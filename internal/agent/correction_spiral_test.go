@@ -208,3 +208,31 @@ func TestCorrectionSpiral_SequenceCapped(t *testing.T) {
 		t.Error("expected no warning for flat severity sequence")
 	}
 }
+
+// TestCorrectionSpiralGreenClearsErrorSequence pins #1449-B: the comment
+// always said "a green build breaks the spiral" but only pendingEdit was
+// reset - the healthy progression (sev1 -> green -> sev3 -> green -> sev5)
+// accumulated [1,3,5] and fired the STOP/revert guidance on a trajectory
+// where every problem was fixed.
+func TestCorrectionSpiralGreenClearsErrorSequence(t *testing.T) {
+	s := newCorrectionSpiralState()
+	// edit -> error(sev1) -> GREEN -> edit -> error(sev3) -> GREEN -> edit -> error(sev5)
+	for _, sev := range []struct {
+		iter int
+		msg  string
+	}{
+		{1, "syntax error: unexpected token"},
+		{3, "compile error: cannot find symbol"},
+		{5, "panic: runtime error: nil pointer"},
+	} {
+		s.recordEdit(sev.iter)
+		s.recordVerifyResult("run_command", sev.msg, true, sev.iter+1)
+		s.recordVerifyResult("run_command", "ok all green", false, sev.iter+2)
+	}
+	if msg := s.maybeWarn(50); msg != "" {
+		t.Fatalf("healthy progression assembled into a fake spiral: %s", msg)
+	}
+	if len(s.errorSequence) != 0 {
+		t.Fatalf("green did not clear errorSequence: %v", s.errorSequence)
+	}
+}
