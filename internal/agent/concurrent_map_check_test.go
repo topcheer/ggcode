@@ -158,3 +158,32 @@ func TestCheckConcurrentMapAccess_EmptyContent(t *testing.T) {
 		t.Errorf("expected no warning for empty content")
 	}
 }
+
+// TestCheckConcurrentMapAccess_SliceFanOutNotMap pins #1445-A: indexed
+// writes to a SLICE (the extremely common parallel fan-out collection
+// pattern) must not be counted as map writes - 'map out is accessed
+// without sync' fired on an object that was never a map.
+func TestCheckConcurrentMapAccess_SliceFanOutNotMap(t *testing.T) {
+	src := `package main
+
+func fanout(in []int) []int {
+	out := make([]int, len(in))
+	done := make(chan struct{}, len(in))
+	for i := range in {
+		go func(i int) {
+			out[i] = compute(in[i])
+			done <- struct{}{}
+		}(i)
+	}
+	for range in {
+		<-done
+	}
+	return out
+}
+
+func compute(v int) int { return v * 2 }
+`
+	if result := checkConcurrentMapAccess("test.go", "", src); result != "" {
+		t.Fatalf("slice fan-out flagged as map: %s", result)
+	}
+}

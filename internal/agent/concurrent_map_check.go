@@ -153,8 +153,9 @@ func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMa
 			continue
 		}
 
-		// Collect function-level info.
-		info := analyzeFuncForMapConcurrency(fn.Body)
+		// Collect function-level info (#1445-A: the FuncDecl seeds map-typed
+		// params/receivers into the declaration-proof set internally).
+		info := analyzeFuncForMapConcurrency(fn)
 		if len(info.unsyncMapWrites) == 0 || !info.hasGoStatement {
 			continue
 		}
@@ -179,14 +180,71 @@ type mapConcurrencyInfo struct {
 	hasGoStatement  bool
 	hasSync         bool                 // uses Mutex, RWMutex, sync.Map, or Locker
 	unsyncMapWrites map[string]token.Pos // map var name -> position of first write
+	mapDeclared     map[string]bool      // #1445-A: names PROVEN to be maps
 }
 
-// analyzeFuncForMapConcurrency inspects a function body for concurrent map
-// access patterns.
-func analyzeFuncForMapConcurrency(body *ast.BlockStmt) mapConcurrencyInfo {
+// analyzeFuncForMapConcurrency inspects a function for concurrent map
+// access patterns (#1445-A: takes the FuncDecl so map-typed params and
+// receivers seed the declaration-proof set BEFORE the write scan).
+func analyzeFuncForMapConcurrency(fn *ast.FuncDecl) mapConcurrencyInfo {
+	body := fn.Body
 	info := mapConcurrencyInfo{
 		unsyncMapWrites: make(map[string]token.Pos),
+		mapDeclared:     make(map[string]bool),
 	}
+	// Params/receiver declared as maps are proof (func worker(m map...)).
+	seed := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, fld := range fl.List {
+			if _, isMap := fld.Type.(*ast.MapType); isMap {
+				for _, name := range fld.Names {
+					info.mapDeclared[name.Name] = true
+				}
+			}
+		}
+	}
+	seed(fn.Type.Params)
+	seed(fn.Recv)
+
+	// #1445-A pass 1: collect names PROVEN to be maps - the old check
+	// counted ANY indexed assignment (`out[i] = v` on a slice, `arr[0]`,
+	// struct-slice rows) as a map write, so the extremely common fan-out
+	// pattern (parallel goroutines filling a preallocated slice) fired
+	// "map 'out' accessed without sync" on an object that was never a map
+	// (the #511 tombstone lesson repeating). Without go/types we prove
+	// map-ness from the declaration shapes: make(map[...]), var x map[...],
+	// or a map composite literal.
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for _, rhs := range node.Rhs {
+				if isMapValuedExpr(rhs) {
+					for _, lhs := range node.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							info.mapDeclared[id.Name] = true
+						}
+					}
+				}
+			}
+		case *ast.DeclStmt:
+			if d, ok := node.Decl.(*ast.GenDecl); ok && d.Tok == token.VAR {
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					if _, isMap := vs.Type.(*ast.MapType); isMap {
+						for _, name := range vs.Names {
+							info.mapDeclared[name.Name] = true
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
 
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -237,9 +295,15 @@ func analyzeFuncForMapConcurrency(body *ast.BlockStmt) mapConcurrencyInfo {
 			if node.Tok == token.ASSIGN || node.Tok == token.DEFINE {
 				for _, lhs := range node.Lhs {
 					if idx, ok := lhs.(*ast.IndexExpr); ok {
-						if mapName := mapVarName(idx.X); mapName != "" {
-							if _, exists := info.unsyncMapWrites[mapName]; !exists {
-								info.unsyncMapWrites[mapName] = node.Pos()
+						// #1445-A: plain identifiers need declaration proof (a
+						// slice out[i]=v is not a map write); struct-field
+						// selectors keep the conservative old behavior (the
+						// field's type lives outside this function).
+						name := mapVarName(idx.X)
+						isMapWrite := name != "" && (strings.Contains(name, ".") || info.mapDeclared[name])
+						if isMapWrite {
+							if _, exists := info.unsyncMapWrites[name]; !exists {
+								info.unsyncMapWrites[name] = node.Pos()
 							}
 						}
 					}
@@ -272,4 +336,25 @@ func mapVarName(expr ast.Expr) string {
 	default:
 		return ""
 	}
+}
+
+// isMapValuedExpr reports whether an expression yields a map: a
+// make(map[...]) call, a map type conversion, or a map composite literal
+// (#1445-A declaration proof, pass 1).
+func isMapValuedExpr(e ast.Expr) bool {
+	switch v := e.(type) {
+	case *ast.CallExpr:
+		if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "make" && len(v.Args) > 0 {
+			if _, isMap := v.Args[0].(*ast.MapType); isMap {
+				return true
+			}
+		}
+	case *ast.CompositeLit:
+		if _, isMap := v.Type.(*ast.MapType); isMap {
+			return true
+		}
+	case *ast.ParenExpr:
+		return isMapValuedExpr(v.X)
+	}
+	return false
 }
