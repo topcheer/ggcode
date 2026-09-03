@@ -3852,8 +3852,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// the first read_file count as a build/test and silenced the
 			// detector for the whole run.
 			a.prematureRefactorRecordVerifyForTool(tc.Arguments)
-			if !result.IsError {
-				a.editPropagation.recordGreenBuild()
+			// #1455-A: gate on command CONTENT, exactly like the #487 fix two
+			// lines above - the unconditional !IsError reset made ANY
+			// successful tool result (read_file/grep, even the successful
+			// edit_file itself) clear the distinct-file set, and since this
+			// runs BEFORE recordEdit, the set size stayed <=1 and the
+			// detector's own charter ("7 edits to 7 DIFFERENT files") was
+			// unreachable. Only a successful VERIFY COMMAND resets now.
+			if tc.Name == "run_command" && !result.IsError {
+				if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
+					a.editPropagation.recordGreenBuild()
+				}
 			}
 			// Convergence lock: record verification result to detect post-verify
 			// unnecessary edit drift. A successful verify arms the lock; a failed

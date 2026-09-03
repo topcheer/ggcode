@@ -93,9 +93,27 @@ type emptyErrorInfo struct {
 // if-statements with error-nil checks that have empty bodies.
 func findEmptyErrorBodies(content string) []emptyErrorInfo {
 	fset := token.NewFileSet()
-	tree, err := parser.ParseFile(fset, "", content, 0)
+	// #1455-B: ParseComments so a documenting comment inside the block
+	// exempts it - the guidance text itself says 'or explicitly suppress
+	// with a comment explaining why', but comments never appear as
+	// statements in BlockStmt.List, so the agent FOLLOWING the advice was
+	// still reported. Comments are non-statement nodes; check the body's
+	// line range for any doc comment instead.
+	tree, err := parser.ParseFile(fset, "", content, parser.ParseComments)
 	if err != nil || tree == nil {
 		return nil
+	}
+	commentRanges := make([][2]token.Pos, 0, len(tree.Comments))
+	for _, cg := range tree.Comments {
+		commentRanges = append(commentRanges, [2]token.Pos{cg.Pos(), cg.End()})
+	}
+	hasCommentInside := func(n ast.Node) bool {
+		for _, r := range commentRanges {
+			if r[0] >= n.Pos() && r[1] <= n.End() {
+				return true
+			}
+		}
+		return false
 	}
 
 	var result []emptyErrorInfo
@@ -118,7 +136,7 @@ func findEmptyErrorBodies(content string) []emptyErrorInfo {
 		}
 
 		// Check if the body has zero statements.
-		if ifStmt.Body == nil || len(ifStmt.Body.List) == 0 {
+		if ifStmt.Body == nil || (len(ifStmt.Body.List) == 0 && !hasCommentInside(ifStmt.Body)) {
 			result = append(result, emptyErrorInfo{
 				line: fset.Position(ifStmt.Pos()).Line,
 				fp:   curFunc + "|" + exprText(ifStmt.Cond),
