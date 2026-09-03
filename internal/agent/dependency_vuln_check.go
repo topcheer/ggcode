@@ -272,6 +272,9 @@ func parsePackageJSON(content string) map[string]string {
 		// Extract from dependencies
 		for name, version := range pkgJSON.Dependencies {
 			if !strings.HasPrefix(name, "//") {
+				if isNonConcreteVersionSpec(version) {
+					continue // #1451-B: no exact version to compare against
+				}
 				version = strings.TrimLeft(version, "^~>=< ")
 				if version != "" {
 					deps[strings.ToLower(name)] = version
@@ -281,6 +284,9 @@ func parsePackageJSON(content string) map[string]string {
 		// Extract from devDependencies
 		for name, version := range pkgJSON.DevDependencies {
 			if !strings.HasPrefix(name, "//") {
+				if isNonConcreteVersionSpec(version) {
+					continue // #1451-B
+				}
 				version = strings.TrimLeft(version, "^~>=< ")
 				if version != "" {
 					deps[strings.ToLower(name)] = version
@@ -421,4 +427,24 @@ func parseVersionPart(s string) int {
 	}
 	n, _ := strconv.Atoi(numStr)
 	return n
+}
+
+// isNonConcreteVersionSpec reports whether a package.json version string
+// denotes ANY/relative resolution rather than a pin-pointable version
+// (#1451-B): "*", "latest", "x", "workspace:*", "file:...", "npm:...",
+// URL/git specs. Comparing them as concrete versions parses "*" into
+// 0.0.0 and reports "vulnerable, upgrade to X+" on a spec that allows
+// ANY version - pure noise; range specs (^1.2.3 / >=2) are still handled
+// by the trim-then-compare path (conservative for the common ^ case).
+func isNonConcreteVersionSpec(v string) bool {
+	switch strings.TrimSpace(v) {
+	case "", "*", "latest", "x", "X":
+		return true
+	}
+	for _, p := range []string{"workspace:", "file:", "npm:", "http://", "https://", "git+", "github:"} {
+		if strings.HasPrefix(strings.TrimSpace(v), p) {
+			return true
+		}
+	}
+	return false
 }

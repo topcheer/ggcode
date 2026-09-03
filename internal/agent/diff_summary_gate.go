@@ -147,6 +147,21 @@ func gitDiffStat(workingDir string) (string, error) {
 			return "", err
 		}
 	}
+	// #1451-A: `git diff --stat HEAD` NEVER includes untracked files - a
+	// run that only CREATED files (new detectors/scaffolds - the dominant
+	// shape in this repo) counted 0 files, failed MinFiles, and the
+	// end-of-run self-review summary never fired. Merge untracked entries
+	// from porcelain so fresh files weigh the same as edits.
+	if st, err := runGitCommandWithTimeout(
+		gitCommand(workingDir, "status", "--porcelain"),
+		gitDiffTimeout,
+	); err == nil {
+		for _, line := range strings.Split(st, "\n") {
+			if strings.HasPrefix(line, "??") {
+				output += "\n" + strings.TrimSpace(line[2:]) + " | 0 +"
+			}
+		}
+	}
 	return output, nil
 }
 
