@@ -134,13 +134,27 @@ var ambiguityPatterns = []struct {
 	{"a few", ambQuantityVague, "the exact count or selection criteria"},
 	{"recent", ambQuantityVague, "the time window or count for 'recent'"},
 	{"latest", ambQuantityVague, "how many of the latest items"},
+	// #1438-A: bare 'latest'/'better' are extremely common ordinary
+	// words - 'upgrade to the latest version' has NO quantity ambiguity
+	// yet hit the quantity suggestion (category mismatch). Narrowed to
+	// phrase-level shapes that actually imply an unresolved count/choice;
+	// the bare forms are dropped.
+	{"latest items", ambQuantityVague, "how many of the latest items"},
+	{"latest entries", ambQuantityVague, "how many entries and by what cutoff"},
+	{"latest results", ambQuantityVague, "how many results and by what cutoff"},
 	{"oldest", ambQuantityVague, "how many of the oldest items"},
 
 	// Vague direction (for modifications)
 	{"improve the", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"improve its", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"enhance", ambDirectionVague, "enhance in what way specifically"},
-	{"better", ambDirectionVague, "better by what metric"},
+	// #1438-A: bare 'better' is an ordinary high-frequency word - a
+	// benchmark sentence whose metric is IN the sentence still hit it.
+	// Narrowed to unresolved-choice shapes.
+	{"make it better", ambDirectionVague, "better by what metric"},
+	{"make this better", ambDirectionVague, "better by what metric"},
+	{"improve it", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
+	{"fix the bug", ambDirectionVague, "which bug and what does 'fixed' mean here -- error gone, test added, or root cause documented?"},
 	{"simplify the", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
 	{"simplify it", ambDirectionVague, "simplify toward what end -- fewer lines, fewer dependencies, clearer logic?"},
 
@@ -148,6 +162,23 @@ var ambiguityPatterns = []struct {
 	{"rename the", ambNamingVague, "the new name convention and whether to update all references"},
 	{"rename it", ambNamingVague, "the new name convention and whether to update all references"},
 	{"rename to something", ambNamingVague, "the specific target name"},
+
+	// #1438-B: the table had zero CJK patterns - the primary user language
+	// (Simplified Chinese UI, README_zh-CN) had 0% coverage. Chinese bytes
+	// pass the length gate; only the pattern side was missing. These mirror
+	// the highest-value English entries (the L21-23 comment's own examples).
+	{"优化一下", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
+	{"优化这个", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
+	{"去掉重复", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
+	{"去重", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
+	{"排个序", ambSortOrder, "ascending or descending, and by which key"},
+	{"排序", ambSortOrder, "ascending or descending, and by which key"},
+	{"重命名", ambNamingVague, "the new name convention and whether to update all references"},
+	{"改名", ambNamingVague, "the new name convention and whether to update all references"},
+	{"最新的", ambQuantityVague, "how many of the latest items, and by what cutoff"},
+	{"最近的", ambQuantityVague, "the time window or count for 'recent'"},
+	{"随便", ambScopeVague, "which specific item or criteria"},
+	{"大概", ambQuantityVague, "the exact count or selection criteria"},
 }
 
 // phrases that indicate this is a quick, unambiguous task -- skip detection
@@ -204,7 +235,11 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 	}
 
 	// Don't fire for very short prompts (single-word commands like "run", "test")
-	if len(strings.TrimSpace(userPrompt)) < 15 {
+	// #1438-C: the 15-char gate overshot - "make it better" (14) and
+	// "simplify it" (11), the textbook vague-direction prototypes, were
+	// all skipped. 6 chars still blocks bare one-word commands while
+	// letting two-word vague directions through.
+	if len(strings.TrimSpace(userPrompt)) < 6 {
 		return ""
 	}
 

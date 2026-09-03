@@ -29,8 +29,16 @@ func TestAmbiguityPointDetection(t *testing.T) {
 			wantMsg: true,
 		},
 		{
-			name:    "optimize vague direction",
+			// #1438-A: bare 'better' hit ordinary sentences whose metric was
+			// already in them; the narrowed table no longer fires here - the
+			// guidance would have been category-mismatched noise.
+			name:    "optimize with metric in sentence no longer fires",
 			prompt:  "Optimize the database query for better performance",
+			wantMsg: false,
+		},
+		{
+			name:    "make it better vague direction fires",
+			prompt:  "Please make it better when you get a chance",
 			wantMsg: true,
 		},
 		{
@@ -205,5 +213,29 @@ func TestAmbiguityQuickTaskSkip(t *testing.T) {
 			t.Errorf("expected no guidance for informational prompt: %s", p)
 		}
 		a.ambiguityPoint.reset()
+	}
+}
+
+// TestAmbiguityPointCJKAndGate pins #1438-B/C: the highest-value Chinese
+// patterns now trigger (the primary user language had zero coverage), and
+// the lowered gate lets short vague directions through.
+func TestAmbiguityPointCJKAndGate(t *testing.T) {
+	// fired is once-per-run: a FRESH state per prompt (the initial version
+	// reused one Agent and the 2nd+ prompts silently skipped).
+	for _, cjk := range []string{"请优化一下这个函数的性能", "把这个列表去重", "帮我排个序", "把这个函数改名"} {
+		a := &Agent{ambiguityPoint: newAmbiguityPointState()}
+		if msg := a.checkAmbiguityPoints(cjk); msg == "" {
+			t.Fatalf("CJK prompt %q not detected", cjk)
+		}
+	}
+	// Gate: 6 chars still blocks bare one-word commands...
+	gateA := &Agent{ambiguityPoint: newAmbiguityPointState()}
+	if msg := gateA.checkAmbiguityPoints("run"); msg != "" {
+		t.Fatal("one-word command should stay gated")
+	}
+	// ...but two-word vague directions pass the gate AND the table.
+	a2 := &Agent{ambiguityPoint: newAmbiguityPointState()}
+	if msg := a2.checkAmbiguityPoints("make it better"); msg == "" {
+		t.Fatal("short vague direction missed (gate overshot)")
 	}
 }
