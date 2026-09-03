@@ -165,3 +165,25 @@ func TestExpiredRead_EmptyPath(t *testing.T) {
 		t.Fatalf("expected no hint for empty path, got: %s", hint)
 	}
 }
+
+// TestExpiredReadRecordUndoClearsState pins #1459-B: after undo_edit the
+// rolled-back file's bookkeeping is forgotten - the anchor-rebuilding
+// re-read records normally and the next edit does not misreport stale.
+func TestExpiredReadRecordUndoClearsState(t *testing.T) {
+	e := newExpiredReadState()
+	e.recordRead("/repo/a.go")
+	if hint := e.recordEdit("/repo/a.go"); hint == "" {
+		t.Fatal("expected expiry hint on first edit after read")
+	}
+	// Undo: state forgets the file...
+	e.recordUndo("/repo/a.go")
+	// ...so the anchor-rebuilding re-read is tracked as a FRESH read
+	// (readBeforeEdit set again, no lingering editedFiles guard).
+	e.recordRead("/repo/a.go")
+	if !e.readBeforeEdit["/repo/a.go"] {
+		t.Fatal("post-undo re-read dropped by lingering editedFiles guard")
+	}
+	if _, still := e.editedFiles["/repo/a.go"]; still {
+		t.Fatal("editedFiles not cleared by recordUndo")
+	}
+}

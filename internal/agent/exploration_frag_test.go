@@ -146,3 +146,33 @@ func TestExplorationFrag_IgnoresNonExplorationTools(t *testing.T) {
 		t.Fatalf("non-exploration tool should not be tracked, got %d entries", len(s.entries))
 	}
 }
+
+// TestExploreFragSingleBatchNotFragmentation pins #1459-A: one parallel
+// batch (6 reads, 6 targets, ALL at the same iteration - the runtime's
+// recommended shape) must NOT fire - entries must span >=2 iterations.
+func TestExploreFragSingleBatchNotFragmentation(t *testing.T) {
+	s := newExploreFragState()
+	last := ""
+	for i := 0; i < 6; i++ {
+		last = s.recordToolCall("read_file", mustFragJSON(t, "/repo/f"+string(rune('a'+i))+".go"), 5)
+	}
+	if last != "" {
+		t.Fatalf("single-batch parallel reads flagged: %s", last)
+	}
+	// Same shape spread across 2 iterations still fires.
+	s2 := newExploreFragState()
+	for i := 0; i < 3; i++ {
+		last = s2.recordToolCall("read_file", mustFragJSON(t, "/repo/a"+string(rune('a'+i))+".go"), 5)
+	}
+	for i := 0; i < 3; i++ {
+		last = s2.recordToolCall("read_file", mustFragJSON(t, "/repo/b"+string(rune('a'+i))+".go"), 7)
+	}
+	if last == "" {
+		t.Fatal("true cross-iteration scattering should still fire")
+	}
+}
+
+func mustFragJSON(t *testing.T, p string) []byte {
+	t.Helper()
+	return []byte(`{"path":"` + p + `"}`)
+}
