@@ -349,3 +349,19 @@ require github.com/dgrijalva/jwt-go v3.2.0
 		t.Fatalf("expected deprecated jwt-go warning, got: %v", warnings)
 	}
 }
+
+// TestIsNonConcreteVersionSpec pins #1451-B: wildcard/latest/workspace/
+// file/npm/URL/git specs carry no pin-pointable version and must be
+// skipped - a bare '*' parsed as 0.0.0 and ALWAYS reported vulnerable.
+func TestIsNonConcreteVersionSpec(t *testing.T) {
+	for _, v := range []string{"", "*", "latest", "x", "X", "workspace:*", "file:../lib", "npm:foo@2", "https://x/y.tgz", "git+ssh://x/y", "github:user/repo"} {
+		if !isNonConcreteVersionSpec(v) {
+			t.Errorf("%q should be non-concrete", v)
+		}
+	}
+	for _, v := range []string{"1.2.3", "^1.2.3", "~2.0", ">=2.0.0", "1.0.0-beta.1"} {
+		if isNonConcreteVersionSpec(v) {
+			t.Errorf("%q is a concrete/range spec - must reach the comparator", v)
+		}
+	}
+}
