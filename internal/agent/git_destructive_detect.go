@@ -77,6 +77,8 @@ var (
 	reGitClean = regexp.MustCompile(`\bgit\s+clean\s+.*-f`)
 	// git branch -D / --delete --force (case-sensitive: -D is force delete, -d is safe)
 	reGitBranchDelete = regexp.MustCompile(`\bgit\s+branch\s+(-D\b|--delete\s+--force\b)`)
+	// git branch -f <branch> <start> - force-moves a branch pointer (#1464-B)
+	reGitBranchForceMove = regexp.MustCompile(`\bgit\s+branch\s+(-f\b|--force\b)`)
 	// git checkout -- . / git restore . (discard all changes)
 	reGitCheckoutDiscard = regexp.MustCompile(`\bgit\s+(checkout|restore)\s+--\s*\.`)
 	// git stash drop / git stash clear
@@ -143,6 +145,16 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 			severity:    "critical",
 			description: "git branch -D force-deletes a branch, permanently losing any unmerged commits on that branch.",
 			suggestion:  "Use `git branch -d` (safe delete) which only succeeds if the branch is fully merged.",
+		})
+	}
+
+	if reGitBranchForceMove.MatchString(cmd) {
+		found = append(found, destructivePattern{
+			name:     "branch_force_move",
+			severity: "warning",
+			description: "git branch -f moves a branch pointer, abandoning commits that were on it " +
+				"(they remain reachable via reflog for ~90 days, unlike reset --hard's uncommitted losses).",
+			suggestion: "Confirm the target branch really should be re-pointed; the old tip stays in the reflog (git reflog show <branch>).",
 		})
 	}
 

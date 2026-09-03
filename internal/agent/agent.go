@@ -1204,6 +1204,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	// Context-length goal drift: extract keywords from the original user
 	// request to detect later drift (arXiv:2505.02709).
+	// #1464-A: the per-turn reset (#28) used to run ~45 lines BELOW the
+	// capture, unconditionally wiping what had just been initialized -
+	// initFromUserMessage is set-if-empty and this was its ONLY call
+	// site, so the detector has been completely dead since #28 (20+
+	// iteration runs drifting off the original request never saw a
+	// [goal-drift] hint; recordToolCall accumulated targets that were
+	// never compared). Reset FIRST, then capture.
+	if a.goalDriftCtx != nil {
+		a.goalDriftCtx.reset()
+	}
 	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
 	// asyncVerifyStats captures run stats for the background verification goroutine.
@@ -1248,11 +1258,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetConvergenceLock()
 	a.integrationResetForRun()
 	a.resetSelfMod()
-	// Goal drift context must reset per user turn to avoid comparing
-	// turn-1 keywords against turn-3 targets (issue #28).
-	if a.goalDriftCtx != nil {
-		a.goalDriftCtx.reset()
-	}
 	a.resetOvercorrection()
 	if a.delegationOrch != nil {
 		a.delegationOrch.resetForNewTurn()
