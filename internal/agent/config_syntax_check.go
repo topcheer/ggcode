@@ -243,7 +243,21 @@ func findYAMLDuplicateKeys(content string) []string {
 		yamlAdjustIndentStack(&stack, &indentStack, indent)
 
 		// Skip list items
-		if strings.HasPrefix(trimmed, "-") || strings.HasPrefix(trimmed, "[") {
+		// #1446-B: a list item can ITSELF open a block scalar (`- run: |` in
+		// every CI workflow) - checking the header BEFORE the skip keeps the
+		// shell body's same-prefixed lines from being read as duplicate
+		// mapping keys (a legitimate .gitea/workflows file got a Critical
+		// 'duplicate key' report).
+		if strings.HasPrefix(trimmed, "-") {
+			if ci := strings.Index(trimmed, ":"); ci > 0 {
+				if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[ci+1:])) {
+					inBlockScalar = true
+					blockIndent = indent
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") {
 			continue
 		}
 

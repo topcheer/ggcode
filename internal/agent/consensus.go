@@ -57,7 +57,7 @@ type consensusState struct {
 	alertsIssued int
 	// lastAlertStep is the tool-call step index when we last alerted (for cooldown).
 	lastAlertStep int
-	// currentStep is incremented each time recordFiring is called.
+	// currentStep tracks the latest tool-call/iteration index supplied by callers (#1446-C).
 	currentStep int
 }
 
@@ -85,22 +85,29 @@ func (s *consensusState) reset() {
 // recordFirings logs multiple detector firings at once. Convenience wrapper
 // (kept for the batch-loop call sites and #952 tests) delegating to
 // recordFiring per name.
-func (s *consensusState) recordFirings(detectorNames ...string) {
+func (s *consensusState) recordFirings(step int, detectorNames ...string) {
 	for _, n := range detectorNames {
-		s.recordFiring(n)
+		s.recordFiring(n, step)
 	}
 }
 
 // recordFiring logs that a named detector produced guidance.
 // This should be called whenever ANY detector's check() returns non-empty.
-func (s *consensusState) recordFiring(detectorName string) {
+// #1446-C: step is the CURRENT tool-call/iteration index supplied by the
+// caller - the old self-increment made the window axis FIRE-COUNT, so any
+// 3 reporters firing once each at arbitrary moments across an entire run
+// counted as "within the last 5 tool calls" and triggered the strong
+// 'STOP incremental patching' intervention with factually wrong wording.
+func (s *consensusState) recordFiring(detectorName string, step int) {
 	if s == nil || detectorName == "" {
 		return
 	}
-	s.currentStep++
+	if step > s.currentStep {
+		s.currentStep = step
+	}
 	s.firings = append(s.firings, consensusFiring{
 		detector: detectorName,
-		step:     s.currentStep,
+		step:     step,
 		time:     time.Now(),
 	})
 	// Trim old entries beyond 2x window to keep memory bounded

@@ -1381,6 +1381,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 	}
 	// Record explicit constraints from user message for amnesia detection.
+	// #1446-A: the reset used to sit ~190 lines BELOW this record (inside
+	// the run-start monitoring block), unconditionally clearing what had
+	// just been recorded - the detector could never fire on the production
+	// path (its unit tests call record->maybeWarn directly and masked the
+	// wiring). crossDetectorConsensus.reset() above is the correct-order
+	// precedent; constraintAmnesia.reset() now runs here too, BEFORE the
+	// record.
+	a.constraintAmnesia.reset()
 	a.constraintAmnesia.recordConstraints(userText, 1)
 	a.mu.RLock()
 	hookCfg := a.hookConfig
@@ -1574,7 +1582,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.infoScent.reset()
 	a.causalAttribution.reset()
 	a.reversibility.reset()
-	a.constraintAmnesia.reset()
 	a.constraintViolation.reset()
 	a.inputUnderspec.reset()
 	a.tunnelVision.reset()
@@ -2070,7 +2077,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// injectGuidance (not appended to tool results), so it is invisible
 			// to crossDetectorConsensus without this call (#952 regression
 			// follow-up).
-			a.crossDetectorConsensus.recordFiring("Cache Efficiency")
+			a.crossDetectorConsensus.recordFiring("Cache Efficiency", i+1)
 			a.injectGuidance(cacheGuidance)
 			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
 		}
@@ -3671,7 +3678,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// #952: this guidance is appended BEFORE the consensus scan window
 				// starts (see consensusBaseline), so record the firing explicitly —
 				// the content scan below would otherwise never see this detector.
-				a.crossDetectorConsensus.recordFiring("Failure Mode")
+				a.crossDetectorConsensus.recordFiring("Failure Mode", i+1)
 				a.appendGuidance(&result, modeGuidance)
 			}
 			// Error cascade detection: when multiple errors share a common root
@@ -3680,7 +3687,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if cascadeGuidance := a.errorCascade.recordError(tc.Name, result.Content); cascadeGuidance != "" {
 					// #952: same as failureMode above — this guidance precedes the
 					// consensus scan window; record the firing explicitly.
-					a.crossDetectorConsensus.recordFiring("Error Cascade")
+					a.crossDetectorConsensus.recordFiring("Error Cascade", i+1)
 					a.appendGuidance(&result, cascadeGuidance)
 				}
 			}
@@ -4028,7 +4035,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// #952: explicit firing record (the old content scan could never
 				// match - this detector's guidance header is "[HYPOTHESIS LOCK-IN
 				// WARNING]", not the stale "[Fix Cascade" tag).
-				a.crossDetectorConsensus.recordFiring("Fix Cascade")
+				a.crossDetectorConsensus.recordFiring("Fix Cascade", i+1)
 				a.appendGuidance(&result, cascadeGuidance)
 			}
 			// Post-edit verification hint: after successful source-code edits,
@@ -4041,7 +4048,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Convergence lock: detect post-verification unnecessary edits.
 			// Fires when the agent continues editing after its changes verified.
 			if convergenceGuidance := a.convergenceCheck(); convergenceGuidance != "" {
-				a.crossDetectorConsensus.recordFiring("Convergence Lock")
+				a.crossDetectorConsensus.recordFiring("Convergence Lock", i+1)
 				a.appendGuidance(&result, convergenceGuidance)
 			}
 			// Diminishing edit: detect polish-spiral (progressively smaller edits).

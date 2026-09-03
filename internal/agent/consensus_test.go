@@ -14,8 +14,8 @@ func TestConsensusState_NoFirings(t *testing.T) {
 
 func TestConsensusState_BelowThreshold(t *testing.T) {
 	s := newConsensusState()
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
 	// Only 2 detectors, threshold is 3
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected empty with only 2 detectors, got: %s", msg)
@@ -24,9 +24,9 @@ func TestConsensusState_BelowThreshold(t *testing.T) {
 
 func TestConsensusState_AtThreshold(t *testing.T) {
 	s := newConsensusState()
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 	msg := s.check()
 	if msg == "" {
 		t.Fatal("expected consensus alert with 3 detectors, got empty")
@@ -41,21 +41,22 @@ func TestConsensusState_AtThreshold(t *testing.T) {
 
 func TestConsensusState_MaxAlerts(t *testing.T) {
 	s := newConsensusState()
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 
 	// First alert
 	if msg := s.check(); msg == "" {
 		t.Fatal("expected first alert")
 	}
 
-	// Reset step to bypass cooldown, fire again
-	for i := 0; i < consensusCooldownSteps; i++ {
-		s.recordFiring("Error Rush")
+	// Advance the tool-call step past the cooldown, fire again (#1446-C:
+	// the step axis is caller-supplied - advancing it is the caller's job).
+	for i := 1; i <= consensusCooldownSteps; i++ {
+		s.recordFiring("Error Rush", 10+i)
 	}
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Tunnel Vision", 10+consensusCooldownSteps)
+	s.recordFiring("Analysis Paralysis", 10+consensusCooldownSteps)
 
 	// Second alert (recurring)
 	if msg := s.check(); msg == "" {
@@ -63,11 +64,11 @@ func TestConsensusState_MaxAlerts(t *testing.T) {
 	}
 
 	// Reset step again for third attempt
-	for i := 0; i < consensusCooldownSteps; i++ {
-		s.recordFiring("Error Rush")
+	for i := 1; i <= consensusCooldownSteps; i++ {
+		s.recordFiring("Error Rush", 30+i)
 	}
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 
 	// Third alert should be blocked (max 2)
 	if msg := s.check(); msg != "" {
@@ -77,18 +78,18 @@ func TestConsensusState_MaxAlerts(t *testing.T) {
 
 func TestConsensusState_Cooldown(t *testing.T) {
 	s := newConsensusState()
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 
 	if msg1 := s.check(); msg1 == "" {
 		t.Fatal("expected first alert")
 	}
 
 	// Immediately fire again within cooldown window
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 	if msg2 := s.check(); msg2 != "" {
 		t.Errorf("expected no alert during cooldown, got: %s", msg2)
 	}
@@ -96,9 +97,9 @@ func TestConsensusState_Cooldown(t *testing.T) {
 
 func TestConsensusState_Reset(t *testing.T) {
 	s := newConsensusState()
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 	s.check()
 
 	s.reset()
@@ -113,9 +114,9 @@ func TestConsensusState_Reset(t *testing.T) {
 func TestConsensusState_RepeatAlertContainsRecurring(t *testing.T) {
 	s := newConsensusState()
 	// First alert
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
+	s.recordFiring("Analysis Paralysis", 1)
 	msg1 := s.check()
 	if msg1 == "" {
 		t.Fatal("expected first alert")
@@ -124,12 +125,12 @@ func TestConsensusState_RepeatAlertContainsRecurring(t *testing.T) {
 		t.Errorf("first alert should not contain RECURRING: %s", msg1)
 	}
 
-	// Wait for cooldown
-	for i := 0; i < consensusCooldownSteps; i++ {
-		s.recordFiring("Error Rush")
+	// Wait for cooldown (#1446-C: advance the caller-supplied step axis)
+	for i := 1; i <= consensusCooldownSteps; i++ {
+		s.recordFiring("Error Rush", 10+i)
 	}
-	s.recordFiring("Tunnel Vision")
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Tunnel Vision", 10+consensusCooldownSteps)
+	s.recordFiring("Analysis Paralysis", 10+consensusCooldownSteps)
 	msg2 := s.check()
 	if msg2 == "" {
 		t.Fatal("expected second alert")
@@ -143,7 +144,7 @@ func TestConsensusState_DeduplicatesSameDetector(t *testing.T) {
 	s := newConsensusState()
 	// Same detector fires 5 times, but only counts as 1 distinct
 	for i := 0; i < 5; i++ {
-		s.recordFiring("Error Rush")
+		s.recordFiring("Error Rush", 1)
 	}
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected no alert with single distinct detector, got: %s", msg)

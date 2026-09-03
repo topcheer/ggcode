@@ -141,9 +141,9 @@ func TestConsensusRecordFiringsAndCheckOnly(t *testing.T) {
 	// Simulate detectors recording their firings explicitly (#952). All three
 	// land on the same step, mirroring the batch-loop pattern where several
 	// detectors fire for one tool result.
-	s.recordFiring("Failure Mode")
-	s.recordFiring("Error Cascade")
-	s.recordFiring("Convergence Lock")
+	s.recordFiring("Failure Mode", 1)
+	s.recordFiring("Error Cascade", 1)
+	s.recordFiring("Convergence Lock", 1)
 
 	got := s.checkOnly()
 	if got == "" {
@@ -162,8 +162,8 @@ func TestConsensusLiveDetectorsBelowAndAtThreshold(t *testing.T) {
 	// firings at all, so the dead-tag concern is moot.
 
 	// Live detectors still work through the explicit recordFiring path.
-	s.recordFiring("Error Rush")
-	s.recordFiring("Tunnel Vision")
+	s.recordFiring("Error Rush", 1)
+	s.recordFiring("Tunnel Vision", 1)
 	if got := s.checkOnly(); got != "" {
 		// Two detectors is below the threshold of 3 — no alert expected.
 		t.Fatalf("two live tags are below threshold, expected no alert, got: %s", got)
@@ -171,7 +171,7 @@ func TestConsensusLiveDetectorsBelowAndAtThreshold(t *testing.T) {
 	// Third firing crosses the threshold of 3 distinct detectors within the
 	// window; the alert is returned by this checkOnly call itself (it fires
 	// the alert and enters cooldown).
-	s.recordFiring("Analysis Paralysis")
+	s.recordFiring("Analysis Paralysis", 1)
 	if got := s.checkOnly(); got == "" {
 		t.Fatal("three live tags across scans should trigger consensus")
 	}

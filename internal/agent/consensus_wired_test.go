@@ -22,9 +22,9 @@ func TestConsensusState_WiredDetectorsParticipate(t *testing.T) {
 	}
 	for _, name := range wired {
 		s := newConsensusState()
-		s.recordFiring(name)
-		s.recordFiring("Error Rush")
-		s.recordFiring("Tunnel Vision")
+		s.recordFiring(name, 1)
+		s.recordFiring("Error Rush", 1)
+		s.recordFiring("Tunnel Vision", 1)
 		msg := s.check()
 		if msg == "" {
 			t.Errorf("detector %q fired with 2 others should trigger consensus alert", name)
