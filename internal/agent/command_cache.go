@@ -88,10 +88,12 @@ func isCacheableCommand(command string) bool {
 	if cmd == "" {
 		return false
 	}
-	// Strip leading "cd ... &&" prefix — check the FINAL command segment.
-	if idx := strings.LastIndex(cmd, "&&"); idx >= 0 {
-		cmd = strings.TrimSpace(cmd[idx+2:])
-	}
+	// #1443-A: the old code stripped to the FINAL segment before the
+	// exclusion scan - `git checkout . && go test ./...` passed (checkout
+	// is excluded, but only the last segment was checked), got cached,
+	// and the second run SKIPPED THE ROLLBACK entirely: the agent re-read
+	// a stale green light. Every && segment is now scanned.
+	segments := strings.Split(cmd, "&&")
 
 	// Exclude commands that modify state, touch the network, or are interactive.
 	excludePrefixes := []string{
@@ -105,23 +107,36 @@ func isCacheableCommand(command string) bool {
 		"go generate", "go mod ", "go get ", "go install ",
 		"brew ", "apt ", "yum ",
 	}
-	for _, p := range excludePrefixes {
-		if strings.HasPrefix(cmd, p) {
+	for _, seg := range segments {
+		seg = strings.TrimSpace(seg)
+		// cd prefixes are positional, not mutating.
+		if strings.HasPrefix(seg, "cd ") {
+			continue
+		}
+		for _, p := range excludePrefixes {
+			if strings.HasPrefix(seg, p) {
+				return false
+			}
+		}
+		if strings.Contains(seg, ">") || strings.Contains(seg, "<<") || strings.Contains(seg, "|") {
 			return false
 		}
 	}
-
-	// Exclude commands with output redirects, heredocs, or pipes.
-	if strings.Contains(cmd, ">") || strings.Contains(cmd, ">>") ||
-		strings.Contains(cmd, "<<") || strings.Contains(cmd, "|") {
-		return false
-	}
+	// The cacheable-prefix check runs on the FINAL segment (the one whose
+	// output would be cached).
+	cmd = strings.TrimSpace(segments[len(segments)-1])
 
 	// Whitelist of cacheable command prefixes.
+	// #1443-A: 'make ' matched ANY target (make deploy / make
+	// release-publish cached - repeat deploys silently swallowed, against
+	// the function's own 'deterministic build/test/lint' charter) and
+	// 'go run -tags' executes arbitrary programs. Narrowed to the common
+	// deterministic build/test/lint targets; other make targets and go run
+	// are simply not cached.
 	cacheablePrefixes := []string{
-		"make ", "make\t", "make\n",
+		"make build", "make test", "make lint", "make check", "make verify", "make ci",
+		"make\tbuild", "make\ttest", "make\tlint", "make\tcheck", "make\tverify", "make\tci",
 		"go build", "go test", "go vet", "go check", "go fmt", "go lint",
-		"go run -tags",
 		"npm test", "npm run test", "npm run build", "npm run lint", "npm run check",
 		"npm run verify", "npm run typecheck", "npm run type-check",
 		"npx tsc", "npx eslint", "npx jest",

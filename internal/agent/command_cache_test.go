@@ -219,3 +219,30 @@ func TestCheckCommandCache_NotCacheableCommand(t *testing.T) {
 		t.Fatal("non-cacheable command should not hit")
 	}
 }
+
+// TestCommandCacheCompoundMutatingSegmentNotCacheable pins #1443-A:
+// `git checkout . && go test` used to pass (only the FINAL segment was
+// exclusion-scanned), got cached, and the second run SKIPPED the rollback.
+// Also pins the narrowed make whitelist (deploy targets not cacheable).
+func TestCommandCacheCompoundMutatingSegmentNotCacheable(t *testing.T) {
+	if isCacheableCommand("git checkout . && go test ./...") {
+		t.Fatal("compound with mutating first segment cached - rollback would be skipped")
+	}
+	if isCacheableCommand("git stash pop && go test ./...") {
+		t.Fatal("stash-pop compound cached")
+	}
+	// Legit compound still cacheable.
+	if !isCacheableCommand("cd /repo && go test ./internal/agent/") {
+		t.Fatal("cd-then-test compound wrongly excluded")
+	}
+	// Narrowed whitelist: make deploy / go run no longer cacheable.
+	if isCacheableCommand("make deploy") {
+		t.Fatal("make deploy cached - repeat deploys swallowed")
+	}
+	if isCacheableCommand("go run -tags goolm ./cmd/gen") {
+		t.Fatal("go run (arbitrary program) cached")
+	}
+	if !isCacheableCommand("make test") {
+		t.Fatal("make test should stay cacheable")
+	}
+}
