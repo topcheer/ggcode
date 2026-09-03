@@ -110,7 +110,10 @@ func TestHandleShellInbound_UsageHintOnBarePrefix(t *testing.T) {
 // waitForShellResult polls until predicate matches an emitted text or fails.
 func waitForShellResult(t *testing.T, em *captureEmitter, pred func(string) bool, what string) string {
 	t.Helper()
-	for i := 0; i < 150; i++ {
+	// Windows cold-start shell spawn (process creation + pipe warmup) can
+	// exceed the original 3s budget; 400x20ms = 8s keeps the assertions
+	// intact while tolerating slower spawn latency. Predicate is unchanged.
+	for i := 0; i < 400; i++ {
 		em.mu.Lock()
 		texts := append([]string(nil), em.texts...)
 		em.mu.Unlock()
