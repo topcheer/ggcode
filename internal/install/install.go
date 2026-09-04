@@ -201,8 +201,11 @@ func NormalizeVersion(version string) string {
 	if version == "" || strings.EqualFold(version, "latest") {
 		return "latest"
 	}
-	if strings.HasPrefix(version, "v") {
-		return version
+	// #1573-C: the latest check is case-insensitive but the prefix check
+	// was not - `V1.2.3` became `vV1.2.3` and the release URL 404'd with
+	// no case-related hint in the error.
+	if len(version) > 0 && (version[0] == 'v' || version[0] == 'V') {
+		return "v" + version[1:]
 	}
 	return "v" + version
 }

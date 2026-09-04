@@ -34,7 +34,17 @@ func main() {
 
 	fmt.Printf("Installed %s to %s\n", filepath.Base(result.Path), result.Path)
 	if !isOnPath(filepath.Dir(result.Path)) {
-		fmt.Printf("Note: %s is not on your PATH yet.\n", filepath.Dir(result.Path))
+		// #1573-A: the python installer appends the install dir to the
+		// user's PATH (marker block / user Path variable); the Go port
+		// only printed a Note. Do the same now - "works after install"
+		// is the installer's core acceptance.
+		if changed, err := install.EnsureOnPath(filepath.Dir(result.Path)); err != nil {
+			fmt.Printf("Note: %s is not on your PATH yet and updating it failed: %v\n", filepath.Dir(result.Path), err)
+		} else if changed {
+			fmt.Printf("Note: added %s to your PATH - open a NEW terminal (or restart your session) before running ggcode.\n", filepath.Dir(result.Path))
+		} else {
+			fmt.Printf("Note: %s is not on your PATH for the CURRENT session; it will be available in new terminals.\n", filepath.Dir(result.Path))
+		}
 	}
 }
 

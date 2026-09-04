@@ -3,6 +3,8 @@ package knight
 import (
 	"sort"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // ABReplayResult captures a deterministic, LLM-free relevance score between a
@@ -45,6 +47,13 @@ func baselineReplayBody(e *SkillEntry) string {
 	body := ""
 	if b, err := readSkillContent(e.Path); err == nil {
 		body = string(b)
+	} else {
+		// #1573-B: a failed baseline read silently produced a name+description
+		// -only fingerprint (the #977 partial) - every delta against it is
+		// inflated and feeds the eval log/LLM rationale, biasing promotion.
+		// Log it so the asymmetry (candidate side aborts on read failure)
+		// is at least observable.
+		debug.Log("knight", "ab-replay baseline read failed for %s: %v (fingerprint will be name+description only)", e.Path, err)
 	}
 	return abReplayFingerprint(e.Name, e.Meta.Description, body)
 }
