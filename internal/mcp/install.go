@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	"github.com/topcheer/ggcode/internal/config"
 )
 
@@ -55,6 +57,12 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 	if transport == "" {
 		if len(args) >= 2 {
 			if trailingTransport := normalizeInstallTransport(args[len(args)-1]); trailingTransport == "stdio" {
+				// #1589-B: the trailing "stdio" is lexically ambiguous -
+				// it may be a real subcommand argument (docker run ... serve
+				// stdio). We still strip it (the convenience form is the
+				// common case) but say so; use `--` or an explicit transport
+				// to keep a literal trailing stdio argument.
+				debug.Log("mcp-install", "stripped trailing %q as the transport hint; if it was a real command argument, re-run with an explicit transport or -- separator", args[len(args)-1])
 				return config.MCPServerConfig{
 					Name:    normalizeServerName(inferCommandServerName(args[0], args[1:len(args)-1])),
 					Type:    "stdio",

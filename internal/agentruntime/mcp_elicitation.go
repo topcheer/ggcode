@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -207,7 +208,11 @@ func parseFloat(s string) (float64, error) {
 
 var elicitationCounter int64
 
+// nextElicitCounter is called from up to 8 concurrent elicitation workers
+// (serverReqSem cap, safego.Go handlers) - the old non-atomic increment
+// let two workers read the same value, mint the same "elicit-N" ID, and
+// the second map write orphaned the first waiter's channel (its user
+// answer never arrived; only the 5-minute timeout fired) (#1589-A).
 func nextElicitCounter() int64 {
-	elicitationCounter++
-	return elicitationCounter
+	return atomic.AddInt64(&elicitationCounter, 1)
 }
