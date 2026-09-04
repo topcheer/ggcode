@@ -57,10 +57,16 @@ func computeRuleBasedOverlap(candidate *SkillEntry, candidateBody string, active
 				sim = 0.6
 			}
 		}
+		// #1576-D: NameCollision is cumulative OR - piggybacking it on the
+		// WorstSimilarity update dropped the collision flag whenever a
+		// LATER entry scored higher without a name match, erasing the
+		// same-name evidence from the rationale.
+		if nameMatch {
+			decision.NameCollision = true
+		}
 		if sim > decision.WorstSimilarity {
 			decision.WorstSimilarity = sim
 			decision.WorstActiveRef = formatSkillRef(entry.Scope, entry.Name)
-			decision.NameCollision = nameMatch
 		}
 	}
 	if decision.WorstSimilarity >= decision.Threshold {

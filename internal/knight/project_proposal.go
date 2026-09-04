@@ -276,6 +276,16 @@ func (k *Knight) transitionProposal(id, status, note, by string) (ProjectImprove
 		if item.ID != id {
 			continue
 		}
+		// #1576-A: terminal states are terminal - a REJECTED proposal
+		// (e.g. delete-skill) must not flip to approved by one stray
+		// command, and vice versa. Re-applying the SAME terminal state is
+		// idempotent (returns the current record untouched).
+		if item.Status == "approved" || item.Status == "rejected" {
+			if item.Status != status {
+				return ProjectImprovementProposal{}, fmt.Errorf("proposal %q is already %s (terminal); create a new proposal instead", id, item.Status)
+			}
+			return item, nil
+		}
 		now := time.Now()
 		item.Status = status
 		item.StatusNote = strings.TrimSpace(note)
@@ -318,7 +328,11 @@ func (k *Knight) writeProjectImprovementProposal(goal, content string) (ProjectI
 		title = "Project Improvement Proposal"
 		content = "# " + title + "\n\n" + content
 	}
-	id := now.Format("20060102-150405") + "-" + slugifyProjectProposal(title)
+	// #1576-B: second-resolution IDs collided for same-second same-title
+	// proposals - AtomicWriteFile overwrote the first .md and the jsonl
+	// collapse kept only the latest, silently losing the first proposal.
+	// Millisecond suffix disambiguates.
+	id := now.Format("20060102-150405") + "-" + slugifyProjectProposal(title) + "-" + now.Format("150405.000000000")[9:]
 	if len(id) > 80 {
 		id = id[:80]
 	}
