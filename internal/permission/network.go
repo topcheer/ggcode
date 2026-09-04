@@ -79,7 +79,11 @@ var networkPatterns = []networkPattern{
 
 	// curl/wget with file-based POST/upload
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--data[- ]binary|-d|--data)[=\s]*@`), "curl sending local file contents via POST data"},
-	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*(--upload-file|-T)[=\s]`), "curl uploading a local file to a remote server"},
+	// #1596-A: -T and -F/--form accept GLUED short-option values
+	// (-Tarchive.tar, -Fphoto=@f) - the [=\s] anchor missed them.
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*--upload-file[=\s]`), "curl uploading a local file to a remote server"},
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*\s-T(=[^\s]+|[=\s]|[^=\s])`), "curl -T uploading a local file to a remote server"},
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*\s(-F[^\s=]*=|--form[=\s])`), "curl multipart form carrying local file data (@path)"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*--post-file[=\s]`), "curl posting a local file to a URL"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bcurl\b.*-F\s+.*=@`), "curl uploading a local file as form data"},
 	// curl/wget reading the request body from stdin combined with an input
@@ -90,7 +94,11 @@ var networkPatterns = []networkPattern{
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bwget\b.*--post-file`), "wget posting a local file to a URL"},
 
 	// nc/netcat piping a file
-	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bnc\b.*<\s`), "netcat piping a local file to a remote host"},
+	// #1596-B/C: no-space '<file' is a common shell habit; and the bare
+	// name 'netcat' matched NOTHING (only \bnc\b/\bncat\b existed) - the
+	// same command under its full name classified as no network activity
+	// at all.
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\b(nc|ncat|netcat)\b.*<\s*\S`), "netcat piping a local file to a remote host"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bncat\b.*<\s`), "ncat piping a local file to a remote host"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bsocat\b.*`), "socat can relay data to external endpoints"},
 
@@ -111,7 +119,7 @@ var networkPatterns = []networkPattern{
 	// curl/wget to a URL (download or general HTTP request)
 	{NetworkAccess, regexp.MustCompile(`(?i)\bcurl\b`), "curl makes an outbound network request"},
 	{NetworkAccess, regexp.MustCompile(`(?i)\bwget\b`), "wget makes an outbound network request"},
-	{NetworkAccess, regexp.MustCompile(`(?i)\bnc\b.*\s+\S+\s+\d+`), "netcat connecting to a remote host:port"},
+	{NetworkAccess, regexp.MustCompile(`(?i)\b(nc|ncat|netcat)\b.*\s+\S+\s+\d+`), "netcat connecting to a remote host:port"},
 	{NetworkAccess, regexp.MustCompile(`(?i)\bncat\b.*\s+\S+\s+\d+`), "ncat connecting to a remote host:port"},
 
 	// ssh/ansible (remote execution)
