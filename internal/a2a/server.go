@@ -1014,9 +1014,19 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 
 	for _, cfg := range configs {
 		// Check if config is disabled or waiting for backoff.
+		// #1470-A: re-read the LIVE entry under the lock - the old shape
+		// copied the snapshot-loop variable under RLock (protecting nothing:
+		// neither a map read nor shared state), so health updates recorded by
+		// earlier delivery goroutines (recordPushFailure/Success) were
+		// invisible during rapid task transitions and the #1074 backoff plus
+		// the Disabled verdict both went inert.
 		s.pushMu.RLock()
-		configCopy := cfg
+		live, ok := s.pushConfigs[cfg.ID]
+		configCopy := live
 		s.pushMu.RUnlock()
+		if !ok {
+			continue
+		}
 
 		if configCopy.Disabled {
 			debug.Log("a2a.push", "skipping disabled config %s", configCopy.ID)

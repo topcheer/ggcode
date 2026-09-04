@@ -504,14 +504,17 @@ type StreamResponse struct {
 
 // TaskStatusUpdateEvent is sent via SSE when a task's status changes.
 type TaskStatusUpdateEvent struct {
-	TaskID string     `json:"id"`
+	// #1470-B: A2A spec field name for events is taskId (Task itself uses
+	// id, which IS spec-conformant) - spec-parsing third-party receivers
+	// silently got an empty TaskID from the old tag.
+	TaskID string     `json:"taskId"`
 	Status TaskStatus `json:"status"`
 	Final  bool       `json:"final"`
 }
 
 // TaskArtifactUpdateEvent is sent via SSE when an artifact is produced.
 type TaskArtifactUpdateEvent struct {
-	TaskID    string   `json:"id"`
+	TaskID    string   `json:"taskId"` // #1470-B: spec field name
 	Artifact  Artifact `json:"artifact"`
 	Append    bool     `json:"append,omitempty"`
 	LastChunk bool     `json:"lastChunk,omitempty"`
