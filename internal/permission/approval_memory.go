@@ -2,6 +2,7 @@ package permission
 
 import (
 	"encoding/json"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -198,6 +199,19 @@ func MakeKey(toolName string, input json.RawMessage) (string, bool) {
 		}
 	}
 
+	// #1595-B: web tools carry their identity in the url field - without
+	// it the key degraded to the bare tool name, and after three
+	// supervised approvals ANY url auto-approved (web tools have no
+	// command-detector backstop).
+	for _, key := range []string{"url"} {
+		if v, ok := m[key]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil && s != "" {
+				return toolName + ":" + urlSignature(s), true
+			}
+		}
+	}
+
 	// For command tools, use the binary name.
 	for _, key := range []string{"command", "input"} {
 		if v, ok := m[key]; ok {
@@ -209,6 +223,23 @@ func MakeKey(toolName string, input json.RawMessage) (string, bool) {
 	}
 
 	return toolName, true
+}
+
+// urlSignature reduces a URL to its scheme+host+first-path-segment so
+// approvals are per-site, not per-exact-query.
+func urlSignature(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return pathSignature(raw)
+	}
+	sig := u.Scheme + "://" + u.Host
+	if u.Path != "" && u.Path != "/" {
+		segs := strings.SplitN(strings.Trim(u.Path, "/"), "/", 2)
+		if segs[0] != "" {
+			sig += "/" + segs[0]
+		}
+	}
+	return sig
 }
 
 // EnsureModeScope resets the learned approvals whenever the permission mode

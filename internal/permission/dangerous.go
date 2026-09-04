@@ -81,6 +81,12 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\b[^|;&\n]*--no-preserve-root`), "rm --no-preserve-root can delete the root filesystem"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bmkfs\b`), "mkfs would format a disk"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bdd\s+.*\bif=/dev/`), "dd with device input could destroy data"},
+		// #1595-A: the dd pattern only anchored on the READ side (if=) -
+		// 'dd of=/dev/sda if=disk.img' (write the image TO the device,
+		// the classic disk-destroy) matched nothing and bypass/autopilot
+		// allowed it with zero confirmation. Cover the write side, and
+		// the nvme/vd/disk device families the old set never knew.
+		{DangerCritical, regexp.MustCompile(`(?i)\bdd\b[^;|&]*\bof=/dev/(sd|hd|nvme|vd|disk|mmcblk)`), "dd writing to a raw device would destroy it"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bshred\b`), "shred securely deletes files"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+/\s*$`), "chmod 777 / is dangerous"},
 		{DangerCritical, regexp.MustCompile(`(?i):\(\)\s*\{\s*:\|:\s*&\s*\}\s*;:`), "fork bomb detected"},
