@@ -146,8 +146,14 @@ func iseCheckSelectorCall(se *ast.SelectorExpr, fset *token.FileSet, warnings *[
 	pkgName := iseExtractPkg(se.X)
 	funcName := se.Sel.Name
 
-	// Check for Fatal/Panic/Exit in any package
-	if desc, found := iseFuncNames[funcName]; found {
+	// Check for Fatal/Panic/Exit - #1467-C: the bare-name branch ran
+	// BEFORE and INDEPENDENT of the package check, so app.Exit() /
+	// err.Panic() / server.Fatalf() (method calls on arbitrary types)
+	// warned 'terminates the process' just like real os.Exit. Restrict
+	// the bare-name shortcut to canonical single-letter packages (os,
+	// log) and route everything else through the package-prefix patterns
+	// below.
+	if desc, found := iseFuncNames[funcName]; found && (pkgName == "os" || pkgName == "log") {
 		pos := fset.Position(se.Pos())
 		*warnings = append(*warnings,
 			fmt.Sprintf("%s:%d: init() calls %s() which %s at import time. "+

@@ -128,9 +128,25 @@ func looksLikeFilePath(s string) bool {
 		}
 	}
 	// Module-like dotted path relative path returned by search tools
+	// #1467-A: the bare len(parts)>=2 fallback classified ANY dotted token
+	// as a path - fmt.Println, os.Getenv, method calls, field selectors -
+	// and read_file full-text feeds this pipeline, so healthy deep reads
+	// inflated allSeenPaths with stdlib symbols and tripped 'stop
+	// exploring' guidance on the 3rd NEW file. A dotted path must now
+	// have a real path shape: a slash in the first segment (dir/file.go
+	// style) or a lowercase-single-dotted module path with a known file
+	// extension.
 	parts := strings.Split(s, ".")
 	if len(parts) >= 2 && len(parts[0]) >= 1 {
-		return true
+		if strings.Contains(parts[0], "/") {
+			return true
+		}
+		ext := parts[len(parts)-1]
+		for _, ok := range []string{"go", "ts", "js", "py", "rs", "json", "yaml", "yml", "md"} {
+			if ext == ok {
+				return true
+			}
+		}
 	}
 	return false
 }

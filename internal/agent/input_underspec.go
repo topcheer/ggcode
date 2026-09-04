@@ -117,6 +117,17 @@ func (a *Agent) maybeWarnInputUnderspec(userText string) string {
 	wordCount := len(words)
 
 	// If the request is long enough, it probably has detail.
+	vagueCount := 0
+	for _, p := range inputVagueWords {
+		if p.MatchString(text) {
+			vagueCount++
+		}
+	}
+	deicticCount := 0
+	for _, p := range inputDeicticPatterns {
+		matches := p.FindAllString(text, -1)
+		deicticCount += len(matches)
+	}
 	if wordCount > inputUnderspecMinWords {
 		// Even for longer requests, check if they're entirely vague
 		// (multiple vague words + deictics but zero identifiers).
@@ -131,17 +142,7 @@ func (a *Agent) maybeWarnInputUnderspec(userText string) string {
 			return ""
 		}
 		// Long but no identifiers -- check if it's vague throughout.
-		vagueCount := 0
-		for _, p := range inputVagueWords {
-			if p.MatchString(text) {
-				vagueCount++
-			}
-		}
-		deicticCount := 0
-		for _, p := range inputDeicticPatterns {
-			matches := p.FindAllString(text, -1)
-			deicticCount += len(matches)
-		}
+		// (#1467-B: counts hoisted so the medium branch shares them.)
 		if vagueCount < 2 && deicticCount < 3 {
 			return ""
 		}
@@ -156,6 +157,15 @@ func (a *Agent) maybeWarnInputUnderspec(userText string) string {
 			}
 		}
 		if hasIdentifier {
+			return ""
+		}
+		// #1467-B: the medium branch had NO vague/action gate (only the
+		// long branch did) - a perfectly specific 12-word request with no
+		// code identifiers ('run the unit tests for the parser package and
+		// report all failures') was deterministically flagged underspecified.
+		// vagueCount counts PATTERNS not words (faster+better = one match),
+		// so the gate is 'no vague pattern AND no deictic at all'.
+		if vagueCount == 0 && deicticCount == 0 {
 			return ""
 		}
 		// Falls through to warning below.
