@@ -28,7 +28,9 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"batch_replace", `{"pattern":"x","replacement":"y","files":[]}`, irrevTierMedium},
 
 		// Tier 3: high
-		{"git_reset", `{"mode":"hard"}`, irrevTierHigh},
+		// #1468-C: soft/mixed resets are Low; only --hard is High.
+		{"git_reset", `{"mode":"soft"}`, irrevTierLow},
+		{"git_reset", `{"args":"git reset --hard HEAD~3"}`, irrevTierHigh},
 		{"git_push", `{"force":true}`, irrevTierHigh},
 
 		// Destructive commands via run_command
@@ -75,7 +77,11 @@ func TestIrrevIsGroundingAction(t *testing.T) {
 			t.Errorf("irrevIsGroundingAction(%q) = false, want true", tool)
 		}
 	}
-	notGrounding := []string{"edit_file", "write_file", "git_commit", "run_command"}
+	notGrounding := []string{"edit_file", "write_file", "git_commit"}
+	// #1468-A: a successful run_command IS grounding.
+	if !irrevIsGroundingAction("run_command") {
+		t.Error("run_command should count as grounding (#1468-A)")
+	}
 	for _, tool := range notGrounding {
 		if irrevIsGroundingAction(tool) {
 			t.Errorf("irrevIsGroundingAction(%q) = true, want false", tool)
@@ -86,7 +92,7 @@ func TestIrrevIsGroundingAction(t *testing.T) {
 func TestIrrevGate_HighImpactNoGrounding(t *testing.T) {
 	s := newIrrevGateState()
 	// First action is high-impact with zero grounding
-	warn := s.recordAction("git_reset", `{"mode":"hard"}`)
+	warn := s.recordAction("git_reset", `{"args":"git reset --hard HEAD~3"}`)
 	if warn == "" {
 		t.Error("expected warning for high-impact action with no grounding")
 	}
@@ -98,7 +104,7 @@ func TestIrrevGate_HighImpactWithGrounding(t *testing.T) {
 	s.recordAction("git_status", `{}`)
 	s.recordAction("git_diff", `{}`)
 	// Now high-impact action should not warn
-	warn := s.recordAction("git_reset", `{"mode":"hard"}`)
+	warn := s.recordAction("git_reset", `{"args":"git reset --hard HEAD~3"}`)
 	if warn != "" {
 		t.Error("expected no warning for high-impact action after 2 grounding actions")
 	}
@@ -197,7 +203,7 @@ func TestIrrevGate_GroundingWindowDecay(t *testing.T) {
 		s.recordAction("edit_file", `{"file_path":"a.go"}`)
 	}
 	// Now high-impact action should warn again (grounding fell out of window)
-	warn := s.recordAction("git_reset", `{"mode":"hard"}`)
+	warn := s.recordAction("git_reset", `{"args":"git reset --hard HEAD~3"}`)
 	if warn == "" {
 		t.Error("expected warning after grounding decayed out of window")
 	}

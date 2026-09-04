@@ -41,6 +41,7 @@ package agent
 //     across ALL iterations
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 )
@@ -59,7 +60,7 @@ const (
 // irrevGateState tracks grounding actions and warns on under-grounded
 // high-irreversibility actions.
 type irrevGateState struct {
-	grounding     []bool // recent iterations: true if grounding action taken
+	grounding     []bool // recent TOOL CALLS (not iterations - #1468-A note): one bool per action
 	warnings      int
 	totalGrounded int
 }
@@ -115,11 +116,23 @@ func irrevClassifyTool(toolName, args string) int {
 		return irrevTierMedium
 
 	// Tier 3: High irreversibility (very hard to undo)
-	case "git_push", "git_reset":
+	case "git_push":
 		return irrevTierHigh
+	case "git_reset":
+		// #1468-C: soft/mixed/unstage resets are reversible - only --hard
+		// is a high-tier irreversible action.
+		if strings.Contains(strings.ToLower(args), "--hard") {
+			return irrevTierHigh
+		}
+		return irrevTierLow
 	default:
-		// Check for destructive patterns in unknown tools
-		if irrevIsDestructiveCommand(args) {
+		// #1468-B: the destructive PATTERN TABLE was designed for COMMANDS
+		// (rm -rf, mkfs) but ran over the ENTIRE argument JSON of unknown
+		// tools - an mcp search whose query merely CONTAINS 'shutdown' or
+		// 'truncate ' got tiered HIGH-IMPACT. Unknown tools are treated as
+		// read-only; pattern matching applies only when the args carry a
+		// command field.
+		if extractCommandFromArgs(json.RawMessage(args)) != "" && irrevIsDestructiveCommand(args) {
 			return irrevTierHigh
 		}
 		return irrevTierLow
@@ -137,7 +150,7 @@ func irrevIsDestructiveCommand(args string) bool {
 		"dd if=", "mkfs", "fdisk",
 		":(){:|:&};:", // fork bomb
 		"chmod -r 777", "chown -r",
-		"git push origin --delete", "git branch -d", "git branch -d",
+		"git push origin --delete", "git branch -d",
 		"git tag -d", "git remote remove",
 		"sudo rm", "shutdown", "reboot", "halt",
 	}
@@ -160,6 +173,12 @@ func irrevIsGroundingAction(toolName string) bool {
 		"lsp_outgoing_calls", "git_show", "git_diff", "git_blame",
 		"git_log", "git_status", "review_changes", "code_health",
 		"scan_todos", "dep_graph":
+		return true
+	// #1468-A: a SUCCESSFUL run_command is the strongest grounding there
+	// is - verification commands (go test / builds) right before a commit
+	// are exactly the evidence the gate wants; the standard
+	// test-driven-commit flow used to score '0 grounding actions'.
+	case "run_command":
 		return true
 	}
 	return false
