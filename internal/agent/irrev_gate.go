@@ -119,9 +119,21 @@ func irrevClassifyTool(toolName, args string) int {
 	case "git_push":
 		return irrevTierHigh
 	case "git_reset":
-		// #1468-C: soft/mixed/unstage resets are reversible - only --hard
-		// is a high-tier irreversible action.
-		if strings.Contains(strings.ToLower(args), "--hard") {
+		// #1468-C: soft/mixed/unstage resets are reversible - only hard
+		// is a high-tier irreversible action. #1579-A: the git_reset TOOL
+		// carries the mode as a schema field ({"mode":"hard"}) - it never
+		// contains the '--hard' literal, so the substring test tiered every
+		// real hard reset Low (zero grounding, all uncommitted work dropped
+		// with no warning). Accept both shapes: the tool's mode field and a
+		// shell literal via run_command.
+		var resetArgs struct {
+			Mode string `json:"mode"`
+		}
+		modeHard := false
+		if err := json.Unmarshal([]byte(args), &resetArgs); err == nil && strings.EqualFold(strings.TrimSpace(resetArgs.Mode), "hard") {
+			modeHard = true
+		}
+		if modeHard || strings.Contains(strings.ToLower(args), "--hard") {
 			return irrevTierHigh
 		}
 		return irrevTierLow
