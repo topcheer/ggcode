@@ -204,6 +204,32 @@ func AdaptiveCapFor(vendor, baseURL, model string, userHint int) *adaptiveCap {
 	return c
 }
 
+// AdaptiveCapForModelSwap returns the cap registered for the SAME
+// (vendor, baseURL) identity but a DIFFERENT model - used by
+// CloneWithModel (#1603). The registry is keyed on the full triple
+// precisely so learned values do not mix across models; the four clone
+// sites used to copy the OLD model's cap pointer, so a subagent cloned
+// onto a smaller-limit model inherited the parent's learned 8000 cap
+// (max_tokens rejections on the clone also wrote back through the shared
+// pointer, dragging the parent session's live cap down).
+func AdaptiveCapForModelSwap(old *adaptiveCap, newModel string, userHint int) *adaptiveCap {
+	if old == nil {
+		return nil
+	}
+	// key = vendor|baseURL|model - split vendor (first), then model is
+	// the LAST segment so a '|' inside baseURL cannot be misread.
+	vendor := old.key
+	baseURL := ""
+	if i := strings.Index(old.key, "|"); i >= 0 {
+		vendor = old.key[:i]
+		rest := old.key[i+1:]
+		if j := strings.LastIndex(rest, "|"); j >= 0 {
+			baseURL = rest[:j]
+		}
+	}
+	return AdaptiveCapFor(vendor, baseURL, newModel, userHint)
+}
+
 func capKey(vendor, baseURL, model string) string {
 	return strings.Join([]string{
 		strings.TrimSpace(vendor),

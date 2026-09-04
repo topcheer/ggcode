@@ -35,10 +35,13 @@ func (p *AnthropicProvider) ModelName() string { return p.model }
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 	return &AnthropicProvider{
-		client:          p.client,
-		model:           model,
-		maxTokens:       p.maxTokens,
-		cap:             p.cap,
+		client:    p.client,
+		model:     model,
+		maxTokens: p.maxTokens,
+		// #1603: re-key the adaptive cap for the NEW model - sharing the
+		// parent's learned cap pointer mixed per-model state across the
+		// registry's carefully-partitioned keys.
+		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
 		transport:       p.transport,
 		calibrator:      p.calibrator,
 		reasoningEffort: p.reasoningEffort,

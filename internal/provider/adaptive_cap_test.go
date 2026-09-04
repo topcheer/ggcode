@@ -71,3 +71,30 @@ func TestAdaptiveCapString_NonNil(t *testing.T) {
 		t.Error("expected non-empty string")
 	}
 }
+
+// TestCloneWithModelCapIsolation pins #1603: a clone on a DIFFERENT model
+// must not share the parent's adaptive cap - the registry keys caps on
+// (vendor, baseURL, model) precisely so learned values never mix, but the
+// clone sites used to copy the pointer wholesale (a smaller-limit clone
+// inherited the parent's learned 8000 cap, and its rejections wrote back
+// through the shared pointer, dragging the parent down).
+func TestCloneWithModelCapIsolation(t *testing.T) {
+	parent := AdaptiveCapFor("testvendor", "https://t.example", "model-a", 8000)
+	parent.OnRejected(9000) // learned: 9000 is too big for model-a
+
+	swapped := AdaptiveCapForModelSwap(parent, "model-b", 4000)
+	if swapped == parent {
+		t.Fatal("model swap returned the SAME cap instance")
+	}
+	if swapped.key == parent.key {
+		t.Fatalf("cap key not re-keyed for the new model: %q", swapped.key)
+	}
+	// A rejection on the clone must not touch the parent's bounds.
+	swapped.OnRejected(100)
+	parent.mu.Lock()
+	hi := parent.hi
+	parent.mu.Unlock()
+	if hi != 9000 {
+		t.Fatalf("parent hi polluted by clone rejection: %d", hi)
+	}
+}

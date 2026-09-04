@@ -45,10 +45,13 @@ func (p *OpenAIProvider) ModelName() string { return p.model }
 // Used by named subagents to run with a model override.
 func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 	return &OpenAIProvider{
-		client:          p.client,
-		model:           model,
-		maxTokens:       p.maxTokens,
-		cap:             p.cap,
+		client:    p.client,
+		model:     model,
+		maxTokens: p.maxTokens,
+		// #1603: re-key the adaptive cap for the NEW model - sharing the
+		// parent's learned cap pointer mixed per-model state across the
+		// registry's carefully-partitioned keys.
+		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
 		temperature:     p.temperature,
