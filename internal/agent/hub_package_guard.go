@@ -275,13 +275,29 @@ func hubComputeFanIn(root, modulePath string) map[string]int {
 	})
 
 	// Parse imports from each package and count edges to internal packages.
+	// #1614-A: each package dir is keyed by its NEAREST go.mod module, not
+	// just the root - a nested module's intra-module imports carry ITS OWN
+	// module prefix (ggcode-relay = github.com/topcheer/ggcode-relay, not a
+	// root prefix), so the root-only check classified them external and the
+	// map never held the keys the (corrected) query side looks up: the
+	// #1574 fix was a no-op for the live case. Same-class fix at the SOURCE.
+	modOf := make(map[string]string)
 	for _, dir := range pkgDirs {
 		if time.Now().After(deadline) {
 			debug.Log("hub-pkg-guard", "fan-in computation: time budget hit after %d packages", len(pkgDirs))
 			break
 		}
+		mod := modOf[dir]
+		if mod == "" {
+			if _, m := hubNearestGoMod(dir, root); m != "" {
+				mod = m
+			} else {
+				mod = modulePath
+			}
+			modOf[dir] = mod
+		}
 		for _, imp := range hubParseImports(dir) {
-			if hubIsInternal(imp, modulePath) {
+			if hubIsInternal(imp, mod) {
 				fanIn[imp]++
 			}
 		}
