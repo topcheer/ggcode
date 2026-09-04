@@ -123,9 +123,10 @@ func TestOrphanFileReset(t *testing.T) {
 
 func TestOrphanFileMultiFileWrite(t *testing.T) {
 	args := `{"files":[{"path":"a.go","content":"x"},{"path":"b.go","content":"y"}]}`
-	path := extractFilePathOrArg(args, "multi_file_write")
-	if path != "a.go" {
-		t.Fatalf("expected a.go, got %s", path)
+	// #1473-B: ALL paths extracted now, not just files[0].
+	paths := extractFilePathsOrArg(args, "multi_file_write")
+	if len(paths) != 2 || paths[0] != "a.go" || paths[1] != "b.go" {
+		t.Fatalf("expected [a.go b.go], got %v", paths)
 	}
 }
 

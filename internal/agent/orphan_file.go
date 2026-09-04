@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -98,18 +99,28 @@ func (o *orphanFileState) recordToolCall(toolName, argsJSON string, iteration in
 
 	switch toolName {
 	case "write_file", "multi_file_write":
-		path := extractFilePathOrArg(argsJSON, toolName)
-		if path == "" {
-			return ""
-		}
-		if isOrphanSourceFile(path) {
-			o.newFiles = append(o.newFiles, path)
-			if len(o.newFiles) > orphanRecentFilesLimit {
-				o.newFiles = o.newFiles[len(o.newFiles)-orphanRecentFilesLimit:]
+		// #1473-B: extract ALL paths (the old first-"path"-only match tracked
+		// just files[0]; editing any OTHER file of the batch set integrated
+		// and cleared the whole list, so the remaining real orphans never
+		// warned).
+		paths := extractFilePathsOrArg(argsJSON, toolName)
+		for _, path := range paths {
+			// #1473-A: only track paths that do NOT exist yet - write_file's
+			// documented semantics cover full OVERWRITES too, and rewriting an
+			// existing build file then misreporting it as a 'new source file
+			// not yet integrated' was the detector's most common false alarm.
+			if _, err := os.Stat(path); err == nil {
+				continue // already on disk: an overwrite, not a creation
 			}
-			o.callsSince = 0
-			o.integrated = false
-			debug.Log("agent", "orphanFile: tracking new source file %s (iteration %d)", path, iteration)
+			if isOrphanSourceFile(path) {
+				o.newFiles = append(o.newFiles, path)
+				if len(o.newFiles) > orphanRecentFilesLimit {
+					o.newFiles = o.newFiles[len(o.newFiles)-orphanRecentFilesLimit:]
+				}
+				o.callsSince = 0
+				o.integrated = false
+				debug.Log("agent", "orphanFile: tracking new source file %s (iteration %d)", path, iteration)
+			}
 		}
 		// Note: write_file on a non-source file (e.g., config) does not
 		// mark as integrated. Only edits to source files or builds do.
@@ -164,31 +175,37 @@ func (o *orphanFileState) recordToolCall(toolName, argsJSON string, iteration in
 
 // extractFilePathOrArg extracts the file path from tool call arguments.
 // For write_file it's "path", for multi_file_write it's in "files" array.
-func extractFilePathOrArg(argsJSON, toolName string) string {
+func extractFilePathsOrArg(argsJSON, toolName string) []string {
 	if toolName == "multi_file_write" {
-		// Look for first "path":"..." in the files array
-		idx := strings.Index(argsJSON, `"path":"`)
-		if idx < 0 {
-			return ""
+		// Every "path":"..." entry in the files array (#1473-B).
+		var out []string
+		rest := argsJSON
+		for {
+			idx := strings.Index(rest, `"path":"`)
+			if idx < 0 {
+				break
+			}
+			start := idx + len(`"path":"`)
+			end := strings.Index(rest[start:], `"`)
+			if end <= 0 {
+				break
+			}
+			out = append(out, rest[start:start+end])
+			rest = rest[start+end:]
 		}
-		start := idx + len(`"path":"`)
-		end := strings.Index(argsJSON[start:], `"`)
-		if end > 0 {
-			return argsJSON[start : start+end]
-		}
-		return ""
+		return out
 	}
-	// Standard write_file: "path":"..."
+	// Standard write_file: single "path":"..." entry.
 	idx := strings.Index(argsJSON, `"path":"`)
 	if idx < 0 {
-		return ""
+		return nil
 	}
 	start := idx + len(`"path":"`)
 	end := strings.Index(argsJSON[start:], `"`)
 	if end > 0 {
-		return argsJSON[start : start+end]
+		return []string{argsJSON[start : start+end]}
 	}
-	return ""
+	return nil
 }
 
 // recordEditIntegration decides whether an edit-style tool call counts as
