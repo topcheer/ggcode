@@ -128,13 +128,17 @@ func (a *Agent) checkHubPackage(filePath string) string {
 	if a.hubPackageGuard.checked[abs] {
 		return ""
 	}
-	a.hubPackageGuard.checked[abs] = true
 
 	// Lazily compute the fan-in map (once per session).
 	a.hubPackageGuard.ensureFanIn(a.workingDir)
 	if len(a.hubPackageGuard.fanIn) == 0 {
 		return ""
 	}
+	// #1574-C: mark checked only AFTER a successful initialization - the
+	// old ordering latched checked before ensureFanIn could fail (e.g. a
+	// transient root go.mod miss leaves initialized=false), and that file
+	// was never re-examined this run.
+	a.hubPackageGuard.checked[abs] = true
 
 	// Determine the edited file's package import path.
 	pkgPath := hubFileToImportPath(a.workingDir, filePath, a.hubPackageGuard.modulePath)
@@ -192,6 +196,22 @@ func hubFileToImportPath(workingDir, filePath, modulePath string) string {
 		abs = filepath.Join(workingDir, filePath)
 	}
 	dir := filepath.Dir(abs)
+	// #1574-A: a NESTED submodule (its own go.mod) keys the fan-in map by
+	// ITS module path (its intra-module imports say so) - concatenating
+	// the ROOT module path produced github.com/root/sub/... keys that
+	// never exist in the map, a guaranteed 0 fan-in for every file under
+	// it (live in this very repo: ggcode-relay). Walk up to the nearest
+	// go.mod between dir and workingDir.
+	modRoot, modName := hubNearestGoMod(dir, workingDir)
+	if modRoot != "" && modName != "" && modName != modulePath {
+		if relNested, err := filepath.Rel(modRoot, dir); err == nil {
+			relNested = filepath.ToSlash(relNested)
+			if relNested == "." {
+				return modName
+			}
+			return modName + "/" + relNested
+		}
+	}
 	rel, err := filepath.Rel(workingDir, dir)
 	if err != nil {
 		return ""
@@ -201,6 +221,27 @@ func hubFileToImportPath(workingDir, filePath, modulePath string) string {
 		return modulePath
 	}
 	return modulePath + "/" + rel
+}
+
+// hubNearestGoMod walks up from dir toward root looking for the nearest
+// go.mod, returning its directory and module name ("" when none found).
+func hubNearestGoMod(dir, root string) (string, string) {
+	for cur := dir; ; {
+		if modPath := filepath.Join(cur, "go.mod"); modPath != "" {
+			if data, err := os.ReadFile(modPath); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "module ") {
+						return cur, strings.TrimSpace(strings.TrimPrefix(line, "module "))
+					}
+				}
+			}
+		}
+		if cur == root || cur == filepath.Dir(cur) {
+			return "", ""
+		}
+		cur = filepath.Dir(cur)
+	}
 }
 
 // hubComputeFanIn walks all Go package directories under root and counts how
