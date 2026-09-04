@@ -431,15 +431,17 @@ type phantomVerifyClaim struct {
 
 // phantomVerifyState tracks verification commands run and warning count.
 type phantomVerifyState struct {
-	warnings        int
-	categoriesRun   map[string]bool // verification categories actually executed
-	recentClaimCats map[string]bool // categories claimed in current assistant text
+	warnings          int
+	categoriesRun     map[string]bool // verification categories actually executed this run
+	categoriesEverRun map[string]bool // session-level: categories EVER verified (#1478-A)
+	recentClaimCats   map[string]bool // categories claimed in current assistant text
 }
 
 func newPhantomVerifyState() *phantomVerifyState {
 	return &phantomVerifyState{
-		categoriesRun:   make(map[string]bool),
-		recentClaimCats: make(map[string]bool),
+		categoriesRun:     make(map[string]bool),
+		categoriesEverRun: make(map[string]bool),
+		recentClaimCats:   make(map[string]bool),
 	}
 }
 
@@ -487,6 +489,12 @@ func (s *phantomVerifyState) recordToolCall(toolName string, toolInput string, i
 	// targets and command-position keyword matching instead of substring
 	// regexes over the raw command text.
 	phantomArmCategories(cmdStr, s.categoriesRun)
+	// #1478-A: session-level arming - reset() clears the per-run table each
+	// turn, so a legitimate cross-turn back-reference ("yes, the tests passed")
+	// after a REAL earlier run was flagged phantom. The ever-run table
+	// survives resets and exempts such back-references while still catching
+	// claims about never-verified categories.
+	phantomArmCategories(cmdStr, s.categoriesEverRun)
 }
 
 // extractCommandArg extracts the "command" field value from a JSON arguments
@@ -532,7 +540,9 @@ func (s *phantomVerifyState) detectPhantomClaims(text string) []phantomVerifyCla
 				s.recentClaimCats[cat] = true
 
 				// Only flag if this category was NOT actually verified
-				if !s.categoriesRun[cat] {
+				// Only flag if this category was NOT actually verified - neither
+				// this run nor earlier in the session (#1478-A back-reference).
+				if !s.categoriesRun[cat] && !s.categoriesEverRun[cat] {
 					claims = append(claims, phantomVerifyClaim{
 						category:  cat,
 						statement: statement,

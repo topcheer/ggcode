@@ -32,6 +32,7 @@ const (
 type permDenyStreakState struct {
 	mu         sync.Mutex
 	streak     int
+	userDenied int // subset of streak: explicit USER rejections (#1478-B)
 	fires      int
 	lastFireAt int // streak value when guidance last fired (0 = never)
 }
@@ -44,6 +45,7 @@ func (s *permDenyStreakState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.streak = 0
+	s.userDenied = 0
 	s.fires = 0
 	s.lastFireAt = 0
 }
@@ -67,9 +69,16 @@ func (s *permDenyStreakState) record(mode permission.PermissionMode, r tool.Resu
 
 	if !isPermissionDeniedResult(r) {
 		s.streak = 0
+		s.userDenied = 0
 		return ""
 	}
 	s.streak++
+	// #1478-B: classify provenance - user rejections must not be narrated
+	// as a permission-POLICY problem (the switch_mode suggestion amounts to
+	// coaching the agent to bypass the user's explicit judgment).
+	if strings.Contains(r.Content, "User rejected") {
+		s.userDenied++
+	}
 	if s.streak < permDenyStreakThreshold || s.fires >= permDenyStreakMaxFires {
 		return ""
 	}
@@ -78,6 +87,12 @@ func (s *permDenyStreakState) record(mode permission.PermissionMode, r tool.Resu
 	}
 	s.fires++
 	s.lastFireAt = s.streak
+
+	// #1478-B: majority-user-rejection streaks get user-intent guidance,
+	// not mode-switch coaching - switch_mode cannot change a user's "no".
+	if s.userDenied*2 >= s.streak {
+		return fmt.Sprintf("[mode-guard] %d consecutive tool calls were rejected by the USER (explicit denials, not policy). Do NOT retry the denied operation and do NOT switch permission modes - the mode is not the problem. Ask the user for clarification or choose a different approach.", s.streak)
+	}
 
 	msg := fmt.Sprintf("[mode-guard] %d consecutive tool calls were denied by the permission policy. Current permission mode: %q.",
 		s.streak, mode.String())
