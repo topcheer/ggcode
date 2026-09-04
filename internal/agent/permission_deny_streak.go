@@ -91,7 +91,7 @@ func (s *permDenyStreakState) record(mode permission.PermissionMode, r tool.Resu
 	// #1478-B: majority-user-rejection streaks get user-intent guidance,
 	// not mode-switch coaching - switch_mode cannot change a user's "no".
 	if s.userDenied*2 >= s.streak {
-		return fmt.Sprintf("[mode-guard] %d consecutive tool calls were rejected by the USER (explicit denials, not policy). Do NOT retry the denied operation and do NOT switch permission modes - the mode is not the problem. Ask the user for clarification or choose a different approach.", s.streak)
+		return fmt.Sprintf("[mode-guard] %d consecutive tool calls were denied - the MAJORITY (%d) were explicit USER rejections, not policy blocks. Do NOT retry the denied operation and do NOT switch permission modes - the mode is not the problem. Ask the user for clarification or choose a different approach.", s.streak, s.userDenied)
 	}
 
 	msg := fmt.Sprintf("[mode-guard] %d consecutive tool calls were denied by the permission policy. Current permission mode: %q.",

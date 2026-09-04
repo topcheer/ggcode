@@ -216,3 +216,16 @@ func TestMaybeWarnPhantomVerify_includesCategory(t *testing.T) {
 		t.Error("hint should include the test category label")
 	}
 }
+
+// TestPhantomEverRunEditInvalidation pins #1598-A: the session-level
+// everRun exemption survives untouched back-references but is cleared by a
+// successful edit - a fresh post-edit "tests passed" claim must be checked
+// again (the detector's core false-completion target).
+func TestPhantomEverRunEditInvalidation(t *testing.T) {
+	s := newPhantomVerifyState()
+	s.categoriesEverRun["test"] = true
+	s.invalidateEdits()
+	if len(s.categoriesEverRun) != 0 {
+		t.Fatalf("edit did not clear everRun: %v", s.categoriesEverRun)
+	}
+}

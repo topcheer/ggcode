@@ -4044,6 +4044,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// matching the !result.IsError style of the checks below (#495).
 			if fileEditingTools[tc.Name] && !result.IsError {
 				a.futileCycle.recordWrite()
+				// #1598-A: a successful edit invalidates every prior
+				// verification - the session-level everRun exemption (#1478-A)
+				// must not outlive the edits it vouches for, or a fresh
+				// "all tests pass" claim after editing 5 files stays
+				// permanently exempt (the detector's core false-completion
+				// target). Legal back-references WITHOUT intervening edits
+				// keep the exemption.
+				a.phantomVerify.invalidateEdits()
 			} else if readPaths := extractFilePathsFromArgs(tc.Arguments, tc.Name); len(readPaths) > 0 {
 				// #500: batch-aware — multi_file_read carries N paths but the
 				// old single-path extraction recorded only files[0], suppressing

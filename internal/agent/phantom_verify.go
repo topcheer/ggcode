@@ -623,3 +623,16 @@ func extractSentence(text string, pos []int) string {
 
 	return strings.TrimSpace(text[start:end])
 }
+
+// invalidateEdits clears the session-level everRun exemption (#1598-A):
+// a successful edit invalidates every prior verification, so back-references
+// vouching for pre-edit runs must not stay exempt after the sources changed.
+// The per-run table was already clear (it resets every turn).
+func (s *phantomVerifyState) invalidateEdits() {
+	if s == nil {
+		return
+	}
+	for k := range s.categoriesEverRun {
+		delete(s.categoriesEverRun, k)
+	}
+}
