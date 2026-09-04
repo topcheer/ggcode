@@ -410,6 +410,19 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 				delete(a.seen, k)
 			}
 		}
+		// #1567-D (#974 pattern, missed here): a burst inside the TTL window
+		// leaves the map over-capacity with no oldest-entry fallback - it
+		// grows unbounded until entries age out. Drop oldest by timestamp.
+		for len(a.seen) >= wecomDedupMaxSize {
+			var oldestKey string
+			var oldestT time.Time
+			for k, t := range a.seen {
+				if oldestKey == "" || t.Before(oldestT) {
+					oldestKey, oldestT = k, t
+				}
+			}
+			delete(a.seen, oldestKey)
+		}
 	}
 	// Remember req_id for respond_msg replies
 	reqID := payloadReqID(payload)

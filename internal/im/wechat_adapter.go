@@ -423,8 +423,13 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 	if strings.TrimSpace(text) == "" {
 		if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
 			notice := "[暂不支持语音消息，请发送文字]"
-			if unsupported == ilinkItemVideo {
+			switch unsupported {
+			case ilinkItemVideo:
 				notice = "[暂不支持视频消息，请发送文字]"
+			case ilinkItemImage:
+				notice = "[暂不支持图片消息，请发送文字]"
+			case ilinkItemFile:
+				notice = "[暂不支持文件消息，请发送文字]"
 			}
 			debug.Log("wechat", "adapter=%s unsupported item type=%d from=%s, replying notice", a.name, unsupported, msg.FromUserID)
 			channelID := msg.FromUserID
@@ -502,7 +507,12 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 // in the message, or 0 if none (#1251 — these have no inbound mapping).
 func wechatUnsupportedItemKind(msg ilinkMessage) int {
 	for _, item := range msg.ItemList {
-		if item.Type == ilinkItemVoice || item.Type == ilinkItemVideo {
+		// #1567-A: image(2)/file(4) previously fell through to the silent
+		// "empty text, skipping" drop - pure image/file inbound messages had
+		// empty text (wechatMessageText joins Type==1 only), so the #1251
+		// notice never fired for them and the bot simply never reacted.
+		switch item.Type {
+		case ilinkItemVoice, ilinkItemVideo, ilinkItemImage, ilinkItemFile:
 			return item.Type
 		}
 	}
@@ -623,7 +633,11 @@ func (a *WechatAdapter) sendTextToUser(ctx context.Context, toUserID, content, c
 		debug.Log("wechat", "adapter=%s sendmessage response decode failed: %v", a.name, err)
 		return nil
 	}
-	if result.Ret != 0 {
+	if result.Ret != 0 || result.ErrCode != 0 {
+		// #1567-C: ret=0 with errcode!=0 is still a server-side rejection
+		// (e.g. rate limit) - the sibling sendSingleChunk checks both; this
+		// path returned nil and every out-of-band reply (pairing guidance,
+		// unauthorized denial, #1251 notices) counted as delivered.
 		return fmt.Errorf("sendmessage error: ret=%d errcode=%d errmsg=%s", result.Ret, result.ErrCode, result.ErrMsg)
 	}
 	debug.Log("wechat", "adapter=%s sendmessage OK", a.name)
@@ -675,6 +689,7 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	text = stripMarkdown(strings.TrimSpace(remainder))
 	sentImage := false
 	attempted := 0
+	sentImages := 0
 	for _, img := range images {
 		url := wechatImageURL(img)
 		if url == "" {
@@ -687,6 +702,7 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			continue
 		}
 		sentImage = true
+		sentImages++
 		// #1250: match the text-chunk path's spacing — iLink is a passive-reply
 		// window protocol that is rate sensitive (5 msgs/inbound); back-to-back
 		// image POSTs asked for throttling the same way the chunks do. This
@@ -722,7 +738,14 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	// chunk count and make the truncation visible via a notice on the last
 	// chunk, instead of sending chunks the server silently drops past quota
 	// (user saw partial replies with no indication anything was lost).
-	if len(chunks) > wechatMaxChunksPerSend {
+	// #1567-B: images share the same inbound quota - N images + 5 text
+	// chunks = N+5 sends and the server silently dropped the tail. The cap
+	// now subtracts the images already sent this turn.
+	textQuota := wechatMaxChunksPerSend - sentImages
+	if textQuota < 1 {
+		textQuota = 1
+	}
+	if len(chunks) > textQuota {
 		origChunks := len(chunks)
 		last := chunks[wechatMaxChunksPerSend-1]
 		if maxBytes := PlatformLimits[PlatformWechat]; maxBytes > 0 && len(last)+len(wechatTruncateNotice) > maxBytes {

@@ -722,6 +722,18 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 				delete(a.seen, k)
 			}
 		}
+		// #1567-D (#974 pattern, missed here): same missing oldest-entry
+		// fallback as wecom - a burst inside the TTL window grows unbounded.
+		for len(a.seen) >= waDedupMaxSize {
+			var oldestKey string
+			var oldestT time.Time
+			for k, t := range a.seen {
+				if oldestKey == "" || t.Before(oldestT) {
+					oldestKey, oldestT = k, t
+				}
+			}
+			delete(a.seen, oldestKey)
+		}
 	}
 	a.mu.Unlock()
 
