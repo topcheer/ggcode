@@ -20,9 +20,21 @@ func (m *Manager) LoadAll(entries []config.PluginConfigEntry) {
 		m.loadEntry(entry)
 	}
 
+	// #1601-B: scanDir used to re-load files already declared in config -
+	// the second Register hit the same tool names and RegisterTools'
+	// first-error return aborted the whole startup, violating this
+	// function's own header promise. Skip config-loaded absolute paths.
+	loaded := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if p := entry.Path; p != "" {
+			if abs, err := filepath.Abs(p); err == nil {
+				loaded[abs] = true
+			}
+		}
+	}
 	home := config.HomeDir()
 	pluginDir := filepath.Join(home, ".ggcode", "plugins")
-	m.scanDir(pluginDir)
+	m.scanDirExcluding(pluginDir, loaded)
 }
 
 func (m *Manager) loadEntry(entry config.PluginConfigEntry) {
@@ -31,6 +43,16 @@ func (m *Manager) loadEntry(entry config.PluginConfigEntry) {
 		m.loadCommandPlugin(entry)
 	case "so", "go-plugin":
 		m.loadGoPlugin(entry)
+	case "grpc":
+		// #1601-A: grpc plugins are owned by the grpc manager
+		// (interactive_core wires grpcMgr separately); routing them here
+		// fell to loadCommandPlugin (Path empty) and recorded a FAILURE
+		// the inspector panel displayed - a healthy plugin shown as
+		// broken. Record the handoff as success instead.
+		m.results = append(m.results, LoadResult{
+			Name: entry.Name, Success: true,
+			Error: fmt.Errorf("handled by gRPC plugin manager"),
+		})
 	default:
 		if strings.HasSuffix(entry.Path, ".so") {
 			m.loadGoPlugin(entry)
@@ -135,6 +157,12 @@ func (m *Manager) loadCommandPlugin(entry config.PluginConfigEntry) {
 }
 
 func (m *Manager) scanDir(dir string) {
+	m.scanDirExcluding(dir, nil)
+}
+
+// scanDirExcluding walks the plugin directory, skipping paths in the
+// exclude set (absolute-normalized, #1601-B).
+func (m *Manager) scanDirExcluding(dir string, exclude map[string]bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -146,6 +174,11 @@ func (m *Manager) scanDir(dir string) {
 		}
 		name := e.Name()
 		fullPath := filepath.Join(dir, name)
+		if exclude != nil {
+			if abs, err := filepath.Abs(fullPath); err == nil && exclude[abs] {
+				continue
+			}
+		}
 
 		switch {
 		case strings.HasSuffix(name, ".so"):
