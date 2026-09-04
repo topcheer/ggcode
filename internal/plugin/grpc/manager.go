@@ -118,6 +118,19 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 	}
 
 	m.mu.Lock()
+	// #1597-A: a same-named config entry (YAML typo) used to overwrite the
+	// map slot silently - the first plugin's Client lost its reference and
+	// was NEVER killed (go-plugin does not reap children), orphaning the
+	// subprocess while its adapter (and any non-colliding tool names)
+	// stayed registered against an unmanaged process.
+	if old, ok := m.plugins[cfg.Name]; ok && old != inst {
+		m.mu.Unlock()
+		debug.Log("plugin-grpc", "config %q reloaded; killing previous plugin instance", cfg.Name)
+		if old.Client != nil {
+			old.Client.Kill()
+		}
+		m.mu.Lock()
+	}
 	m.plugins[cfg.Name] = inst
 	m.mu.Unlock()
 

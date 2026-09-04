@@ -1766,6 +1766,15 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 			flush()
 		}
 	}
+	// #1597-B: SSE spec (WHATWG 9.2.6) - on stream close a pending
+	// non-empty buffer must be processed and dispatched. A server that
+	// writes its last notification without a trailing blank line and
+	// closes (or flushes an under-filled buffer) dropped that event
+	// forever - the reconnect lands on a NEW connection. Flush the tail.
+	flush()
+	if err := scanner.Err(); err != nil {
+		debug.Log("mcp-client", "http notif stream read error: %v", err)
+	}
 	if c.closed.Load() {
 		return httpNotifClosing
 	}
