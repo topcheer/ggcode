@@ -1027,6 +1027,18 @@ func (s *Server) firePushNotifications(taskID string, payload StreamResponse) {
 		if !ok {
 			continue
 		}
+		// #1582-A: the delivery-time re-check above ran against the
+		// SNAPSHOT url; between snapshot and this live re-read a
+		// registration can replace the whole entry, so the LIVE url has
+		// passed NO delivery-time validation - the exact planted-config
+		// window the defense-in-depth comment describes. Re-validate the
+		// live url before dialing.
+		if configCopy.URL != cfg.URL {
+			if err := s.validatePushCallbackURL(configCopy.URL); err != nil {
+				debug.Log("a2a.push", "live callback for %s changed to unverified url, skipping: %v", cfg.ID, err)
+				continue
+			}
+		}
 
 		if configCopy.Disabled {
 			debug.Log("a2a.push", "skipping disabled config %s", configCopy.ID)

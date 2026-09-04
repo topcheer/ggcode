@@ -240,6 +240,16 @@ func tokenSet(desc string) map[string]struct{} {
 	for _, w := range strings.Fields(desc) {
 		set[w] = struct{}{}
 	}
+	// #1582-C: CJK text has no spaces - Fields yields the whole sentence
+	// as one token, so two Chinese descriptions scored J=1 (identical) or
+	// J=0 (any rewrite) and the 0.75 near-duplicate threshold never caught
+	// rewritten duplicates. CJK runes join the set as single-rune tokens
+	// (same shape as the #1580 similarity fix).
+	for _, r := range desc {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			set[string(r)] = struct{}{}
+		}
+	}
 	return set
 }
 
