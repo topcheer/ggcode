@@ -1509,13 +1509,23 @@ func (k *Knight) emitReportKeyed(report, key string, severity EmitSeverity) {
 	if k.inQuietHours(time.Now()) {
 		return
 	}
-	if !k.emitGate.allow(key, severity, time.Now()) {
-		return
-	}
 	k.mu.Lock()
 	em := k.emitter
 	sink := k.sink
 	k.mu.Unlock()
+	// #1575-B: check for an actual destination BEFORE the throttle gate -
+	// allow() is check-and-set, so a targetless call (daemon up before IM
+	// connects) burned the 6h window as a phantom emit and the first REAL
+	// notification was swallowed.
+	if em == nil && sink == nil {
+		return
+	}
+	if em != nil && !em.HasTargets() && sink == nil {
+		return
+	}
+	if !k.emitGate.allow(key, severity, time.Now()) {
+		return
+	}
 	if em != nil && em.HasTargets() {
 		em.EmitKnightReport(report)
 	}

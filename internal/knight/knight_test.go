@@ -144,8 +144,9 @@ vendors:
 	if !b.CanSpend() {
 		t.Fatal("expected unlimited budget to keep allowing spends")
 	}
-	if rem := b.Remaining(); rem != 0 {
-		t.Fatalf("expected unlimited budget remaining sentinel 0, got %d", rem)
+	// #1575-C: -1 is the unlimited sentinel (0 read as exhausted).
+	if rem := b.Remaining(); rem != -1 {
+		t.Fatalf("expected unlimited budget remaining sentinel -1, got %d", rem)
 	}
 }
 

@@ -90,7 +90,10 @@ func (b *Budget) Remaining() int {
 	defer b.mu.Unlock()
 	b.ensureLoaded()
 	if b.daily == 0 {
-		return 0
+		// #1575-C: 0 means UNLIMITED here (CanSpend always true) - reporting
+		// Remaining 0 made the WebUI read as "budget exhausted" while tasks
+		// kept running. -1 is the unlimited sentinel for display layers.
+		return -1
 	}
 	return b.daily - b.todayUsed
 }
@@ -155,15 +158,31 @@ func (b *Budget) ensureLoadedAt(now time.Time) {
 	if b.loaded && b.todayKey == today {
 		return
 	}
-	b.todayKey = today
-	b.todayUsed = 0
-	b.loaded = true
-
 	path := filepath.Join(b.dir, "usage-"+today+".jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return // no file yet — zero usage
+		// #1575-A: only a MISSING file means zero usage - a transient read
+		// failure (EACCES, antivirus, indexer lock) with the state already
+		// flipped to loaded=true zeroed today's usage for the whole day and
+		// CanSpend kept approving past an exhausted budget. Keep the prior
+		// state (or stay unloaded) so the load retries.
+		if !os.IsNotExist(err) {
+			if b.todayKey != today {
+				b.todayKey = today
+				b.loaded = false
+			}
+			debug.Log("knight", "budget usage read failed (keeping prior state, will retry): %v", err)
+			return
+		}
+		// No file yet - a fresh day with genuinely zero usage.
+		b.todayKey = today
+		b.todayUsed = 0
+		b.loaded = true
+		return
 	}
+	b.todayKey = today
+	b.todayUsed = 0
+	b.loaded = true
 
 	for _, line := range splitLines(string(data)) {
 		line = trimSpace(line)
