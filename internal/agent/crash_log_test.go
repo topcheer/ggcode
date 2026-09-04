@@ -47,3 +47,30 @@ func TestWriteCrashLogNilValue(t *testing.T) {
 		t.Fatalf("nil panic value must still produce a log, got %q", path)
 	}
 }
+
+// The crash log must include the all-goroutines dump: the panicking
+// goroutine's stack alone hides blockers (e.g. TUI event-loop stalls show
+// innocent goroutines parked on channel sends while the real culprit sits
+// in an Update handler).
+func TestWriteCrashLogIncludesAllGoroutines(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	path := WriteCrashLog("test", "boom")
+	if strings.HasPrefix(path, "<") {
+		t.Fatalf("expected a log path, got %q", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	if !strings.Contains(s, "=== all goroutines ===") {
+		t.Fatal("crash log missing all-goroutines section")
+	}
+	if !strings.Contains(s, "goroutine ") {
+		t.Fatal("all-goroutines section has no goroutine frames")
+	}
+	if !strings.Contains(s, "TestWriteCrashLogIncludesAllGoroutines") {
+		t.Fatal("primary (current-goroutine) stack missing from log")
+	}
+}

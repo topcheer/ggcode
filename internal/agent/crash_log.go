@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"time"
 
@@ -59,8 +60,28 @@ func WriteCrashLog(component string, val any) string {
 	if len(stack) > maxStack {
 		stack = stack[:maxStack]
 	}
-	body := fmt.Sprintf("time:      %s\ncomponent: %s\npanic:     %s\n\n%s\n",
-		time.Now().Format(time.RFC3339), component, panicText, stack)
+	// Full goroutine dump: the panicking goroutine's stack alone often hides
+	// the cause (e.g. a TUI event-loop stall shows up as innocent goroutines
+	// blocked on tea.Program.Send while the real blocker sits in an Update
+	// handler). Captured from runtime.Stack(all=true) with a generous but
+	// bounded cap; written AFTER the primary stack so the most important
+	// frames stay at the top of the file.
+	const maxAllStack = 8 << 20 // 8 MiB
+	allBuf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(allBuf, true)
+		if n < len(allBuf) {
+			allBuf = allBuf[:n]
+			break
+		}
+		if len(allBuf) >= maxAllStack {
+			allBuf = allBuf[:maxAllStack]
+			break
+		}
+		allBuf = make([]byte, len(allBuf)*2)
+	}
+	body := fmt.Sprintf("time:      %s\ncomponent: %s\npanic:     %s\n\n%s\n\n=== all goroutines ===\n%s\n",
+		time.Now().Format(time.RFC3339), component, panicText, stack, allBuf)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return fmt.Sprintf("<crash log not written: %v>", err)
 	}
