@@ -96,6 +96,12 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 		}
 		if name == "" {
 			name = inferCommandServerName(server.Command, server.Args)
+		} else if name == server.Command && isKnownRunnerCommand(name) {
+			// #1611-B: 'mcp install -t stdio npx -y @scope/server' took npx
+			// as the SERVER NAME and -y as the command, silently installing
+			// a broken config. When the derived name IS a known runner,
+			// treat the whole rest as the command line.
+			name = inferCommandServerName(server.Command, server.Args)
 		}
 	case "http", "ws":
 		if len(rest) != 1 {
@@ -311,6 +317,16 @@ func installSeparatorIndex(args []string) int {
 		}
 	}
 	return -1
+}
+
+// isKnownRunnerCommand reports whether name is a package-runner the
+// install table already special-cases (#1611-B).
+func isKnownRunnerCommand(name string) bool {
+	switch name {
+	case "npx", "pnpm", "bunx", "uvx", "uv", "yarn", "node", "python", "python3", "pipx":
+		return true
+	}
+	return false
 }
 
 func normalizeInstallTransport(value string) string {

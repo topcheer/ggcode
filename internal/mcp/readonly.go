@@ -93,7 +93,16 @@ func camelToSnake(s string) string {
 func isWriteToolName(name string) bool {
 	plain := strings.ToLower(name)
 	segments := strings.Split(camelToSnake(name), "_")
-	plainSegments := strings.Split(plain, "_")
+	// #1611-A: MCP tool names allow '-', '.', '_' (spec pattern
+	// ^[a-zA-Z0-9_-]{1,128}$; dots are namespace separators). Splitting on
+	// '_' alone let "delete-pod"/"write-file"/"fs.write_file" through on
+	// read-only servers - the pre-#1591 substring path caught these; the
+	// whole-segment rewrite kept the #996 fix but dropped the hyphen/dot
+	// families, a SAFETY regression (the mirror of #1591-B's
+	// false-positive fix).
+	plainSegments := strings.FieldsFunc(plain, func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	})
 	for _, kw := range writeKeywords {
 		for _, seg := range segments {
 			if seg == kw {

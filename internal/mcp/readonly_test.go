@@ -136,3 +136,22 @@ func TestNormalAdapter_NotReadOnly(t *testing.T) {
 		t.Errorf("expected 'done', got %q", result.Content)
 	}
 }
+
+// TestIssue1611_HyphenDotSegments pins #1611-A: hyphen- and dot-separated
+// write-tool names are blocked on read-only servers (whole-segment match,
+// no substring regression of the #996/#1591 fixes).
+func TestIssue1611_HyphenDotSegments(t *testing.T) {
+	blocked := []string{"delete-pod", "write-file", "fs.write_file", "execute-query-v2", "deploy-config"}
+	for _, n := range blocked {
+		if !isWriteToolName(n) {
+			t.Errorf("%q must be blocked on read-only servers", n)
+		}
+	}
+	// #996/#1591 false-positive pins must stay non-write.
+	allowed := []string{"get-deployment-status", "list_deployments", "get_created_at", "GET_DATASET"}
+	for _, n := range allowed {
+		if isWriteToolName(n) {
+			t.Errorf("%q must stay allowed (read query)", n)
+		}
+	}
+}
