@@ -248,7 +248,7 @@ func findGoSensitiveLogArgs(src string) []loggingIntelInstance {
 			// string literal context that is NOT a format specifier target.
 			// We only flag when the sensitive name appears as a bare identifier
 			// (variable reference), not inside a quoted string.
-			if hasSensitiveVarRef(args, matches) {
+			if hasSensitiveVarRef(args, matches, false) {
 				results = append(results, loggingIntelInstance{
 					category: "sensitive_log_arg",
 					// #1119: args feed the position-insensitive identity key; line
@@ -285,7 +285,7 @@ func findJSSensitiveLogArgs(src string) []loggingIntelInstance {
 			if len(sensitiveMatches) == 0 {
 				continue
 			}
-			if hasSensitiveVarRef(args, sensitiveMatches) {
+			if hasSensitiveVarRef(args, sensitiveMatches, true) {
 				results = append(results, loggingIntelInstance{
 					category: "sensitive_log_arg",
 					// #1119: position-insensitive key anchor, same as the Go path.
@@ -307,9 +307,9 @@ func findJSSensitiveLogArgs(src string) []loggingIntelInstance {
 // hasSensitiveVarRef checks if sensitive names appear as bare identifiers
 // (variable references) rather than only inside string literals.
 // This reduces false positives where "password" appears in a log message string.
-func hasSensitiveVarRef(args string, sensitiveMatches []string) bool {
+func hasSensitiveVarRef(args string, sensitiveMatches []string, isJS bool) bool {
 	// Remove all quoted string contents, then check if sensitive names remain
-	stripped := stripStringLiterals(args)
+	stripped := stripStringLiteralsFor(args, isJS)
 	for _, s := range sensitiveMatches {
 		if strings.Contains(strings.ToLower(stripped), strings.ToLower(s)) {
 			return true
@@ -320,7 +320,17 @@ func hasSensitiveVarRef(args string, sensitiveMatches []string) bool {
 
 // stripStringLiterals removes quoted string contents from a Go/JS expression,
 // leaving only identifiers, operators, and punctuation.
-func stripStringLiterals(s string) string {
+func stripStringLiterals(s string) string { return stripStringLiteralsFor(s, true) }
+
+// stripStringLiteralsFor is the language-aware core (#1581-A): in JS a
+// backtick string is a TEMPLATE LITERAL and ${...} is live interpolation
+// (the canonical token-leak shape, kept since #1469-B); in Go a backtick
+// string is a RAW STRING - ${GITHUB_TOKEN} inside log.Printf(`curl ...
+// ${GITHUB_TOKEN} ...`) is literal DISPLAY TEXT with zero reference
+// semantics, yet the JS rule emitted it into the stripped text and the
+// Go path raised a CRITICAL sensitive-log false positive that coached
+// agents to "fix" correct code. Go strips backtick contents whole.
+func stripStringLiteralsFor(s string, jsTemplate bool) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	inString := false
@@ -341,7 +351,7 @@ func stripStringLiterals(s string) string {
 			// ${accessToken}`) is the canonical token-leak shape and was
 			// swallowed whole by the strip. Emit the interpolated expression
 			// into the stripped text.
-			if quote == '`' && c == '$' && i+1 < len(s) && s[i+1] == '{' {
+			if jsTemplate && quote == '`' && c == '$' && i+1 < len(s) && s[i+1] == '{' {
 				j := i + 2
 				depth := 1
 				for j < len(s) && depth > 0 {

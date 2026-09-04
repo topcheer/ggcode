@@ -266,7 +266,7 @@ func TestCheckLoggingIntel_MaxWarningsCap(t *testing.T) {
 func TestHasSensitiveVarRef_InStringOnly(t *testing.T) {
 	args := `"checking password for user"`
 	matches := []string{"password"}
-	if hasSensitiveVarRef(args, matches) {
+	if hasSensitiveVarRef(args, matches, false) {
 		t.Error("expected false when sensitive name is only in string literal")
 	}
 }
@@ -274,7 +274,7 @@ func TestHasSensitiveVarRef_InStringOnly(t *testing.T) {
 func TestHasSensitiveVarRef_AsIdentifier(t *testing.T) {
 	args := `"format", password`
 	matches := []string{"password"}
-	if !hasSensitiveVarRef(args, matches) {
+	if !hasSensitiveVarRef(args, matches, false) {
 		t.Error("expected true when sensitive name is a bare identifier")
 	}
 }
@@ -581,5 +581,18 @@ func TestStripInitFuncs(t *testing.T) {
 		if got != tt.expect {
 			t.Errorf("stripInitFuncs(%q) = %q, want %q", tt.input, got, tt.expect)
 		}
+	}
+}
+
+// TestStripLiterals_1581 pins #1581-A: Go raw-string ${} is literal text
+// (stripped whole, no false sensitive-ref), JS template ${} stays live.
+func TestStripLiterals_1581(t *testing.T) {
+	goRaw := stripStringLiteralsFor("log.Printf(`curl -H \"Authorization: Bearer ${GITHUB_TOKEN}\"`)", false)
+	if strings.Contains(strings.ToUpper(goRaw), "GITHUB_TOKEN") {
+		t.Fatalf("Go raw string must strip ${} whole, got %q", goRaw)
+	}
+	jsTpl := stripStringLiteralsFor("console.log(`Bearer ${accessToken}`)", true)
+	if !strings.Contains(jsTpl, "accessToken") {
+		t.Fatalf("JS template interpolation must survive, got %q", jsTpl)
 	}
 }
