@@ -37,7 +37,17 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 		args = append(args, "-R",
 			fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
 	} else if opts.Display > 0 {
-		args = append(args, "-D", strconv.Itoa(opts.Display))
+		// #1570-D: screencapture -D expects a CGDirectDisplayID, but
+		// opts.Display is OUR 1-based DisplayInfo.Index (the main display's
+		// CGDirectDisplayID happens to be 1, so single-screen setups worked
+		// by coincidence; a second screen's ID is a large 32-bit number and
+		// -D 2 fails). Capture by the display's on-screen rectangle instead.
+		if r, err := macDisplayRegion(opts.Display); err == nil {
+			args = append(args, "-R",
+				fmt.Sprintf("%d,%d,%d,%d", r.X, r.Y, r.Width, r.Height))
+		} else {
+			args = append(args, "-D", strconv.Itoa(opts.Display))
+		}
 	}
 
 	args = append(args, rawPath)
@@ -235,4 +245,20 @@ func parseMacResolution(res string) (int, int) {
 		return nums[0], nums[1]
 	}
 	return 0, 0
+}
+
+// macDisplayRegion resolves OUR 1-based display index to its on-screen
+// rectangle (#1570-D) - used to route display capture through -R because
+// screencapture -D expects CGDirectDisplayIDs, not indexes.
+func macDisplayRegion(index int) (ScreenshotRegion, error) {
+	displays, err := ListDisplays()
+	if err != nil {
+		return ScreenshotRegion{}, err
+	}
+	for _, d := range displays {
+		if d.Index == index {
+			return ScreenshotRegion{X: d.X, Y: d.Y, Width: d.Width, Height: d.Height}, nil
+		}
+	}
+	return ScreenshotRegion{}, fmt.Errorf("display %d not found", index)
 }
