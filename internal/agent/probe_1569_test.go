@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +36,30 @@ func TestProbe1569(t *testing.T) {
 			t.Errorf("%-28s got=%q want=%q", c.cmd, got, c.wantName)
 		}
 		fmt.Printf("%-28s got=%-12q want=%-12q %s\n", c.cmd, got, c.wantName, status)
+	}
+}
+
+// TestProbe1600 pins #1600: separator-bounded scanning, long-form
+// dry-run/force, and lease-not-masking.
+func TestProbe1600(t *testing.T) {
+	cases := []struct {
+		cmd      string
+		wantFire bool
+	}{
+		{"git push origin main; make -f Makefile.build", false},
+		{"git push origin main && make -fx", false},
+		{"git clean --dry-run -fd", false},
+		{"git clean --force -d", true},
+		{"git push --force-with-lease origin main -f", true},
+		{"git push --force-with-lease origin main", false},
+	}
+	for _, c := range cases {
+		fired := isForcePushCommand(c.cmd)
+		if strings.Contains(c.cmd, "clean") {
+			fired = isCleanForceCommand(c.cmd)
+		}
+		if fired != c.wantFire {
+			t.Errorf("%-45q fired=%v want=%v", c.cmd, fired, c.wantFire)
+		}
 	}
 }

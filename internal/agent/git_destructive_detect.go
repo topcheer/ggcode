@@ -376,12 +376,28 @@ func isForcePushCommand(cmd string) bool {
 			continue
 		}
 		for _, tok := range toks[i+1:] {
+			// #1600-A: stop at command separators - 'git push origin
+			// main; make -f Makefile' is a force-push-free line whose
+			// SECOND command's -f fired CRITICAL before.
+			switch {
+			case tok == "&&" || tok == "||" || tok == "|" || tok == "&":
+				return false
+			case strings.Contains(tok, ";"):
+				// 'main; make ...' - the separator glues to the previous
+				// word under Fields splitting.
+				return false
+			case strings.HasPrefix(tok, ";"):
+				return false
+			}
 			switch {
 			case tok == "--force", tok == "--force-with-lease=false":
 				return true
 			case tok == "--force-with-lease", tok == "--force-with-lease=true":
-				// handled by the lease pattern at lower severity
-				return false
+				// #1600-D: an explicit lease on THIS token no longer ends
+				// the scan - a later real force flag on the same line was
+				// masked. The lease-does-not-end-scan semantics keep the
+				// lease pattern (lower severity) as the outer reporter.
+				continue
 			case strings.HasPrefix(tok, "--"):
 				continue
 			case strings.HasPrefix(tok, "+"):
@@ -408,6 +424,17 @@ func isCleanForceCommand(cmd string) bool {
 		}
 		hasF, hasN := false, false
 		for _, tok := range toks[i+1:] {
+			// #1600-B: long forms too - --dry-run must suppress, --force
+			// must trigger (the short-group-only check fired CRITICAL on
+			// 'git clean --dry-run -fd', which deletes nothing).
+			switch tok {
+			case "--dry-run":
+				hasN = true
+				continue
+			case "--force":
+				hasF = true
+				continue
+			}
 			if strings.HasPrefix(tok, "-") && !strings.HasPrefix(tok, "--") {
 				if strings.ContainsAny(tok, "f") {
 					hasF = true
