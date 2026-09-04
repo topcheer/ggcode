@@ -827,6 +827,20 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 		return nil, fmt.Errorf("loading session: %w", err)
 	}
 
+	// #1604 (from #1594-B): the already-active guard used to run AFTER
+	// connectMCPServers - a resume of an active session that carried
+	// mcpServers spawned stdio clients first, then the guard rejected and
+	// returned, dropping the session (and its MCP manager) on the floor:
+	// the clients' processes leaked, the ctx cancel was never called, and
+	// any tools registered into the SHARED registry stayed as dead
+	// entries. Check BEFORE any side-effectful setup.
+	h.sessionsMu.Lock()
+	if _, exists := h.sessions[req.SessionID]; exists {
+		h.sessionsMu.Unlock()
+		return nil, fmt.Errorf("session %s already active: cannot resume", req.SessionID)
+	}
+	h.sessionsMu.Unlock()
+
 	// If client provided a CWD, validate and update; otherwise keep session's original CWD
 	if req.CWD != "" {
 		if err := validateCWD(req.CWD); err != nil {
@@ -848,13 +862,11 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 	}
 
 	h.sessionsMu.Lock()
-	// #1056: Check if an agent loop is already running for this session.
-	// If so, refuse the resume to prevent double goroutine driving the
-	// same session, which would bypass the #1033 TryBeginRun guard.
-	if _, exists := h.sessions[req.SessionID]; exists {
-		h.sessionsMu.Unlock()
-		return nil, fmt.Errorf("session %s already active: cannot resume", req.SessionID)
-	}
+	// #1604: the already-active check ran here (after MCP connect); it
+	// now runs before any side effects - see the guard above. The narrow
+	// check-then-insert window between the two lock sections is covered
+	// by the #1033 TryBeginRun guard at run level (#1056 was the second
+	// line of defense, not the only one).
 	h.sessions[req.SessionID] = session
 	// Register the workspace dir so cleanupEmptySessions can manage the
 	// resumed session like a session/new one (previously skipped on resume).
