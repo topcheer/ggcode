@@ -325,16 +325,18 @@ func (b *DaemonBridge) tryQueueOrBeginRun(content []provider.ContentBlock, logPr
 		cancel()
 		return nil, true
 	}
-	b.agent.SetInterruptionHandler(func() string {
+	b.agent.SetInterruptionHandler(func() []provider.ContentBlock {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		if len(b.pendingInterruptions) == 0 {
-			return ""
+			return nil
 		}
 		next := b.pendingInterruptions[0]
 		b.pendingInterruptions = b.pendingInterruptions[1:]
+		// #1472-A: FULL content (image blocks included) - extractText here
+		// permanently dropped mid-run screenshots.
 		debug.Log("daemon-bridge", "interruption handler returning: %s", truncateStr(extractText(next.Content), 80))
-		return extractText(next.Content)
+		return next.Content
 	})
 	b.cancelFunc = cancel
 	return ctx, false

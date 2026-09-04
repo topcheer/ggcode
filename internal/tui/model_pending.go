@@ -10,6 +10,7 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -323,10 +324,10 @@ func (m *Model) restorePendingInput() {
 	composerCursorEnd(&m.input)
 }
 
-func (m *Model) drainPendingInterrupt(runID int) string {
+func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 	text, hidden, _, _ := m.consumePendingSubmissionDetailed()
 	if text == "" {
-		return ""
+		return nil
 	}
 	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
 	// Do NOT call appendUserMessage here. The agent's injectPendingInterruptions()
@@ -337,7 +338,8 @@ func (m *Model) drainPendingInterrupt(runID int) string {
 	_ = hidden
 	// Don't send agentInterruptMsg — the user already saw their input rendered
 	// in the conversation when it was queued. No extra "[delivered]" hint needed.
-	return text
+	// #1472-A: return as a text block (image-capable channel).
+	return []provider.ContentBlock{{Type: "text", Text: text}}
 }
 
 func (m *Model) sessionMutex() *sync.Mutex {

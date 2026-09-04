@@ -88,7 +88,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	m.activeAgentRunID++
 	runID := m.activeAgentRunID
 	if m.agent != nil {
-		m.agent.SetInterruptionHandler(func() string {
+		m.agent.SetInterruptionHandler(func() []provider.ContentBlock {
 			return m.drainPendingInterrupt(runID)
 		})
 	}
@@ -134,7 +134,7 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 	m.activeAgentRunID++
 	runID := m.activeAgentRunID
 	if m.agent != nil {
-		m.agent.SetInterruptionHandler(func() string {
+		m.agent.SetInterruptionHandler(func() []provider.ContentBlock {
 			return m.drainPendingInterrupt(runID)
 		})
 	}

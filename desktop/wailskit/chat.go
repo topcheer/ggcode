@@ -1953,7 +1953,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Set interruption handler — agent checks for pending messages during compact etc.
 	// (mirrors Fyne line 836-839)
-	a.SetInterruptionHandler(func() string {
+	a.SetInterruptionHandler(func() []provider.ContentBlock {
 		return b.drainPendingInterrupt()
 	})
 	b.EnsureSession() // mirrors Fyne setupAgent line 743
@@ -3416,10 +3416,10 @@ func (b *ChatBridge) drainPending() (agentruntime.PendingMessage[*tunnel.Message
 	return b.pendingMsgs.Consume()
 }
 
-func (b *ChatBridge) drainPendingInterrupt() string {
+func (b *ChatBridge) drainPendingInterrupt() []provider.ContentBlock {
 	pending, ok := b.drainPending()
 	if !ok {
-		return ""
+		return nil
 	}
 	// #477: this consume path popped the QUEUE but not the parallel
 	// source/exclude slices, leaving orphan pairs that shifted every later
@@ -3449,7 +3449,8 @@ func (b *ChatBridge) drainPendingInterrupt() string {
 		// content (bare text vs guidance-wrapped), diverging from the
 		// on-disk JSONL (#231).
 	}
-	return strings.TrimSpace(pending.Text)
+	// #1472-A: text block on the image-capable channel.
+	return []provider.ContentBlock{{Type: "text", Text: strings.TrimSpace(pending.Text)}}
 }
 
 // SendHiddenText sends a hidden message to the agent without UI display.

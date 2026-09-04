@@ -229,7 +229,7 @@ func TestDiffConfirmOptionsFor(t *testing.T) {
 func TestVendorNames_NilConfig(t *testing.T) {
 	m := NewModel(nil, nil)
 	if got := m.vendorNames(); got != "" {
-		t.Errorf("expected empty string for nil config, got %q", got)
+		t.Errorf("expected empty string for nil config, got %+v", got)
 	}
 }
 
@@ -243,12 +243,12 @@ func TestVendorNames_WithConfig(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.SetConfig(cfg)
 	got := m.vendorNames()
-	if got == "" {
+	if len(got) == 0 {
 		t.Fatal("expected non-empty vendor names")
 	}
 	// Should contain both vendor names (order may vary)
 	if !strings.Contains(got, "zai") || !strings.Contains(got, "anthropic") {
-		t.Errorf("expected vendor names to contain 'zai' and 'anthropic', got %q", got)
+		t.Errorf("expected vendor names to contain 'zai' and 'anthropic', got %+v", got)
 	}
 }
 
@@ -363,7 +363,7 @@ func TestRestorePendingInput_MergesWithDraft(t *testing.T) {
 	// Both pending and draft should be present; textinput may flatten newlines
 	// but must contain both pieces
 	if !strings.Contains(got, "queued") || !strings.Contains(got, "draft") {
-		t.Fatalf("expected both 'queued' and 'draft' in input, got %q", got)
+		t.Fatalf("expected both 'queued' and 'draft' in input, got %+v", got)
 	}
 	if m.pendingSubmissionCount() != 0 {
 		t.Fatalf("expected pending cleared after restore, got %d", m.pendingSubmissionCount())
@@ -580,8 +580,8 @@ func TestCloseActivePanel_SkillsPanel(t *testing.T) {
 func TestDrainPendingInterrupt_Empty(t *testing.T) {
 	m := newTestModel()
 	got := m.drainPendingInterrupt(42)
-	if got != "" {
-		t.Fatalf("expected empty string, got %q", got)
+	if len(got) != 0 {
+		t.Fatalf("expected empty string, got %+v", got)
 	}
 }
 
@@ -589,8 +589,9 @@ func TestDrainPendingInterrupt_WithPending(t *testing.T) {
 	m := newTestModel()
 	m.pending.enqueue("user interrupt text")
 	got := m.drainPendingInterrupt(1)
-	if got != "user interrupt text" {
-		t.Fatalf("expected 'user interrupt text', got %q", got)
+	// #1472-A: drain now returns content BLOCKS.
+	if len(got) != 1 || got[0].Type != "text" || got[0].Text != "user interrupt text" {
+		t.Fatalf("expected one text block, got %+v", got)
 	}
 	if m.pendingSubmissionCount() != 0 {
 		t.Fatalf("expected pending cleared, got %d", m.pendingSubmissionCount())
@@ -602,8 +603,8 @@ func TestDrainPendingInterrupt_HiddenPendingStaysHidden(t *testing.T) {
 	m.pending.enqueueHidden("scheduled hidden prompt", nil)
 
 	got := m.drainPendingInterrupt(1)
-	if got != "scheduled hidden prompt" {
-		t.Fatalf("expected hidden prompt, got %q", got)
+	if len(got) != 1 || got[0].Text != "scheduled hidden prompt" {
+		t.Fatalf("expected hidden prompt, got %+v", got)
 	}
 	if len(m.session.Messages) != 0 {
 		t.Fatalf("expected hidden interrupt to skip session user message, got %d messages", len(m.session.Messages))

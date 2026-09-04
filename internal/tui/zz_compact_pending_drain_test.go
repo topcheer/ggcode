@@ -70,7 +70,7 @@ func TestRestorePendingInputRemovesQueuedBubbles(t *testing.T) {
 	// Both texts restored to the composer.
 	got := m.input.Value()
 	if !strings.Contains(got, "first queued") || !strings.Contains(got, "second queued") {
-		t.Fatalf("both queued texts must be restored to input, got %q", got)
+		t.Fatalf("both queued texts must be restored to input, got %+v", got)
 	}
 }
 
@@ -99,15 +99,15 @@ func TestDrainPendingInterruptPopsAndReturns(t *testing.T) {
 	m := newTestModel()
 	m.queuePendingSubmission("interrupt me")
 	text := m.drainPendingInterrupt(1)
-	if text != "interrupt me" {
-		t.Fatalf("expected drained text, got %q", text)
+	if len(text) != 1 || text[0].Text != "interrupt me" {
+		t.Fatalf("expected drained text, got %+v", text)
 	}
 	if m.pendingSubmissionCount() != 0 {
 		t.Fatalf("queue must be empty after drain, got %d", m.pendingSubmissionCount())
 	}
 	// Empty queue drains to "".
-	if again := m.drainPendingInterrupt(1); again != "" {
-		t.Fatalf("empty queue must drain to empty, got %q", again)
+	if again := m.drainPendingInterrupt(1); len(again) != 0 {
+		t.Fatalf("empty queue must drain to empty, got %+v", again)
 	}
 }
 

@@ -1,6 +1,7 @@
 package wailskit
 
 import (
+	"github.com/topcheer/ggcode/internal/provider"
 	"strings"
 	"testing"
 )
@@ -25,8 +26,8 @@ func TestPendingSlicesInterruptDrainSync(t *testing.T) {
 
 	// Step 2: iteration-boundary consume pops the queue — and MUST pop the
 	// parallel pair too.
-	if got := b.drainPendingInterrupt(); !strings.Contains(got, "from telegram") {
-		t.Fatalf("interrupt drain should return the queued text, got %q", got)
+	if got := b.drainPendingInterrupt(); !strings.Contains(providerBlocksText(got), "from telegram") {
+		t.Fatalf("interrupt drain should return the queued text, got %+v", got)
 	}
 	b.mu.Lock()
 	srcLen, exclLen := len(b.pendingSource), len(b.pendingExclude)
@@ -82,4 +83,14 @@ func TestQueueMessageAppendsPair(t *testing.T) {
 	if srcLen != 0 || exclLen != 0 {
 		t.Fatalf("pair must be consumed with the visible message, got source=%d exclude=%d", srcLen, exclLen)
 	}
+}
+
+// providerBlocksText flattens content blocks for substring assertions
+// (#1472-A: drain returns blocks now).
+func providerBlocksText(blocks []provider.ContentBlock) string {
+	out := ""
+	for _, b := range blocks {
+		out += b.Text
+	}
+	return out
 }

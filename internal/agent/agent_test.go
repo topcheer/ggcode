@@ -951,12 +951,12 @@ func TestRunStreamInterruptReplansBeforeRemainingToolCalls(t *testing.T) {
 
 	a := NewAgent(mp, registry, "", 3)
 	interruptCalls := 0
-	a.SetInterruptionHandler(func() string {
+	a.SetInterruptionHandler(func() []provider.ContentBlock {
 		interruptCalls++
 		if interruptCalls == 2 {
-			return "skip the second tool and revise"
+			return []provider.ContentBlock{{Type: "text", Text: "skip the second tool and revise"}}
 		}
-		return ""
+		return nil
 	})
 
 	var events []provider.StreamEvent
@@ -1184,12 +1184,12 @@ func TestRunStreamInterruptOverridesAutopilotContinuation(t *testing.T) {
 	a := NewAgent(mp, tool.NewRegistry(), "", 3)
 	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutopilotMode))
 	interruptCalls := 0
-	a.SetInterruptionHandler(func() string {
+	a.SetInterruptionHandler(func() []provider.ContentBlock {
 		interruptCalls++
 		if interruptCalls == 2 {
-			return "Use option B."
+			return []provider.ContentBlock{{Type: "text", Text: "Use option B."}}
 		}
-		return ""
+		return nil
 	})
 
 	if err := a.RunStream(context.Background(), "start", func(event provider.StreamEvent) {}); err != nil {
@@ -1239,12 +1239,12 @@ func TestRunStreamInterruptsStreamingTurnForReplan(t *testing.T) {
 
 	a := NewAgent(mp, tool.NewRegistry(), "", 3)
 	interruptCalls := 0
-	a.SetInterruptionHandler(func() string {
+	a.SetInterruptionHandler(func() []provider.ContentBlock {
 		interruptCalls++
 		if interruptCalls == 2 {
-			return "Actually, switch direction now."
+			return []provider.ContentBlock{{Type: "text", Text: "Actually, switch direction now."}}
 		}
-		return ""
+		return nil
 	})
 
 	var events []provider.StreamEvent

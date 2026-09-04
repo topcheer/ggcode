@@ -34,7 +34,7 @@ type DiffConfirmFunc func(ctx context.Context, filePath, diffText string) bool
 // honor ctx.Done() to avoid a goroutine leak if the TUI exits while a
 // permission prompt is awaiting user input.
 type ApprovalFunc func(ctx context.Context, toolName string, input string) permission.Decision
-type interruptionHandler func() string
+type interruptionHandler func() []provider.ContentBlock // #1472-A: full blocks - images survive the boundary
 type runResultHandler func([]provider.ContentBlock, error)
 
 var errStreamInterruptedForReplan = errors.New("stream interrupted for replan")
@@ -665,8 +665,11 @@ func (a *Agent) ApprovalHandler() ApprovalFunc {
 	return a.onApproval
 }
 
-// SetInterruptionHandler sets a callback that drains user guidance arriving mid-run.
-func (a *Agent) SetInterruptionHandler(fn func() string) {
+// SetInterruptionHandler sets a callback that drains user guidance arriving
+// mid-run. #1472-A: the callback returns full content BLOCKS - a text-only
+// channel silently stripped image blocks (IM/webchat screenshots) at the
+// injection boundary; empty slice replaces the old empty-string convention.
+func (a *Agent) SetInterruptionHandler(fn func() []provider.ContentBlock) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onInterrupt = fn
@@ -4390,17 +4393,21 @@ func (a *Agent) injectPendingInterruptions() bool {
 	if fn == nil {
 		return false
 	}
-	text := strings.TrimSpace(fn())
-	if text == "" {
+	blocks := fn()
+	if len(blocks) == 0 {
 		return false
 	}
 	debug.Log("agent", "injecting mid-run user guidance")
+	// #1472-A: image blocks ride along - a mid-run screenshot is data the
+	// model must see, not payload to strip.
+	content := []provider.ContentBlock{{
+		Type: "text",
+		Text: "New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue.",
+	}}
+	content = append(content, blocks...)
 	a.contextManager.Add(provider.Message{
-		Role: "user",
-		Content: []provider.ContentBlock{{
-			Type: "text",
-			Text: fmt.Sprintf("New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue.\n\n%s", text),
-		}},
+		Role:    "user",
+		Content: content,
 	})
 	return true
 }
