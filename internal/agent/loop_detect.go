@@ -72,9 +72,12 @@ func (ld *loopDetector) checkDuplicate(tc provider.ToolCallDelta) string {
 		ld.lastToolName = tc.Name
 		return fmt.Sprintf(
 			"Notice: You have called %s with the exact same arguments %d consecutive times. "+
-				"This suggests you may be stuck in a loop. If the previous attempts failed, "+
-				"try a different approach: read the current file content first, use different "+
-				"parameters, or reconsider your strategy. Do not repeat the exact same call.",
+				"This suggests you may be stuck in a loop - BUT if the result was marked "+
+				"'[cached — identical content]' after a context compaction, one repeat is "+
+				"expected and fine (the memoization layer answers it at zero cost); only "+
+				"repeatedly NOT acting on the result is a loop. "+
+				"If the previous attempts failed, try a different approach: read the current "+
+				"file content first, use different parameters, or reconsider your strategy.",
 			tc.Name, streak,
 		)
 	}
@@ -86,6 +89,19 @@ func (ld *loopDetector) checkDuplicate(tc provider.ToolCallDelta) string {
 			"WARNING: You have called %s with identical arguments %d times. "+
 				"This is clearly not working. You MUST change your approach entirely. "+
 				"Stop and think about why this is failing before trying anything else.",
+			tc.Name, streak,
+		)
+	}
+
+	// #1471-B: streak 6/7/8... used to stay silent forever - repeatedly
+	// re-reading the same large file to farm the context lost all coverage
+	// after the two one-shot warnings. Re-warn every 5 further duplicates.
+	if streak > 5 && (streak-5)%5 == 0 {
+		debug.Log("agent", "loop detection: %s identical-arg streak at %d, periodic re-warn", tc.Name, streak)
+		return fmt.Sprintf(
+			"WARNING: the identical-argument streak for %s has reached %d calls. "+
+				"Whatever you are waiting for is not going to change on its own - change "+
+				"the approach or stop.",
 			tc.Name, streak,
 		)
 	}
