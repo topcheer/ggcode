@@ -26,7 +26,17 @@ func tokenizeForSimilarity(s string) map[string]struct{} {
 	if strings.TrimSpace(s) == "" {
 		return tokens
 	}
-	matches := similarityTokenPattern.FindAllString(strings.ToLower(s), -1)
+	lower := strings.ToLower(s)
+	matches := similarityTokenPattern.FindAllString(lower, -1)
+	// #1580-A: the ASCII-only pattern dropped every CJK rune - a Chinese
+	// skill body (this repo's primary generation language) tokenized to
+	// EMPTY, fingerprint/jaccard scored 0, and A/B replay relevance was
+	// silently useless. CJK runes become single-rune tokens.
+	for _, r := range lower {
+		if r >= 0x4E00 && r <= 0x9FFF { // CJK Unified Ideographs
+			tokens[string(r)] = struct{}{}
+		}
+	}
 	for _, m := range matches {
 		m = strings.Trim(m, "._-/")
 		if len(m) < 2 {

@@ -31,6 +31,11 @@ func TestIrrevClassifyTool(t *testing.T) {
 		// #1468-C: soft/mixed resets are Low; only --hard is High.
 		{"git_reset", `{"mode":"soft"}`, irrevTierLow},
 		{"git_reset", `{"args":"git reset --hard HEAD~3"}`, irrevTierHigh},
+		// #1579 follow-up: the REAL tool schema shape - mode is a field,
+		// the '--hard' literal never appears in the agent's arguments.
+		{"git_reset", `{"mode":"hard","target":"HEAD~3"}`, irrevTierHigh},
+		{"git_reset", `{"mode":"soft","target":"HEAD"}`, irrevTierLow},
+		{"git_reset", `{"mode":"mixed"}`, irrevTierLow},
 		{"git_push", `{"force":true}`, irrevTierHigh},
 
 		// Destructive commands via run_command
