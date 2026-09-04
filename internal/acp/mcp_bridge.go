@@ -86,8 +86,12 @@ func (m *MCPManager) Close() error {
 	// their own registration (adapter collision-skip) while exposing the
 	// DEAD tools of this session as hallucinated available. The plugin
 	// loader (mcp_loader.go) already did this; the ACP path didn't.
+	// #1594-A: unregister only what THESE adapters actually registered -
+	// ToolNames() includes collision-skipped names owned by a concurrent
+	// same-named session, and unregistering them cross-killed that
+	// session's live tools mid-prompt.
 	for _, a := range m.adapters {
-		for _, tn := range a.ToolNames() {
+		for _, tn := range a.RegisteredNames() {
 			m.registry.Unregister(tn)
 		}
 	}

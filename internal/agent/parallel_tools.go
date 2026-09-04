@@ -97,9 +97,18 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	// PRE-EDIT content unlabeled after the edit landed - the model judged
 	// the edit failed and re-applied it. Skip pre-execution entirely for
 	// mixed batches (conservative; pure read-only batches are unaffected).
+	// #1590-A: the original guard only checked mutatesSourceTree (edit-tool
+	// + git-tool families) while this very comment promised mutating
+	// run_command coverage - shell mutations (gofmt -w x.go, git checkout,
+	// codegen) slipped through and re-created the stale-read hazard.
 	for _, tc := range toolCalls {
 		if mutatesSourceTree(tc.Name) {
 			return nil
+		}
+		if tc.Name == "run_command" || tc.Name == "start_command" {
+			if cmd, _ := parseRunCommandArgs(tc.Arguments); shellMutatesSources(cmd) {
+				return nil
+			}
 		}
 	}
 	for i, tc := range toolCalls {

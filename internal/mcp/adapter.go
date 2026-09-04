@@ -23,6 +23,9 @@ type Adapter struct {
 	tools      []ToolDefinition
 	readOnly   bool
 	mu         sync.Mutex
+	// registeredTools are the names THIS adapter actually owns in the
+	// registry (collision-skips excluded, #1594-A).
+	registeredTools []string
 }
 
 // NewAdapter creates an MCP adapter from server config and tool definitions.
@@ -48,9 +51,15 @@ func NewReadOnlyAdapter(serverName string, caller toolCaller, tools []ToolDefini
 func (a *Adapter) IsReadOnly() bool { return a.readOnly }
 
 // RegisterTools registers all MCP tools into the registry with "mcp__" prefix.
+// #1594-A: the subset that ACTUALLY registered (collision-skips excluded) is
+// recorded - Close must only unregister what this adapter owns; unregistering
+// ToolNames() wholesale cross-killed a concurrent same-named session's tools
+// in the shared registry (the collision-skip made the OTHER session the
+// owner of those names).
 func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.registeredTools = a.registeredTools[:0]
 	for _, td := range a.tools {
 		name := fmt.Sprintf("mcp__%s__%s", a.serverName, td.Name)
 		desc := td.Description
@@ -69,11 +78,24 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 			srvName:  a.serverName,
 		}
 		if err := registry.Register(t); err != nil {
-			// Log but continue — name collision is non-fatal
+			// Log but continue — name collision is non-fatal. Whoever already
+			// holds the name stays the owner; we must not unregister it on Close.
 			debug.Log("mcp", "tool %q from server %q conflicts with existing tool, skipping: %v", name, a.serverName, err)
+			continue
 		}
+		a.registeredTools = append(a.registeredTools, name)
 	}
 	return nil
+}
+
+// RegisteredNames returns the ggcode tool names this adapter ACTUALLY owns
+// in the registry (post-collision subset, #1594-A).
+func (a *Adapter) RegisteredNames() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.registeredTools))
+	copy(out, a.registeredTools)
+	return out
 }
 
 // ToolNames returns the full ggcode tool names for all MCP tools.
