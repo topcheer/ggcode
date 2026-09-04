@@ -70,11 +70,24 @@ var (
 	// git reset --hard [commit]
 	reGitResetHard = regexp.MustCompile(`\bgit\s+reset\s+--hard\b`)
 	// git push --force / --force-with-lease / -f
-	reGitForcePush = regexp.MustCompile(`\bgit\s+push\s+.*(-f|--force\b)`)
+	// #1569-A: the flag must start its own token (whitespace-prefixed
+	// short group or --force) - `.*(-f...)` matched the SUBSTRING and
+	// branch names like hot-fix / bug-fix / x-fix produced CRITICAL
+	// false positives. #1569-C: +refspec (git push origin +main) is the
+	// tersest force form and had no pattern at all.
+	// #1569-A/C: force-push detection is token-based (see
+	// isForcePushCommand) - regex substring matching fired CRITICAL on
+	// branch names like hot-fix, missed `push --force` (the single space
+	// between push and the flag is consumed by \s+, leaving the
+	// whitespace-prefixed flag pattern unmatched), and had no pattern at
+	// all for +refspec force pushes.
 	// git push --force-with-lease is less dangerous, warn at lower severity
 	reGitForceWithLease = regexp.MustCompile(`\bgit\s+push\s+.*--force-with-lease\b`)
-	// git clean -fd / -fdx / -f
-	reGitClean = regexp.MustCompile(`\bgit\s+clean\s+.*-f`)
+	// git clean -fd / -fdx / -f - #1569-B: dry-run forms (-n anywhere in
+	// the flag group) must not fire; the guard's own advice text says
+	// "use git clean -n (dry run) first", yet clean -fdn matched CRITICAL.
+	// #1569-B: clean detection is token-based (isCleanForceCommand) -
+	// dry-run forms (-n in any flag group) must not fire.
 	// git branch -D / --delete --force (case-sensitive: -D is force delete, -d is safe)
 	reGitBranchDelete = regexp.MustCompile(`\bgit\s+branch\s+(-D\b|--delete\s+--force\b)`)
 	// git branch -f <branch> <start> - force-moves a branch pointer (#1464-B)
@@ -112,7 +125,7 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 			description: "git push --force-with-lease rewrites remote history. While safer than --force, it can still overwrite collaborators' work if they've pushed since your last fetch.",
 			suggestion:  "Consider `git push` normally, or coordinate with collaborators first.",
 		})
-	} else if reGitForcePush.MatchString(cmd) {
+	} else if isForcePushCommand(cmd) {
 		found = append(found, destructivePattern{
 			name:        "force_push",
 			severity:    "critical",
@@ -130,7 +143,10 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitClean.MatchString(cmd) {
+	if isCleanForceCommand(cmd) {
+		// #1569-B: -n anywhere in the flag group is a dry run - the
+		// suggestion text itself recommends `git clean -n` first, yet
+		// clean -fdn fired CRITICAL. Skip dry-run invocations entirely.
 		found = append(found, destructivePattern{
 			name:        "clean_force",
 			severity:    "critical",
@@ -256,6 +272,7 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 	}
 
 	var patterns []destructivePattern
+	shellCmd := ""
 
 	switch toolName {
 	case "run_command", "start_command":
@@ -263,6 +280,7 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 		var m map[string]any
 		if err := json.Unmarshal(args, &m); err == nil {
 			if cmd, ok := m["command"].(string); ok {
+				shellCmd = cmd
 				patterns = detectDestructiveInShellCommand(cmd)
 			}
 		}
@@ -297,12 +315,16 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 		return ""
 	}
 
-	// Filter out already-warned patterns (once per unique pattern per run)
+	// Filter out already-warned patterns. #1569-A: the key is pattern+
+	// command, not pattern alone - the old once-per-run pattern dedup let
+	// an early FALSE positive (branch name containing -f) permanently mute
+	// a later REAL force push in the same run.
 	var newPatterns []destructivePattern
 	for _, p := range patterns {
-		if !a.destructiveGuard.warned[p.name] {
+		key := p.name + "|" + shellCmd
+		if !a.destructiveGuard.warned[key] {
 			newPatterns = append(newPatterns, p)
-			a.destructiveGuard.warned[p.name] = true
+			a.destructiveGuard.warned[key] = true
 		}
 	}
 
@@ -341,4 +363,61 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 	sb.WriteString("\nIf this operation is intentional and necessary, proceed. Otherwise, use a safer alternative.\n")
 
 	return sb.String()
+}
+
+// isForcePushCommand reports whether a git push invocation carries a
+// force signal: --force, a short flag group containing f, or a +refspec.
+// Token-based (#1569): branch names like hot-fix are refspec tokens, not
+// flags, and cannot false-positive.
+func isForcePushCommand(cmd string) bool {
+	toks := strings.Fields(cmd)
+	for i, t := range toks {
+		if t != "push" || i == 0 || toks[i-1] != "git" {
+			continue
+		}
+		for _, tok := range toks[i+1:] {
+			switch {
+			case tok == "--force", tok == "--force-with-lease=false":
+				return true
+			case tok == "--force-with-lease", tok == "--force-with-lease=true":
+				// handled by the lease pattern at lower severity
+				return false
+			case strings.HasPrefix(tok, "--"):
+				continue
+			case strings.HasPrefix(tok, "+"):
+				return true
+			case strings.HasPrefix(tok, "-"):
+				if strings.ContainsAny(tok, "f") {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// isCleanForceCommand reports whether a git clean invocation deletes (-f
+// in a flag group) without being a dry run (-n in any flag group)
+// (#1569-B).
+func isCleanForceCommand(cmd string) bool {
+	toks := strings.Fields(cmd)
+	for i, t := range toks {
+		if t != "clean" || i == 0 || toks[i-1] != "git" {
+			continue
+		}
+		hasF, hasN := false, false
+		for _, tok := range toks[i+1:] {
+			if strings.HasPrefix(tok, "-") && !strings.HasPrefix(tok, "--") {
+				if strings.ContainsAny(tok, "f") {
+					hasF = true
+				}
+				if strings.ContainsAny(tok, "n") {
+					hasN = true
+				}
+			}
+		}
+		return hasF && !hasN
+	}
+	return false
 }
