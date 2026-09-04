@@ -207,8 +207,11 @@ func TestGenerateProjectMemory_UsesCurrentRepoFacts(t *testing.T) {
 	if !strings.Contains(content, "A terminal-based AI coding agent.") {
 		t.Fatalf("expected README summary in generated content, got %q", content)
 	}
-	if !strings.Contains(content, "`cmd/ggcode/`") {
-		t.Fatalf("expected important paths in generated content, got %q", content)
+	// #1593-A: the repo-specific path hints are module-gated - a FOREIGN
+	// module (this fixture is example.com/demo) must NOT receive ggcode's
+	// directory descriptions; correct silence beats wrong facts.
+	if strings.Contains(content, "`cmd/ggcode/`") {
+		t.Fatalf("foreign module must not receive ggcode-specific path hints, got %q", content)
 	}
 	if !strings.Contains(content, "`go test ./... && go vet ./...`") {
 		t.Fatalf("expected validation command in generated content, got %q", content)
@@ -261,16 +264,16 @@ func TestLoadProjectMemory_DoesNotScanArbitraryWorkingDirSubtrees(t *testing.T) 
 }
 
 func TestBuildProjectMemoryHint_EmptyReturnsEmpty(t *testing.T) {
-	if got := BuildProjectMemoryHint(nil); got != "" {
+	if got := BuildProjectMemoryHint(nil, ""); got != "" {
 		t.Fatalf("nil input should return empty string, got %q", got)
 	}
-	if got := BuildProjectMemoryHint([]string{}); got != "" {
+	if got := BuildProjectMemoryHint([]string{}, ""); got != "" {
 		t.Fatalf("empty slice should return empty string, got %q", got)
 	}
 }
 
 func TestBuildProjectMemoryHint_SingleFile(t *testing.T) {
-	got := BuildProjectMemoryHint([]string{"/repo/GGCODE.md"})
+	got := BuildProjectMemoryHint([]string{"/repo/GGCODE.md"}, "/repo")
 	for _, want := range []string{"## Project Memory", "GGCODE.md", "read_file"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("hint should contain %q, got %q", want, got)
@@ -283,7 +286,7 @@ func TestBuildProjectMemoryHint_MultipleFiles(t *testing.T) {
 		"/repo/GGCODE.md",
 		"/repo/CLAUDE.md",
 		"/repo/AGENTS.md",
-	})
+	}, "/repo")
 	for _, want := range []string{"GGCODE.md", "CLAUDE.md", "AGENTS.md"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("hint should contain %q, got %q", want, got)
@@ -296,7 +299,7 @@ func TestBuildProjectMemoryHint_DeduplicatesByBaseName(t *testing.T) {
 	got := BuildProjectMemoryHint([]string{
 		"/repo/GGCODE.md",
 		"/repo/GGCODE.md",
-	})
+	}, "/repo")
 	count := strings.Count(got, "GGCODE.md")
 	if count != 1 {
 		t.Fatalf("expected GGCODE.md to appear once (deduplicated), got %d occurrences", count)
@@ -308,7 +311,7 @@ func TestBuildProjectMemoryHint_GlobalFileShowsFullPath(t *testing.T) {
 	// so the agent can locate them via read_file.
 	got := BuildProjectMemoryHint([]string{
 		"/Users/test/.ggcode/GGCODE.md",
-	})
+	}, "/Users/test/project")
 	if !strings.Contains(got, "/Users/test/.ggcode/GGCODE.md") {
 		t.Fatalf("hint should contain full path for global file, got %q", got)
 	}

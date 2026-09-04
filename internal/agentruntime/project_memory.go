@@ -21,7 +21,7 @@ func ApplyProjectMemoryToAgent(agentInst *agent.Agent, workingDir string) ([]str
 	}
 	agentInst.SetProjectMemoryFiles(files)
 
-	hint := memory.BuildProjectMemoryHint(files)
+	hint := memory.BuildProjectMemoryHint(files, workingDir)
 	if hint != "" {
 		agentInst.AddMessage(provider.Message{
 			Role:    "system",

@@ -213,7 +213,7 @@ func (al *AgentLoop) loadProjectMemory() {
 		return
 	}
 	al.agent.SetProjectMemoryFiles(files)
-	hint := memory.BuildProjectMemoryHint(files)
+	hint := memory.BuildProjectMemoryHint(files, al.session.CWD)
 	if hint != "" {
 		al.agent.AddMessage(provider.Message{
 			Role:    "system",

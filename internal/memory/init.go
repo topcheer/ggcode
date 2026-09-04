@@ -159,6 +159,16 @@ func detectTechStack(root string) []string {
 
 func detectImportantPaths(root string) []string {
 	var paths []string
+	// #1593-A: the hints describe THIS repository's layout. Almost every
+	// standard Go repo has internal/agent, internal/tool, docs/, python/
+	// namesakes - emitting these descriptions for a user's own repo wrote
+	// factually WRONG entries into GGCODE.md, which is injected into every
+	// subsequent session ("MUST follow"). Gate on the module name; foreign
+	// repos get no path claims at all (correct silence beats wrong facts).
+	module := detectGoModule(root)
+	if module != "github.com/topcheer/ggcode" {
+		return nil
+	}
 	for _, hint := range projectPathHints {
 		fullPath := filepath.Join(root, filepath.FromSlash(hint.Path))
 		if _, err := os.Stat(fullPath); err == nil {

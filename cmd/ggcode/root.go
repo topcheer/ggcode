@@ -458,7 +458,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if err != nil {
 			return "", nil, err
 		}
-		return memory.BuildProjectMemoryHint(files), files, nil
+		return memory.BuildProjectMemoryHint(files, workingDir), files, nil
 	}
 	var skillUsageHandler func(provider.TokenUsage)
 	skillAgentFactory := func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {

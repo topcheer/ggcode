@@ -144,7 +144,7 @@ func listProjectMemoryFiles(dir string) []string {
 // project memory file paths. For files in the working directory, only the base
 // name is shown. For files outside the working directory (e.g. ~/.ggcode/),
 // the full absolute path is shown so the agent can locate them via read_file.
-func BuildProjectMemoryHint(files []string) string {
+func BuildProjectMemoryHint(files []string, workingDir string) string {
 	if len(files) == 0 {
 		return ""
 	}
@@ -152,7 +152,7 @@ func BuildProjectMemoryHint(files []string) string {
 	seen := make(map[string]struct{})
 	for _, f := range files {
 		var label string
-		if isOutsideWorkingDir(f) {
+		if isOutsideWorkingDir(f, workingDir) {
 			label = f // full path for global files
 		} else {
 			label = filepath.Base(f)
@@ -178,13 +178,20 @@ func BuildProjectMemoryHint(files []string) string {
 	return b.String()
 }
 
-// isOutsideWorkingDir returns true if the file path is not under the current
+// isOutsideWorkingDir returns true if the file path is not under the given
 // working directory. This is used to decide whether to show the full path
 // (for global files like ~/.ggcode/GGCODE.md) or just the base name.
-func isOutsideWorkingDir(absPath string) bool {
-	wd, err := os.Getwd()
-	if err != nil {
-		return false
+// #1593-C: the check used the PROCESS cwd - under ACP/desktop the process
+// cwd differs from the project dir, so the global memory file's rel path
+// did not start with ".." and was labeled by bare basename, leaving the
+// agent unable to locate it.
+func isOutsideWorkingDir(absPath, workingDir string) bool {
+	wd := workingDir
+	if wd == "" {
+		var err error
+		if wd, err = os.Getwd(); err != nil {
+			return false
+		}
 	}
 	wd = filepath.Clean(wd)
 	absPath = filepath.Clean(absPath)
