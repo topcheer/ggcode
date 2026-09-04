@@ -18,6 +18,9 @@ import (
 var (
 	samplingProvider   provider.Provider
 	samplingProviderMu sync.RWMutex
+	// samplingMaxTokensMu serializes the shared-provider maxTokens
+	// mutate->chat->restore window (#1612-A).
+	samplingMaxTokensMu sync.Mutex
 )
 
 // SetSamplingProvider sets the LLM provider used to handle MCP sampling
@@ -81,9 +84,26 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 	// the model default). Best-effort: providers without the optional
 	// setter keep their configured default.
 	if ms, ok := p.(provider.MaxTokensSetter); ok {
-		prev := reflect.ValueOf(ms).Elem().FieldByName("maxTokens").Int()
-		ms.SetMaxTokens(maxTokens)
-		defer func() { ms.SetMaxTokens(int(prev)) }()
+		// #1612-A: set/restore with NO mutex - two concurrent samplings
+		// interleaved (A reads 8192 -> sets 50; B reads 50 -> sets 200; A
+		// restores 8192; B restores 50) and the SHARED provider stayed at
+		// 50 forever, truncating every main-agent chat until restart; the
+		// naked writes also raced Chat's reads. Serialize the whole
+		// mutate->chat->restore window; the sampling chat itself runs
+		// inside so the restore is guaranteed before the next sampler.
+		samplingMaxTokensMu.Lock()
+		defer samplingMaxTokensMu.Unlock()
+		prevField := reflect.ValueOf(ms).Elem().FieldByName("maxTokens")
+		// Third-party MaxTokensSetter impls may not carry this field -
+		// FieldByName on a missing field yields an invalid Value whose
+		// .Int() panics (#1612 rider). Skip the mutation entirely then.
+		if !prevField.IsValid() || prevField.Kind() != reflect.Int {
+			debug.Log("mcp-sampling", "provider %T lacks an int maxTokens field; skipping per-request budget", p)
+		} else {
+			prev := prevField.Int()
+			ms.SetMaxTokens(maxTokens)
+			defer func() { ms.SetMaxTokens(int(prev)) }()
+		}
 	}
 
 	resp, err := p.Chat(ctx, messages, nil)

@@ -57,6 +57,15 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 			continue
 		}
 		path := filepath.Join(am.dir, m.Key+".md")
+		// #1613: the snapshot is stale by now - another instance (or this
+		// process's own writes) may have touched the file between
+		// collectMetas and here; removing per the stale snapshot physically
+		// deleted freshly-written evolving memories. Re-stat and skip when
+		// the file was modified after the snapshot was taken.
+		if fi, err := os.Stat(path); err == nil && fi.ModTime().After(m.CreatedAt) {
+			debug.Log("memory", "GC: %s modified after snapshot (concurrent writer); keeping", m.Key)
+			continue
+		}
 		if err := os.Remove(path); err != nil {
 			debug.Log("memory", "GC: failed to remove %s: %v", path, err)
 			continue
