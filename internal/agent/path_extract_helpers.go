@@ -141,12 +141,11 @@ func looksLikeFilePath(s string) bool {
 		if strings.Contains(parts[0], "/") {
 			return true
 		}
-		ext := parts[len(parts)-1]
-		for _, ok := range []string{"go", "ts", "js", "py", "rs", "json", "yaml", "yml", "md"} {
-			if ext == ok {
-				return true
-			}
-		}
+		// #1577-B: the extension sub-loop here was dead code - any token
+		// ending in one of the 9 whitelist extensions was already matched
+		// by the 32-extension HasSuffix loop above, so this branch could
+		// never fire. Removed; the only live rule is the first-segment
+		// slash (dir/file.go module paths).
 	}
 	return false
 }

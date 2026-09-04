@@ -48,10 +48,24 @@ const maxInitSEWarnings = 5
 // package names as they appear in source code (not import paths).
 var isePackagePrefixes = map[string]string{
 	"os":     "file/env I/O",
-	"http":   "network I/O",
 	"ioutil": "file I/O",
 	"log":    "logging I/O",
-	"time":   "timer/sleep",
+}
+
+// isePkgFuncBlacklists (#1577-A): 'time' and 'http' hit PURE constructors
+// too (time.Now timestamp capture, http.NewServeMux) - blanket package
+// prefixes false-positived the most idiomatic init patterns. These
+// packages flag only their genuinely effectful functions.
+var isePkgFuncBlacklists = map[string]map[string]string{
+	"time": {
+		"Sleep": "timer/sleep", "NewTicker": "starts a ticker",
+		"Tick": "starts a ticker", "AfterFunc": "starts a timer",
+	},
+	"http": {
+		"Get": "network I/O", "Post": "network I/O", "PostForm": "network I/O",
+		"Head": "network I/O", "ListenAndServe": "network I/O",
+		"ListenAndServeTLS": "network I/O", "Serve": "network I/O",
+	},
 }
 
 // iseFmtIOFuncs lists fmt functions that actually perform I/O.
@@ -135,6 +149,18 @@ func iseInspectNode(n ast.Node, fset *token.FileSet, warnings *[]string) {
 		return
 	}
 
+	// #1577-C: bare panic("...") is the most common import-time bomb and
+	// has no selector - the selector-only path let it through silently.
+	if id, ok := ce.Fun.(*ast.Ident); ok && id.Name == "panic" {
+		pos := fset.Position(ce.Pos())
+		*warnings = append(*warnings,
+			fmt.Sprintf("%s:%d: init() calls panic() - the package becomes "+
+				"unimportable whenever the guard condition trips. Return an "+
+				"error or move the check out of init().",
+				pos.Filename, pos.Line))
+		return
+	}
+
 	// Check selector calls: pkg.Func()
 	if se, ok := ce.Fun.(*ast.SelectorExpr); ok {
 		iseCheckSelectorCall(se, fset, warnings)
@@ -173,6 +199,12 @@ func iseCheckSelectorCall(se *ast.SelectorExpr, fset *token.FileSet, warnings *[
 				return
 			}
 			return // pure fmt function — no side effect
+		}
+		if bl, ok := isePkgFuncBlacklists[pkgName]; ok {
+			if desc, found := bl[funcName]; found {
+				iseEmitPkgWarning(pkgName+"."+funcName, desc, se, fset, warnings)
+			}
+			return
 		}
 		if desc, found := isePackagePrefixes[pkgName]; found {
 			iseEmitPkgWarning(pkgName+"."+funcName, desc, se, fset, warnings)

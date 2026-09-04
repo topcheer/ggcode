@@ -177,3 +177,24 @@ func init() {
 		t.Fatalf("expected 0 warnings for sync ops, got %v", warns)
 	}
 }
+
+// TestInitSE_1577 pins #1577: time.Now/http.NewServeMux pure constructors
+// stay silent, time.Sleep still flags, bare panic() is caught.
+func TestInitSE_1577(t *testing.T) {
+	cases := []struct {
+		name, src string
+		want      int
+	}{
+		{"pure time.Now", "package p\nfunc init() { _ = time.Now() }\n", 0},
+		{"pure http ctor", "package p\nfunc init() { _ = http.NewServeMux() }\n", 0},
+		{"time.Sleep flags", "package p\nfunc init() { time.Sleep(time.Second) }\n", 1},
+		{"http.Get flags", "package p\nfunc init() { _, _ = http.Get(\"x\") }\n", 1},
+		{"bare panic caught", "package p\nfunc init() { panic(\"no config\") }\n", 1},
+	}
+	for _, c := range cases {
+		got := len(checkInitSideEffects("t.go", "", c.src))
+		if got != c.want {
+			t.Errorf("%s: got %d warnings, want %d", c.name, got, c.want)
+		}
+	}
+}
