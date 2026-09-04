@@ -747,12 +747,16 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	}
 	if len(chunks) > textQuota {
 		origChunks := len(chunks)
-		last := chunks[wechatMaxChunksPerSend-1]
+		// #1599-A: index by textQuota, not wechatMaxChunksPerSend - the
+		// fixed index panicked (chunks[4] with quota 3) and re-inflated
+		// the send count past the shared image+text budget the cap exists
+		// to enforce.
+		last := chunks[textQuota-1]
 		if maxBytes := PlatformLimits[PlatformWechat]; maxBytes > 0 && len(last)+len(wechatTruncateNotice) > maxBytes {
 			last = truncateWechatBytes(last, maxBytes-len(wechatTruncateNotice))
 		}
-		chunks = append(chunks[:wechatMaxChunksPerSend-1], last+wechatTruncateNotice)
-		debug.Log("wechat", "adapter=%s Send: capped %d chunks to %d with truncation notice", a.name, origChunks, wechatMaxChunksPerSend)
+		chunks = append(chunks[:textQuota-1], last+wechatTruncateNotice)
+		debug.Log("wechat", "adapter=%s Send: capped %d chunks to %d with truncation notice", a.name, origChunks, textQuota)
 	}
 	for i, chunk := range chunks {
 		if err := a.sendSingleChunk(ctx, token, toUserID, contextToken, chunk); err != nil {
@@ -821,14 +825,19 @@ func (a *WechatAdapter) sendSingleImage(ctx context.Context, token, toUserID, co
 	respData, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 
 	var result struct {
+		// #1599-B: ret!=0 with errcode==0 is still a server rejection -
+		// the text path checks both (#1567-C); the image path counted
+		// these as sent, polluting the shared quota while the image was
+		// silently dropped.
+		Ret     int    `json:"ret"`
 		ErrCode int    `json:"errcode"`
 		ErrMsg  string `json:"errmsg"`
 	}
 	if err := json.Unmarshal(respData, &result); err != nil {
 		return fmt.Errorf("parse image sendmessage response: %w", err)
 	}
-	if result.ErrCode != 0 {
-		return fmt.Errorf("WeChat image send [%d]: %s", result.ErrCode, result.ErrMsg)
+	if result.Ret != 0 || result.ErrCode != 0 {
+		return fmt.Errorf("WeChat image send [ret=%d errcode=%d]: %s", result.Ret, result.ErrCode, result.ErrMsg)
 	}
 	debug.Log("wechat", "adapter=%s image sendmessage OK url=%s", a.name, imageURL)
 	return nil
