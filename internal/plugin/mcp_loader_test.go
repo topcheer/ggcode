@@ -17,6 +17,12 @@ import (
 func TestMCPManagerConnectAllTimesOutHungServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			// Standalone notification-stream probe (client.go
+			// startHTTPNotificationStream); this mock does not offer it.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req mcp.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -93,6 +99,12 @@ func TestMCPManagerConnectAllTimesOutHungStdioServer(t *testing.T) {
 func TestMCPPluginInfoIncludesPromptAndResourceNames(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			// Standalone notification-stream probe (client.go
+			// startHTTPNotificationStream); this mock does not offer it.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req mcp.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -136,6 +148,12 @@ func TestMCPPluginInfoDoesNotBlockWhileConnectIsInFlight(t *testing.T) {
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			// Standalone notification-stream probe (client.go
+			// startHTTPNotificationStream); this mock does not offer it.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req mcp.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -196,6 +214,12 @@ func TestMCPPluginInfoDoesNotBlockWhileConnectIsInFlight(t *testing.T) {
 func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			// Standalone notification-stream probe (client.go
+			// startHTTPNotificationStream); this mock does not offer it.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req mcp.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -248,6 +272,12 @@ func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 func TestMCPManagerInstallAddsServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			// Standalone notification-stream probe (client.go
+			// startHTTPNotificationStream); this mock does not offer it.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req mcp.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
@@ -288,6 +318,12 @@ func TestMCPManagerInstallAddsServer(t *testing.T) {
 func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			// Standalone notification-stream probe (client.go
+			// startHTTPNotificationStream); this mock does not offer it.
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req mcp.Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
