@@ -80,6 +80,17 @@ func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 // Close shuts down all connected MCP servers.
 func (m *MCPManager) Close() error {
 	var firstErr error
+	// #1477-A: unregister every tool these adapters registered BEFORE
+	// closing - the shared registry outlives the session, and orphaned
+	// mcp__name__* entries made same-named (or ANY later) sessions skip
+	// their own registration (adapter collision-skip) while exposing the
+	// DEAD tools of this session as hallucinated available. The plugin
+	// loader (mcp_loader.go) already did this; the ACP path didn't.
+	for _, a := range m.adapters {
+		for _, tn := range a.ToolNames() {
+			m.registry.Unregister(tn)
+		}
+	}
 	for _, c := range m.clients {
 		if err := c.Close(); err != nil && firstErr == nil {
 			firstErr = err

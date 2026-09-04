@@ -509,6 +509,12 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 	// Register the loaded session
 	sessionDir := workspaceSessionsDir(h.sessionsDir, session.CWD)
 	os.MkdirAll(sessionDir, 0o755)
+	// #1477-B: the top-level load path forgot SetSaveDir (session/new at
+	// L296 and the workspace scan at L645 both have it; a sibling comment
+	// documents the same bug class for the scan branch). Without it, a
+	// later Save(SaveDir()=="") wrote <id>.json into the process CWD
+	// (daemon: / or $HOME) and compaction checkpoints were lost.
+	session.SetSaveDir(sessionDir)
 	h.sessionsMu.Lock()
 	h.sessions[session.ID] = session
 	h.workspaceDirs[session.ID] = sessionDir
