@@ -89,29 +89,64 @@ func (a *Agent) resetGuidanceCounters() {
 	// (same run continues), so detectors whose quota burned before the
 	// compaction stayed silent for the run's remainder - the opposite of
 	// the file's own rationale ("worse than the noise we removed").
-	// error_compound
+	// error_compound (#1572-A: quota only - the sliding window of what
+	// actually failed survives compaction)
 	if a.errorCompound != nil {
-		a.errorCompound.reset()
+		a.errorCompound.mu.Lock()
+		a.errorCompound.warningCount = 0
+		a.errorCompound.mu.Unlock()
 	}
-	// success_declare
+	// success_declare (#1572-A: quota only - prior premature-success
+	// declarations remain behavioral facts)
 	if a.successDeclare != nil {
-		a.successDeclare.reset()
+		a.successDeclare.mu.Lock()
+		a.successDeclare.warnCount = 0
+		a.successDeclare.fired = false
+		a.successDeclare.mu.Unlock()
 	}
-	// undo_blind
+	// undo_blind (#1572-A: quota only - pendingUndoFiles is DISK state;
+	// wiping it right when the model loses its undo memory to compaction
+	// guaranteed the exact blind-edit miss the detector exists for)
 	if a.undoBlind != nil {
-		a.undoBlind.reset()
+		a.undoBlind.warnCount = 0
 	}
 	// counterfactual_dep (no mutex; agent-loop single-goroutine access)
+	// (#1572-A: quota only)
 	if a.cfDep != nil {
-		a.cfDep.reset()
+		a.cfDep.warnCount = 0
 	}
 	// verify_coverage_gap (no mutex; agent-loop single-goroutine access)
+	// (#1572-A: quota only - the unverified-edit debt ledger survives;
+	// compaction happens on long runs, i.e. at PEAK debt)
 	if a.editCoverage != nil {
-		a.editCoverage.reset()
+		a.editCoverage.warnCount = 0
 	}
 	// foresight_calibrate (no mutex; agent-loop single-goroutine access)
+	// (#1572-B: reset() cleared predictions only and never touched
+	// warnCount - the quota reopen this entry exists for was a no-op)
 	if a.foresightCalib != nil {
-		a.foresightCalib.reset()
+		a.foresightCalib.warnCount = 0
 	}
+	// #1572-C: six more per-run injection quotas #1465-A missed - each
+	// burned-out quota stayed silent for the whole session after burning
+	// pre-compaction.
+	if a.criteriaDrift != nil {
+		a.criteriaDrift.warnCount = 0
+	}
+	if a.subgoalTrack != nil {
+		a.subgoalTrack.fired = false
+	}
+	if a.reasoningRedund != nil {
+		a.reasoningRedund.warnCount = 0
+	}
+	if a.strategyStagnation != nil {
+		a.strategyStagnation.warnings = 0
+	}
+	if a.actionAnnihil != nil {
+		a.actionAnnihil.mu.Lock()
+		a.actionAnnihil.warnsIssued = 0
+		a.actionAnnihil.mu.Unlock()
+	}
+
 	debug.Log("guidance", "post-compaction: guidance injection counters reset (B-class detectors)")
 }
