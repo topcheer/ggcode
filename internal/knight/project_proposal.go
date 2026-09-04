@@ -54,7 +54,16 @@ func filterKnightBookkeeping(snapshot string) string {
 		if len(rest) > 3 {
 			rest = rest[3:]
 		}
-		if after := strings.TrimPrefix(rest, "\""); strings.HasPrefix(after, ".ggcode/") {
+		// #1576-C: a rename line 'R .ggcode/x -> outside/path' starts with
+		// the SOURCE (.ggcode/), so the prefix test dropped the WHOLE line
+		// and the outside destination bypassed the read-only guard. Test
+		// the DESTINATION (post '->') - bookkeeping-internal moves still
+		// filter, moves OUT of .ggcode stay visible to the guard.
+		dest := rest
+		if idx := strings.Index(rest, " -> "); idx >= 0 {
+			dest = rest[idx+4:]
+		}
+		if after := strings.TrimPrefix(strings.TrimSpace(dest), "\""); strings.HasPrefix(after, ".ggcode/") {
 			continue
 		}
 		kept = append(kept, line)
