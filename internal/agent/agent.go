@@ -3189,7 +3189,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Track files read during this run so the unread-edit guard
 			// knows which files the agent has seen.
 			if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
-				for _, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
+				// #1476-B: patch-exhaustion counts CALLS, not paths - the
+				// IFT give-up rule models successive probes (diminishing
+				// returns per RE-visit), and #500's per-path accounting turned
+				// ONE multi_file_read over 4 same-package files (the tool's
+				// documented coordinated-edit prep workflow) into an instant
+				// false 'over-mining' hit. The hint fires once per call on
+				// the LAST path only.
+				readPathsLen := len(extractReadFilePaths(tc.Name, tc.Arguments))
+				for pi, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
 					a.unreadEdit.recordRead(p)
 					a.tunnelVision.recordFile(p)
 					a.editFailRecovery.recordRead(p)
@@ -3198,8 +3206,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if hint := a.redundantRead.checkRedundantRead(p, readArgsHaveWindow(tc.Arguments)); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
-					if hint := a.patchExhaust.recordRead(p); hint != "" {
-						a.appendGuidance(&result, hint)
+					if pi == readPathsLen-1 {
+						if hint := a.patchExhaust.recordRead(p); hint != "" {
+							a.appendGuidance(&result, hint)
+						}
 					}
 				}
 			}
