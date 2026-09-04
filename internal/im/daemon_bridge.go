@@ -476,8 +476,12 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return nil
 	}
 
-	// Check text is not empty
-	if route.Kind == InboundRouteEmpty || text == "" {
+	// #1584-A: route-empty OR text-less messages used to drop here even
+	// when the content blocks were non-empty (a pure image or a
+	// text+image pair whose text part was empty) - image-only IM sends
+	// vanished silently, no run, no notice. Gate on CONTENT, not text;
+	// text still informs the follow sink when present.
+	if route.Kind == InboundRouteEmpty || (text == "" && len(content) == 0) {
 		return nil
 	}
 	b.notifyUserMessage(content)
@@ -494,7 +498,14 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		sink.OnUserMessage(text)
 	}
 
-	content = []provider.ContentBlock{{Type: "text", Text: text}}
+	// #1584-A: the original rebuild replaced the WHOLE content with a
+	// bare text block - image and attachment-hint blocks were silently
+	// discarded on the normal first-submission path (the interruption
+	// handler and webchat pass full content; this path was the odd one
+	// out). Keep the blocks; only synthesize text when content is empty.
+	if len(content) == 0 {
+		content = []provider.ContentBlock{{Type: "text", Text: text}}
+	}
 	ctx2, queued := b.tryQueueOrBeginRun(content, "")
 	if queued {
 		return nil
