@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -28,13 +29,26 @@ func SetSamplingProvider(p provider.Provider) {
 	debug.Log("mcp-sampling", "sampling provider set: %T", p)
 }
 
+// newMCPSamplingHandler binds the sampling handler to ONE runtime's
+// provider getter (#1592-B): the package-global let a second session in
+// the same process overwrite the first's provider - session A's sampling
+// then ran on B's model and API key, with results tagged B.Name().
+func newMCPSamplingHandler(providerFn func() provider.Provider) func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
+	return func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
+		return mcpSamplingHandlerWith(ctx, params, providerFn())
+	}
+}
+
 // mcpSamplingHandler implements mcp.SamplingHandler using the configured provider.
 // If no provider is set, it returns an error.
 func mcpSamplingHandler(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
 	samplingProviderMu.RLock()
 	p := samplingProvider
 	samplingProviderMu.RUnlock()
+	return mcpSamplingHandlerWith(ctx, params, p)
+}
 
+func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p provider.Provider) (*mcp.SamplingResult, error) {
 	if p == nil {
 		return nil, fmt.Errorf("no LLM provider available for sampling")
 	}
@@ -61,6 +75,16 @@ func mcpSamplingHandler(ctx context.Context, params mcp.SamplingParams) (*mcp.Sa
 	// Sampling is a simple completion — no tools.
 	maxTokens := mcp.EffectiveMaxTokens(params.MaxTokens)
 	debug.Log("mcp-sampling", "handling request: %d messages, maxTokens=%d", len(messages), maxTokens)
+
+	// #1592-A: honor the server's budget - parsed then dropped before,
+	// silently violating the MCP sampling contract (maxTokens:50 ran to
+	// the model default). Best-effort: providers without the optional
+	// setter keep their configured default.
+	if ms, ok := p.(provider.MaxTokensSetter); ok {
+		prev := reflect.ValueOf(ms).Elem().FieldByName("maxTokens").Int()
+		ms.SetMaxTokens(maxTokens)
+		defer func() { ms.SetMaxTokens(int(prev)) }()
+	}
 
 	resp, err := p.Chat(ctx, messages, nil)
 	if err != nil {

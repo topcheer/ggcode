@@ -66,6 +66,13 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 // Used by NewProvider to share learned state across reconstructions.
 func (p *OpenAIProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 
+// SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
+func (p *OpenAIProvider) SetMaxTokens(n int) {
+	if n > 0 {
+		p.maxTokens = n
+	}
+}
+
 func (p *OpenAIProvider) SetReasoningEffort(effort string) {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	switch effort {

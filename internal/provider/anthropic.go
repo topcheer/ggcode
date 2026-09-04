@@ -54,6 +54,13 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 // SetReasoningEffort sets the reasoning effort, which maps to Anthropic's
 // extended thinking budget_tokens parameter. Effort levels: "low" (~5K),
 // "medium" (~16K), "high" (~32K). Empty string disables thinking.
+// SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
+func (p *AnthropicProvider) SetMaxTokens(n int) {
+	if n > 0 {
+		p.maxTokens = n
+	}
+}
+
 func (p *AnthropicProvider) SetReasoningEffort(effort string) {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	switch effort {

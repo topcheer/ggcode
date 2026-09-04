@@ -196,6 +196,14 @@ type Provider interface {
 	CountTokens(ctx context.Context, messages []Message) (int, error)
 }
 
+// MaxTokensSetter is implemented by providers that accept a per-call
+// output-token budget. MCP sampling (#1592-A) uses it to honor the
+// server-requested maxTokens; without it the budget was parsed and then
+// silently dropped, violating the MCP sampling contract.
+type MaxTokensSetter interface {
+	SetMaxTokens(n int)
+}
+
 type ReasoningEffortProvider interface {
 	SetReasoningEffort(effort string)
 	ReasoningEffort() string

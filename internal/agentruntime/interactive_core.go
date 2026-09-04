@@ -42,6 +42,10 @@ type InteractiveRuntimeCore struct {
 	mcpHotReload    *MCPHotReload
 	configHotReload *ConfigHotReload
 	skillHotReload  *SkillHotReload
+
+	// samplingProvider is THIS runtime's sampling provider (#1592-B) -
+	// bound via closure, never a package global.
+	samplingProvider provider.Provider
 }
 
 func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy permission.PermissionPolicy) (*InteractiveRuntimeCore, error) {
@@ -54,11 +58,16 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	}
 
 	mergedServers, _ := mcp.MergeStartupServersWithDeleted(workingDir, cfg.MCPServers, cfg.DeletedMCPServers)
+	// Placeholder core so the closure below can reach the per-runtime
+	// provider field set later by SetConfigAgent (#1592-B).
+	core := &InteractiveRuntimeCore{}
 	mcpMgr := plugin.NewMCPManager(mergedServers, registry)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
-	mcpMgr.SetSamplingHandler(mcpSamplingHandler)
+	mcpMgr.SetSamplingHandler(newMCPSamplingHandler(func() provider.Provider {
+		return core.samplingProvider
+	}))
 	mcpMgr.SetElicitationHandler(mcpElicitationHandler)
 
 	pluginMgr := plugin.NewManager()
@@ -96,7 +105,9 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	upgCfg.Enabled = !cfg.P2P.Disabled
 	th.SetP2PEnabled(webrtc.HostPeerFactory(), upgCfg)
 
-	return &InteractiveRuntimeCore{
+	// #1592-B: reuse the placeholder core - the sampling closure above
+	// captures THIS instance; a fresh literal would orphan it.
+	*core = InteractiveRuntimeCore{
 		Registry:         registry,
 		MCPManager:       mcpMgr,
 		PluginManager:    pluginMgr,
@@ -110,7 +121,8 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		Tunnel:           th,
 		configAccess:     cfgAccess,
 		workingDir:       workingDir,
-	}, nil
+	}
+	return core, nil
 }
 
 // SetConfigAgent injects the agent into the config tool for provider hot-reload.
@@ -122,7 +134,9 @@ func (c *InteractiveRuntimeCore) SetConfigAgent(ag *agent.Agent) {
 		c.configAccess.SetAgent(ag)
 	}
 	if ag != nil {
-		SetSamplingProvider(ag.Provider())
+		// #1592-B: per-runtime binding only; the package-global setter
+		// stayed behind for compatibility but nothing else uses it.
+		c.samplingProvider = ag.Provider()
 	}
 }
 

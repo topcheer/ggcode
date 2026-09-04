@@ -52,6 +52,13 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 // ThinkingConfig.ThinkingBudget parameter. Effort levels: "low" (~25% of
 // max tokens), "medium" (~50%), "high" (~75%). Empty string disables
 // explicit thinking budget (uses model default behavior).
+// SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
+func (p *GeminiProvider) SetMaxTokens(n int) {
+	if n > 0 {
+		p.maxTokens = n
+	}
+}
+
 func (p *GeminiProvider) SetReasoningEffort(effort string) {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	switch effort {
