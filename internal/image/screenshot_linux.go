@@ -15,8 +15,8 @@ import (
 // CaptureScreen captures a screenshot on Linux by auto-detecting an
 // available screenshot tool.
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
-	tool := detectLinuxScreenshotTool()
-	if tool == "" {
+	tools := candidateLinuxScreenshotTools()
+	if len(tools) == 0 {
 		return ScreenshotResult{}, linuxScreenshotToolsMissingError()
 	}
 
@@ -28,34 +28,49 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	}
 	defer cleanup()
 
-	// Normalize options for the detected tool: translate unsupported modes
-	// (window, multi-display) into what the tool can do, or reject them with
-	// an explicit, actionable error (#555, #975).
-	opts, err = prepareLinuxCaptureOpts(tool, opts)
-	if err != nil {
-		return ScreenshotResult{}, err
-	}
-
-	var cmd *exec.Cmd
-	switch tool {
-	case "grim":
-		cmd = buildGrimCommand(rawPath, opts)
-	case "gnome-screenshot":
-		cmd = buildGnomeScreenshotCommand(rawPath, opts)
-	case "scrot":
-		scrotCmd, err := buildScrotCommand(rawPath, opts)
+	// #1571-A: try every installed candidate - a session-mismatched tool
+	// (grim on X11, scrot-only on Wayland) no longer aborts the capture;
+	// the next usable tool takes over. Normalize options per tool: translate
+	// unsupported modes (window, multi-display) into what the tool can do,
+	// or skip that tool (#555, #975).
+	var lastErr error
+	for _, tool := range tools {
+		toolOpts, err := prepareLinuxCaptureOpts(tool, opts)
 		if err != nil {
-			return ScreenshotResult{}, err
+			lastErr = err
+			continue
 		}
-		cmd = scrotCmd
-	case "import":
-		cmd = buildImportCommand(rawPath, opts)
-	default:
-		return ScreenshotResult{}, fmt.Errorf("unsupported screenshot tool: %s", tool)
-	}
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return ScreenshotResult{}, fmt.Errorf("%s failed: %w\n%s", tool, err, strings.TrimSpace(string(out)))
+		var cmd *exec.Cmd
+		switch tool {
+		case "grim":
+			cmd = buildGrimCommand(rawPath, toolOpts)
+		case "gnome-screenshot":
+			cmd = buildGnomeScreenshotCommand(rawPath, toolOpts)
+		case "scrot":
+			scrotCmd, err := buildScrotCommand(rawPath, toolOpts)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			cmd = scrotCmd
+		case "import":
+			cmd = buildImportCommand(rawPath, toolOpts)
+		default:
+			lastErr = fmt.Errorf("unsupported screenshot tool: %s", tool)
+			continue
+		}
+
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			lastErr = fmt.Errorf("%s failed: %w\n%s", tool, err, strings.TrimSpace(string(out)))
+			continue
+		}
+		// Found a working tool - finalize below re-reads the file.
+		break
+	}
+	if lastErr != nil && !fileExists(rawPath) {
+		return ScreenshotResult{}, lastErr
 	}
 
 	img, err := finalizeImage(rawPath, opts)
@@ -114,12 +129,38 @@ func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOpt
 }
 
 func detectLinuxScreenshotTool() string {
-	for _, tool := range []string{"grim", "gnome-screenshot", "scrot", "import"} {
-		if _, err := exec.LookPath(tool); err == nil {
-			return tool
-		}
+	if tools := candidateLinuxScreenshotTools(); len(tools) > 0 {
+		return tools[0]
 	}
 	return ""
+}
+
+// candidateLinuxScreenshotTools returns installed screenshot tools ordered
+// for the current session type (#1571-A): on X11, an incidental grim
+// (pulled in by distro deps) was tried first and its guaranteed failure
+// (no wlroots connection) aborted the whole capture even though scrot/
+// import were perfectly usable; the mirror on Wayland with only scrot
+// installed silently grabbed the XWayland virtual screen. Preferred set
+// first, then everything else as fallback.
+func candidateLinuxScreenshotTools() []string {
+	installed := func(names ...string) []string {
+		var out []string
+		for _, n := range names {
+			if _, err := exec.LookPath(n); err == nil {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	sessionType := strings.ToLower(strings.TrimSpace(os.Getenv("XDG_SESSION_TYPE")))
+	switch sessionType {
+	case "x11":
+		return append(installed("scrot", "import", "gnome-screenshot"), installed("grim")...)
+	case "wayland":
+		return append(installed("grim", "gnome-screenshot"), installed("scrot", "import")...)
+	default:
+		return installed("grim", "gnome-screenshot", "scrot", "import")
+	}
 }
 
 func linuxScreenshotToolsMissingError() error {
@@ -136,6 +177,16 @@ func linuxScreenshotToolsMissingError() error {
 
 // ListDisplays returns display information on Linux using xrandr or wlr-randr.
 func ListDisplays() ([]DisplayInfo, error) {
+	// #1571-B: on Wayland, xrandr (XWayland) reports the single virtual
+	// screen's PHYSICAL geometry while grim -g wants wlroots LOGICAL
+	// coordinates - the geometry handed to grim was wrong for any
+	// multi-display setup (the #1258 wlr-randr class, resurrected by the
+	// xrandr-first ordering). Wayland sessions try wlr-randr first.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("XDG_SESSION_TYPE")), "wayland") {
+		if _, err := exec.LookPath("wlr-randr"); err == nil {
+			return listDisplaysWlrrandr()
+		}
+	}
 	if _, err := exec.LookPath("xrandr"); err == nil {
 		return listDisplaysXrandr()
 	}
@@ -359,3 +410,9 @@ func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
 
 // Guard against unused import warnings on some build paths.
 var _ = filepath.Join
+
+// fileExists reports whether the given path exists (#1571-A capture loop).
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
