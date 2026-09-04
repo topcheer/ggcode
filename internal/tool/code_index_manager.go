@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +76,18 @@ const (
 	codeIndexMaxFileSize  = 256 * 1024 // 256 KB per file
 	codeIndexBuildTimeout = 5 * time.Minute
 	codeIndexRebuildTick  = 5 * time.Minute // periodic dirty-check interval (reduced frequency for lower CPU)
+
+	// codeIndexMaxTotalTerms caps the SUM of per-document distinct terms
+	// held in memory (each tf map entry costs ~50-90 bytes with a Go map
+	// string key). Without this budget, a working directory that parents
+	// many repositories (e.g. starting ggcode in ~/projects instead of a
+	// single repo) easily yields 50k files x thousands of terms = tens of
+	// gigabytes of resident tf/df maps. The budget is the primary memory
+	// guard; the file-count cap alone is not. ~1.5M terms keeps the index
+	// under roughly a few hundred MB while still covering large monorepos.
+	// Override with GGCODE_CODE_INDEX_MAX_TERMS (0 restores the old
+	// unbounded behavior and is not recommended).
+	codeIndexMaxTotalTerms = 1_500_000
 
 	// codeIndexRebuildDebounce is the delay after the last MarkDirty call
 	// before triggering an incremental rebuild. This batches rapid edits
@@ -279,9 +292,16 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	// Phase 3: Incremental update — only re-tokenize changed/new files.
 	var docs []bm25Doc
 	var totalLength int
+	var totalTerms int
+	truncated := false
 	skipped, indexed := 0, 0
+	maxTerms := codeIndexMaxTotalTermsOverride()
 
 	for _, absPath := range files {
+		if maxTerms > 0 && totalTerms >= maxTerms {
+			truncated = true
+			break
+		}
 		select {
 		case <-ctx.Done():
 			debug.Log("codeindex", "build timed out after indexing %d files", indexed)
@@ -304,11 +324,16 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		// Check cache: if mtime matches, reuse cached TF without re-reading.
 		if cached, ok := cachedMap[relPath]; ok && cached.Mtime == mtime {
 			if len(cached.TF) > 0 {
+				if maxTerms > 0 && totalTerms+len(cached.TF) > maxTerms {
+					truncated = true
+					break
+				}
 				docs = append(docs, bm25Doc{
 					path:   relPath,
 					tf:     cached.TF,
 					length: cached.Length,
 				})
+				totalTerms += len(cached.TF)
 				totalLength += cached.Length
 				indexed++
 				continue
@@ -329,13 +354,23 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		for _, term := range terms {
 			tf[term]++
 		}
+		if maxTerms > 0 && totalTerms+len(tf) > maxTerms {
+			truncated = true
+			break
+		}
 		docs = append(docs, bm25Doc{
 			path:   relPath,
 			tf:     tf,
 			length: len(terms),
 		})
+		totalTerms += len(tf)
 		totalLength += len(terms)
 		indexed++
+	}
+	if truncated {
+		debug.Log("codeindex", "term budget reached (%d terms over %d docs) - index truncated at %d of %d files; "+
+			"set GGCODE_CODE_INDEX_MAX_TERMS to adjust, or start ggcode inside a single project",
+			totalTerms, len(docs), len(docs), len(files))
 	}
 
 	if len(docs) == 0 {
@@ -514,28 +549,39 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 		})
 	}
 
-	data, err := json.Marshal(pi)
-	if err != nil {
-		debug.Log("codeindex", "persist: marshal error: %v", err)
-		return
-	}
-
-	// Check disk size limit (~100 MB).
-	if len(data) > 100*1024*1024 {
-		debug.Log("codeindex", "persist: skipping write, index too large (%d bytes)", len(data))
-		return
-	}
-
 	dir := filepath.Dir(m.indexPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		debug.Log("codeindex", "persist: mkdir error: %v", err)
 		return
 	}
 
-	// Atomic write: temp file + rename.
+	// Stream-encode to the temp file instead of json.Marshal: building the
+	// whole JSON in one buffer used to double peak memory (marshal buffer on
+	// top of the tf maps), which for large workspaces pushed the process
+	// into swap. json.Encoder writes incrementally.
 	tmpPath := m.indexPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		debug.Log("codeindex", "persist: write error: %v", err)
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		debug.Log("codeindex", "persist: create error: %v", err)
+		return
+	}
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	marshalErr := enc.Encode(&pi)
+	if cerr := f.Close(); cerr != nil && marshalErr == nil {
+		marshalErr = cerr
+	}
+	if marshalErr != nil {
+		debug.Log("codeindex", "persist: encode error: %v", marshalErr)
+		_ = os.Remove(tmpPath)
+		return
+	}
+
+	// Check disk size limit (~100 MB) AFTER writing, then decide whether to
+	// keep the temp file (rename) or drop it.
+	if info, err := os.Stat(tmpPath); err == nil && info.Size() > 100*1024*1024 {
+		debug.Log("codeindex", "persist: discarding cache, index too large (%d bytes)", info.Size())
+		_ = os.Remove(tmpPath)
 		return
 	}
 	if err := os.Rename(tmpPath, m.indexPath); err != nil {
@@ -543,7 +589,21 @@ func (m *CodeIndexManager) persistIndex(ctx context.Context, docs []bm25Doc) {
 		_ = os.Remove(tmpPath)
 		return
 	}
-	debug.Log("codeindex", "persisted %d docs to %s (%d bytes)", len(pi.Docs), m.indexPath, len(data))
+	debug.Log("codeindex", "persisted %d docs to %s", len(pi.Docs), m.indexPath)
+}
+
+// codeIndexMaxTotalTermsOverride reads GGCODE_CODE_INDEX_MAX_TERMS once.
+// Values < 0 disable the budget (legacy unbounded behavior); parse errors
+// fall back to the compiled-in default.
+func codeIndexMaxTotalTermsOverride() int {
+	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("GGCODE_CODE_INDEX_MAX_TERMS")))
+	if err != nil {
+		return codeIndexMaxTotalTerms
+	}
+	if v < 0 {
+		return 0 // unbounded
+	}
+	return v
 }
 
 // backgroundLoop combines periodic dirty-file checking, on-demand
