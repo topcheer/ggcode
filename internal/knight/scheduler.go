@@ -721,6 +721,30 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 		k.usage.Flush()
 	}
 
+	// #1578-A: the nightly maintenance check must run BEFORE the
+	// quiet-hours return - the most common quiet window (23:00-08:00,
+	// crossing midnight) swallowed every 2 AM tick, so the hour==2
+	// condition never held outside quiet hours and regression/document
+	// audits never ran at all. Maintenance is a local, unattended task;
+	// quiet hours govern NOTIFICATIONS (emitReportKeyed checks them
+	// separately), not background upkeep.
+	if now.Hour() == 2 && shouldRunScheduledTask(now, k.lastMaintenance, k.lastMaintenanceAttempt, knightMaintenanceEvery, knightRetryBackoffEvery) {
+		k.lastMaintenanceAttempt = now
+		sink := k.getEventSink()
+		if sink != nil {
+			sink.OnTaskStart("nightly-maintenance")
+		}
+		maintenanceStart := time.Now()
+		if err := k.nightlyMaintenance(ctx); err != nil {
+			debug.Log("knight", "scheduled maintenance failed: %v", err)
+		} else {
+			k.lastMaintenance = now
+		}
+		if sink != nil {
+			sink.OnTaskComplete("nightly-maintenance", "nightly maintenance completed", time.Since(maintenanceStart))
+		}
+	}
+
 	if k.inQuietHours(now) {
 		debug.Log("knight", "within quiet hours, skipping scheduled work")
 		return
@@ -768,23 +792,6 @@ func (k *Knight) tick(ctx context.Context, now time.Time) {
 		}
 	}
 
-	// Nightly (2 AM): deep maintenance
-	if now.Hour() == 2 && shouldRunScheduledTask(now, k.lastMaintenance, k.lastMaintenanceAttempt, knightMaintenanceEvery, knightRetryBackoffEvery) {
-		k.lastMaintenanceAttempt = now
-		sink := k.getEventSink()
-		if sink != nil {
-			sink.OnTaskStart("nightly-maintenance")
-		}
-		maintenanceStart := time.Now()
-		if err := k.nightlyMaintenance(ctx); err != nil {
-			debug.Log("knight", "scheduled maintenance failed: %v", err)
-		} else {
-			k.lastMaintenance = now
-		}
-		if sink != nil {
-			sink.OnTaskComplete("nightly-maintenance", "nightly maintenance completed", time.Since(maintenanceStart))
-		}
-	}
 }
 
 // isIdle returns true if no user activity has happened for the configured idle delay.
