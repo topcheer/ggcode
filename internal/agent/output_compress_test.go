@@ -46,14 +46,16 @@ func TestCompressRepetitiveLines_EmptyAndSingleLine(t *testing.T) {
 }
 
 func TestCompressRepetitiveLines_PrefixSimilar(t *testing.T) {
-	// Lines with a shared 10+ char prefix that differ in suffixes.
+	// Lines with a shared 10+ char prefix AND homogeneous bodies (same
+	// directory, only the trailing segment varies) - #1475-B: prefix alone
+	// no longer folds (grep file listings are unique information).
 	lines := []string{
-		"Compiling module alpha (step 1 of 8)...",
-		"Compiling module beta (step 2 of 8)...",
-		"Compiling module gamma (step 3 of 8)...",
-		"Compiling module delta (step 4 of 8)...",
-		"Compiling module epsilon (step 5 of 8)...",
-		"Compiling module zeta (step 6 of 8)...",
+		"Compiling module/alpha.log: same body",
+		"Compiling module/beta.log: same body",
+		"Compiling module/gamma.log: same body",
+		"Compiling module/delta.log: same body",
+		"Compiling module/epsilon.log: same body",
+		"Compiling module/zeta.log: same body",
 	}
 	input := strings.Join(lines, "\n")
 	got := compressRepetitiveLines(input)
@@ -185,5 +187,27 @@ func TestFormatDupMarker_LongSample(t *testing.T) {
 	got := formatDupMarker(5, long)
 	if !strings.Contains(got, "...") {
 		t.Errorf("expected truncation of long sample, got: %s", got)
+	}
+}
+
+// TestCompressUniqueFileListingNotFolded pins #1475-B: a grep
+// files_with_matches style listing - every line a DIFFERENT file sharing a
+// project-path prefix - is unique information and must NOT be folded.
+func TestCompressUniqueFileListingNotFolded(t *testing.T) {
+	lines := []string{
+		"internal/agent/alpha.go",
+		"internal/agent/beta.go",
+		"internal/agent/gamma.go",
+		"internal/agent/delta.go",
+		"internal/agent/epsilon.go",
+		"internal/agent/zeta.go",
+	}
+	input := strings.Join(lines, "\n")
+	got := compressRepetitiveLines(input)
+	if strings.Contains(got, "similar lines omitted") {
+		t.Fatalf("unique file listing folded: %s", got)
+	}
+	if got != input {
+		t.Fatalf("unique lines altered:\n%s", got)
 	}
 }

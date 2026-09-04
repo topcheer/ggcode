@@ -70,6 +70,14 @@ func compressRepetitiveLines(content string) string {
 		// Layer 2: prefix-similar consecutive lines.
 		// Two lines are "similar" if they share a common prefix of at least
 		// minPrefixLen characters (or the entire shorter line if it's shorter).
+		// #1475-B: prefix alone is NOT redundancy evidence - a project path
+		// (internal/agent/, /Volumes/new) makes ANY grep file listing share
+		// 10+ chars while every line is a DIFFERENT (unique) file name; the
+		// old fold kept 2+1 and deterministically destroyed unique
+		// information with no recovery, violating the file's own contract.
+		// The fold additionally requires high homogeneity: the lines must
+		// match after stripping a common directory-style tail (path:line
+		// bodies equal), i.e. genuine near-duplicates.
 		if len(lines[i]) >= minPrefixLen {
 			prefix := lines[i][:minPrefixLen]
 			sRunEnd := i + 1
@@ -77,7 +85,7 @@ func compressRepetitiveLines(content string) string {
 				sRunEnd++
 			}
 			sRunLen := sRunEnd - i
-			if sRunLen >= prefixSimilarThreshold {
+			if sRunLen >= prefixSimilarThreshold && foldLinesHomogeneous(lines[i:sRunEnd]) {
 				// Keep first 2, last 1, and a count marker.
 				out = append(out, lines[i])
 				if i+1 < sRunEnd {
@@ -120,4 +128,51 @@ func formatDupMarker(omitted int, sample string) string {
 // formatSimilarMarker generates a marker for omitted prefix-similar lines.
 func formatSimilarMarker(omitted int) string {
 	return "[" + strconv.Itoa(omitted) + " similar lines omitted]"
+}
+
+// foldLinesHomogeneous reports whether the run's lines are genuine
+// near-duplicates rather than merely sharing a directory prefix: strip each
+// line's last path segment (file name) and require the remaining bodies to
+// be identical AND contain at least one non-path difference-free payload -
+// in practice, identical bodies mean only the trailing segment varies
+// (#1475-B).
+func foldLinesHomogeneous(lines []string) bool {
+	if len(lines) < 2 {
+		return false
+	}
+	base := stripLastPathSegment(lines[0])
+	if base == "" {
+		return false
+	}
+	for _, ln := range lines[1:] {
+		if stripLastPathSegment(ln) != base {
+			return false
+		}
+	}
+	return true
+}
+
+// stripLastPathSegment removes the final path component (and any :line
+// suffix) for homogeneity comparison.
+func stripLastPathSegment(s string) string {
+	// Trim a trailing :NNN (grep-style line number).
+	if i := strings.LastIndex(s, ":"); i > 0 && isAllDigits(s[i+1:]) {
+		s = s[:i]
+	}
+	if i := strings.LastIndexAny(s, "/\\"); i >= 0 {
+		return s[:i]
+	}
+	return ""
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

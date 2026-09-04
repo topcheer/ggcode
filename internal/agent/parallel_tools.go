@@ -90,6 +90,18 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		args  json.RawMessage
 	}
 	var batch []pending
+	// #1475-A: a batch containing ANY source-mutating tool (or a mutating
+	// run_command - gofmt -w, git checkout, pip install...) invalidates the
+	// very reads being pre-executed: the old shape ran read_file X
+	// concurrently with edit_file X and then handed the model the
+	// PRE-EDIT content unlabeled after the edit landed - the model judged
+	// the edit failed and re-applied it. Skip pre-execution entirely for
+	// mixed batches (conservative; pure read-only batches are unaffected).
+	for _, tc := range toolCalls {
+		if mutatesSourceTree(tc.Name) {
+			return nil
+		}
+	}
 	for i, tc := range toolCalls {
 		if !speculativeSafeTools[tc.Name] {
 			continue
