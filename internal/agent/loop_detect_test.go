@@ -171,3 +171,33 @@ func testToolCall(name string, args string) provider.ToolCallDelta {
 		Arguments: []byte(args),
 	}
 }
+
+// TestLoopDetector_LongStreakPeriodicRewarn pins #1471-B: streaks past 5
+// stayed silent forever - coverage for context-farming by re-reading the
+// same large file resumes with a re-warn every 5 further duplicates.
+func TestLoopDetector_LongStreakPeriodicRewarn(t *testing.T) {
+	var ld loopDetector
+	tc := testToolCall("read_file", `{"path":"/big/file.go"}`)
+	saw3, saw5, saw10 := false, false, false
+	for i := 0; i < 10; i++ {
+		g := ld.checkDuplicate(tc)
+		switch i {
+		case 2: // third call = streak 3
+			saw3 = g != ""
+		case 4: // fifth call = streak 5
+			saw5 = g != ""
+		case 9: // tenth call = streak 10 -> periodic re-warn
+			saw10 = g != ""
+		default:
+			if g != "" {
+				t.Fatalf("unexpected warning at streak %d: %s", i+1, g)
+			}
+		}
+	}
+	if !saw3 || !saw5 {
+		t.Fatalf("baseline warnings missing: saw3=%v saw5=%v", saw3, saw5)
+	}
+	if !saw10 {
+		t.Fatal("streak 10 stayed silent - periodic re-warn missing")
+	}
+}
