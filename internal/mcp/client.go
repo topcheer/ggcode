@@ -1060,6 +1060,22 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 			return retried, err
 		}
 	}
+	if resp.StatusCode == http.StatusNotFound && sessionID != "" && allowRetry {
+		// #1602: a session-bearing streamable-http server that restarted
+		// 404s every POST (the session died with the old process) and the
+		// http transport has NO reconnect watcher (exitCh==nil in the
+		// loader's startReconnectWatcher) - the client stayed Connected
+		// and every call failed until a manual reload. Drop the stale
+		// session and re-initialize once, then replay the request.
+		debug.Log("mcp-http", "server=%s 404 with session - dropping stale session and re-initializing", c.name)
+		c.mu.Lock()
+		c.sessionID = ""
+		c.mu.Unlock()
+		if _, err := c.Initialize(ctx); err != nil {
+			return nil, fmt.Errorf("mcp[%s]: re-init after 404: %w", c.name, err)
+		}
+		return c.sendHTTPWithRetry(ctx, msg, false)
+	}
 	if resp.StatusCode >= 400 {
 		bodyPreview := strings.TrimSpace(string(body))
 		if len(bodyPreview) > 200 {
