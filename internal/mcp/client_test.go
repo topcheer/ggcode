@@ -240,6 +240,13 @@ func TestHTTPClientLifecycle(t *testing.T) {
 	var sawSessionOnList bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		// Standalone notification stream probe (client.go
+		// startHTTPNotificationStream): this mock does not offer it; 405 is
+		// the spec-sanctioned answer and cleanly disables the stream.
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		var req Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)

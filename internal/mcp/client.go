@@ -53,6 +53,17 @@ type Client struct {
 	abortOnce         sync.Once
 	nextID            atomic.Int64
 	closed            atomic.Bool
+	// httpNotifDisabled permanently stops the standalone HTTP GET SSE
+	// stream after the server answered 405 (spec-allowed: servers MAY not
+	// offer the stream) or a non-SSE 200 body. Safe to flip from the stream
+	// goroutine; read before each (re)start.
+	httpNotifDisabled atomic.Bool
+	// notifStreamCancel cancels the standalone GET SSE stream's request
+	// context. Without it the stream's resp.Body read blocks until the
+	// server speaks again, pinning the connection (and test servers' Close)
+	// long after the client closed. Set by startHTTPNotificationStream,
+	// cancelled by Close. Guarded by mu.
+	notifStreamCancel context.CancelFunc
 	// #1275: hang-watchdog state. lastReadProgress is bumped (unix nano)
 	// after every successfully parsed stdio message; hangWatchdogArmed
 	// dedupes the watchdog across concurrent request timeouts.
@@ -326,6 +337,11 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		debug.Log("mcp-client", "server=%s initialized notification send failed (handshake complete): %v", c.name, err)
 	}
 
+	// streamable HTTP only: open the standalone GET SSE channel so
+	// server-initiated notifications (tools/list_changed etc.) reach us
+	// while idle, not only while a POST response is streaming.
+	c.startHTTPNotificationStream()
+
 	return &result, nil
 }
 
@@ -483,10 +499,17 @@ func (c *Client) Close() error {
 	c.sessionID = ""
 	c.httpClient = nil
 	c.procCancel = nil
+	notifCancel := c.notifStreamCancel
 	waitDone := c.procWaitDone
 	oauthHandler := c.oauthHandler
 	c.oauthHandler = nil
 	c.mu.Unlock()
+
+	// Cancel the standalone GET SSE stream first so its body read unblocks
+	// immediately instead of pinning the connection until the server speaks.
+	if notifCancel != nil {
+		notifCancel()
+	}
 
 	if oauthHandler != nil {
 		oauthHandler.Close()
@@ -1576,6 +1599,191 @@ func (c *Client) streamHTTPSSEResponse(r io.Reader, reqID *ID) (*Response, error
 		return nil, fmt.Errorf("parsing SSE response: no valid JSON-RPC message found: %w", lastParseErr)
 	}
 	return nil, fmt.Errorf("parsing SSE response: no Response found in %d event(s)", events)
+}
+
+// httpNotifResult classifies how one standalone GET SSE attempt ended.
+type httpNotifResult int
+
+const (
+	// httpNotifDrop: stream ended or network error - retry with backoff.
+	httpNotifDrop httpNotifResult = iota
+	// httpNotifUnsupported: server answered 405 or a non-SSE body. The MCP
+	// streamable-HTTP spec allows servers to not offer the standalone
+	// stream; stop permanently instead of hammering.
+	httpNotifUnsupported
+	// httpNotifSessionGone: 404 - the server expired our session. The
+	// plugin-level reconnect cycle builds a fresh client (whose Initialize
+	// starts a fresh stream), so this one stops.
+	httpNotifSessionGone
+	// httpNotifClosing: the client is closing; exit without retry.
+	httpNotifClosing
+)
+
+// startHTTPNotificationStream opens the MCP streamable-HTTP standalone GET
+// SSE channel (spec: "the client MAY issue a GET request ... to enable
+// server-to-client messages"). Without it, server-initiated notifications
+// such as tools/list_changed could only arrive while a POST response was
+// actively streaming - a server that adds a tool while the client is idle
+// had its notification silently lost. Idempotent: a no-op for non-HTTP
+// transports, after Close, or once the server proved it does not offer
+// the stream.
+func (c *Client) startHTTPNotificationStream() {
+	if c.transport != "http" || c.closed.Load() || c.httpNotifDisabled.Load() {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.mu.Lock()
+	if c.notifStreamCancel != nil {
+		// A previous stream is already running (e.g. Initialize retried);
+		// keep the oldest ctx alive and skip spawning a second loop.
+		c.mu.Unlock()
+		cancel()
+		return
+	}
+	c.notifStreamCancel = cancel
+	c.mu.Unlock()
+	safego.Go("mcp.client.httpNotifStream", func() {
+		defer cancel()
+		backoff := []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
+		attempt := 0
+		for {
+			res := c.readHTTPNotifStreamOnce(ctx)
+			if res == httpNotifClosing || c.closed.Load() || ctx.Err() != nil {
+				return
+			}
+			if res == httpNotifUnsupported {
+				c.httpNotifDisabled.Store(true)
+				debug.Log("mcp-http", "notif-stream server=%s standalone GET stream unsupported (405/non-SSE); disabled for this client", c.name)
+				return
+			}
+			if res == httpNotifSessionGone {
+				debug.Log("mcp-http", "notif-stream server=%s session expired (404); stopping (reconnect cycle rebuilds)", c.name)
+				return
+			}
+			// httpNotifDrop: retry with backoff, capped at 60s. Wait in
+			// slices so Close() is noticed within a second, not a full tick.
+			delay := 60 * time.Second
+			if attempt < len(backoff) {
+				delay = backoff[attempt]
+			}
+			attempt++
+			debug.Log("mcp-http", "notif-stream server=%s dropped; retry in %s (attempt %d)", c.name, delay, attempt)
+			if !c.sleepUntilClosed(delay) {
+				return
+			}
+		}
+	})
+}
+
+// readHTTPNotifStreamOnce performs one GET / SSE cycle: dial, stream events
+// until the server closes or the client does, routing every Notification
+// through the shared async dispatch (processNotification).
+func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
+	c.mu.Lock()
+	httpClient := c.httpClient
+	sessionID := c.sessionID
+	headers := c.headers
+	oauthHandler := c.oauthHandler
+	url := c.url
+	c.mu.Unlock()
+	if httpClient == nil {
+		return httpNotifClosing
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return httpNotifDrop
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	if oauthHandler != nil {
+		if token, _ := oauthHandler.GetAccessToken(req.Context()); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		if c.closed.Load() || ctx.Err() != nil {
+			return httpNotifClosing
+		}
+		return httpNotifDrop
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		return httpNotifUnsupported
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return httpNotifSessionGone
+	}
+	if resp.StatusCode >= 400 {
+		// Other errors (401 pending token refresh, 5xx, ...) are treated as
+		// transient: the POST path owns interactive auth and error surfacing.
+		return httpNotifDrop
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		// 200 with a non-SSE body means the server does not stream on GET.
+		return httpNotifUnsupported
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var dataLines []string
+	flush := func() {
+		if len(dataLines) == 0 {
+			return
+		}
+		payload := []byte(strings.Join(dataLines, "\n"))
+		dataLines = nil
+		msg, err := ParseMessage(payload)
+		if err != nil {
+			debug.Log("mcp-http", "notif-stream server=%s unparsable event: %v", c.name, err)
+			return
+		}
+		switch typed := msg.(type) {
+		case *Notification:
+			c.processNotification(typed)
+		default:
+			// Server-initiated Requests (sampling, elicitation) arriving on
+			// the standalone stream are not wired through this reader yet;
+			// log for diagnosis instead of silently dropping bytes.
+			debug.Log("mcp-http", "notif-stream server=%s skipping non-notification event %T", c.name, msg)
+		}
+	}
+	for scanner.Scan() {
+		if c.closed.Load() {
+			return httpNotifClosing
+		}
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.TrimSpace(line) == "":
+			flush()
+		}
+	}
+	if c.closed.Load() {
+		return httpNotifClosing
+	}
+	return httpNotifDrop
+}
+
+// sleepUntilClosed waits for d, but wakes at most every second to check the
+// client's closed flag so shutdown is not delayed by a long backoff tick.
+// Returns false when the client closed during the wait.
+func (c *Client) sleepUntilClosed(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if c.closed.Load() {
+			return false
+		}
+		time.Sleep(min(time.Until(deadline), time.Second))
+	}
+	return !c.closed.Load()
 }
 
 // extractNDJSONResponse parses newline-delimited JSON bodies and returns the
