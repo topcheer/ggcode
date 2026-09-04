@@ -124,3 +124,29 @@ func TestPreExecuteReadOnly_SkipsMemoizedTools(t *testing.T) {
 		t.Errorf("expected nil (tools not registered), got %d results", len(results))
 	}
 }
+
+// TestPreExecuteReadOnly_MixedBatchSkipped pins #1475-A: a batch containing
+// a mutating tool must NOT pre-execute its reads - [edit_file X, read_file
+// X] handed back pre-edit content with no annotation and provoked duplicate
+// edits. Pure read-only batches keep the speedup.
+func TestPreExecuteReadOnly_MixedBatchSkipped(t *testing.T) {
+	a := &Agent{
+		tools:      tool.NewRegistry(),
+		speculator: newSpeculator(),
+	}
+	calls := []provider.ToolCallDelta{
+		{ID: "t1", Name: "edit_file", Arguments: []byte(`{"file_path":"/x/a.go","old_text":"o","new_text":"n"}`)},
+		{ID: "t2", Name: "read_file", Arguments: []byte(`{"path":"/x/a.go"}`)},
+	}
+	if got := a.preExecuteReadOnlyTools(context.Background(), calls); len(got) != 0 {
+		t.Fatalf("mixed batch pre-executed: %+v", got)
+	}
+	// Pure read-only batch still pre-executes.
+	pure := []provider.ToolCallDelta{
+		{ID: "t3", Name: "read_file", Arguments: []byte(`{"path":"/x/a.go"}`)},
+		{ID: "t4", Name: "glob", Arguments: []byte(`{"pattern":"*.go"}`)},
+	}
+	if got := a.preExecuteReadOnlyTools(context.Background(), pure); len(got) == 0 {
+		t.Fatal("pure read-only batch lost pre-execution")
+	}
+}
