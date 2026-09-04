@@ -131,48 +131,47 @@ func formatSimilarMarker(omitted int) string {
 }
 
 // foldLinesHomogeneous reports whether the run's lines are genuine
-// near-duplicates rather than merely sharing a directory prefix: strip each
-// line's last path segment (file name) and require the remaining bodies to
-// be identical AND contain at least one non-path difference-free payload -
-// in practice, identical bodies mean only the trailing segment varies
-// (#1475-B).
+// near-duplicates: identical after stripping ALL digit runs (#1475-B).
+// Template-plus-counter output (Compiling module step 1..8, gen_1/gen_2,
+// retry #3) is true redundancy; a grep file listing shares a project-path
+// prefix but its trailing names are DIFFERENT WORDS (alpha/beta/gamma) and
+// digits-stripping exposes exactly that distinction. The first version of
+// this check (directory-body equality) misjudged same-directory unique
+// listings as homogeneous and kept destroying them - caught by the
+// companion pin.
 func foldLinesHomogeneous(lines []string) bool {
 	if len(lines) < 2 {
 		return false
 	}
-	base := stripLastPathSegment(lines[0])
+	base := stripDigits(lines[0])
 	if base == "" {
 		return false
 	}
 	for _, ln := range lines[1:] {
-		if stripLastPathSegment(ln) != base {
+		if stripDigits(ln) != base {
 			return false
 		}
 	}
 	return true
 }
 
-// stripLastPathSegment removes the final path component (and any :line
-// suffix) for homogeneity comparison.
-func stripLastPathSegment(s string) string {
-	// Trim a trailing :NNN (grep-style line number).
-	if i := strings.LastIndex(s, ":"); i > 0 && isAllDigits(s[i+1:]) {
-		s = s[:i]
-	}
-	if i := strings.LastIndexAny(s, "/\\"); i >= 0 {
-		return s[:i]
-	}
-	return ""
-}
-
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
+// stripDigits removes all runs of decimal digits for template comparison.
+func stripDigits(s string) string {
+	var b strings.Builder
+	inDigit := false
 	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
+		if r >= '0' && r <= '9' {
+			inDigit = true
+			continue
 		}
+		if inDigit {
+			b.WriteByte('*')
+			inDigit = false
+		}
+		b.WriteRune(r)
 	}
-	return true
+	if inDigit {
+		b.WriteByte('*')
+	}
+	return b.String()
 }

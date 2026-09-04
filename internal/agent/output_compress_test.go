@@ -46,16 +46,16 @@ func TestCompressRepetitiveLines_EmptyAndSingleLine(t *testing.T) {
 }
 
 func TestCompressRepetitiveLines_PrefixSimilar(t *testing.T) {
-	// Lines with a shared 10+ char prefix AND homogeneous bodies (same
-	// directory, only the trailing segment varies) - #1475-B: prefix alone
-	// no longer folds (grep file listings are unique information).
+	// Lines with a shared 10+ char prefix AND template+counter bodies -
+	// identical after digit stripping. #1475-B: prefix alone no longer
+	// folds (grep file listings are unique information).
 	lines := []string{
-		"Compiling module/alpha.log: same body",
-		"Compiling module/beta.log: same body",
-		"Compiling module/gamma.log: same body",
-		"Compiling module/delta.log: same body",
-		"Compiling module/epsilon.log: same body",
-		"Compiling module/zeta.log: same body",
+		"Compiling module 1 of 8 done",
+		"Compiling module 2 of 8 done",
+		"Compiling module 3 of 8 done",
+		"Compiling module 4 of 8 done",
+		"Compiling module 5 of 8 done",
+		"Compiling module 6 of 8 done",
 	}
 	input := strings.Join(lines, "\n")
 	got := compressRepetitiveLines(input)
