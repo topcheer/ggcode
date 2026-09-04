@@ -12,18 +12,22 @@ import (
 // removal advice). The old check — lastGoodFiles membership — only knew what
 // was edited during the previous green cycle.
 func TestCheckpointPreExistingFileNotNew(t *testing.T) {
-	dir := t.TempDir()
+	// #1469-A: pre-existing now means GIT-TRACKED (only tracked files can
+	// be restored by git checkout) - the scenario needs a real repo.
+	dir := initGitRepo(t)
 	existing := filepath.Join(dir, "b.go")
 	if err := os.WriteFile(existing, []byte("package x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runGitCR(t, dir, "add", ".")
+	runGitCR(t, dir, "commit", "-m", "init")
 
 	c := newLastGoodCheckpoint()
 	// Green cycle with an edit to a.go.
-	c.recordFileEdit(filepath.Join(dir, "a.go"))
+	c.recordFileEdit(filepath.Join(dir, "a.go"), dir)
 	c.recordVerifyPass()
 	// First-ever edit to the PRE-EXISTING b.go, then a failing verify.
-	c.recordFileEdit(existing)
+	c.recordFileEdit(existing, dir)
 	c.recordVerifyFail()
 
 	guidance := c.revertGuidance()
@@ -49,9 +53,9 @@ func TestCheckpointPreExistingFileNotNew(t *testing.T) {
 func TestCheckpointGenuinelyNewFileStaysNew(t *testing.T) {
 	dir := t.TempDir()
 	c := newLastGoodCheckpoint()
-	c.recordFileEdit(filepath.Join(dir, "scratch_generated.go")) // never existed
+	c.recordFileEdit(filepath.Join(dir, "scratch_generated.go"), dir) // never existed
 	c.recordVerifyPass()
-	c.recordFileEdit(filepath.Join(dir, "another_new.go")) // created after green
+	c.recordFileEdit(filepath.Join(dir, "another_new.go"), dir) // created after green
 	c.recordVerifyFail()
 
 	guidance := c.revertGuidance()

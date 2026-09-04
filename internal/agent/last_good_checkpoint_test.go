@@ -14,8 +14,8 @@ func TestLastGoodCheckpoint_BasicLifecycle(t *testing.T) {
 	}
 
 	// Record some edits before first verify.
-	c.recordFileEdit("/foo/bar.go")
-	c.recordFileEdit("/foo/baz.go")
+	c.recordFileEdit("/foo/bar.go", "")
+	c.recordFileEdit("/foo/baz.go", "")
 
 	// First verify passes -- snapshot taken.
 	c.recordVerifyPass()
@@ -28,8 +28,8 @@ func TestLastGoodCheckpoint_BasicLifecycle(t *testing.T) {
 	}
 
 	// Now make more edits that introduce regressions.
-	c.recordFileEdit("/foo/bar.go") // modify existing
-	c.recordFileEdit("/foo/new.go") // new file
+	c.recordFileEdit("/foo/bar.go", "") // modify existing
+	c.recordFileEdit("/foo/new.go", "") // new file
 
 	// Verify fails -- no snapshot update.
 	c.recordVerifyFail()
@@ -53,9 +53,9 @@ func TestLastGoodCheckpoint_BasicLifecycle(t *testing.T) {
 func TestLastGoodCheckpoint_NoGuidanceAfterPass(t *testing.T) {
 	c := newLastGoodCheckpoint()
 
-	c.recordFileEdit("/a.go")
+	c.recordFileEdit("/a.go", "")
 	c.recordVerifyPass()
-	c.recordFileEdit("/b.go")
+	c.recordFileEdit("/b.go", "")
 
 	// No verify fail yet, so no guidance needed.
 	if g := c.revertGuidance(); g != "" {
@@ -66,9 +66,9 @@ func TestLastGoodCheckpoint_NoGuidanceAfterPass(t *testing.T) {
 func TestLastGoodCheckpoint_Reset(t *testing.T) {
 	c := newLastGoodCheckpoint()
 
-	c.recordFileEdit("/a.go")
+	c.recordFileEdit("/a.go", "")
 	c.recordVerifyPass()
-	c.recordFileEdit("/b.go")
+	c.recordFileEdit("/b.go", "")
 	c.recordVerifyFail()
 
 	c.reset()
@@ -91,8 +91,8 @@ func TestLastGoodCheckpoint_NewFilesOnly(t *testing.T) {
 	c.recordVerifyPass()
 
 	// Add only new files.
-	c.recordFileEdit("/new1.go")
-	c.recordFileEdit("/new2.go")
+	c.recordFileEdit("/new1.go", "")
+	c.recordFileEdit("/new2.go", "")
 	c.recordVerifyFail()
 
 	g := c.revertGuidance()
@@ -117,7 +117,7 @@ func TestLastGoodCheckpoint_MaxFilesLimit(t *testing.T) {
 
 	// Record more than checkpointMaxFiles modified files.
 	for i := 0; i < checkpointMaxFiles+5; i++ {
-		c.recordFileEdit("/file" + string(rune('a'+i)) + ".go")
+		c.recordFileEdit("/file"+string(rune('a'+i))+".go", "")
 	}
 	c.recordVerifyFail()
 
@@ -129,7 +129,7 @@ func TestLastGoodCheckpoint_MaxFilesLimit(t *testing.T) {
 
 func TestLastGoodCheckpoint_NilSafe(t *testing.T) {
 	var c *lastGoodCheckpoint
-	c.recordFileEdit("/a.go")
+	c.recordFileEdit("/a.go", "")
 	c.recordVerifyPass()
 	c.recordVerifyFail()
 	c.reset()

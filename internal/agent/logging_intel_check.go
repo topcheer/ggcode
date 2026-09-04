@@ -336,6 +336,29 @@ func stripStringLiterals(s string) string {
 			if c == quote {
 				inString = false
 			}
+			// #1469-B: inside a JS TEMPLATE LITERAL, ${...} interpolations
+			// are EXPRESSIONS, not string content - console.log(`Bearer
+			// ${accessToken}`) is the canonical token-leak shape and was
+			// swallowed whole by the strip. Emit the interpolated expression
+			// into the stripped text.
+			if quote == '`' && c == '$' && i+1 < len(s) && s[i+1] == '{' {
+				j := i + 2
+				depth := 1
+				for j < len(s) && depth > 0 {
+					if s[j] == '{' {
+						depth++
+					} else if s[j] == '}' {
+						depth--
+					}
+					j++
+				}
+				expr := s[i+2 : j-1]
+				for _, ch := range expr {
+					b.WriteRune(ch)
+				}
+				b.WriteRune(' ')
+				i = j - 1
+			}
 			continue // skip chars inside string
 		}
 		if c == '"' || c == '\'' || c == '`' {

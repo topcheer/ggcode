@@ -47,7 +47,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -126,7 +125,7 @@ func (c *lastGoodCheckpoint) reset() {
 
 // recordFileEdit tracks a file modification during the current edit cycle.
 // Called from the agent's tool execution path for file-editing tools.
-func (c *lastGoodCheckpoint) recordFileEdit(filePath string) {
+func (c *lastGoodCheckpoint) recordFileEdit(filePath, workingDir string) {
 	if c == nil || filePath == "" {
 		return
 	}
@@ -134,9 +133,14 @@ func (c *lastGoodCheckpoint) recordFileEdit(filePath string) {
 	// #423: remember whether the file already existed on disk before we
 	// touched it — the first edit of a PRE-EXISTING file is a modification
 	// (git checkout applies), not a new file (remove advice).
+	// #1469-A: os.Stat runs AFTER the tool executed (the call site is in
+	// the result-handling block), so a just-created file always exists and
+	// every new file was misclassified pre-existing - the git-checkout
+	// recovery advice then failed 100% of the time with 'pathspec did not
+	// match'. Track git-tracked status instead: only tracked files can be
+	// restored by git checkout.
 	if _, tracked := c.preExistingFiles[fp]; !tracked {
-		_, err := os.Stat(fp)
-		c.preExistingFiles[fp] = err == nil
+		c.preExistingFiles[fp] = gitIsTracked(fp, workingDir)
 	}
 	c.currentModifiedFiles[fp] = true
 	c.filesModifiedSinceLastGood[fp] = true
@@ -266,7 +270,10 @@ func (a *Agent) lastGoodCheckpointRecordEdit(toolName string, fileHint string) {
 	if !productiveEditTools[toolName] {
 		return
 	}
-	a.lastGoodCheckpoint.recordFileEdit(fileHint)
+	a.mu.RLock()
+	dir := a.workingDir
+	a.mu.RUnlock()
+	a.lastGoodCheckpoint.recordFileEdit(fileHint, dir)
 }
 
 // lastGoodCheckpointRecordPass records a passing verification.
@@ -297,4 +304,17 @@ func (a *Agent) resetLastGoodCheckpoint() {
 	if a.lastGoodCheckpoint != nil {
 		a.lastGoodCheckpoint.reset()
 	}
+}
+
+// gitIsTracked reports whether the path is tracked by git in workingDir -
+// only tracked files can be restored by `git checkout --` (#1469-A).
+func gitIsTracked(path, workingDir string) bool {
+	if path == "" || workingDir == "" {
+		return false
+	}
+	abs := path
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(workingDir, path)
+	}
+	return gitCommand(workingDir, "ls-files", "--error-unmatch", abs).Run() == nil
 }
