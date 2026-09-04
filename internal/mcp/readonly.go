@@ -83,24 +83,27 @@ func camelToSnake(s string) string {
 // AND against the plain-lowercased name, catching ALL-CAPS REST-style
 // tools ("DELETE_FILE", "EXECUTE_QUERY") that fragment under
 // camelToSnake (#998).
+// Long keywords ALSO match whole segments only (#1591-B): the old
+// substring match blocked read-only query tools - 'deploy' substring-hit
+// list_deployments/get_deployment_status (the most common K8s MCP read
+// queries), 'create' hit get_created_at, 'update' hit last_updated_at,
+// 'remove' hit get_removed_nodes. The #996 root-collision class applied
+// to long keywords verbatim. ALL-CAPS REST twins are still caught - the
+// plainSegments side covers "DELETE_FILE"/"EXECUTE_QUERY" whole-segment.
 func isWriteToolName(name string) bool {
 	plain := strings.ToLower(name)
 	segments := strings.Split(camelToSnake(name), "_")
 	plainSegments := strings.Split(plain, "_")
 	for _, kw := range writeKeywords {
-		if containsShortRoot(kw) {
-			for _, seg := range segments {
-				if seg == kw {
-					return true
-				}
+		for _, seg := range segments {
+			if seg == kw {
+				return true
 			}
-			for _, seg := range plainSegments {
-				if seg == kw {
-					return true
-				}
+		}
+		for _, seg := range plainSegments {
+			if seg == kw {
+				return true
 			}
-		} else if strings.Contains(strings.Join(segments, "_"), kw) || strings.Contains(plain, kw) {
-			return true
 		}
 	}
 	return false

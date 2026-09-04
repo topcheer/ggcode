@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -15,8 +16,33 @@ type ID struct {
 func NewStringID(s string) ID { return ID{value: s} }
 func NewIntID(n int64) ID     { return ID{value: n} }
 
-func (id ID) MarshalJSON() ([]byte, error)     { return json.Marshal(id.value) }
-func (id *ID) UnmarshalJSON(data []byte) error { return json.Unmarshal(data, &id.value) }
+func (id ID) MarshalJSON() ([]byte, error) { return json.Marshal(id.value) }
+
+// UnmarshalJSON keeps numeric precision (#1591-C): decoding into
+// interface{} turns every number into float64, so snowflake-scale request
+// IDs (>2^53) from server-initiated requests (sampling/elicitation) lost
+// precision and the echoed response ID no longer matched, hanging the
+// server side. Small ints still become int64; anything that does not fit
+// is preserved as json.Number, which marshals back to the exact original
+// text.
+func (id *ID) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	if n, ok := v.(json.Number); ok {
+		if i, err := n.Int64(); err == nil {
+			id.value = i
+		} else {
+			id.value = n // json.Number marshals as the raw literal
+		}
+		return nil
+	}
+	id.value = v
+	return nil
+}
 
 // Request is a JSON-RPC request.
 type Request struct {
