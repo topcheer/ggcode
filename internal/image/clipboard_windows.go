@@ -3,12 +3,14 @@
 package image
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func ReadClipboard() (Image, error) {
