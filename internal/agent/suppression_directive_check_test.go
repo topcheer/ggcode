@@ -210,3 +210,19 @@ func TestLangInList(t *testing.T) {
 		t.Error("expected empty list to return false")
 	}
 }
+
+// Regression for #1500: bare '# type: ignore' followed by explanatory text
+// is mypy's documented recommended form and must be classified bare
+// (reportable); only bracket error codes (# type: ignore[return-value])
+// make it scoped.
+func TestIsBareSuppressionTypeIgnoreWithExplanation(t *testing.T) {
+	if !isBareSuppression("x = f()  # type: ignore old API returns Any", "# type: ignore", true) {
+		t.Fatal("type: ignore with explanation text must be bare (reportable)")
+	}
+	if isBareSuppression("x = f()  # type: ignore[return-value]", "# type: ignore", true) {
+		t.Fatal("type: ignore[code] is scoped and must not be reported")
+	}
+	if !isBareSuppression("x = f()  # type: ignore", "# type: ignore", true) {
+		t.Fatal("bare type: ignore with nothing after must stay bare")
+	}
+}

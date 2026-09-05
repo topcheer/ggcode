@@ -523,6 +523,24 @@ func hasTestFile(workingDir, srcFile string) string {
 			return candidate
 		}
 	}
+	// #1500: Go compiles tests per package with no same-name convention -
+	// helpers_test.go covering foo.go is the norm in this very repo. For Go
+	// sources, any *_test.go in the same directory counts as coverage;
+	// without this, fully-covered files got branded 'no tests' and the
+	// agent was nudged to generate redundant foo_test.go files.
+	if strings.HasSuffix(srcFile, ".go") {
+		dir := filepath.Dir(srcFile)
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(workingDir, dir)
+		}
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() && strings.HasSuffix(e.Name(), "_test.go") {
+					return filepath.Join(dir, e.Name())
+				}
+			}
+		}
+	}
 	return ""
 }
 

@@ -216,6 +216,16 @@ func isBareSuppression(line, matched string, requiresRule bool) bool {
 		return !strings.HasPrefix(rest, ":")
 	}
 
+	// For Python's # type: ignore, mypy's syntax makes it scoped only via
+	// error codes in brackets (# type: ignore[return-value]) - already
+	// handled by the HasPrefix("[") branch above. A space followed by free
+	// text is the DOCUMENTED recommended form for bare ignores with an
+	// explanation; the old default treated it as scoped and never reported
+	// it (#1500).
+	if strings.Contains(matched, "type:") && strings.Contains(matched, "ignore") {
+		return true
+	}
+
 	// Default: if there's something after, assume it's scoped
 	return false
 }
