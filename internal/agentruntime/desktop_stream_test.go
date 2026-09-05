@@ -207,3 +207,18 @@ func TestDesktopSemanticPreservesToolCallIDForResult(t *testing.T) {
 		t.Fatalf("tool result id = %q, want %q", resultSem.ToolResult.ID, callID)
 	}
 }
+
+func TestHandleDesktopStreamEventErrorResetsRound(t *testing.T) {
+	// Regression for #1482: the Error branch used to leave the round
+	// populated, so an aborted turn's partial text leaked into the next
+	// turn's EmitRoundSummary.
+	round := &IMRoundState{}
+	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "partial output"}, round, nil, nil)
+	if round.Text() != "partial output" {
+		t.Fatalf("setup: text = %q", round.Text())
+	}
+	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: errors.New("boom")}, round, nil, nil)
+	if round.Text() != "" || round.ToolCalls != 0 || round.ToolSuccesses != 0 || round.ToolFailures != 0 {
+		t.Fatalf("error branch must reset round, got text=%q calls=%d", round.Text(), round.ToolCalls)
+	}
+}

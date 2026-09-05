@@ -42,6 +42,15 @@ func (b *InteractionBroker) AwaitApproval(ctx context.Context, req ApprovalReque
 		return decision
 	case <-ctx.Done():
 		b.removeApproval(req.ID)
+		// #1482: ResolveApproval may have buffered a decision and already
+		// acknowledged it to the UI before ctx.Done fired. Draining first
+		// honors an approval the user sees as granted instead of racing
+		// into a bare Deny.
+		select {
+		case decision := <-ch:
+			return decision
+		default:
+		}
 		return permission.Deny
 	}
 }
@@ -57,6 +66,13 @@ func (b *InteractionBroker) AwaitAskUser(ctx context.Context, req AskUserRequest
 		return response, nil
 	case <-ctx.Done():
 		b.removeAskUser(req.ID)
+		// #1482: same race as AwaitApproval - a response the UI already
+		// acknowledged must not be discarded when ctx.Done fires first.
+		select {
+		case response := <-ch:
+			return response, nil
+		default:
+		}
 		return CancelledAskUserResponse(req.Request), ctx.Err()
 	}
 }

@@ -157,6 +157,10 @@ func HandleDesktopStreamEvent(ev provider.StreamEvent, round *IMRoundState, emit
 			mirror.Flush(true)
 			mirror.PushError(message)
 		}
+		// #1482: reset the round so an aborted turn's partial text and
+		// tool counts don't leak into the next turn's EmitRoundSummary
+		// (the Done branch resets; this branch didn't).
+		round.Reset()
 		return DesktopStreamSemantic{Type: ev.Type, ErrorText: message}, true
 	}
 	return DesktopStreamSemantic{}, false

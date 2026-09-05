@@ -191,3 +191,18 @@ func TestConfigHotReload_ConcurrentAccessUnderRefresh(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestApplyFreshConfigRefreshesFallbacks(t *testing.T) {
+	// Regression for #1482: applyFreshConfig copied only the legacy single
+	// Fallback field, leaving the modern Fallbacks array frozen at the
+	// startup snapshot despite the "config refreshed" log.
+	a := &configAccess{cfg: &config.Config{}}
+	a.cfg.Fallbacks = []config.FallbackConfig{{Vendor: "old"}}
+	w := &ConfigHotReload{access: a}
+	fresh := &config.Config{}
+	fresh.Fallbacks = []config.FallbackConfig{{Vendor: "new"}}
+	w.applyFreshConfig(fresh)
+	if len(a.cfg.Fallbacks) != 1 || a.cfg.Fallbacks[0].Vendor != "new" {
+		t.Fatalf("fallbacks chain not refreshed: %+v", a.cfg.Fallbacks)
+	}
+}

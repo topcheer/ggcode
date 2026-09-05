@@ -164,6 +164,11 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	// Fallback: consumed only when a provider is (re)built - next turn
 	// effective by construction, no mid-run impact.
 	old.Fallback = fresh.Fallback
+	// Fallbacks chain (#1482): FallbackChain consumes BOTH the legacy single
+	// entry and the modern array. Refreshing only the legacy field left the
+	// array frozen at the startup snapshot while the "config refreshed"
+	// log implied success - failover-chain edits silently needed a restart.
+	old.Fallbacks = fresh.Fallbacks
 
 	// Knight budgets and iteration caps: consumed per-turn by Apply* calls;
 	// next-turn effective.
