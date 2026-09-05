@@ -195,3 +195,55 @@ func TestDefaultConfig_IncludesXiaoMiMIMOEndpoints(t *testing.T) {
 		t.Fatalf("unexpected anthropic models: default=%q models=%v", anthropicEP.DefaultModel, anthropicEP.Models)
 	}
 }
+
+func TestMatchProviderByBaseURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want string
+	}{
+		// Exact provider endpoints.
+		{"https://api.z.ai/api/coding/paas/v4", "zai"},
+		{"https://api.z.ai/api/paas/v4", "zai"}, // same host, different path
+		{"https://token-plan-cn.xiaomimimo.com/v1", "xiaomi-mimo"},
+		{"https://api.deepseek.com/v1", "deepseek"},
+		// Upstream api_endpoint is an env placeholder; host filled from builtin URL.
+		{"https://api.anthropic.com", "anthropic"},
+		// Host shared by zhipu + zhipu-coding: smallest ID wins deterministically.
+		{"https://open.bigmodel.cn/api/paas/v4", "zhipu"},
+		// No match cases.
+		{"https://custom.example.com/v1", ""},
+		{"", ""},
+		{"$ANTHROPIC_API_ENDPOINT", ""},
+	}
+	for _, tt := range tests {
+		if got := matchProviderByBaseURL(tt.url); got != tt.want {
+			t.Errorf("matchProviderByBaseURL(%q) = %q, want %q", tt.url, got, tt.want)
+		}
+	}
+}
+
+func TestPopulateDefaultModels_UnknownVendorMatchedByURL(t *testing.T) {
+	cfg := &Config{
+		Vendors: map[string]VendorConfig{
+			"my-gateway": {
+				Endpoints: map[string]EndpointConfig{
+					"api": {
+						DisplayName: "My Gateway",
+						Protocol:    "openai",
+						BaseURL:     "https://api.z.ai/api/coding/paas/v4",
+					},
+				},
+			},
+		},
+	}
+
+	populateDefaultModels(cfg)
+
+	models := cfg.Vendors["my-gateway"].Endpoints["api"].Models
+	if len(models) == 0 {
+		t.Fatal("expected zai model list to be filled via URL host match")
+	}
+	if models[0] == "" {
+		t.Fatal("unexpected empty first model")
+	}
+}

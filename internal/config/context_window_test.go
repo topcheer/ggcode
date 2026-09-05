@@ -25,7 +25,7 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		{"gpt-4-turbo-2024-04-09", 128000},
 
 		// Anthropic Claude
-		{"claude-sonnet-4-6", 1_000_000},
+		{"claude-sonnet-4-6", 200_000}, // catwalk now lists 200k (was 1M pre-refresh)
 		{"claude-opus-4-7", 1_000_000},
 		{"claude-sonnet-4-5-20250929", 200000},
 		{"claude-opus-4-5-20251101", 200000},
