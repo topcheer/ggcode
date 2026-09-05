@@ -227,6 +227,15 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("client init: %w", err)
 	}
+	// #1553-A: persist the sync token - a full initial sync on every
+	// restart fed offline timeline events into the didFirstSync drop gate
+	// (silent loss). With the token, Sync resumes from the last event.
+	syncDir := filepath.Join(config.ConfigDir(), "matrix-sync")
+	if err := os.MkdirAll(syncDir, 0o700); err == nil {
+		client.Store = &fileSyncStore{path: filepath.Join(syncDir, sanitizeFileToken(a.name)+".json")}
+	} else {
+		debug.Log("matrix", "adapter=%s sync-token persistence unavailable (falling back to memory): %v", a.name, err)
+	}
 	// #433: a.client/a.userID are read concurrently by Send/sendImage/
 	// TriggerTyping on other goroutines - writes must hold a.mu.
 	a.mu.Lock()
@@ -1120,3 +1129,74 @@ func stripMatrixReplyFallback(body string) string {
 
 // minimal json import for fetchDMRooms
 var _ = json.Marshal
+
+// fileSyncStore persists the Matrix sync token (next_batch) across
+// restarts (#1553-A). Without it every process start did a full initial
+// sync (since="") whose timeline events were ALL dropped by the
+// didFirstSync gate - offline messages (Megolm DMs included) silently
+// lost, while the SQLCryptoStore comment claimed tokens survive restarts.
+type fileSyncStore struct {
+	path string
+	mu   sync.Mutex
+}
+
+type syncStoreData struct {
+	FilterID    string `json:"filter_id,omitempty"`
+	NextBatch   string `json:"next_batch,omitempty"`
+	SavedAtUnix int64  `json:"saved_at,omitempty"`
+}
+
+func (s *fileSyncStore) load() (syncStoreData, error) {
+	var d syncStoreData
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return d, err // absent is fine: zero value
+	}
+	err = json.Unmarshal(raw, &d)
+	return d, err
+}
+
+func (s *fileSyncStore) save(d syncStoreData) error {
+	d.SavedAtUnix = time.Now().Unix()
+	raw, err := json.MarshalIndent(d, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.path, raw, 0o600)
+}
+
+func (s *fileSyncStore) SaveFilterID(ctx context.Context, userID id.UserID, filterID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, _ := s.load()
+	d.FilterID = filterID
+	return s.save(d)
+}
+
+func (s *fileSyncStore) LoadFilterID(ctx context.Context, userID id.UserID) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, err := s.load()
+	if err != nil {
+		return "", nil // absent store is not an error
+	}
+	return d.FilterID, nil
+}
+
+func (s *fileSyncStore) SaveNextBatch(ctx context.Context, userID id.UserID, nextBatchToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, _ := s.load()
+	d.NextBatch = nextBatchToken
+	return s.save(d)
+}
+
+func (s *fileSyncStore) LoadNextBatch(ctx context.Context, userID id.UserID) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, err := s.load()
+	if err != nil {
+		return "", nil // absent store: fresh initial sync
+	}
+	return d.NextBatch, nil
+}

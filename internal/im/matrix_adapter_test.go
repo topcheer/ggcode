@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -379,5 +380,34 @@ func TestOpenPersistentCryptoStorePathIsolation(t *testing.T) {
 	aidB := fmt.Sprintf("%s|%s", b.homeserver, b.name)
 	if aidA == aidB {
 		t.Fatal("different homeservers must yield different account IDs")
+	}
+}
+
+// TestIssue1553_FileSyncStorePersistsToken pins #1553-A: the next_batch
+// token survives process restarts via the file store (absent file ->
+// empty token = fresh initial sync; saved token round-trips).
+func TestIssue1553_FileSyncStorePersistsToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sync.json")
+	s := &fileSyncStore{path: path}
+
+	tok, err := s.LoadNextBatch(context.Background(), "@u:srv")
+	if err != nil || tok != "" {
+		t.Fatalf("absent store must load empty/nil err, got %q %v", tok, err)
+	}
+	if err := s.SaveNextBatch(context.Background(), "@u:srv", "s99_42"); err != nil {
+		t.Fatal(err)
+	}
+	// Fresh instance = restart semantics.
+	s2 := &fileSyncStore{path: path}
+	tok, err = s2.LoadNextBatch(context.Background(), "@u:srv")
+	if err != nil || tok != "s99_42" {
+		t.Fatalf("token must survive restart, got %q %v", tok, err)
+	}
+	if err := s2.SaveFilterID(context.Background(), "@u:srv", "f1"); err != nil {
+		t.Fatal(err)
+	}
+	fid, _ := s2.LoadFilterID(context.Background(), "@u:srv")
+	if fid != "f1" || tok != "s99_42" {
+		t.Fatalf("filter save must not clobber token: fid=%q tok=%q", fid, tok)
 	}
 }
