@@ -304,12 +304,19 @@ func TestSplitIRCMessage(t *testing.T) {
 		t.Errorf("rejoined mismatch")
 	}
 
-	// Long message with spaces
+	// Long message with spaces. #1552-A: the splitter now counts BYTES
+	// (protocol limit) and trims whitespace at split boundaries like the
+	// other byte-limited platforms - compare whitespace-normalized.
 	longSpace := strings.Repeat("word ", 200)
 	chunks = splitIRCMessage(longSpace, 400)
-	rejoined = strings.Join(chunks, "")
-	if rejoined != longSpace {
-		t.Errorf("space-split rejoined mismatch")
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if norm(strings.Join(chunks, " ")) != norm(longSpace) {
+		t.Errorf("space-split content mismatch")
+	}
+	for i, c := range chunks {
+		if len(c) > 400 {
+			t.Errorf("chunk %d exceeds 400 bytes: %d", i, len(c))
+		}
 	}
 }
 

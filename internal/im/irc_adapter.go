@@ -570,7 +570,12 @@ func (a *ircAdapter) sendRaw(line string) error {
 }
 
 func splitIRCMessage(text string, maxLen int) []string {
-	return splitMessageRunes(text, maxLen, false, true, true)
+	// #1552-A: the IRC line limit is 512 BYTES (RFC 2812 2.3.1, minus the
+	// nick!user@host prefix and CRLF - ircMaxMessageLen=400 usable), not
+	// 400 runes: 400 CJK runes are 1200 bytes and the server truncated or
+	// rejected the line, possibly mid-rune. Route through the byte splitter
+	// (rune-boundary safe) instead of the rune counter.
+	return splitMessageBytes(text, maxLen)
 }
 
 // ircTextContainsNick reports whether text mentions nick, case-insensitive

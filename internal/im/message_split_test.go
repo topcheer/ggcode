@@ -262,3 +262,22 @@ func BenchmarkSplitMessageShort(b *testing.B) {
 		SplitMessage(msg, 1000)
 	}
 }
+
+// TestIssue1552_IRCByteLimit pins #1552-A: IRC splitting counts BYTES
+// (512-byte protocol line, ~400 usable), splitting CJK text at rune
+// boundaries instead of letting 400 runes = 1200 bytes overflow.
+func TestIssue1552_IRCByteLimit(t *testing.T) {
+	cjk := strings.Repeat("中", 300) // 900 bytes, 300 runes - fits the OLD rune check
+	parts := splitIRCMessage(cjk, ircMaxMessageLen)
+	if len(parts) < 2 {
+		t.Fatalf("900-byte CJK text must split under a 400-byte limit, got %d parts", len(parts))
+	}
+	for i, p := range parts {
+		if len(p) > ircMaxMessageLen {
+			t.Errorf("part %d is %d bytes > %d", i, len(p), ircMaxMessageLen)
+		}
+		if !utf8.ValidString(p) {
+			t.Errorf("part %d split mid-rune", i)
+		}
+	}
+}
