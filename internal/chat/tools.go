@@ -1070,8 +1070,12 @@ func (t *TodoToolItem) Render(width int) string {
 	header := t.styles.ToolHeader(icon, label, width)
 	if active != "" {
 		maxActive := width - lipgloss.Width(header) - 5
-		if maxActive < 10 {
-			maxActive = 10
+		// #1507: clamp to 1, not 10 - the 10 floor re-inflated past width
+		// in narrow terminals (width=35, header tail 25 -> 35-25-5=5 clamped
+		// to 10 -> line 38 > 35), the exact pattern wrapHeaderParams
+		// eliminated (see styles.go critique).
+		if maxActive < 1 {
+			maxActive = 1
 		}
 		if lipgloss.Width(active) > maxActive {
 			active = truncateTailByWidth(active, maxActive-1) + "…"
