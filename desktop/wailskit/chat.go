@@ -1067,6 +1067,17 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 		delete(b.deletedSessions, state.Session.ID)
 	}
 	b.currentSes = state.Session
+	ag := b.agent
+	sid := ""
+	if b.currentSes != nil {
+		sid = b.currentSes.ID
+	}
+	if ag != nil && sid != "" {
+		// #1504: keep the agent's session binding in sync with every
+		// session switch/adopt - the todo tool and todoStaleness/todoDrop
+		// detectors depend on it and silently no-op without it.
+		defer func() { ag.SetSessionID(sid) }()
+	}
 	b.usageTurnIndex = state.UsageTurnIndex
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.liveHistory = nil
@@ -1501,7 +1512,13 @@ func (b *ChatBridge) EnsureSession() {
 		return
 	}
 	b.sessionEphemeral = true
+	ag := b.agent
 	b.mu.Unlock()
+	if ag != nil {
+		// #1504: this path installs a new session WITHOUT rebuilding the
+		// agent - rebind or the todo subsystem keeps the stale/empty ID.
+		ag.SetSessionID(state.Session.ID)
+	}
 	log.Printf("[chat] EnsureSession: created new session %s", state.Session.ID)
 	b.setSessionState(state)
 
@@ -1855,6 +1872,14 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	systemPrompt := buildWailsSystemPrompt(b.cfg, b.workingDir, b.permissionMode, autoMem, projectAutoMem, commandMgr)
 	maxIter := b.cfg.MaxIterations
 	a := agent.NewAgent(p, b.registry, systemPrompt, maxIter)
+	// #1504: bind the session ID like every other entrypoint (TUI
+	// model.go, daemon, pipe, subagent, swarm) - without it every
+	// todo_write fails with "no active session" and the whole
+	// todo_check/todoStaleness/todoDrop detection net silently no-ops on
+	// Wails desktop. Rebound on session switch/restore via the call below.
+	if sid := b.CurrentSessionID(); sid != "" {
+		a.SetSessionID(sid)
+	}
 	core.SetConfigAgent(a)
 	core.SetConfigUINotify(func() {
 		b.OnConfigProviderChanged()
