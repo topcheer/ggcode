@@ -36,6 +36,18 @@ var probeCache = struct {
 	m map[string]probeCacheEntry
 }{m: make(map[string]probeCacheEntry)}
 
+// InvalidateProbeCache drops all cached (including NEGATIVE) discovery
+// probes (#1586-A): a mid-session toolchain install (rustup component,
+// npm prefix install, dotnet tool - the exact cases whose binaries land
+// OUTSIDE PATH, which is why these probes exist) must not wait out the
+// 10-minute negative TTL. Callers that complete an install should invoke
+// this; the old shape had no invalidation path at all.
+func InvalidateProbeCache() {
+	probeCache.Lock()
+	defer probeCache.Unlock()
+	probeCache.m = make(map[string]probeCacheEntry)
+}
+
 // cachedExternalProbe memoizes probeExternalToolchain per (spec, workspace)
 // with a TTL. Key includes the workspace so per-project tool installs
 // (venv, node_modules) never collide across projects.

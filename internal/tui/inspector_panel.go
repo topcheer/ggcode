@@ -429,6 +429,11 @@ func (m *Model) handleInspectorLSPStatusAction(items []inspectorPanelItem) (Mode
 		}
 		if len(lang.InstallOptions) == 1 {
 			m.closeInspectorPanel()
+			// #1586-A: a toolchain install landing outside PATH must not
+			// sit out the 10-minute negative probe TTL - drop the cache at
+			// submission (one extra probe if the install fails; a
+			// discovered server instead of 10 lost minutes if it works).
+			lsp.InvalidateProbeCache()
 			return *m, m.submitInspectorShellCommand(lang.InstallOptions[0].Command)
 		}
 		m.openLSPInstallPanel(lang)

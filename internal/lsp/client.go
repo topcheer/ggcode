@@ -118,9 +118,25 @@ type lockedBuffer struct {
 	buf bytes.Buffer
 }
 
+// stderrMaxBytes caps the buffer: chatty servers (rust-analyzer
+// indexing, csharp-ls info level) otherwise accumulate unbounded stderr
+// for the whole idle-TTL lifetime, multiplied per parallel language
+// session. The TAIL is kept - that is what failPending reports (#1586-B).
+const stderrMaxBytes = 64 << 10
+
 func (lb *lockedBuffer) Write(p []byte) (int, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
+	if lb.buf.Len()+len(p) > stderrMaxBytes {
+		// Keep the newest tail: drop from the front what no longer fits.
+		overflow := lb.buf.Len() + len(p) - stderrMaxBytes
+		if overflow > 0 && overflow <= lb.buf.Len() {
+			lb.buf.Next(overflow)
+		} else if overflow > lb.buf.Len() {
+			lb.buf.Reset()
+			p = p[len(p)-stderrMaxBytes:]
+		}
+	}
 	return lb.buf.Write(p)
 }
 
