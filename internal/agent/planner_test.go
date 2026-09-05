@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestPlannerSuggestSurvivesRunStartReset(t *testing.T) {
+	// Regression for #1480: RunStreamWithContent used to call plannerAnalyze
+	// ~80 lines BEFORE the run-start resetPlanner, so reset wiped isComplex
+	// and maybeSuggestPlan could never fire on the production path. The fixed
+	// order is reset FIRST, then analyze - mirror that order here end-to-end.
+	a := &Agent{planner: newPlanState()}
+	a.resetPlanner()
+	a.plannerAnalyze("Add error handling across agent.go, prompt.go, and config.go. " +
+		"First update the error types, then add retry logic, and finally add tests.")
+	if hint := a.maybeSuggestPlan(planSuggestionIter); hint == "" {
+		t.Fatal("plan suggestion not injected after reset-then-analyze (ordering regression, #1480)")
+	}
+}
+
 func TestAnalyzeUserPrompt_SimpleRequest(t *testing.T) {
 	p := newPlanState()
 	// Simple request: single file, single action, short.

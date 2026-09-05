@@ -1420,10 +1420,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 		return fmt.Errorf("user message blocked by hook: %s", userMsgResult.Output)
 	}
-	// Agent-side planning: analyze the user's first message for complexity.
-	// If complex (multi-file, multi-goal, multi-step), suggest a structured
-	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
-	a.plannerAnalyze(userText)
 	// on_agent_stop hook (async, fire-and-forget on return).
 	defer func() {
 		stopReason := "completed"
@@ -1502,6 +1498,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// loop. These systems accumulate state across iterations within a run.
 	a.resetOverseer()
 	a.resetPlanner()
+	// Agent-side planning: analyze the user's first message for complexity.
+	// If complex (multi-file, multi-goal, multi-step), suggest a structured
+	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
+	// #1480: MUST run after resetPlanner above — the previous placement ~80
+	// lines earlier let resetPlanner wipe isComplex before maybeSuggestPlan
+	// could ever consume it, dead-ending the planner on every run.
+	a.plannerAnalyze(userText)
 	a.resetTodoStaleness()
 	a.resetTodoDrop()
 	a.resetScopeDrift()
