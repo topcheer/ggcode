@@ -92,7 +92,15 @@ var claimVerifyContentTools = map[string]bool{
 // the intended true positive — warning when a nominally-successful search
 // actually found nothing — without treating user content that merely
 // contains status-like wording as a failure signal.
-const claimVerifyMetaStatusPrefix = "no matches found."
+// claimVerifyMetaStatusPrefixes are the zero-result status prefixes various
+// content tools render. The old single "no matches found." (with period)
+// matched only grep's wording; search_files ("No matches found for pattern"),
+// glob ("No files matched pattern") and friends never triggered the
+// found-claim check (#1506).
+var claimVerifyMetaStatusPrefixes = []string{
+	"no matches found", "no files matched", "no results found",
+	"no matches", "nothing found",
+}
 
 // claimVerifyPatterns are (pattern, message) pairs. Patterns are matched
 // case-insensitively against the tool result content. Each pattern targets
@@ -157,6 +165,19 @@ func isContentRetrievalCommand(cmd string) bool {
 			continue
 		}
 		name := fields[0]
+		// #1506: git grep / git log -S / xargs grep / find -exec grep are
+		// content-retrieval wrappers - their output is raw file content, not
+		// command status. Without this, a successful 'git grep -n "fail:"'
+		// search was condemned as a test failure (semantic reversal) on this
+		// repo's most common workflow.
+		if name == "git" && len(fields) > 1 {
+			switch fields[1] {
+			case "grep", "log", "show", "blame":
+				continue // content-bearing git subcommand
+			}
+		} else if name == "xargs" || name == "find" {
+			continue // wrappers: downstream grep/find -exec carries content
+		}
 		// Strip env-var assignments (FOO=bar cmd) and path prefixes.
 		for strings.Contains(name, "=") && len(fields) > 1 {
 			fields = fields[1:]
@@ -210,10 +231,12 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 	// phrase are payload, not status (fixes issue #739 false positives).
 	if isContent {
 		trimmedLower := strings.ToLower(strings.TrimSpace(content))
-		if strings.HasPrefix(trimmedLower, claimVerifyMetaStatusPrefix) {
-			c.injections++
-			debug.Log("claim_verify", "zero-result meta-status detected: tool=%s", toolName)
-			return "[Verify] Search returned no matches. Do not claim results were found. Re-read the tool output carefully before proceeding."
+		for _, prefix := range claimVerifyMetaStatusPrefixes {
+			if strings.HasPrefix(trimmedLower, prefix) {
+				c.injections++
+				debug.Log("claim_verify", "zero-result meta-status detected: tool=%s", toolName)
+				return "[Verify] Search returned no matches. Do not claim results were found. Re-read the tool output carefully before proceeding."
+			}
 		}
 		return ""
 	}

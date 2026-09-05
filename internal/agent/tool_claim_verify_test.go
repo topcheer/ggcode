@@ -214,3 +214,47 @@ func TestIssue1207_IsContentRetrievalCommand(t *testing.T) {
 		}
 	}
 }
+
+// Regression for #1506: content-retrieval wrappers (git grep/xargs/find)
+// were absent from the exemption chain, so a successful 'git grep -n
+// "fail:"' search was condemned as a test failure; and the zero-result
+// meta-status prefix matched only grep's exact wording.
+func TestIsContentRetrievalCommandGitGrep(t *testing.T) {
+	for _, cmd := range []string{
+		`git grep -n "fail:" -- '*_test.go'`,
+		`git log -S "removed" --oneline`,
+		`cat foo_test.go | xargs grep -n "does not exist"`,
+		`grep -rn "expected" src`,
+	} {
+		if !isContentRetrievalCommand(cmd) {
+			t.Errorf("isContentRetrievalCommand(%q) = false, want true (content-bearing)", cmd)
+		}
+	}
+	for _, cmd := range []string{
+		`go test ./...`,
+		`make test && grep -n "x" f`,
+	} {
+		if isContentRetrievalCommand(cmd) {
+			t.Errorf("isContentRetrievalCommand(%q) = true, want false (status-bearing)", cmd)
+		}
+	}
+}
+
+func TestClaimVerifyZeroResultPrefixVariants(t *testing.T) {
+	// search_files / glob wordings must trigger the found-claim check now.
+	for _, status := range []string{
+		"no matches found.",
+		"No matches found for pattern \".*\"",
+		"No files matched pattern **/*.foo",
+	} {
+		c := newClaimVerifyState()
+		if got := c.check("grep", status, false, ""); got == "" {
+			t.Errorf("zero-result status %q must trigger the found-claim check", status)
+		}
+	}
+	// Payload that merely contains the phrase must stay inert (#739).
+	c := newClaimVerifyState()
+	if got := c.check("grep", "the log line said: no matches found somewhere", false, ""); got != "" {
+		t.Errorf("mid-text mention must not trigger: %q", got)
+	}
+}
