@@ -453,7 +453,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 			debug.Log("daemon-bridge", "dropping approval reply: no waiting asker")
 		}
 		return nil
-		return nil
 	}
 
 	// Check for pending ask_user — if so, route reply there
