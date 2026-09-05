@@ -94,6 +94,17 @@ func hasTrailingWhitespace(line string) bool {
 	return last == ' ' || last == '\t'
 }
 
+// trailingMarkdownBreak reports whether the line ends with exactly two
+// spaces (CommonMark hard line break = <br>). Caller has verified trailing
+// whitespace.
+func trailingMarkdownBreak(line string) bool {
+	n := 0
+	for i := len(line) - 1; i >= 0 && line[i] == ' '; i-- {
+		n++
+	}
+	return n == 2
+}
+
 // checkTrailingWhitespace detects trailing whitespace newly introduced by this
 // edit. Returns a non-empty warning string if newly-introduced trailing
 // whitespace is found, or "" if none.
@@ -113,11 +124,21 @@ func checkTrailingWhitespace(filePath, oldContent, newContent string) string {
 	oldLines := strings.Split(oldContent, "\n")
 	newLines := strings.Split(newContent, "\n")
 
+	// #1512: exactly two trailing spaces in .md/.rst are CommonMark's hard
+	// line break (<br>). Flagging them told the agent to remove a
+	// user-visible rendering break - the checker induced format
+	// regressions. Code files and tabs/1/3+ spaces are still flagged.
+	prose := strings.HasSuffix(strings.ToLower(filePath), ".md") ||
+		strings.HasSuffix(strings.ToLower(filePath), ".rst")
+	twLine := func(line string) bool {
+		return hasTrailingWhitespace(line) && !(prose && trailingMarkdownBreak(line))
+	}
+
 	// Count trailing-whitespace lines in old content to skip files with
 	// pre-existing style issues.
 	oldTWCount := 0
 	for _, line := range oldLines {
-		if hasTrailingWhitespace(line) {
+		if twLine(line) {
 			oldTWCount++
 		}
 	}
@@ -131,7 +152,7 @@ func checkTrailingWhitespace(filePath, oldContent, newContent string) string {
 	// when found in new content (they're pre-existing, not newly introduced).
 	oldTWSet := make(map[string]bool, oldTWCount)
 	for _, line := range oldLines {
-		if hasTrailingWhitespace(line) {
+		if twLine(line) {
 			oldTWSet[line] = true
 		}
 	}
@@ -139,7 +160,7 @@ func checkTrailingWhitespace(filePath, oldContent, newContent string) string {
 	// Find newly-introduced trailing whitespace lines in the new content.
 	var newlyIntroduced []int // 1-based line numbers
 	for i, line := range newLines {
-		if !hasTrailingWhitespace(line) {
+		if !twLine(line) {
 			continue
 		}
 		// Skip if this exact line (with trailing whitespace) already existed

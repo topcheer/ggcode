@@ -140,3 +140,23 @@ func TestHasTrailingWhitespace(t *testing.T) {
 		}
 	}
 }
+
+// Regression for #1512: exactly two trailing spaces in .md/.rst are
+// CommonMark's hard line break (<br>) - flagging them induced the agent to
+// remove user-visible rendering breaks. Code files and other whitespace
+// forms are still flagged.
+func TestTrailingWhitespaceMarkdownHardBreakExempt(t *testing.T) {
+	mdOld := "# Title\nfirst line\n"
+	mdNew := "# Title\nfirst line  \nsecond line\n"
+	if w := checkTrailingWhitespace("doc.md", mdOld, mdNew); w != "" {
+		t.Fatalf("md hard break (two spaces) must be exempt, got: %s", w)
+	}
+	// Three spaces are NOT a clean hard break - still flagged.
+	if w := checkTrailingWhitespace("doc.md", mdOld, "# Title\nfirst line   \n"); w == "" {
+		t.Fatal("3+ trailing spaces in md must still be flagged")
+	}
+	// Two spaces in a code file are noise - still flagged.
+	if w := checkTrailingWhitespace("main.go", "package a\n", "package a\nx := 1  \n"); w == "" {
+		t.Fatal("two trailing spaces in Go must still be flagged")
+	}
+}
