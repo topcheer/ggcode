@@ -1624,7 +1624,7 @@ func BuildSystemPrompt(extraPrompt, workingDir, language string, toolNames []str
 	sb.WriteString(fmt.Sprintf("- Tool schemas are attached separately. Available tools: %s\n", summarizeNames(toolNames, 12)))
 
 	if len(availableModels) > 0 {
-		sb.WriteString(fmt.Sprintf("- Sub-agent models (for spawn_agent 'model' param): %s\n", summarizeNames(availableModels, 20)))
+		sb.WriteString(fmt.Sprintf("- Sub-agent models (for spawn_agent 'model' param): %s (models marked [vision] accept image input)\n", summarizeNames(annotateVisionFlags(availableModels), 20)))
 	}
 
 	if hasAnyToolPrefix(toolNames, "lsp_") {

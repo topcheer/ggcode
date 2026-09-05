@@ -58,7 +58,7 @@ func (m *Model) appendUserMessage(text string) {
 
 	// Persist to disk is handled by onPersist (SetPersistHandler) when
 	// the agent run adds the user message to contextManager via Add().
-	// No need to write here — it would be a duplicate.
+	// No need to write here - it would be a duplicate.
 	if _, ok := store.(*session.JSONLStore); !ok {
 		// Non-JSONLStore: fallback to Save
 		m.sessionMutex().Lock()
@@ -76,7 +76,7 @@ func (m *Model) startAgent(text string) tea.Cmd {
 	}
 	// Ensure the agent's provider is in sync with the current config.
 	// This handles the case where the user set an API key in the provider
-	// panel but hasn't explicitly activated — the key should still take effect.
+	// panel but hasn't explicitly activated - the key should still take effect.
 	m.ensureProviderSync()
 	m.rebuildSystemPrompt()
 
@@ -209,6 +209,43 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 	}
 
 	if !m.activeEndpointSupportsVision() {
+		// Vision fallback: when the user's model cannot accept images but the
+		// current endpoint offers a vision-capable model with a comparable
+		// context window, switch to it for THIS TURN ONLY, then restore the
+		// user's model. The switch is never persisted (syncSessionSelection
+		// is intentionally not called); restoration is idempotent and also
+		// runs on cancel/error paths via defer.
+		if vm := m.temporaryVisionModelForTurn(); vm != "" {
+			userModel := m.config.Model
+			debug.Log("tui", "vision fallback: turn-scoped switch to %s (user model: %s)", vm, userModel)
+			if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, vm); err == nil {
+				if err := m.tryActivateCurrentSelection(); err == nil {
+					defer m.restoreUserModelAfterVisionTurn(userModel)
+					streamErrSent, err := m.runAgentWithContent(ctx, runID, buildAgentSubmissionContent(text, imgs, true))
+					if err == nil || errors.Is(err, context.Canceled) {
+						return err
+					}
+					if streamErrSent {
+						return nil // already sent via stream callback
+					}
+					// The vision model rejected the request. Restore the user's
+					// model immediately and fall back to the text-only path —
+					// the image content is dropped and the path hint tells the
+					// model to inspect the local files with tools instead.
+					m.restoreUserModelAfterVisionTurn(userModel)
+					if !provider.IsImageBlockFallbackCandidate(err) {
+						return err
+					}
+					debug.Log("tui", "vision fallback model rejected request, retrying text-only: %v", err)
+					_, retryErr := m.runAgentWithContent(ctx, runID, content)
+					if retryErr == nil {
+						return nil
+					}
+					return retryErr
+				}
+			}
+			debug.Log("tui", "vision fallback: no usable switch, proceeding text-only")
+		}
 		streamErrSent, err := m.runAgentWithContent(ctx, runID, content)
 		if streamErrSent && err != nil && !errors.Is(err, context.Canceled) {
 			return nil
@@ -251,7 +288,7 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 	// Stream batching: accumulate text chunks AND tool events, then flush
 	// periodically instead of sending one program.Send per event.
 	// This prevents event-loop saturation that stalls the spinner tick chain
-	// and makes the TUI appear frozen — especially during burst tool calls.
+	// and makes the TUI appear frozen - especially during burst tool calls.
 	var batchMu sync.Mutex
 	var batchBuf strings.Builder
 	var batchReasoningBuf strings.Builder
@@ -604,6 +641,46 @@ func (m *Model) activeEndpointSupportsVision() bool {
 		return false
 	}
 	return resolved.SupportsVision
+}
+
+// temporaryVisionModelForTurn selects a vision-capable model from the active
+// endpoint's model list for a turn-scoped switch. The reference window is
+// the active model's context window so the existing conversation fits.
+// Returns "" when no comparable vision model exists.
+func (m *Model) temporaryVisionModelForTurn() string {
+	if m.config == nil {
+		return ""
+	}
+	vc, ok := m.config.Vendors[m.config.Vendor]
+	if !ok {
+		return ""
+	}
+	ep, ok := vc.Endpoints[m.config.Endpoint]
+	if !ok || len(ep.Models) == 0 {
+		return ""
+	}
+	ref := 0
+	if resolved, err := m.config.ResolveActiveEndpoint(); err == nil && resolved != nil {
+		ref = resolved.ContextWindow
+	}
+	return agentruntime.SelectVisionModel(ep.Models, ref)
+}
+
+// restoreUserModelAfterVisionTurn restores the user's model after a
+// turn-scoped vision switch. Idempotent: safe to call from both the error
+// path and the deferred cleanup. Does not persist the selection - the user's
+// session keeps pointing at their chosen model.
+func (m *Model) restoreUserModelAfterVisionTurn(userModel string) {
+	if m.config == nil || userModel == "" || m.config.Model == userModel {
+		return
+	}
+	if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, userModel); err != nil {
+		debug.Log("tui", "vision fallback restore: %v", err)
+		return
+	}
+	if err := m.tryActivateCurrentSelection(); err != nil {
+		debug.Log("tui", "vision fallback restore activation: %v", err)
+	}
 }
 
 // sanitizeAPIError removes API keys from error messages to prevent
