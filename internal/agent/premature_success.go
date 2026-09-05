@@ -429,7 +429,7 @@ func psBuildSystemVerify(tokens []string) (isVerify, handled bool) {
 			}
 		}
 		return false, true
-	case "mvn", "mvnw":
+	case "mvn", "mvnw", "./mvnw":
 		for _, t := range tokens[1:] {
 			if mvnVerifyPhases[t] {
 				return true, true
@@ -466,7 +466,7 @@ var psRunnerPrefixes = map[string]bool{
 	"run":  true, // uv/poetry/deno run <script> — the script is the real command
 	"make": true, "gmake": true, "mingw32-make": true,
 	"npm": true, "yarn": true, "pnpm": true, "bun": true,
-	"mvn": true, "mvnw": true, "gradle": true, "gradlew": true, "./gradlew": true,
+	"mvn": true, "mvnw": true, "./mvnw": true, "gradle": true, "gradlew": true, "./gradlew": true,
 	"cmake": true,
 }
 

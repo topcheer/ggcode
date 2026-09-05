@@ -125,6 +125,11 @@ func TestPsIsVerifyCommand(t *testing.T) {
 		{"yarn test", true},
 		{"go vet ./...", true},
 		{"mvn test", true},
+		// Wrapper forms must match on both runners (#1481): ./gradlew was
+		// covered in both tables, ./mvnw was missing from both.
+		{"./mvnw test", true},
+		{"./gradlew test", true},
+		{"./mvnw clean", false},
 		{"gradle test", true},
 		{"cmake --build .", true},
 		// Hygiene/service commands are NOT verification (#350)
