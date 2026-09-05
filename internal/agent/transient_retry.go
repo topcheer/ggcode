@@ -44,7 +44,10 @@ var retryableTools = map[string]bool{
 	"lsp_code_actions":        true,
 	"lsp_incoming_calls":      true,
 	"lsp_outgoing_calls":      true,
-	"lsp_rename":              true, // rename is idempotent if input is the same
+	// #1514: lsp_rename removed - it applies LSP workspace edits (writes
+	// files) and contradicts this table's own "mutating tools are NEVER
+	// retried" contract. A retry after a misjudged transient could double-
+	// apply a rename or fail on an already-renamed symbol.
 	// Web (transient: network errors, rate limits)
 	"web_fetch":  true,
 	"web_search": true,
