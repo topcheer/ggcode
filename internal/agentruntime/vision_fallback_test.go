@@ -1,6 +1,10 @@
 package agentruntime
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/topcheer/ggcode/internal/config"
+)
 
 func TestSelectVisionModel(t *testing.T) {
 	tests := []struct {
@@ -58,5 +62,43 @@ func TestSelectVisionModel(t *testing.T) {
 				t.Errorf("SelectVisionModel(%v, %d) = %q, want %q", tt.models, tt.refWin, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestVisionTurnModel(t *testing.T) {
+	newCfg := func(model string) *config.Config {
+		return &config.Config{
+			Vendor:   "zai",
+			Endpoint: "coding",
+			Model:    model,
+			Vendors: map[string]config.VendorConfig{
+				"zai": {Endpoints: map[string]config.EndpointConfig{
+					"coding": {
+						Protocol: "openai",
+						BaseURL:  "https://api.example.com",
+						Models:   []string{"glm-5.3", "glm-5.3-flash"},
+					},
+				}},
+			},
+		}
+	}
+	// Non-vision active model -> vision sibling with equal 1M window selected.
+	if got := VisionTurnModel(newCfg("glm-5.3")); got != "glm-5.3-flash" {
+		t.Errorf("VisionTurnModel(glm-5.3) = %q, want glm-5.3-flash", got)
+	}
+	// Vision active model -> no switch needed.
+	if got := VisionTurnModel(newCfg("glm-5.3-flash")); got != "" {
+		t.Errorf("VisionTurnModel(glm-5.3-flash) = %q, want empty", got)
+	}
+	// No vision candidates on the endpoint.
+	cfg := newCfg("deepseek-chat")
+	ep := cfg.Vendors["zai"].Endpoints["coding"]
+	ep.Models = []string{"deepseek-chat", "glm-5.3"}
+	cfg.Vendors["zai"].Endpoints["coding"] = ep
+	if got := VisionTurnModel(cfg); got != "" {
+		t.Errorf("VisionTurnModel(no vision candidates) = %q, want empty", got)
+	}
+	if got := VisionTurnModel(nil); got != "" {
+		t.Errorf("VisionTurnModel(nil) = %q, want empty", got)
 	}
 }
