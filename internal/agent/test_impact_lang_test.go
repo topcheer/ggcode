@@ -1059,3 +1059,27 @@ test("delete_user", () => {});       // Should NOT match anything
 		t.Error("SaveUser should be untested")
 	}
 }
+
+// Regression for #1502: the Java TestFilePaths built src/main/test/java from
+// src/main/java/com/foo (main unstripped, package path lost), so every Java
+// source file was branded 'no tests'. The Maven test tree must mirror the
+// main tree keeping the package path.
+func TestHasTestFileJavaMavenLayout(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src", "main", "java", "com", "foo")
+	testDir := filepath.Join(dir, "src", "test", "java", "com", "foo")
+	os.MkdirAll(srcDir, 0o755)
+	os.MkdirAll(testDir, 0o755)
+
+	srcRel := filepath.Join("src", "main", "java", "com", "foo", "Bar.java")
+	os.WriteFile(filepath.Join(dir, srcRel), []byte("package com.foo; class Bar {}"), 0o644)
+
+	if hasTestFile(dir, srcRel) != "" {
+		t.Fatal("no test file yet: must not be found")
+	}
+
+	os.WriteFile(filepath.Join(testDir, "BarTest.java"), []byte("package com.foo;"), 0o644)
+	if found := hasTestFile(dir, srcRel); found == "" {
+		t.Fatal("Maven-mirrored BarTest.java must be found")
+	}
+}

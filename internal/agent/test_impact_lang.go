@@ -244,13 +244,19 @@ var javaLangProfile = langProfile{
 		dir := filepath.Dir(srcFile)
 		base := filepath.Base(srcFile)
 		name := strings.TrimSuffix(base, ".java")
-		// Java tests live in src/test/java/... mirroring src/main/java/...
-		testDir := strings.Replace(filepath.Join(dir, "..", "..", "test", "java"),
-			string(filepath.Separator)+string(filepath.Separator), string(filepath.Separator), -1)
+		// #1502: for the Maven layout src/main/java/com/foo the old
+		// Join(dir, "..", "..", "test", "java") produced src/main/test/java -
+		// "main" unstripped, package path unretreated, all three candidates
+		// wrong, so EVERY Java source file was branded 'no tests'. Replace
+		// the main tree segment with the test tree, keeping the package path.
+		testDir := dir
+		if i := strings.Index(dir, filepath.Join("src", "main", "java")); i >= 0 {
+			testDir = dir[:i] + filepath.Join("src", "test", "java") + dir[i+len(filepath.Join("src", "main", "java")):]
+		}
 		return []string{
-			filepath.Join(dir, name+"Test.java"),
-			filepath.Join(dir, name+"Tests.java"),
 			filepath.Join(testDir, name+"Test.java"),
+			filepath.Join(testDir, name+"Tests.java"),
+			filepath.Join(testDir, name+"IT.java"),
 		}
 	},
 	TargetedTestCmd: func(workingDir, srcFile string) string {
