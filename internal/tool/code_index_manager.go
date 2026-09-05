@@ -449,6 +449,18 @@ func (m *CodeIndexManager) collectFiles(ctx context.Context) []string {
 			if isSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
+			// Nested git repositories are SEMANTICALLY foreign - a
+			// parent-dir start (multi-project workspace) or a vendored
+			// clone previously had every sibling source file of the
+			// inner .git indexed into THIS project's BM25 corpus,
+			// crowding real files out of the 50k quota and burning the
+			// #1625 term budget on foreign trees (tens of GB on
+			// disk-heavy parents). Skip the whole nested repo root.
+			if path != m.workingDir {
+				if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 		if len(files) >= codeIndexMaxFiles {

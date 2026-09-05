@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,4 +90,40 @@ func itoa(i int) string {
 		i /= 10
 	}
 	return string(b)
+}
+
+// TestNestedGitRepoExcluded pins the walk boundary: a nested git
+// repository's sibling sources never enter the index (parent-dir start).
+func TestNestedGitRepoExcluded(t *testing.T) {
+	root := t.TempDir()
+	inner := filepath.Join(root, "vendored-clone")
+	if err := os.MkdirAll(filepath.Join(inner, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(inner, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil { // dir form (clone)
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, "src", "lib.go"), []byte("package inner\nfunc F() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewCodeIndexManager(root)
+	files := m.collectFiles(context.Background())
+	for _, f := range files {
+		if strings.Contains(f, "vendored-clone") {
+			t.Fatalf("nested repo file must be excluded: %s", f)
+		}
+	}
+	found := false
+	for _, f := range files {
+		if strings.HasSuffix(f, "main.go") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("root's own files must still be indexed")
+	}
 }
