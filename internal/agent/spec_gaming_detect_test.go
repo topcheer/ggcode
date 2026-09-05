@@ -250,3 +250,22 @@ func TestSpecGaming_MultipleWarnings(t *testing.T) {
 		t.Logf("warning message: %s", msg)
 	}
 }
+
+// Regression for #1496: the awk branch used to check skip markers against
+// the WHOLE command, so an injection (gsub(/assert/, "t.Skip(") - marker in
+// the REPLACEMENT) was exempted as "removal". The fix mirrors the sed
+// branch: pattern contains the marker, replacement does not.
+func TestIsAwkSkipRemovalInjectionNotExempt(t *testing.T) {
+	// Injection: marker lives in the replacement -> NOT removal.
+	if isAwkSkipRemoval(`awk '{gsub(/assert/, "t.Skip(")}' t.go`) {
+		t.Fatal("gsub injection (skip marker in replacement) must not be exempted as removal")
+	}
+	// Legit removal: marker in pattern, clean replacement -> exempt.
+	if !isAwkSkipRemoval(`awk '{gsub(/t\.skip\(/, "")}' t.go`) {
+		t.Fatal("gsub removing a skip marker (pattern only) must stay exempt")
+	}
+	// No marker at all.
+	if isAwkSkipRemoval(`awk '{gsub(/foo/, "bar")}' t.go`) {
+		t.Fatal("no skip marker anywhere must not match")
+	}
+}

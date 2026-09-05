@@ -3090,7 +3090,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					result.Content = fmt.Sprintf("[cached — %s returned identical content since your last call]\n%s", tc.Name, result.Content)
 				}
 				debug.Log("memoize", "memo hit for %s (saved tool execution)", tc.Name)
-			} else if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit {
+			} else if cachedResult, hit := a.speculator.getCached(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
+				// #1496: the speculative cache used to serve hits with zero
+				// permission flow while the sibling preExecuted paths run
+				// usePreExecutedWithPermission - a deny(read_file X)+allow(edit
+				// X) policy was bypassed. On any non-Allow decision, abandon
+				// the hit and fall through to the normal gated execution path
+				// (which handles Ask/approval UX properly).
 				result = cachedResult
 				debug.Log("speculate", "speculative cache hit for %s (saved tool execution)", tc.Name)
 			} else if pre, ok := preExecuted[idx]; ok {

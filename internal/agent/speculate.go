@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -447,4 +449,27 @@ func (s *speculator) invalidateCache() {
 	s.cache = make(map[string]*speculativeResult)
 	s.cacheOrder = make([]string, 0, specMaxCacheSize)
 	s.mu.Unlock()
+}
+
+// speculativeHitAllowed reports whether a speculative cache hit may be
+// served to the model without re-execution (#1496). The speculative
+// goroutine executed the tool with zero permission flow (unlike the sibling
+// preExecuted paths), so a deny(read_file X)+allow(edit X) policy was
+// bypassed by serving the cached read. Only a clean Allow decision lets the
+// hit through; anything else falls back to the normal gated execution path.
+func (a *Agent) speculativeHitAllowed(ctx context.Context, tc provider.ToolCallDelta) bool {
+	if err := ctx.Err(); err != nil {
+		return false
+	}
+	a.mu.RLock()
+	policy := a.policy
+	a.mu.RUnlock()
+	if policy == nil {
+		return true
+	}
+	decision, err := policy.Check(tc.Name, tc.Arguments)
+	if err != nil {
+		return false
+	}
+	return decision == permission.Allow
 }

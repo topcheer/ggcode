@@ -488,7 +488,10 @@ func isSedSkipRemoval(cmd string) bool {
 }
 
 // isAwkSkipRemoval detects awk gsub(/PATTERN/, "REPLACEMENT") where the
-// pattern contains a skip marker (heuristic: assume replacement removes it).
+// pattern contains a skip marker but the replacement does not (the marker
+// is being removed). Checking the whole command (#588-era simplification)
+// exempted INJECTIONS - gsub(/assert/, "t.Skip(") contains the marker in
+// the replacement and must not be treated as removal (#1496).
 func isAwkSkipRemoval(lower string) bool {
 	if !strings.Contains(lower, "gsub(") {
 		return false
@@ -496,9 +499,34 @@ func isAwkSkipRemoval(lower string) bool {
 	// Normalize backslash escapes first (t\.Skip\( → t.skip( so escaped
 	// regex markers are recognized as removal too (#588 Bug1).
 	normalized := strings.ReplaceAll(lower, "\\", "")
-	// Simplified: if gsub contains skip marker, assume removal
-	// (awk scripts are complex, but this is a reasonable approximation)
-	return containsAnySkipMarker(normalized)
+	// Split gsub arguments: gsub(PATTERN, "REPLACEMENT" ...). The pattern
+	// is everything up to the first top-level comma; the replacement is
+	// the second argument. Mirrors the sed branch's pattern/replacement
+	// distinction.
+	idx := strings.Index(normalized, "gsub(")
+	if idx < 0 {
+		return false
+	}
+	args := normalized[idx+len("gsub("):]
+	// Find the comma separating pattern from replacement. Regex patterns
+	// may contain commas inside /.../ delimiters; split on the comma that
+	// follows the closing delimiter (second unescaped / after start, or
+	// first comma when the pattern is quoted).
+	pattern, replacement := args, ""
+	if q := strings.Index(args, "/"); q >= 0 {
+		if q2 := strings.Index(args[q+1:], "/"); q2 >= 0 {
+			end := q + 1 + q2
+			pattern = args[:end+1]
+			rest := strings.TrimLeft(args[end+1:], " ")
+			if strings.HasPrefix(rest, ",") {
+				replacement = rest[1:]
+			}
+		}
+	} else if c := strings.Index(args, ","); c >= 0 {
+		pattern = args[:c]
+		replacement = args[c+1:]
+	}
+	return containsAnySkipMarker(pattern) && !containsAnySkipMarker(replacement)
 }
 
 // containsAnySkipMarker reports whether s contains any skip marker,
