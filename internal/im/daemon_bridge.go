@@ -444,15 +444,14 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		// leaked the adapter receive goroutine.
 		select {
 		case approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}:
+			b.mu.Lock()
+			if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
+				b.pendingApproval = nil
+			}
+			b.mu.Unlock()
 		default:
 			debug.Log("daemon-bridge", "dropping approval reply: no waiting asker")
-			return nil
 		}
-		b.mu.Lock()
-		if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
-			b.pendingApproval = nil
-		}
-		b.mu.Unlock()
 		return nil
 		return nil
 	}
