@@ -63,7 +63,11 @@ func WriteCrashLog(component string, val any) string {
 	stack := debug.Stack()
 	const maxStack = 1 << 20 // 1 MiB
 	if len(stack) > maxStack {
-		stack = stack[:maxStack]
+		// #1637: Go stacks print newest-first - runaway recursion's ENTRY
+		// frame (the root cause) sits in the dropped TAIL. Same silent-
+		// truncation defect #1616-A fixed 20 lines below for the all-
+		// goroutine dump; the primary stack needs the marker too.
+		stack = append(stack[:maxStack], []byte(fmt.Sprintf("\n[primary stack truncated at %d bytes; oldest frames dropped]\n", maxStack))...)
 	}
 	// Full goroutine dump: the panicking goroutine's stack alone often hides
 	// the cause (e.g. a TUI event-loop stall shows up as innocent goroutines
