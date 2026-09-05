@@ -317,7 +317,10 @@ func coverageExtractCommand(args string) string {
 	if cmdRaw, ok := raw["command"]; ok {
 		var cmd string
 		if json.Unmarshal(cmdRaw, &cmd) == nil {
-			return strings.TrimSpace(cmd)
+			// #1522: strip the mandated '# ' activity-comment line so the
+			// coverage detector sees the actual command (matcher AND
+			// executor both receive the clean string).
+			return strings.TrimSpace(stripLeadingShellComment(cmd))
 		}
 	}
 	return ""

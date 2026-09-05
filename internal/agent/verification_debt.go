@@ -128,6 +128,11 @@ func classifyDebtAction(toolName, args string) debtAction {
 // 'now go test passes'" (Contains inside a commit message) all returned true,
 // silently resetting the edit-abandonment detector (#354 family).
 func isVerificationCommand(args string) bool {
+	// #1522: the run_command tool mandates a leading '# ' comment line
+	// (prompt convention, #471) - strip it before tokenizing or '# go test'
+	// keeps tokens[0]=="#" and never matches a runner, leaving debtNeutral
+	// forever and blinding edit_abandon (which delegates here) too.
+	args = stripLeadingShellComment(args)
 	tokens := strings.Fields(strings.ToLower(args))
 	// Skip leading env-var assignments (GOFLAGS="-p=1" go test ./...).
 	i := 0
