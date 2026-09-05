@@ -435,12 +435,14 @@ func (rs *RuleStore) MatchingRulesForTool(toolName, args string) []Rule {
 		if !categoryMatchesTool(r.Category, toolName) {
 			continue
 		}
-		// Use ToolPattern if available; fall back to MatchPattern for
-		// backward compatibility with existing rules that only have one.
+		// #1485: no fallback to MatchPattern here. MatchPattern is documented
+		// (and used by the reactive path) as matching error OUTPUT; running it
+		// against tool ARGS is a domain mismatch that both dead-ended the
+		// preventive injection for output-shaped rules and occasionally
+		// injected unrelated build hints into commands whose args merely
+		// contained phrases like "command not found". A rule joins the
+		// preventive path only via an explicit ToolPattern.
 		pattern := r.ToolPattern
-		if pattern == "" {
-			pattern = r.MatchPattern
-		}
 		if pattern == "" {
 			continue
 		}

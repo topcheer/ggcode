@@ -111,10 +111,13 @@ func TestRuleStoreMatchingRulesForTool(t *testing.T) {
 		t.Errorf("unexpected rule: %s", matching[0].Rule)
 	}
 
-	// git_commit should match the git rule (ToolPattern empty, falls back to MatchPattern)
+	// #1485: ToolPattern-empty rules no longer join the preventive path.
+	// The old fallback ran the error-output MatchPattern against tool args -
+	// a domain mismatch. The git rule keeps its MatchPattern for the reactive
+	// path only, so git_commit preventive matching now returns 0.
 	matching = rs.MatchingRulesForTool("git_commit", "git commit -m test")
-	if len(matching) != 1 {
-		t.Fatalf("expected 1 git matching rule, got %d", len(matching))
+	if len(matching) != 0 {
+		t.Fatalf("expected 0 git preventive matches (fallback removed), got %d", len(matching))
 	}
 
 	// write_file should match neither
