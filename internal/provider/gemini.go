@@ -323,10 +323,11 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 						ch <- StreamEvent{
 							Type: StreamEventToolCallDone,
 							Tool: ToolCallDelta{
-								Index:     0,
-								ID:        id,
-								Name:      part.FunctionCall.Name,
-								Arguments: args,
+								Index:            0,
+								ID:               id,
+								Name:             part.FunctionCall.Name,
+								Arguments:        args,
+								ThoughtSignature: part.ThoughtSignature, // #1610-A
 							},
 						}
 					}
@@ -381,6 +382,13 @@ func (p *GeminiProvider) CountTokens(ctx context.Context, messages []Message) (i
 //
 // An empty effort string leaves ThinkingConfig unset (model default).
 // The budget is clamped to [512, maxTokens-1] to satisfy API constraints.
+// isGemini3Model reports whether the model is a gemini-3 family member,
+// which only accepts thinkingLevel (#1610-B).
+func isGemini3Model(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(m, "gemini-3")
+}
+
 func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfig) {
 	if p.reasoningEffort == "" {
 		return
@@ -391,9 +399,33 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 			maxTok = v
 		}
 	}
+	// #1610-B: gemini-3 models REJECT thinkingBudget and only accept
+	// thinkingLevel - routing them through the budget path 400'd every
+	// request once an effort was set (user or adaptive). Level-based for
+	// gemini-3*, budget-based for everything else; the <=512 disable also
+	// uses level (budget 0 is likewise rejected).
+	if isGemini3Model(p.model) {
+		var level genai.ThinkingLevel
+		switch p.reasoningEffort {
+		case "low":
+			level = genai.ThinkingLevelLow
+		case "medium":
+			level = genai.ThinkingLevelMedium
+		case "high":
+			level = genai.ThinkingLevelHigh
+		default:
+			return
+		}
+		if maxTok <= 512 {
+			level = genai.ThinkingLevelMinimal
+		}
+		config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+		debug.Log("gemini", "thinking level=%s (effort=%s, gemini-3)", level, p.reasoningEffort)
+		return
+	}
 	if maxTok <= 512 {
 		// Not enough room for meaningful thinking — set budget to 0
-		// which disables thinking on Gemini.
+		// which disables thinking on Gemini (non-3 models).
 		config.ThinkingConfig = &genai.ThinkingConfig{
 			ThinkingBudget: ptrToInt32(0),
 		}
@@ -470,6 +502,8 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 	var contents []*genai.Content
 	var systemParts []*genai.Part
 	toolNamesByID := make(map[string]string)
+	// sigsByID carries tool-call thought signatures into the responses (#1610-A).
+	sigsByID := make(map[string][]byte)
 
 	for _, m := range messages {
 		if m.Role == "system" {
@@ -511,6 +545,9 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 				if b.ToolID != "" && b.ToolName != "" {
 					toolNamesByID[b.ToolID] = b.ToolName
 				}
+				if b.ThinkingSignature != "" {
+					sigsByID[b.ToolID] = []byte(b.ThinkingSignature)
+				}
 				args, _ := normalizeToolInputValue(b.Input).(map[string]any)
 				if args == nil {
 					args = map[string]any{
@@ -532,7 +569,7 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 				if name == "" {
 					name = "_ggcode_unknown_tool"
 				}
-				parts = append(parts, &genai.Part{
+				frPart := &genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
 						ID:   b.ToolID,
 						Name: name,
@@ -540,7 +577,14 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 							"output": b.Output,
 						},
 					},
-				})
+				}
+				// #1610-A: gemini-3 with thinking on REQUIRES the thought
+				// signature echoed with the function response - omitting it
+				// 400s every agentic multi-turn.
+				if sig, ok := sigsByID[b.ToolID]; ok {
+					frPart.ThoughtSignature = sig
+				}
+				parts = append(parts, frPart)
 			}
 		}
 
@@ -607,7 +651,9 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 				if id == "" {
 					id = part.FunctionCall.Name
 				}
-				blocks = append(blocks, ToolUseBlock(id, part.FunctionCall.Name, args))
+				blk := ToolUseBlock(id, part.FunctionCall.Name, args)
+				blk.ThinkingSignature = string(part.ThoughtSignature) // #1610-A
+				blocks = append(blocks, blk)
 			}
 		}
 	}

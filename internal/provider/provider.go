@@ -169,6 +169,10 @@ type ToolCallDelta struct {
 	Index     int             // position in the tool call list
 	Name      string          // tool name (may be empty in early chunks)
 	Arguments json.RawMessage // accumulated arguments so far
+	// ThoughtSignature carries the Gemini thought signature attached to a
+	// function call part (#1610-A); it must ride the SAME tool_use block so
+	// the functionResponse can echo it back.
+	ThoughtSignature []byte
 }
 
 // ToolDefinition describes a tool to the LLM provider.

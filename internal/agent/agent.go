@@ -4496,7 +4496,9 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			flushText()
 			onEvent(event)
 			toolCalls = append(toolCalls, event.Tool)
-			content = append(content, provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments))
+			blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
+			blk.ThinkingSignature = string(event.Tool.ThoughtSignature) // #1610-A
+			content = append(content, blk)
 		case provider.StreamEventDone:
 			if event.Usage != nil {
 				usage = *event.Usage
