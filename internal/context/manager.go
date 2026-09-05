@@ -1194,7 +1194,12 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 	// skip contaminated samples rather than mis-calibrate.
 	for _, msg := range m.messages {
 		for _, b := range msg.Content {
-			if b.Type == "image" || b.Type == "reasoning" {
+			// #1640-1: the provider side emits Type=='thinking' (anthropic
+			// thinking blocks) - 'reasoning' never occurs as a block type
+			// anywhere else, making the thinking half of #1618-A dead code.
+			// #1640-2: tool_result blocks carry embedded images in
+			// b.Images - the top-level type check let them through.
+			if b.Type == "image" || b.Type == "thinking" || len(b.Images) > 0 {
 				debug.Log("context-calibrator", "sample-frozen: image/thinking blocks present (see #1618-A)")
 				return
 			}
@@ -2351,7 +2356,7 @@ func (m *Manager) estimateTokens(msg provider.Message) int {
 // again immediately, and the session entered a compaction loop.
 func (m *Manager) estimateTokensCalibrated(msg provider.Message) int {
 	var sb strings.Builder
-	var hasImage bool
+	var imageCount int
 	var toolCallCount int
 	for _, b := range msg.Content {
 		sb.WriteString(b.Text)
@@ -2359,15 +2364,24 @@ func (m *Manager) estimateTokensCalibrated(msg provider.Message) int {
 		sb.WriteString(b.ToolName)
 		sb.WriteString(b.Output)
 		sb.Write(b.Input)
-		if b.Type == "image" || b.ImageData != "" || len(b.Images) > 0 {
-			hasImage = true
+		if b.Type == "image" || b.ImageData != "" {
+			imageCount++
 		}
+		// #1640-2: embedded tool_result images are counted EACH - the old
+		// hasImage bool priced multi-image messages at one flat image.
+		imageCount += len(b.Images)
 		if b.Type == "tool_use" {
 			toolCallCount++
 		}
 	}
 	n := EstimateTokensCalibrated(sb.String(), m.calibrator)
-	return n + messageStructuralTokens(toolCallCount, hasImage)
+	// perImageTokenCost matches messageStructuralTokens' flat 170 (#1640-2:
+	// extra images beyond the first are priced, not flattened into one).
+	extra := imageCount - 1
+	if extra < 0 {
+		extra = 0
+	}
+	return n + messageStructuralTokens(toolCallCount, imageCount > 0) + 170*extra
 }
 
 // messageStructuralTokens returns the per-message structural overhead shared
