@@ -54,16 +54,24 @@ func filterKnightBookkeeping(snapshot string) string {
 		if len(rest) > 3 {
 			rest = rest[3:]
 		}
-		// #1576-C: a rename line 'R .ggcode/x -> outside/path' starts with
-		// the SOURCE (.ggcode/), so the prefix test dropped the WHOLE line
-		// and the outside destination bypassed the read-only guard. Test
-		// the DESTINATION (post '->') - bookkeeping-internal moves still
-		// filter, moves OUT of .ggcode stay visible to the guard.
-		dest := rest
+		// #1576-C / #1617-A: the exemption exists for INTERNAL bookkeeping
+		// writes only (the proposal's own budget/usage appends). A rename
+		// crosses the boundary when EITHER side is outside .ggcode:
+		//   '.ggcode/x -> out'  - the write LANDS in the project (visible);
+		//   'tracked.txt -> .ggcode/h' - a project file is MOVED INTO the
+		//    bookkeeping dir (a stash-the-changes channel the guard must
+		//    see; the original DESTINATION-only test swallowed the line).
+		// Filter only when BOTH source and destination are inside .ggcode.
+		src := rest
+		dst := rest
 		if idx := strings.Index(rest, " -> "); idx >= 0 {
-			dest = rest[idx+4:]
+			src = rest[:idx]
+			dst = rest[idx+4:]
 		}
-		if after := strings.TrimPrefix(strings.TrimSpace(dest), "\""); strings.HasPrefix(after, ".ggcode/") {
+		inGG := func(p string) bool {
+			return strings.HasPrefix(strings.TrimPrefix(strings.TrimSpace(p), "\""), ".ggcode/")
+		}
+		if inGG(src) && inGG(dst) {
 			continue
 		}
 		kept = append(kept, line)
