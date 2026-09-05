@@ -33,7 +33,53 @@ func (Subversion) Log(ctx context.Context, dir string, count int) (string, error
 	// entries — 1:HEAD walked from the OLDEST revision, silently returning
 	// r1..rN instead of the newest N (interface contract: recent history).
 	// HEAD:1 walks newest-first.
-	return runVCSCmd(ctx, dir, "svn", "log", "-r", "HEAD:1", "-l", strconv.Itoa(count))
+	// #1493: raw svn log output is multi-line (---- separators, r42|author
+	// headers, message bodies), violating the one-entry-per-line contract
+	// every other VCS honors; recent_commits then hard-sliced the noise into
+	// the system prompt. Normalize each revision to a single line here.
+	out, err := runVCSCmd(ctx, dir, "svn", "log", "-r", "HEAD:1", "-l", strconv.Itoa(count))
+	if err != nil {
+		return out, err
+	}
+	return normalizeSvnLog(out), nil
+}
+
+// normalizeSvnLog collapses svn's multi-line log format into one line per
+// revision: "r42 | author | date | message-first-line".
+func normalizeSvnLog(log string) string {
+	var lines []string
+	for _, block := range strings.Split(log, "------------------------------------------------------------------------") {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+		// First line of each block: r42 | author | date | line-count | path?
+		parts := strings.SplitN(block, "\n", 2)
+		header := strings.TrimSpace(parts[0])
+		msg := ""
+		if len(parts) > 1 {
+			// Skip the header's line-count continuation lines; the message
+			// starts after a blank line. Keep its first line only.
+			bodyLines := strings.Split(parts[1], "\n")
+			for i, l := range bodyLines {
+				if strings.TrimSpace(l) != "" {
+					// message body: all non-empty lines after the first blank
+					// separator; simplest robust pick = first non-empty line that
+					// is not part of the header (headers contain ' | ').
+					if !strings.Contains(l, " | ") || i > 0 {
+						msg = strings.TrimSpace(l)
+						break
+					}
+				}
+			}
+		}
+		if msg != "" {
+			lines = append(lines, header+" | "+msg)
+		} else {
+			lines = append(lines, header)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (Subversion) Add(ctx context.Context, dir string, files []string) (string, error) {

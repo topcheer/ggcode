@@ -54,3 +54,37 @@ func runTestCmd(name string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// Regression for #1493: raw svn log output is multi-line (---- separators,
+// r42|author headers, message bodies), violating the one-entry-per-line
+// contract; recent_commits hard-sliced the noise into the system prompt.
+func TestNormalizeSvnLogSingleLineEntries(t *testing.T) {
+	raw := `------------------------------------------------------------------------
+r42 | alice | 2026-09-01 10:00:00 +0800 (Mon, 01 Sep 2026) | 1 line
+
+Fix login redirect
+------------------------------------------------------------------------
+r41 | bob | 2026-08-31 09:00:00 +0800 (Sun, 31 Aug 2026) | 2 lines
+
+Refactor config loader
+
+and tests
+------------------------------------------------------------------------
+`
+	got := normalizeSvnLog(raw)
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want 2 one-line entries, got %d: %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "r42") || !strings.Contains(lines[0], "Fix login redirect") {
+		t.Errorf("entry 0 malformed: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "r41") || !strings.Contains(lines[1], "Refactor config loader") {
+		t.Errorf("entry 1 malformed: %q", lines[1])
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "----") {
+			t.Errorf("separator leaked into output: %q", l)
+		}
+	}
+}

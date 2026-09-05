@@ -269,6 +269,11 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		prompt += projectCommandsSection(workingDir)
 		prompt += toolchainSection(workingDir)
 		prompt += buildGoPackageSymbolsSection(workingDir)
+		// #1493: f9231dde added multi-language symbol sections to the main
+		// fallback only; this sub-agent fallback kept 7 sections and lost
+		// TS/Python symbol awareness on collector-uninitialized paths.
+		prompt += buildTSSymbolsSection(workingDir)
+		prompt += buildPythonSymbolsSection(workingDir)
 		prompt += buildPackageDepsSection(workingDir)
 	}
 
