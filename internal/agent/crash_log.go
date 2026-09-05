@@ -40,7 +40,12 @@ func WriteCrashLog(component string, val any) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Sprintf("<crash log not written: %v>", err)
 	}
-	name := fmt.Sprintf("%s-%s.log", component, time.Now().Format("20060102-150405"))
+	// #1616-B: second-resolution names collide on same-second double
+	// crashes (agent recover does NOT exit; retry loops re-panic) - the
+	// O_TRUNC write silently destroyed the FIRST crash scene, exactly the
+	// one comparison of consecutive crashes needs. Nanosecond suffix.
+	now := time.Now()
+	name := fmt.Sprintf("%s-%s-%09d.log", component, now.Format("20060102-150405"), now.Nanosecond())
 	path := filepath.Join(dir, name)
 	// Guard the %v formatting: a panic value whose String()/Error() itself
 	// panics would re-panic HERE, inside this recover-adjacent helper, and
@@ -75,7 +80,11 @@ func WriteCrashLog(component string, val any) string {
 			break
 		}
 		if len(allBuf) >= maxAllStack {
-			allBuf = allBuf[:maxAllStack]
+			// #1616-A: runtime.Stack walks allgs in creation order - the
+			// NEWEST goroutines (often the culprit in a just-spawned task)
+			// sit at the tail and a silent truncate drops exactly them.
+			// Mark the truncation so log readers know the dump is partial.
+			allBuf = append(allBuf[:maxAllStack], []byte(fmt.Sprintf("\n[all-goroutine dump truncated at %d bytes; newest goroutines dropped]\n", maxAllStack))...)
 			break
 		}
 		allBuf = make([]byte, len(allBuf)*2)
