@@ -456,6 +456,10 @@ func (m *Model) handleInspectorLSPInstallAction(items []inspectorPanelItem) (Mod
 		return *m, nil
 	}
 	m.closeInspectorPanel()
+	// #1641-1: the multi-option install path (python/yaml/json/dockerfile/
+	// shell/csharp - the mainstream languages) missed the single-option
+	// path's cache drop; a prefix install stayed invisible up to 10 min.
+	lsp.InvalidateProbeCache()
 	return *m, m.submitInspectorShellCommand(command)
 }
 

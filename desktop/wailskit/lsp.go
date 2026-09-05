@@ -186,6 +186,13 @@ func (b *ChatBridge) InstallLSPServer(languageID, optionID string) LSPInstallRes
 	// total wait to ~timeout + WaitDelay.
 	c.WaitDelay = 30 * time.Second
 	output, err := c.CombinedOutput()
+	// #1641-2: wailskit is statically linked into the same process and
+	// shares the lsp package-level probeCache - GetLSPStatus primed a
+	// NEGATIVE entry pre-install, and without invalidation the post-install
+	// refresh served 'unavailable' for up to 10 minutes after the button
+	// reported success. Drop the cache on any completed install attempt
+	// (success or failure - one extra probe is cheap).
+	lsp.InvalidateProbeCache()
 
 	result := LSPInstallResult{
 		Output: string(output),
