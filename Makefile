@@ -2,7 +2,7 @@ BINARY  := bin/ggcode
 PKG     := github.com/topcheer/ggcode/cmd/ggcode
 INSTALLER_PKG := github.com/topcheer/ggcode/cmd/ggcode-installer
 
-.PHONY: build build-desktop-wails test lint verify-ci ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots
+.PHONY: build build-desktop-wails test lint verify-ci ci knight-eval install install-installer install-git-hooks clean store-deploy store-deploy-ios store-deploy-android store-version store-screenshots sync-model-caps
 
 TAGS := goolm
 
@@ -26,6 +26,16 @@ verify-ci:
 
 ## ci is an alias for verify-ci, used by harness verification
 ci: verify-ci
+
+## sync-model-caps regenerates the static model capability database
+## (internal/config/context_window.go + vendor_defaults.go) from
+## charmbracelet/catwalk. Run it any time; it is also a required pre-release
+## step (docs/release-process.md §3.3). Needs network access to GitHub.
+sync-model-caps:
+	go run scripts/sync-model-caps.go
+	gofmt -w internal/config/context_window.go internal/config/vendor_defaults.go
+	@go build -tags "$(TAGS)" ./internal/config/ || (echo "sync-model-caps: generated code failed to build" && exit 1)
+	@echo "sync-model-caps: done. Review 'git diff internal/config/' and include it in your commit."
 
 knight-eval:
 	./scripts/dev/knight-eval.sh

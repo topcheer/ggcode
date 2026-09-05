@@ -63,7 +63,24 @@ For a normal release, bump these version references together:
 1. `GGCODE.md` → latest documented release pointer
 2. `docs/releases/README.md` → current release notes pointer
 
-### 3.3 Run CI-aligned local validation
+### 3.3 Sync the model capability table
+
+Regenerate the static model capability database (context windows, max output
+_tokens, vision support for ~700+ models) from upstream catwalk data. This
+keeps `supports_vision` inference and context-window auto-detection current
+for newly released models:
+
+```bash
+make sync-model-caps
+```
+
+This rewrites `internal/config/context_window.go` and
+`internal/config/vendor_defaults.go`, then verifies the generated code builds.
+Review the diff (`git diff internal/config/`) and include any changes in the
+release commit. No diff means the table is already current. Needs network
+access to raw.githubusercontent.com; skip only if offline.
+
+### 3.4 Run CI-aligned local validation
 
 Use the repository’s CI-equivalent check:
 
@@ -392,22 +409,23 @@ Use this checklist for every real release:
 3. Update `GGCODE.md` release pointer.
 4. Update `docs/releases/README.md` current pointer.
 5. **If mobile changes are included**: `cd mobile/flutter && bash scripts/version_sync.sh X.Y.Z` then stage the four updated files.
-6. Run `make verify-ci`.
-7. Review `git status`.
-8. Commit `release: vX.Y.Z`.
-9. Push `main`.
-10. Create and push tag `vX.Y.Z`.
-11. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
+6. Run `make sync-model-caps` and stage any diff in `internal/config/` (see §3.3).
+7. Run `make verify-ci`.
+8. Review `git status`.
+9. Commit `release: vX.Y.Z`.
+10. Push `main`.
+11. Create and push tag `vX.Y.Z`.
+12. Monitor GitHub Actions — **all workflows must reach `completed` / `success` before the release is considered done**:
     - `Release` (verify → release → smoke tests → macos-pkg → windows-msi → publish-site-release-branch)
     - `CI` (build → vet → test)
     - `CodeQL` (security scan)
-12. If any workflow fails:
+13. If any workflow fails:
     - `gh run view <run-id> --log-failed` to identify root cause
     - Fix the issue locally, commit, push to `main`
     - **Delete the tag** (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`) and **re-tag** on the fix commit
     - Re-monitor all workflows from step 11
-13. Confirm the release assets exist on GitHub (`gh release view vX.Y.Z`).
-14. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
+14. Confirm the release assets exist on GitHub (`gh release view vX.Y.Z`).
+15. Confirm `https://ggcode.dev/downloads/latest/manifest.json` reflects the new tag.
 
 ## 10. Recommended monitoring commands
 
