@@ -353,9 +353,18 @@ func (e *errorPropagateState) formatPropagationGuidance(c *propagationChain) str
 // offset/limit", "use read_command_output", pagination hints. Such
 // footers are the tool's DESIGNED paging signal, not degradation.
 func hasPaginationGuidance(content string) bool {
-	lower := strings.ToLower(content)
-	return strings.Contains(lower, "offset/limit") ||
-		strings.Contains(lower, "offset and limit") ||
-		strings.Contains(lower, "use read_command_output") ||
-		strings.Contains(lower, "use wait_command")
+	// #1554-A: the truncation FOOTER lives in the last lines, but this
+	// check scanned the WHOLE content - any body mention of "offset/limit"
+	// (pagination hint strings embedded in THIS repo's own output/format
+	// code) exempted a genuinely truncated result. Anchor to the tail the
+	// footer detector itself uses.
+	lines := strings.Split(content, "\n")
+	if len(lines) > 5 {
+		lines = lines[len(lines)-5:]
+	}
+	tail := strings.ToLower(strings.Join(lines, "\n"))
+	return strings.Contains(tail, "offset/limit") ||
+		strings.Contains(tail, "offset and limit") ||
+		strings.Contains(tail, "use read_command_output") ||
+		strings.Contains(tail, "use wait_command")
 }

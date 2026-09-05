@@ -183,6 +183,17 @@ func regressionGuidance(prevErrors, currentErrors, increase int) string {
 // (go build / go test / make test / npm test ...) for same-command
 // comparison (#1457-C).
 func verifyCommandKind(cmd string) string {
+	// #1554-B: same-entry asymmetry - isVerifyCommand accepts
+	// 'cd /app && go test' and env-prefixed forms, but the KIND was taken
+	// from fields[0] raw: 'cd' became the kind (two cd-commands compared
+	// as "same" = false regression noise) and 'GOFLAGS=-p=1 make test'
+	// keyed on the assignment. Normalize with the same helpers first:
+	// strip env prefixes, take the LAST compound segment (the verify tail
+	// after cd/setup prefixes - this repo's own release convention).
+	cmd = strings.TrimSpace(stripEnvAssignments(cmd))
+	if segs := strings.Split(cmd, "&&"); len(segs) > 0 {
+		cmd = strings.TrimSpace(segs[len(segs)-1])
+	}
 	fields := strings.Fields(cmd)
 	if len(fields) == 0 {
 		return ""
