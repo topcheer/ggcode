@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -81,7 +82,16 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		}
 		if info != nil {
 			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
-				refreshed, refreshErr := auth.RefreshClaudeToken(context.Background(), info.RefreshToken)
+				// #1505: the sole production refresh call used
+				// context.Background() and RefreshClaudeToken uses
+				// http.DefaultClient (no timeout) - a TCP black hole froze
+				// every endpoint resolution for minutes to hours. Bound the
+				// refresh so resolution degrades to the expired token
+				// instead of hanging. (Single-flight and cross-process store
+				// safety remain open - see issue.)
+				refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
+				refreshed, refreshErr := auth.RefreshClaudeToken(refreshCtx, info.RefreshToken)
+				cancelRefresh()
 				if refreshErr == nil && refreshed != nil {
 					// #1300: Save errors were discarded. Anthropic rotates the
 					// refresh token on each refresh, so a failed Save leaves the
