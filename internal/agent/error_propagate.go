@@ -167,6 +167,10 @@ var degradedPatterns = []string{
 var truncationFooterPrefixes = []string{
 	"[file truncated:", "[showing lines", "[output too large",
 	"[truncated:", "... [output truncated]", "... results omitted",
+	// #1554-C: the ACTUAL prefix guardToolOutput writes (the list's
+	// '... [output truncated]' literal never matched it - head+tail
+	// truncations were undetectable). Shared constant, no re-drift.
+	toolHeadTailTruncationPrefix,
 }
 
 // hasTruncationFooter reports whether any line of the output is a

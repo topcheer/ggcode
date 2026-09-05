@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -261,3 +262,15 @@ func TestIsContentTool(t *testing.T) {
 }
 
 // contains and containsStr are defined in reflection_test.go
+
+// TestIssue1554C_HeadTailMarkerDetected pins #1554-C: the EXACT marker
+// guardToolOutput writes must be classified as a truncation footer.
+func TestIssue1554C_HeadTailMarkerDetected(t *testing.T) {
+	marker := fmt.Sprintf("\n\n%s %s total, showing head + tail ...]\n\n", toolHeadTailTruncationPrefix, "1.2 MB")
+	if !hasTruncationFooter(marker) {
+		t.Fatal("guardToolOutput's own head+tail marker must be detected as a truncation footer")
+	}
+	if !hasTruncationFooter("some output\n" + marker + "more output") {
+		t.Fatal("marker embedded mid-output must be detected (line-anchored)")
+	}
+}

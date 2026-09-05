@@ -41,6 +41,13 @@ const (
 // guardToolOutput truncates large tool results based on context fill level.
 // contextFill is the ratio of current tokens to compaction threshold (0.0-1.0+).
 // Returns the (possibly truncated) content.
+// toolHeadTailTruncationPrefix is the LINE PREFIX of the head+tail
+// truncation marker guardToolOutput writes. #1554-C: the detector list
+// hardcoded '... [output truncated]' - a DIFFERENT literal that never
+// matched this writer, so head+tail truncations were never detected as
+// degraded reads. Both sides reference this constant now.
+const toolHeadTailTruncationPrefix = "[... output truncated:"
+
 func guardToolOutput(content string, contextFill float64) string {
 	if contextFill < contextFillModerate {
 		debug.Log("context-guard", "no-truncation fill=%.2f len=%d", contextFill, len(content))
@@ -77,7 +84,7 @@ func truncateHeadTail(s string, maxLen int) string {
 	}
 
 	// Reserve space for the truncation marker.
-	marker := fmt.Sprintf("\n\n[... output truncated: %s total, showing head + tail ...]\n\n", formatBytes(len(s)))
+	marker := fmt.Sprintf("\n\n%s %s total, showing head + tail ...]\n\n", toolHeadTailTruncationPrefix, formatBytes(len(s)))
 	usable := maxLen - len(marker)
 	if usable < 1000 {
 		// Limit too small for meaningful truncation; hard-cut at rune boundary.
