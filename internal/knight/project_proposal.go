@@ -118,7 +118,30 @@ func gitStatusSnapshot(dir string) string {
 	if err != nil {
 		return ""
 	}
-	return string(out)
+	// #1639-1: porcelain paths are relative to the GIT ROOT, but the guard
+	// runs with dir = a repo SUBDIRECTORY (monorepo workspace) - lines
+	// arrive as 'AM mobile/.ggcode/budget.jsonl', miss the .ggcode/
+	// prefix, and the proposal's own bookkeeping reads as a violation
+	// (every proposal dropped). Normalize to dir-relative: strip the
+	// show-prefix from each path (both sides of 'R old -> new').
+	prefix := ""
+	if p, err := exec.Command("git", "-C", dir, "rev-parse", "--show-prefix").Output(); err == nil {
+		prefix = strings.TrimSpace(string(p))
+	}
+	if prefix == "" {
+		return string(out)
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) > 3 && strings.HasPrefix(line[3:], prefix) {
+			b.WriteString(line[:3])
+			b.WriteString(line[3+len(prefix):])
+		} else {
+			b.WriteString(line)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func (k *Knight) GenerateProjectImprovementProposal(ctx context.Context, goal string) (ProjectImprovementProposal, TaskResult, error) {

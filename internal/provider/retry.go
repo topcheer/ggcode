@@ -207,7 +207,7 @@ func isRetryable(err error) bool {
 	// a common wrapper/relay format with no 'HTTP'/'status' prefix) hit
 	// NONE of the containsHTTPStatus forms and defaulted to retryable,
 	// burning the full budget on a permanent auth error. Anchor at start.
-	for _, code := range []string{"400", "401", "402", "403", "404", "422"} {
+	for _, code := range []string{"400", "401", "402", "403", "404", "413", "422"} {
 		if strings.HasPrefix(msg, code) && (len(msg) == len(code) || msg[len(code)] == ' ') {
 			return false
 		}
