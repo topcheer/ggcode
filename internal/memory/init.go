@@ -146,6 +146,19 @@ func detectGoModule(root string) string {
 }
 
 func detectTechStack(root string) []string {
+	// #1636-A: same gate as detectImportantPaths (#1593-A) - the specific
+	// stack claims below (npm release wrapper, plugin-system phrases) are
+	// ggcode's OWN facts; a user repo with python/ or an MCP-mentioning
+	// README got them written into GGCODE.md as MUST-follow context.
+	// Correct silence beats wrong facts; foreign repos keep only the
+	// generic Go-codebase line.
+	module := detectGoModule(root)
+	if module != "github.com/topcheer/ggcode" {
+		if fileExists(filepath.Join(root, "go.mod")) {
+			return []string{"Go codebase"}
+		}
+		return nil
+	}
 	var stack []string
 	if fileExists(filepath.Join(root, "go.mod")) {
 		stack = append(stack, "Go codebase")

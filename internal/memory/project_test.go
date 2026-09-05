@@ -444,3 +444,27 @@ func TestIssue1615_HtmlBannerNotSummary(t *testing.T) {
 		t.Fatalf("real description must win, got %q", got)
 	}
 }
+
+// TestIssue1636_TechStackGated pins #1636-A: foreign repos never receive
+// ggcode-specific stack claims (npm/python wrappers, plugin phrases) -
+// only the generic Go-codebase line survives the gate.
+func TestIssue1636_TechStackGated(t *testing.T) {
+	dir := t.TempDir()
+	// Foreign Go module with ggcode's telltale dirs/README phrases.
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/user/tool\n\ngo 1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Tool\nMCP and Plugin System\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "npm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "python"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stack := detectTechStack(dir)
+	if len(stack) != 1 || stack[0] != "Go codebase" {
+		t.Fatalf("foreign repo must keep only the generic line, got %v", stack)
+	}
+}
