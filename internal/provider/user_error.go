@@ -93,6 +93,7 @@ func UserFacingErrorLang(err error, lang string) string {
 				strings.Contains(l429, "套餐已到期") ||
 				strings.Contains(l429, "package has expired") ||
 				strings.Contains(l429, "insufficient balance") ||
+				strings.Contains(l429, "insufficient credits") ||
 				strings.Contains(l429, "余额不足") ||
 				strings.Contains(l429, "欠费") ||
 				strings.Contains(l429, "quota exceeded") ||
@@ -188,6 +189,18 @@ func UserFacingErrorLang(err error, lang string) string {
 			return "请求参数错误 (400)，请尝试 /compact 或重新开始对话"
 		}
 		return "Bad request (400). Try /compact or start a new session"
+	}
+
+	// #1618-B: 402 needs a dedicated branch BEFORE the generic status
+	// fallback - "retry shortly" misleads on a permanent insufficient-
+	// funds error, and IM/tunnel/daemon paths call UserFacingError
+	// directly (never FriendlyError's correct top-up copy). Anchor table
+	// gains "insufficient credits" (OpenRouter's actual wording).
+	if code := extractHTTPStatus(err); code == 402 || strings.Contains(strings.ToLower(raw), "insufficient credits") {
+		if zh {
+			return "余额不足 (402)。请到 provider 控制台充值后重试"
+		}
+		return "Insufficient credits (402). Please top up your provider account and retry"
 	}
 
 	// ---- Generic HTTP errors ----

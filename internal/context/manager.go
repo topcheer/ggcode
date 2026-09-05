@@ -1184,6 +1184,22 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 			return
 		}
 	}
+	// #1618-A: the ACTUAL side (totalInput) prices images and thinking
+	// tokens; the ESTIMATED side is text-composition only - a vision
+	// session's samples structurally overshoot the ratio (observedRatio
+	// pinned at the 3.0 clamp on every recalibration, tripling every
+	// subsequent estimate and compacting long sessions early), and the
+	// mirror (calibrate text-only, then attach images) under-reports and
+	// 400s mid-run. The estimator has no image/thinking pricing yet, so
+	// skip contaminated samples rather than mis-calibrate.
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type == "image" || b.Type == "reasoning" {
+				debug.Log("context-calibrator", "sample-frozen: image/thinking blocks present (see #1618-A)")
+				return
+			}
+		}
+	}
 	// #649: latinExtChars feeds the composition shares so Vietnamese-style
 	// residuals are attributed to their own (fixed-tier) bucket instead of
 	// 100% to asciiRatio. RecordSample itself freezes the adjustment when
