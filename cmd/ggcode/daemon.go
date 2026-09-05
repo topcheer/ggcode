@@ -902,8 +902,19 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	bridge.SetVisionTurnHook(
 		func() string { return agentruntime.VisionTurnModel(cfg) },
 		func(model string) error {
+			prev := cfg.Model
 			resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, "", "", model)
 			if err != nil {
+				// Half-switched: SetActiveSelection inside may already have
+				// applied model to cfg.Model - restore the previous in-memory
+				// selection so a failed switch cannot leak the vision model.
+				if prev != "" && prev != model {
+					if r, p, rerr := agentruntime.ActivateCurrentSelection(cfg, "", "", prev); rerr == nil {
+						agentruntime.ApplyProviderToAgent(ag, p, r)
+					} else {
+						debug.Log("daemon", "vision turn switch failed and restore failed: %v / %v", err, rerr)
+					}
+				}
 				return err
 			}
 			agentruntime.ApplyProviderToAgent(ag, prov, resolved)

@@ -4465,6 +4465,17 @@ func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) fu
 	debug.Log("chat", "vision fallback: turn-scoped switch to %s (user model: %s)", vm, userModel)
 	resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, "", "", vm)
 	if err != nil {
+		// Half-switched: SetActiveSelection inside may already have applied
+		// vm to cfg.Model — restore the user's model so a failed switch cannot
+		// leak the vision model beyond this turn (turn-scoped guarantee).
+		if r, p, rerr := agentruntime.ActivateCurrentSelection(cfg, "", "", userModel); rerr == nil {
+			agentruntime.ApplyProviderToAgent(ag, p, r)
+			b.mu.Lock()
+			b.resolved = r
+			b.mu.Unlock()
+		} else {
+			debug.Log("chat", "vision fallback switch failed and restore failed: %v / %v", err, rerr)
+		}
 		debug.Log("chat", "vision fallback switch failed: %v", err)
 		return func() {}
 	}

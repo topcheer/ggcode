@@ -115,3 +115,60 @@ func TestRestorePendingImagesMsgHandler(t *testing.T) {
 		t.Fatalf("stale-run restore interleaved: %#v", got)
 	}
 }
+
+// TestVisionFallbackRestoresModelWhenActivationFails pins the leak fix in
+// runAgentSubmission's vision fallback: when SetActiveSelection succeeds but
+// tryActivateCurrentSelection fails (e.g. missing API key), the user's model
+// must be restored synchronously AND via defer before the text-only
+// fallthrough runs. Pre-fix, the vision model leaked into config.Model
+// permanently on this path.
+func TestVisionFallbackRestoresModelWhenActivationFails(t *testing.T) {
+	m := newTestModel()
+	cfg := &config.Config{
+		Vendor:   "testv",
+		Endpoint: "testep",
+		Model:    "text-model",
+		Vendors: map[string]config.VendorConfig{
+			"testv": {
+				Endpoints: map[string]config.EndpointConfig{
+					"testep": {
+						Protocol: "openai",
+						BaseURL:  "https://example.com",
+						// APIKey intentionally empty: ResolveCurrentSelection
+						// fails with "no api key configured" while
+						// SetActiveSelection still succeeds — the exact
+						// half-switched state the fix guards against.
+						Models: []string{"text-model", "gpt-4o"},
+					},
+				},
+			},
+		},
+	}
+	m.config = cfg
+
+	// Drive the real function chain (everything except the
+	// runAgentSubmission shell): real selection → real switch → real
+	// activation attempt → synchronous restore → idempotent deferred restore.
+	userModel := cfg.Model
+	vm := m.temporaryVisionModelForTurn() // real selection, not a hardcoded name
+	if vm != "gpt-4o" {
+		t.Fatalf("temporaryVisionModelForTurn() = %q, want gpt-4o", vm)
+	}
+	if err := cfg.SetActiveSelection(cfg.Vendor, cfg.Endpoint, vm); err != nil {
+		t.Fatalf("SetActiveSelection() error = %v", err)
+	}
+	defer m.restoreUserModelAfterVisionTurn(userModel)
+	if err := m.tryActivateCurrentSelection(); err == nil {
+		t.Fatal("expected activation failure with empty API key")
+	}
+	m.restoreUserModelAfterVisionTurn(userModel) // failure-branch synchronous restore
+
+	if cfg.Model != userModel {
+		t.Fatalf("vision model leaked: config.Model = %q, want %q", cfg.Model, userModel)
+	}
+	// Second (deferred) restore must be a safe no-op.
+	m.restoreUserModelAfterVisionTurn(userModel)
+	if cfg.Model != userModel {
+		t.Fatalf("idempotent restore mutated model: %q", cfg.Model)
+	}
+}
