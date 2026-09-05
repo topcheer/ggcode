@@ -147,6 +147,17 @@ func (a *Agent) resetGuidanceCounters() {
 		a.actionAnnihil.warnsIssued = 0
 		a.actionAnnihil.mu.Unlock()
 	}
+	// #1605-A: verifDebt was named by #1572-C's own standard (per-run
+	// injection quota) but never listed - a burned quota (maxWarn=2) plus
+	// mid-run compaction left it silent for the run's remainder at PEAK
+	// debt. Quota ONLY (warningsIssued); the debt/maxDebt/green-build
+	// ledger is behavioral state and wiping it would repeat #1572-A's
+	// over-reset (see reset()'s nine fields).
+	if a.verifyDebt != nil {
+		a.verifyDebt.mu.Lock()
+		a.verifyDebt.warningsIssued = 0
+		a.verifyDebt.mu.Unlock()
+	}
 
 	debug.Log("guidance", "post-compaction: guidance injection counters reset (B-class detectors)")
 }

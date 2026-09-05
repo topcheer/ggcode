@@ -244,7 +244,11 @@ func (s *errorCompoundState) maybeWarn(iteration int) string {
 	// Escalation guard (#336): the second (critical) warning requires NEW
 	// errors since the first warning. A pure recovery period (window has
 	// only stale errors, zero new ones) must not escalate severity.
-	if s.warningCount > 0 && s.newErrSinceWarn == 0 {
+	// #1605-B: the guard keyed on warningCount > 0, but compaction resets
+	// that quota (#1572-A) while the sliding window keeps the stale errors
+	// - the first post-compaction iteration re-issued a warning on a
+	// pure-recovery window. The semantic key is newErrSinceWarn alone.
+	if s.newErrSinceWarn == 0 {
 		return ""
 	}
 
