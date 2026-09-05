@@ -51,6 +51,33 @@ func TestGenerateTitle_LongMessage(t *testing.T) {
 	}
 }
 
+func TestGenerateTitle_InlineCodePreserved(t *testing.T) {
+	// Regression for #1479: inlineCodeRe had no capture group, so the $1
+	// replacement expanded to the empty string and deleted the identifier
+	// the adjacent comment claimed to preserve.
+	got := GenerateTitle("check `agent.go` for the bug")
+	if !strings.Contains(got, "agent.go") {
+		t.Errorf("inline code identifier lost: got %q, want it to contain %q", got, "agent.go")
+	}
+}
+
+func TestIsGenericTitle_CJKShortTitles(t *testing.T) {
+	// Regression for #1479: CJK titles carry no ASCII spaces, so the
+	// no-space <6-rune branch flagged every short Chinese task title as
+	// generic and RefineTitleAfterRun overwrote it with the English template.
+	for _, title := range []string{"改个名字", "修个bug", "加个按钮", "部署上线", "帮我改名"} {
+		if isGenericTitle(title) {
+			t.Errorf("%q flagged generic; short CJK task titles must survive", title)
+		}
+	}
+	// Real filler words stay generic via the enumeration table.
+	for _, title := range []string{"你好", "测试", "hi!"} {
+		if !isGenericTitle(title) {
+			t.Errorf("%q should be generic", title)
+		}
+	}
+}
+
 func TestGenerateTitle_FilePath(t *testing.T) {
 	input := "Fix the error in internal/agent/agent.go that causes a panic"
 	got := GenerateTitle(input)

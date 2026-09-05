@@ -40,8 +40,10 @@ const (
 var (
 	// fencedCodeBlockRe matches ``` or ~~~ fenced code blocks (multiline).
 	fencedCodeBlockRe = regexp.MustCompile("(?s)```[\\s\\S]*?```|~~~[\\s\\S]*?~~~")
-	// inlineCodeRe matches `inline code`.
-	inlineCodeRe = regexp.MustCompile("`[^`]+`")
+	// inlineCodeRe matches `inline code`, capturing the inner text so the
+	// $1 replacement below preserves identifiers. A missing capture group
+	// expands $1 to the empty string and silently deletes them (#1479).
+	inlineCodeRe = regexp.MustCompile("`([^`]+)`")
 	// urlRe matches http/https URLs.
 	urlRe = regexp.MustCompile(`https?://\S+`)
 	// markdownHeadingRe matches markdown headings (#, ##, etc.).
@@ -214,8 +216,27 @@ func isGenericTitle(title string) bool {
 		return true
 	}
 	// Single-word titles under 6 chars are likely not descriptive.
-	if !strings.Contains(t, " ") && utf8.RuneCountInString(t) < 6 {
+	// CJK scripts carry no ASCII spaces, so this no-space branch would mark
+	// every short Chinese title (改个名字, 修个bug) generic and let
+	// RefineTitleAfterRun overwrite it with the English template; the
+	// generics table above already covers real CJK filler words (#1479).
+	if !strings.Contains(t, " ") && utf8.RuneCountInString(t) < 6 && !containsCJK(t) {
 		return true
+	}
+	return false
+}
+
+// containsCJK reports whether s contains any CJK rune (Han incl. Ext-A,
+// kana, Hangul, compatibility ideographs, full-width forms).
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if (r >= 0x2E80 && r <= 0x9FFF) || // CJK radicals + Han + Ext-A
+			(r >= 0x3040 && r <= 0x30FF) || // Hiragana + Katakana
+			(r >= 0xAC00 && r <= 0xD7AF) || // Hangul syllables
+			(r >= 0xF900 && r <= 0xFAFF) || // CJK compatibility ideographs
+			(r >= 0xFF01 && r <= 0xFF60) { // full-width forms
+			return true
+		}
 	}
 	return false
 }
