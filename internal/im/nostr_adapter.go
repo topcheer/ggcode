@@ -111,7 +111,7 @@ func newNostrAdapter(name string, _ config.IMConfig, adapterCfg config.IMAdapter
 func (a *nostrAdapter) Name() string { return a.name }
 
 func (a *nostrAdapter) Start(ctx context.Context) {
-	debug.Log("nostr", "adapter=%s start pubkey=%s relays=%v", a.name, a.pubKey[:12], a.relays)
+	debug.Log("nostr", "adapter=%s start pubkey=%s relays=%v", a.name, nostrShortID(a.pubKey), a.relays)
 	a.publishState(false, "connecting", "")
 	safego.Go("im.nostr.run", func() { a.run(ctx) })
 }
@@ -292,6 +292,17 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 // Event handling
 // ---------------------------------------------------------------------------
 
+// nostrShortID returns a display-safe prefix. #1553-B: raw evt.ID[:12] /
+// evt.PubKey[:12] panics on short values from a MALICIOUS relay (nothing
+// enforces 64-hex before the handler), and the panic killed that relay's
+// entire safego reconnect loop - remote-triggerable DoS.
+func nostrShortID(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
+}
+
 func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 	if evt.ID == "" || evt.Kind != nostr.KindEncryptedDirectMessage {
 		return
@@ -322,12 +333,12 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 	// Decrypt NIP-04 content
 	sharedSecret, err := nip04.ComputeSharedSecret(evt.PubKey, a.privKey)
 	if err != nil {
-		debug.Log("nostr", "adapter=%s ECDH failed for event %s: %v", a.name, evt.ID[:12], err)
+		debug.Log("nostr", "adapter=%s ECDH failed for event %s: %v", a.name, nostrShortID(evt.ID), err)
 		return
 	}
 	plaintext, err := nip04.Decrypt(evt.Content, sharedSecret)
 	if err != nil {
-		debug.Log("nostr", "adapter=%s decrypt failed for event %s: %v", a.name, evt.ID[:12], err)
+		debug.Log("nostr", "adapter=%s decrypt failed for event %s: %v", a.name, nostrShortID(evt.ID), err)
 		return
 	}
 
@@ -341,7 +352,7 @@ func (a *nostrAdapter) handleEvent(ctx context.Context, evt *nostr.Event) {
 			Platform:   PlatformNostr,
 			ChannelID:  evt.PubKey,
 			SenderID:   evt.PubKey,
-			SenderName: evt.PubKey[:12],
+			SenderName: nostrShortID(evt.PubKey),
 			MessageID:  evt.ID,
 			ReceivedAt: evt.CreatedAt.Time(),
 		},

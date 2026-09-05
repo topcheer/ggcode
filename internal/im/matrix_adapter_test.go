@@ -411,3 +411,16 @@ func TestIssue1553_FileSyncStorePersistsToken(t *testing.T) {
 		t.Fatalf("filter save must not clobber token: fid=%q tok=%q", fid, tok)
 	}
 }
+
+// TestIssue1553B_ShortEventIDNoPanic pins #1553-B: hostile short IDs from
+// a malicious relay must not panic (which killed the relay loop).
+func TestIssue1553B_ShortEventIDNoPanic(t *testing.T) {
+	for _, s := range []string{"", "abc", "exact12byte", "0123456789abcdef0123456789"} {
+		if got := nostrShortID(s); len(got) > 12 || len(got) > len(s) {
+			t.Fatalf("shortID(%q) = %q", s, got)
+		}
+		if len(s) >= 12 && nostrShortID(s) != s[:12] {
+			t.Fatalf("long id must truncate to 12: %q", s)
+		}
+	}
+}
