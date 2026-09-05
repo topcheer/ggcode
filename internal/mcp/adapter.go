@@ -216,7 +216,16 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	for _, c := range result.Content {
 		if c.Type == "text" {
 			parts = append(parts, c.Text)
+			continue
 		}
+		// #1588-A: a browser/fetch-class server can return ONLY image or
+		// resource blocks - the text-only loop produced Content="" with
+		// IsError=false, a clueless empty success. Emit a typed placeholder
+		// so the agent knows non-text content arrived (and roughly how
+		// much), instead of nothing.
+		// ToolContent carries only Type/Text today - describe the kind and
+		// count so the agent knows non-text content arrived.
+		parts = append(parts, fmt.Sprintf("[%s content omitted by MCP adapter]", c.Type))
 	}
 
 	content := strings.Join(parts, "\n")

@@ -216,7 +216,16 @@ func normalizeHeading(line string) (string, bool) {
 		return line, false
 	}
 	content := strings.TrimSpace(rest[level:])
-	content = strings.TrimRight(content, "#")
+	// #1588-C: CommonMark closing sequences require whitespace BEFORE the
+	// '#'s - a bare TrimRight mangled legitimate trailing characters
+	// ('## C#' -> 'C'). Only strip space-delimited closing sequences.
+	if idx := strings.LastIndex(content, " #"); idx >= 0 && strings.TrimRight(content[idx+1:], "# ") == "" {
+		content = strings.TrimRight(content[:idx], " ")
+	} else if strings.TrimRight(content, "#") == "" {
+		// All-# content (e.g. '###' as heading text) - keep as-is.
+	} else {
+		content = strings.TrimRight(content, " 	")
+	}
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return line, false
