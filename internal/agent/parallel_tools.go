@@ -105,10 +105,18 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		if mutatesSourceTree(tc.Name) {
 			return nil
 		}
+		// #1607-A: ANY shell command in a mixed batch skips pre-execution,
+		// conservatively. The #1590-A shape routed through the
+		// shellMutatesSources heuristic - tuned for the BUILD-CACHE cost
+		// model (FP = lost cache reuse) where narrow is right - but the
+		// guard's failure asymmetry is the opposite (FP = lost parallelism
+		// only; FN = a High-severity stale read after 'git checkout
+		// fix-branch'/'git restore'/'stash pop'/codegen/tee/redirects
+		// rewrote the tree between pre-read and serial consumption).
+		// Borrowing the narrow heuristic parked the risk on the dangerous
+		// side, using this comment's own examples.
 		if tc.Name == "run_command" || tc.Name == "start_command" {
-			if cmd, _ := parseRunCommandArgs(tc.Arguments); shellMutatesSources(cmd) {
-				return nil
-			}
+			return nil
 		}
 	}
 	for i, tc := range toolCalls {
