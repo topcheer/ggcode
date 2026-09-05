@@ -90,11 +90,12 @@ var editTools = sourceMutatingTools
 
 // errorRecoverySignals are tools or patterns that indicate the agent is
 // recovering from a failure — high effort helps avoid repeating mistakes.
-var errorRecoverySignals = map[string]bool{
-	"edit_file":       true, // edit retry after failure
-	"multi_edit_file": true,
-	"multi_file_edit": true,
-}
+// #1516: this must stay the SAME set as editTools (sourceMutatingTools):
+// the old 3-member literal left write_file/multi_file_write/batch_replace/
+// lsp_rename/file_ops/notebook_edit failures outside the high-effort
+// branch entirely (not even editCount), contradicting the module header
+// 'recent edit failures -> high'. Both consumers read the same table now.
+var errorRecoverySignals = sourceMutatingTools
 
 // effortEntry records a single tool interaction for effort classification.
 type effortEntry struct {

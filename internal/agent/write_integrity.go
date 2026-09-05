@@ -355,6 +355,10 @@ func registerAllChecks() {
 		{Name: "context-leak", Langs: []Language{LangGo}, Run: stringCheck(checkContextLeak)},
 		{Name: "resource-leak", Langs: []Language{LangGo}, Run: sliceCheck(checkResourceLeaks)},
 		{Name: "unchecked-type-assert", Langs: []Language{LangGo}, Run: sliceCheck(checkUncheckedTypeAssert)},
+		// #1516: checkTypeSwitchExhaustive existed (with passing tests that
+		// called it directly) but was never registered - the advertised
+		// detection never ran. Register it now.
+		{Name: "type-switch-exhaustive", Langs: []Language{LangGo}, Run: sliceCheck(checkTypeSwitchExhaustive)},
 		{Name: "lock-without-unlock", Langs: []Language{LangGo}, Run: sliceCheck(checkLockWithoutUnlock)},
 		{Name: "waitgroup-misuse", Langs: []Language{LangGo}, Run: sliceCheck(checkWaitGroupMisuse)},
 		{Name: "copylock", Langs: []Language{LangGo}, Run: sliceCheck(checkCopylock)},

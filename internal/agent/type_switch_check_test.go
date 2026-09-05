@@ -311,3 +311,20 @@ func f4(v interface{}) {
 		t.Fatalf("expected at most %d warnings, got %d", maxTypeSwitchWarnings, len(warnings))
 	}
 }
+
+// Regression for #1516: checkTypeSwitchExhaustive existed with passing
+// direct-call tests but was never registered in the write-integrity
+// registry - the detection never ran in production. Verify registration.
+func TestTypeSwitchCheckRegistered(t *testing.T) {
+	registerAllChecks()
+	found := false
+	for _, c := range allChecks {
+		if c.Name == "type-switch-exhaustive" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("type-switch-exhaustive must be registered in the integrity registry")
+	}
+}
