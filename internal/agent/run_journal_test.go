@@ -274,3 +274,16 @@ func TestMarkCompleted_CorruptedJournal(t *testing.T) {
 		t.Error("corrupted journal should be removed")
 	}
 }
+
+// Regression for #1490: isProcessAlive's local Signal(0) implementation
+// returned false for LIVE processes on Windows (EWINDOWS), so a concurrent
+// /resume misjudged the instance as crashed and removed its live anchor.
+// The delegation to util.IsProcessAlive must report the current process alive.
+func TestIsProcessAliveCurrentProcess(t *testing.T) {
+	if !isProcessAlive(os.Getpid()) {
+		t.Fatal("current process must be reported alive")
+	}
+	if isProcessAlive(-1) {
+		t.Fatal("invalid pid must not be alive")
+	}
+}

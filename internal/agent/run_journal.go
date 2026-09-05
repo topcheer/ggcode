@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // RunStateJournal tracks the lifecycle of agent runs to detect crashes.
@@ -262,19 +262,12 @@ func CleanupOldJournals(maxAge time.Duration) {
 }
 
 // isProcessAlive checks if a process with the given PID is running.
-// Uses signal 0 (existence check) on Unix; on Windows always returns false
-// (journal detection falls back to PID-based heuristics).
+// Delegates to util.IsProcessAlive, which has a correct Windows
+// implementation (#1490). The previous local Signal(0) version returned
+// false for LIVE processes on Windows (EWINDOWS), so a concurrent /resume
+// misjudged the instance as crashed and os.Remove'd its live crash anchor.
 func isProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 checks process existence without sending a real signal
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return util.IsProcessAlive(pid)
 }
 
 func formatDuration(d time.Duration) string {
