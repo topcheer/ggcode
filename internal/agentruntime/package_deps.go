@@ -197,6 +197,12 @@ func readModulePath(root string) string {
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "module ") {
+			// #1489: strip trailing // comments - x/mod's modfile lexer
+			// accepts them, and the unstripped path makes every import key
+			// mismatch, silently dropping the whole package-deps section.
+			if v, _, ok := strings.Cut(line, "//"); ok {
+				line = v
+			}
 			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
 		}
 	}

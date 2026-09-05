@@ -216,3 +216,32 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+// Regression for #1489: Taskfile target detection used bare Contains, so
+// tail-suffixed task names (e2e_test:, build-ci:) matched test:/ci: and
+// injected nonexistent verify/lint/format commands into the system prompt.
+func TestDetectCommands_TaskfileSuffixNoFalseHit(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Taskfile.yml"),
+		[]byte("version: '3'\n\ntasks:\n  e2e_test:\n    cmds: [go test ./e2e]\n  build-ci:\n    cmds: [go build]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectLintCommand(dir); got != "" {
+		t.Fatalf("lint must not match e2e_test (no bare test: target), got %q", got)
+	}
+	if got := detectFormatCommand(dir); got != "" {
+		t.Fatalf("format must not match, got %q", got)
+	}
+}
+
+func TestDetectCommands_TaskfileExactTargetStillHits(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Taskfile.yml"),
+		[]byte("version: '3'\n\ntasks:\n  test:\n    cmds: [go test ./...]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info := detectProjectCommands(dir)
+	if info.verify != "task test" {
+		t.Fatalf("exact test: target must still match, got verify=%q", info.verify)
+	}
+}

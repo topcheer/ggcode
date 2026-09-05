@@ -159,3 +159,14 @@ func writeMod(t *testing.T, dir, module string) {
 	t.Helper()
 	writePkgFile(t, filepath.Join(dir, "go.mod"), "module "+module+"\n\ngo 1.26\n")
 }
+
+// Regression for #1489: a trailing // comment on the module line (legal per
+// x/mod's modfile lexer) used to leak into the module path, making every
+// import key mismatch and silently dropping the package-deps section.
+func TestReadModulePath_TrailingComment(t *testing.T) {
+	dir := t.TempDir()
+	writeMod(t, dir, "github.com/foo/bar // internal fork")
+	if got := readModulePath(dir); got != "github.com/foo/bar" {
+		t.Fatalf("module path with trailing comment = %q, want github.com/foo/bar", got)
+	}
+}

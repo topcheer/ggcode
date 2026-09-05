@@ -93,7 +93,7 @@ func detectProjectCommands(workingDir string) projectCommandInfo {
 		if data, err := os.ReadFile(path); err == nil {
 			content := string(data)
 			for _, task := range []string{"verify-ci", "ci", "verify", "test", "build"} {
-				if strings.Contains(content, task+":") {
+				if taskfileHasTarget(content, task) {
 					return projectCommandInfo{verify: "task " + task, lint: lint, format: format}
 				}
 			}
@@ -194,6 +194,20 @@ func projectCommandsSection(workingDir string) string {
 
 // detectLintCommand tries to find the project's lint command.
 // Priority: Makefile/Justfile/Taskfile targets > language-specific defaults.
+// taskfileHasTarget reports whether the Taskfile content defines the given
+// task. Taskfile targets are YAML mapping entries under tasks:, typically
+// indented, so match per line after trimming indentation (#1489: bare
+// Contains made tail-suffixed names e2e_test: match test:).
+func taskfileHasTarget(content, task string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, task+":") {
+			return true
+		}
+	}
+	return false
+}
+
 func detectLintCommand(workingDir string) string {
 	// 1. Build runner targets.
 	for _, mf := range []string{"Makefile", "makefile", "GNUmakefile"} {
@@ -225,7 +239,7 @@ func detectLintCommand(workingDir string) string {
 		if data, err := os.ReadFile(path); err == nil {
 			content := string(data)
 			for _, task := range []string{"lint", "lint-check", "check", "vet"} {
-				if strings.Contains(content, task+":") {
+				if taskfileHasTarget(content, task) {
 					return "task " + task
 				}
 			}
@@ -296,7 +310,7 @@ func detectFormatCommand(workingDir string) string {
 		if data, err := os.ReadFile(path); err == nil {
 			content := string(data)
 			for _, task := range []string{"fmt", "format"} {
-				if strings.Contains(content, task+":") {
+				if taskfileHasTarget(content, task) {
 					return "task " + task
 				}
 			}
