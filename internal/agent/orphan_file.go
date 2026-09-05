@@ -77,6 +77,13 @@ func (o *orphanFileState) reset() {
 	o.callsSince = 0
 	o.integrated = false
 	o.warnings = 0
+	// #1643-1: the Agent lives for the whole session - every write path of
+	// every run accumulated in the map forever (multi_file_write batches
+	// amplify), against the detector's bounded-design intent (newFiles is
+	// capped). Stale entries are always overwritten by the fresh snapshot
+	// before any read (recordPreExec and recordToolCall share the loop and
+	// arguments), so dropping the map costs nothing.
+	o.preExecExisted = nil
 }
 
 // isOrphanSourceFile returns true for file extensions that are typically
