@@ -203,8 +203,9 @@ func rnpCollectNilGuards(body *ast.BlockStmt) map[string][]rnpNilGuard {
 }
 
 // rnpNilCompareIdent checks whether cond is `x == nil`, `nil == x`,
-// `x != nil`, or `nil != x` for a plain identifier x, returning the variable
-// name and whether the comparison is negated (!=).
+// `x != nil`, or `nil != x` for a plain identifier or a field-selector chain
+// rooted at one (x, p.Field, a.b.c), returning the dotted variable name and
+// whether the comparison is negated (!=).
 func rnpNilCompareIdent(cond ast.Expr) (name string, negated, found bool) {
 	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok {
@@ -215,16 +216,35 @@ func rnpNilCompareIdent(cond ast.Expr) (name string, negated, found bool) {
 	}
 	negated = bin.Op == token.NEQ
 	if rnpIsNilIdent(bin.Y) {
-		if id, ok := bin.X.(*ast.Ident); ok {
-			return id.Name, negated, true
+		if n := rnpDottedName(bin.X); n != "" {
+			return n, negated, true
 		}
 	}
 	if rnpIsNilIdent(bin.X) {
-		if id, ok := bin.Y.(*ast.Ident); ok {
-			return id.Name, negated, true
+		if n := rnpDottedName(bin.Y); n != "" {
+			return n, negated, true
 		}
 	}
 	return "", false, false
+}
+
+// rnpDottedName returns the dotted path for an identifier or a chain of
+// field selectors rooted at an identifier (x, p.Field, a.b.c). Empty for
+// anything else (calls, index, type assertions). Selector guards are the
+// most idiomatic Go nil-protection form (#1483): `if p.Field != nil` must
+// guard `for range *p.Field` the same way plain idents do.
+func rnpDottedName(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		base := rnpDottedName(v.X)
+		if base == "" {
+			return ""
+		}
+		return base + "." + v.Sel.Name
+	}
+	return ""
 }
 
 // rnpIsNilIdent reports whether the expression is the nil identifier.
@@ -300,12 +320,11 @@ func rnpHasNilGuard(varName string, rangePos token.Pos, guards map[string][]rnpN
 }
 
 // rnpExprName extracts the variable name from a dereferenced expression.
-// Returns empty string for complex expressions (calls, index, selectors).
+// Returns a dotted path for identifiers and field-selector chains (x,
+// p.Field) matching the guard keys produced by rnpNilCompareIdent, and
+// empty for other complex expressions (calls, index).
 func rnpExprName(expr ast.Expr) string {
-	if ident, ok := expr.(*ast.Ident); ok {
-		return ident.Name
-	}
-	return ""
+	return rnpDottedName(expr)
 }
 
 // rnpFormatPos formats a token.Position for display.
