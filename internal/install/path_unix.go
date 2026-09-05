@@ -25,10 +25,15 @@ const (
 // install".
 func EnsureOnPath(dir string) (bool, error) {
 	changed := false
+	var firstFailure error
+	attempted := 0
 	for _, target := range pathProfileTargets() {
 		before, err := os.ReadFile(target)
 		if err != nil && !os.IsNotExist(err) {
 			debug.Log("install", "path: reading %s: %v", target, err)
+			if firstFailure == nil {
+				firstFailure = fmt.Errorf("reading %s: %w", target, err)
+			}
 			continue
 		}
 		after, err := upsertPathBlock(string(before), dir)
@@ -36,14 +41,26 @@ func EnsureOnPath(dir string) (bool, error) {
 			continue
 		}
 		if after != string(before) {
+			attempted++
 			if err := os.WriteFile(target, []byte(after), 0o644); err != nil {
 				debug.Log("install", "path: writing %s: %v", target, err)
+				if firstFailure == nil {
+					firstFailure = fmt.Errorf("writing %s: %w", target, err)
+				}
 				continue
 			}
 			changed = true
 		}
 	}
-	return changed, nil
+	// #1606-A: swallowing every failure and returning nil made the caller
+	// promise "available in new terminals" with ZERO bytes written to ANY
+	// profile (root-owned rc, read-only home, full disk) - the python
+	// reference fails loudly here. If a write was needed and none landed,
+	// surface the first failure.
+	if !changed && attempted > 0 && firstFailure != nil {
+		return false, firstFailure
+	}
+	return changed, firstFailure
 }
 
 // pathProfileTargets mirrors the python installer: preferred rc files for
