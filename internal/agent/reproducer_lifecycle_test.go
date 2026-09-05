@@ -148,3 +148,18 @@ func TestExtractToolNamesAndInputs(t *testing.T) {
 		t.Fatalf("unexpected inputs: %v", inputs)
 	}
 }
+
+// Regression for #1488: observeText's hasRunTool used to receive "any tool
+// call present", so a read-only iteration that merely said "reproduce" forged
+// the REPRO state. The gate must stay false without a command-executing tool.
+func TestObserveTextRequiresRunTool(t *testing.T) {
+	s := newReproducerLifecycleState()
+	s.observeText(1, "let me reproduce this bug", false)
+	if s.hasReproducer {
+		t.Fatal("text path must not establish REPRO without a run tool")
+	}
+	s.observeText(2, "let me reproduce this bug", true)
+	if !s.hasReproducer {
+		t.Fatal("text path with run tool must establish REPRO")
+	}
+}

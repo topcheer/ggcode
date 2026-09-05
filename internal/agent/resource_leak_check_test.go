@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -89,6 +92,9 @@ func TestCheckResourceLeaks_HTTPBodyProperlyClosed(t *testing.T) {
 	src := `package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 )
@@ -190,6 +196,9 @@ func TestCheckResourceLeaks_MultipleLeaks(t *testing.T) {
 	src := `package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"os"
 )
@@ -313,5 +322,51 @@ func load2() {
 	}
 	if !strings.Contains(w[0], "load2") && !strings.Contains(w[0], "g ") {
 		t.Errorf("warning should name the new leak, got: %s", w[0])
+	}
+}
+
+// Regression for #1488: ownershipTransferred only recognized returns and
+// call args. Struct-field storage (constructor idiom) and channel handoff
+// are the two most common Go ownership transfers and were misreported as
+// leaks.
+func TestOwnershipTransferredFieldStoreAndSend(t *testing.T) {
+	src := `package p
+
+type Server struct{ l net.Listener }
+
+func New(l net.Listener) *Server {
+	s := &Server{}
+	s.l = l
+	return s
+}
+
+func handOff(l net.Conn, ch chan net.Conn) {
+	ch <- l
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "t.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newFn, handFn *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok {
+			switch fn.Name.Name {
+			case "New":
+				newFn = fn
+			case "handOff":
+				handFn = fn
+			}
+		}
+	}
+	if newFn == nil || handFn == nil {
+		t.Fatal("test functions not found")
+	}
+	if !ownershipTransferred(newFn, "l") {
+		t.Fatal("constructor field store (s.l = l) must count as ownership transfer")
+	}
+	if !ownershipTransferred(handFn, "l") {
+		t.Fatal("channel send (ch <- l) must count as ownership transfer")
 	}
 }

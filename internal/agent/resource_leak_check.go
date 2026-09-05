@@ -351,6 +351,31 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 					return false
 				}
 			}
+		case *ast.AssignStmt:
+			// #1488: constructor idiom `srv.l = l` - storing the resource
+			// into another struct's field hands ownership to that owner.
+			// Self-field writes (`l.x = ...`) don't transfer.
+			for _, lhs := range node.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if !ok {
+					continue
+				}
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == base {
+					continue
+				}
+				for _, rhs := range node.Rhs {
+					if exprReferencesIdent(rhs, base) {
+						transferred = true
+						return false
+					}
+				}
+			}
+		case *ast.SendStmt:
+			// #1488: `ch <- l` - the receiver owns the resource now.
+			if exprReferencesIdent(node.Value, base) {
+				transferred = true
+				return false
+			}
 		}
 		return true
 	})

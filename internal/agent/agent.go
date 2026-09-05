@@ -2421,7 +2421,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// lifecycle. If the agent edits after running a reproducer but
 			// never re-runs it, inject guidance to verify the fix.
 			reproToolNames, reproToolInputs := extractToolNamesAndInputs(toolCalls)
-			a.reproducerLifecycle.observeText(i+1, assistantText, len(reproToolNames) > 0)
+			// #1488: the text path's gate must match the tool path's
+			// semantics - reproducer intent counts only when a command-
+			// executing tool ran. Passing "any tool call present" let a
+			// read-only iteration that merely said "reproduce" forge the
+			// REPRO state and later draw edit-without-rerun warnings.
+			reproRan := false
+			for _, tn := range reproToolNames {
+				if reproducerRunToolNames[tn] {
+					reproRan = true
+					break
+				}
+			}
+			a.reproducerLifecycle.observeText(i+1, assistantText, reproRan)
 			a.reproducerLifecycle.observeToolCalls(i+1, reproToolNames, reproToolInputs)
 			if rlHint := a.reproducerLifecycle.checkIncomplete(i + 1); rlHint != "" {
 				debug.Log("agent", "Iteration %d: reproducer lifecycle detector triggered", i+1)
