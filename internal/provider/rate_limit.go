@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -232,6 +233,12 @@ func parseIntSafe(s string, fallback int) int {
 		if err2 != nil {
 			return fallback
 		}
+		// #1617: "Infinity"/"NaN" parse successfully but int() conversion is
+		// implementation-defined garbage - remaining counts scrambled and
+		// bogus critical alerts.
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			return fallback
+		}
 		return int(f)
 	}
 	return n
@@ -247,6 +254,15 @@ func parseDurationSafe(s string) time.Duration {
 	// Try Go duration format first.
 	d, err := time.ParseDuration(s)
 	if err == nil {
+		// #1617: the bare-ms branch below rejects negatives and clamps to
+		// 24h (#664), but the Go-format branch let "-45s"/"876000h" flow
+		// straight into the tracker display.
+		if d <= 0 {
+			return 0
+		}
+		if d > 24*time.Hour {
+			return 24 * time.Hour
+		}
 		return d
 	}
 	// Try raw milliseconds (OpenAI sometimes sends "86400000ms" which

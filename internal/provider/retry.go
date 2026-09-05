@@ -203,6 +203,15 @@ func isRetryable(err error) bool {
 
 	// Fallback: check error message for known non-retryable status codes.
 	msg := err.Error()
+	// #1617-C: bare leading codes ("401 Unauthorized: invalid api key" -
+	// a common wrapper/relay format with no 'HTTP'/'status' prefix) hit
+	// NONE of the containsHTTPStatus forms and defaulted to retryable,
+	// burning the full budget on a permanent auth error. Anchor at start.
+	for _, code := range []string{"400", "401", "402", "403", "404", "422"} {
+		if strings.HasPrefix(msg, code) && (len(msg) == len(code) || msg[len(code)] == ' ') {
+			return false
+		}
+	}
 	if containsHTTPStatus(msg, "401") || containsHTTPStatus(msg, "403") || containsHTTPStatus(msg, "404") {
 		return false
 	}
