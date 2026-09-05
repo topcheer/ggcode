@@ -32,6 +32,7 @@ type documentState struct {
 }
 
 type diagnosticsState struct {
+	version     int // document version these diagnostics were computed against (#1642-1; 0 = untagged)
 	seen        bool
 	diagnostics []Diagnostic
 }
@@ -303,6 +304,11 @@ func (s *sessionClient) refreshDocument(ctx context.Context, uri string) error {
 		return nil
 	}
 	nextVersion := state.version + 1
+	// #1642-1: didChange must drop the cached diagnostics - the next poll
+	// after an edit returned the PRE-EDIT set on first hit (didOpen already
+	// cleared; the asymmetry made the 'still reported after fix' race the
+	// MAIN path, not the out-of-order-push corner).
+	delete(s.diagnostics, uri)
 	if err := s.client.notify(ctx, "textDocument/didChange", map[string]any{
 		"textDocument": map[string]any{
 			"uri":     uri,
@@ -341,7 +347,11 @@ func (s *sessionClient) handleNotification(method string, params json.RawMessage
 		}
 	case "textDocument/publishDiagnostics":
 		var payload struct {
-			URI         string `json:"uri"`
+			URI string `json:"uri"`
+			// #1642-1: LSP 3.15+ publishes the document version the
+			// diagnostics were computed against - the field exists FOR this
+			// race. 0 = absent (servers may omit).
+			Version     int `json:"version"`
 			Diagnostics []struct {
 				Severity int      `json:"severity"`
 				Message  string   `json:"message"`
@@ -362,7 +372,14 @@ func (s *sessionClient) handleNotification(method string, params json.RawMessage
 			})
 		}
 		s.mu.Lock()
-		s.diagnostics[payload.URI] = diagnosticsState{seen: true, diagnostics: diags}
+		// #1642-1: reject STALE pushes - a publish tagged with an older
+		// document version than the one already stored must not overwrite
+		// newer diagnostics (servers may push out of order across edits).
+		if prev, ok := s.diagnostics[payload.URI]; ok && payload.Version > 0 && prev.version > 0 && payload.Version < prev.version {
+			s.mu.Unlock()
+			return
+		}
+		s.diagnostics[payload.URI] = diagnosticsState{seen: true, diagnostics: diags, version: payload.Version}
 		s.lastUsed = time.Now()
 		s.mu.Unlock()
 	}
