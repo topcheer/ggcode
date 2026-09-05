@@ -435,6 +435,13 @@ func (h *TunnelHost) Close() {
 	h.mu.Lock()
 	online := h.onlineBroker
 	ref := h.activeShare
+	// #1501: mirror StopShare's upgrade-manager teardown. Broker.Stop never
+	// touches the P2P transport, so StopSharingGracefully cannot compensate -
+	// without this, a session switch via repl.SetCore with an active
+	// P2P-upgraded share leaked the PeerConnection and negotiation
+	// goroutines for the life of the process.
+	mgr := h.upgradeMgr
+	h.upgradeMgr = nil
 	h.onlineBroker = nil
 	h.projBroker = nil
 	h.projStore = nil
@@ -442,6 +449,10 @@ func (h *TunnelHost) Close() {
 	h.session = nil
 	h.sessionStore = nil
 	h.mu.Unlock()
+
+	if mgr != nil {
+		mgr.Stop()
+	}
 
 	// Stop the active share's tunnel session first (relay connection).
 	if ref != nil && ref.session != nil {
