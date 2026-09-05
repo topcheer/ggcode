@@ -510,8 +510,14 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 				IsError:  b.IsError,
 			})
 		default:
+			// #1647: audio/resource/resource_link arriving without Text were
+			// dropped SILENTLY (the handler declares audio:false - a peer
+			// violating that contract lost data with no trace). Log the drop;
+			// degrade to text when a Text field exists.
 			if b.Text != "" {
 				out = append(out, provider.TextBlock(b.Text))
+			} else {
+				debug.Log("acp-bridge", "dropping non-text content block type=%q (no text fallback)", b.Type)
 			}
 		}
 	}

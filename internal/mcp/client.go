@@ -153,7 +153,16 @@ func NewClient(name, command string, args []string) *Client {
 func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 	transport := strings.ToLower(strings.TrimSpace(cfg.Type))
 	if transport == "" {
-		transport = "stdio"
+		// #1647: URL-only servers (no type, no command) defaulted to
+		// stdio and exec.Command("") failed on every connect - silent
+		// mount failure with no peer-visible signal. A URL with no command
+		// can only be a remote transport.
+		if cfg.Command == "" && strings.TrimSpace(cfg.URL) != "" {
+			transport = "http"
+			debug.Log("mcp-client", "server %s: no type and no command; inferring http from url", cfg.Name)
+		} else {
+			transport = "stdio"
+		}
 	}
 	client := &Client{
 		name:             cfg.Name,
