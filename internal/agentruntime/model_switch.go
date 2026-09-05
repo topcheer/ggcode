@@ -100,9 +100,12 @@ func ApplySessionTokenBudget(agentInst *agent.Agent, cfg *config.Config) {
 	if agentInst == nil || cfg == nil {
 		return
 	}
-	if cfg.SessionTokenBudget > 0 {
-		agentInst.SetSessionTokenBudget(cfg.SessionTokenBudget)
-	}
+	// Always propagate, including 0 (#1494): a config reload that removes
+	// session_token_budget must reset any previously applied explicit
+	// budget, otherwise the old cap survives until restart - the same
+	// always-call semantics ApplyToolCallBudget adopted for the sibling
+	// #543 bug (SetSessionTokenBudget(0) clears the explicit budget).
+	agentInst.SetSessionTokenBudget(cfg.SessionTokenBudget)
 }
 
 // ApplyToolCallBudget propagates the configured tool call budget to the agent.
