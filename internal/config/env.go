@@ -332,6 +332,12 @@ func parseEnvAssignment(line string) (string, string, bool) {
 		if err == nil {
 			return name, unquoted, true
 		}
+		// #1519: strict Unquote fails on embedded escapes that are legal in
+		// shell rc files (Windows paths, regexes: MY_KEY="a\qb"). Falling
+		// through kept the QUOTES as part of the value and auth silently
+		// failed. Strip the delimiters and use the raw interior, matching
+		// the single-quote branch's behavior.
+		return name, value[1 : len(value)-1], true
 	}
 	if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
 		return name, value[1 : len(value)-1], true
