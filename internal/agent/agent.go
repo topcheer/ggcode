@@ -2963,6 +2963,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 				return err
 			}
+			// #1587-A: snapshot write-target existence BEFORE execution -
+			// the orphan detector consumes it post-execution.
+			a.orphanFile.recordPreExec(tc.Name, string(tc.Arguments), a.workingDir)
 			// Track tool call for reflection stats
 			runStats.recordToolCall(tc.Name)
 			a.toolCallBudget.record()

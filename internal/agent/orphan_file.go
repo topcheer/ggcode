@@ -61,6 +61,9 @@ type orphanFileState struct {
 	callsSince int      // tool calls since the last new-file creation
 	integrated bool     // whether any edit to existing file occurred since creation
 	warnings   int      // warnings emitted this run
+	// preExecExisted snapshots write-target existence BEFORE execution
+	// (#1587-A) - post-execution stat'ing is blind to success.
+	preExecExisted map[string]bool
 }
 
 func newOrphanFileState() *orphanFileState {
@@ -93,6 +96,29 @@ func isOrphanSourceFile(path string) bool {
 // new source files, it starts tracking. For edit_file/multi_edit_file on
 // existing files, it marks integration. Returns a warning string if the
 // orphan threshold is reached.
+// recordPreExec snapshots path existence BEFORE the tool runs (#1587-A):
+// the detector's write path consumes this snapshot post-execution, where
+// stat'ing the live filesystem is blind (success implies existence).
+func (o *orphanFileState) recordPreExec(toolName, argsJSON, workingDir string) {
+	if toolName != "write_file" && toolName != "multi_file_write" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.preExecExisted == nil {
+		o.preExecExisted = make(map[string]bool)
+	}
+	for _, path := range extractFilePathsOrArg(argsJSON, toolName) {
+		resolved := path
+		if !filepath.IsAbs(resolved) && workingDir != "" {
+			resolved = filepath.Join(workingDir, resolved)
+		}
+		_, err := os.Stat(resolved)
+		// Key by the SAME raw path recordToolCall extracts.
+		o.preExecExisted[path] = err == nil
+	}
+}
+
 func (o *orphanFileState) recordToolCall(toolName, argsJSON string, iteration int) string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -105,12 +131,17 @@ func (o *orphanFileState) recordToolCall(toolName, argsJSON string, iteration in
 		// warned).
 		paths := extractFilePathsOrArg(argsJSON, toolName)
 		for _, path := range paths {
-			// #1473-A: only track paths that do NOT exist yet - write_file's
-			// documented semantics cover full OVERWRITES too, and rewriting an
-			// existing build file then misreporting it as a 'new source file
-			// not yet integrated' was the detector's most common false alarm.
-			if _, err := os.Stat(path); err == nil {
-				continue // already on disk: an overwrite, not a creation
+			// #1473-A / #1587-A: this runs AFTER execution - a successful
+			// write_file means the file IS on disk now, so the old os.Stat
+			// 'err == nil -> overwrite' skipped EVERY real creation (the
+			// detector never fired on its core scenario), while cwd
+			// misalignment stat'd the RAW relative path and failed into
+			// tracking everything (the #542 false positive the fix claimed
+			// to close). Decide from the PRE-EXECUTION existence snapshot
+			// recorded in recordPreExec; absent snapshot entries default to
+			// not-existed (creation).
+			if o.preExecExisted[path] {
+				continue // existed BEFORE the call: an overwrite, not a creation
 			}
 			if isOrphanSourceFile(path) {
 				o.newFiles = append(o.newFiles, path)

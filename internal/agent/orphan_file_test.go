@@ -147,3 +147,23 @@ func TestOrphanFileMultiFileEditIntegration(t *testing.T) {
 		t.Fatal("multi_file_edit should mark as integrated")
 	}
 }
+
+// TestIssue1587_PreExecSnapshot pins #1587-A: overwrite decisions come
+// from the PRE-execution snapshot, not a post-execution stat (which sees
+// every successful creation as "already on disk" and never tracks).
+func TestIssue1587_PreExecSnapshot(t *testing.T) {
+	o := newOrphanFileState()
+	existing := "/tmp/definitely/existing/note.go"
+	created := "/tmp/definitely/absent/created.go"
+	// Pre-exec: only 'existing' is on disk.
+	o.preExecExisted = map[string]bool{existing: true, created: false}
+	w := o.recordToolCall("write_file", `{"path":"`+existing+`"}`, 1)
+	_ = w
+	if len(o.newFiles) != 0 {
+		t.Fatalf("pre-existing overwrite must NOT be tracked, got %v", o.newFiles)
+	}
+	_ = o.recordToolCall("write_file", `{"path":"`+created+`"}`, 2)
+	if len(o.newFiles) != 1 || o.newFiles[0] != created {
+		t.Fatalf("new creation MUST be tracked (post-exec on-disk state is irrelevant), got %v", o.newFiles)
+	}
+}
