@@ -57,9 +57,13 @@ func TestAmbiguityPointDetection(t *testing.T) {
 			wantMsg: true,
 		},
 		{
+			// #1521: bare 'recent' dropped per #1438-A - the phrase shape
+			// "recent entries" below the bare entry never matched, and the
+			// bare word flagged ordinary sentences like "check the recent
+			// commits". Reversed expectation.
 			name:    "vague quantity recent",
 			prompt:  "Show me the recent entries from the log",
-			wantMsg: true,
+			wantMsg: false,
 		},
 		{
 			name:    "simplify vague direction",
@@ -237,5 +241,25 @@ func TestAmbiguityPointCJKAndGate(t *testing.T) {
 	a2 := &Agent{ambiguityPoint: newAmbiguityPointState()}
 	if msg := a2.checkAmbiguityPoints("make it better"); msg == "" {
 		t.Fatal("short vague direction missed (gate overshot)")
+	}
+}
+
+// Regression for #1521: #1438-A claimed bare latest/recent were dropped but
+// left them in place - "upgrade to the latest version" kept hitting the
+// quantity suggestion, and the new phrase shapes were unreachable (bare
+// word matched first, category dedup ate the phrases).
+func TestAmbiguityBareLatestRecentDropped(t *testing.T) {
+	a := &Agent{ambiguityPoint: newAmbiguityPointState()}
+	if w := a.checkAmbiguityPoints("upgrade to the latest version"); w != "" {
+		t.Fatalf("bare 'latest' must not fire: %s", w)
+	}
+	a2 := &Agent{ambiguityPoint: newAmbiguityPointState()}
+	if w := a2.checkAmbiguityPoints("check the recent commits"); w != "" {
+		t.Fatalf("bare 'recent' must not fire: %s", w)
+	}
+	// The phrase shapes remain live now that the bare words are gone.
+	a3 := &Agent{ambiguityPoint: newAmbiguityPointState()}
+	if w := a3.checkAmbiguityPoints("show me the latest items"); w == "" {
+		t.Fatal("'latest items' phrase shape must still fire")
 	}
 }

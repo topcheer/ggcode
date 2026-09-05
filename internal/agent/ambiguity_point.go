@@ -132,8 +132,10 @@ var ambiguityPatterns = []struct {
 	// Vague quantity
 	{"some of the", ambQuantityVague, "how many items, and by what criteria"},
 	{"a few", ambQuantityVague, "the exact count or selection criteria"},
-	{"recent", ambQuantityVague, "the time window or count for 'recent'"},
-	{"latest", ambQuantityVague, "how many of the latest items"},
+	// #1521: bare 'recent'/'latest' finally dropped per the #1438-A comment
+	// below - they were left in place (half-done fix) while the new phrase
+	// shapes were unreachable behind them (bare word matched first, then
+	// category dedup ate the phrases).
 	// #1438-A: bare 'latest'/'better' are extremely common ordinary
 	// words - 'upgrade to the latest version' has NO quantity ambiguity
 	// yet hit the quantity suggestion (category mismatch). Narrowed to
