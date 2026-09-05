@@ -265,10 +265,15 @@ func hubNearestGoMod(dir, root string) (modRoot, modName string, ok bool) {
 // many internal packages import each package. Time-budgeted to avoid blocking
 // the agent loop on large monorepos.
 func hubComputeFanIn(root, modulePath string) map[string]int {
-	deadline := time.Now().Add(hubPackageFanInBudget)
 	fanIn := make(map[string]int)
 
 	// Collect directories containing non-test .go files.
+	// #1634: the deadline is set AFTER the walk - set at the entry it
+	// charged the 200ms budget against the UNCAPPED directory walk itself
+	// (slow disks / huge repos), the counting loop broke on its first
+	// check, and the session-cached EMPTY fanIn map permanently silenced
+	// the guard (advisory hints never fire). The walk is a one-time
+	// session cost by design; the budget bounds the per-package parsing.
 	var pkgDirs []string
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d == nil {
@@ -291,6 +296,7 @@ func hubComputeFanIn(root, modulePath string) map[string]int {
 		return nil
 	})
 
+	deadline := time.Now().Add(hubPackageFanInBudget)
 	// Parse imports from each package and count edges to internal packages.
 	// #1614-A: each package dir is keyed by its NEAREST go.mod module, not
 	// just the root - a nested module's intra-module imports carry ITS OWN
