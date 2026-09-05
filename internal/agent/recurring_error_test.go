@@ -411,3 +411,16 @@ func TestMaxFingerprintLines(t *testing.T) {
 		t.Logf("fingerprints match (fp=%s) — maxFingerprintLines may exclude the 4th line", fp1)
 	}
 }
+
+// Regression for #1486: bare substring markers ("fail", "expected") occur in
+// PASS lines of healthy runs (--- PASS: TestFailover). hasErrorMarkers must
+// not flag green build output as errors.
+func TestHasErrorMarkersIgnoresPassLines(t *testing.T) {
+	green := "=== RUN   TestFailover\n--- PASS: TestFailover (0.00s)\n--- PASS: TestExpectedOutput (0.01s)\nPASS\nok  \texample.com/pkg\t0.5s"
+	if hasErrorMarkers(green) {
+		t.Fatal("green build output with TestFail*/TestExpected* names must not be flagged as error")
+	}
+	if !hasErrorMarkers("--- FAIL: TestSomething (0.00s)\n    expected 3, got 4") {
+		t.Fatal("real failure output must still be flagged")
+	}
+}

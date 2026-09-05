@@ -272,6 +272,18 @@ func (s *redundantReverifyState) recordEdit(toolName string) {
 	}
 }
 
+// recordShellSourceMutation bumps the edit counter for run_command shells
+// that rewrote source files (#1486). The command cache already invalidates
+// on the same heuristic (agent.go shellMutatesSources), so a re-run genuinely
+// can produce new information - without this bump the detector kept asserting
+// "running it again cannot produce new information" right after a sed -i,
+// contradicting the cache's own judgment on the identical change.
+func (s *redundantReverifyState) recordShellSourceMutation() {
+	for _, run := range s.lastRun {
+		run.editsSince++
+	}
+}
+
 func (a *Agent) maybeWarnRedundantReverify(_ string) string {
 	return "" // detection is inline in recordToolCall because it needs the tool result
 }

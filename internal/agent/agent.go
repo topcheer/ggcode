@@ -3180,6 +3180,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.speculator.invalidateCache()
 					a.toolMemo.invalidateTTLBased()
 					a.commandCache.invalidate()
+					// #1486: the shell rewrote sources, so re-running a build/test
+					// CAN produce new information - keep the reverify detector in
+					// agreement with the caches we just invalidated.
+					a.redundantReverify.recordShellSourceMutation()
 					debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
 				}
 			}

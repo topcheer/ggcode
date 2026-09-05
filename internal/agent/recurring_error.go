@@ -330,5 +330,18 @@ func hasErrorMarkers(output string) bool {
 		return false
 	}
 	lower := strings.ToLower(output)
-	return errorContainsAny(lower, errorLineMarkers...)
+	// #1486: bare substring markers like "fail"/"expected" also occur in
+	// PASS lines and test-name lines of healthy runs (--- PASS:
+	// TestFailover, === RUN TestExpectedOutput). Drop those lines before
+	// marker matching so green builds are not recounted as errors.
+	var kept []string
+	for _, line := range strings.Split(lower, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "--- pass") || strings.HasPrefix(t, "ok  ") ||
+			strings.HasPrefix(t, "=== run") || t == "pass" {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return errorContainsAny(strings.Join(kept, "\n"), errorLineMarkers...)
 }

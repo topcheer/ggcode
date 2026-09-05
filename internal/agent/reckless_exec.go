@@ -1,6 +1,9 @@
 package agent
 
-import "os"
+import (
+	"encoding/json"
+	"os"
+)
 
 // reckless_exec.go -- Reckless Execution Detector
 //
@@ -108,6 +111,15 @@ func (s *recklessExecState) recordEditTool(toolName, args string) bool {
 		return false
 	}
 
+	// #1486: newly created files cannot have been read before they existed.
+	// The sibling unread-edit guard exempts them via extractCreateFilePaths;
+	// this detector lacked the same channel and flagged routine scaffolding
+	// (fixtures, helpers) as "editing files you haven't read".
+	created := map[string]bool{}
+	for _, p := range extractCreateFilePaths(toolName, json.RawMessage(args)) {
+		created[recklessPathKey(p)] = true
+	}
+
 	for _, path := range recklessExtractPaths(toolName, args) {
 		key := recklessPathKey(path)
 		if s.editFiles[key] {
@@ -118,7 +130,7 @@ func (s *recklessExecState) recordEditTool(toolName, args string) bool {
 		// Check if this file was previously explored (#1169: compare
 		// normalized forms so an absolute read and a relative edit of the
 		// same file count as explored).
-		if !s.wasExplored(key) {
+		if !s.wasExplored(key) && !created[key] {
 			s.unexplored++
 		}
 	}

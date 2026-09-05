@@ -202,3 +202,18 @@ func TestReverifyTextOpsNotVerification(t *testing.T) {
 		t.Fatal("genuine redundant re-run not flagged")
 	}
 }
+
+// Regression for #1486: a shell source mutation (sed -i) must bump
+// editsSince so a re-run is not branded "cannot produce new information" -
+// the command cache already invalidates on the same heuristic.
+func TestRecordShellSourceMutationSuppressesReverifyWarning(t *testing.T) {
+	s := newRedundantReverifyState()
+	args := `{"command":"go test ./..."}`
+	if w := s.recordToolCall("run_command", args, 1, false); w != "" {
+		t.Fatalf("first run must not warn: %s", w)
+	}
+	s.recordShellSourceMutation()
+	if w := s.recordToolCall("run_command", args, 2, false); w != "" {
+		t.Fatalf("re-run after shell source mutation must not warn (source changed): %s", w)
+	}
+}

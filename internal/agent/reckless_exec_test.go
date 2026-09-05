@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -144,5 +145,18 @@ func TestRecklessExec_Warning(t *testing.T) {
 	}
 	if !strings.Contains(msg, "reckless-exec") {
 		t.Fatal("warning should contain tag")
+	}
+}
+
+// Regression for #1486: newly created files cannot have been read before they
+// existed. recordEditTool must not count them as unexplored (the sibling
+// unread-edit guard has always exempted them).
+func TestRecordEditToolExemptsCreatedFiles(t *testing.T) {
+	s := newRecklessExecState()
+	for _, path := range []string{"/w/new_helper.go", "/w/fixture_data.json"} {
+		args := fmt.Sprintf(`{"path":%q,"content":"x"}`, path)
+		if s.recordEditTool("write_file", args) {
+			t.Fatalf("creating new file %s must not trigger unexplored warning", path)
+		}
 	}
 }
