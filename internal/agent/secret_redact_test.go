@@ -220,3 +220,22 @@ func TestRedactSecrets_GitLabToken(t *testing.T) {
 		t.Errorf("GitLab token should be redacted, got: %s", result)
 	}
 }
+
+// Regression for #1491: multi_file_write and batch_replace are equivalent
+// write entry points; omitting them from the redaction guard let agents
+// bypass the placeholder check by switching tools.
+func TestIsFileWriteToolCoversAllWriteEntries(t *testing.T) {
+	for _, name := range []string{
+		"edit_file", "write_file", "multi_edit_file", "multi_file_edit",
+		"multi_file_write", "batch_replace", "notebook_edit",
+	} {
+		if !isFileWriteTool(name) {
+			t.Errorf("isFileWriteTool(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"read_file", "grep", "run_command"} {
+		if isFileWriteTool(name) {
+			t.Errorf("isFileWriteTool(%q) = true, want false", name)
+		}
+	}
+}

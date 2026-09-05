@@ -78,7 +78,12 @@ var redactedMarkerRe = regexp.MustCompile(`\[REDACTED:[a-z_]+\]`)
 // a REDACTED marker would corrupt the file.
 func isFileWriteTool(toolName string) bool {
 	switch toolName {
-	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit", "notebook_edit":
+	// #1491: multi_file_write and batch_replace are equivalent write entry
+	// points - omitting them let redacted placeholders reach disk through
+	// either tool and destroy the real secret, the exact corruption the
+	// guard exists to prevent (agent could bypass by switching tools).
+	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
+		"multi_file_write", "batch_replace", "notebook_edit":
 		return true
 	default:
 		return false

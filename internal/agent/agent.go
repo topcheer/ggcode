@@ -3766,7 +3766,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.appendGuidance(&result, propGuidance)
 			}
 			// Scope drift: track productive file edits for semantic scope creep.
-			a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			// #1491: gate on success like the sibling driftRecurrenceRecord
+			// below and the #495/#953 pattern at 4067 - failed edits (old_text
+			// mismatch, denied) never changed anything and must not inflate
+			// productiveCount/editFiles/editedDirs.
+			if !result.IsError {
+				a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			}
 			// Drift recurrence: track edits and verifications relative to any drift warning.
 			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
 			// Last-known-good checkpoint: track edits for revert targeting.
