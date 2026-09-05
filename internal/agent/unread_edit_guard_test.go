@@ -204,14 +204,14 @@ func TestExtractCreateFilePaths(t *testing.T) {
 	})
 
 	t.Run("batch_replace", func(t *testing.T) {
+		// #1520: batch_replace rewrites EXISTING files - never "created".
 		args, _ := json.Marshal(map[string]any{
 			"files":       []any{"/x/y.go"},
 			"pattern":     "a",
 			"replacement": "b",
 		})
-		paths := extractCreateFilePaths("batch_replace", args)
-		if len(paths) != 1 || paths[0] != "/x/y.go" {
-			t.Fatalf("expected [/x/y.go], got %v", paths)
+		if paths := extractCreateFilePaths("batch_replace", args); len(paths) != 0 {
+			t.Fatalf("batch_replace files must not be created, got %v", paths)
 		}
 	})
 }
@@ -429,5 +429,19 @@ func TestStaleRead_OwnEditNotFlagged(t *testing.T) {
 	s.recordWrite(p) // agent's own edit — refreshes baseline to now
 	if hint := s.checkStaleRead(p); hint != "" {
 		t.Fatalf("own-edit refresh must not warn: %q", hint)
+	}
+}
+
+// Regression for #1520: batch_replace's files[] are EXISTING files being
+// batch-modified - they must NOT be recorded as "created" (recordCreated
+// made later edits skip both the unread and stale-read checks).
+func TestExtractCreateFilePathsExcludesBatchReplace(t *testing.T) {
+	args := `{"pattern":"X","replacement":"Y","files":["/w/a.go","/w/b.go"]}`
+	if got := extractCreateFilePaths("batch_replace", json.RawMessage(args)); len(got) != 0 {
+		t.Fatalf("batch_replace files must not be treated as created, got %v", got)
+	}
+	// Sanity: write_file still creates.
+	if got := extractCreateFilePaths("write_file", json.RawMessage(`{"path":"/w/new.go","content":"x"}`)); len(got) != 1 {
+		t.Fatalf("write_file must still extract created path, got %v", got)
 	}
 }

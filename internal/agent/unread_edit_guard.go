@@ -355,16 +355,12 @@ func extractCreateFilePaths(toolName string, args json.RawMessage) []string {
 			}
 			return paths
 		}
-	case "batch_replace":
-		if files, ok := m["files"].([]any); ok {
-			var paths []string
-			for _, f := range files {
-				if s, ok := f.(string); ok {
-					paths = append(paths, s)
-				}
-			}
-			return paths
-		}
+		// #1520: batch_replace deliberately NOT treated as "created" - its
+		// files[] are EXISTING files being batch-modified. Recording them via
+		// recordCreated (the mutatesSourceTree branch in agent.go) made every
+		// later edit_file on those files skip BOTH the unread and the stale-read
+		// checks (filesCreated short-circuits both). write_file/multi_file_write
+		// create; batch_replace only rewrites existing files.
 	}
 	return nil
 }

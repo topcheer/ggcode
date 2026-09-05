@@ -382,11 +382,13 @@ func TestExtractEditFilePaths_BatchReplace(t *testing.T) {
 	}
 }
 
+// #1520: batch_replace files[] are EXISTING files (pattern replacement
+// cannot create); recording them as "created" made later edits skip both
+// the unread and stale-read guards. Reversed expectation.
 func TestExtractCreateFilePaths_BatchReplace(t *testing.T) {
 	args := json.RawMessage(`{"files": ["/x/y.go"], "pattern": "a", "replacement": "b"}`)
-	paths := extractCreateFilePaths("batch_replace", args)
-	if len(paths) != 1 || paths[0] != "/x/y.go" {
-		t.Errorf("unexpected paths: %v", paths)
+	if paths := extractCreateFilePaths("batch_replace", args); len(paths) != 0 {
+		t.Errorf("batch_replace files must not be treated as created, got: %v", paths)
 	}
 }
 
