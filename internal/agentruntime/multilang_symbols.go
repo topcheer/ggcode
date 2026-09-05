@@ -108,7 +108,7 @@ func skipScanDir(name string) bool {
 // TS/JS export patterns.
 // Matches: export function foo, export const bar, export class Baz, export type Qux
 var (
-	tsExportFuncRe  = regexp.MustCompile(`^\s*export\s+(?:async\s+)?function\s+(\w+)`)
+	tsExportFuncRe  = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:async\s+)?function\s+(\w+)`)
 	tsExportClassRe = regexp.MustCompile(`^\s*export\s+(?:default\s+)?(?:abstract\s+)?class\s+(\w+)`)
 	tsExportTypeRe  = regexp.MustCompile(`^\s*export\s+(?:type|interface|enum)\s+(\w+)`)
 	tsExportConstRe = regexp.MustCompile(`^\s*export\s+(?:const|let|var)\s+(\w+)`)
@@ -388,7 +388,7 @@ func extractTSSymbols(dir string, deadline time.Time) ([]string, int) {
 
 // Python patterns.
 var (
-	pyFuncRe  = regexp.MustCompile(`^\s*def\s+(\w+)`)
+	pyFuncRe  = regexp.MustCompile(`^\s*(?:async\s+)?def\s+(\w+)`)
 	pyClassRe = regexp.MustCompile(`^\s*class\s+(\w+)`)
 )
 

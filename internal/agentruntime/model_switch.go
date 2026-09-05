@@ -42,9 +42,35 @@ func ActivateCurrentSelection(cfg *config.Config, vendor, endpoint, model string
 		return nil, nil, fmt.Errorf("config is nil")
 	}
 	if vendor != "" || endpoint != "" || model != "" {
+		// #1487: snapshot the active selection before SetActiveSelection
+		// rewrites it, so a failed Resolve can roll back. Without this, a
+		// switch to a model whose API key is missing (or a vendor returning
+		// 401) left cfg pointing at the broken choice - later provider
+		// rebuilds (ensureProviderSync, daemon restart, config reload) then
+		// failed against it, taking down the previously working provider too.
+		oldVendor, oldEndpoint, oldModel := cfg.Vendor, cfg.Endpoint, cfg.Model
+		var oldSel string
+		if vc, ok := cfg.Vendors[vendor]; ok {
+			if ep, ok2 := vc.Endpoints[endpoint]; ok2 {
+				oldSel = ep.SelectedModel
+			}
+		}
 		if err := cfg.SetActiveSelection(vendor, endpoint, model); err != nil {
 			return nil, nil, err
 		}
+		resolved, prov, rerr := ResolveCurrentSelection(cfg)
+		if rerr != nil {
+			cfg.Vendor, cfg.Endpoint, cfg.Model = oldVendor, oldEndpoint, oldModel
+			if vc, ok := cfg.Vendors[vendor]; ok {
+				if ep, ok2 := vc.Endpoints[endpoint]; ok2 {
+					ep.SelectedModel = oldSel
+					vc.Endpoints[endpoint] = ep
+					cfg.Vendors[vendor] = vc
+				}
+			}
+			return nil, nil, rerr
+		}
+		return resolved, prov, nil
 		// NOTE: cfg.Save() was intentionally removed.
 		// Model selection is now session-scoped — the session JSONL is the
 		// source of truth, not the config file. Callers are responsible for

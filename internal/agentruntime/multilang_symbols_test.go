@@ -212,3 +212,24 @@ func mustWriteFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// Regression for #1487: pyFuncRe had no async prefix so every public
+// `async def` was invisible to symbol extraction; tsExportFuncRe missed
+// named `export default function` while the class regex allowed default.
+func TestSymbolRegexesAsyncAndDefaultExport(t *testing.T) {
+	if !pyFuncRe.MatchString("async def main():") {
+		t.Fatal("async def must match pyFuncRe")
+	}
+	if !pyFuncRe.MatchString("def main():") {
+		t.Fatal("plain def must still match pyFuncRe")
+	}
+	if m := pyFuncRe.FindStringSubmatch("    async def run(self):"); m == nil || m[1] != "run" {
+		t.Fatalf("async def capture broken: %v", m)
+	}
+	if !tsExportFuncRe.MatchString("export default function App() {}") {
+		t.Fatal("named export default function must match")
+	}
+	if !tsExportFuncRe.MatchString("export async function work() {}") {
+		t.Fatal("export async function must still match")
+	}
+}
