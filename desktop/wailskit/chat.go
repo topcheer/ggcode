@@ -4414,9 +4414,13 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		b.persistSession = b.currentSes
 	}
 	b.mu.Unlock()
-	if cur := b.currentRunGeneration(); cur != runGen { // #504: superseded during init — guard emits against the new generation
-		runGen = cur
-	}
+	// #1511: do NOT refresh runGen here. The old #504 re-assignment upgraded
+	// a superseded run to the new generation so its late stream events
+	// passed the emitIfCurrent staleness check and leaked into the NEW
+	// session's liveHistory - the exact inversion of the guard's own
+	// comment ("guard emits against the new generation"). Keep the entry-
+	// claimed generation; emitIfCurrent drops stale events, matching the
+	// text main path which never re-assigns.
 
 	if b.currentSes != nil {
 		msg := provider.Message{Role: "user", Content: content}
