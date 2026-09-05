@@ -2,6 +2,7 @@ package commands
 
 import (
 	"testing"
+	"time"
 )
 
 func TestNewManager(t *testing.T) {
@@ -116,5 +117,22 @@ func TestManager_UserSlashCommands(t *testing.T) {
 	cmds := m.UserSlashCommands()
 	if cmds == nil {
 		t.Error("expected non-nil")
+	}
+}
+
+// Regression for #1513: SkillNames held m.mu.RLock while combinedCommands
+// takes m.mu.Lock internally - RWMutex is not reentrant, so every skill
+// search deadlocked. The test calls SkillNames with a timeout guard.
+func TestSkillNamesNoSelfDeadlock(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	done := make(chan []string, 1)
+	go func() {
+		done <- mgr.SkillNames()
+	}()
+	select {
+	case names := <-done:
+		_ = names // returned without deadlock
+	case <-time.After(5 * time.Second):
+		t.Fatal("SkillNames deadlocked (RLock vs internal Lock)")
 	}
 }

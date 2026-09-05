@@ -87,8 +87,12 @@ func (m *Manager) RecordUsage(name string) {
 // SkillNames returns the names of all enabled, model-invocable skills.
 // Used by the skill tool for fuzzy name matching.
 func (m *Manager) SkillNames() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// #1513: no RLock here. combinedCommands takes m.mu.Lock() internally
+	// (ApplyDisabledState, 32cb3dd6), and RWMutex is not reentrant - holding
+	// the read lock across that call deadlocked every skill search
+	// (skill '?keyword' and fuzzy suggestions, via interactive_core's
+	// NameLister). combinedCommands returns a snapshot; name/cmd reads
+	// below operate on that local copy and need no lock.
 	cmds := m.combinedCommands()
 	names := make([]string, 0, len(cmds))
 	for name, cmd := range cmds {
