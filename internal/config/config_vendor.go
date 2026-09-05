@@ -484,6 +484,25 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 	if vc.Endpoints == nil {
 		vc.Endpoints = make(map[string]EndpointConfig)
 	}
+	// #1517: the function comment says "If the endpoint already exists it
+	// is UPDATED" - but a fresh struct replaced it wholesale, wiping
+	// Models/DefaultModel/SelectedModel/ContextWindow/APIKey and more.
+	// Users changing only base_url via 'config set' lost their API key
+	// reference and discovered models, and clearing the active endpoint's
+	// SelectedModel broke resolution. Merge onto the existing endpoint,
+	// updating only the non-zero incoming fields.
+	if existing, ok := vc.Endpoints[endpointName]; ok {
+		if ep.Protocol != "" {
+			existing.Protocol = ep.Protocol
+		}
+		if ep.BaseURL != "" {
+			existing.BaseURL = ep.BaseURL
+		}
+		if ep.APIKey != "" {
+			existing.APIKey = ep.APIKey
+		}
+		ep = existing
+	}
 	vc.Endpoints[endpointName] = ep
 	c.Vendors[vendor] = vc
 	return nil

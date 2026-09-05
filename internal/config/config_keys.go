@@ -91,6 +91,13 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	} else {
 		envVarName := preferredEndpointAPIKeyEnvVar(vendor, "default")
 		os.Setenv(envVarName, apiKey)
+		// #1517: #1435 fixed this exact class for AddVendor/AddEndpoint
+		// but missed SetVendorAPIKey - the key lived only in process env,
+		// worked until restart, then NeedsOnboard forced re-onboarding on
+		// every fresh terminal. Persist like the siblings.
+		if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
+			return fmt.Errorf("persisting API key for vendor %s: %w", vendor, err)
+		}
 		vc.APIKey = "${" + envVarName + "}"
 	}
 	c.Vendors[vendor] = vc
