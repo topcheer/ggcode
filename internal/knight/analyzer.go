@@ -691,7 +691,11 @@ func buildCorrectionSkillName(text string) string {
 	var parts []string
 	for _, w := range words {
 		w = strings.Trim(w, "，。,.!?！？、")
-		if len(w) > 2 && len(w) < 15 {
+		// #1604-D: byte-length gate vs the rune-length gate upstream - a
+		// 5-hanzi word is 15 BYTES and already failed, so CJK correction
+		// names never assembled and real corrections dropped silently.
+		rw := []rune(w)
+		if len(rw) > 2 && len(rw) < 15 {
 			parts = append(parts, sanitizeName(w))
 		}
 		if len(parts) >= 3 {

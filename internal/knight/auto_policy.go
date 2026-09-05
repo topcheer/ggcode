@@ -17,6 +17,14 @@ type AutoPolicy struct {
 	Reason    string
 }
 
+// trustCanWrite reports whether the trust level grants write access
+// (#1604-E): 'trust != "readonly"' was fail-open - any unrecognized value
+// (typo, future level) granted write policies; the promotion branch
+// already used an exact 'trust == "auto"'. Whitelist instead.
+func trustCanWrite(trust string) bool {
+	return trust == "staged" || trust == "auto"
+}
+
 func (k *Knight) AutoPolicies() []AutoPolicy {
 	trust := strings.ToLower(strings.TrimSpace(k.cfg.TrustLevel))
 	if trust == "" {
@@ -68,12 +76,12 @@ func (k *Knight) AutoPolicies() []AutoPolicy {
 		p := &policies[i]
 		switch p.Name {
 		case "skill metadata sync":
-			p.Effective = trust != "readonly"
+			p.Effective = trustCanWrite(trust)
 			if !p.Effective {
 				p.Reason = fmt.Sprintf("disabled because trust_level=%s; metadata sync requires write access", trust)
 			}
 		case "prompt-signal skill tuning":
-			p.Effective = trust != "readonly" && hasCap("skill_creation")
+			p.Effective = trustCanWrite(trust) && hasCap("skill_creation")
 			if !p.Effective {
 				if trust == "readonly" {
 					p.Reason = "disabled because trust_level=readonly"
@@ -94,7 +102,7 @@ func (k *Knight) AutoPolicies() []AutoPolicy {
 				}
 			}
 		case "project improvement proposal":
-			p.Effective = trust != "readonly"
+			p.Effective = trustCanWrite(trust)
 			if !p.Effective {
 				p.Reason = "disabled because trust_level=readonly cannot persist proposals"
 			}
