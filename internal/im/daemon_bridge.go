@@ -692,10 +692,21 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 	case <-ctx.Done():
 		debug.Log("daemon", "approval: context cancelled for tool=%s", toolName)
 		b.mu.Lock()
+		cleared := false
 		if b.pendingApproval == ch { // #655: compare-then-clear, not blind wipe
 			b.pendingApproval = nil
+			cleared = true
 		}
 		b.mu.Unlock()
+		// #1656: with no question-correlation on TEXT replies (buttons
+		// have interactiveMsgIDs; text has nothing), a late "y" typed at
+		// the STALE on-screen prompt auto-approved whatever question was
+		// registered NEXT. Closing the ambiguity window at the source:
+		// when THIS question's registration dies, tell the user the
+		// prompt is void - a visible stop sign on the stale screen.
+		if cleared {
+			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
+		}
 		return permission.Deny
 	}
 }
