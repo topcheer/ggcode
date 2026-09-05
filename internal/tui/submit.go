@@ -219,8 +219,20 @@ func (m *Model) runAgentSubmission(ctx context.Context, runID int, text string, 
 			userModel := m.config.Model
 			debug.Log("tui", "vision fallback: turn-scoped switch to %s (user model: %s)", vm, userModel)
 			if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, vm); err == nil {
-				if err := m.tryActivateCurrentSelection(); err == nil {
-					defer m.restoreUserModelAfterVisionTurn(userModel)
+				// Restore is registered IMMEDIATELY after the in-memory switch
+				// succeeds: tryActivateCurrentSelection can still fail below,
+				// and without this defer the vision model would leak into
+				// config.Model permanently (possibly persisted by a later
+				// config save), violating the turn-scoped guarantee.
+				defer m.restoreUserModelAfterVisionTurn(userModel)
+				if err := m.tryActivateCurrentSelection(); err != nil {
+					// Activation failed: restore synchronously so the
+					// text-only fallthrough below runs on the user's model,
+					// not on a half-switched selection. The deferred restore
+					// is idempotent and becomes a no-op.
+					m.restoreUserModelAfterVisionTurn(userModel)
+					debug.Log("tui", "vision fallback: activation failed, restored user model: %v", err)
+				} else {
 					streamErrSent, err := m.runAgentWithContent(ctx, runID, buildAgentSubmissionContent(text, imgs, true))
 					if err == nil || errors.Is(err, context.Canceled) {
 						return err
@@ -644,26 +656,13 @@ func (m *Model) activeEndpointSupportsVision() bool {
 }
 
 // temporaryVisionModelForTurn selects a vision-capable model from the active
-// endpoint's model list for a turn-scoped switch. The reference window is
-// the active model's context window so the existing conversation fits.
-// Returns "" when no comparable vision model exists.
+// endpoint's model list for a turn-scoped switch. Returns "" when the active
+// model already supports vision or no comparable vision model exists.
 func (m *Model) temporaryVisionModelForTurn() string {
 	if m.config == nil {
 		return ""
 	}
-	vc, ok := m.config.Vendors[m.config.Vendor]
-	if !ok {
-		return ""
-	}
-	ep, ok := vc.Endpoints[m.config.Endpoint]
-	if !ok || len(ep.Models) == 0 {
-		return ""
-	}
-	ref := 0
-	if resolved, err := m.config.ResolveActiveEndpoint(); err == nil && resolved != nil {
-		ref = resolved.ContextWindow
-	}
-	return agentruntime.SelectVisionModel(ep.Models, ref)
+	return agentruntime.VisionTurnModel(m.config)
 }
 
 // restoreUserModelAfterVisionTurn restores the user's model after a

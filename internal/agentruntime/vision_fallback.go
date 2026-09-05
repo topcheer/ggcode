@@ -6,6 +6,29 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// VisionTurnModel selects a vision-capable model from cfg's ACTIVE endpoint
+// for a turn-scoped switch. Returns "" when the active model already supports
+// vision (no switch needed) or no comparable candidate exists. The reference
+// window is the active model's context window, mirroring SelectVisionModel.
+func VisionTurnModel(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil || resolved == nil || resolved.SupportsVision {
+		return ""
+	}
+	vc, ok := cfg.Vendors[cfg.Vendor]
+	if !ok {
+		return ""
+	}
+	ep, ok := vc.Endpoints[cfg.Endpoint]
+	if !ok || len(ep.Models) == 0 {
+		return ""
+	}
+	return SelectVisionModel(ep.Models, resolved.ContextWindow)
+}
+
 // SelectVisionModel picks a vision-capable model from the given model list
 // for a turn-scoped switch when the user's model cannot accept images.
 //

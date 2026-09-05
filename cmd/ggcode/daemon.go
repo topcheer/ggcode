@@ -73,7 +73,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("persisting Claude MCP servers: %w", err)
 			}
 
-			// If --__daemonized, skip fork logic — we ARE the daemonized child
+			// If --__daemonized, skip fork logic - we ARE the daemonized child
 			newSession, _ := cmd.Flags().GetBool("new-session")
 			if daemonized, _ := cmd.Flags().GetBool("__daemonized"); daemonized {
 				noIM, _ := cmd.Flags().GetBool("__no-im")
@@ -179,7 +179,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Knight agent (created later but referenced via closure)
 	var knightAgent *knight.Knight
 
-	// Knight uses a different factory signature — it doesn't need provider/tools
+	// Knight uses a different factory signature - it doesn't need provider/tools
 	// passed each time because it creates its own agent for analysis tasks.
 	knightFactory := func(systemPrompt string, maxTurns int, onUsage func(provider.TokenUsage)) (knight.AgentRunner, error) {
 		a := agent.NewAgent(knightProv, registry, systemPrompt, maxTurns)
@@ -330,7 +330,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Daemon has no TUI for interactive prompts. BypassMode and AutoMode
 	// auto-approve by design. SupervisedMode is intentionally mapped to
 	// Allow here because the IM approval flow (ask_user tool) handles
-	// user confirmation at a higher level — the agent decides when to
+	// user confirmation at a higher level - the agent decides when to
 	// ask via ask_user, not via the permission system's Ask callback.
 	// See docs/design/daemon-permission-model.md for rationale.
 	ag.SetApprovalHandler(func(_ context.Context, toolName string, input string) permission.Decision {
@@ -487,7 +487,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("acquiring session lock for %s (fail-closed; refusing to run lockless): %w", short, lockErr)
 		} else if lock != nil && !lock.Acquired() {
 			pid := lock.HolderPID()
-			// #882: guard short session IDs — root.go guards the same slice;
+			// #882: guard short session IDs - root.go guards the same slice;
 			// a corrupted short ID must not panic the daemon here.
 			short := ses.ID
 			if len(short) > 8 {
@@ -516,7 +516,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Bind tunnel host to session for projection recording
 	core.Tunnel.BindSession(ses, store)
 
-	// Wire checkpoint handler — persist compacted state after summarize
+	// Wire checkpoint handler - persist compacted state after summarize
 	ag.SetCheckpointHandler(func(summaryMsgID, lastMsgID string, tokenCount int) {
 		if err := store.AppendCheckpoint(ses, summaryMsgID, lastMsgID, tokenCount); err != nil {
 			debug.Log("daemon", "checkpoint save failed: %v", err)
@@ -571,7 +571,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	}
 
-	// Cron tools — enqueue fires the prompt as a user message via the
+	// Cron tools - enqueue fires the prompt as a user message via the
 	// daemon bridge. If queue_if_busy=false (default) and agent is busy,
 	// skip the firing instead of interrupting.
 	cronScheduler := agentruntime.NewSessionCronScheduler(ses.ID, workingDir, func(prompt string, queueIfBusy bool) {
@@ -692,7 +692,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		isPending := current != nil
 
 		if isPending && !wasPending {
-			// New pairing challenge appeared — always show it
+			// New pairing challenge appeared - always show it
 			platformName := daemon.PlatformDisplayName(string(current.Platform))
 			kind := string(current.Kind)
 			followDisplay.OnPairingChallenge(platformName, current.ChannelID, current.Code, kind)
@@ -728,7 +728,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		debug.Log("daemon", "instance detect register failed: %v", err)
 	} else if len(others) > 0 {
 		primary := others[0]
-		fmt.Fprintf(os.Stderr, "Auto-muted IM channels — primary instance (PID %d, started %s)\n",
+		fmt.Fprintf(os.Stderr, "Auto-muted IM channels - primary instance (PID %d, started %s)\n",
 			primary.PID, primary.StartedAt.Format("15:04"))
 	}
 	defer imMgr.UnregisterInstance()
@@ -896,6 +896,19 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
 	})
+	// Turn-scoped vision fallback: image-bearing turns on non-vision models
+	// switch to a comparable vision model for that turn only. switchFn keeps
+	// the switch in memory - no session persistence, no AppendMetaToDisk.
+	bridge.SetVisionTurnHook(
+		func() string { return agentruntime.VisionTurnModel(cfg) },
+		func(model string) error {
+			resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, "", "", model)
+			if err != nil {
+				return err
+			}
+			agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+			return nil
+		})
 	debug.Log("daemon", "Knight config: enabled=%v trust=%s budget=%d idle=%ds capabilities=%v",
 		cfg.Knight().Enabled, cfg.Knight().TrustLevel, cfg.Knight().DailyTokenBudget,
 		cfg.Knight().IdleDelaySec, cfg.Knight().Capabilities)
@@ -912,9 +925,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				if duration > 0 {
 					suffix = fmt.Sprintf(" (%.0fs)", duration.Seconds())
 				}
-				// report may contain \n — convert to \r\n for raw terminal mode
+				// report may contain \n - convert to \r\n for raw terminal mode
 				safeReport := strings.ReplaceAll(report, "\n", "\r\n")
-				fmt.Fprintf(os.Stderr, "🌙 Knight %s completed%s — %s\r\n", taskName, suffix, safeReport)
+				fmt.Fprintf(os.Stderr, "🌙 Knight %s completed%s - %s\r\n", taskName, suffix, safeReport)
 			},
 		})
 		if err := knightAgent.Start(context.Background()); err != nil {
@@ -1066,7 +1079,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Check if stdin is a terminal (for keyboard handling)
 	isTerminal := term.IsTerminal(int(os.Stdin.Fd()))
 
-	// Startup message (before raw mode — normal \n is fine)
+	// Startup message (before raw mode - normal \n is fine)
 	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.started", ses.ID))
 	fmt.Fprintf(os.Stderr, "%s\n", daemon.Tr(lang, "daemon.workdir", workingDir))
 	if isTerminal {
@@ -1562,7 +1575,7 @@ loop:
 	}
 
 	if daemonRestartRequested {
-		// Self-restart via in-place syscall.Exec — no child process needed.
+		// Self-restart via in-place syscall.Exec - no child process needed.
 		binary, err := restart.ResolveBinary()
 		if err != nil {
 			return fmt.Errorf("restart: resolve binary: %w", err)
@@ -1577,7 +1590,7 @@ loop:
 		// new messages incrementally during the session. Just update meta.
 		_ = store.AppendMetaToDisk(ses)
 
-		// Release the session lock before exec — the new process will acquire it fresh.
+		// Release the session lock before exec - the new process will acquire it fresh.
 		// syscall.Exec preserves FDs with flocks, so without releasing here the
 		// new process would fail to acquire its own lock on the same session.
 		if sessionLock != nil {
@@ -1585,7 +1598,7 @@ loop:
 			sessionLock = nil
 		}
 
-		// Clean up port file before exec — syscall.Exec skips defers.
+		// Clean up port file before exec - syscall.Exec skips defers.
 		runfile.Remove(ses.ID)
 
 		var args []string
@@ -1599,7 +1612,7 @@ loop:
 		if bypass {
 			args = append(args, "--bypass")
 		}
-		// #873: propagate --tunnel/--full through the restart argv — a tunnel
+		// #873: propagate --tunnel/--full through the restart argv - a tunnel
 		// daemon otherwise loses its mobile tunnel silently (phone connections
 		// drop, no error anywhere) and --full sessions fall back to 24h window.
 		if startTunnel {

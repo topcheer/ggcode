@@ -4266,6 +4266,13 @@ func (b *ChatBridge) ResumeSession(id string) error {
 
 // SendContent sends multimodal content to the agent.
 func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
+	// Turn-scoped vision fallback: when this content carries images but the
+	// active model lacks vision support and the endpoint offers a comparable
+	// vision model, switch for THIS run and restore afterwards. Never
+	// persisted (b.currentSes untouched); b.resolved is updated so the status
+	// bar reflects the model actually answering.
+	restoreVision := b.beginVisionTurnIfNeeded(content)
+	defer restoreVision()
 	b.mu.Lock()
 	if b.cancel != nil {
 		b.mu.Unlock()
@@ -4397,8 +4404,92 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 	err := b.agent.RunStreamWithContent(ctx, content, func(ev provider.StreamEvent) {
 		b.emitIfCurrent(runGen, ev)
 	})
+	// Vision-model rejection: restore the user's model and retry once with
+	// the text-only projection of the same content (image blocks dropped).
+	if err != nil && restoreVision != nil && provider.IsImageBlockFallbackCandidate(err) && contentHasImageBlocks(content) {
+		debug.Log("chat", "vision turn model rejected image content, retrying text-only: %v", err)
+		restoreVision()
+		textOnly := stripImageBlocks(content)
+		if len(textOnly) > 0 {
+			retryErr := b.agent.RunStreamWithContent(ctx, textOnly, func(ev provider.StreamEvent) {
+				b.emitIfCurrent(runGen, ev)
+			})
+			b.finishRun(retryErr)
+			return retryErr
+		}
+	}
 	b.finishRun(err)
 	return err
+}
+
+// contentHasImageBlocks reports whether any block is an image.
+func contentHasImageBlocks(content []provider.ContentBlock) bool {
+	for _, c := range content {
+		if c.Type == "image" {
+			return true
+		}
+	}
+	return false
+}
+
+// stripImageBlocks removes image blocks, keeping text and other blocks.
+func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
+	out := make([]provider.ContentBlock, 0, len(content))
+	for _, c := range content {
+		if c.Type != "image" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// beginVisionTurnIfNeeded performs the turn-scoped vision switch for a
+// content-carrying run. Returns a restore func (idempotent; no-op when no
+// switch happened).
+func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) func() {
+	if !contentHasImageBlocks(content) {
+		return func() {}
+	}
+	b.mu.Lock()
+	cfg := b.cfg
+	ag := b.agent
+	b.mu.Unlock()
+	if cfg == nil || ag == nil || ag.SupportsVision() {
+		return func() {}
+	}
+	vm := agentruntime.VisionTurnModel(cfg)
+	if vm == "" {
+		return func() {}
+	}
+	userModel := cfg.Model
+	debug.Log("chat", "vision fallback: turn-scoped switch to %s (user model: %s)", vm, userModel)
+	resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, "", "", vm)
+	if err != nil {
+		debug.Log("chat", "vision fallback switch failed: %v", err)
+		return func() {}
+	}
+	agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+	b.mu.Lock()
+	b.resolved = resolved
+	b.mu.Unlock()
+	var once bool
+	return func() {
+		if once {
+			return
+		}
+		once = true
+		if cfg.Model == userModel {
+			return
+		}
+		if r, p, err := agentruntime.ActivateCurrentSelection(cfg, "", "", userModel); err == nil {
+			agentruntime.ApplyProviderToAgent(ag, p, r)
+			b.mu.Lock()
+			b.resolved = r
+			b.mu.Unlock()
+		} else {
+			debug.Log("chat", "vision fallback restore failed: %v", err)
+		}
+	}
 }
 
 // GetAvailableModels returns the list of models available for the current endpoint.

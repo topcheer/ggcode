@@ -68,6 +68,8 @@ type DaemonBridge struct {
 	onUserMessage        func([]provider.ContentBlock)
 	onRestart            func()                                               // trigger daemon self-restart
 	onProviderSwitch     func(vendor, endpoint, model string) (string, error) // switch provider/model, returns summary
+	visionTurnSelect     func() string                                        // returns turn-scoped vision model or "" (no comparable candidate)
+	visionTurnSwitch     func(model string) error                             // in-memory model switch, no session persistence
 	restartDebug         bool                                                 // set by /restart debug to enable debug logging on next launch
 	eventSubs            []*daemonBridgeSub
 	eventSubMu           sync.RWMutex
@@ -230,7 +232,65 @@ func (b *DaemonBridge) SetRestartHook(fn func()) {
 	b.mu.Unlock()
 }
 
-// SetProviderSwitchHook installs a callback to switch provider/model.
+// SetVisionTurnHook installs the turn-scoped vision fallback hooks.
+// selectFn returns a comparable vision model name ("" = none); switchFn
+// switches models in memory WITHOUT persisting to the session. When unset,
+// image-bearing turns on non-vision models keep current behavior (images
+// are stripped by the agent's SupportsVision gate).
+func (b *DaemonBridge) SetVisionTurnHook(selectFn func() string, switchFn func(model string) error) {
+	b.mu.Lock()
+	b.visionTurnSelect = selectFn
+	b.visionTurnSwitch = switchFn
+	b.mu.Unlock()
+}
+
+// beginVisionTurn switches to a vision model for THIS inbound turn when the
+// content carries images, the active model has no vision, and a comparable
+// vision model exists on the endpoint. Returns the restore func (idempotent).
+func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) func() {
+	hasImage := false
+	for _, c := range content {
+		if c.Type == "image" {
+			hasImage = true
+			break
+		}
+	}
+	b.mu.Lock()
+	sel := b.visionTurnSelect
+	sw := b.visionTurnSwitch
+	ag := b.agent
+	userModel := ""
+	if b.sess != nil {
+		userModel = b.sess.Model
+	}
+	b.mu.Unlock()
+	if !hasImage || sel == nil || sw == nil || ag == nil || ag.SupportsVision() {
+		return func() {}
+	}
+	vm := sel()
+	if vm == "" || vm == userModel {
+		return func() {}
+	}
+	if err := sw(vm); err != nil {
+		debug.Log("daemon-bridge", "vision turn switch to %s failed: %v", vm, err)
+		return func() {}
+	}
+	debug.Log("daemon-bridge", "vision turn: switched to %s for this turn (user model: %s)", vm, userModel)
+	var once bool
+	return func() {
+		if once {
+			return
+		}
+		once = true
+		if userModel == "" {
+			return
+		}
+		if err := sw(userModel); err != nil {
+			debug.Log("daemon-bridge", "vision turn restore to %s failed: %v", userModel, err)
+		}
+	}
+}
+
 // The callback receives (vendor, endpoint, model) — any may be empty to mean "keep current".
 // It returns a human-readable summary string.
 func (b *DaemonBridge) SetProviderSwitchHook(fn func(vendor, endpoint, model string) (string, error)) {
@@ -500,6 +560,14 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if len(content) == 0 {
 		return nil
 	}
+
+	// Turn-scoped vision fallback: switch to a vision model for this turn
+	// when images are present and the active model cannot accept them.
+	// Restore runs on every exit path; if the vision run itself fails, the
+	// error surfaces as usual (the restored non-vision model strips any
+	// history image parts via the SupportsVision gate on the next turn).
+	restoreVision := b.beginVisionTurn(content)
+	defer restoreVision()
 
 	// #1584-A: route-empty OR text-less messages used to drop here even
 	// when the content blocks were non-empty (a pure image or a
