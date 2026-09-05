@@ -202,7 +202,12 @@ func hubFileToImportPath(workingDir, filePath, modulePath string) string {
 	// never exist in the map, a guaranteed 0 fan-in for every file under
 	// it (live in this very repo: ggcode-relay). Walk up to the nearest
 	// go.mod between dir and workingDir.
-	modRoot, modName := hubNearestGoMod(dir, workingDir)
+	modRoot, modName, ok := hubNearestGoMod(dir, workingDir)
+	// #1614-B: unreadable go.mod = UNKNOWN key - return empty (no fallback
+	// to root keying, no latch-burn) so the next call retries.
+	if !ok {
+		return ""
+	}
 	if modRoot != "" && modName != "" && modName != modulePath {
 		if relNested, err := filepath.Rel(modRoot, dir); err == nil {
 			relNested = filepath.ToSlash(relNested)
@@ -225,20 +230,32 @@ func hubFileToImportPath(workingDir, filePath, modulePath string) string {
 
 // hubNearestGoMod walks up from dir toward root looking for the nearest
 // go.mod, returning its directory and module name ("" when none found).
-func hubNearestGoMod(dir, root string) (string, string) {
+// hubNearestGoMod walks up from dir toward root. Third state per #1614-B:
+// a go.mod EXISTS but cannot be READ (permission, transient IO) returns
+// ok=false WITHOUT falling through - the caller must treat the key as
+// UNKNOWN (skip the sample/latch this round) rather than silently
+// re-keying via the root module (query 0 + latch = wrong key forever
+// this run).
+func hubNearestGoMod(dir, root string) (modRoot, modName string, ok bool) {
 	for cur := dir; ; {
-		if modPath := filepath.Join(cur, "go.mod"); modPath != "" {
-			if data, err := os.ReadFile(modPath); err == nil {
-				for _, line := range strings.Split(string(data), "\n") {
-					line = strings.TrimSpace(line)
-					if strings.HasPrefix(line, "module ") {
-						return cur, strings.TrimSpace(strings.TrimPrefix(line, "module "))
-					}
+		modPath := filepath.Join(cur, "go.mod")
+		if _, statErr := os.Stat(modPath); statErr == nil {
+			data, err := os.ReadFile(modPath)
+			if err != nil {
+				// Exists but unreadable: indeterminate - stop here, report
+				// not-ok so callers freeze rather than mis-key.
+				debug.Log("hub-pkg-guard", "go.mod at %s unreadable: %v", cur, err)
+				return "", "", false
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "module ") {
+					return cur, strings.TrimSpace(strings.TrimPrefix(line, "module ")), true
 				}
 			}
 		}
 		if cur == root || cur == filepath.Dir(cur) {
-			return "", ""
+			return "", "", true // none found anywhere: determinate absence
 		}
 		cur = filepath.Dir(cur)
 	}
@@ -289,8 +306,12 @@ func hubComputeFanIn(root, modulePath string) map[string]int {
 		}
 		mod := modOf[dir]
 		if mod == "" {
-			if _, m := hubNearestGoMod(dir, root); m != "" {
+			if _, m, ok := hubNearestGoMod(dir, root); ok && m != "" {
 				mod = m
+			} else if !ok {
+				// Indeterminate: skip this package this round rather than
+				// counting it under a wrong module key.
+				continue
 			} else {
 				mod = modulePath
 			}
