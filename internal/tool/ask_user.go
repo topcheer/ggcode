@@ -160,6 +160,25 @@ func (t *AskUserTool) HasHandler() bool {
 	return t.handler != nil
 }
 
+// AskDirect routes a normalized AskUserRequest through the surface handler
+// without JSON round-tripping. It lets non-agent callers (e.g. the MCP
+// elicitation bridge) reuse the per-surface ask_user routing that TUI,
+// daemon and desktop install via SetHandler. Returns an error when no
+// surface handler is installed in this session.
+func (t *AskUserTool) AskDirect(ctx context.Context, req AskUserRequest) (AskUserResponse, error) {
+	normalized, err := normalizeAskUserRequest(req)
+	if err != nil {
+		return AskUserResponse{}, fmt.Errorf("invalid ask_user request: %w", err)
+	}
+	t.mu.RLock()
+	handler := t.handler
+	t.mu.RUnlock()
+	if handler == nil {
+		return AskUserResponse{}, fmt.Errorf("ask_user handler not available in this session")
+	}
+	return handler(ctx, normalized)
+}
+
 func (t *AskUserTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var req AskUserRequest
 	if err := json.Unmarshal(input, &req); err != nil {

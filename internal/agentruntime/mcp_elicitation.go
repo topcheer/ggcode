@@ -3,10 +3,8 @@ package agentruntime
 import (
 	"context"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
-	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -14,67 +12,59 @@ import (
 // Elicitation support wiring for MCP servers (protocol 2025-06-18+).
 //
 // When an MCP server sends an elicitation/create request, the handler routes
-// it through the InteractionBroker's ask_user mechanism — the same path used
-// by the agent's ask_user tool. This lets MCP servers collect structured input
-// from the user without needing custom UI plumbing for each surface (TUI, IM,
-// desktop, mobile).
-
-var (
-	elicitationBroker   *InteractionBroker
-	elicitationBrokerMu sync.RWMutex
-)
-
-// SetElicitationBroker sets the interaction broker used to route MCP
-// elicitation requests to the user. Called after the broker is created
-// (typically during session setup).
-func SetElicitationBroker(b *InteractionBroker) {
-	elicitationBrokerMu.Lock()
-	elicitationBroker = b
-	elicitationBrokerMu.Unlock()
-	debug.Log("mcp-elicitation", "elicitation broker set")
-}
-
-// mcpElicitationHandler implements mcp.ElicitationHandler.
+// it through the session's ask_user tool - the same per-surface handler the
+// agent's ask_user tool uses (installed by TUI/daemon/desktop at startup).
+// This lets MCP servers collect structured input from the user without
+// needing custom UI plumbing for each surface.
 //
-// It converts the elicitation request into an AskUserRequest (which has
-// first-class routing through all UI surfaces) and waits for the user's
-// response. If no broker is available, it returns an error so the server
-// knows elicitation is not possible in this context.
-func mcpElicitationHandler(ctx context.Context, params mcp.ElicitationParams) (*mcp.ElicitationResult, error) {
-	elicitationBrokerMu.RLock()
-	broker := elicitationBroker
-	elicitationBrokerMu.RUnlock()
+// #1484: the original design routed through a package-global
+// InteractionBroker whose setter (SetElicitationBroker) had zero call sites -
+// every elicitation died at "no interaction broker available". Worse, a
+// one-line fix calling that setter with a fresh broker would have been a
+// fake repair: no surface ever resolves requests INTO that broker, so
+// AwaitAskUser would hang to timeout. The registry bridge below reaches the
+// real, already-wired ask_user surfaces.
 
-	if broker == nil {
-		return nil, fmt.Errorf("no interaction broker available for elicitation")
-	}
+// newMCPElicitationHandler builds an mcp.ElicitationHandler that routes
+// elicitation/create requests through the session's registered ask_user
+// tool. The registry lookup is late-bound: surfaces install their ask_user
+// handler after the runtime core is built, and AskDirect reads it per call.
+func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler {
+	return func(ctx context.Context, params mcp.ElicitationParams) (*mcp.ElicitationResult, error) {
+		var askTool *toolpkg.AskUserTool
+		if registry != nil {
+			if t, ok := registry.Get("ask_user"); ok {
+				askTool, _ = t.(*toolpkg.AskUserTool)
+			}
+		}
+		if askTool == nil {
+			return nil, fmt.Errorf("ask_user tool unavailable; cannot route MCP elicitation")
+		}
 
-	reqID := fmt.Sprintf("elicit-%d", nextElicitCounter())
-	askReq := buildElicitationAskUser(reqID, params)
+		reqID := fmt.Sprintf("elicit-%d", nextElicitCounter())
+		askReq := buildElicitationAskUser(reqID, params)
 
-	resp, err := broker.AwaitAskUser(ctx, AskUserRequest{
-		ID:      reqID,
-		Request: askReq,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("elicitation interrupted: %w", err)
-	}
+		resp, err := askTool.AskDirect(ctx, askReq)
+		if err != nil {
+			return nil, fmt.Errorf("elicitation interrupted: %w", err)
+		}
 
-	switch resp.Status {
-	case toolpkg.AskUserStatusSubmitted:
-		content := buildElicitationContent(params.Schema, resp)
-		return &mcp.ElicitationResult{
-			Action:  mcp.ElicitationActionAccept,
-			Content: content,
-		}, nil
-	case toolpkg.AskUserStatusCancelled:
-		return &mcp.ElicitationResult{
-			Action: mcp.ElicitationActionCancel,
-		}, nil
-	default:
-		return &mcp.ElicitationResult{
-			Action: mcp.ElicitationActionDecline,
-		}, nil
+		switch resp.Status {
+		case toolpkg.AskUserStatusSubmitted:
+			content := buildElicitationContent(params.Schema, resp)
+			return &mcp.ElicitationResult{
+				Action:  mcp.ElicitationActionAccept,
+				Content: content,
+			}, nil
+		case toolpkg.AskUserStatusCancelled:
+			return &mcp.ElicitationResult{
+				Action: mcp.ElicitationActionCancel,
+			}, nil
+		default:
+			return &mcp.ElicitationResult{
+				Action: mcp.ElicitationActionDecline,
+			}, nil
+		}
 	}
 }
 
