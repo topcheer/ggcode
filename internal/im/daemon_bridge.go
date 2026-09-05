@@ -426,20 +426,34 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	approvalCh := b.pendingApproval
 	b.mu.Unlock()
 	if route.Kind == InboundRouteApproval {
-		if approvalCh != nil {
-			// #943: send the full route (Decision + AlwaysAllow) — the old
-			// permission.Decision-only channel silently dropped the always-allow
-			// semantics computed by RouteInboundText, degrading "a" to one-shot "y".
-			approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}
-			b.mu.Lock()
-			if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
-				b.pendingApproval = nil
-			}
-			b.mu.Unlock()
+		// #569 A: the route decision came from a snapshot taken before this
+		// re-read. If the channel vanished in between (approval timed out),
+		// the late reply must be dropped — leaking it to the agent path would
+		// resubmit "y" as a fresh prompt.
+		if approvalCh == nil {
+			debug.Log("daemon-bridge", "dropping approval reply after timeout: %q", truncateStr(text, 80))
 			return nil
 		}
-		// Approval timed out between snapshot and re-lock
-		debug.Log("daemon-bridge", "dropping stale approval reply: %s", text)
+		// #943: send the full route (Decision + AlwaysAllow) — the old
+		// permission.Decision-only channel silently dropped the always-allow
+		// semantics computed by RouteInboundText, degrading "a" to one-shot "y".
+		// #1551-B: non-blocking send, mirroring the ask_user path's #944 fix —
+		// a bare blocking send deadlocked the SECOND concurrent replier (both
+		// snapshot the channel before compare-then-clear; the first fills the
+		// single buffer, the asker has exited, the second blocks forever) and
+		// leaked the adapter receive goroutine.
+		select {
+		case approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}:
+		default:
+			debug.Log("daemon-bridge", "dropping approval reply: no waiting asker")
+			return nil
+		}
+		b.mu.Lock()
+		if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
+			b.pendingApproval = nil
+		}
+		b.mu.Unlock()
+		return nil
 		return nil
 	}
 
@@ -468,6 +482,19 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		// AskUser timed out between snapshot and re-lock
 		debug.Log("daemon-bridge", "dropping stale ask_user reply: %s", text)
 		return nil
+	}
+
+	// #569: the agent path dereferences b.agent (interruption handler, run
+	// loop). A bridge constructed without an agent must fail explicitly
+	// instead of panicking. However, when a run is already active
+	// (cancelFunc != nil) the message is only queued as an interruption —
+	// the agent is never dereferenced on this path — so queuing must stay
+	// allowed for agent-less bridges (tests simulate active runs this way).
+	b.mu.Lock()
+	runActive := b.cancelFunc != nil
+	b.mu.Unlock()
+	if b.agent == nil && !runActive {
+		return fmt.Errorf("daemon bridge has no agent attached")
 	}
 
 	// Normal agent submission
@@ -551,6 +578,7 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		// nobody listening) and were silently dropped, forcing the user to click
 		// again; the duplicate multiSelectChosen reset also wiped selections
 		// accumulated inside that window.
+		// Send buttons AFTER registering pendingAsk so callbacks can't race.
 		var msgIDs map[string]string
 		isMulti := q.Kind == toolpkg.AskUserKindMulti
 		pending := &pendingAskUser{
