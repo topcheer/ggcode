@@ -379,9 +379,13 @@ func sqlInjSkipFormatFlags(format string, start int) int {
 
 // sqlInjIsIntVerb reports whether a format verb renders only integer values
 // (digits, sign, or base prefix) and therefore cannot carry SQL metacharacters.
+// %c is deliberately excluded (#1498): it renders the CODE POINT character
+// itself, so a user-controlled 39 emits a quote that closes the string
+// literal (45 '-', 59 ';' likewise) - it is the only integer verb that can
+// produce non-digit text.
 func sqlInjIsIntVerb(verb byte) bool {
 	switch verb {
-	case 'b', 'c', 'd', 'o', 'O', 'U', 'x', 'X':
+	case 'b', 'd', 'o', 'O', 'U', 'x', 'X':
 		return true
 	}
 	return false

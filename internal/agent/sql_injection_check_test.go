@@ -443,3 +443,17 @@ func TestSQLInjection_SingleLineDeltaStillSuppressed(t *testing.T) {
 		t.Fatalf("expected 0 warnings for unchanged single-line call, got %d: %v", len(warnings), warnings)
 	}
 }
+
+// Regression for #1498: %c renders the code point character itself, so a
+// user-controlled 39 emits a quote closing the string literal - it must not
+// be exempted as an "integer-safe" verb.
+func TestSQLInjectionPercentCNotExempt(t *testing.T) {
+	if sqlInjIsIntVerb('c') {
+		t.Fatal("verb 'c' must not be classified as an integer-safe verb")
+	}
+	for _, v := range []byte{'b', 'd', 'o', 'U', 'x'} {
+		if !sqlInjIsIntVerb(v) {
+			t.Errorf("%%%c should remain integer-safe", v)
+		}
+	}
+}

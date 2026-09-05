@@ -66,7 +66,11 @@ const (
 )
 
 // errorLinesRe matches common compiler/test error patterns across languages.
-var errorLinesRe = regexp.MustCompile(`(?im)^.*\b(?:error|ERROR|Error)[\s:].*$`)
+// #1498: the bare word-boundary "error[\s:]" form missed Go/Cargo/pytest
+// output entirely (go build 'undefined:', go test '--- FAIL:', cargo
+// 'error[E0308]', pytest's CamelCase assertion errors), so countVerifyErrors
+// scored zero on the very build/test stalls the detector was written for.
+var errorLinesRe = regexp.MustCompile(`(?im)^.*(?:\b(?:error|ERROR|Error)[\s:]|--- FAIL:|---fail:|undefined:|\bpanic:|\bfatal error:|error\[[A-Z]?\d+\]|\bAssertionError\b|\bExitError\b).*$`)
 
 // countVerifyErrors returns the number of error-like lines in verification output.
 // Uses a conservative regex to avoid false positives from non-error text.

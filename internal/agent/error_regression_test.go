@@ -114,7 +114,9 @@ func TestCountErrors(t *testing.T) {
 		{"mixed case", "Error: something\nERROR: other", 2},
 		{"with file prefix", "main.go:10: error: syntax error", 1},
 		{"filters zero errors", "0 errors found\nno error detected", 0},
-		{"go compiler", "./main.go:5:2: undefined: foo\n./main.go:6:3: undefined: bar", 0}, // Go compiler uses "undefined:" not "error:"
+		// #1498: 'undefined:' IS a Go compiler error - the old regex missed it
+		// entirely, which is exactly the detector's target scenario going blind.
+		{"go compiler", "./main.go:5:2: undefined: foo\n./main.go:6:3: undefined: bar", 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,4 +147,31 @@ func buildOutput(n int) string {
 		b.WriteString("error: something broke\n")
 	}
 	return b.String()
+}
+
+// Regression for #1498: the old error-lines regex required the word "error"
+// plus [\s:], missing go build ('undefined:'), go test ('--- FAIL:'), cargo
+// ('error[E0308]') and pytest output entirely - countVerifyErrors scored
+// zero on the exact build/test stalls the detector targets.
+func TestErrorLinesReMatchesToolchainOutput(t *testing.T) {
+	for _, line := range []string{
+		"./internal/agent/foo.go:12:5: undefined: helpers.Render",
+		"--- FAIL: TestAgentLoop (0.30s)",
+		"error[E0308]: mismatched types",
+		"panic: runtime error: index out of range",
+		"E       AssertionError: expected 3, got 4",
+	} {
+		if !errorLinesRe.MatchString(line) {
+			t.Errorf("errorLinesRe missed toolchain error line: %q", line)
+		}
+	}
+	for _, line := range []string{
+		"--- PASS: TestSomething (0.10s)",
+		"ok  \texample.com/pkg\t0.5s",
+		"all checks passed, no findings",
+	} {
+		if errorLinesRe.MatchString(line) {
+			t.Errorf("errorLinesRe false-positive on: %q", line)
+		}
+	}
 }
