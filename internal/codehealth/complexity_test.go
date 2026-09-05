@@ -3,6 +3,7 @@ package codehealth
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -472,6 +473,9 @@ func TestAnalyzeSingleFileSkipsGenerated(t *testing.T) {
 // Regression for #1510: an unreadable root directory used to be swallowed
 // into a 0-file/100-score "healthy" report.
 func TestAnalyzeUnreadableRootReturnsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod cannot make a dir unreadable on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses permission checks")
 	}
