@@ -750,7 +750,19 @@ Examples:
 
 			switch key {
 			case "enabled":
-				enabled := value == "true" || value == "1"
+				// #1510: silent interpretation of arbitrary values ("TRUE" ->
+				// disabled, echoed back as success) contradicts the strict
+				// unknown-key error two cases below. Validate like strconv
+				// but keep the accepted surface explicit.
+				switch strings.ToLower(strings.TrimSpace(value)) {
+				case "true", "1", "yes", "on":
+					value = "true"
+				case "false", "0", "no", "off":
+					value = "false"
+				default:
+					return fmt.Errorf("invalid value %q for key %q (want true/false)", value, key)
+				}
+				enabled := value == "true"
 				if err := cfg.SetIMAdapterEnabled(name, enabled); err != nil {
 					return err
 				}

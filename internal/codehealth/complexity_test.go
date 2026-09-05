@@ -468,3 +468,29 @@ func TestAnalyzeSingleFileSkipsGenerated(t *testing.T) {
 		t.Errorf("single-file Analyze should skip generated files, got %d funcs / %d files", len(report.TopFunctions), report.FilesScanned)
 	}
 }
+
+// Regression for #1510: an unreadable root directory used to be swallowed
+// into a 0-file/100-score "healthy" report.
+func TestAnalyzeUnreadableRootReturnsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission checks")
+	}
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "a.go"), []byte("package a\nfunc A(){}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(sub, 0o755) //nolint
+
+	// The walk root itself is readable; point Analyze AT the locked dir so
+	// the root-entry read fails and must surface as an error, not a score.
+	if _, err := Analyze(sub, DefaultOptions()); err == nil {
+		t.Fatal("unreadable root must return an error, not a healthy report")
+	}
+}

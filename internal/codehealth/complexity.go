@@ -114,7 +114,13 @@ func Analyze(dir string, opts Options) (*Report, error) {
 
 	err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
-			return nil // skip unreadable paths
+			// #1510: an unreadable ROOT (dir exists but chmod 000) used to
+			// be swallowed here, producing a 0-file/100-score "healthy"
+			// report. Only per-entry errors below the root are skipped.
+			if path == dir {
+				return err
+			}
+			return nil // skip unreadable entries
 		}
 		if fi.IsDir() {
 			name := filepath.Base(path)
