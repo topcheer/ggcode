@@ -184,6 +184,7 @@ func handleMessage(
 			TeammateID:   tm.ID,
 			TeammateName: tm.Name,
 			Result:       util.Truncate(result, 500),
+			Error:        taskErr, // #1497: idle derived success from ev.Error; leaving it unset made failed tasks render green on tunnel clients
 			Timestamp:    time.Now(),
 		})
 	}
@@ -350,6 +351,7 @@ func tryClaimPendingTask(
 				TeammateID:   tm.ID,
 				TeammateName: tm.Name,
 				Result:       util.Truncate(result, 500),
+				Error:        taskErr, // #1497: same as the inbox-task idle event above
 				Timestamp:    time.Now(),
 			})
 		}
