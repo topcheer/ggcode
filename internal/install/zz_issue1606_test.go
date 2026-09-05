@@ -3,6 +3,7 @@ package install
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ import (
 // EnsureOnPath must return a non-nil error instead of a false "will be
 // available in new terminals" promise.
 func TestIssue1606_WriteFailureSurfaced(t *testing.T) {
-	if os.Getenv("GOOS") == "windows" {
+	if runtime.GOOS == "windows" {
 		t.Skip("unix profile logic")
 	}
 	home := t.TempDir()
