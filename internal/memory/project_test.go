@@ -427,3 +427,20 @@ func TestLoadProjectMemory_PrimaryOverridesCompatibility(t *testing.T) {
 func contains(s, sub string) bool {
 	return strings.Contains(s, sub)
 }
+
+// TestIssue1615_HtmlBannerNotSummary pins #1615: README banner HTML
+// paragraphs must not become the project Summary.
+func TestIssue1615_HtmlBannerNotSummary(t *testing.T) {
+	dir := t.TempDir()
+	readme := "# ggcode\n\n<p align=\"center\">\n<img src=\"banner.png\" alt=\"banner\">\n</p>\n\nAn AI coding agent for the terminal.\n"
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(readme), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := detectReadmeSummary(dir)
+	if strings.Contains(got, "<") || strings.Contains(got, "img") {
+		t.Fatalf("HTML banner leaked into summary: %q", got)
+	}
+	if !strings.Contains(got, "An AI coding agent") {
+		t.Fatalf("real description must win, got %q", got)
+	}
+}

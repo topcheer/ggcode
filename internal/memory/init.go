@@ -115,6 +115,17 @@ func detectReadmeSummary(root string) string {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
+		// #1615: centered HTML banners (<p align=center>, <img>, </p>)
+		// are the first "paragraph" in many READMEs (this repo's own) -
+		// the tag soup became the project Summary injected into every
+		// session's GGCODE.md. Skip HTML-tag lines and empty-out
+		// tag-only paragraphs so the first REAL text paragraph wins.
+		if strings.HasPrefix(line, "<") {
+			continue
+		}
+		if strings.Contains(line, "</p>") {
+			continue
+		}
 		paragraph = append(paragraph, line)
 	}
 	return strings.Join(paragraph, " ")
