@@ -277,7 +277,6 @@ func (t *toolFallbackState) maybeFallbackSuggestion(toolName, errorContent strin
 		t.mu.Unlock()
 		return ""
 	}
-	t.fired[toolName] = true
 	t.mu.Unlock()
 
 	rules, ok := fallbackRules[toolName]
@@ -288,6 +287,12 @@ func (t *toolFallbackState) maybeFallbackSuggestion(toolName, errorContent strin
 	lowerContent := strings.ToLower(errorContent)
 	for _, rl := range rules {
 		if rl.match(lowerContent) {
+			// #1508: mark fired only on an actual suggestion - the old
+			// upfront marking burned the tool's single per-run slot even
+			// when no rule matched the error.
+			t.mu.Lock()
+			t.fired[toolName] = true
+			t.mu.Unlock()
 			debug.Log("tool-fallback", "fallback suggestion for %s: %s",
 				toolName, truncateString(rl.suggestion, 80))
 			return rl.suggestion

@@ -239,3 +239,20 @@ func TestAgentResetToolFallback(t *testing.T) {
 		t.Fatalf("expected fired map to be empty after reset")
 	}
 }
+
+// Regression for #1508: fired was marked BEFORE rule evaluation, so an
+// error matching no rule still burned the tool's single per-run slot.
+// After the fix, fired is set only when a suggestion is actually returned.
+func TestMaybeFallbackSuggestionFiresOnlyOnMatch(t *testing.T) {
+	tf := newToolFallbackState()
+	if tf.fired["grep"] {
+		t.Fatal("fired must start unset")
+	}
+	// "no match" is grep's first rule - must fire AND mark fired.
+	if s := tf.maybeFallbackSuggestion("grep", "grep: no match in file"); s == "" {
+		t.Fatal("expected a fallback suggestion for the no-match rule")
+	}
+	if !tf.fired["grep"] {
+		t.Fatal("fired must be set after an actual suggestion")
+	}
+}

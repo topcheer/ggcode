@@ -309,13 +309,17 @@ func (s *integrationState) checkIntegration(assistantText string) string {
 	evidence := s.pendingEvidence
 	toolName := s.pendingTool
 
-	// Clear pending regardless of outcome.
-	s.pendingEvidence = nil
-	s.pendingTool = ""
-
+	// #1508: check the empty-text bail BEFORE clearing pending evidence.
+	// Text-less iterations (pure tool-call turns - the common agentic
+	// output mode) used to evaporate the recorded evidence unexamined,
+	// defeating the keep-evidence design the comment below describes.
 	if assistantText == "" {
 		return ""
 	}
+
+	// Clear pending regardless of outcome.
+	s.pendingEvidence = nil
+	s.pendingTool = ""
 
 	lower := strings.ToLower(assistantText)
 	integrated := 0
