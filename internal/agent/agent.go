@@ -3788,7 +3788,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Drift recurrence: track edits and verifications relative to any drift warning.
 			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
 			// Last-known-good checkpoint: track edits for revert targeting.
-			a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			// #1581-B: FAILED edits (bad old_text, wrong path) never touched
+			// disk - recording them put GHOST files into the revert list,
+			// and formatRevertGuidance suggested removing paths that never
+			// existed. Gate on success like the sibling trackers.
+			if !result.IsError {
+				a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			}
 			// Monorepo scoper: track which packages are being edited.
 			if fh := extractFileHint(tc.Name, tc.Arguments); fh != "" {
 				a.monorepoScoper.recordEdit(fh)
