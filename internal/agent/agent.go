@@ -3443,13 +3443,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Orphaned new file detection: check if new source files were
 			// created but never integrated via edits to existing files.
-			if orphanWarn := a.orphanFile.recordToolCall(tc.Name, string(tc.Arguments), i+1); orphanWarn != "" {
-				debug.Log("agent", "Iteration %d: orphaned file detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: orphanWarn}},
-				})
-				msgs = a.contextManager.Messages()
+			// #1587-B: FAILED writes (sandbox rejection, batch abort) never
+			// created anything - tracking them made "file(s) created" fire
+			// with text that lied about disk state. Gate on success.
+			if !result.IsError {
+				if orphanWarn := a.orphanFile.recordToolCall(tc.Name, string(tc.Arguments), i+1); orphanWarn != "" {
+					debug.Log("agent", "Iteration %d: orphaned file detected", i+1)
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: orphanWarn}},
+					})
+					msgs = a.contextManager.Messages()
+				}
 			}
 			// Build idempotency detection: check if a deterministic build/test
 			// command is being re-run with 0 source edits since the last build.
