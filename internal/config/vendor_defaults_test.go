@@ -247,3 +247,26 @@ func TestPopulateDefaultModels_UnknownVendorMatchedByURL(t *testing.T) {
 		t.Fatal("unexpected empty first model")
 	}
 }
+
+// Regression for #1525: zai/zhipu-coding and minimax/minimax-china alias
+// pairs carry byte-identical model lists - merge by name or every model
+// shows twice in the model panel; and the "kimi" catwalk key never existed.
+func TestPopulateDefaultModelsNoDuplicates(t *testing.T) {
+	cfg := &Config{Vendors: map[string]VendorConfig{
+		"zai": {Endpoints: map[string]EndpointConfig{
+			"e1": {BaseURL: "https://api.z.ai"},
+		}},
+	}}
+	populateDefaultModels(cfg)
+	models := cfg.Vendors["zai"].Endpoints["e1"].Models
+	seen := map[string]bool{}
+	for _, m := range models {
+		if seen[m] {
+			t.Fatalf("duplicate model %q in populated list (len=%d)", m, len(models))
+		}
+		seen[m] = true
+	}
+	if len(models) == 0 {
+		t.Fatal("expected populated models")
+	}
+}

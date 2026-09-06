@@ -236,8 +236,15 @@ func estimateBlockTokens(block provider.ContentBlock) int {
 	}
 
 	// Tool result: output text
-	if block.Type == "tool_result" && block.Output != "" {
-		return EstimateTokens(block.Output) + 5 // small overhead
+	if block.Type == "tool_result" {
+		// #1525: tool_result blocks can embed images (screenshots, read
+		// images) - the send side converts them to image blocks upstream
+		// (anthropic provider) and they bill like any other image, but the
+		// analysis side counted them as zero. Undercounting landed exactly
+		// on the image-heavy sessions compaction most needs to see.
+		n := EstimateTokens(block.Output) + 5 // small overhead
+		n += len(block.Images) * 300          // same per-image cost as the image branch below
+		return n
 	}
 
 	// Reasoning content
