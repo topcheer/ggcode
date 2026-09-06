@@ -4472,7 +4472,20 @@ func (a *Agent) injectPendingInterruptions() bool {
 		return false
 	}
 	blocks := fn()
-	if len(blocks) == 0 {
+	// #1585-C: the gate was TrimSpace(text)=="" before #1472 widened the
+	// block types; the length-only form lets whitespace-only text blocks
+	// (plus empty image blocks) inject guidance with empty payload -
+	// harmless today (producers pre-filter) but a defensive regression
+	// at the interface. Require at least one NON-BLANK block.
+	nonBlank := false
+	for _, b := range blocks {
+		if b.Type == "text" && strings.TrimSpace(b.Text) == "" {
+			continue
+		}
+		nonBlank = true
+		break
+	}
+	if !nonBlank {
 		return false
 	}
 	debug.Log("agent", "injecting mid-run user guidance")
