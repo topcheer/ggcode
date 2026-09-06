@@ -155,13 +155,19 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 
 	// Output destination
 	var w io.Writer = os.Stdout
+	var outFile *os.File // #1531: hoisted so the exit path can Close-check
 	if outputPath != "" {
 		f, err := os.Create(outputPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "creating output file: %v\n", err)
 			return 1
 		}
-		defer f.Close()
+		outFile = f
+		defer func() { // safety net only; the real check is before return 0
+			if outFile != nil {
+				_ = outFile.Close()
+			}
+		}()
 		w = f
 	}
 
@@ -233,6 +239,17 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 	if hasError {
 		return 1
+	}
+	// #1531: Fprint to *os.File lands in the page cache and returns nil -
+	// ENOSPC/NFS-async-commit/FUSE-flush errors only surface at Close.
+	// The comment above has promised Close-checking since #1444-B; do it
+	// here (before the exit-code decision) instead of a bare defer whose
+	// error was discarded after the return value was already fixed.
+	if outFile != nil {
+		if err := outFile.Close(); err != nil {
+			writeErr = err
+		}
+		outFile = nil // the deferred Close is then a harmless no-op on nil
 	}
 	// #1444-B: a failed write means the output artifact is truncated or
 	// empty - never exit 0 for it.
