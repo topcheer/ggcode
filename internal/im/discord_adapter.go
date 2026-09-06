@@ -1074,6 +1074,19 @@ func (a *discordAdapter) SendInteractive(ctx context.Context, binding ChannelBin
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return "", err
 		}
+		// #1548: error bodies are valid JSON - Decode succeeded, the "id"
+		// field was absent, and the old path returned ("", nil). The caller
+		// believed the send succeeded, the empty msgID disabled stale-card
+		// correlation, and the agent hung on select until timeout. Every
+		// sibling path checks the status (sendChannelMessage below, TG's
+		// apiRequest); check here too.
+		if resp.StatusCode >= 400 {
+			msg := ""
+			if s, ok := result["message"].(string); ok {
+				msg = s
+			}
+			return "", fmt.Errorf("Discord API [%d] interactive: %s", resp.StatusCode, msg)
+		}
 		if id, ok := result["id"].(string); ok {
 			return id, nil
 		}
