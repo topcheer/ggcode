@@ -74,24 +74,56 @@ func MCPDisabled(name string) bool {
 
 // SetMCPDisabled persists the enabled/disabled state for an MCP server.
 func SetMCPDisabled(name string, disabled bool) {
-	cached := loadMCPDisabledSet()
-	// Copy the cached map before mutating to avoid concurrent map access
-	// with readers that hold the same map pointer from the cache.
-	disabledSet := make(map[string]bool, len(cached)+1)
-	for k, v := range cached {
-		disabledSet[k] = v
+	// #1601-C: hold the WRITE lock across the whole read-modify-write.
+	// The old flow snapshotted the cache (RLock inside
+	// loadMCPDisabledSet), mutated the copy, then re-locked to store -
+	// two concurrent toggles based on the same stale snapshot lost the
+	// first one's update in memory AND on disk (panel rapid-toggling of
+	// multiple servers). With the write lock held, the nested
+	// loadMCPDisabledSet takes its RLock on the same goroutine -> would
+	// deadlock, so read the cache under THIS lock directly.
+	mcpDisabledMu.Lock()
+	defer mcpDisabledMu.Unlock()
+	cached := mcpDisabledCache
+	if !mcpDisabledCacheOK {
+		// Cold cache: hydrate from disk (lock already held; mirror the
+		// load path's decode without re-locking).
+		cached = map[string]bool{}
+		if path, err := mcpDisabledPath(); err == nil {
+			if data, rerr := os.ReadFile(path); rerr == nil {
+				var names []string
+				if jerr := json.Unmarshal(data, &names); jerr == nil {
+					// #781: corrupt JSON is not cacheable as truth.
+					cached = make(map[string]bool, len(names))
+					for _, n := range names {
+						cached[n] = true
+					}
+				}
+			}
+		}
+		mcpDisabledCache = cached
+		mcpDisabledCacheOK = true
+	} else {
+		// Warm cache: copy before mutating - readers index the cached
+		// map pointer outside their RLock (MCPDisabled), so in-place
+		// mutation under the write lock would still race them.
+		cp := make(map[string]bool, len(cached)+1)
+		for k, v := range cached {
+			cp[k] = v
+		}
+		cached = cp
 	}
 	if disabled {
-		disabledSet[name] = true
+		cached[name] = true
 	} else {
-		delete(disabledSet, name)
+		delete(cached, name)
 	}
 	path, err := mcpDisabledPath()
 	if err != nil {
 		return
 	}
-	names := make([]string, 0, len(disabledSet))
-	for n, v := range disabledSet {
+	names := make([]string, 0, len(cached))
+	for n, v := range cached {
 		if v {
 			names = append(names, n)
 		}
@@ -100,7 +132,5 @@ func SetMCPDisabled(name string, disabled bool) {
 	_ = os.MkdirAll(filepath.Dir(path), 0o700)
 	_ = util.AtomicWriteFile(path, data, 0o600)
 
-	mcpDisabledMu.Lock()
-	mcpDisabledCache = disabledSet
-	mcpDisabledMu.Unlock()
+	mcpDisabledCache = cached
 }
