@@ -3823,7 +3823,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// is character-for-character the error-file regex's shape) with a
 			// stray failure word blamed an INNOCENT edit (probe: CRS=84 on a
 			// passing-test grep). Only command/test channels carry build output.
-			if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" {
+			// #1528: read_command_output is the polling channel for
+			// start_command jobs (the tool docs route completion reads
+			// through it) - long-test workflows surface failures there,
+			// not in wait_command. Without it the detector stayed silent
+			// on the most common background-test failure path.
+			if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
 				if result.IsError || looksLikeFailure(result.Content) {
 					if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
 						a.appendGuidance(&result, causalHint)

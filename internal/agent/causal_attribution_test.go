@@ -237,3 +237,19 @@ func TestCausalAttribution_MultiLineGrepNotCmdOutput(t *testing.T) {
 		t.Fatal("real compiler failure no longer attributes")
 	}
 }
+
+// Regression for #1528: recency alone must not clear the suspect threshold -
+// "git push rejected" carries no file evidence, yet a pure recency rank of
+// 3+ crossed 25 (and 5+ crossed the 50 "references this file" wording),
+// blaming innocent recent edits with a false claim about the error output.
+func TestComputeCRSRecencyAloneInsufficient(t *testing.T) {
+	edit := causalEditStep{filePath: "/w/main.go", dirPath: "/w"}
+	// No error files: even max recency must score zero.
+	if got := computeCRS(edit, nil, 10); got != 0 {
+		t.Fatalf("recency without file evidence must score 0, got %d", got)
+	}
+	// With evidence, recency still contributes.
+	if got := computeCRS(edit, []string{"/w/main.go"}, 5); got < causalWtErrorFileMatch {
+		t.Fatalf("exact match + recency must include the file-match weight, got %d", got)
+	}
+}

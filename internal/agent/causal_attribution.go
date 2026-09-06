@@ -187,8 +187,17 @@ func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
 		}
 	}
 
-	// Recency bonus: most recent edit gets the highest bonus
-	score += recencyRank * causalWtRecency
+	// Recency bonus: most recent edit gets the highest bonus.
+	// #1528: recency alone must NEVER clear the suspect threshold - with
+	// no error-file evidence there is no causal signal at all ("no
+	// meaningful causal signal, skip"), yet rank*10 (up to 100) crossed
+	// both the 25 threshold and the 50 file-match wording branch, firing
+	// "error output references this file" for outputs containing NO file
+	// (git push rejections, missing tools) and blaming innocent recent
+	// edits. Zero evidence -> zero score.
+	if len(errorFiles) > 0 {
+		score += recencyRank * causalWtRecency
+	}
 
 	return score
 }
