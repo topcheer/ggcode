@@ -34,6 +34,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -161,13 +162,38 @@ func (d *fixAmnesiaState) recordFileEdited(file string) {
 // fixAmnesiaSameFile reports whether two file references point at the
 // same file across relative/absolute/./-prefixed forms (promotion and
 // exclusion paths must agree - #1564-B).
+// #1566-B: suffix matching is DIRECTORY-ANCHORED - the shorter side must
+// carry at least one directory segment. Bare filenames from single-package
+// test output (foo_test.go) matched ANY /-prefixed path ending in the same
+// name, and short relative paths (agent/foo.go) matched unrelated mirror
+// trees (desktop/wailskit/agent/foo.go) - both promoted the wrong file and
+// skewed every later attribution. A bare name matches only itself.
 func fixAmnesiaSameFile(a, b string) bool {
 	a = strings.TrimPrefix(strings.TrimSpace(a), "./")
 	b = strings.TrimPrefix(strings.TrimSpace(b), "./")
 	if a == b {
 		return true
 	}
-	return strings.HasSuffix(a, "/"+b) || strings.HasSuffix(b, "/"+a)
+	// Suffix match only when the shorter side carries at least TWO
+	// directory segments - one-segment relatives (agent/foo.go) still
+	// hit unrelated mirror trees (.../wailskit/agent/foo.go), and bare
+	// names hit anything ending in the name.
+	if pathDepth(b) >= 2 && strings.HasSuffix(a, "/"+b) {
+		return true
+	}
+	if pathDepth(a) >= 2 && strings.HasSuffix(b, "/"+a) {
+		return true
+	}
+	return false
+}
+
+// pathDepth counts directory segments ("a/b/c.go" -> 2, "c.go" -> 0).
+func pathDepth(p string) int {
+	dir := filepath.Dir(p)
+	if dir == "." {
+		return 0
+	}
+	return strings.Count(dir, "/") + 1
 }
 
 // recordFix marks a category as fixed in the given file (because the agent
@@ -192,7 +218,10 @@ func (d *fixAmnesiaState) recordFix(category, file string) {
 // newFile is the file being written/edited now.
 // content is the NEW content of newFile.
 func (d *fixAmnesiaState) checkContentAgainstFixed(fixFile, newFile, content string) string {
-	if fixFile == newFile {
+	// #1566: the early exit compared exactly - a relative stored form vs
+	// the absolute edit path skipped the guard and fell into the
+	// exclusion loop below (whose comparator is already sameFile).
+	if fixAmnesiaSameFile(fixFile, newFile) {
 		return "" // same file, not amnesia
 	}
 	if len(content) == 0 {

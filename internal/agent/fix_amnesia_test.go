@@ -224,3 +224,29 @@ func TestFixAmnesiaImportInDiffPrefixedHunk(t *testing.T) {
 		t.Fatal("missing import no longer detected")
 	}
 }
+
+// Regression for #1566-B: suffix matching is directory-anchored - bare
+// filenames and one-segment relatives must not promote to unrelated
+// paths sharing the tail, and the early-exit must honor sameFile.
+func TestFixAmnesiaSameFileAnchoring(t *testing.T) {
+	ok := [][2]string{
+		{"./internal/agent/foo.go", "/Volumes/w/ggcode/internal/agent/foo.go"}, // rel vs abs
+		{"/w/internal/agent/foo.go", "internal/agent/foo.go"},
+	}
+	for _, c := range ok {
+		if !fixAmnesiaSameFile(c[0], c[1]) {
+			t.Errorf("%q vs %q must match", c[0], c[1])
+		}
+	}
+	bad := [][2]string{
+		{"foo_test.go", "/w/other/foo_test.go"},                        // bare name
+		{"foo.go", "/w/anywhere/foo.go"},                               // bare name 2
+		{"agent/foo.go", "/w/desktop/wailskit/agent/foo.go"},           // one-segment vs mirror tree
+		{"/w/a/internal/x/foo.go", "/w/b/internal/x/foo.go"},           // same tail, different roots
+	}
+	for _, c := range bad {
+		if fixAmnesiaSameFile(c[0], c[1]) {
+			t.Errorf("%q vs %q must NOT match (anchoring)", c[0], c[1])
+		}
+	}
+}
