@@ -2026,6 +2026,20 @@ func (h *Hub) hasMessageLocked(msgID string) bool {
 // timeout (typically 90s).
 func (h *Hub) Close() {
 	h.closeOnce.Do(func() {
+		// #1583-B: settle pending approvals BEFORE the transport dies -
+		// the TTL pruner only runs on the inbound path, so a process exit
+		// with an @agent DM pending (or a run processing) left the peer
+		// stuck on StatusPending/processing forever: the prune timer died
+		// with the process and Close never sent a verdict. Reject
+		// everything still queued so senders' GetReceipt resolves.
+		h.mu.Lock()
+		pending := append([]PendingAgentMsg(nil), h.pendingApproval...)
+		h.pendingApproval = nil
+		h.mu.Unlock()
+		for _, p := range pending {
+			pm := p
+			safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(pm.Message, StatusRejected, "node shutting down") })
+		}
 		// Stop the health probe loop first — it must not outlive the hub.
 		h.mu.Lock()
 		if h.probeCancel != nil {
