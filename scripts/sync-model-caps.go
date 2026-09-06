@@ -782,8 +782,8 @@ func populateDefaultModels(cfg *Config) {
 		"groq":          {"groq"},
 		"mistral":       {"mistral"},
 		"deepseek":      {"deepseek"},
-		"moonshot":      {"kimi", "moonshot"},
-		"kimi":          {"kimi"},
+		"moonshot": {"kimi-coding", "moonshot"}, // #1525: "kimi" key never existed in vendorModels (only kimi-coding) - first source was permanently nil
+		"kimi":     {"kimi-coding"},
 		"minimax":       {"minimax", "minimax-china"},
 		"perplexity":    {"perplexity"},
 		"github-copilot": {"copilot"},
@@ -813,9 +813,18 @@ func populateDefaultModels(cfg *Config) {
 				continue
 			}
 			var models []string
+			seen := make(map[string]bool)
 			for _, cid := range catwalkIDs {
 				if m := lookupVendorModels(cid); len(m) > 0 {
-					models = append(models, m...)
+					for _, name := range m {
+						// #1525: zai/minimax alias pairs (zai/zhipu-coding,
+						// minimax/minimax-china) carry byte-identical lists - merge
+						// by name or every model shows twice in the model panel.
+						if !seen[name] {
+							seen[name] = true
+							models = append(models, name)
+						}
+					}
 				}
 			}
 			if len(models) > 0 {
