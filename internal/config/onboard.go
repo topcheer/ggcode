@@ -80,7 +80,17 @@ func VendorPresets() []VendorPreset {
 			APIKeyEnvHint: extractEnvVarName(vc.APIKey),
 			NeedsAPIKey:   vc.APIKey != "",
 		}
-		for epID, ep := range vc.Endpoints {
+		// #1523: map iteration order is random - the wizard's preselected
+		// endpoint (TUI endpointCursor starts at 0; desktop takes
+		// DefaultEndpoint) differed between launches. Iterate sorted keys
+		// so the list and the default are deterministic.
+		epIDs := make([]string, 0, len(vc.Endpoints))
+		for epID := range vc.Endpoints {
+			epIDs = append(epIDs, epID)
+		}
+		sort.Strings(epIDs)
+		for _, epID := range epIDs {
+			ep := vc.Endpoints[epID]
 			if vp.DefaultEndpoint == "" {
 				vp.DefaultEndpoint = epID
 			}
