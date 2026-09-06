@@ -247,3 +247,22 @@ func TestDestructiveDiscardFormsAndVariants(t *testing.T) {
 		}
 	}
 }
+
+// Regression for #1600-C: wrapper/subshell forms must still be detected -
+// the token adjacency check skipped quoted invocations the old \b-regex
+// matched.
+func TestForcePushQuotedWrapperForm(t *testing.T) {
+	if !isForcePushCommand(`sh -c "git push --force origin main"`) {
+		t.Fatal("quoted wrapper force push must be detected")
+	}
+	if !isForcePushCommand("bash -c 'git push -f origin main'") {
+		t.Fatal("single-quoted wrapper force push must be detected")
+	}
+	// Plain and negative controls keep their behavior.
+	if !isForcePushCommand("git push -f origin main") {
+		t.Fatal("plain force push must stay detected")
+	}
+	if isForcePushCommand("git push origin main") {
+		t.Fatal("plain push must stay clean")
+	}
+}

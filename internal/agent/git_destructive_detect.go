@@ -385,7 +385,17 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 func isForcePushCommand(cmd string) bool {
 	toks := strings.Fields(cmd)
 	for i, t := range toks {
-		if t != "push" || i == 0 || toks[i-1] != "git" {
+		// #1600-C: adjacent-form check must strip surrounding quotes -
+		// 'sh -c "git push --force origin main"' tokenizes to "\"git"
+		// which never equals "git", so the whole invocation was skipped
+		// where the old \b-regex matched through the quote boundary (a
+		// tokenization REGRESSION). Strip a single layer of quotes for
+		// adjacency only.
+		st := strings.Trim(t, "\"'")
+		if st != "push" || i == 0 {
+			continue
+		}
+		if strings.Trim(toks[i-1], "\"'") != "git" {
 			continue
 		}
 		for _, tok := range toks[i+1:] {
