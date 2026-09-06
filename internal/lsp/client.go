@@ -682,7 +682,10 @@ func retryEmptyStringResult(ctx context.Context, session *sessionClient, call fu
 	}
 	for i := 0; i < csharpWarmupRetryAttempts; i++ {
 		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
-			return result, nil
+			// #1586-D: returning (result, nil) made a CANCELLED warmup
+			// indistinguishable from a legitimately-empty hover - callers
+			// could neither retry nor degrade. Surface the context error.
+			return result, err
 		}
 		next, err := call()
 		if err != nil {
