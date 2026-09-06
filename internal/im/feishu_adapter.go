@@ -138,7 +138,16 @@ func newFeishuAdapter(name string, imCfg config.IMConfig, adapterCfg config.IMAd
 }
 
 func resolveFeishuSTTConfig(global config.IMSTTConfig, extra map[string]interface{}) *config.IMSTTConfig {
-	var cfg config.IMSTTConfig
+	// #1562: start from the GLOBAL config and overlay adapter extras -
+	// the resolveSTTConfigFunc contract every other implementation
+	// (slack/qq/tg/discord) establishes. This function started from a
+	// zero value and returned the sparse extra-only config as the
+	// PRIMARY, so a global base_url+api_key plus a feishu-only model
+	// override built a primary with empty credentials that failed every
+
+	// Transcribe ("STT is not configured") - feishu voice was dead
+	// while the same global config worked everywhere else.
+	cfg := global
 	hasOverride := false
 	if sttExtra, ok := extra["stt"].(map[string]interface{}); ok {
 		cfg.Provider = firstNonEmpty(strings.TrimSpace(stringFromAny(sttExtra["provider"])), cfg.Provider)

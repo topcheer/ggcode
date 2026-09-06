@@ -109,6 +109,16 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 
 	debug.Log("stt", "local whisper: running %s %v", w.binPath, args)
 
+	// #1562: ctx is the ADAPTER lifecycle context with no deadline - and
+	// Telegram (among others) processes updates serially inline, so a
+	// hanging transcription (openai-whisper's first run downloads its
+	// model for minutes-to-hours; whisper.cpp can wedge) froze the whole
+	// message pump: later texts/commands went unprocessed. The remote
+	// engine has a 60s HTTP timeout; give the local engine a generous
+	// wall-clock bound of its own.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, w.binPath, args...)
 	cmd.Stdout = nil
