@@ -23,7 +23,11 @@ func isProcessRunningWindows(proc *os.Process) bool {
 
 	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(proc.Pid))
 	if err != nil {
-		return false
+		// #1535: ACCESS_DENIED means the process exists but belongs to
+		// another user/elevation - treating it as dead made daemon slot
+		// checks delete the PID file and fork a second daemon. Same
+		// principle as the WaitFor fallback below: when in doubt, alive.
+		return true
 	}
 	defer windows.CloseHandle(handle)
 

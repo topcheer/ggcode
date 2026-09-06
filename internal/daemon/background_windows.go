@@ -77,7 +77,15 @@ func openPIDFile(path string) (*os.File, error) {
 }
 
 func newBackgroundSysProcAttr() *syscall.SysProcAttr {
-	return &syscall.SysProcAttr{}
+	// #1535: daemon is the LAST holdout without console detachment - mcp/
+	// acp child processes all set CREATE_NO_WINDOW|NEW_PROCESS_GROUP (see
+	// mcp/command_process_windows.go). Without it the daemon dies with the
+	// launching terminal's CTRL_C_EVENT, breaking the 'survives terminal
+	// close' contract that unix Setpgid already honors.
+	return &syscall.SysProcAttr{
+		CreationFlags: 0x08000000 | syscall.CREATE_NEW_PROCESS_GROUP,
+		HideWindow:    true,
+	}
 }
 
 func checkProcessAlive(proc *os.Process) error {

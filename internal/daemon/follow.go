@@ -363,6 +363,10 @@ func (d *TerminalFollowDisplay) OnRoundDone() {
 func (d *TerminalFollowDisplay) OnError(err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// #1535: drop the half-streamed round text - the writer side got this
+	// same fix (#552-D); keeping the buffer stitched the failed round's
+	// partial text onto the next round's answer as one message.
+	d.roundBuf.Reset()
 	fmt.Fprintf(d.out, "❌ %v"+nl, err)
 }
 

@@ -26,5 +26,14 @@ func openPIDFile(path string) (*os.File, error) {
 }
 
 func checkProcessAlive(proc *os.Process) error {
-	return proc.Signal(syscall.Signal(0))
+	// #1535: EPERM means the process EXISTS but is not ours (root-owned
+	// daemon checked by a regular user, cross-user on shared hosts).
+	// Returning it as an error made CheckExistingDaemon treat the live
+	// daemon as gone, delete the PID file, and fork a second daemon.
+	// EPERM = alive; only ESRCH means gone.
+	err := proc.Signal(syscall.Signal(0))
+	if err == syscall.EPERM {
+		return nil
+	}
+	return err
 }
