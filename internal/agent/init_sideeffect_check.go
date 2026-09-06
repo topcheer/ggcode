@@ -76,7 +76,9 @@ var iseFmtIOFuncs = map[string]bool{
 	"Fprint": true, "Fprintf": true, "Fprintln": true,
 	"Scan": true, "Scanf": true, "Scanln": true,
 	"Fscan": true, "Fscanf": true, "Fscanln": true,
-	"Sscan": true, "Sscanf": true, "Sscanln": true,
+	// #1577-D: Sscan/Sscanf/Sscanln parse IN-MEMORY strings - zero I/O -
+	// flagging them contradicted this header ("pure fmt functions do NOT
+	// perform I/O"). Stdin/file scans stay flagged; memory scans removed.
 }
 
 // iseFuncNames lists specific function calls that are definite side effects
