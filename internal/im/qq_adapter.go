@@ -1708,6 +1708,12 @@ func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) 
 		if err != nil {
 			return "", fmt.Errorf("invalid base64 in data URL: %w", err)
 		}
+		// #1557: the URL branch enforces imagepkg.MaxSize via ReadLimited;
+		// this branch decoded unbounded - a huge data-URL attachment passed
+		// through verbatim (same attachment, inconsistent limits).
+		if int64(len(data)) > imagepkg.MaxSize {
+			return "", fmt.Errorf("data URL image exceeds %d bytes", imagepkg.MaxSize)
+		}
 		if _, err := imagepkg.Decode(data); err != nil {
 			return "", fmt.Errorf("data URL is not a valid image: %w", err)
 		}
@@ -1715,7 +1721,14 @@ func (a *qqAdapter) resolveImageSource(ctx context.Context, img ExtractedImage) 
 	case "url":
 		if IsLocalFilePath(img.Data) {
 			// Local file path
-			data, err := os.ReadFile(img.Data)
+			// #1557: match the URL branch's size cap (ReadLimited) - the
+			// local path read was unbounded.
+			f, err := os.Open(img.Data)
+			if err != nil {
+				return "", fmt.Errorf("read local image: %w", err)
+			}
+			data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+			f.Close()
 			if err != nil {
 				return "", fmt.Errorf("read local image: %w", err)
 			}
