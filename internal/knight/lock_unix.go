@@ -93,7 +93,12 @@ func LockHeldBy(projDir string) (int, error) {
 	// Verify the lock is actually held by checking with a non-blocking attempt
 	f, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
 	if err != nil {
-		return pid, nil // can't open = stale
+		// #1576-E: the old comment claimed "can't open = stale" while the
+		// code returned (pid, nil) - callers read that as "ANOTHER INSTANCE
+		// IS RUNNING" and blamed a permission error on a live PID (the
+		// Windows branch correctly returns 0). Report the failure as a
+		// failure; only a real flock win proves liveness.
+		return 0, fmt.Errorf("cannot verify knight lock %s: %w", lockPath, err)
 	}
 	defer f.Close()
 
