@@ -29,6 +29,11 @@ func (pdfExtractor) Extract(data []byte) (TextResult, error) {
 		}
 		text, err := page.GetPlainText(nil)
 		if err != nil {
+			// #1542: a corrupt page silently vanished - a 50-page doc became
+			// 49 with no page number and no marker while Pages still reported
+			// the total, the exact masquerade svg/tar/zip already fixed
+			// (#686/#682). Flag it honestly.
+			fmt.Fprintf(&buf, "\n[page %d unreadable: %v]", i+1, err)
 			continue
 		}
 		text = strings.TrimSpace(text)

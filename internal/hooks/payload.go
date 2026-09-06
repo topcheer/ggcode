@@ -103,8 +103,25 @@ func BuildPayload(env HookEnv) HookPayload {
 
 // JSON serializes the payload to JSON bytes.
 func (p HookPayload) JSON() []byte {
-	b, _ := json.Marshal(p)
-	return b
+	b, err := json.Marshal(p)
+	if err == nil {
+		return b
+	}
+	// #1542: the swallowed error returned nil, and ALL THREE hook channels
+	// (stdin, GGCODE_HOOK_PAYLOAD env, HTTP body) went empty while HMAC
+	// signed the empty string - silently. The usual culprit is Tool.Input
+	// holding non-strict JSON. Degrade by dropping Tool.Input and
+	// re-marshaling so hooks at least receive the well-formed remainder.
+	sans := p
+	if sans.Tool != nil {
+		t := *sans.Tool // clone: Tool is a shared pointer
+		t.Input = nil
+		sans.Tool = &t
+	}
+	if b2, err2 := json.Marshal(sans); err2 == nil {
+		return b2
+	}
+	return nil
 }
 
 func parseDurationMs(s string) int64 {
