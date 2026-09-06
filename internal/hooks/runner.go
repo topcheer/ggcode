@@ -506,7 +506,16 @@ func matchToolSingle(pattern, toolName, rawInput string) bool {
 			}
 			return strings.Contains(rawInput, prefix)
 		}
-		return strings.Contains(rawInput, patArgs)
+		// #1543: exact/substring patterns ran Contains over the raw JSON
+		// INCLUDING content fields - the star branch already established
+		// (in #679) that content hits are false positives (edit_file with
+		// new_text merely mentioning the pattern blocked a legitimate
+		// edit). Apply the same strip to the non-star branch; the path
+		// itself still takes priority when extractable.
+		if p := ExtractFilePath(toolName, rawInput); p != "" {
+			return strings.Contains(p, patArgs)
+		}
+		return strings.Contains(stripContentValues(rawInput), patArgs)
 	}
 
 	// Simple glob match on tool name

@@ -78,9 +78,26 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 				continue
 			}
 		}
-		// Built-in PC adapter — only start when binding explicitly targets it
+		// Built-in PC adapter — only start when binding explicitly targets it.
+		// #1543: startPCAdapter's "explicit config already present" skip
+		// must only fire for the AUTO binding name (_pc_builtin). A binding
+		// literally NAMED "privateclaw" (UI default names bindings after
+		// the platform) hit the same skip via the platform-name match, so
+		// the CLI/daemon restore path returned from startPCAdapter and the
+		// continue skipped startConfiguredAdapter - zero startup, zero
+		// logs, zero errors.
 		if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
-			startPCAdapter(ctx, cfg, mgr)
+			if binding.Adapter == "_pc_builtin" {
+				startPCAdapter(ctx, cfg, mgr)
+			} else {
+				// User-named binding: treat like any explicit config entry.
+				adapterCfg, ok := cfg.Adapters[binding.Adapter]
+				if ok && adapterCfg.Enabled {
+					if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
+						debug.Log("im", "binding adapter %q: %v", binding.Adapter, err)
+					}
+				}
+			}
 			continue
 		}
 
