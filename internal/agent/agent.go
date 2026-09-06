@@ -3923,7 +3923,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Smart verify hint reset: if the agent ran a build/test/verify command,
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
-			a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
+			// #1549: gate by command CONTENT like every sibling (#1455-A's
+			// maybeResetVerifyOnCommand above, #487's propagation counter).
+			// The unconditional call made ANY successful tool - read_file,
+			// grep, even the successful edit itself (clearing right before
+			// recordSourceEdit adds 1 back) - zero the debt, so debt never
+			// exceeded 1 and the warn thresholds (7/12) were unreachable:
+			// the detector was permanently silent.
+			if tc.Name == "run_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
+				a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
+			}
 			// #487: gate on command CONTENT — the unconditional raw setter made
 			// the first read_file count as a build/test and silenced the
 			// detector for the whole run.
