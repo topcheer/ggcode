@@ -216,7 +216,16 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 	for i, path := range paths {
 		go safego.Run("cmd.reportScan.file", func() {
 			sr, err := scanSessionFile(path)
-			if err != nil || sr == nil {
+			// #1537: scanSessionFile deliberately returns partial results
+			// alongside errors (the 4MB single-line cap trips on
+			// screenshot-laden turns AFTER earlier turns were already
+			// parsed). Dropping the non-nil sr removed the session from the
+			// report silently - and pasted-image sessions are the most
+			// active ones. Keep partial results; warn.
+			if err != nil && sr != nil {
+				fmt.Fprintf(os.Stderr, "report: partial session scan %s: %v\n", path, err)
+			}
+			if sr == nil {
 				ch <- fileResult{idx: i, sr: nil}
 				return
 			}
