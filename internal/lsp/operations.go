@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 type WorkspaceSymbol struct {
@@ -40,6 +42,13 @@ type rawTextEdit struct {
 type rawWorkspaceEdit struct {
 	Changes         map[string][]rawTextEdit `json:"changes"`
 	DocumentChanges []struct {
+		// #1588-B: rename/delete entries carry NO edits key - the typed
+		// struct had no kind field, so those entries silently parsed to
+		// empty Edits and the loop skipped them, leaving callers with
+		// "No rename edits returned" that masked "the server returned an
+		// unsupported change form" (typescript-language-server
+		// Move-to-file class). Track kind so unsupported forms surface.
+		Kind         string `json:"kind"`
 		TextDocument struct {
 			URI string `json:"uri"`
 		} `json:"textDocument"`
@@ -145,6 +154,7 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 	}
 	grouped := make(map[string][]TextEdit)
 	seen := make(map[string]struct{})
+	var unsupportedWorkspaceChangeKinds []string
 	appendEdit := func(path string, edit TextEdit) {
 		key := path + "|" + editKey(edit)
 		if _, dup := seen[key]; dup {
@@ -160,6 +170,15 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 		}
 	}
 	for _, change := range edit.DocumentChanges {
+		// #1588-B: kind-bearing entries without edits (rename, delete)
+		// previously parsed to empty Edits and skipped silently; surface
+		// them so callers can report the unsupported change form instead
+		// of a bare "no edits returned".
+		if change.Kind != "" && change.Kind != "edit" && len(change.Edits) == 0 {
+			unsupportedWorkspaceChangeKinds = append(unsupportedWorkspaceChangeKinds,
+				fmt.Sprintf("%s %s", change.Kind, uriToPath(change.TextDocument.URI)))
+			continue
+		}
 		path := uriToPath(change.TextDocument.URI)
 		for _, e := range change.Edits {
 			appendEdit(path, TextEdit{Range: toRange(e.Range), NewText: e.NewText})
@@ -176,6 +195,12 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 	out := make([]FileEdit, 0, len(paths))
 	for _, path := range paths {
 		out = append(out, FileEdit{Path: path, Edits: grouped[path]})
+	}
+	// #1588-B: make unsupported documentChanges kinds observable instead
+	// of the old silent skip (callers saw only "no edits returned").
+	if len(unsupportedWorkspaceChangeKinds) > 0 {
+		debug.Log("lsp", "workspace edit dropped unsupported documentChanges kinds: %s",
+			strings.Join(unsupportedWorkspaceChangeKinds, ", "))
 	}
 	return out
 }
