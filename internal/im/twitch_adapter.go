@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -542,7 +543,8 @@ func (a *twitchAdapter) handlePRIVMSG(ctx context.Context, msg *ircMessage, tags
 
 	// Mention gating for channels
 	if !isDM {
-		if !strings.Contains(strings.ToLower(text), "@"+currentNick) && !strings.Contains(text, currentNick) {
+		// #1565: token-bounded, case-insensitive mention check.
+		if !twitchNickMentioned(text, currentNick) {
 			return
 		}
 		text = stripTwitchMention(text, currentNick)
@@ -603,10 +605,46 @@ func (a *twitchAdapter) handlePairing(ctx context.Context, ircMsg InboundMessage
 	return true
 }
 
+// twitchNickMentioned reports whether text mentions currentNick as a
+// whole TOKEN, case-insensitively.
+// #1565: the old second condition was a bare substring Contains -
+// "ggcodex is broken" mentioned nick "ggcode" (substring INSIDE a word),
+// so messages that never addressed the bot were forwarded, and
+// stripTwitchMention then amputated the substring mid-word, corrupting
+// the text the agent received.
+func twitchNickMentioned(text, currentNick string) bool {
+	if currentNick == "" {
+		return false
+	}
+	ln := strings.ToLower(currentNick)
+	for _, tok := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	}) {
+		if tok == ln {
+			return true
+		}
+	}
+	return false
+}
+
 func stripTwitchMention(text, nick string) string {
-	text = strings.ReplaceAll(text, "@"+nick, "")
-	text = strings.ReplaceAll(text, nick, "")
-	return strings.Join(strings.Fields(text), " ")
+	if nick == "" {
+		return strings.Join(strings.Fields(text), " ")
+	}
+	// #1565: token-level, case-INSENSITIVE removal. The old ReplaceAll
+	// pair was case-sensitive ("@GGCode do X" kept the mention after the
+	// gate matched it) and matched substrings inside words, corrupting
+	// them. Dropping whole tokens also collapses consecutive mentions
+	// cleanly ("@bot @bot double" -> "double").
+	ln := strings.ToLower(nick)
+	kept := make([]string, 0, len(strings.Fields(text)))
+	for _, tok := range strings.Fields(text) {
+		if strings.ToLower(strings.TrimPrefix(tok, "@")) == ln {
+			continue
+		}
+		kept = append(kept, tok)
+	}
+	return strings.Join(kept, " ")
 }
 
 // ---------------------------------------------------------------------------

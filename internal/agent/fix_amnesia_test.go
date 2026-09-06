@@ -239,10 +239,10 @@ func TestFixAmnesiaSameFileAnchoring(t *testing.T) {
 		}
 	}
 	bad := [][2]string{
-		{"foo_test.go", "/w/other/foo_test.go"},                        // bare name
-		{"foo.go", "/w/anywhere/foo.go"},                               // bare name 2
-		{"agent/foo.go", "/w/desktop/wailskit/agent/foo.go"},           // one-segment vs mirror tree
-		{"/w/a/internal/x/foo.go", "/w/b/internal/x/foo.go"},           // same tail, different roots
+		{"foo_test.go", "/w/other/foo_test.go"},              // bare name
+		{"foo.go", "/w/anywhere/foo.go"},                     // bare name 2
+		{"agent/foo.go", "/w/desktop/wailskit/agent/foo.go"}, // one-segment vs mirror tree
+		{"/w/a/internal/x/foo.go", "/w/b/internal/x/foo.go"}, // same tail, different roots
 	}
 	for _, c := range bad {
 		if fixAmnesiaSameFile(c[0], c[1]) {

@@ -672,7 +672,10 @@ func TestStripTwitchMention(t *testing.T) {
 		{"@bot hello", "bot", "hello"},
 		{"bot hello world", "bot", "hello world"},
 		{"hello world", "bot", "hello world"},
-		{"@Bot hello", "bot", "@Bot hello"}, // case-sensitive, @Bot not stripped when nick is lowercase
+		// #1565: reversed - the old case-sensitive strip was asymmetric
+		// with the (case-insensitive) mention gate: "@GGCode do X" passed
+		// the gate but kept the mention. Strip is case-insensitive now.
+		{"@Bot hello", "bot", "hello"},
 		{"@bot @bot double", "bot", "double"},
 	}
 	for _, tt := range tests {
@@ -680,5 +683,22 @@ func TestStripTwitchMention(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("stripTwitchMention(%q, %q) = %q, want %q", tt.text, tt.nick, got, tt.want)
 		}
+	}
+}
+
+// Regression for #1565: mention gating is token-bounded and
+// case-insensitive; stripping never amputates mid-word substrings.
+func TestTwitchMentionTokenBoundary(t *testing.T) {
+	if twitchNickMentioned("ggcodex is broken", "ggcode") {
+		t.Fatal("substring inside a word must not count as a mention")
+	}
+	if !twitchNickMentioned("@GGCode do X", "ggcode") {
+		t.Fatal("case-insensitive whole-token mention must count")
+	}
+	if got := stripTwitchMention("ggcodex is broken", "ggcode"); got != "ggcodex is broken" {
+		t.Fatalf("mid-word substring must not be stripped, got %q", got)
+	}
+	if got := stripTwitchMention("@GGCode do X", "ggcode"); got != "do X" {
+		t.Fatalf("case-insensitive mention must be stripped, got %q", got)
 	}
 }
