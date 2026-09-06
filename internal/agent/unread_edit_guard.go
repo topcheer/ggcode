@@ -256,7 +256,39 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 		return extractObjectArrayPaths(m)
 	case "batch_replace":
 		return extractStringArrayPaths(m)
+	case "write_file":
+		return extractSinglePath(m, "path")
+	case "multi_file_write":
+		return extractObjectArrayPaths(m)
+	case "lsp_rename":
+		return extractSinglePath(m, "path")
+	case "notebook_edit":
+		return extractSinglePath(m, "notebook_path")
+	case "file_ops":
+		// operations[] carries source/destination per op.
+		if ops, ok := m["operations"].([]any); ok {
+			var paths []string
+			for _, o := range ops {
+				om, ok := o.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, key := range []string{"source", "destination"} {
+					if s, ok := om[key].(string); ok && s != "" {
+						paths = append(paths, s)
+					}
+				}
+			}
+			return paths
+		}
+		return nil
 	}
+	// #1547: the agent.go success-recording block (fileEditingTools gate,
+	// sourceMutatingTools' 9 members) previously let these 5 tools through
+	// the gate but extracted zero paths from them - editFailRecovery
+	// resets, fileFreshness, readHash, unread-edit and the rest of the
+	// per-file bookkeeping silently no-oped for them (#1454-C's stated
+	// 3->9 goal actually landed as 3->4).
 	return nil
 }
 
