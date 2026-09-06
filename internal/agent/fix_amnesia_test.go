@@ -210,6 +210,15 @@ func TestFixAmnesiaRelativeVsAbsolutePromotion(t *testing.T) {
 	if len(d2.fixedPatterns["missing-import"]) != 1 {
 		t.Fatal("same-form promotion regressed")
 	}
+	// Windows edit paths arrive OS-separated while compiler output is
+	// slash-form; the normalization must reconcile them on every platform
+	// (dc6b6609).
+	d3 := newFixAmnesiaState()
+	d3.recordErrorObserved("missing-import", "internal/agent/foo.go")
+	d3.recordFileEdited(`C:\repo\root\internal\agent\foo.go`)
+	if len(d3.fixedPatterns["missing-import"]) != 1 {
+		t.Fatalf("backslash-edited vs slash-observed promotion failed: %v", d3.fixedPatterns["missing-import"])
+	}
 }
 
 // TestFixAmnesiaImportInDiffPrefixedHunk pins #1462-B: a '+ ' prefixed diff
