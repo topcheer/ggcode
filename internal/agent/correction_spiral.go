@@ -55,6 +55,9 @@ type correctionSpiralState struct {
 	// iterations after corrections (edits). Each entry is the severity of
 	// the error observed AFTER an edit, in iteration order.
 	errorSequence []int
+	// #1538: sequence length at the time of the last warning - the
+	// escalation re-fire requires new entries since then.
+	lastWarnedSeqLen int
 
 	// totalCorrections counts how many edit→error pairs we've seen.
 	totalCorrections int
@@ -85,6 +88,7 @@ func (s *correctionSpiralState) reset() {
 	s.totalCorrections = 0
 	s.warningCount = 0
 	s.lastWarnedAt = 0
+	s.lastWarnedSeqLen = 0
 	s.lastEditIteration = 0
 	s.pendingEdit = false
 }
@@ -158,6 +162,14 @@ func (s *correctionSpiralState) maybeWarn(iteration int) string {
 	if s.warningCount > 0 && iteration-s.lastWarnedAt < 5 {
 		return ""
 	}
+	// #1538: the second (heaviest, 'revert and start over') warning must
+	// require NEW failure evidence. Read-only investigation freezes
+	// errorSequence; the iteration-distance gate alone re-fired the
+	// CRITICAL on the exact same data while the agent was legitimately
+	// investigating or waiting for clarification.
+	if s.warningCount > 0 && len(s.errorSequence) <= s.lastWarnedSeqLen {
+		return ""
+	}
 
 	// Analyze the recent error sequence for escalation
 	seq := s.errorSequence
@@ -192,6 +204,7 @@ func (s *correctionSpiralState) maybeWarn(iteration int) string {
 
 	s.warningCount++
 	s.lastWarnedAt = iteration
+	s.lastWarnedSeqLen = len(s.errorSequence) // #1538: evidence snapshot for the new-entry gate
 
 	// Build severity trajectory description
 	labels := make([]string, len(seq))

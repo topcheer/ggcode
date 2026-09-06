@@ -69,10 +69,17 @@ func TestCorrectionSpiral_SecondWarning(t *testing.T) {
 	if msg2 != "" {
 		t.Fatal("expected no warning too soon after first")
 	}
-	// Second warning after spacing
+	// #1538: a re-warn also requires NEW failure evidence - a frozen
+	// sequence (read-only investigation) must stay silent even after the
+	// spacing window passes.
+	if msg3 := s.maybeWarn(16); msg3 != "" {
+		t.Fatal("expected no re-warn on frozen sequence")
+	}
+	// Second warning after spacing AND new evidence.
+	s.errorSequence = append(s.errorSequence, sevCrash)
 	msg3 := s.maybeWarn(16)
 	if msg3 == "" {
-		t.Fatal("expected second warning after spacing")
+		t.Fatal("expected second warning after spacing with new evidence")
 	}
 	if s.warningCount != 2 {
 		t.Errorf("expected warningCount=2, got %d", s.warningCount)
@@ -234,5 +241,27 @@ func TestCorrectionSpiralGreenClearsErrorSequence(t *testing.T) {
 	}
 	if len(s.errorSequence) != 0 {
 		t.Fatalf("green did not clear errorSequence: %v", s.errorSequence)
+	}
+}
+
+// Regression for #1538: the second (heaviest) warning must require NEW
+// error-sequence entries - read-only investigation freezes the sequence
+// and the iteration-distance gate alone re-fired the CRITICAL "revert and
+// start over" on identical evidence.
+func TestCorrectionSpiralNoNewEvidenceNoRewarn(t *testing.T) {
+	s := newCorrectionSpiralState()
+	s.errorSequence = []int{1, 3, 5}
+	got := s.maybeWarn(10)
+	if got == "" {
+		t.Fatal("first warning must fire on 3-pair escalation")
+	}
+	// No new entries; distance satisfied - must NOT re-warn.
+	if got := s.maybeWarn(20); got != "" {
+		t.Fatalf("re-warn on frozen sequence must not fire: %.80s", got)
+	}
+	// New entry - re-warn allowed.
+	s.errorSequence = append(s.errorSequence, 6)
+	if got := s.maybeWarn(20); got == "" {
+		t.Fatal("warning must re-fire after new failure evidence")
 	}
 }
