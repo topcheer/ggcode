@@ -35,6 +35,12 @@ func init() {
 	defaultRegistry.Register(".docx", &docxExtractor{})
 	defaultRegistry.Register(".xlsx", &xlsxExtractor{})
 	defaultRegistry.Register(".pptx", &pptxExtractor{})
+	// #1540: macro-enabled variants are the same OOXML zip the library
+	// parses directly - without registration IsDocumentFile was false and
+	// the binary zip bytes went into context as a garbage string.
+	defaultRegistry.Register(".docm", &docxExtractor{})
+	defaultRegistry.Register(".xlsm", &xlsxExtractor{})
+	defaultRegistry.Register(".pptm", &pptxExtractor{})
 	// OpenDocument
 	defaultRegistry.Register(".odt", &odfExtractor{subFormat: "odt"})
 	defaultRegistry.Register(".ods", &odfExtractor{subFormat: "ods"})
