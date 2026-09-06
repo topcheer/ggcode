@@ -459,7 +459,52 @@ func isIdentChar(b byte) bool {
 
 // gitFileContentAtHEAD returns the file content from the last committed version.
 func gitFileContentAtHEAD(workingDir, relPath string) (string, error) {
-	return runGitShowWithTimeout(workingDir, relPath, gitDiffTimeout)
+	// #1541: tool calls carry ABSOLUTE paths (the schema says "Prefer an
+	// absolute path") and `git show HEAD:<abs>` rejects them outright;
+	// paths relative to a -C SUBDIR break too (git show resolves from the
+	// REPO ROOT). Every production caller fell into the per-file continue,
+	// so the whole detector (including #1450's unexported extraction)
+	// never ran - tests happened to use repo-root relative paths. Resolve
+	// the repo root and normalize against it.
+	repoRoot := gitRepoTopLevel(workingDir)
+	// Normalize workingDir to absolute for consistent comparison - a
+	// relative workingDir and the absolute repoRoot never compare equal.
+	absWork := workingDir
+	if !filepath.IsAbs(absWork) {
+		if a, err := filepath.Abs(absWork); err == nil {
+			absWork = a
+		}
+	}
+	target := relPath
+	if filepath.IsAbs(target) {
+		base := repoRoot
+		if base == "" {
+			base = absWork
+		}
+		rel, err := filepath.Rel(base, target)
+		if err != nil {
+			return "", err
+		}
+		target = rel
+	} else if repoRoot != "" && absWork != repoRoot && strings.HasPrefix(absWork, repoRoot+string(filepath.Separator)) {
+		// Subdir-relative path: rebase onto the repo root.
+		target = filepath.Join(strings.TrimPrefix(absWork, repoRoot+string(filepath.Separator)), target)
+	}
+	target = filepath.Clean(target)
+	if target == ".." || strings.HasPrefix(target, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes repo root", target)
+	}
+	return runGitShowWithTimeout(workingDir, target, gitDiffTimeout)
+}
+
+// gitRepoTopLevel returns the repository root for workingDir ("" on failure).
+func gitRepoTopLevel(workingDir string) string {
+	cmd := exec.Command("git", "-C", workingDir, "rev-parse", "--show-toplevel")
+	out, err := runGitCommandWithTimeout(cmd, gitDiffTimeout)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // runGitShowWithTimeout runs `git show HEAD:path` with a timeout.
