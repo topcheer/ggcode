@@ -121,6 +121,14 @@ func acpMCPServerToConfig(srv MCPServer) config.MCPServerConfig {
 	if transportType == "" && srv.Command != "" {
 		transportType = "stdio"
 	}
+	// #1606-B: a URL-only server (no type, no command) fell through with
+	// Type "" - the transport switch defaults to stdio and
+	// exec.Command("") fails on connect, with the per-server error
+	// swallowed (non-fatal by design) so the peer never learned the
+	// mount failed. URL presence implies streamable http.
+	if transportType == "" && srv.URL != "" {
+		transportType = "http"
+	}
 
 	return config.MCPServerConfig{
 		Name:    srv.Name,
