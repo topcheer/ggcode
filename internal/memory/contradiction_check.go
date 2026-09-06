@@ -375,14 +375,42 @@ func numericConflict(a, b string) bool {
 		return false
 	}
 	// If both have version-like numbers and they differ, flag conflict.
+	// #1592-C: the old cross-product loop flagged conflict when ANY pair
+	// differed - order-permuted or superset sets of the SAME facts
+	// ("go 1.27 with node 20" vs "node 20 paired with go 1.27", "8080
+	// 8443" vs "8080") read as contradictions, and the injected warning
+	// told the agent to delete the CORRECT memory. Compare as SETS:
+	// conflicting only when each side holds a number the other lacks
+	// (subset/superset/equal all pass).
+	amissing := false
 	for _, an := range aNums {
+		found := false
 		for _, bn := range bNums {
-			if an != bn {
-				return true
+			if an == bn {
+				found = true
+				break
 			}
 		}
+		if !found {
+			amissing = true
+			break
+		}
 	}
-	return false
+	bmissing := false
+	for _, bn := range bNums {
+		found := false
+		for _, an := range aNums {
+			if bn == an {
+				found = true
+				break
+			}
+		}
+		if !found {
+			bmissing = true
+			break
+		}
+	}
+	return amissing && bmissing
 }
 
 // tokenOverlap computes the Jaccard similarity between the token sets of two

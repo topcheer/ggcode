@@ -171,3 +171,22 @@ func TestClaimsConflict_Direct(t *testing.T) {
 		})
 	}
 }
+
+// Regression for #1592-C: number-set comparison must be order-insensitive
+// and subset-tolerant - the old any-pair-differs loop flagged permuted
+// and superset sets of the SAME facts and told the agent to delete the
+// correct memory.
+func TestNumericConflictSetSemantics(t *testing.T) {
+	// Same facts, permuted order: no conflict.
+	if numericConflict("go 1.27 with node 20", "node 20 paired with go 1.27") {
+		t.Fatal("permuted same-fact sets must not conflict")
+	}
+	// Superset (subset/superset pass): no conflict.
+	if numericConflict("ports 8080 8443", "port 8080") {
+		t.Fatal("superset sets must not conflict")
+	}
+	// Genuinely disjoint numbers on both sides: conflict.
+	if !numericConflict("go 1.27", "go 1.35") {
+		t.Fatal("each side holding a number the other lacks must conflict")
+	}
+}
