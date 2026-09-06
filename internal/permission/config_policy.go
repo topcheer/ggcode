@@ -87,6 +87,16 @@ func (p *ConfigPolicy) AllowCommandPattern(pattern string) {
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
 	// Don't dump tool input JSON — can be huge and contains file content
 
+	// #1595-C: an explicit user Deny is the STRONGEST signal (the #741 /
+	// #573-B comment itself says so) - it must precede the fast paths.
+	// IsAlwaysAllowedTool includes lanchat/im, and the benign-action
+	// branch returned Allow BEFORE the Deny lookup: a user who denied
+	// lanchat/im was silently ignored, and the ignored channel was
+	// exactly the outbound one Deny is most meant to gate.
+	if d, ok := p.rules[toolName]; ok && d == Deny {
+		return Deny, nil
+	}
+
 	// Interactive/communication tools are always auto-approved regardless of mode.
 	// ask_user: the tool itself IS the user interaction — requiring approval would be circular.
 	// save_memory: writing project memory is always safe and expected.

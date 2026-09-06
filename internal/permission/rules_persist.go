@@ -101,11 +101,19 @@ func SnapshotRules(p *ConfigPolicy, configDir string) *PermissionRulesFile {
 	}
 	p.mu.RUnlock()
 
+	// #1596-D: cmdRules was read OUTSIDE the lock while p.rules held it -
+	// a TUI rules save racing an approval callback's AllowCommandPattern
+	// (in-place AddAllowPattern) was a data race tearing the snapshot.
+	// Read both under the same RLock.
+	p.mu.RLock()
+	var allowPats, denyPats []string
 	if p.cmdRules != nil {
-		// Convert regex patterns back to user-friendly glob patterns
-		data.CommandAllowPatterns = userFriendlyPatterns(p.cmdRules.AllowPatterns())
-		data.CommandDenyPatterns = userFriendlyPatterns(p.cmdRules.DenyPatterns())
+		allowPats = userFriendlyPatterns(p.cmdRules.AllowPatterns())
+		denyPats = userFriendlyPatterns(p.cmdRules.DenyPatterns())
 	}
+	p.mu.RUnlock()
+	data.CommandAllowPatterns = allowPats
+	data.CommandDenyPatterns = denyPats
 
 	return data
 }
