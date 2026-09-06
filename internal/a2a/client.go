@@ -96,10 +96,34 @@ func WithTokenProvider(p TokenProvider) ClientOption {
 
 // NewClient creates a new A2A client targeting the given server URL.
 func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
+	// #1556: the DEFAULT client (apiKey/bearer - the overwhelming majority
+	// of A2A calls) still carried BOTH #1458 defects; the fixes landed only
+	// on the WithMTLS branch:
+	//   A) Client.Timeout is a hard cap over the ENTIRE interaction
+	//      including SSE body reads - 15min streams die mid-flight and ctx
+	//      deadlines cannot extend it. Build the header-only-timeout
+	//      variant for the default path too.
+	//   B) CheckRedirect stripping only protected the mTLS client whose
+	//      setAuth sets NO header - the clients actually carrying
+	//      X-API-Key followed a cross-host 302 with the key verbatim (Go
+	//      strips only Authorization/Cookies).
+	client := util.NewInsecureAwareClient(15 * time.Minute)
+	if tr, ok := client.Transport.(interface {
+		http.RoundTripper
+		Clone() *http.Transport
+	}); ok {
+		t2 := tr.Clone()
+		t2.ResponseHeaderTimeout = 15 * time.Minute
+		client.Transport = t2
+		// Client.Timeout is the hard cap we are removing; ctx governs the
+		// overall duration now, mirroring the WithMTLS branch.
+		client.Timeout = 0
+	}
+	client.CheckRedirect = stripKeyOnRedirect
 	c := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
-		httpClient: util.NewInsecureAwareClient(15 * time.Minute),
+		httpClient: client,
 	}
 	if apiKey != "" && c.authMethod == "" {
 		c.authMethod = "apiKey"
@@ -202,6 +226,11 @@ func (c *Client) NegotiateAuth() error {
 					if c.apiKeyIn == "query" {
 						// The client cannot rewrite the endpoint URL per-card
 						// here; report explicitly instead of 401-at-first-call.
+						// #1556-C: return WITHOUT unlocking held c.mu - every
+						// later setAuth/NegotiateAuth/tryBearerToken blocked
+						// forever (Go mutexes have no timeout); the client was
+						// unrecoverable.
+						c.mu.Unlock()
 						return fmt.Errorf("a2a: card requires apiKey in query param %q - not supported", scheme.Name)
 					}
 					c.mu.Unlock()
