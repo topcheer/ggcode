@@ -60,7 +60,7 @@ func TestBgOrphan_NoWarnAfterOutputCheck(t *testing.T) {
 
 	// Agent reads output at iteration 2 -- resets the timer
 	readArgs := json.RawMessage(`{"job_id": "job-1"}`)
-	s.recordOutputCheck(readArgs, "Status: RUNNING\nTotal lines: 1", 2)
+	s.recordOutputCheck(readArgs, "Status: running\nTotal lines: 1", 2)
 
 	// At iteration 3, gap is only 1 -- should not warn
 	if msg := s.checkOrphanedCommands(3); msg != "" {
@@ -159,7 +159,7 @@ func TestBgOrphan_ReWarnAfterRecheck(t *testing.T) {
 
 	// Agent rechecks output -- clears warning state
 	readArgs := json.RawMessage(`{"job_id": "job-1"}`)
-	s.recordOutputCheck(readArgs, "Status: RUNNING\nTotal lines: 2", 3)
+	s.recordOutputCheck(readArgs, "Status: running\nTotal lines: 2", 3)
 
 	// Goes stale again
 	msg := s.checkOrphanedCommands(6)
@@ -245,12 +245,12 @@ func TestBgOrphan_TruncateBgCmd(t *testing.T) {
 func TestBgOrphanTerminalStatusExitsTracking(t *testing.T) {
 	s := newBgOrphanState()
 	// recordStartCommand extracts the job ID from the RESULT snapshot.
-	s.recordStartCommand(json.RawMessage("{\"command\":\"sleep 1\"}"), "Job ID: job-1\nStatus: RUNNING", 1)
+	s.recordStartCommand(json.RawMessage("{\"command\":\"sleep 1\"}"), "Job ID: job-1\nStatus: running", 1)
 	if len(s.activeJobs) == 0 {
 		t.Fatal("job not tracked after start")
 	}
 	readArgs := json.RawMessage(`{"job_id": "job-1"}`)
-	s.recordOutputCheck(readArgs, "Job ID: job-1\nStatus: SUCCESS\nTotal lines: 3", 2)
+	s.recordOutputCheck(readArgs, "Job ID: job-1\nStatus: completed\nTotal lines: 3", 2)
 	if len(s.activeJobs) != 0 {
 		t.Fatalf("completed job still tracked: %d", len(s.activeJobs))
 	}

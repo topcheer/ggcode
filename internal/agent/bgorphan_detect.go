@@ -170,7 +170,14 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 			continue
 		}
 		status := strings.TrimSpace(strings.TrimPrefix(line, "Status:"))
-		if status == "SUCCESS" || status == "FAILED" || status == "CRASHED" || status == "REMOVED" {
+		// #1524: the renderer emits the job manager's LOWERCASE value
+		// domain (running/completed/failed/cancelled/timed_out). #1440's
+		// fix compared UPPERCASE literals (SUCCESS/FAILED/CRASHED/REMOVED)
+		// that never occur - completed jobs stayed in activeJobs, fired
+		// false orphan warnings until the injection budget burned out, and
+		// real orphans went permanently silent after that.
+		switch strings.ToLower(status) {
+		case "completed", "failed", "cancelled", "timed_out":
 			delete(s.activeJobs, jobID)
 			delete(s.warned, jobID)
 			return
