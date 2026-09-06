@@ -63,7 +63,22 @@ func (s *ProductStore) Create(input *model.CreateProductInput) (*model.Product, 
 	s.products[product.ID] = product
 	s.bySKU[normalizedSKU] = product.ID
 
-	return product, nil
+	// #1563: GetByID/List return copies (#1461-B) but Create/Update
+	// returned the STORED pointer - the same race class via two more
+	// exits (caller json.Marshal after lock release vs concurrent
+	// Update). Return a copy with a deep-copied Tags slice (shallow
+	// copies shared the backing array, so caller mutations wrote through
+	// into storage outside the lock).
+	return cloneProduct(product), nil
+}
+
+// cloneProduct returns a deep copy safe to hand past the lock boundary.
+func cloneProduct(p *model.Product) *model.Product {
+	cp := *p
+	if p.Tags != nil {
+		cp.Tags = append([]string(nil), p.Tags...)
+	}
+	return &cp
 }
 
 // GetByID retrieves a product by its ID.
@@ -127,7 +142,8 @@ func (s *ProductStore) Update(id string, input *model.UpdateProductInput) (*mode
 	}
 
 	product.UpdatedAt = time.Now().UTC()
-	return product, nil
+	// #1563: same race class as Create - never hand out the stored pointer.
+	return cloneProduct(product), nil
 }
 
 // Delete removes a product from the store by ID.
