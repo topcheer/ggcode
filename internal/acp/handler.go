@@ -504,6 +504,25 @@ func (h *Handler) handleSessionLoad(params json.RawMessage) (interface{}, error)
 		if err != nil {
 			return nil, fmt.Errorf("loading session: %w", err)
 		}
+	} else {
+		// #1594-C: legacy root layout shadow. Save now redirects to the
+		// per-CWD subdirectory, but a leftover root <id>.json wins every
+		// future top-level load (read path) while saves keep updating the
+		// subdirectory copy - the user sees conversations roll back. When
+		// the subdirectory copy exists, prefer it and remove the stale
+		// root original (the subdirectory copy is the one saves update).
+		sub := filepath.Join(workspaceSessionsDir(h.sessionsDir, session.CWD), loadParams.SessionID+".json")
+		if sub != filepath.Join(h.sessionsDir, loadParams.SessionID+".json") {
+			if subData, subErr := os.ReadFile(sub); subErr == nil {
+				var sd SessionData
+				if json.Unmarshal(subData, &sd) == nil && sd.ID == session.ID {
+					if s2, lErr := LoadSession(workspaceSessionsDir(h.sessionsDir, session.CWD), loadParams.SessionID); lErr == nil {
+						session = s2
+					}
+					_ = os.Remove(filepath.Join(h.sessionsDir, loadParams.SessionID+".json"))
+				}
+			}
+		}
 	}
 
 	// Register the loaded session
