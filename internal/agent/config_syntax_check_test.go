@@ -270,3 +270,18 @@ func TestCheckConfigSyntaxCIWorkflowListBlockScalar(t *testing.T) {
 		t.Fatalf("legit CI workflow falsely flagged: %s", msg)
 	}
 }
+
+// Regression for #1534: keyless list-item block scalars (`- |` in Argo/
+// Flux/k8s shapes) and headers with trailing comments (`| # note`) never
+// engaged the block state, so the shell body's same-prefixed lines were
+// reported as duplicate mapping keys (Critical).
+func TestValidateYAMLKeylessBlockScalar(t *testing.T) {
+	keyless := "script:\n  - |\n    echo \"phase 1: build\"\n    echo \"phase 1: build\"\n"
+	if dups := validateYAML(keyless, "f.yaml"); len(dups) != 0 {
+		t.Fatalf("keyless list block scalar must not report dups, got %v", dups)
+	}
+	commented := "build: | # compile everything\n  make build\n  make build\n"
+	if dups := validateYAML(commented, "f.yaml"); len(dups) != 0 {
+		t.Fatalf("header trailing comment must not report dups, got %v", dups)
+	}
+}

@@ -249,11 +249,17 @@ func findYAMLDuplicateKeys(content string) []string {
 		// mapping keys (a legitimate .gitea/workflows file got a Critical
 		// 'duplicate key' report).
 		if strings.HasPrefix(trimmed, "-") {
+			// #1534: the list item can ALSO open the scalar keylessly (`- |`,
+			// `- >`, `- |2` - Argo/Flux/k8s shapes). Without this the shell
+			// body's same-prefixed lines were read as duplicate mapping keys.
 			if ci := strings.Index(trimmed, ":"); ci > 0 {
 				if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[ci+1:])) {
 					inBlockScalar = true
 					blockIndent = indent
 				}
+			} else if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[1:])) {
+				inBlockScalar = true
+				blockIndent = indent
 			}
 			continue
 		}
@@ -323,6 +329,12 @@ func isYAMLBlockScalarHeader(value string) bool {
 		return false
 	}
 	rest := value[1:]
+	// #1534: a header may carry a trailing comment (`| # build phase`)
+	// - strip it before the emptiness check, else the block state never
+	// engages and the body's same-prefixed lines read as duplicate keys.
+	if i := strings.Index(rest, " #"); i >= 0 {
+		rest = strings.TrimSpace(rest[:i])
+	}
 	// Consume at most one '+'/'-' and at most one digit (any order).
 	for i := 0; i < 2 && rest != ""; i++ {
 		c := rest[0]
