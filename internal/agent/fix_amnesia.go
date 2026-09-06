@@ -34,7 +34,7 @@ package agent
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -169,8 +169,11 @@ func (d *fixAmnesiaState) recordFileEdited(file string) {
 // trees (desktop/wailskit/agent/foo.go) - both promoted the wrong file and
 // skewed every later attribution. A bare name matches only itself.
 func fixAmnesiaSameFile(a, b string) bool {
-	a = strings.TrimPrefix(strings.TrimSpace(a), "./")
-	b = strings.TrimPrefix(strings.TrimSpace(b), "./")
+	// Windows paths arrive with OS separators while compiler output is
+	// slash-form; normalize once so suffix matching and depth counting see
+	// one separator style everywhere (no-op on POSIX).
+	a = strings.ReplaceAll(strings.TrimPrefix(strings.TrimSpace(a), "./"), "\\", "/")
+	b = strings.ReplaceAll(strings.TrimPrefix(strings.TrimSpace(b), "./"), "\\", "/")
 	if a == b {
 		return true
 	}
@@ -188,8 +191,11 @@ func fixAmnesiaSameFile(a, b string) bool {
 }
 
 // pathDepth counts directory segments ("a/b/c.go" -> 2, "c.go" -> 0).
+// path.Dir (not filepath.Dir): callers feed slash-form paths, and on
+// Windows filepath.Dir returns backslash-separated text that would zero
+// the forward-slash count and understate the depth.
 func pathDepth(p string) int {
-	dir := filepath.Dir(p)
+	dir := path.Dir(p)
 	if dir == "." {
 		return 0
 	}
