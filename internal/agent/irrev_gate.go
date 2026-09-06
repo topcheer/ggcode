@@ -153,7 +153,19 @@ func irrevClassifyTool(toolName, args string) int {
 
 // irrevIsDestructiveCommand checks argument text for destructive patterns.
 func irrevIsDestructiveCommand(args string) bool {
-	lower := strings.ToLower(args)
+	// #1579-C: the run_command schema mandates a leading '# ' comment
+	// line - matching over the whole payload lets a pattern mentioned in
+	// a MERE COMMENT (e.g. "# drop table leftovers") tier the call High.
+	// Match only the command field, comment stripped - mirroring
+	// verify_hint's stripLeadingShellComment usage.
+	var payload struct {
+		Command string `json:"command"`
+	}
+	cmdStr := args
+	if err := json.Unmarshal([]byte(args), &payload); err == nil && payload.Command != "" {
+		cmdStr = payload.Command
+	}
+	lower := strings.ToLower(stripLeadingShellComment(cmdStr))
 	patterns := []string{
 		"push --force", "push -f", "push --force-with-lease",
 		"reset --hard", "checkout -- .", "clean -fd", "clean -f",
