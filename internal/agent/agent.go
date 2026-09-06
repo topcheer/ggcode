@@ -4009,7 +4009,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fixAmnesia.recordFileEdited(fp)
 				}
 				// Check new content for patterns matching previously-fixed errors.
-				if faGuidance := a.fixAmnesia.checkContentAgainstFixed("", fp, result.Content); faGuidance != "" {
+				if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, result.Content); faGuidance != "" {
 					a.appendGuidance(&result, faGuidance)
 				}
 			}

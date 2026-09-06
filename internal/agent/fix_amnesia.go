@@ -145,24 +145,29 @@ func (d *fixAmnesiaState) recordFileEdited(file string) {
 	// matched, so the observe->fixed promotion (this detector's MAIN
 	// path) never fired and fixed patterns stayed forgotten. Match when
 	// either form is a path-suffix of the other (covers relative-vs-
-	// absolute and stray ./ prefixes).
-	sameFile := func(a, b string) bool {
-		a = strings.TrimPrefix(strings.TrimSpace(a), "./")
-		b = strings.TrimPrefix(strings.TrimSpace(b), "./")
-		if a == b {
-			return true
-		}
-		return strings.HasSuffix(a, "/"+b) || strings.HasSuffix(b, "/"+a)
-	}
+	// absolute and stray ./ prefixes). #1564-B: hoisted to the package-
+	// level fixAmnesiaSameFile so the exclusion path shares the semantics.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for cat, files := range d.observed {
 		for _, f := range files {
-			if sameFile(f, file) {
+			if fixAmnesiaSameFile(f, file) {
 				d.fixedPatterns[cat] = appendIfMissing(d.fixedPatterns[cat], f)
 			}
 		}
 	}
+}
+
+// fixAmnesiaSameFile reports whether two file references point at the
+// same file across relative/absolute/./-prefixed forms (promotion and
+// exclusion paths must agree - #1564-B).
+func fixAmnesiaSameFile(a, b string) bool {
+	a = strings.TrimPrefix(strings.TrimSpace(a), "./")
+	b = strings.TrimPrefix(strings.TrimSpace(b), "./")
+	if a == b {
+		return true
+	}
+	return strings.HasSuffix(a, "/"+b) || strings.HasSuffix(b, "/"+a)
 }
 
 // recordFix marks a category as fixed in the given file (because the agent
@@ -217,7 +222,13 @@ func (d *fixAmnesiaState) checkContentAgainstFixed(fixFile, newFile, content str
 
 		fixedInDiffFile := false
 		for _, f := range fixedFiles {
-			if f != newFile && f != "" {
+			// #1564-B: the promotion path matches relative-vs-absolute via
+			// suffix comparison, but this exclusion compared exactly - the
+			// same file edited again under its ABSOLUTE path read as
+			// f(relative) != newFile(absolute) and fired "in another file"
+			// for a SAME-file recurrence. Reuse the promotion-side
+			// semantics (strip ./, equal or path-suffix).
+			if !fixAmnesiaSameFile(f, newFile) && f != "" {
 				fixedInDiffFile = true
 				break
 			}
