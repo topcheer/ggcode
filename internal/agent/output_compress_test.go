@@ -211,3 +211,26 @@ func TestCompressUniqueFileListingNotFolded(t *testing.T) {
 		t.Fatalf("unique lines altered:\n%s", got)
 	}
 }
+
+// Regression for #1590-B: digit-carrying UNIQUE data must not fold.
+func TestFoldLinesHomogeneousExemptsUniqueDigitShapes(t *testing.T) {
+	fold := []string{
+		"check[1] passed",
+		"check[2] passed",
+		"check[3] passed",
+	}
+	if !foldLinesHomogeneous(fold) {
+		t.Fatal("pure template repeats must still fold")
+	}
+	keep := [][]string{
+		{"logs/2026-09-01.log", "logs/2026-09-02.log", "logs/2026-09-03.log"},
+		{"foo.go:12: TODO", "foo.go:13: TODO", "foo.go:14: TODO"},
+		{"v1.9", "v1.10", "v1.11"},
+		{"shard_001.dat", "shard_002.dat", "shard_003.dat"},
+	}
+	for i, set := range keep {
+		if foldLinesHomogeneous(set) {
+			t.Errorf("set %d carries unique digits and must NOT fold", i)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -137,11 +138,20 @@ func formatSimilarMarker(omitted int) string {
 // prefix but its trailing names are DIFFERENT WORDS (alpha/beta/gamma) and
 // digits-stripping exposes exactly that distinction. The first version of
 // this check (directory-body equality) misjudged same-directory unique
-// listings as homogeneous and kept destroying them - caught by the
-// companion pin.
+// foldLinesHomogeneous reports whether the lines differ ONLY in digits -
+// safe to fold as template repeats. #1590-B: date/line-number/shard-like
+// shapes carry UNIQUE information despite matching the digits-template -
+// folding 2026-09-01..05 logs, grep -n line runs, or v1.9..v1.11 listings
+// irrecoverably dropped the middle entries. Exempt lines whose digit runs
+// look like dates, file:line refs, or dotted versions.
 func foldLinesHomogeneous(lines []string) bool {
 	if len(lines) < 2 {
 		return false
+	}
+	for _, ln := range lines {
+		if lineCarriesUniqueDigits(ln) {
+			return false
+		}
 	}
 	base := stripDigits(lines[0])
 	if base == "" {
@@ -153,6 +163,16 @@ func foldLinesHomogeneous(lines []string) bool {
 		}
 	}
 	return true
+}
+
+// lineCarriesUniqueDigits reports digit shapes whose variance is DATA, not
+// template noise: ISO dates (2026-09-01), file:line refs (foo.go:12),
+// dotted versions (v1.10 / 1.2.3), and _NNN suffix runs (shard_001).
+var reUniqueDigitShape = regexp.MustCompile(
+	`\d{4}-\d{2}-\d{2}|:\d+|v?\d+\.\d+(\.\d+)?|_\d{3,}`)
+
+func lineCarriesUniqueDigits(line string) bool {
+	return reUniqueDigitShape.MatchString(line)
 }
 
 // stripDigits removes all runs of decimal digits for template comparison.
