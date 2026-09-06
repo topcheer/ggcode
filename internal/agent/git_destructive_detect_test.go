@@ -210,3 +210,40 @@ func TestGitDestructiveBranchForceMoveWarning(t *testing.T) {
 		t.Fatalf("safe lowercase -d flagged: %+v", got)
 	}
 }
+
+// Regression for #1569-D/E: discard-form blind spots and flag variants.
+func TestDestructiveDiscardFormsAndVariants(t *testing.T) {
+	hit := []struct{ cmd, want string }{
+		{"git checkout .", "discard_all"},              // bare shortest form
+		{"git restore .", "discard_all"},               // modern equivalent
+		{"git checkout -f main", "discard_all"},        // force checkout
+		{"git switch -f main", "discard_all"},          // force switch
+		{"git checkout -B main HEAD~5", "discard_all"}, // semantic branch -f
+		{"git checkout -- .", "discard_all"},           // legacy pin shape
+		{"git reset -q --hard", "reset_hard"},          // flag between reset and --hard
+		{"rm -Rf tmp", "rm_rf"},                        // BSD/macOS capital
+		{"rm -r -f tmp", "rm_rf"},                      // separated flags
+		{"rm --recursive --force tmp", "rm_rf"},        // long options
+	}
+	for _, h := range hit {
+		pats := detectDestructiveInShellCommand(h.cmd)
+		found := false
+		for _, p := range pats {
+			if p.name == h.want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%q must fire %s, got %+v", h.cmd, h.want, pats)
+		}
+	}
+	// Safe shapes must stay silent.
+	for _, cmd := range []string{
+		"git checkout main", "git checkout -b feature", "git restore --staged file.go",
+		"git reset --soft HEAD~1", "rm file.txt",
+	} {
+		if pats := detectDestructiveInShellCommand(cmd); len(pats) != 0 {
+			t.Errorf("%q must not fire, got %+v", cmd, pats)
+		}
+	}
+}

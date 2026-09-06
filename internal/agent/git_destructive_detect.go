@@ -67,8 +67,9 @@ func (s *gitDestructiveState) reset() {
 // Patterns for detecting destructive git operations in shell command strings.
 // These are compiled once at package init for performance.
 var (
-	// git reset --hard [commit]
-	reGitResetHard = regexp.MustCompile(`\bgit\s+reset\s+--hard\b`)
+	// git reset --hard [commit] - #1569-E: optional flags may sit between
+	// reset and --hard (`reset -q --hard`).
+	reGitResetHard = regexp.MustCompile(`\bgit\s+reset\s+(-[a-zA-Z]+\s+)*--hard\b`)
 	// git push --force / --force-with-lease / -f
 	// #1569-A: the flag must start its own token (whitespace-prefixed
 	// short group or --force) - `.*(-f...)` matched the SUBSTRING and
@@ -93,7 +94,15 @@ var (
 	// git branch -f <branch> <start> - force-moves a branch pointer (#1464-B)
 	reGitBranchForceMove = regexp.MustCompile(`\bgit\s+branch\s+(-f\b|--force\b)`)
 	// git checkout -- . / git restore . (discard all changes)
-	reGitCheckoutDiscard = regexp.MustCompile(`\bgit\s+(checkout|restore)\s+--\s*\.`)
+	// #1569-D: the old `--\s*\.` shape was the narrowest possible form -
+	// the BARE `git checkout .` (shortest discard-all form) sat in the
+	// blind spot, as did `checkout -f <ref>` / `switch -f` / the
+	// semantically-identical `checkout -B` (which #1464-B's branch -f
+	// warning makes inconsistent), and bare `restore .`.
+	reGitDiscardAll = regexp.MustCompile(`\bgit\s+(checkout|switch|restore)\s+(-[a-zA-Z]+\s+)*(-[aBf]+\s+)?(\.\s*$|--\s*\.)`)
+	// checkout/switch with a force-bearing flag discards local changes to
+	// reach the target state (checkout -f / switch -f / checkout -B main).
+	reGitCheckoutForce = regexp.MustCompile(`\bgit\s+(checkout|switch)\s+(-[a-zA-Z]*[fB][a-zA-Z]*|--force)\b`)
 	// git stash drop / git stash clear
 	reGitStashDrop = regexp.MustCompile(`\bgit\s+stash\s+(drop|clear)\b`)
 	// git rebase (can rewrite history)
@@ -101,7 +110,10 @@ var (
 	// git filter-branch / git filter-repo (rewrites history)
 	reGitFilterBranch = regexp.MustCompile(`\bgit\s+(filter-branch|filter-repo)\b`)
 	// rm -rf (not git-specific but extremely destructive)
-	reRmRf = regexp.MustCompile(`\brm\s+-[a-zA-Z]*r[a-zA-Z]*f\b|\brm\s+-[a-zA-Z]*f[a-zA-Z]*r\b`)
+	// #1569-E: cover -Rf (BSD/macOS capital-R), separated flags (-r -f),
+	// and long options (--recursive --force in either order). The old
+	// character class was case-sensitive and required combined flags.
+	reRmRf = regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f\b|-[a-zA-Z]*f[a-zA-Z]*[rR]\b|-[rR]f\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--recursive\s+--force\b|--force\s+--recursive\b|--recursive\s+-f\b|-f\s+--recursive\b)`)
 )
 
 // detectDestructiveInShellCommand analyzes a shell command string for destructive
@@ -174,7 +186,8 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 		})
 	}
 
-	if reGitCheckoutDiscard.MatchString(cmd) {
+	// #1569-D: bare checkout/restore . and checkout/switch force forms.
+	if reGitDiscardAll.MatchString(cmd) || reGitCheckoutForce.MatchString(cmd) {
 		found = append(found, destructivePattern{
 			name:        "discard_all",
 			severity:    "critical",
