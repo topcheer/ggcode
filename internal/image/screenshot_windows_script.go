@@ -10,14 +10,23 @@ import "strings"
 // reports 1707x960). Without this preamble ListDisplays and the capture
 // scripts disagree about the coordinate space, and Region captures computed
 // from DisplayInfo land in the wrong place.
+// #1571-C: SetProcessDPIAware is only SYSTEM-aware - on mixed-DPI setups
+// (primary 100%, secondary 150%) secondary-screen bounds were virtualized
+// by the primary DPI and CopyFromScreen regions landed offset. Prefer
+// SetProcessDpiAwarenessContext with PER_MONITOR_AWARE_V2 (the preamble's
+// own comment promises "whole chain works in physical pixels" per
+// monitor); fall back to the legacy call on old Windows.
 const windowsDpiAwarenessSnippet = `Add-Type @'
 using System.Runtime.InteropServices;
 public class Win32Dpi {
     [DllImport("user32.dll")]
+    public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")]
     public static extern bool SetProcessDPIAware();
 }
 '@
-[Win32Dpi]::SetProcessDPIAware() | Out-Null
+$PMv2 = [IntPtr](-4)
+try { [Win32Dpi]::SetProcessDpiAwarenessContext($PMv2) | Out-Null } catch { [Win32Dpi]::SetProcessDPIAware() | Out-Null }
 `
 
 // buildWindowsListDisplaysScript returns the PowerShell script used by
