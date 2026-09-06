@@ -147,3 +147,34 @@ func TestNextTimeAllWildcard(t *testing.T) {
 		t.Errorf("expected %v, got %v", expected, next)
 	}
 }
+
+// Regression for #1532: on a DST fall-back day (2024-11-03 America/New_York,
+// wall hour 1 occurs twice) the hour-advance used an absolute time.Hour -
+// time.Date picked the earlier EDT instance and the +1h landed back in EST
+// hour 1, so t never advanced and NextTime spun forever (watchdog: 3s).
+func TestNextTimeDSTFallBackTerminates(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("tzdata unavailable")
+	}
+	from := time.Date(2024, 11, 3, 0, 5, 0, 0, loc) // 0 5 * * * must cross the ambiguous hour
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		nt, err := NextTime("0 5 * * *", from)
+		if err != nil {
+			t.Errorf("NextTime: %v", err)
+			return
+		}
+		// Expect the next 5 AM strictly after `from` (same day is fine -
+		// both sides of the fall-back still have a 5 AM in EST).
+		if !nt.After(from) {
+			t.Errorf("NextTime = %v, want after %v", nt, from)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("NextTime spun on the DST fall-back day (3s watchdog)")
+	}
+}

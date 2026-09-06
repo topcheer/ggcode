@@ -55,11 +55,15 @@ func NextTime(expr string, from time.Time) (time.Time, error) {
 	t := time.Date(from.Year(), from.Month(), from.Day(), from.Hour(), from.Minute(), 0, 0, from.Location()).Add(time.Minute)
 
 	// Search forward, cap at ~4 years to prevent infinite loops.
+	// #1532: the cap is an ITERATION count, not an absolute-time deadline -
+	// a clock that stops advancing (the DST spin above) never reaches an
+	// absolute deadline, defeating the very loop guard it exists for.
 	dayRestricted := !isWildcard(fields[2])
 	dowRestricted := !isWildcard(fields[4])
 
 	deadline := from.AddDate(4, 0, 0)
-	for t.Before(deadline) {
+	maxIterations := 5 * 366 * 24 * 60 // minute steps over 5 years, generous margin
+	for iter := 0; t.Before(deadline) && iter < maxIterations; iter++ {
 		if !month.values[int(t.Month())] {
 			t = firstOfNextMonth(t)
 			continue
@@ -85,7 +89,16 @@ func NextTime(expr string, from time.Time) (time.Time, error) {
 			continue
 		}
 		if !hour.values[t.Hour()] {
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location()).Add(time.Hour)
+			// #1532: advance in WALL-clock semantics. The old
+			// .Add(time.Hour) added an absolute duration: on a DST
+			// fall-back day wall hour 1 occurs twice, time.Date(...,1,...)
+			// always picks the earlier (EDT) instance and adding one
+			// absolute hour landed back in EST hour 1 - t never advanced
+			// and the loop spun forever (eight callers hold scheduler
+			// locks, so the spin deadlocked the whole scheduler).
+			// Rebuilding with Hour()+1 crosses the ambiguity in wall time
+			// (23+1 rolls the day over via time.Date normalization).
+			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
 			continue
 		}
 		if !minute.values[t.Minute()] {
