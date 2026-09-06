@@ -515,6 +515,16 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 			SetProbeCache(key, w)
 			return w
 		}
+		// #1608: tryTierProbe's own contract says -1 = abort (auth error -
+		// "aborting all probing"). The loop only consumed w > 0, so a -1
+		// fell through and the remaining tiers each fired ANOTHER real
+		// billed request against a dead token - hundreds of KB of padding
+		// wasted per tier. Phase 2's simple-probe path already treats a
+		// negative result as terminal; align here.
+		if w < 0 {
+			debug.Log("probe", "tiered probe aborting at tier[%d]=%d (auth failure)", i, tier)
+			return 0
+		}
 	}
 
 	return 0
