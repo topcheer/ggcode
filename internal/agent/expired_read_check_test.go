@@ -187,3 +187,20 @@ func TestExpiredReadRecordUndoClearsState(t *testing.T) {
 		t.Fatal("editedFiles not cleared by recordUndo")
 	}
 }
+
+// Regression for #1559-A: the recordUndo wiring sat inside agent.go's
+// fileEditingTools block - triply unreachable for undo_edit (gate's 9
+// members exclude it; no extract shape; per-path loop never ran). The
+// call now lives in executeUndoEditInner where cp.FilePath is in hand.
+func TestUndoEditClearsExpiredReadBookkeeping(t *testing.T) {
+	e := newExpiredReadState()
+	e.recordRead("/w/a.go")
+	if hint := e.recordEdit("/w/a.go"); hint == "" {
+		t.Fatal("editing a previously-read file must mark the read expired")
+	}
+	// Undo must forget the file entirely: a re-edit no longer reports.
+	e.recordUndo("/w/a.go")
+	if hint := e.recordEdit("/w/a.go"); hint != "" {
+		t.Fatalf("after undo the file must be forgotten, got: %s", hint)
+	}
+}

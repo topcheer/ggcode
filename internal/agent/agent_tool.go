@@ -1605,6 +1605,14 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 		// manager has already REMOVED the file, so the report must say so —
 		// claiming "restored" would mislead the agent about disk state.
 		isNew := !cp.Existed
+		// #1559-A: clear the file's read/edit bookkeeping HERE, at the
+		// source with cp.FilePath in hand. The old wiring inside agent.go's
+		// fileEditingTools block was triply unreachable for undo_edit (the
+		// gate's 9 members exclude it; extractEditFilePaths has no undo_edit
+		// shape; the per-path loop never ran) - #1459's "undo_edit clears
+		// read/edit bookkeeping" was a no-op its unit test only pinned by
+		// calling recordUndo directly.
+		a.expiredRead.recordUndo(cp.FilePath)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		// Include a diff summary of what changed
 		if !isNew && diff.HasChanges(cp.NewContent, cp.OldContent) {

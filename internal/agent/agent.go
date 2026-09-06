@@ -3423,8 +3423,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// #1459-A: failed calls (missing args etc.) don't count - two
 			// errored reads plus four good ones used to trip the detector
 			// with the failures' 60-char fallback blobs as fake targets.
+			// #1559-B: the gate must only exclude EXPLORATION COUNTING -
+			// wrapping the whole recordToolCall also disabled the mutating
+			// window reset, so a FAILED run_command (a converging action
+			// being handled) no longer reset the window and the very next
+			// read re-fired "without any converging action (edit, write,
+			// command)" right after the agent had run a command.
 			fragWarn := ""
-			if !result.IsError {
+			if !result.IsError || mutatingToolNamesFrag[tc.Name] {
 				fragWarn = a.exploreFrag.recordToolCall(tc.Name, tc.Arguments, i+1)
 			}
 			if fragWarn != "" {
