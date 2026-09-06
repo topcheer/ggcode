@@ -103,11 +103,18 @@ func removeStagingSkill(path string) error {
 
 // Reject removes a skill from staging.
 func (p *Promoter) Reject(entry *SkillEntry) error {
+	// #1580-D: siblings guard nil; a nil entry panicked here. And repeated
+	// Rejects (scheduler retry + human race) hit a non-idempotent
+	// os.Remove - the second call ALWAYS errored and upper layers kept
+	// retrying forever. Mirror removeStagingSkill's idempotence.
+	if entry == nil {
+		return fmt.Errorf("reject: nil skill entry")
+	}
 	if !entry.Staging {
 		return fmt.Errorf("skill %q is not in staging", entry.Name)
 	}
 
-	if err := os.Remove(entry.Path); err != nil {
+	if err := os.Remove(entry.Path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove staging skill: %w", err)
 	}
 
