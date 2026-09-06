@@ -375,6 +375,15 @@ func refreshShareSession(cfg shareAuthConfig, req refreshShareSessionRequest, pr
 	if time.Now().After(time.Unix(claims.Exp, 0).UTC()) {
 		return refreshedShareSessionResponse{}, errors.New("renew token expired")
 	}
+	// #1551: the handshake path retires pre-V3 tickets (unsupported ticket
+	// version, 401) for BOTH connect and renew tokens - but the refresh
+	// path checked only the scope triple, so a still-valid pre-upgrade
+	// renew token minted a FRESH V3 client ticket plus a new 30-day renew
+	// chain, bypassing version retirement indefinitely. #1456's original
+	// report suggested adding this alongside Exp; 92794996 only did Exp.
+	if claims.V < requiredShareProtocolVersion {
+		return refreshedShareSessionResponse{}, errors.New("unsupported ticket version")
+	}
 	if claims.RoomID != roomID || claims.Role != "server" || claims.Kind != shareTicketKindRenew {
 		return refreshedShareSessionResponse{}, errors.New("ticket scope mismatch")
 	}

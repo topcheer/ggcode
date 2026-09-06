@@ -352,3 +352,39 @@ func TestRefreshShareSessionExpiredTokenRejected(t *testing.T) {
 		t.Fatalf("valid token rejected: %v", err)
 	}
 }
+
+// Regression for #1551: the refresh path checked only the scope triple -
+// a pre-V3 renew token (scope valid, unexpired) minted a fresh V3 client
+// ticket plus a new 30-day renew chain, bypassing version retirement that
+// the handshake path enforces for both token kinds.
+func TestRefreshShareSessionRejectsOldTicketVersion(t *testing.T) {
+	cfg := shareAuthConfig{
+		Secret:     "relay-secret",
+		ConnectTTL: time.Minute,
+		RenewTTL:   time.Hour,
+	}
+	// issueShareSession refuses to mint below V3; craft the legacy token
+	// directly via signShareTicket with an old claims.V (an attacker holds
+	// one minted before the upgrade).
+	room := "room-" + t.Name()
+	renew, err := signShareTicket(cfg.Secret, shareTicketClaims{
+		RoomID: room,
+		Role:   "server",
+		Kind:   shareTicketKindRenew,
+		Exp:    time.Now().UTC().Add(cfg.RenewTTL).Unix(),
+		V:      requiredShareProtocolVersion - 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = refreshShareSession(cfg, refreshShareSessionRequest{
+		RoomID:           room,
+		ServerRenewToken: renew,
+	}, requiredShareProtocolVersion, shareModeV3)
+	if err == nil {
+		t.Fatal("pre-V3 renew token must be rejected on refresh")
+	}
+	if !strings.Contains(err.Error(), "unsupported ticket version") && !strings.Contains(err.Error(), "share v3 is required") {
+		t.Fatalf("want version-retirement error, got: %v", err)
+	}
+}
