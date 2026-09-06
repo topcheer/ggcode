@@ -383,6 +383,21 @@ func (a *Agent) checkGitDestructive(toolName string, args json.RawMessage) strin
 // Token-based (#1569): branch names like hot-fix are refspec tokens, not
 // flags, and cannot false-positive.
 func isForcePushCommand(cmd string) bool {
+	// #1609-A: Fields CONSUMES newlines as whitespace, so a multi-line
+	// script's second line ("git push origin main\nmake -f Makefile")
+	// reached the -f scan with no separator token at all. Split into
+	// lines and judge each line independently - a push on ANY line is a
+	// push of this command; a non-push line's flags never leak into
+	// another line's scan.
+	for _, line := range strings.Split(cmd, "\n") {
+		if forcePushSingleLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func forcePushSingleLine(cmd string) bool {
 	toks := strings.Fields(cmd)
 	for i, t := range toks {
 		// #1600-C: adjacent-form check must strip surrounding quotes -
@@ -402,12 +417,17 @@ func isForcePushCommand(cmd string) bool {
 			// #1600-A: stop at command separators - 'git push origin
 			// main; make -f Makefile' is a force-push-free line whose
 			// SECOND command's -f fired CRITICAL before.
+			// #1609-A: NEWLINES too - Fields splits on Unicode whitespace
+			// including \n, so a multi-line script's second line ("git
+			// push origin main\nmake -f Makefile") reached the -f scan
+			// with no separator token at all. Any token carrying a
+			// newline ends this command.
 			switch {
 			case tok == "&&" || tok == "||" || tok == "|" || tok == "&":
 				return false
-			case strings.Contains(tok, ";"):
+			case strings.ContainsAny(tok, ";\n"):
 				// 'main; make ...' - the separator glues to the previous
-				// word under Fields splitting.
+				// word under Fields splitting; same for embedded newlines.
 				return false
 			case strings.HasPrefix(tok, ";"):
 				return false

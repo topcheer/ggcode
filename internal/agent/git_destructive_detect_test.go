@@ -266,3 +266,15 @@ func TestForcePushQuotedWrapperForm(t *testing.T) {
 		t.Fatal("plain push must stay clean")
 	}
 }
+
+// Regression for #1609-A: newline separators - Fields splits on \n, so a
+// multi-line script's second line reached the -f scan with no separator
+// token at all.
+func TestForcePushNewlineSeparatedSecondCommand(t *testing.T) {
+	if isForcePushCommand("git push origin main\nmake -f Makefile.build") {
+		t.Fatal("second-line -f after a newline must not fire force_push")
+	}
+	if !isForcePushCommand("git push --force origin main") {
+		t.Fatal("single-line force push must stay detected")
+	}
+}
