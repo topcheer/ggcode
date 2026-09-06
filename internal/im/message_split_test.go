@@ -281,3 +281,36 @@ func TestIssue1552_IRCByteLimit(t *testing.T) {
 		}
 	}
 }
+
+// Regression for #1553-C: after the INNER flush inside the re-sync loop,
+// the byte ledger kept only one rune - runes between the new start and i
+// vanished from the account, so subsequent chunks could exceed maxBytes.
+func TestSplitMessageBytesInnerFlushLedgerComplete(t *testing.T) {
+	// Mixed CJK/ASCII filler long enough to force nested re-sync flushes.
+	var sb strings.Builder
+	for i := 0; i < 400; i++ {
+		if i%3 == 0 {
+			sb.WriteString("中文段落") // 12 bytes each
+		} else {
+			sb.WriteString("ab") // 2 bytes
+		}
+	}
+	const maxBytes = 50
+	chunks := splitMessageBytes(sb.String(), maxBytes)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+	for idx, c := range chunks {
+		if got := len(c); got > maxBytes {
+			t.Fatalf("chunk %d = %d bytes > max %d (ledger drop)", idx, got, maxBytes)
+		}
+	}
+	// Reassembly preserves every rune.
+	var total int
+	for _, c := range chunks {
+		total += len([]rune(c))
+	}
+	if total != len([]rune(sb.String())) {
+		t.Fatalf("rune loss: reassembled %d, original %d", total, len([]rune(sb.String())))
+	}
+}

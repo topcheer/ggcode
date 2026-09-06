@@ -141,7 +141,18 @@ func splitMessageBytes(text string, maxBytes int) []string {
 					end2 := preferredByteSplit(runes[start:j], maxBytes)
 					chunks = append(chunks, string(runes[start:start+end2]))
 					start += end2
-					byteCount = utf8.RuneLen(runes[start])
+					// #1553-C: re-account the WHOLE remaining span
+					// start..i - the old single-rune assignment dropped
+					// runes[start+1..i] from the ledger, so later chunks
+					// could exceed maxBytes (WeCom's strict 2048-byte
+					// check then 400s). Overflows here are impossible by
+					// construction (end2 is a <=maxBytes prefix); if the
+					// span still overflows, the OUTER loop re-flushes on
+					// the next rune.
+					byteCount = 0
+					for k := start; k <= i; k++ {
+						byteCount += utf8.RuneLen(runes[k])
+					}
 					break
 				}
 			}
