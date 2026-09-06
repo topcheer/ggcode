@@ -227,23 +227,36 @@ func (s *Server) pushRegistrationDisabled() string {
 // The transport's Control hook now validates the IP the kernel is about
 // to connect to - pinning at connection time, the standard rebinding
 // defense.
+// pushControlHook returns the Dialer Control function that pins the
+// kernel-resolved IP at connection establishment (#1463-A - the
+// rebinding-proof place to check).
+// #1568-A: allowlisted IPs are exempt - registration exempts allowlisted
+// hosts/CIDRs and the header comment promises "Allowlisted hosts and CIDRs
+// are exempt", but the old closure pinned EVERY private IP: the advertised
+// main use case (private collectors) registered fine and then had 100% of
+// deliveries blocked as "disallowed IP".
+func pushControlHook(guard *pushGuard) func(network, address string, c syscall.RawConn) error {
+	return func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			if guard != nil && guard.ipAllowed(ip) {
+				return nil
+			}
+			if isDisallowedCallbackIP(ip) {
+				return fmt.Errorf("dial to disallowed IP %s blocked (rebinding guard)", host)
+			}
+		}
+		return nil
+	}
+}
+
 func (s *Server) pushHTTPClient() *http.Client {
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
-		// #1463-A: Control fires at connection establishment with the
-		// kernel-resolved address - the rebinding-proof place to check.
-		Control: func(network, address string, _ syscall.RawConn) error {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				return err
-			}
-			if ip := net.ParseIP(host); ip != nil {
-				if isDisallowedCallbackIP(ip) {
-					return fmt.Errorf("dial to disallowed IP %s blocked (rebinding guard)", host)
-				}
-			}
-			return nil
-		},
+		Control: pushControlHook(s.pushGuard),
 	}
 	transport := &http.Transport{DialContext: dialer.DialContext}
 	return &http.Client{
