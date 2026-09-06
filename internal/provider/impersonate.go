@@ -158,7 +158,20 @@ func ResolveImpersonationHeaders() http.Header {
 	impersonationMu.RUnlock()
 
 	if preset == nil {
-		return nil
+		// #1610-C: an early nil return dropped CUSTOM headers entirely -
+		// the panel collects them alongside the (empty) preset, saving
+		// succeeded, and the header NEVER reached the wire (gateway
+		// auth/routing silently broken). With no preset, custom headers
+		// alone still apply - the documented "custom > preset" precedence
+		// degenerates to "custom only".
+		if len(custom) == 0 {
+			return nil
+		}
+		h := make(http.Header, len(custom))
+		for k, v := range custom {
+			h.Set(k, v)
+		}
+		return h
 	}
 
 	h := make(http.Header, 4)
