@@ -84,16 +84,22 @@ func (cc *commandCache) reset() {
 // that are safe to cache. Non-deterministic commands (network, file I/O,
 // interactive) are excluded.
 func isCacheableCommand(command string) bool {
-	cmd := strings.TrimSpace(command)
+	// #1530: strip the mandated '# ' activity-comment line FIRST - the old
+	// check keyed on the raw string, so conforming commands were almost
+	// never cached while `# note\n<mutator>; make test` slipped the scan.
+	cmd := strings.TrimSpace(stripLeadingShellComment(command))
 	if cmd == "" {
 		return false
 	}
-	// #1443-A: the old code stripped to the FINAL segment before the
-	// exclusion scan - `git checkout . && go test ./...` passed (checkout
-	// is excluded, but only the last segment was checked), got cached,
-	// and the second run SKIPPED THE ROLLBACK entirely: the agent re-read
-	// a stale green light. Every && segment is now scanned.
-	segments := strings.Split(cmd, "&&")
+	// #1443-A + #1530: split on EVERY sequencing separator (&&, ||, ;,
+	// newline) - the &&-only split let `go test ./... ; git checkout .`
+	// bypass the exclusion scan (#1443 revived) - and require every
+	// segment to pass both the exclusion scan and the cacheable whitelist
+	// (a cached `make deploy && make test` replayed the deploy).
+	segments := splitShellSegments(cmd)
+	if len(segments) == 0 {
+		return false
+	}
 
 	// Exclude commands that modify state, touch the network, or are interactive.
 	excludePrefixes := []string{
@@ -108,31 +114,23 @@ func isCacheableCommand(command string) bool {
 		"brew ", "apt ", "yum ",
 	}
 	for _, seg := range segments {
-		seg = strings.TrimSpace(seg)
-		// cd prefixes are positional, not mutating.
-		if strings.HasPrefix(seg, "cd ") {
-			continue
+		if strings.Contains(seg, ">") || strings.Contains(seg, "<<") || strings.Contains(seg, "|") {
+			return false
 		}
 		for _, p := range excludePrefixes {
 			if strings.HasPrefix(seg, p) {
 				return false
 			}
 		}
-		if strings.Contains(seg, ">") || strings.Contains(seg, "<<") || strings.Contains(seg, "|") {
-			return false
-		}
 	}
-	// The cacheable-prefix check runs on the FINAL segment (the one whose
-	// output would be cached).
-	cmd = strings.TrimSpace(segments[len(segments)-1])
 
-	// Whitelist of cacheable command prefixes.
+	// Whitelist of cacheable command prefixes, applied to EVERY segment.
 	// #1443-A: 'make ' matched ANY target (make deploy / make
 	// release-publish cached - repeat deploys silently swallowed, against
 	// the function's own 'deterministic build/test/lint' charter) and
-	// 'go run -tags' executes arbitrary programs. Narrowed to the common
-	// deterministic build/test/lint targets; other make targets and go run
-	// are simply not cached.
+	// 'go run -tags' executes arbitrary programs. #1530: bare `make` no
+	// longer caches either - it means the Makefile's FIRST target, which
+	// is deploy-first in real projects.
 	cacheablePrefixes := []string{
 		"make build", "make test", "make lint", "make check", "make verify", "make ci",
 		"make\tbuild", "make\ttest", "make\tlint", "make\tcheck", "make\tverify", "make\tci",
@@ -150,11 +148,61 @@ func isCacheableCommand(command string) bool {
 		"rake test", "rspec ",
 		"dotnet build", "dotnet test",
 	}
-	if cmd == "make" {
-		return true
+	for _, seg := range segments {
+		if !isCacheableSegment(seg, cacheablePrefixes) {
+			return false
+		}
 	}
-	for _, p := range cacheablePrefixes {
-		if strings.HasPrefix(cmd, p) {
+	return true
+}
+
+// splitShellSegments splits a shell command on every sequencing separator
+// (&&, ||, ;, newline), trims each segment, and strips leading positional
+// `cd <dir>` clauses - cd only relocates, it must not exempt what follows
+// in the same segment (#1530-D: `cd /repo; rm -rf tmp`).
+func splitShellSegments(cmd string) []string {
+	raw := strings.FieldsFunc(cmd, func(r rune) bool { return r == '\n' || r == ';' })
+	var out []string
+	for _, part := range raw {
+		for _, seg := range splitAndOr(part) {
+			seg = strings.TrimSpace(seg)
+			for strings.HasPrefix(seg, "cd ") {
+				rest := seg[3:]
+				if i := strings.IndexAny(rest, " \t"); i >= 0 {
+					seg = strings.TrimSpace(rest[i+1:])
+				} else {
+					seg = ""
+				}
+			}
+			if seg != "" {
+				out = append(out, seg)
+			}
+		}
+	}
+	return out
+}
+
+func splitAndOr(s string) []string {
+	var out []string
+	for {
+		i := strings.Index(s, "&&")
+		j := strings.Index(s, "||")
+		if i < 0 && j < 0 {
+			out = append(out, s)
+			return out
+		}
+		k := i
+		if k < 0 || (j >= 0 && j < k) {
+			k = j
+		}
+		out = append(out, s[:k])
+		s = s[k+2:]
+	}
+}
+
+func isCacheableSegment(seg string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(seg, p) {
 			return true
 		}
 	}

@@ -13,7 +13,9 @@ func TestIsCacheableCommand(t *testing.T) {
 		want bool
 	}{
 		// Build/test commands — cacheable
-		{"make", true},
+		// #1530: bare 'make' means the Makefile's FIRST target (deploy-first
+		// in real projects) - no longer cached; explicit targets below remain.
+		{"make", false},
 		{"make verify-ci", true},
 		{"make build", true},
 		{"go build ./...", true},
@@ -244,5 +246,37 @@ func TestCommandCacheCompoundMutatingSegmentNotCacheable(t *testing.T) {
 	}
 	if !isCacheableCommand("make test") {
 		t.Fatal("make test should stay cacheable")
+	}
+}
+
+// Regression for #1530: the cache gate only understood '&&' - ';'/'||'/
+// newline mutation segments bypassed the scan, the whitelist checked only
+// the final segment, '# ' comment lines coupled cacheability to comment
+// presence, and 'cd ' exempted its whole segment.
+func TestIsCacheableCommandShellModel(t *testing.T) {
+	notCacheable := []string{
+		"go test ./... ; git checkout .",         // A: ; bypasses scan
+		"go test ./... || git checkout .",        // A: || bypasses
+		"# reset\n\ngit checkout . && make test", // C(a): comment + mutator
+		"make deploy && make test",               // B: non-final deploy segment
+		"cd /repo; rm -rf tmp && make test",      // D: cd exempts segment
+		"make",                                   // E: bare make = first target
+		"go run ./cmd/x && make test",            // non-whitelisted runner
+	}
+	for _, cmd := range notCacheable {
+		if isCacheableCommand(cmd) {
+			t.Errorf("isCacheableCommand(%q) = true, want false", cmd)
+		}
+	}
+	cacheable := []string{
+		"# Build and test\nmake test",               // C(b): conforming comment now caches
+		"# verify\ngo build ./... && go test ./...", // comment + all-whitelisted chain
+		"cd /repo && make test",                     // cd-only segment is positional
+		"make test", "go test ./...", "cargo check",
+	}
+	for _, cmd := range cacheable {
+		if !isCacheableCommand(cmd) {
+			t.Errorf("isCacheableCommand(%q) = false, want true", cmd)
+		}
 	}
 }
