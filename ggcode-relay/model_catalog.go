@@ -156,10 +156,15 @@ func (m *modelCatalogManager) start(ctx context.Context) {
 // retry is warranted (catalogRetryInterval) vs the normal daily cadence
 // (#1453-B).
 func (m *modelCatalogManager) refreshReturningInterval(parent context.Context) time.Duration {
-	before := m.loadStatus().LastError
+	// #1545: the OLD signal compared the error STRING before/after - a
+	// persistent fault (network down, 403 rate limit) produces the SAME
+	// error text on every attempt, so attempt 2 returned the daily
+	// interval with failures=0 and the catalog went stale for 24h after a
+	// single retry, the exact scenario the retry contract ("3 attempts at
+	// 5-minute spacing") exists for. Retry on failure STATE, not text
+	// mutation.
 	m.refresh(parent)
-	after := m.loadStatus().LastError
-	if after != "" && after != before {
+	if m.loadStatus().LastError != "" {
 		return catalogRetryInterval
 	}
 	return defaultCatalogSyncInterval
