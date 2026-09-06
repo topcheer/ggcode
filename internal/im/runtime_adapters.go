@@ -118,7 +118,13 @@ func (m *Manager) PublishAdapterState(state AdapterState) {
 	// (by stopAdapter), don't allow late error states to overwrite it. This prevents
 	// stale error messages from appearing in the UI after clean shutdown.
 	// Pattern from whatsapp_adapter L330.
-	if existing, ok := m.adapters[state.Name]; ok && existing.Status == "disconnected" {
+	// #1558: but a CONNECTED report is the legitimate restart signal - mute→
+	// unmute re-runs StartNamedAdapter, the adapter reconnects and publishes
+	// "connected", and the guard swallowed every one of them: the snapshot/UI/
+	// health check stayed "disconnected" until process restart even though the
+	// adapter was actively sending and receiving. Only LATE ERROR frames are
+	// suppressed; connected always wins.
+	if existing, ok := m.adapters[state.Name]; ok && existing.Status == "disconnected" && state.Status != "connected" {
 		m.mu.Unlock()
 		debug.Log("im", "PublishAdapterState: ignoring late state update for %s (already disconnected)", state.Name)
 		return
