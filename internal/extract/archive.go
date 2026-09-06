@@ -244,6 +244,10 @@ func listZip(data []byte) ([]archiveFile, error) {
 		}
 		rc, err := f.Open()
 		if err != nil {
+			// #1539: an unreadable entry vanished from the inventory - the
+			// agent could not even tell the file existed. Keep the name with
+			// an error marker (mirrors the budget-exhausted entry above).
+			files = append(files, archiveFile{name: f.Name, data: []byte(fmt.Sprintf("[unreadable: %v]", err))})
 			continue
 		}
 		// Stream via LimitReader (limit+1 to detect over-limit) instead of
@@ -251,7 +255,16 @@ func listZip(data []byte) ([]archiveFile, error) {
 		d, err := io.ReadAll(io.LimitReader(rc, limit+1))
 		rc.Close()
 		if err != nil {
+			files = append(files, archiveFile{name: f.Name, data: []byte(fmt.Sprintf("[unreadable: %v]", err))})
 			continue
+		}
+		// #1539: the limit+1 probe byte silently truncated >64KB text
+		// entries into content that looked COMPLETE - the agent took the
+		// first 64KB for the whole file. Mark truncation honestly (#682
+		// convention) while staying within the per-entry budget.
+		if int64(len(d)) > limit {
+			marker := []byte(fmt.Sprintf("\n[truncated at %d bytes]", limit))
+			d = append(d[:limit-int64(len(marker))], marker...)
 		}
 		totalRead += int64(len(d))
 		files = append(files, archiveFile{name: f.Name, data: d})
