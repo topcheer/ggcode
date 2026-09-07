@@ -310,12 +310,37 @@ func findJSSensitiveLogArgs(src string) []loggingIntelInstance {
 func hasSensitiveVarRef(args string, sensitiveMatches []string, isJS bool) bool {
 	// Remove all quoted string contents, then check if sensitive names remain
 	stripped := stripStringLiteralsFor(args, isJS)
+	// #1623: word-boundary match, not raw Contains - stage 1's pattern
+	// uses \b specifically to avoid tokenCount/maxTokens (#1098), but the
+	// FINAL check used plain substrings: a message literal containing
+	// "token" left `, maxTokenCount)` in the stripped text and
+	// Contains("maxtokencount","token") fired a CRITICAL false positive
+	// on correct code - stage 2 silently discarded stage 1's protection.
 	for _, s := range sensitiveMatches {
-		if strings.Contains(strings.ToLower(stripped), strings.ToLower(s)) {
+		if containsWordBoundary(strings.ToLower(stripped), strings.ToLower(s)) {
 			return true
 		}
 	}
 	return false
+}
+
+// containsWordBoundary reports whether substr appears in s delimited by
+// non-word characters (ASCII \b semantics, sufficient for identifiers).
+func containsWordBoundary(s, substr string) bool {
+	for i := 0; ; {
+		idx := strings.Index(s[i:], substr)
+		if idx < 0 {
+			return false
+		}
+		start := i + idx
+		end := start + len(substr)
+		beforeOK := start == 0 || !isWordByte(s[start-1])
+		afterOK := end == len(s) || !isWordByte(s[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		i = start + 1
+	}
 }
 
 // stripStringLiterals removes quoted string contents from a Go/JS expression,

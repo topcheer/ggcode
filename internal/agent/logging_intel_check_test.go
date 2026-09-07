@@ -596,3 +596,18 @@ func TestStripLiterals_1581(t *testing.T) {
 		t.Fatalf("JS template interpolation must survive, got %q", jsTpl)
 	}
 }
+
+// Regression for #1623: the FINAL sensitive-name check must keep stage 1's
+// word-boundary semantics - Contains matched "token" inside "maxTokenCount"
+// left in the stripped text.
+func TestContainsWordBoundary(t *testing.T) {
+	if containsWordBoundary("printf(maxtokencount)", "token") {
+		t.Fatal("substring inside an identifier must NOT match")
+	}
+	if !containsWordBoundary("printf(token)", "token") {
+		t.Fatal("standalone identifier must match")
+	}
+	if !containsWordBoundary("token, other", "token") {
+		t.Fatal("token followed by delimiter must match")
+	}
+}
