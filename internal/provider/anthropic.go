@@ -573,6 +573,16 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 			p.calibrator.recordFailure()
 			return estimated, nil
 		}
+		// #1618-A: skip asymmetric samples - the local estimator counts
+		// only text, but image/tool_result-attachment/thinking blocks all
+		// land in the remote count. Feeding such a sample pinned the
+		// ratio at the 3.0 clamp for the whole visual session (every
+		// subsequent estimate x3 -> premature compaction), and it could
+		// never converge because images stay in context.
+		if messagesContainNonTextBlocks(messages) {
+			debug.Log("provider-calibrator", "first calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
+			return estimated, nil
+		}
 		p.calibrator.applyResult(estimated, realTokens)
 		debug.Log("provider-calibrator", "first calibration OK: estimated=%d real=%d ratio=%.3f", estimated, realTokens, p.calibrator.currentRatio())
 		return realTokens, nil
@@ -590,10 +600,31 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 			p.calibrator.recordFailure() // transient errors back off, don't disable (#708)
 			return
 		}
+		// #1618-A: same asymmetry guard as the first-calibration path.
+		if messagesContainNonTextBlocks(messages) {
+			debug.Log("provider-calibrator", "async calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
+			return
+		}
 		p.calibrator.applyResult(estimated, realTokens)
 		debug.Log("provider-calibrator", "async calibration OK: estimated=%d real=%d ratio=%.3f", estimated, realTokens, p.calibrator.currentRatio())
 	})
 	return result, nil
+}
+
+// messagesContainNonTextBlocks reports whether any message carries blocks the
+// local estimator does not count (image data, tool_result attachments,
+// thinking/redacted_thinking) - such samples are asymmetric against the
+// remote truth and must not feed the calibration ratio (#1618-A).
+func messagesContainNonTextBlocks(messages []Message) bool {
+	for _, m := range messages {
+		for _, b := range m.Content {
+			switch b.Type {
+			case "image", "tool_result", "thinking", "redacted_thinking":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // remoteCountTokens calls the Anthropic count_tokens API for accurate token counts.
