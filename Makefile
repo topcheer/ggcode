@@ -28,9 +28,11 @@ verify-ci:
 ci: verify-ci
 
 ## sync-model-caps regenerates the static model capability database
-## (internal/config/context_window.go + vendor_defaults.go) from
-## charmbracelet/catwalk. Run it any time; it is also a required pre-release
-## step (docs/release-process.md §3.3). Needs network access to GitHub.
+## (internal/config/context_window.go + vendor_defaults.go) from models.dev
+## (api.json, MIT). Single source since v1.3.234 - replaced the old
+## charmbracelet/catwalk fetch + OpenRouter fallback. Run it any time; it is
+## also a required pre-release step (docs/release-process.md §3.3) and runs
+## weekly via .github/workflows/model-caps-sync.yml. Needs network access.
 sync-model-caps:
 	go run scripts/sync-model-caps.go
 	gofmt -w internal/config/context_window.go internal/config/vendor_defaults.go

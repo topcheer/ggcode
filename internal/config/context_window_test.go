@@ -14,7 +14,7 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		{"gpt-4o", 128000},
 		{"gpt-4o-mini", 128000},
 		{"gpt-4-turbo", 128000},
-		{"gpt-4", 32768},
+		{"gpt-4", 8192}, // models.dev: base gpt-4 is 8k (32k was the turbo variant)
 		{"o3", 200000},
 		{"o3-mini", 200000},
 		{"o4-mini", 200000},
@@ -25,9 +25,9 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		{"gpt-4-turbo-2024-04-09", 128000},
 
 		// Anthropic Claude
-		{"claude-sonnet-4-6", 200_000}, // catwalk now lists 200k (was 1M pre-refresh)
+		{"claude-sonnet-4-6", 1_000_000}, // models.dev: Sonnet 4.6 ships with 1M context
 		{"claude-opus-4-7", 1_000_000},
-		{"claude-sonnet-4-5-20250929", 200000},
+		{"claude-sonnet-4-5-20250929", 1_000_000}, // models.dev: 4.5 carries the 1M beta window
 		{"claude-opus-4-5-20251101", 200000},
 		{"claude-opus-4-20250514", 200000},
 		{"claude-sonnet-4-20250514", 200000},
@@ -45,7 +45,7 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		{"deepseek-reasoner", 128000},
 
 		// Groq
-		{"llama-3.3-70b-versatile", 128000},
+		{"llama-3.3-70b-versatile", 131072}, // models.dev: exact 128KiB (was rounded 128000)
 		{"mixtral-8x7b-32768", 32768},
 
 		// Zhipu GLM (from catwalk zai.json)
@@ -59,10 +59,11 @@ func TestInferContextWindow_KnownModels(t *testing.T) {
 		{"moonshot-v1-8k", 8000},
 		{"kimi-k2", 262144},
 
-		// XiaoMi MIMO
-		{"MiMo-V2.5-Pro", 1_000_000},
-		{"MiMo-V2.5", 1_000_000},
-		{"MiMo-V2-Pro", 1_000_000},
+		// XiaoMi MIMO (models.dev upstream: 1MiB measured windows win over the
+		// localProviders 1M-decimal entries via the richer-output dedup rule)
+		{"MiMo-V2.5-Pro", 1_048_576},
+		{"MiMo-V2.5", 1_048_576},
+		{"MiMo-V2-Pro", 1_048_576},
 
 		// Protocol fallback
 		{"unknown-model", 128000},

@@ -1,7 +1,10 @@
 //go:build ignore
 
-// sync-model-caps fetches model capability data from the charmbracelet/catwalk
-// repository and generates the knownModelCapabilities map for context_window.go.
+// sync-model-caps fetches model capability data from models.dev (api.json,
+// MIT-licensed, https://github.com/anomalyco/models.dev) and generates the
+// knownModelCapabilities map for context_window.go plus vendor_defaults.go.
+// Single source since v1.3.234 - it replaced the former charmbracelet/catwalk
+// fetch and the OpenRouter /v1/models fallback.
 //
 // Preferred invocation: `make sync-model-caps` (gofmt + build check included).
 // Direct usage with flags:
@@ -30,9 +33,10 @@ import (
 	"strings"
 )
 
-const catwalkBaseURL = "https://raw.githubusercontent.com/charmbracelet/catwalk/main/internal/providers/configs/"
+const modelsDevAPIURL = "https://models.dev/api.json"
 
-// catwalkProvider represents a provider config JSON from catwalk.
+// catwalkProvider is the internal provider representation the generator
+// emits (name kept from the catwalk era; data now comes from models.dev).
 type catwalkProvider struct {
 	ID                  string         `json:"id"`
 	Name                string         `json:"name"`
@@ -42,8 +46,8 @@ type catwalkProvider struct {
 	DefaultSmallModelID string         `json:"default_small_model_id"`
 	Models              []catwalkModel `json:"models"`
 	// ExtraEndpoints carries locally maintained endpoint URLs that upstream
-	// catwalk does not list. Never serialized from JSON; used only for
-	// localProviders so their URLs enter the vendorAPIEndpoints match table.
+	// does not list. Never serialized from JSON; used only for localProviders
+	// so their URLs enter the vendorAPIEndpoints match table.
 	ExtraEndpoints []string
 }
 
@@ -56,6 +60,9 @@ type catwalkModel struct {
 	CanReason           bool    `json:"can_reason"`
 	CostPer1mIn         float64 `json:"cost_per_1m_in"`
 	CostPer1mOut        float64 `json:"cost_per_1m_out"`
+	// release_date drives the default-large-model heuristic (newest wins).
+	// Only populated from models.dev; not serialized into the output.
+	ReleaseDate string `json:"-"`
 }
 
 // modelEntry is our output format — one line in the Go map literal.
@@ -64,41 +71,105 @@ type modelEntry struct {
 	ContextWindow   int
 	MaxOutputTokens int
 	SupportsVision  bool
-	SourceProvider  string // catwalk provider ID (e.g. "openai", "minimax")
+	SourceProvider  string // models.dev provider ID (e.g. "openai", "minimax")
 }
 
-// Which catwalk config files we care about.
-// Maps catwalk filename → our vendor section header.
-var desiredConfigs = map[string]string{
-	"openai.json":        "OpenAI",
-	"anthropic.json":     "Anthropic Claude",
-	"gemini.json":        "Google Gemini",
-	"deepseek.json":      "DeepSeek",
-	"groq.json":          "Groq",
-	"xai.json":           "xAI Grok",
-	"copilot.json":       "GitHub Copilot",
-	"openrouter.json":    "OpenRouter",
-	"vercel.json":        "Vercel AI Gateway",
-	"zai.json":           "Z.ai",
-	"zhipu.json":         "Zhipu GLM",
-	"zhipu-coding.json":  "Zhipu GLM (Coding)",
-	"kimi.json":          "Moonshot / Kimi",
-	"minimax.json":       "MiniMax",
-	"minimax-china.json": "MiniMax China",
-	"bedrock.json":       "AWS Bedrock",
-	"azure.json":         "Azure OpenAI",
-	"vertexai.json":      "Google Vertex AI",
-	"huggingface.json":   "HuggingFace",
-	"venice.json":        "Venice",
-	"nebius.json":        "Nebius",
-	"cerebras.json":      "Cerebras",
-	"chutes.json":        "Chutes",
+// Which models.dev providers we sync (provider ID → our section header).
+// models.dev carries 200+ providers; this list keeps the vendors ggcode
+// ships plus the major ones users point custom endpoints at.
+var desiredProviders = map[string]string{
+	"alibaba":                  "Alibaba (International)",
+	"alibaba-cn":               "Alibaba Cloud (DashScope)",
+	"amazon-bedrock":           "AWS Bedrock",
+	"anthropic":                "Anthropic Claude",
+	"azure":                    "Azure OpenAI",
+	"azure-cognitive-services": "Azure AI",
+	"cerebras":                 "Cerebras",
+	"chutes":                   "Chutes",
+	"cloudflare-workers-ai":    "Cloudflare Workers AI",
+	"cohere":                   "Cohere",
+	"databricks":               "Databricks",
+	"deepseek":                 "DeepSeek",
+	"fireworks-ai":             "Fireworks AI",
+	"github-copilot":           "GitHub Copilot",
+	"google":                   "Google Gemini",
+	"google-vertex":            "Google Vertex AI",
+	"groq":                     "Groq",
+	"huggingface":              "HuggingFace",
+	"iflowcn":                  "iFlow",
+	"kimi-for-coding":          "Kimi for Coding",
+	"longcat":                  "LongCat",
+	"minimax":                  "MiniMax",
+	"minimax-cn":               "MiniMax China",
+	"mistral":                  "Mistral",
+	"moonshotai":               "Moonshot",
+	"moonshotai-cn":            "Moonshot (CN)",
+	"nebius":                   "Nebius",
+	"novita-ai":                "Novita",
+	"nvidia":                   "NVIDIA",
+	"ollama-cloud":             "Ollama Cloud",
+	"openai":                   "OpenAI",
+	"opencode":                 "OpenCode Zen",
+	"openrouter":               "OpenRouter",
+	"perplexity":               "Perplexity",
+	"sensenova":                "SenseNova",
+	"siliconflow":              "SiliconFlow",
+	"siliconflow-cn":           "SiliconFlow (CN)",
+	"snowflake-cortex":         "Snowflake Cortex",
+	"stepfun":                  "StepFun",
+	"thinkingmachines":         "Thinking Machines",
+	"togetherai":               "Together AI",
+	"upstage":                  "Upstage",
+	"venice":                   "Venice",
+	"vercel":                   "Vercel AI Gateway",
+	"volcengine":               "Volcengine Ark",
+	"wandb":                    "W&B",
+	"watsonx":                  "IBM watsonx",
+	"xai":                      "xAI Grok",
+	"xiaomi":                   "Xiaomi MiMo",
+	"xiaomi-token-plan-ams":    "Xiaomi MiMo (AMS)",
+	"xiaomi-token-plan-cn":     "Xiaomi MiMo (CN)",
+	"xiaomi-token-plan-sgp":    "Xiaomi MiMo (SGP)",
+	"zai":                      "Z.ai",
+	"zai-coding-plan":          "Z.ai (Coding Plan)",
+	"zhipuai":                  "Zhipu GLM",
+	"zhipuai-coding-plan":      "Zhipu GLM (Coding Plan)",
+}
+
+// models.dev api.json wire types.
+type modelsDevDoc map[string]modelsDevProvider
+
+type modelsDevProvider struct {
+	ID     string                    `json:"id"`
+	Name   string                    `json:"name"`
+	NPM    string                    `json:"npm"`
+	API    string                    `json:"api"`
+	Doc    string                    `json:"doc"`
+	Env    []string                  `json:"env"`
+	Models map[string]modelsDevModel `json:"models"`
+}
+
+type modelsDevModel struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Attachment  bool   `json:"attachment"`
+	ReleaseDate string `json:"release_date"`
+	Limit       struct {
+		Context int `json:"context"`
+		Input   int `json:"input"`
+		Output  int `json:"output"`
+	} `json:"limit"`
+	Cost struct {
+		Input     float64 `json:"input"`
+		Output    float64 `json:"output"`
+		CacheRead float64 `json:"cache_read"`
+	} `json:"cost"`
 }
 
 /*
-localProviders carries ggcode-local vendor definitions that upstream catwalk
+localProviders carries ggcode-local vendor definitions that upstream
 does not ship (e.g. "xiaomi-mimo", added manually in v1.3.154). Regeneration
-used to wipe them whenever catwalk dropped or never had the provider.
+used to wipe them whenever upstream dropped or never had the provider.
 During sync these are merged back: if upstream starts carrying the same
 provider ID, upstream data wins. Capability-less models (e.g. TTS-only) are
 kept in the vendor model list but skipped in the capability table.
@@ -140,27 +211,31 @@ func main() {
 	output := flag.String("output", "internal/config/context_window.go", "Output file path")
 	flag.Parse()
 
-	// 1. Fetch all config files.
+	// 1. Fetch models.dev api.json (single source of truth).
 	var allEntries []modelEntry
 	var sections []string            // ordered section names for output
 	var providers []*catwalkProvider // save for vendor_defaults.go
 
-	// Sort config names for deterministic output order.
-	configNames := make([]string, 0, len(desiredConfigs))
-	for name := range desiredConfigs {
-		configNames = append(configNames, name)
+	doc, err := fetchModelsDev()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: fetch models.dev: %v\n", err)
+		os.Exit(1)
 	}
-	sort.Strings(configNames)
 
-	for _, configName := range configNames {
-		sectionHeader := desiredConfigs[configName]
-		fmt.Fprintf(os.Stderr, "Fetching %s ...\n", configName)
+	// Deterministic output order: sort provider IDs alphabetically.
+	pids := make([]string, 0, len(desiredProviders))
+	for pid := range desiredProviders {
+		pids = append(pids, pid)
+	}
+	sort.Strings(pids)
 
-		provider, err := fetchProvider(configName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING: %v\n", err)
+	for _, pid := range pids {
+		mdp, ok := (*doc)[pid]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "  WARNING: models.dev has no provider %q\n", pid)
 			continue
 		}
+		provider := adaptModelsDevProvider(pid, desiredProviders[pid], &mdp)
 
 		var sectionEntries []modelEntry
 		for _, m := range provider.Models {
@@ -177,93 +252,19 @@ func main() {
 			sectionEntries = append(sectionEntries, e)
 		}
 
-		if len(sectionEntries) == 0 {
+		fmt.Fprintf(os.Stderr, "  %s: %d models\n", pid, len(provider.Models))
+		if len(sectionEntries) == 0 && len(provider.Models) == 0 {
 			continue
 		}
 
-		sections = append(sections, sectionHeader)
+		sections = append(sections, desiredProviders[pid])
 		allEntries = append(allEntries, sectionEntries...)
 		providers = append(providers, provider)
 	}
 
 	fmt.Fprintf(os.Stderr, "\nTotal models: %d\n\n", len(allEntries))
 
-	// 1b. OpenRouter fallback: for vendors not in catwalk, fetch from OpenRouter /v1/models.
-	openRouterFallback := map[string][]string{
-		// ggcode vendor → OpenRouter provider prefixes
-		"mistral":    {"mistralai/"},
-		"perplexity": {"perplexity/"},
-		"moonshot":   {"moonshotai/"},
-		"nvidia":     {"nvidia/"},
-		"ark":        {"bytedance/", "bytedance-seed/"},
-		"aliyun":     {"qwen/"},
-	}
-
-	// Check which catwalk providers we already have.
-	catwalkProviderIDs := make(map[string]bool)
-	for _, p := range providers {
-		catwalkProviderIDs[p.ID] = true
-	}
-
-	// Only fetch OpenRouter if we need any fallback vendors.
-	needFallback := false
-	for vendor := range openRouterFallback {
-		catwalkID := vendorToCatwalkID(vendor)
-		if !catwalkProviderIDs[catwalkID] {
-			needFallback = true
-			break
-		}
-	}
-
-	if needFallback {
-		fmt.Fprintf(os.Stderr, "Fetching OpenRouter models as fallback...\n")
-		orModels, err := fetchOpenRouterModels()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  WARNING: OpenRouter fetch failed: %v\n", err)
-		} else {
-			fmt.Fprintf(os.Stderr, "  OpenRouter returned %d models\n", len(orModels))
-			for vendor, prefixes := range openRouterFallback {
-				catwalkID := vendorToCatwalkID(vendor)
-				if catwalkProviderIDs[catwalkID] {
-					continue // already have from catwalk
-				}
-				var vendorModels []catwalkModel
-				for _, m := range orModels {
-					for _, prefix := range prefixes {
-						if strings.HasPrefix(m.ID, prefix) {
-							// Strip provider prefix for the model ID.
-							stripped := strings.TrimPrefix(m.ID, prefix)
-							vendorModels = append(vendorModels, catwalkModel{
-								ID:                  stripped,
-								ContextWindow:       m.ContextLength,
-								DefaultMaxTokens:    m.MaxOutputTokens,
-								SupportsAttachments: strings.Contains(m.Architecture.Modality, "image"),
-							})
-							// Also add with prefix for context_window.go exact match.
-							allEntries = append(allEntries, modelEntry{
-								ID:              strings.ToLower(m.ID),
-								ContextWindow:   m.ContextLength,
-								MaxOutputTokens: m.MaxOutputTokens,
-								SupportsVision:  strings.Contains(m.Architecture.Modality, "image"),
-								SourceProvider:  vendor,
-							})
-							break
-						}
-					}
-				}
-				if len(vendorModels) > 0 {
-					fmt.Fprintf(os.Stderr, "  %s: %d models from OpenRouter\n", vendor, len(vendorModels))
-					providers = append(providers, &catwalkProvider{
-						ID:     vendor,
-						Name:   vendor,
-						Models: vendorModels,
-					})
-				}
-			}
-		}
-	}
-
-	// 1c. Merge local-only providers (see localProviders doc comment).
+	// 1b. Merge local-only providers (see localProviders doc comment).
 	for _, lp := range localProviders {
 		upstream := false
 		for _, p := range providers {
@@ -325,28 +326,71 @@ func main() {
 	}
 }
 
-func fetchProvider(filename string) (*catwalkProvider, error) {
-	url := catwalkBaseURL + filename
-	resp, err := http.Get(url)
+func fetchModelsDev() (*modelsDevDoc, error) {
+	resp, err := http.Get(modelsDevAPIURL)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", url, err)
+		return nil, fmt.Errorf("fetch %s: %w", modelsDevAPIURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
+		return nil, fmt.Errorf("fetch %s: HTTP %d", modelsDevAPIURL, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", filename, err)
+		return nil, fmt.Errorf("read %s: %w", modelsDevAPIURL, err)
 	}
 
-	var provider catwalkProvider
-	if err := json.Unmarshal(body, &provider); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", filename, err)
+	var doc modelsDevDoc
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", modelsDevAPIURL, err)
 	}
-	return &provider, nil
+	return &doc, nil
+}
+
+// adaptModelsDevProvider converts a models.dev provider entry into the
+// generator's internal representation. models.dev has no explicit default
+// model field, so DefaultLargeModelID is derived: the newest model by
+// release_date whose ID is not a third-party re-serve (no "/" in the ID -
+// openrouter-style prefixed entries) wins.
+func adaptModelsDevProvider(pid, sectionName string, mdp *modelsDevProvider) *catwalkProvider {
+	p := &catwalkProvider{
+		ID:          pid,
+		Name:        sectionName,
+		APIEndpoint: mdp.API,
+	}
+	for mid, m := range mdp.Models {
+		id := mid
+		if m.ID != "" {
+			id = m.ID
+		}
+		p.Models = append(p.Models, catwalkModel{
+			ID:                  id,
+			Name:                m.Name,
+			ContextWindow:       m.Limit.Context,
+			DefaultMaxTokens:    m.Limit.Output,
+			SupportsAttachments: m.Attachment,
+			CostPer1mIn:         m.Cost.Input,
+			CostPer1mOut:        m.Cost.Output,
+			ReleaseDate:         m.ReleaseDate,
+		})
+	}
+	// Deterministic order: newest release first, then ID.
+	sort.SliceStable(p.Models, func(i, j int) bool {
+		if p.Models[i].ReleaseDate != p.Models[j].ReleaseDate {
+			return p.Models[i].ReleaseDate > p.Models[j].ReleaseDate
+		}
+		return p.Models[i].ID < p.Models[j].ID
+	})
+	// Default large model: newest own model (skip re-served IDs with "/").
+	for _, m := range p.Models {
+		if !strings.Contains(m.ID, "/") {
+			p.DefaultLargeModelID = m.ID
+			break
+		}
+	}
+	return p
 }
 
 func generateGoCode(entries []modelEntry, sections []string) string {
@@ -371,7 +415,7 @@ type modelCapability struct {
 
 // knownModelCapabilities maps exact model name (lowercased) to its capabilities.
 // Auto-generated by: go run scripts/sync-model-caps.go
-// Source: https://github.com/charmbracelet/catwalk/tree/main/internal/providers/configs
+// Source: https://models.dev (api.json), MIT-licensed
 `)
 
 	// We don't regenerate the full map literal with sections because the
@@ -625,7 +669,7 @@ func generateVendorDefaults(providers []*catwalkProvider) string {
 	sb.WriteString(`package config
 
 // Code generated by scripts/sync-model-caps.go. DO NOT EDIT.
-// Source: https://github.com/charmbracelet/catwalk/tree/main/internal/providers/configs
+// Source: https://models.dev (api.json), MIT-licensed
 
 import (
 	"net/url"
@@ -684,7 +728,8 @@ var vendorDefaultModels = map[string]defaultModelInfo{
 
 // vendorAPIEndpointHosts maps a lowercased URL host to its provider ID.
 // Flattened (expanded) from each provider's known API base URLs — upstream
-// catwalk api_endpoint plus locally maintained extras — so matching is a
+// catwalk api_endpoint (models.dev era: provider api field) plus locally
+// maintained extras — so matching is a
 // single map lookup. Read-only data: builtin endpoint URLs in config.go are
 // never rewritten from this. When several providers share a host, the
 // lexicographically smallest ID wins (resolved at generation time).
@@ -769,41 +814,58 @@ func firstNonEmptyBaseURL(vc VendorConfig) string {
 	return ""
 }
 
-// populateDefaultModels fills endpoint Models lists from the catwalk/OpenRouter data.
+// populateDefaultModels fills endpoint Models lists from the models.dev data.
 // Only sets Models on endpoints that don't already have user-defined models.
 func populateDefaultModels(cfg *Config) {
-	vendorToCatwalk := map[string][]string{
-		"zai":           {"zai", "zhipu-coding"},
-		"zhipu":         {"zhipu"},
-		"anthropic":     {"anthropic"},
-		"openai":        {"openai"},
-		"google":        {"gemini"},
-		"openrouter":    {"openrouter"},
-		"groq":          {"groq"},
-		"mistral":       {"mistral"},
-		"deepseek":      {"deepseek"},
-		"moonshot": {"kimi-coding", "moonshot"}, // #1525: "kimi" key never existed in vendorModels (only kimi-coding) - first source was permanently nil
-		"kimi":     {"kimi-coding"},
-		"minimax":       {"minimax", "minimax-china"},
-		"perplexity":    {"perplexity"},
-		"github-copilot": {"copilot"},
-		"xiaomi-mimo":   {"xiaomi-mimo"},
-		"xai":           {"xai"},
-		"together":      {"together"},
-		"nvidia":        {"nvidia"},
-		"ark":           {"ark"},
-		"aliyun":        {"aliyun"},
+	vendorToProvider := map[string][]string{
+		"zai":            {"zai", "zai-coding-plan"},
+		"zhipu":          {"zhipuai", "zhipuai-coding-plan"},
+		"anthropic":      {"anthropic"},
+		"openai":         {"openai"},
+		"google":         {"google"},
+		"openrouter":     {"openrouter"},
+		"groq":           {"groq"},
+		"mistral":        {"mistral"},
+		"deepseek":       {"deepseek"},
+		"moonshot":       {"moonshotai", "moonshotai-cn"}, // #1525 lineage: coding-plan entries stay out of the plain OpenAI-protocol list
+		"kimi":           {"kimi-for-coding"},
+		"minimax":        {"minimax", "minimax-cn"},
+		"perplexity":     {"perplexity"},
+		"github-copilot": {"github-copilot"},
+		"copilot":        {"github-copilot"},
+		"xiaomi-mimo":    {"xiaomi-mimo"},
+		"xiaomi":         {"xiaomi"},
+		"xai":            {"xai"},
+		"together":       {"togetherai"},
+		"nvidia":         {"nvidia"},
+		"ark":            {"volcengine"},
+		"volcengine":     {"volcengine"},
+		"aliyun":         {"alibaba-cn"},
+		"dashscope":      {"alibaba-cn"},
+		"alibaba":        {"alibaba"},
+		"azure":          {"azure"},
+		"bedrock":        {"amazon-bedrock"},
+		"vertexai":       {"google-vertex"},
+		"huggingface":    {"huggingface"},
+		"fireworks":      {"fireworks-ai"},
+		"cerebras":       {"cerebras"},
+		"siliconflow":    {"siliconflow"},
+		"novita":         {"novita-ai"},
+		"chutes":         {"chutes"},
+		"venice":         {"venice"},
+		"nebius":         {"nebius"},
+		"stepfun":        {"stepfun"},
 	}
 
 	for vendorName, vc := range cfg.Vendors {
-		catwalkIDs, ok := vendorToCatwalk[vendorName]
+		providerIDs, ok := vendorToProvider[vendorName]
 		if !ok {
 			// Attribute unknown vendors to a provider by endpoint URL host so
 			// custom endpoints pointing at a known provider (e.g. a user-added
 			// vendor with base_url on api.z.ai) still receive that provider's
 			// model list. Read-only: builtin URLs in config.go are untouched.
 			if pid := matchProviderByBaseURL(firstNonEmptyBaseURL(vc)); pid != "" {
-				catwalkIDs = []string{pid}
+				providerIDs = []string{pid}
 			} else {
 				continue
 			}
@@ -814,12 +876,12 @@ func populateDefaultModels(cfg *Config) {
 			}
 			var models []string
 			seen := make(map[string]bool)
-			for _, cid := range catwalkIDs {
+			for _, cid := range providerIDs {
 				if m := lookupVendorModels(cid); len(m) > 0 {
 					for _, name := range m {
-						// #1525: zai/minimax alias pairs (zai/zhipu-coding,
-						// minimax/minimax-china) carry byte-identical lists - merge
-						// by name or every model shows twice in the model panel.
+						// #1525 lineage: alias pairs (zai/zai-coding-plan,
+					// minimax/minimax-cn, ...) may carry overlapping lists - merge
+					// by name or models show twice in the model panel.
 						if !seen[name] {
 							seen[name] = true
 							models = append(models, name)
@@ -855,25 +917,34 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 			continue
 		}
 
-		// Heuristic: prefer the entry whose SourceProvider appears in the model ID.
-		// E.g. "minimax-m2.7" should prefer the entry from provider "minimax",
-		// not from "openrouter" or "fireworks".
-		var best modelEntry
-		bestScore := -1
-		for _, e := range group {
-			score := 0
-			// Strongly prefer: source provider name is a prefix of the model ID.
+		// Heuristic ranking, lexicographic (strict tuple compare, no additive
+		// scores - additive scores deadlock on ties where the first entry has
+		// already banked the same points):
+		//  1. SourceProvider appears in the model ID ("minimax-m2.7" from
+		//     provider "minimax" beats the same name served by "openrouter").
+		//  2. Richer max output: first-party sources expose larger output
+		//     limits than third-party mirrors serving the same bare model ID
+		//     (glm-5: zai 131072 vs alibaba-cn 16384).
+		//  3. Larger context window.
+		//  4. Prefer re-serve IDs containing "/" LAST: "zai-org/glm-5" from a
+		//     catalog is a worse witness than the bare "glm-5" entry.
+		rank := func(e modelEntry) (nameScore, out, ctx int) {
 			if strings.HasPrefix(e.ID, e.SourceProvider) ||
 				strings.Contains(e.ID, e.SourceProvider) {
-				score += 100
+				nameScore = 1
 			}
-			// Weakly prefer: larger context window (more accurate).
-			if e.ContextWindow > best.ContextWindow {
-				score += 1
+			if strings.Contains(e.ID, "/") {
+				nameScore = -1 // catalog re-serve: weakest witness
 			}
-			if score > bestScore {
-				bestScore = score
-				best = e
+			return nameScore, e.MaxOutputTokens, e.ContextWindow
+		}
+		best := group[0]
+		bestName, bestOut, bestCtx := rank(best)
+		for _, e := range group[1:] {
+			n, o, c := rank(e)
+			if n > bestName ||
+				(n == bestName && (o > bestOut || (o == bestOut && c > bestCtx))) {
+				best, bestName, bestOut, bestCtx = e, n, o, c
 			}
 		}
 		dedup[id] = best
@@ -887,75 +958,4 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 		return entries[i].ID < entries[j].ID
 	})
 	return entries
-}
-
-// openRouterModel represents a model from the OpenRouter /v1/models API.
-type openRouterModel struct {
-	ID              string `json:"id"`
-	ContextLength   int    `json:"context_length"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-	Architecture    struct {
-		Modality string `json:"modality"`
-	} `json:"architecture"`
-}
-
-type openRouterResponse struct {
-	Data []openRouterModel `json:"data"`
-}
-
-func fetchOpenRouterModels() ([]openRouterModel, error) {
-	resp, err := http.Get("https://openrouter.ai/api/v1/models")
-	if err != nil {
-		return nil, fmt.Errorf("fetch OpenRouter: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read OpenRouter: %w", err)
-	}
-
-	var orResp openRouterResponse
-	if err := json.Unmarshal(body, &orResp); err != nil {
-		return nil, fmt.Errorf("parse OpenRouter: %w", err)
-	}
-
-	// Convert to catwalkModel-compatible format.
-	var models []openRouterModel
-	for _, m := range orResp.Data {
-		if m.ContextLength <= 0 {
-			continue
-		}
-		models = append(models, m)
-	}
-	return models, nil
-}
-
-// vendorToCatwalkID maps a ggcode vendor name to its primary catwalk provider ID.
-func vendorToCatwalkID(vendor string) string {
-	m := map[string]string{
-		"zai":            "zai",
-		"zhipu":          "zhipu",
-		"anthropic":      "anthropic",
-		"openai":         "openai",
-		"google":         "gemini",
-		"openrouter":     "openrouter",
-		"groq":           "groq",
-		"mistral":        "mistral",
-		"deepseek":       "deepseek",
-		"moonshot":       "kimi",
-		"kimi":           "kimi",
-		"minimax":        "minimax",
-		"perplexity":     "perplexity",
-		"github-copilot": "copilot",
-		"xai":            "xai",
-		"together":       "together",
-		"nvidia":         "nvidia",
-		"ark":            "ark",
-		"aliyun":         "aliyun",
-	}
-	if id, ok := m[vendor]; ok {
-		return id
-	}
-	return vendor
 }

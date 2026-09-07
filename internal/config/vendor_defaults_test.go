@@ -208,8 +208,8 @@ func TestMatchProviderByBaseURL(t *testing.T) {
 		{"https://api.deepseek.com/v1", "deepseek"},
 		// Upstream api_endpoint is an env placeholder; host filled from builtin URL.
 		{"https://api.anthropic.com", "anthropic"},
-		// Host shared by zhipu + zhipu-coding: smallest ID wins deterministically.
-		{"https://open.bigmodel.cn/api/paas/v4", "zhipu"},
+		// Host shared by zhipuai + zhipuai-coding-plan: smallest ID wins deterministically.
+		{"https://open.bigmodel.cn/api/paas/v4", "zhipuai"},
 		// No match cases.
 		{"https://custom.example.com/v1", ""},
 		{"", ""},
