@@ -107,10 +107,23 @@ func MarkRunning(sessionID, userPrompt string, pid int) {
 	}
 
 	path := journalPath(sessionID)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := atomicWriteJournal(path, data); err != nil {
 		debug.Log("run_journal", "MarkRunning: write failed: %v", err)
 	}
 	debug.Log("run_journal", "MarkRunning: session=%s pid=%d", sessionID, pid)
+}
+
+// atomicWriteJournal writes via tmp+rename (#1666 case 2): MarkRunning
+// runs in the hot path and MarkCompleted runs inside panic-unwinding
+// defers - a SIGKILL/OOM mid-write left a truncated JSON that the reader
+// then DELETED as evidence. Torn writes are now impossible: rename is
+// atomic on every supported filesystem.
+func atomicWriteJournal(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // MarkCompleted updates the journal to "completed" state. Safe to call
@@ -128,7 +141,11 @@ func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) 
 
 	var entry RunJournalEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
-		os.Remove(path)
+		// #1666 case 2: do NOT delete - a torn write means the process died
+		// mid-MarkRunning/MarkCompleted (the exact crash this facility
+		// exists to detect). Keep the file for the reader to treat as a
+		// crash suspect.
+		debug.Log("run_journal", "MarkCompleted: journal corrupt (%v) - preserved", err)
 		return
 	}
 
@@ -143,7 +160,7 @@ func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) 
 		return
 	}
 
-	if err := os.WriteFile(path, updated, 0o644); err != nil {
+	if err := atomicWriteJournal(path, updated); err != nil {
 		debug.Log("run_journal", "MarkCompleted: write failed: %v", err)
 	}
 	debug.Log("run_journal", "MarkCompleted: session=%s success=%v", sessionID, success)
@@ -177,8 +194,15 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 
 	var entry RunJournalEntry
 	if err := json.Unmarshal(data, &entry); err != nil {
-		os.Remove(path)
-		return nil
+		// #1666 case 2: a corrupt journal is evidence, not noise - the
+		// process died mid-write, which is itself crash-suspect behavior.
+		// Report it as a crash recovery candidate (best-effort fields) and
+		// PRESERVE the file for inspection instead of deleting it.
+		debug.Log("run_journal", "CheckCrashedRun: journal corrupt (%v) - preserved, reporting as crash suspect", err)
+		return &CrashRecoveryInfo{
+			SessionID:  sessionID,
+			UserPrompt: fmt.Sprintf("<journal corrupted: %s>", filepath.Base(path)),
+		}
 	}
 
 	// Already completed: clean exit, no crash

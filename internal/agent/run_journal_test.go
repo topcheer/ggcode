@@ -269,9 +269,35 @@ func TestMarkCompleted_CorruptedJournal(t *testing.T) {
 	// Should not panic
 	MarkCompleted("corrupt", true, 1, 0)
 
-	// Corrupted file should be cleaned up
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Error("corrupted journal should be removed")
+	// #1666 case 2: corrupted journals are EVIDENCE (the process died
+	// mid-write - crash-suspect behavior), preserved for inspection
+	// instead of silently deleted.
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("corrupted journal should be preserved, stat err=%v", err)
+	}
+}
+
+// TestCheckCrashedRun_CorruptJournalReportsSuspect pins #1666 case 2: a
+// torn running-journal write is itself crash evidence - the reader must
+// report it as a recovery candidate, not delete it and return "no crash".
+func TestCheckCrashedRun_CorruptJournalReportsSuspect(t *testing.T) {
+	dir := t.TempDir()
+	orig := journalDirFunc
+	journalDirFunc = func() string { return dir }
+	defer func() { journalDirFunc = orig }()
+
+	path := filepath.Join(dir, "torn_"+journalFileName)
+	os.WriteFile(path, []byte(`{"state":"run`), 0o644) // torn mid-write
+
+	info := CheckCrashedRun("torn")
+	if info == nil {
+		t.Fatal("corrupt running journal must report a crash suspect, got nil")
+	}
+	if info.SessionID != "torn" {
+		t.Errorf("suspect should carry the session ID, got %q", info.SessionID)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("evidence file must be preserved, stat err=%v", err)
 	}
 }
 

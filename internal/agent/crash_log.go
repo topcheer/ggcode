@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	ggdebug "github.com/topcheer/ggcode/internal/debug"
 )
 
 // Crash logging for main-goroutine panic containment (the 1a/1b follow-up to
@@ -98,5 +101,58 @@ func WriteCrashLog(component string, val any) string {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return fmt.Sprintf("<crash log not written: %v>", err)
 	}
+	// #1666 case 1: crash loops are an expected scenario ("agent recover
+	// does NOT exit; retry loops re-panic" - see the naming comment above),
+	// and each iteration writes up to ~9MiB. Without pruning, the crash
+	// directory grows unboundedly - the diagnostic facility becomes a disk
+	// killer in exactly the scenario it exists to observe. Best-effort
+	// cleanup after every write: keep the newest 20 files and anything
+	// younger than 7 days.
+	pruneCrashLogs(dir)
 	return path
+}
+
+// crashLogRetention is the number of newest crash logs always kept.
+const crashLogRetention = 20
+
+// crashLogMaxAge caps how long an old crash log survives pruning.
+const crashLogMaxAge = 7 * 24 * time.Hour
+
+// pruneCrashLogs keeps the newest crashLogRetention files plus any file
+// younger than crashLogMaxAge; older files beyond the retention count are
+// removed (best-effort - failures are logged, never propagated: this runs
+// inside the crash path).
+func pruneCrashLogs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	type logFile struct {
+		name    string
+		modTime time.Time
+	}
+	var logs []logFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".log") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		logs = append(logs, logFile{name: e.Name(), modTime: info.ModTime()})
+	}
+	if len(logs) <= crashLogRetention {
+		return
+	}
+	// Newest first.
+	sort.Slice(logs, func(i, j int) bool { return logs[i].modTime.After(logs[j].modTime) })
+	for _, lf := range logs[crashLogRetention:] {
+		if time.Since(lf.modTime) < crashLogMaxAge {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, lf.name)); err == nil {
+			ggdebug.Log("crash-log", "pruned old crash log %s", lf.name)
+		}
+	}
 }
