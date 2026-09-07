@@ -735,10 +735,28 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 			if isSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
+			// #1669 case 1: the #1625 nested-repo exclusion landed only in
+			// collectFiles - this incremental walk (5min tick on active
+			// sessions) descended into nested repos anyway, marked every
+			// foreign file dirty (wasIndexed=false), and the append branch
+			// re-indexed them with NO term budget - the exact memory
+			// bloat #1625 fixed, resurrected within 5 minutes and then
+			// persisted. Same predicate as collectFiles, same file cap.
+			if path != m.workingDir {
+				if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr == nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 		if !isCodeFile(path) {
 			return nil
+		}
+		// #1669 case 1: same 50k cap as collectFiles - the incremental
+		// walk must not blow the corpus size just because it has no
+		// builder phase.
+		if len(found) >= codeIndexMaxFiles {
+			return filepath.SkipAll
 		}
 		relPath, _ := filepath.Rel(m.workingDir, path)
 		found[relPath] = true
@@ -974,9 +992,39 @@ func (m *CodeIndexManager) replaceDocInIndex(idx *bm25Index, i int, newDoc bm25D
 // MarkDirty records that the given files have been modified and signals
 // the background loop to trigger a debounced incremental rebuild. This is
 // non-blocking and safe to call from the agent loop.
+// inNestedRepo reports whether path lives inside a nested git repository
+// under the working directory (vendored clones, submodule checkouts) - i.e.
+// some ancestor directory below workingDir carries its own .git. Used by
+// MarkDirty to keep the #1625 exclusion airtight on the edit channel (#1669
+// case 2). Paths outside workingDir are treated as nested (foreign).
+func (m *CodeIndexManager) inNestedRepo(path string) bool {
+	abs := path
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(m.workingDir, abs)
+	}
+	abs = filepath.Clean(abs)
+	wd := filepath.Clean(m.workingDir)
+	if abs == wd || !strings.HasPrefix(abs, wd+string(filepath.Separator)) {
+		return abs != wd
+	}
+	for dir := filepath.Dir(abs); dir != wd && dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *CodeIndexManager) MarkDirty(paths []string) {
 	m.mu.Lock()
 	for _, p := range paths {
+		// #1669 case 2: the #1625 exclusion means nested-repo files never
+		// ENTER the index via build or scan - letting an agent edit inside
+		// a vendored clone re-add exactly those files via the append branch
+		// contradicts "entirely excluded" ("entirely" per the fix comment).
+		if m.inNestedRepo(p) {
+			continue
+		}
 		m.dirtyFiles[p] = time.Now().Unix()
 	}
 	m.lastActivity = time.Now()

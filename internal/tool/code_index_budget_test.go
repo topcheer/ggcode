@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,75 @@ func TestNestedGitRepoExcluded(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("root's own files must still be indexed")
+	}
+}
+
+// TestNestedGitRepoScanAndMarkDirtyExcluded pins #1669: the #1625 exclusion
+// must hold on the incremental channels too - scanForExternalChanges' walk
+// (5min tick) and MarkDirty (agent edits) both skip nested-repo files.
+func TestNestedGitRepoScanAndMarkDirtyExcluded(t *testing.T) {
+	root := t.TempDir()
+	inner := filepath.Join(root, "vendored-clone")
+	if err := os.MkdirAll(filepath.Join(inner, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(inner, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inner, "src", "lib.go"), []byte("package inner\nfunc F() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewCodeIndexManager(root)
+
+	// --- Case 2: MarkDirty filters nested-repo edit paths ---
+	m.MarkDirty([]string{filepath.Join(root, "main.go"), filepath.Join(inner, "src", "lib.go")})
+	m.mu.RLock()
+	dirtyCount := len(m.dirtyFiles)
+	_, foreignDirty := m.dirtyFiles[filepath.Join(inner, "src", "lib.go")]
+	m.mu.RUnlock()
+	if foreignDirty {
+		t.Fatal("nested-repo edit must not be marked dirty (re-enters the index via the append branch)")
+	}
+	if dirtyCount != 1 {
+		t.Fatalf("only the root file must be dirty, got %d entries", dirtyCount)
+	}
+
+	// --- Case 1: scanForExternalChanges walk skips nested repos ---
+	// Prime the in-memory index + disk cache so the scan has a baseline.
+	m.index = &bm25Index{docs: []bm25Doc{{path: "main.go"}}}
+	pi := persistedIndex{Version: codeIndexVersion, Docs: []persistedDoc{{Path: "main.go", Mtime: 1}}}
+	raw, _ := json.Marshal(pi)
+	if err := os.WriteFile(m.indexPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m.scanForExternalChanges()
+	m.mu.RLock()
+	for p := range m.dirtyFiles {
+		if strings.Contains(p, "vendored-clone") {
+			m.mu.RUnlock()
+			t.Fatalf("scan walk marked nested-repo file dirty: %s", p)
+		}
+	}
+	m.mu.RUnlock()
+}
+
+// TestInNestedRepoDirect pins the MarkDirty filter's predicate directly.
+func TestInNestedRepoDirect(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "vendored", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := NewCodeIndexManager(root)
+	if !m.inNestedRepo(filepath.Join(root, "vendored", "a.go")) {
+		t.Error("file directly under nested repo root must be detected as nested")
+	}
+	if !m.inNestedRepo(filepath.Join(root, "vendored", "src", "a.go")) {
+		t.Error("file deep in nested repo must be detected as nested")
+	}
+	if m.inNestedRepo(filepath.Join(root, "a.go")) {
+		t.Error("file in the working repo itself must NOT be nested")
 	}
 }
