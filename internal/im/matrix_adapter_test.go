@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -422,5 +423,100 @@ func TestIssue1553B_ShortEventIDNoPanic(t *testing.T) {
 		if len(s) >= 12 && nostrShortID(s) != s[:12] {
 			t.Fatalf("long id must truncate to 12: %q", s)
 		}
+	}
+}
+
+// --- #1661: fileSyncStore crash-safety and account binding ---
+
+func TestFileSyncStoreAtomicSaveAndRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s := &fileSyncStore{path: filepath.Join(dir, "m.json")}
+	ctx := context.Background()
+	if err := s.SaveNextBatch(ctx, "@alice:example.org", "tok1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("tmp file must be renamed away after save, stat err=%v", err)
+	}
+	got, err := s.LoadNextBatch(ctx, "@alice:example.org")
+	if err != nil || got != "tok1" {
+		t.Fatalf("round trip: got %q err=%v", got, err)
+	}
+}
+
+func TestFileSyncStoreForeignAccountDiscarded(t *testing.T) {
+	dir := t.TempDir()
+	s := &fileSyncStore{path: filepath.Join(dir, "m.json")}
+	ctx := context.Background()
+	if err := s.SaveNextBatch(ctx, "@alice:example.org", "alice-token"); err != nil {
+		t.Fatal(err)
+	}
+	// Same adapter name, different account (shared ~/.ggcode across workspaces).
+	got, err := s.LoadNextBatch(ctx, "@bob:example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("foreign token leaked: %q", got)
+	}
+	// Bob's save must not clobber Alice's data with a mixed state.
+	if err := s.SaveNextBatch(ctx, "@bob:example.org", "bob-token"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.LoadNextBatch(ctx, "@alice:example.org"); got != "alice-token" {
+		// After Bob's save the file is Bob-owned; Alice's next load is a
+		// clean discard, not a replay of Bob's token.
+		if got != "" {
+			t.Fatalf("expected discard after ownership switch, got %q", got)
+		}
+	}
+}
+
+func TestFileSyncStoreCorruptFileQuarantined(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "m.json")
+	if err := os.WriteFile(path, []byte(`{"next_batch": "trunc`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &fileSyncStore{path: path}
+	ctx := context.Background()
+	got, err := s.LoadNextBatch(ctx, "@alice:example.org")
+	if err != nil || got != "" {
+		t.Fatalf("corrupt store must degrade to absent (\"\", nil), got %q err=%v", got, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("corrupt file must be renamed away, stat err=%v", err)
+	}
+	if _, err := os.Stat(path + ".corrupt"); err != nil {
+		t.Errorf("quarantine copy missing: %v", err)
+	}
+}
+
+func TestSelfHealingSyncerResetsOnUnknownPos(t *testing.T) {
+	dir := t.TempDir()
+	store := &fileSyncStore{path: filepath.Join(dir, "m.json")}
+	ctx := context.Background()
+	if err := store.SaveNextBatch(ctx, "@alice:example.org", "dead-token"); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &selfHealingSyncer{DefaultSyncer: mautrix.NewDefaultSyncer(), store: store}
+	retry, fatal := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
+		RespError: &mautrix.RespError{ErrCode: "M_UNKNOWN_POS", StatusCode: http.StatusBadRequest},
+	})
+	if fatal != nil {
+		t.Fatalf("M_UNKNOWN_POS must be self-healed, not fatal: %v", fatal)
+	}
+	if retry <= 0 {
+		t.Fatalf("expected a positive retry delay, got %v", retry)
+	}
+	if got, _ := store.LoadNextBatch(ctx, "@alice:example.org"); got != "" {
+		t.Fatalf("token must be reset after M_UNKNOWN_POS, got %q", got)
+	}
+	// Unrelated errors keep DefaultSyncer behavior (retry, non-fatal).
+	retry2, fatal2 := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
+		RespError: &mautrix.RespError{ErrCode: "M_LIMIT_EXCEEDED", StatusCode: http.StatusTooManyRequests},
+	})
+	if fatal2 != nil || retry2 != 10*time.Second {
+		t.Fatalf("non-M_UNKNOWN_POS must delegate to DefaultSyncer (10s, nil), got (%v, %v)", retry2, fatal2)
 	}
 }

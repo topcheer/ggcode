@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -230,9 +231,11 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	// #1553-A: persist the sync token - a full initial sync on every
 	// restart fed offline timeline events into the didFirstSync drop gate
 	// (silent loss). With the token, Sync resumes from the last event.
+	var syncStoreRef *fileSyncStore
 	syncDir := filepath.Join(config.ConfigDir(), "matrix-sync")
 	if err := os.MkdirAll(syncDir, 0o700); err == nil {
-		client.Store = &fileSyncStore{path: filepath.Join(syncDir, sanitizeFileToken(a.name)+".json")}
+		syncStoreRef = &fileSyncStore{path: filepath.Join(syncDir, sanitizeFileToken(a.name)+".json")}
+		client.Store = syncStoreRef
 	} else {
 		debug.Log("matrix", "adapter=%s sync-token persistence unavailable (falling back to memory): %v", a.name, err)
 	}
@@ -307,7 +310,12 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		a.handleEvent(ctx, evt)
 	})
 
-	client.Syncer = syncer
+	// #1661 case 2: wrap the syncer so a persisted next_batch the server
+	// rejects (M_UNKNOWN_POS - a different account sharing the adapter name
+	// across workspaces, or the homeserver GC'd the stream position)
+	// resets the token and falls back to an initial sync, instead of the
+	// DefaultSyncer's infinite same-token retry loop.
+	client.Syncer = &selfHealingSyncer{DefaultSyncer: syncer, store: syncStoreRef}
 
 	a.publishState(true, "connected", "")
 	debug.Log("matrix", "adapter=%s entering sync loop", a.name)
@@ -1143,7 +1151,15 @@ type fileSyncStore struct {
 type syncStoreData struct {
 	FilterID    string `json:"filter_id,omitempty"`
 	NextBatch   string `json:"next_batch,omitempty"`
+	UserID      string `json:"user_id,omitempty"`    // #1661: token must be account-bound, not adapter-name-bound
+	Homeserver  string `json:"homeserver,omitempty"` // #1661: full identity of the token's owner
 	SavedAtUnix int64  `json:"saved_at,omitempty"`
+}
+
+// fileSyncStoreUserIDMismatch reports whether the persisted data belongs
+// to a different account (old files without a UserID skip the check).
+func (d syncStoreData) ownedBy(userID id.UserID) bool {
+	return d.UserID == "" || d.UserID == string(userID)
 }
 
 func (s *fileSyncStore) load() (syncStoreData, error) {
@@ -1152,8 +1168,15 @@ func (s *fileSyncStore) load() (syncStoreData, error) {
 	if err != nil {
 		return d, err // absent is fine: zero value
 	}
-	err = json.Unmarshal(raw, &d)
-	return d, err
+	if err := json.Unmarshal(raw, &d); err != nil {
+		// #1661 case 1: a truncated/corrupt store (crash mid-write under the
+		// old non-atomic save) must not be re-read forever. Quarantine it
+		// aside; the next read is then a clean NotExist -> initial sync.
+		debug.Log("matrix", "sync store %s corrupt (%v) - quarantining", s.path, err)
+		_ = os.Rename(s.path, s.path+".corrupt")
+		return syncStoreData{}, err
+	}
+	return d, nil
 }
 
 func (s *fileSyncStore) save(d syncStoreData) error {
@@ -1162,21 +1185,58 @@ func (s *fileSyncStore) save(d syncStoreData) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, raw, 0o600)
+	// #1661 case 1: tmp+rename atomic write - mautrix saves on every sync
+	// (~30s), so a SIGKILL/OOM mid-WriteFile used to leave a truncated
+	// JSON that Load silently swallowed as "".
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
+}
+
+// loadFor returns the persisted data only when it belongs to userID;
+// another account's data (same adapter name across workspaces - the file
+// lives under the user-global ~/.ggcode) is treated as absent so the
+// client falls back to a fresh initial sync instead of replaying a
+// foreign token.
+func (s *fileSyncStore) loadFor(userID id.UserID) (syncStoreData, error) {
+	d, err := s.load()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// Corrupt file already quarantined by load(); treat as absent.
+		return syncStoreData{}, nil
+	}
+	if err != nil {
+		return d, err
+	}
+	if !d.ownedBy(userID) {
+		debug.Log("matrix", "sync store %s belongs to %q not %q - discarding foreign token", s.path, d.UserID, userID)
+		return syncStoreData{}, nil
+	}
+	return d, nil
+}
+
+// resetNextBatch clears the persisted token so the next sync attempt
+// performs an initial sync (self-heal for M_UNKNOWN_POS).
+func (s *fileSyncStore) resetNextBatch() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.save(syncStoreData{})
 }
 
 func (s *fileSyncStore) SaveFilterID(ctx context.Context, userID id.UserID, filterID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, _ := s.load()
+	d, _ := s.loadFor(userID)
 	d.FilterID = filterID
+	d.UserID = string(userID)
 	return s.save(d)
 }
 
 func (s *fileSyncStore) LoadFilterID(ctx context.Context, userID id.UserID) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, err := s.load()
+	d, err := s.loadFor(userID)
 	if err != nil {
 		return "", nil // absent store is not an error
 	}
@@ -1186,17 +1246,39 @@ func (s *fileSyncStore) LoadFilterID(ctx context.Context, userID id.UserID) (str
 func (s *fileSyncStore) SaveNextBatch(ctx context.Context, userID id.UserID, nextBatchToken string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, _ := s.load()
+	d, _ := s.loadFor(userID)
 	d.NextBatch = nextBatchToken
+	d.UserID = string(userID)
 	return s.save(d)
 }
 
 func (s *fileSyncStore) LoadNextBatch(ctx context.Context, userID id.UserID) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, err := s.load()
+	d, err := s.loadFor(userID)
 	if err != nil {
 		return "", nil // absent store: fresh initial sync
 	}
 	return d.NextBatch, nil
+}
+
+// selfHealingSyncer wraps DefaultSyncer to recover from a persisted sync
+// token the server no longer accepts (#1661 case 2): DefaultSyncer treats
+// everything except M_UNKNOWN_TOKEN as retry-with-same-token, which wedged
+// the adapter in a permanently "connected" but eventless state.
+type selfHealingSyncer struct {
+	*mautrix.DefaultSyncer
+	store *fileSyncStore
+}
+
+func (s *selfHealingSyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Duration, error) {
+	var httpErr *mautrix.HTTPError
+	if errors.As(err, &httpErr) && httpErr.RespError != nil && httpErr.RespError.ErrCode == "M_UNKNOWN_POS" {
+		debug.Log("matrix", "sync token rejected (M_UNKNOWN_POS) - resetting for initial sync")
+		if s.store != nil {
+			s.store.resetNextBatch()
+		}
+		return 2 * time.Second, nil
+	}
+	return s.DefaultSyncer.OnFailedSync(res, err)
 }
