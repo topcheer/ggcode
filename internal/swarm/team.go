@@ -120,15 +120,29 @@ func (t *Teammate) appendEvent(ev TeammateEvent) {
 // EventsSince returns only events with index >= fromIdx, along with the total
 // event count. This avoids copying the full event history when only incremental
 // events are needed (e.g. GUI agent panel updates).
+// EventsSince returns events newer than the caller's cursor. The cursor and
+// the returned total are ABSOLUTE positions (len(events) + eventsDropped):
+// the ring-buffer eviction (events = events[1:]) shifts relative indices,
+// so a caller that stored a relative total and reused it after N evictions
+// silently skipped N events. Callers keep passing back whatever total they
+// received - now both sides of the comparison live in the same monotonic
+// domain and eviction is absorbed by the dropped offset.
 func (t *Teammate) EventsSince(fromIdx int) ([]TeammateEvent, int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	total := len(t.events)
+	total := len(t.events) + t.eventsDropped
 	if fromIdx >= total {
 		return nil, total
 	}
-	out := make([]TeammateEvent, total-fromIdx)
-	copy(out, t.events[fromIdx:])
+	// #1636-B: translate the absolute cursor into the live slice's frame.
+	rel := fromIdx - t.eventsDropped
+	if rel < 0 {
+		// The cursor predates evicted events the caller never saw - replay
+		// from the oldest surviving event rather than skipping.
+		rel = 0
+	}
+	out := make([]TeammateEvent, len(t.events)-rel)
+	copy(out, t.events[rel:])
 	return out, total
 }
 

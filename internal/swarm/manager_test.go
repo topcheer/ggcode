@@ -960,3 +960,29 @@ func TestManager_TeammateEventsSince_NoEvents(t *testing.T) {
 		t.Fatalf("expected 0 events, got %d", len(events))
 	}
 }
+
+// Regression for #1636-B: after ring eviction, an old ABSOLUTE cursor must
+// not silently skip events - the dropped offset absorbs the eviction.
+func TestEventsSinceSurvivesEviction(t *testing.T) {
+	tm := &Teammate{ID: "tm-1", Name: "tester"}
+	total := maxTeammateEvents + 5
+	for i := 0; i < total; i++ {
+		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: fmt.Sprintf("e%d", i)})
+	}
+	// Absolute cursor taken mid-stream (when the ring was full, before the
+	// 5 evictions): after eviction a relative-index caller skipped 5 events.
+	cursor := maxTeammateEvents
+	events, gotTotal := tm.EventsSince(cursor)
+	if gotTotal != total {
+		t.Fatalf("total must be absolute (len+dropped=%d), got %d", total, gotTotal)
+	}
+	if len(events) != 5 || events[0].Text != fmt.Sprintf("e%d", cursor) {
+		t.Fatalf("expected the 5 newest events from absolute cursor %d, got %d events starting %q",
+			cursor, len(events), events[0].Text)
+	}
+	// Cursor predating evicted events replays the oldest survivors.
+	events2, _ := tm.EventsSince(0)
+	if len(events2) != maxTeammateEvents || events2[0].Text != fmt.Sprintf("e%d", 5) {
+		t.Fatalf("stale cursor must replay oldest survivors, got %d events starting %q", len(events2), events2[0].Text)
+	}
+}
