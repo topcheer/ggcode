@@ -113,7 +113,12 @@ func checkInitSideEffects(filePath, _, newContent string) []string {
 	var warnings []string
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name == nil || fn.Name.Name != "init" {
+		// #1619-B: a METHOD named init (func (s *Server) init()) is a
+		// legal lifecycle method that runs only when CALLED - flagging it
+		// with "runs at import time"/"makes the package unimportable"
+		// asserted facts that are simply false and pushed the agent into
+		// pointless refactors. Only package-level init qualifies.
+		if !ok || fn.Name == nil || fn.Name.Name != "init" || fn.Recv != nil {
 			continue
 		}
 		if fn.Body == nil {

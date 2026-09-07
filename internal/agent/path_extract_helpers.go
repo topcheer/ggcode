@@ -170,9 +170,14 @@ var emptyResultPatterns = []string{
 	"no commits found",
 	"nothing found",
 	"no matching",
-	"0 matches",
-	"0 results",
-	"0 files",
+	// #1619-A: bare "0 matches"/"0 results"/"0 files" are SUBSTRINGS of
+	// successful counts - "Found 10 matches:" matched and poor-result
+	// tracking misfired on every tail-zero count (10/20/.../100),
+	// steering the agent away from healthy search tools. Anchor to the
+	// count formats the tools actually emit.
+	"found 0",
+	"showing 0 of 0",
+	"0 files matched",
 	"no changes",
 	"nothing to show",
 }
