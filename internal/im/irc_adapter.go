@@ -575,7 +575,10 @@ func splitIRCMessage(text string, maxLen int) []string {
 	// 400 runes: 400 CJK runes are 1200 bytes and the server truncated or
 	// rejected the line, possibly mid-rune. Route through the byte splitter
 	// (rune-boundary safe) instead of the rune counter.
-	return splitMessageBytes(text, maxLen)
+	// #1660 case 1: trim=false restores the old rune-based splitter's
+	// contract - leading/trailing whitespace (code-block indentation) must
+	// survive; trimming was only ever intended for the WeCom family.
+	return splitMessageBytes(text, maxLen, false)
 }
 
 // ircTextContainsNick reports whether text mentions nick, case-insensitive

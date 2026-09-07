@@ -77,7 +77,7 @@ func SplitMessageForPlatform(text string, p Platform) []string {
 		maxLen = 4000 // safe default
 	}
 	if ByteLimitPlatforms[p] {
-		return splitMessageBytes(text, maxLen)
+		return splitMessageBytes(text, maxLen, true)
 	}
 	return SplitMessage(text, maxLen)
 }
@@ -109,10 +109,19 @@ func splitMessageRunes(text string, maxLen int, trim bool, allowSpace bool, requ
 }
 
 // splitMessageBytes splits text so that each chunk's UTF-8 byte length
-// does not exceed maxBytes. It prefers splitting at newline boundaries
-// for readability, falling back to hard cuts when necessary.
-func splitMessageBytes(text string, maxBytes int) []string {
-	text = strings.TrimSpace(text)
+// does not exceed maxBytes. It prefers splitting at newline boundaries,
+// then at word (space) boundaries, falling back to hard cuts when necessary.
+//
+// trim controls whether the WHOLE input is TrimSpace'd first. The WeCom
+// family pass true (their legacy behavior); the IRC path passes false
+// (#1660 case 1: an unconditional trim stripped leading indentation on
+// every line - including lines that never needed splitting - so Python/Go
+// code blocks arrived on IRC/Twitch with their syntax-semantic indentation
+// silently gone; the old rune-based IRC splitter had trim=false by design).
+func splitMessageBytes(text string, maxBytes int, trim bool) []string {
+	if trim {
+		text = strings.TrimSpace(text)
+	}
 	if text == "" || maxBytes <= 0 {
 		return []string{text}
 	}
@@ -169,7 +178,7 @@ func splitMessageBytes(text string, maxBytes int) []string {
 		remaining := string(runes[start:])
 		if len(remaining) > maxBytes {
 			// Recursively split the tail in case of very large remaining text
-			chunks = append(chunks, splitMessageBytes(remaining, maxBytes)...)
+			chunks = append(chunks, splitMessageBytes(remaining, maxBytes, trim)...)
 		} else {
 			chunks = append(chunks, remaining)
 		}
@@ -179,9 +188,13 @@ func splitMessageBytes(text string, maxBytes int) []string {
 }
 
 // preferredByteSplit finds the best rune index to split at within runes[0:maxBytes].
-// Prefers newline boundaries, then falls back to a byte-budget-limited hard cut.
+// Prefers newline boundaries, then the last space inside the budget (word
+// boundaries - #1660 case 3: the old version only matched \n, so long
+// single-line text was hard-cut mid-word like "supercalifragilistic|s"),
+// then falls back to a byte-budget-limited hard cut.
 func preferredByteSplit(runes []rune, maxBytes int) int {
 	best := 0
+	lastSpace := -1
 	byteCount := 0
 	for i, r := range runes {
 		rb := utf8.RuneLen(r)
@@ -192,7 +205,13 @@ func preferredByteSplit(runes []rune, maxBytes int) int {
 		if r == '\n' {
 			return i + 1
 		}
+		if r == ' ' {
+			lastSpace = i + 1
+		}
 		best = i + 1
+	}
+	if lastSpace > 0 {
+		return lastSpace
 	}
 	if best == 0 {
 		best = 1 // at least one rune

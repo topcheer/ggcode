@@ -166,7 +166,7 @@ func TestTruncateRunes_DoesNotBreakUTF8(t *testing.T) {
 // --- Byte-aware splitting tests ---
 
 func TestSplitMessageBytes_ShortMessage(t *testing.T) {
-	chunks := splitMessageBytes("hello", 100)
+	chunks := splitMessageBytes("hello", 100, true)
 	if len(chunks) != 1 || chunks[0] != "hello" {
 		t.Errorf("expected single chunk, got %v", chunks)
 	}
@@ -175,7 +175,7 @@ func TestSplitMessageBytes_ShortMessage(t *testing.T) {
 func TestSplitMessageBytes_CJKRespectsByteLimit(t *testing.T) {
 	// 800 Chinese characters = 2400 bytes, limit is 2048 bytes
 	msg := strings.Repeat("你", 800) // 800 runes, 2400 bytes
-	chunks := splitMessageBytes(msg, 2048)
+	chunks := splitMessageBytes(msg, 2048, true)
 
 	if len(chunks) < 2 {
 		t.Fatalf("expected >= 2 chunks for 2400-byte CJK message, got %d", len(chunks))
@@ -198,7 +198,7 @@ func TestSplitMessageBytes_CJKRespectsByteLimit(t *testing.T) {
 func TestSplitMessageBytes_NewlinePreference(t *testing.T) {
 	// Each line is 6 bytes (5 chars + newline), split at 12 bytes
 	msg := "hello\nhello\nhello\nhello"
-	chunks := splitMessageBytes(msg, 12)
+	chunks := splitMessageBytes(msg, 12, true)
 	if len(chunks) < 2 {
 		t.Fatalf("expected >= 2 chunks, got %d", len(chunks))
 	}
@@ -211,7 +211,7 @@ func TestSplitMessageBytes_NewlinePreference(t *testing.T) {
 func TestSplitMessageBytes_ASCIIOnly(t *testing.T) {
 	// Pure ASCII: bytes == runes, should behave like rune-based splitting
 	msg := strings.Repeat("a", 300)
-	chunks := splitMessageBytes(msg, 100)
+	chunks := splitMessageBytes(msg, 100, true)
 	if len(chunks) != 3 {
 		t.Errorf("expected 3 chunks, got %d", len(chunks))
 	}
@@ -296,7 +296,7 @@ func TestSplitMessageBytesInnerFlushLedgerComplete(t *testing.T) {
 		}
 	}
 	const maxBytes = 50
-	chunks := splitMessageBytes(sb.String(), maxBytes)
+	chunks := splitMessageBytes(sb.String(), maxBytes, true)
 	if len(chunks) < 2 {
 		t.Fatalf("expected multiple chunks, got %d", len(chunks))
 	}
@@ -313,4 +313,50 @@ func TestSplitMessageBytesInnerFlushLedgerComplete(t *testing.T) {
 	if total != len([]rune(sb.String())) {
 		t.Fatalf("rune loss: reassembled %d, original %d", total, len([]rune(sb.String())))
 	}
+}
+
+// TestSplitMessageBytes_NoTrimPreservesIndentation pins #1660 case 1: the
+// IRC path (trim=false) must not TrimSpace the input - leading code-block
+// indentation is syntax in Python/Go and used to be silently stripped even
+// for lines that never needed splitting.
+func TestSplitMessageBytes_NoTrimPreservesIndentation(t *testing.T) {
+	chunks := splitMessageBytes("    foo := 1", 400, false)
+	if len(chunks) != 1 || chunks[0] != "    foo := 1" {
+		t.Fatalf("expected indentation preserved, got %q", chunks)
+	}
+	// trim=true (WeCom family legacy) still trims.
+	chunks = splitMessageBytes("    foo := 1", 400, true)
+	if len(chunks) != 1 || chunks[0] != "foo := 1" {
+		t.Fatalf("expected trimmed for WeCom-family path, got %q", chunks)
+	}
+}
+
+// TestSplitMessageBytes_SpaceBoundaryPreferred pins #1660 case 3: when no
+// newline is inside the budget, the split should land after the last space
+// in the budget instead of hard-cutting mid-word.
+func TestSplitMessageBytes_SpaceBoundaryPreferred(t *testing.T) {
+	// 60-byte line of two words + punctuation; budget cuts inside the
+	// second word if space preference is missing.
+	text := "supercalifragilistic expialidocious supercalifragilistic expialidocious"
+	chunks := splitMessageBytes(text, 40, false)
+	if len(chunks) < 2 {
+		t.Fatalf("expected split, got %d chunks", len(chunks))
+	}
+	for _, c := range chunks {
+		if len(c) > 40 {
+			t.Errorf("chunk exceeds budget: %d bytes", len(c))
+		}
+	}
+	// The first chunk must end at a word boundary, not mid-word.
+	first := chunks[0]
+	if len(first) > 0 && first[len(first)-1] != ' ' && !endsWithWord(text, first) {
+		t.Errorf("first chunk hard-cut mid-word: %q", first)
+	}
+}
+
+func endsWithWord(full, prefix string) bool {
+	if len(prefix) >= len(full) {
+		return true
+	}
+	return full[len(prefix)] == ' ' || prefix[len(prefix)-1] == ' '
 }

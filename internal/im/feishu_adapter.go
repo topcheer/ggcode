@@ -1659,7 +1659,7 @@ func splitFeishuMessage(text string, maxLen int) []string {
 	// reach ~84KB (3 bytes/rune) -- every long Chinese reply exceeded the
 	// card limit, failed, and degraded to plain text via fallback. Split on
 	// bytes; maxLen (28000) already leaves headroom for card structure.
-	return splitMessageBytes(text, maxLen)
+	return splitMessageBytes(text, maxLen, true)
 }
 
 func intValueStr(s string) (int, bool) {
