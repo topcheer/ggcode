@@ -452,7 +452,12 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return fmt.Errorf("daemon bridge not initialized")
 	}
 	text := strings.TrimSpace(msg.Text)
-	if text != "" {
+	// #1628-B: gate activity on TEXT only meant a pure-image message (the
+	// exact #1584-A scenario) never tickled the Knight idle timer - an
+	// active user read as idle (idle notices/timeouts skewed). Check the
+	// RAW fields (text or attachments): ProviderContent() has a
+	// non-empty-block fallback (#1628-C) and would be always-true here.
+	if text != "" || len(msg.Attachments) > 0 {
 		b.mu.Lock()
 		onActivity := b.onActivity
 		b.mu.Unlock()
