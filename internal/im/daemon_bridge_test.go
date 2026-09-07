@@ -893,3 +893,78 @@ func TestDaemonAskUser_DoubleSenderDoesNotBlock(t *testing.T) {
 		}
 	}
 }
+
+// TestExpiryNoticeEmitted pins #1656/#1667: when the ctx behind a pending
+// approval or ask_user dies (timeout/stop), the bridge clears the pending
+// entry AND emits a visible expiry notice - the on-screen prompt is stale
+// and late replies route to NEW messages. The approval side landed with
+// #1656; the ask_user side (and both assertions) with #1667.
+func TestExpiryNoticeEmitted(t *testing.T) {
+	t.Run("approval", func(t *testing.T) {
+		mgr := NewManager()
+		sink := &namedCaptureSink{name: "qq"}
+		mgr.RegisterSink(sink)
+		mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
+		emitter := NewIMEmitter(mgr, "en", t.TempDir())
+		bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+		ch := make(chan approvalReply, 1)
+		bridge.mu.Lock()
+		bridge.pendingApproval = ch
+		bridge.mu.Unlock()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			bridge.handleApproval(ctx, "run_command", "")
+			close(done)
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		<-done
+
+		time.Sleep(150 * time.Millisecond)
+		for _, ev := range sink.events() {
+			if ev.Kind == OutboundEventText && strings.Contains(ev.Text, "approval prompt above has expired") {
+				return // notice observed
+			}
+		}
+		t.Fatal("expiry notice not emitted for cancelled approval")
+	})
+
+	t.Run("ask_user", func(t *testing.T) {
+		mgr := NewManager()
+		sink := &namedCaptureSink{name: "qq"}
+		mgr.RegisterSink(sink)
+		mgr.currentBindings["qq"] = &ChannelBinding{Adapter: "qq", ChannelID: "ch1"}
+		emitter := NewIMEmitter(mgr, "en", t.TempDir())
+		bridge := &DaemonBridge{manager: mgr, emitter: emitter}
+
+		askCh := make(chan toolpkg.AskUserResponse, 1)
+		pending := &pendingAskUser{response: askCh, request: toolpkg.AskUserRequest{
+			Title:     "T",
+			Questions: []toolpkg.AskUserQuestion{{ID: "q1", Title: "Q1", Kind: "single", Choices: []toolpkg.AskUserChoice{{ID: "a", Label: "A"}}}},
+		}}
+		bridge.mu.Lock()
+		bridge.pendingAsk = pending
+		bridge.mu.Unlock()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			bridge.HandleAskUser(ctx, pending.request)
+			close(done)
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		<-done
+
+		time.Sleep(150 * time.Millisecond)
+		for _, ev := range sink.events() {
+			if ev.Kind == OutboundEventText && strings.Contains(ev.Text, "question above has expired") {
+				return // notice observed
+			}
+		}
+		t.Fatal("expiry notice not emitted for cancelled ask_user")
+	})
+}

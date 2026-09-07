@@ -696,10 +696,21 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			}
 		case <-ctx.Done():
 			b.mu.Lock()
+			cleared := false
 			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
 				b.pendingAsk = nil
+				cleared = true
 			}
 			b.mu.Unlock()
+			// #1667: the #1656 expiry notice healed only the approval
+			// half. Same structural hole here: no question-correlation on
+			// text replies, so a late "2" typed at the STALE on-screen
+			// question gets parsed against whatever question registered
+			// NEXT - possibly selecting the wrong option. Symmetric
+			// visible stop sign on the stale screen.
+			if cleared {
+				_ = b.emitter.EmitText("⏱ The question above has expired. Any reply to it now will be treated as a NEW message, not an answer.")
+			}
 			return toolpkg.AskUserResponse{}, ctx.Err()
 		}
 	}
