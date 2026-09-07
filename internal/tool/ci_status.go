@@ -335,7 +335,14 @@ func currentBranch(ctx context.Context, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	branch := strings.TrimSpace(string(out))
+	// #1642-3: on a detached HEAD rev-parse SUCCEEDS and prints the
+	// literal "HEAD" - callers then pass --branch HEAD to gh, which fails
+	// with a confusing error instead of a clear "detached HEAD" message.
+	if branch == "HEAD" {
+		return "", fmt.Errorf("detached HEAD state: no branch is checked out (git switch <branch> first)")
+	}
+	return branch, nil
 }
 
 // shortSHA truncates a full SHA to a short form.

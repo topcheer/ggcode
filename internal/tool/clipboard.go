@@ -149,7 +149,10 @@ func clipboardWriteCmd(ctx context.Context) (*exec.Cmd, error) {
 	case "darwin":
 		return exec.CommandContext(ctx, "pbcopy"), nil
 	case "windows":
-		return exec.CommandContext(ctx, "clip"), nil
+		// #1642-2: clip.exe decodes stdin with the SYSTEM ANSI code page
+		// (GBK/936 etc.) - CJK/emoji wrote mojibake while the READ side
+		// already uses PowerShell UTF-8. Symmetric Set-Clipboard fixes it.
+		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "$OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())"), nil
 	default:
 		if path, _ := exec.LookPath("wl-copy"); path != "" {
 			return exec.CommandContext(ctx, path), nil
