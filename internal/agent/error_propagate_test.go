@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -272,5 +273,56 @@ func TestIssue1554C_HeadTailMarkerDetected(t *testing.T) {
 	}
 	if !hasTruncationFooter("some output\n" + marker + "more output") {
 		t.Fatal("marker embedded mid-output must be detected (line-anchored)")
+	}
+}
+
+// TestErrorPropagateGuardedTruncationBackfill pins #1664: recordResult runs
+// BEFORE the output guard with the RAW content, so a guard-induced
+// truncation is invisible to classifyDegraded. recordGuardedTruncation (wired
+// in the guard branch) back-fills the chain - the #1554-C marker pairing now
+// has a runtime-reachable path.
+func TestErrorPropagateGuardedTruncationBackfill(t *testing.T) {
+	e := newErrorPropagateState() // or zero value init
+	// Step 1: raw 50KB log, no truncation markers - recordResult alone
+	// classifies it clean (the old dead-at-runtime behavior).
+	if g := e.recordResult("run_command", strings.Repeat("build log line\n", 4000), false); g != "" {
+		t.Fatalf("unexpected guidance on clean raw output: %s", g)
+	}
+	// Guard truncates afterwards -> back-fill fires.
+	e.recordGuardedTruncation("run_command")
+	// Subsequent tool calls build on the (truncated) result; the chain
+	// must now reach the propagation threshold and warn.
+	var got string
+	for i := 0; i < 8 && got == ""; i++ {
+		got = e.recordResult("edit_file", "ok", false)
+	}
+	if got == "" {
+		t.Fatal("expected propagation warning after guarded truncation + downstream edits, got none")
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("warning should mention the truncated origin, got: %s", got)
+	}
+}
+
+// TestErrorPropagateGuardedTruncationNoDuplicate: when the RAW content
+// already carried a tool-internal truncation footer (read_file), recordResult
+// started a chain itself - the back-fill must not double it.
+func TestErrorPropagateGuardedTruncationNoDuplicate(t *testing.T) {
+	e := newErrorPropagateState()
+	raw := strings.Repeat("x", 300) + "\n[... output truncated: 5000 -> 300 bytes]\n"
+	if g := e.recordResult("read_file", raw, false); g != "" {
+		t.Fatalf("unexpected early guidance: %s", g)
+	}
+	e.recordGuardedTruncation("read_file")
+	// Exactly one chain origin for this step: count warnings ceiling - fire
+	// threshold once, then confirm only one warning ever fires for the pair.
+	var warns int
+	for i := 0; i < 10; i++ {
+		if g := e.recordResult("edit_file", "ok", false); g != "" {
+			warns++
+		}
+	}
+	if warns > 1 {
+		t.Fatalf("duplicate chains fired multiple warnings: %d", warns)
 	}
 }

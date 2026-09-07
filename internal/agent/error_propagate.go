@@ -274,6 +274,38 @@ func isContentTool(toolName string) bool {
 	}
 }
 
+// recordGuardedTruncation records that THIS step's tool result was truncated
+// by the tool output guard (#1664). recordResult runs BEFORE the guard with
+// the raw content, so a guard-induced truncation (which only appends the
+// shared marker when it rewrites result.Content afterwards) is invisible to
+// classifyDegraded at that point - the #1554-C marker pairing never fired in
+// production. This back-fills the chain without advancing the step counter
+// (recordResult already counted this step) and without duplicating a chain
+// the raw content may have legitimately started (tool-internal footers like
+// read_file's "[File truncated:...]" exist pre-record).
+func (e *errorPropagateState) recordGuardedTruncation(toolName string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := len(e.chains) - 1; i >= 0; i-- {
+		c := e.chains[i]
+		if c.origin.step < e.totalSteps {
+			break // older chains belong to earlier steps
+		}
+		if c.origin.toolName == toolName {
+			return // this result already started a chain
+		}
+	}
+	if len(e.chains) < propagateMaxChains {
+		e.chains = append(e.chains, &propagationChain{
+			origin: degradedOutput{
+				toolName: toolName,
+				kind:     degradedTruncated,
+				step:     e.totalSteps,
+			},
+		})
+	}
+}
+
 // recordResult is called after every tool execution. It first advances
 // existing chains, then checks if this result is a new degraded output.
 // Returns guidance text if propagation warning should be injected.

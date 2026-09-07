@@ -4261,6 +4261,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(truncated))
 						result.Content = withTruncationAdvisory(truncated, tc.Name, len(result.Content))
 						a.truncClaim.recordTruncation(tc.Name, i)
+						// #1664: errorPropagate.recordResult ran BEFORE the
+						// guard with the raw content, so this truncation - the
+						// exact degraded output the chain tracker exists to
+						// flag - was invisible to it (the #1554-C marker
+						// pairing never fired at runtime). Back-fill the chain.
+						a.errorPropagate.recordGuardedTruncation(tc.Name)
 					}
 				}
 			}
