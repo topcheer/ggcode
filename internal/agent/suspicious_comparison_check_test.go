@@ -252,6 +252,40 @@ func check() {
 	}
 }
 
+func TestCheckSuspiciousComparison_ConstantLiteralBinaryCmp(t *testing.T) {
+	code := `package main
+func check(x int) bool {
+	if 1 > 2 {
+		return false
+	}
+	if x > 0 && 3.0 <= 3.0 {
+		return true
+	}
+	if x == 42 {
+		return true
+	}
+	return false
+}
+`
+	result := checkSuspiciousComparison("test.go", "", code)
+	if result == "" {
+		t.Fatal("expected detection of constant-literal comparison 1 > 2")
+	}
+	if !strings.Contains(result, "1 > 2") {
+		t.Errorf("expected mention of '1 > 2', got: %s", result)
+	}
+	if !strings.Contains(result, "3.0 <= 3.0") {
+		t.Errorf("expected mention of nested '3.0 <= 3.0' under &&, got: %s", result)
+	}
+	if !strings.Contains(result, "constant literals") {
+		t.Errorf("expected constant-literals reason, got: %s", result)
+	}
+	// x == 42 has a variable operand and must NOT be flagged here.
+	if strings.Contains(result, "x == 42") {
+		t.Errorf("variable-vs-literal comparison wrongly flagged: %s", result)
+	}
+}
+
 func TestCheckSuspiciousComparison_FloatNotFlaggedForInt(t *testing.T) {
 	code := `package main
 func check(x int) bool {

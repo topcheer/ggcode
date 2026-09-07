@@ -382,7 +382,10 @@ func isNonZeroFloatLiteral(expr ast.Expr) bool {
 
 // findConstantConditions detects conditions that are always true or false (SA4015).
 // Flags: literal `true`/`false` used as if/for conditions, and binary expressions
-// where both operands are constant literals (e.g., 1 > 2, 3.0 <= 3.0).
+// where both operands are constant literals (e.g., 1 > 2, 3.0 <= 3.0), including
+// operands nested under && / || (if x && 1 > 2). Fix #1500 case A: the header
+// promised the literal-vs-literal form since the detector's introduction but the
+// implementation only covered true/false idents.
 func findConstantConditions(fset *token.FileSet, file *ast.File) []suspiciousCmpInstance {
 	var instances []suspiciousCmpInstance
 
@@ -408,9 +411,57 @@ func findConstantConditions(fset *token.FileSet, file *ast.File) []suspiciousCmp
 					reason:    "constant boolean condition is always " + ident.Name + " - likely a logic error or leftover debug code",
 				})
 			}
+			// SA4015 literal-vs-literal comparisons anywhere inside the
+			// condition, descending through && / || and parentheses.
+			collectConstLiteralCmps(cond, fset, &instances)
 		}
 		return true
 	})
 
 	return instances
+}
+
+// collectConstLiteralCmps walks a condition expression and appends an instance
+// for every comparison whose operands are both constant numeric literals.
+func collectConstLiteralCmps(cond ast.Expr, fset *token.FileSet, instances *[]suspiciousCmpInstance) {
+	switch e := cond.(type) {
+	case *ast.BinaryExpr:
+		if e.Op == token.LAND || e.Op == token.LOR {
+			collectConstLiteralCmps(e.X, fset, instances)
+			collectConstLiteralCmps(e.Y, fset, instances)
+			return
+		}
+		if !isConstLiteralCmp(e) {
+			return
+		}
+		pos := fset.Position(e.Pos())
+		*instances = append(*instances, suspiciousCmpInstance{
+			posStr:    fmt.Sprintf("%s:%d", filepath.Base(pos.Filename), pos.Line),
+			leftText:  exprText(e.X),
+			rightText: exprText(e.Y),
+			op:        e.Op.String(),
+			reason:    "comparison of two constant literals is fixed at compile time (always true/false) - likely a logic error or leftover debug code",
+		})
+	case *ast.ParenExpr:
+		collectConstLiteralCmps(e.X, fset, instances)
+	}
+}
+
+// isConstLiteralCmp reports whether be is a numeric comparison (==, !=, <, >,
+// <=, >=) whose operands are both constant INT/FLOAT literals. Variable
+// operands (`x == 0.1`) are deliberately out of scope here: float-vs-literal
+// equality has its own SA4003 advisory above.
+func isConstLiteralCmp(be *ast.BinaryExpr) bool {
+	switch be.Op {
+	case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ:
+	default:
+		return false
+	}
+	return isNumericLiteral(be.X) && isNumericLiteral(be.Y)
+}
+
+// isNumericLiteral reports whether expr is an INT or FLOAT basic literal.
+func isNumericLiteral(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.BasicLit)
+	return ok && (lit.Kind == token.INT || lit.Kind == token.FLOAT)
 }
