@@ -153,10 +153,22 @@ func (a *Agent) resetGuidanceCounters() {
 	// debt. Quota ONLY (warningsIssued); the debt/maxDebt/green-build
 	// ledger is behavioral state and wiping it would repeat #1572-A's
 	// over-reset (see reset()'s nine fields).
-	if a.verifyDebt != nil {
-		a.verifyDebt.mu.Lock()
-		a.verifyDebt.warningsIssued = 0
-		a.verifyDebt.mu.Unlock()
+	// #1646-1: the #1605-A block operated a.verifyDebt (max=1, already
+	// reset above - byte-identical duplicate, a NO-OP for the issue's own
+	// scenario). The commit message named verifDebt (maxWarn=2, the SAUP
+	// debt model) - after mid-run compaction that detector stayed muted
+	// for the rest of the run. Its struct has no mutex (single-goroutine
+	// access, same pattern as correctionSpiral). #1646-2:
+	// overcorrection_cascade (maxWarn=2, consumed in-loop) completes the
+	// same-family list.
+	if a.verifDebt != nil {
+		a.verifDebt.warningsIssued = 0
+	}
+	// #1646-2: quota-only (warnCount) - entries/pendingErr are behavioral.
+	if a.overcorrection != nil {
+		a.overcorrection.mu.Lock()
+		a.overcorrection.warnCount = 0
+		a.overcorrection.mu.Unlock()
 	}
 
 	debug.Log("guidance", "post-compaction: guidance injection counters reset (B-class detectors)")
