@@ -1199,7 +1199,12 @@ func (m *Manager) RecordUsage(usage provider.TokenUsage) {
 			// anywhere else, making the thinking half of #1618-A dead code.
 			// #1640-2: tool_result blocks carry embedded images in
 			// b.Images - the top-level type check let them through.
-			if b.Type == "image" || b.Type == "thinking" || len(b.Images) > 0 {
+			// #1652-1: redacted_thinking carries encrypted data in
+			// ThinkingData (ReasoningContent/Images empty) and slipped
+			// through all three conditions on the non-streaming path -
+			// base64/encrypted bytes depressed asciiRatio and polluted the
+			// calibration sample.
+			if b.Type == "image" || b.Type == "thinking" || b.Type == "redacted_thinking" || len(b.Images) > 0 {
 				debug.Log("context-calibrator", "sample-frozen: image/thinking blocks present (see #1618-A)")
 				return
 			}
