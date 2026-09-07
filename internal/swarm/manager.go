@@ -450,6 +450,11 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	tm.EndedAt = time.Now()
 	tm.mu.Unlock()
 
+	// #1633-2: free the quota slot. The map entry used to linger forever,
+	// so len(team.Teammates) counted shut-down teammates and 16
+	// spawn/shutdown cycles permanently exhausted the quota.
+	team.removeTeammate(tmID)
+
 	m.emit(Event{
 		Type:       "teammate_shutdown",
 		TeamID:     teamID,

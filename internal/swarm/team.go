@@ -328,6 +328,17 @@ func (t *Team) getTeammate(id string) (*Teammate, bool) {
 	return m, ok
 }
 
+// removeTeammate drops a teammate from the map. #1633-2: shutdown never
+// deleted the entry, so the 16-slot quota counted corpses - repeated
+// spawn/shutdown cycles exhausted the quota and new teammates were
+// permanently rejected until DeleteTeam. Snapshot/event consumers read
+// by ID; a shutting-down entry lingering would keep the slot reserved.
+func (t *Team) removeTeammate(id string) {
+	t.mu.Lock()
+	delete(t.Teammates, id)
+	t.mu.Unlock()
+}
+
 func (t *Team) listTeammates() []*Teammate {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

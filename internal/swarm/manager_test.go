@@ -191,19 +191,14 @@ func TestManager_ShutdownTeammate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify teammate is shutting down
+	// #1633-2: shutdown now REMOVES the teammate (the entry used to linger
+	// and the 16-slot quota counted corpses until DeleteTeam). Verify it is
+	// gone and the slot is freed.
 	updated, _ := m.GetTeam(team.ID)
-	found := false
 	for _, tm := range updated.Teammates {
 		if tm.ID == tmSnap.ID {
-			found = true
-			if tm.Status != TeammateShuttingDown {
-				t.Errorf("expected shutting_down, got %s", tm.Status)
-			}
+			t.Error("teammate must be removed from the team on shutdown (quota slot freed)")
 		}
-	}
-	if !found {
-		t.Error("teammate should still exist in team")
 	}
 }
 
