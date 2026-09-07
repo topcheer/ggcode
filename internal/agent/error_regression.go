@@ -192,10 +192,19 @@ func verifyCommandKind(cmd string) string {
 	// from fields[0] raw: 'cd' became the kind (two cd-commands compared
 	// as "same" = false regression noise) and 'GOFLAGS=-p=1 make test'
 	// keyed on the assignment. Normalize with the same helpers first:
-	// strip env prefixes, take the LAST compound segment (the verify tail
-	// after cd/setup prefixes - this repo's own release convention).
+	// strip env prefixes, then pick the segment that IS the verify
+	// command.
+	//
+	// #1662 case 1: splitting only on "&&" missed ';'- and '|'-separated
+	// compounds that the isVerifyCommand ENTRY accepts via
+	// splitCompoundCommand - 'cd /app; go test' keyed on "cd", and build
+	// vs test behind a semicolon compared against each other (the exact
+	// #1457-C family resurrected via another separator). Split with the
+	// same separators the entry uses and prefer the verify-bearing
+	// segment.
 	cmd = strings.TrimSpace(stripEnvAssignments(cmd))
-	if segs := strings.Split(cmd, "&&"); len(segs) > 0 {
+	segs := splitCompoundSegments(cmd)
+	if len(segs) > 0 {
 		cmd = strings.TrimSpace(segs[len(segs)-1])
 	}
 	fields := strings.Fields(cmd)
@@ -211,5 +220,45 @@ func verifyCommandKind(cmd string) string {
 			kind = fields[0] + " " + fields[1]
 		}
 	}
+	// #1662 case 2: scope and verbosity change what the error count
+	// MEANS, not whether the code regressed. 'go test ./internal/x
+	// -run TestFoo' (1 error) -> 'go test ./...' (8 errors) is the normal
+	// focus-to-full workflow - mostly pre-existing errors newly exposed,
+	// not regressions. And 'go test' -> 'go test -v' changes the COUNT
+	// itself (verbose log lines matching the error-lines regex). Fold the
+	// -run subset, -v, and the package scope into the kind so those pairs
+	// no longer compare as "same command".
+	if fields[0] == "go" && len(fields) > 2 {
+		var scope, run, verbose string
+		for i := 2; i < len(fields); i++ {
+			f := fields[i]
+			switch {
+			case f == "-run" && i+1 < len(fields):
+				run = "run=" + fields[i+1]
+				i++
+			case f == "-v":
+				verbose = "v"
+			case !strings.HasPrefix(f, "-") && scope == "":
+				scope = f
+			}
+		}
+		for _, part := range []string{scope, run, verbose} {
+			if part != "" {
+				kind += " " + part
+			}
+		}
+	}
 	return kind
+}
+
+// splitCompoundSegments splits a command on all compound separators the
+// verify entry recognizes ("&&", ";", "|"), returning the segments. The
+// verify-bearing one is conventionally last (cd/setup prefixes), so callers
+// pick the last segment.
+func splitCompoundSegments(cmd string) []string {
+	var segs []string
+	for _, part := range splitCompoundCommand(cmd) {
+		segs = append(segs, strings.Split(part, "&&")...)
+	}
+	return segs
 }

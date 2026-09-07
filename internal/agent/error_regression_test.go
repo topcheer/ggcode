@@ -175,3 +175,48 @@ func TestErrorLinesReMatchesToolchainOutput(t *testing.T) {
 		}
 	}
 }
+
+// --- #1662: verifyCommandKind separator symmetry and scope granularity ---
+
+func TestVerifyCommandKindSemicolonPipeSeparated(t *testing.T) {
+	// Entry accepts ';'-separated compounds; the kind must not key on the
+	// cd/setup prefix.
+	if got := verifyCommandKind("cd /app; go test ./..."); got != "go test ./..." {
+		t.Errorf("semicolon compound: got %q, want %q", got, "go test ./...")
+	}
+	if got := verifyCommandKind("cd /app | go test ./..."); got != "go test ./..." {
+		t.Errorf("pipe compound: got %q, want %q", got, "go test ./...")
+	}
+	// build vs test behind a semicolon must be DIFFERENT kinds (the
+	// #1457-C family resurrected via another separator).
+	kb := verifyCommandKind("cd /x; go build ./...")
+	kt := verifyCommandKind("cd /x; go test ./...")
+	if kb == kt {
+		t.Errorf("build and test behind semicolon compared as same kind: %q", kb)
+	}
+	// Legacy && form and env prefixes still work.
+	if got := verifyCommandKind("GOFLAGS=-p=1 cd /app && go test ./..."); got != "go test ./..." {
+		t.Errorf("legacy && compound: got %q", got)
+	}
+}
+
+func TestVerifyCommandKindScopeAndVerbosity(t *testing.T) {
+	// Focused subset vs full run are different workflows - the error-count
+	// delta is mostly pre-existing errors newly exposed, not regressions.
+	focused := verifyCommandKind("go test ./internal/agent -run TestFoo")
+	full := verifyCommandKind("go test ./...")
+	if focused == full {
+		t.Errorf("focused and full runs share kind %q - focus-to-full would false-fire", focused)
+	}
+	// Verbosity changes the counting itself (verbose log lines match the
+	// error-lines regex); -v must not compare against quiet.
+	quiet := verifyCommandKind("go test ./...")
+	verbose := verifyCommandKind("go test ./... -v")
+	if quiet == verbose {
+		t.Errorf("-v shares kind with quiet run: %q", quiet)
+	}
+	// Same scope+flags still compare equal (no false split).
+	if a, b := verifyCommandKind("go test ./internal/im/"), verifyCommandKind("go test ./internal/im/"); a != b {
+		t.Errorf("identical commands got different kinds: %q vs %q", a, b)
+	}
+}
