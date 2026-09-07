@@ -924,18 +924,27 @@ func TestDefaultConfigIncludesBundledVendorCatalog(t *testing.T) {
 		}
 	}
 
-	// Verify ai-gateway endpoints (formerly top-level vendors)
+	// Verify ai-gateway endpoints (formerly top-level vendors + models.dev
+	// gateway family folded in).
 	wantGatewayEndpoints := map[string]string{
-		"aihubmix":   "AIHubMix",
-		"getgoapi":   "GetGoAPI",
-		"novita":     "Novita AI",
-		"nvidia":     "NVIDIA NIM",
-		"openrouter": "OpenRouter",
-		"poe":        "Poe",
-		"requesty":   "Requesty",
-		"together":   "Together AI",
-		"perplexity": "Perplexity",
-		"vercel":     "Vercel AI Gateway",
+		"302ai":          "302.AI",
+		"aihubmix":       "AIHubMix",
+		"chutes":         "Chutes AI",
+		"fireworks":      "Fireworks AI",
+		"getgoapi":       "GetGoAPI",
+		"nebius":         "Nebius AI Studio",
+		"novita":         "Novita AI",
+		"nvidia":         "NVIDIA NIM",
+		"ollama":         "Ollama Cloud",
+		"opencode":       "OpenCode Zen",
+		"openrouter":     "OpenRouter",
+		"poe":            "Poe",
+		"requesty":       "Requesty",
+		"siliconflow":    "SiliconFlow",
+		"siliconflow-cn": "SiliconFlow (CN)",
+		"together":       "Together AI",
+		"perplexity":     "Perplexity",
+		"vercel":         "Vercel AI Gateway",
 	}
 	gw := cfg.Vendors["ai-gateway"]
 	for id, displayName := range wantGatewayEndpoints {

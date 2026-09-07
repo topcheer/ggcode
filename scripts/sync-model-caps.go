@@ -76,8 +76,11 @@ type modelEntry struct {
 
 // Which models.dev providers we sync (provider ID → our section header).
 // models.dev carries 200+ providers; this list keeps the vendors ggcode
-// ships plus the major ones users point custom endpoints at.
+// ships plus the major ones users point custom endpoints at (including
+// the gateway family folded into the "ai-gateway" vendor in config.go).
 var desiredProviders = map[string]string{
+	"302ai":                    "302.AI",
+	"aihubmix":                 "AIHubMix",
 	"alibaba":                  "Alibaba (International)",
 	"alibaba-cn":               "Alibaba Cloud (DashScope)",
 	"amazon-bedrock":           "AWS Bedrock",
@@ -112,6 +115,8 @@ var desiredProviders = map[string]string{
 	"opencode":                 "OpenCode Zen",
 	"openrouter":               "OpenRouter",
 	"perplexity":               "Perplexity",
+	"poe":                      "Poe",
+	"requesty":                 "Requesty",
 	"sensenova":                "SenseNova",
 	"siliconflow":              "SiliconFlow",
 	"siliconflow-cn":           "SiliconFlow (CN)",
@@ -858,6 +863,25 @@ func populateDefaultModels(cfg *Config) {
 	}
 
 	for vendorName, vc := range cfg.Vendors {
+		// ai-gateway is a pure container of independent gateways: populate
+		// each endpoint from ITS OWN provider via its own BaseURL host.
+		// The generic vendor-level mapping would give every endpoint the
+		// first endpoint's provider list - wrong for all others.
+		if vendorName == "ai-gateway" {
+			for epName, ep := range vc.Endpoints {
+				if len(ep.Models) > 0 {
+					continue
+				}
+				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
+					if m := lookupVendorModels(pid); len(m) > 0 {
+						ep.Models = m
+						vc.Endpoints[epName] = ep
+					}
+				}
+			}
+			cfg.Vendors[vendorName] = vc
+			continue
+		}
 		providerIDs, ok := vendorToProvider[vendorName]
 		if !ok {
 			// Attribute unknown vendors to a provider by endpoint URL host so
