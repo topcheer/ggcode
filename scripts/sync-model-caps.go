@@ -128,7 +128,6 @@ var desiredProviders = map[string]string{
 	"venice":                   "Venice",
 	"vercel":                   "Vercel AI Gateway",
 	"volcengine":               "Volcengine Ark",
-	"wandb":                    "W&B",
 	"watsonx":                  "IBM watsonx",
 	"xai":                      "xAI Grok",
 	"xiaomi":                   "Xiaomi MiMo",
