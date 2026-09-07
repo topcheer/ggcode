@@ -686,6 +686,22 @@ func TestClientErrorContext_HTTPConnectionError(t *testing.T) {
 	}
 }
 
+// TestStartSSETransportNormalizedToHTTP verifies #1659 case 2: MCPCapabilities
+// declares SSE:true and types.go documents "sse" as a legal server Type, so
+// Start must accept transport "sse" (normalized onto the HTTP client, which
+// already handles SSE-framed responses) instead of erroring "unsupported
+// transport".
+func TestStartSSETransportNormalizedToHTTP(t *testing.T) {
+	client := NewClientFromConfig(config.MCPServerConfig{
+		Name: "sse-server",
+		Type: "sse",
+		URL:  "https://example.invalid/mcp",
+	})
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("expected sse transport to start via HTTP client, got: %v", err)
+	}
+}
+
 // TestClientErrorContext_UnsupportedTransport verifies server name in unsupported transport error.
 func TestClientErrorContext_UnsupportedTransport(t *testing.T) {
 	client := NewClientFromConfig(config.MCPServerConfig{

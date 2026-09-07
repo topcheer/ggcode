@@ -108,6 +108,95 @@ func TestHubPackageGuard_FiresOncePerFile(t *testing.T) {
 
 // TestHubPackageGuard_ResetClearsChecked verifies that reset() clears the
 // checked set so hints fire again on a new run.
+// TestHubPackageGuard_LatchOnlyAfterKeyingSuccess verifies #1658 case 1: a
+// file whose keying fails (outside the module tree) must NOT be latched in
+// the checked set - the next edit retries keying instead of silently
+// short-circuiting, matching the #1574-C pattern.
+func TestHubPackageGuard_LatchOnlyAfterKeyingSuccess(t *testing.T) {
+	root := t.TempDir()
+
+	writeHubGoFile(t, root, "go.mod", "module example.com/test\n\ngo 1.26\n")
+	writeHubGoFile(t, root, "internal/hub/hub.go", "package hub\n\nfunc DoSomething() {}\n")
+
+	for i := 0; i < 6; i++ {
+		dir := filepath.Join(root, "internal", "c"+string(rune('a'+i)))
+		writeHubGoFile(t, dir, "main.go",
+			"package c"+string(rune('a'+i))+"\n\nimport \"example.com/test/internal/hub\"\n\nfunc Use() { hub.DoSomething() }\n")
+	}
+
+	a := &Agent{
+		hubPackageGuard: newHubPackageState(),
+		workingDir:      root,
+	}
+	// Force fanIn initialization so we reach the keying stage.
+	a.hubPackageGuard.ensureFanIn(root)
+
+	// Transient failure: the nearest go.mod exists but is unreadable, so
+	// keying fails and must NOT latch - the next edit retries.
+	nested := filepath.Join(root, "internal", "nested")
+	if err := os.MkdirAll(nested, 0o0755); err != nil {
+		t.Fatal(err)
+	}
+	nestedMod := filepath.Join(nested, "go.mod")
+	if err := os.WriteFile(nestedMod, []byte("module example.com/test/internal/nested\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(nestedMod, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(nested, "x.go")
+	if err := os.WriteFile(target, []byte("package nested\n"), 0o644); err != nil {
+		os.Chmod(nestedMod, 0o644)
+		t.Fatal(err)
+	}
+	if hint := a.checkHubPackage(target); hint != "" {
+		t.Fatalf("expected no hint while go.mod unreadable, got: %s", hint)
+	}
+	if n := len(a.hubPackageGuard.checked); n != 0 {
+		t.Fatalf("expected checked to stay empty after transient keying failure, has %d entries", n)
+	}
+
+	// Cause resolved: the retry on the next edit must key successfully
+	// (module resolved, package not in fanIn -> no hint, but latched).
+	if err := os.Chmod(nestedMod, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if hint := a.checkHubPackage(target); hint != "" {
+		t.Fatalf("expected no hint for non-hub nested file, got: %s", hint)
+	}
+	if n := len(a.hubPackageGuard.checked); n != 1 {
+		t.Fatalf("expected 1 checked entry after retry keyed successfully, got %d", n)
+	}
+}
+
+// TestHubNearestGoModStatIndeterminate verifies #1658 case 2: a go.mod that
+// exists but cannot be stat'd (EACCES on a directory without +x) must freeze
+// as indeterminate (ok=false), not keep walking to the root module.
+func TestHubNearestGoModStatIndeterminate(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: EACCES cannot be triggered via chmod")
+	}
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(nested, 0o0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "go.mod"), []byte("module example.com/nested\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Strip execute permission from the directory: os.Stat on any entry
+	// inside returns EACCES even though the go.mod exists.
+	if err := os.Chmod(nested, 0o0600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(nested, 0o0755) // restore for TempDir cleanup
+
+	_, _, ok := hubNearestGoMod(filepath.Join(nested, "pkg"), root)
+	if ok {
+		t.Fatal("expected ok=false (indeterminate) for unstattable go.mod, got ok=true - would mis-key via root fallback")
+	}
+}
+
 func TestHubPackageGuard_ResetClearsChecked(t *testing.T) {
 	root := t.TempDir()
 

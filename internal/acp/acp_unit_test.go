@@ -116,6 +116,35 @@ func TestACPToProviderContentUnknownType(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// acpToProviderContent: resource blocks (#1659 case 1)
+// ---------------------------------------------------------------------------
+
+func TestACPToProviderContentResource(t *testing.T) {
+	blocks := []ContentBlock{
+		{Type: "resource", Resource: &EmbeddedResource{Text: &TextResourceContents{
+			URI:  "file:///tmp/notes.md",
+			Text: "resource body text",
+		}}},
+		{Type: "resource", Resource: &EmbeddedResource{Blob: &BlobResourceContents{
+			URI:      "file:///tmp/img.png",
+			Blob:     "aGVsbG8=",
+			MIMEType: "image/png",
+		}}},
+		{Type: "resource"}, // no resource payload - dropped, no panic
+	}
+	result := acpToProviderContent(blocks)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 blocks (text resource + blob placeholder), got %d", len(result))
+	}
+	if result[0].Type != "text" || result[0].Text != "resource body text" {
+		t.Errorf("expected text resource inlined, got %+v", result[0])
+	}
+	if result[1].Type != "text" || !strings.Contains(result[1].Text, "file:///tmp/img.png") || !strings.Contains(result[1].Text, "image/png") {
+		t.Errorf("expected blob placeholder with URI and MIME, got %+v", result[1])
+	}
+}
+
+// ---------------------------------------------------------------------------
 // workspaceSessionsDir
 // ---------------------------------------------------------------------------
 
