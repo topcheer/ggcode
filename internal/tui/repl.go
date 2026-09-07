@@ -302,6 +302,15 @@ func (r *REPL) SetLanChatHub(hub *lanchat.Hub) {
 func (r *REPL) SetMCPManager(mgr *plugin.MCPManager) {
 	r.mcpMgr = mgr
 	r.model.SetMCPManager(mgr)
+	// Bridge the manager's background state changes (connect/reconnect/
+	// disconnect emitUpdate) into the TUI event loop. Without this the MCP
+	// panel's "reconnecting ..." message never resolves even when the
+	// server connected successfully - the snapshot in m.mcpServers was only
+	// written once at startup. program.Send is goroutine-safe, and the
+	// callbacks fire from safego goroutines.
+	mgr.SetOnUpdate(func(infos []plugin.MCPServerInfo) {
+		r.sendTUI(mcpServersUpdatedMsg{servers: toMCPInfos(infos)})
+	})
 }
 
 // SetCore stores the runtime core reference for unified background service management.

@@ -17,10 +17,11 @@ import (
 )
 
 type mcpPanelState struct {
-	selected     int
-	message      string
-	installMode  bool
-	installInput string
+	selected         int
+	message          string
+	installMode      bool
+	installInput     string
+	pendingReconnect string
 }
 
 type mcpInstallResultMsg struct {
@@ -35,6 +36,14 @@ type mcpUninstallResultMsg struct {
 }
 
 func (m *Model) openMCPPanel() {
+	// Pull a fresh snapshot so the panel reflects any background state
+	// changes that happened while it was closed (the update message may
+	// have arrived before the panel was open).
+	if m.mcpManager != nil {
+		if servers := toMCPInfos(m.mcpManager.Snapshot()); len(servers) > 0 {
+			m.mcpServers = servers
+		}
+	}
 	panel := &mcpPanelState{}
 	for i, srv := range m.mcpServers {
 		if srv.Connected {
@@ -236,6 +245,7 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		name := m.mcpServers[panel.selected].Name
 		if m.mcpManager.Retry(name) {
 			panel.message = m.t("panel.mcp.reconnecting", name)
+			panel.pendingReconnect = name
 		} else {
 			panel.message = m.t("panel.mcp.reconnect_failed", name)
 		}
@@ -279,6 +289,7 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		} else {
 			if m.mcpManager != nil {
 				m.mcpManager.Reconnect(srv.Name)
+				panel.pendingReconnect = srv.Name
 			}
 			panel.message = fmt.Sprintf(" %s enabled, reconnecting...", srv.Name)
 		}
@@ -297,6 +308,7 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		name := m.mcpServers[panel.selected].Name
 		if m.mcpManager.ForceReauth(name) {
 			panel.message = fmt.Sprintf(" Reset credentials for %s — reconnecting...", name)
+			panel.pendingReconnect = name
 		} else {
 			panel.message = fmt.Sprintf(" %s: no OAuth handler (not an HTTP/WS server?)", name)
 		}

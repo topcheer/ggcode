@@ -429,6 +429,7 @@ type mcpManager interface {
 	Refresh(name string) (bool, plugin.RefreshOutcome, int)
 	PendingOAuth() *plugin.MCPOAuthRequiredError
 	ClearPendingOAuth(name string)
+	Snapshot() []plugin.MCPServerInfo
 }
 
 type styles struct {

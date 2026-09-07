@@ -49,6 +49,10 @@ func jaCatalog(key string) string {
 		return "このセッションでは再接続できません。"
 	case "panel.mcp.reconnecting":
 		return "%s に再接続中..."
+	case "panel.mcp.reconnected":
+		return "%s を再接続しました：%d 個のツール。"
+	case "panel.mcp.reconnect_error":
+		return "%s の再接続に失敗しました：%s"
 	case "panel.mcp.reconnect_failed":
 		return "%s に再接続できません。"
 	case "panel.mcp.uninstalling":

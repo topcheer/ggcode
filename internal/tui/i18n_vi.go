@@ -50,6 +50,10 @@ func viCatalog(key string) string {
 		return "Kết nối lại không khả dụng trong phiên này."
 	case "panel.mcp.reconnecting":
 		return "Đang kết nối lại %s..."
+	case "panel.mcp.reconnected":
+		return "Đã kết nối lại %s: %d công cụ."
+	case "panel.mcp.reconnect_error":
+		return "Kết nối lại %s thất bại: %s"
 	case "panel.mcp.reconnect_failed":
 		return "Không thể kết nối lại %s."
 	case "panel.mcp.uninstalling":

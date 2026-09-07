@@ -1053,6 +1053,10 @@ func ptCatalog(key string) string {
 		return "Reconexão indisponível nesta sessão."
 	case "panel.mcp.reconnecting":
 		return "Reconectando %s..."
+	case "panel.mcp.reconnected":
+		return "Reconectado %s: %d ferramentas."
+	case "panel.mcp.reconnect_error":
+		return "Falha ao reconectar %s: %s"
 	case "panel.mcp.uninstalling":
 		return "Desinstalando %s..."
 	case "panel.metrics":

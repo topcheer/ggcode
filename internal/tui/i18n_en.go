@@ -48,6 +48,10 @@ func enCatalog(key string) string {
 		return "Reconnect unavailable in this session."
 	case "panel.mcp.reconnecting":
 		return "Reconnecting %s..."
+	case "panel.mcp.reconnected":
+		return "Reconnected %s: %d tools."
+	case "panel.mcp.reconnect_error":
+		return "Reconnect failed for %s: %s"
 	case "panel.mcp.reconnect_failed":
 		return "Unable to reconnect %s."
 	case "panel.mcp.uninstalling":

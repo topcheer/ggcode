@@ -54,6 +54,10 @@ func koCatalog(key string) string {
 		return "이 세션에서는 재연결을 사용할 수 없습니다."
 	case "panel.mcp.reconnecting":
 		return "%s 재연결 중..."
+	case "panel.mcp.reconnected":
+		return "%s 재연결됨: 도구 %d개."
+	case "panel.mcp.reconnect_error":
+		return "%s 재연결 실패: %s"
 	case "panel.mcp.reconnect_failed":
 		return "%s 재연결 불가"
 	case "panel.mcp.uninstalling":

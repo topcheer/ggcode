@@ -50,6 +50,10 @@ func frCatalog(key string) string {
 		return "Reconnexion non disponible dans cette session."
 	case "panel.mcp.reconnecting":
 		return "Reconnexion de %s..."
+	case "panel.mcp.reconnected":
+		return "Reconnecté %s : %d outils."
+	case "panel.mcp.reconnect_error":
+		return "Échec de la reconnexion de %s : %s"
 	case "panel.mcp.reconnect_failed":
 		return "Impossible de reconnectér %s."
 	case "panel.mcp.uninstalling":

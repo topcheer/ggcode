@@ -55,6 +55,10 @@ func deCatalog(key string) string {
 		return "Erneut verbinden in dieser Sitzung nicht verfügbar."
 	case "panel.mcp.reconnecting":
 		return "Verbinde %s erneut..."
+	case "panel.mcp.reconnected":
+		return "%s neu verbunden: %d Tools."
+	case "panel.mcp.reconnect_error":
+		return "Neuverbindung von %s fehlgeschlagen: %s"
 	case "panel.mcp.reconnect_failed":
 		return "%s konnte nicht erneut verbunden werden."
 	case "panel.mcp.uninstalling":

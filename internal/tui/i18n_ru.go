@@ -55,6 +55,10 @@ func ruCatalog(key string) string {
 		return "Переподключение недоступно в этой сессии."
 	case "panel.mcp.reconnecting":
 		return "Переподключение %s..."
+	case "panel.mcp.reconnected":
+		return "Переподключено %s: инструментов - %d."
+	case "panel.mcp.reconnect_error":
+		return "Не удалось переподключить %s: %s"
 	case "panel.mcp.reconnect_failed":
 		return "Не удалось переподключить %s."
 	case "panel.mcp.uninstalling":
