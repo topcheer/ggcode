@@ -250,8 +250,13 @@ func (m *CommandJobManager) Wait(ctx context.Context, id string, wait time.Durat
 	if err := waitForCommandJob(ctx, job, wait); err != nil {
 		return CommandJobSnapshot{}, err
 	}
-
-	return m.Read(id, tailLines, sinceLine)
+	// #1650-2: NOT m.Read(id) - that re-fetches by ID, and between the
+	// wake-up and the second lookup a burst of 20 newer finished jobs can
+	// evict this one (cap=20), turning a normal completion into "command
+	// job not found". We already hold the job; snapshot it directly.
+	snap := m.snapshot(job)
+	snap.Lines, snap.TruncatedHead = selectCommandLines(snap.Lines, snap.BufferedFrom, tailLines, sinceLine)
+	return snap, nil
 }
 
 func (m *CommandJobManager) Stop(id string) (CommandJobSnapshot, error) {
