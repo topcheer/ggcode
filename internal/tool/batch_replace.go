@@ -225,9 +225,17 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 			}
 
 			// Build a sample diff for dry_run mode (first changed line).
+			// #1638-1: format the SAME way the real write would - gofmt runs
+			// only on the write path, so the preview (and the approval based
+			// on it) showed pre-format content while the landed file differed
+			// in indentation/blank lines.
 			var sampleDiff string
 			if args.DryRun {
-				sampleDiff = extractSampleDiff(content, newContent)
+				if formatted, changed := formatGoBytes(p, []byte(newContent)); changed {
+					sampleDiff = extractSampleDiff(content, string(formatted))
+				} else {
+					sampleDiff = extractSampleDiff(content, newContent)
+				}
 			}
 
 			procResults[idx] = procResult{
@@ -302,6 +310,10 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 			out.Results[i].Error = fmt.Sprintf("error writing file: %v", err)
 			out.FilesError++
 			out.FilesChanged--
+			// #1638-2: the file's matches were counted as landed - roll them
+			// back or the summary overstates the actual change ("2 changed
+			// (120 total matches), 1 errors" counted a file that failed).
+			out.TotalMatches -= pr.matches
 			continue
 		}
 		// Post-write checks (reuse existing infrastructure).
