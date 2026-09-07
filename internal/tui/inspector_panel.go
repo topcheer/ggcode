@@ -429,11 +429,14 @@ func (m *Model) handleInspectorLSPStatusAction(items []inspectorPanelItem) (Mode
 		}
 		if len(lang.InstallOptions) == 1 {
 			m.closeInspectorPanel()
-			// #1586-A: a toolchain install landing outside PATH must not
-			// sit out the 10-minute negative probe TTL - drop the cache at
-			// submission (one extra probe if the install fails; a
-			// discovered server instead of 10 lost minutes if it works).
-			lsp.InvalidateProbeCache()
+			// #1586-A/#1653: a toolchain install landing outside PATH must not
+			// sit out the 10-minute negative probe TTL. Dropping at submission
+			// (the original #1586-A fix) was wrong on the TUI side: the install
+			// runs asynchronously, and merely reopening the inspector panel (or
+			// post-edit diagnostics) re-primes a negative entry mid-install that
+			// then outlives it. Align with the desktop side (wailskit lsp.go):
+			// mark in-flight and drop when the shell command completes.
+			m.lspInstallInFlight = true
 			return *m, m.submitInspectorShellCommand(lang.InstallOptions[0].Command)
 		}
 		m.openLSPInstallPanel(lang)
@@ -456,10 +459,12 @@ func (m *Model) handleInspectorLSPInstallAction(items []inspectorPanelItem) (Mod
 		return *m, nil
 	}
 	m.closeInspectorPanel()
-	// #1641-1: the multi-option install path (python/yaml/json/dockerfile/
+	// #1641-1/#1653: the multi-option install path (python/yaml/json/dockerfile/
 	// shell/csharp - the mainstream languages) missed the single-option
-	// path's cache drop; a prefix install stayed invisible up to 10 min.
-	lsp.InvalidateProbeCache()
+	// path's cache drop. Like the single-option path, drop at completion
+	// (not submission) so the async install window cannot re-prime a
+	// negative probe entry that outlives the install.
+	m.lspInstallInFlight = true
 	return *m, m.submitInspectorShellCommand(command)
 }
 

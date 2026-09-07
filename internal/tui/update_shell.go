@@ -1,9 +1,11 @@
 package tui
 
 import (
-	tea "charm.land/bubbletea/v2"
-	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/topcheer/ggcode/internal/lsp"
+	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
 // handleShellCommandStreamMsg handles the corresponding message case.
@@ -19,6 +21,16 @@ func (m Model) handleShellCommandStreamMsg(msg shellCommandStreamMsg, spinnerCmd
 func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cmd) {
 	if msg.RunID != m.activeShellRunID {
 		return m, nil
+	}
+	// #1653: an LSP install command just finished (success, failure, or
+	// timeout). Drop the probe cache NOW - any negative entry primed while
+	// the install was still running (panel reopen, post-edit diagnostics)
+	// must not hide the freshly installed server for another 10 minutes.
+	// Same semantics as the desktop side (wailskit lsp.go: success or
+	// failure, one extra probe is cheap).
+	if m.lspInstallInFlight {
+		m.lspInstallInFlight = false
+		lsp.InvalidateProbeCache()
 	}
 	hadShellOutput := m.shellBuffer != nil && m.shellBuffer.Len() > 0
 	shellOutputID := m.shellOutputID
