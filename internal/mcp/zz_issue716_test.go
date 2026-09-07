@@ -22,6 +22,11 @@ import (
 func TestIssue716_SSEStreamHeldOpenDoesNotBlock(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+		if r.URL.Path == "/.well-known/oauth-protected-resource" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var raw map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			t.Errorf("decode request: %v", err)

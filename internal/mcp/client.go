@@ -76,6 +76,10 @@ type Client struct {
 	// auto-reconnect exists for.
 	hangAbort    atomic.Bool
 	oauthHandler *OAuthHandler
+	// oauthProbed gates the pre-flight well-known probe to one shot per
+	// client lifetime (user guidance: no auth headers + well-known present
+	// → start OAuth immediately, no 401 roundtrip).
+	oauthProbed atomic.Bool
 
 	// processExit is closed when the stdio server process exits unexpectedly
 	// (i.e., not via Close/Abort). Consumers can use this for auto-reconnect.
@@ -1041,6 +1045,20 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 		} else {
 			debug.Log("mcp-http", "send_no_token server=%s", c.name)
 		}
+	}
+	// No auth configured (no token, no user Authorization header) and this is
+	// the first hop: probe the OAuth well-known endpoint and, when the server
+	// declares OAuth protection there, start the OAuth flow IMMEDIATELY -
+	// don't waste a POST/401 roundtrip first. Anonymous servers (no
+	// well-known) miss the probe and proceed as before.
+	if allowRetry && oauthHandler != nil && authHeader == "" &&
+		headers["Authorization"] == "" && c.oauthProbed.CompareAndSwap(false, true) {
+		probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
+		if oauthHandler.ProbeWellKnown(probeCtx) {
+			probeCancel()
+			return nil, &OAuthRequiredError{Handler: oauthHandler}
+		}
+		probeCancel()
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {

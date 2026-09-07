@@ -189,6 +189,11 @@ func TestIssue562C_ElicitationDoesNotBlockReadLoop(t *testing.T) {
 func TestIssue562A_ListToolsFollowsNextCursor(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+		if r.URL.Path == "/.well-known/oauth-protected-resource" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var req Request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("decode: %v", err)
@@ -236,6 +241,11 @@ func TestIssue562A_ListToolsFollowsNextCursor(t *testing.T) {
 func TestIssue562A_ListPromptsAndResourcesPagination(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+		if r.URL.Path == "/.well-known/oauth-protected-resource" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var req Request
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		w.Header().Set("Content-Type", "application/json")
@@ -421,6 +431,11 @@ func TestIssue562D_NullIDResponseSkippedInWSLoop(t *testing.T) {
 func TestIssue562G_InitializeSurvivesInitializedNotifyFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
+		// Pre-flight OAuth probe: tolerate the well-known GET with a 404.
+		if r.URL.Path == "/.well-known/oauth-protected-resource" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var req Request
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		switch req.Method {

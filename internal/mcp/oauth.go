@@ -450,6 +450,34 @@ func (h *OAuthHandler) Handle401(resp *http.Response) (bool, error) {
 	return true, nil
 }
 
+// ProbeWellKnown proactively discovers OAuth metadata from the server's
+// well-known endpoint BEFORE any request is sent. Per project guidance: when
+// the client has NO auth headers configured and the server exposes
+// /.well-known/oauth-protected-resource, start the OAuth DCR flow immediately
+// instead of waiting for the initialize 401 roundtrip. Returns true when the
+// discovery chain succeeded (protected-resource + authorization-server
+// metadata filled) and the caller should surface OAuthRequiredError.
+func (h *OAuthHandler) ProbeWellKnown(ctx context.Context) bool {
+	metadataURL := buildProtectedResourceWellKnown(h.serverURL)
+	debug.Log("mcp-oauth", "probe well-known server=%s url=%s", h.serverName, metadataURL)
+	if err := h.discoverProtectedResource(ctx, metadataURL); err != nil {
+		debug.Log("mcp-oauth", "probe well-known miss server=%s error=%v", h.serverName, err)
+		return false
+	}
+	h.mu.Lock()
+	servers := h.state.protectedResourceMeta.AuthorizationServers
+	h.mu.Unlock()
+	if len(servers) == 0 {
+		return false
+	}
+	if err := h.discoverAuthorizationServer(ctx, servers[0]); err != nil {
+		debug.Log("mcp-oauth", "probe well-known auth-server discovery failed server=%s error=%v", h.serverName, err)
+		return false
+	}
+	debug.Log("mcp-oauth", "probe well-known hit server=%s - starting OAuth immediately (no 401 roundtrip)", h.serverName)
+	return true
+}
+
 // parseWWWAuthenticate extracts resource_metadata URL from WWW-Authenticate header.
 // Format: Bearer resource_metadata="<url>"
 func parseWWWAuthenticate(header string) (string, bool) {
@@ -708,8 +736,9 @@ func (h *OAuthHandler) RegisterClient(ctx context.Context) error {
 // have eventual consistency between the DCR endpoint and the AS, causing
 // "invalid_client" errors if the user opens the authorize URL too soon.
 //
-// Retries indefinitely until the client_id is recognized or the context is
-// cancelled. Updates healthCheckStatus for MCP panel display.
+// Retries with backoff up to a bounded attempt budget (the sync window is
+// seconds, not minutes), then gives up - the caller logs and continues
+// anyway. Updates healthCheckStatus for MCP panel display.
 func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, clientID, redirectURI string) error {
 	// Generate a dummy PKCE pair for the probe. Many AS (Railway, etc.)
 	// require PKCE on ALL authorize requests, so the probe must include
@@ -736,11 +765,21 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 	probeURL.RawQuery = q.Encode()
 
 	const maxDelay = 10 * time.Second
+	// Bounded budget: 2+3+4.5+6.75+10+10 ~= 36s total. The Railway-style
+	// sync window is "a few seconds"; unbounded retry parked the MCP panel
+	// on "Verifying OAuth client" for the FULL 5-minute caller ctx on any
+	// server whose authorize endpoint kept 4xx-ing the probe.
+	const maxAttempts = 6
 	delay := 2 * time.Second
 	attempt := 0
 
 	for {
 		attempt++
+		if attempt > maxAttempts {
+			h.setHealthCheckStatus("")
+			debug.Log("mcp-oauth", "client_id health check gave up after %d attempts, continuing anyway", maxAttempts)
+			return nil
+		}
 		select {
 		case <-ctx.Done():
 			h.setHealthCheckStatus("")
