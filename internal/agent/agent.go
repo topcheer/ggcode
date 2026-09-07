@@ -2008,6 +2008,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// guessing tool behavior from names. All registered tools are sent
 		// with their full, unmodified descriptions.
 		activeToolDefs := toolDefs
+		// #1672: read the manager snapshot HERE, at the consumption point.
+		// msgs is initialized once before the loop and only refreshed at
+		// 37 conditional sites; the recovery nudges and final gates Add to
+		// the manager then `continue` WITHOUT refreshing, so the next
+		// request was byte-identical to the previous one - the injected
+		// nudge/gate message never reached the model (empty-response
+		// nudges replayed into 3-empty aborts, truncated-recovery burned
+		// its retries invisibly, and gates ping-ponged to maxIter).
+		// Taking Messages() at the send site closes every current and
+		// future Add-then-continue path.
+		msgs = a.contextManager.Messages()
 		resp, textBuf, toolCalls, truncated, policyBlocked, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		if samplingApplied >= 0 {
 			a.restoreSampling(samplingPrev)
@@ -2120,11 +2131,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				i+1, consecutiveEmptyResponses, resp.Usage.InputTokens)
 			if consecutiveEmptyResponses >= 3 {
 				debug.Log("agent", "too many consecutive empty responses (%d), aborting", consecutiveEmptyResponses)
+				// #1672: the old text claimed "conversation reset for
+				// recovery" but NOTHING here resets or compacts anything,
+				// and return nil reported the failure upstream as a
+				// normal completion - ACP/subagents/cron had no way to
+				// know the task never ran. Tell the truth and return a
+				// distinguishable error.
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventText,
-					Text: "[context overflow — conversation reset for recovery]\n",
+					Text: "[run aborted — the model returned 3 consecutive empty responses; the task did not complete]\n",
 				})
-				return nil
+				return fmt.Errorf("agent: aborted after %d consecutive empty responses", consecutiveEmptyResponses)
 			}
 			// Retry: inject a nudge and continue.
 			// #677: loop-recovery protocol, NOT detector guidance — it keeps its
