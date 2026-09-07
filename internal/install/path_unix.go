@@ -36,12 +36,17 @@ func EnsureOnPath(dir string) (bool, error) {
 			}
 			continue
 		}
-		after, err := upsertPathBlock(string(before), dir)
+		after, err := upsertPathBlockFor(target, string(before), dir)
 		if err != nil {
 			continue
 		}
 		if after != string(before) {
 			attempted++
+			// #1648-1: preferred-on-demand targets may live in a directory
+			// that doesn't exist yet (~/.config/fish/ on a fresh fish box).
+			if d := filepath.Dir(target); d != "." && d != "" {
+				_ = os.MkdirAll(d, 0o755)
+			}
 			if err := os.WriteFile(target, []byte(after), 0o644); err != nil {
 				debug.Log("install", "path: writing %s: %v", target, err)
 				if firstFailure == nil {
@@ -77,6 +82,12 @@ func pathProfileTargets() []string {
 		preferred = []string{".zshrc", ".zprofile"}
 	case "bash":
 		preferred = []string{".bashrc", ".bash_profile"}
+	case "fish":
+		// #1648-1: fish sources ONLY ~/.config/fish/config.fish - the POSIX
+		// fallback wrote rc files fish never reads, and with none existing
+		// the installer returned (false, nil) yet still promised "will be
+		// available in new terminals" with zero bytes written.
+		preferred = []string{".config/fish/config.fish"}
 	}
 	existing := []string{".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile"}
 
@@ -116,6 +127,20 @@ var pathBlockPattern = regexp.MustCompile(`(?s)` + regexp.QuoteMeta(pathMarkerSt
 
 func upsertPathBlock(content, dir string) (string, error) {
 	block := fmt.Sprintf("%s\nexport PATH=%q:$PATH\n%s\n", pathMarkerStart, dir, pathMarkerEnd)
+	return upsertBlockWith(content, block)
+}
+
+// upsertPathBlockFor picks fish syntax for config.fish targets (#1648-1):
+// fish does not read POSIX rc files and cannot parse `export PATH=...`.
+func upsertPathBlockFor(target, content, dir string) (string, error) {
+	if filepath.Base(target) == "config.fish" {
+		block := fmt.Sprintf("%s\nfish_add_path %q\n%s\n", pathMarkerStart, dir, pathMarkerEnd)
+		return upsertBlockWith(content, block)
+	}
+	return upsertPathBlock(content, dir)
+}
+
+func upsertBlockWith(content, block string) (string, error) {
 	if pathBlockPattern.MatchString(content) {
 		return pathBlockPattern.ReplaceAllString(content, block), nil
 	}
