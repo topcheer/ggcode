@@ -82,9 +82,22 @@ func TestVisionTurnModel(t *testing.T) {
 			},
 		}
 	}
-	// Non-vision active model -> vision sibling with equal 1M window selected.
-	if got := VisionTurnModel(newCfg("glm-5.3")); got != "glm-5.3-flash" {
-		t.Errorf("VisionTurnModel(glm-5.3) = %q, want glm-5.3-flash", got)
+	// Non-vision active model with a vision sibling whose window is smaller:
+	// models.dev gives glm-5.3 a 1048576 window but glm-5.3-flash 1000000 -
+	// the "equal 1M" assumption this test originally made no longer holds,
+	// and the comparable-window rule must conservatively reject the switch
+	// (1000000 < 1048576, the conversation could overflow the sibling).
+	if got := VisionTurnModel(newCfg("glm-5.3")); got != "" {
+		t.Errorf("VisionTurnModel(glm-5.3) = %q, want empty (flash window 1000000 < active 1048576)", got)
+	}
+	// Same endpoint, but with a sibling whose window is genuinely large
+	// enough: the switch must select it.
+	cfgBig := newCfg("glm-5.3")
+	epBig := cfgBig.Vendors["zai"].Endpoints["coding"]
+	epBig.Models = []string{"glm-5.3", "z-ai-glm-5-3-flash"}
+	cfgBig.Vendors["zai"].Endpoints["coding"] = epBig
+	if got := VisionTurnModel(cfgBig); got != "z-ai-glm-5-3-flash" {
+		t.Errorf("VisionTurnModel(glm-5.3, big sibling) = %q, want z-ai-glm-5-3-flash", got)
 	}
 	// Vision active model -> no switch needed.
 	if got := VisionTurnModel(newCfg("glm-5.3-flash")); got != "" {
