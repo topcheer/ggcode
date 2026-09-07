@@ -152,3 +152,20 @@ func TestPreExecuteReadOnly_MixedBatchSkipped(t *testing.T) {
 	got := a.preExecuteReadOnlyTools(context.Background(), pure)
 	_ = got // nil (unregistered) or populated - either is fine here
 }
+
+// Regression for #1649: delegate must skip mixed-batch pre-execution like a
+// shell command (on assemblies without SubAgentManager its CLI fallback
+// runs synchronously in the serial loop and rewrites the tree).
+func TestPreExecuteReadOnly_SkipsDelegate(t *testing.T) {
+	a := &Agent{
+		tools:      tool.NewRegistry(),
+		speculator: newSpeculator(),
+	}
+	calls := []provider.ToolCallDelta{
+		{ID: "1", Name: "delegate", Arguments: []byte(`{"agent":"claude","prompt":"edit x"}`)},
+		{ID: "2", Name: "read_file", Arguments: []byte(`{"path":"x"}`)},
+	}
+	if results := a.preExecuteReadOnlyTools(context.Background(), calls); results != nil {
+		t.Errorf("mixed batch with delegate must skip pre-execution, got %d results", len(results))
+	}
+}
