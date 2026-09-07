@@ -102,7 +102,12 @@ func (w *boundedOutputWriter) String() string {
 	if w.overflow > 0 {
 		tail := w.tail
 		if len(tail) > w.tailCap {
-			tail = tail[len(tail)-w.tailCap:]
+			// #1639-4: snap forward to a rune boundary - the bare byte slice
+			// cut a multi-byte rune in half (CJK output), violating the
+			// rune-alignment contract every OTHER truncation point in Write
+			// upholds via snapForwardToRune.
+			cut := snapForwardToRune(tail, len(tail)-w.tailCap)
+			tail = tail[cut:]
 		}
 		if w.head.Len() == 0 {
 			return string(tail)
