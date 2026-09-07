@@ -1687,6 +1687,20 @@ func (c *Client) startHTTPNotificationStream() {
 	c.mu.Unlock()
 	safego.Go("mcp.client.httpNotifStream", func() {
 		defer cancel()
+		// #1632-C1: EVERY exit path must clear the guard pointer under the
+		// lock. The old code left it non-nil forever: after sessionGone the
+		// #1602 re-init on THIS client called startHTTPNotificationStream
+		// again, the guard saw the stale pointer, judged "stream already
+		// running", and skipped - server-initiated notifications were then
+		// permanently lost until Close. ("reconnect cycle rebuilds" assumed
+		// a fresh client; #1602 re-inits in place.)
+		defer func() {
+			c.mu.Lock()
+			if c.notifStreamCancel != nil {
+				c.notifStreamCancel = nil
+			}
+			c.mu.Unlock()
+		}()
 		backoff := []time.Duration{5 * time.Second, 15 * time.Second, 30 * time.Second}
 		attempt := 0
 		for {
