@@ -337,3 +337,72 @@ func TestExchangeCode_EmptyMetadataGuard(t *testing.T) {
 		t.Fatal("ExchangeCode should fail with empty authorizationServerMeta")
 	}
 }
+
+// Regression for the user-guidance flow: an unauthenticated server that
+// declares OAuth via well-known must be detected by the pre-flight probe,
+// and an anonymous server must miss (404) without side effects.
+func TestProbeWellKnownHitAndMiss(t *testing.T) {
+	// HIT: well-known returns one authorization server, and that server's
+	// metadata is fetchable.
+	var asServed bool
+	mux := http.NewServeMux()
+	asURL := "" // filled after srv starts; discovery needs ABSOLUTE issuer URLs
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"authorization_servers": []string{asURL},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	asURL = srv.URL + "/as-meta"
+
+	h := NewOAuthHandler("probe-test", srv.URL, auth.DefaultStore())
+	// Point the AS metadata fetch at the same test server so the chain
+	// completes without an external issuer.
+	mux.HandleFunc("/as-meta", func(w http.ResponseWriter, r *http.Request) {
+		asServed = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":                 srv.URL,
+			"authorization_endpoint": srv.URL + "/authorize",
+			"token_endpoint":         srv.URL + "/token",
+		})
+	})
+	if !h.ProbeWellKnown(context.Background()) {
+		t.Fatal("well-known hit must return true and complete discovery")
+	}
+	if !asServed {
+		t.Fatal("authorization-server metadata must have been fetched")
+	}
+
+	// MISS: anonymous server (404 on well-known).
+	anon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer anon.Close()
+	h2 := NewOAuthHandler("anon-test", anon.URL, auth.DefaultStore())
+	if h2.ProbeWellKnown(context.Background()) {
+		t.Fatal("anonymous server (404) must miss the probe")
+	}
+}
+
+// waitForClientID must respect an already-cancelled context immediately (the
+// unbounded-retry regression once parked the panel for the full caller ctx).
+func TestWaitForClientIDRespectsContextCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	h := NewOAuthHandler("cancel-test", srv.URL, auth.DefaultStore())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := h.waitForClientID(ctx, srv.URL, "client-x", "http://localhost:1/callback"); err == nil {
+		t.Fatal("cancelled context must return an error")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("cancelled context must return immediately, took %v", time.Since(start))
+	}
+}
