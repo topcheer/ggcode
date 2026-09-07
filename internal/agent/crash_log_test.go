@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteCrashLog(t *testing.T) {
@@ -92,5 +94,78 @@ func TestIssue1637_PrimaryStackTruncationMarked(t *testing.T) {
 	// marker, and the marker constant must exist (shared-literal guard).
 	if !strings.Contains("[primary stack truncated at", "[primary stack truncated at") {
 		t.Fatal("marker literal drift")
+	}
+}
+
+// TestPruneCrashLogs pins #1666 case 1: crash loops are a designed-for
+// scenario and each write is up to ~9MiB, so the directory must be pruned -
+// keep the newest crashLogRetention files, delete older ones past the age
+// cap, and never touch files younger than the cap even beyond the count.
+func TestPruneCrashLogs(t *testing.T) {
+	dir := t.TempDir()
+
+	newLog := func(name string, age time.Duration) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-age)
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// crashLogRetention old files (deletable: age > cap)...
+	for i := 0; i < crashLogRetention; i++ {
+		newLog(fmt.Sprintf("old-%02d.log", i), crashLogMaxAge+time.Hour)
+	}
+	// ...2 NEW files beyond the retention count but younger than the cap:
+	// must survive (age rule protects them).
+	newLog("fresh-1.log", time.Minute)
+	newLog("fresh-2.log", time.Minute)
+
+	pruneCrashLogs(dir)
+
+	// The 2 fresh files must survive regardless of count.
+	for _, name := range []string{"fresh-1.log", "fresh-2.log"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s should survive (younger than cap): %v", name, err)
+		}
+	}
+	// Old files beyond the newest-20 window must be gone. With 22 files
+	// total, the newest 20 are kept: that covers all 20 old files (they
+	// are "newest" relative to each other only among themselves when the
+	// fresh ones are newer) - recompute expectation simply: old files
+	// remaining must be 18 (20 retention - 2 fresh slots).
+	oldLeft := 0
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "old-") {
+			oldLeft++
+		}
+	}
+	if oldLeft != crashLogRetention-2 {
+		t.Errorf("expected %d old files pruned down to %d remaining, got %d", crashLogRetention, crashLogRetention-2, oldLeft)
+	}
+}
+
+// TestPruneCrashLogsNoopBelowThreshold: at or below the retention count the
+// prune must be a no-op (no incidental deletion).
+func TestPruneCrashLogsNoopBelowThreshold(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < crashLogRetention; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("a-%02d.log", i))
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-(crashLogMaxAge + 24*time.Hour))
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pruneCrashLogs(dir)
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != crashLogRetention {
+		t.Errorf("at-threshold directory must be untouched, got %d files", len(entries))
 	}
 }
