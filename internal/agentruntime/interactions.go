@@ -9,19 +9,23 @@ import (
 )
 
 type InteractionBroker struct {
-	mu        sync.Mutex
-	approvals map[string]approvalWaiter
-	askUsers  map[string]askUserWaiter
+	mu          sync.Mutex
+	approvals   map[string]approvalWaiter
+	askUsers    map[string]askUserWaiter
+	approvalSeq uint64 // #1657: registration order, makes FirstPending* deterministic
+	askSeq      uint64
 }
 
 type approvalWaiter struct {
 	request ApprovalRequest
 	resp    chan permission.Decision
+	seq     uint64 // registration order (#1657)
 }
 
 type askUserWaiter struct {
 	request AskUserRequest
 	resp    chan toolpkg.AskUserResponse
+	seq     uint64 // registration order (#1657)
 }
 
 func NewInteractionBroker() *InteractionBroker {
@@ -34,7 +38,8 @@ func NewInteractionBroker() *InteractionBroker {
 func (b *InteractionBroker) AwaitApproval(ctx context.Context, req ApprovalRequest) permission.Decision {
 	ch := make(chan permission.Decision, 1)
 	b.mu.Lock()
-	b.approvals[req.ID] = approvalWaiter{request: req, resp: ch}
+	b.approvalSeq++
+	b.approvals[req.ID] = approvalWaiter{request: req, resp: ch, seq: b.approvalSeq}
 	b.mu.Unlock()
 
 	select {
@@ -58,7 +63,8 @@ func (b *InteractionBroker) AwaitApproval(ctx context.Context, req ApprovalReque
 func (b *InteractionBroker) AwaitAskUser(ctx context.Context, req AskUserRequest) (toolpkg.AskUserResponse, error) {
 	ch := make(chan toolpkg.AskUserResponse, 1)
 	b.mu.Lock()
-	b.askUsers[req.ID] = askUserWaiter{request: req, resp: ch}
+	b.askSeq++
+	b.askUsers[req.ID] = askUserWaiter{request: req, resp: ch, seq: b.askSeq}
 	b.mu.Unlock()
 
 	select {
@@ -124,19 +130,37 @@ func (b *InteractionBroker) PendingAskUser(id string) (AskUserRequest, bool) {
 func (b *InteractionBroker) FirstPendingApproval() (ApprovalRequest, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// #1657: with 2+ pending approvals (parallel tool calls), Go map
+	// iteration order is random - a text "y" landed on an arbitrary one,
+	// which could be the more dangerous request. "First" must mean the
+	// earliest-registered one, deterministically.
+	var earliest approvalWaiter
 	for _, waiter := range b.approvals {
-		return waiter.request, true
+		if earliest.seq == 0 || waiter.seq < earliest.seq {
+			earliest = waiter
+		}
 	}
-	return ApprovalRequest{}, false
+	if earliest.seq == 0 {
+		return ApprovalRequest{}, false
+	}
+	return earliest.request, true
 }
 
 func (b *InteractionBroker) FirstPendingAskUser() (AskUserRequest, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// #1657: same as FirstPendingApproval - earliest registration wins,
+	// not an arbitrary map-iteration entry.
+	var earliest askUserWaiter
 	for _, waiter := range b.askUsers {
-		return waiter.request, true
+		if earliest.seq == 0 || waiter.seq < earliest.seq {
+			earliest = waiter
+		}
 	}
-	return AskUserRequest{}, false
+	if earliest.seq == 0 {
+		return AskUserRequest{}, false
+	}
+	return earliest.request, true
 }
 
 func (b *InteractionBroker) ApprovalCount() int {
