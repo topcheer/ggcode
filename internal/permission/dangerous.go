@@ -85,8 +85,13 @@ func NewDangerousDetector() *DangerousDetector {
 		// 'dd of=/dev/sda if=disk.img' (write the image TO the device,
 		// the classic disk-destroy) matched nothing and bypass/autopilot
 		// allowed it with zero confirmation. Cover the write side, and
-		// the nvme/vd/disk device families the old set never knew.
-		{DangerCritical, regexp.MustCompile(`(?i)\bdd\b[^;|&]*\bof=/dev/(sd|hd|nvme|vd|disk|mmcblk)`), "dd writing to a raw device would destroy it"},
+		// the device families the old set never knew.
+		// #1629-D1: r?disk catches macOS rdisk (the FASTEST and most
+		// common burn path - plain 'disk' never matched the r-prefixed
+		// raw device); mapper/loop/dm-/xvd cover LVM, loopback, devmapper,
+		// and xen virtual disks - all tested as zero-warning disk
+		// destruction on bypass/autopilot before this fix.
+		{DangerCritical, regexp.MustCompile(`(?i)\bdd\b[^;|&]*\bof=/dev/(sd|hd|nvme|vd|r?disk|mmcblk|mapper|loop|dm-|xvd)`), "dd writing to a raw device would destroy it"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bshred\b`), "shred securely deletes files"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bchmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+/\s*$`), "chmod 777 / is dangerous"},
 		{DangerCritical, regexp.MustCompile(`(?i):\(\)\s*\{\s*:\|:\s*&\s*\}\s*;:`), "fork bomb detected"},
