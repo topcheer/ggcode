@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // ValidationResult contains the outcome of skill validation.
@@ -245,8 +246,16 @@ func tokenSet(desc string) map[string]struct{} {
 	// J=0 (any rewrite) and the 0.75 near-duplicate threshold never caught
 	// rewritten duplicates. CJK runes join the set as single-rune tokens
 	// (same shape as the #1580 similarity fix).
+	// #1624-A: the range was the same hand-written Han-URO-only check as
+	// similarity.go pre-#1622 - Korean token sets barely intersected
+	// across rewrites (near-duplicates leaked) and kana-only Japanese
+	// collapsed to one whole-sentence token. Use the unicode tables.
 	for _, r := range desc {
-		if r >= 0x4E00 && r <= 0x9FFF {
+		if unicode.Is(unicode.Han, r) ||
+			unicode.Is(unicode.Hangul, r) ||
+			unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) ||
+			(r >= 0xFF01 && r <= 0xFF5E) {
 			set[string(r)] = struct{}{}
 		}
 	}
