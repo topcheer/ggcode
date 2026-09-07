@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sort"
@@ -689,6 +690,7 @@ func buildCorrectionSkillName(text string) string {
 	// Fallback: derive from first meaningful words
 	words := strings.Fields(textLower)
 	var parts []string
+	cjkOnly := true
 	for _, w := range words {
 		w = strings.Trim(w, "，。,.!?！？、")
 		// #1604-D: byte-length gate vs the rune-length gate upstream - a
@@ -696,7 +698,19 @@ func buildCorrectionSkillName(text string) string {
 		// names never assembled and real corrections dropped silently.
 		rw := []rune(w)
 		if len(rw) > 2 && len(rw) < 15 {
-			parts = append(parts, sanitizeName(w))
+			// #1644-1: sanitizeName maps every non-[a-zA-Z0-9-] rune to
+			// '-', so a PURE-CJK word sanitized to the empty string, the
+			// join produced "--" (<8, rejected) or fell to correction-N
+			// (also rejected) - the commit claimed "CJK correction names
+			// never dropped" but the main scenario never changed. Skip
+			// empty parts (they only waste the 3-part budget) and remember
+			// whether ANY semantic content existed.
+			if san := sanitizeName(w); san != "" {
+				parts = append(parts, san)
+			}
+		}
+		if w != "" && isASCIIIdentifierWord(w) {
+			cjkOnly = false
 		}
 		if len(parts) >= 3 {
 			break
@@ -705,7 +719,26 @@ func buildCorrectionSkillName(text string) string {
 	if len(parts) > 0 {
 		return strings.Join(parts, "-")
 	}
+	if cjkOnly {
+		// Deterministic readable-enough name for pure-CJK corrections:
+		// survives isValidCandidateName (>=8, not the correction-N
+		// fallback pattern) instead of being silently dropped.
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(textLower))
+		return fmt.Sprintf("cjk-correction-%08x", h.Sum32())
+	}
 	return "correction-" + fmt.Sprintf("%d", len(text))
+}
+
+// isASCIIIdentifierWord reports whether w carries any ASCII alphanumeric
+// content that survives sanitizeName (i.e. is not purely CJK/punctuation).
+func isASCIIIdentifierWord(w string) bool {
+	for _, r := range w {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return true
+		}
+	}
+	return false
 }
 
 type failure struct {
