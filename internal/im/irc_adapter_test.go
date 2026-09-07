@@ -304,9 +304,11 @@ func TestSplitIRCMessage(t *testing.T) {
 		t.Errorf("rejoined mismatch")
 	}
 
-	// Long message with spaces. #1552-A: the splitter now counts BYTES
-	// (protocol limit) and trims whitespace at split boundaries like the
-	// other byte-limited platforms - compare whitespace-normalized.
+	// Long message with spaces. #1552-A: the splitter counts BYTES
+	// (protocol limit). #1660: IRC no longer trims - whitespace is
+	// content (code-block indentation) - and word boundaries are
+	// preferred over hard cuts, so compare whitespace-normalized for
+	// the multi-space edge and check exact preservation below.
 	longSpace := strings.Repeat("word ", 200)
 	chunks = splitIRCMessage(longSpace, 400)
 	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
@@ -317,6 +319,36 @@ func TestSplitIRCMessage(t *testing.T) {
 		if len(c) > 400 {
 			t.Errorf("chunk %d exceeds 400 bytes: %d", i, len(c))
 		}
+	}
+}
+
+// TestSplitIRCMessage_PreservesIndentation pins #1660 case 1: the IRC
+// splitter must NOT TrimSpace its input - leading code-block indentation
+// is syntax in Python/Go. Both short (no split) and long (split) inputs
+// keep their leading whitespace verbatim.
+func TestSplitIRCMessage_PreservesIndentation(t *testing.T) {
+	// Short indented line: no split, no trim.
+	if got := splitIRCMessage("    foo := 1", 400); len(got) != 1 || got[0] != "    foo := 1" {
+		t.Errorf("short indented line trimmed: %q", got)
+	}
+	// Long indented code block: every chunk boundary preserves content;
+	// rejoined output is byte-identical to the input.
+	code := strings.Repeat("    indented := true\n", 40) // 23 * 40 = 920 bytes
+	chunks := splitIRCMessage(code, 400)
+	if len(chunks) < 2 {
+		t.Fatalf("expected split, got %d chunks", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) > 400 {
+			t.Errorf("chunk %d exceeds 400 bytes: %d", i, len(c))
+		}
+	}
+	if joined := strings.Join(chunks, ""); joined != code {
+		t.Errorf("indented code not preserved verbatim:\n%q\nvs\n%q", joined, code)
+	}
+	// Leading indentation of the very first chunk survives.
+	if !strings.HasPrefix(chunks[0], "    ") {
+		t.Errorf("first chunk lost its leading indentation: %q", chunks[0])
 	}
 }
 
