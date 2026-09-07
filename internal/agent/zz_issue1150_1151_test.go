@@ -78,8 +78,8 @@ func TestIssue1150_FailedTestCommandDoesNotArmCategories(t *testing.T) {
 // warned spuriously.
 func TestIssue1151_TwoBeyondTargetReadsExemptWithoutSearch(t *testing.T) {
 	s := newPrematureCommitState()
-	s.recordExploration("read_file", "/proj/pkg/bar.go")
-	s.recordExploration("read_file", "/proj/pkg/baz.go")
+	s.recordExploration("read_file", []string{"/proj/pkg/bar.go"})
+	s.recordExploration("read_file", []string{"/proj/pkg/baz.go"})
 
 	msg := s.checkFirstEdit([]string{"/proj/pkg/qux.go"})
 	if msg != "" {
@@ -93,9 +93,9 @@ func TestIssue1151_TwoBeyondTargetReadsExemptWithoutSearch(t *testing.T) {
 // inflated the count.
 func TestIssue1151_MultiTargetWithSingleBeyondReadWarns(t *testing.T) {
 	s := newPrematureCommitState()
-	s.recordExploration("read_file", "/proj/pkg/a.go")
-	s.recordExploration("read_file", "/proj/pkg/b.go")
-	s.recordExploration("read_file", "/proj/pkg/c.go")
+	s.recordExploration("read_file", []string{"/proj/pkg/a.go"})
+	s.recordExploration("read_file", []string{"/proj/pkg/b.go"})
+	s.recordExploration("read_file", []string{"/proj/pkg/c.go"})
 
 	msg := s.checkFirstEdit([]string{"/proj/pkg/a.go", "/proj/pkg/b.go"})
 	if msg == "" {
@@ -109,8 +109,8 @@ func TestIssue1151_MultiTargetWithSingleBeyondReadWarns(t *testing.T) {
 // #1151 baseline: 1 beyond-target read was and remains insufficient.
 func TestIssue1151_SingleBeyondTargetReadInsufficient(t *testing.T) {
 	s := newPrematureCommitState()
-	s.recordExploration("read_file", "/proj/pkg/target.go")
-	s.recordExploration("read_file", "/proj/pkg/other.go")
+	s.recordExploration("read_file", []string{"/proj/pkg/target.go"})
+	s.recordExploration("read_file", []string{"/proj/pkg/other.go"})
 
 	msg := s.checkFirstEdit([]string{"/proj/pkg/target.go"})
 	if msg == "" {

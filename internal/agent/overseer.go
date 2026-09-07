@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -559,6 +560,38 @@ func countErrors(traj []trajectoryEntry) int {
 // extractFileHint tries to extract a file path from tool arguments JSON.
 // Returns the first "path" or "file_path" value, or empty string.
 func extractFileHint(toolName string, args []byte) string {
+	hints := extractFileHints(toolName, args)
+	if len(hints) > 0 {
+		return hints[0]
+	}
+	return ""
+}
+
+// extractFileHints returns ALL file paths a tool call touches (#1480 case
+// C). multi_file_read's `files` is an array of {path,offset,limit} objects;
+// the old single-hint extraction recorded only the FIRST file of a batch,
+// so premature_commit's evidence counter systematically under-counted
+// batch reads - one multi_file_read of 4 files counted as 1 - inverting
+// the tool's purpose (batch reads got punished while the same 4 files read
+// serially passed the exemption).
+func extractFileHints(toolName string, args []byte) []string {
+	if toolName == "multi_file_read" {
+		var parsed struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		}
+		if err := json.Unmarshal(args, &parsed); err == nil && len(parsed.Files) > 0 {
+			out := make([]string, 0, len(parsed.Files))
+			for _, f := range parsed.Files {
+				if p := strings.TrimSpace(f.Path); p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+		return nil
+	}
 	// Quick extraction without full JSON parse — look for "path":"..." or "file_path":"..."
 	s := string(args)
 	for _, key := range []string{`"path"`, `"file_path"`, `"filePath"`} {
@@ -577,10 +610,10 @@ func extractFileHint(toolName string, args []byte) string {
 			if len([]rune(hint)) > 80 {
 				hint = string([]rune(hint)[:77]) + "..."
 			}
-			return hint
+			return []string{hint}
 		}
 	}
-	return ""
+	return nil
 }
 
 // Compile-time assertion that time is used (for the duration tracking we may

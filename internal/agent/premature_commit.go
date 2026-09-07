@@ -122,7 +122,9 @@ func (s *prematureCommitState) reset() {
 }
 
 // recordExploration tracks an exploratory tool call before the first edit.
-func (s *prematureCommitState) recordExploration(toolName string, fileHint string) {
+// #1480 case C: multi_file_read batches carry N files - record ALL of them,
+// not just the first (the count-based exemptions compare files-touched).
+func (s *prematureCommitState) recordExploration(toolName string, fileHints []string) {
 	if s.firstEditDone || s.warned {
 		return
 	}
@@ -132,8 +134,12 @@ func (s *prematureCommitState) recordExploration(toolName string, fileHint strin
 	if pcSearchTools[toolName] {
 		s.searchCount++
 	}
-	if fileHint != "" && (toolName == "read_file" || toolName == "multi_file_read") {
-		s.filesRead[normalizeFilePath(fileHint)] = true
+	if toolName == "read_file" || toolName == "multi_file_read" {
+		for _, hint := range fileHints {
+			if hint != "" {
+				s.filesRead[normalizeFilePath(hint)] = true
+			}
+		}
 	}
 }
 

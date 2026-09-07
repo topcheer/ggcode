@@ -327,3 +327,73 @@ func collect(n int) []int {
 		t.Errorf("expected warning about out, got: %s", warnings[0])
 	}
 }
+
+// TestPreallocBreakLoopExempt pins #1480 case B: the header has always
+// promised a data-dependent-early-break exemption; now it exists - a loop
+// with break/continue/goto at any depth must NOT be flagged (the capacity
+// is unknowable, and the old advice pushed the agent to invent one).
+func TestPreallocBreakLoopExempt(t *testing.T) {
+	code := `package main
+func f(items []int) []int {
+	var out []int
+	for _, x := range items {
+		if x < 0 {
+			break
+		}
+		out = append(out, x)
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test.go", "", code); len(got) != 0 {
+		t.Errorf("loop with early break must be exempt, got: %v", got)
+	}
+	// continue and goto too.
+	code2 := `package main
+func g(items []int) []int {
+	var out []int
+	for _, x := range items {
+		if x == 3 {
+			continue
+		}
+		out = append(out, x)
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test2.go", "", code2); len(got) != 0 {
+		t.Errorf("loop with continue must be exempt, got: %v", got)
+	}
+	// No break: still flagged (the detector keeps its teeth).
+	code3 := `package main
+func h(items []int) []int {
+	var out []int
+	for _, x := range items {
+		out = append(out, x)
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test3.go", "", code3); len(got) == 0 {
+		t.Error("plain unbroken loop must still be flagged")
+	}
+}
+
+// TestPreallocConditionalAppendExempt pins #1480 case B: an append inside
+// an if body is conditional - the final count is data-dependent.
+func TestPreallocConditionalAppendExempt(t *testing.T) {
+	code := `package main
+func f(items []int) []int {
+	var out []int
+	for _, x := range items {
+		if x%2 == 0 {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test.go", "", code); len(got) != 0 {
+		t.Errorf("conditional append must be exempt, got: %v", got)
+	}
+}

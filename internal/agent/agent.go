@@ -3871,7 +3871,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Premature commitment: record exploratory actions to track
 			// evidence gathering before the first edit.
-			a.prematureCommit.recordExploration(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+			a.prematureCommit.recordExploration(tc.Name, extractFileHints(tc.Name, tc.Arguments))
 			if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
 				a.appendGuidance(&result, debtGuidance)
 			}

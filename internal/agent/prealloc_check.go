@@ -164,6 +164,14 @@ func findMissingPrealloc(file *ast.File, fset *token.FileSet) []preallocWarning 
 		unitWarned := make(map[string]bool)
 		onLoop := func(loopBody *ast.BlockStmt, loopPos token.Pos) {
 			loopLine := fset.Position(loopPos).Line
+			// #1480 case B: the header has always promised "the loop has a
+			// data-dependent early break (capacity unknown)" as an exemption,
+			// but no code ever implemented it - loops with break/continue/
+			// goto were still flagged, pushing the agent to invent a bogus
+			// make() capacity where the count is unknowable.
+			if loopHasEarlyExit(loopBody) {
+				return
+			}
 			for _, w := range scanForAppend(loopBody, decls, loopLine) {
 				key := fmt.Sprintf("%d:%s", loopLine, w.varName)
 				if unitWarned[w.varName] || seenLoopWarn[key] {
@@ -291,6 +299,28 @@ func aSTInspectLoops(body *ast.BlockStmt, fn func(loopBody *ast.BlockStmt, loopP
 	})
 }
 
+// loopHasEarlyExit reports whether a loop body contains any branch
+// statement (break, continue, goto) at any nesting depth - including inside
+// ifs and inner blocks - meaning the final element count is data-dependent
+// and a preallocation capacity cannot be known up front.
+func loopHasEarlyExit(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if bs, ok := n.(*ast.BranchStmt); ok {
+			switch bs.Tok {
+			case token.BREAK, token.CONTINUE, token.GOTO:
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
 // scanForAppend walks a statement list looking for append() calls assigned
 // to zero-capacity slice declarations.
 
@@ -336,15 +366,19 @@ func analyzeInitExpr(name string, pos token.Pos, expr ast.Expr) *zeroCapSliceDec
 }
 
 // scanForAppend walks a statement list looking for append() calls assigned
-// to zero-capacity slice declarations.
+// to zero-capacity slice declarations. #1480 case B: only DIRECT statements
+// of the loop body count - an append inside an if/switch/inner block is
+// conditional, so the final count is data-dependent and preallocation is
+// not reliably better (the old full-depth walk flagged conditional appends
+// too, advising a capacity the code cannot know).
 func scanForAppend(body *ast.BlockStmt, decls map[string]*zeroCapSliceDecl, loopLine int) []preallocWarning {
 	var warnings []preallocWarning
 	seen := make(map[string]bool)
 
-	ast.Inspect(body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
+	for _, stmt := range body.List {
+		assign, ok := stmt.(*ast.AssignStmt)
 		if !ok {
-			return true
+			continue
 		}
 		// Look for x = append(x, ...) pattern.
 		for i, lhs := range assign.Lhs {
@@ -376,8 +410,7 @@ func scanForAppend(body *ast.BlockStmt, decls map[string]*zeroCapSliceDecl, loop
 				}
 			}
 		}
-		return true
-	})
+	}
 
 	return warnings
 }
