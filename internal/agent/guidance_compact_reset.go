@@ -164,6 +164,16 @@ func (a *Agent) resetGuidanceCounters() {
 	if a.verifDebt != nil {
 		a.verifDebt.warningsIssued = 0
 	}
+	// #1651: quota=1 detectors go PERMANENTLY silent after one mid-run
+	// compaction swallows their single warning - the worst offenders of
+	// the 56-item enumeration gap (mechanical fix: per-state quota reset;
+	// the structural fix is a registry, tracked in the issue).
+	if a.spiralState != nil {
+		a.spiralState.warnings = 0 // "at most once per run" - compact REOPENS it
+	}
+	if a.capBoundary != nil {
+		a.capBoundary.warnings = 0 // capBoundaryMaxWarnings=1
+	}
 	// #1646-2: quota-only (warnCount) - entries/pendingErr are behavioral.
 	if a.overcorrection != nil {
 		a.overcorrection.mu.Lock()
