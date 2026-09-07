@@ -34,9 +34,11 @@ package agent
 //   - Complements export_guard: provides scale context even for non-breaking edits
 
 import (
+	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -134,17 +136,20 @@ func (a *Agent) checkHubPackage(filePath string) string {
 	if len(a.hubPackageGuard.fanIn) == 0 {
 		return ""
 	}
-	// #1574-C: mark checked only AFTER a successful initialization - the
-	// old ordering latched checked before ensureFanIn could fail (e.g. a
-	// transient root go.mod miss leaves initialized=false), and that file
-	// was never re-examined this run.
-	a.hubPackageGuard.checked[abs] = true
+	// #1574-C / #1658 case 1: mark checked only AFTER a successful keying -
+	// latching before hubFileToImportPath left a transient failure (backup
+	// lock, permission mid-repair) permanently skipped for this file: the
+	// next edit of the same file short-circuited at the checked map even
+	// after the cause was gone, despite the fix comment promising "the next
+	// call retries". Determinate non-package files re-running keying is a
+	// cheap Rel+string op.
 
 	// Determine the edited file's package import path.
 	pkgPath := hubFileToImportPath(a.workingDir, filePath, a.hubPackageGuard.modulePath)
 	if pkgPath == "" {
 		return ""
 	}
+	a.hubPackageGuard.checked[abs] = true
 
 	count := a.hubPackageGuard.fanIn[pkgPath]
 	if count < hubPackageThreshold {
@@ -253,6 +258,14 @@ func hubNearestGoMod(dir, root string) (modRoot, modName string, ok bool) {
 					return cur, strings.TrimSpace(strings.TrimPrefix(line, "module ")), true
 				}
 			}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			// #1658 case 2: exists-but-unstattable (EACCES on an r-- dir without
+			// +x, EIO, ESTALE) is indeterminate, not absence - walking past it
+			// falls through to the root module and re-keys everything wrong,
+			// the exact bug shape #1614-B closed at the ReadFile entry. Freeze
+			// like the unreadable branch above.
+			debug.Log("hub-pkg-guard", "go.mod stat indeterminate at %s: %v", cur, statErr)
+			return "", "", false
 		}
 		if cur == root || cur == filepath.Dir(cur) {
 			return "", "", true // none found anywhere: determinate absence
