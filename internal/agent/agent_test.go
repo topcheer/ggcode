@@ -92,6 +92,9 @@ type mockProvider struct {
 	tokenCount    int
 	chatCalls     int
 	streamCalls   int
+	// capturedMsgs records every ChatStream request's messages (#1672):
+	// recovery-nudge delivery assertions compare consecutive requests.
+	capturedMsgs [][]provider.Message
 
 	// firstEventDelay, when > 0, delays delivery of the first streamed event
 	// by this duration (goroutine delivery, ctx-aware). Metric tests use it so
@@ -290,6 +293,7 @@ func (m *mockProvider) Chat(ctx context.Context, messages []provider.Message, to
 func (m *mockProvider) ChatStream(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (<-chan provider.StreamEvent, error) {
 	m.mu.Lock()
 	m.streamCalls++
+	m.capturedMsgs = append(m.capturedMsgs, append([]provider.Message(nil), messages...))
 	if m.streamErr != nil {
 		err := m.streamErr
 		m.mu.Unlock()
@@ -2379,5 +2383,67 @@ func TestRunStreamTruncatedStillContinues(t *testing.T) {
 	joined := strings.Join(systemTexts, "\n")
 	if !strings.Contains(joined, "truncated by output length limit") {
 		t.Fatalf("expected continuation notice, got %q", joined)
+	}
+}
+
+// --- #1672: recovery-path message delivery and honest empty-abort ---
+
+// TestAgentEmptyResponseAbortReturnsError pins #1672 case 2: three
+// consecutive empty responses abort the run with a DISTINGUISHABLE error -
+// the old code claimed "[context overflow - conversation reset for
+// recovery]" (nothing reset anything) and returned nil, reporting the
+// failure upstream as a normal completion.
+func TestAgentEmptyResponseAbortReturnsError(t *testing.T) {
+	emptyStream := []provider.StreamEvent{{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 100, OutputTokens: 0}}}
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{emptyStream, emptyStream, emptyStream}, // three usage-real empty streams
+	}
+	a := NewAgent(mp, tool.NewRegistry(), t.TempDir(), 10)
+	err := a.RunStream(context.Background(), "do something", func(ev provider.StreamEvent) {})
+	if err == nil {
+		t.Fatal("3-empty abort must return an error, got nil (reported as normal completion)")
+	}
+	if !strings.Contains(err.Error(), "consecutive empty responses") {
+		t.Errorf("error must be distinguishable, got: %v", err)
+	}
+}
+
+// TestAgentEmptyResponseNudgeDelivered pins #1672 case 1: the nudge injected
+// after an empty response must reach the model - the NEXT ChatStream request
+// must contain it. The old code sent a byte-identical request (the injected
+// message never left the context manager), so nudges replayed into the
+// 3-empty abort and gates ping-ponged to maxIter.
+func TestAgentEmptyResponseNudgeDelivered(t *testing.T) {
+	emptyStream := []provider.StreamEvent{{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 100, OutputTokens: 0}}}
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			emptyStream, // 1st: empty -> nudge injected
+			streamEventsFromResponse(&provider.ChatResponse{
+				Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("recovered")}},
+			}),
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), t.TempDir(), 10)
+	err := a.RunStream(context.Background(), "do something", func(ev provider.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("run should complete after recovery, got: %v", err)
+	}
+	mp.mu.Lock()
+	captured := mp.capturedMsgs
+	mp.mu.Unlock()
+	if len(captured) < 2 {
+		t.Fatalf("expected >=2 stream requests (empty + retry), got %d", len(captured))
+	}
+	second := captured[1]
+	found := false
+	for _, msg := range second {
+		for _, blk := range msg.Content {
+			if blk.Type == "text" && strings.Contains(blk.Text, "The previous response was empty") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("nudge message not present in the SECOND request - delivery path regressed (#1672 case 1)")
 	}
 }
