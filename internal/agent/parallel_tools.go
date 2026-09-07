@@ -118,6 +118,14 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		if tc.Name == "run_command" || tc.Name == "start_command" {
 			return nil
 		}
+		// #1649: delegate escapes every guard set (only the orchestration
+		// file references it). On assemblies WITHOUT SubAgentManager the
+		// CLI fallback runs SYNCHRONOUSLY in the serial loop and rewrites
+		// the tree before a pre-executed read is consumed - the #1607-A
+		// shape via a different channel. Treat it like a shell command.
+		if tc.Name == "delegate" {
+			return nil
+		}
 	}
 	for i, tc := range toolCalls {
 		if !speculativeSafeTools[tc.Name] {
