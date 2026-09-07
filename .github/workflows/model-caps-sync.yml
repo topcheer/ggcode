@@ -57,7 +57,10 @@ jobs:
       - name: Create pull request
         if: steps.diff.outputs.changed == 'true'
         run: |
-          BRANCH="chore/model-caps-sync-$(date +%Y%m%d)"
+          # GITHUB_RUN_ID suffix: same-day re-runs (dispatch + cron overlap)
+          # must not collide on the daily branch name - a fixed per-day name
+          # gets its push rejected (fetch first) on the second run.
+          BRANCH="chore/model-caps-sync-$(date +%Y%m%d)-r${GITHUB_RUN_ID}"
           git config user.name "ggcode-bot"
           git config user.email "noreply@ggcode.dev"
           git checkout -b "$BRANCH"
