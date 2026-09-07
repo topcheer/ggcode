@@ -37,7 +37,12 @@ var displaySecretPatterns = []struct {
 	{"gitlab_token", regexp.MustCompile(`\b(glpat-[A-Za-z0-9_\-]{20})\b`)},
 	{"slack_token", regexp.MustCompile(`\b(xox[bpras]-[A-Za-z0-9-]{10,72})\b`)},
 	{"stripe_key", regexp.MustCompile(`\b((?:sk|pk|rk)_(?:test_|live_)?[A-Za-z0-9]{24,})\b`)},
-	{"private_key", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----.*?-----END (?:[A-Z ]+)PRIVATE KEY-----)`)},
+	// #1626-B: the prefix class required >=1 char (RSA/EC/OPENSSH/...),
+	// so bare PKCS#8 `-----BEGIN PRIVATE KEY-----` - the format most
+	// modern SDK keys ship in - passed through UNMASKED while the DETECTION
+	// layer (secretdetect) matched it via its optional group: detection and
+	// display drifted apart for the 4th time. `*` allows the empty prefix.
+	{"private_key", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----.*?-----END (?:[A-Z ]*)PRIVATE KEY-----)`)},
 	{"openai_key", regexp.MustCompile(`\b(sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,})\b`)},
 	{"anthropic_key", regexp.MustCompile(`\b(sk-ant-[A-Za-z0-9\-_]{70,})\b`)},
 	{"jwt", regexp.MustCompile(`\b(eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b`)},
@@ -85,8 +90,18 @@ func RedactForDisplay(content string) string {
 					return match
 				}
 				changed = true
-				// Keep prefix + masked value + suffix
-				return sub[1] + maskValue(sub[2]) + sub[len(sub)-1]
+				// Keep prefix + masked value. #1626-A: the old code appended
+				// sub[len(sub)-1] as a "suffix" - for exactly-2-group patterns
+				// (aws_secret_access_key, azure AccountKey) that IS the raw
+				// secret, so the redactor itself copied the full plaintext onto
+				// the screen after the mask, across all three UI paths (TUI
+				// echo, IM push, desktop render). Suffixes only exist for 3+
+				// group patterns.
+				suffix := ""
+				if len(sub) > 3 {
+					suffix = sub[len(sub)-1]
+				}
+				return sub[1] + maskValue(sub[2]) + suffix
 			})
 		} else {
 			// Single-group: mask the entire match

@@ -113,3 +113,29 @@ func TestRedactForDisplayCoversDetectionLayerFormats(t *testing.T) {
 		})
 	}
 }
+
+// Regression for #1626-A: for exactly-2-group patterns the old suffix
+// re-append copied the FULL PLAINTEXT after the mask - the redactor itself
+// echoed the secret to screen/IM/desktop. Assert the plaintext is GONE.
+func TestRedactTwoGroupNoPlaintextEcho(t *testing.T) {
+	const awsSecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+	out := RedactForDisplay("AWS_SECRET_ACCESS_KEY=" + awsSecret)
+	if strings.Contains(out, awsSecret) {
+		t.Fatalf("plaintext secret re-echoed in redacted output: %q", out)
+	}
+	const azSecret = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV0123456789+ab="
+	out2 := RedactForDisplay("AccountKey=" + azSecret)
+	if strings.Contains(out2, azSecret) {
+		t.Fatalf("plaintext azure key re-echoed: %q", out2)
+	}
+}
+
+// Regression for #1626-B: bare PKCS#8 "BEGIN PRIVATE KEY" (no RSA/EC/...
+// prefix) must be masked - the detection layer matched it, display didn't.
+func TestRedactBarePKCS8PrivateKey(t *testing.T) {
+	pem := "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7\n-----END PRIVATE KEY-----"
+	out := RedactForDisplay(pem)
+	if strings.Contains(out, "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7") {
+		t.Fatalf("bare PKCS#8 body leaked: %q", out)
+	}
+}
