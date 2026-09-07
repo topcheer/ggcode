@@ -125,6 +125,11 @@ func (h *Hub) handleReceiveReceipt(w http.ResponseWriter, r *http.Request) {
 
 	var receipt Receipt
 	if err := json.NewDecoder(r.Body).Decode(&receipt); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) { // #1627-B: 413, matching the message endpoint
+			http.Error(w, "receipt body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid receipt: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -144,6 +149,11 @@ func (h *Hub) handleNickChange(w http.ResponseWriter, r *http.Request) {
 
 	var change NickChange
 	if err := json.NewDecoder(r.Body).Decode(&change); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) { // #1627-B: 413, matching the message endpoint
+			http.Error(w, "nick body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid nick change: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -163,6 +173,14 @@ func (h *Hub) handleParticipantQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Hub) handlePresence(w http.ResponseWriter, r *http.Request) {
+	// #1627-A: the fourth receive endpoint missed the #1583-A sweep (its
+	// commit said "all three" - there are four). Zero-config mode accepts
+	// the well-known community key, so any LAN host could POST an
+	// unbounded body; json.Decoder buffers the whole value before
+	// parsing (multi-GB RSS). Presence payloads are tiny - cap hard.
+	defer func() { _ = r.Body.Close() }()
+	r.Body = http.MaxBytesReader(w, r.Body, lanchatMaxBodyBytes)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -170,6 +188,12 @@ func (h *Hub) handlePresence(w http.ResponseWriter, r *http.Request) {
 
 	var p Participant
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		// #1627-B: 413 for oversize bodies, not a 400 that hides the cap.
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, "presence body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "invalid presence: "+err.Error(), http.StatusBadRequest)
 		return
 	}
