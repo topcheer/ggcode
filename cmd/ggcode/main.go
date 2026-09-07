@@ -135,12 +135,21 @@ func redirectStderr() {
 						if looksFatal(line) {
 							// Banner sighted: persist ring + remainder, then
 							// keep streaming raw.
+							// #1620: BREAK, not continue - the line was just
+							// prepended back to buf, so `continue` re-reads
+							// the SAME line, looksFatal is deterministic, and
+							// the inner loop spins forever between the two
+							// states: mu never unlocks, stderr never drains
+							// (the process hangs instead of crashing), and
+							// the dump grows with repeated banner lines
+							// forever. Breaking exits to the outer read
+							// loop, whose raw branch takes over.
 							buf = append([]byte(line+"\n"), buf...)
 							startFatalCapture()
 							if dumpFile != nil {
 								_, _ = dumpFile.Write([]byte(line + "\n"))
 							}
-							continue
+							break
 						}
 						debug.Log("stderr", "%s", line)
 					}
