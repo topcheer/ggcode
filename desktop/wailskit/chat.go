@@ -628,9 +628,12 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 	// leaking into the new session's live history and frontend stream.
 	runGen := b.currentRunGeneration()
 	err := b.agent.RunStream(ctx, userMsg, func(ev provider.StreamEvent) {
-		if b.OnStreamEvent == nil {
-			return
-		}
+		// #1671 case 2: no outer OnStreamEvent gate here - emit() already
+		// nil-checks it internally before pushing to the frontend, but this
+		// callback is also the sole path for the OTHER emit() duties (IM
+		// echo, live-history state machine, tunnel projection). Gating here
+		// silently stalled those in headless/embedded/cron entrypoints
+		// where OnStreamEvent is legitimately nil.
 		b.emitIfCurrent(runGen, ev)
 	})
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -2708,12 +2711,10 @@ func (b *ChatBridge) GetModelInfo() map[string]interface{} {
 func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	var (
 		currentSes *session.Session
-		working    bool
 		cfg        *config.Config
 	)
 	b.mu.Lock()
 	currentSes = b.currentSes
-	working = b.cancel != nil
 	cfg = b.cfg
 	b.mu.Unlock()
 
@@ -2722,9 +2723,15 @@ func (b *ChatBridge) AttachTunnelBroker(broker *tunnel.Broker) {
 	}
 
 	// Set snapshot provider for the "no replay events" fallback.
+	// #1671 case 1: no attach-time `working` freeze - the old snapshot
+	// captured b.cancel != nil once at attach, so attaching while idle
+	// gated the provider closed forever: a run starting later still sent
+	// the STALE idle provider to a mobile client with no replay events
+	// (busy desktop shown as idle). CurrentTunnelStatus already reads
+	// b.cancel live under the lock (#1081) - trust it.
 	broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
 		snapshot := tunnel.BrokerSnapshot{}
-		if working && cfg != nil {
+		if cfg != nil {
 			status := b.CurrentTunnelStatus()
 			snapshot.Status = status
 			activity := b.CurrentTunnelActivity()
