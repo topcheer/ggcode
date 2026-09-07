@@ -213,3 +213,19 @@ func TestIrrevGate_GroundingWindowDecay(t *testing.T) {
 		t.Error("expected warning after grounding decayed out of window")
 	}
 }
+
+// Regression for #1621-A/B: destructive schema-field actions must tier up.
+func TestStashDropAndTagDeleteTierUp(t *testing.T) {
+	if got := irrevClassifyTool("git_stash", `{"action":"drop","index":3}`); got != irrevTierHigh {
+		t.Fatalf("stash drop must be High, got %v", got)
+	}
+	if got := irrevClassifyTool("git_stash", `{"action":"list"}`); got != irrevTierLow {
+		t.Fatalf("stash list must stay Low, got %v", got)
+	}
+	if got := irrevClassifyTool("git_tag", `{"action":"delete","name":"v1.0"}`); got != irrevTierMedium {
+		t.Fatalf("tag delete must be Medium, got %v", got)
+	}
+	if got := irrevClassifyTool("git_tag", `{"action":"list"}`); got != irrevTierNone {
+		t.Fatalf("tag list must stay None, got %v", got)
+	}
+}

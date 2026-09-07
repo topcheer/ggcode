@@ -88,15 +88,44 @@ func irrevClassifyTool(toolName, args string) int {
 		"lsp_incoming_calls", "lsp_outgoing_calls", "lsp_prepare_call_hierarchy",
 		"lsp_diagnostics", "lsp_document_highlights", "lsp_code_actions",
 		"git_show", "git_diff", "git_blame", "git_log", "git_status",
-		"git_branch_list", "git_remote", "git_stash_list", "git_tag",
+		"git_branch_list", "git_remote", "git_stash_list",
 		"web_search", "web_fetch", "code_execution", "runtime", "clipboard":
+		return irrevTierNone
+
+	// #1621-B: git_tag carries a destructive "delete" action (the shell
+	// pattern table in this same file already treats `git tag -d` as a
+	// destructive pattern - the two paths contradicted each other).
+	// Tier-0 tools short-circuit before grounding tracking entirely, so a
+	// deleted (possibly pushed) release tag vanished with zero signal.
+	case "git_tag":
+		var a struct {
+			Action string `json:"action"`
+		}
+		if json.Unmarshal([]byte(args), &a) == nil && a.Action == "delete" {
+			return irrevTierMedium
+		}
 		return irrevTierNone
 
 	// Tier 1: Low irreversibility (easily undone)
 	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
 		"multi_file_write", "notebook_edit":
 		return irrevTierLow
-	case "undo_edit", "git_stash":
+	case "undo_edit":
+		return irrevTierLow
+	// #1621-A: stash drop permanently discards uncommitted work - the
+	// tool's own schema says "destructive" and recovery means fsck-ing
+	// dangling commits, NOT "easily undone". The shell pattern table
+	// covers `git branch -d`/`git tag -d` but never stash drop, and the
+	// tool path short-circuited on the tool NAME - the #1579-A class
+	// (destructive sub-action encoded in a schema field, static
+	// grouping by tool name never consumes it).
+	case "git_stash":
+		var a struct {
+			Action string `json:"action"`
+		}
+		if json.Unmarshal([]byte(args), &a) == nil && a.Action == "drop" {
+			return irrevTierHigh
+		}
 		return irrevTierLow
 	case "git_add", "git_checkout":
 		return irrevTierLow
