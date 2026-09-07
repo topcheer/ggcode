@@ -509,6 +509,21 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 				Output:   b.Output,
 				IsError:  b.IsError,
 			})
+		case "resource":
+			// #1659 case 1: we declare EmbeddedContext:true in
+			// InitializeResult, so a spec-compliant peer legitimately sends
+			// resource attachments - the old code dropped them here because
+			// b.Text is an independent JSON field that is always empty for
+			// resources (content lives in b.Resource.Text/Blob). Degrade to
+			// text; log the type for blob resources we cannot inline.
+			if b.Resource != nil {
+				if b.Resource.Text != nil && b.Resource.Text.Text != "" {
+					out = append(out, provider.TextBlock(b.Resource.Text.Text))
+				} else if b.Resource.Blob != nil {
+					debug.Log("acp-bridge", "resource blob %q (%s) not inlinable - placeholder only", b.Resource.Blob.URI, b.Resource.Blob.MIMEType)
+					out = append(out, provider.TextBlock(fmt.Sprintf("[embedded binary resource: %s (%s)]", b.Resource.Blob.URI, b.Resource.Blob.MIMEType)))
+				}
+			}
 		default:
 			// #1647: audio/resource/resource_link arriving without Text were
 			// dropped SILENTLY (the handler declares audio:false - a peer

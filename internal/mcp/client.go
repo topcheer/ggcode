@@ -191,7 +191,13 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 // Start launches the MCP server process.
 func (c *Client) Start(ctx context.Context) error {
 	switch c.transport {
-	case "http":
+	case "http", "sse":
+		// #1659 case 2: we declare SSE:true in MCPCapabilities and
+		// types.go documents "sse" as a legal server Type, but this switch
+		// had no case for it - an explicit type:"sse" server fell to
+		// "unsupported transport" and ConnectServers swallowed the error,
+		// so the peer got no failure signal at all. The HTTP transport
+		// already handles SSE-framed responses, so normalize sse -> http.
 		c.httpClient = newMCPHTTPClient(0) // no client-level timeout; per-request context used
 		return nil
 	case "ws", "websocket":
