@@ -272,7 +272,19 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 				return fmt.Errorf("subscription closed: %w", errNostrServed)
 			}
 			if evt != nil {
-				a.handleEvent(ctx, evt)
+				// #1663 case 1: dispatch asynchronously (whatsapp
+				// pattern). handleEvent -> manager.HandleInbound runs the
+				// ENTIRE agent run synchronously; calling it inline blocked
+				// this relayLoop, so a nostr-DM approval reply ("y") - a
+				// kind-4 DM only consumed by relayLoop - deadlocked the
+				// run it was supposed to answer (guaranteed with a single
+				// relay, possible once run messages occupy every loop),
+				// backpressured the unbuffered Events channel, and tripped
+				// the watchdog into a false reconnect after 5min.
+				evt := evt
+				safego.Go(fmt.Sprintf("nostr-inbound-%s", a.name), func() {
+					a.handleEvent(ctx, evt)
+				})
 			}
 			// Reset watchdog on any activity
 			watchdog.Reset(nostrWatchdogTimeout)
