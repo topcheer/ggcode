@@ -277,6 +277,40 @@ func TestExtractFileHintJSON(t *testing.T) {
 	}
 }
 
+// TestExtractFileHints pins #1480 case C: multi_file_read batches expand to
+// EVERY path; other tools fall back to the single-hint scan; malformed
+// input degrades to empty.
+func TestExtractFileHints(t *testing.T) {
+	// Batch expansion - all four files, in order.
+	batch := []byte(`{"files":[{"path":"/a.go","offset":1,"limit":10},{"path":"/b.go"},{"path":"/c.go"},{"path":"/d.go"}]}`)
+	got := extractFileHints("multi_file_read", batch)
+	want := []string{"/a.go", "/b.go", "/c.go", "/d.go"}
+	if len(got) != len(want) {
+		t.Fatalf("batch: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("batch[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// Non-batch tool: single-hint fallback (first "path" occurrence).
+	single := extractFileHints("read_file", []byte(`{"path":"/x.go","offset":5}`))
+	if len(single) != 1 || single[0] != "/x.go" {
+		t.Errorf("single: got %v, want [/x.go]", single)
+	}
+
+	// Malformed multi_file_read JSON degrades to empty (no panic).
+	if got := extractFileHints("multi_file_read", []byte(`{"files": not-json`)); got != nil {
+		t.Errorf("malformed: got %v, want nil", got)
+	}
+
+	// Empty batch array.
+	if got := extractFileHints("multi_file_read", []byte(`{"files":[]}`)); got != nil {
+		t.Errorf("empty batch: got %v, want nil", got)
+	}
+}
+
 // TestOverseer_FailedCommandNotProductive verifies that a failed run_command
 // does NOT reset itersSinceProductive. Previously, ALL run_command calls were
 // treated as productive, which suppressed drift detection when the agent was
