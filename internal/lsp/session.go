@@ -299,6 +299,13 @@ func (s *sessionClient) refreshDocument(ctx context.Context, uri string) error {
 	defer s.opMu.Unlock()
 	s.mu.Lock()
 	state, ok := s.docs[uri]
+	// #1654-1: the delete ran OUTSIDE the lock (mu released above) - a
+	// data race with setPublishedDiagnostics on the shared map that can
+	// go fatal under -race and corrupt concurrent readers. Read AND
+	// delete atomically in one critical section.
+	if ok {
+		delete(s.diagnostics, uri)
+	}
 	s.mu.Unlock()
 	if !ok {
 		return nil
@@ -308,7 +315,6 @@ func (s *sessionClient) refreshDocument(ctx context.Context, uri string) error {
 	// after an edit returned the PRE-EDIT set on first hit (didOpen already
 	// cleared; the asymmetry made the 'still reported after fix' race the
 	// MAIN path, not the out-of-order-push corner).
-	delete(s.diagnostics, uri)
 	if err := s.client.notify(ctx, "textDocument/didChange", map[string]any{
 		"textDocument": map[string]any{
 			"uri":     uri,
