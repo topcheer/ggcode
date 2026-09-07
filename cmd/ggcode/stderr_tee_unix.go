@@ -26,14 +26,14 @@ func teeStderrFD(w *os.File) (restore func(), ok bool) {
 	if err != nil {
 		return nil, false
 	}
-	if err := syscall.Dup2(int(w.Fd()), 2); err != nil {
+	if err := dupTo(int(w.Fd()), 2); err != nil {
 		_ = syscall.Close(origFD)
 		return nil, false
 	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			_ = syscall.Dup2(origFD, 2)
+			_ = dupTo(origFD, 2)
 			_ = syscall.Close(origFD)
 		})
 	}, true
