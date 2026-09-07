@@ -3,6 +3,7 @@ package knight
 import (
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // similarityTokenStopwords is a small English/code stopword list to reduce
@@ -32,8 +33,19 @@ func tokenizeForSimilarity(s string) map[string]struct{} {
 	// skill body (this repo's primary generation language) tokenized to
 	// EMPTY, fingerprint/jaccard scored 0, and A/B replay relevance was
 	// silently useless. CJK runes become single-rune tokens.
+	// #1622-A: the hand-written range covered ONLY Han U+4E00-9FFF -
+	// Korean scored 0 tokens (jaccard 0, dedup dead), Japanese kana
+	// U+3040-30FF dropped (fingerprints skewed), Ext-A/compat ideographs
+	// missed. Use the unicode tables (Han/Hangul/Hiragana/Katakana).
+	// #1622-B: full-width ASCII (U+FF01-FF5E, web/doc paste) was in NO
+	// range - "版本Ｖ１．２" and "版本" both fingerprinted {版,本} and
+	// scored 1.0 (distinct versions discarded as duplicates). Included.
 	for _, r := range lower {
-		if r >= 0x4E00 && r <= 0x9FFF { // CJK Unified Ideographs
+		if unicode.Is(unicode.Han, r) ||
+			unicode.Is(unicode.Hangul, r) ||
+			unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) ||
+			(r >= 0xFF01 && r <= 0xFF5E) {
 			tokens[string(r)] = struct{}{}
 		}
 	}
