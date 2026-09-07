@@ -15,11 +15,16 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	switch p.Action {
 	// ── Mouse ──
 	case "click":
-		return mouseClick(ctx, p.X, p.Y, "left", 1)
+		// #1665: the schema promises button applies to click actions; the
+		// hardcoded "left" silently ignored button="right" (which would
+		// open a context menu on Windows/Wayland but ACTIVATED on macOS -
+		// a destructive misclick surface). mouseClick already supports all
+		// buttons; wire the parameter through.
+		return mouseClick(ctx, p.X, p.Y, p.Button, 1)
 	case "double_click":
-		return mouseClick(ctx, p.X, p.Y, "left", 2)
+		return mouseClick(ctx, p.X, p.Y, p.Button, 2)
 	case "triple_click":
-		return mouseClick(ctx, p.X, p.Y, "left", 3)
+		return mouseClick(ctx, p.X, p.Y, p.Button, 3)
 	case "right_click":
 		return mouseClick(ctx, p.X, p.Y, "right", 1)
 	case "middle_click":

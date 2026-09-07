@@ -74,12 +74,12 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     "app": {"type": "string", "description": "Application name: to open the target with (for 'open'), or the app whose menu bar to use (for 'menu_select', default frontmost), or whose window to resize (for 'set_window_bounds', default frontmost)."},
     "button": {"type": "string", "enum": ["left", "right"], "default": "left", "description": "Mouse button for click actions."},
     "direction": {"type": "string", "enum": ["up", "down"], "default": "down", "description": "Scroll direction."},
-    "amount": {"type": "integer", "default": 1, "description": "Scroll amount (number of steps)."},
+    "amount": {"type": "integer", "default": 1, "minimum": 1, "description": "Scroll amount (number of steps)."},
     "to_x": {"type": "integer", "description": "Destination X for drag."},
     "to_y": {"type": "integer", "description": "Destination Y for drag."},
-    "duration": {"type": "integer", "default": 0, "description": "Duration in milliseconds: drag animation time, or hold_key hold time."},
-    "max_depth": {"type": "integer", "default": 8, "description": "Max depth for snapshot_ui accessibility tree traversal."},
-    "timeout_ms": {"type": "integer", "default": 5000, "description": "Timeout for wait_and_click (polls for element)."}
+    "duration": {"type": "integer", "default": 0, "minimum": 0, "description": "Duration in milliseconds: drag animation time, or hold_key hold time."},
+    "max_depth": {"type": "integer", "default": 8, "minimum": 1, "description": "Max depth for snapshot_ui accessibility tree traversal."},
+    "timeout_ms": {"type": "integer", "default": 5000, "minimum": 1, "description": "Timeout for wait_and_click (polls for element)."}
   },
   "required": ["action"]
 }`)

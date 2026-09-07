@@ -43,3 +43,28 @@ func TestDesktopControlName(t *testing.T) {
 		t.Fatalf("expected desktop_control, got %s", tool.Name())
 	}
 }
+
+// TestDesktopControlSchemaMinimumConstraints pins #1662 case 2 in #1665:
+// negative scroll amounts silently reversed direction (sign flip), negative
+// max_depth/timeout_ms were garbage-in. The schema now declares minimum on
+// amount/max_depth/timeout_ms; ValidateSchemaConstraints enforces them.
+func TestDesktopControlSchemaMinimumConstraints(t *testing.T) {
+	tool := DesktopControlTool{}
+	for _, tc := range []struct {
+		name string
+		args string
+	}{
+		{"negative scroll amount", `{"action": "scroll", "amount": -5}`},
+		{"zero scroll amount", `{"action": "scroll", "amount": 0}`},
+		{"negative max_depth", `{"action": "snapshot_ui", "max_depth": -1}`},
+		{"negative timeout_ms", `{"action": "wait_and_click", "timeout_ms": -100, "text": "Go"}`},
+	} {
+		if msg := ValidateSchemaConstraints(tool.Parameters(), json.RawMessage(tc.args)); msg == "" {
+			t.Errorf("%s: expected schema rejection, got none", tc.name)
+		}
+	}
+	// Valid values still pass.
+	if msg := ValidateSchemaConstraints(tool.Parameters(), json.RawMessage(`{"action": "scroll", "amount": 3}`)); msg != "" {
+		t.Errorf("valid scroll rejected: %s", msg)
+	}
+}

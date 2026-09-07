@@ -54,11 +54,12 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 	// ── Mouse ──
 	case "click":
 		// Move to coordinates first, then click — matching macOS behavior.
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "1")
+		// #1665: honor p.Button (xdotool button codes: 1=left 2=middle 3=right).
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", x11ButtonCode(p.Button))
 	case "double_click":
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "2", "1")
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "2", x11ButtonCode(p.Button))
 	case "triple_click":
-		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "3", "1")
+		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "--repeat", "3", x11ButtonCode(p.Button))
 	case "right_click":
 		return xdotoolResult(ctx, "mousemove", "--sync", fmt.Sprintf("%d", p.X), fmt.Sprintf("%d", p.Y), "click", "3")
 	case "middle_click":
@@ -539,6 +540,20 @@ func executeDesktopControlWayland(ctx context.Context, p desktopParams) (Result,
 		return runAppResult(ctx, fields[0], fields[1:]...)
 	default:
 		return Result{}, fmt.Errorf("unknown action: %s", p.Action)
+	}
+}
+
+// x11ButtonCode maps the schema's button enum to X11/xdotool button codes
+// (1=left, 2=middle, 3=right). Unknown values default to left, mirroring
+// the schema's "default": "left".
+func x11ButtonCode(button string) string {
+	switch button {
+	case "right":
+		return "3"
+	case "middle":
+		return "2"
+	default:
+		return "1"
 	}
 }
 
