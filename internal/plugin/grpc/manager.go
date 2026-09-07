@@ -91,6 +91,26 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 
 	toolClient := raw.(pb.ToolServiceClient)
 
+	// #1630-1: retire the OLD same-named instance BEFORE registering the
+	// new adapters. The old order registered first - a name collision
+	// errored (warning only, new tool lost, new process started for
+	// nothing) and THEN killed the old process, leaving the registry
+	// holding adapters that point at a DEAD process: every tool of the
+	// plugin failed until restart ("leaked but working" regressed to
+	// "all dead"). Unregister the old adapters first (the API existed
+	// but was never called), then kill, then register fresh.
+	m.mu.Lock()
+	if old, ok := m.plugins[cfg.Name]; ok && old != nil && old.Client != nil {
+		m.mu.Unlock()
+		debug.Log("plugin-grpc", "config %q reloaded; retiring previous instance before re-registering", cfg.Name)
+		for _, a := range old.Adapters {
+			registry.Unregister(a.Name())
+		}
+		old.Client.Kill()
+	} else {
+		m.mu.Unlock()
+	}
+
 	// List tools from the plugin
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -123,12 +143,15 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 	// was NEVER killed (go-plugin does not reap children), orphaning the
 	// subprocess while its adapter (and any non-colliding tool names)
 	// stayed registered against an unmanaged process.
-	if old, ok := m.plugins[cfg.Name]; ok && old != inst {
+	// #1597-A orphan cleanup moved ABOVE registration (#1630-1): the
+	// old instance is already unregistered and killed by the time the
+	// new adapters register, so this branch is now a no-op guard.
+	if old, ok := m.plugins[cfg.Name]; ok && old != inst && old != nil && old.Client != nil {
 		m.mu.Unlock()
-		debug.Log("plugin-grpc", "config %q reloaded; killing previous plugin instance", cfg.Name)
-		if old.Client != nil {
-			old.Client.Kill()
+		for _, a := range old.Adapters {
+			registry.Unregister(a.Name())
 		}
+		old.Client.Kill()
 		m.mu.Lock()
 	}
 	m.plugins[cfg.Name] = inst
