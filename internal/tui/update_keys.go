@@ -13,10 +13,23 @@ import (
 // anyPanelOpen reports whether any overlay panel currently owns the UI
 // (#1772): global keys that switch sessions must yield to the panel
 // dispatch when one is open, or the panel leaks onto the new session.
+//
+// #1880 case 1: delegate to hasActivePanel (model.go) as the single
+// source of truth for panel state. The hand-enumerated list here covered
+// only 9 states while the dispatch chain below handles ~22 more
+// (model/qr/tg/discord/feishu/slack/dingtalk/wechat/wecom/mattermost/
+// matrix/signal/irc/nostr/twitch/whatsapp/im/knight/skills/stats/hooks/
+// inspector/lanChat/initPrompt) - for every diff-set panel the cycle
+// keys still switched sessions and leaked the panel, the exact bug this
+// guard exists to prevent. hasActivePanel stays in sync with
+// closeActivePanel's switch (audited #904); the four states it does not
+// model are appended here.
 func anyPanelOpen(m Model) bool {
-	return m.providerPanel != nil || m.qqPanel != nil || m.mcpPanel != nil ||
-		m.tmuxMenuOpen || m.impersonatePanel != nil || m.pcPanel != nil ||
-		m.streamPanel != nil || len(m.langOptions) > 0 || m.pendingQuestionnaire != nil
+	return m.hasActivePanel() ||
+		m.tmuxMenuOpen ||
+		m.pendingQuestionnaire != nil ||
+		m.qrOverlay != nil ||
+		m.initPromptActive
 }
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {

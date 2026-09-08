@@ -4065,12 +4065,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// the #1153 registry: attribute only jobs registered as
 				// verification (start_command itself still excluded -
 				// launch is not an outcome).
+				// #1880 case 2: these tools also legally return NON-terminal
+				// results (poll timeout -> "Still running..." with
+				// IsError=false). premature_success filters those with
+				// psTerminalVerifyOutcome before grading; without the same
+				// gate here, a partial output counted as GREEN and RESET
+				// the spiral (a green run clears pendingEdit+errorSequence),
+				// blinding the detector when the job later genuinely failed.
 				jobID, _ := psArgs["job_id"].(string)
 				if jobID == "" {
 					jobID, _ = psArgs["task_id"].(string)
 				}
 				if jobID != "" && a.prematureSuccess.psJobIsVerify(jobID) {
-					a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
+					if terminal, _ := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal {
+						a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
+					}
 				}
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
