@@ -629,9 +629,9 @@ func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 		return err
 	}
 	k.index.Invalidate()
-	k.clearStagingNotification(s.Name)
+	k.clearStagingNotification(s.Scope + ":" + s.Name)
 	if k.emitGate != nil {
-		k.emitGate.reset(s.Name)
+		k.emitGate.reset(s.Scope + ":" + s.Name)
 	}
 	_ = k.RecordSemanticMemory("skill-promoted",
 		fmt.Sprintf("promoted skill %s — %s", s.Name, s.Meta.Description),
@@ -668,9 +668,9 @@ func (k *Knight) rejectStagingEntry(s *SkillEntry) error {
 		return err
 	}
 	k.index.Invalidate()
-	k.clearStagingNotification(s.Name)
+	k.clearStagingNotification(s.Scope + ":" + s.Name)
 	if k.emitGate != nil {
-		k.emitGate.reset(s.Name)
+		k.emitGate.reset(s.Scope + ":" + s.Name)
 	}
 	if k.rejects != nil {
 		_ = k.rejects.Append(rejectFeedbackEntry{
@@ -845,7 +845,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 					debug.Log("knight", "reject staging skill %s failed: %v", s.Name, err)
 				} else {
 					k.index.Invalidate()
-					k.clearStagingNotification(s.Name)
+					k.clearStagingNotification(s.Scope + ":" + s.Name)
 					delete(k.stagingFailCount, s.Scope+":"+s.Name)
 					if k.rejects != nil {
 						_ = k.rejects.Append(rejectFeedbackEntry{
@@ -860,7 +860,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 						fmt.Sprintf("auto-rejected staging skill %s after %d validation failures: %v", s.Name, knightStagingMaxValidationFails, result.Errors),
 						[]string{s.Scope + ":" + s.Name}, s.Path)
 					k.emitReportKeyed(fmt.Sprintf("🗑️ Auto-rejected staging skill %s: failed validation %d times (%v)",
-						s.Name, knightStagingMaxValidationFails, result.Errors), s.Name, EmitSeverityNotice)
+						s.Name, knightStagingMaxValidationFails, result.Errors), s.Scope+":"+s.Name, EmitSeverityNotice)
 				}
 			}
 			continue
@@ -880,9 +880,9 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 
 		if k.cfg.TrustLevel == "auto" {
 			if allowed, reason := canAutoPromoteStagingSkill(s, result, isRevision); !allowed {
-				if k.markStagingNotified(s.Name) {
+				if k.markStagingNotified(s.Scope + ":" + s.Name) {
 					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",
-						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
+						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Scope+":"+s.Name, EmitSeverityActionRequired)
 				}
 				continue
 			}
@@ -896,9 +896,9 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 				continue
 			}
 			if allowed, reason := k.evaluateAutoPromoteCandidate(ctx, s); !allowed {
-				if k.markStagingNotified(s.Name) {
+				if k.markStagingNotified(s.Scope + ":" + s.Name) {
 					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",
-						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
+						s.Name, s.Meta.Description, reason, s.Name, s.Name), s.Scope+":"+s.Name, EmitSeverityActionRequired)
 				}
 				continue
 			}
@@ -908,9 +908,9 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 				continue
 			}
 			k.index.Invalidate()
-			k.clearStagingNotification(s.Name)
+			k.clearStagingNotification(s.Scope + ":" + s.Name)
 			if k.emitGate != nil {
-				k.emitGate.reset(s.Name)
+				k.emitGate.reset(s.Scope + ":" + s.Name)
 			}
 			k.emitReport(fmt.Sprintf("✅ Skill auto-promoted: %s (%s)", s.Name, s.Meta.Description))
 			_ = k.RecordSemanticMemory("skill-auto-promoted",
@@ -918,9 +918,9 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 				[]string{s.Scope + ":" + s.Name}, s.Path)
 		} else {
 			// For "staged" trust level, notify user once per skill
-			if k.markStagingNotified(s.Name) {
+			if k.markStagingNotified(s.Scope + ":" + s.Name) {
 				k.emitReportKeyed(fmt.Sprintf("📝 New skill candidate: %s\n%s\n👉 /knight approve %s to promote / /knight reject %s to decline",
-					s.Name, s.Meta.Description, s.Name, s.Name), s.Name, EmitSeverityActionRequired)
+					s.Name, s.Meta.Description, s.Name, s.Name), s.Scope+":"+s.Name, EmitSeverityActionRequired)
 			}
 		}
 	}
