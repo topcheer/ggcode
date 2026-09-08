@@ -815,10 +815,43 @@ CachedSessionSnapshot _coalesceCachedSnapshotForPersistence({
   }
   if (!_shouldPreserveExistingCachedSnapshot(
       existing: existing, candidate: candidate)) {
-    return candidate;
+    // #1870 case 1: the wholesale replace used to drop the existing
+    // side's ANONYMOUS messages (empty id, never deduped) - reachable
+    // when both snapshots are degraded (no sessionInfo) and diverged
+    // across the fg/bg projection split. Union the existing anonymous
+    // messages into the candidate instead of discarding them.
+    final candidateAnonKeys = <String>{};
+    for (final m in candidate.messages) {
+      if (m.id.isEmpty) {
+        candidateAnonKeys.add(_anonymousMessageKey(m));
+      }
+    }
+    final lostAnonymous = <ChatMessage>[];
+    for (final m in existing.messages) {
+      if (m.id.isEmpty && !candidateAnonKeys.contains(_anonymousMessageKey(m))) {
+        lostAnonymous.add(m);
+      }
+    }
+    if (lostAnonymous.isEmpty) {
+      return candidate;
+    }
+    return CachedSessionSnapshot(
+      messages: List<ChatMessage>.from(candidate.messages)..addAll(lostAnonymous),
+      subagents: candidate.subagents,
+      sessionInfo: candidate.sessionInfo ?? existing.sessionInfo,
+      agentStatus: candidate.agentStatus,
+      agentStatusMessage: candidate.agentStatusMessage,
+      lastEventId: candidate.lastEventId,
+      authorityEpoch: candidate.authorityEpoch,
+    );
   }
   return _mergeCachedSnapshots(existing: existing, candidate: candidate);
 }
+
+/// Identity key for an anonymous (id-less) message - kind+text+time, so
+/// the anonymous-union merge can skip duplicates without ids.
+String _anonymousMessageKey(ChatMessage m) =>
+    '${m.kind}|${m.text}|${m.time.toIso8601String()}';
 
 bool _shouldPreserveExistingCachedSnapshot({
   required CachedSessionSnapshot existing,
@@ -869,7 +902,20 @@ CachedSessionSnapshot _mergeCachedSnapshots({
       mergedMessages.add(message);
     }
   }
-  mergedMessages.addAll(appendedAnonymous);
+  // #1870 case 2: the candidate's anonymous messages used to be appended
+  // AFTER all named messages - but streamed anonymous and named messages
+  // interleave in real event order. Insert each one at its time position
+  // (insertion keeps the merge stable for equal timestamps).
+  for (final anon in appendedAnonymous) {
+    var insertAt = mergedMessages.length;
+    for (var i = 0; i < mergedMessages.length; i++) {
+      if (anon.time.isBefore(mergedMessages[i].time)) {
+        insertAt = i;
+        break;
+      }
+    }
+    mergedMessages.insert(insertAt, anon);
+  }
 
   final mergedSubagents = Map<String, SubagentInfo>.from(existing.subagents)
     ..addAll(candidate.subagents);
