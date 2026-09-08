@@ -190,3 +190,18 @@ func TestNumericConflictSetSemantics(t *testing.T) {
 		t.Fatal("each side holding a number the other lacks must conflict")
 	}
 }
+
+// TestClaimsConflict_PolarityGate pins #1777 case 2: an affirmative and a
+// negated claim only conflict when they target NEARLY the same thing.
+// "use git" vs "never use git rebase" (jaccard 0.5) is fully compatible
+// and must NOT be a conflict; "use git" vs "don't use git" must be.
+func TestClaimsConflict_PolarityGate(t *testing.T) {
+	// Compatible: subset domains, opposite polarity.
+	if claimsConflict("use git for version control", "never use git rebase") {
+		t.Fatal("\"use git\" vs \"never use git rebase\" is compatible (subset domain) - must not conflict")
+	}
+	// True conflict: same target, opposite polarity ("~" form).
+	if !claimsConflict("use git for version control", "~use git for version control") {
+		t.Fatal("identical target with opposite polarity must conflict")
+	}
+}

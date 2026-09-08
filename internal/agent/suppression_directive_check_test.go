@@ -226,3 +226,28 @@ func TestIsBareSuppressionTypeIgnoreWithExplanation(t *testing.T) {
 		t.Fatal("bare type: ignore with nothing after must stay bare")
 	}
 }
+
+// TestCheckSuppressionDirectives_StringLiteralNotCounted pins #1778 case 3:
+// a directive keyword inside a string literal ("eslint-disable" as a banner
+// value) must not count - the old counter produced a warning with no line
+// to point at.
+func TestCheckSuppressionDirectives_StringLiteralNotCounted(t *testing.T) {
+	old := "const banner = 'x';\n"
+	new_ := "const banner = 'eslint-disable';\n"
+	warnings := checkSuppressionDirectives("app.js", old, new_)
+	if len(warnings) != 0 {
+		t.Fatalf("string-literal keyword must not warn, got: %v", warnings)
+	}
+}
+
+// TestCheckSuppressionDirectives_VueSfcCovered pins #1778 case 4: .vue
+// single-file components carry eslint-disable inside <script> - previously
+// excluded entirely (LangMarkup).
+func TestCheckSuppressionDirectives_VueSfcCovered(t *testing.T) {
+	old := "<script>\nexport default {}\n</script>\n"
+	new_ := "<script>\n// eslint-disable\nexport default {}\n</script>\n"
+	warnings := checkSuppressionDirectives("App.vue", old, new_)
+	if len(warnings) == 0 {
+		t.Fatal(".vue <script> eslint-disable must be detected")
+	}
+}
