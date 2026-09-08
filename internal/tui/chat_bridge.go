@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -381,7 +383,66 @@ func suppressToolResult(toolName, rawArgs, result string, isError bool) string {
 			return present.Summary
 		}
 	}
-	return result
+	return collapseGuidanceHints(result)
+}
+
+// guidanceTagLine matches the head line of an injected agent-guidance block
+// ("[ERROR-RUSH] ...", "[TIP] ..."). Tags are 2+ uppercase/hyphen chars.
+var guidanceTagLine = regexp.MustCompile(`^\[[A-Z][A-Z0-9-]{1,}\]\s`)
+
+// collapseGuidanceHints folds TRAILING agent-guidance blocks - appended to
+// tool results by Agent.appendGuidance as "\n\n[TAG] ..." - into a one-line
+// summary for the TUI chat list. The model still receives the full text in
+// its own context; this is a display-layer collapse only, so error-recovery
+// capability is unaffected. Only trailing blocks are folded: real tool
+// output (logs, compiler text) can legitimately contain [UPPERCASE] lines
+// mid-body, but injected guidance is always appended at the end, so folding
+// from the tail backwards cannot clip legitimate content. When everything
+// folds away (guidance-only result), the summary line is kept so the user
+// still sees that the tool produced output.
+func collapseGuidanceHints(result string) string {
+	paras := strings.Split(result, "\n\n")
+	// A single paragraph cannot be trailing-injected guidance with a
+	// preceding body: appendGuidance joins with "\n\n", so guidance always
+	// yields 2+ paragraphs. Skipping single paragraphs also protects real
+	// output that merely starts with a tagged line ("[INFO] server started").
+	if len(paras) < 2 {
+		return result
+	}
+	end := len(paras)
+	for end > 0 {
+		firstLine := paras[end-1]
+		if nl := strings.IndexByte(firstLine, '\n'); nl >= 0 {
+			firstLine = firstLine[:nl]
+		}
+		if !guidanceTagLine.MatchString(strings.TrimRight(firstLine, " \t\r")) {
+			break
+		}
+		end--
+	}
+	folded := len(paras) - end
+	if folded == 0 {
+		return result
+	}
+	var tags []string
+	for _, p := range paras[end:] {
+		firstLine := p
+		if nl := strings.IndexByte(firstLine, '\n'); nl >= 0 {
+			firstLine = firstLine[:nl]
+		}
+		if m := guidanceTagLine.FindStringSubmatch(strings.TrimRight(firstLine, " \t\r")); m != nil {
+			tag := strings.Trim(m[0], " []")
+			if !slices.Contains(tags, tag) {
+				tags = append(tags, tag)
+			}
+		}
+	}
+	summary := fmt.Sprintf("ⓘ %d agent guidance block(s) folded (model sees full text): %s",
+		folded, strings.Join(tags, ", "))
+	if end == 0 {
+		return summary
+	}
+	return strings.Join(paras[:end], "\n\n") + "\n\n" + summary
 }
 
 func formatTeammateSpawnResult(result string) string {
