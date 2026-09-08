@@ -3,8 +3,10 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -460,5 +462,23 @@ func TestCopyRecursiveSymlinkCycle(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(filepath.Join(dst, "f.txt")); string(data) != "x" {
 		t.Error("regular file content lost")
+	}
+}
+
+// TestIsCrossDeviceErrorForms pins #1684 case 2: errno check plus the
+// Windows ERROR_NOT_SAME_DEVICE text (which mentions neither "cross-device"
+// nor "EXDEV") so the copy+remove fallback fires there too.
+func TestIsCrossDeviceErrorForms(t *testing.T) {
+	if !isCrossDeviceError(syscall.EXDEV) {
+		t.Fatal("errno EXDEV must be recognized")
+	}
+	if !isCrossDeviceError(fmt.Errorf("rename /a /b: The system cannot move the file to a different disk drive.")) {
+		t.Fatal("Windows different-disk-drive text must be recognized")
+	}
+	if !isCrossDeviceError(fmt.Errorf("rename /a /b: invalid cross-device link")) {
+		t.Fatal("Linux cross-device text must stay recognized")
+	}
+	if isCrossDeviceError(nil) || isCrossDeviceError(fmt.Errorf("permission denied")) {
+		t.Fatal("unrelated errors must not match")
 	}
 }
