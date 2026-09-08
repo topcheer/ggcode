@@ -896,22 +896,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 		return fmt.Sprintf("✅ Config updated: %s (%s) → %s", resolved.VendorName, resolved.EndpointName, resolved.Model), nil
 	})
-	// Headless model discovery: the TUI populates ep.Models lazily via the
-	// provider panel (SetEndpointModels), but the daemon has no panel - its
-	// ep.Models stays empty, so agentruntime.VisionTurnModel can never find
-	// a vision candidate and image-bearing IM turns 400 in a retry loop.
-	// Discover once at startup (best-effort; failure only degrades the
-	// vision fallback, never blocks the daemon).
-	if resolved, _, err := agentruntime.ResolveCurrentSelection(cfg); err == nil {
-		dctx, dcancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if models, derr := provider.DiscoverModels(dctx, resolved); derr == nil && len(models) > 0 {
-			_ = cfg.SetEndpointModels(cfg.Vendor, cfg.Endpoint, models)
-			debug.Log("daemon", "discovered %d models for %s/%s (vision fallback enabled)", len(models), cfg.Vendor, cfg.Endpoint)
-		} else if derr != nil {
-			debug.Log("daemon", "model discovery failed - vision fallback degraded to text-only: %v", derr)
-		}
-		dcancel()
-	}
 	// Turn-scoped vision fallback: image-bearing turns on non-vision models
 	// switch to a comparable vision model for that turn only. switchFn keeps
 	// the switch in memory - no session persistence, no AppendMetaToDisk.

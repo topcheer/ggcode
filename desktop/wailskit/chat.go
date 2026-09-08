@@ -4446,7 +4446,15 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		debug.Log("chat", "vision turn model rejected image content, retrying text-only: %v", err)
 		restoreVision()
 		textOnly := stripImageBlocks(content)
-		if len(textOnly) > 0 {
+		if len(textOnly) == 0 {
+			// Pure-image content with no text to retry: keep a placeholder so
+			// the agent can still answer (e.g. explaining the active model
+			// lacks vision) instead of surfacing a raw 400 from a text-only
+			// endpoint. Desktop images are in-memory blobs without a local
+			// path, so there is nothing for read-file/OCR tools to inspect.
+			textOnly = []provider.ContentBlock{provider.TextBlock("[image omitted: the active model has no vision support]")}
+		}
+		{
 			retryErr := b.agent.RunStreamWithContent(ctx, textOnly, func(ev provider.StreamEvent) {
 				b.emitIfCurrent(runGen, ev)
 			})

@@ -32,18 +32,21 @@ func VisionTurnModel(cfg *config.Config) string {
 // SelectVisionModel picks a vision-capable model from the given model list
 // for a turn-scoped switch when the user's model cannot accept images.
 //
-// Selection rule ("comparable context window"): a candidate qualifies only
-// when its inferred context window is >= referenceWindow (typically the
-// user's active model window) - otherwise the existing conversation would
-// overflow the smaller window and the request would likely fail. Among
-// qualifying candidates the smallest window wins (closest to the user's
-// model, minimizing cost/latency jump). Models with unknown windows are
-// treated as the 128k default. Returns "" when no candidate qualifies;
-// callers should then keep the current model and strip images instead.
+// Selection rule ("comparable context window"): among candidates, prefer
+// those whose inferred context window is >= referenceWindow (typically the
+// user's active model window) - smallest qualifying window wins. When NO
+// candidate meets the bar, the largest-window vision candidate wins as a
+// last resort: a slightly smaller window may still hold the session, and a
+// genuine overflow degrades via the 400 text-only fallback - rejecting the
+// switch outright is what fed the image-400 retry loop. Models with unknown
+// windows are treated as the 128k default. Returns "" only when the list
+// has no vision-capable model at all.
 func SelectVisionModel(models []string, referenceWindow int) string {
 	const unknownWindowFallback = 128000
 	best := ""
 	bestWindow := 0
+	lastResort := ""
+	lastResortWindow := 0
 	for _, m := range models {
 		m = strings.TrimSpace(m)
 		if m == "" || !config.ModelSupportsVision(m) {
@@ -53,12 +56,16 @@ func SelectVisionModel(models []string, referenceWindow int) string {
 		if w <= 0 {
 			w = unknownWindowFallback
 		}
-		if referenceWindow > 0 && w < referenceWindow {
-			continue // too small - the conversation would not fit
-		}
-		if best == "" || w < bestWindow {
+		if (referenceWindow <= 0 || w >= referenceWindow) && (best == "" || w < bestWindow) {
 			best, bestWindow = m, w
+			continue
+		}
+		if w > lastResortWindow {
+			lastResort, lastResortWindow = m, w
 		}
 	}
-	return best
+	if best != "" {
+		return best
+	}
+	return lastResort
 }
