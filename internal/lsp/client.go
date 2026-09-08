@@ -705,7 +705,10 @@ func retryEmptySliceResult[T any](ctx context.Context, session *sessionClient, c
 	}
 	for i := 0; i < csharpWarmupRetryAttempts; i++ {
 		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
-			return result, nil
+			// #1586-D (sibling completion, #1766 case 1): return the context
+			// error - (result, nil) made a cancelled call indistinguishable
+			// from a legitimately-empty result for all six slice callers.
+			return result, err
 		}
 		next, err := call()
 		if err != nil {
@@ -725,7 +728,8 @@ func retryCallHierarchyItems(ctx context.Context, session *sessionClient, call f
 	}
 	for i := 0; i < csharpWarmupRetryAttempts; i++ {
 		if err := sleepWithContext(ctx, csharpWarmupRetryDelay); err != nil {
-			return result, nil
+			// #1586-D sibling completion (#1766 case 1): surface cancellation.
+			return result, err
 		}
 		next, err := call()
 		if err != nil {
