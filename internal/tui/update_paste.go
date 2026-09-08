@@ -16,6 +16,13 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 	if !m.inputReady {
 		return m, spinnerCmd
 	}
+	// #1775 case 1 (tmux sibling): the tmux menu intercepts KEY presses
+	// (update_keys L31) but had no paste gate - a paste while the menu is
+	// open fell through to whatever input lies beneath. The menu is
+	// transient; dropping the paste matches the key-channel semantics.
+	if m.tmuxMenuOpen {
+		return m, nil
+	}
 	// Paste is allowed while loading — the agent loop supports
 	// interleaving user messages mid-run.
 	// Forward paste to active panel inputs.
@@ -192,7 +199,16 @@ func (m Model) handlePaste(msg tea.PasteMsg, spinnerCmd tea.Cmd) (tea.Model, tea
 		return m, nil
 	}
 	// Forward paste to questionnaire input if active.
-	if m.pendingQuestionnaire != nil && m.pendingQuestionnaire.activeQuestionAllowsFreeform() {
+	if m.pendingQuestionnaire != nil {
+		// #1775 case 1: key presses are intercepted by handleQuestionnaireKey
+		// whenever a questionnaire is active, but PasteMsg had no such gate
+		// - pasted text silently fell through to the (fully covered) main
+		// input and haunted the NEXT message after the questionnaire closed.
+		// Gate pastes the same way: route when the active question allows
+		// freeform, drop otherwise.
+		if !m.pendingQuestionnaire.activeQuestionAllowsFreeform() {
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.pendingQuestionnaire.input, cmd = m.pendingQuestionnaire.input.Update(msg)
 		m.pendingQuestionnaire.saveActiveQuestionInput()

@@ -12,7 +12,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/debug"
-	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tmux"
 )
@@ -215,18 +214,19 @@ func (m *Model) enterTmuxSession(sessionName, setupLayout string) tea.Cmd {
 		// With per-message persistence (SetPersistHandler), all messages are
 		// already on disk. Only flush meta for JSONLStore; full Save would
 		// race with concurrent onPersist appends.
+		// #1775 case 2: this runs on the QUIT path - the old fire-and-forget
+		// safego.Go meant tea.Quit could fire before the save completed, and
+		// a slow disk lost the meta (or the whole Save) while tmux re-exec
+		// immediately read the stale file for resume. Synchronous here: the
+		// cost is one blocking write at exit.
 		if jsonlStore, ok := store.(*session.JSONLStore); ok {
-			safego.Go("tui.tmux.metaSave", func() {
-				if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
-					debug.Log("tui", "tmux metaSave: %v", err)
-				}
-			})
+			if err := jsonlStore.AppendMetaToDisk(ses); err != nil {
+				debug.Log("tui", "tmux metaSave: %v", err)
+			}
 		} else {
-			safego.Go("tui.tmux.sessionSave", func() {
-				if err := store.Save(ses); err != nil {
-					debug.Log("tui", "tmux sessionSave: %v", err)
-				}
-			})
+			if err := store.Save(ses); err != nil {
+				debug.Log("tui", "tmux sessionSave: %v", err)
+			}
 		}
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Entering tmux session %q and resuming session %s...", sessionName, m.session.ID))
