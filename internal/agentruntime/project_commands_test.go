@@ -276,3 +276,21 @@ tasks:
 		t.Error("vars-block member must not match outside tasks:")
 	}
 }
+
+// #1885 case 2: column-0 comments are legal inside a YAML tasks: block and
+// must not end it; CRLF files must detect targets at all.
+func TestTaskfileHasTargetCommentAndCRLF(t *testing.T) {
+	tf := "tasks:\n  build:\n    cmds:\n      - echo hi\n# column-zero comment inside the block\n  test:\n    cmds:\n      - echo test\n"
+	if !taskfileHasTarget(tf, "test") {
+		t.Error("task after a column-0 comment inside tasks: must still be detected")
+	}
+	crlf := "version: '3'\r\ntasks:\r\n  build:\r\n    cmds:\r\n      - echo hi\r\n"
+	if !taskfileHasTarget(crlf, "build") {
+		t.Error("CRLF taskfile must detect targets (tasks:\\r never matched)")
+	}
+	// Blank CRLF lines must not reset block state mid-tasks.
+	midBlank := "tasks:\r\n  build:\r\n\r\n  test:\r\n"
+	if !taskfileHasTarget(midBlank, "test") {
+		t.Error("blank CRLF line must not end the tasks: block")
+	}
+}

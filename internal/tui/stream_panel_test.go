@@ -376,3 +376,31 @@ func TestStreamPanelVisiblePresetMapping(t *testing.T) {
 		t.Fatal("unreachable")
 	}
 }
+
+// TestStreamPanelSyncSelectionUsesVisiblePresets pins #1885 case 1:
+// syncStreamPanelSelection was the fifth consumer #1759 claimed to have
+// converted (its diff had no hunk there) - with presets[0] hidden and the
+// cursor on the first visible preset row, the prefilled URL must be the
+// VISIBLE preset's URL, not raw Presets[0]'s.
+func TestStreamPanelSyncSelectionUsesVisiblePresets(t *testing.T) {
+	m := newTestStreamModel(t)
+	m.openStreamPanel()
+	p := m.streamPanel
+	p.targets = []stream.StreamTarget{{Name: "youtube", URL: "u", Key: "k", Enabled: true}}
+	vis := p.visiblePresets()
+	if len(vis) == 0 || len(stream.Presets) < 2 {
+		t.Fatal("fixture needs a hidden first preset plus a visible one")
+	}
+	if vis[0].ID == stream.Presets[0].ID {
+		t.Fatal("fixture assumption broken: first visible preset must differ from raw Presets[0]")
+	}
+	// Cursor on the first preset row (after the single target row).
+	p.selectedIndex = len(p.targets)
+	p.urlInput.SetValue("")
+	m.streamPanel = p
+	m.syncStreamPanelSelection()
+	if got := m.streamPanel.urlInput.Value(); got != vis[0].URL {
+		t.Fatalf("prefilled URL = %q (raw Presets[0] URL %q); want visible preset URL %q",
+			got, stream.Presets[0].URL, vis[0].URL)
+	}
+}

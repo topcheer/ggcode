@@ -342,8 +342,12 @@ func (m *Model) syncStreamPanelSelection() {
 		p.urlInput.SetValue(p.targets[p.selectedIndex].URL)
 	} else if p.selectedIndex < p.totalItems()-1 {
 		presetIdx := p.selectedIndex - len(p.targets)
-		if presetIdx < len(stream.Presets) {
-			p.urlInput.SetValue(stream.Presets[presetIdx].URL)
+		// #1885 case 1: the fifth consumer #1759 claimed to have
+		// converted - index the VISIBLE preset list, not the raw array,
+		// or a hidden presets[0] shifts the URL by one.
+		vis := p.visiblePresets()
+		if presetIdx < len(vis) {
+			p.urlInput.SetValue(vis[presetIdx].URL)
 			p.keyInput.SetValue("")
 		}
 	}

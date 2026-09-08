@@ -204,11 +204,20 @@ func taskfileHasTarget(content, task string) bool {
 	// top-level tasks: block are targets. Track the block, not the shape.
 	inTasks := false
 	for _, line := range strings.Split(content, "\n") {
-		if line == "" {
+		// #1885 case 2: strip CR first so CRLF files work at all
+		// (`tasks:\r` never matched, and a bare `\r` line would reset
+		// the block state mid-tasks).
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		indented := line[0] == ' ' || line[0] == '\t'
 		if !indented {
+			// #1885 case 2: a column-0 comment is legal INSIDE a YAML
+			// block and must not end it.
+			if line[0] == '#' {
+				continue
+			}
 			// Top-level key: enter tasks:, leave everything else.
 			t := strings.TrimRight(line, ": \t")
 			inTasks = strings.TrimSpace(t) == "tasks"
