@@ -389,11 +389,14 @@ func registerAllChecks() {
 		// check purge even though its own docs call mixed indentation
 		// "guaranteed TabError in Python 3" - a crash-class defect squarely
 		// under the purge's stated retention standard. checkPythonIndentation
-		// takes (filePath, content); adapt to the three-arg stringCheck shape
-		// (oldContent is irrelevant to indentation validity).
-		{Name: "python-indentation", Langs: []Language{LangPython}, Severity: SeverityCritical, Run: stringCheck(func(filePath, _, content string) string {
-			return checkPythonIndentation(filePath, content)
-		})},
+		// takes (filePath, content).
+		// #1865 case 1: gate with deltaGateNew like the other new-content-only
+		// checks (#601 W4) - the previous stringCheck adapter dropped
+		// oldContent, so ANY unrelated small edit to a .py file with
+		// pre-existing mixed indentation re-reported the same Critical
+		// warning on every save (the exact context-pollution regression
+		// W4's gate eliminated for the structural checks).
+		{Name: "python-indentation", Langs: []Language{LangPython}, Severity: SeverityCritical, Run: deltaGateNew(checkPythonIndentation)},
 		{Name: "sensitive-json", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSensitiveJSONExposure)},
 		{Name: "hardcoded-secret", Severity: SeverityCritical, Run: sliceCheck(checkHardcodedSecrets)},
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkInsecurePatterns)},

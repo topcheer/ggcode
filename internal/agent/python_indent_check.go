@@ -19,11 +19,17 @@ package agent
 //   - Aider: no Python indentation validation
 //   - OpenHands/Cline: post-edit test execution catches it (slow feedback loop)
 //
-// This module provides a zero-dependency, always-available check that catches the
-// two most impactful issues:
+// This module provides a zero-dependency, always-available check that catches
+// the most impactful issue:
 //   1. MIXED TABS AND SPACES in the same indentation run (PEP 8 violation,
-//      guaranteed TabError in Python 3)
-//   2. TRAILING WHITESPACE on code lines that could mask indentation issues
+//      can cause TabError in Python 3)
+//
+// (#1865 case 3: the header used to also advertise TRAILING WHITESPACE
+// detection, which was never implemented - dead doc removed.)
+//
+// Lines inside open brackets (continuation lines, where indentation has no
+// syntactic meaning) and lines inside triple-quoted strings (string data,
+// not indentation) are excluded (#1865 case 2).
 //
 // The check runs after successful file writes on .py/.pyw files, is <1ms for
 // typical files, and is non-blocking.
@@ -57,9 +63,30 @@ func checkPythonIndentation(filePath, content string) string {
 	mixedCount := 0
 	mixedLines := []int{}
 	lineNum := 0
+	// #1865 case 2: bracket depth and triple-quote state, carried across
+	// lines, separate CODE indentation (significant) from continuation
+	// lines inside brackets and string DATA inside triple quotes (neither
+	// is indentation). A trailing backslash also makes the next line a
+	// continuation.
+	depth := 0
+	inTriple := ""
+	contPrev := false
 
 	for _, rawLine := range strings.Split(content, "\n") {
 		lineNum++
+		inStringAtStart := inTriple != ""
+		depthAtStart := depth
+		depth, inTriple = scanPythonLogicalState(rawLine, depth, inTriple)
+		contNow := strings.HasSuffix(rawLine, "\\")
+
+		// Indent is checkable only on lines that open a logical line of
+		// their own: not string data, not a bracket/backslash continuation.
+		checkable := !inStringAtStart && depthAtStart == 0 && !contPrev
+		contPrev = contNow
+		if !checkable {
+			continue
+		}
+
 		stripped := strings.TrimLeft(rawLine, " \t")
 
 		// Skip blank lines and comment-only lines (no indentation significance).
@@ -74,8 +101,6 @@ func checkPythonIndentation(filePath, content string) string {
 		}
 
 		// Check for mixed tabs and spaces in the indentation run.
-		// This is a guaranteed TabError in Python 3 when both appear in the
-		// same indentation sequence.
 		hasTab := strings.Contains(indent, "\t")
 		hasSpace := strings.Contains(indent, " ")
 		if hasTab && hasSpace {
@@ -94,17 +119,74 @@ func checkPythonIndentation(filePath, content string) string {
 
 	var msg string
 	if len(mixedLines) == 1 {
-		msg = fmt.Sprintf("line %d: mixed tabs and spaces in indentation - this causes TabError in Python 3. Use only spaces (PEP 8 recommends 4 spaces per level).",
+		msg = fmt.Sprintf("line %d: mixed tabs and spaces in indentation - this can cause TabError/IndentationError in Python 3. Use only spaces (PEP 8 recommends 4 spaces per level).",
 			mixedLines[0])
 	} else {
 		lineStrs := make([]string, len(mixedLines))
 		for i, l := range mixedLines {
 			lineStrs[i] = fmt.Sprintf("%d", l)
 		}
-		msg = fmt.Sprintf("lines %s: mixed tabs and spaces in indentation (%d occurrences) - this causes TabError in Python 3. Use only spaces (PEP 8 recommends 4 spaces per level).",
+		msg = fmt.Sprintf("lines %s: mixed tabs and spaces in indentation (%d occurrences) - this can cause TabError/IndentationError in Python 3. Use only spaces (PEP 8 recommends 4 spaces per level).",
 			strings.Join(lineStrs, ", "), mixedCount)
 	}
 	return msg
+}
+
+// scanPythonLogicalState carries bracket depth and triple-quote state
+// across the lines of a Python source (#1865 case 2). Single-line strings
+// are consumed so brackets inside them do not count; a '#' outside a
+// string ends the logical scan for the line; '\\' escapes the next
+// character. Depth never goes below zero (tolerates unbalanced closers
+// in damaged files).
+func scanPythonLogicalState(line string, depth int, inTriple string) (int, string) {
+	i := 0
+	for i < len(line) {
+		c := line[i]
+		if inTriple != "" {
+			if strings.HasPrefix(line[i:], inTriple) {
+				i += 3
+				inTriple = ""
+				continue
+			}
+			i++
+			continue
+		}
+		switch c {
+		case '\\':
+			i += 2
+			continue
+		case '\'', '"':
+			if strings.HasPrefix(line[i:], "'''") || strings.HasPrefix(line[i:], "\"\"\"") {
+				inTriple = line[i : i+3]
+				i += 3
+				continue
+			}
+			q := c
+			j := i + 1
+			for j < len(line) {
+				if line[j] == '\\' {
+					j += 2
+					continue
+				}
+				if line[j] == q {
+					break
+				}
+				j++
+			}
+			i = j + 1
+			continue
+		case '#':
+			return depth, inTriple
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		}
+		i++
+	}
+	return depth, inTriple
 }
 
 // filepathExtSafe returns the file extension without importing filepath in

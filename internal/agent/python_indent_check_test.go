@@ -122,3 +122,53 @@ func TestPythonIndentationRegistered(t *testing.T) {
 		return
 	}
 }
+
+// Regression for #1865 case 2: bracket-continuation lines and
+// triple-quoted string content are NOT code indentation - flagging them
+// as "mixed tabs and spaces" was a Critical-severity false positive on
+// perfectly legal Python.
+func TestCheckPythonIndentation_NoFalsePositiveContinuation(t *testing.T) {
+	// Indent inside open brackets has no syntactic meaning.
+	bracket := "foo(a,\n\t    b)\nif True:\n    x = [1,\n\t 2]\n"
+	if w := checkPythonIndentation("t.py", bracket); w != "" {
+		t.Fatalf("bracket continuation indent must not be flagged: %q", w)
+	}
+	// String data inside triple quotes is not indentation.
+	triple := "s = '''\n\t  data line\n\tx = [1]\n'''\n"
+	if w := checkPythonIndentation("t.py", triple); w != "" {
+		t.Fatalf("triple-quoted string content must not be flagged: %q", w)
+	}
+	// Backslash continuation lines are also not new logical lines.
+	cont := "x = 1 + \\\n\t 2\n"
+	if w := checkPythonIndentation("t.py", cont); w != "" {
+		t.Fatalf("backslash continuation indent must not be flagged: %q", w)
+	}
+	// Genuine mixed indent AFTER a closed bracket still fires.
+	real := "y = (1, 2)\n\tif True:\n\t    pass\n"
+	if w := checkPythonIndentation("t.py", real); w == "" {
+		t.Fatal("genuine mixed indent on a code line must still be flagged")
+	}
+}
+
+// Regression for #1865 case 1: the check is delta-gated (#601 W4) - an
+// unrelated edit to a file whose PRE-EXISTING indentation is mixed must
+// not re-report the same warning, and a zero-delta write must not fire.
+func TestPythonIndentationDeltaGated(t *testing.T) {
+	old := "def f():\n\t    return 1\n" // pre-existing mixed indent
+
+	// Zero-delta write: never fires.
+	if w := checkWriteIntegrity("t.py", old, old); w != "" {
+		t.Fatalf("zero-delta write must not fire: %v", w)
+	}
+	// Unrelated edit elsewhere in the same file: same warning on both
+	// sides -> suppressed (pre-existing problem untouched by this write).
+	edited := old + "# trailing comment\n"
+	if w := checkWriteIntegrity("t.py", old, edited); w != "" {
+		t.Fatalf("unrelated edit must not re-report pre-existing mixed indent: %v", w)
+	}
+	// This write INTRODUCES mixed indentation -> must fire.
+	clean := "def f():\n    return 1\n"
+	if w := checkWriteIntegrity("t.py", clean, old); w == "" {
+		t.Fatal("write introducing mixed indent must be flagged")
+	}
+}
