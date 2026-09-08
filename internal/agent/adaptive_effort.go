@@ -82,6 +82,12 @@ var effortReadOnlyTools = map[string]bool{
 	"lsp_incoming_calls":         true,
 	"lsp_outgoing_calls":         true,
 	"lsp_document_highlights":    true,
+	// #1859: dep_graph/scan_todos are pure reads - every other read-only
+	// tool is already here; screenshot too (case 2 - capture-only, and it
+	// keeps the thermal explore ratio honest).
+	"dep_graph":  true,
+	"scan_todos": true,
+	"screenshot": true,
 }
 
 // editTools are tools that modify files -- higher stakes, benefit from more reasoning.

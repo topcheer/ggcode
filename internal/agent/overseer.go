@@ -134,6 +134,21 @@ var readOnlyTools = map[string]bool{
 	"lsp_symbols":             true,
 	"lsp_diagnostics":         true,
 	"lsp_document_highlights": true,
+	// #1859 case 1: the eight pure-read tools serialReadOnlyTools already
+	// lists were missing here, so a run of only dep_graph/code_health/
+	// lsp_implementation calls never counted as all-read and the stall
+	// nudge (the sole consumer) was suppressed.
+	"code_search":                true,
+	"git_stash_list":             true,
+	"lsp_workspace_symbols":      true,
+	"lsp_implementation":         true,
+	"lsp_code_actions":           true,
+	"lsp_prepare_call_hierarchy": true,
+	"lsp_incoming_calls":         true,
+	"lsp_outgoing_calls":         true,
+	"dep_graph":                  true,
+	"scan_todos":                 true,
+	"code_health":                true,
 }
 
 func newOverseerState() *overseerState {

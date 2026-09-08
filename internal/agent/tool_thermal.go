@@ -98,6 +98,11 @@ var toolCategoryMap = map[string]thermalCategory{
 	"lsp_code_actions":           thermalExplore,
 	"web_search":                 thermalExplore,
 	"web_fetch":                  thermalExplore,
+	// #1859 case 2: screenshot is capture-only - without a category it
+	// fell into thermalOther and diluted the explore ratio, suppressing
+	// explore-heavy warnings during screenshot-heavy runs. browser and
+	// mobile_device (click/type/tap) intentionally stay uncategorized.
+	"screenshot": thermalExplore,
 
 	// Modification (code changes) -- canonical sourceMutatingTools members
 	// (#738): edit_file, write_file, multi_edit_file, multi_file_edit,
