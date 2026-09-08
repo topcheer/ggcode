@@ -1252,6 +1252,24 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
 
     final existing = state.snapshots[snapshotKey];
 
+    // #1871: replay/cursor guard for the BACKGROUND path. The foreground
+    // connection_provider already drops events at or behind its applied
+    // cursor (ord <= last), but background_connection_manager calls this
+    // method directly with no such guard - on reconnect the relay replays
+    // full history when the cursor is empty/stale, duplicating user
+    // messages, tool results and streaming text into the cached snapshot
+    // (and then into SQLite). Mirror the foreground semantics: an event
+    // whose ordinal is at or behind the snapshot's lastEventId is a stale
+    // replay - drop it. Ordinal-unparseable ids carry no ordering info and
+    // are applied (same fallback as the foreground).
+    if (eventId != null && eventId.isNotEmpty) {
+      final ord = _parseEventOrdinal(eventId);
+      final last = _parseEventOrdinal(existing?.lastEventId);
+      if (ord != null && last != null && ord <= last) {
+        return;
+      }
+    }
+
     List<ChatMessage> messages = List.from(existing?.messages ?? []);
     Map<String, SubagentInfo> subagents =
         Map<String, SubagentInfo>.from(existing?.subagents ?? {});
@@ -1474,6 +1492,16 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
       }
     }
     return null;
+  }
+
+  /// Parse the trailing ordinal from a relay event id ("evt-42" -> 42).
+  /// Mirrors connection_provider's _parseEventOrdinal so both the
+  /// foreground and background paths share identical cursor semantics.
+  int? _parseEventOrdinal(String? eventId) {
+    if (eventId == null || eventId.isEmpty) return null;
+    final idx = eventId.lastIndexOf('-');
+    final raw = idx >= 0 ? eventId.substring(idx + 1) : eventId;
+    return int.tryParse(raw);
   }
 
   Future<bool> attachSessionToActiveWorkspace(String sessionId) async {
