@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -53,20 +54,37 @@ func (p *streamPanelState) totalItems() int {
 	// 'already added' on an empty-looking row).
 	visible := 0
 	for _, preset := range stream.Presets {
-		added := false
-		for _, t := range p.targets {
-			// Same predicate as render and Enter (ID or Name) - render used to
-			// check ID only, hiding the row while Enter still refused it.
-			if t.Name == preset.ID || t.Name == preset.Name {
-				added = true
-				break
-			}
-		}
-		if !added {
+		if !p.presetAdded(preset) {
 			visible++
 		}
 	}
 	return len(p.targets) + visible + 1 // +1 for "Custom"
+}
+
+// presetAdded reports whether the preset already has a target row (ID or
+// Name - the single predicate every site must share).
+func (p *streamPanelState) presetAdded(preset stream.PlatformPreset) bool {
+	for _, t := range p.targets {
+		if t.Name == preset.ID || t.Name == preset.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// visiblePresets returns the presets that still have a row, in order - the
+// ONLY source of preset<->row index mapping (#1759 case 1: the old
+// `selectedIndex - len(targets)` mapped onto RAW preset indexes, so with
+// presets[0] hidden, Enter added the wrong platform and the cursor
+// vanished; render used the same broken raw-i mapping).
+func (p *streamPanelState) visiblePresets() []stream.PlatformPreset {
+	out := make([]stream.PlatformPreset, 0, len(stream.Presets))
+	for _, preset := range stream.Presets {
+		if !p.presetAdded(preset) {
+			out = append(out, preset)
+		}
+	}
+	return out
 }
 
 // --- View ---
@@ -234,6 +252,16 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 					p.editingField = ""
 					return m, nil
 				}
+				// #1759 case 4: custom adds had no duplicate check (presets do at
+				// L266) - a second target with the same name silently replaced the
+				// first in the manager's map while config kept both.
+				for _, t := range p.targets {
+					if t.Name == name {
+						p.message = fmt.Sprintf("%s already exists", name)
+						p.editingField = ""
+						return m, nil
+					}
+				}
 				p.targets = append(p.targets, stream.StreamTarget{
 					Name:    name,
 					Enabled: true,
@@ -258,9 +286,14 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 	// Not editing: add from preset or start custom flow
 	totalItems := p.totalItems()
 	if p.selectedIndex >= len(p.targets) && p.selectedIndex < totalItems-1 {
-		// Preset selected
+		// Preset selected - via the VISIBLE preset list (#1759 case 1):
+		// raw preset indexes drift once earlier presets are hidden.
+		vis := p.visiblePresets()
 		presetIdx := p.selectedIndex - len(p.targets)
-		preset := stream.Presets[presetIdx]
+		if presetIdx >= len(vis) {
+			return m, nil
+		}
+		preset := vis[presetIdx]
 
 		// Check if already added
 		for _, t := range p.targets {
@@ -375,19 +408,7 @@ func (m *Model) renderStreamPanelLeft() string {
 	lines = append(lines, "")
 	lines = append(lines, dimColor.Render("── Add ──"))
 
-	for i, preset := range stream.Presets {
-		// Skip if already added (same ID||Name predicate as Enter/totalItems)
-		found := false
-		for _, t := range p.targets {
-			if t.Name == preset.ID || t.Name == preset.Name {
-				found = true
-				break
-			}
-		}
-		if found {
-			continue
-		}
-
+	for i, preset := range p.visiblePresets() { // #1759: visible list keeps row/index in lockstep
 		idx := len(p.targets) + i
 		prefix := "  "
 		if idx == p.selectedIndex {
@@ -414,6 +435,27 @@ func (m *Model) renderStreamPanelLeft() string {
 		Render(content)
 }
 
+// cachedFFmpegCheck / cachedCJKFont (#1759 case 3): the right panel renders
+// on every key press and blink tick - spawning an ffmpeg -version
+// subprocess and rescanning the system font directory per frame is
+// pointless; the answers don't change within a session.
+var (
+	ffmpegCheckOnce sync.Once
+	ffmpegCheckVal  stream.FFmpegCheck
+	cjkFontOnce     sync.Once
+	cjkFontVal      string
+)
+
+func cachedFFmpegCheck() stream.FFmpegCheck {
+	ffmpegCheckOnce.Do(func() { ffmpegCheckVal = stream.CheckFFmpeg() })
+	return ffmpegCheckVal
+}
+
+func cachedCJKFont() string {
+	cjkFontOnce.Do(func() { cjkFontVal = stream.FindCJKFont() })
+	return cjkFontVal
+}
+
 func (m *Model) renderStreamPanelRight(w int) string {
 	p := m.streamPanel
 	var lines []string
@@ -424,8 +466,10 @@ func (m *Model) renderStreamPanelRight(w int) string {
 	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	yellow := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 
-	// FFmpeg status
-	check := stream.CheckFFmpeg()
+	// FFmpeg status (#1759 case 3: cached - CheckFFmpeg spawns an
+	// `ffmpeg -version` subprocess and this render runs on EVERY key/tick;
+	// FindCJKFont scans the whole system font directory likewise)
+	check := cachedFFmpegCheck()
 	if !check.Available {
 		lines = append(lines, red.Render("⚠ FFmpeg not available"))
 		// Show first 2 lines of error (install hints)
@@ -438,7 +482,7 @@ func (m *Model) renderStreamPanelRight(w int) string {
 	}
 
 	// Show font status
-	fontPath := stream.FindCJKFont()
+	fontPath := cachedCJKFont()
 	if fontPath != "" {
 		lines = append(lines, green.Render("● CJK Font")+" "+dim.Render(filepath.Base(fontPath)))
 	} else {
@@ -488,10 +532,11 @@ func (m *Model) renderStreamPanelRight(w int) string {
 		}
 
 	} else if p.selectedIndex < p.totalItems()-1 {
-		// Preset selected
+		// Preset selected - visible-list mapping, same as Enter (#1759 case 1)
+		vis := p.visiblePresets()
 		presetIdx := p.selectedIndex - len(p.targets)
-		if presetIdx < len(stream.Presets) {
-			preset := stream.Presets[presetIdx]
+		if presetIdx < len(vis) {
+			preset := vis[presetIdx]
 			lines = append(lines, "")
 			lines = append(lines, fmt.Sprintf("  Platform: %s", preset.Name))
 			lines = append(lines, fmt.Sprintf("  URL:      %s", preset.URL))
