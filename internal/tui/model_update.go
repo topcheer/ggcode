@@ -169,6 +169,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 				return streamMsg(m.t("session.resume_failed", msg.requestedID, msg.err))
 			}
 		}
+		// #1755: a slow OLDER Load completing after a newer request must
+		// not clobber the latest resume - drop the stale result.
+		if m.pendingResumeID != "" && msg.requestedID != m.pendingResumeID {
+			debug.Log("tui", "dropping stale resume result for %q (latest: %q)", msg.requestedID, m.pendingResumeID)
+			return m, nil
+		}
+		m.pendingResumeID = ""
 		m.applyResumedSession(msg.session)
 		title := msg.session.Title
 		if title == "" {

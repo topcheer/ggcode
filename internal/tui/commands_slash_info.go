@@ -90,6 +90,11 @@ func resolveSessionID(store sessionLister, query string) (string, error) {
 }
 
 func (m *Model) resumeSession(id string) tea.Cmd {
+	// #1755: record the LATEST request - two rapid /resume commands (or a
+	// picker double-click) produce two Loads whose COMPLETION order is
+	// arbitrary; without this gate a slow older Load could overwrite the
+	// newer one and the session ends up on the wrong resume.
+	m.pendingResumeID = id
 	return func() tea.Msg {
 		if m.sessionStore == nil {
 			return streamMsg(m.t("session.store_missing"))
