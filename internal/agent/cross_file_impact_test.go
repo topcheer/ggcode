@@ -198,14 +198,20 @@ func TestCheckCrossFileImpact_NoFiles(t *testing.T) {
 func TestCheckCrossFileImpact_FiresOnce(t *testing.T) {
 	a := &Agent{crossFileImpact: newCrossFileImpactState()}
 	stats := &RunStats{}
-	// First call - fires (returns empty since no Go files, but marks fired).
+	// #1773 case 6: entry no longer burns the flag - an empty run (no Go
+	// files, nothing produced) leaves the gate ARMED so a later
+	// qualifying state can still produce its warning.
 	_ = a.checkCrossFileImpact(stats)
-	// Second call - should short-circuit.
+	if a.crossFileImpact.fired {
+		t.Error("empty analysis must NOT burn the once-per-run flag (#1773 case 6)")
+	}
+	// Manually simulate the "producing output" claim point.
+	a.crossFileImpact.mu.Lock()
+	a.crossFileImpact.fired = true
+	a.crossFileImpact.mu.Unlock()
+	// Second call - short-circuits.
 	msg := a.checkCrossFileImpact(stats)
 	if msg != "" {
 		t.Error("expected empty on second call (already fired)")
-	}
-	if !a.crossFileImpact.fired {
-		t.Error("expected fired=true after checkCrossFileImpact")
 	}
 }

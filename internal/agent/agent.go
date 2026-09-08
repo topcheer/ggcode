@@ -4057,6 +4057,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.correctionSpiral.recordEdit(i + 1)
 			} else if tc.Name == "run_command" && psIsVerifyCommand(sfCommandArg(psArgs)) {
 				a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
+			} else if tc.Name == "wait_command" || tc.Name == "read_command_output" || tc.Name == "task_output" {
+				// #1773 case 4: the final outcome of a long verification
+				// run arrives HERE - wait_command returns the job's terminal
+				// result, yet the run_command-only wiring left the most
+				// informative evidence out of the correction spiral. Reuse
+				// the #1153 registry: attribute only jobs registered as
+				// verification (start_command itself still excluded -
+				// launch is not an outcome).
+				jobID, _ := psArgs["job_id"].(string)
+				if jobID == "" {
+					jobID, _ = psArgs["task_id"].(string)
+				}
+				if jobID != "" && a.prematureSuccess.psJobIsVerify(jobID) {
+					a.correctionSpiral.recordVerifyResult(tc.Name, result.Content, result.IsError, i+1)
+				}
 			}
 			// Unverified mutation streak: track consecutive edits without verification.
 			a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))

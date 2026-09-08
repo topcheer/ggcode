@@ -105,8 +105,13 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		a.crossFileImpact.mu.Unlock()
 		return ""
 	}
-	a.crossFileImpact.fired = true
 	a.crossFileImpact.mu.Unlock()
+	// #1773 case 6: fired used to lock on ENTRY - four early-out paths
+	// (>20 files, 5s deadline, git show failure, zero siblings) burned
+	// the once-per-run flag with NOTHING produced, and the comment's
+	// "fires at most once" really means "produces a warning at most
+	// once". The flag now sets only when a warning is actually about to
+	// be returned; concurrent entrants are safe (idempotent analysis).
 
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
@@ -221,6 +226,15 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		totalAffected += len(imp.affectedFiles)
 		totalRemoved += len(imp.removedSyms)
 	}
+
+	// Real output ahead: claim the once-per-run flag NOW (#1773 case 6).
+	a.crossFileImpact.mu.Lock()
+	if a.crossFileImpact.fired {
+		a.crossFileImpact.mu.Unlock()
+		return "" // a concurrent call already reported
+	}
+	a.crossFileImpact.fired = true
+	a.crossFileImpact.mu.Unlock()
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(

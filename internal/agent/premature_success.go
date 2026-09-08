@@ -249,6 +249,18 @@ func (p *prematureSuccessState) psMarkVerifiedLocked() {
 	p.lastVerifyFailedCmd = ""
 }
 
+// psJobIsVerify reports whether the background job was registered as a
+// verification job (#1773 case 4): the correction-spiral wiring needs it
+// to attribute wait_command/read_command_output results - the final
+// outcome of a long test run is exactly the evidence recordVerifyResult
+// wants, and it used to flow past untouched.
+func (p *prematureSuccessState) psJobIsVerify(jobID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	rec, ok := p.backgroundJobs[jobID]
+	return ok && rec.isVerify
+}
+
 // psRegisterJobLocked adds a freshly started background job to the registry
 // keyed by job_id so later waits/reads can be attributed (#1153). Registry
 // size is capped at psMaxTrackedJobs.
