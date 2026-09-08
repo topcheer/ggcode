@@ -245,3 +245,34 @@ func TestDetectCommands_TaskfileExactTargetStillHits(t *testing.T) {
 		t.Fatalf("exact test: target must still match, got verify=%q", info.verify)
 	}
 }
+
+// TestTaskfileHasTargetBlockScoped pins #1681 case 1: only keys inside the
+// top-level tasks: block are targets - a vars member or a cmds script line
+// with the same name must NOT count.
+func TestTaskfileHasTargetBlockScoped(t *testing.T) {
+	tf := `version: '3'
+
+vars:
+  test: extra-args
+
+tasks:
+  build:
+    cmds:
+      - echo hi
+  test:
+    cmds:
+      - go test ./...
+`
+	if !taskfileHasTarget(tf, "test") {
+		t.Error("tasks: block member 'test' must match")
+	}
+	if !taskfileHasTarget(tf, "build") {
+		t.Error("tasks: block member 'build' must match")
+	}
+	if taskfileHasTarget(tf, "vars") {
+		t.Error("the vars: KEY itself is not a task")
+	}
+	if taskfileHasTarget(`version: '3'\nvars:\n  build: x\n`, "build") {
+		t.Error("vars-block member must not match outside tasks:")
+	}
+}

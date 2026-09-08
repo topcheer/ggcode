@@ -199,7 +199,24 @@ func projectCommandsSection(workingDir string) string {
 // indented, so match per line after trimming indentation (#1489: bare
 // Contains made tail-suffixed names e2e_test: match test:).
 func taskfileHasTarget(content, task string) bool {
+	// #1681 case 1: a vars-block member (`vars:\n  test: x`) or a cmds
+	// script line matched the flat prefix check - only keys INSIDE the
+	// top-level tasks: block are targets. Track the block, not the shape.
+	inTasks := false
 	for _, line := range strings.Split(content, "\n") {
+		if line == "" {
+			continue
+		}
+		indented := line[0] == ' ' || line[0] == '\t'
+		if !indented {
+			// Top-level key: enter tasks:, leave everything else.
+			t := strings.TrimRight(line, ": \t")
+			inTasks = strings.TrimSpace(t) == "tasks"
+			continue
+		}
+		if !inTasks {
+			continue
+		}
 		t := strings.TrimSpace(line)
 		if strings.HasPrefix(t, task+":") {
 			return true

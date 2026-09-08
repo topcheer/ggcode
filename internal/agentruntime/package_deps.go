@@ -196,14 +196,18 @@ func readModulePath(root string) string {
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
+		// #1681 case 2: x/mod modfile allows ANY whitespace between
+		// tokens - `module\tfoo` was missed by the space-only prefix and
+		// the whole package-deps section silently dropped.
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "module" {
+			mod := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "module"))
 			// #1489: strip trailing // comments - x/mod's modfile lexer
 			// accepts them, and the unstripped path makes every import key
 			// mismatch, silently dropping the whole package-deps section.
-			if v, _, ok := strings.Cut(line, "//"); ok {
-				line = v
+			if v, _, ok := strings.Cut(mod, "//"); ok {
+				mod = v
 			}
-			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			return strings.TrimSpace(mod)
 		}
 	}
 	return ""

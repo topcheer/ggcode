@@ -170,3 +170,23 @@ func TestReadModulePath_TrailingComment(t *testing.T) {
 		t.Fatalf("module path with trailing comment = %q, want github.com/foo/bar", got)
 	}
 }
+
+// TestReadModulePathTabSeparated pins #1681 case 2: x/mod modfile allows
+// any whitespace between tokens - `module\tfoo` was missed and the whole
+// package-deps section silently dropped.
+func TestReadModulePathTabSeparated(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module\tgithub.com/topcheer/ggcode\n\ngo 1.27\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readModulePath(dir); got != "github.com/topcheer/ggcode" {
+		t.Fatalf("tab-separated module decl must parse, got %q", got)
+	}
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "go.mod"), []byte("module  github.com/x/y // comment\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readModulePath(dir2); got != "github.com/x/y" {
+		t.Fatalf("comment stripping must survive the field split, got %q", got)
+	}
+}
