@@ -71,8 +71,8 @@ type Knight struct {
 	// same-process runs (tick loop vs PerformSkillAnalysis, issue #977).
 	analysisInFlight  bool
 	notifiedStaging   map[string]bool      // tracks staging skills already notified to avoid spam
-	stagingFailCount  map[string]int       // consecutive validation failure count per staging skill
-	evalCooldownUntil map[string]time.Time // #1265: LLM-eval cooldown per skill name
+	stagingFailCount  map[string]int       // per staging skill, keyed scope+name (#1760: name-only leaked counts across legal same-name scopes)
+	evalCooldownUntil map[string]time.Time // #1265: LLM-eval cooldown, keyed scope+name (#1760)
 }
 
 const (
@@ -835,18 +835,18 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 	for _, s := range staging {
 		result := ValidateSkill(s)
 		if !result.Valid {
-			k.stagingFailCount[s.Name]++
+			k.stagingFailCount[s.Scope+":"+s.Name]++
 			debug.Log("knight", "staging skill %s validation failed (%d/%d): %v",
-				s.Name, k.stagingFailCount[s.Name], knightStagingMaxValidationFails, result.Errors)
-			if k.stagingFailCount[s.Name] >= knightStagingMaxValidationFails {
+				s.Name, k.stagingFailCount[s.Scope+":"+s.Name], knightStagingMaxValidationFails, result.Errors)
+			if k.stagingFailCount[s.Scope+":"+s.Name] >= knightStagingMaxValidationFails {
 				debug.Log("knight", "auto-rejecting staging skill %s after %d consecutive validation failures",
-					s.Name, k.stagingFailCount[s.Name])
+					s.Name, k.stagingFailCount[s.Scope+":"+s.Name])
 				if err := k.promoter.Reject(s); err != nil {
 					debug.Log("knight", "reject staging skill %s failed: %v", s.Name, err)
 				} else {
 					k.index.Invalidate()
 					k.clearStagingNotification(s.Name)
-					delete(k.stagingFailCount, s.Name)
+					delete(k.stagingFailCount, s.Scope+":"+s.Name)
 					if k.rejects != nil {
 						_ = k.rejects.Append(rejectFeedbackEntry{
 							Name:     s.Name,
@@ -866,7 +866,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			continue
 		}
 		// Valid — reset failure count
-		delete(k.stagingFailCount, s.Name)
+		delete(k.stagingFailCount, s.Scope+":"+s.Name)
 		isRevision := stagingUpdatesActiveSkill(s, active)
 		if CheckDuplicate(s, active) && !isRevision {
 			debug.Log("knight", "staging skill %s is duplicate, rejecting", s.Name)
@@ -886,7 +886,7 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 				}
 				continue
 			}
-			if until, ok := k.evalCooldownUntil[s.Name]; ok && time.Now().Before(until) {
+			if until, ok := k.evalCooldownUntil[s.Scope+":"+s.Name]; ok && time.Now().Before(until) {
 				// #1265: the LLM already evaluated this candidate recently and
 				// concluded no (or the runner errored) - the same context re-runs
 				// to the same verdict. Skip until the cooldown expires; the
@@ -1117,7 +1117,7 @@ Staged skill:
 		})
 		// #1265: the expensive LLM run already burned and produced nothing -
 		// cooldown so the next ticks don't repeat it with the same context.
-		k.evalCooldownUntil[entry.Name] = time.Now().Add(knightEvalRetryCooldown)
+		k.evalCooldownUntil[entry.Scope+":"+entry.Name] = time.Now().Add(knightEvalRetryCooldown)
 		return false, fmt.Sprintf("scenario evaluation failed: %v", result.Error)
 	}
 	decision := parseAutoPromoteEvalDecision(result.Output)
@@ -1138,12 +1138,12 @@ Staged skill:
 		}
 		// #1265: the LLM evaluated and declined - re-running with identical
 		// context every tick is the structural eval-bucket drain; cooldown.
-		k.evalCooldownUntil[entry.Name] = time.Now().Add(knightEvalRetryCooldown)
+		k.evalCooldownUntil[entry.Scope+":"+entry.Name] = time.Now().Add(knightEvalRetryCooldown)
 		return false, decision.Rationale
 	}
 	// Approved: clear any cooldown (baselines or the skill may have changed
 	// since the declining verdict).
-	delete(k.evalCooldownUntil, entry.Name)
+	delete(k.evalCooldownUntil, entry.Scope+":"+entry.Name)
 	return true, ""
 }
 
