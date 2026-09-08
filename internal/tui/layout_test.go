@@ -3152,3 +3152,58 @@ func TestResetConversationViewClearsTransientState(t *testing.T) {
 		t.Error("expected spinner to stop")
 	}
 }
+
+// Regression for #1882: the project-memory gate (#1762) must cover every
+// message entry, not just local/remote. Tunnel, webchat, and cron messages
+// arriving during the startup loading window must queue instead of starting
+// an uninjected first run. The three handlers are gated on cancelFunc == nil
+// (or !loading); with projectMemoryLoading set they must NOT start a run.
+func TestProjectMemoryLoadingQueuesTunnelWebchatAndCron(t *testing.T) {
+	m := newTestModel()
+	m.projectMemoryLoading = true
+	m.cancelFunc = nil // agent idle
+
+	asModel := func(t *testing.T, v tea.Model) *Model {
+		t.Helper()
+		switch x := v.(type) {
+		case Model:
+			return &x
+		case *Model:
+			return x
+		default:
+			t.Fatalf("unexpected model type %T", v)
+			return nil
+		}
+	}
+	assertNoRunQueued := func(v tea.Model, entry string) {
+		t.Helper()
+		mm := asModel(t, v)
+		if mm.cancelFunc != nil || len(mm.pending.items) == 0 {
+			t.Fatalf("%s must queue during project-memory loading, not start a run", entry)
+		}
+	}
+
+	// Tunnel inbound: queues behind the loading window.
+	model, _ := m.Update(tunnelInboundMsg{text: "from phone"})
+	assertNoRunQueued(model, "tunnel message")
+
+	// Webchat inbound: same gate.
+	m3 := newTestModel()
+	m3.projectMemoryLoading = true
+	m3.cancelFunc = nil
+	model3, _ := m3.Update(webchatUserMsg{Text: "from web"})
+	assertNoRunQueued(model3, "webchat message")
+
+	// Cron firing: same gate (no run, no immediate submit).
+	m5 := newTestModel()
+	m5.projectMemoryLoading = true
+	m5.loading = false
+	// Cron firing: same gate. Cron's default busy semantics are SKIP, not
+	// queue - the gate's contract here is only that no uninjected run
+	// starts during the loading window (pending stays empty with the
+	// default queue_if_busy=false).
+	model5, _ := m5.Update(cronPromptMsg{Prompt: "tick"})
+	if mm := asModel(t, model5); mm.cancelFunc != nil {
+		t.Fatal("cron firing must not start a run during project-memory loading")
+	}
+}

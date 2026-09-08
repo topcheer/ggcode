@@ -1019,7 +1019,11 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		}
 	}
 
-	if m.cancelFunc == nil {
+	// #1882: the projectMemoryLoading predicate #1762 added to the local
+	// and remote gates - a tunnel message arriving during the startup
+	// project-memory loading window must queue, not start the agent
+	// without the injection the queued paths guarantee.
+	if m.cancelFunc == nil && !m.projectMemoryLoading {
 		// Agent idle — render user bubble and persist, then start agent.
 		m.chatWriteUser(nextChatID(), text)
 		m.chatListScrollToBottom()

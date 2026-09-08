@@ -312,8 +312,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if m.knight != nil {
 			m.knight.NotifyActivity()
 		}
-		// If agent is idle, start a new run with the webchat message
-		if m.cancelFunc == nil {
+		// #1882: same predicate as the local/remote gates (#1762) - a
+		// webchat message during the project-memory loading window queues
+		// behind the injection instead of starting an uninjected run.
+		if m.cancelFunc == nil && !m.projectMemoryLoading {
 			// Render the user bubble and persist to session.
 			m.chatWriteUser(nextChatID(), text)
 			m.chatListScrollToBottom()
@@ -583,7 +585,10 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// Append a doc-sync reminder if the prompt doesn't already mention docs.
 		prompt := withDocSyncReminder(msg.Prompt)
 		ts := time.Now().Format("15:04:05")
-		if !m.loading {
+		// #1882: cron firings obey the same project-memory gate (#1762):
+		// a firing inside the startup loading window would run its first
+		// turn without the project-memory injection queued paths get.
+		if !m.loading && !m.projectMemoryLoading {
 			sysMsg := fmt.Sprintf("%s (%s)", m.t("cron.firing"), ts)
 			m.suppressNextTunnelSystem = sysMsg
 			m.chatWriteSystem(nextSystemID(), sysMsg)
