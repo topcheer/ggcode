@@ -611,7 +611,8 @@ func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
 	// If the agent is already running, queue the message instead of
 	// starting a competing run. This mirrors the behavior of local
 	// user input (update_keys.go) and IM remote inbound (update_remote.go).
-	if m.loading {
+	// #1762 case 2: projectMemoryLoading included, same as the local gate.
+	if m.loading || m.projectMemoryLoading {
 		m.queuePendingSubmission(text)
 		return nil
 	}
