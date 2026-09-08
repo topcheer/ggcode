@@ -122,6 +122,7 @@ type Model struct {
 	cancelFunc              func()
 	shellCancelFunc         func() // #910: shell-run cancel, kept separate from the agent's cancelFunc
 	pendingResumeID         string // #1755/#1887: latest /resume request; kept (never cleared) so stale completions drop under both completion orders
+	knightRunning           int    // #1890: scheduled knight tasks in flight (own agent, never touch loading/cancelFunc); counts via knightTaskEventMsg start/report
 	lspInstallInFlight      bool   // #1653: LSP install shell command submitted; drop probe cache when it completes
 	policy                  permission.PermissionPolicy
 	spinner                 *ToolSpinner

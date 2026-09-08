@@ -1023,7 +1023,8 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 	// and remote gates - a tunnel message arriving during the startup
 	// project-memory loading window must queue, not start the agent
 	// without the injection the queued paths guarantee.
-	if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading { // #1744 case 1: knight runs never set cancelFunc
+	if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading && // #1744 case 1: knight runs never set cancelFunc
+		m.knightRunning == 0 { // #1890: scheduled knight tasks run on their own agent - twin gate
 		// Agent idle — render user bubble and persist, then start agent.
 		m.chatWriteUser(nextChatID(), text)
 		m.chatListScrollToBottom()

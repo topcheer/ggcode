@@ -344,7 +344,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		// (cancelFunc overwritten, event streams interleaved). loading is the
 		// real idleness predicate; cancelFunc stays as a belt-and-suspenders
 		// guard for the injected-but-not-yet-loading window.
-		if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading {
+		// #1890: scheduled knight tasks (runMaintenanceTask /
+		// stageSkillRevision) run on their OWN agent and never touch
+		// m.loading/m.cancelFunc - both gates stay open while they run.
+		// knightRunning (counted by the task-event sink) closes that twin
+		// path the same way adhoc loading does.
+		if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading &&
+			m.knightRunning == 0 {
 			// Render the user bubble and persist to session.
 			m.chatWriteUser(nextChatID(), text)
 			m.chatListScrollToBottom()
@@ -467,10 +473,16 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case knightTaskEventMsg:
 		// #902: per model_messages.go these should surface as a system chat
 		// message (task started/completed progress).
-		m.setLoading(false)
+		// #1890: the START event used to setLoading(false) - a scheduled task
+		// never set loading, so this actively CLEARED a loading state owned
+		// by something else. Only completion touches loading now.
 		if msg.Report != "" {
+			if m.knightRunning > 0 {
+				m.knightRunning--
+			}
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight %s: %s", msg.TaskName, msg.Report))
 		} else {
+			m.knightRunning++
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight %s started", msg.TaskName))
 		}
 		return m, nil
