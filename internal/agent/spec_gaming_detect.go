@@ -486,7 +486,20 @@ func isSedSkipRemoval(cmd string) bool {
 	// marker in a replacement disqualifies; at least one legitimate
 	// removal (marker in pattern, none in replacement) is still required.
 	sawLegitRemoval := false
-	for _, expr := range strings.Split(parts[1], ";") {
+	for _, rawExpr := range strings.Split(parts[1], ";") {
+		// #1891: every chunk after the first still carries the `s` command
+		// prefix (e.g. `; s/assert/t.Skip(/g`). Splitting that on "/" made
+		// pattern=" s" and replacement="assert" - the injected marker sat at
+		// index 2 where neither check looked, so the exact #1685 case was
+		// STILL exempted. Normalize each chunk first: trim spaces and the
+		// s-command prefix.
+		expr := strings.TrimSpace(rawExpr)
+		if strings.HasPrefix(expr, "s/") {
+			// Strip the FULL "s/" so slash-split alignment matches chunk1
+			// (stripping one char left a leading "/" and shifted every
+			// field - the marker landed between checks again).
+			expr = expr[2:]
+		}
 		replacementParts := strings.Split(expr, "/")
 		if len(replacementParts) < 2 {
 			continue
