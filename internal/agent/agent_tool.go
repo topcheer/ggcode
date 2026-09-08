@@ -543,13 +543,12 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 				}
 			}
 		}
-		if len(integrityWarnings) > 0 {
-			combined := strings.Join(integrityWarnings, "\n\n")
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + combined
-			} else {
-				result.Content = combined
-			}
+		for _, w := range integrityWarnings {
+			// #1864 case 2: route through appendGuidance so the shared per-turn
+			// budget applies - the direct += appends let N plans stack 3N warning
+			// blocks that neither charged the count cap nor the 2048-byte pool,
+			// breaking guidance_budget's "all paths share one pool" contract.
+			a.appendGuidance(&result, w)
 		}
 	}
 
@@ -563,13 +562,8 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 				}
 			}
 		}
-		if len(testCompanionWarnings) > 0 {
-			combined := strings.Join(testCompanionWarnings, "\n\n")
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + combined
-			} else {
-				result.Content = combined
-			}
+		for _, w := range testCompanionWarnings {
+			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
 		}
 	}
 
@@ -590,11 +584,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			}
 		}
 		for _, w := range debugWarnings {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + w
-			} else {
-				result.Content = w
-			}
+			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
 		}
 	}
 
@@ -726,11 +716,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// agent can fix them in the same turn instead of wasting a build cycle.
 	if !result.IsError {
 		if warning := checkWriteIntegrity(filePath, oldContent, newContent); warning != "" {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + warning
-			} else {
-				result.Content = warning
-			}
+			a.appendGuidance(&result, warning) // #1864 case 2: budgeted path
 		}
 	}
 
@@ -740,11 +726,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// substantive lines, or edits adding new exported functions).
 	if !result.IsError {
 		if warning := CheckMissingTestCompanionWithFS(filePath, oldContent, newContent); warning != "" {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + warning
-			} else {
-				result.Content = warning
-			}
+			a.appendGuidance(&result, warning) // #1864 case 2: budgeted path
 		}
 	}
 
@@ -761,11 +743,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// are typically added during debugging and forgotten.
 	if !result.IsError {
 		if debugWarning := checkDebugStmts(filePath, oldContent, newContent); debugWarning != "" {
-			if result.Content != "" {
-				result.Content = result.Content + "\n\n" + debugWarning
-			} else {
-				result.Content = debugWarning
-			}
+			a.appendGuidance(&result, debugWarning) // #1864 case 2: budgeted path
 		}
 	}
 
