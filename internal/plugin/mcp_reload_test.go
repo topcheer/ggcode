@@ -60,6 +60,26 @@ func TestMCPServerConfigEqual(t *testing.T) {
 			b:    config.MCPServerConfig{Name: "s1", URL: "http://b"},
 			want: false,
 		},
+		// #1868: OAuth credentials affect the connection (SetClientCredentials
+		// on connect) - a change must be reported as changed.
+		{
+			name: "different oauth client id",
+			a:    config.MCPServerConfig{Name: "s1", OAuthClientID: "id1"},
+			b:    config.MCPServerConfig{Name: "s1", OAuthClientID: "id2"},
+			want: false,
+		},
+		{
+			name: "different oauth client secret",
+			a:    config.MCPServerConfig{Name: "s1", OAuthClientSecret: "sec1"},
+			b:    config.MCPServerConfig{Name: "s1", OAuthClientSecret: "sec2"},
+			want: false,
+		},
+		{
+			name: "same oauth credentials",
+			a:    config.MCPServerConfig{Name: "s1", OAuthClientID: "id", OAuthClientSecret: "sec"},
+			b:    config.MCPServerConfig{Name: "s1", OAuthClientID: "id", OAuthClientSecret: "sec"},
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {

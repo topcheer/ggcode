@@ -1491,6 +1491,15 @@ func mcpServerConfigEqual(a, b config.MCPServerConfig) bool {
 			return false
 		}
 	}
+	// #1868: OAuth credentials feed SetClientCredentials (mcp/client.go)
+	// on connect - a changed client_id/secret must rebuild the connection,
+	// or the old client keeps authenticating with stale credentials.
+	if a.OAuthClientID != b.OAuthClientID {
+		return false
+	}
+	if a.OAuthClientSecret != b.OAuthClientSecret {
+		return false
+	}
 	return true
 }
 
