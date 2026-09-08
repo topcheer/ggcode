@@ -63,6 +63,11 @@ type irrevGateState struct {
 	grounding     []bool // recent TOOL CALLS (not iterations - #1468-A note): one bool per action
 	warnings      int
 	totalGrounded int
+	// #1776 case 3: the grounding append happens BEFORE execution (the
+	// gate must fire pre-action), so the outcome is unknown there. This
+	// remembers the last recorded action so a FAILED verification can be
+	// retroactively un-grounded.
+	lastGroundingTool string
 }
 
 func newIrrevGateState() *irrevGateState {
@@ -237,6 +242,25 @@ func irrevIsGroundingAction(toolName string) bool {
 	return false
 }
 
+// recordOutcome retroactively corrects the grounding ledger after the
+// tool result lands (#1776 case 3): a FAILED run_command (go test error,
+// build error) is NOT grounding - counting it let a string of failures
+// satisfy the threshold and then push --force sailed through ungated,
+// exactly the scenario the gate exists to catch.
+func (s *irrevGateState) recordOutcome(toolName string, isError bool) {
+	if !isError || len(s.grounding) == 0 {
+		return
+	}
+	if !s.grounding[len(s.grounding)-1] || s.lastGroundingTool != toolName {
+		return
+	}
+	s.grounding[len(s.grounding)-1] = false
+	if s.totalGrounded > 0 {
+		s.totalGrounded--
+	}
+	s.lastGroundingTool = ""
+}
+
 // recordAction records a tool action and returns a warning string if
 // the action is high-irreversibility with insufficient grounding.
 func (s *irrevGateState) recordAction(toolName, args string) string {
@@ -250,6 +274,7 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	s.grounding = append(s.grounding, isGrounding)
 	if isGrounding {
 		s.totalGrounded++
+		s.lastGroundingTool = toolName
 	}
 
 	// Only gate medium+ irreversibility actions

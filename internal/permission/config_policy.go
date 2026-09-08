@@ -93,7 +93,19 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// branch returned Allow BEFORE the Deny lookup: a user who denied
 	// lanchat/im was silently ignored, and the ignored channel was
 	// exactly the outbound one Deny is most meant to gate.
-	if d, ok := p.rules[toolName]; ok && d == Deny {
+	//
+	// #1776 case 1: this fast path read p.rules UNLOCKED (the function's
+	// RLock only comes later) - a concurrent SetOverride/ClearOverride
+	// (TUI rule save) hit the same map and went fatal: concurrent map
+	// read and map write. The very race class #1596-D claimed to fix,
+	// reintroduced on the new fast path. Snapshot the deny state (and
+	// the command rule set, also read unlocked below) under one short
+	// RLock.
+	p.mu.RLock()
+	denyRule, hasDenyRule := p.rules[toolName]
+	cmdRuleSnapshot := p.cmdRules
+	p.mu.RUnlock()
+	if hasDenyRule && denyRule == Deny {
 		return Deny, nil
 	}
 
@@ -131,7 +143,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// user's interactive shell and executes; leaving it unaudited let a
 		// deny rule be bypassed via that second channel in every mode.
 		for _, cmd := range extractCommandsForTool(toolName, input) {
-			if rs := p.cmdRules; rs != nil {
+			if rs := cmdRuleSnapshot; rs != nil { // #1776: locked snapshot, not the live field
 				if d, matched := rs.Check(cmd); matched && d == Deny {
 					debug.Log("permission", "command denied by deny rule (mode-independent)")
 					return Deny, nil
@@ -146,7 +158,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// silently ignored while the browser tool could navigate to file:// URLs
 	// that read_file would have sandboxed. Deny is the strongest user intent
 	// and must win in every mode, before any mode-specific logic runs.
-	if d, ok := p.rules[toolName]; ok && d == Deny {
+	if hasDenyRule && denyRule == Deny { // #1776: locked snapshot from the fast path
 		debug.Log("permission", "tool denied by explicit deny rule (mode-independent): %s", toolName)
 		return Deny, nil
 	}

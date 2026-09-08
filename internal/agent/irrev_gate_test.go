@@ -229,3 +229,35 @@ func TestStashDropAndTagDeleteTierUp(t *testing.T) {
 		t.Fatalf("tag list must stay None, got %v", got)
 	}
 }
+
+// TestIrrevGateRecordOutcomeRevokesFailedGrounding pins #1776 case 3: a
+// FAILED run_command is not grounding - the optimistic pre-execution append
+// must be retroactively revoked, or a string of failed tests satisfies the
+// threshold and push --force sails through ungated.
+func TestIrrevGateRecordOutcomeRevokesFailedGrounding(t *testing.T) {
+	s := newIrrevGateState()
+	// Successful verification grounds.
+	s.recordAction("run_command", "go test ./...")
+	s.recordOutcome("run_command", false)
+	s.recordAction("run_command", "go build ./...")
+	s.recordOutcome("run_command", false)
+	if s.totalGrounded != 2 {
+		t.Fatalf("successful verifications must ground, got %d", s.totalGrounded)
+	}
+	// A FAILED one gets revoked.
+	s.recordAction("run_command", "go test ./pkg/...")
+	s.recordOutcome("run_command", true)
+	if s.totalGrounded != 2 {
+		t.Fatalf("failed verification must be revoked, got %d", s.totalGrounded)
+	}
+	if s.grounding[len(s.grounding)-1] {
+		t.Fatal("grounding ledger tail must be false after revocation")
+	}
+	// Outcome for a DIFFERENT tool must not revoke anything.
+	s.recordAction("run_command", "go vet ./...")
+	before := s.totalGrounded
+	s.recordOutcome("grep", true)
+	if s.totalGrounded != before {
+		t.Fatal("outcome for a different tool must not revoke")
+	}
+}
