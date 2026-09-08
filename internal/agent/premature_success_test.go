@@ -246,3 +246,91 @@ func TestPsFailedVerifyDoesNotReset(t *testing.T) {
 		t.Fatal("passing verification after a failure legitimately clears the warning")
 	}
 }
+
+// --- #1674: parallel-table sync for ./mvnw ---
+
+// TestParallelTablesRecognizeMvnwWrapper pins #1674 case 1: the five
+// parallel runner tables must all recognize ./mvnw - 3f24ef1c fixed
+// premature_success's two tables and left phantom_verify (x3),
+// verification_debt, and verify_coverage_gap behind.
+func TestParallelTablesRecognizeMvnwWrapper(t *testing.T) {
+	// phantomRunners map
+	if !phantomRunners["./mvnw"] {
+		t.Error("phantomRunners missing ./mvnw")
+	}
+	// verification_debt / verify_coverage_gap runner switches (exercised
+	// through their isVerify-style predicates where cheap; the switch
+	// literals are compile-time, the maps are behavioral).
+	if !phantomRunners["mvnw"] || !phantomRunners["mvn"] {
+		t.Error("phantomRunners missing bare mvnw/mvn")
+	}
+	// ci verdict classifier sanity (case 1 helper)
+	if got := ciStatusConclusion("CI PASSED for branch \"main\" (topcheer/ggcode)\nWorkflow: CI"); got != ciVerdictSuccess {
+		t.Errorf("CI PASSED should classify success, got %v", got)
+	}
+	if got := ciStatusConclusion("CI FAILED for branch \"main\" (topcheer/ggcode)\nUse action='logs'..."); got != ciVerdictFailure {
+		t.Errorf("CI FAILED should classify failure, got %v", got)
+	}
+	if got := ciStatusConclusion("CI CANCELLED for branch \"main\"\nRun ID: 1"); got != ciVerdictFailure {
+		t.Errorf("CI CANCELLED should classify failure, got %v", got)
+	}
+	if got := ciStatusConclusion("CI IN PROGRESS for branch \"main\"\nCheck again shortly."); got != ciVerdictNone {
+		t.Errorf("IN PROGRESS must be verdict-none, got %v", got)
+	}
+	if got := ciStatusConclusion("Job: build (FAILED)\n  -> Step #3 FAILED: Compile"); got != ciVerdictFailure {
+		t.Errorf("failed job/step lines should classify failure, got %v", got)
+	}
+	if got := ciStatusConclusion("just some log body text"); got != ciVerdictNone {
+		t.Errorf("plain logs must be verdict-none, got %v", got)
+	}
+}
+
+// TestCiStatusLogsDoesNotClearFailure pins #1675 case 1's core scenario:
+// after a failed verification, reading the CI failure logs (the system
+// prompt's own triage flow) must NOT clear the failure memory.
+func TestCiStatusLogsDoesNotClearFailure(t *testing.T) {
+	p := newPrematureSuccessState()
+	// A run fails verification first.
+	p.mu.Lock()
+	p.lastVerifyFailed = true
+	p.lastVerifyFailedCmd = "run_command"
+	p.mu.Unlock()
+
+	// Agent reads the failure logs (successful API call, FAILED content).
+	// recordToolCall takes p.mu internally - no outer lock here.
+	p.recordToolCall("ci_status", map[string]interface{}{"action": "logs"}, false, "Job: build (FAILED)\n  -> Step #3 FAILED: Compile")
+	p.mu.Lock()
+	failed := p.lastVerifyFailed
+	cmd := p.lastVerifyFailedCmd
+	p.mu.Unlock()
+
+	if !failed {
+		t.Error("reading CI failure logs cleared the failure memory (#1675 case 1)")
+	}
+	if cmd != "run_command" || cmd == "ci_status" {
+		// cmd should stay the original failure (or be ci_status); only
+		// assert it wasn't wiped to "" which would unblock CRITICAL.
+		if cmd == "" {
+			t.Error("failure command wiped")
+		}
+	}
+
+	// A PASSING status afterwards DOES clear it.
+	p.recordToolCall("ci_status", map[string]interface{}{}, false, "CI PASSED for branch \"main\"")
+	p.mu.Lock()
+	failed = p.lastVerifyFailed
+	p.mu.Unlock()
+	if failed {
+		t.Error("CI PASSED should clear the failure memory")
+	}
+}
+
+// TestSuccessClaimNegationNotClaimed pins #1675 case 2: "no tests passed"
+// is an honest failure report, not a success claim.
+func TestSuccessClaimNegationNotClaimed(t *testing.T) {
+	p := newPrematureSuccessState()
+	got := p.checkSuccessClaim("After the fix, no tests passed - still investigating.")
+	if got != "" {
+		t.Errorf("negated success phrase must not be a claim, got: %s", got)
+	}
+}

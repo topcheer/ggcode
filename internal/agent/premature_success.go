@@ -114,6 +114,41 @@ var conditionalGuardWords = []string{
 	"if ", "when ", "should ", "would ", "could ", "might ", "may ",
 	"need to ", "want to ", "going to ", "about to ",
 	"once ", "after ", "before ",
+	// #1675 case 2: negation and purpose markers - "no tests passed" /
+	// "0 tests passed" are honest FAILURE reports, not success claims;
+	// reading them as claims let the CRITICAL branch accuse a truthful
+	// report of contradicting a (different) failure.
+	"no ", "zero ", "none ", "0 ",
+	"make ",
+}
+
+// ciStatusVerdict classifies a ci_status tool result's bearing on
+// verification state (#1675 case 1).
+type ciStatusVerdict int
+
+const (
+	ciVerdictNone    ciStatusVerdict = iota // logs/list enumeration or unknown text
+	ciVerdictSuccess                        // "CI PASSED" / "✓ ... succeeded"
+	ciVerdictFailure                        // "CI FAILED" / "CI CANCELLED" / failed job/step lines
+)
+
+// ciStatusConclusion inspects the tool output the same way the tool formats
+// it (ci_status.go builds "CI PASSED for ...", "CI FAILED for ...",
+// "CI CANCELLED for ...", "CI IN PROGRESS for ..." plus job/step failure
+// lines for action=logs).
+func ciStatusConclusion(content string) ciStatusVerdict {
+	head := content
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	if strings.Contains(head, "CI PASSED") || strings.Contains(head, "✓") && strings.Contains(head, "succeeded") {
+		return ciVerdictSuccess
+	}
+	if strings.Contains(head, "CI FAILED") || strings.Contains(head, "CI CANCELLED") ||
+		strings.Contains(head, "(FAILED)") || strings.Contains(head, "Step #") && strings.Contains(head, "FAILED") {
+		return ciVerdictFailure
+	}
+	return ciVerdictNone // logs bodies, list tables, in-progress, unknown
 }
 
 // verifyTools are tool names that constitute verification actions.
@@ -324,6 +359,24 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 		if isError {
 			p.lastVerifyFailed = true
 			p.lastVerifyFailedCmd = ""
+			return
+		}
+		// #1675 case 1: ci_status succeeding only means the API call worked -
+		// the run itself may be FAILED/CANCELLED/IN_PROGRESS (and
+		// action=logs/list are read-only enumerations, not verification at
+		// all). The system prompt's own CI-failure triage flow ("use
+		// ci_status action='logs' to read failure details") must NOT clear
+		// the failure memory: only a SUCCESS/passed conclusion counts as
+		// verification; explicit failure records as such; anything else
+		// (logs/list/in-progress) leaves the previous state untouched.
+		if toolName == "ci_status" {
+			switch ciStatusConclusion(resultContent) {
+			case ciVerdictSuccess:
+				p.psMarkVerifiedLocked()
+			case ciVerdictFailure:
+				p.lastVerifyFailed = true
+				p.lastVerifyFailedCmd = toolName
+			}
 			return
 		}
 		p.psMarkVerifiedLocked()
