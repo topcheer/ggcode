@@ -3765,14 +3765,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if claimGuidance := a.claimVerify.check(tc.Name, result.Content, result.IsError, extractCommandFromToolCall(tc.Arguments)); claimGuidance != "" {
 				a.appendGuidance(&result, claimGuidance)
 			}
-			// #1776 case 3: a FAILED verification is not grounding - the
-			// irreversibility gate recorded it optimistically before
-			// execution; retroactively un-ground it now that the outcome
-			// is known, or a string of failed tests satisfies the threshold
-			// and push --force sails through ungated.
-			if a.irrevGate != nil {
-				a.irrevGate.recordOutcome(tc.Name, result.IsError)
-			}
 			// Permission-deny streak guard: a run of consecutive policy denials
 			// usually means the agent is operating in an unintended permission
 			// mode (e.g. dropped into plan mode without realizing it). Name the
@@ -4125,6 +4117,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
 					})
 				}
+			}
+			// #1776 case 3 / #1877: a FAILED verification is not grounding.
+			// recordAction must run FIRST so this call's ledger entry exists
+			// when the outcome is checked - the original wiring called
+			// recordOutcome ~350 lines earlier, so the revoke always
+			// inspected the PREVIOUS call's entry (revoking a success and
+			// keeping the failure, or missing the failure entirely when an
+			// interleaved read changed the tail).
+			if a.irrevGate != nil {
+				a.irrevGate.recordOutcome(tc.Name, result.IsError)
 			}
 			// Futile cycle: track reads vs writes to detect circular exploration.
 			// #953: a FAILED edit produced no state mutation — recording it as a
