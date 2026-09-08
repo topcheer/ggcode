@@ -289,6 +289,14 @@ func shellMutatesSources(cmd string) bool {
 	// recordShellSourceMutation, reverify) so the gap tripled. The token
 	// check requires a file-shaped target (contains "." or "/") so quoted
 	// content like `grep 'foo > bar' file.go` does not trip it.
+	// #1875: device pseudo-targets (/dev/null, /dev/stderr...) are the
+	// canonical NOISE-SUPPRESSION idiom - redirecting into them mutates
+	// nothing. Without the exemption every `go build ./... > /dev/null
+	// 2>&1` counted as a source mutation, which suppressed the redundant-
+	// build warning and zeroed editsSinceLastBuild on the standard noise
+	// path - a check that fires on an extremely frequent idiom is a
+	// silently disabled alarm. Quoted leftovers ("v1.2'") are also
+	// skipped: a quote-wrapped token is string content, not a path.
 	toks := strings.Fields(lower)
 	for i, tok := range toks {
 		redirect := ""
@@ -300,7 +308,16 @@ func shellMutatesSources(cmd string) bool {
 		case strings.HasPrefix(tok, ">"):
 			redirect = tok[1:]
 		}
-		if redirect != "" && (strings.Contains(redirect, ".") || strings.Contains(redirect, "/")) {
+		if redirect == "" {
+			continue
+		}
+		if strings.HasPrefix(redirect, "/dev/") {
+			continue // device sink: nothing is mutated
+		}
+		if strings.ContainsAny(redirect, "\"'") {
+			continue // quoted content, not a path
+		}
+		if strings.Contains(redirect, ".") || strings.Contains(redirect, "/") {
 			return true
 		}
 	}

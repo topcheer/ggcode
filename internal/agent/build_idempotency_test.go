@@ -317,9 +317,29 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 		`grep 'foo > bar' file.go`,
 		"go build ./...",
 		"ls -la",
+		// #1875: the canonical noise-suppression idiom - redirecting into
+		// a /dev/* device mutates nothing and must not count.
+		"go build ./... > /dev/null",
+		"go test ./internal/agent/ > /dev/null 2>&1",
+		"cargo build 2>/dev/null",
+		"make lint >/dev/stderr",
+		// #1875 case 2: quoted content containing a dot is still string
+		// content, not a path (the old code tripped on `v1.2'`).
+		`grep 'use > v1.2' readme`,
+		`echo "see > v1.2.md" docs`,
 	} {
 		if shellMutatesSources(cmd) {
 			t.Errorf("false positive on non-mutating command: %q", cmd)
+		}
+	}
+	// Real redirection into a file-shaped target still counts.
+	for _, cmd := range []string{
+		"echo hi > out.txt",
+		"go build ./... > build.log",
+		"echo hi >>notes.md",
+	} {
+		if !shellMutatesSources(cmd) {
+			t.Errorf("must be detected as source mutation: %q", cmd)
 		}
 	}
 }
