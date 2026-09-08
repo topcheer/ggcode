@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
@@ -52,6 +53,18 @@ func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler
 		switch resp.Status {
 		case toolpkg.AskUserStatusSubmitted:
 			content := buildElicitationContent(params.Schema, resp)
+			// #1678 case 2: a required field left EMPTY was silently
+			// dropped from the accept content (buildElicitationContent
+			// skips empty values) - the MCP server received an accept
+			// missing required fields with NO error signal, failing only
+			// at its own validation a round-trip later. Decline instead:
+			// an incomplete answer is not an acceptable answer.
+			if missing := missingRequiredFields(params.Schema, content); len(missing) > 0 {
+				debug.Log("mcp-elicitation", "declining accept: required field(s) left empty: %v", missing)
+				return &mcp.ElicitationResult{
+					Action: mcp.ElicitationActionDecline,
+				}, nil
+			}
 			return &mcp.ElicitationResult{
 				Action:  mcp.ElicitationActionAccept,
 				Content: content,
@@ -123,6 +136,23 @@ func buildElicitationAskUser(id string, params mcp.ElicitationParams) toolpkg.As
 
 // buildElicitationContent maps the AskUserResponse answers back into the
 // content map expected by the MCP elicitation result.
+// missingRequiredFields returns the required schema fields absent (or empty)
+// from the built accept content (#1678 case 2).
+func missingRequiredFields(schema mcp.ElicitationSchema, content map[string]any) []string {
+	var missing []string
+	for _, name := range schema.Required {
+		v, ok := content[name]
+		if !ok {
+			missing = append(missing, name)
+			continue
+		}
+		if s, isStr := v.(string); isStr && s == "" {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
 func buildElicitationContent(schema mcp.ElicitationSchema, resp toolpkg.AskUserResponse) map[string]any {
 	content := make(map[string]any)
 	for _, ans := range resp.Answers {

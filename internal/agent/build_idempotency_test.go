@@ -284,3 +284,42 @@ func indexOfIdempot(s, substr string) int {
 	}
 	return -1
 }
+
+// TestShellMutatesSourcesCommonWriteSurfaces pins #1678 case 1: the
+// whitelist missed redirections (the MOST common write surface) plus
+// tee/cp/mv/git-restore class commands - the cache-hit note "no source
+// files have changed" was literally false, tripled across #1486's three
+// consumers.
+func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
+	mutating := []string{
+		"echo 'package main' > main.go",
+		"cat header.txt body.txt >> out.go",
+		"tee version.go <<< v2",
+		"cp src.go backup.go",
+		"mv old.go new.go",
+		"git restore internal/tool/file.go",
+		"git checkout -- .",
+		"git stash",
+		"clang-format -i fmt.cc",
+		"perl -pi -e 's/a/b/' x.go",
+		"dd if=img of=loader.go",
+		"install -m 644 gen.go dest.go",
+		"patch < fix.diff",
+	}
+	for _, cmd := range mutating {
+		if !shellMutatesSources(cmd) {
+			t.Errorf("must be detected as source mutation: %q", cmd)
+		}
+	}
+	// Quoted redirection-like content must NOT trip the token check.
+	for _, cmd := range []string{
+		`echo "a>b"`,
+		`grep 'foo > bar' file.go`,
+		"go build ./...",
+		"ls -la",
+	} {
+		if shellMutatesSources(cmd) {
+			t.Errorf("false positive on non-mutating command: %q", cmd)
+		}
+	}
+}

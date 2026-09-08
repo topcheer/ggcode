@@ -282,6 +282,43 @@ func shellMutatesSources(cmd string) bool {
 	if lower == "go fmt" {
 		return true
 	}
+	// #1678 case 1: the whitelist missed the most common write surfaces.
+	// A shell redirection into a file IS a source mutation - the cache-hit
+	// note "no source files have changed" was literally false, and #1486
+	// wired this predicate into THREE consumers (build cache,
+	// recordShellSourceMutation, reverify) so the gap tripled. The token
+	// check requires a file-shaped target (contains "." or "/") so quoted
+	// content like `grep 'foo > bar' file.go` does not trip it.
+	toks := strings.Fields(lower)
+	for i, tok := range toks {
+		redirect := ""
+		switch {
+		case tok == ">" || tok == ">>":
+			if i+1 < len(toks) {
+				redirect = toks[i+1]
+			}
+		case strings.HasPrefix(tok, ">"):
+			redirect = tok[1:]
+		}
+		if redirect != "" && (strings.Contains(redirect, ".") || strings.Contains(redirect, "/")) {
+			return true
+		}
+	}
+	for _, pat := range []string{
+		"tee ",       // tee file.go (no redirection form)
+		"cp ", "mv ", // overwrite/replace targets
+		"git restore",                       // discard local edits
+		"git checkout --", "git checkout .", // revert working tree
+		"git stash", // drop/apply cycles mutate sources
+		"clang-format -i", "perl -pi", "perl -i",
+		" of=", // dd of=file (any position)
+		"install ",
+		"patch <", // patch without -p (stdin form)
+	} {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
 	return false
 }
 
