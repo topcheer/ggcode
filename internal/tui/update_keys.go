@@ -10,6 +10,15 @@ import (
 )
 
 // handleKeyPress handles the tea.KeyPressMsg case.
+// anyPanelOpen reports whether any overlay panel currently owns the UI
+// (#1772): global keys that switch sessions must yield to the panel
+// dispatch when one is open, or the panel leaks onto the new session.
+func anyPanelOpen(m Model) bool {
+	return m.providerPanel != nil || m.qqPanel != nil || m.mcpPanel != nil ||
+		m.tmuxMenuOpen || m.impersonatePanel != nil || m.pcPanel != nil ||
+		m.streamPanel != nil || len(m.langOptions) > 0 || m.pendingQuestionnaire != nil
+}
+
 func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	// During startup input drain, suppress all keyboard input.
 	// This prevents terminal responses (OSC 11, CPR, Kitty mode report)
@@ -74,10 +83,16 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 	// Iteration 2: Alt+Up/Down to cycle sessions quickly
-	if msg.String() == "alt+up" || msg.String() == "alt+k" {
+	// #1772: these globals sit BEFORE the panel dispatch - a session
+	// switch under an open settings/todo/mcp/cron panel left the panel
+	// alive on the NEW session, showing and editing the OLD one's data.
+	// Guard the cycle keys the same way the panel dispatch below takes
+	// precedence over everything else.
+	if anyPanelOpen(m) {
+		// fall through to the panel handlers below
+	} else if msg.String() == "alt+up" || msg.String() == "alt+k" {
 		return m, m.cycleSession(-1)
-	}
-	if msg.String() == "alt+down" || msg.String() == "alt+j" {
+	} else if msg.String() == "alt+down" || msg.String() == "alt+j" {
 		return m, m.cycleSession(1)
 	}
 	// Iteration 3: Ctrl+Shift+C copies last assistant response to clipboard
