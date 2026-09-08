@@ -334,6 +334,13 @@ func RemoveMCPServer(name string) error {
 	removedYaml := cfg.RemoveMCPServer(name)
 	if removedYaml {
 		if err := cfg.SaveMCPServers(); err != nil {
+			// #1868 case 3: the in-memory removal already recorded + persisted
+			// the tombstone; with the yaml save failed the on-disk entry
+			// survives, which leaves a split state (tombstone hides the row,
+			// yaml keeps it, re-adding the name revives stale fields).
+			// Roll the tombstone back so the failed delete leaves the server
+			// fully present and consistent instead.
+			cfg.ClearMCPDeleted(name)
 			return err
 		}
 	}
@@ -342,6 +349,12 @@ func RemoveMCPServer(name string) error {
 	// and dual-side names (yaml removal alone would be resurrected by merge).
 	removedOrigin, err := removeMigratedMCPServer(chatSnap, name)
 	if err != nil {
+		// #1868 case 2: partial migration-file cleanup - the files that DID
+		// get rewritten are gone, the survivors are a merge resurrect source
+		// with no tombstone in between, so the next panel read silently
+		// re-imports the server. The user's intent was DELETE: record the
+		// tombstone even on failure (idempotent) so survivors stay hidden.
+		cfg.RecordMCPDeleted(name)
 		return err
 	}
 	if !removedYaml && !removedOrigin {

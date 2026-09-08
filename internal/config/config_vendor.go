@@ -378,6 +378,13 @@ func (c *Config) RemoveMCPServer(name string) bool {
 // and never reaches it.
 func (c *Config) RecordMCPDeleted(name string) { c.recordMCPDeleted(name) }
 
+// ClearMCPDeleted is the exported rollback entry point: surfaces that
+// recorded a tombstone but then failed to persist the removal itself
+// (e.g. SaveMCPServers error) un-record it to avoid a split state where
+// the yaml entry survives on disk while the tombstone hides it (#1868
+// case 3).
+func (c *Config) ClearMCPDeleted(name string) { c.clearMCPDeleted(name) }
+
 // recordMCPDeleted appends name to the deletion tombstones and persists them
 // so a Claude source file rewritten behind our back (e.g. Pen.app re-adding
 // its registration) cannot resurrect the server via merge. Callers that

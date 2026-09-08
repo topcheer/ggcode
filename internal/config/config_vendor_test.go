@@ -29,3 +29,30 @@ func TestAddEndpointExistingMergesNotReplaces(t *testing.T) {
 		t.Fatal("new endpoint must be created")
 	}
 }
+
+// Regression for #1868 case 3: a failed delete must be able to roll the
+// tombstone back, or the yaml entry that survived on disk stays hidden by
+// the tombstone (split state) and re-adding the name revives stale fields.
+func TestMCPTombstoneRollback(t *testing.T) {
+	c := &Config{}
+	c.RecordMCPDeleted("srv")
+	if len(c.DeletedMCPServers) != 1 || c.DeletedMCPServers[0] != "srv" {
+		t.Fatalf("tombstone must be recorded, got %v", c.DeletedMCPServers)
+	}
+	// Idempotent double-record (failure paths may re-record).
+	c.RecordMCPDeleted("srv")
+	if len(c.DeletedMCPServers) != 1 {
+		t.Fatalf("double record must be idempotent, got %v", c.DeletedMCPServers)
+	}
+	// Rollback removes exactly the name.
+	c.RecordMCPDeleted("other")
+	c.ClearMCPDeleted("srv")
+	if len(c.DeletedMCPServers) != 1 || c.DeletedMCPServers[0] != "other" {
+		t.Fatalf("rollback must remove only the target, got %v", c.DeletedMCPServers)
+	}
+	// Clearing a name that is not tombstoned is a no-op.
+	c.ClearMCPDeleted("absent")
+	if len(c.DeletedMCPServers) != 1 {
+		t.Fatalf("clear of absent name must be a no-op, got %v", c.DeletedMCPServers)
+	}
+}
