@@ -119,7 +119,11 @@ type onboardModel struct {
 	allModels     []string
 	modelFilter   textinput.Model
 	modelFiltered []int
-	modelLoading  bool
+	// modelsAreSentinel marks the model list as the "default" placeholder
+	// (discover failed, no DefaultModel) - completing onboarding on it would
+	// persist a non-model and auto-exec a broken first boot (#1745 case 2).
+	modelsAreSentinel bool
+	modelLoading      bool
 
 	optCursor int
 	optMode   int

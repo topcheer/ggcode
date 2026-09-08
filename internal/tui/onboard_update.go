@@ -233,6 +233,11 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 	} else {
 		m.allModels = []string{"default"}
 		m.models = []string{"default"}
+		// #1745 case 2: the "default" sentinel is a PLACEHOLDER, not a real
+		// model - discover failed and no DefaultModel exists. Mark it so the
+		// enter key can refuse to complete onboarding with this non-value
+		// (it would be saved + auto-exec'd into a broken first-boot loop).
+		m.modelsAreSentinel = true
 	}
 
 	// #907: keep the FULL list as the filter/selection source — the old
@@ -280,7 +285,10 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "enter":
-				if len(m.modelFiltered) > 0 {
+				if len(m.modelFiltered) > 0 && !m.modelsAreSentinel {
+					// #1745 case 2: sentinel lists (discover failed, no
+					// DefaultModel) must not complete the wizard - the caller
+					// saves cfg.Model verbatim and syscall.Exec's a broken boot.
 					// Update custom provider model field if user came via custom path
 					if m.selectedVendor.ID == "" && m.customResolved != nil {
 						m.customFields[3].SetValue(m.models[m.modelFiltered[m.modelCursor]])

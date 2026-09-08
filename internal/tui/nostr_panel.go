@@ -349,6 +349,11 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 						return nostrBindResultMsg{err: err}
 					}
 					if err := m.startNostrAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errNostrEnableNeeded) {
+							// #1745 case 1: enable on the Update loop, then
+							// retry the rest of this flow.
+							return m.enableNostrAdapterMutation(name, nil)
+						}
 						return nostrBindResultMsg{err: err}
 					}
 
@@ -382,36 +387,85 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 }
 
 func (m *Model) startNostrAdapterIfNeeded(name string) error {
+	// #1745 case 1: callers run on Cmd goroutines; the auto-enable used to
+	// call SetIMAdapterEnabled (config map write) right here - a
+	// concurrent map read/write fatal against render. Split into a check
+	// (safe anywhere) + an apply (must run on the Update loop); the bind and
+	// create-next paths route the apply through configMutationMsg.
+	needEnable, err := m.nostrAdapterNeedsEnable(name)
+	if err != nil {
+		return err
+	}
+	if needEnable {
+		return errNostrEnableNeeded
+	}
+	return m.startEnabledNostrAdapter(name)
+}
+
+// errNostrEnableNeeded signals the caller to route the enable through
+// configMutationMsg instead of writing config inline.
+var errNostrEnableNeeded = errors.New("nostr adapter needs enable-on-update-loop")
+
+// nostrAdapterNeedsEnable reports whether the adapter is absent from the
+// runtime snapshot and disabled in config (the auto-enable case).
+func (m *Model) nostrAdapterNeedsEnable(name string) (bool, error) {
 	if m.imManager == nil || m.config == nil {
-		return nil
+		return false, nil
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return errors.New(m.t("panel.nostr.error.adapter_required"))
+		return false, errors.New(m.t("panel.nostr.error.adapter_required"))
 	}
 	snapshot := m.imManager.Snapshot()
 	for _, state := range snapshot.Adapters {
 		if state.Name == name {
-			return nil
+			return false, nil
 		}
 	}
 	adapterCfg, ok := m.config.IM.Adapters[name]
 	if !ok {
-		return fmt.Errorf(m.t("panel.nostr.error.not_configured"), name)
-	}
-	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		return false, fmt.Errorf(m.t("panel.nostr.error.not_configured"), name)
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformNostr)) {
-		return fmt.Errorf(m.t("panel.nostr.error.not_nostr_adapter"), name)
+		return false, fmt.Errorf(m.t("panel.nostr.error.not_nostr_adapter"), name)
 	}
+	return !adapterCfg.Enabled, nil
+}
+
+// startEnabledNostrAdapter brings the (already-enabled) adapter up.
+func (m *Model) startEnabledNostrAdapter(name string) error {
 	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+}
+
+// enableNostrAdapterMutation returns the configMutationMsg that performs the
+// auto-enable on the Update loop and then starts the adapter, continuing
+// with the caller's follow-up Cmd.
+func (m *Model) enableNostrAdapterMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := m.startEnabledNostrAdapter(name); err != nil {
+					return nostrBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return nostrBindResultMsg{err: err}
+		},
+	}
 }
 
 func (m *Model) ensureNostrRuntime() error {
@@ -428,6 +482,17 @@ func (m *Model) bindNostrEntry(entry nostrBindingEntry) tea.Cmd {
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_unavailable"))}
 		}
 		if err := m.startNostrAdapterIfNeeded(entry.Adapter); err != nil {
+			if errors.Is(err, errNostrEnableNeeded) {
+				// #1745 case 1: enable rides configMutationMsg (Update loop);
+				// the bind itself runs in its follow-up.
+				return m.enableNostrAdapterMutation(entry.Adapter, func(m *Model) tea.Msg {
+					cmd := m.bindNostrEntry(entry)
+					if cmd == nil {
+						return nil
+					}
+					return cmd()
+				})
+			}
 			return nostrBindResultMsg{err: err}
 		}
 		targetID := defaultNostrTargetID(ws)
