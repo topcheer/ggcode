@@ -1505,14 +1505,22 @@ func (a *configAccess) setFallbacksList(value string) error {
 	if err := json.Unmarshal([]byte(value), &list); err != nil {
 		return fmt.Errorf("fallbacks must be a JSON array of entries: %w", err)
 	}
+	// #1482 case D: hot-reload reads cfg fields under cfgMu; these writes
+	// raced it unlocked (torn reads in the refresh log at best).
+	a.cfgMu.Lock()
 	a.cfg.Fallbacks = list
+	a.cfgMu.Unlock()
 	return a.saveAndPatch("fallbacks", value)
 }
 
 // setFallbacksIndexed writes one field of chain entry idxStr.
 func (a *configAccess) setFallbacksIndexed(idxStr, field, value string) error {
+	// #1482 case D: bounds check + write under the same lock so hot-reload
+	// cannot observe a stale length mid-swap.
+	a.cfgMu.Lock()
 	idx, err := strconv.Atoi(idxStr)
 	if err != nil || idx < 0 || idx >= len(a.cfg.Fallbacks) {
+		a.cfgMu.Unlock()
 		return fmt.Errorf("fallbacks index out of range: %q (chain has %d entries)", idxStr, len(a.cfg.Fallbacks))
 	}
 	fb := &a.cfg.Fallbacks[idx]
@@ -1520,6 +1528,7 @@ func (a *configAccess) setFallbacksIndexed(idxStr, field, value string) error {
 	case "enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
+			a.cfgMu.Unlock()
 			return fmt.Errorf("invalid enabled: %w", err)
 		}
 		fb.Enabled = b
@@ -1530,10 +1539,13 @@ func (a *configAccess) setFallbacksIndexed(idxStr, field, value string) error {
 	case "model":
 		fb.Model = value
 	case "":
+		a.cfgMu.Unlock()
 		return fmt.Errorf("fallbacks.<N> writes are not supported; use fallbacks.<N>.<field>")
 	default:
+		a.cfgMu.Unlock()
 		return fmt.Errorf("unknown fallback field: %q (enabled/vendor/endpoint/model)", field)
 	}
+	a.cfgMu.Unlock()
 	return a.saveAndPatch("fallbacks."+idxStr+"."+field, value)
 }
 
@@ -1543,6 +1555,9 @@ func (a *configAccess) appendFallbackEntry(value string) error {
 	if err := json.Unmarshal([]byte(value), &fb); err != nil {
 		return fmt.Errorf("fallbacks.append must be a JSON entry object: %w", err)
 	}
+	// #1482 case D: same lock as the other fallbacks writers.
+	a.cfgMu.Lock()
 	a.cfg.Fallbacks = append(a.cfg.Fallbacks, fb)
+	a.cfgMu.Unlock()
 	return a.saveAndPatch("fallbacks.append", value)
 }

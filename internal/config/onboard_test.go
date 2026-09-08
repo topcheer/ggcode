@@ -241,8 +241,11 @@ func TestNeedsOnboardEmptyHome(t *testing.T) {
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
-	if !cfg.NeedsOnboard() {
-		t.Error("saved config with no env vars should still need onboard")
+	// #1865 owner invariant: once the config FILE exists on disk, onboarding
+	// never triggers again - even with every env var cleared. Key resolution
+	// failures must surface at provider-call time, not as a re-onboard.
+	if cfg.NeedsOnboard() {
+		t.Error("saved config file on disk must never re-onboard (owner invariant #1865)")
 	}
 }
 

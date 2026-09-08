@@ -765,10 +765,10 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 	probeURL.RawQuery = q.Encode()
 
 	const maxDelay = 10 * time.Second
-	// Bounded budget: 2+3+4.5+6.75+10+10 ~= 36s total. The Railway-style
-	// sync window is "a few seconds"; unbounded retry parked the MCP panel
-	// on "Verifying OAuth client" for the FULL 5-minute caller ctx on any
-	// server whose authorize endpoint kept 4xx-ing the probe.
+	// Bounded budget: probe-first + waits of 2+3+4.5+6.75+10 ~= 26s worst
+	// case. The Railway-style sync window is "a few seconds"; unbounded retry
+	// parked the MCP panel on "Verifying OAuth client" for the FULL 5-minute
+	// caller ctx on any server whose authorize endpoint kept 4xx-ing the probe.
 	const maxAttempts = 6
 	delay := 2 * time.Second
 	attempt := 0
@@ -780,11 +780,19 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 			debug.Log("mcp-oauth", "client_id health check gave up after %d attempts, continuing anyway", maxAttempts)
 			return nil
 		}
-		select {
-		case <-ctx.Done():
-			h.setHealthCheckStatus("")
-			return ctx.Err()
-		case <-time.After(delay):
+		// Probe FIRST; wait only BETWEEN retries (owner report: the pre-probe
+		// sleep made every OAuth start pay 2s even on fully consistent servers
+		// where the first probe succeeds instantly - "DCR 无延迟" must mean
+		// zero added delay for the common case; only eventual-consistency
+		// servers should ever see the backoff waits).
+		if attempt > 1 {
+			select {
+			case <-ctx.Done():
+				h.setHealthCheckStatus("")
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			delay = minDuration(delay*3/2, maxDelay)
 		}
 
 		// GET with redirect-following disabled. A valid client_id gets 302
@@ -800,7 +808,6 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 		if err != nil {
 			h.setHealthCheckStatus(fmt.Sprintf("Verifying OAuth client (attempt %d, retrying)...", attempt))
 			debug.Log("mcp-oauth", "client_id health check attempt=%d error=%v", attempt, err)
-			delay = minDuration(delay*3/2, maxDelay)
 			continue
 		}
 		body, _ := util.ReadAll(resp.Body, util.ReadLimitAuth)
@@ -818,15 +825,13 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 			return nil
 		case strings.Contains(bodyStr, "invalid_client"):
 			h.setHealthCheckStatus(fmt.Sprintf("Waiting for OAuth client to sync (attempt %d)...", attempt))
-			debug.Log("mcp-oauth", "client_id health check invalid_client attempt=%d, retrying in %s", attempt, delay)
-			delay = minDuration(delay*3/2, maxDelay)
+			debug.Log("mcp-oauth", "client_id health check invalid_client attempt=%d", attempt)
 			continue
 		case resp.StatusCode >= 400 && resp.StatusCode < 500:
 			// Other 4xx errors — could be transient server-side issues during
 			// DCR propagation. Log the body for debugging and retry.
 			h.setHealthCheckStatus(fmt.Sprintf("Waiting for OAuth client to sync (attempt %d)...", attempt))
-			debug.Log("mcp-oauth", "client_id health check 4xx status=%d body=%s attempt=%d, retrying in %s", resp.StatusCode, truncateForLog(bodyStr, 200), attempt, delay)
-			delay = minDuration(delay*3/2, maxDelay)
+			debug.Log("mcp-oauth", "client_id health check 4xx status=%d body=%s attempt=%d", resp.StatusCode, truncateForLog(bodyStr, 200), attempt)
 			continue
 		default:
 			h.setHealthCheckStatus("")

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // OpenEditorTool lets the agent open a file (optionally at a specific line) in
@@ -292,6 +294,6 @@ func startDetached(cmd *exec.Cmd) error {
 	// children - without a Wait, every editor launch leaked a zombie
 	// until ggcode exited. Reap in the background like the desktop-control
 	// runAppResult path does.
-	go func() { _ = cmd.Wait() }()
+	safego.Go("tool.openEditor.reap", func() { _ = cmd.Wait() })
 	return nil
 }

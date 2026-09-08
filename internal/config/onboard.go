@@ -32,9 +32,27 @@ type EndpointPreset struct {
 
 // NeedsOnboard returns true when the current config does not have a usable
 // LLM provider and the user should be guided through first-time setup.
+//
+// OWNER INVARIANT (v1.3.234, reported by the repo owner): whether onboarding
+// runs is decided SOLELY by the presence of the ggcode.yaml config file. If
+// the file exists, onboarding must never trigger again - no vendor/endpoint/
+// API-key inference may override that. The inference below only runs for
+// configs with no file on disk (fresh installs, in-memory test configs).
+// History: key persistence moved to keys.env (#1517) left ${VAR} references
+// in yaml; if an entrypoint skipped loadRuntimeEnv, LookupEnv failed and
+// every existing user was thrown back into onboarding after upgrading.
+// File presence is the single source of truth; do not reintroduce inference
+// on top of an existing file.
 func (c *Config) NeedsOnboard() bool {
 	if c == nil {
 		return true
+	}
+	// An existing config file means setup was completed at some point:
+	// never re-onboard over it (#1865 regression guard).
+	if c.FilePath != "" {
+		if _, err := os.Stat(c.FilePath); err == nil {
+			return false
+		}
 	}
 	// No vendor selected at all.
 	if strings.TrimSpace(c.Vendor) == "" {

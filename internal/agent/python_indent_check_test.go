@@ -90,3 +90,35 @@ func TestFilepathExtSafe(t *testing.T) {
 		}
 	}
 }
+
+// TestPythonIndentationRegistered pins #1481 case C: fc5c4aad's style-check
+// purge orphaned checkPythonIndentation (zero production callers, registry
+// entry deleted) even though the module's own docs call mixed indentation
+// "guaranteed TabError in Python 3" - crash-class, squarely under the
+// purge's stated retention standard. The registry must carry it again.
+func TestPythonIndentationRegistered(t *testing.T) {
+	found := false
+	for _, c := range allChecks {
+		if c.Name == "python-indentation" {
+			found = true
+			if c.Severity != SeverityCritical {
+				t.Errorf("python-indentation must be Critical (TabError crashes the run), got %v", c.Severity)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("python-indentation missing from the write-integrity registry (#1481 case C: dead wiring again)")
+	}
+	// And the registered check actually fires on a mixed-indent Python file.
+	for _, c := range allChecks {
+		if c.Name != "python-indentation" {
+			continue
+		}
+		msgs := c.Run(CheckContext{FilePath: "test.py", NewContent: "def f():\n\t    pass\n"})
+		if len(msgs) == 0 {
+			t.Error("registered python-indentation check did not fire on mixed tabs/spaces")
+		}
+		return
+	}
+}

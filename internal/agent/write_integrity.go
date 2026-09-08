@@ -385,6 +385,15 @@ func registerAllChecks() {
 		// --- Security (OWASP / CVE-class) ---
 		{Name: "sql-injection", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSQLInjection)},
 		{Name: "path-traversal", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkPathTraversal)},
+		// #1481 case C: python-indentation was orphaned by fc5c4aad's style-
+		// check purge even though its own docs call mixed indentation
+		// "guaranteed TabError in Python 3" - a crash-class defect squarely
+		// under the purge's stated retention standard. checkPythonIndentation
+		// takes (filePath, content); adapt to the three-arg stringCheck shape
+		// (oldContent is irrelevant to indentation validity).
+		{Name: "python-indentation", Langs: []Language{LangPython}, Severity: SeverityCritical, Run: stringCheck(func(filePath, _, content string) string {
+			return checkPythonIndentation(filePath, content)
+		})},
 		{Name: "sensitive-json", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSensitiveJSONExposure)},
 		{Name: "hardcoded-secret", Severity: SeverityCritical, Run: sliceCheck(checkHardcodedSecrets)},
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkInsecurePatterns)},

@@ -176,10 +176,15 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	old.MaxIterations = fresh.MaxIterations
 	old.SessionTokenBudget = fresh.SessionTokenBudget
 	old.ToolCallBudget = fresh.ToolCallBudget
+	// #1482 case D: snapshot the log fields under the same lock the
+	// setFallbacks* writers now hold - the old post-Unlock read raced
+	// concurrent fallback writes.
+	fallbackConfigured := old.Fallback.IsConfigured()
+	vendorCount := len(old.Vendors)
 	a.cfgMu.Unlock()
 
 	debug.Log("config-hotreload", "config refreshed: vendors=%d fallback=%v",
-		len(old.Vendors), old.Fallback.IsConfigured())
+		vendorCount, fallbackConfigured)
 
 	// Re-apply turn-scoped budgets so the next turn picks them up.
 	if a.agentInst != nil {
