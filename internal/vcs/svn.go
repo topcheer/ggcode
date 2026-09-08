@@ -127,7 +127,14 @@ func (Subversion) IsClean(ctx context.Context, dir string) (bool, error) {
 		if strings.TrimSpace(t) == "" {
 			continue
 		}
-		if c := t[0]; c == 'X' || c == '>' {
+		c := t[0]
+		if c == 'X' || c == '>' {
+			continue
+		}
+		// #1684 case 1: recursive status prints "Performing status on
+		// external item at '...'" (leading 'P') when walking externals - a
+		// working copy using svn:externals was permanently "dirty".
+		if c == 'P' {
 			continue
 		}
 		return false, nil

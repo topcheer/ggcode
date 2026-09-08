@@ -3,10 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/topcheer/ggcode/internal/safego"
 )
@@ -292,9 +294,16 @@ func isCrossDeviceError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// #1684 case 2: errno check first (Windows returns
+	// ERROR_NOT_SAME_DEVICE(17), whose text mentions neither keyword),
+	// text fallback second.
+	if errors.Is(err, syscall.EXDEV) {
+		return true
+	}
 	msg := err.Error()
 	// "invalid cross-device link" (Linux) or "cross-device renamed" or errno EXDEV.
-	return strings.Contains(msg, "cross-device") || strings.Contains(msg, "EXDEV")
+	return strings.Contains(msg, "cross-device") || strings.Contains(msg, "EXDEV") ||
+		strings.Contains(msg, "different disk drive")
 }
 
 // copyDirEntry copies one child of a directory tree during copyDirTree.

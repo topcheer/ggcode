@@ -48,6 +48,13 @@ func suggestFilePath(absPath string) string {
 	}
 
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	// #1684 case 3: for dotfiles like ".env", Ext==".env" and stem=="" -
+	// every later HasPrefix(x, "") is true, so the fast filter collapsed
+	// and one typo triggered a pointless 20000-file walk whose only
+	// survivors were OTHER dotfiles (exact-match branch, similarity 0).
+	if stem == "" && strings.HasPrefix(base, ".") {
+		stem = base // compare the full dotfile name, not the empty string
+	}
 	parentDir := filepath.Dir(absPath)
 
 	candidates := collectCandidates(parentDir, base, searchDepth)
