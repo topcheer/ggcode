@@ -90,6 +90,8 @@ func localizedToolLabel(lang Language, action string) string {
 			return "使用技能"
 		case "save_memory":
 			return "保存记忆"
+		case "delete":
+			return "删除"
 		case "delete_memory":
 			return "删除记忆"
 		case "sleep":
@@ -231,6 +233,8 @@ func localizedToolLabel(lang Language, action string) string {
 			return "Using Skill"
 		case "save_memory":
 			return "Save Memory"
+		case "delete":
+			return "Delete"
 		case "delete_memory":
 			return "Delete Memory"
 		case "sleep":
@@ -375,10 +379,32 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "更新待办"
 			case "task":
 				return "执行任务"
+			// #1766 case 2: git sub-command actions with no target used to
+			// fall to generic and render "Running " with a trailing space.
+			case "diff":
+				return "查看差异"
+			case "log":
+				return "查看提交历史"
+			case "show":
+				return "查看对象"
+			case "blame":
+				return "追溯行历史"
+			case "branches":
+				return "列出分支"
+			case "remote":
+				return "查看远程仓库"
+			case "stash":
+				return "管理贮藏"
+			case "stage":
+				return "暂存变更"
+			case "commit":
+				return "提交变更"
 			case "skill":
 				return "加载技能"
 			case "save_memory":
 				return "保存记忆中..."
+			case "delete":
+				return "删除中..."
 			case "delete_memory":
 				return "删除记忆中..."
 			case "sleep":
@@ -492,10 +518,30 @@ func localizedToolActivity(lang Language, action, target string) string {
 				return "Updating todos"
 			case "task":
 				return "Running task"
+			case "diff":
+				return "Diffing"
+			case "log":
+				return "Reading commit history"
+			case "show":
+				return "Showing object"
+			case "blame":
+				return "Blaming"
+			case "branches":
+				return "Listing branches"
+			case "remote":
+				return "Inspecting remotes"
+			case "stash":
+				return "Managing stash"
+			case "stage":
+				return "Staging changes"
+			case "commit":
+				return "Committing"
 			case "skill":
 				return "Loading skill"
 			case "save_memory":
 				return "Saving memory..."
+			case "delete":
+				return "Deleting..."
 			case "delete_memory":
 				return "Deleting memory..."
 			case "sleep":
