@@ -455,6 +455,11 @@ func (m *Model) enableAllIMChannels() tea.Cmd {
 
 // toggleIMAdapterEnabled disables or enables an adapter with config persistence.
 // Shared by all channel-specific panels.
+// #1763 case 1: this SHARED root is the last direct-write path of the
+// #1367/#1377/#1745/#1750/#1751/#1758 family - six rounds fixed individual
+// panels' private paths while their common 'd'-key entry point kept writing
+// the config map from a Cmd goroutine (fatal concurrent map read/write against
+// the render loop). One fix here heals all 15 panel call sites.
 func (m *Model) toggleIMAdapterEnabled(adapterName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.imManager == nil {
@@ -466,8 +471,18 @@ func (m *Model) toggleIMAdapterEnabled(adapterName string) tea.Cmd {
 				return imPanelResultMsg{err: err}
 			}
 			if m.config != nil {
-				if err := m.config.SetIMAdapterEnabled(adapterName, true); err != nil {
-					return imPanelResultMsg{err: fmt.Errorf("persist enable failed: %w", err)}
+				return configMutationMsg{
+					apply: func(m *Model) error {
+						return m.config.SetIMAdapterEnabled(adapterName, true)
+					},
+					next: func(m *Model) tea.Cmd {
+						return func() tea.Msg {
+							return imPanelResultMsg{message: m.t("panel.im.message.enabled", adapterName)}
+						}
+					},
+					fail: func(err error) tea.Msg {
+						return imPanelResultMsg{err: fmt.Errorf("persist enable failed: %w", err)}
+					},
 				}
 			}
 			return imPanelResultMsg{message: m.t("panel.im.message.enabled", adapterName)}
@@ -476,8 +491,18 @@ func (m *Model) toggleIMAdapterEnabled(adapterName string) tea.Cmd {
 			return imPanelResultMsg{err: err}
 		}
 		if m.config != nil {
-			if err := m.config.SetIMAdapterEnabled(adapterName, false); err != nil {
-				return imPanelResultMsg{err: fmt.Errorf("persist disable failed: %w", err)}
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					return m.config.SetIMAdapterEnabled(adapterName, false)
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						return imPanelResultMsg{message: m.t("panel.im.message.disabled", adapterName)}
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return imPanelResultMsg{err: fmt.Errorf("persist disable failed: %w", err)}
+				},
 			}
 		}
 		return imPanelResultMsg{message: m.t("panel.im.message.disabled", adapterName)}

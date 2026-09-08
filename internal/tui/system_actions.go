@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -42,6 +43,13 @@ func openSystemURL(rawURL string) error {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return fmt.Errorf("url is empty")
+	}
+	// #1763 case 2: callers include OAuth flows where the URL comes from an
+	// EXTERNAL MCP server's response (VerificationURI/authorizeURL) - a
+	// hostile server could hand back file:// or a custom scheme and let the
+	// OS protocol handler dispatch it. Allow only web schemes.
+	if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("refusing to open non-http(s) URL: %q", rawURL)
 	}
 	command, args := openURLCommand(rawURL)
 	if command == "" {
