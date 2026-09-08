@@ -409,7 +409,9 @@ func SiblingDiagnostics(ctx context.Context, workspace, editedPath string) ([]Si
 			continue
 		}
 		for _, d := range diags {
-			if d.Severity <= 2 { // Error or Warning only
+			// #1881 case 2: severity is optional in LSP - a missing field
+			// decodes to 0 (unspecified), which must NOT count as Error/Warning.
+			if d.Severity >= 1 && d.Severity <= 2 { // Error or Warning only
 				result = append(result, SiblingDiagnostic{
 					File:       siblingPath,
 					Diagnostic: d,
@@ -464,7 +466,6 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 	}
 
 	// Collect all URIs with cached error/warning diagnostics.
-	editedDir := filepath.Dir(editedPath)
 	editedAbs, _ := filepath.Abs(editedPath)
 
 	var candidates []crossPackageCandidate
@@ -481,11 +482,13 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 		}
 		fpAbs, _ := filepath.Abs(fp)
 		// Skip the edited file itself and files in the same directory
-		// (those are handled by SiblingDiagnostics).
+		// (those are handled by SiblingDiagnostics). #1881 case 1: both
+		// comparisons use Abs-normalized paths so correctness does not depend
+		// on callers always passing absolute paths.
 		if fpAbs == editedAbs {
 			continue
 		}
-		if filepath.Dir(fp) == editedDir {
+		if filepath.Dir(fpAbs) == filepath.Dir(editedAbs) {
 			continue
 		}
 		// Only consider Go source files.
@@ -495,7 +498,8 @@ func CrossPackageDiagnostics(ctx context.Context, workspace, editedPath string) 
 		// Collect error/warning diagnostics.
 		var diags []Diagnostic
 		for _, d := range state.diagnostics {
-			if d.Severity <= 2 {
+			// #1881 case 2: 0 = unspecified severity, not Error/Warning.
+			if d.Severity >= 1 && d.Severity <= 2 {
 				diags = append(diags, d)
 			}
 		}
