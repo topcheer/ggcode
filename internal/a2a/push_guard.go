@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,9 +49,18 @@ const pushValidationDNSTimeout = 3 * time.Second
 // pushGuard holds the parsed explicit allowlist for callback targets that
 // the default rules would reject (private/loopback ranges, plain http).
 type pushGuard struct {
-	allowCIDRs   []*net.IPNet
-	allowHosts   map[string]struct{} // lowercase hostnames / bare IPs
-	allowHostIPs []net.IP            // #1751: resolved IPs of the entries above, for dial-time checks
+	allowCIDRs []*net.IPNet
+	allowHosts map[string]struct{} // lowercase hostnames / bare IPs
+	// #1751: resolved IPs of the entries above, for dial-time checks.
+	// #1889: hostname resolution is a snapshot that goes stale when the
+	// LAN collector renews its DHCP lease - keep the hostnames that need
+	// resolution and re-resolve (rate-limited) when a dial-time check
+	// misses, so registration-side and delivery-side agreement survives
+	// DNS drift without a server restart.
+	allowHostIPs []net.IP
+	resolveNames []string
+	mu           sync.Mutex
+	lastResolve  time.Time
 }
 
 // newPushGuard parses allowlist entries. Accepted forms:
@@ -61,8 +71,6 @@ type pushGuard struct {
 // Invalid entries are logged and skipped (never widen the guard silently).
 func newPushGuard(allowlist []string) *pushGuard {
 	g := &pushGuard{allowHosts: make(map[string]struct{})}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	for _, entry := range allowlist {
 		entry = strings.ToLower(strings.TrimSpace(entry))
 		if entry == "" {
@@ -86,13 +94,63 @@ func newPushGuard(allowlist []string) *pushGuard {
 			g.allowHostIPs = append(g.allowHostIPs, ip)
 			continue
 		}
-		if addrs, err := net.DefaultResolver.LookupIPAddr(ctx, entry); err == nil {
+		g.resolveNames = append(g.resolveNames, entry)
+		// #1889: per-entry ctx (a shared one starved later entries) and a
+		// log on failure (it used to fail silently and look exactly like a
+		// stale snapshot - undiagnosable).
+		ectx, ecancel := context.WithTimeout(context.Background(), 3*time.Second)
+		addrs, err := net.DefaultResolver.LookupIPAddr(ectx, entry)
+		ecancel()
+		if err != nil {
+			debug.Log("a2a.push", "push allowlist hostname %q failed to resolve at startup: %v", entry, err)
+		} else {
 			for _, a := range addrs {
 				g.allowHostIPs = append(g.allowHostIPs, a.IP)
 			}
 		}
 	}
 	return g
+}
+
+// refreshResolvedHosts re-resolves the allowlisted hostnames at most once
+// per resolveTTL. Called from ipAllowed on a miss, before rejecting: a
+// DHCP/DDNS lease change moves the collector to an IP that is not in the
+// startup snapshot, which would otherwise break delivery again (#1889).
+const pushGuardResolveTTL = 60 * time.Second
+
+func (g *pushGuard) refreshResolvedHosts() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if time.Since(g.lastResolve) < pushGuardResolveTTL || len(g.resolveNames) == 0 {
+		return
+	}
+	g.lastResolve = time.Now()
+	// Keep ALL existing IPs and append fresh resolutions - stale hostname
+	// IPs are harmless (they simply stop matching), while dropping them
+	// could break a peer whose DNS has not propagated everywhere yet.
+	for _, name := range g.resolveNames {
+		ectx, ecancel := context.WithTimeout(context.Background(), 3*time.Second)
+		addrs, err := net.DefaultResolver.LookupIPAddr(ectx, name)
+		ecancel()
+		if err != nil {
+			debug.Log("a2a.push", "push allowlist hostname %q re-resolve failed: %v", name, err)
+			continue
+		}
+		for _, a := range addrs {
+			if !containsIP(g.allowHostIPs, a.IP) {
+				g.allowHostIPs = append(g.allowHostIPs, a.IP)
+			}
+		}
+	}
+}
+
+func containsIP(ips []net.IP, ip net.IP) bool {
+	for _, v := range ips {
+		if v.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // hostAllowed reports whether the literal URL hostname is allowlisted.
@@ -107,7 +165,9 @@ func (g *pushGuard) hostAllowed(host string) bool {
 // ipAllowed reports whether an IP falls inside an allowlisted CIDR or
 // matches an allowlisted host's resolved IP (#1751 case 1: hostname/bare-IP
 // entries must survive into the dial-time check, or delivery is rejected
-// while registration exempted it).
+// while registration exempted it). #1889: on a miss, refresh the hostname
+// resolutions first (rate-limited) - a DHCP lease change moves the collector
+// off the startup snapshot and the miss is stale, not hostile.
 func (g *pushGuard) ipAllowed(ip net.IP) bool {
 	if g == nil {
 		return false
@@ -117,12 +177,19 @@ func (g *pushGuard) ipAllowed(ip net.IP) bool {
 			return true
 		}
 	}
-	for _, allowed := range g.allowHostIPs {
-		if allowed.Equal(ip) {
-			return true
-		}
+	g.mu.Lock()
+	hostIPs := make([]net.IP, len(g.allowHostIPs))
+	copy(hostIPs, g.allowHostIPs)
+	g.mu.Unlock()
+	if containsIP(hostIPs, ip) {
+		return true
 	}
-	return false
+	g.refreshResolvedHosts()
+	g.mu.Lock()
+	hostIPs = make([]net.IP, len(g.allowHostIPs))
+	copy(hostIPs, g.allowHostIPs)
+	g.mu.Unlock()
+	return containsIP(hostIPs, ip)
 }
 
 // isDisallowedCallbackIP reports whether an IP is in a range the push guard

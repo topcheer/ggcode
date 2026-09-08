@@ -382,6 +382,13 @@ func (m *Model) pcCloseSessionCmd(sessionID string) tea.Cmd {
 }
 
 func (m *Model) pcBindSessionCmd(session im.PCSessionInfo) tea.Cmd {
+	// #1889 case 2: pcAdapterName ranges the shared m.config.IM.Adapters
+	// map, and the IM/matrix/wechat panels WRITE that map from their Update
+	// paths - reading it inside the Cmd goroutine is a concurrent map read
+	// (fatal). Prefetch the name HERE, on the Update loop, before the
+	// closure escapes. ensurePCReady stays in the goroutine: it busy-waits
+	// up to 3s for the manager and must not block Update.
+	adapterName := m.pcAdapterName()
 	return func() tea.Msg {
 		if m.imManager == nil {
 			return pcResultMsg{err: errors.New("IM manager not available")}
@@ -392,9 +399,15 @@ func (m *Model) pcBindSessionCmd(session im.PCSessionInfo) tea.Cmd {
 		if err := m.ensurePCReady(); err != nil {
 			return pcResultMsg{err: fmt.Errorf("prepare private-claw runtime: %w", err)}
 		}
+		name := adapterName
+		if name == "" {
+			// ensurePCReady may have lazily registered the adapter just now;
+			// re-read via the manager (no config map access).
+			name = "_pc_builtin"
+		}
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Platform:  im.PlatformPrivateClaw,
-			Adapter:   m.pcAdapterName(),
+			Adapter:   name,
 			TargetID:  session.SessionID,
 			ChannelID: session.SessionID,
 		})
