@@ -339,14 +339,14 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 		switch node := n.(type) {
 		case *ast.ReturnStmt:
 			for _, res := range node.Results {
-				if exprReferencesIdent(res, base) {
+				if exprIsResourceHandoff(res, base) {
 					transferred = true
 					return false
 				}
 			}
 		case *ast.CallExpr:
 			for _, arg := range node.Args {
-				if exprReferencesIdent(arg, base) {
+				if exprIsResourceHandoff(arg, base) {
 					transferred = true
 					return false
 				}
@@ -364,7 +364,7 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 					continue
 				}
 				for _, rhs := range node.Rhs {
-					if exprReferencesIdent(rhs, base) {
+					if exprIsResourceHandoff(rhs, base) {
 						transferred = true
 						return false
 					}
@@ -372,7 +372,7 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 			}
 		case *ast.SendStmt:
 			// #1488: `ch <- l` - the receiver owns the resource now.
-			if exprReferencesIdent(node.Value, base) {
+			if exprIsResourceHandoff(node.Value, base) {
 				transferred = true
 				return false
 			}
@@ -398,6 +398,52 @@ func exprReferencesIdent(e ast.Expr, name string) bool {
 		return true
 	})
 	return found
+}
+
+// exprIsResourceHandoff reports whether e HANDS OFF the resource itself:
+// `l`, `&l`, or a direct field of it (`l.Body` - a transferable handle),
+// NOT an expression that merely READS from it (#1680 case 1:
+// `s.lastStatus = resp.StatusCode` contains resp, but a scalar read is
+// not ownership - the contains-check silenced real leaks. #1488
+// widened that flaw to assignments and sends).
+func exprIsResourceHandoff(e ast.Expr, name string) bool {
+	for {
+		if u, ok := e.(*ast.UnaryExpr); ok && (u.Op == token.AND || u.Op == token.MUL) {
+			e = u.X
+			continue
+		}
+		break
+	}
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name == name
+	}
+	if sel, ok := e.(*ast.SelectorExpr); ok {
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == name {
+			// Only closer-handle fields transfer (resp.Body); reading a
+			// scalar field (resp.StatusCode) is NOT ownership even though
+			// both are `base.Field` shapes (#1680 case 1).
+			switch sel.Sel.Name {
+			case "Body", "File", "Conn", "Handle":
+				return true
+			}
+			return false
+		}
+	}
+	// Wrapped return/handoff: `return &reader{f: f}` embeds the resource
+	// itself into the returned struct (#1191 wrapped-return transfer).
+	// Only DIRECT element handoffs recurse - `status{c: resp.StatusCode}`
+	// is a scalar read, not a transfer (#1680 case 1 keeps that excluded).
+	if lit, ok := e.(*ast.CompositeLit); ok {
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+			if exprIsResourceHandoff(elt, name) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // matchResourceCall checks if a call expression matches a known resource

@@ -370,3 +370,30 @@ func handOff(l net.Conn, ch chan net.Conn) {
 		t.Fatal("channel send (ch <- l) must count as ownership transfer")
 	}
 }
+
+// TestResourceLeakScalarFieldReadIsNotTransfer pins #1680 case 1: reading a
+// scalar field (`s.lastStatus = resp.StatusCode`) contains the resource
+// ident but transfers nothing - the old contains-check permanently silenced
+// the real leak.
+func TestResourceLeakScalarFieldReadIsNotTransfer(t *testing.T) {
+	src := `package main
+
+import (
+	"net/http"
+)
+
+type srv struct{ lastStatus int }
+
+func do(s *srv) {
+	resp, err := http.Get("http://x")
+	if err != nil {
+		return
+	}
+	s.lastStatus = resp.StatusCode
+}
+`
+	warnings := checkResourceLeaks("test.go", "", src)
+	if len(warnings) == 0 {
+		t.Fatal("reading resp.StatusCode must NOT count as ownership transfer - the leak is real")
+	}
+}
