@@ -41,6 +41,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -110,6 +111,33 @@ func countConcurrencyPrimitives(src string) int {
 
 	count := 0
 
+	// #1483 case C: build local-name -> import-path map so aliased
+	// imports (`import concur "sync"`) resolve to their real package -
+	// the old code compared the LOCAL name against "sync"/"atomic"
+	// literally, so an aliased import counted ZERO concurrency
+	// primitives, breaking even the "NEWLY introduced" promise.
+	aliasToPath := map[string]string{"sync": "sync", "atomic": "sync/atomic"}
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		local := ""
+		if imp.Name != nil {
+			local = imp.Name.Name
+			if local == "_" || local == "." {
+				continue
+			}
+		} else {
+			// Default local name: last path segment.
+			parts := strings.Split(path, "/")
+			local = parts[len(parts)-1]
+		}
+		if path == "sync" || path == "sync/atomic" {
+			aliasToPath[local] = path
+		}
+	}
+
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.GoStmt:
@@ -117,9 +145,10 @@ func countConcurrencyPrimitives(src string) int {
 			count++
 
 		case *ast.SelectorExpr:
-			// Check for sync.* and atomic.* package usage.
+			// Check for sync.* and atomic.* package usage (including
+			// aliased imports - resolved via aliasToPath).
 			if ident, ok := n.X.(*ast.Ident); ok {
-				pkg := ident.Name
+				pkg := aliasToPath[ident.Name]
 				sel := n.Sel.Name
 				switch pkg {
 				case "sync":
@@ -128,7 +157,7 @@ func countConcurrencyPrimitives(src string) int {
 						"Once", "Cond", "Pool":
 						count++
 					}
-				case "atomic":
+				case "sync/atomic":
 					// Any atomic operation indicates concurrent access.
 					count++
 				}

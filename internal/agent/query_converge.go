@@ -48,7 +48,11 @@ var qcSearchTools = map[string]bool{
 	"search_files": true,
 	"code_search":  true,
 	"web_search":   true,
-	"glob":         true,
+	// #1483 case B: glob EXCLUDED - its pattern is path syntax
+	// (internal/agent/*.go), not a natural-language query; tokenizing it
+	// into a bag-of-words made three DIFFERENT packages' globs look like
+	// the same question rephrased (Jaccard 0.5 over shared path tokens)
+	// and injected "try a different strategy" into healthy exploration.
 }
 
 // qcActionTools that indicate the agent moved beyond exploration.
