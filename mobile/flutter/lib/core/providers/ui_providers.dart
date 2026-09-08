@@ -114,6 +114,34 @@ final subagentProvider =
   _SubagentNotifier.new,
 );
 
+/// Which completed sub-agent cards the user has tapped open (#1874 case 1).
+/// Lives in the provider layer (not widget state) so the connection
+/// provider's 5s cleanup can see it and defer removal while the user is
+/// still reading the card - previously a card (and its whole message
+/// stream) vanished ~100ms after the user opened it.
+class _SubagentExpandedNotifier extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => {};
+
+  void toggle(String agentId) {
+    final next = <String>{...state};
+    if (!next.remove(agentId)) {
+      next.add(agentId);
+    }
+    state = next;
+  }
+
+  void remove(String agentId) {
+    if (!state.contains(agentId)) return;
+    state = <String>{...state}..remove(agentId);
+  }
+}
+
+final subagentExpandedProvider =
+    NotifierProvider<_SubagentExpandedNotifier, Set<String>>(
+  _SubagentExpandedNotifier.new,
+);
+
 // ---- Approval Provider ----
 
 class ApprovalInfo {

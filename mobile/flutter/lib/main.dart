@@ -138,6 +138,11 @@ class _AppShellState extends ConsumerState<AppShell>
             notifier.reconnect();
           } else if (currentStatus == ConnectionStatus.connecting) {
             // Still trying — let it finish
+          } else {
+            // Connected — but iOS may have frozen with the socket torn
+            // down before the close callback ran (#1874 case 2): probe
+            // liveness and reconnect if the state is stale.
+            notifier.verifyLivenessOnResume();
           }
           // If connected, nothing to do
         }

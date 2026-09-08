@@ -483,6 +483,23 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     await connect(_liveUrl, clearState: false);
   }
 
+  /// #1874 case 2: called on AppLifecycleState.resumed. The paused branch
+  /// only reconnects when the status ALREADY reads disconnected - an iOS
+  /// background freeze can leave the socket torn down without the close
+  /// callback having run, so the state still says connected while the
+  /// connection is dead and the next message hangs. With the socket object
+  /// gone there is nothing to keep - reconnect directly.
+  void verifyLivenessOnResume() {
+    final svc = service;
+    if (state.status != ConnectionStatus.connected) return;
+    if (svc != null && svc.socketAlive) return;
+    debugPrint(
+      '[connection] resumed with a dead socket but connected status - '
+      'reconnecting (stale liveness, #1874 case 2)',
+    );
+    Future<void>.microtask(() => reconnect());
+  }
+
   void disconnect() {
     _nextConnectionGeneration();
     service?.disconnect();
@@ -2242,6 +2259,13 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     _cancelSubagentCleanup(agentId);
     _subagentCleanupTimers[agentId] = Timer(const Duration(seconds: 5), () {
       if (!_isConnectionGenerationCurrent(generation)) return;
+      // #1874 case 1: the user opened the completed card - defer removal
+      // and re-check shortly after they collapse it. Clearing here made the
+      // card and its whole message stream vanish ~100ms after being opened.
+      if (ref.read(subagentExpandedProvider).contains(agentId)) {
+        _scheduleSubagentCleanup(agentId, generation: generation);
+        return;
+      }
       final current =
           Map<String, SubagentInfo>.from(ref.read(subagentProvider));
       current.remove(agentId);
@@ -2250,6 +2274,11 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       ref
           .read(chatProvider.notifier)
           .set(msgs.where((m) => m.sourceId != agentId).toList());
+      // Collapse state no longer applies once the card is gone.
+      final expanded = <String>{...ref.read(subagentExpandedProvider)};
+      if (expanded.remove(agentId)) {
+        ref.read(subagentExpandedProvider.notifier).state = expanded;
+      }
       _subagentCleanupTimers.remove(agentId);
     });
   }

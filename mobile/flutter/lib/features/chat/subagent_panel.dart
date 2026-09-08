@@ -16,13 +16,14 @@ class SubagentPanel extends ConsumerStatefulWidget {
 }
 
 class _SubagentPanelState extends ConsumerState<SubagentPanel> {
-  final Set<String> _expanded = {};
-
   @override
   Widget build(BuildContext context) {
     final agents = ref.watch(subagentProvider);
+    // #1874 case 1: expansion lives in subagentExpandedProvider so the
+    // connection layer's cleanup timer can defer removal while open.
+    final expanded = ref.watch(subagentExpandedProvider);
     final active = agents.values
-        .where((a) => !a.completed || _expanded.contains(a.agentId))
+        .where((a) => !a.completed || expanded.contains(a.agentId))
         .toList();
 
     if (active.isEmpty) return const SizedBox.shrink();
@@ -39,20 +40,17 @@ class _SubagentPanelState extends ConsumerState<SubagentPanel> {
   }
 
   Widget _buildCard(SubagentInfo agent) {
-    final isExpanded = _expanded.contains(agent.agentId);
+    final isExpanded =
+        ref.read(subagentExpandedProvider).contains(agent.agentId);
     final color = _parseColor(agent.color);
     final isRunning =
         agent.status == 'running' || agent.status == 'waiting_approval';
 
     return GestureDetector(
       onTap: () {
-        setState(() {
-          if (isExpanded) {
-            _expanded.remove(agent.agentId);
-          } else {
-            _expanded.add(agent.agentId);
-          }
-        });
+        // #1874 case 1: expansion lives in subagentExpandedProvider so the
+        // connection layer's cleanup timer can defer removal while open.
+        ref.read(subagentExpandedProvider.notifier).toggle(agent.agentId);
       },
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),

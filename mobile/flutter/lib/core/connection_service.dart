@@ -942,6 +942,12 @@ class ConnectionService {
     _socket?.add(jsonEncode(data));
   }
 
+  /// #1874 case 2: whether the underlying websocket object still exists.
+  /// iOS can freeze the app with the socket half-dead while the status
+  /// stream still reports connected - the provider consults this on
+  /// lifecycle resume to catch the stale state.
+  bool get socketAlive => _socket != null && !_disposed;
+
   void armResumeHello({
     required String clientId,
     String? sessionId,
