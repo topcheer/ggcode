@@ -363,3 +363,38 @@ func TestJaccardSimilarity(t *testing.T) {
 		t.Errorf("expected 0 for disjoint sets, got %f", s)
 	}
 }
+
+// TestEditFile_CRLFCompletion pins #1676 case 3: a byte-exact hit on CRLF
+// old_text with LF-only new_text must produce CRLF new_text - the old code
+// silently introduced mixed line endings (no formatting hook rescues
+// .md/.yaml/.cs; only .go got fixed by formatGoBytes).
+func TestEditFile_CRLFCompletion(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "notes.md")
+	os.WriteFile(fp, []byte("# Title\r\n\r\nold body line\r\n"), 0644)
+
+	ef := EditFile{}
+	input := json.RawMessage(`{
+		"file_path": "` + filepath.ToSlash(fp) + `",
+		"old_text": "old body line\r\n",
+		"new_text": "new body line\nplus a second line\n"
+	}`)
+	result, err := ef.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("edit failed: %s", result.Content)
+	}
+	data, _ := os.ReadFile(fp)
+	got := string(data)
+	if strings.Contains(got, "\n") && !strings.Contains(got, "\r\n") {
+		t.Fatalf("file converted wholesale to LF; expected CRLF preserved:\n%q", got)
+	}
+	// Every LF must belong to a CRLF pair - no mixed endings.
+	for i := 0; i < len(got); i++ {
+		if got[i] == '\n' && (i == 0 || got[i-1] != '\r') {
+			t.Fatalf("bare LF at offset %d - mixed line endings survived (#1676 case 3):\n%q", i, got)
+		}
+	}
+}
