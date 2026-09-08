@@ -274,3 +274,36 @@ func TestBGOrphanEvictedJobReadStopsCycle(t *testing.T) {
 		t.Fatal("evicted (not found) job must be removed from tracking")
 	}
 }
+
+// Regression for #1879 case 2: a RUNNING job whose own stdout merely
+// QUOTES the not-found phrase (self-referential test output) must NOT be
+// removed from tracking - only the error channel (a line starting with
+// "Error: command job" containing "not found") is the removal signal.
+// The old full-text substring match deleted such a job and the detector
+// went permanently silent when it later genuinely orphaned.
+func TestBGOrphanQuotedNotFoundOutputKeepsTracking(t *testing.T) {
+	s := newBgOrphanState()
+	s.mu.Lock()
+	s.activeJobs["job-7"] = &bgJobInfo{JobID: "job-7", Command: "go test ./internal/tool/", StartIter: 1}
+	s.mu.Unlock()
+	args := json.RawMessage(`{"job_id":"job-7"}`)
+
+	// Self-referential output: phrases present, but inside normal stdout.
+	quoted := "=== RUN TestCommandJobs\n--- FAIL: TestCommandJobs\ncommand job \"job-9\" not found\nFAIL\nStatus: running"
+	s.recordOutputCheck(args, quoted, 5)
+	s.mu.Lock()
+	_, still := s.activeJobs["job-7"]
+	s.mu.Unlock()
+	if !still {
+		t.Fatal("running job quoting the phrase in stdout must stay tracked")
+	}
+
+	// The genuine error channel still removes it.
+	s.recordOutputCheck(args, "Error: command job \"job-7\" not found", 7)
+	s.mu.Lock()
+	_, still = s.activeJobs["job-7"]
+	s.mu.Unlock()
+	if still {
+		t.Fatal("error-channel not-found must remove the job from tracking")
+	}
+}

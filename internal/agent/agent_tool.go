@@ -1642,7 +1642,7 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 				Content: "checkpoint_id is required for action=revert. Use action=list to see available checkpoint IDs.",
 			}
 		}
-		cp, err := cpMgr.Revert(args.CheckpointID)
+		cp, revertedFiles, err := cpMgr.RevertWithFiles(args.CheckpointID)
 		if err != nil {
 			return tool.Result{
 				IsError: true,
@@ -1654,7 +1654,12 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 		// clearing the expired-read ledger, the next edit of the same file
 		// hit stale readBeforeEdit and injected a misleading "read has
 		// expired" note. #1559 fixed the undo branch only.
-		a.expiredRead.recordUndo(cp.FilePath)
+		// #1879 case 1: revert rewrites EVERY co-existing file (not just
+		// cp.FilePath) - clear the ledger for the full reverted set or the
+		// stale-read hint resurfaces on the other files.
+		for _, f := range revertedFiles {
+			a.expiredRead.recordUndo(f)
+		}
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		result += fmt.Sprintf("\n\nAll edits after checkpoint %s have also been reverted.", args.CheckpointID)
 		debug.Log("agent", "undo_edit: reverted to %s for %s", args.CheckpointID, cp.FilePath)

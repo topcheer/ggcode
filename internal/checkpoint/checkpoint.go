@@ -202,6 +202,16 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 // semantics (per-file baseline write-back); Revert now follows the same
 // pattern.
 func (m *Manager) Revert(id string) (*Checkpoint, error) {
+	cp, _, err := m.RevertWithFiles(id)
+	return cp, err
+}
+
+// RevertWithFiles is Revert plus the full list of files that were written
+// back (#1879 case 1). Revert rewrites EVERY file touched at idx or later
+// but historically returned only the target checkpoint - callers cleaning
+// up per-file state (e.g. the agent's expired-read ledger) cleaned a single
+// file and stale state resurfaced on the co-existing reverted files.
+func (m *Manager) RevertWithFiles(id string) (*Checkpoint, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -214,7 +224,7 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 	}
 
 	if idx < 0 {
-		return nil, fmt.Errorf("checkpoint %q not found", id)
+		return nil, nil, fmt.Errorf("checkpoint %q not found", id)
 	}
 
 	// Copy the checkpoint value before truncating the slice to avoid aliasing
@@ -272,9 +282,9 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 		// and inject per-path failures deterministically.
 		if err := restoreFile(f, st.content, st.existed); err != nil {
 			if len(files) == 0 {
-				return nil, fmt.Errorf("failed to revert %s: %w", f, err)
+				return nil, nil, fmt.Errorf("failed to revert %s: %w", f, err)
 			}
-			return nil, fmt.Errorf("failed to revert %s: %w (partial state: restored %v; still pending %v — history kept, retry or use single-step Undo)",
+			return nil, nil, fmt.Errorf("failed to revert %s: %w (partial state: restored %v; still pending %v — history kept, retry or use single-step Undo)",
 				f, err, files, order[len(files):])
 		}
 		files = append(files, f)
@@ -298,7 +308,7 @@ func (m *Manager) Revert(id string) (*Checkpoint, error) {
 		Source:   "user", // /undo-run is a user slash command (#1449-A)
 	})
 
-	return &cp, nil
+	return &cp, files, nil
 }
 
 // restoreCheckpointState writes oldContent back to path. When the checkpoint

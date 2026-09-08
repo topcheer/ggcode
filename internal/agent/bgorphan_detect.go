@@ -167,7 +167,15 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 	// later... burning the shared 3-injection budget on a job that is
 	// GONE while real orphans went silent. Treat the not-found error as
 	// the removal signal it is.
-	if strings.Contains(result, "command job") && strings.Contains(result, "not found") {
+	// #1879 case 2: anchor the not-found detection to the ERROR CHANNEL,
+	// not semantic content. A running job's own output can legitimately
+	// contain the words "command job" and "not found" (self-referential
+	// test output quoting the very error format); the full-text substring
+	// match deleted such a still-running job from activeJobs and the
+	// detector went permanently silent exactly when it later orphaned.
+	// The job manager emits this as a single error line, so match a line
+	// that starts with "Error: command job" and contains "not found".
+	if isCommandJobNotFoundResult(result) {
 		delete(s.activeJobs, jobID)
 		delete(s.warned, jobID)
 		return
@@ -428,4 +436,20 @@ func (a *Agent) resetBgOrphan() {
 	if a.bgOrphan != nil {
 		a.bgOrphan.reset()
 	}
+}
+
+// isCommandJobNotFoundResult reports whether the tool result carries the
+// job manager's not-found ERROR (command_jobs.go: "command job %q not
+// found"). Line-anchored: the manager emits it as a standalone error line
+// (rendered "Error: command job ..." in results), while a running job can
+// legitimately QUOTE the phrase inside its own stdout - that must not read
+// as the error channel (#1879 case 2).
+func isCommandJobNotFoundResult(result string) bool {
+	for _, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Error: command job") && strings.Contains(line, "not found") {
+			return true
+		}
+	}
+	return false
 }

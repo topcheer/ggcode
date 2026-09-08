@@ -467,3 +467,43 @@ func TestUndoRunSingleFileMultipleEdits(t *testing.T) {
 		t.Errorf("expected 'baseline', got %s", data)
 	}
 }
+
+// Regression for #1879 case 1: Revert rewrites EVERY file touched at idx
+// or later but used to return only the target checkpoint - callers doing
+// per-file cleanup (the agent's expired-read ledger) cleaned one file and
+// stale state resurfaced on the co-existing reverted files. RevertWithFiles
+// must return the full written-back set.
+func TestRevertWithFilesReturnsAllRevertedFiles(t *testing.T) {
+	dir := t.TempDir()
+	fa := filepath.Join(dir, "a.txt")
+	fb := filepath.Join(dir, "b.txt")
+	m := NewManager(50)
+
+	// cp1 edits a, cp2 edits b, cp3 edits a again.
+	cp1 := m.Save(fa, "a1", "a2", "edit_file")
+	m.Save(fb, "b1", "b2", "edit_file")
+	m.Save(fa, "a2", "a3", "edit_file")
+
+	// Revert cp1: both a and b roll back to their pre-cp1 states.
+	_, files, err := m.RevertWithFiles(cp1.ID)
+	if err != nil {
+		t.Fatalf("RevertWithFiles failed: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("revert of cp1 must report BOTH co-existing files, got %v", files)
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f] = true
+	}
+	if !got[fa] || !got[fb] {
+		t.Fatalf("files must include a and b, got %v", files)
+	}
+	// Disk reflects the revert-moment states.
+	if data, _ := os.ReadFile(fa); string(data) != "a1" {
+		t.Errorf("a.txt must be back at a1, got %q", data)
+	}
+	if data, _ := os.ReadFile(fb); string(data) != "b1" {
+		t.Errorf("b.txt must be back at b1, got %q", data)
+	}
+}
