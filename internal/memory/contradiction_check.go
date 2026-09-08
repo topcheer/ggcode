@@ -297,6 +297,13 @@ func claimsConflict(a, b string) bool {
 		if tokenOverlap(aBase, bBase) >= 0.85 {
 			return true
 		}
+		// #1878: a mixed-polarity pair that is NOT near-equivalent is
+		// compatible by design ("use git" vs "~use git rebase") - it must
+		// not fall through to the two-affirmative band below. Without this
+		// short-circuit the 0.85 threshold change had zero behavioral
+		// effect: tokenize drops '~', so the band below saw the same
+		// jaccard (2/3 ∈ [0.3, 0.85)) and still returned true.
+		return false
 	}
 
 	// Negation keywords within values: "required" vs "optional", "enabled"

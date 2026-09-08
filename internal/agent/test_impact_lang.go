@@ -371,9 +371,20 @@ var dartLangProfile = langProfile{
 		// by test/foo_test.dart at the PROJECT ROOT - the old candidates
 		// (lib/foo_test.dart, lib/test/foo_test.dart) almost never exist,
 		// so every lib/ source was branded 'no tests'.
-		if rel, err := filepath.Rel(workingDir, srcFile); err == nil && strings.HasPrefix(rel, "lib"+string(filepath.Separator)) {
+		// #1878: git status yields REPO-RELATIVE paths while callers pass
+		// an ABSOLUTE workingDir; filepath.Rel errors on that mix and the
+		// fix never fired on the standard call path. Normalize like the
+		// rust branch (join relative srcFile onto workingDir) first.
+		abs := srcFile
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(workingDir, abs)
+		}
+		if rel, err := filepath.Rel(workingDir, abs); err == nil && strings.HasPrefix(rel, "lib"+string(filepath.Separator)) {
+			// Mirror the lib/ sub-tree under test/ (Flutter convention:
+			// lib/src/models/user.dart -> test/src/models/user_test.dart).
+			sub := strings.TrimSuffix(strings.TrimPrefix(rel, "lib"+string(filepath.Separator)), ".dart")
 			return []string{
-				filepath.Join("test", name+"_test.dart"),
+				filepath.Join("test", sub+"_test.dart"),
 				filepath.Join(dir, name+"_test.dart"),
 			}
 		}

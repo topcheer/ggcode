@@ -1083,3 +1083,39 @@ func TestHasTestFileJavaMavenLayout(t *testing.T) {
 		t.Fatal("Maven-mirrored BarTest.java must be found")
 	}
 }
+
+// Regression for #1878 (residual of #1778 case 6): git status yields
+// REPO-RELATIVE paths (lib/foo.dart) while callers pass an ABSOLUTE
+// workingDir; filepath.Rel errors on that mix, so the dart lib/ -> test/
+// mapping never fired on the standard call path. The mapping must also
+// mirror the lib/ sub-tree under test/ (Flutter convention).
+func TestHasTestFileDartFlutterLayout(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "lib", "src", "models"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "test", "src", "models"), 0o755)
+
+	// Relative srcFile (as changedSourceFilesFromGit produces) + absolute
+	// workingDir (as the agent passes) - the exact inert combination.
+	srcRel := filepath.Join("lib", "src", "models", "user.dart")
+	os.WriteFile(filepath.Join(dir, srcRel), []byte("class User {}"), 0o644)
+
+	if hasTestFile(dir, srcRel) != "" {
+		t.Fatal("no mirrored test yet: must not be found")
+	}
+
+	os.WriteFile(filepath.Join(dir, "test", "src", "models", "user_test.dart"), []byte("void main() {}"), 0o644)
+	if found := hasTestFile(dir, srcRel); found == "" {
+		t.Fatal("Flutter-mirrored test/src/models/user_test.dart must be found from relative srcFile + absolute workingDir")
+	}
+
+	// Top-level lib file maps to root test/.
+	srcTop := filepath.Join("lib", "main.dart")
+	os.WriteFile(filepath.Join(dir, srcTop), []byte("void main() {}"), 0o644)
+	if hasTestFile(dir, srcTop) != "" {
+		t.Fatal("no root-level test yet: must not be found")
+	}
+	os.WriteFile(filepath.Join(dir, "test", "main_test.dart"), []byte("void main() {}"), 0o644)
+	if found := hasTestFile(dir, srcTop); found == "" {
+		t.Fatal("root test/main_test.dart must be found")
+	}
+}
