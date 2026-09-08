@@ -550,7 +550,11 @@ func (m *Model) renderKnightProposals(w int) string {
 		if m.knightPanel.detailIndex == i {
 			sb.WriteString(fmt.Sprintf("    Path: %s\n", p.Path))
 			sb.WriteString(fmt.Sprintf("    Created: %s\n", p.Time.Format("2006-01-02")))
-			if p.Status == "pending" {
+			// #1738 case 1: proposals are CREATED with status "proposed"
+			// (project_proposal.go) - a "pending" literal never matched any
+			// real write, so the approve/reject hint NEVER rendered and the
+			// proposal workflow's core UI entry was dead.
+			if p.Status == "proposed" {
 				sb.WriteString("    [a] approve  [r] reject\n")
 			}
 		}

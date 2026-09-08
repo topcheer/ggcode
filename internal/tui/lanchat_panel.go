@@ -304,18 +304,19 @@ func (m *Model) handleLanChatPanelUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s is online (from %s)%s", nick, ep, wsInfo))
 		return m, nil
 	case lanchatPeerLeaveMsg:
-		nick := msg.humanNick
+		nick := sanitizeLanChatDisplay(msg.humanNick) // #1738 case 4: same surface as join (#1014)
 		if nick == "" {
 			nick = "(unknown)"
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("[LAN Chat] %s went offline", nick))
 		return m, nil
 	case lanchatNickChangeMsg:
-		old := msg.oldNick
+		// #1738 case 4: both nicks ride the broadcast - sanitize like join.
+		old := sanitizeLanChatDisplay(msg.oldNick)
 		if old == "" {
 			old = "(unknown)"
 		}
-		new := msg.newNick
+		new := sanitizeLanChatDisplay(msg.newNick)
 		if new == "" {
 			new = "(unknown)"
 		}
@@ -425,6 +426,15 @@ func (m Model) handleLanChatKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	p := m.lanChatPanel
 	pending := m.lanChatHub.PendingApprovals()
+	// #1738 case 3: every reset below sits inside a len(pending) > 0 guard -
+	// when the peer times out or cancels (#899) while the popup is open,
+	// pending empties, the popup flag never clears, and ALL keys stay
+	// hijacked-and-swallowed with nothing rendered (only esc escaped).
+	// An empty pending list is itself the reset signal.
+	if len(pending) == 0 {
+		p.approvalPopup = false
+		return m, nil
+	}
 
 	switch msg.String() {
 	case "esc":
