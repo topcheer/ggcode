@@ -602,3 +602,31 @@ func TestDetectResearchMode(t *testing.T) {
 		}
 	}
 }
+
+// #1859: the three read-only classification tables are maintained
+// independently and had drifted from serialReadOnlyTools. This pins the
+// previously-missing members so a future table edit cannot silently
+// re-open the gap (a read-only run of dep_graph/code_health calls must
+// satisfy the all-read condition, and screenshot must be classified
+// explore, not other).
+func TestReadOnlyTablesIncludeFormerGaps(t *testing.T) {
+	// The eight pure-read tools serialReadOnlyTools always covered.
+	for _, name := range []string{
+		"code_search", "git_stash_list", "lsp_workspace_symbols",
+		"lsp_implementation", "lsp_code_actions", "dep_graph",
+		"scan_todos", "code_health",
+	} {
+		if !readOnlyTools[name] {
+			t.Errorf("readOnlyTools missing pure-read tool %q (stall nudge suppressed)", name)
+		}
+		if !effortReadOnlyTools[name] {
+			t.Errorf("effortReadOnlyTools missing pure-read tool %q", name)
+		}
+	}
+	if !effortReadOnlyTools["screenshot"] {
+		t.Error("effortReadOnlyTools missing screenshot (capture-only)")
+	}
+	if toolCategoryMap["screenshot"] != thermalExplore {
+		t.Errorf("screenshot must be thermalExplore, got %v", toolCategoryMap["screenshot"])
+	}
+}
