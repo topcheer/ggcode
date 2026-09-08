@@ -239,3 +239,36 @@ func TestIsFileWriteToolCoversAllWriteEntries(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactPreservesTrailingQuote pins #1682 case 2: the value-group
+// splice must keep everything after the value in the ORIGINAL match -
+// `API_KEY: "abcdef123"` kept its content but lost the closing quote,
+// corrupting JSON/YAML and later edit_file anchors.
+func TestRedactPreservesTrailingQuote(t *testing.T) {
+	in := `API_KEY: "abcdefghij1234567890"`
+	out := redactSecrets("read_file", in)
+	if !strings.HasSuffix(out, `"`) {
+		t.Fatalf("closing quote dropped: %q", out)
+	}
+	if !strings.Contains(out, "API_KEY:") {
+		t.Fatalf("key name context lost: %q", out)
+	}
+	if strings.Contains(out, "abcdefghij1234567890") {
+		t.Fatalf("secret leaked: %q", out)
+	}
+}
+
+// TestRedactDashFamilyKeys pins #1682 case 3: sk-/sk-proj-/sk-ant- bare
+// values (curl logs, env dumps without a key name) must be caught.
+func TestRedactDashFamilyKeys(t *testing.T) {
+	for _, in := range []string{
+		"curl -H 'Authorization: Bearer sk-proj-AbCdEf1234567890GhIjKlMnOpQrStUvWx",
+		"token=sk-ant-api03-AbCdEf1234567890GhIjKlMnOpQrStUv",
+		"sk-AbCdEf1234567890GhIjKlMnOpQrStUvWx",
+	} {
+		out := redactSecrets("read_file", in)
+		if !strings.Contains(out, "[REDACTED:") {
+			t.Errorf("dash-family key not caught: %q -> %q", in, out)
+		}
+	}
+}

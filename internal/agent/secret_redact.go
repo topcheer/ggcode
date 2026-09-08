@@ -50,6 +50,11 @@ var secretPatterns = []struct {
 	{"gitlab_token", regexp.MustCompile(`\b(glpat-[A-Za-z0-9_\-]{20})\b`)},
 	{"slack_token", regexp.MustCompile(`\b(xox[bpras]-[A-Za-z0-9-]{10,72})\b`)},
 	{"stripe_key", regexp.MustCompile(`\b((?:sk|pk|rk)_(?:test_|live_)?[A-Za-z0-9]{24,})\b`)},
+	// #1682 case 3: the dash-family keys are THE dominant LLM-era form
+	// (OpenAI sk-, sk-proj-, Anthropic sk-ant-) - bare values with no key
+	// name (curl logs, env dumps) sailed through because every other
+	// pattern needs an underscore or an assignment prefix.
+	{"openai_or_anthropic_key", regexp.MustCompile(`\b(sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,})\b`)},
 
 	// Private key blocks — very high precision (PEM header + content + footer)
 	{"private_key", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]+)PRIVATE KEY-----.*?-----END (?:[A-Z ]+)PRIVATE KEY-----)`)},
@@ -83,7 +88,12 @@ func isFileWriteTool(toolName string) bool {
 	// either tool and destroy the real secret, the exact corruption the
 	// guard exists to prevent (agent could bypass by switching tools).
 	case "edit_file", "write_file", "multi_edit_file", "multi_file_edit",
-		"multi_file_write", "batch_replace", "notebook_edit":
+		"multi_file_write", "batch_replace", "notebook_edit",
+		// #1682 case 1: lsp_rename's new_name flows to disk through LSP
+		// workspace edits across MULTIPLE files - same bypass class #1491
+		// closed for the direct write tools (4th drift of the #738 family;
+		// the guard comment itself demands sync with the 9-tool superset).
+		"lsp_rename":
 		return true
 	default:
 		return false
@@ -159,25 +169,29 @@ func redactSecrets(toolName, content string) string {
 		// For single-group patterns (e.g. aws_access_key), mask the whole match.
 		groups := sp.pattern.NumSubexp()
 		if groups >= 2 {
-			// Multi-group: mask only the last capture group (the secret value)
-			redacted = sp.pattern.ReplaceAllStringFunc(redacted, func(match string) string {
-				sub := sp.pattern.FindStringSubmatch(match)
-				if len(sub) < 2 {
-					return match
+			// Multi-group: mask only the VALUE group, splicing by index so
+			// everything around it in the ORIGINAL match survives verbatim.
+			// #1682 case 2: the old submatch-concatenation dropped the
+			// trailing optional quote group (the loop started at i:=3, and
+			// 2-group patterns have nothing there) - `API_KEY: "abcdef"`
+			// lost its closing quote, corrupting JSON/YAML syntax and
+			// breaking later edit_file anchors.
+			var sb strings.Builder
+			last := 0
+			locs := sp.pattern.FindAllStringSubmatchIndex(redacted, -1)
+			for _, loc := range locs {
+				if len(loc) < 6 || loc[4] < 0 || loc[5] < 0 {
+					continue
 				}
 				count++
-				masked := "[REDACTED:" + sp.name + "]"
-				// Replace the value portion while keeping the prefix group intact
-				result := sub[1] + masked
-				// Append any trailing characters after the value in the original match
-				// by reconstructing from the submatches
-				for i := 3; i < len(sub); i++ {
-					if sub[i] != "" {
-						result += sub[i]
-					}
-				}
-				return result
-			})
+				sb.WriteString(redacted[last:loc[4]])
+				sb.WriteString("[REDACTED:" + sp.name + "]")
+				last = loc[5]
+			}
+			if count > 0 || locs != nil {
+				sb.WriteString(redacted[last:])
+				redacted = sb.String()
+			}
 		} else {
 			// Single-group or no-group: mask the entire match
 			redacted = sp.pattern.ReplaceAllStringFunc(redacted, func(match string) string {
