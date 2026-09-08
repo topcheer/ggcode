@@ -210,6 +210,16 @@ func fingerprintBuildError(output string) string {
 			continue
 		}
 		lower := strings.ToLower(trimmed)
+		// #1679 case 1: the #1486 green-line filter existed only in
+		// hasErrorMarkers (the gate); this fingerprint path matched bare
+		// markers ("fail"/"expected") against RAW output - green lines
+		// (--- PASS: TestFailover) filled the 5-line fingerprint, so two
+		// DIFFERENT errors hashed identically as "SAME error" and real
+		// error lines got squeezed out. Same four-prefix drop as the gate.
+		if strings.HasPrefix(lower, "--- pass") || strings.HasPrefix(lower, "ok  ") ||
+			strings.HasPrefix(lower, "=== run") || lower == "pass" {
+			continue
+		}
 		if !errorContainsAny(lower, errorLineMarkers...) {
 			continue
 		}

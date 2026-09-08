@@ -264,7 +264,12 @@ This run: %s (iteration %d)`,
 // recordEdit increments the edit counter for all tracked verification
 // categories. Called whenever a file-modifying tool is executed.
 func (s *redundantReverifyState) recordEdit(toolName string) {
-	if !reverifyEditTools[toolName] {
+	// #1679 case 2: use mutatesSourceTree (the cache-invalidation
+	// predicate) instead of the 9-tool file-edit map - git_checkout/
+	// git_revert/git_stash/git_reset rewrite the whole tree and undo_edit
+	// restores content, yet none bumped editsSince, so a re-test after a
+	// branch switch was factually told "cannot produce new information".
+	if !mutatesSourceTree(toolName) {
 		return
 	}
 	for _, run := range s.lastRun {
