@@ -133,6 +133,14 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleStreamMsg(msg, spinnerCmd)
 
 	case reviewReadyMsg:
+		// #1744 case 3: the async git subprocess takes seconds - an agent run
+		// starting (or a /commit while busy, which is whitelisted) in that
+		// window made this handler startAgent CONCURRENTLY, overwriting
+		// cancelFunc. Queue behind the run instead.
+		if m.loading {
+			m.queuePendingSubmission("/review")
+			return m, nil
+		}
 		// The /review command prepared the full prompt text; start the agent with it.
 		m.chatWriteUser(nextChatID(), "/review")
 		m.appendUserMessage("/review")
@@ -147,6 +155,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, m.startAgent(msg.text)
 
 	case commitReadyMsg:
+		// #1744 case 3: same async-window guard as reviewReadyMsg - /commit
+		// is whitelisted to RUN while busy, so its ready message can land
+		// mid-run and must queue, not start concurrently.
+		if m.loading {
+			m.queuePendingSubmission("/commit")
+			return m, nil
+		}
 		// The /commit command prepared the full prompt text; start the agent with it.
 		m.chatWriteUser(nextChatID(), "/commit")
 		m.appendUserMessage("/commit")
@@ -323,9 +338,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 			m.knight.NotifyActivity()
 		}
 		// #1882: same predicate as the local/remote gates (#1762) - a
-		// webchat message during the project-memory loading window queues
-		// behind the injection instead of starting an uninjected run.
-		if m.cancelFunc == nil && !m.projectMemoryLoading {
+		// #1744 case 1: cancelFunc==nil is NOT idle - knight runs (and any
+		// agentless loading state) never set it, so a remote webchat user
+		// during a knight run was judged idle and started a CONCURRENT agent
+		// (cancelFunc overwritten, event streams interleaved). loading is the
+		// real idleness predicate; cancelFunc stays as a belt-and-suspenders
+		// guard for the injected-but-not-yet-loading window.
+		if m.cancelFunc == nil && !m.loading && !m.projectMemoryLoading {
 			// Render the user bubble and persist to session.
 			m.chatWriteUser(nextChatID(), text)
 			m.chatListScrollToBottom()

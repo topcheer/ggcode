@@ -325,8 +325,8 @@ func (m *Model) restorePendingInput() {
 }
 
 func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
-	text, hidden, _, _ := m.consumePendingSubmissionDetailed()
-	if text == "" {
+	text, hidden, override, imgs := m.consumePendingSubmissionDetailed()
+	if text == "" && len(imgs) == 0 {
 		return nil
 	}
 	debug.Log("tui", "drainPendingInterrupt: runID=%d text=%s", runID, util.Truncate(text, 100))
@@ -335,6 +335,16 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 	// persistFullSessionMessages() will sync+persist it. Calling appendUserMessage
 	// here would create a SECOND JSONL record for the same user input —
 	// causing duplicate user bubbles on session reload.
+	// #1744 case 2: the old `_, _` discard dropped queued IMAGES and the
+	// tunnel override mid-flight - a run interrupted with a screenshot
+	// queued lost it permanently (#1411 fixed only the cancel-restore
+	// path, not this drain). Restore both, per that precedent.
+	if override != nil {
+		m.setNextTunnelUserMessageOverride(*override)
+	}
+	if len(imgs) > 0 {
+		m.pendingImages = imgs
+	}
 	_ = hidden
 	// Don't send agentInterruptMsg — the user already saw their input rendered
 	// in the conversation when it was queued. No extra "[delivered]" hint needed.
