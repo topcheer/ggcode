@@ -125,6 +125,16 @@ type sqlInjIssue struct {
 
 // sqlInjScan parses the content and returns all unsafe-query findings.
 func sqlInjScan(filePath, content string) []sqlInjIssue {
+	return sqlInjScanCapped(filePath, content, true)
+}
+
+// sqlInjScanAll is the uncapped variant for fingerprint collection
+// (#1778 case 2).
+func sqlInjScanAll(filePath, content string) []sqlInjIssue {
+	return sqlInjScanCapped(filePath, content, false)
+}
+
+func sqlInjScanCapped(filePath, content string, capped bool) []sqlInjIssue {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filePath, content, 0)
 	if err != nil || file == nil {
@@ -134,7 +144,7 @@ func sqlInjScan(filePath, content string) []sqlInjIssue {
 
 	var issues []sqlInjIssue
 	ast.Inspect(file, func(node ast.Node) bool {
-		if len(issues) >= maxSQLInjectionWarnings+1 {
+		if capped && len(issues) >= maxSQLInjectionWarnings+1 {
 			return false
 		}
 
@@ -182,8 +192,13 @@ func sqlInjScan(filePath, content string) []sqlInjIssue {
 }
 
 // sqlInjScanFingerprints returns the set of delta fingerprints for a content.
+// #1778 case 2: the scan's internal warning CAP (5) truncated the issue
+// list before every site was fingerprinted - files with 6+ PRE-EXISTING
+// sites re-flagged the 6th+ as "new" on every edit because it never made
+// it into the old-content fingerprint set. Fingerprint collection must
+// see ALL sites; only warning OUTPUT is capped.
 func sqlInjScanFingerprints(filePath, content string) map[string]bool {
-	issues := sqlInjScan(filePath, content)
+	issues := sqlInjScanAll(filePath, content)
 	set := make(map[string]bool, len(issues))
 	for _, i := range issues {
 		set[i.fingerprint] = true

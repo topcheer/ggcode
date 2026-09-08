@@ -20,6 +20,7 @@ package agent
 //   - JetBrains AI: per-language coverage gap detection
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -366,6 +367,16 @@ var dartLangProfile = langProfile{
 		dir := filepath.Dir(srcFile)
 		base := filepath.Base(srcFile)
 		name := strings.TrimSuffix(base, ".dart")
+		// #1778 case 6: Flutter's standard layout is lib/foo.dart covered
+		// by test/foo_test.dart at the PROJECT ROOT - the old candidates
+		// (lib/foo_test.dart, lib/test/foo_test.dart) almost never exist,
+		// so every lib/ source was branded 'no tests'.
+		if rel, err := filepath.Rel(workingDir, srcFile); err == nil && strings.HasPrefix(rel, "lib"+string(filepath.Separator)) {
+			return []string{
+				filepath.Join("test", name+"_test.dart"),
+				filepath.Join(dir, name+"_test.dart"),
+			}
+		}
 		return []string{
 			filepath.Join(dir, name+"_test.dart"),
 			filepath.Join(dir, "test", name+"_test.dart"),
@@ -544,6 +555,22 @@ func hasTestFile(workingDir, srcFile string) string {
 				if !e.IsDir() && strings.HasSuffix(e.Name(), "_test.go") {
 					return filepath.Join(dir, e.Name())
 				}
+			}
+		}
+	}
+	// #1778 case 5: Rust's STANDARD convention is inline #[test] mod tests
+	// in the source file itself (the profile comment says so) - but the
+	// candidate list only names sibling files, so every .rs edit was
+	// branded 'no tests'. The source file IS its own test file when it
+	// carries test attributes.
+	if strings.HasSuffix(srcFile, ".rs") {
+		abs := srcFile
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(workingDir, abs)
+		}
+		if data, err := os.ReadFile(abs); err == nil {
+			if bytes.Contains(data, []byte("#[test]")) || bytes.Contains(data, []byte("#[tokio::test]")) {
+				return abs
 			}
 		}
 	}

@@ -56,8 +56,12 @@ var suppressionDirectives = func() []suppressionDirective {
 		{pattern: regexp.MustCompile(`(?m)#\s*pylint:\s*disable`), description: "# pylint: disable suppresses pylint warnings", languages: []Language{LangPython}, requiresRule: false, checkLinePrefix: true},
 
 		// --- JS/TS lint suppressions (NOT @ts-* which are in jsts_antipattern) ---
-		{pattern: regexp.MustCompile(`(?i)eslint-disable`), description: "eslint-disable suppresses ESLint warnings", languages: []Language{LangJSTS}, requiresRule: false, checkLinePrefix: true},
-		{pattern: regexp.MustCompile(`(?i)stylelint-disable`), description: "stylelint-disable suppresses Stylelint warnings", languages: []Language{LangJSTS}, requiresRule: false, checkLinePrefix: true},
+		{pattern: regexp.MustCompile(`(?i)eslint-disable`), description: "eslint-disable suppresses ESLint warnings", languages: []Language{LangJSTS, LangMarkup}, requiresRule: false, checkLinePrefix: true},
+		// #1778 case 4: .vue/.svelte single-file components carry ESLint
+		// directives inside their <script> block and stylelint ones in
+		// <style> - .vue is stylelint's HOME turf. Both map to LangMarkup,
+		// which excluded them entirely.
+		{pattern: regexp.MustCompile(`(?i)stylelint-disable`), description: "stylelint-disable suppresses Stylelint warnings", languages: []Language{LangJSTS, LangMarkup}, requiresRule: false, checkLinePrefix: true},
 
 		// --- Ruby suppressions (only for .rb files, NOT unknown extensions) ---
 		{pattern: regexp.MustCompile(`(?m)#\s*rubocop:disable`), description: "# rubocop:disable suppresses RuboCop warnings", languages: []Language{LangRuby}, requiresRule: false, checkLinePrefix: true},
@@ -139,11 +143,33 @@ func countBareMatches(content string, sd *suppressionDirective) int {
 		if idx := strings.IndexByte(content[loc[1]:], '\n'); idx >= 0 {
 			lineEnd = loc[1] + idx
 		}
-		if isBareSuppression(content[lineStart:lineEnd], content[loc[0]:loc[1]], sd.requiresRule) {
+		line := content[lineStart:lineEnd]
+		matched := content[loc[0]:loc[1]]
+		// #1778 case 3: prose/string-literal guard - a match inside code
+		// (const banner = "eslint-disable") counted as a suppression with
+		// NO line to point at. A REAL directive's match text itself rides
+		// a comment marker ("# noqa", "// nolint") or the line embeds one
+		// for trailing forms; a bare keyword in a string does neither.
+		if sd.checkLinePrefix && !matchRidesComment(line, matched) {
+			continue
+		}
+		if isBareSuppression(line, matched, sd.requiresRule) {
 			count++
 		}
 	}
 	return count
+}
+
+// matchRidesComment reports whether the matched directive text is (or
+// sits on) a comment: the match itself contains a comment marker, or the
+// line embeds one (trailing forms like "x = 1  # noqa").
+func matchRidesComment(line, matched string) bool {
+	for _, marker := range []string{"//", "#", "--", "/*", "*"} {
+		if strings.Contains(matched, marker) || strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // containsLang checks if a language is in a list.
