@@ -424,3 +424,20 @@ func TestHasErrorMarkersIgnoresPassLines(t *testing.T) {
 		t.Fatal("real failure output must still be flagged")
 	}
 }
+
+// TestFingerprintSkipsGreenLines pins #1679 case 1: green lines carrying
+// bare marker substrings (--- PASS: TestFailover, ok  , === RUN
+// TestExpected) must not fill the fingerprint - two DIFFERENT errors
+// whose outputs share green preambles hashed identically as SAME error.
+func TestFingerprintSkipsGreenLines(t *testing.T) {
+	outA := "--- PASS: TestFailover (0.00s)\n--- FAIL: TestAlpha (0.01s)\n    alpha_test.go:12: want 1 got 2\nok  pkg/x 0.5s"
+	outB := "--- PASS: TestFailover (0.00s)\n--- FAIL: TestBeta (0.01s)\n    beta_test.go:34: want 3 got 4\nok  pkg/y 0.6s"
+	fa := fingerprintBuildError(outA)
+	fb := fingerprintBuildError(outB)
+	if fa == "" || fb == "" {
+		t.Fatalf("fingerprints must be non-empty, got %q / %q", fa, fb)
+	}
+	if fa == fb {
+		t.Fatal("different errors sharing green preambles must NOT fingerprint identically (#1679 case 1)")
+	}
+}

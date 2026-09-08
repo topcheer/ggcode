@@ -217,3 +217,22 @@ func TestRecordShellSourceMutationSuppressesReverifyWarning(t *testing.T) {
 		t.Fatalf("re-run after shell source mutation must not warn (source changed): %s", w)
 	}
 }
+
+// TestReverifyBumpsOnTreeMutations pins #1679 case 2: whole-tree rewrites
+// (git_checkout and friends) and undo_edit must bump editsSince - a
+// re-test after a branch switch is NOT "cannot produce new information".
+func TestReverifyBumpsOnTreeMutations(t *testing.T) {
+	s := newRedundantReverifyState()
+	s.lastRun["test"] = &reverifyRun{toolName: "run_command", iteration: 1}
+	for _, tool := range []string{"git_checkout", "git_stash", "git_reset", "git_revert", "undo_edit"} {
+		s.recordEdit(tool)
+	}
+	if got := s.lastRun["test"].editsSince; got != 5 {
+		t.Fatalf("tree-mutating tools must bump editsSince, got %d want 5 (#1679 case 2)", got)
+	}
+	// Non-mutating tools still don't.
+	s.recordEdit("read_file")
+	if got := s.lastRun["test"].editsSince; got != 5 {
+		t.Fatalf("read_file must not bump, got %d", got)
+	}
+}
