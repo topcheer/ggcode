@@ -66,7 +66,22 @@ class SecureTokenStorage {
   /// never degrades another. A successful read/write re-enables that key.
   static const _secureRetryAfter = Duration(minutes: 5);
 
+  /// Test seam for #1872 case 2: lets a test shorten the degraded-window
+  /// cooldown so read-side arbitration is reachable without wall-clock waits.
+  @visibleForTesting
+  Duration secureRetryAfter = _secureRetryAfter;
+
   final Map<String, DateTime> _degradedUntilByKey = {};
+
+  /// #1872 case 2: keys that received FALLBACK writes during a degraded
+  /// window. The secure store may still hold the value from BEFORE the
+  /// degradation (Keychain write timed out - the old value stayed), so when
+  /// secure reads come back the fallback value is the NEWER one and must
+  /// win (last-write-wins), then be healed back into the secure store.
+  /// Without this, a user editing connections during a 5-minute degraded
+  /// window silently lost every edit the moment the cooldown expired and
+  /// the stale Keychain value became readable again.
+  final Map<String, bool> _fallbackWritesByKey = {};
   bool _disabledForTest = false;
 
   /// Whether secure storage should be attempted for this key right now.
@@ -77,7 +92,7 @@ class SecureTokenStorage {
   }
 
   void _degradeSecureFor(String key) {
-    _degradedUntilByKey[key] = DateTime.now().add(_secureRetryAfter);
+    _degradedUntilByKey[key] = DateTime.now().add(secureRetryAfter);
   }
 
   /// Generic read with timeout fallback to SharedPreferences.
@@ -88,8 +103,24 @@ class SecureTokenStorage {
     }
     try {
       final result = await _storage.read(key: key).timeout(_timeout);
-      debugPrint('[secure_storage] Keychain read OK: $key');
       _degradedUntilByKey.remove(key); // success re-enables
+      // #1872 case 2 arbitration: if fallback writes happened while this
+      // key was degraded, the prefs value is NEWER than whatever the
+      // secure store still holds. Prefer it and heal the secure store.
+      if (_fallbackWritesByKey[key] == true) {
+        final prefs = await SharedPreferences.getInstance();
+        final fallbackValue = prefs.getString(fallbackKey);
+        if (fallbackValue != null && fallbackValue != result) {
+          try {
+            await _storage.write(key: key, value: fallbackValue).timeout(_timeout);
+            debugPrint('[secure_storage] healed $key from newer fallback value written during degradation');
+          } catch (_) {
+            // Heal is best-effort; the newer value is still returned.
+          }
+        }
+        _fallbackWritesByKey.remove(key);
+        return fallbackValue ?? result;
+      }
       return result;
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out, falling back to SharedPreferences');
@@ -112,6 +143,7 @@ class SecureTokenStorage {
   /// persisted copy (Keychain empty + prefs empty).
   Future<bool> _writeSecure(String key, String value, String fallbackKey) async {
     if (!_shouldTrySecureFor(key)) {
+      _fallbackWritesByKey[key] = true; // #1872 case 2: newer than secure
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
       return false;
@@ -120,16 +152,22 @@ class SecureTokenStorage {
       await _storage.write(key: key, value: value).timeout(_timeout);
       debugPrint('[secure_storage] Keychain write OK: $key');
       _degradedUntilByKey.remove(key); // success re-enables
+      // #1872 case 2: this secure write is now the NEWEST value - any
+      // fallback value from an earlier degraded window is stale and must
+      // never win arbitration on a later read.
+      _fallbackWritesByKey.remove(key);
       return true;
     } on TimeoutException {
       debugPrint('[secure_storage] Keychain timed out on write, falling back to SharedPreferences');
       _degradeSecureFor(key);
+      _fallbackWritesByKey[key] = true; // #1872 case 2: newer than secure
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
       return false;
     } catch (e) {
       debugPrint('[secure_storage] write error: $e, falling back to SharedPreferences');
       _degradeSecureFor(key);
+      _fallbackWritesByKey[key] = true; // #1872 case 2: newer than secure
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(fallbackKey, value);
       return false;
@@ -178,6 +216,7 @@ class SecureTokenStorage {
       await _storage.delete(key: _connectionsKey).timeout(_timeout);
     } catch (_) {}
     final prefs = await SharedPreferences.getInstance();
+    _fallbackWritesByKey.remove(_connectionsKey); // nothing left to arbitrate
     try {
       await prefs.remove(_legacyConnectionsKey);
     } catch (_) {}
@@ -188,16 +227,32 @@ class SecureTokenStorage {
   static const _historyKey = 'ggcode_history_secure';
   static const _legacyHistoryKey = 'ggcode_history';
 
+  /// #1872 case 3: the legacy history key holds a StringList (set by old
+  /// versions), but the fallback write path stores a JSON String. Writing
+  /// the String into the SAME key made the two types collide: Android's
+  /// getString returns null for a StringList and iOS UserDefaults can
+  /// throw on the cast. The string fallback gets its OWN key so the legacy
+  /// StringList key is only ever read (migration source), never rewritten.
+  static const _historyFallbackKey = 'ggcode_history_fallback';
+
   /// Load URL history from secure storage, with one-time migration.
   Future<List<String>> loadHistory() async {
-    var raw = await _readSecure(_historyKey, _legacyHistoryKey);
+    var raw = await _readSecure(_historyKey, _historyFallbackKey);
     if (raw == null) {
       // Migrate from legacy SharedPreferences.
       final prefs = await SharedPreferences.getInstance();
-      final legacy = prefs.getStringList(_legacyHistoryKey);
+      // #1872 case 3 read-side defense: pre-fix installs may have left a
+      // JSON String in the legacy StringList key; getStringList must not
+      // throw on iOS or silently collide on Android.
+      List<String>? legacy;
+      try {
+        legacy = prefs.getStringList(_legacyHistoryKey);
+      } catch (_) {
+        legacy = null;
+      }
       if (legacy != null && legacy.isNotEmpty) {
         raw = jsonEncode(legacy);
-        final secured = await _writeSecure(_historyKey, raw, _legacyHistoryKey);
+        final secured = await _writeSecure(_historyKey, raw, _historyFallbackKey);
         // #1421-A: same rule as connections - never delete the source on
         // a degraded (fallback) write.
         if (secured) {
@@ -220,6 +275,6 @@ class SecureTokenStorage {
 
   /// Save URL history to secure storage.
   Future<void> saveHistory(List<String> urls) async {
-    await _writeSecure(_historyKey, jsonEncode(urls), _legacyHistoryKey);
+    await _writeSecure(_historyKey, jsonEncode(urls), _historyFallbackKey);
   }
 }
