@@ -99,7 +99,12 @@ var (
 	// blind spot, as did `checkout -f <ref>` / `switch -f` / the
 	// semantically-identical `checkout -B` (which #1464-B's branch -f
 	// warning makes inconsistent), and bare `restore .`.
-	reGitDiscardAll = regexp.MustCompile(`\bgit\s+(checkout|switch|restore)\s+(-[a-zA-Z]+\s+)*(-[aBf]+\s+)?(\.\s*$|--\s*\.)`)
+	// #1754 case 1: the flag slot only ate SINGLE-DASH flags - the most
+	// common restore-to-HEAD spellings all carry a REF or tree-ish token
+	// (`checkout HEAD -- .`, `restore --source=HEAD .`, `checkout main .`,
+	// `switch -C`) and the trailing `.` anchor broke inside `&&` chains;
+	// every one silently skipped the advisory.
+	reGitDiscardAll = regexp.MustCompile(`\bgit\s+(?:(?:checkout|switch|restore)\s+(?:(?:-[a-zA-Z]+\s+|--source(?:[= ]\S+)\s+|[A-Za-z0-9_][\w./=-]*\s+|--\s+)*(?:\.\s*(?:$|&&|--)|--\s*\.))|switch\s+-[CcFf]\b)`)
 	// checkout/switch with a force-bearing flag discards local changes to
 	// reach the target state (checkout -f / switch -f / checkout -B main).
 	reGitCheckoutForce = regexp.MustCompile(`\bgit\s+(checkout|switch)\s+(-[a-zA-Z]*[fB][a-zA-Z]*|--force)\b`)

@@ -26,7 +26,13 @@ public class Win32Dpi {
 }
 '@
 $PMv2 = [IntPtr](-4)
-try { [Win32Dpi]::SetProcessDpiAwarenessContext($PMv2) | Out-Null } catch { [Win32Dpi]::SetProcessDPIAware() | Out-Null }
+# #1754 case 2: SetProcessDPIAwarenessContext returns FALSE (no exception)
+# when the context is already set or the session is restricted - Out-Null
+# swallowed that, the catch never ran, and the process silently stayed
+# DPI-unaware (the #763 bug the preamble exists to prevent). Check the
+# return; fall back to the legacy API, and keep the catch for pre-1703
+# machines where the P/Invoke itself throws.
+try { if (-not [Win32Dpi]::SetProcessDpiAwarenessContext($PMv2)) { [Win32Dpi]::SetProcessDPIAware() | Out-Null } } catch { [Win32Dpi]::SetProcessDPIAware() | Out-Null }
 `
 
 // buildWindowsListDisplaysScript returns the PowerShell script used by

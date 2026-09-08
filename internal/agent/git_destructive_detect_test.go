@@ -278,3 +278,35 @@ func TestForcePushNewlineSeparatedSecondCommand(t *testing.T) {
 		t.Fatal("single-line force push must stay detected")
 	}
 }
+
+// TestGitDiscardAllRefForms pins #1754 case 1: the restore-to-HEAD
+// spellings agents actually write (ref/tree-ish token before the dot,
+// --source=, chains) all previously slipped the single-dash flag slot.
+func TestGitDiscardAllRefForms(t *testing.T) {
+	mustMatch := []string{
+		"git checkout HEAD -- .",
+		"git checkout main .",
+		"git checkout origin/main .",
+		"git restore --source=HEAD .",
+		"git checkout . && git add -A",
+		"git switch -C main",
+		"git checkout -f HEAD .",
+	}
+	for _, cmd := range mustMatch {
+		if !reGitDiscardAll.MatchString(cmd) {
+			t.Errorf("must match: %q", cmd)
+		}
+	}
+	// Non-destructive look-alikes stay clean.
+	for _, cmd := range []string{
+		"git checkout --staged .",
+		"git checkout -b feature-x",
+		"git checkout --orphan fresh",
+		"git restore --staged file.go",
+		"git switch feature-x",
+	} {
+		if reGitDiscardAll.MatchString(cmd) {
+			t.Errorf("false positive on: %q", cmd)
+		}
+	}
+}
