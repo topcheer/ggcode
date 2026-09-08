@@ -43,7 +43,10 @@ func TestBeginVisionTurn_SwitchAndRestore(t *testing.T) {
 		{Type: "image", ImageMIME: "image/png"},
 	}
 
-	restore := bridge.beginVisionTurn(content)
+	restore, switched := bridge.beginVisionTurn(content)
+	if !switched {
+		t.Fatal("expected switched=true when a vision model is available")
+	}
 	if len(*calls) != 1 || (*calls)[0] != "vision-model" {
 		t.Fatalf("expected switch to vision-model, got %v", *calls)
 	}
@@ -56,7 +59,10 @@ func TestBeginVisionTurn_SwitchAndRestore(t *testing.T) {
 
 func TestBeginVisionTurn_NoImageNoSwitch(t *testing.T) {
 	bridge, calls := newVisionTurnBridge(t, false, "user-model")
-	restore := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "text", Text: "plain"}})
+	restore, switched := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "text", Text: "plain"}})
+	if switched {
+		t.Fatal("expected switched=false for text-only content")
+	}
 	restore()
 	if len(*calls) != 0 {
 		t.Fatalf("expected no switch for text-only content, got %v", *calls)
@@ -65,7 +71,10 @@ func TestBeginVisionTurn_NoImageNoSwitch(t *testing.T) {
 
 func TestBeginVisionTurn_VisionAgentNoSwitch(t *testing.T) {
 	bridge, calls := newVisionTurnBridge(t, true, "user-model")
-	restore := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "image", ImageMIME: "image/png"}})
+	restore, switched := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "image", ImageMIME: "image/png"}})
+	if switched {
+		t.Fatal("expected switched=false when agent already has vision")
+	}
 	restore()
 	if len(*calls) != 0 {
 		t.Fatalf("expected no switch when agent already has vision, got %v", *calls)
@@ -76,7 +85,10 @@ func TestBeginVisionTurn_NoSessionKeepsSwitchUntilNoop(t *testing.T) {
 	// Without a session there is no user model to restore to: the switch
 	// still happens for the turn, restore is a no-op.
 	bridge, calls := newVisionTurnBridge(t, false, "")
-	restore := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "image", ImageMIME: "image/png"}})
+	restore, switched := bridge.beginVisionTurn([]provider.ContentBlock{{Type: "image", ImageMIME: "image/png"}})
+	if !switched {
+		t.Fatal("expected switched=true for image content without session model")
+	}
 	if len(*calls) != 1 {
 		t.Fatalf("expected turn switch, got %v", *calls)
 	}

@@ -246,8 +246,12 @@ func (b *DaemonBridge) SetVisionTurnHook(selectFn func() string, switchFn func(m
 
 // beginVisionTurn switches to a vision model for THIS inbound turn when the
 // content carries images, the active model has no vision, and a comparable
-// vision model exists on the endpoint. Returns the restore func (idempotent).
-func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) func() {
+// vision model exists on the endpoint. Returns (restore, switched):
+// switched=true means the turn will run on the vision model and restore MUST
+// be deferred; switched=false means no vision channel was available and the
+// caller should degrade to text-only instead of sending image blocks to a
+// text-only endpoint (which 400s and feeds the auto-retry loop).
+func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(), bool) {
 	hasImage := false
 	for _, c := range content {
 		if c.Type == "image" {
@@ -264,16 +268,27 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) func() {
 		userModel = b.sess.Model
 	}
 	b.mu.Unlock()
-	if !hasImage || sel == nil || sw == nil || ag == nil || ag.SupportsVision() {
-		return func() {}
+	if !hasImage {
+		return func() {}, false
+	}
+	if sel == nil || sw == nil {
+		debug.Log("daemon-bridge", "vision turn: hooks not installed - degrading to text-only")
+		return func() {}, false
+	}
+	if ag == nil || ag.SupportsVision() {
+		return func() {}, false
 	}
 	vm := sel()
-	if vm == "" || vm == userModel {
-		return func() {}
+	if vm == "" {
+		debug.Log("daemon-bridge", "vision turn: no comparable vision model on endpoint (user model: %s) - degrading to text-only", userModel)
+		return func() {}, false
+	}
+	if vm == userModel {
+		return func() {}, false
 	}
 	if err := sw(vm); err != nil {
-		debug.Log("daemon-bridge", "vision turn switch to %s failed: %v", vm, err)
-		return func() {}
+		debug.Log("daemon-bridge", "vision turn switch to %s failed: %v - degrading to text-only", vm, err)
+		return func() {}, false
 	}
 	debug.Log("daemon-bridge", "vision turn: switched to %s for this turn (user model: %s)", vm, userModel)
 	var once bool
@@ -288,7 +303,29 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) func() {
 		if err := sw(userModel); err != nil {
 			debug.Log("daemon-bridge", "vision turn restore to %s failed: %v", userModel, err)
 		}
+	}, true
+}
+
+// stripImageBlocks removes image blocks, keeping text and attachment hints,
+// mirroring the TUI/desktop 400-fallback so IM turns degrade identically.
+func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
+	out := make([]provider.ContentBlock, 0, len(content))
+	for _, c := range content {
+		if c.Type != "image" {
+			out = append(out, c)
+		}
 	}
+	return out
+}
+
+// contentHasImageBlocks reports whether any block is an image.
+func contentHasImageBlocks(content []provider.ContentBlock) bool {
+	for _, c := range content {
+		if c.Type == "image" {
+			return true
+		}
+	}
+	return false
 }
 
 // The callback receives (vendor, endpoint, model) — any may be empty to mean "keep current".
@@ -566,12 +603,16 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return nil
 	}
 
-	// Turn-scoped vision fallback: switch to a vision model for this turn
-	// when images are present and the active model cannot accept them.
-	// Restore runs on every exit path; if the vision run itself fails, the
-	// error surfaces as usual (the restored non-vision model strips any
-	// history image parts via the SupportsVision gate on the next turn).
-	restoreVision := b.beginVisionTurn(content)
+	// Turn-scoped vision fallback, mirroring the TUI path: switch to a
+	// vision model for this turn when images are present and the active
+	// model cannot accept them. When no vision channel is available the
+	// image blocks are stripped up front (path hints survive as text) -
+	// sending them to a text-only endpoint would 400 and feed the generic
+	// auto-retry loop with the same failing payload, 5 times in a row.
+	restoreVision, visionSwitched := b.beginVisionTurn(content)
+	if !visionSwitched && contentHasImageBlocks(content) {
+		content = stripImageBlocks(content)
+	}
 	defer restoreVision()
 
 	// #1584-A: route-empty OR text-less messages used to drop here even

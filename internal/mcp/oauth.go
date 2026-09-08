@@ -804,7 +804,18 @@ func (h *OAuthHandler) waitForClientID(ctx context.Context, authEndpoint, client
 		}
 		req.Header.Set("Accept", "text/html,application/json")
 
-		resp, err := h.httpClient.Do(req)
+		// The comment above has claimed "redirect-following disabled" since
+		// this probe was written, but nothing enforced it: a 302 was followed
+		// to the real IdP login page, adding a full extra roundtrip to a
+		// possibly-distant host before returning (owner-visible OAuth start
+		// delay), and in offline/proxied environments the failed follow
+		// burned the whole retry budget. The 302 itself is the evidence that
+		// the client_id is live - stop there (v1.3.234 follow-up).
+		probeClient := *h.httpClient
+		probeClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		resp, err := probeClient.Do(req)
 		if err != nil {
 			h.setHealthCheckStatus(fmt.Sprintf("Verifying OAuth client (attempt %d, retrying)...", attempt))
 			debug.Log("mcp-oauth", "client_id health check attempt=%d error=%v", attempt, err)

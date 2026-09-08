@@ -113,3 +113,34 @@ func TestInferVisionSupport_XiaoMiMIMO(t *testing.T) {
 		t.Fatal("expected MiMo-V2.5-Pro to remain non-vision by default")
 	}
 }
+
+// TestInferVisionSupportCapabilityTableOnly pins the keyword-heuristic
+// removal: vision support comes from the capability table alone. Name
+// substring matching misclassified models in both directions (glm-5.3 sent
+// images to a text-only coding endpoint; a proxy name containing "claude"
+// was flagged vision without evidence). Table misses are NOT vision.
+func TestInferVisionSupportCapabilityTableOnly(t *testing.T) {
+	cases := []struct {
+		model    string
+		protocol string
+		want     bool
+	}{
+		// Table hits decide.
+		{"glm-5.3-flash", "openai", true},
+		{"claude-3-5-haiku", "anthropic", true},
+		{"deepseek-chat", "openai", false},
+		{"glm-5.3", "openai", false}, // absent from table: NOT vision
+		// Keyword heuristics are gone: names containing vision-ish substrings
+		// but absent from the table must NOT be flagged.
+		{"my-claude-proxy", "openai", false},
+		{"custom-gpt-gateway", "openai", false},
+		{"weird-glm-vision-thing", "openai", false},
+		// Gemini protocol natively multimodal (protocol property, not name).
+		{"whatever-model", "gemini", true},
+	}
+	for _, tc := range cases {
+		if got := inferVisionSupport(tc.model, tc.protocol); got != tc.want {
+			t.Errorf("inferVisionSupport(%q, %q) = %v, want %v", tc.model, tc.protocol, got, tc.want)
+		}
+	}
+}

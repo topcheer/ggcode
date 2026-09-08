@@ -532,6 +532,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"glm-4.7-flashx":                                           {ContextWindow: 200000, MaxOutputTokens: 131072},
 	"glm-4.7-free":                                             {ContextWindow: 204800, MaxOutputTokens: 131072},
 	"glm-5":                                                    {ContextWindow: 204800, MaxOutputTokens: 131072},
+	"glm-4v-plus":                                              {ContextWindow: 128000, MaxOutputTokens: 128000, SupportsVision: true},
 	"glm-5-2-260617":                                           {ContextWindow: 1000000, MaxOutputTokens: 131072},
 	"glm-5-free":                                               {ContextWindow: 204800, MaxOutputTokens: 131072},
 	"glm-5-turbo":                                              {ContextWindow: 200000, MaxOutputTokens: 131072},
@@ -776,7 +777,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"kimi-k2-7-code":                                           {ContextWindow: 256000, MaxOutputTokens: 65536, SupportsVision: true},
 	"kimi-k2-thinking":                                         {ContextWindow: 262144, MaxOutputTokens: 262144},
 	"kimi-k2-thinking-turbo":                                   {ContextWindow: 262144, MaxOutputTokens: 262144},
-	"kimi-k2.5":                                                {ContextWindow: 262144, MaxOutputTokens: 262144},
+	"kimi-k2.5":                                                {ContextWindow: 262144, MaxOutputTokens: 262144, SupportsVision: true},
 	"kimi-k2.5-free":                                           {ContextWindow: 262144, MaxOutputTokens: 262144, SupportsVision: true},
 	"kimi-k2.6":                                                {ContextWindow: 262144, MaxOutputTokens: 262144},
 	"kimi-k2.6@eu":                                             {ContextWindow: 256000, MaxOutputTokens: 128000, SupportsVision: true},
@@ -1481,7 +1482,7 @@ var knownModelCapabilities = map[string]modelCapability{
 	"qwen3.6-35b-a3b":                                          {ContextWindow: 262144, MaxOutputTokens: 65536, SupportsVision: true},
 	"qwen3.6-flash":                                            {ContextWindow: 1000000, MaxOutputTokens: 65536, SupportsVision: true},
 	"qwen3.6-max-preview":                                      {ContextWindow: 262144, MaxOutputTokens: 65536},
-	"qwen3.6-plus":                                             {ContextWindow: 1000000, MaxOutputTokens: 65536},
+	"qwen3.6-plus":                                             {ContextWindow: 1000000, MaxOutputTokens: 65536, SupportsVision: true},
 	"qwen3.6-plus-free":                                        {ContextWindow: 262144, MaxOutputTokens: 65536, SupportsVision: true},
 	"qwen3.7-flash":                                            {ContextWindow: 1000000, MaxOutputTokens: 65536, SupportsVision: true},
 	"qwen3.7-max":                                              {ContextWindow: 1048576, MaxOutputTokens: 131072},
@@ -1865,37 +1866,19 @@ func inferMaxOutputTokens(model, protocol string) int {
 	}
 }
 
+// inferVisionSupport reports vision support from the capability table ONLY.
+// Model-name keyword heuristics were removed deliberately: substring matching
+// misclassified real models in both directions (e.g. "glm-5.3" contains no
+// "v" yet the endpoint rejected image content with a 400, and a custom proxy
+// name containing "claude" was flagged vision without any evidence). The
+// capability table is the single source of truth; models absent from it are
+// treated as NOT vision-capable, so callers fall back to a vision-capable
+// model from the table or degrade to text-only instead of sending images to
+// a text-only endpoint. The gemini-protocol check is kept: it is a property
+// of the wire protocol (Gemini's native multimodal API), not a name guess.
 func inferVisionSupport(model, protocol string) bool {
-	if cap, ok := lookupModelCapability(model); ok && cap.SupportsVision {
-		return true
-	}
-
-	m := strings.ToLower(strings.TrimSpace(model))
-	switch {
-	case strings.Contains(m, "claude"),
-		strings.Contains(m, "gpt"),
-		strings.Contains(m, "gemini"),
-		strings.Contains(m, "gemma"),
-		strings.Contains(m, "grok"),
-		strings.Contains(m, "seed-2"),
-		strings.Contains(m, "qwen3.5"),
-		strings.Contains(m, "qwen-3.5"),
-		strings.Contains(m, "qwen3.6"),
-		strings.Contains(m, "qwen-3.6"),
-		(strings.Contains(m, "glm-") && strings.Contains(m, "v")),
-		strings.Contains(m, "kimi-2.5"),
-		strings.Contains(m, "kimi-k2"),
-		strings.Contains(m, "kimi-vl"):
-		return true
-	case strings.Contains(m, "glm-"),
-		strings.Contains(m, "kimi"),
-		strings.Contains(m, "deepseek"),
-		strings.Contains(m, "mistral"),
-		strings.Contains(m, "qwen"),
-		strings.Contains(m, "moonshot"),
-		strings.Contains(m, "minimax"),
-		strings.Contains(m, "llama"):
-		return false
+	if cap, ok := lookupModelCapability(model); ok {
+		return cap.SupportsVision
 	}
 
 	return strings.EqualFold(strings.TrimSpace(protocol), "gemini")

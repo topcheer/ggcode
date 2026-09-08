@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -404,5 +405,33 @@ func TestWaitForClientIDRespectsContextCancel(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatalf("cancelled context must return immediately, took %v", time.Since(start))
+	}
+}
+
+// v1.3.234 owner report: "DCR 无延迟" must mean ZERO added delay on a
+// consistent server. The old loop slept 2s BEFORE the first probe, so every
+// OAuth start paid the Railway-style eventual-consistency tax even when the
+// client_id was already live. Pin probe-first: first probe immediate, waits
+// only between retries.
+func TestWaitForClientIDProbesImmediately(t *testing.T) {
+	var probes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&probes, 1)
+		w.Header().Set("Location", "https://example.com/login")
+		w.WriteHeader(http.StatusFound) // 302 = client_id live
+	}))
+	defer srv.Close()
+
+	h := NewOAuthHandler("probe-first", srv.URL, auth.DefaultStore())
+	start := time.Now()
+	if err := h.waitForClientID(context.Background(), srv.URL, "client-live", "http://localhost:1/callback"); err != nil {
+		t.Fatalf("live client_id must pass: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("first-probe success must return without any sleep, took %v", elapsed)
+	}
+	if n := atomic.LoadInt32(&probes); n != 1 {
+		t.Fatalf("live client_id must succeed on the first probe, got %d probes", n)
 	}
 }

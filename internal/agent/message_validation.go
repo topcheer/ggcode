@@ -90,6 +90,8 @@ func (a *Agent) ensureMessagesSendable(msgs []provider.Message) []provider.Messa
 			var stripped int
 			msg, stripped = stripToolResultImages(msg)
 			strippedImages += stripped
+			msg, stripped = stripInlineImageBlocks(msg)
+			strippedImages += stripped
 		}
 
 		switch msg.Role {
@@ -207,6 +209,38 @@ func filterToolResults(content []provider.ContentBlock, open []openCall) (kept [
 // stripToolResultImages returns a deep copy of a user message with image data
 // removed from tool_result blocks (their text output is preserved), plus the
 // number of blocks stripped. The caller's slice is never mutated.
+// stripInlineImageBlocks removes standalone image content blocks
+// (provider.ImageBlock entries) from a user message. ensureMessagesSendable
+// uses it when the active model lacks vision so legacy-session or IM-originated
+// image parts cannot reach a text-only endpoint and trigger
+// "messages.content.type 参数非法，取值范围 ['text']" 400s. A pure-image message
+// keeps a short text placeholder so the provider receives a non-empty block.
+func stripInlineImageBlocks(msg provider.Message) (provider.Message, int) {
+	hasImage := false
+	for _, b := range msg.Content {
+		if b.Type == "image" {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return msg, 0
+	}
+	content := make([]provider.ContentBlock, 0, len(msg.Content))
+	stripped := 0
+	for _, b := range msg.Content {
+		if b.Type == "image" {
+			stripped++
+			continue
+		}
+		content = append(content, b)
+	}
+	if len(content) == 0 {
+		content = append(content, provider.TextBlock("[image removed: current model has no vision support]"))
+	}
+	return provider.Message{Role: msg.Role, Content: content}, stripped
+}
+
 func stripToolResultImages(msg provider.Message) (provider.Message, int) {
 	var content []provider.ContentBlock
 	stripped := 0
