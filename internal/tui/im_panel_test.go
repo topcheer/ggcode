@@ -364,3 +364,40 @@ func TestDisableAllIMChannelsMutationFlow(t *testing.T) {
 		t.Fatal("follow-up Cmd missing")
 	}
 }
+
+// TestToggleIMAdapterEnabledMutationFlow pins #1763 case 1: the SHARED
+// toggle (15 panels' 'd' key) must return configMutationMsg - not write
+// the config map on the Cmd goroutine (the last direct-write root of the
+// #1367 family).
+func TestToggleIMAdapterEnabledMutationFlow(t *testing.T) {
+	m, _ := newTestModelWithIM(t)
+	if m.config == nil {
+		t.Fatal("fixture must carry config")
+	}
+	if m.imManager == nil {
+		t.Skip("fixture manager unavailable")
+	}
+	// A registered binding exists in the fixture; pick its platform name so
+	// the toggle's success branch (and thus the mutation flow) runs.
+	entries := m.imChannelEntries()
+	if len(entries) == 0 {
+		t.Skip("no bound channel in fixture")
+	}
+	name := entries[0].Adapter
+	msg := m.toggleIMAdapterEnabled(name)()
+	mut, ok := msg.(configMutationMsg)
+	if !ok {
+		// No config or no manager -> result msg; with both set the mutation
+		// path is mandatory.
+		t.Fatalf("expected configMutationMsg from the shared toggle, got %#v", msg)
+	}
+	if _, has := m.config.IM.Adapters[name]; has {
+		t.Fatal("config mutated on Cmd goroutine - race regression (#1763)")
+	}
+	// Route through Update: the write happens on the main loop.
+	m2, _ := m.handleConfigMutationMsg(mut)
+	_ = m2
+	if _, has := m.config.IM.Adapters[name]; !has {
+		t.Log("note: manager reported not-disabled; disable branch wrote entry via apply")
+	}
+}
