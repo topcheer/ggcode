@@ -19,6 +19,10 @@ class BackgroundConnectionManager extends Notifier<void> {
   final Map<String, List<StreamSubscription<dynamic>>> _subscriptions = {};
   final Map<String, String> _sessionIdToUrl = {};
   final Set<String> _liveSessionIds = {};
+  // #1869 case 6: sessions whose `await svc.connect()` is still pending -
+  // guards against a second connect() overwriting the service mid-handshake
+  // (the first would keep completing into a zombie WebSocket).
+  final Set<String> _connectingSessionIds = {};
 
   @override
   void build() {
@@ -34,19 +38,36 @@ class BackgroundConnectionManager extends Notifier<void> {
       debugPrint('[bg-conn] session $sessionId already connected');
       return;
     }
+    // #1869 case 6: the liveness check alone is not an in-flight guard -
+    // while `await svc.connect()` below is pending, a second connect()
+    // for the SAME session passed the old check and overwrote
+    // _services[sessionId]; the first service's handshake kept completing
+    // into a zombie WebSocket that kept receiving the stream. Track
+    // connecting sessions explicitly, and dispose the replaced service
+    // (previously only its subscription was cancelled - registerService
+    // already disposed, this path did not).
+    if (_connectingSessionIds.contains(sessionId)) {
+      debugPrint('[bg-conn] session $sessionId connect already in flight');
+      return;
+    }
+    _connectingSessionIds.add(sessionId);
+    try {
+      debugPrint('[bg-conn] connecting session=$sessionId');
+      final descriptor = ShareConnectionDescriptor.parse(url);
+      final svc = ConnectionService(descriptor: descriptor);
+      _services[sessionId]?.dispose();
+      _services[sessionId] = svc;
+      _sessionIdToUrl[sessionId] = url;
 
-    debugPrint('[bg-conn] connecting session=$sessionId');
-    final descriptor = ShareConnectionDescriptor.parse(url);
-    final svc = ConnectionService(descriptor: descriptor);
-    _services[sessionId] = svc;
-    _sessionIdToUrl[sessionId] = url;
-
-    _wireService(sessionId, svc);
-    await svc.connect();
-    // #931: do NOT add to _liveSessionIds here - connect() never throws
-    // even on permanent failure, so expired rooms showed live and were
-    // skipped by reconnect logic. The connected callback in _wireService
-    // is the single source of truth for liveness.
+      _wireService(sessionId, svc);
+      await svc.connect();
+      // #931: do NOT add to _liveSessionIds here - connect() never throws
+      // even on permanent failure, so expired rooms showed live and were
+      // skipped by reconnect logic. The connected callback in _wireService
+      // is the single source of truth for liveness.
+    } finally {
+      _connectingSessionIds.remove(sessionId);
+    }
   }
 
   void _wireService(String sessionId, ConnectionService svc) {

@@ -175,24 +175,56 @@ class ConnectionStore {
 
   /// Load all connections from secure storage and deduplicate by sessionId.
   Future<void> load() async {
+    // #1869 case 1: the jsonDecode await is a suspension point - concurrent
+    // markAlive/markDead/add/save mutations that land while we wait would be
+    // clobbered by a wholesale `_connections = diskList` replacement (an
+    // alive flag rolls back, then the NEXT save persists the rollback).
+    // Merge instead: prefer the newer of the two entries per id and keep
+    // memory-only entries.
+    final beforeLoad = List<StoredConnection>.from(_connections);
     final raw = await SecureTokenStorage.instance.loadConnectionsJson();
     if (raw == null || raw.isEmpty) {
-      _connections = [];
+      // Nothing on disk - keep whatever memory already holds.
       return;
     }
+    List<StoredConnection> fromDisk;
     try {
       final list = jsonDecode(raw) as List<dynamic>;
-      _connections = list
+      fromDisk = list
           .map((e) => StoredConnection.fromJson(e as Map<String, dynamic>))
           .toList();
-      _deduplicate();
-      // Cleanup stale connections on load — remove anything older than 6 hours
-      // and permanently failed connections. Session data (CachedSessionRecord)
-      // is NOT touched.
-      await cleanupStale();
     } catch (_) {
-      _connections = [];
+      // #1869 case 2: a corrupted blob (partial write, bad DateTime, ...)
+      // used to blank the in-memory list - the next high-frequency save
+      // then PERSISTED the empty list and every connection, renew_token
+      // URLs included, was unrecoverable. Keep the last known-good memory
+      // state instead.
+      debugPrint('[store] connections JSON corrupted - keeping ${_connections.length} in-memory entries');
+      return;
     }
+    final merged = <String, StoredConnection>{};
+    for (final c in fromDisk) {
+      merged[c.id] = c;
+    }
+    for (final c in beforeLoad) {
+      final disk = merged[c.id];
+      if (disk == null || _newerThan(c, disk)) {
+        merged[c.id] = c;
+      }
+    }
+    _connections = merged.values.toList();
+    _deduplicate();
+    // Cleanup stale connections on load — remove anything older than 6 hours
+    // and permanently failed connections. Session data (CachedSessionRecord)
+    // is NOT touched.
+    await cleanupStale();
+  }
+
+  /// #1869 case 1 helper: whether [a] reflects a newer mutation than [b].
+  bool _newerThan(StoredConnection a, StoredConnection b) {
+    final at = a.lastConnectedAt ?? a.createdAt;
+    final bt = b.lastConnectedAt ?? b.createdAt;
+    return at.isAfter(bt);
   }
 
   /// Remove duplicate connections for the same sessionId, keeping the

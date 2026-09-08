@@ -273,14 +273,39 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
           ShareConnectionDescriptor descriptor) =>
       ConnectionService(descriptor: descriptor);
 
+  /// #1869 case 3: identity comparison helper - drops per-ISSUANCE query
+  /// params (renew_token / auth_ticket / kx_pub) so a re-scanned original
+  /// URL matches its renew_token variant, while room identity params
+  /// (room_id, proto) stay in the comparison.
+  static String _identityUrl(String url) {
+    final q = url.indexOf('?');
+    if (q < 0) return url;
+    final base = url.substring(0, q);
+    final keep = <String>[];
+    for (final part in url.substring(q + 1).split('&')) {
+      final name = part.split('=')[0];
+      if (name == 'renew_token' || name == 'auth_ticket' || name == 'kx_pub') {
+        continue;
+      }
+      keep.add(part);
+    }
+    return keep.isEmpty ? base : '$base?${keep.join("&")}';
+  }
+
   Future<void> connect(String url,
       {bool clearState = true, bool force = false}) async {
     debugPrint('[connection] connect() called url=$url clearState=$clearState');
     url = normalizeTunnelUrl(url);
     final activeUrl = normalizeTunnelUrl(state.url ?? '');
+    // #1869 case 3: state.url gets swapped for the renew_token variant
+    // inside _connectImpl, so a re-scan of the SAME room with its original
+    // URL (no renew_token) failed the equality and ran a full
+    // clearState=true reconnect (UI flash + full relay replay). Compare
+    // room identity: strip the query (renew_token/auth_ticket differ per
+    // issuance; path identifies the room).
     if (!force &&
         service != null &&
-        activeUrl == url &&
+        _identityUrl(activeUrl) == _identityUrl(url) &&
         (state.status == ConnectionStatus.connecting ||
             state.status == ConnectionStatus.connected)) {
       return _connectInFlight ?? Future<void>.value();

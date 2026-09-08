@@ -15,6 +15,12 @@ enum MessageStatus {
   delivered, // relay acknowledged (relay_ack received)
   acknowledged, // desktop acknowledged (server_ack received)
   failed, // timed out waiting for relay_ack
+  // #1869 case 5: the 5s timeout fired while the connection looked
+  // healthy - the relay never acked (silent drop, or an older relay that
+  // does not send relay_ack). NOT "delivered": that was a permanent
+  // lie that no later path could correct (no resend existed). This is
+  // an honest retryable terminal-until-acked state.
+  unconfirmed,
 }
 
 // ---- Chat Messages Provider ----
@@ -211,7 +217,10 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       if (current.status == MessageStatus.sending) {
         final connState = ref.read(connectionProvider);
         final newStatus = connState.status == ConnectionStatus.connected
-            ? MessageStatus.delivered // connection ok, assume TCP delivered
+            // #1869 case 5: WS-up says nothing about relay delivery. The
+            // old `delivered` here was a permanent fake - no ack, no resend,
+            // no rollback. Mark unconfirmed (retryable-until-acked).
+            ? MessageStatus.unconfirmed
             : MessageStatus.failed; // connection lost, likely failed
         state = [
           for (int i = 0; i < state.length; i++)
