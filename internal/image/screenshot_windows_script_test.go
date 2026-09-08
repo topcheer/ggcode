@@ -54,3 +54,17 @@ func TestWindowsDpiAwarenessSnippetIsShared(t *testing.T) {
 		t.Fatal("DPI snippet appears malformed: unterminated here-string")
 	}
 }
+
+// TestWindowsDpiSnippetHandlesFalseReturn pins #1754 case 2: the context
+// API returns FALSE (without throwing) when the context is already set or
+// the session is restricted - the snippet must check the return and fall
+// back to the legacy API, not pipe it to Out-Null.
+func TestWindowsDpiSnippetHandlesFalseReturn(t *testing.T) {
+	snippet := windowsDpiAwarenessSnippet
+	if !strings.Contains(snippet, "if (-not") {
+		t.Fatal("DPI snippet must check the context API's boolean return (#1754)")
+	}
+	if !strings.Contains(snippet, "SetProcessDPIAware()") {
+		t.Fatal("legacy fallback must remain")
+	}
+}
