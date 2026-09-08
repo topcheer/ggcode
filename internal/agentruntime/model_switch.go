@@ -30,7 +30,11 @@ func ResolveCurrentSelection(cfg *config.Config) (*config.ResolvedEndpoint, prov
 	}
 
 	// Wrap in FallbackProvider if a fallback is configured and resolvable.
-	if cfg.Fallback.IsConfigured() {
+	// #1674: the guard checked ONLY the legacy single-entry field while
+	// FallbackChain() (what wrapWithFallback consumes) merges BOTH the
+	// legacy field and the modern fallbacks array - a pure `fallbacks:`
+	// array config silently never got a failover wrapper at all.
+	if cfg.Fallback.IsConfigured() || len(cfg.Fallbacks) > 0 {
 		prov = wrapWithFallback(cfg, prov, resolved)
 	}
 

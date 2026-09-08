@@ -422,7 +422,7 @@ func coverageIsVerifyCommand(lc string) bool {
 	first := fields[0]
 	isRunner := false
 	switch first {
-	case "go", "make", "npm", "yarn", "pnpm", "pytest", "cargo", "mvn", "gradle", "./gradlew", "dotnet", "tox", "nox":
+	case "go", "make", "npm", "yarn", "pnpm", "pytest", "cargo", "mvn", "mvnw", "./mvnw", "gradle", "./gradlew", "dotnet", "tox", "nox":
 		isRunner = true
 	}
 	if !isRunner {

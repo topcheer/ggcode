@@ -209,6 +209,7 @@ var phantomRunners = map[string]bool{
 	"bun":                 true,
 	"mvn":                 true,
 	"mvnw":                true,
+	"./mvnw":              true,
 	"gradle":              true,
 	"gradlew":             true,
 	"./gradlew":           true,
@@ -321,7 +322,7 @@ func phantomArmGeneric(seg []string, cats map[string]bool) {
 			for _, c := range phantomArmsTarget(npmVerifyScripts, t) {
 				cats[c] = true
 			}
-		case "mvn", "mvnw":
+		case "mvn", "mvnw", "./mvnw":
 			for _, c := range phantomArmsTarget(mvnVerifyPhases, t) {
 				cats[c] = true
 			}
@@ -368,7 +369,7 @@ func phantomArmSegment(seg []string, cats map[string]bool) bool {
 		phantomArmMake(seg, cats)
 	case "npm", "yarn", "pnpm", "bun":
 		phantomArmNpmScript(seg, cats)
-	case "mvn", "mvnw":
+	case "mvn", "mvnw", "./mvnw":
 		phantomArmMvn(seg, cats)
 	case "gradle", "gradlew", "./gradlew":
 		phantomArmGradle(seg, cats)

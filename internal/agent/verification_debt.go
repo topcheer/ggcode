@@ -157,7 +157,7 @@ func isVerificationCommand(args string) bool {
 	// tokens, so "cargo clean"/"cargo fmt"/"yarn install"/"yarn remove" stay
 	// non-verification while "go test"/"make verify-ci"/"npm run build" hit.
 	switch first {
-	case "go", "make", "npm", "yarn", "pnpm", "cargo", "mvn", "gradle",
+	case "go", "make", "npm", "yarn", "pnpm", "cargo", "mvn", "mvnw", "./mvnw", "gradle",
 		"./gradlew", "dotnet", "tox", "nox":
 	default:
 		return false
