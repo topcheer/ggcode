@@ -308,6 +308,12 @@ func hasMakefileTamperingContent(content string) bool {
 		body = strings.TrimPrefix(body, "@")
 		body = strings.TrimPrefix(body, "-")
 		body = strings.TrimSpace(body)
+		// #1685 case 2: 'echo ok && go test ./...' is NOT a no-op - the
+		// composed operators make the trailing command real, and judging the
+		// whole line by the echo prefix misreported Makefile tampering.
+		if strings.ContainsAny(body, "&;|") {
+			return false
+		}
 		for _, prefix := range makefileNoOpPrefixes {
 			prefix = strings.TrimPrefix(strings.TrimPrefix(prefix, "@"), "-")
 			if body == prefix || strings.HasPrefix(body, prefix+" ") {
@@ -473,18 +479,28 @@ func isSedSkipRemoval(cmd string) bool {
 	if len(parts) < 2 {
 		return false
 	}
-	replacementParts := strings.Split(parts[1], "/")
-	if len(replacementParts) < 2 {
-		return false
+	// #1685 case 1: a sed expression string can carry MULTIPLE ;-separated
+	// expressions; the old code judged only the FIRST - 's/t.Skip(//g;
+	// s/assert/t.Skip(/g' exempted the whole command while the SECOND
+	// expression injected the skip marker. Scan every expression: any
+	// marker in a replacement disqualifies; at least one legitimate
+	// removal (marker in pattern, none in replacement) is still required.
+	sawLegitRemoval := false
+	for _, expr := range strings.Split(parts[1], ";") {
+		replacementParts := strings.Split(expr, "/")
+		if len(replacementParts) < 2 {
+			continue
+		}
+		pattern := strings.ToLower(replacementParts[0])
+		replacement := strings.ToLower(replacementParts[1])
+		if containsAnySkipMarker(replacement) {
+			return false // injection in ANY expression: not exempt
+		}
+		if containsAnySkipMarker(pattern) {
+			sawLegitRemoval = true
+		}
 	}
-	pattern := strings.ToLower(replacementParts[0])
-	replacement := strings.ToLower(replacementParts[1])
-
-	hasSkipInPattern := containsAnySkipMarker(pattern)
-	hasSkipInReplacement := containsAnySkipMarker(replacement)
-
-	// Exempt if pattern has skip but replacement doesn't
-	return hasSkipInPattern && !hasSkipInReplacement
+	return sawLegitRemoval
 }
 
 // isAwkSkipRemoval detects awk gsub(/PATTERN/, "REPLACEMENT") where the
