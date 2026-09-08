@@ -99,13 +99,11 @@ func SnapshotRules(p *ConfigPolicy, configDir string) *PermissionRulesFile {
 			data.ToolOverrides[tool] = "deny"
 		}
 	}
-	p.mu.RUnlock()
-
-	// #1596-D: cmdRules was read OUTSIDE the lock while p.rules held it -
-	// a TUI rules save racing an approval callback's AllowCommandPattern
-	// (in-place AddAllowPattern) was a data race tearing the snapshot.
-	// Read both under the same RLock.
-	p.mu.RLock()
+	// #1777 case 1: cmdRules used to be read in a SECOND RLock after this
+	// one released - a SetOverride/SetCommandRuleSet slotted between the
+	// two produced a mixed-generation snapshot (old rules + new cmdRules)
+	// that persisted and drifted state on next load. The #1596-D comment
+	// said "read both under the same RLock" all along; now the code does.
 	var allowPats, denyPats []string
 	if p.cmdRules != nil {
 		allowPats = userFriendlyPatterns(p.cmdRules.AllowPatterns())

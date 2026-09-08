@@ -287,8 +287,14 @@ func claimsConflict(a, b string) bool {
 	if aNeg != bNeg {
 		aBase := strings.TrimPrefix(a, "~")
 		bBase := strings.TrimPrefix(b, "~")
-		// If the underlying target overlaps significantly, it's a conflict.
-		if tokenOverlap(aBase, bBase) >= 0.3 {
+		// #1777 case 2: an affirmative and a negated claim only contradict
+		// when they target NEARLY the same thing ("use git" vs "~use git"),
+		// not when their domains merely overlap ("use git" vs "never use
+		// git rebase" is fully compatible). The old 0.3 overlap gate - fine
+		// for the two-affirmative band below - was far too loose here and
+		// deleted correct memories; polarity flips need the same near-
+		// equivalence as that band's ceiling.
+		if tokenOverlap(aBase, bBase) >= 0.85 {
 			return true
 		}
 	}
