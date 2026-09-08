@@ -252,3 +252,19 @@ func TestFileGuard_DirPrefixOutsideWorkingDir(t *testing.T) {
 		t.Error("plain outside path must not be protected")
 	}
 }
+
+// TestProtectedPatternFoldsOnCaseInsensitiveFS pins #1683 case 2: on
+// macOS/Windows a literal .GIT/.ENV resolves to the protected target -
+// segment equality and glob matching must fold there (and stay exact on
+// Linux, but that's the host's own semantics).
+func TestProtectedPatternFoldsOnCaseInsensitiveFS(t *testing.T) {
+	if !fsCaseInsensitive() {
+		t.Skip("host FS is case-sensitive - fold path not compiled in")
+	}
+	if !matchProtectedPattern(".GIT/config", ".GIT/config", ".GIT/config") {
+		t.Fatal(".GIT dir segment must fold to the protected .git pattern on this FS")
+	}
+	if !matchProtectedPattern(".ENV", ".ENV", ".ENV") {
+		t.Fatal(".ENV glob must fold to the protected .env pattern on this FS")
+	}
+}

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -62,5 +63,21 @@ func TestInterpretExitCode_UnknownHighCode(t *testing.T) {
 	got := interpretExitCode(160)
 	if got != "" {
 		t.Errorf("interpretExitCode(160) = %q, want empty (outside signal range)", got)
+	}
+}
+
+// TestExitCodeIntelWindowsBand pins #1683 case 1: the 128+N signal band is
+// POSIX-only. On this (non-Windows) test host the band stays live and the
+// 126/127 command-not-found entries are platform-independent.
+func TestExitCodeIntelWindowsBand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("host is windows - band compiled out by design")
+	}
+	if got := interpretExitCode(137); !strings.Contains(got, "SIGKILL") {
+		t.Fatalf("non-windows host must keep signal intel, got %q", got)
+	}
+	// 126/127 carry meaning on every platform.
+	if got := interpretExitCode(127); !strings.Contains(got, "not found") {
+		t.Fatalf("127 must stay universal, got %q", got)
 	}
 }

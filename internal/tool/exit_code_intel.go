@@ -89,6 +89,13 @@ func interpretExitCode(exitCode int) string {
 	}
 
 	info, ok := exitCodeIntelMap[exitCode]
+	// #1683 case 1 (complete): the specific map's 128+N entries are POSIX
+	// signals too - on Windows they are exactly as wrong as the generic
+	// band below (exit 137 is a legal PowerShell status, not an OOM kill).
+	// Only the 126/127 command-not-found class carries meaning there.
+	if runtime.GOOS == "windows" && exitCode > 127 {
+		return ""
+	}
 	if !ok {
 		// Generic 128+N signal code not in the specific map
 		// #1683 case 1: POSIX signal semantics do not exist on Windows -
