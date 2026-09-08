@@ -160,6 +160,18 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 	if jobID == "" {
 		return
 	}
+	// #1771 case 2: the job manager evicts finished jobs beyond its ring
+	// (maxFinishedJobs=20) - reading an evicted job returns "command job
+	// %q not found" with NO Status: line, so the loop below never deleted
+	// it: LastCheckedIter refreshed, warned cleared, re-warned 2 iters
+	// later... burning the shared 3-injection budget on a job that is
+	// GONE while real orphans went silent. Treat the not-found error as
+	// the removal signal it is.
+	if strings.Contains(result, "command job") && strings.Contains(result, "not found") {
+		delete(s.activeJobs, jobID)
+		delete(s.warned, jobID)
+		return
+	}
 	info, ok := s.activeJobs[jobID]
 	if !ok {
 		return

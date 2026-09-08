@@ -39,6 +39,7 @@ package agent
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -160,29 +161,52 @@ func goPackageOf(path string) string {
 	return path[:idx]
 }
 
+// normalizeCausalPath canonicalizes a path for comparison (#1771 case 1):
+// slash form + cleaned, so absolute vs relative spellings of the same
+// tree compare equal in the package/dir tiers instead of silently
+// losing those weights to recency.
+func normalizeCausalPath(p string) string {
+	return filepath.ToSlash(filepath.Clean(p))
+}
+
 // computeCRS computes the Causal Responsibility Score for an edit step
 // given the error files extracted from the failure output.
 func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
+	score, _ := computeCRSDetail(edit, errorFiles, recencyRank)
+	return score
+}
+
+// computeCRSDetail also reports whether the edit target actually MATCHED
+// an error file - the wording branch must not infer that from the total
+// score (#1771: recency alone reaches 10x10=100 >= 50, so a total-score
+// gate asserted "error output references this file" for edits with ZERO
+// file-match evidence, sending the agent to fix an unrelated recent edit).
+func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int) (int, bool) {
 	score := 0
+	fileMatch := false
 
 	for _, ef := range errorFiles {
+		efN := normalizeCausalPath(ef)
+		editN := normalizeCausalPath(edit.filePath)
 		// Exact file match — strongest signal
-		if ef == edit.filePath || strings.HasSuffix(edit.filePath, ef) || strings.HasSuffix(ef, edit.filePath) {
+		if efN == editN || strings.HasSuffix(editN, efN) || strings.HasSuffix(efN, editN) {
 			score += causalWtErrorFileMatch
+			fileMatch = true
 			continue
 		}
 
-		// Same Go package
-		ep := goPackageOf(ef)
-		tp := goPackageOf(edit.filePath)
+		// Same Go package (path-form normalized: absolute vs relative
+		// spellings of the same tree must not silently lose this weight)
+		ep := goPackageOf(efN)
+		tp := goPackageOf(editN)
 		if ep != "" && tp != "" && ep == tp {
 			score += causalWtSamePackage
 			continue
 		}
 
 		// Same directory
-		ed := dirOfFile(ef)
-		if ed != "" && ed == edit.dirPath {
+		ed := dirOfFile(efN)
+		if ed != "" && ed == normalizeCausalPath(edit.dirPath) {
 			score += causalWtSameDir
 		}
 	}
@@ -199,7 +223,7 @@ func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
 		score += recencyRank * causalWtRecency
 	}
 
-	return score
+	return score, fileMatch
 }
 
 // attributeFailure traces backward from a failure to identify the most
@@ -249,17 +273,18 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	recent := s.edits[start:]
 
 	type scored struct {
-		step  causalEditStep
-		score int
-		rank  int
+		step      causalEditStep
+		score     int
+		rank      int
+		fileMatch bool // #1771: an error file actually matched this edit
 	}
 
 	var results []scored
 	for i, edit := range recent {
 		// Recency rank: most recent edit gets highest rank (i+1)
 		recencyRank := i + 1
-		score := computeCRS(edit, errorFiles, recencyRank)
-		results = append(results, scored{step: edit, score: score, rank: i})
+		score, matched := computeCRSDetail(edit, errorFiles, recencyRank)
+		results = append(results, scored{step: edit, score: score, rank: i, fileMatch: matched})
 	}
 
 	if len(results) == 0 {
@@ -284,7 +309,7 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	// Format guidance
 	var sb strings.Builder
 	sb.WriteString("[causal-attribution] ")
-	if best.score >= causalWtErrorFileMatch {
+	if best.fileMatch { // #1771: evidence type, never the total score
 		sb.WriteString(fmt.Sprintf("Build/test failure likely caused by your %s to %s (step %d, CRS=%d — error output references this file). ",
 			best.step.toolName, best.step.filePath, best.step.iteration, best.score))
 	} else {

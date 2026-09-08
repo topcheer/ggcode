@@ -255,3 +255,22 @@ func TestBgOrphanTerminalStatusExitsTracking(t *testing.T) {
 		t.Fatalf("completed job still tracked: %d", len(s.activeJobs))
 	}
 }
+
+// TestBGOrphanEvictedJobReadStopsCycle pins #1771 case 2: reading an
+// evicted ("not found") job must remove it from tracking - the old loop
+// waited for a Status: line that never comes, re-warning every 2 iters
+// until the injection budget burned out.
+func TestBGOrphanEvictedJobReadStopsCycle(t *testing.T) {
+	s := newBgOrphanState()
+	s.mu.Lock()
+	s.activeJobs["job-9"] = &bgJobInfo{JobID: "job-9", Command: "sleep 100", StartIter: 1}
+	s.mu.Unlock()
+	args := json.RawMessage(`{"job_id":"job-9"}`)
+	s.recordOutputCheck(args, "Error: command job \"job-9\" not found", 5)
+	s.mu.Lock()
+	_, still := s.activeJobs["job-9"]
+	s.mu.Unlock()
+	if still {
+		t.Fatal("evicted (not found) job must be removed from tracking")
+	}
+}
