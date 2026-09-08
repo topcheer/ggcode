@@ -48,8 +48,9 @@ const pushValidationDNSTimeout = 3 * time.Second
 // pushGuard holds the parsed explicit allowlist for callback targets that
 // the default rules would reject (private/loopback ranges, plain http).
 type pushGuard struct {
-	allowCIDRs []*net.IPNet
-	allowHosts map[string]struct{} // lowercase hostnames / bare IPs
+	allowCIDRs   []*net.IPNet
+	allowHosts   map[string]struct{} // lowercase hostnames / bare IPs
+	allowHostIPs []net.IP            // #1751: resolved IPs of the entries above, for dial-time checks
 }
 
 // newPushGuard parses allowlist entries. Accepted forms:
@@ -60,6 +61,8 @@ type pushGuard struct {
 // Invalid entries are logged and skipped (never widen the guard silently).
 func newPushGuard(allowlist []string) *pushGuard {
 	g := &pushGuard{allowHosts: make(map[string]struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	for _, entry := range allowlist {
 		entry = strings.ToLower(strings.TrimSpace(entry))
 		if entry == "" {
@@ -74,6 +77,20 @@ func newPushGuard(allowlist []string) *pushGuard {
 			continue
 		}
 		g.allowHosts[entry] = struct{}{}
+		// #1751 case 1: the Control hook sees the kernel-resolved IP, not the
+		// hostname - a bare-IP or hostname entry was never consulted there,
+		// so the delivery side rejected 100% of what the registration side
+		// exempted. Resolve what's resolvable now and keep the IP set for the
+		// dial-time check.
+		if ip := net.ParseIP(entry); ip != nil {
+			g.allowHostIPs = append(g.allowHostIPs, ip)
+			continue
+		}
+		if addrs, err := net.DefaultResolver.LookupIPAddr(ctx, entry); err == nil {
+			for _, a := range addrs {
+				g.allowHostIPs = append(g.allowHostIPs, a.IP)
+			}
+		}
 	}
 	return g
 }
@@ -87,13 +104,21 @@ func (g *pushGuard) hostAllowed(host string) bool {
 	return ok
 }
 
-// ipAllowed reports whether an IP falls inside an allowlisted CIDR.
+// ipAllowed reports whether an IP falls inside an allowlisted CIDR or
+// matches an allowlisted host's resolved IP (#1751 case 1: hostname/bare-IP
+// entries must survive into the dial-time check, or delivery is rejected
+// while registration exempted it).
 func (g *pushGuard) ipAllowed(ip net.IP) bool {
 	if g == nil {
 		return false
 	}
 	for _, ipNet := range g.allowCIDRs {
 		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	for _, allowed := range g.allowHostIPs {
+		if allowed.Equal(ip) {
 			return true
 		}
 	}
