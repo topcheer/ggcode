@@ -345,22 +345,43 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 				}
 			}
 		case *ast.CallExpr:
+			// #1884 case B: io.Copy/ReadAll/decoder constructors only CONSUME
+			// a closer-handle field (resp.Body) - they read it and never own
+			// or close it. Treating that as a handoff silently passed real
+			// leaks on connections that are never reused.
+			consumer := isKnownBodyConsumer(node)
 			for _, arg := range node.Args {
-				if exprIsResourceHandoff(arg, base) {
-					transferred = true
-					return false
-				}
-			}
-		case *ast.AssignStmt:
-			// #1488: constructor idiom `srv.l = l` - storing the resource
-			// into another struct's field hands ownership to that owner.
-			// Self-field writes (`l.x = ...`) don't transfer.
-			for _, lhs := range node.Lhs {
-				sel, ok := lhs.(*ast.SelectorExpr)
-				if !ok {
+				if !exprIsResourceHandoff(arg, base) {
 					continue
 				}
-				if id, ok := sel.X.(*ast.Ident); ok && id.Name == base {
+				if consumer && isCloserFieldRef(arg, base) {
+					continue
+				}
+				transferred = true
+				return false
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				// An assignment transfers ownership when the LHS is a
+				// container someone else owns and the RHS is the resource
+				// itself. #1488: `srv.l = l` (another struct's field).
+				// #1884 case A: `m["k"] = l` / `arr[i] = l` (a container
+				// cell). Self-writes (`l.x = ...`, `l[k] = ...`) and plain
+				// rebinds (`x = l`) are not transfers.
+				owner := false
+				switch v := lhs.(type) {
+				case *ast.SelectorExpr:
+					if id, ok := v.X.(*ast.Ident); ok && id.Name == base {
+						continue
+					}
+					owner = true
+				case *ast.IndexExpr:
+					if id, ok := v.X.(*ast.Ident); ok && id.Name == base {
+						continue
+					}
+					owner = true
+				}
+				if !owner {
 					continue
 				}
 				for _, rhs := range node.Rhs {
@@ -442,6 +463,59 @@ func exprIsResourceHandoff(e ast.Expr, name string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// isCloserFieldRef reports whether e is `name.Field` (after unary unwrap)
+// where Field is one of the closer-handle whitelist names - the shape the
+// #1884 case B consumer carve-out applies to.
+func isCloserFieldRef(e ast.Expr, name string) bool {
+	for {
+		if u, ok := e.(*ast.UnaryExpr); ok && (u.Op == token.AND || u.Op == token.MUL) {
+			e = u.X
+			continue
+		}
+		break
+	}
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != name {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Body", "File", "Conn", "Handle":
+		return true
+	}
+	return false
+}
+
+// bodyConsumerFuncs lists functions that merely CONSUME a reader/closer
+// field without ever owning or closing it (#1884 case B). Passing
+// resp.Body to any of these is not an ownership transfer.
+var bodyConsumerFuncs = map[string]bool{
+	"Copy":        true, // io.Copy
+	"CopyBuffer":  true, // io.CopyBuffer
+	"CopyN":       true, // io.CopyN
+	"ReadAll":     true, // io.ReadAll
+	"ReadFull":    true, // io.ReadFull
+	"ReadAtLeast": true, // io.ReadAtLeast
+	"NewDecoder":  true, // json/xml/etc.NewDecoder - wraps, never closes
+	"NewReader":   true, // bufio.NewReader - wraps, never closes
+	"NewScanner":  true, // bufio.NewScanner - wraps, never closes
+	"TeeReader":   true, // io.TeeReader
+	"MultiReader": true, // io.MultiReader
+}
+
+func isKnownBodyConsumer(call *ast.CallExpr) bool {
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return bodyConsumerFuncs[fn.Sel.Name]
+	case *ast.Ident:
+		return bodyConsumerFuncs[fn.Name]
 	}
 	return false
 }

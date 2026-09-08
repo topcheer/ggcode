@@ -397,3 +397,69 @@ func do(s *srv) {
 		t.Fatal("reading resp.StatusCode must NOT count as ownership transfer - the leak is real")
 	}
 }
+
+// transfersOwnership parses src (a single func body) and reports whether
+// ownershipTransferred marks the resource named "l" as handed off.
+func transfersOwnership(t *testing.T, src string) bool {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "t.go", "package p\n"+src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	var fn *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok {
+			fn = fd
+		}
+	}
+	if fn == nil {
+		t.Fatal("no function found")
+	}
+	return ownershipTransferred(fn, "l")
+}
+
+// #1884 case A: storing the resource into a container cell (map or slice
+// index) transfers ownership to the container's owner; writing INTO the
+// resource itself does not.
+func TestResourceLeakContainerStoreTransfersOwnership(t *testing.T) {
+	mapStore := "func f() { m := map[string]*res{}; var l *res; _ = l; m[\"k\"] = l; l.Close() }"
+	if !transfersOwnership(t, mapStore) {
+		t.Error("m[\"k\"] = l must count as an ownership transfer (was flagged as a leak)")
+	}
+	selfIndex := "func f() { var l *res; _ = l; l.rows[0] = nil; l.Close() }"
+	if transfersOwnership(t, selfIndex) {
+		t.Error("l.rows[0] = ... is a write into the resource, not a transfer")
+	}
+	// Corrected adjudication from the #1884 review: append(s.items, l) was
+	// already covered by the CallExpr argument branch - pin it so a future
+	// carve-out cannot silently regress it.
+	appendStore := "func f() { s := &store{}; var l *res; _ = l; s.items = append(s.items, l); l.Close() }"
+	if !transfersOwnership(t, appendStore) {
+		t.Error("s.items = append(s.items, l) must count as an ownership transfer")
+	}
+}
+
+// #1884 case B: reader consumers (io.Copy/ReadAll/decoder constructors)
+// never own or close the resource - passing resp.Body to them is NOT a
+// transfer, so a missing Close on a never-reused connection is surfaced.
+func TestResourceLeakBodyConsumersAreNotTransfers(t *testing.T) {
+	copySrc := "func f() { var l *res; _ = l; io.Copy(out, l.Body); l.Close() }"
+	if transfersOwnership(t, copySrc) {
+		t.Error("io.Copy(out, l.Body) consumes without owning - must not count as a transfer")
+	}
+	readAll := "func f() { var l *res; _ = l; _, _ = io.ReadAll(l.Body); l.Close() }"
+	if transfersOwnership(t, readAll) {
+		t.Error("io.ReadAll(l.Body) must not count as a transfer")
+	}
+	decoder := "func f() { var l *res; _ = l; json.NewDecoder(l.Body).Decode(&v); l.Close() }"
+	if transfersOwnership(t, decoder) {
+		t.Error("json.NewDecoder(l.Body) wraps without closing - must not count as a transfer")
+	}
+	// Passing the WHOLE resource to any function remains a handoff (the
+	// consumer carve-out is scoped to closer-field refs only).
+	wholeIdent := "func f() { var l *res; _ = l; takeover(l); l.Close() }"
+	if !transfersOwnership(t, wholeIdent) {
+		t.Error("takeover(l) passes the resource itself - stays a transfer")
+	}
+}
