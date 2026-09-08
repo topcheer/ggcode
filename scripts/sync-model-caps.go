@@ -63,6 +63,14 @@ type catwalkModel struct {
 	// release_date drives the default-large-model heuristic (newest wins).
 	// Only populated from models.dev; not serialized into the output.
 	ReleaseDate string `json:"-"`
+	// SupportsChatOutput: modality.output contains "text". Absent
+	// modality data counts as true (back-compat: an entry with no
+	// modality info stays eligible for defaults).
+	SupportsChatOutput bool
+}
+
+func isChatModel(m catwalkModel) bool {
+	return m.SupportsChatOutput
 }
 
 // modelEntry is our output format — one line in the Go map literal.
@@ -159,7 +167,15 @@ type modelsDevModel struct {
 	Name        string `json:"name"`
 	Attachment  bool   `json:"attachment"`
 	ReleaseDate string `json:"release_date"`
-	Limit       struct {
+	// #1862 case 2: modality decides whether a model is a chat model at
+	// all - image-only (gpt-image-*) and realtime models share the model
+	// list and were eligible for DefaultLargeModelID solely by release
+	// date recency.
+	Modality struct {
+		Input  []string `json:"input"`
+		Output []string `json:"output"`
+	} `json:"modality"`
+	Limit struct {
 		Context int `json:"context"`
 		Input   int `json:"input"`
 		Output  int `json:"output"`
@@ -376,6 +392,7 @@ func adaptModelsDevProvider(pid, sectionName string, mdp *modelsDevProvider) *ca
 			ContextWindow:       m.Limit.Context,
 			DefaultMaxTokens:    m.Limit.Output,
 			SupportsAttachments: m.Attachment,
+			SupportsChatOutput:  len(m.Modality.Output) == 0 || containsString(m.Modality.Output, "text"),
 			CostPer1mIn:         m.Cost.Input,
 			CostPer1mOut:        m.Cost.Output,
 			ReleaseDate:         m.ReleaseDate,
@@ -388,12 +405,18 @@ func adaptModelsDevProvider(pid, sectionName string, mdp *modelsDevProvider) *ca
 		}
 		return p.Models[i].ID < p.Models[j].ID
 	})
-	// Default large model: newest own model (skip re-served IDs with "/").
+	// Default large model: newest own CHAT model (skip re-served IDs with
+	// "/" and non-chat modalities - #1862 case 2: image-only and realtime
+	// models were eligible purely by release-date recency).
 	for _, m := range p.Models {
-		if !strings.Contains(m.ID, "/") {
-			p.DefaultLargeModelID = m.ID
-			break
+		if strings.Contains(m.ID, "/") {
+			continue
 		}
+		if !isChatModel(m) {
+			continue
+		}
+		p.DefaultLargeModelID = m.ID
+		break
 	}
 	return p
 }
@@ -952,7 +975,11 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 		//  3. Larger context window.
 		//  4. Prefer re-serve IDs containing "/" LAST: "zai-org/glm-5" from a
 		//     catalog is a worse witness than the bare "glm-5" entry.
-		rank := func(e modelEntry) (nameScore, out, ctx int) {
+		//  5. #1862 case 1: vision capability - on a name-score tie a
+		//     vision-capable witness beats a blind mirror with bigger
+		//     out/ctx numbers, so the merged entry never silently loses its
+		//     SupportsVision flag to a lagging data source.
+		rank := func(e modelEntry) (nameScore, out, ctx int, vision bool) {
 			if strings.HasPrefix(e.ID, e.SourceProvider) ||
 				strings.Contains(e.ID, e.SourceProvider) {
 				nameScore = 1
@@ -960,15 +987,26 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 			if strings.Contains(e.ID, "/") {
 				nameScore = -1 // catalog re-serve: weakest witness
 			}
-			return nameScore, e.MaxOutputTokens, e.ContextWindow
+			return nameScore, e.MaxOutputTokens, e.ContextWindow, e.SupportsVision
 		}
 		best := group[0]
-		bestName, bestOut, bestCtx := rank(best)
+		bestName, bestOut, bestCtx, bestVision := rank(best)
 		for _, e := range group[1:] {
-			n, o, c := rank(e)
+			n, o, c, v := rank(e)
 			if n > bestName ||
-				(n == bestName && (o > bestOut || (o == bestOut && c > bestCtx))) {
-				best, bestName, bestOut, bestCtx = e, n, o, c
+				(n == bestName && (v && !bestVision ||
+					(v == bestVision && (o > bestOut || (o == bestOut && c > bestCtx))))) {
+				best, bestName, bestOut, bestCtx, bestVision = e, n, o, c, v
+			}
+		}
+		// #1862 case 1: same-name entries disagreeing on vision is exactly
+		// the situation where the flag used to vanish silently - surface it
+		// so a lagging upstream source gets noticed.
+		for _, e := range group {
+			if e.SupportsVision != best.SupportsVision {
+				fmt.Fprintf(os.Stderr,
+					"  WARNING: dedup %q: vision divergence across sources (picked %v, source %s says %v)\n",
+					id, best.SupportsVision, e.SourceProvider, e.SupportsVision)
 			}
 		}
 		dedup[id] = best
@@ -982,4 +1020,14 @@ func dedupEntries(allEntries []modelEntry) []modelEntry {
 		return entries[i].ID < entries[j].ID
 	})
 	return entries
+}
+
+// containsString reports whether s is in list (#1862 case 2 helper).
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
