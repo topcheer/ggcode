@@ -386,6 +386,12 @@ func (m *Model) pcBindSessionCmd(session im.PCSessionInfo) tea.Cmd {
 		if m.imManager == nil {
 			return pcResultMsg{err: errors.New("IM manager not available")}
 		}
+		// #1750 case 3: create/Renew/Close all ensure the runtime adapter
+		// first; bind alone skipped it - an empty adapter name wrote a
+		// binding pointing at a nonexistent adapter into the store.
+		if err := m.ensurePCReady(); err != nil {
+			return pcResultMsg{err: fmt.Errorf("prepare private-claw runtime: %w", err)}
+		}
 		_, err := m.imManager.BindChannel(im.ChannelBinding{
 			Platform:  im.PlatformPrivateClaw,
 			Adapter:   m.pcAdapterName(),

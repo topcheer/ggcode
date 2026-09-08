@@ -1233,27 +1233,31 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 		m.providerPanel.message = m.t("panel.provider.refreshing_vendor", vendor)
 	}
 
+	// #1750 case 1: ResolveEndpoint reads the shared Vendors MAP - it ran
+	// inside the Cmd goroutine, so a user edit during the 20s discovery
+	// window was a concurrent map read/write fatal. #1387-A moved the
+	// WRITES back to the Update loop but left this READ behind. Snapshot
+	// the resolution HERE (Update loop) and let the closure capture values.
+	resolved, resolveErr := m.config.ResolveEndpoint(vendor, endpointID)
+	if resolveErr != nil {
+		resolved = &config.ResolvedEndpoint{
+			VendorID:   vendor,
+			EndpointID: endpointID,
+			Protocol:   endpoint.Protocol,
+			BaseURL:    endpoint.BaseURL,
+			// Expand ${VAR} references so the actual key value (set via
+			// os.Setenv when the user saved it) is used for discovery,
+			// not the raw "${...}" reference string.
+			APIKey: config.ExpandEnv(resolveAPIKey(endpoint.APIKey, vc.APIKey)),
+		}
+	}
+
 	return func() tea.Msg {
 		result := providerModelsRefreshResultMsg{vendor: vendor, endpointID: endpointID}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
-		// Try ResolveEndpoint first; if it fails (e.g. no model set yet),
-		// construct ResolvedEndpoint manually from config for discovery.
-		resolved, err := m.config.ResolveEndpoint(vendor, endpointID)
-		if err != nil {
-			resolved = &config.ResolvedEndpoint{
-				VendorID:   vendor,
-				EndpointID: endpointID,
-				Protocol:   endpoint.Protocol,
-				BaseURL:    endpoint.BaseURL,
-				// Expand ${VAR} references so the actual key value (set via
-				// os.Setenv when the user saved it) is used for discovery,
-				// not the raw "${...}" reference string.
-				APIKey: config.ExpandEnv(resolveAPIKey(endpoint.APIKey, vc.APIKey)),
-			}
-		}
-
+		// (resolved snapshot taken on the Update loop - see above.)
 		models, err := provider.DiscoverModels(ctx, resolved)
 		if err != nil {
 			result.skipped++
