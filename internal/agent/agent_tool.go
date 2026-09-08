@@ -1650,6 +1650,11 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 			}
 		}
 		isNew := !cp.Existed // not OldContent=="": pre-existing empty files are edits, not creations (#554 C)
+		// #1770: revert rewrites the file exactly like undo does - without
+		// clearing the expired-read ledger, the next edit of the same file
+		// hit stale readBeforeEdit and injected a misleading "read has
+		// expired" note. #1559 fixed the undo branch only.
+		a.expiredRead.recordUndo(cp.FilePath)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		result += fmt.Sprintf("\n\nAll edits after checkpoint %s have also been reverted.", args.CheckpointID)
 		debug.Log("agent", "undo_edit: reverted to %s for %s", args.CheckpointID, cp.FilePath)
