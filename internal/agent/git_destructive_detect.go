@@ -104,7 +104,17 @@ var (
 	// (`checkout HEAD -- .`, `restore --source=HEAD .`, `checkout main .`,
 	// `switch -C`) and the trailing `.` anchor broke inside `&&` chains;
 	// every one silently skipped the advisory.
-	reGitDiscardAll = regexp.MustCompile(`\bgit\s+(?:(?:checkout|switch|restore)\s+(?:(?:-[a-zA-Z]+\s+|--source(?:[= ]\S+)\s+|[A-Za-z0-9_][\w./=-]*\s+|--\s+)*(?:\.\s*(?:$|&&|--)|--\s*\.))|switch\s+-[CcFf]\b)`)
+	// #1886: `--worktree` (long spelling; the -W abbreviation already fit
+	// the single-dash slot) joins the flag alternation, and `;` joins the
+	// chain anchor so semicolon-linked discards cannot slip through.
+	// `--staged` alone stays OUT: `restore --staged .` is a legal unstage;
+	// combined `--staged --worktree .` matches via the --worktree slot.
+	reGitDiscardAll = regexp.MustCompile(`\bgit\s+(?:(?:checkout|switch|restore)\s+(?:(?:-[a-zA-Z]+\s+|--source(?:[= ]\S+)\s+|(?:--staged\s+)?--worktree\s+|[A-Za-z0-9_][\w./=-]*\s+|--\s+)*(?:\.\s*(?:$|&&|--|;)|--\s*\.))|switch\s+-[CcFf]\b)`)
+	// #1886: `git checkout -b feature .` fits the discard-all shape but git
+	// itself rejects -b combined with a pathspec - the advisory would fire
+	// on a doomed command. RE2 has no lookahead, so this is filtered at the
+	// consumer (L195) instead of inside the big pattern.
+	reGitBranchCreate = regexp.MustCompile(`\s-b\s`)
 	// checkout/switch with a force-bearing flag discards local changes to
 	// reach the target state (checkout -f / switch -f / checkout -B main).
 	reGitCheckoutForce = regexp.MustCompile(`\bgit\s+(checkout|switch)\s+(-[a-zA-Z]*[fB][a-zA-Z]*|--force)\b`)
@@ -192,7 +202,10 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	}
 
 	// #1569-D: bare checkout/restore . and checkout/switch force forms.
-	if reGitDiscardAll.MatchString(cmd) || reGitCheckoutForce.MatchString(cmd) {
+	// #1886: -b branch-create forms are excluded (git rejects -b with a
+	// pathspec - the advisory would only fire on a doomed command).
+	if (reGitDiscardAll.MatchString(cmd) || reGitCheckoutForce.MatchString(cmd)) &&
+		!reGitBranchCreate.MatchString(cmd) {
 		found = append(found, destructivePattern{
 			name:        "discard_all",
 			severity:    "critical",

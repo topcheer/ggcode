@@ -310,3 +310,55 @@ func TestGitDiscardAllRefForms(t *testing.T) {
 		}
 	}
 }
+
+// #1886: the discard-all detector missed the LONG flag spelling of the
+// worktree restore, semicolon-chained discards, and false-fired on
+// branch-create + pathspec (a combination git itself rejects).
+func TestGitDiscardAllWorktreeSemicolonBranchCreate(t *testing.T) {
+	mustMatch := []string{
+		// Long flag spelling (the -W abbreviation already matched).
+		"git restore --worktree .",
+		"git restore --staged --worktree .",
+		"git restore --source=HEAD --worktree .",
+		// Semicolon chain anchor (was $|&&|-- only).
+		"git checkout . ; git add -A",
+		"git restore . ; echo done",
+	}
+	for _, cmd := range mustMatch {
+		if !reGitDiscardAll.MatchString(cmd) {
+			t.Errorf("must match: %q", cmd)
+		}
+	}
+
+	mustStayClean := []string{
+		// Legal unstage: --staged alone is NOT a worktree discard.
+		"git restore --staged file.go",
+		"git restore --staged .",
+	}
+	for _, cmd := range mustStayClean {
+		if reGitDiscardAll.MatchString(cmd) {
+			t.Errorf("must stay clean: %q", cmd)
+		}
+	}
+
+	// -b with a pathspec is rejected by git itself - no advisory.
+	if got := detectDestructiveInShellCommand("git checkout -b feature ."); hasPattern(got, "discard_all") {
+		t.Error("checkout -b feature . must not fire discard_all (git rejects -b with a pathspec)")
+	}
+	// ...while the equivalent real discards still fire.
+	if !hasPattern(detectDestructiveInShellCommand("git restore --worktree ."), "discard_all") {
+		t.Error("restore --worktree . must fire discard_all")
+	}
+	if !hasPattern(detectDestructiveInShellCommand("git checkout -f ."), "discard_all") {
+		t.Error("checkout -f . must keep firing discard_all")
+	}
+}
+
+func hasPattern(pats []destructivePattern, name string) bool {
+	for _, p := range pats {
+		if p.name == name {
+			return true
+		}
+	}
+	return false
+}
