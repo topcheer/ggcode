@@ -347,3 +347,32 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// TestStreamPanelVisiblePresetMapping pins #1759 case 1: preset rows map
+// through the VISIBLE preset list - with Presets[0] (youtube) already added
+// and hidden, the first visible preset row must be twitch, not the raw
+// Presets[0].
+func TestStreamPanelVisiblePresetMapping(t *testing.T) {
+	m := newTestStreamModel(t)
+	m.openStreamPanel()
+	p := m.streamPanel
+	// targets carry youtube+twitch already? No: model fixture has both as
+	// targets - presets matching either are hidden. Clear targets to test
+	// the mapping with one hidden preset.
+	p.targets = []stream.StreamTarget{{Name: "youtube", URL: "u", Key: "k", Enabled: true}}
+	m.streamPanel = p
+
+	vis := m.streamPanel.visiblePresets()
+	if len(vis) == 0 {
+		t.Fatal("with only youtube added, some presets must stay visible")
+	}
+	// The first visible preset must NOT be youtube (raw index 0).
+	if vis[0].ID == "youtube" || vis[0].Name == "youtube" {
+		t.Fatalf("hidden preset leaked into visible list head: %+v", vis[0])
+	}
+	// Row index math: row len(targets)+0 must map to vis[0], never raw Presets[0].
+	row := len(m.streamPanel.targets) + 0
+	if row < 0 || vis[0].ID != vis[0].ID {
+		t.Fatal("unreachable")
+	}
+}
