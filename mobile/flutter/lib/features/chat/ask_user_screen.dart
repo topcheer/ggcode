@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/protocol.dart' as proto;
+import '../../core/l10n/app_localizations.dart';
 import '../../core/providers/session_provider.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -16,6 +17,9 @@ class AskUserScreen extends ConsumerStatefulWidget {
 class _AskUserScreenState extends ConsumerState<AskUserScreen> {
   final Map<String, List<String>> _selectedChoices = {};
   final Map<String, TextEditingController> _freeformControllers = {};
+  // #1873 case 1: multi-tap duplicate-response guard (host is first-wins;
+  // this only avoids redundant messages), same as approval_sheet #1023.
+  bool _responded = false;
 
   @override
   void dispose() {
@@ -282,6 +286,19 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
   }
 
   void _submit(AskUserInfo askUser) {
+    // #1873 case 1: same trio as approval_sheet (#1023) - double-tap
+    // guard and disconnect guard. Without them a send over a dead
+    // tunnel is a silent no-op, yet the local message still gets marked
+    // answered and the screen pops - the host blocks on
+    // ask_user_response forever while the user believes they answered.
+    if (_responded) return;
+    if (ref.read(connectionProvider).status != ConnectionStatus.connected) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(t('approval.send_failed_reconnect')),
+      ));
+      return;
+    }
+    _responded = true;
     final answers = askUser.questions.map((q) {
       return proto.AskUserAnswer(
         questionId: q.id,
@@ -329,6 +346,16 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
   }
 
   void _cancel(String id) {
+    // #1873 case 1: same guards as _submit - a cancelled send that never
+    // left the device still clears the question and blocks the host.
+    if (_responded) return;
+    if (ref.read(connectionProvider).status != ConnectionStatus.connected) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(t('approval.send_failed_reconnect')),
+      ));
+      return;
+    }
+    _responded = true;
     ref.read(connectionProvider.notifier).send({
       'type': 'ask_user_response',
       'data': {'id': id, 'status': 'cancelled', 'answers': []},

@@ -19,7 +19,11 @@ import '../status/status_bar.dart';
 /// Always uses the key as source of truth — never host-provided title.
 String _decodeWorkspaceName(String key) {
   try {
-    final padded = key + '=' * (4 - key.length % 4);
+    // #1873 case 2: keys whose length is already a multiple of 4 would
+    // get FOUR '=' appended (4 - 0), which Dart's base64 decoder rejects
+    // (FormatException) - the catch fell back to the raw key and the
+    // title bar showed base64 noise for every such workspace.
+    final padded = key + '=' * ((4 - key.length % 4) % 4);
     final decoded = utf8.decode(base64Url.decode(padded));
     final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
     return parts.isNotEmpty ? parts.last : decoded;
