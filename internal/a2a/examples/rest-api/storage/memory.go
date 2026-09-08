@@ -55,9 +55,12 @@ func (s *ProductStore) Create(input *model.CreateProductInput) (*model.Product, 
 		Currency:    input.Currency,
 		SKU:         normalizedSKU,
 		Status:      model.StatusActive,
-		Tags:        input.Tags,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		// #1746 case 1: clone the CALLER's slice too - storing it directly
+		// let a post-Create mutation of input.Tags write into storage
+		// outside the lock (the commit's stated motivation, in-bound half).
+		Tags:      append([]string(nil), input.Tags...),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	s.products[product.ID] = product
@@ -94,8 +97,7 @@ func (s *ProductStore) GetByID(id string) (*model.Product, error) {
 	// a caller's json.Marshal race with Update's in-place writes under
 	// -race (the lock only protects the map structure, not the object
 	// graph).
-	cp := *product
-	return &cp, nil
+	return cloneProduct(product), nil
 }
 
 // Update modifies an existing product. Only non-nil fields in the input are applied.
@@ -138,7 +140,8 @@ func (s *ProductStore) Update(id string, input *model.UpdateProductInput) (*mode
 		product.Status = *input.Status
 	}
 	if input.Tags != nil {
-		product.Tags = *input.Tags
+		// #1746 case 1: same in-bound clone for Update.
+		product.Tags = append([]string(nil), (*input.Tags)...)
 	}
 
 	product.UpdatedAt = time.Now().UTC()
@@ -174,8 +177,10 @@ func (s *ProductStore) List(filter *model.ListProductsFilter) ([]*model.Product,
 		if !matchesFilter(p, filter) {
 			continue
 		}
-		cp := *p
-		result = append(result, &cp)
+		// #1746 case 2: cloneProduct (deep Tags) - the shallow cp := *p kept
+		// backing arrays shared, the exact thing #1461-B/#1563 judged
+		// insufficient for the return paths.
+		result = append(result, cloneProduct(p))
 	}
 
 	total := len(result)
