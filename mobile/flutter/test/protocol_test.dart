@@ -43,4 +43,23 @@ void main() {
     expect(msg.barrierOrdinal, 21);
     expect(msg.projectionHash, 'hash-b');
   });
+
+  // #1867 case 2: a non-object element in the images array used to throw
+  // a bare TypeError out of MessageData.fromJson (unhandled in stream
+  // listeners); malformed elements are now skipped.
+  test('MessageData.fromJson skips malformed images elements', () {
+    final d = proto.MessageData.fromJson({
+      'id': 'm1',
+      'text': 'hello',
+      'images': [
+        {'mime': 'image/png', 'data': 'abc', 'name': 'ok.png'},
+        'not-a-map',
+        42,
+        {'mime': 'image/jpeg', 'data': 'def', 'name': 'also-ok.jpg'},
+      ],
+    });
+    expect(d.images.length, 2);
+    expect(d.images[0].name, 'ok.png');
+    expect(d.images[1].name, 'also-ok.jpg');
+  });
 }

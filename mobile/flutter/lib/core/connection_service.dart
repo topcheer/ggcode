@@ -340,6 +340,26 @@ class ConnectionService {
   Future<void> connect() async {
     _cancelReconnect();
     _permanentFailure = false;
+    // #1867 case 1: a live socket/sub from a previous connect() would
+    // stay attached while the new one overwrites the fields; when the old
+    // socket later closes, its onDone -> _cleanup() cancels the
+    // subscription the FIELDS now point at - the NEW connection's -
+    // losing messages and resetting heartbeat/P2P state. Detach the old
+    // listener first (a cancelled subscription never fires onDone) and
+    // close the old socket silently.
+    final oldSub = _socketSub;
+    _socketSub = null;
+    final oldSocket = _socket;
+    _socket = null;
+    await oldSub?.cancel();
+    if (oldSocket != null) {
+      try {
+        await oldSocket.close();
+      } catch (_) {
+        // The old socket may already be half-dead; a failed close is fine
+        // - the listener is gone and nothing references it.
+      }
+    }
     _resetHandshakeState();
     _statusController.add(ConnectionStatus.connecting);
 

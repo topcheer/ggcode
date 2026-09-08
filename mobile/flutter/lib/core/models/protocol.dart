@@ -194,11 +194,16 @@ class MessageData {
         kind: d['kind'] as String? ?? '',
         messageId: d['message_id'] as String? ?? '',
         images: (d['images'] as List<dynamic>?)
-                ?.map((e) => MessageImage(
-                      mime: (e as Map<String, dynamic>)['mime'] as String? ?? 'image/jpeg',
+                ?.map((e) => e is Map<String, dynamic>
+                    ? MessageImage(
+                      mime: e['mime'] as String? ?? 'image/jpeg',
                       data: e['data'] as String? ?? '',
                       name: e['name'] as String? ?? '',
-                    ))
+                    )
+                    : null) // #1867 case 2: a malformed element used to
+                // throw a bare TypeError out of the factory (unhandled in
+                // stream listeners); skip it instead.
+                .whereType<MessageImage>()
                 .toList() ??
             const [],
       );
