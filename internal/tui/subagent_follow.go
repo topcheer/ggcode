@@ -42,6 +42,7 @@ type followViewEntry struct {
 	dropped         int
 	eventsProcessed int    // number of events rendered in last build; skip rebuild if unchanged
 	status          string // last rendered status; rebuild if changed
+	task            string // last rendered current task (#1761 case 1: header staleness)
 }
 
 // stripRefreshInterval is the minimum time between follow-strip refreshes.
@@ -494,7 +495,10 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 			// Skip full rebuild if nothing changed (same event count + status).
 			// This avoids re-processing hundreds of events on every 1s tick
 			// when the sub-agent is idle or between tool calls.
-			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped {
+			// #1761 case 1: Task joins the skip predicate - a reassigned teammate whose
+			// Idle window beat the 1s throttle kept a stale header until the next
+			// run's first event.
+			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped && entry.task == data.Task {
 				f.markRebuilt(f.activeID)
 				return
 			}
@@ -502,6 +506,7 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 			entry.eventsProcessed = len(data.Events)
 			entry.status = data.Status
 			entry.dropped = data.EventsDropped
+			entry.task = data.Task
 			f.markRebuilt(f.activeID)
 			return
 		}
@@ -510,7 +515,10 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 	if swMgr != nil {
 		if snap, ok := swMgr.TeammateSnapshot(f.activeID); ok {
 			data := teammateSnapshotToFollowData(snap)
-			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped {
+			// #1761 case 1: Task joins the skip predicate - a reassigned teammate whose
+			// Idle window beat the 1s throttle kept a stale header until the next
+			// run's first event.
+			if entry.eventsProcessed == len(data.Events) && entry.status == data.Status && entry.dropped == data.EventsDropped && entry.task == data.Task {
 				f.markRebuilt(f.activeID)
 				return
 			}
@@ -518,6 +526,7 @@ func (f *subAgentFollowState) rebuildActiveView(saMgr *subagent.Manager, swMgr *
 			entry.eventsProcessed = len(data.Events)
 			entry.status = data.Status
 			entry.dropped = data.EventsDropped
+			entry.task = data.Task
 			f.markRebuilt(f.activeID)
 		}
 	}
