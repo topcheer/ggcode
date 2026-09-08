@@ -646,6 +646,13 @@ type ClipboardAttachment struct {
 
 const maxClipboardFileBytes int64 = 10 * 1024 * 1024
 
+// maxClipboardImagePixels bounds pasted-image payloads by PIXEL count
+// (#1866 case 2): the 20MB byte gate alone lets a well-compressed large
+// PNG expand to ~27MB of base64 per copy (Go + JS) after decoding. 8MP
+// (~4K screen) keeps normal screenshots untouched while capping the
+// pathological cases.
+const maxClipboardImagePixels int64 = 8 * 1000 * 1000
+
 func (a *App) ReadClipboardImage() (*PastedImage, error) {
 	img, err := imgpkg.ReadClipboard()
 	if err != nil {
@@ -654,6 +661,7 @@ func (a *App) ReadClipboardImage() (*PastedImage, error) {
 		}
 		return nil, err
 	}
+	img = imgpkg.DownscaleByPixels(img, maxClipboardImagePixels)
 	return &PastedImage{
 		MimeType: img.MIME,
 		Data:     imgpkg.EncodeBase64(img),
