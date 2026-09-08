@@ -372,3 +372,56 @@ func TestScanStagedDiffForIssues_HunkWithoutLineCount(t *testing.T) {
 		t.Errorf("expected debug-stmt, got %q", issues[0].Category)
 	}
 }
+
+// TestScanStagedDiffForIssues_SecretNotStarvedByTodos pins #1676 case 1:
+// the old per-line break capped ALL categories at 15 - 15 leading TODO
+// lines starved the secret scan on every later line. Secrets (and merge
+// conflicts) are now always scanned; only the low-severity tail is capped.
+func TestScanStagedDiffForIssues_SecretNotStarvedByTodos(t *testing.T) {
+	// 20 TODO lines, then a line with an obvious API-key-shaped secret.
+	var sb strings.Builder
+	sb.WriteString("diff --git a/f.txt b/f.txt\n")
+	sb.WriteString("--- a/f.txt\n+++ b/f.txt\n@@ -1,25 +1,25 @@\n")
+	for i := 0; i < 20; i++ {
+		sb.WriteString("+// TODO fix this thing\n")
+	}
+	// AWS-access-key-shaped string (security scanner's classic pattern).
+	sb.WriteString("+aws_access_key_id = \"AKIAIOSFODNN7EXAMPLE\"\n")
+	issues := ScanStagedDiffForIssues(sb.String())
+	var todoCount, secretCount int
+	for _, iss := range issues {
+		switch iss.Category {
+		case "todo":
+			todoCount++
+		case "secret":
+			secretCount++
+		}
+	}
+	if secretCount == 0 {
+		t.Fatal("secret starved by TODO cap (#1676 case 1 regression)")
+	}
+	if todoCount > maxDiffScanIssues {
+		t.Errorf("low-severity cap broken: %d TODOs reported", todoCount)
+	}
+}
+
+// TestPythonFileReNoSubstringMatches pins #1676 case 2: a path merely
+// CONTAINING "python" (mypythonlib.js) must not gate Python-only patterns
+// on; a real python path segment must.
+func TestPythonFileReNoSubstringMatches(t *testing.T) {
+	if pythonFileRe.MatchString("src/mypythonlib.js") {
+		t.Error("substring 'python' must not match")
+	}
+	if pythonFileRe.MatchString("utils/python_tools.ts") {
+		t.Error("'python_tools' segment prefix must not match")
+	}
+	if !pythonFileRe.MatchString("app.py") {
+		t.Error(".py suffix must match")
+	}
+	if !pythonFileRe.MatchString("lib/python/mod.js") {
+		t.Error("'python' path segment must match")
+	}
+	if !pythonFileRe.MatchString("python/main.py") {
+		t.Error("leading 'python' segment must match")
+	}
+}

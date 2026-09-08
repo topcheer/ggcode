@@ -75,7 +75,11 @@ var debuggerPatterns = []*regexp.Regexp{
 }
 
 // pythonFileRe gates Python-only debug patterns by file path (#826).
-var pythonFileRe = regexp.MustCompile(`\.py$|/python/|python`)
+// #1676 case 2: the old third alternative was a bare `python`, so any path
+// CONTAINING the substring ("mypythonlib.js", "python_utils.ts") matched -
+// a partial revival of #826. The anchored form keeps the original intent
+// (a path segment named python) without substring hits.
+var pythonFileRe = regexp.MustCompile(`\.py$|(^|/)python(/|$)`)
 
 // todoPattern matches TODO/FIXME/HACK/XXX in added lines.
 var todoPattern = regexp.MustCompile(`(?i)\b(TODO|FIXME|HACK|XXX|BUG|WORKAROUND)\b`)
@@ -119,6 +123,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	}
 
 	var issues []DiffIssue
+	lowSeverityIssues := 0 // #1676 case 1: cap applies only to the low-severity tail
 	currentFile := ""
 	newLineNum := 0
 	isTestFile := false
@@ -157,9 +162,11 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 		issueLine := newLineNum  // this added line's number in the new file
 		newLineNum++             // advance for the next line
 
-		if len(issues) >= maxDiffScanIssues {
-			break
-		}
+		// #1676 case 1: the cap used to break HERE, before any category
+		// check - 15 leading TODO lines silently starved the secret scan on
+		// every later line. Critical categories (merge-conflict, secrets)
+		// are now ALWAYS scanned; the cap only gates the low-severity tail
+		// (debugger / debug-stmt / todo) below.
 
 		// --- Always-checked categories ---
 
@@ -181,9 +188,6 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 		if secretScanEnabled {
 			findings := security.ScanForSecrets(currentFile, addedContent+"\n")
 			for _, f := range findings {
-				if len(issues) >= maxDiffScanIssues {
-					break
-				}
 				issues = append(issues, DiffIssue{
 					File:     currentFile,
 					Line:     issueLine,
@@ -200,6 +204,12 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 			continue
 		}
 
+		// Low-severity tail: capped, and never allowed to grow past the
+		// critical findings' budget (#1676 case 1).
+		if lowSeverityIssues >= maxDiffScanIssues {
+			continue
+		}
+
 		// 3. Debugger/breakpoint statements.
 		for _, pat := range debuggerPatterns {
 			if pat.MatchString(addedContent) {
@@ -210,6 +220,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 					Category: "debugger",
 					Message:  "Debugger/breakpoint statement detected — remove before committing.",
 				})
+				lowSeverityIssues++
 				break
 			}
 		}
@@ -229,6 +240,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 					Category: "debug-stmt",
 					Message:  "Debug print statement detected — remove if not intentionally logging.",
 				})
+				lowSeverityIssues++
 				break
 			}
 		}
@@ -242,6 +254,7 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 				Category: "todo",
 				Message:  "TODO/FIXME marker in new code — track this as a follow-up task.",
 			})
+			lowSeverityIssues++
 		}
 	}
 

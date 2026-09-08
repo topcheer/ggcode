@@ -149,6 +149,14 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	newText := args.NewText
 	if mr.transform != "" {
 		newText = adjustNewText(content, args.NewText, mr)
+	} else if strings.Contains(oldText, "\r\n") && !strings.Contains(newText, "\r\n") {
+		// #1676 case 3: byte-exact hit on CRLF old_text but LF-only
+		// new_text - the edit landed and silently introduced mixed line
+		// endings. .go files get rescued by formatGoBytes; .md/.yaml/.cs
+		// have no formatting hook and stayed mixed forever. Match the
+		// file's convention on this direction too (tryCRLFMatch covers
+		// the opposite LF-old/CRLF-file case).
+		newText = strings.ReplaceAll(newText, "\n", "\r\n")
 	}
 
 	var newContent string

@@ -306,6 +306,10 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		CaptureDiagnosticBaseline(t.WorkingDir, pr.path)
 		writeData, _ := formatGoBytes(pr.path, []byte(pr.newContent))
 		if err := atomicWriteFile(pr.path, writeData, 0644); err != nil {
+			// #1676 case 4: the just-captured baseline has no consumer on
+			// this path - clear it or the next edit_file on this file mis-
+			// attributes stale diagnostics as new (#824 pattern).
+			ClearDiagnosticBaseline(pr.path)
 			out.Results[i].Status = "error"
 			out.Results[i].Error = fmt.Sprintf("error writing file: %v", err)
 			out.FilesError++
@@ -318,6 +322,14 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 		}
 		// Post-write checks (reuse existing infrastructure).
 		out.Results[i].Error += syntaxCheck(pr.path, []byte(pr.newContent))
+		// #1676 case 4: the baseline captured above must be CONSUMED here
+		// like every other edit path does (edit_file L205 family) - the
+		// old capture-without-consume left a stale entry that the next
+		// edit_file's postEditDiagnostics mis-attributed, plus wasted the
+		// 150ms LSP capture per file.
+		if diagMsg := postEditDiagnostics(t.WorkingDir, pr.path); diagMsg != "" {
+			out.Results[i].Error += "\n" + diagMsg
+		}
 		defaultFileTracker.RecordWrite(pr.path)
 	}
 
