@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 /// Configuration for STUN/TURN ICE servers.
@@ -85,6 +85,13 @@ class P2PPeer {
   RTCDataChannel? _dc;
   bool _disposed = false;
   bool _connected = false;
+  // #1876 case 1: ICE Disconnected is often transient - the ICE agent
+  // recovers on its own and the DataChannel stays usable. Treating it as
+  // terminal (same as Failed) permanently cleared _connected while the
+  // channel was still open: the host kept sending downstream into a
+  // one-way black hole until the next rtc_offer. Disconnected now gets a
+  // grace window; only Failed (or a grace expiry) is terminal.
+  Timer? _iceGraceTimer;
 
   final ICEConfig _iceConfig;
   final OnP2PMessage? onMessage;
@@ -113,6 +120,26 @@ class P2PPeer {
     if (_disposed) return;
 
     _pc = await createPeerConnection(_iceConfig.toMap(), {});
+    // #1876 case 3: a malformed SDP (jsonDecode / setRemoteDescription /
+    // createAnswer throw) used to leak the just-created native
+    // PeerConnection (_pc assigned but never closed) and the exception
+    // propagated up and broke the whole signaling loop; later
+    // rtc_candidates then hit a pc without a remote description.
+    try {
+      await _handleOfferBody(sdpJson, sendSignal);
+    } catch (e) {
+      debugPrint('[p2p] handleOffer failed, closing leaked peer: $e');
+      try {
+        await _pc?.close();
+      } catch (_) {}
+      _pc = null;
+    }
+  }
+
+  Future<void> _handleOfferBody(
+    String sdpJson,
+    void Function(String signalJson) sendSignal,
+  ) async {
     // #1426-B: check-then-await race - dispose (heartbeat timeout /
     // _forceReconnect via the manager's unawaited dispose) can land
     // during createPeerConnection. Without the recheck the fresh
@@ -143,9 +170,27 @@ class P2PPeer {
     };
 
     _pc!.onConnectionState = (RTCPeerConnectionState state) {
-      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        // ICE recovered on its own - cancel any pending grace expiry.
+        _iceGraceTimer?.cancel();
+        _iceGraceTimer = null;
+        return;
+      }
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        _iceGraceTimer?.cancel();
+        _iceGraceTimer = null;
         _handleDisconnect();
+        return;
+      }
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
+        // #1876 case 1: grace window, NOT terminal - see field comment.
+        _iceGraceTimer?.cancel();
+        _iceGraceTimer = Timer(const Duration(seconds: 10), () {
+          if (!_disposed && _connected) {
+            debugPrint('[p2p] ICE disconnected beyond grace window');
+            _handleDisconnect();
+          }
+        });
       }
     };
 
@@ -229,6 +274,8 @@ class P2PPeer {
   Future<void> dispose() async {
     _disposed = true;
     _connected = false;
+    _iceGraceTimer?.cancel();
+    _iceGraceTimer = null;
     await _dc?.close();
     await _pc?.close();
     _dc = null;

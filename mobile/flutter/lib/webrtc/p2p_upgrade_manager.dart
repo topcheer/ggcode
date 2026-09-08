@@ -70,6 +70,15 @@ class P2PUpgradeManager {
           },
           onDisconnected: () {
             _p2pActive = false;
+            // #1876 case 2 (merged fix): clearing the local flag alone left
+            // the half-open channel in place - the host kept considering
+            // P2P active and sent downstream into the manager's _p2pActive
+            // guard (one-way black hole) while the stale peer held native
+            // resources. Dispose so the DataChannel close is visible to the
+            // host (it falls back to relay) and nothing leaks.
+            final stale = _peer;
+            _peer = null;
+            unawaited(stale?.dispose());
             debugPrint('[p2p] DataChannel disconnected, reverting to relay');
             onP2PDisconnected();
           },
@@ -108,6 +117,11 @@ class P2PUpgradeManager {
     } catch (e) {
       debugPrint('[p2p] send failed, falling back to relay: $e');
       _p2pActive = false;
+      // #1876 case 2: dispose the bad peer instead of keeping it around
+      // half-open - see the onDisconnected comment.
+      final stale = _peer;
+      _peer = null;
+      unawaited(stale?.dispose());
       onP2PDisconnected();
       return false;
     }
