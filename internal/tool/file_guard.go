@@ -3,6 +3,7 @@ package tool
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -97,6 +98,35 @@ func (g *FileGuard) IsProtected(absPath, workingDir string) (bool, string) {
 //   - Glob: ".env*", "*.lock", "src/secrets/**"
 //   - Directory prefix: ".git/" matches any path under .git/
 //   - Exact file: "go.sum" matches go.sum at workspace root
+//
+// fsCaseInsensitive reports whether the local filesystem resolves names
+// case-insensitively (macOS APFS default, Windows NTFS). Linux stays
+// case-sensitive (#1683 case 2: a literal `.GIT`/`.ENV` must not slip the
+// guard on the platforms where the OS would resolve it to .git/.env).
+func fsCaseInsensitive() bool {
+	goos := runtime.GOOS
+	return goos == "darwin" || goos == "windows"
+}
+
+// segEqualsFS compares two path segments under the local FS semantics.
+func segEqualsFS(a, b string) bool {
+	if fsCaseInsensitive() {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// matchSegFS matches one pattern segment against one path segment under
+// the local FS semantics (fold before filepath.Match on insensitive FSes).
+func matchSegFS(pattern, name string) bool {
+	if fsCaseInsensitive() {
+		pattern = strings.ToLower(pattern)
+		name = strings.ToLower(name)
+	}
+	matched, err := filepath.Match(pattern, name)
+	return err == nil && matched
+}
+
 func matchProtectedPattern(relPath, slashPath, pattern string) bool {
 	pat := strings.TrimSpace(pattern)
 	if pat == "" {
@@ -158,7 +188,8 @@ func matchGlob(pattern, name string) (bool, error) {
 	if strings.Contains(pattern, "**") {
 		return matchDoubleStar(pattern, name)
 	}
-	return filepath.Match(pattern, name)
+	matched := matchSegFS(pattern, name) // #1683: FS-aware fold
+	return matched, nil
 }
 
 // matchGlobSegments reports whether every path SEGMENT of name matches the
@@ -172,8 +203,7 @@ func matchGlobSegments(pattern, name string) bool {
 		return false
 	}
 	for i, p := range pSegs {
-		matched, err := filepath.Match(p, nSegs[i])
-		if err != nil || !matched {
+		if !matchSegFS(p, nSegs[i]) { // #1683: FS-aware fold
 			return false
 		}
 	}

@@ -157,18 +157,31 @@ func (m *onboardModel) viewModel() string {
 		b.WriteString(fmt.Sprintf("%s %s\n\n", m.tr("filter"), m.modelFilter.View()))
 	}
 
-	displayed := 0
-	for i, idx := range m.modelFiltered {
-		if displayed >= 20 {
-			b.WriteString(fmt.Sprintf("\n  ... +%d", len(m.modelFiltered)-displayed))
-			break
-		}
+	// #1749: the list used to hard-cut at the first 20 items while the
+	// cursor could navigate to ANY index - past 20 the user selected blind.
+	// Render a 20-row window that FOLLOWS the cursor instead.
+	const maxModelRows = 20
+	start := 0
+	if m.modelCursor >= maxModelRows {
+		start = m.modelCursor - maxModelRows + 1
+	}
+	end := start + maxModelRows
+	if end > len(m.modelFiltered) {
+		end = len(m.modelFiltered)
+	}
+	if start > 0 {
+		b.WriteString(fmt.Sprintf("  ... +%d above\n", start))
+	}
+	for i := start; i < end; i++ {
+		idx := m.modelFiltered[i]
 		cursor := "  "
 		if i == m.modelCursor {
 			cursor = "> "
 		}
 		b.WriteString(fmt.Sprintf("  %s%s\n", cursor, m.models[idx]))
-		displayed++
+	}
+	if end < len(m.modelFiltered) {
+		b.WriteString(fmt.Sprintf("\n  ... +%d", len(m.modelFiltered)-end))
 	}
 
 	if len(m.modelFiltered) == 0 {

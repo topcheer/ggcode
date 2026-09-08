@@ -32,6 +32,7 @@ package tool
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 )
 
@@ -90,7 +91,12 @@ func interpretExitCode(exitCode int) string {
 	info, ok := exitCodeIntelMap[exitCode]
 	if !ok {
 		// Generic 128+N signal code not in the specific map
-		if exitCode > 128 && exitCode < 160 {
+		// #1683 case 1: POSIX signal semantics do not exist on Windows -
+		// a PowerShell program legally exiting 137/143 was diagnosed as
+		// "OOM killed"/"SIGTERM" with Unix-only remediation hints, sending
+		// the agent down a completely wrong debugging path. On Windows only
+		// the 126/127 entries (command-not-found class) carry meaning.
+		if runtime.GOOS != "windows" && exitCode > 128 && exitCode < 160 {
 			signal := exitCode - 128
 			return fmt.Sprintf("[Exit Code] %d (terminated by signal %d)", exitCode, signal)
 		}
