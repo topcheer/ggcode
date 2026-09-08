@@ -334,3 +334,28 @@ func TestSuccessClaimNegationNotClaimed(t *testing.T) {
 		t.Errorf("negated success phrase must not be a claim, got: %s", got)
 	}
 }
+
+// TestMvnwWrapperRecognizedAcrossDetectors pins #1674 case 1 behaviorally:
+// "./mvnw test" (and bare mvnw) must count as verification in the debt and
+// coverage-gap runner switches, not just the tables fixed by 3f24ef1c.
+func TestMvnwWrapperRecognizedAcrossDetectors(t *testing.T) {
+	if !isVerificationCommand("./mvnw test") {
+		t.Error("verification_debt: ./mvnw test not recognized as verification")
+	}
+	if !isVerificationCommand("mvnw verify") {
+		t.Error("verification_debt: bare mvnw not recognized")
+	}
+	// phantom_verify: ./mvnw test must mark the test category as run.
+	s := newPhantomVerifyState()
+	s.recordToolCall("run_command", "./mvnw test", false)
+	if !s.categoriesRun[phantomCatTest] {
+		t.Error("phantom_verify: ./mvnw test did not mark the test category")
+	}
+	// coverage-gap: "./mvnw test" must count as a scoped runner (no
+	// premature insufficient-evidence warning).
+	g := newEditCoverageState()
+	warn := g.recordToolCall("run_command", "./mvnw test")
+	if warn != "" {
+		t.Errorf("verify_coverage_gap: ./mvnw test flagged: %s", warn)
+	}
+}
