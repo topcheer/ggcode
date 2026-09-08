@@ -99,11 +99,37 @@ func (nm *NotificationManager) SetContext(ctx interface{}) {
 // SetEnabled toggles the master notification switch.
 func (nm *NotificationManager) SetEnabled(enabled bool) {
 	nm.mu.Lock()
-	defer nm.mu.Unlock()
 	nm.enabled = enabled
 	if !enabled {
 		nm.unread = 0
 		nm.clearBadge()
+	}
+	nm.mu.Unlock()
+	if !enabled {
+		// #1866 case 3: dropping the switch must also drop whatever is
+		// still queued - the worker would otherwise keep surfacing
+		// banners for minutes (Windows toasts include a 6s sleep each)
+		// after the user explicitly turned notifications off.
+		nm.dropQueuedToasts()
+	}
+}
+
+// dropQueuedToasts empties both bounded queues non-blockingly (#1866).
+func (nm *NotificationManager) dropQueuedToasts() {
+	for {
+		select {
+		case <-nm.winQueue:
+		default:
+			goto winDone
+		}
+	}
+winDone:
+	for {
+		select {
+		case <-nm.unixQueue:
+		default:
+			return
+		}
 	}
 }
 
@@ -123,6 +149,12 @@ func (nm *NotificationManager) SetFocused(focused bool) {
 // 1. Notifications are enabled
 // 2. The window is NOT currently focused
 // It also bumps the dock badge count.
+//
+// #1866 case 1: darwin delivery goes through the bounded unix queue, and a
+// full queue must roll back the dedup/unread commits committed above - the
+// same contract Windows already has (#600 N4). Without the rollback the
+// badge counts banners that will never display and a 5s-window retry hits
+// the dedup branch and is never re-queued.
 func (nm *NotificationManager) Notify(title, body string) {
 	nm.mu.Lock()
 	if !nm.enabled {
@@ -200,14 +232,17 @@ func (nm *NotificationManager) Notify(title, body string) {
 	// and is never re-queued either.
 	if runtime.GOOS == "windows" {
 		if !nm.enqueueWinToast(title, body) {
-			nm.mu.Lock()
-			delete(nm.lastShown, key)
-			nm.unread--
-			if nm.unread < 0 {
-				nm.unread = 0
-			}
-			nm.mu.Unlock()
+			nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after toast enqueue failure: %s", title)
+		}
+	} else if runtime.GOOS == "darwin" {
+		// #1866: macOS delivery is queue-mediated too (single osascript
+		// worker, 0.3-1.5s per toast) - the queue fills under notification
+		// storms exactly like winQueue, and a bare blocking send stalled the
+		// stream-event dispatch goroutine for tens of seconds.
+		if !nm.enqueueUnixToast(title, body) {
+			nm.rollbackNotify(key)
+			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
 		}
 	} else {
 		nm.showOSNotification(title, body)
@@ -378,14 +413,51 @@ func (nm *NotificationManager) notifyMacOS(title, body string) {
 	// concurrent sessions completing (#600 makes bodies unique, so
 	// dedup never folds them) meant N concurrent osascript processes.
 	// Same queue+worker pattern as winQueue, shared across platforms.
-	nm.unixQueue <- unixToast{title: title, body: body}
+	// #1866: enqueue via the non-blocking helper - Notify() rolls back on
+	// failure (see enqueueUnixToast).
+	if !nm.enqueueUnixToast(title, body) {
+		debug.Log("desktop", "unix toast queue full; dropping notification: %s", title)
+	}
+}
+
+// enqueueUnixToast offers a toast to the single unix worker queue and
+// reports whether it was accepted (#1866). Returns false when the queue
+// is full - Notify() must then roll back its lastShown/unread commits,
+// mirroring the Windows contract (#600 N4). Platform-independent by
+// design so the rollback path stays unit-testable on any host.
+func (nm *NotificationManager) enqueueUnixToast(title, body string) bool {
+	select {
+	case nm.unixQueue <- unixToast{title: title, body: body}:
+		return true
+	default:
+		debug.Log("desktop", "unix toast queue full; dropping notification: %s", title)
+		return false
+	}
+}
+
+// rollbackNotify undoes the dedup-map and unread commits Notify made
+// before handing the banner to a bounded queue (#600 N4 / #1866).
+func (nm *NotificationManager) rollbackNotify(key string) {
+	nm.mu.Lock()
+	delete(nm.lastShown, key)
+	nm.unread--
+	if nm.unread < 0 {
+		nm.unread = 0
+	}
+	nm.mu.Unlock()
 }
 
 // drainUnixQueue serializes non-Windows notifications (#1431-A):
 // at most ONE osascript/notify-send process is alive at a time.
+// #701/#1866: per-event recover - a panicking delivery must skip one
+// notification, not kill the only consumer and block every future
+// macOS Notify caller on a queue nobody drains.
 func (nm *NotificationManager) drainUnixQueue() {
 	for t := range nm.unixQueue {
-		nm.deliverUnix(t.title, t.body)
+		t := t
+		safego.Run("notify-unix-toast", func() {
+			nm.deliverUnix(t.title, t.body)
+		})
 	}
 }
 
