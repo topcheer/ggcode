@@ -113,7 +113,11 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 		t.Manager.SetOutputTee(t.OutputTee)
 		defer t.Manager.SetOutputTee(nil)
 	}
-	snap, err := t.Manager.Start(ctx, args.Command, args.Detach, secondsToDuration(args.Timeout, defaultCommandTimeout))
+	// #1756 case 1: Start now derives the job ctx from the passed context
+	// (the TUI shell Esc-cancel chain depends on it). The agent tool path
+	// must NOT tie the job to this request ctx - it dies when the tool call
+	// returns - so pass Background explicitly, preserving the old behavior.
+	snap, err := t.Manager.Start(context.Background(), args.Command, args.Detach, secondsToDuration(args.Timeout, defaultCommandTimeout))
 	if err != nil {
 		if t.OnPostExec != nil {
 			t.OnPostExec(-1, err)

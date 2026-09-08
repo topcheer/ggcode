@@ -127,11 +127,14 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 		if timeout <= 0 {
 			timeout = defaultCommandTimeout
 		}
-		// Use context.Background() so the background process is NOT tied to
-		// the incoming request context. The request ctx dies when the tool call
-		// returns, which would kill the process prematurely. Only the timeout
-		// (managed by the job's own context) should control the process lifetime.
-		jobCtx, cancel = context.WithTimeout(context.Background(), timeout)
+		// #1756 case 1: derive from the PASSED ctx. Callers that must NOT tie
+		// the job to a request context (the agent tool path, whose ctx dies
+		// when the tool call returns) pass context.Background() explicitly;
+		// callers that need cancellation (the TUI shell Esc chain, whose ctx
+		// lives until #910's shellCancelFunc fires) get it. The old hardcoded
+		// Background made the ctx parameter a dead parameter - Esc cancelled
+		// a context nobody listened to and `!tail -f` leaked for 30 minutes.
+		jobCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	cmd, _, err := util.NewShellCommandContext(jobCtx, command)
 	if err != nil {
