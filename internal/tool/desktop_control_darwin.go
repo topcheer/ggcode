@@ -205,6 +205,18 @@ func holdKey(ctx context.Context, keys string, durationMs int) (Result, error) {
 	if strings.TrimSpace(keys) == "" {
 		return Result{}, fmt.Errorf("hold_key requires 'text' (key or combo like 'shift' or 'cmd+tab')")
 	}
+	// #1673: System Events' `key down` accepts ONLY modifier-key constants.
+	// An ordinary key name ("w") compiles into an AppleScript that fails at
+	// runtime ("Can't make ... into type modifier key") - hold_key was DOA
+	// for non-modifier keys while the helper's comment claimed both forms
+	// worked. Fail fast with a truthful message instead.
+	for _, p := range strings.Split(keys, "+") {
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "cmd", "command", "meta", "super", "ctrl", "control", "alt", "option", "opt", "shift":
+		default:
+			return Result{}, fmt.Errorf("hold_key supports modifier keys only (cmd/ctrl/alt/shift, optionally combined like 'cmd+shift'); System Events cannot hold ordinary key %q - use key_press for taps", p)
+		}
+	}
 	// AppleScript: key down, delay, key up.
 	script := fmt.Sprintf(`
 tell application "System Events"

@@ -285,5 +285,13 @@ func startDetached(cmd *exec.Cmd) error {
 
 	cmd.SysProcAttr = detachSysProcAttr()
 
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// #1673: detached (setsid/DETACHED_PROCESS) children are STILL our
+	// children - without a Wait, every editor launch leaked a zombie
+	// until ggcode exited. Reap in the background like the desktop-control
+	// runAppResult path does.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

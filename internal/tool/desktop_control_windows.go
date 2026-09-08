@@ -311,20 +311,33 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		return Result{Content: fmt.Sprintf("OK: window at (%d,%d) size %dx%d", p.X, p.Y, p.ToX, p.ToY)}, nil
 
 	case "quit_app":
-		// Best-effort without process enumeration: close all windows whose
-		// class matches — or by title substring as with other window actions.
-		h, err := findWindowByTitle(p.Text)
+		// #1673: no app-level quit primitive without process enumeration;
+		// best-effort = close EVERY visible window whose title matches the
+		// given app name (the old code found the FIRST match only - a
+		// multi-window app stayed alive behind one closed window, and the
+		// comment falsely claimed "close all windows whose class matches").
+		windows, err := enumVisibleWindows()
 		if err != nil {
 			return Result{}, err
 		}
-		pPostMessageW.Call(uintptr(h), wmClose, 0, 0)
-		return Result{Content: "OK: close requested for " + windowText(h)}, nil
+		needle := strings.ToLower(p.Text)
+		closed := 0
+		for _, w := range windows {
+			if strings.Contains(strings.ToLower(w.title), needle) {
+				pPostMessageW.Call(uintptr(w.handle), wmClose, 0, 0)
+				closed++
+			}
+		}
+		if closed == 0 {
+			return Result{Content: "no windows found matching " + p.Text}, nil
+		}
+		return Result{Content: fmt.Sprintf("OK: close requested for %d window(s) matching %q", closed, p.Text)}, nil
 
 	case "display_info":
 		// Virtual screen span via GetSystemMetrics (76/79); origin via 76/77
 		// is the primary origin — report span as the multi-monitor extent.
 		p := user32.NewProc("GetSystemMetrics")
-		cx, _, _ := p.Call(76)
+		cx, _, _ := p.Call(78) // #1673: SM_CXVIRTUALSCREEN (was 76 = X origin, reporting "0x1080" on single-monitor)
 		cy, _, _ := p.Call(79)
 		return Result{Content: fmt.Sprintf("virtual screen: %dx%d logical pixels (multi-monitor extent)", int32(cx), int32(cy))}, nil
 
@@ -682,7 +695,10 @@ func keyEventInputWithScan(scan uint16, flags uint32) winINPUT {
 func runWindowsCommand(ctx context.Context, cmdline string) error {
 	// Use cmd /c start "" <cmdline> so URLs and documents open via
 	// shell associations, matching the macOS `open` semantics.
-	c := exec.CommandContext(ctx, "cmd", "/c", "start", "", cmdline)
+	// #1673: pass the target as a QUOTED single argv. The old unquoted
+	// form let cmd.exe re-parse the whole string - URLs with '&' split
+	// into commands, '^' escaped, and spaced paths broke into arguments.
+	c := exec.CommandContext(ctx, "cmd", "/c", "start", "", `"`+cmdline+`"`)
 	if out, err := c.CombinedOutput(); err != nil {
 		return fmt.Errorf("start failed: %w\n%s", err, string(out))
 	}
