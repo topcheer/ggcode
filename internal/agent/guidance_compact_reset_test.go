@@ -135,3 +135,21 @@ func TestResetGuidanceCounters1651Extension(t *testing.T) {
 		t.Fatal("quota bools must reset")
 	}
 }
+
+// #1646: the compaction reset must reopen the RIGHT debt detector -
+// verifDebt (maxWarn=2, the SAUP model the #1605 commit message named)
+// and overcorrection_cascade (maxWarn=2), not a byte-identical duplicate
+// of the verifyDebt (max=1) block above.
+func TestResetGuidanceCounters1646RightTracker(t *testing.T) {
+	a := &Agent{
+		verifDebt:      &verificationDebtState{warningsIssued: 2},
+		overcorrection: &overcorrectionState{warnCount: 2},
+	}
+	a.resetGuidanceCounters()
+	if a.verifDebt.warningsIssued != 0 {
+		t.Fatal("verifDebt.warningsIssued must reset (the #1605-A no-op fixed)")
+	}
+	if a.overcorrection.warnCount != 0 {
+		t.Fatal("overcorrection warnCount must reset (#1646-2)")
+	}
+}
