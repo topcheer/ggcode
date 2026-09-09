@@ -118,7 +118,7 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	// Status doesn't require Ghostty to be running — it reports detection.
 	if action == "status" {
-		return g.executeStatus(ctx, ), nil
+		return g.executeStatus(ctx), nil
 	}
 
 	if !ghosttyAvailable() {
@@ -127,7 +127,7 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	switch action {
 	case "list":
-		return g.executeList(ctx, ), nil
+		return g.executeList(ctx), nil
 	case "split":
 		return g.executeSplit(ctx, args.TerminalID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
 	case "new_tab":

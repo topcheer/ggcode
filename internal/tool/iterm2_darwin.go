@@ -119,7 +119,7 @@ func (t *Iterm2Tool) executeStatus(ctx context.Context) Result {
 	return Result{Content: b.String()}
 }
 
-func (t *Iterm2Tool) executeList(ctx context.Context, ) Result {
+func (t *Iterm2Tool) executeList(ctx context.Context) Result {
 	script := `
 tell application "iTerm"
 	set output to ""

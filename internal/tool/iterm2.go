@@ -149,7 +149,7 @@ func (t *Iterm2Tool) Execute(ctx context.Context, input json.RawMessage) (Result
 
 	switch action {
 	case "list":
-		return t.executeList(ctx, ), nil
+		return t.executeList(ctx), nil
 	case "split":
 		return t.executeSplit(ctx, args.SessionID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
 	case "new_tab":
