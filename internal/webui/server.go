@@ -320,7 +320,15 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) routes() {
+	// #1856 case 1: unmatched /api/ paths must NOT fall into the SPA
+	// catch-all - a typo'd endpoint returned 200 text/html, the frontend's
+	// res.ok was true, and the real API error was silently swallowed.
+	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, fmt.Sprintf("{\"error\":\"unknown api endpoint: %s\"}", r.URL.Path), http.StatusNotFound)
+	})
+
 	// Static SPA (no auth required -- serves static HTML/JS)
+	// ("/api/" above is longer, so it wins for API paths.)
 	s.mux.HandleFunc("/", s.serveSPA)
 
 	// All API endpoints require auth token via Bearer header or ?token= query param.

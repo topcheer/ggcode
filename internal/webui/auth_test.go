@@ -37,12 +37,22 @@ func TestRequireAuth_QueryParam(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 
-	// Valid token via query parameter
-	req := httptest.NewRequest("GET", "/api/test?token="+s.Token(), nil)
+	// #1856 case 3: the query fallback is WebSocket-only now.
+	// Valid token via query on the WS route -> 200.
+	req := httptest.NewRequest("GET", "/api/chat/ws?token="+s.Token(), nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
 	if w.Code != 200 {
-		t.Fatalf("expected 200 with valid query token, got %d", w.Code)
+		t.Fatalf("expected 200 with valid query token on ws route, got %d", w.Code)
+	}
+
+	// Same valid token via query on a REST route -> 401 (REST must use
+	// Bearer; the token must not live in URLs for loggable routes).
+	req2 := httptest.NewRequest("GET", "/api/test?token="+s.Token(), nil)
+	w2 := httptest.NewRecorder()
+	handler(w2, req2)
+	if w2.Code != 401 {
+		t.Fatalf("expected 401 for query token on non-ws route, got %d", w2.Code)
 	}
 }
 

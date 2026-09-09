@@ -41,8 +41,13 @@ func generateAuthToken() string {
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.authToken == "" {
-			// No token configured (shouldn't happen, but defense in depth)
-			next(w, r)
+			// #1856 case 2: fail-CLOSED. The old comment said "defense in
+			// depth" while the code let every request through when the token
+			// was empty - the exact opposite of defense in depth. Unreachable
+			// today (NewServer always sets a 64-hex token), but a zero-value
+			// &Server{} or a future "auth off" knob would have bypassed
+			// auth entirely.
+			http.Error(w, "server auth not configured", http.StatusInternalServerError)
 			return
 		}
 
@@ -55,14 +60,25 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
-		// Fallback: check query parameter (needed for WebSocket upgrade)
-		if authTokenMatches(r.URL.Query().Get("token"), s.authToken) {
+		// Fallback: query parameter - WebSocket only. The browser cannot
+		// set headers on a WS upgrade, so it needs the token in the URL.
+		// #1856 case 3: this used to apply to every API route, putting the
+		// token into access logs / Referer / proxy logs for plain REST
+		// calls that all carry a Bearer header anyway. The SPA already
+		// sends Bearer for every fetch and only the WS uses ?token=.
+		if isWebSocketRoute(r.URL.Path) && authTokenMatches(r.URL.Query().Get("token"), s.authToken) {
 			next(w, r)
 			return
 		}
 
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}
+}
+
+// isWebSocketRoute reports whether the path is the websocket endpoint,
+// the only route that legitimately needs the ?token= query fallback.
+func isWebSocketRoute(path string) bool {
+	return path == "/api/chat/ws"
 }
 
 func authTokenMatches(provided, expected string) bool {
