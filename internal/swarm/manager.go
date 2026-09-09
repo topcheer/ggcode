@@ -200,7 +200,11 @@ func (m *Manager) DeleteTeam(teamID string) error {
 		if tm.cancel != nil {
 			tm.cancel()
 		}
-		tm.setStatus(TeammateShuttingDown)
+		// Set status DIRECTLY: the caller already holds tm.mu, and
+		// setStatus re-locks it - a same-goroutine re-entrant lock on a
+		// Go mutex DEADLOCKS (the 931913ff CI hang: DeleteTeam -> setStatus
+		// -> t.mu.Lock under the already-held tm.mu).
+		tm.Status = TeammateShuttingDown
 		if tm.done != nil {
 			doneChs = append(doneChs, tm.done)
 		}
