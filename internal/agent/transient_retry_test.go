@@ -66,7 +66,8 @@ func TestIsRetryableTool(t *testing.T) {
 		}
 	}
 
-	nonRetryable := []string{"edit_file", "write_file", "git_commit", "run_command", "git_add", "git_stash"}
+	nonRetryable := []string{"edit_file", "write_file", "git_commit", "run_command", "git_add", "git_stash",
+		"lsp_rename" /* #1702-4: #1514 moved lsp_rename INTO the retryable set with no test pinning it */}
 	for _, name := range nonRetryable {
 		if isRetryableTool(name) {
 			t.Errorf("isRetryableTool(%q) = true, want false", name)
