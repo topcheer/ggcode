@@ -340,7 +340,9 @@ func (s *Server) routes() {
 	// catch-all - a typo'd endpoint returned 200 text/html, the frontend's
 	// res.ok was true, and the real API error was silently swallowed.
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, fmt.Sprintf("{\"error\":\"unknown api endpoint: %s\"}", r.URL.Path), http.StatusNotFound)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprintf(w, "{\"error\":\"unknown api endpoint: %s\"}", r.URL.Path)
 	})
 
 	// Static SPA (no auth required -- serves static HTML/JS)

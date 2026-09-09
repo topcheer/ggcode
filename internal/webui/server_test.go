@@ -1333,3 +1333,39 @@ func TestKnightTypes(t *testing.T) {
 		t.Errorf("queue = %v", decoded.Queue)
 	}
 }
+
+// #1856 case 1: an unmatched /api/ path must 404 with JSON, not fall
+// into the SPA catch-all (200 text/html silently swallowed API errors).
+func TestUnknownAPIPathReturns404NotSPA(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	ts := httptest.NewServer(s.mux)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/configss") // typo'd endpoint
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("unknown api path: got %d, want 404", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "json") {
+		t.Fatalf("unknown api path content-type: got %q, want json", ct)
+	}
+}
+
+// #1857 case 1: a second Start must be refused, not orphan the first
+// listener as a zombie port.
+func TestDoubleStartRefused(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := NewServer(cfg)
+	if _, err := s.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Start("127.0.0.1:0"); err == nil {
+		t.Fatal("second Start must be refused")
+	}
+}
