@@ -69,7 +69,18 @@ var sensitiveLogVarPattern = regexp.MustCompile(
 	`\b(?i)(password|passwd|secret|token|apikey|api_key|accesskey|access_key|` +
 		`credential|privatekey|private_key|authheader|auth_header|bearer|` +
 		`sessionkey|session_key|clientsecret|client_secret|refreshtoken|` +
-		`refresh_token)\b`,
+		`refresh_token|` +
+		// #1800 case 4: camelCase identifiers (authToken, sessionToken,
+		// accessToken) were fully missed under \b while tokenCount stayed
+		// excluded - the table already carried the refreshtoken precedent,
+		// so these are plain keyword-table gaps, not structural tension.
+		`authtoken|accesstoken|idtoken|` +
+		// #1800 case 3: SCREAMING_SNAKE env names (GITHUB_TOKEN) escaped BOTH
+		// stages - `_T` is a word byte so \btoken never matched, yet this is
+		// the most typical runtime secret-fetch path. Match the WHOLE
+		// underscored identifier so the leading \b lands on its first byte;
+		// max_token_count stays excluded (no boundary after "token").
+		`[a-z0-9]+_token|[a-z0-9]+_secret|[a-z0-9]+_password|[a-z0-9]+_apikey)\b`,
 )
 
 // goLogCallRe matches Go log package calls that accept format strings or
@@ -269,18 +280,42 @@ func findGoSensitiveLogArgs(src string) []loggingIntelInstance {
 	return results
 }
 
+// jsRedactWrapperRe matches redact/mask/sanitize/scrub/obfuscate wrapper
+// calls (with their argument list) so already-redacted logging stays quiet.
+var jsRedactWrapperRe = regexp.MustCompile(
+	`\b(?:redact|redacted|mask|masked|sanitize|sanitized|scrub|scrubbed|obfuscate|obfuscated)\s*\([^()]*\)`,
+)
+
+// jsConsoleCallRe matches the START of a console.* call so arguments can
+// be extracted with paren balancing (#1800 case 5: the old `([^)]*)` capture
+// truncated at the first ')' - console.log(fmt(x), token) lost token - and
+// could not see nested calls at all).
+var jsConsoleCallRe = regexp.MustCompile(
+	`console\.(log|error|warn|info|debug)\s*\(`,
+)
+
 // findJSSensitiveLogArgs finds JS/TS console calls with sensitive variable args.
 func findJSSensitiveLogArgs(src string) []loggingIntelInstance {
+	// #1800 case 1: commented-out code (`// console.log("token", token)`)
+	// used to fire and directed the agent to fix dead code. JS comment
+	// syntax (// and /* */) and string quotes are Go-compatible, so the Go
+	// stripper works; it preserves newlines so line numbers stay valid.
+	src = stripGoComments(src)
+
 	lines := strings.Split(src, "\n")
 	var results []loggingIntelInstance
 
 	for lineNum, line := range lines {
-		matches := jsConsoleSensitiveRe.FindAllStringSubmatch(line, -1)
-		for _, m := range matches {
-			if len(m) < 3 {
+		for _, loc := range jsConsoleCallRe.FindAllStringSubmatchIndex(line, -1) {
+			// #1800 case 5: balanced extraction with literal jumping -
+			// console.log(fmt(x), token) now keeps the full arg list
+			// (the old ([^)]*) capture truncated at the first ')').
+			// loc[1] points just past the call's opening '('.
+			args := extractGoCallArgsAt(line, loc[1]-1)
+			if args == "" {
 				continue
 			}
-			args := m[2]
+			method := line[loc[2]:loc[3]]
 			sensitiveMatches := sensitiveLogVarPattern.FindAllString(args, -1)
 			if len(sensitiveMatches) == 0 {
 				continue
@@ -289,13 +324,13 @@ func findJSSensitiveLogArgs(src string) []loggingIntelInstance {
 				results = append(results, loggingIntelInstance{
 					category: "sensitive_log_arg",
 					// #1119: position-insensitive key anchor, same as the Go path.
-					key: m[1] + "(" + args + ")",
+					key: method + "(" + args + ")",
 					detail: fmt.Sprintf(
 						"[LOGGING WARNING] Sensitive variable in console.%s at line %d: "+
 							"passes sensitive data (%s) to console output. "+
 							"This is a data-exfiltration risk in browser/server logs. "+
 							"Remove the sensitive variable or redact it before logging.",
-						m[1], lineNum+1, strings.Join(sensitiveMatches, ", ")),
+						method, lineNum+1, strings.Join(sensitiveMatches, ", ")),
 				})
 			}
 		}
@@ -316,6 +351,10 @@ func hasSensitiveVarRef(args string, sensitiveMatches []string, isJS bool) bool 
 	// "token" left `, maxTokenCount)` in the stripped text and
 	// Contains("maxtokencount","token") fired a CRITICAL false positive
 	// on correct code - stage 2 silently discarded stage 1's protection.
+	// #1800 case 2: a redact(token)/mask(...)/sanitize(...) wrapper is the
+	// CORRECT handling the warning itself demands - strip such wrapper calls
+	// before the bare-identifier check so properly redacted code stays quiet.
+	stripped = jsRedactWrapperRe.ReplaceAllString(stripped, "")
 	for _, s := range sensitiveMatches {
 		if containsWordBoundary(strings.ToLower(stripped), strings.ToLower(s)) {
 			return true
