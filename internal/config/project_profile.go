@@ -325,11 +325,19 @@ func isMonorepo(dir string) bool {
 func detectGoMakefileTags(p *ProjectProfile, workingDir string) {
 	if data, err := os.ReadFile(filepath.Join(workingDir, "Makefile")); err == nil {
 		mf := string(data)
-		if strings.Contains(mf, "goolm") || strings.Contains(mf, "TAGS") {
+		// #1523: TAGS must look like a real goolm-tag usage, not any
+		// substring - DOCKER_TAGS/IMAGE_TAGS/BUILD_TAGS used to inject
+		// `-tags goolm` for projects that never use it.
+		if strings.Contains(mf, "goolm") || goolmTagUsage(mf) {
 			p.BuildCommand = "go build -tags goolm ./..."
 			p.TestCommand = "go test -tags goolm ./..."
 		}
-		p.BuildSystem = "Make"
+		// #1523: only claim Make when nothing earlier set a build system -
+		// go.mod's "go" used to be overwritten here while BuildCommand
+		// stayed "go build" (paired fields diverged).
+		if p.BuildSystem == "" {
+			p.BuildSystem = "Make"
+		}
 	}
 }
 
@@ -367,12 +375,28 @@ func detectNpmFrameworks(p *ProjectProfile, pkgPath string) {
 	if strings.Contains(pj, "\"lint\"") && p.LintCommand == "" {
 		p.LintCommand = "npm run lint"
 	}
-	if strings.Contains(pj, "\"test\"") {
+	if strings.Contains(pj, "\"test\"") && p.TestCommand == "" {
+		// #1523: fill-don't-overwrite, per the profile's own priority
+		// contract ("earlier entries take priority") - a Go+npm hybrid
+		// repo used to get its go test command replaced by npm test.
 		p.TestCommand = "npm test"
 	}
-	if strings.Contains(pj, "\"build\"") {
+	if strings.Contains(pj, "\"build\"") && p.BuildCommand == "" {
 		p.BuildCommand = "npm run build"
 	}
+}
+
+// goolmTagUsage reports whether the Makefile uses the TAGS variable in a
+// go-build-shaped way (assignment or -tags reference), excluding unrelated
+// *_TAGS variables like DOCKER_TAGS. #1523
+func goolmTagUsage(makefile string) bool {
+	for _, line := range strings.Split(makefile, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "TAGS") || strings.HasPrefix(t, "-tags $(TAGS)") || strings.Contains(t, "-tags=$(TAGS)") {
+			return true
+		}
+	}
+	return false
 }
 
 // detectCargoFrameworks detects Rust frameworks from Cargo.toml.

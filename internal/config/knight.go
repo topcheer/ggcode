@@ -1,6 +1,10 @@
 package config
 
-import "gopkg.in/yaml.v3"
+import (
+	"sort"
+
+	"gopkg.in/yaml.v3"
+)
 
 // KnightConfig holds configuration for the Knight background agent.
 type KnightConfig struct {
@@ -169,12 +173,31 @@ func (c *Config) ResolveKnightEndpoint() (*ResolvedEndpoint, error) {
 		vendor = c.Vendor
 	}
 	endpoint := kc.Endpoint
-	if endpoint == "" {
-		endpoint = c.Endpoint
-	}
 	model := kc.Model
-	if model == "" {
-		model = c.Model
+	if vendor == c.Vendor {
+		// Same vendor as the main selection: main-scoped ids are valid.
+		if endpoint == "" {
+			endpoint = c.Endpoint
+		}
+		if model == "" {
+			model = c.Model
+		}
+	} else if endpoint == "" {
+		// #1523: endpoint ids are per-vendor scoped - the old fallback
+		// spliced the MAIN vendor's endpoint id into the knight vendor
+		// (either "endpoint not configured for <knight vendor>" or a
+		// same-id silent cross-vendor misresolution). Fall back to the
+		// knight vendor's first endpoint, deterministically sorted.
+		if vc, ok := c.Vendors[vendor]; ok && len(vc.Endpoints) > 0 {
+			ids := make([]string, 0, len(vc.Endpoints))
+			for id := range vc.Endpoints {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			endpoint = ids[0]
+		}
 	}
+	// When the model is empty, ResolveEndpointSelection falls back to the
+	// endpoint's own SelectedModel/DefaultModel - the correct scope.
 	return c.ResolveEndpointSelection(vendor, endpoint, model)
 }

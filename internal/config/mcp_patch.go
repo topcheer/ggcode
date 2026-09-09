@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // PatchMCPServerConfig merges a patch into a base MCPServerConfig and
 // normalizes fields that are meaningless for the resulting server type
 // (#584 M2): switching stdio→http must clear Command/Args, and
@@ -39,8 +41,13 @@ func PatchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	merged.Headers = mergeStringMap(base.Headers, patch.Headers)
 
 	// Type normalization: drop fields that belong to the other transport.
+	// #1523: normalize case/whitespace first ('type: HTTP' used to fall to
+	// default and wipe the URL), and include the ws/wss websocket family
+	// (internal/mcp/migration.go: "supported: stdio, http, ws") - a ws
+	// patch used to fall to default and wipe the URL/Headers.
+	merged.Type = strings.ToLower(strings.TrimSpace(merged.Type))
 	switch merged.Type {
-	case "http", "https", "sse", "streamable-http":
+	case "http", "https", "sse", "streamable-http", "ws", "wss":
 		merged.Command = ""
 		merged.Args = nil
 	default: // "stdio", "command", "so", "grpc", ""
