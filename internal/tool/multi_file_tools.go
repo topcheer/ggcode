@@ -90,11 +90,9 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: %v", i, err)}, nil
 		}
-		if _, ok := seen[path]; ok {
-			// Duplicate path — skip silently (first occurrence wins).
-			continue
-		}
-		seen[path] = struct{}{}
+		// #1696 case 4: validate EVERY entry before the duplicate skip -
+		// a duplicated path carrying a negative offset used to slip past
+		// validation silently (the skip ran first).
 		if f.Offset < 0 {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: offset must be >= 0", i)}, nil
 		}
@@ -104,6 +102,11 @@ func (t MultiFileRead) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if f.Limit > maxExplicitMultiFileReadLimit {
 			return Result{IsError: true, Content: fmt.Sprintf("files[%d]: limit %d exceeds max %d. Narrow the range or split the batch.", i, f.Limit, maxExplicitMultiFileReadLimit)}, nil
 		}
+		if _, ok := seen[path]; ok {
+			// Duplicate path — skip silently (first occurrence wins).
+			continue
+		}
+		seen[path] = struct{}{}
 		reqs = append(reqs, readReq{Path: path, Offset: f.Offset, Limit: f.Limit})
 	}
 
