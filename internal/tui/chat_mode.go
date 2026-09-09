@@ -65,7 +65,13 @@ func (m *Model) refreshLanChatTargets() {
 
 	sort.Strings(targets[1:]) // keep "All" first, sort the rest
 
-	if len(targets) > 0 {
+	// #1714 case 4: targets ALWAYS contains "All" (appended
+	// unconditionally above), so the old len(targets) > 0 check was
+	// constantly true and the else branch - autocomplete off when nobody
+	// is online - was dead code: with zero online participants the
+	// completion popup still activated with only "All" in it. Gate on
+	// whether there is anyone to address.
+	if len(targets) > 1 {
 		m.autoCompleteActive = true
 		m.autoCompleteKind = "lanchat"
 		m.autoCompleteItems = targets
