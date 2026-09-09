@@ -117,7 +117,22 @@ func (s *toolServer) ListTools(_ context.Context, _ *pb.ListToolsRequest) (*pb.L
 	return &pb.ListToolsResponse{Tools: tools}, nil
 }
 
-func (s *toolServer) Execute(grpcCtx context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
+func (s *toolServer) Execute(grpcCtx context.Context, req *pb.ExecuteRequest) (resp *pb.ExecuteResponse, err error) {
+	// #1863: grpc-go does NOT recover handler panics - a third-party
+	// plugin author's tool panicking killed the whole plugin process
+	// (every concurrent session on it), and the host reported
+	// "plugin crashed". The SDK boundary must convert panics into the
+	// same IsError response an ordinary provider error gets (errors do
+	// not cross the protocol boundary as gRPC errors).
+	defer func() {
+		if r := recover(); r != nil {
+			resp = &pb.ExecuteResponse{
+				Content: fmt.Sprintf("plugin execute panic: %v", r),
+				IsError: true,
+			}
+			err = nil
+		}
+	}()
 	toolCtx := Context{
 		WorkingDir: req.Context["working_dir"],
 		SessionID:  req.Context["session_id"],
@@ -137,7 +152,7 @@ func (s *toolServer) Execute(grpcCtx context.Context, req *pb.ExecuteRequest) (*
 	if result == nil {
 		return &pb.ExecuteResponse{Content: ""}, nil
 	}
-	resp := &pb.ExecuteResponse{
+	resp = &pb.ExecuteResponse{
 		Content:             result.Content,
 		IsError:             result.IsError,
 		SuggestedWorkingDir: result.SuggestedWorkingDir,
