@@ -261,3 +261,14 @@ func TestIrrevGateRecordOutcomeRevokesFailedGrounding(t *testing.T) {
 		t.Fatal("outcome for a different tool must not revoke")
 	}
 }
+
+// #1621 side note: files-present resets ignore mode (per-file mixed
+// unstage) - a stale "mode":"hard" next to files is not a hard reset.
+func TestIrrevClassifyTool1621ModeIgnoredWithFiles(t *testing.T) {
+	if got := irrevClassifyTool("git_reset", `{"mode":"hard","files":["a.go"]}`); got != irrevTierLow {
+		t.Fatalf("mode+files must tier Low (mixed unstage), got %d", got)
+	}
+	if got := irrevClassifyTool("git_reset", `{"mode":"hard"}`); got != irrevTierHigh {
+		t.Fatalf("mode hard without files must stay High, got %d", got)
+	}
+}
