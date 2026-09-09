@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
@@ -33,7 +34,7 @@ type precompactState struct {
 	snapshot  ctxpkg.CompactSnapshot // immutable live-context snapshot compacted in background
 	result    ctxpkg.CompactResult   // populated before close(done) — read only after <-done
 	err       error                  // populated before close(done) — read only after <-done
-	cancelled bool                   // set if CancelPreCompact was called externally
+	cancelled atomic.Bool            // set if CancelPreCompact was called externally (#1828: written by the canceller, read by the consumer with no common lock - plain bool was racy on natural-completion/concurrent-cancel)
 }
 
 const (
@@ -199,7 +200,15 @@ func (a *Agent) StartPreCompact() {
 		result, err := snapshot.Compact(bgCtx, prov)
 		if err != nil && isRetryableCompactError(err) && a.shutdownCtx.Err() == nil {
 			debug.Log("precompact", "first attempt failed (%v), retrying...", err)
-			retryCtx, retryCancel := context.WithTimeout(a.shutdownCtx, precompactBackgroundTimeout)
+			// #1828 case 1: derive from bgCtx, NOT shutdownCtx. bgCtx is
+			// cancelled by CancelPreCompact (pc.cancel) and by the agent's
+			// shutdown; a shutdownCtx-derived retry survived CancelPreCompact
+			// with a fresh full budget - after Clear() the LLM compression
+			// kept burning tokens for up to 180s while the slot was detached
+			// and the status showed idle. A cancel landing on the FIRST
+			// Compact yields context.Canceled which isRetryableCompactError
+			// rejects, so the retry window was exactly the unguarded one.
+			retryCtx, retryCancel := context.WithTimeout(bgCtx, precompactBackgroundTimeout)
 			defer retryCancel()
 			result, err = snapshot.Compact(retryCtx, prov)
 		}
@@ -230,15 +239,20 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 	case <-pc.done:
 		// Clear the slot. Safe under lock — the goroutine no longer touches
 		// a.precompact (it only touches the captured pc).
+		// #1828 case 2: capture the CURRENT context manager under the same
+		// lock — SetContextManager swaps it under a.mu, and reading it
+		// unlocked below could hand an old snapshot's ApplyCompactResult to
+		// a manager swapped in mid-race.
 		a.mu.Lock()
 		if a.precompact == pc {
 			a.precompact = nil
 		}
+		cm := a.contextManager
 		a.mu.Unlock()
-		if pc.err != nil || pc.cancelled {
-			debug.Log("precompact", "READY but unusable err=%v cancelled=%v", pc.err, pc.cancelled)
+		if pc.err != nil || pc.cancelled.Load() {
+			debug.Log("precompact", "READY but unusable err=%v cancelled=%v", pc.err, pc.cancelled.Load())
 			if onEvent != nil {
-				if pc.cancelled {
+				if pc.cancelled.Load() {
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Auto-compressing context... cancelled]"})
 				} else {
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... failed: %v]", pc.err)})
@@ -246,7 +260,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			}
 			return false
 		}
-		snapshotMgr, ok := a.contextManager.(snapshotCompactManager)
+		snapshotMgr, ok := cm.(snapshotCompactManager)
 		if !ok {
 			debug.Log("precompact", "READY but context manager cannot apply snapshots")
 			return false
@@ -300,7 +314,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 					liveShrunk = true
 				}
 			}
-			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(a.contextManager.Messages()))
+			debug.Log("precompact", "RESULT DISCARDED: %s (snapshot.OrigLen=%d live=%d)", reason, pc.snapshot.OrigLen, len(cm.Messages()))
 			// #612: a discarded result leaves the stale 2-minute cooldown set
 			// by maybeAutoCompact at schedule time. The cooldown-on-failure is
 			// intentional for genuinely failed compactions, but a DISCARD means
@@ -322,7 +336,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			// production (mock-only) even though discard-by-shrink is exactly
 			// the case the refund exists for.
 			if liveShrunk {
-				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 && pc.startTok >= threshold {
+				if threshold := cm.AutoCompactThreshold(); threshold > 0 && pc.startTok >= threshold {
 					a.mu.Lock()
 					a.precompactCooldownUntil = time.Time{}
 					a.mu.Unlock()
@@ -365,7 +379,7 @@ func (a *Agent) CancelPreCompact() {
 	if pc == nil {
 		return
 	}
-	pc.cancelled = true
+	pc.cancelled.Store(true)
 	if pc.cancel != nil {
 		pc.cancel()
 	}
