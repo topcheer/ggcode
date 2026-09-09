@@ -237,3 +237,52 @@ func TestApprovalNotifiedIMField(t *testing.T) {
 		t.Error("should be settable")
 	}
 }
+
+// #1741: every ApprovalMsg/DiffConfirmMsg arrival must re-derive option
+// labels from the model's CURRENT language, not LangEnglish wrappers.
+func TestApprovalOptionsFollowLanguage1741(t *testing.T) {
+	var m Model
+	m.language = LangZhCN
+	m, _ = m.handleApprovalMsg(ApprovalMsg{ToolName: "run_command"})
+	if len(m.approvalOptions) == 0 {
+		t.Fatal("expected approval options to be set")
+	}
+	// The Chinese catalog must not be the English one: the first label
+	// differs between defaultApprovalOptionsFor(LangEnglish) and (LangZhCN).
+	en := defaultApprovalOptionsFor(LangEnglish)
+	zh := defaultApprovalOptionsFor(LangZhCN)
+	if len(en) == len(zh) && en[0].label == zh[0].label {
+		t.Skip("catalogs identical for first label - nothing to distinguish")
+	}
+	sawZh := false
+	for _, opt := range m.approvalOptions {
+		if opt.label == zh[0].label {
+			sawZh = true
+			break
+		}
+	}
+	if !sawZh {
+		t.Fatalf("approval options must carry Chinese labels, got: %v", m.approvalOptions)
+	}
+	// Diff-confirm path.
+	m.language = LangZhCN
+	m, _ = m.handleDiffConfirmMsg(DiffConfirmMsg{FilePath: "x.go", DiffText: "+ 1"})
+	if len(m.diffOptions) == 0 {
+		t.Fatal("expected diff options to be set")
+	}
+	enD := diffConfirmOptionsFor(LangEnglish)
+	zhD := diffConfirmOptionsFor(LangZhCN)
+	if len(enD) == len(zhD) && enD[0].label == zhD[0].label {
+		t.Skip("diff catalogs identical for first label")
+	}
+	sawZhD := false
+	for _, opt := range m.diffOptions {
+		if opt.label == zhD[0].label {
+			sawZhD = true
+			break
+		}
+	}
+	if !sawZhD {
+		t.Fatalf("diff options must carry Chinese labels, got: %v", m.diffOptions)
+	}
+}
