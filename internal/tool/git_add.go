@@ -126,13 +126,17 @@ func checkSensitiveFiles(files []string) string {
 	for _, f := range files {
 		lf := strings.ToLower(f)
 		for _, pattern := range sensitiveFilePatterns {
-			// #835: the old 'HasSuffix || Contains' reduced to a bare substring
-			// match — 'app.environment.go' hit '.env' every stage. Anchor
-			// short patterns to path boundaries.
+			// #835/#1687 case 3: anchor to path SEGMENTS - the '/'+pattern
+			// substring hit 'foo/.envrc' for '/.env'. Split and compare
+			// segments exactly.
 			hit := strings.HasSuffix(lf, pattern)
 			if !hit && strings.Contains(pattern, ".") {
-				hit = strings.Contains(lf, pattern+"/") || strings.Contains(lf, "/"+pattern) ||
-					strings.HasSuffix(lf, "/"+pattern)
+				for _, seg := range strings.Split(lf, "/") {
+					if seg == pattern {
+						hit = true
+						break
+					}
+				}
 			}
 			if hit {
 				flagged = append(flagged, f)

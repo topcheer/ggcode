@@ -100,7 +100,7 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 	}
 
 	// Execute checkout via VCS abstraction.
-	out, err := vcsImpl.Checkout(ctx, dir, args.Branch, args.Create, args.StartPoint)
+	out, err := vcsImpl.Checkout(ctx, dir, strings.TrimSpace(args.Branch), args.Create, strings.TrimSpace(args.StartPoint)) // #1687 case 2: validate trims a COPY - execute the trimmed value, else " main " passes validation but git rejects it
 	if err != nil {
 		if errors.Is(err, vcs.ErrCheckoutNotSupported) {
 			return Result{IsError: true, Content: fmt.Sprintf("%s does not support branch checkout", vcsImpl.DisplayName())}, nil
