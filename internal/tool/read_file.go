@@ -102,6 +102,12 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 			if err != nil {
 				return Result{IsError: true, Content: err.Error()}, nil
 			}
+			// #1698 case 2: the streaming path skipped BOTH guards the
+			// small-file path runs - stale-read detection never saw a
+			// >10MB ranged read (write_file's CheckStale went blind) and
+			// merge-conflict markers slipped through unflagged.
+			defaultFileTracker.RecordRead(args.Path)
+			text += CheckContentForConflicts(text)
 			return Result{Content: text}, nil
 		}
 		// Count lines so the agent knows the range to use
