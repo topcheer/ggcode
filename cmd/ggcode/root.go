@@ -1257,11 +1257,11 @@ type tuiWebchatSender struct {
 	repl *tui.REPL
 }
 
-func (s *tuiWebchatSender) SendWebchatMessage(text string) {
+func (s *tuiWebchatSender) SendWebchatMessage(text string, images []provider.ContentBlock) {
 	if s.repl == nil {
 		return
 	}
-	s.repl.InjectWebchatMessage(text)
+	s.repl.InjectWebchatMessage(text, images)
 }
 
 // a2aAPIKey resolves the A2A API key from config.

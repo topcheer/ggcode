@@ -325,6 +325,9 @@ type imPanelRefreshMsg struct{}
 // user input submission.
 type webchatUserMsg struct {
 	Text string
+	// #1860 case 1: image blocks from the webui - pure-image messages
+	// used to be dropped by the bridge's text-only extraction.
+	Images []provider.ContentBlock
 }
 
 // webuiReadyMsg is sent when the webui HTTP server is ready. The TUI

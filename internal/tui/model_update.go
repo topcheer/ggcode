@@ -330,7 +330,25 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 	case webchatUserMsg:
 		// Webchat message injected from the webui. Handle like user input.
 		text := msg.Text
+		// #1860 case 1: attach the image blocks to pendingImages so the
+		// next submission carries them (same slot pasted images use). A
+		// pure-image message is no longer dropped: the WS layer already
+		// acked "delivered, N images" before this point.
+		for _, blk := range msg.Images {
+			if blk.Type != "image" {
+				continue
+			}
+			att, err := buildWebchatImageAttachment(blk)
+			if err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("webchat image rejected: %v", err))
+				continue
+			}
+			m.pendingImages = append(m.pendingImages, att)
+		}
 		if text == "" {
+			// Pure image (or all images rejected): nothing to route now.
+			// Images that attached stay in pendingImages and ride the next
+			// submission; starting a run with empty text would be worse.
 			return m, nil
 		}
 		// Notify Knight idle timer — webchat counts as user activity too.

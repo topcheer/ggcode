@@ -2,6 +2,7 @@ package tui
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/image"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 func loadClipboardImage() (imageAttachedMsg, error) {
@@ -74,4 +76,32 @@ func cleanupOldTempImages() {
 			os.Remove(filepath.Join(cacheDir, e.Name()))
 		}
 	}
+}
+
+// buildWebchatImageAttachment converts a webchat image ContentBlock into
+// the same imageAttachedMsg a pasted clipboard image produces (#1860 case 1:
+// pure-image webchat messages used to be dropped by the bridge).
+func buildWebchatImageAttachment(blk provider.ContentBlock) (imageAttachedMsg, error) {
+	data, err := base64.StdEncoding.DecodeString(blk.ImageData)
+	if err != nil {
+		return imageAttachedMsg{}, fmt.Errorf("decoding image data: %w", err)
+	}
+	img, err := image.Decode(data)
+	if err != nil {
+		return imageAttachedMsg{}, fmt.Errorf("decoding image: %w", err)
+	}
+	filename, err := newClipboardImageFilename()
+	if err != nil {
+		return imageAttachedMsg{}, err
+	}
+	sourcePath, err := persistAttachedImage(filename, img)
+	if err != nil {
+		return imageAttachedMsg{}, err
+	}
+	return imageAttachedMsg{
+		placeholder: image.Placeholder(filename, img),
+		img:         img,
+		filename:    filename,
+		sourcePath:  sourcePath,
+	}, nil
 }

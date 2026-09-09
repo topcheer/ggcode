@@ -146,7 +146,15 @@ func bodyHasSafegoRecover(body *ast.BlockStmt) bool {
 						// inside a goroutine body passed the CI gate with
 						// no recover at all. Restrict to the two runner
 						// entry points per the documented rule.
-						if sel.Sel != nil && (sel.Sel.Name == "Run" || sel.Sel.Name == "Go") {
+						// #1860 case 2: ONLY also means the runner call is
+						// the ENTIRE body. A body like
+						//   go func(){ doRiskyWork(); safego.Go("x", f) }()
+						// still panics bare in doRiskyWork before the
+						// supervised runner ever runs - the gate was
+						// silently bypassable by prepending arbitrary
+						// statements.
+						if sel.Sel != nil && (sel.Sel.Name == "Run" || sel.Sel.Name == "Go") &&
+							len(body.List) == 1 {
 							found = true
 						}
 					}

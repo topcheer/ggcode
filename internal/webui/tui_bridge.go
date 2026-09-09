@@ -2,6 +2,7 @@ package webui
 
 import (
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -16,7 +17,11 @@ type TUIAgent interface {
 // WebchatMessageSender injects a webchat user message into the TUI event loop.
 // Implemented by a closure that calls program.Send(webchatUserMsg{...}).
 type WebchatMessageSender interface {
-	SendWebchatMessage(text string)
+	// SendWebchatMessage routes a user message into the TUI event loop.
+	// #1860 case 1: images must ride along - the WS side accepts pure-image
+	// messages (server_websocket.go builds ImageBlocks and acks image_count),
+	// and the TUI bridge used to extract text only, silently dropping them.
+	SendWebchatMessage(text string, images []provider.ContentBlock)
 }
 
 // tuiBridgeSubscriber wraps a callback with an async channel.
@@ -53,11 +58,21 @@ func (b *TUIChatBridge) Messages() []provider.Message {
 // queuing, interruption, and submission just like a keyboard input.
 func (b *TUIChatBridge) SendUserMessage(content []provider.ContentBlock) {
 	text := extractText(content)
-	if text == "" || b.sender == nil {
+	// #1860 case 1: keep the image blocks - a pure-image webchat message
+	// used to return here with an ack already sent by the WS layer
+	// ("delivered, N images") and then vanish: no injection, no error,
+	// no receipt. Mixed text+image routed text only.
+	var images []provider.ContentBlock
+	for _, blk := range content {
+		if blk.Type == "image" {
+			images = append(images, blk)
+		}
+	}
+	if (text == "" && len(images) == 0) || b.sender == nil {
 		return
 	}
-	debug.Log("tui-bridge", "routing webchat message to TUI: %s", truncateStr(text, 80))
-	b.sender.SendWebchatMessage(text)
+	debug.Log("tui-bridge", "routing webchat message to TUI: %s (+%d images)", truncateStr(text, 80), len(images))
+	b.sender.SendWebchatMessage(text, images)
 }
 
 // Subscribe registers a callback for agent streaming events.
@@ -83,12 +98,26 @@ func (b *TUIChatBridge) Subscribe(fn func(provider.StreamEvent)) func() {
 	b.subs = append(b.subs, sub)
 	idx := len(b.subs) - 1
 	return func() {
+		// #1860 case 3: the drain (<-done) used to run INSIDE the write
+		// lock - one slow subscriber's up-to-256 queued callbacks blocked
+		// BroadcastEvent's RLock for the whole drain, stalling the agent
+		// event fan-out. Unlink under the lock, then wait for the drain
+		// outside it, bounded (a stuck callback must not hang the
+		// unsubscriber either).
+		var done chan struct{}
 		b.subMu.Lock()
-		defer b.subMu.Unlock()
 		if b.subs[idx] != nil {
 			close(b.subs[idx].ch)
-			<-b.subs[idx].done
+			done = b.subs[idx].done
 			b.subs[idx] = nil
+		}
+		b.subMu.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				debug.Log("tui-bridge", "subscriber drain timed out after unsubscription")
+			}
 		}
 	}
 }

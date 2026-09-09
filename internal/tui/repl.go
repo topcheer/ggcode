@@ -631,9 +631,9 @@ func (r *REPL) SetWebUIBridge(b WebUIEventBroadcaster) {
 // InjectWebchatMessage sends a webchat user message into the TUI event loop.
 // The message is handled like a normal user input — if the agent is idle,
 // it starts a new run; if busy, it queues as a pending interruption.
-func (r *REPL) InjectWebchatMessage(text string) {
+func (r *REPL) InjectWebchatMessage(text string, images []provider.ContentBlock) {
 	if r.program != nil {
-		r.program.Send(webchatUserMsg{Text: text})
+		r.program.Send(webchatUserMsg{Text: text, Images: images})
 	}
 }
 
