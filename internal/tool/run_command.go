@@ -325,8 +325,19 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		// clock at all, so a long-lived editor is never killed by the tool
 		// call returning (#568) nor by a delayed timer (#1245).
 		safego.Go("tool.runCommand.guiWait", func() {
-			_ = cmd.Wait()
+			// #1699 case 4: the non-GUI success/failure paths both invoke
+			// OnPostExec, but the GUI path never did - hooks mounted on
+			// post-exec never saw GUI launches. Mirror the completion
+			// semantics once the app process exits.
+			waitErr := cmd.Wait()
 			cancel()
+			if t.OnPostExec != nil {
+				code := 0
+				if waitErr != nil {
+					code = -1
+				}
+				t.OnPostExec(code, waitErr)
+			}
 		})
 		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
 	}
