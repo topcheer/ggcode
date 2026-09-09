@@ -15,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	imagepkg "github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -812,7 +813,13 @@ func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage,
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			data, err := os.ReadFile(img.Data)
+			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+			f, err := os.Open(img.Data)
+			if err != nil {
+				return nil, fmt.Errorf("read local image: %w", err)
+			}
+			data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+			f.Close()
 			if err != nil {
 				return nil, fmt.Errorf("read local image: %w", err)
 			}

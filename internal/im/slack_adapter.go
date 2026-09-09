@@ -926,7 +926,16 @@ func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, thread
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			data, err := os.ReadFile(img.Data)
+			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+			f, err := os.Open(img.Data)
+			if err != nil {
+				return fmt.Errorf("read local image: %w", err)
+			}
+			data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+			f.Close()
+			if err != nil {
+				return fmt.Errorf("read local image: %w", err)
+			}
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
 			}

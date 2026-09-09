@@ -796,7 +796,13 @@ func (a *mattermostAdapter) resolveImageToBytes(ctx context.Context, img Extract
 		// "unsupported protocol scheme" (the old case "local" below was dead -
 		// no extractor ever emitted Kind "local").
 		if IsLocalFilePath(img.Data) {
-			data, err := os.ReadFile(img.Data)
+			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+			f, err := os.Open(img.Data)
+			if err != nil {
+				return nil, "", fmt.Errorf("read local image: %w", err)
+			}
+			data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+			f.Close()
 			if err != nil {
 				return nil, "", fmt.Errorf("read local image: %w", err)
 			}
