@@ -269,3 +269,20 @@ func TestIsAwkSkipRemovalInjectionNotExempt(t *testing.T) {
 		t.Fatal("no skip marker anywhere must not match")
 	}
 }
+
+// TestIsSedSkipRemoval_MultiExpression pins #1685 case 1: a sed string with
+// a legit removal followed by an INJECTING second expression must not be
+// exempt - the old code judged only the first.
+func TestIsSedSkipRemoval_MultiExpression(t *testing.T) {
+	legit := "sed -i 's/pytest.skip(//g' f.go"
+	if !isSedSkipRemoval(legit) {
+		t.Fatal("single legit removal must stay exempt")
+	}
+	inject := "sed -i 's/pytest.skip(//g; s/assert/pytest.skip(/g' f.go"
+	if isSedSkipRemoval(inject) {
+		t.Fatal("second-expression injection must NOT be exempt (#1685 case 1)")
+	}
+	if isSedSkipRemoval("sed -i 's/foo/bar/g' f.go") {
+		t.Fatal("plain sed (no marker) must not be exempt - original semantics")
+	}
+}
