@@ -71,10 +71,14 @@ func suggestSkills(query string, allNames []string) []string {
 		}
 	}
 
-	// Sort: substring matches (-1) first, then by distance.
+	// Sort: exact (0) first, then substring (-1), then by distance.
+	// #1704 case 3: -1 < 0 put every SUBSTRING/SUPERSTRING match ahead
+	// of the exact hit - "verify-changes" outranked "verify" itself,
+	// and >=3 substring candidates could push the exact match out of
+	// the top-3 entirely.
 	for i := 0; i < len(candidates); i++ {
 		for j := i + 1; j < len(candidates); j++ {
-			if candidates[j].dist < candidates[i].dist {
+			if rank(candidates[j].dist) < rank(candidates[i].dist) {
 				candidates[i], candidates[j] = candidates[j], candidates[i]
 			}
 		}
@@ -107,3 +111,15 @@ func normalizeSkillName(s string) string {
 }
 
 // levenshtein and min3 are defined in file_suggest.go and tool_suggest.go respectively.
+
+// rank maps candidate distances to sort priority: exact 0 first, then
+// substring -1, then real distances ascending (#1704 case 3).
+func rank(dist int) int {
+	if dist == 0 {
+		return 0
+	}
+	if dist == -1 {
+		return 1
+	}
+	return dist + 2
+}

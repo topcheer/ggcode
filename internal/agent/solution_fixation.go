@@ -107,6 +107,10 @@ var agentMutationEditTools = map[string]bool{
 	"notebook_edit":    true,
 	"batch_replace":    true,
 	"lsp_rename":       true,
+	// #1704 case 5: file_ops delete/move are file mutations - a failed
+	// file_ops is an edit failure for fixation purposes; its omission
+	// made the detector blind to that failure class.
+	"file_ops": true,
 }
 
 // isAgentMutationEditTool reports whether the tool mutates files.
