@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -71,7 +72,7 @@ tell application "iTerm"
 		write text "%s"
 	end tell
 end tell`, lookup, spec, escapeAS(text))
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	return err
 }
 
@@ -87,31 +88,31 @@ func (t *Iterm2Tool) executeStatus() Result {
 	b.WriteString(fmt.Sprintf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 
 	// iTerm2 version
-	if v, err := runAppleScript(`tell application "iTerm" to get version`); err == nil {
+	if v, err := runAppleScript(context.Background(), `tell application "iTerm" to get version`); err == nil {
 		b.WriteString(fmt.Sprintf("version: %s\n", v))
 	}
 
 	// App path
-	if p, err := runAppleScript(`tell application "iTerm" to get path to`); err == nil && p != "" {
+	if p, err := runAppleScript(context.Background(), `tell application "iTerm" to get path to`); err == nil && p != "" {
 		b.WriteString(fmt.Sprintf("app path: %s\n", p))
 	}
 
 	// Current session info
-	if name, err := runAppleScript(`tell application "iTerm" to get name of current session of current tab of front window`); err == nil {
+	if name, err := runAppleScript(context.Background(), `tell application "iTerm" to get name of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session name: %s\n", name))
 	}
-	if tty, err := runAppleScript(`tell application "iTerm" to get tty of current session of current tab of front window`); err == nil {
+	if tty, err := runAppleScript(context.Background(), `tell application "iTerm" to get tty of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session tty: %s\n", tty))
 	}
-	if cols, err := runAppleScript(`tell application "iTerm" to get columns of current session of current tab of front window`); err == nil {
+	if cols, err := runAppleScript(context.Background(), `tell application "iTerm" to get columns of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("columns: %s\n", cols))
 	}
-	if rows, err := runAppleScript(`tell application "iTerm" to get rows of current session of current tab of front window`); err == nil {
+	if rows, err := runAppleScript(context.Background(), `tell application "iTerm" to get rows of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("rows: %s\n", rows))
 	}
 
 	// Session ID (iTerm2 assigns a numeric ID to each session)
-	if sid, err := runAppleScript(`tell application "iTerm" to get id of current session of current tab of front window`); err == nil {
+	if sid, err := runAppleScript(context.Background(), `tell application "iTerm" to get id of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session ID: %s", sid))
 	}
 
@@ -165,7 +166,7 @@ tell application "iTerm"
 	return output
 end tell`
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 list failed: %v", err)}
 	}
@@ -240,7 +241,7 @@ tell application "iTerm"
 end tell`, lookup, targetSpec, splitCmd, escapeAS(escapeShellSingleQuote(wd)))
 	}
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 split failed: %v", err)}
 	}
@@ -287,7 +288,7 @@ tell application "iTerm"
 end tell`
 	}
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 new_tab failed: %v", err)}
 	}
@@ -321,7 +322,7 @@ tell application "iTerm"
 end tell`
 	}
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 new_window failed: %v", err)}
 	}
@@ -339,7 +340,7 @@ tell application "iTerm"
 	return "focused"
 end tell`, lookup, spec)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 focus failed: %v", err)}
 	}
@@ -361,7 +362,7 @@ tell application "iTerm"
 	return "closed"
 end tell`, lookup, spec)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 close failed: %v", err)}
 	}
@@ -388,7 +389,7 @@ tell application "iTerm"
 	end tell
 end tell`, tabIndex)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 select_tab failed: %v", err)}
 	}
@@ -533,7 +534,7 @@ tell application "iTerm"
 end tell`, lookup, spec, increment)
 	}
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 resize failed: %v", err)}
 	}
@@ -571,7 +572,7 @@ tell application "iTerm"
 	end tell
 end tell`, lookup, spec)
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		// Fallback: try using capture() which may not be available in all versions
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 get_text failed: %v", err)}
@@ -595,7 +596,7 @@ tell application "iTerm"
 	end tell
 end tell`, lookup, spec, escapeAS(title))
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 set_title failed: %v", err)}
 	}
@@ -633,7 +634,7 @@ tell application "iTerm"
 	end tell
 end tell`, lookup, spec)
 
-	tty, err := runAppleScript(ttyScript)
+	tty, err := runAppleScript(context.Background(), ttyScript)
 	if err != nil {
 		return fmt.Errorf("failed to get session tty: %w", err)
 	}
@@ -710,7 +711,7 @@ end tell`
 		return Result{IsError: true, Content: fmt.Sprintf("invalid broadcast sub-action %q (use toggle/on/off)", subAction)}
 	}
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 broadcast failed: %v", err)}
 	}
@@ -751,7 +752,7 @@ tell application "System Events"
 	end tell
 end tell`, sub, sub, sub)
 
-		_, err := runAppleScript(script)
+		_, err := runAppleScript(context.Background(), script)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("iterm2 mark %s failed (needs Accessibility permission for keyboard shortcuts): %v", sub, err)}
 		}
@@ -804,7 +805,7 @@ tell application "System Events"
 end tell
 return "not found"`, menuItem)
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 action %q failed: %v", menuItem, err)}
 	}
@@ -838,7 +839,7 @@ tell application "System Events"
 	end tell
 end tell`
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(context.Background(), script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 reload_config failed: %v", err)}
 	}

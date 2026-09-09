@@ -118,7 +118,7 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	// Status doesn't require Ghostty to be running — it reports detection.
 	if action == "status" {
-		return g.executeStatus(), nil
+		return g.executeStatus(ctx, ), nil
 	}
 
 	if !ghosttyAvailable() {
@@ -127,31 +127,31 @@ func (g *GhosttyTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	switch action {
 	case "list":
-		return g.executeList(), nil
+		return g.executeList(ctx, ), nil
 	case "split":
-		return g.executeSplit(args.TerminalID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
+		return g.executeSplit(ctx, args.TerminalID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
 	case "new_tab":
-		return g.executeNewTab(args.Command, args.WorkingDir), nil
+		return g.executeNewTab(ctx, args.Command, args.WorkingDir), nil
 	case "new_window":
-		return g.executeNewWindow(args.Command, args.WorkingDir), nil
+		return g.executeNewWindow(ctx, args.Command, args.WorkingDir), nil
 	case "focus":
-		return g.executeFocus(args.TerminalID), nil
+		return g.executeFocus(ctx, args.TerminalID), nil
 	case "close":
-		return g.executeClose(args.TerminalID), nil
+		return g.executeClose(ctx, args.TerminalID), nil
 	case "input":
-		return g.executeInput(args.TerminalID, args.Text), nil
+		return g.executeInput(ctx, args.TerminalID, args.Text), nil
 	case "send_key":
-		return g.executeSendKey(args.TerminalID, args.Key, args.Modifiers), nil
+		return g.executeSendKey(ctx, args.TerminalID, args.Key, args.Modifiers), nil
 	case "action":
-		return g.executeAction(args.TerminalID, args.Text), nil
+		return g.executeAction(ctx, args.TerminalID, args.Text), nil
 	case "zoom":
-		return g.executeAction(args.TerminalID, "toggle_split_zoom"), nil
+		return g.executeAction(ctx, args.TerminalID, "toggle_split_zoom"), nil
 	case "equalize":
-		return g.executeAction("", "equalize_splits"), nil
+		return g.executeAction(ctx, "", "equalize_splits"), nil
 	case "select_tab":
-		return g.executeSelectTab(args.TabIndex), nil
+		return g.executeSelectTab(ctx, args.TabIndex), nil
 	case "reload_config":
-		return g.executeAction("", "reload_config"), nil
+		return g.executeAction(ctx, "", "reload_config"), nil
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unsupported ghostty action %q", args.Action)}, nil
 	}

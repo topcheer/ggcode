@@ -3,6 +3,7 @@
 package tool
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,8 +16,11 @@ import (
 // ── AppleScript helpers (macOS only) ────────────────────────────────────────
 
 // runAppleScript executes an AppleScript string and returns stdout output.
-func runAppleScript(script string) (string, error) {
-	cmd := exec.Command("osascript", "-e", script)
+func runAppleScript(ctx context.Context, script string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err // #1686 case 1: cancelled sessions must not touch the user's terminal
+	}
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	out, err := cmd.Output()
 	if err != nil {
 		stderr := ""
@@ -139,13 +143,13 @@ func ghosttyBinaryPath() string {
 
 // ── Action implementations (macOS) ──────────────────────────────────────────
 
-func (g *GhosttyTool) executeStatus() Result {
+func (g *GhosttyTool) executeStatus(ctx context.Context, ) Result {
 	if !ghosttyAvailable() {
 		return Result{Content: "ghostty: not detected (TERM_PROGRAM != ghostty)"}
 	}
 
 	version := ""
-	if v, err := runAppleScript(`tell application "Ghostty" to get version`); err == nil {
+	if v, err := runAppleScript(ctx, `tell application "Ghostty" to get version`); err == nil {
 		version = v
 	}
 
@@ -159,17 +163,17 @@ func (g *GhosttyTool) executeStatus() Result {
 	}
 	b.WriteString(fmt.Sprintf("platform: %s/%s", runtime.GOOS, runtime.GOARCH))
 
-	if cwd, err := runAppleScript(`tell application "Ghostty" to get working directory of focused terminal of selected tab of window 1`); err == nil {
+	if cwd, err := runAppleScript(ctx, `tell application "Ghostty" to get working directory of focused terminal of selected tab of window 1`); err == nil {
 		b.WriteString(fmt.Sprintf("\ncurrent terminal CWD: %s", cwd))
 	}
-	if tid, err := runAppleScript(`tell application "Ghostty" to get id of focused terminal of selected tab of window 1`); err == nil {
+	if tid, err := runAppleScript(ctx, `tell application "Ghostty" to get id of focused terminal of selected tab of window 1`); err == nil {
 		b.WriteString(fmt.Sprintf("\ncurrent terminal ID: %s", tid))
 	}
 
 	return Result{Content: b.String()}
 }
 
-func (g *GhosttyTool) executeList() Result {
+func (g *GhosttyTool) executeList(ctx context.Context, ) Result {
 	script := `
 tell application "Ghostty"
 	set output to ""
@@ -197,14 +201,14 @@ tell application "Ghostty"
 	return output
 end tell`
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty list failed: %v", err)}
 	}
 	return Result{Content: out}
 }
 
-func (g *GhosttyTool) executeSplit(terminalID, direction string, size int, command, workingDir string) Result {
+func (g *GhosttyTool) executeSplit(ctx context.Context, terminalID, direction string, size int, command, workingDir string) Result {
 	dir := strings.ToLower(strings.TrimSpace(direction))
 	if dir == "" {
 		dir = "right"
@@ -271,7 +275,7 @@ tell application "Ghostty"
 	return id of newTerm
 end tell`, spec, dir, resizePart, cmdPart)
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty split failed: %v", err)}
 	}
@@ -282,7 +286,7 @@ end tell`, spec, dir, resizePart, cmdPart)
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, terminal_id=%s", dir, out)}
 }
 
-func (g *GhosttyTool) executeNewTab(command, workingDir string) Result {
+func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir string) Result {
 	wd := strings.TrimSpace(workingDir)
 	if wd == "" {
 		wd = g.workingDir()
@@ -308,7 +312,7 @@ tell application "Ghostty"
 end tell`
 	}
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty new_tab failed: %v", err)}
 	}
@@ -316,7 +320,7 @@ end tell`
 	return Result{Content: fmt.Sprintf("ghostty tab created: terminal_id=%s", out)}
 }
 
-func (g *GhosttyTool) executeNewWindow(command, workingDir string) Result {
+func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir string) Result {
 	wd := strings.TrimSpace(workingDir)
 	if wd == "" {
 		wd = g.workingDir()
@@ -341,7 +345,7 @@ tell application "Ghostty"
 end tell`
 	}
 
-	out, err := runAppleScript(script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty new_window failed: %v", err)}
 	}
@@ -349,7 +353,7 @@ end tell`
 	return Result{Content: fmt.Sprintf("ghostty window created: terminal_id=%s", out)}
 }
 
-func (g *GhosttyTool) executeFocus(terminalID string) Result {
+func (g *GhosttyTool) executeFocus(ctx context.Context, terminalID string) Result {
 	spec := terminalSpecifier(terminalID)
 	script := fmt.Sprintf(`
 tell application "Ghostty"
@@ -357,7 +361,7 @@ tell application "Ghostty"
 	return "focused"
 end tell`, spec)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty focus failed: %v", err)}
 	}
@@ -369,7 +373,7 @@ end tell`, spec)
 	return Result{Content: fmt.Sprintf("ghostty focused: %s", label)}
 }
 
-func (g *GhosttyTool) executeClose(terminalID string) Result {
+func (g *GhosttyTool) executeClose(ctx context.Context, terminalID string) Result {
 	spec := terminalSpecifier(terminalID)
 	script := fmt.Sprintf(`
 tell application "Ghostty"
@@ -377,7 +381,7 @@ tell application "Ghostty"
 	return "closed"
 end tell`, spec)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty close failed: %v", err)}
 	}
@@ -389,7 +393,7 @@ end tell`, spec)
 	return Result{Content: fmt.Sprintf("ghostty closed: %s", label)}
 }
 
-func (g *GhosttyTool) executeInput(terminalID, text string) Result {
+func (g *GhosttyTool) executeInput(ctx context.Context, terminalID, text string) Result {
 	if strings.TrimSpace(text) == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
@@ -401,7 +405,7 @@ tell application "Ghostty"
 	return "sent"
 end tell`, escapeAS(text), spec)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty input failed: %v", err)}
 	}
@@ -417,7 +421,7 @@ end tell`, escapeAS(text), spec)
 	return Result{Content: fmt.Sprintf("ghostty input sent to %s: %s", label, preview)}
 }
 
-func (g *GhosttyTool) executeSendKey(terminalID, key, modifiers string) Result {
+func (g *GhosttyTool) executeSendKey(ctx context.Context, terminalID, key, modifiers string) Result {
 	if strings.TrimSpace(key) == "" {
 		return Result{IsError: true, Content: "key is required for send_key action"}
 	}
@@ -438,7 +442,7 @@ tell application "Ghostty"
 end tell`, escapeAS(key), spec)
 	}
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty send_key failed: %v", err)}
 	}
@@ -454,7 +458,7 @@ end tell`, escapeAS(key), spec)
 	return Result{Content: fmt.Sprintf("ghostty key sent to %s: %s", label, keyDesc)}
 }
 
-func (g *GhosttyTool) executeAction(terminalID, actionStr string) Result {
+func (g *GhosttyTool) executeAction(ctx context.Context, terminalID, actionStr string) Result {
 	if strings.TrimSpace(actionStr) == "" {
 		return Result{IsError: true, Content: "text (action string) is required for action command"}
 	}
@@ -466,7 +470,7 @@ tell application "Ghostty"
 	return "done"
 end tell`, escapeAS(actionStr), spec)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty action failed: %v", err)}
 	}
@@ -474,7 +478,7 @@ end tell`, escapeAS(actionStr), spec)
 	return Result{Content: fmt.Sprintf("ghostty action performed: %s", actionStr)}
 }
 
-func (g *GhosttyTool) executeSelectTab(tabIndex int) Result {
+func (g *GhosttyTool) executeSelectTab(ctx context.Context, tabIndex int) Result {
 	if tabIndex < 1 {
 		return Result{IsError: true, Content: "tab_index must be >= 1 (1-based)"}
 	}
@@ -499,7 +503,7 @@ tell application "Ghostty"
 	return "selected"
 end tell`, tabRef)
 
-	_, err := runAppleScript(script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("ghostty select_tab failed: %v", err)}
 	}
