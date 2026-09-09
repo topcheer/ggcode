@@ -61,16 +61,22 @@ var strictVerifyCommands = map[string]bool{
 // but never synced here - `GOFLAGS="-p=1" go test ./...` (this repo's own
 // documented OOM-avoidance form) and `cd /app && go test` were invisible,
 // starving the cascade counter. Each segment is env-stripped and matched.
+// #1564-C: the third separator is mirrored too - `cat tests.txt | pytest -`
+// fed the whole pipeline to the prefix match and never counted; the loose
+// splitCompoundCommand already splits on && / ; / | (same quote-context
+// tradeoff accepted there).
 func isStrictVerifyCommand(cmd string) bool {
 	for _, seg := range strings.Split(cmd, "&&") {
 		for _, semi := range strings.Split(seg, ";") {
-			c := strings.ToLower(strings.TrimSpace(stripEnvAssignments(semi)))
-			if c == "" {
-				continue
-			}
-			for prefix := range strictVerifyCommands {
-				if strings.HasPrefix(c, prefix+" ") || c == prefix {
-					return true
+			for _, pipe := range strings.Split(semi, "|") {
+				c := strings.ToLower(strings.TrimSpace(stripEnvAssignments(pipe)))
+				if c == "" {
+					continue
+				}
+				for prefix := range strictVerifyCommands {
+					if strings.HasPrefix(c, prefix+" ") || c == prefix {
+						return true
+					}
 				}
 			}
 		}
