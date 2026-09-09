@@ -32,14 +32,18 @@ func SuggestToolName(registry *Registry, name string) string {
 		isPrefix := strings.HasPrefix(cand, name) || strings.HasPrefix(name, cand)
 		if isPrefix && len(name) >= 3 {
 			// Prefix match is a strong signal; treat as distance 1.
-			if 1 < bestDist {
+			// #1708: ties previously kept the FIRST-REGISTERED candidate -
+			// "mul" hit multi_file_read/multi_edit_file/... in whatever
+			// order registration happened to use. Lexical order is stable
+			// and deterministic across builds.
+			if 1 < bestDist || (1 == bestDist && t.Name() < bestName) {
 				bestDist = 1
 				bestName = t.Name()
 			}
 			continue
 		}
 
-		if dist < bestDist {
+		if dist < bestDist || (dist == bestDist && t.Name() < bestName) {
 			bestDist = dist
 			bestName = t.Name()
 		}
