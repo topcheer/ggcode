@@ -133,6 +133,12 @@ func (a *Agent) resetGuidanceCounters() {
 	if a.criteriaDrift != nil {
 		a.criteriaDrift.warnCount = 0
 	}
+	// #1843 case 3: editOscillation was missing from this list too -
+	// max=1 burned pre-compaction left the detector silent (and the
+	// model never saw the warning text) for the rest of the run.
+	if a.editOscillation != nil {
+		a.editOscillation.fired = 0
+	}
 	if a.subgoalTrack != nil {
 		a.subgoalTrack.fired = false
 	}

@@ -228,8 +228,14 @@ func (s *attentionFragmentState) analyze() string {
 }
 
 // reset clears state for a new user turn.
+// #1843 case 2: warnCount previously persisted across the Agent's
+// LIFETIME (the only reset call site is the per-user-turn block), so
+// afMaxWarnings=1 meant ONE warning for the whole session - the comment
+// claimed "per run" but nothing re-opened the quota. warnCount now
+// resets per user turn, matching the caller's semantics; totalCalls
+// stays monotonic (the refire-gap arithmetic depends on it).
 func (s *attentionFragmentState) reset() {
 	s.recentDirs = s.recentDirs[:0]
 	s.switchCount = 0
-	// Don't reset warnCount or firedAt - those persist across the run.
+	s.warnCount = 0
 }

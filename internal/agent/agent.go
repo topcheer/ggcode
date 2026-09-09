@@ -1260,6 +1260,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// hmMaxWarns=1 burned in run 1 kept the detector silent for every
 	// later run of the Agent's lifetime.
 	a.heterogeneousModel.reset()
+	// #1843 case 1: foresightCalib.reset() was never called outside
+	// compaction - "at most 2 per run" (file-header promise) was in fact
+	// per-LIFETIME: mismatches and warnCount accumulated across every
+	// user turn, so after two early warnings the detector stayed silent
+	// for the rest of the session.
+	a.foresightCalib.reset()
 	a.expiredRead.reset()
 	// Convergence lock must reset per run so post-verification edit drift
 	// counters don't leak across runs (issue #341).
