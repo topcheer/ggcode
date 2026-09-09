@@ -12,12 +12,19 @@ import (
 // and wt_invalidation_check.go.
 
 // extractFilePathsFromArgs extracts file paths from tool call arguments.
+// #1619-C: url/directory/source removed from the key set - the read-path
+// recorder consumed them, so web_fetch/browser URLs entered the file-read
+// set (wt_invalidation printed "stale file(s): https://..." and expiredRead
+// warned about "re-reading" a URL) and grep's directory argument inflated
+// the set. This is the mirror of the #953 write-side isolation;
+// verify_hint's own comment already admitted this function "would admit
+// url/directory noise".
 func extractFilePathsFromArgs(args json.RawMessage, _ string) []string {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return nil
 	}
-	paths := extractStringKeys(raw, "path", "file_path", "file", "directory", "source", "notebook_path", "url")
+	paths := extractStringKeys(raw, "path", "file_path", "file", "notebook_path")
 	paths = append(paths, extractArrayPaths(raw)...)
 	return dedupPaths(paths)
 }

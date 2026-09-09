@@ -4179,25 +4179,32 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// target). Legal back-references WITHOUT intervening edits
 				// keep the exemption.
 				a.phantomVerify.invalidateEdits()
-			} else if readPaths := extractFilePathsFromArgs(tc.Arguments, tc.Name); len(readPaths) > 0 {
-				// #500: batch-aware — multi_file_read carries N paths but the
-				// old single-path extraction recorded only files[0], suppressing
-				// the cross-file stale-read warning (minReadsBeforeWarning) and
-				// starving expired-read/futile-cycle for the same reason.
-				for _, p := range readPaths {
-					a.futileCycle.recordRead(p)
-					// Expired-read: track reads for self-invalidation detection.
-					a.expiredRead.recordRead(p)
-					a.wtInvalidation.recordRead(p)
+			} else if !result.IsError {
+				// #1619-C: failed tools never touched the files they named -
+				// a failed edit recorded its target as READ, so the legitimate
+				// recovery re-read (edit_fail_recovery's own advice) inflated
+				// the futile/expired signals - the read-side mirror of the
+				// #953 write-side fix above.
+				if readPaths := extractFilePathsFromArgs(tc.Arguments, tc.Name); len(readPaths) > 0 {
+					// #500: batch-aware — multi_file_read carries N paths but the
+					// old single-path extraction recorded only files[0], suppressing
+					// the cross-file stale-read warning (minReadsBeforeWarning) and
+					// starving expired-read/futile-cycle for the same reason.
+					for _, p := range readPaths {
+						a.futileCycle.recordRead(p)
+						// Expired-read: track reads for self-invalidation detection.
+						a.expiredRead.recordRead(p)
+						a.wtInvalidation.recordRead(p)
+					}
+					// Post-edit re-read check: warn if re-reading shortly after edit.
+					// First path only — each hint appends, N hints would spam.
+					if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {
+						a.appendGuidance(&result, hint)
+					}
+					// Search-result invalidation: record search-type tool results
+					// for later invalidation detection on file edits.
+					a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 				}
-				// Post-edit re-read check: warn if re-reading shortly after edit.
-				// First path only — each hint appends, N hints would spam.
-				if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {
-					a.appendGuidance(&result, hint)
-				}
-				// Search-result invalidation: record search-type tool results
-				// for later invalidation detection on file edits.
-				a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 			}
 			// Working-tree invalidation: detect cross-file stale reads after git mutations
 			if isWTMutatingTool(tc.Name) && !result.IsError {
