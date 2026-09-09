@@ -1081,6 +1081,15 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
+	// #1559-C: the read/edit guard states key files by path - anchor
+	// them to the workspace root so relative reads and absolute edits
+	// hit the same map entry.
+	if a.unreadEdit != nil {
+		a.unreadEdit.baseDir = dir
+	}
+	if a.expiredRead != nil {
+		a.expiredRead.baseDir = dir
+	}
 }
 func (a *Agent) WorkingDir() string {
 	a.mu.RLock()
