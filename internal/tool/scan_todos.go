@@ -181,12 +181,23 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	// Parse category filter
 	var categoryFilter map[string]bool
 	if args.Categories != "" {
+		valid := make(map[string]bool, len(todoMarkerOrder))
+		for _, m := range todoMarkerOrder {
+			valid[m] = true
+		}
 		categoryFilter = make(map[string]bool)
 		for _, c := range strings.Split(args.Categories, ",") {
 			c = strings.ToUpper(strings.TrimSpace(c))
-			if c != "" {
-				categoryFilter[c] = true
+			if c == "" {
+				continue
 			}
+			// #1701 case 4: an unknown category used to be silently
+			// accepted and filtered EVERYTHING out - the tool reported
+			// "Codebase is clean." for a typo like "FOO".
+			if !valid[c] {
+				return Result{IsError: true, Content: fmt.Sprintf("unknown category %q; valid: TODO, FIXME, HACK, XXX, BUG, NOTE, WORKAROUND", c)}, nil
+			}
+			categoryFilter[c] = true
 		}
 	}
 
@@ -228,6 +239,27 @@ func (t ScanTodosTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	return Result{Content: content}, nil
 }
 
+// limitedBuf caps captured stdout at 8MB (#1701 case 6: blame porcelain
+// is verbose; pathological files must not balloon agent memory).
+type limitedBuf struct {
+	b []byte
+}
+
+func (w *limitedBuf) Write(p []byte) (int, error) {
+	const max = 8 << 20
+	if len(w.b) < max {
+		room := max - len(w.b)
+		if room > len(p) {
+			room = len(p)
+		}
+		w.b = append(w.b, p[:room]...)
+	}
+	// Always report full consumption so the command never sees EPIPE.
+	return len(p), nil
+}
+
+func (w *limitedBuf) bytes() []byte { return w.b }
+
 // scanDirectoryForTodos walks the directory tree and collects all markers.
 func scanDirectoryForTodos(rootDir string, categoryFilter map[string]bool) ([]TodoMarker, int, error) {
 	var markers []TodoMarker
@@ -235,7 +267,15 @@ func scanDirectoryForTodos(rootDir string, categoryFilter map[string]bool) ([]To
 
 	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable paths
+			// #1701 case 2: an unreadable/nonexistent ROOT used to be
+			// swallowed here and the tool reported "Codebase is clean."
+			// with filesScanned == 0 - the same misleading-success class
+			// #1510 fixed for code-health. Only NON-root paths are
+			// skipped.
+			if path == rootDir {
+				return err
+			}
+			return nil
 		}
 		if d.IsDir() {
 			name := d.Name()
@@ -372,12 +412,20 @@ func enrichWithBlame(rootDir string, markers []TodoMarker, staleDays int) {
 
 	for relPath, indices := range fileMarkers {
 		// Run git blame for this file
-		cmd := exec.Command("git", "blame", "--line-porcelain", "--date=iso", relPath)
+		// #1701 case 6: bound the call - plain Command with unbounded
+		// Output could hang or balloon on pathological files. 30s per
+		// file, 8MB stdout cap (blame porcelain is verbose).
+		blameCtx, cancelBlame := context.WithTimeout(context.Background(), 30*time.Second)
+		cmd := exec.CommandContext(blameCtx, "git", "blame", "--line-porcelain", "--date=iso", relPath)
 		cmd.Dir = rootDir
-		output, err := cmd.Output()
+		var lb limitedBuf
+		cmd.Stdout = &lb
+		err := cmd.Run()
+		cancelBlame()
 		if err != nil {
 			continue
 		}
+		output := lb.bytes()
 		// Parse git blame output
 		blameInfo := parseGitBlame(output)
 
