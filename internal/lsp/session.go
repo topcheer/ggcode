@@ -378,10 +378,16 @@ func (s *sessionClient) handleNotification(method string, params json.RawMessage
 			})
 		}
 		s.mu.Lock()
-		// #1642-1: reject STALE pushes - a publish tagged with an older
-		// document version than the one already stored must not overwrite
-		// newer diagnostics (servers may push out of order across edits).
-		if prev, ok := s.diagnostics[payload.URI]; ok && payload.Version > 0 && prev.version > 0 && payload.Version < prev.version {
+		// #1642-1/#1654-2: reject STALE pushes - a publish tagged with an
+		// older document version must not overwrite newer diagnostics.
+		// The reference is the DOCUMENT's current version (s.docs), not the
+		// stored diagnostics entry: prepareDocument wipes that entry's
+		// version to 0 on every edit, so the old prev.version>0 check
+		// short-circuited exactly when it mattered - the common
+		// stale-first ordering (previous edit's push still in flight while
+		// the newer analysis is slower) sailed through and the 500ms poll
+		// window returned pre-fix diagnostics.
+		if docState, known := s.docs[payload.URI]; known && payload.Version > 0 && docState.version > 0 && payload.Version < docState.version {
 			s.mu.Unlock()
 			return
 		}

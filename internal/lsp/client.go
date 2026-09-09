@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -641,6 +642,11 @@ func sortCandidatesByErrorCount(candidates []crossPackageCandidate) {
 	}
 }
 
+// ErrDiagnosticsNotReady reports that the published-diagnostics wait timed
+// out without the server ever pushing for the document (#1654-4): the data
+// is late, not absent. Callers must not treat this as a clean/empty result.
+var ErrDiagnosticsNotReady = errors.New("lsp diagnostics not yet published (wait timed out; server analysis may still be running)")
+
 func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, error) {
 	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]Diagnostic, error) {
 		if session.supportsPullDiagnostics() {
@@ -675,7 +681,16 @@ func Diagnostics(ctx context.Context, workspace, path string) ([]Diagnostic, err
 			}
 			time.Sleep(40 * time.Millisecond)
 		}
-		return nil, nil
+		// #1654-4: the wait timed out with no publish seen. Returning
+		// (nil, nil) here conflated "server reports zero diagnostics"
+		// with "data has not arrived" - post-edit consumers diffed the
+		// empty set against the baseline and asserted "resolved N
+		// pre-existing diagnostic(s)" when the analysis was merely late.
+		// A push-only server on a large project (tsserver-class reanalysis
+		// > 500ms) reported phantom fixes on every such edit. Surface a
+		// distinct sentinel so callers can distinguish not-ready from
+		// clean.
+		return nil, ErrDiagnosticsNotReady
 	})
 }
 

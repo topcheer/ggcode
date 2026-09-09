@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -662,6 +663,11 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 			exec: func(ctx context.Context, workspace, path string) (string, error) {
 				diagnostics, err := lsp.Diagnostics(ctx, workspace, path)
 				if err != nil {
+					// #1654-4: distinguish not-ready from failure - the agent can
+					// retry after the server catches up.
+					if errors.Is(err, lsp.ErrDiagnosticsNotReady) {
+						return "Diagnostics not ready yet: the server has not published results within the wait window (analysis may still be running). Retry shortly.", nil
+					}
 					return "", err
 				}
 				if len(diagnostics) == 0 {

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,13 @@ func postEditDiagnostics(workingDir, filePath string) string {
 
 	diagnostics, err := lsp.Diagnostics(ctx, workingDir, filePath)
 	if err != nil {
+		// #1654-4: not-ready is transient - the baseline stays valid (the
+		// server is merely late, and clearing here would make the NEXT
+		// edit diff against nothing). Say nothing; do not claim fixes.
+		if errors.Is(err, lsp.ErrDiagnosticsNotReady) {
+			debug.Log("post-edit-diag", "diagnostics not ready for %s (server analysis late); skipping", filePath)
+			return ""
+		}
 		debug.Log("post-edit-diag", "LSP diagnostics failed for %s: %v", filePath, err)
 		// Clear any stale baseline since we couldn't get post-edit diagnostics.
 		ClearDiagnosticBaseline(filePath)
