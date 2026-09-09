@@ -173,3 +173,23 @@ func TestThermalState_HighModifyNoWarning(t *testing.T) {
 		t.Fatalf("expected no warning for edit-heavy usage, got: %s", warn)
 	}
 }
+
+// #1855 case 3: explore and verify modes must keep SEPARATE cooldown
+// clocks - a shared one let an explore warning cool down a verify trigger.
+func TestThermalSeparateModeCooldowns1855(t *testing.T) {
+	ts := newThermalState()
+	// Seed an explore-heavy warning at iter 10.
+	ts.lastExploreWarnIter = 10
+	ts.warned = true
+	// Verify-heavy conditions met at iter 11 (within shared cooldown range).
+	ts.categories[thermalVerify] = 50
+	ts.categories[thermalModify] = 1
+	ts.total = 51
+	msg := ts.maybeWarn(11)
+	if msg == "" {
+		t.Fatal("verify-heavy warning must not be cooled down by an explore warning")
+	}
+	if !strings.Contains(msg, "Verification") {
+		t.Fatalf("expected verify-heavy message, got: %s", msg)
+	}
+}
