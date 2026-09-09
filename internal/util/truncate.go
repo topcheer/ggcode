@@ -5,8 +5,12 @@ import "unicode/utf8"
 // Truncate truncates a string to maxRunes runes, appending "..." if truncated.
 // Uses []rune to avoid UTF-8 multi-byte truncation.
 func Truncate(s string, maxRunes int) string {
-	if maxRunes < 0 {
-		return s
+	// #1849 case 2: width-arithmetic callers (terminal width minus
+	// padding, e.g. w-6 on a <10-wide terminal) leak negative values -
+	// returning the string untruncated broke fixed-width panel rendering.
+	// A negative budget means NO room: empty string.
+	if maxRunes <= 0 {
+		return ""
 	}
 	runes := []rune(s)
 	if len(runes) <= maxRunes {
