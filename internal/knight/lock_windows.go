@@ -117,7 +117,14 @@ func LockHeldBy(projDir string) (int, error) {
 	lockPath := filepath.Join(projDir, ".ggcode", "knight.lock")
 	f, err := os.OpenFile(lockPath, os.O_RDWR, 0600)
 	if err != nil {
-		return 0, nil // no lock file
+		// #1757 case 2: only a MISSING lock file means "not held" - a
+		// permission failure used to be silently swallowed here while the
+		// unix branch (post-#1576) reports it, leaving callers' pid,_ with
+		// a wrong "no lock" verdict and zero diagnostics.
+		if os.IsNotExist(err) {
+			return 0, nil // no lock file
+		}
+		return 0, err
 	}
 	defer f.Close()
 	// Read only the unlocked PID region (see readLockPID): whole-file reads

@@ -294,6 +294,15 @@ func (m *Model) handleSignalPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 	if panel.installing {
+		// #1757 case 1: the install runs up to ~2 minutes (Docker pull).
+		// Swallowing EVERY key left esc dead the whole time; ctrl+c had a
+		// pre-panel escape channel users didn't know about. Let both
+		// escape keys through so the panel is closable mid-install.
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			m.closeSignalPanel()
+			return *m, nil
+		}
 		return *m, nil
 	}
 	if panel.editState.mode != imEditNone {
