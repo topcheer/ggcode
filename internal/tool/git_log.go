@@ -51,8 +51,10 @@ func (t GitLog) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
 
-	if args.Count <= 0 || args.Count > 100 {
+	if args.Count <= 0 {
 		args.Count = 10
+	} else if args.Count > 100 {
+		args.Count = 100 // #1688 case 4: over-limit CLAMPS to the max, not silently back to 10 - an agent asking for 500 got 10 and misread the history
 	}
 
 	dir := resolveDir(args.Path, t.WorkingDir)

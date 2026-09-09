@@ -33,6 +33,21 @@ func runTeammateLoop(
 	defer func() {
 		if r := recover(); r != nil {
 			debug.Log("swarm", "teammate panic recovered teammate=%s error=%v stack=%s", tm.ID, r, string(runtimedebug.Stack()))
+			// #1688 case 1: roll the in-flight task BACK on the board - the
+			// old recovery only marked the teammate done, leaving the task
+			// stuck in_progress forever (claim only scans pending), so every
+			// BlockedBy dependent was blocked by allBlockersComplete forever.
+			tm.mu.Lock()
+			taskID := tm.CurrentTaskID
+			tm.mu.Unlock()
+			if taskID != "" && mgr != nil {
+				if board := mgr.GetTaskManager(team.ID); board != nil {
+					pending := task.StatusPending
+					if _, uerr := board.Update(taskID, task.UpdateOptions{Status: &pending}); uerr != nil {
+						debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
+					}
+				}
+			}
 			tm.setStatus(TeammateShuttingDown)
 			if onEvent != nil {
 				onEvent(Event{
