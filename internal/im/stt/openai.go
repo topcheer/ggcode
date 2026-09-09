@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	imagepkg "github.com/topcheer/ggcode/internal/image"
+
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -73,7 +75,14 @@ func (t *OpenAICompatible) Transcribe(ctx context.Context, req Request) (Result,
 	if err != nil {
 		return Result{}, fmt.Errorf("create STT form file: %w", err)
 	}
-	data, err := os.ReadFile(audioPath)
+	// #1893: same unbounded-read class as the image attachments - the
+	// path can be externally provided, so bound it the same way.
+	f, err := os.Open(audioPath)
+	if err != nil {
+		return Result{}, fmt.Errorf("read STT audio file: %w", err)
+	}
+	data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+	f.Close()
 	if err != nil {
 		return Result{}, fmt.Errorf("read STT audio file: %w", err)
 	}

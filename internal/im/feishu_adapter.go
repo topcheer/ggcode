@@ -1457,7 +1457,14 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
-			d, err := os.ReadFile(img.Data)
+			// #1893: feishu was the one adapter the #1739 sweep missed -
+			// every other adapter reads local paths via ReadLimited.
+			f, err := os.Open(img.Data)
+			if err != nil {
+				return fmt.Errorf("read local image: %w", err)
+			}
+			d, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+			f.Close()
 			if err != nil {
 				return fmt.Errorf("read local image: %w", err)
 			}

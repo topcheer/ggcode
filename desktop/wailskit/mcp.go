@@ -128,10 +128,18 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 		// Persist the toggle FIRST so the UI state matches disk (#408):
 		// returning false after writing misled the frontend into showing
 		// "failed" for a change that had already taken effect.
-		plugin.SetMCPDisabled(name, disabled)
+		// #1893: but a FAILED persist must surface as failure - the old
+		// call dropped the error, the UI reported success, and the
+		// server resurrected on restart (memory-only disable).
+		if err := plugin.SetMCPDisabled(name, disabled); err != nil {
+			return false
+		}
 		return true
 	}
-	plugin.SetMCPDisabled(name, disabled)
+	// #1893: propagate here too - a failed persist is not a success.
+	if err := plugin.SetMCPDisabled(name, disabled); err != nil {
+		return false
+	}
 	if disabled {
 		return chat.mcpManager.Disconnect(name)
 	}
