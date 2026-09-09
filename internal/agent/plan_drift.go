@@ -271,15 +271,22 @@ func isAlpha(s string) bool {
 
 // checkPlanDrift verifies that plan items have corresponding work.
 // Returns a non-empty message if significant drift is detected.
-func (p *planDriftState) checkPlanDrift(runStats *RunStats, assistantText string) string {
+func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 	if !p.captured || p.fired || len(p.items) == 0 {
 		return ""
 	}
 
 	p.fired = true
 
-	// Build a corpus of "work done" from stats + assistant text
-	workCorpus := strings.ToLower(assistantText)
+	// Build a corpus of "work done" from TOOL-FACED EVIDENCE only.
+	// #1850 case 1: the corpus used to start from assistantText - an LLM
+	// that RESTATED the plan in its reply ("next I'll update
+	// config_loader and auth_middleware...") marked unwritten items as
+	// addressed and the reminder went silent exactly when needed.
+	// Restating a plan is not doing it; compare against what the tools
+	// actually touched (the todo_staleness pattern: silencing requires
+	// tool-pattern evidence, not text promises).
+	workCorpus := ""
 
 	// Add edited file paths and names
 	for _, f := range runStats.FilesEdited {
@@ -289,10 +296,10 @@ func (p *planDriftState) checkPlanDrift(runStats *RunStats, assistantText string
 		}
 	}
 
-	// Add tool names used
-	for toolName := range runStats.ToolCalls {
-		workCorpus += " " + strings.ToLower(toolName)
-	}
+	// Tool names are EXCLUDED from the corpus: plan-item keywords
+	// colliding with generic tool names (grep/search/read) counted as
+	// "work done" without any action. Per-tool call targets below carry
+	// the real evidence.
 
 	// Add commands run
 	for _, cmd := range runStats.CommandsRun {
