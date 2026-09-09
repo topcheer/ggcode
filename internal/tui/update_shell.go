@@ -38,8 +38,17 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 	m.shellOutputID = ""
 	m.shellRunning = false
 
+	// #1781: capture ownership BEFORE clearing it. The old code cleared
+	// shellOwnedLoading at the top of this handler and then tested it
+	// twenty lines later - the #915 reset below was dead code. A shell-
+	// owned cancel left runCanceled set, and with no reset point on the
+	// direct-prompt path, the next NORMAL agent completion was treated
+	// as canceled (persistFullSessionMessages and the pendingSubmission
+	// continuation skipped).
+	shellOwnedRun := m.shellOwnedLoading
+
 	// Only clear loading if shell "owns" it (agent wasn't running when shell started).
-	if m.shellOwnedLoading {
+	if shellOwnedRun {
 		m.shellOwnedLoading = false
 		m.setLoading(false)
 		m.statusActivity = ""
@@ -59,7 +68,7 @@ func (m Model) handleShellCommandDoneMsg(msg shellCommandDoneMsg) (Model, tea.Cm
 	// completion path (duplicate session persist, metrics digest, swallowed
 	// pending restore). commit 652104df's message states the intended
 	// semantics: clear ONLY when the shell owns the run.
-	if m.shellOwnedLoading {
+	if shellOwnedRun {
 		m.runCanceled = false
 		m.runFailed = false
 	}
