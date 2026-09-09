@@ -286,6 +286,13 @@ func parseTodoSnapshot(rawArgs string) ([]todoStateItem, bool) {
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return nil, false
 	}
+	// #1711 case 2: a MISSING todos key ({} or a typo'd field) is not a
+	// clear-all - Unmarshal succeeds with nil Todos and the whole sidebar
+	// was wiped. Distinguish from an explicit empty array, which #885
+	// keeps as a legitimate clear.
+	if args.Todos == nil && !strings.Contains(rawArgs, "\"todos\"") {
+		return nil, false
+	}
 	// #885: an explicitly EMPTY todos array is a valid "clear all" snapshot
 	// — returning false here short-circuited applyTodoWrite before the
 	// sidebar auto-hide, so clearing todos left an empty sidebar visible.
