@@ -96,11 +96,15 @@ func parseLegacyInstallArgs(args []string) (config.MCPServerConfig, error) {
 		}
 		if name == "" {
 			name = inferCommandServerName(server.Command, server.Args)
-		} else if name == server.Command && isKnownRunnerCommand(name) {
-			// #1611-B: 'mcp install -t stdio npx -y @scope/server' took npx
-			// as the SERVER NAME and -y as the command, silently installing
-			// a broken config. When the derived name IS a known runner,
-			// treat the whole rest as the command line.
+		} else if isKnownRunnerCommand(name) {
+			// #1633: the #1611-B guard required name==server.Command,
+			// which real inputs never satisfy ('mcp install -t stdio npx
+			// -y @scope/server' has name="npx" but Command="-y") - the
+			// fix's own repro still produced command="-y". If the leading
+			// token is a known runner, the WHOLE arg list is the command
+			// line and there is no explicit server name.
+			server.Command = name
+			server.Args = append([]string(nil), rest...)
 			name = inferCommandServerName(server.Command, server.Args)
 		}
 	case "http", "ws":
@@ -138,6 +142,17 @@ func parseOptionTransportInstallArgs(args []string, transport string) (config.MC
 	server := config.MCPServerConfig{Type: transport}
 	switch transport {
 	case "stdio":
+		// #1633: same runner guard as the legacy path. 'mcp install -t
+		// stdio npx -y @scope/server' routed HERE (option transport),
+		// which had no guard at all: name="npx", target=["-y",
+		// "@scope/server"], command="-y" - a broken config written into
+		// the user's yaml (the exact repro the #1611-B fix claimed to
+		// solve). If the leading token is a known runner, the whole arg
+		// list is the command line.
+		if len(args) > 1 && isKnownRunnerCommand(strings.TrimSpace(args[0])) {
+			name = ""
+			target = args
+		}
 		server.Command = target[0]
 		if len(target) > 1 {
 			server.Args = append([]string(nil), target[1:]...)

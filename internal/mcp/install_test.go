@@ -156,3 +156,37 @@ func TestParseInstallArgsRejectsHeadersForStdio(t *testing.T) {
 		t.Fatal("expected stdio header rejection")
 	}
 }
+
+// #1633 case 1: the -t/--transport option path had no runner guard - the
+// #1611-B fix's own repro ('mcp install -t stdio npx -y @scope/server')
+// still produced Command="-y" (the flag stored as the executable).
+func TestParseInstallArgsOptionTransportRunnerGuard(t *testing.T) {
+	server, err := ParseInstallArgs([]string{"-t", "stdio", "npx", "-y", "@scope/server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Command != "npx" {
+		t.Fatalf("expected command npx, got %q (flag stored as executable?)", server.Command)
+	}
+	if len(server.Args) != 2 || server.Args[0] != "-y" || server.Args[1] != "@scope/server" {
+		t.Fatalf("unexpected args: %+v", server.Args)
+	}
+	if server.Name == "npx" || server.Name == "" {
+		t.Fatalf("expected an inferred package name, got %q", server.Name)
+	}
+}
+
+// #1633 case 1 (legacy form): with an explicit name that IS a known
+// runner, 'mcp install stdio npx -y pkg' used to store Command="-y".
+func TestParseInstallArgsLegacyRunnerGuard(t *testing.T) {
+	server, err := ParseInstallArgs([]string{"stdio", "npx", "-y", "@scope/legacy-server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Command != "npx" {
+		t.Fatalf("expected command npx, got %q", server.Command)
+	}
+	if len(server.Args) != 2 || server.Args[0] != "-y" {
+		t.Fatalf("unexpected args: %+v", server.Args)
+	}
+}

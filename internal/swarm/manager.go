@@ -193,16 +193,46 @@ func (m *Manager) DeleteTeam(teamID string) error {
 
 	// Shutdown all teammates before removing from map so goroutines
 	// that hold a reference to the team can drain gracefully.
+	var doneChs []<-chan struct{}
 	team.mu.Lock()
 	for _, tm := range team.Teammates {
+		tm.mu.Lock()
 		if tm.cancel != nil {
 			tm.cancel()
 		}
 		tm.setStatus(TeammateShuttingDown)
+		if tm.done != nil {
+			doneChs = append(doneChs, tm.done)
+		}
+		tm.mu.Unlock()
 		// Clean up stored results to prevent unbounded growth in m.results.
 		delete(m.results, tm.ID)
 	}
 	team.mu.Unlock()
+
+	// #1633 case 3: wait for the idle-runner goroutines to actually exit,
+	// same per-teammate bounded pattern as CancelAll - without it a
+	// briefly-alive goroutine could emit an event onto a team already
+	// removed from the map.
+	if len(doneChs) > 0 {
+		timedOut := false
+		for _, ch := range doneChs {
+			if timedOut {
+				select {
+				case <-ch:
+				default:
+				}
+				continue
+			}
+			timer := time.NewTimer(swarmCancelTimeout)
+			select {
+			case <-ch:
+			case <-timer.C:
+				timedOut = true
+			}
+			timer.Stop()
+		}
+	}
 
 	delete(m.teams, teamID)
 	m.mu.Unlock()
@@ -450,9 +480,17 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	tm.EndedAt = time.Now()
 	tm.mu.Unlock()
 
-	// #1633-2: free the quota slot. The map entry used to linger forever,
-	// so len(team.Teammates) counted shut-down teammates and 16
-	// spawn/shutdown cycles permanently exhausted the quota.
+	// #1633 case 2: free the quota slot AND the stored result. The map
+	// entries used to linger forever: len(team.Teammates) counted
+	// shut-down teammates (16 spawn/shutdown cycles permanently
+	// exhausted the quota - removal landed in-flight), and m.results
+	// leaked one entry per shutdown despite the field comment saying
+	// "cleared on teammate shutdown" (it was only cleared in
+	// DeleteTeam).
+	m.mu.Lock()
+	delete(m.results, tmID)
+	m.mu.Unlock()
+
 	team.removeTeammate(tmID)
 
 	m.emit(Event{

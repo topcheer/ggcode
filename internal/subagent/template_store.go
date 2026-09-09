@@ -156,7 +156,12 @@ func (s *TemplateStore) Delete(name string) error {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		var stored NamedAgentTemplate
-		if jsonErr := json.Unmarshal(data, &stored); jsonErr == nil && stored.Name != "" && stored.Name != name {
+		// #1633 case 4: normalized comparison like Save/Load — the bare
+		// compare made Delete("code reviewer") refuse what Load accepts
+		// (Save("Code Reviewer") loads case/whitespace-insensitively but
+		// would not delete).
+		if jsonErr := json.Unmarshal(data, &stored); jsonErr == nil && stored.Name != "" &&
+			strings.TrimSpace(strings.ToLower(stored.Name)) != strings.TrimSpace(strings.ToLower(name)) {
 			return fmt.Errorf("template file %q belongs to %q, not %q — refusing to delete the wrong template", sanitizeName(name)+".json", stored.Name, name)
 		}
 	}
