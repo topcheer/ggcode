@@ -202,16 +202,27 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 // semantics (per-file baseline write-back); Revert now follows the same
 // pattern.
 func (m *Manager) Revert(id string) (*Checkpoint, error) {
-	cp, _, err := m.RevertWithFiles(id)
+	cp, _, err := m.RevertWithFilesSource(id, "user") // panel/CLI entries are user intent
 	return cp, err
 }
 
 // RevertWithFiles is Revert plus the full list of files that were written
-// back (#1879 case 1). Revert rewrites EVERY file touched at idx or later
+// back (#1879 case 1); the correction is recorded as USER-sourced. Agent
+// self-reverts must use RevertWithFilesSource(id, "agent") (#1449-A: an
+// agent rollback narrated as a user rejection is a misattribution).
+func (m *Manager) RevertWithFiles(id string) (*Checkpoint, []string, error) {
+	return m.RevertWithFilesSource(id, "user")
+}
+
+func (m *Manager) RevertWithFilesSource(id, source string) (*Checkpoint, []string, error) {
+	return m.revertWithFiles(id, source)
+}
+
+// revertWithFiles rewrites EVERY file touched at idx or later
 // but historically returned only the target checkpoint - callers cleaning
 // up per-file state (e.g. the agent's expired-read ledger) cleaned a single
 // file and stale state resurfaced on the co-existing reverted files.
-func (m *Manager) RevertWithFiles(id string) (*Checkpoint, []string, error) {
+func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -305,7 +316,7 @@ func (m *Manager) RevertWithFiles(id string) (*Checkpoint, []string, error) {
 		ToolCall: cp.ToolCall,
 		RunID:    cp.RunID,
 		Time:     time.Now(),
-		Source:   "user", // /undo-run is a user slash command (#1449-A)
+		Source:   source, // #1708: caller-declared (#1449-A) - was hardcoded "user"
 	})
 
 	return &cp, files, nil
