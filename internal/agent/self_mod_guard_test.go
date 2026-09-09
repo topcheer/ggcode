@@ -257,3 +257,42 @@ func TestSelfMod_GateCoversAllWriteTools(t *testing.T) {
 		}
 	}
 }
+
+// #1492-D: file_ops operations[].source/destination must feed the
+// self-modification guard.
+func TestSelfModGuardFileOpsShapes1492(t *testing.T) {
+	paths := extractSelfModPaths(json.RawMessage(`{"operations":[
+		{"action":"delete","source":".ggcode/hooks/x.sh"},
+		{"action":"move","source":"/tmp/a.sh","destination":".ggcode/hooks/y.sh"},
+		{"action":"mkdir","source":"/tmp/d"}
+	]}`), "")
+	joined := strings.Join(paths, ",")
+	for _, want := range []string{".ggcode/hooks/x.sh", "/tmp/a.sh", ".ggcode/hooks/y.sh"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %s in extracted paths, got: %v", want, paths)
+		}
+	}
+}
+
+// #1492-E: the mandated LSP serial chain (symbols -> definition ->
+// references) is dependent by construction - three such single-read
+// turns must NOT fire the "independent reads" guidance.
+func TestSerialReadLSPChainExempt1492(t *testing.T) {
+	s := newSerialReadState()
+	for i, tool := range []string{"lsp_symbols", "lsp_definition", "lsp_references"} {
+		s.recordToolCall(tool)
+		if msg := s.endTurn(i + 1); msg != "" {
+			t.Fatalf("LSP serial chain must be exempt, got: %s", msg)
+		}
+	}
+	// Mixed chain: two LSP turns then a plain read_file turn still fires.
+	s2 := newSerialReadState()
+	s2.recordToolCall("lsp_symbols")
+	s2.endTurn(1)
+	s2.recordToolCall("lsp_definition")
+	s2.endTurn(2)
+	s2.recordToolCall("read_file")
+	if msg := s2.endTurn(3); msg == "" {
+		t.Fatal("mixed streak (non-LSP read present) must still fire")
+	}
+}
