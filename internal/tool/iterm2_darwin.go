@@ -398,18 +398,6 @@ end tell`, tabIndex)
 	return Result{Content: fmt.Sprintf("iterm2 selected tab: %d", tabIndex)}
 }
 
-// countDroppedControlRunes mirrors escapeAS's default branch: C0 runes
-// other than tab/newline/carriage-return are silently dropped (#1691).
-func countDroppedControlRunes(s string) int {
-	n := 0
-	for _, r := range s {
-		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
-			n++
-		}
-	}
-	return n
-}
-
 func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) Result {
 	if strings.TrimSpace(text) == "" {
 		return Result{IsError: true, Content: "text is required for input action"}

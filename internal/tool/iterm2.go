@@ -209,3 +209,17 @@ func (t *Iterm2Tool) workingDir() string {
 	}
 	return wd
 }
+
+// countDroppedControlRunes mirrors escapeAS's default branch: C0 runes
+// other than tab/newline/carriage-return are silently dropped (#1691).
+// Pure string logic shared by the darwin implementation and the
+// cross-platform 1691 test - lives here so every GOOS compiles it.
+func countDroppedControlRunes(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			n++
+		}
+	}
+	return n
+}

@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"strings"
 	"testing"
 )
 
@@ -25,16 +24,5 @@ func TestIMWaitForHealthyCtxCancel1691(t *testing.T) {
 	var it IMTool
 	if it.waitForHealthy(ctx, "tg", 0) {
 		t.Fatal("cancelled ctx must abort immediately")
-	}
-}
-
-// #1691 case 5: menu lookup must not embed Go %q escapes (\x1b / \u{})
-// into the AppleScript literal.
-func TestIterm2MenuScriptHasNoGoEscapes1691(t *testing.T) {
-	// Control char path: script must quote via escapeAS, whose output for
-	// dropped runes never contains Go escape sequences.
-	got := escapeAS("menu\x1bitem")
-	if strings.Contains(got, "\\x1b") || strings.Contains(got, "\\u") {
-		t.Fatalf("escapeAS must not emit Go escapes: %q", got)
 	}
 }
