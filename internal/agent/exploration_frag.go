@@ -262,6 +262,11 @@ func (s *exploreFragState) recordToolCall(toolName string, args []byte, iteratio
 	}
 
 	s.warnings++
+	// #1559-D: fire-and-keep made the very next exploration call re-fire
+	// with a byte-identical message (window still full), burning both
+	// warnings back-to-back. Mirror attention_fragment: the window empties
+	// on fire, so a re-fire needs a full fresh window of exploration.
+	s.entries = nil
 	debug.Log("agent", "Iteration %d: exploration fragmentation detected (%d calls, %d unique targets)",
 		iteration, len(s.entries), len(uniqueTargets))
 
