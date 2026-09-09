@@ -352,6 +352,26 @@ func (m *Model) setIMOutputMode(mode string) tea.Cmd {
 		if m.imEmitter != nil {
 			m.imEmitter.SetOutputMode(mode)
 		}
+		// #1736 case 2: disable/enable in this panel persist via
+		// configMutationMsg and the agent path persists the same key
+		// (im.output_mode) via saveAndPatch - the runtime-only set here
+		// lost the user's choice on restart. Persist like the siblings.
+		if m.config != nil {
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					m.config.IM.OutputMode = mode
+					return m.config.Save()
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						return imPanelResultMsg{message: m.t("panel.im.output_mode.set", mode)}
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return imPanelResultMsg{err: fmt.Errorf("persist output mode failed: %w", err)}
+				},
+			}
+		}
 		return imPanelResultMsg{message: m.t("panel.im.output_mode.set", mode)}
 	}
 }
