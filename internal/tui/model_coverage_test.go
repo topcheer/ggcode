@@ -461,10 +461,13 @@ func TestCancelActiveRun_NilCancelFunc(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
 	m.cancelFunc = nil
-	// Should not panic
+	// Should not panic.
 	m.cancelActiveRun()
-	if !m.runCanceled {
-		t.Error("expected runCanceled to be true even with nil cancelFunc")
+	// #1768: an uncancellable loading window (/compact, Background ctx)
+	// must NOT poison runCanceled - the next normal run would be treated
+	// as cancelled (persist/metrics/drain skipped).
+	if m.runCanceled {
+		t.Error("runCanceled must stay false when nothing is cancellable (cross-run poisoning)")
 	}
 }
 

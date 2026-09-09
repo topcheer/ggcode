@@ -1692,6 +1692,31 @@ func (h *Hub) NotifyAgentComplete(messageID string) {
 	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(*msg, StatusCompleted, "") })
 }
 
+// NotifyAgentNotCompleted sends a non-completed receipt for a run that
+// ended cancelled or failed (#1768 case 3) - the peer must not be told
+// the task finished. Uses StatusRejected as the terminal non-success
+// receipt the protocol already defines.
+func (h *Hub) NotifyAgentNotCompleted(messageID string) {
+	h.mu.RLock()
+	var msg *Message
+	if m, ok := h.recentAgentMsgs[messageID]; ok {
+		msg = &m
+	} else {
+		for i := range h.messages {
+			if h.messages[i].ID == messageID {
+				msg = &h.messages[i]
+				break
+			}
+		}
+	}
+	h.mu.RUnlock()
+	if msg == nil {
+		debug.Log("lanchat", "NotifyAgentNotCompleted: message %s not found, no receipt sent", messageID)
+		return
+	}
+	safego.Go("lanchat.sendReceipt", func() { h.sendReceipt(*msg, StatusRejected, "") })
+}
+
 // handleUDPEnvelope processes incoming UDP messages (called by UDPTransport).
 func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
 	// Handle ACK

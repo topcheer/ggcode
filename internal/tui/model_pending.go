@@ -110,6 +110,17 @@ func (m *Model) cancelActiveRun() {
 		return
 	}
 	debug.Log("cancel", "cancelActiveRun: START")
+	// #1768 case 1+2: only poison runCanceled when there is something
+	// to cancel. /compact runs on context.Background (cancelFunc nil,
+	// uncancellable by design) with loading=true - Esc-Esc during it
+	// used to set runCanceled with nothing to cancel, and nothing
+	// reset it before the NEXT normal run, which was then treated as
+	// cancelled: session persist, metrics digest, and the pending-queue
+	// drain all skipped.
+	if !m.shellOwnedLoading && m.cancelFunc == nil {
+		debug.Log("cancel", "cancelActiveRun: no active cancellable run (loading is uncancellable e.g. /compact); not poisoning runCanceled")
+		return
+	}
 	m.runCanceled = true
 	cancelledTools := m.chatCancelAllRunningTools()
 	for _, tool := range cancelledTools {
