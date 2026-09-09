@@ -2904,6 +2904,7 @@ func TestCtrlCCancelDoesNotRestoreHiddenPendingSubmission(t *testing.T) {
 func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
+	m.cancelFunc = func() {} // #1768: a CANCELLABLE run - visible-state clearing only applies then
 	m.statusActivity = "Thinking..."
 	m.statusToolName = "npm run type-check"
 	m.statusToolArg = "type-check"
