@@ -3012,6 +3012,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgs = a.contextManager.Messages()
 			}
 		}
+		// #1798 case 1: the irreversibility gate is a PRE-action check - it
+		// used to sit in the post-execution result loop, so the "You are
+		// about to execute" warning arrived after the action had already
+		// happened (calibrated abstention had nothing to abstain from).
+		// Recording here also keeps the ledger entry alive for the
+		// post-execution recordOutcome revoke (#1776).
+		if a.irrevGate != nil {
+			for _, tc := range toolCalls {
+				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
+					})
+				}
+			}
+		}
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
 				// Context cancelled mid-tool-execution. The assistant message
@@ -4169,15 +4185,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 							Content: []provider.ContentBlock{{Type: "text", Text: msg}},
 						})
 					}
-				}
-			}
-			// Irreversibility gate: warn on under-grounded high-impact actions.
-			if a.irrevGate != nil {
-				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
-					a.contextManager.Add(provider.Message{
-						Role:    "user",
-						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
-					})
 				}
 			}
 			// #1776 case 3 / #1877: a FAILED verification is not grounding.
