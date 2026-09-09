@@ -31,13 +31,18 @@ func configureCommandCancellation(cmd *exec.Cmd) {
 			return nil
 		}
 		targets := snapshotCommandTargets(cmd.Process.Pid)
-		err := signalCommandTargets(targets, syscall.SIGTERM)
+		_ = signalCommandTargets(targets, syscall.SIGTERM)
 		time.Sleep(commandTerminateGracePeriod)
 		killErr := signalCommandTargets(targets, syscall.SIGKILL)
-		if err != nil {
-			return err
+		// #1700 case 1: a failed SIGTERM (e.g. group EPERM after the pid
+		// snapshot) masked a SUCCESSFUL SIGKILL termination - os/exec
+		// turns a non-ErrProcessDone Cancel error into the Wait() error,
+		// so an actually-dead process reported failure. The KILL outcome
+		// is the authoritative one.
+		if killErr != nil {
+			return killErr
 		}
-		return killErr
+		return nil
 	}
 	cmd.WaitDelay = commandWaitDelay
 }
