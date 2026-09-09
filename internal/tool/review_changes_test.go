@@ -187,3 +187,18 @@ func TestCommentedCodePatterns(t *testing.T) {
 }
 
 // Note: contains and indexOf helpers are already defined in plan_mode_tools_test.go
+
+// #1699 case 1: content lines starting with ++ are additions, not headers.
+func TestParseReviewDiffDoublePlusContentLine(t *testing.T) {
+	diff := "diff --git a/x.c b/x.c\n--- a/x.c\n+++ b/x.c\n@@ -1,2 +1,3 @@\n int i;\n++i;\n return i;\n"
+	files := parseReviewDiff(diff)
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+	if files[0].addedCount != 1 {
+		t.Fatalf("++i content line must count as added, got %d", files[0].addedCount)
+	}
+	if len(files[0].addedLines) != 1 || files[0].addedLines[0].content != "+i;" {
+		t.Fatalf("content must be \"+i;\", got %+v", files[0].addedLines)
+	}
+}
