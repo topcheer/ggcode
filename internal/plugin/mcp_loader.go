@@ -871,6 +871,16 @@ func (m *MCPManager) emitUpdate() {
 }
 
 func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
+	// #1740 case 1: the panel's enter/r keys reach Retry/Reconnect here
+	// without any disabled check - connectOne explicitly revives (p.closed
+	// = false), so a server disabled via space (persisted disabled_mcp.json)
+	// came back alive in-process and re-died on next start. The "human
+	// intent revives" comment means an explicit UN-disable, not a reconnect
+	// keypress. ConnectAll/attemptReconnect already gate on this.
+	if MCPDisabled(p.Name()) {
+		debug.Log("mcp-connect", "refusing connect of disabled server=%s", p.Name())
+		return
+	}
 	connectCtx, cancel := context.WithTimeout(ctx, m.connectTimeoutFor(p))
 	defer cancel()
 	p.markPending()

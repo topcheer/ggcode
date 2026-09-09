@@ -279,7 +279,13 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		srv := m.mcpServers[panel.selected]
 		willDisable := !srv.Disabled
-		plugin.SetMCPDisabled(srv.Name, willDisable)
+		if err := plugin.SetMCPDisabled(srv.Name, willDisable); err != nil {
+			// #1740 case 2: surface the persist failure instead of the
+			// unconditional "disabled and disconnected" claim - the server
+			// silently revives on restart when the write failed.
+			panel.message = fmt.Sprintf("persist failed (will revert on restart): %v", err)
+			return *m, nil
+		}
 		m.mcpServers[panel.selected].Disabled = willDisable
 		if willDisable {
 			if m.mcpManager != nil {

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -73,7 +74,7 @@ func MCPDisabled(name string) bool {
 }
 
 // SetMCPDisabled persists the enabled/disabled state for an MCP server.
-func SetMCPDisabled(name string, disabled bool) {
+func SetMCPDisabled(name string, disabled bool) error {
 	// #1601-C: hold the WRITE lock across the whole read-modify-write.
 	// The old flow snapshotted the cache (RLock inside
 	// loadMCPDisabledSet), mutated the copy, then re-locked to store -
@@ -120,7 +121,8 @@ func SetMCPDisabled(name string, disabled bool) {
 	}
 	path, err := mcpDisabledPath()
 	if err != nil {
-		return
+		mcpDisabledCache = cached
+		return fmt.Errorf("mcp disabled path: %w", err)
 	}
 	names := make([]string, 0, len(cached))
 	for n, v := range cached {
@@ -130,7 +132,16 @@ func SetMCPDisabled(name string, disabled bool) {
 	}
 	data, _ := json.MarshalIndent(names, "", "  ")
 	_ = os.MkdirAll(filepath.Dir(path), 0o700)
-	_ = util.AtomicWriteFile(path, data, 0o600)
+	if werr := util.AtomicWriteFile(path, data, 0o600); werr != nil {
+		// #1740 case 2: swallowing this forked cache and disk - the panel
+		// unconditionally claimed "disabled and disconnected" while the
+		// server silently revived on restart. Keep the in-memory verdict
+		// (it governs this process) but REPORT the persist failure so the
+		// caller can surface it.
+		mcpDisabledCache = cached
+		return fmt.Errorf("persist MCP disabled set: %w", werr)
+	}
 
 	mcpDisabledCache = cached
+	return nil
 }
