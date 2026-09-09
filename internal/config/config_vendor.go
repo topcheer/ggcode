@@ -473,7 +473,17 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 	if endpointName == "" {
 		return fmt.Errorf("endpoint name cannot be empty")
 	}
-	if protocol == "" {
+
+	// #1706 case 1: the openai default previously applied HERE, before
+	// the merge check - so ep.Protocol was never empty and the merge
+	// branch's "empty = keep existing" never applied to protocol: a
+	// partial update (base_url only) silently flipped an anthropic
+	// endpoint to openai. The default now applies only to NEW endpoints.
+	isNew := false
+	if _, exists := vc.Endpoints[endpointName]; !exists {
+		isNew = true
+	}
+	if protocol == "" && isNew {
 		protocol = "openai"
 	}
 
