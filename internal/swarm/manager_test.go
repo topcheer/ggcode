@@ -986,3 +986,22 @@ func TestEventsSinceSurvivesEviction(t *testing.T) {
 		t.Fatalf("stale cursor must replay oldest survivors, got %d events starting %q", len(events2), events2[0].Text)
 	}
 }
+
+// #1633 case 2: shutdown must also free the stored result entry, not
+// just the quota slot (the field comment says "cleared on teammate
+// shutdown" - it used to only clear in DeleteTeam).
+func TestManager_ShutdownTeammateFreesResult(t *testing.T) {
+	m, _ := testManager(t)
+	team := m.CreateTeam("test-team", "leader-1")
+	tmSnap, _ := m.SpawnTeammate(team.ID, "coder", "33", nil)
+	time.Sleep(50 * time.Millisecond)
+
+	if err := m.ShutdownTeammate(team.ID, tmSnap.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for id, res := range m.GetTeamResults(team.ID) {
+		if id == tmSnap.ID && res != "" {
+			t.Errorf("shutdown must clear the stored result for %s", tmSnap.ID)
+		}
+	}
+}

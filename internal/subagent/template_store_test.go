@@ -186,3 +186,20 @@ func TestSaveCaseRenameNotCollision(t *testing.T) {
 		t.Fatal("different name with same sanitized filename must collide")
 	}
 }
+
+// #1633 case 4: Delete must use the same normalized comparison as
+// Save/Load - deleting with different casing/whitespace than the stored
+// name used to be refused ("belongs to" error) while Load accepted it.
+func TestTemplateStore_DeleteNormalized(t *testing.T) {
+	dir := t.TempDir()
+	s := &TemplateStore{dir: dir}
+	if err := s.Save(NamedAgentTemplate{Name: "Code Reviewer", SystemPrompt: "x"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := s.Delete("  code reviewer "); err != nil {
+		t.Fatalf("Delete with normalized casing must succeed, got: %v", err)
+	}
+	if _, err := s.Load("Code Reviewer"); err == nil {
+		t.Fatal("template must be gone after normalized delete")
+	}
+}
