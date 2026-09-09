@@ -94,6 +94,26 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		return Result{IsError: true, Content: fmt.Sprintf("git add failed: %v\n%s", err, out)}, nil
 	}
 
+	// #1687 case 1: directory/dot/glob arguments (".", "config/", "*")
+	// carry no literal file name for checkSensitiveFiles to match - the
+	// advisory went silent exactly where mass-staging is most likely to
+	// sweep in secrets. Scan what actually landed in the index instead.
+	if secretWarning == "" {
+		dirLike := false
+		for _, f := range args.Files {
+			tf := strings.TrimSpace(f)
+			if tf == "." || tf == ".." || strings.HasSuffix(tf, "/") || strings.ContainsAny(tf, "*?[") {
+				dirLike = true
+				break
+			}
+		}
+		if dirLike {
+			if staged := stagedSensitiveFiles(ctx, dir); len(staged) > 0 {
+				secretWarning = checkSensitiveFiles(staged)
+			}
+		}
+	}
+
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
 		msg := fmt.Sprintf("Staged %d file(s).", len(args.Files))
@@ -124,24 +144,9 @@ var sensitiveFilePatterns = []string{
 func checkSensitiveFiles(files []string) string {
 	var flagged []string
 	for _, f := range files {
-		lf := strings.ToLower(f)
-		for _, pattern := range sensitiveFilePatterns {
-			// #835/#1687 case 3: anchor to path SEGMENTS - the '/'+pattern
-			// substring hit 'foo/.envrc' for '/.env'. Split and compare
-			// segments exactly.
-			hit := strings.HasSuffix(lf, pattern)
-			if !hit && strings.Contains(pattern, ".") {
-				for _, seg := range strings.Split(lf, "/") {
-					if seg == pattern {
-						hit = true
-						break
-					}
-				}
-			}
-			if hit {
-				flagged = append(flagged, f)
-				break
-			}
+		if matchSensitivePath(f) {
+			flagged = append(flagged, f)
+
 		}
 	}
 	if len(flagged) == 0 {
@@ -153,6 +158,71 @@ func checkSensitiveFiles(files []string) string {
 			"If they do, unstage them with 'git reset HEAD <file>' and add them to .gitignore.",
 		strings.Join(flagged, ", "),
 	)
+}
+
+// matchSensitivePath reports whether a single path matches any sensitive
+// pattern. #1687 case 3: the #835 anchoring used SUBSTRING forms - "/.env"
+// hit foo/.envrc and ".env/" hit dir.env/x. Exact matching now compares
+// path SEGMENTS: a pattern's own "/" splits must align with the path's
+// segment boundaries (so ".aws/credentials" matches exactly that
+// sub-path), and a slash-less pattern matches only a whole basename.
+func matchSensitivePath(path string) bool {
+	lf := strings.ToLower(strings.TrimSpace(path))
+	if lf == "" {
+		return false
+	}
+	segs := strings.Split(lf, "/")
+	base := segs[len(segs)-1]
+	for _, pattern := range sensitiveFilePatterns {
+		if !strings.Contains(pattern, "/") {
+			// Slash-less patterns are basename SUFFIXES: .pem matches
+			// server.pem and .env matches prod.env. Segment-splitting
+			// first kills the #835 regressions: foo/.envrc does not
+			// end in .env, and dir.env/x has basename x.
+			if strings.HasSuffix(base, pattern) {
+				return true
+			}
+			continue
+		}
+		// Slash patterns (.aws/credentials) match an exact segment run
+		// ending at the last segment.
+		p := strings.Split(pattern, "/")
+		if len(segs) >= len(p) {
+			match := true
+			for j, ps := range p {
+				if segs[len(segs)-len(p)+j] != ps {
+					match = false
+					break
+				}
+			}
+			if match {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stagedSensitiveFiles lists sensitive files currently staged (index vs
+// HEAD). #1687 case 1: `files: ["."]` (explicitly allowed by the schema)
+// or a directory argument carries no literal name for the literal-argument
+// check to match - the advisory went silent exactly where mass-staging is
+// most likely to sweep in .env files. Called on the git path after add.
+func stagedSensitiveFiles(ctx context.Context, dir string) []string {
+	cmd := gitCommand(ctx, "diff", "--cached", "--name-only")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	var flagged []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && matchSensitivePath(line) {
+			flagged = append(flagged, line)
+		}
+	}
+	return flagged
 }
 
 // Clone returns an independent copy of this tool for use by a different agent.
