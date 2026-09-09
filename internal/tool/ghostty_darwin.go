@@ -143,7 +143,7 @@ func ghosttyBinaryPath() string {
 
 // ── Action implementations (macOS) ──────────────────────────────────────────
 
-func (g *GhosttyTool) executeStatus(ctx context.Context, ) Result {
+func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 	if !ghosttyAvailable() {
 		return Result{Content: "ghostty: not detected (TERM_PROGRAM != ghostty)"}
 	}
@@ -173,7 +173,7 @@ func (g *GhosttyTool) executeStatus(ctx context.Context, ) Result {
 	return Result{Content: b.String()}
 }
 
-func (g *GhosttyTool) executeList(ctx context.Context, ) Result {
+func (g *GhosttyTool) executeList(ctx context.Context) Result {
 	script := `
 tell application "Ghostty"
 	set output to ""
