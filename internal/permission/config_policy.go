@@ -114,6 +114,18 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// save_memory: writing project memory is always safe and expected.
 	// lanchat: P2P messaging between ggcode instances — no local filesystem or system impact.
 	if IsAlwaysAllowedTool(toolName) {
+		// #1705 case 1: switch_mode stays reachable in EVERY mode (the
+		// #1210 self-rescue invariant - an agent trapped in plan mode
+		// must always be able to switch OUT), but ESCALATING to
+		// bypass/autopilot now needs consent: one zero-confirmation
+		// call used to grant near-total permissions (self-escalation),
+		// and switching to auto/bypass from plan escaped #551-D's
+		// exit_plan_mode Ask gate through the WIDER unguarded channel.
+		// Downgrade/same-level switches (and escaping plan BACK to the
+		// session's supervised mode) stay auto-allowed.
+		if toolName == "switch_mode" && switchModeEscalates(input) {
+			return Ask, nil
+		}
 		return Allow, nil
 	}
 	// #1283: im is no longer blanket-approved — only its side-effect-free
@@ -379,6 +391,18 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 // side-effect-free adapter management (#1283). Anything that can move data
 // out of the machine (send, send_file) or an unknown/missing action is NOT
 // benign — fail closed toward the normal approval pipeline.
+// switchModeEscalates reports whether a switch_mode call targets a MORE
+// privileged mode (#1705 case 1): bypass/autopilot ask for consent; every
+// other target (including plan escapes) flows Allow.
+func switchModeEscalates(input json.RawMessage) bool {
+	var a struct {
+		Mode string `json:"mode"`
+	}
+	_ = json.Unmarshal(input, &a)
+	m := strings.TrimSpace(a.Mode)
+	return m == "bypass" || m == "autopilot"
+}
+
 func imActionIsBenign(input json.RawMessage) bool {
 	var m struct {
 		Action string `json:"action"`
