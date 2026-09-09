@@ -337,6 +337,10 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelLoading = false
 			if len(msg.models) > 0 {
 				m.allModels = msg.models
+				// #1892 case a: real models arrived - the placeholder sentinel
+				// is stale. Clear it, or a focused-enter stays refused forever
+				// even though discovery succeeded.
+				m.modelsAreSentinel = false
 				// #907: do NOT truncate the selection source here — the old
 				// [:20] cap meant models 21+ could never be filtered to or
 				// selected (and the later success path replaced the list whole,

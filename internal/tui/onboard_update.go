@@ -205,6 +205,12 @@ func (m *onboardModel) startModelSelection() tea.Cmd {
 			} else {
 				m.allModels = []string{"default"}
 				m.models = []string{"default"}
+				// #1892 case b: same placeholder as the standard path below -
+				// custom provider, manual model left empty, discovery yet to
+				// run. Without the flag a failed discovery let the wizard save
+				// Model="default" and syscall.Exec a broken first boot (the
+				// exact #1745 bug, alive on this path).
+				m.modelsAreSentinel = true
 			}
 			m.applyModelFilter()
 
@@ -327,7 +333,10 @@ func (m *onboardModel) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelCursor = (m.modelCursor + 1) % modelCount
 		}
 	case "enter":
-		if len(m.modelFiltered) > 0 {
+		if len(m.modelFiltered) > 0 && !m.modelsAreSentinel {
+			// #1892 case a: this unfocused-enter branch skipped the sentinel
+			// check the focused branch has - the guard must hold on EVERY
+			// exit, or the placeholder completes the wizard anyway.
 			// Update custom provider model field if user came via custom path
 			if m.selectedVendor.ID == "" && m.customResolved != nil {
 				m.customFields[3].SetValue(m.models[m.modelFiltered[m.modelCursor]])
