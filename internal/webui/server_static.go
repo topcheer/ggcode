@@ -31,6 +31,14 @@ const authScript = `<script>
 		return new OrigWS(url);
 	};
 	window.WebSocket.prototype=OrigWS.prototype;
+	// #1858 case 3: OPEN/CONNECTING/CLOSING/CLOSED are constructor-owned
+	// statics, not prototype members - without copying them the SPA's
+	// readyState === WebSocket.OPEN checks compared against undefined and
+	// were always false.
+	window.WebSocket.OPEN=OrigWS.OPEN;
+	window.WebSocket.CONNECTING=OrigWS.CONNECTING;
+	window.WebSocket.CLOSING=OrigWS.CLOSING;
+	window.WebSocket.CLOSED=OrigWS.CLOSED;
 })();
 </script>`
 

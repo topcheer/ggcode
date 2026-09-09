@@ -170,6 +170,12 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 	}
 	routeEvent := func(event provider.StreamEvent) {
 		m := streamEventToJSON(event)
+		// #1858 case 2: unmapped event types must be SKIPPED, not sent -
+		// send(nil) made WriteJSON emit a literal `null` frame into the
+		// protocol stream.
+		if m == nil {
+			return
+		}
 		switch m["type"] {
 		case "text_delta", "tool_call_chunk":
 			select {
@@ -288,7 +294,9 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 				defer close(done)
 				err := s.agent.RunStreamWithContent(ctx, content, func(event provider.StreamEvent) {
 					defer safego.Recover("webui.ws.streamCallback")
-					send(streamEventToJSON(event))
+					if m := streamEventToJSON(event); m != nil {
+						send(m)
+					}
 				})
 				if err != nil && ctx.Err() == nil {
 					send(map[string]interface{}{"type": "error", "error": err.Error()})
@@ -302,7 +310,13 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 			// gorilla/websocket's "no concurrent readers" contract.
 			conn.SetReadDeadline(time.Now())
 			<-readPumpDone
-			conn.SetReadDeadline(time.Time{}) // reset for outer loop
+			// #1858 case 1: restore the #927 read deadline - clearing it
+			// ("reset for outer loop") disabled half-open detection after
+			// the first legacy round: the outer ReadMessage blocked forever,
+			// pongs only renew on arrival, and ping WriteControl "succeeds"
+			// into the kernel buffer of a dead peer. The goroutine and conn
+			// leaked for the prototype #927 scenario after round one.
+			conn.SetReadDeadline(time.Now().Add(wsReadTimeout))
 			s.agentMu.Unlock()
 			s.agentBusy.Store(false)
 		}
@@ -343,6 +357,16 @@ func streamEventToJSON(event provider.StreamEvent) map[string]interface{} {
 			"type": "tool_result", "name": event.Tool.Name,
 			"result": event.Result, "is_error": event.IsError,
 		}
+	case provider.StreamEventReasoning:
+		// #1858 case 2: reasoning used to fall to default -> nil -> a
+		// literal `null` frame written into the protocol stream, silently
+		// losing DeepSeek/Anthropic thinking content. Forward it as a
+		// collapsible reasoning_delta.
+		return map[string]interface{}{"type": "reasoning_delta", "text": event.Text}
+	case provider.StreamEventSystem:
+		// #1858 case 2: system notices (retry/failover announcements) - map
+		// to an info event instead of a null frame.
+		return map[string]interface{}{"type": "system", "text": event.Text}
 	case provider.StreamEventDone:
 		doneMsg := map[string]interface{}{"type": "done"}
 		if event.Usage != nil {
