@@ -250,10 +250,16 @@ func TestAttentionFragmentSingleShotHonest1855(t *testing.T) {
 	if m := s.analyze(); m != "" {
 		t.Fatalf("single-shot violated: %s", m)
 	}
-	// reset() clears the window but deliberately keeps warnCount (per-run
-	// persistence - see reset()); re-arm is a NEW state for the next run.
+	// #1843 case 2 wins over this test's original pin: reset() is called
+	// once per user turn (agent.go), and warnCount=0 there re-opens the
+	// quota - otherwise afMaxWarnings=1 means ONE warning per SESSION,
+	// contradicting the "per run" comment. The two pins conflicted; the
+	// #1843 semantics is the correct one, so this test now asserts it.
 	s.reset()
-	if s.warnCount != 1 {
-		t.Fatalf("warnCount must persist across window reset, got %d", s.warnCount)
+	if s.warnCount != 0 {
+		t.Fatalf("warnCount must re-open per user turn (reset), got %d", s.warnCount)
+	}
+	if m := s.analyze(); m != "" {
+		t.Fatalf("fresh window must not warn before thresholds: %s", m)
 	}
 }
