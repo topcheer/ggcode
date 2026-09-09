@@ -368,9 +368,14 @@ func isAdapterHealthy(snap IMSnapshot, adapter string) bool {
 }
 
 // waitForHealthy polls Snapshot until the adapter becomes healthy or timeout.
-func (t IMTool) waitForHealthy(adapter string, timeout time.Duration) bool {
+// #1691 case 3: honors ctx cancellation - a cancelled session used to
+// block for the full 15s window.
+func (t IMTool) waitForHealthy(ctx context.Context, adapter string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return false
+		}
 		snap := t.Manager.Snapshot()
 		if isAdapterHealthy(snap, adapter) {
 			return true
@@ -447,9 +452,26 @@ func (t IMTool) doSend(ctx context.Context, adapter, message string, autoStart b
 		return Result{IsError: true, Content: fmt.Sprintf("failed to activate adapter %q: %v", adapter, activateErr)}, nil
 	}
 
+	// #1691 case 4: when neither enable nor unmute applied (adapter was
+	// merely unhealthy, not muted/disabled), no ACTIVATION happened - the
+	// old path idled the full 15s and reported "was activated" untruth-
+	// fully. Only wait when we actually activated something.
+	activated := isDisabled || isMuted
+	if !activated {
+		// Healthy already? Send now. Otherwise surface the state without
+		// the pointless wait.
+		if t.waitForHealthy(ctx, adapter, 2*time.Second) {
+			return t.sendAndReport(ctx, adapter, binding.ChannelID, message)
+		}
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"adapter %q is unhealthy (not muted/disabled - nothing to auto-activate). Use the IM status tool to inspect it; the message was not sent.",
+			adapter,
+		)}, nil
+	}
+
 	// Wait for adapter to become healthy (max 15 seconds)
 	const healthTimeout = 15 * time.Second
-	if !t.waitForHealthy(adapter, healthTimeout) {
+	if !t.waitForHealthy(ctx, adapter, healthTimeout) {
 		return Result{IsError: true, Content: fmt.Sprintf(
 			"adapter %q was activated but did not become healthy within %s. The message was not sent. "+
 				"Check adapter status for errors.",
