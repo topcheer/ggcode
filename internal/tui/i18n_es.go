@@ -393,7 +393,7 @@ func esCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter guardar • Esc cancelar"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab cambiar foco • j/k mover • / foco filtro • Enter o s aplicar • a vendor key • u endpoint key • b URL base • m modelo personalizado • e agregar endpoint • Esc cerrar"
+		return "Tab/Shift+Tab cambiar foco • j/k mover • / foco filtro • Enter o s aplicar • a vendor key • u endpoint key • b URL base • m modelo personalizado • e agregar endpoint • n nuevo proveedor • Esc cerrar"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l iniciar sesión • x cerrar sesión • b editar dominio empresarial"
 	case "panel.provider.saved":

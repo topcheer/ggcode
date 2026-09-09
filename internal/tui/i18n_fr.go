@@ -393,7 +393,7 @@ func frCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter sauvegardér • Esc annulér"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab changer focus • j/k déplacer • / focus filtre • Enter ou s appliquér • a cle fournisseur • u cle endpoint • b URL base • m modèle personnalisé • e ajoutér endpoint • Esc fermér"
+		return "Tab/Shift+Tab changer focus • j/k déplacer • / focus filtre • Enter ou s appliquér • a cle fournisseur • u cle endpoint • b URL base • m modèle personnalisé • e ajoutér endpoint • n nouveau fournisseur • Esc fermér"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l connexion • x déconnexion • b éditer domaine entreprise"
 	case "panel.provider.saved":
