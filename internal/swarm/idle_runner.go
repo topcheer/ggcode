@@ -37,17 +37,7 @@ func runTeammateLoop(
 			// old recovery only marked the teammate done, leaving the task
 			// stuck in_progress forever (claim only scans pending), so every
 			// BlockedBy dependent was blocked by allBlockersComplete forever.
-			tm.mu.Lock()
-			taskID := tm.CurrentTaskID
-			tm.mu.Unlock()
-			if taskID != "" && mgr != nil {
-				if board := mgr.GetTaskManager(team.ID); board != nil {
-					pending := task.StatusPending
-					if _, uerr := board.Update(taskID, task.UpdateOptions{Status: &pending}); uerr != nil {
-						debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
-					}
-				}
-			}
+			rollbackClaimedTask(mgr, team, tm)
 			tm.setStatus(TeammateShuttingDown)
 			if onEvent != nil {
 				onEvent(Event{
@@ -155,6 +145,9 @@ func handleMessage(
 		return
 	}
 
+	tm.mu.Lock()
+	tm.CurrentTaskID = "" // direct messages carry no board ID (#1688)
+	tm.mu.Unlock()
 	tm.setStatus(TeammateWorking)
 	tm.setCurrentTask(util.Truncate(msg.Content, 100))
 
@@ -266,6 +259,9 @@ func tryClaimPendingTask(
 		// Build prompt from the claimed task.
 		prompt := buildTaskPrompt(claimed)
 
+		tm.mu.Lock()
+		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
+		tm.mu.Unlock()
 		tm.setStatus(TeammateWorking)
 		tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
 
@@ -396,6 +392,29 @@ func buildTaskPrompt(tk task.Task) string {
 	}
 	sb.WriteString("\nComplete this task now and return the final result. The teammate runner will update the task board when you finish.")
 	return sb.String()
+}
+
+// rollbackClaimedTask reverts the teammate's in-flight board task to
+// pending (#1688 case 1: panic recovery used to leave it in_progress
+// forever - claim only scans pending, so BlockedBy dependents deadlocked).
+func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
+	if mgr == nil || team == nil {
+		return
+	}
+	tm.mu.Lock()
+	taskID := tm.CurrentTaskID
+	tm.mu.Unlock()
+	if taskID == "" {
+		return
+	}
+	board := mgr.GetTaskManager(team.ID)
+	if board == nil {
+		return
+	}
+	pending := task.StatusPending
+	if _, uerr := board.Update(taskID, task.UpdateOptions{Status: &pending}); uerr != nil {
+		debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
+	}
 }
 
 // executeTask runs the agent on a task message and collects the output.
