@@ -515,13 +515,13 @@ func deCatalog(key string) string {
 	case "panel.model.refresh.builtin_loaded":
 		return "Eingebaute Modelle geladen."
 	case "panel.model.vendor_not_found":
-		return "厂商未找到"
+		return "Anbieter nicht gefunden"
 	case "panel.model.endpoint_not_found":
-		return "端点未找到"
+		return "Endpunkt nicht gefunden"
 	case "panel.model.save_failed":
-		return "保存失败：%s"
+		return "Speichern fehlgeschlagen: %s"
 	case "panel.model.endpoint_save_failed":
-		return "端点配置保存失败：%s"
+		return "Speichern der Endpunktkonfiguration fehlgeschlagen: %s"
 
 	// --- Commands ---
 	case "command.unknown":
