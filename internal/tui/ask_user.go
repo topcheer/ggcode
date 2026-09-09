@@ -69,11 +69,18 @@ func (m Model) handleQuestionnaireKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "tab", "right":
-		qs.moveTab(1, m.currentLanguage())
-		return m, nil
+		// #1712 case 2: in the freeform notes input, left/right must move
+		// the TEXT CURSOR (fix a typo mid-sentence), not switch tabs -
+		// fall through to input.Update below. Only bare Tab switches.
+		if msg.String() == "tab" || !qs.activeQuestionAllowsFreeform() {
+			qs.moveTab(1, m.currentLanguage())
+			return m, nil
+		}
 	case "shift+tab", "left":
-		qs.moveTab(-1, m.currentLanguage())
-		return m, nil
+		if msg.String() == "shift+tab" || !qs.activeQuestionAllowsFreeform() {
+			qs.moveTab(-1, m.currentLanguage())
+			return m, nil
+		}
 	case "enter":
 		if qs.onSubmitTab() {
 			return m, m.handleQuestionnaireResult(toolpkg.AskUserStatusSubmitted)
@@ -96,11 +103,19 @@ func (m Model) handleQuestionnaireKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "space":
+		// #1712 case 3: on MIXED questions (choices AND AllowFreeform)
+		// space toggled the choice even mid-typing, so freeform answers
+		// could never contain spaces after the first word. Compromise
+		// that preserves the pinned empty-input behavior (space selects
+		// the highlighted choice): once the user has STARTED typing
+		// (input non-empty), space flows to the text input.
 		if qs.activeQuestionHasChoices() {
-			qs.toggleCurrentChoice()
-			return m, nil
+			if !qs.activeQuestionAllowsFreeform() || qs.input.Value() == "" {
+				qs.toggleCurrentChoice()
+				return m, nil
+			}
 		}
-		// No choices: space goes to freeform text input.
+		// Freeform-only, or mixed with typing in progress.
 	}
 	switch msg.String() {
 	case "k":

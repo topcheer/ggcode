@@ -335,3 +335,32 @@ func TestVendorPresetsNeedsAPIKey(t *testing.T) {
 		}
 	}
 }
+
+// #1712 case 1: the default endpoint must be the MAINSTREAM official one,
+// not the alphabetically-first key (enterprise < github.com sorted first
+// and preselected a placeholder GHE domain).
+func TestVendorPresetDefaultEndpointOfficial1712(t *testing.T) {
+	presets := VendorPresets()
+	var copilot *VendorPreset
+	for i := range presets {
+		if presets[i].ID == "github-copilot" {
+			copilot = &presets[i]
+		}
+	}
+	if copilot == nil {
+		t.Fatal("github-copilot preset missing")
+	}
+	if copilot.DefaultEndpoint != "github.com" {
+		t.Fatalf("DefaultEndpoint = %q, want github.com (not the enterprise placeholder)", copilot.DefaultEndpoint)
+	}
+	// Deterministic across calls.
+	for i := 0; i < 20; i++ {
+		if again := VendorPresets(); again != nil {
+			for _, vp := range again {
+				if vp.ID == "github-copilot" && vp.DefaultEndpoint != "github.com" {
+					t.Fatalf("DefaultEndpoint unstable: %q", vp.DefaultEndpoint)
+				}
+			}
+		}
+	}
+}
