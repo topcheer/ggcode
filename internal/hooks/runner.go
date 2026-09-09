@@ -794,14 +794,33 @@ func stripContentValues(rawInput string) string {
 	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
 		return ""
 	}
-	for _, k := range contentValueFields {
-		delete(args, k)
-	}
+	stripNested(args)
 	b, err := json.Marshal(args)
 	if err != nil {
 		return ""
 	}
 	return string(b)
+}
+
+// stripNested deletes content-like keys at EVERY depth (#1730 case 1):
+// multi_edit_file's edits[].new_text and multi_file_write's files[].content
+// nest under arrays - the top-level-only delete left them in the payload,
+// and a path-prefix miss let the secondary Contains match "internal/"
+// inside new_text -> exit-2 false positive.
+func stripNested(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for _, k := range contentValueFields {
+			delete(t, k)
+		}
+		for _, child := range t {
+			stripNested(child)
+		}
+	case []any:
+		for _, child := range t {
+			stripNested(child)
+		}
+	}
 }
 
 // ExtractFilePath attempts to extract a file path from common tool argument patterns.
