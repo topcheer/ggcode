@@ -297,3 +297,24 @@ func TestCodeExecution_RunawayConsoleLogInterrupted(t *testing.T) {
 		t.Fatalf("interrupt took %v - cap not enforced during execution", elapsed)
 	}
 }
+
+// #1645 case 2: error paths must carry partial output. A runtime error
+// after console.log used to discard everything captured before it.
+func TestCodeExecution_RuntimeErrorKeepsPartialOutput(t *testing.T) {
+	reg := NewRegistry()
+	ce := CodeExecution{Registry: reg}
+
+	result, err := ce.Execute(context.Background(), json.RawMessage(`{"code": "console.log('before failure'); null.x;"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected IsError for a runtime error")
+	}
+	if !strings.Contains(result.Content, "Execution error") {
+		t.Errorf("expected error header, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "before failure") {
+		t.Errorf("partial output before failure must be kept, got: %s", result.Content)
+	}
+}
