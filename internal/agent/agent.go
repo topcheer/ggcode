@@ -4310,7 +4310,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Prompt injection guard: scan external-content tool results for
 			// adversarial injection patterns and wrap them with a security
 			// notice so the model treats them as untrusted data.
-			result.Content = guardPromptInjection(tc.Name, result.Content)
+			result.Content = guardPromptInjection(tc.Name, tc.Arguments, result.Content)
 			// Tainted data influence tracking (IFC): when the injection guard
 			// flags tool output, record distinctive fingerprints so we can
 			// later detect if that tainted content flows into privileged
