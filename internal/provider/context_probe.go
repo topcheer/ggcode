@@ -583,20 +583,30 @@ func trySimpleProbe(ctx context.Context, p Provider) int {
 			return w
 		}
 
-		// Non-context error (auth, network, etc.) — stop probing entirely
+		// #1788: this used to abort the ENTIRE probe on any non-context
+		// error (only context/token-limit/too-long/exceeds continued to
+		// tiered probing). A transient 429 or network blip at probe start
+		// therefore returned -1, the caller fell back to estimation, and
+		// under the #1198 persistent cache a momentary rate limit could
+		// harden into a low window. Align with the tier classifier below:
+		// only AUTH aborts; rate-limit/network/5xx/timeout/unknown are
+		// inconclusive and fall through to tiered probing.
 		errMsg := strings.ToLower(err.Error())
 		isContextError := strings.Contains(errMsg, "context") ||
 			strings.Contains(errMsg, "token limit") ||
 			strings.Contains(errMsg, "too long") ||
 			strings.Contains(errMsg, "exceeds")
 
-		if !isContextError {
-			debug.Log("probe", "simple probe non-context error (auth/network?): %v", err)
+		if isContextError {
+			// Context error but couldn't parse the limit — tiered probing
+			debug.Log("probe", "simple probe hit context limit but couldn't parse exact value")
+			return 0
+		}
+		if containsAny(errMsg, authKeywords) || containsAnyAnchored(errMsg, authStatusPatterns) {
+			debug.Log("probe", "simple probe auth error (aborting all probing): %v", err)
 			return -1
 		}
-
-		// Context error but couldn't parse the limit — continue to tiered probing
-		debug.Log("probe", "simple probe hit context limit but couldn't parse exact value")
+		debug.Log("probe", "simple probe inconclusive error (rate-limit/network/5xx/timeout/unknown — deferring to tiers): %v", err)
 		return 0
 	}
 
