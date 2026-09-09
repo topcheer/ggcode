@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/memory"
 )
@@ -98,6 +99,13 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	// Validate key
+	// #1700 case 2: an empty key slipped through (only the max length was
+	// checked), sanitizeKey turned it into "untitled" and sha256("")'s
+	// first bytes mapped EVERY empty key to the same file - silent mutual
+	// overwrites reported as "memory saved: ".
+	if strings.TrimSpace(params.Key) == "" {
+		return Result{IsError: true, Content: "key is required and cannot be blank"}, nil
+	}
 	if len(params.Key) > maxMemoryKeyLen {
 		return Result{IsError: true, Content: fmt.Sprintf("key too long: %d chars (max %d). Use a shorter identifier.", len(params.Key), maxMemoryKeyLen)}, nil
 	}
