@@ -141,6 +141,19 @@ func irrevClassifyTool(toolName, args string) int {
 	case "file_ops", "batch_replace", "lsp_rename":
 		// lsp_rename applies LSP workspace edits across files (no dispatch-layer
 		// checkpoint, see agent_tool.go) -- same tier as file_ops/batch_replace.
+		// #1798 case 3: file_ops delete+recursive removes a whole directory -
+		// semantically equal to shell `rm -rf` (High) but used to sit a tier
+		// lower with a weaker threshold; the most dangerous file_ops shape
+		// had the weakest gate.
+		if toolName == "file_ops" {
+			var a struct {
+				Action    string `json:"action"`
+				Recursive bool   `json:"recursive"`
+			}
+			if json.Unmarshal([]byte(args), &a) == nil && a.Action == "delete" && a.Recursive {
+				return irrevTierHigh
+			}
+		}
 		return irrevTierMedium
 	case "start_command", "run_command":
 		// Commands are at least medium — could be anything
@@ -210,6 +223,9 @@ func irrevIsDestructiveCommand(args string) bool {
 		"chmod -r 777", "chown -r",
 		"git push origin --delete", "git branch -d",
 		"git tag -d", "git remote remove",
+		// #1798 case 4: #1621 claimed "BOTH paths missed stash drop" but
+		// only fixed the tool path - the shell table never gained it.
+		"git stash drop", "git stash clear",
 		"sudo rm", "shutdown", "reboot", "halt",
 	}
 	for _, p := range patterns {
@@ -267,6 +283,23 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	tier := irrevClassifyTool(toolName, args)
 	isGrounding := irrevIsGroundingAction(toolName)
 
+	// #1798 case 2: snapshot the window BEFORE appending the current call -
+	// the current call used to count itself as its own grounding evidence
+	// (run_command's Medium warning was mathematically unreachable, and two
+	// consecutive destructive commands served as each other's proof).
+	// Grounding still only counts the ledger, never success/failure of the
+	// current in-flight call (recordOutcome handles that retroactively).
+	recentGrounding := 0
+	start := len(s.grounding) - irrevGroundingWindow
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(s.grounding); i++ {
+		if s.grounding[i] {
+			recentGrounding++
+		}
+	}
+
 	// Track grounding history
 	if len(s.grounding) >= irrevMaxHistory {
 		s.grounding = s.grounding[1:]
@@ -280,18 +313,6 @@ func (s *irrevGateState) recordAction(toolName, args string) string {
 	// Only gate medium+ irreversibility actions
 	if tier < irrevTierMedium {
 		return ""
-	}
-
-	// Check grounding depth in recent window
-	recentGrounding := 0
-	start := len(s.grounding) - irrevGroundingWindow
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < len(s.grounding); i++ {
-		if s.grounding[i] {
-			recentGrounding++
-		}
 	}
 
 	// Tier-based thresholds: higher irreversibility needs more grounding
