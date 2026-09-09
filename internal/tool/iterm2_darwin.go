@@ -397,6 +397,18 @@ end tell`, tabIndex)
 	return Result{Content: fmt.Sprintf("iterm2 selected tab: %d", tabIndex)}
 }
 
+// countDroppedControlRunes mirrors escapeAS's default branch: C0 runes
+// other than tab/newline/carriage-return are silently dropped (#1691).
+func countDroppedControlRunes(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			n++
+		}
+	}
+	return n
+}
+
 func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) Result {
 	if strings.TrimSpace(text) == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
@@ -405,6 +417,15 @@ func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) R
 	err := iterm2WriteText(ctx, sessionID, text)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 input failed: %v", err)}
+	}
+	// #1691 case 2: escapeAS silently DROPS C0 control characters (except
+	// tab/nl/cr) - the caller believed the full text was delivered while
+	// the terminal received corrupted content with no error. Report the
+	// stripped characters honestly instead.
+	stripped := countDroppedControlRunes(text)
+	note := ""
+	if stripped > 0 {
+		note = fmt.Sprintf(" (note: %d control rune(s) stripped by terminal escaping)", stripped)
 	}
 
 	label := sessionID
@@ -415,7 +436,7 @@ func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) R
 	if len([]rune(preview)) > 100 {
 		preview = string([]rune(preview)[:100]) + "..."
 	}
-	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s", label, preview)}
+	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s%s", label, preview, note)}
 }
 
 func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifiers string) Result {
