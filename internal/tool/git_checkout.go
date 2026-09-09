@@ -73,6 +73,11 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 	if err := validateBranchName(args.Branch); err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
+	// #1687 case 2: validateBranchName trims an internal COPY, so " main "
+	// passed validation but the ORIGINAL value reached git and failed
+	// ("did not match any file(s)") - validated-but-doomed. Execute the
+	// trimmed value validation actually approved.
+	args.Branch = strings.TrimSpace(args.Branch)
 
 	dir := resolveDir(args.Path, t.WorkingDir)
 
@@ -97,6 +102,8 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 		if err := validateRefName(args.StartPoint); err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
+		// Same #1687 case 2 trim-copy mismatch as Branch above.
+		args.StartPoint = strings.TrimSpace(args.StartPoint)
 	}
 
 	// Execute checkout via VCS abstraction.
