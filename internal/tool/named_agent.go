@@ -170,7 +170,8 @@ func (t DeleteNamedAgentTool) Execute(ctx context.Context, input json.RawMessage
 	}
 
 	// Verify the template exists before deleting for a better error message.
-	if _, err := t.Store.Load(args.Name); err != nil {
+	// #1696 case 6: create trims on save - trim here for the same reason.
+	if _, err := t.Store.Load(strings.TrimSpace(args.Name)); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("named subagent '%s' not found", args.Name)}, nil
 	}
 

@@ -92,6 +92,17 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
+	// #1696 case 1: notebook_edit was the only writer in the package not
+	// running the stale guard - it silently overwrote notebooks modified
+	// externally after the agent's last read.
+	if stale, since := defaultFileTracker.CheckStale(args.NotebookPath); stale {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"notebook was modified externally since last read (changed after %s). "+
+				"Re-read the notebook with read_file before editing to avoid overwriting external changes.",
+			since.Format("2006-01-02 15:04:05"),
+		)}, nil
+	}
+
 	// Read and parse notebook
 	data, err := os.ReadFile(args.NotebookPath)
 	if err != nil {
@@ -154,6 +165,13 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		if cellType == "" {
 			cellType = "code"
 		}
+		// #1696 case 5: a typo like "python" silently produced an
+		// nbformat-invalid cell while reporting success.
+		switch cellType {
+		case "code", "markdown", "raw":
+		default:
+			return Result{IsError: true, Content: fmt.Sprintf("invalid cell_type %q for add (must be code, markdown, or raw)", cellType)}, nil
+		}
 		newCell := map[string]interface{}{
 			"cell_type":       cellType,
 			"source":          sourceToLines(args.Source),
@@ -209,6 +227,10 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if err := atomicWriteFile(args.NotebookPath, output, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing notebook: %v", err)}, nil
 	}
+	// #1696 case 1: every other writer in the package records the write —
+	// without this, a later write_file/multi_file_write CheckStale misreported
+	// OUR OWN edit as an external modification.
+	defaultFileTracker.RecordWrite(args.NotebookPath)
 
 	return Result{Content: fmt.Sprintf("Notebook %s: %s operation completed (%d cells)", args.NotebookPath, args.Operation, len(cells))}, nil
 }

@@ -85,7 +85,9 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 	}
 
 	// Load the template
-	tmpl, err := t.Store.Load(args.Name)
+	// #1696 case 6: create trims the name before saving - trim here too,
+	// else " reviewer " is stored as "reviewer" but invoked by its raw form.
+	tmpl, err := t.Store.Load(strings.TrimSpace(args.Name))
 	if err != nil {
 		// Suggest available templates
 		available, _ := t.Store.List()

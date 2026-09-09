@@ -125,15 +125,6 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("total payload too large: %d bytes, max %d. Split the write into smaller batches.", totalBytes, maxMultiFileWritePayloadBytes)}, nil
 	}
 
-	// Sandbox validation — check all paths first.
-	for _, f := range args.Files {
-		if t.SandboxCheck != nil && !t.SandboxCheck(f.Path) {
-			if mode == "atomic" {
-				return Result{IsError: true, Content: fmt.Sprintf("path not allowed: %s", f.Path)}, nil
-			}
-		}
-	}
-
 	type writeResult struct {
 		Path   string `json:"path"`
 		Status string `json:"status"` // "written" or "error"
