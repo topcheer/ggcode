@@ -221,7 +221,9 @@ func TestNotifyUnixQueuedNotForked(t *testing.T) {
 		defer close(done)
 		for i := 0; i < 64; i++ {
 			nm.notifyMacOS("t", "b")
-			nm.notifyLinux("t", "b")
+			// #1852: linux rides the same queue now - exercise the
+			// enqueue primitive directly (notifyLinux was removed).
+			nm.enqueueUnixToast("t", "b")
 		}
 	}()
 	select {
