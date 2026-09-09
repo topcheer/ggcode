@@ -343,9 +343,11 @@ func containsWordBoundary(s, substr string) bool {
 	}
 }
 
-// stripStringLiterals removes quoted string contents from a Go/JS expression,
-// leaving only identifiers, operators, and punctuation.
-func stripStringLiterals(s string) string { return stripStringLiteralsFor(s, true) }
+// stripStringLiterals is intentionally GONE (#1623 side note 1): the old
+// zero-production-caller wrapper defaulted to JS semantics - a future Go
+// path reaching for it would silently reintroduce the #1581-A false
+// positive. Callers must choose a language explicitly via
+// stripStringLiteralsFor(s, isJS).
 
 // stripStringLiteralsFor is the language-aware core (#1581-A): in JS a
 // backtick string is a TEMPLATE LITERAL and ${...} is live interpolation
@@ -728,12 +730,7 @@ func stripInitFuncs(src string) string {
 	return b.String()
 }
 
-// countSensitiveLogArgs returns the count of sensitive-log-arg patterns.
-func countSensitiveLogArgs(src, ext string) int {
-	return len(findSensitiveLogArgs(src, ext))
-}
-
-// countFatalInLib returns the count of fatal-in-library patterns.
-func countFatalInLib(src, ext, filePath string) int {
-	return len(findFatalInLib(src, ext, filePath))
-}
+// countSensitiveLogArgs / countFatalInLib were zero-call wrappers
+// (#1623 side note 2) and are gone; call findSensitiveLogArgs /
+// findFatalInLib and take len() at the (currently nonexistent) metrics
+// call sites if counting is ever needed.
