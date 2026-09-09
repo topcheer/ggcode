@@ -148,7 +148,13 @@ func (t *toolResultRedundancyState) recordResult(toolName, content string, itera
 		jaccard := trJaccard(lines, entry.lines)
 		if jaccard >= trOverlapThreshold {
 			// Avoid re-warning on consecutive iterations.
-			if iteration == t.lastWarnedIter && t.warningsFired > 0 {
+			// #1855 case 2: this compared EQUALITY (iteration ==
+			// lastWarnedIter), which only suppressed same-iteration
+			// parallel duplicates - two warnings burned on iters N and
+			// N+1 while sustained redundancy stayed silent after. The
+			// comment's intent ("consecutive iterations" cooldown) needs
+			// adjacency suppression across iterations.
+			if t.warningsFired > 0 && iteration <= t.lastWarnedIter+1 {
 				t.storeEntry(toolName, content, iteration)
 				return ""
 			}

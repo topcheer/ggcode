@@ -142,8 +142,11 @@ type thermalState struct {
 	// Total calls recorded
 	total int
 
-	// Iteration of last warning (for cooldown)
-	lastWarnIter int
+	// Iteration of last warning, PER MODE (#1855 case 3: a single field
+	// let an explore-heavy warning cool down a verify-heavy trigger -
+	// opposite inefficiency modes sharing one clock).
+	lastExploreWarnIter int
+	lastVerifyWarnIter  int
 
 	// Whether any warning has been given this run
 	warned bool
@@ -151,7 +154,9 @@ type thermalState struct {
 
 func newThermalState() *thermalState {
 	return &thermalState{
-		lastWarnIter: -thermalWarnCooldown, // allow first warning immediately
+		// negative seeds allow the first warning immediately
+		lastExploreWarnIter: -thermalWarnCooldown,
+		lastVerifyWarnIter:  -thermalWarnCooldown,
 	}
 }
 
@@ -160,7 +165,8 @@ func (t *thermalState) reset() {
 		t.categories[i] = 0
 	}
 	t.total = 0
-	t.lastWarnIter = -thermalWarnCooldown
+	t.lastExploreWarnIter = -thermalWarnCooldown
+	t.lastVerifyWarnIter = -thermalWarnCooldown
 	t.warned = false
 }
 
@@ -201,10 +207,13 @@ func (t *thermalState) maybeWarn(iteration int) string {
 
 	// Mode 1: Explore-heavy (most common inefficiency)
 	if exploreFrac > explorationThreshold && modifyFrac < modificationFloor {
-		if iteration-t.lastWarnIter < thermalWarnCooldown {
+		// #1855 case 3: document condition 4 via the warned field (it was
+		// declared, reset, never set, never read).
+		if t.warned && iteration-t.lastExploreWarnIter < thermalWarnCooldown {
 			return ""
 		}
-		t.lastWarnIter = iteration
+		t.warned = true
+		t.lastExploreWarnIter = iteration
 		debug.Log("thermal-profile", "explore-heavy: explore=%.0f%% modify=%.0f%% total=%d",
 			exploreFrac*100, modifyFrac*100, t.total)
 
@@ -218,10 +227,11 @@ func (t *thermalState) maybeWarn(iteration int) string {
 
 	// Mode 2: Verify-heavy (excessive checking)
 	if verifyFrac > 0.30 && modifyFrac < modificationFloor {
-		if iteration-t.lastWarnIter < thermalWarnCooldown {
+		if t.warned && iteration-t.lastVerifyWarnIter < thermalWarnCooldown {
 			return ""
 		}
-		t.lastWarnIter = iteration
+		t.warned = true
+		t.lastVerifyWarnIter = iteration
 		debug.Log("thermal-profile", "verify-heavy: verify=%.0f%% modify=%.0f%% total=%d",
 			verifyFrac*100, modifyFrac*100, t.total)
 

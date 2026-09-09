@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -224,5 +225,35 @@ func TestAttentionFragment_MultiFileRead(t *testing.T) {
 	msg := s.analyze()
 	if msg == "" {
 		t.Fatal("expected fragmentation warning for multi_file_read across dirs")
+	}
+}
+
+// #1855 case 1: the guidance-noise cleanup set max=1 but left the
+// refire-gap/firedAt machinery behind as unreachable dead code. The
+// machinery is now REMOVED - this pins the honest single-shot semantics
+// (one warning per run; reset() re-arms).
+func TestAttentionFragmentSingleShotHonest1855(t *testing.T) {
+	s := newAttentionFragmentState()
+	for i := 0; i < s.windowSize; i++ {
+		s.recordToolCall("read_file", map[string]interface{}{"path": fmt.Sprintf("/dir%d/f.go", i%4)})
+	}
+	if m := s.analyze(); m == "" {
+		t.Fatal("first warning expected")
+	}
+	if s.warnCount != 1 {
+		t.Fatalf("warnCount = %d, want 1", s.warnCount)
+	}
+	// Sustained fragmentation stays silent (single-shot).
+	for i := 0; i < s.windowSize*3; i++ {
+		s.recordToolCall("read_file", map[string]interface{}{"path": fmt.Sprintf("/more%d/f.go", i%4)})
+	}
+	if m := s.analyze(); m != "" {
+		t.Fatalf("single-shot violated: %s", m)
+	}
+	// reset() clears the window but deliberately keeps warnCount (per-run
+	// persistence - see reset()); re-arm is a NEW state for the next run.
+	s.reset()
+	if s.warnCount != 1 {
+		t.Fatalf("warnCount must persist across window reset, got %d", s.warnCount)
 	}
 }
