@@ -64,6 +64,17 @@ func (t *TodoWrite) SetSessionID(id string) {
 	t.sessionID = id
 }
 
+// Clone satisfies the Cloner contract (#1707 case 1): Registry.Clone shares
+// non-Cloner instances across teammates, so a teammate's SetSessionID(tmID)
+// flipped the SHARED instance's sessionID - the leader's todo persistence
+// file became the teammate's, and the teammate's ClearTodos deleted the
+// file the leader was using. Each clone owns its sessionID.
+func (t *TodoWrite) Clone() Tool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return &TodoWrite{sessionID: t.sessionID}
+}
+
 // ClearTodos removes the todo file for the current session (if any).
 // This is called on agent stop to prevent permanent todo residue.
 func (t *TodoWrite) ClearTodos() {
