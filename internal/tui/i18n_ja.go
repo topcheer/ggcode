@@ -318,7 +318,7 @@ func jaCatalog(key string) string {
 	case "lang.selection.hint":
 		return "言語を選択してください"
 	case "lang.first_use.title":
-		return " preferred言語を選択してください"
+		return "優先する言語を選択してください"
 	case "lang.first_use.body":
 		return " ggcodeが使用する言語を選択してください。"
 	case "lang.first_use.hint":
@@ -754,7 +754,7 @@ func jaCatalog(key string) string {
 	case "mcp.active_tools":
 		return "アクティブツール"
 	case "mcp.more":
-		return "… %d件更多 • /mcp"
+		return "… さらに%d件 • /mcp"
 	case "image.usage":
 		return "使用法: /image <ファイルパス> または /image paste\n"
 	case "image.formats":
