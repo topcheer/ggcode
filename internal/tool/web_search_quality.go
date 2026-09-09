@@ -92,10 +92,15 @@ func assessSearchResults(query string, results []searchResult, allowedDomains []
 	queryTerms := tokenizeQuery(query)
 
 	// Phase 1: Filter spam domains
+	// #1709 case 3: the user's explicit allowed_domains must EXEMPT from
+	// the spam list too - filterByDomain kept w3schools.com, then this
+	// phase killed every result and the tool answered "No results found"
+	// for the domain the user explicitly asked for (dedup had the
+	// exemption; the phases were asymmetric).
 	var filtered []searchResult
 	for _, res := range results {
 		domain := domainFromURL(res.URL)
-		if isSpamDomain(domain) {
+		if isSpamDomain(domain) && !allowed[domain] {
 			continue
 		}
 		filtered = append(filtered, res)
