@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/sashabaranov/go-openai"
@@ -318,11 +320,26 @@ const (
 // message: enough to diagnose, short enough not to flood the chat panel.
 const blindSpotRawLimit = 400
 
+var blindSpotSecretRe = regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|authorization)["'\s:=]+[^\s"',;]{8,}`)
+
+// sanitizeRawError masks credential-looking pairs before the raw error
+// reaches the chat panel (#1720 case 2: the blind-spot fallback embedded
+// the FULL error chain with zero redaction).
+func sanitizeRawError(raw string) string {
+	return blindSpotSecretRe.ReplaceAllString(raw, "$1=[REDACTED]")
+}
+
 func truncateRawError(raw string) string {
 	if len(raw) <= blindSpotRawLimit {
-		return raw
+		return sanitizeRawError(raw)
 	}
-	return raw[:blindSpotRawLimit] + "…(truncated)"
+	// #1720 case 2: back off to a rune boundary - the byte slice cut
+	// multi-byte UTF-8 mid-rune.
+	cut := blindSpotRawLimit
+	for cut > 0 && cut < len(raw) && !utf8.RuneStart(raw[cut]) {
+		cut--
+	}
+	return sanitizeRawError(raw[:cut]) + "…(truncated)"
 }
 
 // IsBlindSpotError reports whether err fell through every category in
