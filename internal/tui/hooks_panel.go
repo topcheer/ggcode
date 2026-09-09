@@ -378,6 +378,15 @@ func (m *Model) handleHooksEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			Secret:       f.secret,
 			InjectOutput: f.injectOutput,
 		}
+		// #1724 case 1: the package's own ValidateHooks was never called on
+		// this path - an empty match SAVED fine and then matched EVERYTHING
+		// (pattern=="" -> return true), an invalid matchMode silently fell
+		// back to glob, an invalid regex died quietly. Surface the errors in
+		// the panel's status line instead of persisting broken config.
+		if verrs := hooks.ValidateHooks(hooks.HookConfig{OnUserMessage: []hooks.Hook{h}}); len(verrs) > 0 {
+			p.message = strings.Join(verrs, "; ")
+			return *m, nil
+		}
 
 		hooksList := m.getEventHooks(p.selectedEvent)
 		if p.editingNew {
