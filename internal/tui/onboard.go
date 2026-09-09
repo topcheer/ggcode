@@ -350,8 +350,17 @@ func (m *onboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// #1385 side-fix: a deeper cursor from the pre-discovery list
 				// could point past the new list - clamp so the first render has
 				// a valid highlight.
-				if m.modelCursor >= len(m.models) {
-					m.modelCursor = len(m.models) - 1
+				// #1748: clamp against the FILTERED list - consumers index
+				// m.modelFiltered[m.modelCursor], and a narrowing filter
+				// typed during discovery left the full-list clamp pointing
+				// past the filtered tail: Enter without moving the cursor
+				// panicked out of range (custom-provider path).
+				if n := len(m.modelFiltered); n > 0 {
+					if m.modelCursor >= n {
+						m.modelCursor = n - 1
+					}
+				} else {
+					m.modelCursor = 0
 				}
 				if m.modelCursor < 0 {
 					m.modelCursor = 0
