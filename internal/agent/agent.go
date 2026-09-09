@@ -3814,7 +3814,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// disk - recording them put GHOST files into the revert list,
 			// and formatRevertGuidance suggested removing paths that never
 			// existed. Gate on success like the sibling trackers.
-			if !result.IsError {
+			// #1762 case 1: multi_file_edit partial_success sets IsError=true
+			// for the WHOLE result, but the files in written_paths ARE on
+			// disk (atomicWriteFile per plan). The whole-result gate excluded
+			// them from the revert list - the opposite distortion of #1581
+			// (real modifications missing from revertGuidance). Record those
+			// per-file. Also closes the multi-file Info gap: a successful
+			// multi-file edit used to record only extractFileHint's first path.
+			if written := extractWrittenPaths(result.Content); len(written) > 0 {
+				for _, p := range written {
+					a.lastGoodCheckpointRecordEdit(tc.Name, p)
+				}
+			} else if !result.IsError {
 				a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			}
 			// Monorepo scoper: track which packages are being edited.

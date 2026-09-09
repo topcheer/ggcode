@@ -572,6 +572,32 @@ func countErrors(traj []trajectoryEntry) int {
 	return count
 }
 
+// extractWrittenPaths parses the multi-file tools' written_paths field out
+// of a tool RESULT body (#1762 case 1). These are the files that actually
+// reached disk - present on both full success and partial_success (where
+// the overall result carries IsError=true but the written files are real).
+func extractWrittenPaths(resultContent string) []string {
+	if resultContent == "" || !strings.Contains(resultContent, "written_paths") {
+		return nil
+	}
+	var payload struct {
+		WrittenPaths []string `json:"written_paths"`
+	}
+	// Tool results wrap the JSON body in markdown fences or prose; find the
+	// outermost JSON object that carries the field.
+	dec := json.NewDecoder(strings.NewReader(resultContent))
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			break
+		}
+		if json.Unmarshal(raw, &payload) == nil && len(payload.WrittenPaths) > 0 {
+			return payload.WrittenPaths
+		}
+	}
+	return nil
+}
+
 // extractFileHint tries to extract a file path from tool arguments JSON.
 // Returns the first "path" or "file_path" value, or empty string.
 func extractFileHint(toolName string, args []byte) string {

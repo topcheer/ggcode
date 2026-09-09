@@ -630,3 +630,19 @@ func TestReadOnlyTablesIncludeFormerGaps(t *testing.T) {
 		t.Errorf("screenshot must be thermalExplore, got %v", toolCategoryMap["screenshot"])
 	}
 }
+
+// #1762 case 1: partial_success carries IsError=true for the whole result,
+// but written_paths ARE on disk - the whole-result gate excluded real
+// modifications from the revert list.
+func TestExtractWrittenPaths(t *testing.T) {
+	got := extractWrittenPaths(`{"written_files":1,"written_paths":["/a.go"],"failed_files":1,"failed_paths":["/b.go"]}`)
+	if len(got) != 1 || got[0] != "/a.go" {
+		t.Fatalf("expected [/a.go], got %v", got)
+	}
+	if extractWrittenPaths("no json here") != nil {
+		t.Fatal("non-JSON body must return nil")
+	}
+	if extractWrittenPaths(`{"ok":true}`) != nil {
+		t.Fatal("body without written_paths must return nil")
+	}
+}
