@@ -24,8 +24,14 @@ func PushTunnelSwarmEvent(
 		return
 	}
 
+	// teammate reasoning stream msgID (mirrors tui.subagentTunnelReasoningMsgID).
+	subagentTunnelReasoningMsgID := func(agentID string) string {
+		return fmt.Sprintf("sa-%s-reasoning", agentID)
+	}
+
 	switch ev.Type {
 	case "teammate_tool_call":
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(ev.TeammateID))
 		d := ""
 		if detail != nil {
 			d = detail(ev.CurrentTool, ev.ToolArgs)
@@ -38,9 +44,19 @@ func PushTunnelSwarmEvent(
 		broker.PushSubagentStatus(ev.TeammateID, tunnel.StatusRunning, ev.CurrentTool)
 
 	case "teammate_tool_result":
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(ev.TeammateID))
 		broker.PushSubagentToolResult(ev.TeammateID, ev.ToolID, ev.CurrentTool, "", "", ev.Result, ev.IsError)
 
+	case "teammate_reasoning":
+		// #1497 case A: this consumer lacked the case entirely (and no
+		// default) - desktop/mobile tunnel clients silently dropped every
+		// teammate reasoning chunk the TUI renders.
+		if chunk := tunnel.NormalizeReasoningChunk(ev.Result); chunk != "" {
+			broker.PushSubagentReasoning(ev.TeammateID, subagentTunnelReasoningMsgID(ev.TeammateID), chunk, false)
+		}
+
 	case "teammate_text":
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(ev.TeammateID))
 		msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
 		broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, false)
 
@@ -73,6 +89,7 @@ func PushTunnelSwarmEvent(
 		}
 
 	case "teammate_idle":
+		broker.PushReasoningDone(subagentTunnelReasoningMsgID(ev.TeammateID))
 		if ev.Result != "" {
 			msgID := fmt.Sprintf("tm-%s", ev.TeammateID)
 			broker.PushSubagentText(ev.TeammateID, msgID, ev.Result, true)
