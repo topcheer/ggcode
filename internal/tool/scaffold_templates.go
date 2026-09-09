@@ -119,6 +119,7 @@ func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
   },
   "license": "MIT",
   "devDependencies": {
+    "@eslint/js": "^9.11.0",
     "@jest/globals": "^29.7.0",
     "@types/jest": "^29.5.13",
     "@types/node": "^20.14.0",
@@ -156,6 +157,42 @@ func tsTemplate(name, rootDir string, ci, docker bool) []scaffoldFile {
 		Path: "src/index.ts",
 		Content: fmt.Sprintf(`console.log("Hello from %s!");
 `, name),
+	})
+
+	// #1701 case 1: eslint 9 requires a flat config and jest needs a TS
+	// transform for .test.ts - the CI workflow (npm run lint && npm test)
+	// failed on every freshly generated repo (#1335 added the deps but
+	// no configs).
+	files = append(files, scaffoldFile{
+		Path: "eslint.config.js",
+		Content: `const js = require("@eslint/js");
+
+module.exports = [
+  js.configs.recommended,
+  {
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "commonjs",
+      globals: { console: "readonly", process: "readonly" },
+    },
+    rules: {},
+  },
+  {
+    ignores: ["dist/**", "coverage/**"],
+  },
+];
+`,
+	})
+
+	files = append(files, scaffoldFile{
+		Path: "jest.config.js",
+		Content: `/** @type {import('jest').Config} */
+module.exports = {
+  preset: "ts-jest",
+  testEnvironment: "node",
+  roots: ["<rootDir>/src"],
+};
+`,
 	})
 
 	files = append(files, scaffoldFile{
