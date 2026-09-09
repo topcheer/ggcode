@@ -247,6 +247,10 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// error was discarded after the return value was already fixed.
 	if outFile != nil {
 		if err := outFile.Close(); err != nil {
+			// #1719 case 2: Close is where ENOSPC/NFS flush failures surface
+			// (Fprint already sat in page cache) - exit 1 with zero stderr
+			// gave CI nothing to go on (#1444-B/#1531's exact scenario).
+			fmt.Fprintf(os.Stderr, "ggcode pipe: closing output file: %v\n", err)
 			writeErr = err
 		}
 		outFile = nil // the deferred Close is then a harmless no-op on nil
