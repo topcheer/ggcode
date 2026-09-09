@@ -227,9 +227,10 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if err := atomicWriteFile(args.NotebookPath, output, 0644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error writing notebook: %v", err)}, nil
 	}
-	// #1696 case 1: every other writer in the package records the write —
-	// without this, a later write_file/multi_file_write CheckStale misreported
-	// OUR OWN edit as an external modification.
+	// #1696 case 1: the package-wide contract - seven write sites call
+	// RecordWrite, notebook_edit was the lone exception. Without it,
+	// read(.ipynb) -> notebook_edit -> write_file tripped CheckStale's
+	// "modified externally" misreport on the agent's OWN edit.
 	defaultFileTracker.RecordWrite(args.NotebookPath)
 
 	return Result{Content: fmt.Sprintf("Notebook %s: %s operation completed (%d cells)", args.NotebookPath, args.Operation, len(cells))}, nil

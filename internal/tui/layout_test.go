@@ -2904,6 +2904,7 @@ func TestCtrlCCancelDoesNotRestoreHiddenPendingSubmission(t *testing.T) {
 func TestCancelActiveRunClearsVisibleActivityStateImmediately(t *testing.T) {
 	m := newTestModel()
 	m.loading = true
+	m.cancelFunc = func() {} // #1768: a CANCELLABLE run - visible-state clearing only applies then
 	m.statusActivity = "Thinking..."
 	m.statusToolName = "npm run type-check"
 	m.statusToolArg = "type-check"
@@ -3205,5 +3206,41 @@ func TestProjectMemoryLoadingQueuesTunnelWebchatAndCron(t *testing.T) {
 	model5, _ := m5.Update(cronPromptMsg{Prompt: "tick"})
 	if mm := asModel(t, model5); mm.cancelFunc != nil {
 		t.Fatal("cron firing must not start a run during project-memory loading")
+	}
+}
+
+// #1712 case 3: once freeform typing has started on a MIXED question,
+// space must reach the text input (was: toggle choice forever).
+func TestAskUserMixedQuestionSpaceFlowsToInputAfterTyping1712(t *testing.T) {
+	m := newTestModel()
+	response := make(chan tool.AskUserResponse, 1)
+	m.pendingQuestionnaire = newQuestionnaireState(tool.AskUserRequest{
+		Questions: []tool.AskUserQuestion{
+			{
+				ID:            "scope",
+				Title:         "Scope",
+				Prompt:        "Pick",
+				Kind:          tool.AskUserKindSingle,
+				AllowFreeform: true,
+				Choices:       []tool.AskUserChoice{{ID: "a", Label: "A"}},
+			},
+		},
+	}, response, LangEnglish)
+	m.pendingQuestionnaire.input.Focus()
+
+	// Simulate freeform typing already in progress (the space-key routing
+	// under test is identical whether the text arrived keystroke-by-
+	// keystroke or programmatically).
+	qs := m.pendingQuestionnaire
+	qs.input.SetValue("two")
+	if !qs.input.Focused() {
+		t.Fatalf("input not focused")
+	}
+	before := qs.input.Value()
+	// Real terminal drivers populate Text for the space rune; a bare
+	// Code-only msg inserts nothing (bubbles default branch uses msg.Text).
+	m2, _ := m.handleQuestionnaireKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	if got := m2.pendingQuestionnaire.input.Value(); got != before+" " {
+		t.Fatalf("space must reach input once typing started, got %q (before=%q)", got, before)
 	}
 }

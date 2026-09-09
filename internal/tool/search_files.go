@@ -131,6 +131,25 @@ func (t SearchFiles) gitGrepSearch(ctx context.Context, args struct {
 		if len(out) == 0 {
 			return nil, 0, false // pattern rejected or git failure: use fallback
 		}
+		// #1702 case 2: git died non-1 (signal/SIGPIPE 141) with partial
+		// stdout. The old code parsed the partial output as COMPLETE -
+		// totalMatches silently underestimated with no truncation marker.
+		// Keep the partial results but tag the output.
+		lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+		results := make([]string, 0, args.MaxResults)
+		total := 0
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			total++
+			if len(results) < args.MaxResults {
+				results = append(results, line)
+			}
+		}
+		results = append(results, fmt.Sprintf("[truncated: git grep exited non-zero (%v) with partial output; %d matches shown may undercount]", err, total))
+		return results, total, true
 	}
 
 	lines := strings.Split(string(out), "\n")
@@ -182,11 +201,23 @@ func (t SearchFiles) parallelSearch(ctx context.Context, args struct {
 			}
 		}
 
-		// Apply include glob filter
+		// Apply include glob filter.
+		// #1702 case 1: the git fast path passes IncludePattern to git
+		// grep as a PATHSPEC (arbitrary-depth: "src/*.go" matches
+		// src/deep/nested/file.go via fnmatch semantics) while the old
+		// fallback matched the BASENAME only - the same argument silently
+		// returned zero results (with a misleading "check the pattern"
+		// hint) depending on git availability. Match basename OR the
+		// repo-relative slash path so the fallback accepts a superset of
+		// the pathspec forms (documented include_pattern semantics).
 		if args.IncludePattern != "" {
 			matched, err := filepath.Match(args.IncludePattern, d.Name())
 			if err != nil || !matched {
-				return nil
+				// Pathspec-style: like git, `*` also crosses path
+				// separators when matching the repo-relative path.
+				if !globMatchCrossSlash(args.IncludePattern, filepath.ToSlash(relPath)) {
+					return nil
+				}
 			}
 		}
 
@@ -313,4 +344,48 @@ func formatResults(results []string, totalMatches int) Result {
 		sb.WriteByte('\n')
 	}
 	return Result{Content: sb.String()}
+}
+
+// globMatchCrossSlash matches a glob where `*` and `?` cross path
+// separators (git pathspec / fnmatch semantics), unlike filepath.Match.
+// Malformed patterns (e.g. unterminated character class) simply do not
+// match. #1702 case 1.
+func globMatchCrossSlash(pattern, name string) bool {
+	var sb strings.Builder
+	sb.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		c := pattern[i]
+		switch c {
+		case '*':
+			sb.WriteString(".*")
+		case '?':
+			sb.WriteString(".")
+		case '[':
+			j := i + 1
+			if j < len(pattern) && (pattern[j] == '!' || pattern[j] == '^') {
+				j++
+			}
+			if j < len(pattern) && pattern[j] == ']' {
+				j++
+			}
+			for j < len(pattern) && pattern[j] != ']' {
+				j++
+			}
+			if j >= len(pattern) {
+				return false // unterminated class
+			}
+			seg := pattern[i : j+1]
+			seg = strings.Replace(seg, "[!", "[^", 1)
+			sb.WriteString(seg)
+			i = j
+		default:
+			sb.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	sb.WriteString("$")
+	re, err := regexp.Compile(sb.String())
+	if err != nil {
+		return false
+	}
+	return re.MatchString(name)
 }

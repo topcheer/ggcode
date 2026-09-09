@@ -92,6 +92,29 @@ var claimVerifyContentTools = map[string]bool{
 // the intended true positive — warning when a nominally-successful search
 // actually found nothing — without treating user content that merely
 // contains status-like wording as a failure signal.
+// segHasDownstreamRetriever reports whether a command segment contains a
+// content-retrieval command after the wrapper (#1695 case 1).
+func segHasDownstreamRetriever(seg string) bool {
+	f := strings.Fields(seg)
+	for i := 0; i < len(f); i++ {
+		switch f[i] {
+		case "grep", "rg", "cat", "head", "tail":
+			return true
+		case "-exec":
+			// find -exec grep ... \; / xargs-style suffix counts if a
+			// retriever appears anywhere after -exec.
+			for j := i + 1; j < len(f); j++ {
+				switch f[j] {
+				case "grep", "rg", "cat", "head", "tail":
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
 // claimVerifyMetaStatusPrefixes are the zero-result status prefixes various
 // content tools render. The old single "no matches found." (with period)
 // matched only grep's wording; search_files ("No matches found for pattern"),
@@ -171,12 +194,41 @@ func isContentRetrievalCommand(cmd string) bool {
 		// search was condemned as a test failure (semantic reversal) on this
 		// repo's most common workflow.
 		if name == "git" && len(fields) > 1 {
-			switch fields[1] {
-			case "grep", "log", "show", "blame":
-				continue // content-bearing git subcommand
+			// #1695 case 2: skip leading GLOBAL options (-C /path, --no-
+			// pager, --git-dir=...) so the common `git -C /path grep`
+			// idiom reaches the subcommand instead of falling back to the
+			// status-pattern scan (fields[1] == "-C" never matched).
+			sub := 1
+			for sub < len(fields) && strings.HasPrefix(fields[sub], "-") {
+				// Value-taking global options (-C <path>, --git-dir=<v> is
+				// self-contained but -C /path is not) consume the NEXT
+				// field - without this the path was mistaken for the
+				// subcommand and `git -C /repo grep` never exempted.
+				if fields[sub] == "-C" || fields[sub] == "--git-dir" ||
+					fields[sub] == "--work-tree" || fields[sub] == "--namespace" {
+					sub += 2
+				} else {
+					sub++
+				}
+			}
+			if sub < len(fields) {
+				switch fields[sub] {
+				case "grep", "log", "show", "blame":
+					continue // content-bearing git subcommand
+				}
 			}
 		} else if name == "xargs" || name == "find" {
-			continue // wrappers: downstream grep/find -exec carries content
+			// #1695 case 1: NOT unconditional - `xargs rm -rf` and
+			// `find . -delete` are pure mutators whose output carries no
+			// retrieved content; exempting them skipped the ENTIRE status
+			// scan and soft failures (permission warnings, partial batch
+			// errors) went unnoticed. Exempt only when the command line
+			// also contains a downstream content retriever (grep/rg/cat/
+			// find -exec ... grep), which is the case the wrapper
+			// exemption exists for (#1506).
+			if segHasDownstreamRetriever(seg) {
+				continue
+			}
 		}
 		// Strip env-var assignments (FOO=bar cmd) and path prefixes.
 		for strings.Contains(name, "=") && len(fields) > 1 {
@@ -230,9 +282,42 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 	// counts as a signal. Match lines / file content that merely CONTAIN the
 	// phrase are payload, not status (fixes issue #739 false positives).
 	if isContent {
-		trimmedLower := strings.ToLower(strings.TrimSpace(content))
+		// #1695 case 3: meta-status prefixes are generic ("no matches") -
+		// a MATCHED payload whose first line reads "no matches are
+		// allowed..." would trip the advisory. The tool's own meta-status
+		// line is the ENTIRE first line, so require the prefix to consume
+		// it exactly (prefix + end, or prefix + space + qualifier).
+		firstLine := strings.ToLower(strings.TrimSpace(content))
+		if idx := strings.IndexByte(firstLine, '\n'); idx >= 0 {
+			firstLine = strings.TrimSpace(firstLine[:idx])
+		}
+		// Longest-prefix-first: "no matches" would otherwise shadow
+		// "no matches found" for the qualifier check below.
+		for i := range claimVerifyMetaStatusPrefixes {
+			for j := i + 1; j < len(claimVerifyMetaStatusPrefixes); j++ {
+				if len(claimVerifyMetaStatusPrefixes[j]) > len(claimVerifyMetaStatusPrefixes[i]) {
+					claimVerifyMetaStatusPrefixes[i], claimVerifyMetaStatusPrefixes[j] =
+						claimVerifyMetaStatusPrefixes[j], claimVerifyMetaStatusPrefixes[i]
+				}
+			}
+		}
 		for _, prefix := range claimVerifyMetaStatusPrefixes {
-			if strings.HasPrefix(trimmedLower, prefix) {
+			if len(firstLine) < len(prefix) || !strings.HasPrefix(firstLine, prefix) {
+				continue
+			}
+			rest := firstLine[len(prefix):]
+			if rest == "" || strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, ".") {
+				c.injections++
+				debug.Log("claim_verify", "zero-result meta-status detected: tool=%s", toolName)
+				return "[Verify] Search returned no matches. Do not claim results were found. Re-read the tool output carefully before proceeding."
+			}
+			// Short GENERIC prefixes ("no matches", "nothing found") stop
+			// here: any continuation ("are allowed in strict mode") is a
+			// matched payload sentence, not a meta qualifier. Longer
+			// specific prefixes ("no matches found") accept qualifiers
+			// ("for pattern: foo" - search_files wording).
+			if prefix == "no matches found" || prefix == "no results found" ||
+				prefix == "no files matched" {
 				c.injections++
 				debug.Log("claim_verify", "zero-result meta-status detected: tool=%s", toolName)
 				return "[Verify] Search returned no matches. Do not claim results were found. Re-read the tool output carefully before proceeding."

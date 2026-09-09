@@ -285,3 +285,41 @@ func TestValidateYAMLKeylessBlockScalar(t *testing.T) {
 		t.Fatalf("header trailing comment must not report dups, got %v", dups)
 	}
 }
+
+// TestConfigSyntaxCheck_ListBlockScalarEdges pins #1721 cases 1+2: the
+// nested keyless form and the quoted-key-with-colon form must both engage
+// the block scalar (body lines are content, not duplicate mapping keys).
+func TestConfigSyntaxCheck_ListBlockScalarEdges(t *testing.T) {
+	// Case 1: list of lists of block scalars ('- - |').
+	nested := `
+matrix:
+  - - |
+      script line one
+      script line two
+    - |
+      other script
+`
+	if warn := configSyntaxCheck("ci.yaml", nested); warn != "" {
+		t.Errorf("case 1: nested keyless block must not warn, got: %s", warn)
+	}
+	// Case 2: quoted key containing a colon opens a block scalar.
+	quoted := `
+endpoints:
+  - "host:port": |
+      body line one
+      body line two
+`
+	if warn := configSyntaxCheck("cfg.yaml", quoted); warn != "" {
+		t.Errorf("case 2: quoted-key block must not warn, got: %s", warn)
+	}
+	// A REAL duplicate after a block must still be caught (negative side).
+	realDup := `
+- run: |
+    echo hi
+key: 1
+key: 2
+`
+	if warn := configSyntaxCheck("d.yaml", realDup); warn == "" {
+		t.Error("true duplicate keys must still warn (block engagement must not swallow everything)")
+	}
+}

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -240,5 +241,37 @@ func TestTRJaccard(t *testing.T) {
 	j = trJaccard(map[string]bool{}, map[string]bool{"a": true})
 	if math.Abs(j) > 1e-9 {
 		t.Errorf("empty set should have Jaccard 0, got %.2f", j)
+	}
+}
+
+// #1855 case 2: equality-only dedup burned both warnings on iters N and
+// N+1. Adjacent-iteration cooldown keeps the second warning available for
+// genuinely later redundancy.
+func TestRedundancyAdjacentIterCooldown1855(t *testing.T) {
+	tr := newToolResultRedundancyState()
+	// Unique lines: trNormalize dedups into a set, so repeated identical
+	// lines collapse below trMinLines.
+	var sb strings.Builder
+	for i := 0; i < trMinLines+1; i++ {
+		fmt.Fprintf(&sb, "unique output line %02d\n", i)
+	}
+	content := sb.String()
+	// Seed one history entry first (a lone result has nothing to overlap).
+	tr.recordResult("read_file", content, 4)
+	// Iter 5: first warning.
+	if m := tr.recordResult("read_file", content, 5); m == "" {
+		t.Fatal("first warning expected")
+	}
+	// Iter 6 (adjacent): suppressed by the cooldown.
+	if m := tr.recordResult("read_file", content, 6); m != "" {
+		t.Fatal("adjacent-iteration repeat must be suppressed")
+	}
+	// Iter 20 (well past adjacency): second warning fires.
+	if m := tr.recordResult("read_file", content, 20); m == "" {
+		t.Fatal("second warning must fire for later redundancy")
+	}
+	// Iter 40: capped at trMaxWarnings.
+	if m := tr.recordResult("read_file", content, 40); m != "" {
+		t.Fatal("cap must still apply")
 	}
 }

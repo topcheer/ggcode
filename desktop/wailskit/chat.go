@@ -3552,8 +3552,18 @@ func (b *ChatBridge) SendHiddenText(text string) error {
 	b.mu.Lock()
 	b.runSes = b.currentSes
 	b.mu.Unlock()
-	b.setRunPersistSnapshot()
-	runGen = b.currentRunGeneration()
+	// #1701 case 3: setRunPersistSnapshot bumps runGeneration itself; the
+	// re-read above raced another run's bump between the two lock windows
+	// and could capture THAT generation, defeating emitIfCurrent - the
+	// same inversion #1511 removed from the text main path. Hold the lock
+	// across bump-and-capture so runGen is exactly the generation this
+	// run created (#1181 guard pattern).
+	b.mu.Lock()
+	b.runGeneration++
+	b.activeRunGen = b.runGeneration
+	b.persistSession = b.runSes
+	runGen = b.runGeneration
+	b.mu.Unlock()
 	err := b.agent.RunStream(ctx, text, func(ev provider.StreamEvent) {
 		b.emitIfCurrent(runGen, ev)
 	})

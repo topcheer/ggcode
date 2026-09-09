@@ -46,6 +46,20 @@ func (m Model) handleDoneMsg(msg doneMsg) (Model, tea.Cmd) {
 	wasFailed := m.runFailed
 	m.runCanceled = false
 	m.runFailed = false
+
+	// #1768 case 3: the lanchat receipt used to fire BEFORE the
+	// canceled/failed flags were read - failed and cancelled runs still
+	// reported "completed" to the peer. Distinguish now that we know the
+	// outcome (completed receipt for healthy runs; a rejected-status
+	// receipt otherwise so the peer is not told the task finished).
+	if m.lanChatPendingComplete != "" && m.lanChatHub != nil {
+		if wasCanceled || wasFailed {
+			m.lanChatHub.NotifyAgentNotCompleted(m.lanChatPendingComplete)
+		} else {
+			m.lanChatHub.NotifyAgentComplete(m.lanChatPendingComplete)
+		}
+		m.lanChatPendingComplete = ""
+	}
 	m.statusActivity = ""
 	m.statusToolName = ""
 	m.statusToolArg = ""
@@ -91,11 +105,6 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if msg.RunID != m.activeAgentRunID {
 		return m, nil
 	}
-	// Send "completed" receipt for lanchat messages that triggered this agent run
-	if m.lanChatPendingComplete != "" && m.lanChatHub != nil {
-		m.lanChatHub.NotifyAgentComplete(m.lanChatPendingComplete)
-		m.lanChatPendingComplete = ""
-	}
 	if m.agent != nil {
 		m.projMemFiles = m.agent.ProjectMemoryFiles()
 	}
@@ -113,6 +122,20 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	wasFailed := m.runFailed
 	m.runCanceled = false
 	m.runFailed = false
+
+	// #1768 case 3: the lanchat receipt used to fire BEFORE the
+	// canceled/failed flags were read - failed and cancelled runs still
+	// reported "completed" to the peer. Distinguish now that we know the
+	// outcome (completed receipt for healthy runs; a rejected-status
+	// receipt otherwise so the peer is not told the task finished).
+	if m.lanChatPendingComplete != "" && m.lanChatHub != nil {
+		if wasCanceled || wasFailed {
+			m.lanChatHub.NotifyAgentNotCompleted(m.lanChatPendingComplete)
+		} else {
+			m.lanChatHub.NotifyAgentComplete(m.lanChatPendingComplete)
+		}
+		m.lanChatPendingComplete = ""
+	}
 	m.statusActivity = ""
 	m.statusToolName = ""
 	m.statusToolArg = ""

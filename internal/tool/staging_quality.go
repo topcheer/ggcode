@@ -31,6 +31,7 @@ package tool
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -154,9 +155,18 @@ func AnalyzeStagingQuality(diffOutput string) string {
 	}
 
 	// Extract unique file paths from the diff.
+	// #1704 case 1: newly added BINARY files print
+	// "Binary files /dev/null and b/app.exe differ" with ZERO +++
+	// lines, and pure renames (similarity 100%) omit them too - the
+	// accidental-artifact commit (a build product) is exactly the case
+	// the old single-source extraction missed. Also harvest the b/
+	// side of `diff --git a/X b/Y` headers, which binary and rename
+	// diffs always carry.
 	fileSet := make(map[string]bool)
 	for _, line := range strings.Split(diffOutput, "\n") {
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+			fileSet[m[1]] = true
+		} else if m := diffGitHeader.FindStringSubmatch(line); m != nil {
 			fileSet[m[1]] = true
 		}
 	}
@@ -266,8 +276,24 @@ func stagingPatternMatch(path, pattern string) bool {
 		}
 		return false
 	}
-	return strings.Contains(path, pattern)
+	// #1704 case 4: bare Contains matched ".project" inside
+	// docs/my.project.md, "Wire.swift" inside Underwire.swift, and
+	// ".min.js" inside config.min.json. A non-glob pattern now means
+	// an exact FILE-NAME or path-SEGMENT match.
+	if strings.HasPrefix(pattern, ".") || strings.Contains(pattern, "/") {
+		for _, seg := range strings.Split(path, "/") {
+			if seg == pattern {
+				return true
+			}
+		}
+		return false
+	}
+	return filepath.Base(path) == pattern
 }
+
+// diffGitHeader matches the b/ side of `diff --git a/X b/Y` headers -
+// the only reliable path source for binary and pure-rename diffs (#1704).
+var diffGitHeader = regexp.MustCompile(`^diff --git a/\S+ b/(\S+)`)
 
 // formatStagingIssues formats staging quality issues into a human-readable warning.
 func formatStagingIssues(issues []StagingIssue) string {

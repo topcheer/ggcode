@@ -67,6 +67,15 @@ func (t Glob) Execute(ctx context.Context, input json.RawMessage) (Result, error
 
 	// Support ** for recursive matching via filepath.Glob doublestar
 	pattern := filepath.Join(args.Directory, args.Pattern)
+	// #1690 case 3: the pattern itself was never sandbox-checked - "../../*"
+	// joined its way out of the allowed directory and Glob happily walked
+	// it. Clean the joined path and require it to stay inside.
+	if t.SandboxCheck != nil {
+		joined := filepath.Clean(pattern)
+		if !t.SandboxCheck(joined) {
+			return Result{IsError: true, Content: fmt.Sprintf("Error: glob pattern %q escapes the allowed directory", args.Pattern)}, nil
+		}
+	}
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("glob error: %v", err)}, nil

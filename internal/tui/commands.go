@@ -599,6 +599,11 @@ func (m *Model) startNormalTextRun(text string, displayText string, displayInCha
 	// and /edit permanently on their "empty" branches. Restored per issue
 	// #541 (original position: startAutoRunCheck in 2fb70704).
 	m.lastUserSubmission = text
+	// #1713 case 1: the retry budget is per-SUBMISSION (the field comment
+	// says "current submission") but nothing reset it here - submission B
+	// inherited A's burnt budget or landed straight in the exhausted
+	// branch with a stale count.
+	m.resetBlindSpotRetry()
 
 	return m.continueDisplayedNormalTextRun(text)
 }

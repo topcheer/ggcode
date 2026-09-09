@@ -399,7 +399,12 @@ func (nm *NotificationManager) showOSNotification(title, body string) {
 	case "darwin":
 		nm.notifyMacOS(title, body)
 	case "linux":
-		nm.notifyLinux(title, body)
+		// #1852 case 1: route Linux through the SAME bounded queue as
+		// macOS - the old notifyLinux call spawned one goroutine+process
+		// per notification and never touched unixQueue, so the #1431-A
+		// serialization contract was honored on darwin only. The worker
+		// (deliverUnix) already dispatches notify-send for non-darwin.
+		nm.notifyMacOS(title, body)
 	case "windows":
 		nm.notifyWindows(title, body)
 	}
@@ -503,18 +508,10 @@ func (nm *NotificationManager) deliverUnix(title, body string) {
 	}
 }
 
-func (nm *NotificationManager) notifyLinux(title, body string) {
-	// Try notify-send (libnotify) — available on most Linux desktops.
-	// Run asynchronously (#290): notify-send forks a process on the
-	// stream-event dispatch path; keep it off the caller like the #202
-	// Windows fix. Failures are best-effort and only logged.
-	safego.Go("notify-linux", func() {
-		cmd := exec.Command("notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
-		if err := cmd.Run(); err != nil {
-			debug.Log("desktop", "Linux notification failed: %v", err)
-		}
-	})
-}
+// notifyLinux was removed (#1852 case 1): Linux now rides the shared
+// unixQueue (see showOSNotification); deliverUnix runs notify-send on
+// the single worker. The old one-goroutine-per-notification path was
+// the #399 storm shape that #1431-A fixed for darwin only.
 
 func (nm *NotificationManager) notifyWindows(title, body string) {
 	// Kept for interface parity; real delivery goes through enqueueWinToast so

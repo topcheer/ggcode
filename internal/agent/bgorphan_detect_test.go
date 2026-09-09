@@ -307,3 +307,26 @@ func TestBGOrphanQuotedNotFoundOutputKeepsTracking(t *testing.T) {
 		t.Fatal("error-channel not-found must remove the job from tracking")
 	}
 }
+
+// #1712 case 5: a bare "Status: completed" line ECHOED by program output
+// (build logs) must NOT retire a still-running jobs
+
+// #1712 case 5: a bare "Status: completed" line ECHOED by program output
+// (build logs) must NOT retire a still-running job's tracker.
+func TestBgOrphanEchoedStatusDoesNotRetire1712(t *testing.T) {
+	s := newBgOrphanState()
+	s.recordStartCommand(json.RawMessage("{\"command\":\"make test\"}"), "Job ID: job-9\nStatus: running", 1)
+	if len(s.activeJobs) == 0 {
+		t.Fatal("job not tracked after start")
+	}
+	// Echoed build output with no Job ID header.
+	s.recordOutputCheck(json.RawMessage(`{"job_id": "job-9"}`), "=== RUN TestX\nStatus: completed (cached)\n--- PASS", 2)
+	if len(s.activeJobs) != 1 {
+		t.Fatalf("echoed status must not retire tracking, tracked=%d", len(s.activeJobs))
+	}
+	// Real manager block still retires.
+	s.recordOutputCheck(json.RawMessage(`{"job_id": "job-9"}`), "Job ID: job-9\nStatus: completed", 3)
+	if len(s.activeJobs) != 0 {
+		t.Fatal("manager status block must retire tracking")
+	}
+}

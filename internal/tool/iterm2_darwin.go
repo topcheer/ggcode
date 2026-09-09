@@ -4,10 +4,11 @@ package tool
 
 import (
 	"context"
+
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ func iterm2SessionSpecifier(sessionID string) string {
 // iterm2SessionLookup returns AppleScript traversal code that finds a session by ID.
 // Returns empty string for current session (no lookup needed).
 // The found session is stored in variable "theSession".
-func iterm2SessionLookup(sessionID string) string {
+func iterm2SessionLookup(ctx context.Context, sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
@@ -62,9 +63,9 @@ func iterm2SessionLookup(sessionID string) string {
 // iterm2WriteText writes text to a session using iTerm2's native AppleScript.
 // Unlike Warp/Ghostty, iTerm2 has a native "write text" command that types
 // directly into the target session without needing System Events.
-func iterm2WriteText(sessionID, text string) error {
+func iterm2WriteText(ctx context.Context, sessionID, text string) error {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 	activate%s
@@ -72,13 +73,13 @@ tell application "iTerm"
 		write text "%s"
 	end tell
 end tell`, lookup, spec, escapeAS(text))
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	return err
 }
 
 // ── Action implementations (macOS) ───────────────────────────────────────────
 
-func (t *Iterm2Tool) executeStatus() Result {
+func (t *Iterm2Tool) executeStatus(ctx context.Context) Result {
 	if !iterm2Available() {
 		return Result{Content: "iterm2: not detected (TERM_PROGRAM != iTerm.app)"}
 	}
@@ -88,38 +89,38 @@ func (t *Iterm2Tool) executeStatus() Result {
 	b.WriteString(fmt.Sprintf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 
 	// iTerm2 version
-	if v, err := runAppleScript(context.Background(), `tell application "iTerm" to get version`); err == nil {
+	if v, err := runAppleScript(ctx, `tell application "iTerm" to get version`); err == nil {
 		b.WriteString(fmt.Sprintf("version: %s\n", v))
 	}
 
 	// App path
-	if p, err := runAppleScript(context.Background(), `tell application "iTerm" to get path to`); err == nil && p != "" {
+	if p, err := runAppleScript(ctx, `tell application "iTerm" to get path to`); err == nil && p != "" {
 		b.WriteString(fmt.Sprintf("app path: %s\n", p))
 	}
 
 	// Current session info
-	if name, err := runAppleScript(context.Background(), `tell application "iTerm" to get name of current session of current tab of front window`); err == nil {
+	if name, err := runAppleScript(ctx, `tell application "iTerm" to get name of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session name: %s\n", name))
 	}
-	if tty, err := runAppleScript(context.Background(), `tell application "iTerm" to get tty of current session of current tab of front window`); err == nil {
+	if tty, err := runAppleScript(ctx, `tell application "iTerm" to get tty of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session tty: %s\n", tty))
 	}
-	if cols, err := runAppleScript(context.Background(), `tell application "iTerm" to get columns of current session of current tab of front window`); err == nil {
+	if cols, err := runAppleScript(ctx, `tell application "iTerm" to get columns of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("columns: %s\n", cols))
 	}
-	if rows, err := runAppleScript(context.Background(), `tell application "iTerm" to get rows of current session of current tab of front window`); err == nil {
+	if rows, err := runAppleScript(ctx, `tell application "iTerm" to get rows of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("rows: %s\n", rows))
 	}
 
 	// Session ID (iTerm2 assigns a numeric ID to each session)
-	if sid, err := runAppleScript(context.Background(), `tell application "iTerm" to get id of current session of current tab of front window`); err == nil {
+	if sid, err := runAppleScript(ctx, `tell application "iTerm" to get id of current session of current tab of front window`); err == nil {
 		b.WriteString(fmt.Sprintf("current session ID: %s", sid))
 	}
 
 	return Result{Content: b.String()}
 }
 
-func (t *Iterm2Tool) executeList() Result {
+func (t *Iterm2Tool) executeList(ctx context.Context) Result {
 	script := `
 tell application "iTerm"
 	set output to ""
@@ -166,14 +167,14 @@ tell application "iTerm"
 	return output
 end tell`
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 list failed: %v", err)}
 	}
 	return Result{Content: out}
 }
 
-func (t *Iterm2Tool) executeSplit(sessionID, direction string, size int, command, workingDir string) Result {
+func (t *Iterm2Tool) executeSplit(ctx context.Context, sessionID, direction string, size int, command, workingDir string) Result {
 	dir := strings.ToLower(strings.TrimSpace(direction))
 	if dir == "" {
 		dir = "right"
@@ -213,7 +214,7 @@ func (t *Iterm2Tool) executeSplit(sessionID, direction string, size int, command
 	// Build the script
 	var script string
 	targetSpec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 
 	if strings.TrimSpace(command) != "" {
 		script = fmt.Sprintf(`
@@ -241,7 +242,7 @@ tell application "iTerm"
 end tell`, lookup, targetSpec, splitCmd, escapeAS(escapeShellSingleQuote(wd)))
 	}
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 split failed: %v", err)}
 	}
@@ -258,7 +259,7 @@ end tell`, lookup, targetSpec, splitCmd, escapeAS(escapeShellSingleQuote(wd)))
 	return Result{Content: fmt.Sprintf("iterm2 split created: direction=%s, session_id=%s", dir, out)}
 }
 
-func (t *Iterm2Tool) executeNewTab(command, workingDir string) Result {
+func (t *Iterm2Tool) executeNewTab(ctx context.Context, command, workingDir string) Result {
 	wd := strings.TrimSpace(workingDir)
 	if wd == "" {
 		wd = t.workingDir()
@@ -288,7 +289,7 @@ tell application "iTerm"
 end tell`
 	}
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 new_tab failed: %v", err)}
 	}
@@ -296,7 +297,7 @@ end tell`
 	return Result{Content: fmt.Sprintf("iterm2 tab created: session_id=%s", out)}
 }
 
-func (t *Iterm2Tool) executeNewWindow(command, workingDir string) Result {
+func (t *Iterm2Tool) executeNewWindow(ctx context.Context, command, workingDir string) Result {
 	wd := strings.TrimSpace(workingDir)
 	if wd == "" {
 		wd = t.workingDir()
@@ -322,7 +323,7 @@ tell application "iTerm"
 end tell`
 	}
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 new_window failed: %v", err)}
 	}
@@ -330,9 +331,9 @@ end tell`
 	return Result{Content: fmt.Sprintf("iterm2 window created: session_id=%s", out)}
 }
 
-func (t *Iterm2Tool) executeFocus(sessionID string) Result {
+func (t *Iterm2Tool) executeFocus(ctx context.Context, sessionID string) Result {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 	activate%s
@@ -340,7 +341,7 @@ tell application "iTerm"
 	return "focused"
 end tell`, lookup, spec)
 
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 focus failed: %v", err)}
 	}
@@ -352,9 +353,9 @@ end tell`, lookup, spec)
 	return Result{Content: fmt.Sprintf("iterm2 focused: %s", label)}
 }
 
-func (t *Iterm2Tool) executeClose(sessionID string) Result {
+func (t *Iterm2Tool) executeClose(ctx context.Context, sessionID string) Result {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -362,7 +363,7 @@ tell application "iTerm"
 	return "closed"
 end tell`, lookup, spec)
 
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 close failed: %v", err)}
 	}
@@ -374,7 +375,7 @@ end tell`, lookup, spec)
 	return Result{Content: fmt.Sprintf("iterm2 closed: %s", label)}
 }
 
-func (t *Iterm2Tool) executeSelectTab(tabIndex int) Result {
+func (t *Iterm2Tool) executeSelectTab(ctx context.Context, tabIndex int) Result {
 	if tabIndex < 1 {
 		return Result{IsError: true, Content: "tab_index must be >= 1 (1-based)"}
 	}
@@ -389,7 +390,7 @@ tell application "iTerm"
 	end tell
 end tell`, tabIndex)
 
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 select_tab failed: %v", err)}
 	}
@@ -397,14 +398,22 @@ end tell`, tabIndex)
 	return Result{Content: fmt.Sprintf("iterm2 selected tab: %d", tabIndex)}
 }
 
-func (t *Iterm2Tool) executeInput(sessionID, text string) Result {
+func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) Result {
 	if strings.TrimSpace(text) == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
-
-	err := iterm2WriteText(sessionID, text)
+	err := iterm2WriteText(ctx, sessionID, text)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 input failed: %v", err)}
+	}
+	// #1691 case 2: escapeAS silently DROPS C0 control characters (except
+	// tab/nl/cr) - the caller believed the full text was delivered while
+	// the terminal received corrupted content with no error. Report the
+	// stripped characters honestly instead.
+	stripped := countDroppedControlRunes(text)
+	note := ""
+	if stripped > 0 {
+		note = fmt.Sprintf(" (note: %d control rune(s) stripped by terminal escaping)", stripped)
 	}
 
 	label := sessionID
@@ -415,10 +424,10 @@ func (t *Iterm2Tool) executeInput(sessionID, text string) Result {
 	if len([]rune(preview)) > 100 {
 		preview = string([]rune(preview)[:100]) + "..."
 	}
-	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s", label, preview)}
+	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s%s", label, preview, note)}
 }
 
-func (t *Iterm2Tool) executeSendKey(sessionID, key, modifiers string) Result {
+func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifiers string) Result {
 	if strings.TrimSpace(key) == "" {
 		return Result{IsError: true, Content: "key is required for send_key action"}
 	}
@@ -464,7 +473,7 @@ func (t *Iterm2Tool) executeSendKey(sessionID, key, modifiers string) Result {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unknown key %q (supported: enter, escape, tab, space, backspace, arrow keys, home, end, pageup, pagedown, f1-f12, single characters)", key)}
 	}
 
-	if err := t.iterm2WriteToTTY(sessionID, data); err != nil {
+	if err := t.iterm2WriteToTTY(ctx, sessionID, data); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key failed: %v", err)}
 	}
 
@@ -479,7 +488,7 @@ func (t *Iterm2Tool) executeSendKey(sessionID, key, modifiers string) Result {
 	return Result{Content: fmt.Sprintf("iterm2 key sent to %s: %s", label, keyDesc)}
 }
 
-func (t *Iterm2Tool) executeResize(sessionID, axis string, increment int) Result {
+func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, increment int) Result {
 	if increment == 0 {
 		increment = 20
 	}
@@ -498,9 +507,13 @@ func (t *Iterm2Tool) executeResize(sessionID, axis string, increment int) Result
 
 	// Focus target session
 	if sessionID != "" {
-		t.executeFocus(sessionID)
+		t.executeFocus(ctx, sessionID)
 	} else {
-		exec.Command("osascript", "-e", `tell application "iTerm" to activate`).Run()
+		// #1691 case 5: swallow + no ctx were both wrong - route through
+		// the shared helper (ctx-aware, stderr captured).
+		if _, err := runAppleScript(ctx, `tell application "iTerm" to activate`); err != nil {
+			debug.Log("tool", "iterm2 resize activate failed: %v", err)
+		}
 	}
 	time.Sleep(30 * time.Millisecond)
 
@@ -512,7 +525,7 @@ func (t *Iterm2Tool) executeResize(sessionID, axis string, increment int) Result
 	// Use iTerm2's native AppleScript to adjust columns/rows directly.
 	// This avoids the need for Accessibility/System Events permissions.
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	var script string
 	if ax == "horizontal" {
 		script = fmt.Sprintf(`
@@ -534,7 +547,7 @@ tell application "iTerm"
 end tell`, lookup, spec, increment)
 	}
 
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 resize failed: %v", err)}
 	}
@@ -553,9 +566,9 @@ func absInt(n int) int {
 	return n
 }
 
-func (t *Iterm2Tool) executeGetText(sessionID string) Result {
+func (t *Iterm2Tool) executeGetText(ctx context.Context, sessionID string) Result {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -572,7 +585,7 @@ tell application "iTerm"
 	end tell
 end tell`, lookup, spec)
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		// Fallback: try using capture() which may not be available in all versions
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 get_text failed: %v", err)}
@@ -581,13 +594,13 @@ end tell`, lookup, spec)
 	return Result{Content: out}
 }
 
-func (t *Iterm2Tool) executeSetTitle(sessionID, title string) Result {
+func (t *Iterm2Tool) executeSetTitle(ctx context.Context, sessionID, title string) Result {
 	if strings.TrimSpace(title) == "" {
 		return Result{IsError: true, Content: "text (title) is required for set_title action"}
 	}
 
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -596,7 +609,7 @@ tell application "iTerm"
 	end tell
 end tell`, lookup, spec, escapeAS(title))
 
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 set_title failed: %v", err)}
 	}
@@ -604,7 +617,7 @@ end tell`, lookup, spec, escapeAS(title))
 	return Result{Content: fmt.Sprintf("iterm2 session title set: %s", title)}
 }
 
-func (t *Iterm2Tool) executeProfile(sessionID, profileName string) Result {
+func (t *Iterm2Tool) executeProfile(ctx context.Context, sessionID, profileName string) Result {
 	if strings.TrimSpace(profileName) == "" {
 		return Result{IsError: true, Content: "text (profile name) is required for profile action"}
 	}
@@ -613,7 +626,7 @@ func (t *Iterm2Tool) executeProfile(sessionID, profileName string) Result {
 	// Use the proprietary escape sequence ESC]1337;SetProfile=Name BEL
 	// to switch the profile for the target session.
 	esc := fmt.Sprintf("\x1b]1337;SetProfile=%s\x07", profileName)
-	if err := t.iterm2WriteToTTY(sessionID, esc); err != nil {
+	if err := t.iterm2WriteToTTY(ctx, sessionID, esc); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 profile switch failed: %v", err)}
 	}
 
@@ -623,9 +636,9 @@ func (t *Iterm2Tool) executeProfile(sessionID, profileName string) Result {
 // iterm2WriteToTTY writes a raw string directly to the session's TTY device,
 // bypassing both System Events and the shell. This is used for escape
 // sequences (badge, mark, clear) that must not be interpreted by the shell.
-func (t *Iterm2Tool) iterm2WriteToTTY(sessionID, data string) error {
+func (t *Iterm2Tool) iterm2WriteToTTY(ctx context.Context, sessionID, data string) error {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	ttyScript := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -634,7 +647,7 @@ tell application "iTerm"
 	end tell
 end tell`, lookup, spec)
 
-	tty, err := runAppleScript(context.Background(), ttyScript)
+	tty, err := runAppleScript(ctx, ttyScript)
 	if err != nil {
 		return fmt.Errorf("failed to get session tty: %w", err)
 	}
@@ -654,21 +667,21 @@ end tell`, lookup, spec)
 	return nil
 }
 
-func (t *Iterm2Tool) executeBadge(sessionID, badgeText string) Result {
+func (t *Iterm2Tool) executeBadge(ctx context.Context, sessionID, badgeText string) Result {
 	// iTerm2 supports per-session badges via the OSC 1337 escape sequence:
 	// ESC ] 1337 ; SetBadgeFormat = BASE64(text) BEL
 	// We write the escape sequence directly to the session's TTY device
 	// to avoid interference from the shell or TUI raw mode.
 
 	if badgeText == "" {
-		err := t.iterm2WriteToTTY(sessionID, "\033]1337;SetBadgeFormat=\007")
+		err := t.iterm2WriteToTTY(ctx, sessionID, "\033]1337;SetBadgeFormat=\007")
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("iterm2 badge clear failed: %v", err)}
 		}
 		return Result{Content: "iterm2 badge cleared"}
 	}
 
-	err := t.iterm2WriteToTTY(sessionID, fmt.Sprintf("\033]1337;SetBadgeFormat=%s\007", badgeText))
+	err := t.iterm2WriteToTTY(ctx, sessionID, fmt.Sprintf("\033]1337;SetBadgeFormat=%s\007", badgeText))
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 badge failed: %v", err)}
 	}
@@ -680,7 +693,7 @@ func (t *Iterm2Tool) executeBadge(sessionID, badgeText string) Result {
 	return Result{Content: fmt.Sprintf("iterm2 badge set: %s", preview)}
 }
 
-func (t *Iterm2Tool) executeBroadcast(subAction string) Result {
+func (t *Iterm2Tool) executeBroadcast(ctx context.Context, subAction string) Result {
 	sub := strings.ToLower(strings.TrimSpace(subAction))
 	if sub == "" {
 		sub = "toggle"
@@ -711,7 +724,7 @@ end tell`
 		return Result{IsError: true, Content: fmt.Sprintf("invalid broadcast sub-action %q (use toggle/on/off)", subAction)}
 	}
 
-	_, err := runAppleScript(context.Background(), script)
+	_, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 broadcast failed: %v", err)}
 	}
@@ -719,7 +732,7 @@ end tell`
 	return Result{Content: fmt.Sprintf("iterm2 broadcast: %s", sub)}
 }
 
-func (t *Iterm2Tool) executeMark(subAction string) Result {
+func (t *Iterm2Tool) executeMark(ctx context.Context, subAction string) Result {
 	sub := strings.ToLower(strings.TrimSpace(subAction))
 	if sub == "" {
 		sub = "set"
@@ -729,7 +742,7 @@ func (t *Iterm2Tool) executeMark(subAction string) Result {
 	case "set":
 		// Use OSC 1337 escape sequence written directly to TTY - no
 		// Accessibility permission needed.
-		err := t.iterm2WriteToTTY("", "\033]1337;SetMark\007")
+		err := t.iterm2WriteToTTY(ctx, "", "\033]1337;SetMark\007")
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("iterm2 mark set failed: %v", err)}
 		}
@@ -752,7 +765,7 @@ tell application "System Events"
 	end tell
 end tell`, sub, sub, sub)
 
-		_, err := runAppleScript(context.Background(), script)
+		_, err := runAppleScript(ctx, script)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("iterm2 mark %s failed (needs Accessibility permission for keyboard shortcuts): %v", sub, err)}
 		}
@@ -763,18 +776,18 @@ end tell`, sub, sub, sub)
 	}
 }
 
-func (t *Iterm2Tool) executeClear(sessionID string) Result {
+func (t *Iterm2Tool) executeClear(ctx context.Context, sessionID string) Result {
 	// Clear screen + scrollback via escape sequence written to TTY.
 	// ESC[2J = clear screen, ESC[3J = clear scrollback, ESC[H = cursor home.
 	// No Accessibility permission needed.
-	err := t.iterm2WriteToTTY(sessionID, "\033[2J\033[3J\033[H")
+	err := t.iterm2WriteToTTY(ctx, sessionID, "\033[2J\033[3J\033[H")
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 clear failed: %v", err)}
 	}
 	return Result{Content: "iterm2 buffer cleared"}
 }
 
-func (t *Iterm2Tool) executeMenuAction(menuItem string) Result {
+func (t *Iterm2Tool) executeMenuAction(ctx context.Context, menuItem string) Result {
 	if strings.TrimSpace(menuItem) == "" {
 		return Result{IsError: true, Content: "text (menu item name) is required for action"}
 	}
@@ -784,7 +797,7 @@ func (t *Iterm2Tool) executeMenuAction(menuItem string) Result {
 tell application "iTerm" to activate
 tell application "System Events"
 	tell process "iTerm2"
-		set targetItem to %q
+		set targetItem to "%s"
 		set menuNames to {"File", "Edit", "View", "Sessions", "Tab", "Split Panes", "Window", "Help", "Shell"}
 		repeat with mb in menuNames
 			try
@@ -803,9 +816,9 @@ tell application "System Events"
 		end repeat
 	end tell
 end tell
-return "not found"`, menuItem)
+return "not found"`, escapeAS(menuItem))
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 action %q failed: %v", menuItem, err)}
 	}
@@ -817,7 +830,7 @@ return "not found"`, menuItem)
 	return Result{Content: fmt.Sprintf("iterm2: %s", menuItem)}
 }
 
-func (t *Iterm2Tool) executeReloadConfig() Result {
+func (t *Iterm2Tool) executeReloadConfig(ctx context.Context) Result {
 	// iTerm2 does not have a native AppleScript command to reload preferences.
 	// System Events UI scripting requires Accessibility permissions.
 	// Best effort: try the menu item; if it fails, inform the user.
@@ -839,7 +852,7 @@ tell application "System Events"
 	end tell
 end tell`
 
-	out, err := runAppleScript(context.Background(), script)
+	out, err := runAppleScript(ctx, script)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 reload_config failed: %v", err)}
 	}

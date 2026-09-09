@@ -57,8 +57,16 @@ func configSyntaxCheck(filePath, content string) string {
 	switch ext {
 	case ".json":
 		return validateJSON(filePath, content)
-	case ".jsonc", ".json5":
+	case ".jsonc":
 		return validateJSONC(filePath, content)
+	case ".json5":
+		// #1773 case 2: JSON5 is a SUPERSET of JSON - unquoted keys, single
+		// quotes, trailing commas, hex numbers, +Infinity. stripJSONComments
+		// only handles // and /**/, so routing .json5 through the JSONC→JSON
+		// gauntlet reported every legal JSON5 file as broken with the false
+		// claim that it "will cause failures at runtime". Skip until a real
+		// JSON5 parser is wired in.
+		return ""
 	case ".yaml", ".yml":
 		return validateYAML(filePath, content)
 	case ".toml":
@@ -173,15 +181,28 @@ func stripJSONComments(s string) (string, error) {
 func validateYAML(filePath, content string) string {
 	// First check for duplicate keys by parsing the raw YAML text
 	// yaml.Unmarshal silently merges duplicates, so we need a different approach
-	if dupKeys := findYAMLDuplicateKeys(content); len(dupKeys) > 0 {
-		return fmt.Sprintf("YAML duplicate key(s) in %s: %s — fix before proceeding, "+
-			"this causes data loss (later keys overwrite earlier ones).",
-			filePath, strings.Join(dupKeys, ", "))
-	}
-
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &node); err != nil {
 		return formatConfigError(filePath, "YAML", err)
+	}
+	// #1773 case 3: duplicate keys must come from the AUTHORITATIVE parser,
+	// not the hand-rolled scanner. The scanner missed flow mappings
+	// (`{a: 1, a: 2}`) and list-item keys (`- key: val`), and its early
+	// return also suppressed the full syntax validation above. Decoding a
+	// mapping document into a map makes yaml.v3 itself report "mapping
+	// key ... already defined at line N" with real line numbers; non-mapping
+	// roots (sequences, scalars) simply have no mapping keys to duplicate.
+	if len(node.Content) > 0 && node.Content[0].Kind == yaml.MappingNode {
+		var into map[string]interface{}
+		if err := node.Decode(&into); err != nil {
+			// yaml.v3 phrases it "mapping key ... already defined at line N";
+			// keep the historical "duplicate key" phrasing callers and tests
+			// match on while surfacing the authoritative line numbers.
+			if strings.Contains(err.Error(), "already defined") {
+				return fmt.Sprintf("YAML duplicate key in %s: %v — this causes data loss (later keys overwrite earlier ones), fix before proceeding", filePath, err)
+			}
+			return formatConfigError(filePath, "YAML", err)
+		}
 	}
 
 	return ""
@@ -252,14 +273,31 @@ func findYAMLDuplicateKeys(content string) []string {
 			// #1534: the list item can ALSO open the scalar keylessly (`- |`,
 			// `- >`, `- |2` - Argo/Flux/k8s shapes). Without this the shell
 			// body's same-prefixed lines were read as duplicate mapping keys.
-			if ci := strings.Index(trimmed, ":"); ci > 0 {
-				if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[ci+1:])) {
+			// #1721 case 2: first-colon Index hits a colon INSIDE a quoted
+			// key (`- "host:port": |`) - the mapping path skips quoted keys,
+			// this list branch never did. Strip a leading marker and quote
+			// pair before colon-hunting.
+			listBody := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			if strings.HasPrefix(listBody, `"`) {
+				if end := strings.Index(listBody[1:], `"`); end >= 0 {
+					listBody = strings.TrimSpace(listBody[end+2:])
+				}
+			}
+			if ci := strings.Index(listBody, ":"); ci > 0 {
+				if isYAMLBlockScalarHeader(strings.TrimSpace(listBody[ci+1:])) {
 					inBlockScalar = true
 					blockIndent = indent
 				}
 			} else if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[1:])) {
 				inBlockScalar = true
 				blockIndent = indent
+			} else if strings.HasPrefix(listBody, "-") {
+				// #1721 case 1: `- - |` (list of lists of block scalars) -
+				// strip the inner marker and re-check the remainder.
+				if isYAMLBlockScalarHeader(strings.TrimSpace(strings.TrimPrefix(listBody, "-"))) {
+					inBlockScalar = true
+					blockIndent = indent
+				}
 			}
 			continue
 		}

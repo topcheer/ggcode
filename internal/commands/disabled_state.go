@@ -29,10 +29,12 @@ func loadDisabledSet() map[string]bool {
 	}
 	disabledMu.RUnlock()
 
-	disabledMu.Lock()
-	defer disabledMu.Unlock()
+	return loadDisabledSetLocked()
+}
 
-	// Double-check after acquiring write lock
+// loadDisabledSetLocked populates the disabled-set cache from disk.
+// Caller MUST hold disabledMu for writing.
+func loadDisabledSetLocked() map[string]bool {
 	if disabledCacheOK {
 		return disabledCache
 	}
@@ -106,7 +108,16 @@ func ApplyDisabledState(cmds map[string]*Command) {
 
 // PersistEnabledState saves the enabled/disabled state for a single skill.
 func PersistEnabledState(name string, enabled bool) {
-	cached := loadDisabledSet()
+	// #1702 case 5: the read-copy-write ran OUTSIDE any lock spanning the
+	// whole RMW - two concurrent calls both copied the same cache, each
+	// dropped the other's change (lost update), and the interleaved disk
+	// writes made the file nondeterministic. Serialize the full RMW.
+	disabledMu.Lock()
+	defer disabledMu.Unlock()
+	cached := disabledCache
+	if !disabledCacheOK {
+		cached = loadDisabledSetLocked()
+	}
 	// Copy the cached map before mutating to avoid concurrent map access
 	// with readers that hold the same map pointer from the cache.
 	disabled := make(map[string]bool, len(cached)+1)
@@ -120,10 +131,9 @@ func PersistEnabledState(name string, enabled bool) {
 	}
 	_ = saveDisabledSet(disabled)
 
-	// Update cache
-	disabledMu.Lock()
+	// Update cache (lock already held)
 	disabledCache = disabled
-	disabledMu.Unlock()
+	disabledCacheOK = true
 }
 
 // InvalidateDisabledCache clears the in-memory cache so next load reads from disk.

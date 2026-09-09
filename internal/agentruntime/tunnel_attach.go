@@ -1,6 +1,9 @@
 package agentruntime
 
-import "github.com/topcheer/ggcode/internal/tunnel"
+import (
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/tunnel"
+)
 
 type TunnelAttachConfig struct {
 	ReplayProvider func() []tunnel.GatewayMessage
@@ -15,8 +18,15 @@ func AttachTunnelBroker(broker *tunnel.Broker, cfg TunnelAttachConfig) {
 	if broker == nil {
 		return
 	}
-	broker.SetReplayProvider(cfg.ReplayProvider)
-	broker.SetEventRecorder(nil)
+	// #1497 case C: callers passing a nil ReplayProvider used to wipe
+	// BOTH history channels (replay set to nil AND the event recorder
+	// cleared) - newly attached clients got zero replay with no log.
+	// Keep the existing recorder when there is nothing to replay from.
+	if cfg.ReplayProvider != nil {
+		broker.SetReplayProvider(cfg.ReplayProvider)
+	} else {
+		debug.Log("agentruntime", "AttachTunnelBroker: nil ReplayProvider; keeping existing recorder")
+	}
 	if cfg.SessionInfo != nil {
 		broker.SendSessionInfo(*cfg.SessionInfo)
 	}

@@ -1081,6 +1081,15 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
+	// #1559-C: the read/edit guard states key files by path - anchor
+	// them to the workspace root so relative reads and absolute edits
+	// hit the same map entry.
+	if a.unreadEdit != nil {
+		a.unreadEdit.baseDir = dir
+	}
+	if a.expiredRead != nil {
+		a.expiredRead.baseDir = dir
+	}
 }
 func (a *Agent) WorkingDir() string {
 	a.mu.RLock()
@@ -1260,6 +1269,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// hmMaxWarns=1 burned in run 1 kept the detector silent for every
 	// later run of the Agent's lifetime.
 	a.heterogeneousModel.reset()
+	// #1843 case 1: foresightCalib.reset() was never called outside
+	// compaction - "at most 2 per run" (file-header promise) was in fact
+	// per-LIFETIME: mismatches and warnCount accumulated across every
+	// user turn, so after two early warnings the detector stayed silent
+	// for the rest of the session.
+	a.foresightCalib.reset()
 	a.expiredRead.reset()
 	// Convergence lock must reset per run so post-verification edit drift
 	// counters don't leak across runs (issue #341).
@@ -1698,8 +1713,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.guidanceBudget.reset() // reset per-turn guidance injection budget
 		// Check session wall-clock timeout: emit user-visible notifications or stop.
-		// Timeout messages are infrastructure notifications for the user only;
-		// they are NOT injected into LLM context to avoid distracting the model.
+		// #1492-C: the 80%/95% warnings must ALSO reach the LLM context -
+		// #611's commit message promised exactly that, but the only consumer
+		// emitted a user-visible event, so the model never knew the budget
+		// was running out and the 100% hard stop cut runs mid-edit/mid-verify
+		// - the very truncation this guardrail exists to prevent. The 100%
+		// stop message stays user-only (the loop ends; injecting a directive
+		// would only confuse the next session turn, #367/#611).
 		if msg := a.sessionTimeout.check(); msg != "" {
 			onEvent(provider.StreamEvent{
 				Type: provider.StreamEventSystem,
@@ -1710,6 +1730,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				sessionTimedOut = true
 				break
 			}
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: msg,
+				}},
+			})
 		}
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
@@ -4289,7 +4316,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Prompt injection guard: scan external-content tool results for
 			// adversarial injection patterns and wrap them with a security
 			// notice so the model treats them as untrusted data.
-			result.Content = guardPromptInjection(tc.Name, result.Content)
+			result.Content = guardPromptInjection(tc.Name, tc.Arguments, result.Content)
 			// Tainted data influence tracking (IFC): when the injection guard
 			// flags tool output, record distinctive fingerprints so we can
 			// later detect if that tainted content flows into privileged

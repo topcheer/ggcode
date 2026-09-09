@@ -119,6 +119,14 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 	if args.Plan == "" {
 		return Result{IsError: true, Content: "plan content is required"}, nil
 	}
+	// #1697 case 3: guard on PlanMode - without it, a call OUTSIDE any plan
+	// period still "restored" (previous plan cycle's Supervised, silently
+	// DOWNGRADING a user who had switched to bypass in between; or the
+	// zero-value "" for a first-ever call, feeding SetMode an invalid
+	// mode).
+	if t.Switcher.Mode() != permission.PlanMode {
+		return Result{IsError: true, Content: "exit_plan_mode: not in plan mode (nothing to exit)"}, nil
+	}
 
 	// Always restore the mode from before entering plan mode.
 	mode := t.Switcher.RestoreMode(t.DefaultMode)

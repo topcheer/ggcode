@@ -82,15 +82,6 @@ func (s *consensusState) reset() {
 	s.currentStep = 0
 }
 
-// recordFirings logs multiple detector firings at once. Convenience wrapper
-// (kept for the batch-loop call sites and #952 tests) delegating to
-// recordFiring per name.
-func (s *consensusState) recordFirings(step int, detectorNames ...string) {
-	for _, n := range detectorNames {
-		s.recordFiring(n, step)
-	}
-}
-
 // recordFiring logs that a named detector produced guidance.
 // This should be called whenever ANY detector's check() returns non-empty.
 // #1446-C: step is the CURRENT tool-call/iteration index supplied by the
@@ -187,8 +178,8 @@ func (s *consensusState) check() string {
 }
 
 // checkOnly runs the consensus check WITHOUT scanning content (#952). Used by
-// the agent loop, where firings are recorded explicitly via recordFiring /
-// recordFirings at each detector call site: the content scan was both fragile
+// the agent loop, where firings are recorded explicitly via recordFiring at
+// each detector call site: the content scan was both fragile
 // (its baseline-offset window missed every detector whose guidance is appended
 // before the window starts — failureMode, errorCascade, ...) and a
 // false-positive vector (#147: raw tool output containing tag literals).

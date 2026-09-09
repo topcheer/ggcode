@@ -1620,7 +1620,7 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 				Content: "checkpoint_id is required for action=revert. Use action=list to see available checkpoint IDs.",
 			}
 		}
-		cp, revertedFiles, err := cpMgr.RevertWithFiles(args.CheckpointID)
+		cp, revertedFiles, err := cpMgr.RevertWithFilesSource(args.CheckpointID, "agent") // #1708: agent self-revert must not narrate as user rejection (#1449-A)
 		if err != nil {
 			return tool.Result{
 				IsError: true,

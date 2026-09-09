@@ -25,6 +25,10 @@ func (pdfExtractor) Extract(data []byte) (TextResult, error) {
 	for i := 1; i <= numPages; i++ {
 		page := reader.Page(i)
 		if page.V.IsNull() {
+			// #1729 case 2: a null page object vanished silently while
+			// Pages still reported the total - the page-level twin of the
+			// masquerade #1542 fixed for corrupt pages (#686/#682 family).
+			fmt.Fprintf(&buf, "\n[page %d empty: page object missing]", i)
 			continue
 		}
 		text, err := page.GetPlainText(nil)
@@ -33,7 +37,10 @@ func (pdfExtractor) Extract(data []byte) (TextResult, error) {
 			// 49 with no page number and no marker while Pages still reported
 			// the total, the exact masquerade svg/tar/zip already fixed
 			// (#686/#682). Flag it honestly.
-			fmt.Fprintf(&buf, "\n[page %d unreadable: %v]", i+1, err)
+			// #1729 case 1: ledongthuc/pdf's Page(n) takes 1-BASED numbers
+			// (page.go num-- comment) - i is already the true page number;
+			// the old i+1 reported page numPages+1 for a corrupt LAST page.
+			fmt.Fprintf(&buf, "\n[page %d unreadable: %v]", i, err)
 			continue
 		}
 		text = strings.TrimSpace(text)

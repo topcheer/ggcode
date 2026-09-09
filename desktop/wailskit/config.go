@@ -31,6 +31,7 @@ func SetConfig(cfg *config.Config) {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	globalCfg = cfg
+	startConfigFileSync()
 }
 
 // GetGlobalConfig returns the current global config.
@@ -38,6 +39,80 @@ func GetGlobalConfig() *config.Config {
 	globalMu.RLock()
 	defer globalMu.RUnlock()
 	return globalCfg
+}
+
+// configFileState tracks the config file for external changes (#1847).
+var (
+	cfgFileSyncOnce    sync.Once
+	cfgFileLastMod     time.Time
+	cfgFileLastModOnce bool
+)
+
+// startConfigFileSync refreshes globalCfg when the config file changes
+// underneath the desktop process (#1847 case 1/3).
+//
+// The desktop keeps a startup snapshot; a TUI/CLI session (or any other
+// OS process) can patch the file at any time. Saving the stale snapshot
+// deep-merged STALE NON-ZERO values over the newer disk state - silently
+// rolling back the other session's changes (UI display included). The
+// same 2s polling pattern as agentruntime's config hot-reload (project
+// convention: no fsnotify dependency). Our own saves update the tracked
+// mtime first, so self-writes do not trigger a redundant reload; a
+// reload racing a writer is serialized by globalMu.
+func startConfigFileSync() {
+	cfgFileSyncOnce.Do(func() {
+		if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
+			cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
+		}
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				globalMu.Lock()
+				syncCfgFileLocked()
+				globalMu.Unlock()
+			}
+		}()
+	})
+}
+
+// trackedConfigPathLocked returns the file globalCfg was loaded from
+// (falls back to the default path). Callers hold globalMu.
+func trackedConfigPathLocked() string {
+	if globalCfg != nil && globalCfg.FilePath != "" {
+		return globalCfg.FilePath
+	}
+	return config.ConfigPath()
+}
+
+// syncCfgFileLocked reloads globalCfg from disk when the file is newer
+// than the last observed mtime. Callers must hold globalMu for writing.
+func syncCfgFileLocked() {
+	path := trackedConfigPathLocked()
+	st, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if cfgFileLastModOnce && !st.ModTime().After(cfgFileLastMod) {
+		return
+	}
+	cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
+	if globalCfg == nil {
+		return
+	}
+	if fresh, lerr := config.Load(path); lerr == nil && fresh != nil {
+		globalCfg = fresh
+		debug.Log("desktop", "config file changed externally; global config refreshed (#1847)")
+	}
+}
+
+// noteConfigFileSaved records the mtime right after OUR OWN save, so the
+// poller does not treat our write as an external change (callers hold
+// globalMu).
+func noteConfigFileSaved() {
+	if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
+		cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
+	}
 }
 
 // ResolveConfigFilePath finds the config file for a workspace directory.
@@ -126,12 +201,16 @@ type FullConfig struct {
 // GetFullConfig returns a complete config snapshot.
 func GetFullConfig() (*FullConfig, error) {
 	globalMu.RLock()
-	defer globalMu.RUnlock()
 	cfg := globalCfg
+	globalMu.RUnlock()
 
 	if cfg == nil {
 		return &FullConfig{NeedsSetup: true}, nil
 	}
+	// #1847: display freshness comes from the file-sync poller (2s)
+	// rather than a display-time disk read - GetFullConfig must keep
+	// rendering the in-memory snapshot, which tests and the onboarding
+	// flow rely on as the source of truth for not-yet-saved state.
 
 	// Check if API key is set (without exposing it)
 	// Guard on vendor entry existing; key resolution itself goes through
@@ -350,6 +429,7 @@ func UpdateConfig(values map[string]interface{}) error {
 	if err := cfg.Save(); err != nil {
 		return err
 	}
+	noteConfigFileSaved()
 	// Save() strips instance-sourced keys from the global file write; persist
 	// any such field touched by this update to the instance file too, or the
 	// change would be silently lost on restart (#282).
@@ -667,7 +747,11 @@ func ApplyImpersonation(presetID, version string, customHeaders map[string]strin
 		CustomVersion: version,
 		CustomHeaders: mergedHeaders,
 	}
-	return cfg.Save()
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	noteConfigFileSaved()
+	return nil
 }
 
 // Ensure unused imports are referenced.
@@ -705,7 +789,11 @@ func (b *ChatBridge) SaveHooks(cfg hooks.HookConfig) error {
 	if b.agent != nil {
 		b.agent.SetHookConfig(cfg)
 	}
-	return b.cfg.Save()
+	err := b.cfg.Save()
+	if err == nil {
+		noteConfigFileSaved()
+	}
+	return err
 }
 
 // TestHookMatchResult is the result of testing a hook match pattern.

@@ -90,7 +90,23 @@ func extractJSONTagName(tag string) (name string, hasTag bool) {
 // Returns "" if the field is not sensitive or already properly excluded.
 func sensitiveFieldWarning(fset *token.FileSet, filePath, structName string, field *ast.Field) string {
 	if field.Tag == nil {
-		return ""
+		// #1492-A: an exported field with NO json tag is serialized by
+		// encoding/json under its field name - `Password string` leaks just
+		// the same. This is the MOST COMMON leak shape and was skipped
+		// entirely. An untagged field cannot carry "-" without ADDING a
+		// tag, so the remediation differs from the tagged case.
+		fieldName := ""
+		if len(field.Names) > 0 {
+			fieldName = field.Names[0].Name
+		}
+		if fieldName == "" || !isSensitiveFieldName(fieldName) || !field.Names[0].IsExported() {
+			return ""
+		}
+		pos := fset.Position(field.Pos())
+		return fmt.Sprintf(
+			"%s:%d: sensitive field %q in struct %q has NO json tag - encoding/json serializes it under the field name, leaking it in any marshaled output. If this struct crosses a response/log boundary, add `json:\"-\"` (or omit the field); if it MUST serialize (request payloads, token exchanges, persisted config), verify every sink redacts it before relying on it (OWASP A01:2021)",
+			filepath.Base(filePath), pos.Line, fieldName, structName,
+		)
 	}
 	tagName, hasJSONTag := extractJSONTagName(field.Tag.Value)
 	if !hasJSONTag || tagName == "-" {
@@ -114,7 +130,7 @@ func sensitiveFieldWarning(fset *token.FileSet, filePath, structName string, fie
 	}
 	pos := fset.Position(field.Pos())
 	return fmt.Sprintf(
-		"%s:%d: sensitive field %q in struct %q has json tag %q but is not excluded from JSON output -- add `json:\"-\"` to prevent sensitive data exposure in API responses (OWASP A01:2021)",
+		"%s:%d: sensitive field %q in struct %q has json tag %q and IS serialized - if this struct crosses a response/log boundary add `json:\"-\"` to exclude it; if it must serialize (request payload, token exchange, persisted config), verify every consumer/redaction sink handles it before shipping (OWASP A01:2021)",
 		filepath.Base(filePath), pos.Line, displayName, structName, tagName,
 	)
 }
