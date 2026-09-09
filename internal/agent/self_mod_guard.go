@@ -259,6 +259,25 @@ func extractSelfModPaths(args json.RawMessage, _ string) []string {
 		}
 	}
 
+	// #1492-D: file_ops carries {action, source, destination} objects in
+	// an `operations` array - none of the shapes above matched, so
+	// `file_ops delete .ggcode/hooks/x.sh` or a move INTO .ggcode/ passed
+	// the guard silently even though file_ops is in sourceMutatingTools
+	// (the guard ran but always returned empty).
+	if ops, ok := raw["operations"].([]interface{}); ok {
+		for _, item := range ops {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"source", "destination"} {
+				if s, ok := m[key].(string); ok {
+					add(s)
+				}
+			}
+		}
+	}
+
 	return paths
 }
 
