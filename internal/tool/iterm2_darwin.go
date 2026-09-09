@@ -4,10 +4,11 @@ package tool
 
 import (
 	"context"
+
 	"fmt"
+	"github.com/topcheer/ggcode/internal/debug"
 	"io"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -413,7 +414,6 @@ func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) R
 	if strings.TrimSpace(text) == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
-
 	err := iterm2WriteText(ctx, sessionID, text)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 input failed: %v", err)}
@@ -521,7 +521,11 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 	if sessionID != "" {
 		t.executeFocus(ctx, sessionID)
 	} else {
-		exec.Command("osascript", "-e", `tell application "iTerm" to activate`).Run()
+		// #1691 case 5: swallow + no ctx were both wrong - route through
+		// the shared helper (ctx-aware, stderr captured).
+		if _, err := runAppleScript(ctx, `tell application "iTerm" to activate`); err != nil {
+			debug.Log("tool", "iterm2 resize activate failed: %v", err)
+		}
 	}
 	time.Sleep(30 * time.Millisecond)
 
@@ -805,7 +809,7 @@ func (t *Iterm2Tool) executeMenuAction(ctx context.Context, menuItem string) Res
 tell application "iTerm" to activate
 tell application "System Events"
 	tell process "iTerm2"
-		set targetItem to %q
+		set targetItem to "%s"
 		set menuNames to {"File", "Edit", "View", "Sessions", "Tab", "Split Panes", "Window", "Help", "Shell"}
 		repeat with mb in menuNames
 			try
@@ -824,7 +828,7 @@ tell application "System Events"
 		end repeat
 	end tell
 end tell
-return "not found"`, menuItem)
+return "not found"`, escapeAS(menuItem))
 
 	out, err := runAppleScript(ctx, script)
 	if err != nil {
