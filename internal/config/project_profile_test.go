@@ -202,3 +202,36 @@ func mustWriteFile(t *testing.T, dir, name, content string) {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
+
+// #1523 case C/D: detection must fill-don't-overwrite and not substring-match.
+func TestProjectProfile_DockerTagsNoGoolmInjection(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, dir, "go.mod", "module example.com/x\n\ngo 1.27\n")
+	mustWriteFile(t, dir, "Makefile", "DOCKER_TAGS ?= latest\nbuild:\n\tdocker build .\n")
+	profile := DetectProjectProfile(dir)
+	if profile == nil {
+		t.Fatal("expected profile")
+	}
+	if strings.Contains(profile.BuildCommand, "goolm") {
+		t.Errorf("DOCKER_TAGS must not inject -tags goolm, got %s", profile.BuildCommand)
+	}
+}
+
+func TestProjectProfile_NpmFillsOnlyEmpty(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, dir, "go.mod", "module example.com/x\n\ngo 1.27\n")
+	mustWriteFile(t, dir, "package.json", `{"name":"x","scripts":{"build":"webpack","test":"jest"}}`)
+	// A Makefile with goolm tags decides the commands FIRST (go build/test);
+	// the npm probe must fill nothing over them.
+	mustWriteFile(t, dir, "Makefile", "TAGS := goolm\nbuild:\n\tgo build -tags $(TAGS) ./...\n")
+	profile := DetectProjectProfile(dir)
+	if profile == nil {
+		t.Fatal("expected profile")
+	}
+	if profile.BuildCommand != "go build -tags goolm ./..." {
+		t.Errorf("go.mod/Makefile-decided build command must survive npm detection, got %q", profile.BuildCommand)
+	}
+	if profile.TestCommand != "go test -tags goolm ./..." {
+		t.Errorf("go test command must survive npm detection, got %q", profile.TestCommand)
+	}
+}
