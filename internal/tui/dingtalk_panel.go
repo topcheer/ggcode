@@ -311,6 +311,10 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 						return dingtalkBindResultMsg{err: err}
 					}
 					if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errDingtalkEnableNeeded) {
+							// #1719 case 1: enable on the Update loop, then retry.
+							return m.dingtalkEnableMutation(name, nil)
+						}
 						return dingtalkBindResultMsg{err: err}
 					}
 					return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
@@ -342,13 +346,11 @@ func (m *Model) startDingtalkAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.dingtalk.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1719 case 1: the auto-enable used to write the config map RIGHT
+		// HERE on the Cmd goroutine - a concurrent map read/write fatal
+		// against the render loop. Signal the caller to route the enable
+		// through configMutationMsg (Update loop) instead.
+		return errDingtalkEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDingTalk)) {
 		return errors.New(m.t("panel.dingtalk.error.not_dingtalk_adapter", name))
@@ -460,6 +462,40 @@ func defaultDingtalkTargetID(workspace string) string {
 		return "current-cli"
 	}
 	return base
+}
+
+// errDingtalkEnableNeeded signals the auto-enable must run on the Update
+// loop via configMutationMsg (#1719 case 1).
+var errDingtalkEnableNeeded = errors.New("dingtalk adapter needs enable-on-update-loop")
+
+// dingtalkEnableMutation returns the configMutationMsg that performs the
+// auto-enable on the Update loop and then continues with next.
+func (m *Model) dingtalkEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+					return dingtalkBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return dingtalkBindResultMsg{err: err}
+		},
+	}
 }
 
 func (m *Model) ensureDingtalkBotBinding(adapter string) error {
