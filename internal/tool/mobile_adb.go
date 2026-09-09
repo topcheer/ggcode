@@ -232,15 +232,20 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		return Result{IsError: true, Content: "element reference requires a prior snapshot - tap the field first, then type"}, nil
 	}
 	// Tap the field first if coordinates provided
-	if x > 0 || y > 0 {
+	// #1694 case 1: x=0/y=0 are LEGAL edge coordinates - the old x>0||y>0
+	// skipped the pre-tap there (text landed wherever focus was). >= 0
+	// with both-set semantics keeps the intent.
+	if ref == "" && (x != 0 || y != 0) {
 		// #840: include the device selector - without it, multi-device setups
-		// fail 'more than one device/emulator', the error is swallowed below,
-		// and the text goes to whatever holds focus while the tool reports
-		// success.
+		// fail 'more than one device/emulator', the error was swallowed below,
+		// and the text went to whatever holds focus while the tool reported
+		// success. #1694: the swallow itself was the unfixed half - a failed
+		// pre-tap now fails LOUD (typing into the wrong control while
+		// reporting success is the worse outcome).
 		preArgs := adbDeviceArgs(device)
 		preArgs = append(preArgs, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
 		if _, _, err := runCommand(ctx, 5*time.Second, a.adbPath, preArgs...); err != nil {
-			// Non-fatal, continue with typing
+			return Result{IsError: true, Content: fmt.Sprintf("pre-tap at (%d,%d) failed: %v - aborting type to avoid sending text to the wrong control", x, y, err)}, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
