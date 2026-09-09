@@ -376,8 +376,14 @@ func isOppositeValue(a, b string) bool {
 	return false
 }
 
-// versionNumRe extracts version-like or numeric tokens from a value.
-var versionNumRe = regexp.MustCompile(`\d+(?:\.\d+)*`)
+// versionNumRe extracts version-like numeric tokens from a value.
+// #1773 case 1: dotted numbers only (1.27, 2.0.1). Bare integers are
+// usually non-version context - "go 1.27 (issue 4532)" vs "go 1.27
+// (fixed in 4533)" used to compare {1.27,4532} vs {1.27,4533}, mutual
+// absence flagged a conflict between two statements whose CORE version
+// is identical. Bare-number drift ("3 retries" vs "5 retries") is a
+// deliberate miss: without context those are just counts.
+var versionNumRe = regexp.MustCompile(`\d+\.\d+(?:\.\d+)*`)
 
 // numericConflict detects when two values contain different version numbers or
 // numeric specifications, suggesting a version drift.
