@@ -536,21 +536,51 @@ func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return signalBindResultMsg{err: errors.New(m.t("panel.signal.error.config_unavailable"))}
 		}
-		if err := m.startSignalAdapterIfNeeded(entry.Adapter); err != nil {
-			return signalBindResultMsg{err: err}
+		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
+		// Update loop (#1367 family) - startSignalAdapterIfNeeded wrote the
+		// config map from this Cmd goroutine while the render loop ranged
+		// it. qq pattern: mutate via configMutationMsg, continue in next().
+		if m.config != nil {
+			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+				return configMutationMsg{
+					apply: func(m *Model) error {
+						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+					},
+					next: func(m *Model) tea.Cmd {
+						return func() tea.Msg {
+							if m.imManager != nil {
+								_ = m.imManager.EnableBinding(entry.Adapter)
+							}
+							return bindSigRest(m, entry, ws)
+						}
+					},
+					fail: func(err error) tea.Msg {
+						return signalBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+					},
+				}
+			}
 		}
-		targetID := defaultSignalTargetID(ws)
-		_, err := m.imManager.BindChannel(im.ChannelBinding{
-			Workspace: ws,
-			Platform:  im.PlatformSignal,
-			Adapter:   entry.Adapter,
-			TargetID:  targetID,
-		})
-		if err != nil {
-			return signalBindResultMsg{err: err}
-		}
-		return signalBindResultMsg{message: m.t("panel.signal.message.bound_success")}
+		return bindSigRest(m, entry, ws)
 	}
+}
+
+// bindSigRest is the bind chain body after the (optional) enable mutation
+// lands on the Update loop.
+func bindSigRest(m *Model, entry signalBindingEntry, ws string) tea.Msg {
+	if err := m.startSignalAdapterIfNeeded(entry.Adapter); err != nil {
+		return signalBindResultMsg{err: err}
+	}
+	targetID := defaultSignalTargetID(ws)
+	_, err := m.imManager.BindChannel(im.ChannelBinding{
+		Workspace: ws,
+		Platform:  im.PlatformSignal,
+		Adapter:   entry.Adapter,
+		TargetID:  targetID,
+	})
+	if err != nil {
+		return signalBindResultMsg{err: err}
+	}
+	return signalBindResultMsg{message: m.t("panel.signal.message.bound_success")}
 }
 
 func (m *Model) unbindSigEntry(adapterName string) tea.Cmd {

@@ -226,22 +226,53 @@ func (m *Model) handleFeishuPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindFeishuEntry(entry feishuBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.ensureFeishuBotBinding(entry.Adapter); err != nil {
-			return feishuBindResultMsg{err: err}
-		}
-		if m.agent != nil {
-			if err := m.waitForFeishuAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
-				return feishuBindResultMsg{err: err}
-			}
-			// Sync session history to the newly bound channel only.
-			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
-				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-					return feishuBindResultMsg{err: err}
+		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
+		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
+		// config map from this Cmd goroutine while the render loop ranged
+		// it. Follow the qq pattern: mutate via configMutationMsg, continue
+		// the bind in next().
+		if m.config != nil {
+			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+				return configMutationMsg{
+					apply: func(m *Model) error {
+						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+					},
+					next: func(m *Model) tea.Cmd {
+						return func() tea.Msg {
+							if m.imManager != nil {
+								_ = m.imManager.EnableBinding(entry.Adapter)
+							}
+							return bindFeishuRest(m, entry)
+						}
+					},
+					fail: func(err error) tea.Msg {
+						return feishuBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+					},
 				}
 			}
 		}
-		return feishuBindResultMsg{message: m.t("panel.feishu.message.bound_success")}
+		return bindFeishuRest(m, entry)
 	}
+}
+
+// bindFeishuRest is the bind chain body after the (optional) enable
+// mutation lands on the Update loop.
+func bindFeishuRest(m *Model, entry feishuBindingEntry) tea.Msg {
+	if err := m.ensureFeishuBotBinding(entry.Adapter); err != nil {
+		return feishuBindResultMsg{err: err}
+	}
+	if m.agent != nil {
+		if err := m.waitForFeishuAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
+			return feishuBindResultMsg{err: err}
+		}
+		// Sync session history to the newly bound channel only.
+		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+				return feishuBindResultMsg{err: err}
+			}
+		}
+	}
+	return feishuBindResultMsg{message: m.t("panel.feishu.message.bound_success")}
 }
 
 func (m *Model) unbindFeishuEntry(adapterName string) tea.Cmd {
@@ -300,7 +331,16 @@ func (m *Model) createFeishuAdapterCmd(spec string) tea.Cmd {
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				m.config.IM.Enabled = true
-				return m.config.AddIMAdapter(name, adapter)
+				if err := m.config.AddIMAdapter(name, adapter); err != nil {
+					return err
+				}
+				// #1794 case 2: auto-enable on the Update loop - the next()
+				// closure's startXXXAdapterIfNeeded used to write the map
+				// from the Cmd goroutine (#1367 family).
+				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+					return m.config.SetIMAdapterEnabled(name, true)
+				}
+				return nil
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
