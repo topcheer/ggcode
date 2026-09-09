@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -174,6 +175,11 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 	if m.selfPane == "" {
 		out, err := m.runTmux(ctx, "display-message", "-p", "#{pane_id}")
 		if err != nil || strings.TrimSpace(out) == "" {
+			// #1715 case 4: %w on a nil err renders "%!w(<nil>)" when the
+			// command succeeded but printed nothing.
+			if err == nil {
+				err = errors.New("empty pane id")
+			}
 			return fmt.Errorf("cmdpane: failed to determine current tmux pane: %w", err)
 		}
 		m.selfPane = strings.TrimSpace(out)
@@ -194,7 +200,7 @@ func (m *Manager) EnsurePane(ctx context.Context) error {
 	if m.selfPane != "" {
 		splitArgs = append(splitArgs, "-t", m.selfPane)
 	}
-	splitArgs = append(splitArgs, "tail", "-f", m.logPath)
+	splitArgs = append(splitArgs, "tail", "-f", "-n", "0", m.logPath) // #1715 case 1: bare -f replays the last 10 lines - the "old content is never shown" comments were wrong across sessions
 
 	paneID, err := m.runTmux(ctx, splitArgs...)
 	if err != nil {
@@ -313,8 +319,14 @@ func (m *Manager) Close() {
 		m.killPane(ctx)
 	}
 	if m.logFile != nil {
+		// #1715 case 2: lockedWriter.Write holds writeMu across its nil
+		// check and the write - Close used to close the file BETWEEN them
+		// (write error silently dropped, or nil-file ErrInvalid under
+		// -race). Lock order m.mu -> writeMu matches the writer.
+		m.writeMu.Lock()
 		_ = m.logFile.Close()
 		m.logFile = nil
+		m.writeMu.Unlock()
 	}
 	if m.logPath != "" {
 		_ = os.Remove(m.logPath)

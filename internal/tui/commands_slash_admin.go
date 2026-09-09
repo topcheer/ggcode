@@ -1299,7 +1299,7 @@ func (m *Model) handlePinCommand(parts []string) tea.Cmd {
 		for i, item := range items {
 			preview := item.Text
 			if len(preview) > 80 {
-				preview = preview[:80] + "..."
+				preview = string([]rune(preview)[:80]) + "..." // #1716: rune-safe clip (skills_panel.go pattern) - byte slice cut CJK mid-sequence
 			}
 			sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, item.ID, preview))
 		}
