@@ -234,22 +234,53 @@ func (m *Model) handleDiscordPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindDiscordEntry(entry discordBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.ensureDiscordBotBinding(entry.Adapter); err != nil {
-			return discordBindResultMsg{err: err}
-		}
-		if m.agent != nil {
-			if err := m.waitForDiscordAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
-				return discordBindResultMsg{err: err}
-			}
-			// Sync session history to the newly bound channel only.
-			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
-				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-					return discordBindResultMsg{err: err}
+		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
+		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
+		// config map from this Cmd goroutine while the render loop ranged
+		// it. Follow the qq pattern: mutate via configMutationMsg, continue
+		// the bind in next().
+		if m.config != nil {
+			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+				return configMutationMsg{
+					apply: func(m *Model) error {
+						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+					},
+					next: func(m *Model) tea.Cmd {
+						return func() tea.Msg {
+							if m.imManager != nil {
+								_ = m.imManager.EnableBinding(entry.Adapter)
+							}
+							return bindDiscordRest(m, entry)
+						}
+					},
+					fail: func(err error) tea.Msg {
+						return discordBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+					},
 				}
 			}
 		}
-		return discordBindResultMsg{message: m.t("panel.discord.message.bound_success")}
+		return bindDiscordRest(m, entry)
 	}
+}
+
+// bindDiscordRest is the bind chain body after the (optional) enable
+// mutation lands on the Update loop.
+func bindDiscordRest(m *Model, entry discordBindingEntry) tea.Msg {
+	if err := m.ensureDiscordBotBinding(entry.Adapter); err != nil {
+		return discordBindResultMsg{err: err}
+	}
+	if m.agent != nil {
+		if err := m.waitForDiscordAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
+			return discordBindResultMsg{err: err}
+		}
+		// Sync session history to the newly bound channel only.
+		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+				return discordBindResultMsg{err: err}
+			}
+		}
+	}
+	return discordBindResultMsg{message: m.t("panel.discord.message.bound_success")}
 }
 
 func (m *Model) unbindDiscordEntry(adapterName string) tea.Cmd {
@@ -300,7 +331,16 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				m.config.IM.Enabled = true
-				return m.config.AddIMAdapter(name, adapter)
+				if err := m.config.AddIMAdapter(name, adapter); err != nil {
+					return err
+				}
+				// #1794 case 2: auto-enable on the Update loop - the next()
+				// closure's startXXXAdapterIfNeeded used to write the map
+				// from the Cmd goroutine (#1367 family).
+				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+					return m.config.SetIMAdapterEnabled(name, true)
+				}
+				return nil
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
