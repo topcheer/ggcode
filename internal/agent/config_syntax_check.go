@@ -273,14 +273,31 @@ func findYAMLDuplicateKeys(content string) []string {
 			// #1534: the list item can ALSO open the scalar keylessly (`- |`,
 			// `- >`, `- |2` - Argo/Flux/k8s shapes). Without this the shell
 			// body's same-prefixed lines were read as duplicate mapping keys.
-			if ci := strings.Index(trimmed, ":"); ci > 0 {
-				if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[ci+1:])) {
+			// #1721 case 2: first-colon Index hits a colon INSIDE a quoted
+			// key (`- "host:port": |`) - the mapping path skips quoted keys,
+			// this list branch never did. Strip a leading marker and quote
+			// pair before colon-hunting.
+			listBody := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			if strings.HasPrefix(listBody, `"`) {
+				if end := strings.Index(listBody[1:], `"`); end >= 0 {
+					listBody = strings.TrimSpace(listBody[end+2:])
+				}
+			}
+			if ci := strings.Index(listBody, ":"); ci > 0 {
+				if isYAMLBlockScalarHeader(strings.TrimSpace(listBody[ci+1:])) {
 					inBlockScalar = true
 					blockIndent = indent
 				}
 			} else if isYAMLBlockScalarHeader(strings.TrimSpace(trimmed[1:])) {
 				inBlockScalar = true
 				blockIndent = indent
+			} else if strings.HasPrefix(listBody, "-") {
+				// #1721 case 1: `- - |` (list of lists of block scalars) -
+				// strip the inner marker and re-check the remainder.
+				if isYAMLBlockScalarHeader(strings.TrimSpace(strings.TrimPrefix(listBody, "-"))) {
+					inBlockScalar = true
+					blockIndent = indent
+				}
 			}
 			continue
 		}
