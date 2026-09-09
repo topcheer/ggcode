@@ -152,7 +152,16 @@ func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Resu
 	result, err := c.runCode(execCtx, args.Code)
 	if err != nil {
 		debug.Log("ptc", "execution error: %v", err)
-		return Result{IsError: true, Content: fmt.Sprintf("Execution error: %v", err)}, nil
+		// #1645 case 2: the timeout/runtime-error paths used to discard
+		// ALL captured console output - exactly when "how far did it
+		// get" matters most (debugging infinite loops, locating the
+		// crash point). runCode now returns a result with partial stdout
+		// alongside the error; surface it.
+		msg := fmt.Sprintf("Execution error: %v", err)
+		if result != nil && result.stdout != "" {
+			msg += fmt.Sprintf("\n\nPartial output before failure:\n%s", result.stdout)
+		}
+		return Result{IsError: true, Content: msg}, nil
 	}
 
 	output := result.stdout
@@ -336,7 +345,13 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 	if err != nil {
 		// Check if it was a timeout/interrupt.
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("execution timed out after %v", codeExecTimeout)
+			// #1645 case 2: carry the partial output up - the old
+			// `return nil, err` dropped everything captured before the
+			// timeout inside runCode itself.
+			return &execResult{
+				stdout:    stdout.String(),
+				toolCalls: toolCalls,
+			}, fmt.Errorf("execution timed out after %v", codeExecTimeout)
 		}
 		return &execResult{
 			stdout:    stdout.String(),

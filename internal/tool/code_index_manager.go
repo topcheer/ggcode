@@ -721,7 +721,15 @@ func (m *CodeIndexManager) scanForExternalChanges() {
 		}
 	}
 	if cachedMap == nil {
-		return // no cache to compare against
+		// #1645 case 3: do NOT silently disable external-change
+		// detection - a missing/version-mismatched cache used to return
+		// early, so deleted files stayed searchable forever (the
+		// deletion check below never ran). With an empty baseline every
+		// on-disk file reads as unindexed (one full dirty-mark), the
+		// next rebuildDirty rebuilds everything and persists a fresh
+		// cache - one-time self-healing instead of permanent staleness.
+		cachedMap = make(map[string]int64)
+		debug.Log("codeindex", "disk cache unavailable, external scan marks all for one full rebuild (%d indexed paths)", len(indexedPaths))
 	}
 
 	found := make(map[string]bool)
@@ -812,10 +820,14 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 	}
 	// Only update if we can acquire the cross-process lock.
 	if !m.tryLock() {
-		debug.Log("codeindex", "%s rebuild: skipping, lock held by another instance", reason)
-		m.mu.Lock()
-		m.dirtyFiles = make(map[string]int64)
-		m.mu.Unlock()
+		debug.Log("codeindex", "%s rebuild: lock held by another instance, retaining dirty set for next cycle", reason)
+		// #1645 case 1: do NOT wipe the dirty set. The old code cleared it
+		// here, and in the standard two-instances-one-workspace case the
+		// memory index never self-healed: once the other instance finished
+		// and persisted, the on-disk cache mtime matched the file mtime so
+		// scanForExternalChanges never re-marked dirty, leaving this
+		// instance serving stale code_search results for up to 60min.
+		// Keeping the set means the next debounce/periodic cycle retries.
 		return
 	}
 
