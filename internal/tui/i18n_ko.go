@@ -397,7 +397,7 @@ func koCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter 저장 • Esc 취소"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab 포커스 변경 • j/k 이동 • / 필터 포커스 • Enter 또는 s 적용 • a 제공자 키 • u 엔드포인트 키 • b 기본 URL • m 커스텀 모델 • e 엔드포인트 추가 • Esc 닫기"
+		return "Tab/Shift+Tab 포커스 변경 • j/k 이동 • / 필터 포커스 • Enter 또는 s 적용 • a 제공자 키 • u 엔드포인트 키 • b 기본 URL • m 커스텀 모델 • e 엔드포인트 추가 • n 새 공급자 • Esc 닫기"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l 로그인 • x 로그아웃 • b 엔터프라이즈 도메인 편집"
 	case "panel.provider.saved":

@@ -431,7 +431,7 @@ func ruCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter сохранить • Esc отмена"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab сменить фокус • j/k перемещение • / фокус на фильтр • Enter или s применить • a ключ поставщика • u ключ эндпоинта • b базовый URL • m польз. модель • e добавить эндпоинт • Esc закрыть"
+		return "Tab/Shift+Tab сменить фокус • j/k перемещение • / фокус на фильтр • Enter или s применить • a ключ поставщика • u ключ эндпоинта • b базовый URL • m польз. модель • e добавить эндпоинт • n новый поставщик • Esc закрыть"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l вход • x выход • b редактировать Enterprise-домен"
 	case "panel.provider.saved":

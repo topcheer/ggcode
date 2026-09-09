@@ -431,7 +431,7 @@ func deCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter speichern • Esc abbrechen"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab Fokus wechseln • j/k bewegen • / Filter fokussieren • Enter oder s anwenden • a Anbieter-Schlüssel • u Endpunkt-Schlüssel • b Basis-URL • m benutzerdef. Modell • e Endpunkt hinzufügen • Esc schließen"
+		return "Tab/Shift+Tab Fokus wechseln • j/k bewegen • / Filter fokussieren • Enter oder s anwenden • a Anbieter-Schlüssel • u Endpunkt-Schlüssel • b Basis-URL • m benutzerdef. Modell • e Endpunkt hinzufügen • n neuer Anbieter • Esc schließen"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l anmelden • x abmelden • b Enterprise-Domain bearbeiten"
 	case "panel.provider.saved":
