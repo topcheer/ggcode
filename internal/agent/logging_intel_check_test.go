@@ -280,6 +280,9 @@ func TestHasSensitiveVarRef_AsIdentifier(t *testing.T) {
 }
 
 func TestStripStringLiterals(t *testing.T) {
+	// #1623 side note 1: the JS-default wrapper is gone; state the
+	// language explicitly (these cases are JS-shaped: single quotes,
+	// backticks).
 	tests := []struct {
 		input  string
 		expect string
@@ -291,9 +294,9 @@ func TestStripStringLiterals(t *testing.T) {
 		{"`backtick`", ``},
 	}
 	for _, tt := range tests {
-		got := stripStringLiterals(tt.input)
+		got := stripStringLiteralsFor(tt.input, true)
 		if got != tt.expect {
-			t.Errorf("stripStringLiterals(%q) = %q, want %q", tt.input, got, tt.expect)
+			t.Errorf("stripStringLiteralsFor(%q, true) = %q, want %q", tt.input, got, tt.expect)
 		}
 	}
 }
@@ -609,5 +612,22 @@ func TestContainsWordBoundary(t *testing.T) {
 	}
 	if !containsWordBoundary("token, other", "token") {
 		t.Fatal("token followed by delimiter must match")
+	}
+}
+
+// #1623 main case: stage-2 must honor stage-1s
+
+// #1623 main case: stage-2 must honor stage-1's word-boundary semantics -
+// a message literal containing "token" plus an argument whose ident merely
+// CONTAINS the sensitive word (maxTokenCount) is correct code, not a leak.
+func TestHasSensitiveVarRef_1623WordBoundaryFinalVerdict(t *testing.T) {
+	args := `"token issued for %s", maxTokenCount`
+	matches := []string{"token"}
+	if hasSensitiveVarRef(args, matches, false) {
+		t.Fatal("substring-only match in maxTokenCount must NOT fire - stage 2 must keep word-boundary semantics")
+	}
+	real := `"issued for %s", token`
+	if !hasSensitiveVarRef(real, matches, false) {
+		t.Fatal("a bare sensitive identifier argument must still fire")
 	}
 }
