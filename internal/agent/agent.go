@@ -1698,8 +1698,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.guidanceBudget.reset() // reset per-turn guidance injection budget
 		// Check session wall-clock timeout: emit user-visible notifications or stop.
-		// Timeout messages are infrastructure notifications for the user only;
-		// they are NOT injected into LLM context to avoid distracting the model.
+		// #1492-C: the 80%/95% warnings must ALSO reach the LLM context -
+		// #611's commit message promised exactly that, but the only consumer
+		// emitted a user-visible event, so the model never knew the budget
+		// was running out and the 100% hard stop cut runs mid-edit/mid-verify
+		// - the very truncation this guardrail exists to prevent. The 100%
+		// stop message stays user-only (the loop ends; injecting a directive
+		// would only confuse the next session turn, #367/#611).
 		if msg := a.sessionTimeout.check(); msg != "" {
 			onEvent(provider.StreamEvent{
 				Type: provider.StreamEventSystem,
@@ -1710,6 +1715,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				sessionTimedOut = true
 				break
 			}
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: msg,
+				}},
+			})
 		}
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses

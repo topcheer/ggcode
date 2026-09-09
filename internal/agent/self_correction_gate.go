@@ -166,10 +166,16 @@ func (s *selfCorrectionGateState) recordRound(newErrors, persistentErrors, resol
 
 // selfCorrectionUnstableGuidance generates the stability warning message.
 // The message uses a "step back" framing (the paper's "verify-first" prompt
-// intervention that reduces EIR from 2% to ~0%).
+// intervention that reduces EIR from ~2% to ~0%).
+// #1492-B: the fingerprint diff cannot distinguish errors a fix INTRODUCED
+// from errors the compiler EXPOSED (Go reports the first error per package
+// and tests fail fast, so fixing A legitimately surfaces B). The old text
+// asserted causation ("Fixes introduce more errors than they resolve") and
+// steered straight to rollback - pushing a converging fix chain (whose
+// rollback point still contains A) backwards. Observation wording only.
 func selfCorrectionUnstableGuidance(rounds, newErrors, resolvedErrors int, ratio float64) string {
 	return fmt.Sprintf(
-		"[self-correction-unstable] %d cycles: %d new errors vs %d resolved (ratio %.1f < %.1f). Fixes introduce more errors than they resolve.",
+		"[self-correction-unstable] %d cycles: %d newly-visible errors vs %d resolved (ratio %.1f < %.1f). Error counts keep growing across fix rounds - some may be newly introduced by recent fixes, others merely exposed now that earlier errors stopped masking them. Step back and re-verify the plan before writing another fix.",
 		rounds, newErrors, resolvedErrors, ratio, scGateStabilityRatio,
 	)
 }
