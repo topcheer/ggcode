@@ -504,6 +504,61 @@ func writeKeysEnv(newEntries map[string]string) error {
 	return writeKeysEnvTo(newEntries, KeysEnvPath())
 }
 
+// removeKeysEnv deletes the named variables from keys.env (#1706 case 3:
+// clearing a key used to leave the stale plaintext entry behind forever -
+// writeKeysEnv only ever adds/updates, so the secret outlived its config).
+func removeKeysEnv(names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	path := KeysEnvPath()
+	unlock := lockConfigFile(path)
+	defer unlock()
+
+	del := make(map[string]bool, len(names))
+	for _, n := range names {
+		del[n] = true
+	}
+
+	existing := make(map[string]string)
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			name, value, ok := parseEnvAssignment(line)
+			if ok {
+				existing[name] = value
+			}
+		}
+	}
+	changed := false
+	for _, n := range names {
+		if _, ok := existing[n]; ok {
+			delete(existing, n)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	keys := make([]string, 0, len(existing))
+	for k := range existing {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var b strings.Builder
+	b.WriteString("# Managed by ggcode — DO NOT EDIT manually.\n")
+	b.WriteString("# Use ggcode config to change API keys.\n")
+	for _, k := range keys {
+		fmt.Fprintf(&b, "export %s='%s'\n", k, existing[k])
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), secureConfigDirMode); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(b.String()), secureConfigFileMode)
+}
+
 // writeKeysEnvTo merges new entries into the keys.env file at the given path.
 func writeKeysEnvTo(newEntries map[string]string, path string) error {
 	// Acquire cross-process lock to prevent concurrent read-modify-write
