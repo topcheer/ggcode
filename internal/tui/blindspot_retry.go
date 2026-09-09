@@ -85,6 +85,13 @@ func (m *Model) handleBlindSpotRetryMsg(msg blindSpotRetryMsg) tea.Cmd {
 	if m.loading {
 		return nil
 	}
+	// #1713 case 2: the timer only checked loading - an Esc cancel or a
+	// DIFFERENT submission B finishing inside the window made the stale
+	// text auto-resend against the user's intent. Only the still-current
+	// submission may retry (handleRetryCommand's identity check pattern).
+	if msg.Text == "" || msg.Text != m.lastUserSubmission {
+		return nil
+	}
 	return m.submitText(msg.Text, true)
 }
 
