@@ -52,16 +52,23 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return agents[i].CreatedAt.Before(agents[j].CreatedAt)
 	})
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%d agent run(s):\n\n", len(agents)))
+	// #1693 case 2: count what is actually SHOWN, not len(agents) - a run
+	// completing between List() and Snapshot() was skipped, leaving the
+	// header count higher than the listed entries.
+	var lines []string
 	for _, sa := range agents {
 		snap, ok := t.Manager.Snapshot(sa.ID)
 		if !ok {
 			continue
 		}
-		sb.WriteString(formatSubAgentSnapshot(snap))
-		sb.WriteString("\n")
+		lines = append(lines, formatSubAgentSnapshot(snap))
 	}
+	if len(lines) == 0 {
+		return Result{Content: "No agent runs have been spawned."}, nil
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%d agent run(s):\n\n", len(lines)))
+	sb.WriteString(strings.Join(lines, "\n"))
 
 	return Result{Content: sb.String()}, nil
 }
@@ -103,10 +110,9 @@ func formatSubAgentDuration(snap subagent.Snapshot) string {
 	if snap.StartedAt.IsZero() {
 		return ""
 	}
-	end := snap.EndedAt
-	if end.IsZero() {
-		end = snap.StartedAt
-	}
+	// #1693 case 3: an `end` fallback to StartedAt was written here but
+	// never read (the branches below re-check snap.EndedAt directly) -
+	// removed dead assignment; running durations use time.Since as before.
 	if !snap.EndedAt.IsZero() {
 		return fmt.Sprintf(" (%v)", snap.EndedAt.Sub(snap.StartedAt).Round(time.Second))
 	}

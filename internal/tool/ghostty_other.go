@@ -13,14 +13,14 @@ import (
 
 func ghosttyBinaryPath() string { return "" }
 
-func (g *GhosttyTool) executeStatus(ctx context.Context, ) Result {
+func (g *GhosttyTool) executeStatus(ctx context.Context) Result {
 	if !ghosttyAvailable() {
 		return Result{Content: "ghostty: not detected (TERM_PROGRAM != ghostty)"}
 	}
 	return Result{Content: fmt.Sprintf("ghostty: detected but platform %s/%s is not supported (only darwin and linux)", runtime.GOOS, runtime.GOARCH)}
 }
 
-func (g *GhosttyTool) executeList(ctx context.Context, ) Result {
+func (g *GhosttyTool) executeList(ctx context.Context) Result {
 	return unsupportedResult()
 }
 

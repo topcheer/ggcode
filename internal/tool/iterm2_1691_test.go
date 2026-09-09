@@ -4,46 +4,37 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
-// #1691 case 2: control characters in input text must be REJECTED with an
-// explicit error, not silently stripped by escapeAS (corrupted delivery).
-func TestIterm2InputControlCharRejected1691(t *testing.T) {
-	var it Iterm2Tool
-	res := it.executeInput(context.Background(), "s1", "ok\x1b[Atext")
-	if !res.IsError {
-		t.Fatal("control char in input must be an explicit error")
+// #1691 case 2 (upstream semantics): control characters are NOT rejected
+// but REPORTED - countDroppedControlRunes drives an honest note so the
+// caller knows the terminal received less than was asked.
+func TestIterm2DroppedControlCounted1691(t *testing.T) {
+	if got := countDroppedControlRunes("ok\x1b[Ax\x07"); got != 2 {
+		t.Fatalf("dropped control count = %d, want 2", got)
 	}
-	if !strings.Contains(res.Content, "U+") {
-		t.Fatalf("error must name the character, got: %s", res.Content)
-	}
-	// Plain text unaffected - checked at the VALIDATOR level only (no
-	// real AppleScript from unit tests).
-	if bad := asUnsupportedControl("plain text \t tab \n nl \r ok"); bad != 0 {
-		t.Fatalf("tab/newline/CR must stay allowed, got U+%04X", bad)
-	}
-}
-
-// #1691 case 2: set_title boundary.
-func TestIterm2TitleControlCharRejected1691(t *testing.T) {
-	var it Iterm2Tool
-	res := it.executeSetTitle(context.Background(), "s1", "bad\x07title")
-	if !res.IsError {
-		t.Fatal("control char in title must be an explicit error")
+	if got := countDroppedControlRunes("plain \t tab \n nl \r ok"); got != 0 {
+		t.Fatalf("tab/nl/cr must not count, got %d", got)
 	}
 }
 
 // #1691 case 3: waitForHealthy must honor ctx cancellation.
-type imHealthSnapStub struct{ healthy bool }
-
 func TestIMWaitForHealthyCtxCancel1691(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	// A stub tool without a Manager: waitForHealthy returns before
-	// touching Snapshot when ctx is already cancelled.
 	var it IMTool
-	if it.waitForHealthy(ctx, "tg", 15*0+time.Millisecond) {
+	if it.waitForHealthy(ctx, "tg", 0) {
 		t.Fatal("cancelled ctx must abort immediately")
+	}
+}
+
+// #1691 case 5: menu lookup must not embed Go %q escapes (\x1b / \u{})
+// into the AppleScript literal.
+func TestIterm2MenuScriptHasNoGoEscapes1691(t *testing.T) {
+	// Control char path: script must quote via escapeAS, whose output for
+	// dropped runes never contains Go escape sequences.
+	got := escapeAS("menu\x1bitem")
+	if strings.Contains(got, "\\x1b") || strings.Contains(got, "\\u") {
+		t.Fatalf("escapeAS must not emit Go escapes: %q", got)
 	}
 }

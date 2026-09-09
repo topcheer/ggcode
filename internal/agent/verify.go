@@ -148,10 +148,13 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 		); gateGuidance != "" {
 			errorSummary += "\n\n" + gateGuidance
 
-			// When the self-correction gate fires, provide actionable revert
-			// targets from the last-known-good checkpoint.
+			// When the self-correction gate fires, surface the
+			// last-known-good checkpoint as ONE option, not a directive -
+			// #1492-B: newly-visible errors may be exposure, not
+			// regression, and the checkpoint may still contain the
+			// original error.
 			if checkpointGuidance := a.lastGoodCheckpointGuidance(); checkpointGuidance != "" {
-				errorSummary += "\n\n" + checkpointGuidance
+				errorSummary += "\n\nIf (and only if) inspection shows these errors were CAUSED by recent fixes, the last-known-good checkpoint is available as a fallback:\n" + checkpointGuidance
 			}
 		}
 	}
@@ -727,10 +730,13 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 		); gateGuidance != "" {
 			errorSummary += "\n\n" + gateGuidance
 
-			// When the self-correction gate fires, provide actionable revert
-			// targets from the last-known-good checkpoint.
+			// When the self-correction gate fires, surface the
+			// last-known-good checkpoint as ONE option, not a directive -
+			// #1492-B: newly-visible errors may be exposure, not
+			// regression, and the checkpoint may still contain the
+			// original error.
 			if checkpointGuidance := a.lastGoodCheckpointGuidance(); checkpointGuidance != "" {
-				errorSummary += "\n\n" + checkpointGuidance
+				errorSummary += "\n\nIf (and only if) inspection shows these errors were CAUSED by recent fixes, the last-known-good checkpoint is available as a fallback:\n" + checkpointGuidance
 			}
 		}
 	}

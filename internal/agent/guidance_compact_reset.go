@@ -133,6 +133,12 @@ func (a *Agent) resetGuidanceCounters() {
 	if a.criteriaDrift != nil {
 		a.criteriaDrift.warnCount = 0
 	}
+	// #1843 case 3: editOscillation was missing from this list too -
+	// max=1 burned pre-compaction left the detector silent (and the
+	// model never saw the warning text) for the rest of the run.
+	if a.editOscillation != nil {
+		a.editOscillation.fired = 0
+	}
 	if a.subgoalTrack != nil {
 		a.subgoalTrack.fired = false
 	}
@@ -179,6 +185,220 @@ func (a *Agent) resetGuidanceCounters() {
 		a.overcorrection.mu.Lock()
 		a.overcorrection.warnCount = 0
 		a.overcorrection.mu.Unlock()
+	}
+
+	// #1651: the enumerative gap closed. Same contract as above - ONLY
+	// injection quotas (int counters + quota bools) reset; behavioral
+	// windows (sliding buffers, maps, streaks, time caches, session-level
+	// flags like phantomVerify.categoriesEverRun) stay. Locks follow each
+	// struct's own convention (mutex where one exists; plain field for
+	// single-goroutine agent-loop access).
+
+	// -- A-group int counters --
+	if a.trajectoryHealth != nil {
+		a.trajectoryHealth.warnings = 0
+	}
+	if a.planAbandon != nil {
+		a.planAbandon.warnings = 0
+	}
+	if a.redundantReverify != nil {
+		a.redundantReverify.warnings = 0
+	}
+	if a.constraintViolation != nil {
+		a.constraintViolation.warnings = 0
+	}
+	if a.reasonAction != nil {
+		a.reasonAction.mu.Lock()
+		a.reasonAction.warnings = 0
+		a.reasonAction.mu.Unlock()
+	}
+	if a.contradiction != nil {
+		a.contradiction.warnings = 0
+	}
+	if a.strategyExhaustion != nil {
+		a.strategyExhaustion.mu.Lock()
+		a.strategyExhaustion.warningCount = 0
+		a.strategyExhaustion.mu.Unlock()
+	}
+	if a.actionHedging != nil {
+		a.actionHedging.warnings = 0
+	}
+	if a.delegationOrch != nil {
+		a.delegationOrch.mu.Lock()
+		a.delegationOrch.orphanWarnCount = 0
+		a.delegationOrch.serialWarnCount = 0
+		a.delegationOrch.overDelWarned = false
+		a.delegationOrch.mu.Unlock()
+	}
+	if a.buildIdempot != nil {
+		a.buildIdempot.mu.Lock()
+		a.buildIdempot.warnsIssued = 0
+		a.buildIdempot.mu.Unlock()
+	}
+	if a.toolResultRedundancy != nil {
+		a.toolResultRedundancy.warningsFired = 0
+	}
+	if a.editAbandon != nil {
+		a.editAbandon.mu.Lock()
+		a.editAbandon.warnings = 0
+		a.editAbandon.fired = false
+		a.editAbandon.mu.Unlock()
+	}
+	if a.outcomeMisattrib != nil {
+		a.outcomeMisattrib.warnings = 0
+	}
+	if a.causalAttribution != nil {
+		a.causalAttribution.warnings = 0
+	}
+	if a.mindlessAction != nil {
+		a.mindlessAction.warnings = 0
+	}
+	if a.toolTargetMismatch != nil {
+		a.toolTargetMismatch.warnings = 0
+	}
+	if a.toolEquivDetect != nil {
+		a.toolEquivDetect.warnings = 0
+	}
+	if a.tokenWasteBudget != nil {
+		a.tokenWasteBudget.mu.Lock()
+		a.tokenWasteBudget.warnings = 0
+		a.tokenWasteBudget.mu.Unlock()
+	}
+	if a.truncClaim != nil {
+		a.truncClaim.warnings = 0
+	}
+	if a.solutionFixation != nil {
+		a.solutionFixation.warningCount = 0
+	}
+	if a.fixAmnesia != nil {
+		// quota = per-category warned map (maxWarnings counts TRUE
+		// categories); clearing it reopens the quota. maxWarnings is a
+		// config constant, not a counter.
+		a.fixAmnesia.mu.Lock()
+		a.fixAmnesia.warned = make(map[string]bool)
+		a.fixAmnesia.mu.Unlock()
+	}
+	if a.errRegression != nil {
+		a.errRegression.warningCount = 0
+	}
+	if a.phantomVerify != nil {
+		// warnings only - categoriesEverRun is session-level (#1478-A)
+		// and stays.
+		a.phantomVerify.warnings = 0
+	}
+	if a.heterogeneousModel != nil {
+		a.heterogeneousModel.mu.Lock()
+		a.heterogeneousModel.warnsIssued = 0
+		a.heterogeneousModel.mu.Unlock()
+	}
+	if a.selfMod != nil {
+		a.selfMod.mu.Lock()
+		a.selfMod.warningCount = 0
+		a.selfMod.mu.Unlock()
+	}
+	if a.prematureAbstr != nil {
+		a.prematureAbstr.warnings = 0
+	}
+	if a.circularReasoning != nil {
+		a.circularReasoning.warnings = 0
+	}
+	if a.stalledConvergence != nil {
+		a.stalledConvergence.warningCount = 0
+	}
+	if a.expiredRead != nil {
+		// warningCount only - seq/maps are behavioral windows.
+		a.expiredRead.warningCount = 0
+	}
+	if a.searchInvalidation != nil {
+		a.searchInvalidation.warningCount = 0
+	}
+	if a.irrevGate != nil {
+		// warnings only - grounding ledger is behavioral.
+		a.irrevGate.warnings = 0
+	}
+	if a.exploreFrag != nil {
+		a.exploreFrag.mu.Lock()
+		a.exploreFrag.warnings = 0
+		a.exploreFrag.mu.Unlock()
+	}
+
+	// -- B-group quota bools (fired / warned; quota effectively 1) --
+	if a.goalDriftCtx != nil {
+		a.goalDriftCtx.mu.Lock()
+		a.goalDriftCtx.warned = false
+		a.goalDriftCtx.mu.Unlock()
+	}
+	if a.planDrift != nil {
+		a.planDrift.fired = false
+	}
+	if a.driftRecurrence != nil {
+		a.driftRecurrence.fired = false
+		a.driftRecurrence.warned = false
+	}
+	if a.fulfillmentGate != nil {
+		a.fulfillmentGate.fired = false
+	}
+	if a.scopeNarrow != nil {
+		a.scopeNarrow.fired = false
+	}
+	if a.specGaming != nil {
+		a.specGaming.fired = false
+	}
+	if a.selfCorrectionGate != nil {
+		a.selfCorrectionGate.fired = false
+	}
+	if a.crossFileImpact != nil {
+		a.crossFileImpact.mu.Lock()
+		a.crossFileImpact.fired = false
+		a.crossFileImpact.mu.Unlock()
+	}
+	if a.fileChurn != nil {
+		a.fileChurn.fired = false
+	}
+	if a.silentError != nil {
+		a.silentError.fired = false
+	}
+	if a.compoundedUncert != nil {
+		a.compoundedUncert.fired = false
+	}
+	if a.scopeDrift != nil {
+		a.scopeDrift.fired = false
+	}
+	if a.compoundingFailure != nil {
+		a.compoundingFailure.fired = false
+	}
+	if a.branchGuard != nil {
+		a.branchGuard.fired = false
+	}
+	if a.changeReconcile != nil {
+		a.changeReconcile.fired = false
+	}
+	if a.companionGuard != nil {
+		a.companionGuard.fired = false
+	}
+	if a.ambiguityPoint != nil {
+		a.ambiguityPoint.mu.Lock()
+		a.ambiguityPoint.fired = false
+		a.ambiguityPoint.mu.Unlock()
+	}
+	if a.serialRead != nil {
+		a.serialRead.mu.Lock()
+		a.serialRead.fired = false
+		a.serialRead.mu.Unlock()
+	}
+	if a.diffSummary != nil {
+		a.diffSummary.fired = false
+	}
+	if a.unverifiedClaim != nil {
+		a.unverifiedClaim.fired = false
+	}
+	// Safety advisories: fired is a run-level quota (reset at run start);
+	// lastCheck is a cross-run time cache and deliberately stays.
+	if a.envDrift != nil {
+		a.envDrift.fired = false
+	}
+	if a.diskSpace != nil {
+		a.diskSpace.fired = false
 	}
 
 	debug.Log("guidance", "post-compaction: guidance injection counters reset (B-class detectors)")

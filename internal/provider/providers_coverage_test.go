@@ -2,6 +2,7 @@ package provider
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -123,14 +124,29 @@ func TestNewProviderHTTPTransportUsesLLMHeaderTimeout(t *testing.T) {
 	if tr == nil {
 		t.Fatal("expected non-nil transport")
 	}
-	if tr.DialContext == nil {
+	// The transport is wrapped by the idle-timeout stream guard; unwrap to
+	// the base *http.Transport to verify the tuned LLM timeouts survive.
+	var inner *http.Transport
+	switch v := tr.(type) {
+	case *idleTimeoutTransport:
+		base, ok := v.base.(*http.Transport)
+		if !ok {
+			t.Fatalf("expected *http.Transport under idleTimeoutTransport, got %T", v.base)
+		}
+		inner = base
+	case *http.Transport:
+		inner = v
+	default:
+		t.Fatalf("unexpected transport type %T", tr)
+	}
+	if inner.DialContext == nil {
 		t.Fatal("expected DialContext timeout to be configured")
 	}
-	if tr.TLSHandshakeTimeout != 10*time.Second {
-		t.Fatalf("expected TLS handshake timeout 10s, got %v", tr.TLSHandshakeTimeout)
+	if inner.TLSHandshakeTimeout != 10*time.Second {
+		t.Fatalf("expected TLS handshake timeout 10s, got %v", inner.TLSHandshakeTimeout)
 	}
-	if tr.ResponseHeaderTimeout != 120*time.Second {
-		t.Fatalf("expected response header timeout 120s, got %v", tr.ResponseHeaderTimeout)
+	if inner.ResponseHeaderTimeout != 120*time.Second {
+		t.Fatalf("expected response header timeout 120s, got %v", inner.ResponseHeaderTimeout)
 	}
 }
 

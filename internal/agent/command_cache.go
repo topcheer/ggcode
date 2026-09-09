@@ -114,7 +114,13 @@ func isCacheableCommand(command string) bool {
 		"brew ", "apt ", "yum ",
 	}
 	for _, seg := range segments {
-		if strings.Contains(seg, ">") || strings.Contains(seg, "<<") || strings.Contains(seg, "|") {
+		// #1717: cacheability requires the result to depend ONLY on the
+		// files (invalidated on edit) and the fixed segment text. Four
+		// substitution/background forms passed the old three-token scan:
+		// $() and backticks re-evaluate per run (a cached replay skips the
+		// substitution and returns stale output), `<` feeds from files the
+		// cache never watches, and & returns a transient shell-job echo.
+		if strings.ContainsAny(seg, "`<>&|") || strings.Contains(seg, "$(") {
 			return false
 		}
 		for _, p := range excludePrefixes {
@@ -302,6 +308,14 @@ func (a *Agent) checkCommandCache(name string, args []byte) (tool.Result, bool) 
 // storeCommandResult caches a run_command result if the command is cacheable.
 func (a *Agent) storeCommandResult(name string, args []byte, result tool.Result) {
 	if name != "run_command" {
+		return
+	}
+	// #1717: a failed execution (timeout, killed, flaky infra) must not
+	// enter the cache - replays returned the stale failure verbatim with
+	// no [cached] annotation, so a one-off timeout flake masqueraded as a
+	// fresh failure for the full 10-minute TTL and steered later build/
+	// fix decisions. Only successes are deterministic by definition.
+	if result.IsError {
 		return
 	}
 	command, workDir := parseRunCommandArgs(args)

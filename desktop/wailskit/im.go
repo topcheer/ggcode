@@ -179,6 +179,12 @@ func ListIMAdapters(workingDir string, imMgr interface {
 //   - "command": command for stdio transport
 //   - other keys are stored in the adapter's Extra map
 func SaveIMAdapter(name string, values map[string]string) error {
+	// #1847 case 2: serialize against UpdateConfig/ApplyImpersonation
+	// (globalMu) - this path fresh-loads and saves OUTSIDE any lock, so a
+	// concurrent UpdateConfig save could interleave and silently drop this
+	// write (or vice versa).
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -314,6 +320,12 @@ func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMA
 func RemoveIMAdapter(name string, imMgr interface {
 	UnbindAdapter(adapterName string) error
 }) error {
+	// #1847 case 2: serialize against UpdateConfig/ApplyImpersonation
+	// (globalMu) - this path fresh-loads and saves OUTSIDE any lock, so a
+	// concurrent UpdateConfig save could interleave and silently drop this
+	// write (or vice versa).
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -336,6 +348,12 @@ func RemoveIMAdapter(name string, imMgr interface {
 
 // SetIMAdapterEnabled toggles the enabled state of an IM adapter.
 func SetIMAdapterEnabled(name string, enabled bool) error {
+	// #1847 case 2: serialize against UpdateConfig/ApplyImpersonation
+	// (globalMu) - this path fresh-loads and saves OUTSIDE any lock, so a
+	// concurrent UpdateConfig save could interleave and silently drop this
+	// write (or vice versa).
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

@@ -161,11 +161,19 @@ func irrevClassifyTool(toolName, args string) int {
 		// with no warning). Accept both shapes: the tool's mode field and a
 		// shell literal via run_command.
 		var resetArgs struct {
-			Mode string `json:"mode"`
+			Mode  string   `json:"mode"`
+			Files []string `json:"files"`
 		}
 		modeHard := false
 		if err := json.Unmarshal([]byte(args), &resetArgs); err == nil && strings.EqualFold(strings.TrimSpace(resetArgs.Mode), "hard") {
 			modeHard = true
+		}
+		// #1621 side note: when files are specified the tool ignores mode
+		// entirely and always performs a per-file mixed unstage (its schema
+		// says so) - a leftover "mode":"hard" alongside files is NOT a
+		// hard reset and must not fire the HIGH-IMPACT advisory.
+		if len(resetArgs.Files) > 0 {
+			return irrevTierLow
 		}
 		if modeHard || strings.Contains(strings.ToLower(args), "--hard") {
 			return irrevTierHigh

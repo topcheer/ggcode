@@ -69,6 +69,14 @@ func (t GitShow) Execute(ctx context.Context, input json.RawMessage) (Result, er
 	} else {
 		gitArgs = append(gitArgs, "--format=fuller", "--patch")
 	}
+	// #1689 case 2: the revision rides BEFORE the "--" separator - an
+	// agent-passed "--output=/tmp/x" turns the read-only show into an
+	// arbitrary-path overwrite (git show supports --output=<file>). The
+	// file argument has the guard; the revision didn't (blame got
+	// validateRefName via #1687 - show joins the family).
+	if strings.HasPrefix(args.Revision, "-") {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid revision %q: leading dash (refusing option injection)", args.Revision)}, nil
+	}
 	gitArgs = append(gitArgs, args.Revision)
 	if args.File != "" {
 		gitArgs = append(gitArgs, "--", args.File)

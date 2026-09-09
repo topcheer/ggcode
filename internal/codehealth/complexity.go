@@ -9,6 +9,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -132,12 +133,16 @@ func Analyze(dir string, opts Options) (*Report, error) {
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		// Skip generated files
+		// Skip generated files (excluded, not counted against the cap).
 		if isGenerated(path) {
 			return nil
 		}
 		if opts.MaxFiles > 0 && filesScanned >= opts.MaxFiles {
-			return filepath.SkipDir
+			// #1699 case 2: SkipDir on a FILE only skips the REST of that
+			// directory - sibling and parent-level directories kept scanning
+			// and the "cap" was routinely exceeded. SkipAll aborts the
+			// entire walk, making MaxFiles a real global limit.
+			return filepath.SkipAll
 		}
 
 		funcs, err := analyzeFile(path)
@@ -502,16 +507,20 @@ func isGenerated(path string) bool {
 		return true
 	}
 	// Check first line for "Code generated" comment
-	data, err := os.ReadFile(path)
+	// #1699 case 3: the comment promised a 200-byte window but ReadFile
+	// slurped the whole file; a long license header could also push the
+	// marker past the window. Read exactly the window.
+	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
-	// Only read first 200 bytes for performance
-	end := 200
-	if len(data) < end {
-		end = len(data)
+	defer f.Close()
+	buf := make([]byte, 200)
+	n, _ := io.ReadFull(f, buf)
+	if n == 0 {
+		return false
 	}
-	prefix := string(data[:end])
+	prefix := string(buf[:n])
 	return strings.Contains(prefix, "Code generated")
 }
 

@@ -38,7 +38,7 @@ func iterm2SessionSpecifier(sessionID string) string {
 // iterm2SessionLookup returns AppleScript traversal code that finds a session by ID.
 // Returns empty string for current session (no lookup needed).
 // The found session is stored in variable "theSession".
-func iterm2SessionLookup(sessionID string) string {
+func iterm2SessionLookup(ctx context.Context, sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
@@ -65,7 +65,7 @@ func iterm2SessionLookup(sessionID string) string {
 // directly into the target session without needing System Events.
 func iterm2WriteText(ctx context.Context, sessionID, text string) error {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 	activate%s
@@ -214,7 +214,7 @@ func (t *Iterm2Tool) executeSplit(ctx context.Context, sessionID, direction stri
 	// Build the script
 	var script string
 	targetSpec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 
 	if strings.TrimSpace(command) != "" {
 		script = fmt.Sprintf(`
@@ -333,7 +333,7 @@ end tell`
 
 func (t *Iterm2Tool) executeFocus(ctx context.Context, sessionID string) Result {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 	activate%s
@@ -355,7 +355,7 @@ end tell`, lookup, spec)
 
 func (t *Iterm2Tool) executeClose(ctx context.Context, sessionID string) Result {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -398,33 +398,34 @@ end tell`, tabIndex)
 	return Result{Content: fmt.Sprintf("iterm2 selected tab: %d", tabIndex)}
 }
 
-// asUnsupportedControl returns the first control character that
-// escapeAS would SILENTLY DROP (#1691 case 2): embedding such text via
-// `write text` delivered corrupted content with no error - callers
-// believed the full text was typed. Control chars must go through
-// send_key (TTY-direct), not input text.
-func asUnsupportedControl(s string) rune {
+// countDroppedControlRunes mirrors escapeAS's default branch: C0 runes
+// other than tab/newline/carriage-return are silently dropped (#1691).
+func countDroppedControlRunes(s string) int {
+	n := 0
 	for _, r := range s {
 		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
-			return r
+			n++
 		}
 	}
-	return 0
+	return n
 }
 
 func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) Result {
 	if strings.TrimSpace(text) == "" {
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
-	// #1691 case 2: reject instead of silently stripping control
-	// characters - the old path delivered corrupted text with success.
-	if bad := asUnsupportedControl(text); bad != 0 {
-		return Result{IsError: true, Content: fmt.Sprintf("input text contains control character U+%04X that cannot be delivered via AppleScript write text; use send_key for control keys", bad)}
-	}
-
 	err := iterm2WriteText(ctx, sessionID, text)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("iterm2 input failed: %v", err)}
+	}
+	// #1691 case 2: escapeAS silently DROPS C0 control characters (except
+	// tab/nl/cr) - the caller believed the full text was delivered while
+	// the terminal received corrupted content with no error. Report the
+	// stripped characters honestly instead.
+	stripped := countDroppedControlRunes(text)
+	note := ""
+	if stripped > 0 {
+		note = fmt.Sprintf(" (note: %d control rune(s) stripped by terminal escaping)", stripped)
 	}
 
 	label := sessionID
@@ -435,7 +436,7 @@ func (t *Iterm2Tool) executeInput(ctx context.Context, sessionID, text string) R
 	if len([]rune(preview)) > 100 {
 		preview = string([]rune(preview)[:100]) + "..."
 	}
-	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s", label, preview)}
+	return Result{Content: fmt.Sprintf("iterm2 input sent to %s: %s%s", label, preview, note)}
 }
 
 func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifiers string) Result {
@@ -536,7 +537,7 @@ func (t *Iterm2Tool) executeResize(ctx context.Context, sessionID, axis string, 
 	// Use iTerm2's native AppleScript to adjust columns/rows directly.
 	// This avoids the need for Accessibility/System Events permissions.
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	var script string
 	if ax == "horizontal" {
 		script = fmt.Sprintf(`
@@ -579,7 +580,7 @@ func absInt(n int) int {
 
 func (t *Iterm2Tool) executeGetText(ctx context.Context, sessionID string) Result {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -609,13 +610,9 @@ func (t *Iterm2Tool) executeSetTitle(ctx context.Context, sessionID, title strin
 	if strings.TrimSpace(title) == "" {
 		return Result{IsError: true, Content: "text (title) is required for set_title action"}
 	}
-	// #1691 case 2: same silent-strip boundary as executeInput.
-	if bad := asUnsupportedControl(title); bad != 0 {
-		return Result{IsError: true, Content: fmt.Sprintf("title contains control character U+%04X that cannot be delivered via AppleScript", bad)}
-	}
 
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	script := fmt.Sprintf(`
 tell application "iTerm"
 %s
@@ -653,7 +650,7 @@ func (t *Iterm2Tool) executeProfile(ctx context.Context, sessionID, profileName 
 // sequences (badge, mark, clear) that must not be interpreted by the shell.
 func (t *Iterm2Tool) iterm2WriteToTTY(ctx context.Context, sessionID, data string) error {
 	spec := iterm2SessionSpecifier(sessionID)
-	lookup := iterm2SessionLookup(sessionID)
+	lookup := iterm2SessionLookup(ctx, sessionID)
 	ttyScript := fmt.Sprintf(`
 tell application "iTerm"
 %s

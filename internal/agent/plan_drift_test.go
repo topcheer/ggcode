@@ -231,3 +231,25 @@ func containsStrPD(s, substr string) bool {
 	}
 	return false
 }
+
+// #1850 case 1: restating the plan in the reply text must NOT count as
+// addressing plan items - only tool-faced evidence does.
+func TestPlanDriftRestatedPlanDoesNotMute1850(t *testing.T) {
+	s := newPlanDriftState()
+	s.captured = true
+	s.items = []planItem{{Text: "update auth middleware", Keywords: []string{"auth", "middleware"}}}
+	stats := &RunStats{}
+	// Assistant text literally restates the plan; NO files edited.
+	msg := s.checkPlanDrift(stats, "Next I will update the auth middleware.")
+	if msg == "" {
+		t.Fatal("restated-but-not-done plan must stay flagged")
+	}
+	// Tool-faced evidence does mute.
+	stats2 := &RunStats{FilesEdited: []string{"internal/auth/middleware.go"}}
+	s2 := newPlanDriftState()
+	s2.captured = true
+	s2.items = s.items
+	if m := s2.checkPlanDrift(stats2, ""); m != "" {
+		t.Fatalf("edited-file evidence should address item, got: %s", m)
+	}
+}

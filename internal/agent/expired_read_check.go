@@ -40,6 +40,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -75,6 +76,16 @@ type expiredReadState struct {
 
 	// seq is a monotonically increasing counter for event ordering.
 	seq int
+
+	// baseDir anchors relative paths to the workspace root (#1559-C);
+	// mirrors unreadEditState.baseDir - see its normalize for rationale.
+	baseDir string
+}
+
+// normalize anchors to the workspace root, mirroring
+// unreadEditState.normalize (#1559-C).
+func (s *expiredReadState) normalize(path string) string {
+	return normalizeCompanionPath(s.baseDir, strings.TrimSpace(path))
 }
 
 func newExpiredReadState() *expiredReadState {
@@ -101,7 +112,7 @@ func (e *expiredReadState) recordRead(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := e.normalize(path)
 	// Mark that this file has been read at least once (for expiry detection).
 	// Only track if not yet edited -- if already edited, the prior read is
 	// already expired and this re-read will be caught by checkPostEditReread.
@@ -121,7 +132,7 @@ func (e *expiredReadState) recordUndo(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := e.normalize(path)
 	delete(e.editedFiles, n)
 	delete(e.readBeforeEdit, n)
 }
@@ -132,7 +143,7 @@ func (e *expiredReadState) recordEdit(path string) string {
 	if path == "" {
 		return ""
 	}
-	n := normalizePath(path)
+	n := e.normalize(path)
 
 	// Record this edit with the current sequence number.
 	e.seq++
@@ -171,7 +182,7 @@ func (e *expiredReadState) checkPostEditReread(path string) string {
 	if path == "" {
 		return ""
 	}
-	n := normalizePath(path)
+	n := e.normalize(path)
 
 	// Was this file edited?
 	editSeq, wasEdited := e.editedFiles[n]

@@ -215,3 +215,25 @@ func TestCheckCrossFileImpact_FiresOnce(t *testing.T) {
 		t.Error("expected empty on second call (already fired)")
 	}
 }
+
+// #1773 case 5: a sibling LOCAL variable sharing the deleted
+// package-level symbol name is not a cross-file impact.
+func TestReferencesAnyImpactSymbolScopeDiscrimination(t *testing.T) {
+	removed := []impactRemovedSymbol{{name: "userCount", category: "var"}}
+	local := "package b\n\nfunc f() int {\n\tuserCount := 3\n\treturn userCount\n}\n"
+	if referencesAnyImpactSymbol(local, removed) {
+		t.Fatal("locally-defined ident must not count as an impact reference")
+	}
+	real := "package b\n\nfunc g() int {\n\treturn userCount\n}\n"
+	if !referencesAnyImpactSymbol(real, removed) {
+		t.Fatal("unresolved (cross-file) ident must count as an impact reference")
+	}
+}
+
+// #1773 case 2: JSON5 is a superset of JSON - legal JSON5 must not be
+// reported as broken config.
+func TestConfigSyntaxJSON5Skipped(t *testing.T) {
+	if w := configSyntaxCheck("config.json5", "{unquoted: single, trailing: [1,2,],}"); w != "" {
+		t.Fatalf("legal JSON5 must be skipped, got %q", w)
+	}
+}
