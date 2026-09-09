@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -148,11 +149,45 @@ func (s *Server) handleChatWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// #1857 case 2: terminal frames must NEVER be silently dropped. A
+	// background-throttled tab fills the 64-deep channel with text deltas,
+	// and the old non-blocking send then dropped the done/error frame too -
+	// the UI waited forever with no marker. Terminal frames block up to 5s
+	// (the write loop drains; a truly dead client is reaped by the ping/
+	// read-deadline machinery) and delta drops are counted so the done
+	// frame can carry a resync hint.
+	deltaDrops := int64(0)
+	sendTerminal := func(msg map[string]interface{}) {
+		if msg["type"] == "done" && deltaDrops > 0 {
+			msg["dropped_deltas"] = deltaDrops
+			deltaDrops = 0
+		}
+		select {
+		case writeCh <- msg:
+		case <-time.After(5 * time.Second):
+			debug.Log("webui", "ws write channel full on TERMINAL message, dropped after 5s")
+		}
+	}
+	routeEvent := func(event provider.StreamEvent) {
+		m := streamEventToJSON(event)
+		switch m["type"] {
+		case "text_delta", "tool_call_chunk":
+			select {
+			case writeCh <- m:
+			default:
+				atomic.AddInt64(&deltaDrops, 1)
+				debug.Log("webui", "ws write channel full, dropping delta")
+			}
+		default: // done / error / tool_call / tool_result: terminal
+			sendTerminal(m)
+		}
+	}
+
 	// In bridge mode: subscribe immediately so all agent events are forwarded
 	var unsub func()
 	if s.chatBridge != nil {
 		unsub = s.chatBridge.Subscribe(func(event provider.StreamEvent) {
-			send(streamEventToJSON(event))
+			routeEvent(event)
 		})
 		// Note: unsub is called explicitly in the read-error path before
 		// closing writeCh to avoid send-on-closed-channel panic. There is

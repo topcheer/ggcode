@@ -290,8 +290,20 @@ func (s *Server) Start(addr string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("webui listen: %w", err)
 	}
+	// #1857 case 1: lock discipline + double-Start guard. The fields
+	// used to be written bare while Addr() read them under RLock (a
+	// -race report waiting to happen), and a second Start silently
+	// orphaned the first listener - Close only ever closed the last
+	// one, leaving a zombie port behind.
+	s.mu.Lock()
+	if s.listener != nil {
+		s.mu.Unlock()
+		ln.Close()
+		return "", fmt.Errorf("webui server already started")
+	}
 	s.listener = ln
 	s.addr = ln.Addr().String()
+	s.mu.Unlock()
 
 	safego.Go("webui.httpServe", func() {
 		// Wrap mux with a body size limit middleware (1MB) to prevent
@@ -313,8 +325,12 @@ func (s *Server) Addr() string {
 
 // Close shuts down the server.
 func (s *Server) Close() error {
-	if s.listener != nil {
-		return s.listener.Close()
+	s.mu.Lock()
+	ln := s.listener
+	s.listener = nil
+	s.mu.Unlock()
+	if ln != nil {
+		return ln.Close()
 	}
 	return nil
 }
