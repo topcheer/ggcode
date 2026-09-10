@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -52,7 +53,13 @@ type rawWorkspaceEdit struct {
 		TextDocument struct {
 			URI string `json:"uri"`
 		} `json:"textDocument"`
-		Edits []rawTextEdit `json:"edits"`
+		// #1769: rename/create/delete carry the TARGET uri at the TOP level
+		// (LSP WorkspaceEdit_structure) - without these the unsupported-kind
+		// note could not say which file was involved.
+		URI    string        `json:"uri"`
+		OldURI string        `json:"oldUri"`
+		NewURI string        `json:"newUri"`
+		Edits  []rawTextEdit `json:"edits"`
 	} `json:"documentChanges"`
 }
 
@@ -175,8 +182,11 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 		// them so callers can report the unsupported change form instead
 		// of a bare "no edits returned".
 		if change.Kind != "" && change.Kind != "edit" && len(change.Edits) == 0 {
+			// #1769: prefer the top-level uri fields (rename uses oldUri/newUri,
+			// create/delete use uri) - TextDocument.URI is absent for these kinds.
+			target := firstNonEmptyStr(change.NewURI, change.OldURI, change.URI, change.TextDocument.URI)
 			unsupportedWorkspaceChangeKinds = append(unsupportedWorkspaceChangeKinds,
-				fmt.Sprintf("%s %s", change.Kind, uriToPath(change.TextDocument.URI)))
+				fmt.Sprintf("%s %s", change.Kind, uriToPath(target)))
 			continue
 		}
 		path := uriToPath(change.TextDocument.URI)
@@ -196,13 +206,38 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 	for _, path := range paths {
 		out = append(out, FileEdit{Path: path, Edits: grouped[path]})
 	}
-	// #1588-B: make unsupported documentChanges kinds observable instead
-	// of the old silent skip (callers saw only "no edits returned").
+	// #1588-B/#1769: make unsupported documentChanges kinds observable.
+	// debug.Log alone was invisible to the agent (ring buffer; /debug only)
+	// - the TypeScript Move-to-file case still got the misleading bare
+	// "no edits returned". RenameEdits now surfaces the note to the caller.
 	if len(unsupportedWorkspaceChangeKinds) > 0 {
+		lastUnsupportedNote.Store(strings.Join(unsupportedWorkspaceChangeKinds, ", "))
 		debug.Log("lsp", "workspace edit dropped unsupported documentChanges kinds: %s",
 			strings.Join(unsupportedWorkspaceChangeKinds, ", "))
 	}
 	return out
+}
+
+// lastUnsupportedNote carries the most recent unsupported-kind note from
+// parseWorkspaceEdit to RenameEdits' caller (#1769) - single-flight per
+// call sequence, cleared on read.
+var lastUnsupportedNote atomic.Value
+
+// TakeUnsupportedNote returns and clears the note about unsupported
+// documentChanges kinds dropped by the last workspace-edit parse.
+func TakeUnsupportedNote() string {
+	v, _ := lastUnsupportedNote.Load().(string)
+	lastUnsupportedNote.Store("")
+	return v
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // editKey builds a dedup key for a TextEdit: range start/end positions plus

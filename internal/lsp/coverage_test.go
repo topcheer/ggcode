@@ -164,3 +164,24 @@ func TestServerLaunchEnv(t *testing.T) {
 		t.Error("expected non-nil env")
 	}
 }
+
+// TestParseWorkspaceEditUnsupportedKindNote pins #1769: a rename-kind
+// documentChange (no edits, top-level oldUri/newUri) drops into the
+// unsupported note WITH the file it involves, and the note is retrievable.
+func TestParseWorkspaceEditUnsupportedKindNote(t *testing.T) {
+	raw := []byte(`{"documentChanges":[{"kind":"rename","oldUri":"file:///a/old.go","newUri":"file:///a/new.go"}]}`)
+	edits := parseWorkspaceEdit(raw)
+	if len(edits) != 0 {
+		t.Fatalf("rename-kind change must not produce edits, got %d", len(edits))
+	}
+	note := TakeUnsupportedNote()
+	if note == "" {
+		t.Fatal("unsupported note must be recorded")
+	}
+	if !strings.Contains(note, "rename") || !strings.Contains(note, "new.go") {
+		t.Fatalf("note must name kind+uri, got %q", note)
+	}
+	if again := TakeUnsupportedNote(); again != "" {
+		t.Fatalf("note must clear on read, got %q", again)
+	}
+}
