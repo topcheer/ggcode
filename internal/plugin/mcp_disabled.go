@@ -90,20 +90,41 @@ func SetMCPDisabled(name string, disabled bool) error {
 		// Cold cache: hydrate from disk (lock already held; mirror the
 		// load path's decode without re-locking).
 		cached = map[string]bool{}
+		// #1782 case 1: the load path treats a read/decode failure as
+		// NOT cacheable (#781 - corrupt JSON is not truth), but this cold
+		// WRITE path unconditionally cached the empty map - the first
+		// touch after startup being a toggle under a failed read wrote
+		// the EMPTY set + the toggle to disk, silently reviving every
+		// previously disabled server on restart. Mirror the load path:
+		// only a missing file hydrates as legitimately empty; anything
+		// else leaves the cache un-OK so the next reader retries.
+		readFailed := false
 		if path, err := mcpDisabledPath(); err == nil {
-			if data, rerr := os.ReadFile(path); rerr == nil {
+			data, rerr := os.ReadFile(path)
+			switch {
+			case rerr == nil:
 				var names []string
 				if jerr := json.Unmarshal(data, &names); jerr == nil {
-					// #781: corrupt JSON is not cacheable as truth.
 					cached = make(map[string]bool, len(names))
 					for _, n := range names {
 						cached[n] = true
 					}
+				} else {
+					readFailed = true // corrupt JSON is not truth (#781)
 				}
+			case os.IsNotExist(rerr):
+				// Legitimately empty - cacheable.
+			default:
+				readFailed = true
 			}
 		}
 		mcpDisabledCache = cached
-		mcpDisabledCacheOK = true
+		if !readFailed {
+			mcpDisabledCacheOK = true
+		}
+		// On readFailed we proceed with the toggle-only in-memory delta
+		// below but the cache stays cold; the toggle STILL persists (see
+		// the names slice below seeded from `cached`).
 	} else {
 		// Warm cache: copy before mutating - readers index the cached
 		// map pointer outside their RLock (MCPDisabled), so in-place

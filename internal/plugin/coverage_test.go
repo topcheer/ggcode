@@ -8,6 +8,13 @@ import (
 )
 
 func TestSetMCPDisabled(t *testing.T) {
+	// #1782 case 2: same isolation as the race test - never touch the
+	// developer's real ~/.ggcode.
+	t.Setenv("HOME", t.TempDir())
+	mcpDisabledMu.Lock()
+	mcpDisabledCache = nil
+	mcpDisabledCacheOK = false
+	mcpDisabledMu.Unlock()
 	// Should not panic; #1740 case 2 also returns nil error on success.
 	if err := SetMCPDisabled("test-server", true); err != nil {
 		t.Fatalf("disable should succeed: %v", err)
