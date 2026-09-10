@@ -86,6 +86,16 @@ func (m Model) renderDeviceCodeBanner() string {
 	}
 	var lines []string
 	for _, dc := range m.pendingDeviceCodes {
+		if dc.userCode == "" {
+			// #1790: browser-flow OAuth carries no device code - the banner
+			// shows the authorize URL only (time-sensitive; must be visible
+			// even when another panel shadows the MCP panel).
+			lines = append(lines,
+				fmt.Sprintf(" MCP server %s requires authentication", dc.serverName),
+				fmt.Sprintf(" Visit %s", dc.verifyURL),
+			)
+			continue
+		}
 		codeDigits := strings.Join(strings.Split(dc.userCode, ""), "   ")
 		codeStyle := lipgloss.NewStyle().
 			Bold(true).
