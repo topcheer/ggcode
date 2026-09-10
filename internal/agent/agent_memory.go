@@ -124,6 +124,13 @@ func projectMemoryPathKey(key string) bool {
 	switch key {
 	case "path", "file_path", "file", "filename", "directory":
 		return true
+	case "files":
+		// #1518 case C: batch_replace's files[] is a BARE string array -
+		// with "files" rejected here every element was dropped and the
+		// whitelist entry for batch_replace was effectively dead (no project
+		// memory injection ever fired for it). Object-shaped files[] (multi_*
+		// tools) are unaffected - their nested "path" keys already qualify.
+		return true
 	default:
 		return false
 	}
