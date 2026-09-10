@@ -69,10 +69,62 @@ func (c *churnState) reset() {
 // is confirmed green are legitimate refinement - the old bare count
 // reached the threshold on the third polish pass and ordered the agent
 // to 'STOP editing, your initial assumptions were wrong'.
-func (c *churnState) recordVerifySuccess() {
-	for p := range c.editCounts {
-		delete(c.editCounts, p)
+func (c *churnState) recordVerifySuccess(cmd string) {
+	// #1561 case B: scope the clear to what the command actually verified.
+	// `go test ./internal/a/...` green certifies internal/a - it says
+	// nothing about internal/b being blindly re-edited; a repo-wide command
+	// (no path arguments) certifies everything.
+	scopes := commandPathScopes1561(cmd)
+	if len(scopes) == 0 {
+		for p := range c.editCounts {
+			delete(c.editCounts, p)
+		}
+		return
 	}
+	for p := range c.editCounts {
+		for _, sc := range scopes {
+			if pathUnderScope1561(p, sc) {
+				delete(c.editCounts, p)
+				break
+			}
+		}
+	}
+}
+
+// commandPathScopes1561 extracts path-shaped tokens from a command
+// (arguments containing '/' or './' style roots). Returns nil when the
+// command is repo-wide.
+func commandPathScopes1561(cmd string) []string {
+	var scopes []string
+	for _, tok := range strings.Fields(strings.ToLower(cmd)) {
+		if tok == "./..." || tok == "." || tok == "..." {
+			return nil // repo-wide
+		}
+		if strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "/") ||
+			(strings.Contains(tok, "/") && !strings.Contains(tok, "=")) {
+			scopes = append(scopes, strings.TrimSuffix(tok, "/..."))
+		}
+	}
+	return scopes
+}
+
+// pathUnderScope1561 reports whether file path p falls under scope dir.
+// The scope may be relative (./internal/a from `go test ./internal/a/...`)
+// while edit paths are absolute (/w/repo/internal/a/foo.go) - match on the
+// core segment boundary, not byte prefix.
+func pathUnderScope1561(p, scope string) bool {
+	scope = strings.TrimSuffix(scope, "/...")
+	scope = strings.TrimPrefix(scope, "./")
+	if scope == "" || scope == "/" || scope == "." {
+		return true
+	}
+	pp := strings.ToLower(p)
+	if strings.HasPrefix(pp, scope+"/") || pp == scope {
+		return true
+	}
+	// Segment-boundary containment: ./internal/a matches
+	// /w/repo/internal/a/foo.go, but NOT /w/repo/xinternal/a/foo.go.
+	return strings.Contains(pp, "/"+scope+"/")
 }
 
 // recordEdit increments the edit count for the given file paths.

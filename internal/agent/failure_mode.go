@@ -83,6 +83,13 @@ type failureModeState struct {
 
 	// total tool calls (for ratio calculation)
 	totalCalls int
+
+	// #1561 case A: totalCalls snapshot when the current structural streak
+	// began - the density denominator must measure the SAME window as the
+	// streak numerator, not the lifelong total (streak/lifelong made the
+	// mid-run death spiral mathematically unreachable: after 50 successful
+	// calls, firing needs 22 CONSECUTIVE failures - beyond most run caps).
+	structuralStreakStart int
 }
 
 func newFailureModeState() *failureModeState {
@@ -175,6 +182,16 @@ func classifyFailureMode(toolName, errorContent string) FailureMode {
 		"capacity",
 	}
 	for _, p := range transientPatterns {
+		// #1561 case E: digit-only patterns need token boundaries -
+		// `foo.go:429:5: syntax error` contains "429" and a DETERMINISTIC
+		// compile error was classified TRANSIENT ('retry with delays' for
+		// a syntax error). Word patterns stay substring-matched.
+		if isAllDigits1561(p) {
+			if containsToken1561(c, p) {
+				return FailureModeTransient
+			}
+			continue
+		}
 		if strings.Contains(c, p) {
 			return FailureModeTransient
 		}
@@ -196,7 +213,19 @@ func (s *failureModeState) recordResult(toolName string, isError bool, errorCont
 		// #1460-B: successes decay the structural streak - a long run with
 		// isolated, FIXED failures must not accumulate into a strategy
 		// verdict ('approach is fundamentally wrong, Do NOT retry').
+		// #1561 case D: also un-latch the fired flag - a premature alert
+		// from same-batch parallel ordering ([edit xN, verify green] with
+		// the verify result landing after the edits) must not leave a
+		// stale fired latch for the rest of the run.
 		s.structuralCount = 0
+		delete(s.fired, FailureModeStructural)
+		// #1561 case C: transient gets the SAME streak treatment - a
+		// lifelong counter fired '[retry strategy isn't working]' after 3
+		// scattered, individually-recovered timeouts spaced 100 calls
+		// apart. Consecutive failures are the signal; recovered ones are
+		// noise.
+		s.transientCount = 0
+		delete(s.fired, FailureModeTransient)
 		return ""
 	}
 
@@ -205,6 +234,10 @@ func (s *failureModeState) recordResult(toolName string, isError bool, errorCont
 	case FailureModeTransient:
 		s.transientCount++
 	case FailureModeStructural:
+		if s.structuralCount == 0 {
+			// Streak begins NOW: the density window opens with it (#1561 A).
+			s.structuralStreakStart = s.totalCalls
+		}
 		s.structuralCount++
 	case FailureModeSystemic:
 		s.systemicCount++
@@ -248,9 +281,19 @@ func (s *failureModeState) checkDominantMode() string {
 	// STRUCTURAL is also the fallback default class, so it inflates easily.
 	// totalCalls (previously a write-only field 'for ratio calculation'
 	// that never calculated) finally earns its keep.
+	// #1561 case A: windowed density - denominator is calls since the
+	// streak began, matching the numerator's window. The old
+	// streak/lifelong ratio made a genuine mid-run spiral unreachable
+	// (after S successful calls it needs S*3/7 CONSECUTIVE failures, e.g.
+	// 22 after 50); the scattered-fixed-failure false positive it guarded
+	// against was ALREADY eliminated by the streak reset above.
+	streakWindow := s.totalCalls - s.structuralStreakStart + 1
+	if s.structuralStreakStart == 0 {
+		streakWindow = s.totalCalls
+	}
 	structuralRatio := 0.0
-	if s.totalCalls > 0 {
-		structuralRatio = float64(s.structuralCount) / float64(s.totalCalls)
+	if streakWindow > 0 {
+		structuralRatio = float64(s.structuralCount) / float64(streakWindow)
 	}
 	if s.structuralCount >= 4 && structuralRatio >= 0.30 && !s.fired[FailureModeStructural] {
 		s.fired[FailureModeStructural] = true
@@ -263,3 +306,40 @@ func (s *failureModeState) checkDominantMode() string {
 
 	return ""
 }
+
+// isAllDigits1561 reports whether the pattern is a bare number (needs
+// token-boundary matching, #1561 case E).
+func isAllDigits1561(p string) bool {
+	if p == "" {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] < '0' || p[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// containsToken1561 reports whether s contains the digit run needle as a
+// status-code-shaped token: it must not be embedded in a larger digit run
+// AND must not sit in a file:line:col position slot (adjacent ':' or '/'
+// delimiters on either side mark compiler coordinate output like
+// "foo.go:429:5: syntax error", which is a DETERMINISTIC error - matching
+// it as HTTP 429 prescribed retry delays for a syntax error, #1561 E).
+func containsToken1561(s, needle string) bool {
+	for i := 0; i+len(needle) <= len(s); i++ {
+		if s[i:i+len(needle)] != needle {
+			continue
+		}
+		leftOK := i == 0 || (!isDigitByte1561(s[i-1]) && s[i-1] != ':' && s[i-1] != '/')
+		j := i + len(needle)
+		rightOK := j == len(s) || (!isDigitByte1561(s[j]) && s[j] != ':')
+		if leftOK && rightOK {
+			return true
+		}
+	}
+	return false
+}
+
+func isDigitByte1561(b byte) bool { return b >= '0' && b <= '9' }
