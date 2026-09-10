@@ -192,8 +192,22 @@ func detectNegativeFeedback(message string) string {
 				// false positives in detailed technical messages. A long
 				// message with "actually" mid-sentence is context, not
 				// a course-correction signal.
+				//
+				// #1521 case C: redirection fires on long messages too (the
+				// header heuristic #2 promises "regardless of length"), but
+				// only as an OPENER - the first 40 chars. The old isShort
+				// gate swallowed a 150-char "Actually, I meant X" opener,
+				// which also reset consecutiveNegatives (two detailed
+				// corrections in a row restarted from the level-1 nudge);
+				// while firing on a mid-sentence "actually" in a long
+				// reflective message was the exact FP the gate existed for.
 				if isShort {
 					return group.category
+				}
+				if group.category == negCatRedirection {
+					if idx := strings.Index(scanText, pat); idx >= 0 && idx < 40 {
+						return group.category
+					}
 				}
 			}
 		}

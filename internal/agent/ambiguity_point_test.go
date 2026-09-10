@@ -226,7 +226,7 @@ func TestAmbiguityQuickTaskSkip(t *testing.T) {
 func TestAmbiguityPointCJKAndGate(t *testing.T) {
 	// fired is once-per-run: a FRESH state per prompt (the initial version
 	// reused one Agent and the 2nd+ prompts silently skipped).
-	for _, cjk := range []string{"请优化一下这个函数的性能", "把这个列表去重", "帮我排个序", "把这个函数改名"} {
+	for _, cjk := range []string{"请优化一下这个函数的性能", "帮我把这个列表去重一下", "帮我排个序", "帮我把这个函数改个名"} {
 		a := &Agent{ambiguityPoint: newAmbiguityPointState()}
 		if msg := a.checkAmbiguityPoints(cjk); msg == "" {
 			t.Fatalf("CJK prompt %q not detected", cjk)

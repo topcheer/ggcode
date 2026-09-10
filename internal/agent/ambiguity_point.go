@@ -171,14 +171,24 @@ var ambiguityPatterns = []struct {
 	{"优化一下", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"优化这个", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
 	{"去掉重复", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
-	{"去重", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
+	{"去重一下", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
+	{"帮我去重", ambScopeVague, "which duplicates exactly, and dedupe by what key"},
 	{"排个序", ambSortOrder, "ascending or descending, and by which key"},
-	{"排序", ambSortOrder, "ascending or descending, and by which key"},
-	{"重命名", ambNamingVague, "the new name convention and whether to update all references"},
-	{"改名", ambNamingVague, "the new name convention and whether to update all references"},
-	{"最新的", ambQuantityVague, "how many of the latest items, and by what cutoff"},
-	{"随便", ambScopeVague, "which specific item or criteria"},
-	{"大概", ambQuantityVague, "the exact count or selection criteria"},
+	// #1521 case B: the bare CJK forms were pure substrings - isWordByte is
+	// ASCII-only, so beforeOK/afterOK are ALWAYS true for CJK and
+	// "修复排序不稳定的 bug" (stability explicitly discussed) still hit
+	// bare 排序; "大概是上个月引入的" (time adverb) hit bare 大概 with a
+	// COUNT suggestion. Narrowed to imperative/count-question shapes, the
+	// same discipline #1438-A applied to the English table.
+	{"排序一下", ambSortOrder, "ascending or descending, and by which key"},
+	{"帮我排序", ambSortOrder, "ascending or descending, and by which key"},
+	{"重命名一下", ambNamingVague, "the new name convention and whether to update all references"},
+	{"改个名", ambNamingVague, "the new name convention and whether to update all references"},
+	{"最新的几个", ambQuantityVague, "how many of the latest items, and by what cutoff"},
+	{"大概几个", ambQuantityVague, "the exact count or selection criteria"},
+	{"大概多少", ambQuantityVague, "the exact count or selection criteria"},
+	{"随便挑", ambScopeVague, "which specific item or criteria"},
+	{"随便选", ambScopeVague, "which specific item or criteria"},
 }
 
 // phrases that indicate this is a quick, unambiguous task -- skip detection

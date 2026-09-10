@@ -231,6 +231,40 @@ func hasVerificationCommands(runStats *RunStats) bool {
 	for _, cmd := range runStats.CommandsRun {
 		lower := strings.ToLower(stripCommandComment(cmd))
 		if isBuildTestCommand(lower) {
+			// #1521 case D: a FAILED test run is not verification - the
+			// target scenario is exactly "ran the tests (they failed) and
+			// still declared them passing". Existence-only checking made
+			// the failed run satisfy the exemption. The command string is
+			// cross-checked against the run's collected error text: a
+			// build/test command whose failure signature appears there
+			// does not count.
+			if commandFailed(runStats, cmd) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// commandFailed reports whether the run's collected Errors mention this
+// build/test command failing (exit-status/non-zero markers near the
+// command text, or FAIL/exit status lines referencing it).
+func commandFailed(runStats *RunStats, cmd string) bool {
+	if len(runStats.Errors) == 0 {
+		return false
+	}
+	base := strings.TrimSpace(stripCommandComment(cmd))
+	if base == "" {
+		return false
+	}
+	// Use the first token (the binary) as the anchor - error lines usually
+	// quote the command or its failure output, not the full arg list.
+	fields := strings.Fields(base)
+	anchor := fields[0]
+	for _, e := range runStats.Errors {
+		el := strings.ToLower(e)
+		if strings.Contains(el, strings.ToLower(anchor)) && (strings.Contains(el, "fail") || strings.Contains(el, "exit status") || strings.Contains(el, "non-zero") || strings.Contains(el, "error")) {
 			return true
 		}
 	}
