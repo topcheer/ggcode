@@ -111,7 +111,10 @@ func TestDangerousDetector_AppleScriptCritical(t *testing.T) {
 		{`do shell script "rm -rf /*"`, true, DangerCritical},
 		{`do shell script 'rm -rf /*'`, true, DangerCritical},
 		{`do shell script "mkfs /dev/sda1"`, true, DangerCritical},
-		{`do shell script "dd if=/dev/sda of=file"`, true, DangerCritical},
+		// #1804 case 2: the raw-device READ side demoted Critical->High
+		// (writing devices stays Critical below) - everyday
+		// 'dd if=/dev/zero of=blank.img' was hard-blocked before.
+		{`do shell script "dd if=/dev/sda of=file"`, true, DangerHigh},
 		{`do shell script "chmod -R 777 /"`, true, DangerCritical},
 
 		// Safe/less dangerous AppleScript commands (rm -f is medium, not critical)
@@ -262,7 +265,9 @@ func TestDangerousDetector_IsExtremelyDangerous(t *testing.T) {
 	}{
 		{"rm -rf /", true},
 		{"mkfs /dev/sda1", true},
-		{"dd if=/dev/sda of=file", true},
+		// #1804 case 2: read side is High now, not Critical.
+		{"dd if=/dev/sda of=file", false},
+		{"dd if=/dev/zero of=blank.img", false},
 		{`do shell script "rm -rf /"`, true},
 		{`do shell script "mkfs /dev/sda1"`, true},
 
@@ -271,6 +276,9 @@ func TestDangerousDetector_IsExtremelyDangerous(t *testing.T) {
 		{`do shell script "sudo ls"`, false},
 		{`security find-generic-password -a test`, false},
 		{"ls -la", false},
+		// #1804 case 1: quoted root and $HOME forms must stay Critical.
+		{`rm -rf "/"`, true},
+		{"rm -rf $HOME", true},
 	}
 
 	for _, tt := range tests {
