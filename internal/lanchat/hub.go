@@ -908,9 +908,15 @@ func (h *Hub) sendPresence(peer Participant) {
 	// TCP succeeded — mark peer TCP as up
 	h.recordTransportResult(peer.NodeID, "tcp", true)
 
-	// The response contains the peer's own presence — learn it too
+	// The response contains the peer's own presence — learn it too.
+	// #1627 case C: the sender side parsed the peer's response body with
+	// no ceiling — a malicious/compromised LAN peer could stream an
+	// unbounded "presence" and json.Decoder would buffer it all. Presence
+	// payloads are tiny; bound the read (io.LimitReader keeps the decode
+	// semantic - oversize input simply fails to decode and is ignored,
+	// matching this path's best-effort nature).
 	var peerInfo Participant
-	if err := json.NewDecoder(resp.Body).Decode(&peerInfo); err == nil && peerInfo.NodeID != "" {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, lanchatMaxBodyBytes)).Decode(&peerInfo); err == nil && peerInfo.NodeID != "" {
 		var cb func(Participant)
 		var participant Participant
 		h.mu.Lock()
