@@ -364,7 +364,7 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 	}
 	a.emitUsageWithSource(resp.Usage, "verify")
 
-	cmd := strings.TrimSpace(extractText(resp.Message))
+	cmd := stripCodeFence(strings.TrimSpace(extractText(resp.Message)))
 	if strings.EqualFold(cmd, "SKIP") || cmd == "" {
 		return ""
 	}
@@ -380,6 +380,30 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 	}
 
 	return cmd
+}
+
+// stripCodeFence removes a markdown code fence wrapper the LLM may add
+// despite the "output only the command" instruction (#1522 case C): a
+// fenced command reached the pre-flight LookPath as a 3-backtick prefix,
+// failed, and came back Passed=true "verification skipped" - a silent
+// false green for every fenced oracle answer.
+func stripCodeFence(s string) string {
+	t := strings.TrimSpace(s)
+	for _, fence := range []string{"```go", "```bash", "```sh", "```shell", "```"} {
+		if strings.HasPrefix(t, fence) {
+			t = strings.TrimPrefix(t, fence)
+			t = strings.TrimSpace(t)
+			break
+		}
+	}
+	if idx := strings.LastIndex(t, "```"); idx >= 0 {
+		t = strings.TrimSpace(t[:idx])
+	}
+	// Single line only - the oracle is asked for ONE command.
+	if nl := strings.IndexByte(t, '\n'); nl >= 0 {
+		t = t[:nl]
+	}
+	return strings.TrimSpace(t)
 }
 
 // executeVerifyCommand runs the command and returns the result.
@@ -460,7 +484,17 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 // that simply lack tests or the toolchain.
 func isNonFailureExit(command string, code int) bool {
 	if code == 127 {
-		return true // command not found
+		// Command not found. #1522 case B: only a MISSING LEADING binary is
+		// "nothing to verify" - `go test ./... || npm run build` with npm
+		// absent exits 127 from the FALLBACK side while the real test run
+		// already failed; blanket 127 amnesty turned that into Passed=true
+		// ("verification passed") with a genuine test failure swallowed.
+		// Compound commands (||, &&, ;) lose the amnesty: we cannot tell
+		// which leg exited 127 without shell semantics.
+		if strings.ContainsAny(command, "||;&&") {
+			return false
+		}
+		return true
 	}
 	// pytest exit 5: no tests were collected - not a code defect.
 	return code == 5 && strings.Contains(command, "pytest")
