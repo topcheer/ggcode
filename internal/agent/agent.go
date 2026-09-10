@@ -2050,13 +2050,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Taking Messages() at the send site closes every current and
 		// future Add-then-continue path.
 		msgs = a.contextManager.Messages()
-		resp, textBuf, toolCalls, truncated, policyBlocked, err := a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
-		if samplingApplied >= 0 {
-			a.restoreSampling(samplingPrev)
-		}
-		if effortApplied != "" {
-			a.restoreEffort(effortPrev)
-		}
+		// #1817 case 2: the restore must survive a panic inside
+		// streamChatResponse. Run() recovers panics into error returns, but
+		// the old positional restores after the call never executed on that
+		// path - the leaked adaptive "low" then self-perpetuated (next
+		// apply's previous read the leaked value) and ReasoningEffort()
+		// reported the wrong state for the rest of the session. The closure's
+		// defer restores on every exit including panic-unwind.
+		resp, textBuf, toolCalls, truncated, policyBlocked, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
+			defer func() {
+				if samplingApplied >= 0 {
+					a.restoreSampling(samplingPrev)
+				}
+				if effortApplied != "" {
+					a.restoreEffort(effortPrev)
+				}
+			}()
+			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
+		}()
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0

@@ -301,6 +301,12 @@ func (t BatchReplace) Execute(ctx context.Context, input json.RawMessage) (Resul
 			out.Results[i].Error = "cancelled"
 			out.FilesError++
 			out.FilesChanged--
+			// #1817 case 3: #1638-2 fixed the write-failure branch below but
+			// missed this sibling - a cancelled file never reached disk, so
+			// its matches must leave TotalMatches too or the summary counts
+			// matches that were never written ("3 changed (120 total
+			// matches)" with a cancelled file inside).
+			out.TotalMatches -= pr.matches
 			continue
 		}
 		CaptureDiagnosticBaseline(t.WorkingDir, pr.path)
