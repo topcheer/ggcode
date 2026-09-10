@@ -106,11 +106,24 @@ func (s *unreadEditState) normalize(path string) string {
 // recordRead marks a file as read. Called after successful read_file/multi_file_read.
 // Also captures the file's modification time for stale-read detection.
 func (s *unreadEditState) recordRead(path string) {
+	s.recordReadWindow(path, false)
+}
+
+// recordReadWindow records a read; when windowed (read_file with
+// offset/limit), the file is NOT marked fully read (#1782 case 3:
+// `read_file {offset:2000, limit:50}` used to set filesRead=true and a
+// follow-up edit_file outside the window passed the unread guard
+// silently). A windowed read still refreshes the staleness baseline and
+// mtime - the agent did look at the file, so the stale/mtime sentinels
+// keep their semantics; only the fully-read flag is withheld.
+func (s *unreadEditState) recordReadWindow(path string, windowed bool) {
 	if path == "" {
 		return
 	}
 	n := s.normalize(path)
-	s.filesRead[n] = true
+	if !windowed {
+		s.filesRead[n] = true
+	}
 	// Re-reading the file refreshes the staleness baseline: any future
 	// external modification after this read must be able to re-warn, so
 	// clear the stale warning key (fix #162 — the key was never cleared,

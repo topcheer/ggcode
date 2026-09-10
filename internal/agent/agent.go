@@ -3282,13 +3282,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// false 'over-mining' hit. The hint fires once per call on
 				// the LAST path only.
 				readPathsLen := len(extractReadFilePaths(tc.Name, tc.Arguments))
+				// #1782 case 3: a windowed read (read_file with offset/limit)
+				// must not mark the file FULLY read. recordRead had no window
+				// notion, so `read_file {offset:2000, limit:50}` set
+				// filesRead=true and a follow-up edit outside the window
+				// passed the unread guard silently (#463 fixed the redundant
+				// read side only - the fix that reached exactly one consumer).
+				// The other three recorders below are disk-based (they stat or
+				// hash the file itself, not the returned slice), so a windowed
+				// read is equivalent to a full read for them - unchanged.
+				hasWindow := readArgsHaveWindow(tc.Arguments)
 				for pi, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
-					a.unreadEdit.recordRead(p)
+					a.unreadEdit.recordReadWindow(p, hasWindow)
 					a.tunnelVision.recordFile(p)
 					a.editFailRecovery.recordRead(p)
 					a.fileFreshness.recordRead(p)
 					a.readHash.recordReadHash(p)
-					if hint := a.redundantRead.checkRedundantRead(p, readArgsHaveWindow(tc.Arguments)); hint != "" {
+					if hint := a.redundantRead.checkRedundantRead(p, hasWindow); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
 					if pi == readPathsLen-1 {
