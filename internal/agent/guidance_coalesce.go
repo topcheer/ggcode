@@ -277,15 +277,20 @@ func appendSuppressedSummary(result, suppressed []string) []string {
 //   - overuseHint: tool overuse guidance
 func (a *Agent) applyToolResultGuidance(
 	result *tool.Result,
-	loopGuidance, searchParamHint, redundancyHint, equivHint string,
+	loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint string,
 ) {
-	if loopGuidance == "" && searchParamHint == "" && redundancyHint == "" && equivHint == "" {
+	if loopGuidance == "" && searchParamHint == "" && redundancyHint == "" && equivHint == "" && undoBlindHint == "" {
 		return
 	}
 
 	var hints []string
 	if searchParamHint != "" {
 		hints = append(hints, searchParamHint)
+	}
+	if undoBlindHint != "" {
+		// #1799 case 1: computed BEFORE execution, attached to the result of
+		// the very call it warned about.
+		hints = append(hints, undoBlindHint)
 	}
 	if loopGuidance != "" {
 		hints = append(hints, loopGuidance)

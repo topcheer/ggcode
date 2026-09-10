@@ -132,9 +132,10 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 				s.warnCount++
 				delete(s.pendingUndoFiles, "*")
 				return fmt.Sprintf(
-					"[undo-blind] A tree-wide revert/reset was performed but you are editing " +
-						"without re-reading the affected files first. The file contents may differ " +
-						"from what you remember. Read the file(s) you are about to edit before proceeding.",
+					"[undo-blind] A tree-wide revert/reset was performed and this edit ran without " +
+						"re-reading the affected files first - its anchors may have come from the " +
+						"pre-revert contents. Read the file(s) you just edited back NOW, verify the " +
+						"result is what you intended, and re-read before every further edit.",
 				)
 			}
 		}
@@ -144,9 +145,9 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 				s.warnCount++
 				delete(s.pendingUndoFiles, fp)
 				return fmt.Sprintf(
-					"[undo-blind] You are editing %s after an undo/revert operation on this file "+
-						"without re-reading it first. The undo may have restored content different from "+
-						"your current mental model. Read %s before editing to avoid compounding errors.",
+					"[undo-blind] This edit to %s ran after an undo/revert on the file without "+
+						"a re-read - it may have used stale pre-revert anchors. Read %s back NOW "+
+						"and verify what actually landed; re-read before every further edit.",
 					fp, fp,
 				)
 			}
@@ -163,8 +164,8 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 						s.warnCount++
 						delete(s.pendingUndoFiles, p)
 						return fmt.Sprintf(
-							"[undo-blind] You are editing %s after an undo/revert on this file "+
-								"without re-reading it first. Read %s before editing.",
+							"[undo-blind] This edit to %s ran after an undo/revert on the file "+
+								"without a re-read. Read %s back and verify what landed.",
 							p, p,
 						)
 					}

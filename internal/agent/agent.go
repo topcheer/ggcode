@@ -2995,6 +2995,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 				return err
 			}
+			// #1799 case 1: undo-blind detection BEFORE execution. The old
+			// call site sat in the post-execution result loop: the blind edit
+			// had ALREADY landed on disk by the time the "read before editing"
+			// guidance arrived - exactly the compounding error this detector
+			// exists to prevent. The check is pure (state mutation records the
+			// undo/read/mutation sequence), so calling it pre-execution yields
+			// identical classification one step earlier; the hint rides the
+			// tool result so the LLM sees it in the same turn.
+			var undoBlindHint string
+			if ub := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ub != "" {
+				debug.Log("agent", "Iteration %d: undo-blind mutation detected (pre-execution)", i+1)
+				undoBlindHint = ub
+			}
 			// #1587-A: snapshot write-target existence BEFORE execution -
 			// the orphan detector consumes it post-execution.
 			a.orphanFile.recordPreExec(tc.Name, string(tc.Arguments), a.workingDir)
@@ -3886,17 +3899,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Verification debt: track unverified modifications (SAUP-inspired).
 			// Detects when the agent stacks edits without building/testing.
 			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
-			// Undo-blind: detect mutations after undo/revert without re-reading.
-			if ubMsg := a.undoBlind.recordToolCall(tc.Name, tc.Arguments); ubMsg != "" {
-				debug.Log("agent", "Iteration %d: undo-blind continuation detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: ubMsg,
-					}},
-				})
-			}
+			// Undo-blind moved to pre-execution (#1799 case 1) - see the
+			// loop above; the hint rides the tool result there.
 			// Premature commitment: record exploratory actions to track
 			// evidence gathering before the first edit.
 			a.prematureCommit.recordExploration(tc.Name, extractFileHints(tc.Name, tc.Arguments))
@@ -4343,7 +4347,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Both vision and non-vision paths share the same hint assembly logic.
 			// originalContentLen was captured BEFORE the detector chain above (#952,
 			// #553 residual) so detector guidance never inflates waste metering.
-			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint)
+			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint)
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
 				for i, ri := range result.Images {
