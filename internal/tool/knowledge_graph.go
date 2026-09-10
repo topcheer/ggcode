@@ -175,11 +175,33 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 	}
 
 	id := p.ID
+	idWasAuto := false
 	if id == "" {
 		id = slugify(p.Title)
+		idWasAuto = true
 	}
 	if len(id) > 80 {
 		id = id[:80]
+	}
+	// #1692 case 4: slugify is lowercase + strip-non-[a-z0-9-], so "C++ API"
+	// and "c api" both become "c-api" - the second add hit the partial-
+	// update branch and silently OVERWROTE the first node's Content while
+	// reporting plain "saved". When the id was auto-generated and the
+	// existing node has a different title, disambiguate with a numeric
+	// suffix instead. Same title → legitimate update path.
+	if idWasAuto {
+		for i := 2; ; i++ {
+			ex, exists := s.Nodes[id]
+			if !exists || strings.EqualFold(ex.Title, p.Title) {
+				break
+			}
+			suffix := fmt.Sprintf("-%d", i)
+			base := id
+			if len(base)+len(suffix) > 80 {
+				base = base[:80-len(suffix)]
+			}
+			id = base + suffix
+		}
 	}
 
 	now := time.Now()

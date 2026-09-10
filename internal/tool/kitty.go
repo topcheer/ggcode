@@ -139,7 +139,7 @@ func (k *KittyTool) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	// Status doesn't require Kitty to be running — it reports detection.
 	if action == "status" {
-		return k.executeStatus(), nil
+		return k.executeStatus(ctx), nil
 	}
 
 	if !kittyAvailable() {
@@ -148,37 +148,37 @@ func (k *KittyTool) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	switch action {
 	case "list":
-		return k.executeList(), nil
+		return k.executeList(ctx), nil
 	case "split":
-		return k.executeSplit(args.WindowID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
+		return k.executeSplit(ctx, args.WindowID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
 	case "new_tab":
-		return k.executeNewTab(args.Command, args.WorkingDir), nil
+		return k.executeNewTab(ctx, args.Command, args.WorkingDir), nil
 	case "new_window":
-		return k.executeNewWindow(args.Command, args.WorkingDir), nil
+		return k.executeNewWindow(ctx, args.Command, args.WorkingDir), nil
 	case "focus":
-		return k.executeFocus(args.WindowID), nil
+		return k.executeFocus(ctx, args.WindowID), nil
 	case "close":
-		return k.executeClose(args.WindowID), nil
+		return k.executeClose(ctx, args.WindowID), nil
 	case "close_tab":
-		return k.executeCloseTab(), nil
+		return k.executeCloseTab(ctx), nil
 	case "select_tab":
-		return k.executeSelectTab(args.TabIndex), nil
+		return k.executeSelectTab(ctx, args.TabIndex), nil
 	case "input":
-		return k.executeInput(args.WindowID, args.Text), nil
+		return k.executeInput(ctx, args.WindowID, args.Text), nil
 	case "send_key":
-		return k.executeSendKey(args.WindowID, args.Key, args.Modifiers), nil
+		return k.executeSendKey(ctx, args.WindowID, args.Key, args.Modifiers), nil
 	case "resize":
-		return k.executeResize(args.WindowID, args.Axis, args.Increment), nil
+		return k.executeResize(ctx, args.WindowID, args.Axis, args.Increment), nil
 	case "get_text":
-		return k.executeGetText(args.WindowID), nil
+		return k.executeGetText(ctx, args.WindowID), nil
 	case "zoom":
-		return k.executeZoom(args.WindowID), nil
+		return k.executeZoom(ctx, args.WindowID), nil
 	case "set_tab_title":
-		return k.executeSetTabTitle(args.Text), nil
+		return k.executeSetTabTitle(ctx, args.Text), nil
 	case "action":
-		return k.executeAction(args.WindowID, args.Text), nil
+		return k.executeAction(ctx, args.WindowID, args.Text), nil
 	case "reload_config":
-		return k.executeReloadConfig(), nil
+		return k.executeReloadConfig(ctx), nil
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unsupported kitty action %q", args.Action)}, nil
 	}
