@@ -136,6 +136,20 @@ func (c *tokenCountCalibrator) applyResult(estimated, realTokens int) {
 		estimated, realTokens, observedRatio, c.ratio)
 }
 
+// recordSkip marks a calibration attempt as performed-but-skipped (an
+// asymmetric sample, #1795 case 1): the cadence clock advances without
+// counting a failure or disabling - the OLD code left lastCalibrate zero
+// on every skip, so shouldCalibrate stayed true and each CountTokens paid
+// a synchronous remote call whose result was then discarded.
+func (c *tokenCountCalibrator) recordSkip() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.enabled {
+		return
+	}
+	c.lastCalibrate = time.Now()
+}
+
 // recordFailure records a failed calibration attempt (429/5xx/network) and
 // starts (or extends) the exponential backoff window (#708). After
 // calibrateMaxConsecutiveFailures consecutive failures the calibrator is

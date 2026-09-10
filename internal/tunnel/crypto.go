@@ -4,10 +4,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
-
 	"golang.org/x/crypto/argon2"
+	"strings"
 )
 
 // Crypto provides AES-GCM encryption/decryption using the token as key.
@@ -25,6 +27,12 @@ type Crypto struct {
 // Length policy: <16 bytes -> argon2id-derived 32-byte key; 16/24/32 -> used
 // directly; >32 -> truncated to 32 (intermediate lengths 17-31 also truncate).
 func NewCrypto(tokenHex string) (*Crypto, error) {
+	// #1795 case 4: an empty token shared a deterministic key anyone
+	// could recompute offline - the sibling relay_client.go rejects this
+	// explicitly; the public constructor must too.
+	if strings.TrimSpace(tokenHex) == "" {
+		return nil, errors.New("crypto: empty session token")
+	}
 	// Decode hex token to get key bytes
 	key := []byte(tokenHex)
 	// If key is too short for AES, derive via argon2id
@@ -33,9 +41,13 @@ func NewCrypto(tokenHex string) (*Crypto, error) {
 	// But AES only supports 16, 24, or 32 byte keys.
 	// For simplicity: if len < 16, derive; if 16/24/32, use directly; else truncate to 32.
 	if len(key) < 16 {
-		// Derive 32-byte key via argon2id
-		var salt [16]byte
-		derived := argon2.IDKey(key, salt[:], 1, 64*1024, 4, 32)
+		// Derive 32-byte key via argon2id. #1795 case 3: the salt was a
+		// FIXED all-zero array - precomputable across every installation
+		// (rainbow-able for low-entropy tokens). Salt from the key material
+		// itself: deterministic per token (relays must derive the same key
+		// without a shared salt channel) but no longer globally constant.
+		salt := sha256.Sum256(append([]byte("ggcode-tunnel-salt-v1"), key...))
+		derived := argon2.IDKey(key, salt[:16], 1, 64*1024, 4, 32)
 		key = derived
 	} else if len(key) > 32 {
 		key = key[:32]
