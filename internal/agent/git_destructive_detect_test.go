@@ -362,3 +362,25 @@ func hasPattern(pats []destructivePattern, name string) bool {
 	}
 	return false
 }
+
+// TestIsCleanForceCommandSeparatorAndGlobalFlags pins #1774 cases 1+2:
+// a second command's -f must not fire on a force-free clean (separator
+// truncation, #1600-A for push only), and 'git -C <dir> clean -fd' must
+// still detect (global flags between git and the subcommand).
+func TestIsCleanForceCommandSeparatorAndGlobalFlags(t *testing.T) {
+	if isCleanForceCommand("git clean . && rm -f x") {
+		t.Fatal("second command's -f must not fire on a force-free clean")
+	}
+	if !isCleanForceCommand("git -C /repo clean -fd") {
+		t.Fatal("git -C <dir> clean -fd must detect")
+	}
+	if !isCleanForceCommand("git --no-pager clean --force") {
+		t.Fatal("global flag --no-pager must not hide clean --force")
+	}
+	if !isCleanForceCommand("git clean -fd") {
+		t.Fatal("plain clean -fd must still detect")
+	}
+	if isCleanForceCommand("git clean -n") {
+		t.Fatal("dry-run must still suppress")
+	}
+}
