@@ -126,6 +126,28 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		if tc.Name == "delegate" {
 			return nil
 		}
+		// #1829 case 1: spawn_agent/teammate_spawn (and their task-delivery
+		// companions send_message/swarm_task_create on tm-* targets) leak
+		// async tree mutations past every guard: the spawned agent inherits
+		// the parent WorkingDir with edit tools enabled, and can rewrite the
+		// tree while pre-executed reads sit unconsumed. Weaker than #1649's
+		// deterministic delegate (the first sub-agent edit needs an LLM
+		// round-trip, so the race window opens in seconds, not ms) but the
+		// failure shape is identical: stale pre-read content delivered
+		// unlabeled. FN = High-severity stale read / FP = lost parallelism
+		// - the guard's own asymmetry says block.
+		if tc.Name == "spawn_agent" || tc.Name == "teammate_spawn" ||
+			tc.Name == "send_message" || tc.Name == "swarm_task_create" ||
+			tc.Name == "a2a_send_task" || tc.Name == "a2a_remote" {
+			return nil
+		}
+		// #1829 case 2: warp's input/new_tab surfaces execute arbitrary shell
+		// (executeInput(args.Command)+send_key enter) in one call - a
+		// run_command-equivalent mutation channel the shell guard never
+		// covered. Narrow trigger (macOS + Warp), but same stale-read shape.
+		if tc.Name == "warp" {
+			return nil
+		}
 	}
 	for i, tc := range toolCalls {
 		if !speculativeSafeTools[tc.Name] {
