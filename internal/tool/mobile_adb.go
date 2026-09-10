@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,12 +18,38 @@ import (
 // Works on all platforms where adb is installed.
 type androidBackend struct {
 	adbPath string
+
+	// #1694 case 2: last parsed snapshot tree per device, with @eN IDs
+	// stamped by formatSnapshot. Lets tap/type/swipe resolve element refs
+	// the description promises instead of erroring on every ref call.
+	mu        sync.Mutex
+	snapshots map[string]*uiElement
+}
+
+// resolveRef maps an @eN reference from the device's last snapshot to the
+// element's center coordinates (#1694 case 2).
+func (a *androidBackend) resolveRef(device, ref string) (int, int, error) {
+	if !strings.HasPrefix(ref, "@e") {
+		return 0, 0, fmt.Errorf("invalid element reference %q (expected @eN)", ref)
+	}
+	a.mu.Lock()
+	root := a.snapshots[device]
+	a.mu.Unlock()
+	if root == nil {
+		return 0, 0, fmt.Errorf("element reference %q requires a prior snapshot - call snapshot first", ref)
+	}
+	el := findElementByID(root, ref)
+	if el == nil || el.Rect == nil {
+		return 0, 0, fmt.Errorf("element %q not found in the last snapshot - the UI may have changed; take a new snapshot", ref)
+	}
+	cx, cy := el.Rect.center()
+	return cx, cy, nil
 }
 
 func (a *androidBackend) defaultDevice() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, _, _ := runCommand(ctx, 5*time.Second, a.adbPath, "devices")
+	out, _, _ := runCommand(ctx, 5*time.Second, a.adbPath, "devices", "-l")
 	var firstDevice string
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -176,6 +204,15 @@ func (a *androidBackend) snapshot(ctx context.Context, device string) (Result, e
 	devInfo := fmt.Sprintf("Platform: Android\nDevice: %s", device)
 
 	formatted := formatSnapshot(root, devInfo)
+	// #1694 case 2: formatSnapshot stamps @eN IDs onto the tree as it
+	// numbers elements - cache the stamped tree so later tap/type/swipe
+	// calls can resolve the references this output advertises.
+	a.mu.Lock()
+	if a.snapshots == nil {
+		a.snapshots = make(map[string]*uiElement)
+	}
+	a.snapshots[device] = root
+	a.mu.Unlock()
 	return Result{Content: formatted}, nil
 }
 
@@ -191,11 +228,15 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 		return Result{IsError: true, Content: fmt.Sprintf("failed to create temp file: %v", err)}, nil
 	}
 	cmd.Stdout = f
-	cmd.Stderr = nil
+	// #1694 case 7: stderr was discarded - the 0-byte check below catches
+	// the common offline case, but adb's actual error message ("device
+	// offline", "not found") was lost for every other failure mode.
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
 	err = cmd.Run()
 	f.Close()
 	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v", err)}, nil
+		return Result{IsError: true, Content: fmt.Sprintf("screenshot failed: %v\n%s", err, errBuf.String())}, nil
 	}
 
 	data, err := os.ReadFile(tmpFile)
@@ -215,8 +256,14 @@ func (a *androidBackend) screenshot(ctx context.Context, device, format string, 
 }
 
 func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) (Result, error) {
+	// #1694 case 2: resolve @eN against the cached snapshot instead of
+	// erroring - the snapshot output advertises these references.
 	if ref != "" {
-		return Result{IsError: true, Content: "element reference requires a prior snapshot - use coordinates instead, or call snapshot first"}, nil
+		cx, cy, err := a.resolveRef(device, ref)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		x, y = cx, cy
 	}
 	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
@@ -228,19 +275,26 @@ func (a *androidBackend) tap(ctx context.Context, device, ref string, x, y int) 
 }
 
 func (a *androidBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
+	// #1694 case 2: a ref carries its own target from the last snapshot.
 	if ref != "" {
-		return Result{IsError: true, Content: "element reference requires a prior snapshot - tap the field first, then type"}, nil
+		cx, cy, err := a.resolveRef(device, ref)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		x, y = cx, cy
 	}
-	// Tap the field first if coordinates provided
-	if x > 0 || y > 0 {
-		// #840: include the device selector - without it, multi-device setups
-		// fail 'more than one device/emulator', the error is swallowed below,
-		// and the text goes to whatever holds focus while the tool reports
-		// success.
+	// Tap the field first if coordinates provided. #1694 case 1: the
+	// pre-tap error was swallowed ("Non-fatal, continue with typing") -
+	// with a focus elsewhere the text goes to the WRONG control while the
+	// tool reports success; the #840 comment described exactly this failure
+	// yet the fix only added the device selector. Fail instead. (0,0 stays
+	// the unset marker: ref-resolved coords or any positive coordinate
+	// trigger the pre-tap; a true top-left-corner target should use a ref.)
+	if ref != "" || x > 0 || y > 0 {
 		preArgs := adbDeviceArgs(device)
 		preArgs = append(preArgs, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
 		if _, _, err := runCommand(ctx, 5*time.Second, a.adbPath, preArgs...); err != nil {
-			// Non-fatal, continue with typing
+			return Result{IsError: true, Content: fmt.Sprintf("pre-type tap at (%d, %d) failed: %v - text was NOT typed (it would have gone to whatever holds focus)", x, y, err)}, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -262,6 +316,15 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 }
 
 func (a *androidBackend) swipe(ctx context.Context, device, ref string, x, y, endX, endY int) (Result, error) {
+	// #1694 case 2: a ref-only swipe used to run (0,0)->(0,0) and report
+	// success. Resolve the ref to the element center as the swipe START.
+	if ref != "" {
+		cx, cy, err := a.resolveRef(device, ref)
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
+		x, y = cx, cy
+	}
 	args := adbDeviceArgs(device)
 	args = append(args, "shell", "input", "swipe",
 		strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(endX), strconv.Itoa(endY), "300")
@@ -284,7 +347,6 @@ func (a *androidBackend) press(ctx context.Context, device, key string) (Result,
 }
 
 func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int) (Result, error) {
-	unfiltered := false
 	args := adbDeviceArgs(device)
 	if pkg != "" {
 		// #847: the old form passed '--pid=$(pidof' as separate argv fragments
@@ -324,9 +386,11 @@ func (a *androidBackend) logs(ctx context.Context, device, pkg string, lines int
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("logcat failed: %v\n%s", err, stderr)}, nil
 		}
-		unfiltered = true
+		// #1694 case 3: the pid filter failed to execute - the fallback is
+		// UNFILTERED logcat. The old `unfiltered` variable was dead code;
+		// surface the downgrade so the agent knows system noise is mixed in.
+		out = "[note: pid-filtered logcat failed; showing unfiltered logcat - lines from other processes are mixed in]\n" + out
 	}
-	_ = unfiltered
 	// Trim to last N lines
 	allLines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(allLines) > lines {

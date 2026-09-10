@@ -314,8 +314,13 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 }
 
 func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
+	// #1694 case 1: the pre-tap result was discarded on iOS too - a failed
+	// tap left focus elsewhere and the text went to the wrong control while
+	// the tool reported success. Fail instead of swallowing.
 	if x > 0 || y > 0 {
-		b.tap(ctx, device, "", x, y)
+		if r, _ := b.tap(ctx, device, "", x, y); r.IsError {
+			return Result{IsError: true, Content: fmt.Sprintf("pre-type tap at (%d, %d) failed: %s - text was NOT typed (it would have gone to whatever holds focus)", x, y, r.Content)}, nil
+		}
 		time.Sleep(300 * time.Millisecond)
 	}
 	// Use AppleScript to type into the Simulator

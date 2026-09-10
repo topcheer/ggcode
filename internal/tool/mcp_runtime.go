@@ -184,7 +184,17 @@ func (t GetMCPPromptTool) Execute(ctx context.Context, input json.RawMessage) (R
 			sb.WriteString(msg.Raw)
 		}
 	}
-	return Result{Content: strings.TrimSpace(sb.String())}, nil
+	out := strings.TrimSpace(sb.String())
+	// #1694 case 4: prompts are as arbitrarily large as resources (the
+	// resource path caps at 50KB with the exact same rationale) - an
+	// uncapped prompt dump fills the context in one call.
+	const maxMCPPromptBytes = 50 * 1024
+	if len(out) > maxMCPPromptBytes {
+		out = truncateUTF8Safe(out, maxMCPPromptBytes) +
+			fmt.Sprintf("\n\n[... MCP prompt truncated: %d bytes total, showing first %d ...]",
+				len(out), maxMCPPromptBytes)
+	}
+	return Result{Content: out}, nil
 }
 
 type ReadMCPResourceTool struct {

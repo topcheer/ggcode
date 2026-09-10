@@ -262,6 +262,7 @@ func (t *MobileDeviceTool) Close() error {
 func (t *MobileDeviceTool) listAllDevices(ctx context.Context) (Result, error) {
 	var sb strings.Builder
 	hasAny := false
+	var failures []string // #1694 case 6: "No devices" masked the real reason (adb/xcrun errors)
 
 	if t.ios != nil {
 		r, err := t.ios.devices(ctx)
@@ -269,6 +270,12 @@ func (t *MobileDeviceTool) listAllDevices(ctx context.Context) (Result, error) {
 			sb.WriteString(r.Content)
 			sb.WriteString("\n")
 			hasAny = true
+		} else {
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("iOS: %v", err))
+			} else {
+				failures = append(failures, fmt.Sprintf("iOS: %s", strings.SplitN(r.Content, "\n", 2)[0]))
+			}
 		}
 	}
 
@@ -278,11 +285,23 @@ func (t *MobileDeviceTool) listAllDevices(ctx context.Context) (Result, error) {
 			sb.WriteString(r.Content)
 			sb.WriteString("\n")
 			hasAny = true
+		} else {
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("Android: %v", err))
+			} else {
+				failures = append(failures, fmt.Sprintf("Android: %s", strings.SplitN(r.Content, "\n", 2)[0]))
+			}
 		}
 	}
 
 	if !hasAny {
-		return Result{Content: "No mobile devices or simulators available."}, nil
+		msg := "No mobile devices or simulators available."
+		// #1694 case 6: when BOTH backends errored, the blanket "No devices"
+		// hid adb-permission/xcrun-broken causes - surface the first line of each.
+		if len(failures) > 0 {
+			msg += " Backend issues: " + strings.Join(failures, "; ")
+		}
+		return Result{Content: msg}, nil
 	}
 	return Result{Content: strings.TrimSpace(sb.String())}, nil
 }
