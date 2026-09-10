@@ -199,7 +199,13 @@ func isAlphaNumByte(b byte) bool {
 
 func scoreResult(queryTerms []string, res searchResult) int {
 	if len(queryTerms) == 0 {
-		return 50 // neutral score when no query terms
+		// #1710 case 4: a CJK query (or any non-[a-z0-9+#.] script) yields
+		// ZERO tokens here - every result scores a flat 50 and the sort
+		// degenerates to the upstream (DDG) order. That is still a sane
+		// fallback (the upstream ranker saw the full query we cannot
+		// tokenize), so keep 50, but log it once per call site via the
+		// caller's debug path - silent degeneration hid the gap for months.
+		return 50 // neutral score when no query terms (incl. CJK queries)
 	}
 
 	titleLower := strings.ToLower(res.Title)

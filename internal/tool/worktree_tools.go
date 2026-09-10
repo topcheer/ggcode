@@ -8,8 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // EnterWorktree creates a new git worktree for isolated work.
@@ -62,6 +65,12 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 		if !isWorktreeNameChar(c) {
 			return Result{IsError: true, Content: fmt.Sprintf("invalid worktree name %q: only letters, digits, dots, underscores, and dashes allowed", name)}, nil
 		}
+	}
+	// #1710 case 5: "."/".." pass the character check (dot allowed) but are
+	// path components - filepath.Join(worktreesDir, "..") escapes the
+	// worktrees directory.
+	if !isSafeWorktreeName(name) {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid worktree name %q: must not be a path component ('.', '..') or contain separators", name)}, nil
 	}
 
 	// Find git root
@@ -230,10 +239,37 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	// Optionally delete the branch
 	if branchName != "" && branchName != "main" && branchName != "master" {
-		delCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
-		delCmd.Dir = mainRepoRoot
-		delCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
-		_ = delCmd.Run() // best effort
+		// #1710 case 1: gate the force-delete on unmerged/unpushed commits.
+		// The old code ran `git branch -D` unconditionally and swallowed the
+		// error, so committed-but-unpushed work was destroyed with ZERO gate -
+		// strictly weaker protection than the dirty-files gate above, for data
+		// that is worth strictly more.
+		unmergedCmd := exec.CommandContext(ctx, "git", "rev-list", "--count", branchName, "--not", "HEAD")
+		unpushedCmd := exec.CommandContext(ctx, "git", "rev-list", "--count", branchName, "--not", "--remotes")
+		unmergedCmd.Dir = mainRepoRoot
+		unpushedCmd.Dir = mainRepoRoot
+		unmergedCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+		unpushedCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+		unmergedOut, uerr1 := unmergedCmd.Output()
+		unpushedOut, uerr2 := unpushedCmd.Output()
+		unmerged, _ := strconv.Atoi(strings.TrimSpace(string(unmergedOut)))
+		unpushed, _ := strconv.Atoi(strings.TrimSpace(string(unpushedOut)))
+		// If the safety probes themselves fail, do NOT force-delete (fail
+		// closed); keep the branch and tell the user.
+		if uerr1 == nil && uerr2 == nil && (unmerged > 0 || unpushed > 0) && !args.DiscardChanges {
+			return Result{
+				Content:             fmt.Sprintf("worktree removed, but branch %s has %d unmerged and %d unpushed commit(s); branch kept. Set discard_changes=true to delete the branch too, or push/merge it first (recoverable via reflog for ~30 days after -D).", branchName, unmerged, unpushed),
+				SuggestedWorkingDir: mainRepoRoot,
+			}, nil
+		}
+		if uerr1 != nil || uerr2 != nil {
+			debug.Log("tool.worktree", "branch safety probe failed for %s (unmerged err=%v unpushed err=%v); keeping branch", branchName, uerr1, uerr2)
+		} else {
+			delCmd := exec.CommandContext(ctx, "git", "branch", "-D", branchName)
+			delCmd.Dir = mainRepoRoot
+			delCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+			_ = delCmd.Run() // best effort
+		}
 	}
 
 	return Result{
@@ -245,6 +281,16 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 // isWorktreeNameChar returns true for characters allowed in worktree names.
 func isWorktreeNameChar(c rune) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.'
+}
+
+// isSafeWorktreeName rejects names that are themselves path components
+// (#1710 case 5): "." and ".." pass isWorktreeNameChar (dot allowed) and
+// then escape the worktrees directory through filepath.Join.
+func isSafeWorktreeName(name string) bool {
+	if name == "." || name == ".." || strings.Contains(name, "/") || strings.Contains(name, string(os.PathSeparator)) {
+		return false
+	}
+	return true
 }
 
 // findGitRoot finds the git repository root from a directory.
@@ -423,6 +469,13 @@ func checkWorktreeDirty(ctx context.Context, entries []worktreeEntry) {
 		stCmd.Env = append(os.Environ(), "GIT_PAGER=cat")
 		stOut, stErr := stCmd.Output()
 		if stErr == nil && len(strings.TrimSpace(string(stOut))) > 0 {
+			entries[i].Dirty = true
+		}
+		// #1710 case 5: a failed probe used to leave Dirty=false - a
+		// worktree whose status could not be read rendered "clean". Fail
+		// safe: mark dirty (unknown state must not look safe).
+		if stErr != nil {
+			debug.Log("tool.worktree", "dirty probe failed for %s: %v; marking dirty (fail-safe)", entries[i].Path, stErr)
 			entries[i].Dirty = true
 		}
 	}
