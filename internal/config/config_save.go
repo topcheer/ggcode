@@ -36,6 +36,12 @@ func (c *Config) Save() error {
 	if strings.TrimSpace(c.FilePath) == "" {
 		return fmt.Errorf("config file path is empty")
 	}
+	// Test isolation guard: writing into the real user HOME from a test
+	// binary is always a bug (fixture leakage; see the vendors.yaml
+	// base_url incident). Explicit temp paths pass; real-home paths fail.
+	if err := GuardRealHomePath(c.FilePath, "Save()"); err != nil {
+		return err
+	}
 	unlock := lockConfigFile(c.FilePath)
 	defer unlock()
 	if err := c.Validate(); err != nil {

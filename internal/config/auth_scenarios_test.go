@@ -304,6 +304,9 @@ auth:
 // ---------------------------------------------------------------------------
 func parseTestConfig(t *testing.T, yamlContent string) *Config {
 	t.Helper()
+	// Load() resolves ConfigDir() for external sections; isolate HOME so the
+	// guard does not (correctly) fail fast on the real user home.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte(yamlContent), 0644); err != nil {

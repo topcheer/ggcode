@@ -149,6 +149,7 @@ func HomeDir() string {
 
 // ConfigDir returns ~/.ggcode
 func ConfigDir() string {
+	guardRealHomeDir("ConfigDir()")
 	return strings.Join([]string{HomeDir(), ".ggcode"}, string(os.PathSeparator))
 }
 
