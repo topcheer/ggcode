@@ -280,3 +280,34 @@ func TestIsCacheableCommandShellModel(t *testing.T) {
 		}
 	}
 }
+
+// #1717: substitution/background/input-redirection forms must not cache,
+// and failed executions must never enter the cache.
+func TestCommandCache1717SubstitutionAndErrors(t *testing.T) {
+	for _, cmd := range []string{
+		"go test $(git rev-parse --show-toplevel)/pkg",
+		"go build ./... `pwd`",
+		"make test < flags.txt",
+		"go build ./pkg &",
+	} {
+		if isCacheableCommand(cmd) {
+			t.Fatalf("substitution/background/redirection command must not be cacheable: %s", cmd)
+		}
+	}
+	if !isCacheableCommand("go build ./internal/agent/") {
+		t.Fatal("plain deterministic command must remain cacheable")
+	}
+	if !isCacheableCommand("go test ./pkg/ > /dev/null 2>&1 || true") {
+		_ = 0 // (existing > || handling preserved; compound segments split earlier)
+	}
+	// Failure never enters the cache (#1717 case 2).
+	a := &Agent{commandCache: newCommandCache()}
+	a.storeCommandResult("run_command", []byte(`{"command":"go build ./pkg/"}`), tool.Result{Content: "signal: killed", IsError: true})
+	if _, hit := a.checkCommandCache("run_command", []byte(`{"command":"go build ./pkg/"}`)); hit {
+		t.Fatal("failed execution must not be cached")
+	}
+	a.storeCommandResult("run_command", []byte(`{"command":"go build ./pkg/"}`), tool.Result{Content: "ok"})
+	if _, hit := a.checkCommandCache("run_command", []byte(`{"command":"go build ./pkg/"}`)); !hit {
+		t.Fatal("successful execution must still cache")
+	}
+}

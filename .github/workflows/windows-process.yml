@@ -1,0 +1,42 @@
+name: windows-process
+
+# Windows process-liveness verification (#1723 case 1 / PR #1911).
+#
+# IsProcessAlive on Windows goes through OpenProcess + a non-blocking
+# WaitForSingleObject, and the ERROR_INVALID_PARAMETER (87) verdict
+# (nonexistent pid = dead) only behaves as documented on a real Windows
+# kernel: 87 must report dead, ACCESS_DENIED (5) must stay alive, and a
+# signaled handle must mean exited. No LAN member has a Windows machine,
+# so this runner IS the real-machine test (same standing policy as
+# windows-proxy, #761). TestIsProcessAlive_NonExistent is the regression
+# sentinel: it turns red on Windows exactly when the 87 branch regresses.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "internal/util/process*.go"
+      - ".github/workflows/windows-process.yml"
+  pull_request:
+    paths:
+      - "internal/util/process*.go"
+      - ".github/workflows/windows-process.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      GOFLAGS: "-p=1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Process liveness tests
+        shell: pwsh
+        run: go test -tags goolm -count=1 -v -run "IsProcessAlive" ./internal/util/

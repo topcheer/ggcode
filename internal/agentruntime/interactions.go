@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/permission"
@@ -125,6 +126,24 @@ func (b *InteractionBroker) PendingAskUser(id string) (AskUserRequest, bool) {
 		return AskUserRequest{}, false
 	}
 	return waiter.request, true
+}
+
+// PendingApprovals returns all pending approval requests in registration
+// order (#1657 case 2): text-path callers need to know when a bare "y" is
+// ambiguous (2+ pending) and to offer index-based disambiguation.
+func (b *InteractionBroker) PendingApprovals() []ApprovalRequest {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	waiters := make([]approvalWaiter, 0, len(b.approvals))
+	for _, w := range b.approvals {
+		waiters = append(waiters, w)
+	}
+	sort.Slice(waiters, func(i, j int) bool { return waiters[i].seq < waiters[j].seq })
+	reqs := make([]ApprovalRequest, 0, len(waiters))
+	for _, w := range waiters {
+		reqs = append(reqs, w.request)
+	}
+	return reqs
 }
 
 func (b *InteractionBroker) FirstPendingApproval() (ApprovalRequest, bool) {

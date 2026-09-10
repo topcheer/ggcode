@@ -147,3 +147,17 @@ func cascadeIndexOf(s, substr string) int {
 	}
 	return -1
 }
+
+// #1564-C: pipe-tailed verify segments must count - the strict mirror
+// lacked the third separator the loose splitCompoundCommand has.
+func TestIsStrictVerifyCommand1564CPipeSegment(t *testing.T) {
+	if !isStrictVerifyCommand("cat tests.txt | pytest -") {
+		t.Fatal("pipe-tailed verify segment must match")
+	}
+	if !isStrictVerifyCommand("go build ./... && cat r.txt | go test ./pkg/ -run X") {
+		t.Fatal("verify after && and | must match")
+	}
+	if isStrictVerifyCommand("cat notes.txt | grep foo") {
+		t.Fatal("non-verify pipeline must not match")
+	}
+}

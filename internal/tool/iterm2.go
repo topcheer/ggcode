@@ -140,7 +140,7 @@ func (t *Iterm2Tool) Execute(ctx context.Context, input json.RawMessage) (Result
 
 	// Status doesn't require iTerm2 to be running — it reports detection.
 	if action == "status" {
-		return t.executeStatus(), nil
+		return t.executeStatus(ctx), nil
 	}
 
 	if !iterm2Available() {
@@ -149,43 +149,43 @@ func (t *Iterm2Tool) Execute(ctx context.Context, input json.RawMessage) (Result
 
 	switch action {
 	case "list":
-		return t.executeList(), nil
+		return t.executeList(ctx), nil
 	case "split":
-		return t.executeSplit(args.SessionID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
+		return t.executeSplit(ctx, args.SessionID, args.Direction, args.Size, args.Command, args.WorkingDir), nil
 	case "new_tab":
-		return t.executeNewTab(args.Command, args.WorkingDir), nil
+		return t.executeNewTab(ctx, args.Command, args.WorkingDir), nil
 	case "new_window":
-		return t.executeNewWindow(args.Command, args.WorkingDir), nil
+		return t.executeNewWindow(ctx, args.Command, args.WorkingDir), nil
 	case "focus":
-		return t.executeFocus(args.SessionID), nil
+		return t.executeFocus(ctx, args.SessionID), nil
 	case "close":
-		return t.executeClose(args.SessionID), nil
+		return t.executeClose(ctx, args.SessionID), nil
 	case "select_tab":
-		return t.executeSelectTab(args.TabIndex), nil
+		return t.executeSelectTab(ctx, args.TabIndex), nil
 	case "input":
-		return t.executeInput(args.SessionID, args.Text), nil
+		return t.executeInput(ctx, args.SessionID, args.Text), nil
 	case "send_key":
-		return t.executeSendKey(args.SessionID, args.Key, args.Modifiers), nil
+		return t.executeSendKey(ctx, args.SessionID, args.Key, args.Modifiers), nil
 	case "resize":
-		return t.executeResize(args.SessionID, args.Axis, args.Increment), nil
+		return t.executeResize(ctx, args.SessionID, args.Axis, args.Increment), nil
 	case "get_text":
-		return t.executeGetText(args.SessionID), nil
+		return t.executeGetText(ctx, args.SessionID), nil
 	case "set_title":
-		return t.executeSetTitle(args.SessionID, args.Text), nil
+		return t.executeSetTitle(ctx, args.SessionID, args.Text), nil
 	case "profile":
-		return t.executeProfile(args.SessionID, args.Text), nil
+		return t.executeProfile(ctx, args.SessionID, args.Text), nil
 	case "badge":
-		return t.executeBadge(args.SessionID, args.Text), nil
+		return t.executeBadge(ctx, args.SessionID, args.Text), nil
 	case "broadcast":
-		return t.executeBroadcast(args.Text), nil
+		return t.executeBroadcast(ctx, args.Text), nil
 	case "mark":
-		return t.executeMark(args.Text), nil
+		return t.executeMark(ctx, args.Text), nil
 	case "clear":
-		return t.executeClear(args.SessionID), nil
+		return t.executeClear(ctx, args.SessionID), nil
 	case "action":
-		return t.executeMenuAction(args.Text), nil
+		return t.executeMenuAction(ctx, args.Text), nil
 	case "reload_config":
-		return t.executeReloadConfig(), nil
+		return t.executeReloadConfig(ctx), nil
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("unsupported iterm2 action %q", args.Action)}, nil
 	}
@@ -208,4 +208,18 @@ func (t *Iterm2Tool) workingDir() string {
 		return "."
 	}
 	return wd
+}
+
+// countDroppedControlRunes mirrors escapeAS's default branch: C0 runes
+// other than tab/newline/carriage-return are silently dropped (#1691).
+// Pure string logic shared by the darwin implementation and the
+// cross-platform 1691 test - lives here so every GOOS compiles it.
+func countDroppedControlRunes(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' {
+			n++
+		}
+	}
+	return n
 }

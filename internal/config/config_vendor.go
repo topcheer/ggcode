@@ -70,7 +70,10 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 			enterpriseURL = strings.TrimSpace(info.EnterpriseURL)
 			if endpoint == "enterprise" && enterpriseURL != "" {
 				baseURL = auth.CopilotAPIBaseURL(enterpriseURL)
-			} else if endpoint == "github.com" {
+			} else if endpoint == "github.com" && baseURL == "" {
+				// #1695 case 5: an explicitly configured base_url (custom
+				// proxy) was silently overwritten with the official API
+				// host. Only default when unset.
 				baseURL = auth.CopilotAPIBaseURL("")
 			}
 		}
@@ -86,8 +89,9 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 				// context.Background() and RefreshClaudeToken uses
 				// http.DefaultClient (no timeout) - a TCP black hole froze
 				// every endpoint resolution for minutes to hours. Bound the
-				// refresh so resolution degrades to the expired token
-				// instead of hanging. (Single-flight and cross-process store
+				// refresh so a TCP black hole cannot hang every endpoint
+				// resolution; a FAILED refresh then fails LOUDLY (#1300
+				// below) to trigger re-auth. (Single-flight / cross-process
 				// safety remain open - see issue.)
 				refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
 				refreshed, refreshErr := auth.RefreshClaudeToken(refreshCtx, info.RefreshToken)
@@ -120,6 +124,13 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 				}
 			} else {
 				apiKey = strings.TrimSpace(info.AccessToken)
+				// #1695 case 5: an unexpired token with an EMPTY access
+				// token used to resolve successfully and surface as a bare
+				// 401 later - reject at resolution time instead.
+				if apiKey == "" {
+					debug.Log("config", "claude oauth: unexpired token has empty access token (re-authentication required)")
+					return nil, fmt.Errorf("claude oauth: stored token has no access token; run /login to re-authenticate")
+				}
 			}
 		}
 	}
@@ -462,7 +473,17 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 	if endpointName == "" {
 		return fmt.Errorf("endpoint name cannot be empty")
 	}
-	if protocol == "" {
+
+	// #1706 case 1: the openai default previously applied HERE, before
+	// the merge check - so ep.Protocol was never empty and the merge
+	// branch's "empty = keep existing" never applied to protocol: a
+	// partial update (base_url only) silently flipped an anthropic
+	// endpoint to openai. The default now applies only to NEW endpoints.
+	isNew := false
+	if _, exists := vc.Endpoints[endpointName]; !exists {
+		isNew = true
+	}
+	if protocol == "" && isNew {
 		protocol = "openai"
 	}
 

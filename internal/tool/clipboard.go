@@ -128,7 +128,12 @@ func clipboardReadCmd(ctx context.Context) (*exec.Cmd, error) {
 	case "darwin":
 		return exec.CommandContext(ctx, "pbpaste"), nil
 	case "windows":
-		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "Get-Clipboard"), nil
+		// #1822 case 1: Get-Clipboard emits through [Console]::OutputEncoding,
+		// which Windows PowerShell 5.1 defaults to the OEM code page (936 on
+		// CJK machines) - Go then UTF-8-decoded GBK bytes into mojibake.
+		// The #1642-2 "symmetric fix" set only the WRITE side's encodings.
+		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command",
+			"[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard"), nil
 	default: // linux, freebsd, etc.
 		if path, _ := exec.LookPath("wl-paste"); path != "" {
 			return exec.CommandContext(ctx, path), nil
@@ -152,7 +157,20 @@ func clipboardWriteCmd(ctx context.Context) (*exec.Cmd, error) {
 		// #1642-2: clip.exe decodes stdin with the SYSTEM ANSI code page
 		// (GBK/936 etc.) - CJK/emoji wrote mojibake while the READ side
 		// already uses PowerShell UTF-8. Symmetric Set-Clipboard fixes it.
-		return exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", "$OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())"), nil
+		// #1822 case 2: a hard-coded "powershell" broke Nano Server/Server
+		// Core containers (no Windows PowerShell) where clip.exe works -
+		// mirror the Linux three-tier degradation: powershell, then pwsh,
+		// then clip.exe (old behavior, mojibake limitation beats nothing).
+		if path, _ := exec.LookPath("powershell"); path != "" {
+			return exec.CommandContext(ctx, path, "-NoProfile", "-Command", "$OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())"), nil
+		}
+		if path, _ := exec.LookPath("pwsh"); path != "" {
+			return exec.CommandContext(ctx, path, "-NoProfile", "-Command", "$OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())"), nil
+		}
+		if path, _ := exec.LookPath("clip.exe"); path != "" {
+			return exec.CommandContext(ctx, path), nil
+		}
+		return nil, fmt.Errorf("no clipboard utility found (powershell, pwsh, or clip.exe)")
 	default:
 		if path, _ := exec.LookPath("wl-copy"); path != "" {
 			return exec.CommandContext(ctx, path), nil

@@ -29,14 +29,12 @@ func FormatDiff(diff string) string {
 			sb.WriteString(diffHeaderStyle.Render(line))
 			sb.WriteString("\n")
 			hasDiff = true
-		} else if strings.HasPrefix(line, "+") {
+		} else if hasDiff && strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			sb.WriteString(diffAddStyle.Render(line))
 			sb.WriteString("\n")
-			hasDiff = true
-		} else if strings.HasPrefix(line, "-") {
+		} else if hasDiff && strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
 			sb.WriteString(diffRemoveStyle.Render(line))
 			sb.WriteString("\n")
-			hasDiff = true
 		} else if hasDiff {
 			sb.WriteString(diffContextStyle.Render(line))
 			sb.WriteString("\n")

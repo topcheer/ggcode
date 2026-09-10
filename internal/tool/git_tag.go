@@ -104,7 +104,13 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 			gitArgs = append(gitArgs, args.Name)
 		}
 		if args.Commit != "" {
-			gitArgs = append(gitArgs, args.Commit)
+			// #1690 case 2: a dash-prefixed rev reached git as an OPTION -
+			// "-d" DELETED an existing tag, "-f" force-moved it. The git
+			// flag-family guard (#1325/#1687/#1689), fourth instance.
+			if strings.HasPrefix(args.Commit, "-") {
+				return Result{IsError: true, Content: fmt.Sprintf("invalid commit %q: leading dash (refusing option injection)", args.Commit)}, nil
+			}
+			gitArgs = append(gitArgs, "--", args.Commit)
 		}
 
 		cmd := gitCommand(ctx, gitArgs...)

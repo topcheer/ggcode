@@ -2,6 +2,7 @@ package util
 
 import (
 	"crypto/tls"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -35,10 +36,35 @@ func WrapTransport(base *http.Transport) *http.Transport {
 	var t *http.Transport
 	if base != nil {
 		t = base.Clone()
+		// #1849 case 1: Clone preserves the base's Proxy verbatim - callers
+		// like a2a WithMTLS build a transport for its TLS fields only and
+		// leave Proxy nil, which silently meant DIRECT connection: the env
+		// proxy (ProxyFromEnvironment) and the Windows sysproxy chain both
+		// stopped working behind corporate proxies. Only honor an explicit
+		// caller-set Proxy; a nil Proxy gets the smart default.
+		if t.Proxy == nil {
+			t.Proxy = SmartProxyFunc()
+		}
 	} else {
 		t = &http.Transport{
 			Proxy: SmartProxyFunc(),
 		}
+	}
+	// #1849 case 3: staged timeouts for the fresh-transport paths - the
+	// a2a mTLS client runs with Client.Timeout == 0 on purpose (#1458-B),
+	// so without per-stage defaults a hung dial or silent peer could pin
+	// the connection for as long as the (possibly nil) context allows.
+	if t.DialContext == nil {
+		t.DialContext = (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext
+	}
+	if t.TLSHandshakeTimeout == 0 {
+		t.TLSHandshakeTimeout = 15 * time.Second
+	}
+	if t.ResponseHeaderTimeout == 0 {
+		t.ResponseHeaderTimeout = 10 * time.Minute
 	}
 	// Disable HTTP/2 globally to prevent a crash in net/http's http2 client
 	// conn readLoop on Windows (Go 1.26.x). The http2Framer.ReadFrameHeader

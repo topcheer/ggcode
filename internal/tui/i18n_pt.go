@@ -1160,7 +1160,7 @@ func ptCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter salvar • Esc cancelar"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab mudar foco • j/k mover • / focar filtro • Enter ou s aplicar • a chave fornecedor • u chave endpoint • b URL base • m modelo personalizado • e adicionar endpoint • Esc fechar"
+		return "Tab/Shift+Tab mudar foco • j/k mover • / focar filtro • Enter ou s aplicar • a chave fornecedor • u chave endpoint • b URL base • m modelo personalizado • e adicionar endpoint • n novo fornecedor • Esc fechar"
 	case "panel.provider.login.browser_failed":
 		return "Falha ao abrir a página de verificação: %s"
 	case "panel.provider.login.browser_opened":

@@ -675,7 +675,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 				}
 				lines := make([]string, 0, len(diagnostics))
 				for _, diag := range diagnostics {
-					line := fmt.Sprintf("L%d:%d [%d] %s", diag.Range.Start.Line, diag.Range.Start.Character, diag.Severity, diag.Message)
+					line := fmt.Sprintf("L%d:%d [%s] %s", diag.Range.Start.Line, diag.Range.Start.Character, lspSeverityLabel(diag.Severity), diag.Message)
 					if strings.TrimSpace(diag.Source) != "" {
 						line += " (" + diag.Source + ")"
 					}
@@ -988,4 +988,21 @@ func offsetForPosition(content string, pos lsp.Position) (int, error) {
 		return offset + len(strings.SplitN(content[offset:], "\n", 2)[0]), nil
 	}
 	return 0, fmt.Errorf("character %d out of range on line %d", pos.Character, pos.Line)
+}
+
+// lspSeverityLabel maps LSP severity numbers to names (#1694 case 8: the
+// raw digit forced the agent to guess whether [1] was a hint or an error).
+func lspSeverityLabel(sev int) string {
+	switch sev {
+	case 1:
+		return "Error"
+	case 2:
+		return "Warning"
+	case 3:
+		return "Info"
+	case 4:
+		return "Hint"
+	default:
+		return fmt.Sprintf("severity-%d", sev)
+	}
 }

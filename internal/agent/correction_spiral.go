@@ -61,6 +61,10 @@ type correctionSpiralState struct {
 
 	// totalCorrections counts how many edit→error pairs we've seen.
 	totalCorrections int
+	// lastWarnedTotal pairs with lastWarnedSeqLen (#1726 case 1): len is
+	// capped at 12, so a snapshot AT the cap could never be exceeded - the
+	// monotonic counter is the second measure that keeps growing.
+	lastWarnedTotal int
 
 	// warningCount limits warnings per run.
 	warningCount int
@@ -127,6 +131,12 @@ func (s *correctionSpiralState) recordVerifyResult(_ string, output string, isEr
 			// every problem WAS fixed. The error sequence clears too.
 			s.pendingEdit = false
 			s.errorSequence = s.errorSequence[:0]
+			// #1726 case 2: green clears the evidence but kept the warning
+			// snapshots - a fresh true spiral needed to exceed the OLD
+			// thresholds to fire, contradicting #1449-B's stated green-slate
+			// intent. Reset both.
+			s.lastWarnedSeqLen = 0
+			s.lastWarnedTotal = 0
 		}
 		return
 	}
@@ -142,7 +152,6 @@ func (s *correctionSpiralState) recordVerifyResult(_ string, output string, isEr
 	if len(s.errorSequence) > 12 {
 		s.errorSequence = s.errorSequence[len(s.errorSequence)-12:]
 	}
-
 	s.pendingEdit = false
 }
 
@@ -167,7 +176,12 @@ func (s *correctionSpiralState) maybeWarn(iteration int) string {
 	// errorSequence; the iteration-distance gate alone re-fired the
 	// CRITICAL on the exact same data while the agent was legitimately
 	// investigating or waiting for clarification.
-	if s.warningCount > 0 && len(s.errorSequence) <= s.lastWarnedSeqLen {
+	// #1726 case 1: len alone deadlocks at the cap - a first warning firing
+	// exactly at len==12 snapshots 12 and every later append is capped back
+	// to 12, so 12<=12 forever suppressed the CRITICAL. New evidence = EITHER
+	// measure grew past its snapshot: uncapped sequences grow len, capped
+	// ones keep growing the monotonic counter. Frozen sequences freeze both.
+	if s.warningCount > 0 && len(s.errorSequence) <= s.lastWarnedSeqLen && s.totalCorrections <= s.lastWarnedTotal {
 		return ""
 	}
 
@@ -205,6 +219,7 @@ func (s *correctionSpiralState) maybeWarn(iteration int) string {
 	s.warningCount++
 	s.lastWarnedAt = iteration
 	s.lastWarnedSeqLen = len(s.errorSequence) // #1538: evidence snapshot for the new-entry gate
+	s.lastWarnedTotal = s.totalCorrections    // #1726: cap-proof second measure
 
 	// Build severity trajectory description
 	labels := make([]string, len(seq))

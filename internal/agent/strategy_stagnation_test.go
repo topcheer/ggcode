@@ -14,9 +14,16 @@ func TestStrategyStagnation_BasicFailure(t *testing.T) {
 		t.Fatal("first failure should not trigger")
 	}
 
-	// Second consecutive failure - should trigger
+	// Second consecutive failure - should not trigger either
+	// (#1498 case D: a verbatim transient retry is endorsed recovery, not a
+	// rut; threshold raised from 2 to 3)
+	if s.recordAttempt("edit_file", args, false) {
+		t.Fatal("second consecutive failure should not trigger")
+	}
+
+	// Third consecutive failure - should trigger
 	if !s.recordAttempt("edit_file", args, false) {
-		t.Fatal("second consecutive failure should trigger")
+		t.Fatal("third consecutive failure should trigger")
 	}
 }
 
@@ -57,15 +64,17 @@ func TestStrategyStagnation_MaxWarnings(t *testing.T) {
 	args := `{"file_path":"/tmp/test.go"}`
 
 	s.recordAttempt("edit_file", args, false)
+	s.recordAttempt("edit_file", args, false)
 	if !s.recordAttempt("edit_file", args, false) {
-		t.Fatal("should trigger first warning")
+		t.Fatal("should trigger first warning on the third failure")
 	}
 
 	s.recordAttempt("edit_file", args, true) // reset
 
 	s.recordAttempt("edit_file", args, false)
+	s.recordAttempt("edit_file", args, false)
 	if !s.recordAttempt("edit_file", args, false) {
-		t.Fatal("should trigger second warning")
+		t.Fatal("should trigger second warning on the third failure")
 	}
 
 	s.recordAttempt("edit_file", args, true) // reset

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -264,7 +265,14 @@ func listZip(data []byte) ([]archiveFile, error) {
 		// convention) while staying within the per-entry budget.
 		if int64(len(d)) > limit {
 			marker := []byte(fmt.Sprintf("\n[truncated at %d bytes]", limit))
-			d = append(d[:limit-int64(len(marker))], marker...)
+			cut := limit - int64(len(marker))
+			// #1727 case 3: the nested-path branch above already snaps to
+			// a rune boundary (#547/#301 lineage); this zip-preview cut
+			// sliced mid-UTF-8 - CJK entries truncated to invalid bytes.
+			for cut > 0 && !utf8.RuneStart(d[cut]) {
+				cut--
+			}
+			d = append(d[:cut], marker...)
 		}
 		totalRead += int64(len(d))
 		files = append(files, archiveFile{name: f.Name, data: d})

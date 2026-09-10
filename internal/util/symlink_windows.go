@@ -96,9 +96,19 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	// #1845: Close flushes network-redirector delayed writes (SMB close-
+	// time failures). A dropped Close error let a silently TRUNCATED
+	// copy report success - the caller then believed the fallback
+	// "link" existed while the content was incomplete.
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
 	info, err := os.Stat(src)

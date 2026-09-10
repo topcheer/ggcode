@@ -1081,6 +1081,15 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
+	// #1559-C: the read/edit guard states key files by path - anchor
+	// them to the workspace root so relative reads and absolute edits
+	// hit the same map entry.
+	if a.unreadEdit != nil {
+		a.unreadEdit.baseDir = dir
+	}
+	if a.expiredRead != nil {
+		a.expiredRead.baseDir = dir
+	}
 }
 func (a *Agent) WorkingDir() string {
 	a.mu.RLock()
@@ -1260,6 +1269,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// hmMaxWarns=1 burned in run 1 kept the detector silent for every
 	// later run of the Agent's lifetime.
 	a.heterogeneousModel.reset()
+	// #1843 case 1: foresightCalib.reset() was never called outside
+	// compaction - "at most 2 per run" (file-header promise) was in fact
+	// per-LIFETIME: mismatches and warnCount accumulated across every
+	// user turn, so after two early warnings the detector stayed silent
+	// for the rest of the session.
+	a.foresightCalib.reset()
 	a.expiredRead.reset()
 	// Convergence lock must reset per run so post-verification edit drift
 	// counters don't leak across runs (issue #341).
@@ -1698,8 +1713,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		a.guidanceBudget.reset() // reset per-turn guidance injection budget
 		// Check session wall-clock timeout: emit user-visible notifications or stop.
-		// Timeout messages are infrastructure notifications for the user only;
-		// they are NOT injected into LLM context to avoid distracting the model.
+		// #1492-C: the 80%/95% warnings must ALSO reach the LLM context -
+		// #611's commit message promised exactly that, but the only consumer
+		// emitted a user-visible event, so the model never knew the budget
+		// was running out and the 100% hard stop cut runs mid-edit/mid-verify
+		// - the very truncation this guardrail exists to prevent. The 100%
+		// stop message stays user-only (the loop ends; injecting a directive
+		// would only confuse the next session turn, #367/#611).
 		if msg := a.sessionTimeout.check(); msg != "" {
 			onEvent(provider.StreamEvent{
 				Type: provider.StreamEventSystem,
@@ -1710,6 +1730,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				sessionTimedOut = true
 				break
 			}
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: msg,
+				}},
+			})
 		}
 		// Adopt a completed background pre-compact only at an LLM turn
 		// boundary. If it is still running, do not wait; this ChatStream uses
@@ -2985,6 +3012,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				msgs = a.contextManager.Messages()
 			}
 		}
+		// #1798 case 1: the irreversibility gate is a PRE-action check - it
+		// used to sit in the post-execution result loop, so the "You are
+		// about to execute" warning arrived after the action had already
+		// happened (calibrated abstention had nothing to abstain from).
+		// Recording here also keeps the ledger entry alive for the
+		// post-execution recordOutcome revoke (#1776).
+		if a.irrevGate != nil {
+			for _, tc := range toolCalls {
+				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
+					})
+				}
+			}
+		}
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
 				// Context cancelled mid-tool-execution. The assistant message
@@ -3597,7 +3640,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// "12 tool calls", not "12 edits"); only failed mutation edits
 			// feed the per-file counts (handled inside recordToolCall).
 			a.solutionFixation.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
-			a.redundantReverify.recordEdit(tc.Name)
+			// #1486 case E: a FAILED edit_file/write_file changed nothing on
+			// disk - counting it as editsSince wrongly told the reverify
+			// detector "sources changed since your last verify" and
+			// suppressed a legitimate redundant-rerun warning.
+			if !result.IsError {
+				a.redundantReverify.recordEdit(tc.Name)
+			}
 			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
 				a.injectGuidance(fixationHint)
@@ -3875,7 +3924,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// on the most common background-test failure path.
 			if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
 				if result.IsError || looksLikeFailure(result.Content) {
-					if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
+					// #1528 case C: pass the command text and exit status - a
+					// succeeded grep/cat of logs carrying "FAIL" must not be
+					// attributed as a build failure (shell bypasses the
+					// layer-1 tool-name filter).
+					if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, extractStringField(tc.Arguments, "command"), result.IsError); causalHint != "" {
 						a.appendGuidance(&result, causalHint)
 					}
 				}
@@ -4144,15 +4197,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
-			// Irreversibility gate: warn on under-grounded high-impact actions.
-			if a.irrevGate != nil {
-				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
-					a.contextManager.Add(provider.Message{
-						Role:    "user",
-						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
-					})
-				}
-			}
 			// #1776 case 3 / #1877: a FAILED verification is not grounding.
 			// recordAction must run FIRST so this call's ledger entry exists
 			// when the outcome is checked - the original wiring called
@@ -4289,7 +4333,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Prompt injection guard: scan external-content tool results for
 			// adversarial injection patterns and wrap them with a security
 			// notice so the model treats them as untrusted data.
-			result.Content = guardPromptInjection(tc.Name, result.Content)
+			result.Content = guardPromptInjection(tc.Name, tc.Arguments, result.Content)
 			// Tainted data influence tracking (IFC): when the injection guard
 			// flags tool output, record distinctive fingerprints so we can
 			// later detect if that tainted content flows into privileged

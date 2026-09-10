@@ -225,6 +225,26 @@ func (m *Manager) BindAdapterToWorkspace(adapterName, workspace string) error {
 // UnbindAdapter removes the binding for whatever workspace has the given
 // adapter name. This is needed when unbinding from a panel where the current
 // session workspace may differ from the workspace that originally bound the
+// AdapterBindings returns the workspaces the adapter is currently bound to
+// (#1811 case 2: Rebind captures these so a failed rebind can restore the
+// previous binding instead of leaving the adapter silently dead).
+func (m *Manager) AdapterBindings(adapterName string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.bindingStore == nil {
+		return nil
+	}
+	bindings, err := m.bindingStore.ListByAdapter(adapterName)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, b := range bindings {
+		out = append(out, b.Workspace)
+	}
+	return out
+}
+
 // adapter. Idempotent: no persisted binding for this adapter is a successful
 // no-op, not an error (#396 cascade / #498 note — the old doc claimed
 // ErrNoChannelBound here, contradicting the implementation below it).

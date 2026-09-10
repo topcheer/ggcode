@@ -147,3 +147,17 @@ func errStrContains(s, sub string) bool {
 	}
 	return false
 }
+
+// #1850 case 2: a sub-threshold dominant generic must not mask a
+// QUALIFIED timeout category.
+func TestErrStrategyGenericDoesNotMaskQualifiedTimeout1850(t *testing.T) {
+	s := newErrStrategyState()
+	s.catCounts = map[errCategory]int{errCatGeneric: 4, errCatTimeout: 3}
+	msg := s.checkAndWarn()
+	if msg == "" {
+		t.Fatal("qualified timeout warning must fire despite generic 4")
+	}
+	if !s.firedFor[errCatTimeout] {
+		t.Fatal("timeout should be the fired category")
+	}
+}

@@ -30,6 +30,7 @@ package agent
 //   - Threshold: 3+ same-category errors within a sliding window of 15
 
 import (
+	"sort"
 	"strings"
 )
 
@@ -139,21 +140,46 @@ func (s *errStrategyState) checkAndWarn() string {
 	if s.warningCount >= maxErrStrategyWarnings {
 		return ""
 	}
+	// #1850 case 2: evaluate candidates in a DETERMINISTIC order (map
+	// iteration is random - ties picked a nondeterministic winner) and do
+	// not let a sub-threshold dominant category mask a QUALIFIED one:
+	// 4 generic + 3 timeout used to return early on generic (below its
+	// strengthened bar) without ever looking at timeout, silencing a
+	// legitimate strategy warning for the rest of the run.
+	type candidate struct {
+		cat   errCategory
+		count int
+	}
+	var candidates []candidate
+	for c, n := range s.catCounts {
+		candidates = append(candidates, candidate{c, n})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].count != candidates[j].count {
+			return candidates[i].count > candidates[j].count
+		}
+		return candidates[i].cat < candidates[j].cat
+	})
 	var dominantCat errCategory
 	var dominantCount int
-	for c, n := range s.catCounts {
-		if n > dominantCount {
-			dominantCount = n
-			dominantCat = c
+	found := false
+	for _, cand := range candidates {
+		if s.firedFor[cand.cat] {
+			continue
 		}
+		// #340: generic has no semantic identity — require a stronger
+		// threshold for the catch-all bucket.
+		if cand.cat == errCatGeneric && cand.count < 5 {
+			continue
+		}
+		if cand.count < errStrategyThreshold {
+			// Sorted descending: no later candidate can qualify either.
+			break
+		}
+		dominantCat, dominantCount, found = cand.cat, cand.count, true
+		break
 	}
-	if dominantCount < errStrategyThreshold || s.firedFor[dominantCat] {
-		return ""
-	}
-	// #340: generic has no semantic identity — "the same error category is
-	// recurring" is not a valid claim for a catch-all bucket of unrelated
-	// one-off errors. Require a stronger threshold for it.
-	if dominantCat == errCatGeneric && dominantCount < 5 {
+	if !found {
 		return ""
 	}
 	s.firedFor[dominantCat] = true

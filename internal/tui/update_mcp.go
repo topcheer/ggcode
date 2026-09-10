@@ -70,17 +70,23 @@ func (m Model) handleMcpOAuthStartMsg(msg mcpOAuthStartMsg) (Model, tea.Cmd) {
 		}
 		return m, m.waitForMCPOAuthDevice(msg.handler)
 	}
-	// Browser flow
-	// Auto-open MCP panel so user can see the auth instructions
-	if m.mcpPanel == nil {
-		m.openMCPPanel()
-	}
+	// Browser flow.
+	// #1790: auto-opening the panel did not clear modelPanel/providerPanel,
+	// and view_panels renders those FIRST - the time-sensitive auth URL was
+	// invisible and keys routed to the shadowing panel. The device flow
+	// already uses the global banner (renderDeviceCodeBanner); the browser
+	// flow now reuses it for the URL, so visibility no longer depends on
+	// which panel happens to be on top. Still open the panel when nothing
+	// else is, so the flow has context.
+	m.addDeviceCode(msg.serverName, "", msg.authorizeURL)
 	notes := []string{fmt.Sprintf("Opening browser for MCP server %s authentication...", msg.serverName)}
 	if msg.openErr != nil {
 		notes = append(notes, fmt.Sprintf("Browser failed: %v", msg.openErr))
 		notes = append(notes, fmt.Sprintf("Visit: %s", msg.authorizeURL))
 	}
-	m.mcpPanel.message = strings.Join(notes, "\n")
+	if m.mcpPanel != nil {
+		m.mcpPanel.message = strings.Join(notes, "\n")
+	}
 	return m, m.waitForMCPOAuthCallback(msg.handler)
 
 }

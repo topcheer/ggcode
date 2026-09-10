@@ -85,6 +85,14 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 				continue
 			}
 			switch {
+			// #1690 case 1: unmerged states FIRST - AA/AU/UA contain "A" and
+			// DD/DU/UD contain "D", so the added/deleted buckets above ate
+			// five of the six unmerged states and the #834 arms were dead
+			// code. Only UU ever reached conflicted: "0 CONFLICTED" false
+			// negatives on merged repos.
+			case l[:2] == "AA" || l[:2] == "DD" || l[:2] == "UU" ||
+				l[:2] == "AU" || l[:2] == "UA" || l[:2] == "DU" || l[:2] == "UD":
+				conflicted++
 			case strings.HasPrefix(l, "?? "):
 				untracked++
 			case strings.Contains(l[:2], "M"):
@@ -96,10 +104,6 @@ func (t GitStatus) Execute(ctx context.Context, input json.RawMessage) (Result, 
 			case strings.Contains(l[:2], "R") || strings.Contains(l[:2], "C"):
 				// #834: renamed/copied entries fell through every bucket.
 				modified++
-			case strings.Contains(l[:2], "U") || l[:2] == "AA" || l[:2] == "DD":
-				// #834: unmerged conflict states (UU/AA/DD/AU/UA) — the most
-				// important class — were silently hidden from the summary.
-				conflicted++
 			}
 		}
 		shown := strings.Join(lines[:maxGitStatusLines], "\n")

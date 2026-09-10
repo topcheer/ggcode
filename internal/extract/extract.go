@@ -41,6 +41,17 @@ func init() {
 	defaultRegistry.Register(".docm", &docxExtractor{})
 	defaultRegistry.Register(".xlsm", &xlsxExtractor{})
 	defaultRegistry.Register(".pptm", &pptxExtractor{})
+	// #1727 case 1: the OOXML TEMPLATE family - same zip the library
+	// parses directly (.dotx/.dotm word, .xltx/.xltm/.xlam excel,
+	// .potx/.potm powerpoint). #1540 fixed only the three macro-enabled
+	// documents; templates still went in as raw binary.
+	defaultRegistry.Register(".dotx", &docxExtractor{})
+	defaultRegistry.Register(".dotm", &docxExtractor{})
+	defaultRegistry.Register(".xltx", &xlsxExtractor{})
+	defaultRegistry.Register(".xltm", &xlsxExtractor{})
+	defaultRegistry.Register(".xlam", &xlsxExtractor{})
+	defaultRegistry.Register(".potx", &pptxExtractor{})
+	defaultRegistry.Register(".potm", &pptxExtractor{})
 	// OpenDocument
 	defaultRegistry.Register(".odt", &odfExtractor{subFormat: "odt"})
 	defaultRegistry.Register(".ods", &odfExtractor{subFormat: "ods"})

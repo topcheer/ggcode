@@ -102,6 +102,17 @@ type serialReadState struct {
 	// mutating tool call. If so, the turn is not a "single read" turn.
 	currentTurnHasMutation bool
 
+	// lspStreak counts consecutive single-read turns whose one call was
+	// an LSP tool (#1492-E): the system prompt MANDATES the serial chain
+	// lsp_symbols -> lsp_definition -> lsp_references - each step feeds
+	// the next - so three such turns are dependent by design, not
+	// "independent reads" the batch guidance could parallelize.
+	lspStreak int
+
+	// currentTurnTool is the tool name of the current turn's first
+	// read-only call (only meaningful when the turn ends as a single read).
+	currentTurnTool string
+
 	// fired tracks whether the detector has already fired this run.
 	fired bool
 }
@@ -145,6 +156,9 @@ func (s *serialReadState) recordToolCall(toolName string) {
 	defer s.mu.Unlock()
 	if serialReadOnlyTools[toolName] {
 		s.currentTurnReadOnly++
+		if s.currentTurnTool == "" {
+			s.currentTurnTool = toolName
+		}
 	} else if serialMutatingTools[toolName] {
 		s.currentTurnHasMutation = true
 	}
@@ -160,16 +174,29 @@ func (s *serialReadState) endTurn(iteration int) string {
 	// A "single read" turn: exactly 1 read-only call, zero mutations.
 	if s.currentTurnReadOnly == 1 && !s.currentTurnHasMutation {
 		s.consecutiveSingleReads++
+		if strings.HasPrefix(s.currentTurnTool, "lsp_") {
+			s.lspStreak++
+		} else {
+			s.lspStreak = 0
+		}
 	} else {
 		s.consecutiveSingleReads = 0
+		s.lspStreak = 0
 	}
 
 	// Reset per-turn counters for the next turn.
 	s.currentTurnReadOnly = 0
 	s.currentTurnHasMutation = false
+	s.currentTurnTool = ""
 
 	// Fire once per run when 3+ consecutive single-read turns are detected.
+	// #1492-E: skip when every streak turn was an LSP call - the mandated
+	// symbols->definition->references chain is dependent by construction.
 	if s.consecutiveSingleReads >= 3 && !s.fired {
+		if s.lspStreak >= s.consecutiveSingleReads {
+			debug.Log("agent", "Serial read: skipping fire - streak is the mandated LSP serial chain (iteration %d)", iteration)
+			return ""
+		}
 		s.fired = true
 		debug.Log("agent", "Serial read serialization detected: %d consecutive single-read turns at iteration %d", s.consecutiveSingleReads, iteration)
 		return strings.TrimSpace(`

@@ -184,9 +184,23 @@ func (s *bgOrphanState) recordOutputCheck(args json.RawMessage, result string, i
 	if !ok {
 		return
 	}
-	for _, line := range strings.Split(result, "\n") {
-		line = strings.TrimSpace(line)
+	// #1712 case 5: only the job MANAGER's own status block counts. Job
+	// OUTPUT (build logs echoing "Status: completed" from the program
+	// under test) must not retire the tracker. The manager's result
+	// always carries a "Job ID:" header line before the "Status:" line,
+	// so require that anchor - a bare echoed Status line lacks it.
+	jobIDSeen := false
+	for _, rawLine := range strings.Split(result, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if strings.HasPrefix(line, "Job ID:") {
+			jobIDSeen = true
+			continue
+		}
 		if !strings.HasPrefix(line, "Status:") {
+			continue
+		}
+		if !jobIDSeen {
+			// Echoed program output, not the manager's status block.
 			continue
 		}
 		status := strings.TrimSpace(strings.TrimPrefix(line, "Status:"))

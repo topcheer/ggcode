@@ -44,7 +44,11 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	}
 	// Agent is requesting approval
 	m.pendingApproval = &msg
-	m.approvalOptions = defaultApprovalOptions()
+	// #1741: defaultApprovalOptions() hardcodes LangEnglish wrappers -
+	// every arrival overwrote the language set at startup, so a zh user
+	// saw English approval labels on EVERY approval until they re-switched
+	// languages. Derive from the model's current language instead.
+	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.approvalCursor = 0
 	m.inputBellFired = false
 	// Push to IM if available so user can approve remotely
@@ -73,7 +77,8 @@ func (m Model) handleDiffConfirmMsg(msg DiffConfirmMsg) (Model, tea.Cmd) {
 		return m, m.handleDiffConfirm(true)
 	}
 	m.pendingDiffConfirm = &msg
-	m.diffOptions = diffConfirmOptions()
+	// #1741: same LangEnglish hardcoding as the approval options above.
+	m.diffOptions = diffConfirmOptionsFor(m.currentLanguage())
 	m.diffCursor = 0
 	m.inputBellFired = false
 	// Schedule delayed input bell

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -224,5 +225,41 @@ func TestAttentionFragment_MultiFileRead(t *testing.T) {
 	msg := s.analyze()
 	if msg == "" {
 		t.Fatal("expected fragmentation warning for multi_file_read across dirs")
+	}
+}
+
+// #1855 case 1: the guidance-noise cleanup set max=1 but left the
+// refire-gap/firedAt machinery behind as unreachable dead code. The
+// machinery is now REMOVED - this pins the honest single-shot semantics
+// (one warning per run; reset() re-arms).
+func TestAttentionFragmentSingleShotHonest1855(t *testing.T) {
+	s := newAttentionFragmentState()
+	for i := 0; i < s.windowSize; i++ {
+		s.recordToolCall("read_file", map[string]interface{}{"path": fmt.Sprintf("/dir%d/f.go", i%4)})
+	}
+	if m := s.analyze(); m == "" {
+		t.Fatal("first warning expected")
+	}
+	if s.warnCount != 1 {
+		t.Fatalf("warnCount = %d, want 1", s.warnCount)
+	}
+	// Sustained fragmentation stays silent (single-shot).
+	for i := 0; i < s.windowSize*3; i++ {
+		s.recordToolCall("read_file", map[string]interface{}{"path": fmt.Sprintf("/more%d/f.go", i%4)})
+	}
+	if m := s.analyze(); m != "" {
+		t.Fatalf("single-shot violated: %s", m)
+	}
+	// #1843 case 2 wins over this test's original pin: reset() is called
+	// once per user turn (agent.go), and warnCount=0 there re-opens the
+	// quota - otherwise afMaxWarnings=1 means ONE warning per SESSION,
+	// contradicting the "per run" comment. The two pins conflicted; the
+	// #1843 semantics is the correct one, so this test now asserts it.
+	s.reset()
+	if s.warnCount != 0 {
+		t.Fatalf("warnCount must re-open per user turn (reset), got %d", s.warnCount)
+	}
+	if m := s.analyze(); m != "" {
+		t.Fatalf("fresh window must not warn before thresholds: %s", m)
 	}
 }

@@ -92,10 +92,15 @@ func assessSearchResults(query string, results []searchResult, allowedDomains []
 	queryTerms := tokenizeQuery(query)
 
 	// Phase 1: Filter spam domains
+	// #1709 case 3: the user's explicit allowed_domains must EXEMPT from
+	// the spam list too - filterByDomain kept w3schools.com, then this
+	// phase killed every result and the tool answered "No results found"
+	// for the domain the user explicitly asked for (dedup had the
+	// exemption; the phases were asymmetric).
 	var filtered []searchResult
 	for _, res := range results {
 		domain := domainFromURL(res.URL)
-		if isSpamDomain(domain) {
+		if isSpamDomain(domain) && !allowed[domain] {
 			continue
 		}
 		filtered = append(filtered, res)
@@ -167,6 +172,31 @@ func tokenizeQuery(query string) []string {
 
 // scoreResult computes a 0-100 relevance score based on query term overlap
 // with the title (weight 3x) and snippet (weight 1x).
+// containsTermAtBoundary reports whether term appears in hay delimited by
+// non-alphanumerics on both sides (substring hits inside longer words do
+// not count).
+func containsTermAtBoundary(hay, term string) bool {
+	if term == "" {
+		return false
+	}
+	for i := 0; i+len(term) <= len(hay); i++ {
+		if hay[i:i+len(term)] != term {
+			continue
+		}
+		beforeOK := i == 0 || !isAlphaNumByte(hay[i-1])
+		after := i + len(term)
+		afterOK := after == len(hay) || !isAlphaNumByte(hay[after])
+		if beforeOK && afterOK {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlphaNumByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
 func scoreResult(queryTerms []string, res searchResult) int {
 	if len(queryTerms) == 0 {
 		return 50 // neutral score when no query terms
@@ -177,10 +207,15 @@ func scoreResult(queryTerms []string, res searchResult) int {
 
 	var titleHits, snippetHits int
 	for _, term := range queryTerms {
-		if strings.Contains(titleLower, term) {
+		// #1710 case 3: bare Contains hit substrings - 'go' matched
+		// google/golang, 'api' matched rapid - systematically inflating
+		// pages that merely CONTAIN the query inside bigger words. The
+		// ambiguity side got word boundaries (#381/#1438); the scoring
+		// side never did.
+		if containsTermAtBoundary(titleLower, term) {
 			titleHits++
 		}
-		if strings.Contains(snippetLower, term) {
+		if containsTermAtBoundary(snippetLower, term) {
 			snippetHits++
 		}
 	}

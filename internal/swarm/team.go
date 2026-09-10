@@ -63,16 +63,17 @@ const maxTeammateEvents = 200
 
 // Teammate represents a worker agent within a team.
 type Teammate struct {
-	ID          string
-	Name        string // e.g., "researcher", "coder"
-	Color       string // TUI display color (ANSI code or empty)
-	Status      TeammateStatus
-	CurrentTask string
-	LastResult  string // most recent task output (truncated)
-	Inbox       chan MailMessage
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	EndedAt     time.Time
+	ID            string
+	Name          string // e.g., "researcher", "coder"
+	Color         string // TUI display color (ANSI code or empty)
+	Status        TeammateStatus
+	CurrentTask   string
+	CurrentTaskID string // #1688: claimed board task ID (CurrentTask holds the SUBJECT for display)
+	LastResult    string // most recent task output (truncated)
+	Inbox         chan MailMessage
+	CreatedAt     time.Time
+	StartedAt     time.Time
+	EndedAt       time.Time
 
 	events        []TeammateEvent
 	eventsDropped int

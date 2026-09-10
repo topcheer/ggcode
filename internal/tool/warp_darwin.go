@@ -162,7 +162,10 @@ func (w *WarpTool) sendKeystroke(ctx context.Context, key string, modifiers stri
 		return fmt.Errorf("cancelled before keystroke: %w", err)
 	}
 
-	mods := parseModifiers(modifiers)
+	mods, mErr := parseModifiers(modifiers)
+	if mErr != nil {
+		return mErr
+	}
 	script := fmt.Sprintf(`tell application "System Events" to keystroke %q%s`, key, mods)
 	if err := exec.CommandContext(ctx, "osascript", "-e", script).Run(); err != nil {
 		return fmt.Errorf("keystroke script failed: %w", err)
@@ -179,7 +182,10 @@ func (w *WarpTool) sendKeyCode(ctx context.Context, code string, modifiers strin
 		return fmt.Errorf("cancelled before key code: %w", err)
 	}
 
-	mods := parseModifiers(modifiers)
+	mods, mErr := parseModifiers(modifiers)
+	if mErr != nil {
+		return mErr
+	}
 	script := fmt.Sprintf(`tell application "System Events" to key code %s%s`, code, mods)
 	if err := exec.CommandContext(ctx, "osascript", "-e", script).Run(); err != nil {
 		return fmt.Errorf("key code script failed: %w", err)
@@ -188,9 +194,9 @@ func (w *WarpTool) sendKeyCode(ctx context.Context, code string, modifiers strin
 }
 
 // parseModifiers converts "control,shift" to " using {control down, shift down}"
-func parseModifiers(mods string) string {
+func parseModifiers(mods string) (string, error) {
 	if mods == "" {
-		return ""
+		return "", nil
 	}
 	parts := strings.Split(mods, ",")
 	var valid []string
@@ -199,12 +205,20 @@ func parseModifiers(mods string) string {
 		switch p {
 		case "shift", "control", "option", "command":
 			valid = append(valid, p+" down")
+		case "":
+			// empty segment from a trailing comma - skip
+		default:
+			// #1709 case 1: unknown tokens ("ctrl"/"cmd"/"alt" synonyms)
+			// were silently DROPPED - 'ctrl+c' degraded to typing a bare
+			// 'c' into Warp while reporting success. Reject loudly (#880
+			// family) with the legal values so the caller can retry.
+			return "", fmt.Errorf("unknown modifier %q (legal: shift, control, option, command)", p)
 		}
 	}
 	if len(valid) == 0 {
-		return ""
+		return "", nil
 	}
-	return " using {" + strings.Join(valid, ", ") + "}"
+	return " using {" + strings.Join(valid, ", ") + "}", nil
 }
 
 func formatMods(mods string) string {

@@ -507,3 +507,35 @@ func TestRevertWithFilesReturnsAllRevertedFiles(t *testing.T) {
 		t.Errorf("b.txt must be back at b1, got %q", data)
 	}
 }
+
+// TestRevertWithFilesSourceAgent pins #1708 case 1: the agent-sourced revert
+// records Source="agent" (so correction-feedback never narrates the agent's
+// own rollback as a user rejection, #1449-A), while the plain Revert wrapper
+// keeps "user" for panel/CLI entries.
+func TestRevertWithFilesSourceAgent(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(50)
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cp := m.Save(path, "v1", "v2", "edit_file")
+	if _, _, err := m.RevertWithFilesSource(cp.ID, "agent"); err != nil {
+		t.Fatalf("agent-sourced revert failed: %v", err)
+	}
+	if len(m.corrections) == 0 {
+		t.Fatal("revert must record a correction")
+	}
+	if got := m.corrections[len(m.corrections)-1].Source; got != "agent" {
+		t.Fatalf("agent revert must record Source=agent, got %q", got)
+	}
+
+	// Wrapper keeps "user".
+	cp2 := m.Save(path, "v2", "v3", "edit_file")
+	if _, _, err := m.RevertWithFiles(cp2.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.corrections[len(m.corrections)-1].Source; got != "user" {
+		t.Fatalf("plain Revert must keep Source=user, got %q", got)
+	}
+}

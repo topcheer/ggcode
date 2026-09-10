@@ -60,11 +60,17 @@ func (t *tmuxBackend) CreateTab(ctx context.Context, title, logfile string) (str
 			return
 		}
 		hookCmd := strings.SplitN(savedHook, " -> ", 2)
+		// #1722 case 1: the unset above uses a 5s ctx; these restores used
+		// context.Background() - a hung tmux server blocked the deferred
+		// restore FOREVER, straight through to the bubbletea Update
+		// goroutine (full UI freeze). Same #894 lesson, restore path.
+		rctx, rcancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer rcancel()
 		if len(hookCmd) == 2 {
-			_, _ = runTmux(context.Background(), "set-hook", "-g", "after-new-window", strings.TrimSpace(hookCmd[1]))
+			_, _ = runTmux(rctx, "set-hook", "-g", "after-new-window", strings.TrimSpace(hookCmd[1]))
 		} else {
 			// Unexpected format — restore the raw value so nothing is lost.
-			_, _ = runTmux(context.Background(), "set-hook", "-g", "after-new-window", savedHook)
+			_, _ = runTmux(rctx, "set-hook", "-g", "after-new-window", savedHook)
 		}
 	}
 	defer restore()

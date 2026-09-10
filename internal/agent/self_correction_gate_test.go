@@ -36,8 +36,12 @@ func TestSelfCorrectionGate_FiresWhenNetNegative(t *testing.T) {
 	if !strings.Contains(msg, "self-correction-unstable") {
 		t.Errorf("warning should contain stability marker, got: %s", msg)
 	}
-	if !strings.Contains(msg, "more errors") {
-		t.Errorf("warning should mention net-negative, got: %s", msg)
+	// #1492-B: observation wording - no causal "fixes introduce" claim.
+	if !strings.Contains(msg, "newly-visible errors") {
+		t.Errorf("warning should use exposure-neutral wording, got: %s", msg)
+	}
+	if strings.Contains(msg, "Fixes introduce more errors") {
+		t.Errorf("warning must not assert causation, got: %s", msg)
 	}
 }
 

@@ -205,3 +205,14 @@ func TestClaimsConflict_PolarityGate(t *testing.T) {
 		t.Fatal("identical target with opposite polarity must conflict")
 	}
 }
+
+// #1773 case 1: bare integers in non-version context (issue/PR numbers)
+// must not join the version set.
+func TestNumericConflictBareIntegersAreNotVersions(t *testing.T) {
+	if numericConflict("go 1.27 (issue 4532)", "go 1.27 (fixed in 4533)") {
+		t.Fatal("bare issue numbers must not count as version members")
+	}
+	if !numericConflict("go 1.27", "go 1.28") {
+		t.Fatal("real dotted version drift must still conflict")
+	}
+}

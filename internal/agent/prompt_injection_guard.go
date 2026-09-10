@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -100,7 +102,68 @@ const injectionWarning = "[SECURITY NOTICE: This tool output contains text that 
 //
 // Returns the (possibly annotated) content. No-ops for tools not in the
 // external content set or when no patterns are found.
-func guardPromptInjection(toolName, content string) string {
+// selfDefenseReadTargets are the injection-defense system's own source
+// files. Reading them ALWAYS trips the pattern scan (the pattern list itself
+// lives in prompt_injection_guard.go), so an agent doing injection-defense
+// work was flagged by its own defense on every read and the wrap fed taint
+// fingerprints that later fired Tier-1 on the agent's own edit_file calls
+// (#1481-B; three live incidents). Exempting only these exact basenames of
+// LOCAL read tools keeps the hole negligible: web/browser/command output is
+// never exempt, and a same-named file in the workspace is the user's own
+// code, not external content.
+var selfDefenseReadTargets = map[string]bool{
+	"prompt_injection_guard.go":      true,
+	"prompt_injection_guard_test.go": true,
+	"taint_influence_check.go":       true,
+	"taint_influence_check_test.go":  true,
+}
+
+// isSelfDefenseRead reports whether a local-read tool call targets one of
+// the defense system's own files (by scanning every string value in the
+// args JSON - covers read_file path, multi_file_read files[].path, grep
+// path/glob, search_files directory).
+func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
+	switch toolName {
+	case "read_file", "multi_file_read", "grep", "search_files", "code_search":
+	default:
+		return false
+	}
+	var m interface{}
+	if len(args) == 0 || json.Unmarshal(args, &m) != nil {
+		return false
+	}
+	found := false
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		if found {
+			return
+		}
+		switch x := v.(type) {
+		case string:
+			if selfDefenseReadTargets[filepath.Base(strings.TrimSpace(x))] {
+				found = true
+			}
+		case map[string]interface{}:
+			for _, vv := range x {
+				walk(vv)
+			}
+		case []interface{}:
+			for _, vv := range x {
+				walk(vv)
+			}
+		}
+	}
+	walk(m)
+	return found
+}
+
+func guardPromptInjection(toolName string, args json.RawMessage, content string) string {
+	// #1481-B: local reads of the defense system's own source skip the
+	// wrap entirely (which also skips taint fingerprinting downstream,
+	// since recordIfTainted keys on the injectionWarning prefix).
+	if isSelfDefenseRead(toolName, args) {
+		return content
+	}
 	// MCP tools (mcp__*) return content from external servers — always
 	// untrusted, so they are guarded via prefix match in addition to the map.
 	if !externalContentTools[toolName] && !strings.HasPrefix(toolName, "mcp__") {

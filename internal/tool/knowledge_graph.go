@@ -236,7 +236,14 @@ func (t *KnowledgeGraphTool) doAdd(s *kgStore, p *kgParams) (Result, error) {
 	if err := t.save(s); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
 	}
-	return Result{Content: fmt.Sprintf("Node '%s' (%s) saved. Total: %d nodes.", id, nt, len(s.Nodes))}, nil
+	// #1692 case 4: distinct titles can collide on the slug ("C++ API" vs
+	// "c api" -> c-api) and the second save silently OVERWROTE the first
+	// node's fields while reporting a plain "saved".
+	note := ""
+	if ex, ok := s.Nodes[id]; ok && p.Title != "" && ex.Title != "" && !strings.EqualFold(ex.Title, p.Title) {
+		note = fmt.Sprintf(" (note: slug '%s' already existed with title %q - fields were overwritten)", id, ex.Title)
+	}
+	return Result{Content: fmt.Sprintf("Node '%s' (%s) saved%s. Total: %d nodes.", id, nt, note, len(s.Nodes))}, nil
 }
 
 func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
@@ -274,23 +281,23 @@ func (t *KnowledgeGraphTool) doQuery(s *kgStore, p *kgParams) (Result, error) {
 		if p.Type != "" && n.Type != p.Type {
 			continue
 		}
-		// #1692 case 3: the parameter docs promise "tags for categorization
-		// (query filter)" but this loop never read them - a tags query
-		// returned the UNFILTERED set and callers trusting the docs got
-		// noise. Nodes match when they carry EVERY requested tag.
+		// #1692 case 3: the parameter doc promises "query filter" for tags -
+		// doQuery never read p.Tags, so a tags-filtered query returned the
+		// UNFILTERED set. Node tags are lowercase (slugify); match case-
+		// insensitively, node must carry EVERY requested tag (AND).
 		if len(p.Tags) > 0 {
-			have := make(map[string]bool, len(n.Tags))
-			for _, tg := range n.Tags {
-				have[strings.ToLower(tg)] = true
+			nodeTags := make(map[string]bool, len(n.Tags))
+			for _, t := range n.Tags {
+				nodeTags[strings.ToLower(t)] = true
 			}
-			missed := false
+			ok := true
 			for _, want := range p.Tags {
-				if !have[strings.ToLower(want)] {
-					missed = true
+				if !nodeTags[strings.ToLower(want)] {
+					ok = false
 					break
 				}
 			}
-			if missed {
+			if !ok {
 				continue
 			}
 		}

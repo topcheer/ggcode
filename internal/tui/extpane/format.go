@@ -87,9 +87,11 @@ func stripAnsi(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	const (
-		statePlain  = iota
-		stateEsc    // saw ESC, deciding CSI vs two-byte
-		stateCsi    // inside CSI [... final @-~
+		statePlain = iota
+		stateEsc   // saw ESC, deciding CSI vs two-byte
+		stateCsi   // inside CSI [... final @-~
+		stateDcs   // #1721: DCS/APC/PM passthrough consumer
+		stateDcsEsc
 		stateOsc    // #1414-B: inside OSC ] ... BEL/ST
 		stateOscEsc // OSC saw ESC: ST (\) ends, else stay
 	)
@@ -112,6 +114,13 @@ func stripAnsi(s string) string {
 				// hyperlink URLs) plus BEL leaked verbatim into the
 				// preview pane as invisible control bytes.
 				st = stateOsc
+			} else if c == 'P' || c == '_' || c == '^' {
+				// #1721 case 3: DCS (P), APC (_), PM (^) - the same leak
+				// family #1414-B fixed for OSC, but the note only patched
+				// ']'. A tmux wrap-passthrough ESC P tmux;... leaked its
+				// second byte, the DCS body AND the trailing ST backslash
+				// into the preview. Consume until ST (ESC \).
+				st = stateDcs
 			} else {
 				st = statePlain // two-byte ESC sequence (e.g. \x1bM)
 				b.WriteRune(c)
@@ -119,6 +128,17 @@ func stripAnsi(s string) string {
 		case stateCsi:
 			if c >= 0x40 && c <= 0x7E {
 				st = statePlain
+			}
+		case stateDcs:
+			// #1721 case 3: consume the string body; ST (ESC \) ends it.
+			if c == 0x1b {
+				st = stateDcsEsc
+			}
+		case stateDcsEsc:
+			if c == '\\' {
+				st = statePlain // ST complete - sequence fully consumed
+			} else {
+				st = stateDcs // stray ESC inside the body keeps consuming
 			}
 		case stateOsc:
 			if c == '\x07' { // BEL terminator

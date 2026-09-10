@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -164,15 +163,4 @@ func effectiveTimeout(configured time.Duration, isAutopilot bool) time.Duration 
 // EffectiveSessionTimeout is the exported wrapper for agentruntime wiring.
 func EffectiveSessionTimeout(configured time.Duration, isAutopilot bool) time.Duration {
 	return effectiveTimeout(configured, isAutopilot)
-}
-
-// withSessionTimeout derives a child context that is cancelled when the session
-// wall-clock timeout expires. This provides a hard backstop even if the agent
-// is blocked in an LLM call or a long-running tool execution.
-func (a *Agent) withSessionTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	if a.sessionTimeout == nil || a.sessionTimeout.timeout <= 0 {
-		return ctx, func() {}
-	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, a.sessionTimeout.timeout)
-	return timeoutCtx, cancel
 }

@@ -199,6 +199,12 @@ func (t *BaseToolItem) RenderBody(width int) string {
 		body = strings.ReplaceAll(body, "\r", "\n")
 		body = expandTabs(body)
 		lines := wrapLines(body, width)
+		// #1697 case 1: the normal path caps at ToolBodyMaxLines (and
+		// streaming too) - the error path had NO cap, so a 200-line
+		// build/test failure flooded the body. Same cap, error styling.
+		if len(lines) > ToolBodyMaxLines {
+			lines = lines[:ToolBodyMaxLines]
+		}
 		return t.styles.ErrorStyle.Render(strings.Join(lines, "\n"))
 	}
 

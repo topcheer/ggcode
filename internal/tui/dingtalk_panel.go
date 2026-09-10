@@ -233,22 +233,53 @@ func (m *Model) handleDingtalkPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 
 func (m *Model) bindDingtalkEntry(entry dingtalkBindingEntry) tea.Cmd {
 	return func() tea.Msg {
-		if err := m.ensureDingtalkBotBinding(entry.Adapter); err != nil {
-			return dingtalkBindResultMsg{err: err}
-		}
-		if m.agent != nil {
-			if err := m.waitForDingtalkAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
-				return dingtalkBindResultMsg{err: err}
-			}
-			// Sync session history to the newly bound channel only.
-			if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
-				if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
-					return dingtalkBindResultMsg{err: err}
+		// #1794 case 2/3: a disabled adapter's auto-enable must run on the
+		// Update loop (#1367 family) - startXXXAdapterIfNeeded wrote the
+		// config map from this Cmd goroutine while the render loop ranged
+		// it. Follow the qq pattern: mutate via configMutationMsg, continue
+		// the bind in next().
+		if m.config != nil {
+			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+				return configMutationMsg{
+					apply: func(m *Model) error {
+						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
+					},
+					next: func(m *Model) tea.Cmd {
+						return func() tea.Msg {
+							if m.imManager != nil {
+								_ = m.imManager.EnableBinding(entry.Adapter)
+							}
+							return bindDingtalkRest(m, entry)
+						}
+					},
+					fail: func(err error) tea.Msg {
+						return dingtalkBindResultMsg{err: fmt.Errorf("enable %s: %w", entry.Adapter, err)}
+					},
 				}
 			}
 		}
-		return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.bound_success")}
+		return bindDingtalkRest(m, entry)
 	}
+}
+
+// bindDingtalkRest is the bind chain body after the (optional) enable
+// mutation lands on the Update loop.
+func bindDingtalkRest(m *Model, entry dingtalkBindingEntry) tea.Msg {
+	if err := m.ensureDingtalkBotBinding(entry.Adapter); err != nil {
+		return dingtalkBindResultMsg{err: err}
+	}
+	if m.agent != nil {
+		if err := m.waitForDingtalkAdapterHealthy(m.imManager, entry.Adapter, 10*time.Second); err != nil {
+			return dingtalkBindResultMsg{err: err}
+		}
+		// Sync session history to the newly bound channel only.
+		if binding := m.imManager.Snapshot().BindingByAdapter(entry.Adapter); binding != nil {
+			if err := m.imManager.SyncSessionHistory(context.Background(), *binding, m.agent.Messages()); err != nil && err != im.ErrNoChannelBound {
+				return dingtalkBindResultMsg{err: err}
+			}
+		}
+	}
+	return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.bound_success")}
 }
 
 func (m *Model) unbindDingtalkEntry(adapterName string) tea.Cmd {
@@ -303,7 +334,16 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				m.config.IM.Enabled = true
-				return m.config.AddIMAdapter(name, adapter)
+				if err := m.config.AddIMAdapter(name, adapter); err != nil {
+					return err
+				}
+				// #1794 case 2: auto-enable on the Update loop - the next()
+				// closure's startXXXAdapterIfNeeded used to write the map
+				// from the Cmd goroutine (#1367 family).
+				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+					return m.config.SetIMAdapterEnabled(name, true)
+				}
+				return nil
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
@@ -311,6 +351,10 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 						return dingtalkBindResultMsg{err: err}
 					}
 					if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errDingtalkEnableNeeded) {
+							// #1719 case 1: enable on the Update loop, then retry.
+							return m.dingtalkEnableMutation(name, nil)
+						}
 						return dingtalkBindResultMsg{err: err}
 					}
 					return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
@@ -342,13 +386,11 @@ func (m *Model) startDingtalkAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.dingtalk.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1719 case 1: the auto-enable used to write the config map RIGHT
+		// HERE on the Cmd goroutine - a concurrent map read/write fatal
+		// against the render loop. Signal the caller to route the enable
+		// through configMutationMsg (Update loop) instead.
+		return errDingtalkEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDingTalk)) {
 		return errors.New(m.t("panel.dingtalk.error.not_dingtalk_adapter", name))
@@ -460,6 +502,40 @@ func defaultDingtalkTargetID(workspace string) string {
 		return "current-cli"
 	}
 	return base
+}
+
+// errDingtalkEnableNeeded signals the auto-enable must run on the Update
+// loop via configMutationMsg (#1719 case 1).
+var errDingtalkEnableNeeded = errors.New("dingtalk adapter needs enable-on-update-loop")
+
+// dingtalkEnableMutation returns the configMutationMsg that performs the
+// auto-enable on the Update loop and then continues with next.
+func (m *Model) dingtalkEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+					return dingtalkBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return dingtalkBindResultMsg{err: err}
+		},
+	}
 }
 
 func (m *Model) ensureDingtalkBotBinding(adapter string) error {

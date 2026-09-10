@@ -14,9 +14,15 @@ import (
 // --- Legacy types for migration from workspace-scoped to session-scoped ---
 
 // workspaceBucket groups jobs under a workspace key (old format).
+// MigratedTo is the #1531 crash-window tombstone: set to the target
+// session-store path BEFORE the new store is written, so an instance that
+// crashes between the two writes leaves a durable marker instead of letting
+// the next session re-migrate (double fire). Absent in pre-#1531 stores
+// (zero value "" = not migrated).
 type workspaceBucket struct {
-	Workspace string    `json:"workspace"`
-	Jobs      []jobJSON `json:"jobs"`
+	Workspace  string    `json:"workspace"`
+	Jobs       []jobJSON `json:"jobs"`
+	MigratedTo string    `json:"migrated_to,omitempty"`
 }
 
 // oldStoreFile is the old top-level structure keyed by SHA256(workspace dir).
@@ -87,9 +93,40 @@ func MigrateWorkspaceJobs(oldStorePath, newSessionPath, workspaceDir string) {
 	// a failed write leaves the old store untouched and a later start can
 	// retry, instead of losing the jobs forever.
 	var migrated []jobJSON
+	oneShotDropped := 0 // #1531 case C: one-shots are intentionally not migrated
 	for _, j := range bucket.Jobs {
 		if j.Recurring {
 			migrated = append(migrated, j)
+		} else {
+			oneShotDropped++
+		}
+	}
+	if oneShotDropped > 0 {
+		debug.Log("cron", "MigrateWorkspaceJobs: dropping %d one-shot job(s) from workspace %s (one-shots are not migrated; they fire once and are gone)", oneShotDropped, workspaceDir)
+	}
+
+	// #1531 case B: the new-store write and the old-store removal were two
+	// separate atomic writes with a crash window between them - a kill in
+	// that gap left the bucket in place, so the NEXT session (different
+	// store path, Stat no-op) re-migrated the same recurring jobs and both
+	// sessions scheduled them (double fire). Tombstone-first closes it:
+	// stamp the bucket with the migration target BEFORE writing the new
+	// store. A later instance seeing a tombstone skips when the target
+	// store exists (jobs durably migrated) and re-migrates only when the
+	// target vanished (crashed before the new-store write landed).
+	if bucket.MigratedTo != "" {
+		if _, err := os.Stat(bucket.MigratedTo); err == nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: workspace %s already migrated to %s by a previous instance; skipping", workspaceDir, bucket.MigratedTo)
+			return
+		}
+		// Tombstone points at a store that never landed (crash between the
+		// two writes). Fall through and migrate into THIS session instead.
+	}
+	bucket.MigratedTo = newSessionPath
+	sf[wsKey] = bucket
+	if out, err := json.MarshalIndent(sf, "", "  "); err == nil {
+		if err := util.AtomicWriteFile(oldStorePath, out, 0644); err != nil {
+			debug.Log("cron", "MigrateWorkspaceJobs: failed to write tombstone: %v (proceeding; the crash window stays open this once)", err)
 		}
 	}
 	if len(migrated) > 0 {

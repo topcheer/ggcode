@@ -107,10 +107,31 @@ func VendorPresets() []VendorPreset {
 			epIDs = append(epIDs, epID)
 		}
 		sort.Strings(epIDs)
+		// #1712 case 1: taking the FIRST sorted key made the default
+		// deterministic but wrong for github-copilot ("enterprise" < "github.com"
+		// alphabetically - a placeholder GHE domain got preselected over the
+		// mainstream github.com endpoint). Prefer an endpoint whose first tag
+		// is "official" AND that is NOT tagged "enterprise"/"cn"-style
+		// alternates; fall back to sorted-first for vendors without tags.
+		defaultEp := ""
+		for _, epID := range epIDs {
+			ep := vc.Endpoints[epID]
+			if len(ep.Tags) == 0 || ep.Tags[0] != "official" {
+				continue
+			}
+			if hasEndpointTag(ep, "enterprise") {
+				continue
+			}
+			defaultEp = epID
+			break
+		}
+		if defaultEp == "" {
+			defaultEp = epIDs[0]
+		}
 		for _, epID := range epIDs {
 			ep := vc.Endpoints[epID]
 			if vp.DefaultEndpoint == "" {
-				vp.DefaultEndpoint = epID
+				vp.DefaultEndpoint = defaultEp
 			}
 			vp.Endpoints = append(vp.Endpoints, EndpointPreset{
 				ID:           epID,
@@ -146,4 +167,14 @@ func sortVendors(vs []VendorPreset) {
 	sort.Slice(vs, func(i, j int) bool {
 		return vs[i].DisplayName < vs[j].DisplayName
 	})
+}
+
+// hasEndpointTag reports whether ep carries the given tag (#1712).
+func hasEndpointTag(ep EndpointConfig, tag string) bool {
+	for _, t := range ep.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }

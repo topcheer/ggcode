@@ -60,6 +60,11 @@ type unreadEditState struct {
 	// Used for stale-read detection: if the file's mtime has changed since
 	// the last read, the agent's edit may be based on stale content.
 	readMtime map[string]time.Time
+
+	// baseDir anchors relative paths to the workspace root (#1559-C):
+	// "a.go" (read) and "/repo/a.go" (edit) must key the same map entry.
+	// Empty until SetWorkingDir wires it - Clean-only until then.
+	baseDir string
 }
 
 func newUnreadEditState() *unreadEditState {
@@ -79,11 +84,23 @@ func (s *unreadEditState) reset() {
 }
 
 // normalizePath converts a file path to a consistent form for comparison.
-// Lowercased and trimmed of trailing slashes — sufficient for dedup.
+// Trimmed and cleaned of trailing slashes - sufficient for dedup when the
+// caller feeds one path form. See unreadEditState.normalize for the
+// workspace-anchored variant the guard states use (#1559-C: the old
+// comment claimed "Lowercased" and no lowercasing ever existed).
 func normalizePath(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.TrimRight(p, "/")
 	return p
+}
+
+// normalize anchors the path to the workspace root before keying: a
+// relative read ("internal/agent/foo.go") and an absolute edit
+// ("/repo/internal/agent/foo.go") previously landed on two map keys, so
+// recordEdit never found the prior read (missed stale-read reports) and
+// uniqueTargets double-counted. Mirrors normalizeCompanionPath semantics.
+func (s *unreadEditState) normalize(path string) string {
+	return normalizeCompanionPath(s.baseDir, strings.TrimSpace(path))
 }
 
 // recordRead marks a file as read. Called after successful read_file/multi_file_read.
@@ -92,7 +109,7 @@ func (s *unreadEditState) recordRead(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	s.filesRead[n] = true
 	// Re-reading the file refreshes the staleness baseline: any future
 	// external modification after this read must be able to re-warn, so
@@ -115,7 +132,7 @@ func (s *unreadEditState) recordWrite(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	s.readMtime[n] = time.Now()
 	delete(s.warnedFiles, n+"\x00stale")
 }
@@ -126,12 +143,12 @@ func (s *unreadEditState) recordCreated(path string) {
 	if path == "" {
 		return
 	}
-	s.filesCreated[normalizePath(path)] = true
+	s.filesCreated[s.normalize(path)] = true
 }
 
 // hasBeenRead returns true if the file was read or created during this run.
 func (s *unreadEditState) hasBeenRead(path string) bool {
-	n := normalizePath(path)
+	n := s.normalize(path)
 	return s.filesRead[n] || s.filesCreated[n]
 }
 
@@ -142,7 +159,7 @@ func (s *unreadEditState) checkUnreadEdit(path string) string {
 	if path == "" {
 		return ""
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	if s.filesRead[n] || s.filesCreated[n] {
 		return ""
 	}
@@ -163,7 +180,7 @@ func (s *unreadEditState) checkStaleRead(path string) string {
 	if path == "" {
 		return ""
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 
 	// Only check files that were read (not created — those are agent-authored).
 	readAt, wasRead := s.readMtime[n]

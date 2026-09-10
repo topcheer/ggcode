@@ -60,8 +60,6 @@ type attentionFragmentState struct {
 	windowSize int
 	// warnCount caps warnings per run.
 	warnCount int
-	// firedAt tracks the call count when last warned, to space out re-warnings.
-	firedAt int
 	// totalCalls counts all recorded calls.
 	totalCalls int
 }
@@ -75,9 +73,15 @@ const (
 	// window before the detector fires (avoids firing on 2-dir alternation).
 	afMinUniqueDirs = 4
 	// afMaxWarnings caps how many times this detector warns per run.
+	// #1855 case 1: a guidance-noise cleanup batch lowered this from 2
+	// to 1 but left afRefireGap and firedAt behind as dead code (the
+	// warnCount>=max return made them unreachable), so the code still
+	// LOOKED multi-shot while the implementation memory documented
+	// "2x/run, 8-call refire gap". Single-shot is the intended behavior
+	// (see TestAttentionFragment_MaxWarnings); the dead refire machinery
+	// is removed to make the semantics honest. A fresh warning is
+	// possible only after reset() (new run / compaction).
 	afMaxWarnings = 1
-	// afRefireGap requires this many new calls before re-warning.
-	afRefireGap = 8
 )
 
 func newAttentionFragmentState() *attentionFragmentState {
@@ -189,10 +193,6 @@ func (s *attentionFragmentState) analyze() string {
 	if len(s.recentDirs) < s.windowSize {
 		return ""
 	}
-	// Space out re-warnings.
-	if s.firedAt > 0 && s.totalCalls-s.firedAt < afRefireGap {
-		return ""
-	}
 
 	// Count switches (consecutive pairs with different dirs).
 	switches := 0
@@ -217,7 +217,6 @@ func (s *attentionFragmentState) analyze() string {
 	}
 
 	s.warnCount++
-	s.firedAt = s.totalCalls
 
 	debug.Log("agent", "attention fragmentation detected: density=%.2f, unique_dirs=%d", switchDensity, len(uniqueDirs))
 
@@ -228,8 +227,14 @@ func (s *attentionFragmentState) analyze() string {
 }
 
 // reset clears state for a new user turn.
+// #1843 case 2: warnCount previously persisted across the Agent's
+// LIFETIME (the only reset call site is the per-user-turn block), so
+// afMaxWarnings=1 meant ONE warning for the whole session - the comment
+// claimed "per run" but nothing re-opened the quota. warnCount now
+// resets per user turn, matching the caller's semantics; totalCalls
+// stays monotonic (the refire-gap arithmetic depends on it).
 func (s *attentionFragmentState) reset() {
 	s.recentDirs = s.recentDirs[:0]
 	s.switchCount = 0
-	// Don't reset warnCount or firedAt - those persist across the run.
+	s.warnCount = 0
 }

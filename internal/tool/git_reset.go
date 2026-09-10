@@ -77,7 +77,10 @@ func (t GitReset) Execute(ctx context.Context, input json.RawMessage) (Result, e
 
 	// File-specific reset: unstage specific files (always mixed mode)
 	if len(args.Files) > 0 {
-		gitArgs := append([]string{"reset"}, args.Files...)
+		// #1689 case 3: without the separator, a repo file literally named
+		// "HEAD" (or any dash-prefixed name) is consumed as a ref/option -
+		// git_show's file argument has had "--" all along.
+		gitArgs := append([]string{"reset", "--"}, args.Files...)
 		cmd := gitCommand(ctx, gitArgs...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
@@ -91,6 +94,13 @@ func (t GitReset) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{Content: trimmed}, nil
 	}
 
+	// #1689 case 1: a dash-prefixed target reaches git as an OPTION -
+	// "--pathspec-from-file=..." can steer a DESTRUCTIVE hard reset's
+	// pathspec from an external file. git_revert guards this (#1325);
+	// reset, the more destructive sibling, never did.
+	if strings.HasPrefix(target, "-") {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid reset target %q: leading dash (refusing option injection)", target)}, nil
+	}
 	gitArgs := []string{"reset", "--" + mode, target}
 
 	cmd := gitCommand(ctx, gitArgs...)

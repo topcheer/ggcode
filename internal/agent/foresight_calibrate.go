@@ -305,10 +305,14 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	return ""
 }
 
-// reset clears state for a new user turn.
+// reset clears state for a new user turn (#1843: previously dead code
+// outside compaction - warnCount/mismatches accumulated across the whole
+// session, turning "at most 2 per run" into a lifetime quota).
 func (s *foresightCalibrateState) reset() {
 	if s == nil {
 		return
 	}
 	s.predictions = nil
+	s.mismatches = 0
+	s.warnCount = 0
 }
