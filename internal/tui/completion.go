@@ -25,6 +25,10 @@ type Mention struct {
 
 // ParseMentions extracts @path references from user input.
 // Returns the cleaned message (with @path removed) and list of mentions.
+func isSpaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
+}
+
 func ParseMentions(input string, workDir string) (string, []Mention, error) {
 	// #1425-A: canonicalize workDir for CONTAINMENT CHECKS only - if the
 	// caller-supplied workdir contains symlink components (macOS
@@ -47,6 +51,16 @@ func ParseMentions(input string, workDir string) (string, []Mention, error) {
 		idx := strings.Index(cleaned[searchFrom:], mentionPrefix)
 		if idx < 0 {
 			break
+		}
+		// #1718 case 2: DetectMention requires the @ to start the text or
+		// follow whitespace - ParseMentions accepted ANY position, so
+		// foo@bar.com's mid-token @ became a mention (workDir coincidence
+		// made Stat pass, the email got silently rewritten and the file
+		// content injected). Same guard, both sides.
+		abs := searchFrom + idx
+		if abs > 0 && !isSpaceByte(cleaned[abs-1]) {
+			searchFrom = abs + 1
+			continue
 		}
 		idx += searchFrom
 
