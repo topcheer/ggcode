@@ -330,6 +330,10 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 						return wecomBindResultMsg{err: err}
 					}
 					if err := m.startWeComAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errWecomEnableNeeded) {
+							// #1792 case 3: enable on the Update loop, then restart.
+							return m.wecomEnableMutation(name, nil)
+						}
 						return wecomBindResultMsg{err: err}
 					}
 					return wecomBindResultMsg{message: m.t("panel.wecom.message.added_bot", name)}
@@ -339,6 +343,40 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 				return wecomBindResultMsg{err: err}
 			},
 		}
+	}
+}
+
+// errWecomEnableNeeded signals the auto-enable must run on the Update
+// loop via configMutationMsg (#1792 case 3).
+var errWecomEnableNeeded = errors.New("wecom adapter needs enable-on-update-loop")
+
+// wecomEnableMutation performs the auto-enable on the Update loop, then
+// restarts the adapter and continues with next.
+func (m *Model) wecomEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+					return wecomBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return wecomBindResultMsg{err: err}
+		},
 	}
 }
 
@@ -361,13 +399,12 @@ func (m *Model) startWeComAdapterIfNeeded(name string) error {
 		return fmt.Errorf(m.t("panel.wecom.error.not_configured"), name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1792 case 3: this ran SetIMAdapterEnabled on the Cmd goroutine -
+		// config map write + disk save racing the View thread's per-frame
+		// iteration of the same map (concurrent map read/write fatal). The
+		// #1367 family comment above claims the migration; this call missed
+		// it. Signal the caller to route through configMutationMsg.
+		return errWecomEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformWeCom)) {
 		return fmt.Errorf(m.t("panel.wecom.error.not_wecom_adapter"), name)

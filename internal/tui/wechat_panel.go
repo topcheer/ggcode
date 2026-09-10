@@ -292,6 +292,21 @@ func (m *Model) requestWechatQRCode() tea.Cmd {
 }
 
 // pollWechatQRStatus polls the QR code scan status directly (no adapter needed).
+// wechatPollTick delays a re-poll re-arm (#1792 case 2): #1398-A capped
+// the FAILURE streak, but the healthy wait-loop re-polled at network RTT
+// (~10 req/s) for as long as the QR sat unscanned.
+func wechatPollTick(qrcodeToken string) tea.Cmd {
+	return tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
+		// The tick fires as a bare Msg; wrap so the handler sees a poll
+		// request. Reuse the poll command lazily by returning a marker the
+		// existing command path handles: simplest is to schedule the real
+		// poll command here.
+		return wechatPollDueMsg{token: qrcodeToken}
+	})
+}
+
+type wechatPollDueMsg struct{ token string }
+
 func (m *Model) pollWechatQRStatus(qrcodeToken string) tea.Cmd {
 	return func() tea.Msg {
 		// #1398-A: an empty token produced a guaranteed-failing request on
@@ -375,11 +390,11 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 	case "scanned":
 		panel.authPhase = "polling"
 		panel.message = m.t("panel.wechat.scanned")
-		return *m, m.pollWechatQRStatus(panel.qrcodeToken)
+		return *m, wechatPollTick(panel.qrcodeToken) // #1792 case 2: paced
 	case "wait", "":
 		panel.authPhase = "polling"
-		panel.pollFailures = 0 // #1398-A: healthy poll resets the streak
-		return *m, m.pollWechatQRStatus(panel.qrcodeToken)
+		panel.pollFailures = 0                       // #1398-A: healthy poll resets the streak
+		return *m, wechatPollTick(panel.qrcodeToken) // #1792 case 2: paced
 	default:
 		if msg.err != nil {
 			panel.message = fmt.Sprintf("Poll error: %v", msg.err)
