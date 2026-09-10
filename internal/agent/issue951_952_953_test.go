@@ -204,24 +204,27 @@ func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 	}
 }
 
-// TestAgentGoOriginalContentLenCapturedBeforeDetectorChain pins the #952-1 fix
-// point: the capture must precede the first detector call in the chain, so
-// appended guidance never lands in the metering window.
+// TestAgentGoOriginalContentLenCapturedBeforeDetectorChain pins the
+// #952/#1819-case-2 metering capture contract: the length metered into
+// token-waste must be taken AFTER output shrink (compress/guard) and
+// BEFORE guidance hints are appended, so metering reflects the real
+// context cost in both directions (#553 inflation and #1819 shrink).
 func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
 	src, err := os.ReadFile("agent.go")
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
 	}
-	captureIdx := strings.Index(string(src), "originalContentLen := len(result.Content)")
-	classifierIdx := strings.Index(string(src), "a.errorClassifier.classifyToolError(tc.Name, result.Content)")
+	captureIdx := strings.Index(string(src), "measuredLen := len(result.Content)")
+	applyIdx := strings.Index(string(src), "a.applyToolResultGuidance(")
+	shrinkIdx := strings.LastIndex(string(src), "guardToolOutput(result.Content")
 	if captureIdx < 0 {
-		t.Fatal("originalContentLen capture not found in agent.go")
+		t.Fatal("measuredLen capture not found in agent.go")
 	}
-	if classifierIdx < 0 {
-		t.Fatal("detector-chain entry point (errorClassifier) not found in agent.go")
+	if applyIdx < 0 || captureIdx > applyIdx {
+		t.Fatalf("measuredLen capture (%d) must precede applyToolResultGuidance (%d)", captureIdx, applyIdx)
 	}
-	if captureIdx > classifierIdx {
-		t.Fatalf("originalContentLen capture (%d) must precede the detector chain entry (%d) — #553/#952 regression", captureIdx, classifierIdx)
+	if shrinkIdx < 0 || captureIdx < shrinkIdx {
+		t.Fatalf("measuredLen capture (%d) must follow the last shrink site (%d) - #1819 case 2", captureIdx, shrinkIdx)
 	}
 }
 

@@ -2525,26 +2525,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// predictor of agent success.
 			if raHint := a.maybeWarnReasonAction(assistantText, toolCalls); raHint != "" {
 				debug.Log("agent", "Iteration %d: reasoning-action alignment verifier triggered", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: raHint,
-					}},
-				})
+				a.injectGuidance(raHint)
 			}
 			// Mindless action detector: tracks consecutive tool-call steps
 			// with minimal reasoning text. When 4+ consecutive mindless steps
 			// occur, inject guidance to pause and reflect before continuing.
 			if a.mindlessAction.recordStep(len(assistantText), len(toolCalls) > 0) {
 				debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: mindlessActionWarning(a.mindlessAction.streak),
-					}},
-				})
+				a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
 			}
 			// Trajectory health synthesizer (metacognitive layer): record
 			// per-iteration tool activity stats for composite health scoring.
@@ -2557,25 +2545,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// inject holistic guidance about accumulating risk.
 			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
 				debug.Log("agent", "Iteration %d: trajectory health synthesizer detected composite degradation", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: healthHint,
-					}},
-				})
+				a.injectGuidance(healthHint)
 			}
 			// Token waste budget warning (AgentDiet arXiv:2509.23586):
 			// when aggregate waste ratio exceeds 40%, inject guidance.
 			if wasteHint := a.maybeWarnTokenWaste(); wasteHint != "" {
 				debug.Log("agent", "Iteration %d: token waste budget exceeded 40%% threshold", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: wasteHint,
-					}},
-				})
+				a.injectGuidance(wasteHint)
 			}
 			// Foresight calibration (WorldEvolver arXiv:2606.30639): record
 			// the agent's predictions about upcoming tool outcomes BEFORE
@@ -2586,13 +2562,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// drifted from the original user request keywords (arXiv:2505.02709).
 			if gdHint := a.goalDriftCtx.checkDrift(i + 1); gdHint != "" {
 				debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: gdHint,
-					}},
-				})
+				a.injectGuidance(gdHint)
 			}
 			if a.injectPendingInterruptions() {
 				continue
@@ -3792,7 +3762,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// metering the polluted string double-counts guidance tokens in both the
 			// waste numerator and denominator (#553 residual: the old capture point
 			// sat after the chain, so an original 1-token result was recorded as 19).
-			originalContentLen := len(result.Content)
+			// #1819 case 2: metering now uses measuredLen captured post-shrink /
+			// pre-hint at the applyToolResultGuidance call site; nothing needs the
+			// pre-detector-chain length anymore.
 			// Error classifier: immediate type-specific guidance on the first
 			// occurrence of each error category (AgentDebug-inspired).
 			// Fires before error-streak so the agent gets targeted feedback
@@ -4407,6 +4379,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Both vision and non-vision paths share the same hint assembly logic.
 			// originalContentLen was captured BEFORE the detector chain above (#952,
 			// #553 residual) so detector guidance never inflates waste metering.
+			// #1819 case 2: capture the POST-shrink length here — compress/
+			// guardToolOutput may have rewritten Content between the original
+			// capture and this point, and metering must reflect what actually
+			// enters the context (the #952 "real context cost" intent cuts both
+			// ways: a 60KB→6KB compressed error log metered at 60KB inflates the
+			// waste ratio past the 40% threshold early; a truncated large read
+			// metered at full size dilutes it).
+			measuredLen := len(result.Content)
 			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint)
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
@@ -4435,7 +4415,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			isRedundant := redundancyHint != ""
 			if a.tokenWasteBudget != nil {
-				a.tokenWasteBudget.recordToolResultLen(tc.Name, result.Content, originalContentLen, result.IsError, isRedundant, pathsRead)
+				// #1819 case 2: measuredLen (post-compress/guard, pre-hint) is the
+				// real context cost; originalContentLen stays available upstream for
+				// anything that needs the pre-shrink size.
+				a.tokenWasteBudget.recordToolResultLen(tc.Name, result.Content, measuredLen, result.IsError, isRedundant, pathsRead)
 			}
 			if err := ctx.Err(); err != nil {
 				// Context cancelled after completing some tools. Fill "cancelled"
