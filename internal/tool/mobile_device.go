@@ -391,6 +391,15 @@ func formatSnapshot(root *uiElement, deviceInfo string) string {
 	counter := 0
 	const maxSnapshotElements = 500
 	formatElement(&sb, root, 0, &counter, maxSnapshotElements)
+	// #1835 case 1: the element cap stopped SILENTLY - a small-element tree
+	// (30-60B/line x 500 ~= 15-30KB) stays under the byte cap, so the only
+	// annotation branch (below) never fired and the agent saw a clean
+	// listing whose 501st+ controls were simply gone: it concluded "this
+	// screen has no such control", gave up, or tapped degraded coordinates.
+	// Mirror the byte-path annotation when the cap actually hit.
+	if counter >= maxSnapshotElements {
+		sb.WriteString(fmt.Sprintf("\n... [snapshot truncated: reached the %d-element limit; deeper/later elements omitted]", maxSnapshotElements))
+	}
 	out := sb.String()
 	const maxSnapshotBytes = 30 * 1024
 	if len(out) > maxSnapshotBytes {

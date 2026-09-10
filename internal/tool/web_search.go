@@ -127,6 +127,7 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	results = assessSearchResults(args.Query, results, args.AllowedDomains)
 
 	// Trim to requested max after filtering
+	total := len(results)
 	if len(results) > args.MaxResults {
 		results = results[:args.MaxResults]
 	}
@@ -138,6 +139,14 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	var sb strings.Builder
 	for i, r := range results {
 		sb.WriteString(fmt.Sprintf("%d. %s\n   URL: %s\n   %s\n\n", i+1, r.Title, r.URL, r.Snippet))
+	}
+	// #1835 case 2: domain filtering fetches up to 3x the requested count
+	// and this trim silently dropped up to 2/3 of the surviving candidates -
+	// a bare numbered list let the agent conclude "the docs don't cover it"
+	// without knowing results were withheld. Say how many survived filtering
+	// (the grep/search_files of-N convention).
+	if total > len(results) {
+		sb.WriteString(fmt.Sprintf("... [showing %d of %d filtered results — refine allowed_domains or raise max_results to see the rest]\n", len(results), total))
 	}
 	return Result{Content: sb.String()}, nil
 }
