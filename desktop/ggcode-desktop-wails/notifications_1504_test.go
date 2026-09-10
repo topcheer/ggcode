@@ -30,9 +30,9 @@ func Test1504DeliverUnixBounded(t *testing.T) {
 // deliverUnix bound above is the behavioral one.)
 func Test1504SourceContracts(t *testing.T) {
 	srcs := map[string]string{
-		"main.go":           "runtime.WindowShow(app.ctx)",
-		"app.go":            "a.dc.SetGlobalHotkey(false)",
-		"notifications.go":  "exec.CommandContext(ctx",
+		"main.go":          "runtime.WindowShow(app.ctx)",
+		"app.go":           "a.dc.SetGlobalHotkey(false)",
+		"notifications.go": "exec.CommandContext(ctx",
 	}
 	for f, needle := range srcs {
 		data, err := os.ReadFile(f)
