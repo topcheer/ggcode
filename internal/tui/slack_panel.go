@@ -378,6 +378,10 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 						return rollback(err)
 					}
 					if err := m.startSlackAdapterIfNeeded(name); err != nil {
+						if errors.Is(err, errSlackEnableNeeded) {
+							// #1758 case 1: enable on the Update loop, then retry.
+							return m.slackEnableMutation(name, nil)
+						}
 						return rollback(err)
 					}
 					return slackBindResultMsg{message: m.t("panel.slack.message.added_bot", name)}
@@ -387,6 +391,40 @@ func (m *Model) createSlackAdapterCmd(spec string) tea.Cmd {
 				return slackBindResultMsg{err: err}
 			},
 		}
+	}
+}
+
+// errSlackEnableNeeded signals the auto-enable must run on the Update
+// loop via configMutationMsg (#1758 case 1).
+var errSlackEnableNeeded = errors.New("slack adapter needs enable-on-update-loop")
+
+// slackEnableMutation performs the auto-enable on the Update loop, then
+// restarts the adapter and continues with next.
+func (m *Model) slackEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+					return slackBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return slackBindResultMsg{err: err}
+		},
 	}
 }
 
@@ -409,13 +447,11 @@ func (m *Model) startSlackAdapterIfNeeded(name string) error {
 		return errors.New(m.t("panel.slack.error.not_configured", name))
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1758 case 1: the auto-enable wrote the config map RIGHT HERE on
+		// the Cmd goroutine (the #1367 family - irc/matrix/mattermost all
+		// migrated; slack only moved AddIMAdapter and missed this). Signal
+		// the caller to route the enable through configMutationMsg.
+		return errSlackEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSlack)) {
 		return errors.New(m.t("panel.slack.error.not_slack_adapter", name))
