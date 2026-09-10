@@ -267,6 +267,12 @@ func (s *trajIntelState) persistLocked() error {
 		return fmt.Errorf("mkdir: %w", err)
 	}
 
+	unlock, lockErr := lockTrajFile(s.filePath + ".lock")
+	if lockErr != nil {
+		return fmt.Errorf("lock: %w", lockErr)
+	}
+	defer unlock()
+
 	// Read existing entries to maintain rolling window.
 	existing, loadErr := s.loadFromFile()
 	if loadErr != nil && !os.IsNotExist(loadErr) {
@@ -281,11 +287,20 @@ func (s *trajIntelState) persistLocked() error {
 	}
 
 	// Write atomically.
-	tmpPath := s.filePath + ".tmp"
-	f, err := os.Create(tmpPath)
+	// #1512 case C: the whole load→append→rewrite must run under a
+	// cross-PROCESS file lock — s.mu is per-Agent-instance, but the file
+	// is workspace-shared: two concurrently finishing agents each loaded
+	// the same baseline, appended their own learnings, and the LAST
+	// rename won, silently erasing the other's entries (a lost update
+	// directly against the "accumulated self-improvement" purpose). The
+	// tmp name is also unique now: two writers sharing the fixed
+	// ".tmp" path interleaved content into one file.
+	tmpF, err := os.CreateTemp(filepath.Dir(s.filePath), ".traj-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create tmp: %w", err)
 	}
+	tmpPath := tmpF.Name()
+	f := tmpF
 	enc := json.NewEncoder(f)
 	for _, l := range all {
 		if encErr := enc.Encode(l); encErr != nil {
