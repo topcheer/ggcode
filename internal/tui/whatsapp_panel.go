@@ -333,6 +333,10 @@ func (m *Model) bindWAEntry(entry whatsappBindingEntry) tea.Cmd {
 			return whatsappBindResultMsg{err: err}
 		}
 		if err := m.startWAAdapterIfNeeded(entry.Adapter); err != nil {
+			if errors.Is(err, errWAEnableNeeded) {
+				// #1793 case 1: enable on the Update loop, then restart+bind.
+				return m.waEnableMutation(entry.Adapter, nil)
+			}
 			return whatsappBindResultMsg{err: err}
 		}
 		ws := m.currentWorkspacePath()
@@ -419,6 +423,40 @@ func (m *Model) ensureWARuntime() error {
 	return m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel.whatsapp.error.config_unavailable"), "", true)
 }
 
+// errWAEnableNeeded signals the auto-enable must run on the Update loop
+// via configMutationMsg (#1793 case 1).
+var errWAEnableNeeded = errors.New("whatsapp adapter needs enable-on-update-loop")
+
+// waEnableMutation performs the auto-enable on the Update loop, then
+// restarts the adapter and continues with next.
+func (m *Model) waEnableMutation(name string, next func(m *Model) tea.Msg) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
+				return fmt.Errorf("enable %s: %w", name, err)
+			}
+			if m.imManager != nil {
+				_ = m.imManager.EnableBinding(name)
+			}
+			return nil
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+					return whatsappBindResultMsg{err: err}
+				}
+				if next == nil {
+					return nil
+				}
+				return next(m)
+			}
+		},
+		fail: func(err error) tea.Msg {
+			return whatsappBindResultMsg{err: err}
+		},
+	}
+}
+
 func (m *Model) startWAAdapterIfNeeded(name string) error {
 	if m.imManager == nil || m.config == nil {
 		return nil
@@ -438,13 +476,12 @@ func (m *Model) startWAAdapterIfNeeded(name string) error {
 		return fmt.Errorf("adapter %q not configured", name)
 	}
 	if !adapterCfg.Enabled {
-		// Auto-enable when user explicitly tries to bind from panel.
-		if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
-			return fmt.Errorf("enable %s: %w", name, err)
-		}
-		if m.imManager != nil {
-			_ = m.imManager.EnableBinding(name)
-		}
+		// #1793 case 1: ran SetIMAdapterEnabled on the Cmd goroutine -
+		// config map write + disk save racing the panel's 2s tick range of
+		// the same map (concurrent map read/write fatal). The file's own
+		// #1367 comment claims the migration; createWAAdapterCmd got it,
+		// this bind path didn't. Sentinel + mutation, the nostr pattern.
+		return errWAEnableNeeded
 	}
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformWhatsApp)) {
 		return fmt.Errorf("adapter %q is not a WhatsApp adapter", name)
