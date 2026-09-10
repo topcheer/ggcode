@@ -94,10 +94,13 @@ func TestFingerprintDifferentErrors(t *testing.T) {
 	}
 }
 
-// TestPathNormalization verifies that path differences don't affect fingerprint.
+// TestPathNormalization verifies path SPELLING variance (./-prefix) merges,
+// per #1486 case D: only leading root markers (./ ../ /) are stripped, so
+// ./internal/agent/foo.go and internal/agent/foo.go share a fingerprint while
+// absolute paths and sibling packages stay distinct (see recurring_1486_test.go).
 func TestPathNormalization(t *testing.T) {
 	out1 := "./internal/agent/foo.go:42:5: undefined: myFunc"
-	out2 := "/home/user/project/internal/agent/foo.go:42:5: undefined: myFunc"
+	out2 := "internal/agent/foo.go:42:5: undefined: myFunc"
 
 	fp1 := fingerprintBuildError(out1)
 	fp2 := fingerprintBuildError(out2)
@@ -106,7 +109,13 @@ func TestPathNormalization(t *testing.T) {
 		t.Fatal("expected non-empty fingerprint")
 	}
 	if fp1 != fp2 {
-		t.Errorf("same error with different paths should match:\n  fp1=%s\n  fp2=%s", fp1, fp2)
+		t.Errorf("same error with ./ spelling variance should match:\n  fp1=%s\n  fp2=%s", fp1, fp2)
+	}
+	// #1486 case D: absolute vs relative no longer merge (sibling separation) -
+	// this is the deliberate behavior change; pin it explicitly.
+	out3 := "/home/user/project/internal/agent/foo.go:42:5: undefined: myFunc"
+	if fp3 := fingerprintBuildError(out3); fp3 == fp1 {
+		t.Errorf("absolute path must stay distinct from relative (#1486 sibling separation)")
 	}
 }
 
@@ -284,16 +293,19 @@ func TestNormalizeErrorLine(t *testing.T) {
 	}
 }
 
-// TestStripPathToBasename verifies directory paths are stripped to basenames.
+// TestStripPathToBasename pins #1486 case D semantics: leading root markers
+// (./ ../ /) are dropped; NAMED segments are KEPT so sibling packages do not
+// collide (the old strip-to-basename merged a/util.go and b/util.go into one
+// fingerprint, inflating recurrence counts).
 func TestStripPathToBasename(t *testing.T) {
-	input := "./internal/agent/foo.go:42: undefined: myFunc"
-	result := stripPathToBasename(input)
-	// The "/" chars should be removed, leaving "foo.go:N: undefined: myFunc"
-	if strings.Contains(result, "internal/") {
-		t.Errorf("directory path not stripped: %s", result)
+	if got := stripPathToBasename("./internal/agent/foo.go:42: undefined: myFunc"); got != "internal/agent/foo.go:42: undefined: myFunc" {
+		t.Errorf("./-prefix must be stripped, got: %s", got)
 	}
-	if !strings.Contains(result, "foo.go") {
-		t.Errorf("basename should be preserved: %s", result)
+	if got := stripPathToBasename("/abs/path/foo.go:1: err"); got != "abs/path/foo.go:1: err" {
+		t.Errorf("leading slash must be stripped, named segments kept, got: %s", got)
+	}
+	if got := stripPathToBasename("../rel/foo.go:1: err"); got != "rel/foo.go:1: err" {
+		t.Errorf("../-prefix must be stripped, got: %s", got)
 	}
 }
 
