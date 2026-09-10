@@ -24,8 +24,12 @@ func (m Model) handleToolStatusMsg(msg toolStatusMsg, spinnerCmd tea.Cmd) (Model
 		startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		spinnerCmd = combineCmds(spinnerCmd, startCmd)
 	} else {
-		m.chatFinishTool(ts)
+		// #1785: the Elapsed assignment sat AFTER chatFinishTool - the
+		// finisher consumed a value-copy with Elapsed==0 (senders never
+		// pre-fill it), making the assignment a dead store and the tool
+		// card's elapsed display dead SINCE INTRODUCTION.
 		ts.Elapsed = m.spinner.Elapsed()
+		m.chatFinishTool(ts)
 		m.spinner.Stop()
 		spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 		// Do NOT reset streamPrefixWritten here. Resetting causes the
@@ -71,8 +75,9 @@ func (m Model) handleAgentToolBatchMsg(msg agentToolBatchMsg, spinnerCmd tea.Cmd
 			startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts.ToolStatusMsg), toolDetail(ts.ToolStatusMsg))))
 			spinnerCmd = combineCmds(spinnerCmd, startCmd)
 		} else {
-			m.chatFinishTool(ts.ToolStatusMsg)
+			// #1785: same dead-store ordering as the sibling handlers.
 			ts.ToolStatusMsg.Elapsed = m.spinner.Elapsed()
+			m.chatFinishTool(ts.ToolStatusMsg)
 			m.spinner.Stop()
 			spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 			// Do NOT reset streamPrefixWritten here — that would fragment the
@@ -104,8 +109,12 @@ func (m Model) handleAgentToolStatusMsg(msg agentToolStatusMsg, spinnerCmd tea.C
 		startCmd := m.spinner.Start(util.FirstNonEmpty(ts.Activity, formatToolInline(toolDisplayName(ts), toolDetail(ts))))
 		spinnerCmd = combineCmds(spinnerCmd, startCmd)
 	} else {
-		m.chatFinishTool(ts)
+		// #1785: the Elapsed assignment sat AFTER chatFinishTool - the
+		// finisher consumed a value-copy with Elapsed==0 (senders never
+		// pre-fill it), making the assignment a dead store and the tool
+		// card's elapsed display dead SINCE INTRODUCTION.
 		ts.Elapsed = m.spinner.Elapsed()
+		m.chatFinishTool(ts)
 		m.spinner.Stop()
 		spinnerCmd = combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
 		// Do NOT reset streamPrefixWritten (see handleToolStatusMsg).
