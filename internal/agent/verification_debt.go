@@ -93,9 +93,13 @@ var verificationDebtTools = map[string]debtAction{
 	"batch_replace":   debtModifying,
 
 	// Verifying: explicit validation
-	"run_command":      debtVerifying,
-	"lsp_diagnostics":  debtVerifying,
-	"lsp_code_actions": debtVerifying,
+	"run_command":     debtVerifying,
+	"lsp_diagnostics": debtVerifying,
+	// #1784 case 2: lsp_code_actions only ENUMERATES available quickfixes -
+	// it executes no check, has no pass/fail semantics, and is read-only
+	// like the other lsp_* members classified as grounding above. Counting
+	// it as verification reset the debt on a no-op call.
+	"lsp_code_actions": debtGrounding,
 }
 
 // classifyDebtAction determines the debt action for a tool call.
@@ -188,10 +192,11 @@ type verificationDebtState struct {
 	maxDebt        int // peak debt this run
 	warningsIssued int
 	lastAction     debtAction
+	editedPkgs     map[string]bool // packages of files modified since last full verification (#1784)
 }
 
 func newVerificationDebtState() *verificationDebtState {
-	return &verificationDebtState{}
+	return &verificationDebtState{editedPkgs: make(map[string]bool)}
 }
 
 func (v *verificationDebtState) reset() {
@@ -203,6 +208,7 @@ func (v *verificationDebtState) reset() {
 	v.maxDebt = 0
 	v.warningsIssued = 0
 	v.lastAction = debtNeutral
+	v.editedPkgs = make(map[string]bool)
 }
 
 // recordToolCall updates the debt state based on the tool call.
@@ -215,6 +221,11 @@ func (v *verificationDebtState) recordToolCall(toolName, args string) {
 	case debtModifying:
 		v.modifyCount++
 		v.debt++
+		for _, f := range extractFileHints(toolName, []byte(args)) {
+			if pkg := fileToPkgKey(f); pkg != "" {
+				v.editedPkgs[pkg] = true
+			}
+		}
 		if v.debt > v.maxDebt {
 			v.maxDebt = v.debt
 		}
@@ -228,9 +239,20 @@ func (v *verificationDebtState) recordToolCall(toolName, args string) {
 		}
 	case debtVerifying:
 		v.verifyCount++
-		// Verification resets debt entirely -- build/test results are the
-		// ground truth that validates prior modifications.
-		v.debt = 0
+		// #1784 case 1: verification used to reset the debt ENTIRELY even when
+		// it covered a fraction of the edited packages - edit 5 packages, run
+		// 1 package's tests, and the debt read zero. Partial repayment: scale
+		// the reset by the fraction of edited files whose package is covered
+		// by the verification's scopes. When scopes can't be determined, the
+		// verification is treated as full (the pre-#1784 behavior) - better
+		// to clear on an unmeasurable verification than to nag forever.
+		if v.debt > 0 {
+			if covered, total, ok := v.verificationCoverage(args); ok && total > 0 && covered < total {
+				v.debt = v.debt * (total - covered) / total
+			} else {
+				v.debt = 0
+			}
+		}
 	case debtNeutral:
 		// No change to debt
 	}
@@ -260,4 +282,100 @@ func (v *verificationDebtState) maybeWarn() string {
 			"assumption propagates through all subsequent edits.",
 		v.debt,
 	)
+}
+
+// verificationCoverage estimates what fraction of the edited surface a
+// verification call covers (#1784 case 1). It needs the edited-file set,
+// which the debt state starts tracking on every modifying call. Returns
+// (covered, total, ok); ok=false when scopes cannot be determined (treat as
+// full coverage).
+func (v *verificationDebtState) verificationCoverage(args string) (int, int, bool) {
+	scopes, ok := extractVerificationScopes(args)
+	if !ok {
+		return 0, 0, false
+	}
+	if len(v.editedPkgs) == 0 {
+		return 0, 0, false
+	}
+	total := len(v.editedPkgs)
+	covered := 0
+	for pkg := range v.editedPkgs {
+		// Normalize absolute editor paths to relative for matching.
+		rel := strings.TrimPrefix(pkg, "/")
+		for _, sc := range scopes {
+			if sc == "." || rel == sc || strings.HasPrefix(rel, sc+"/") ||
+				strings.HasSuffix(rel, "/"+sc) {
+				covered++
+				break
+			}
+		}
+	}
+	return covered, total, true
+}
+
+// fileToPkgKey maps an edited file path to a package directory key
+// (slash-separated, no leading ./) for coverage matching.
+func fileToPkgKey(f string) string {
+	f = strings.TrimPrefix(f, "./")
+	i := strings.LastIndexByte(f, '/')
+	if i < 0 {
+		return ""
+	}
+	return f[:i]
+}
+
+// extractVerificationScopes pulls the package paths a verification command
+// targets. Returns ok=false when the command is scope-free (whole-tree
+// build/vet) or the scopes cannot be parsed.
+func extractVerificationScopes(args string) ([]string, bool) {
+	cmd := eaExtractCommand(args)
+	if cmd == "" {
+		return nil, false
+	}
+	if !isVerificationCommand(cmd) {
+		return nil, false // classifyDebtAction already treats this as neutral
+	}
+	scopes := parseGoPackageScopes(cmd)
+	if scopes == nil {
+		// Whole-tree verification (bare go build/test/vet with no package
+		// args) or unparsable targets: treat as full coverage.
+		return []string{"."}, true
+	}
+	return scopes, true
+}
+
+// parseGoPackageScopes extracts package path arguments from a Go tool
+// invocation. Returns nil when no explicit package args are present
+// (whole-tree). Handles ./... forms, ./dir forms, AND bare internal
+// relative paths like "internal/agent/" (#1784 case 3 parity: Go accepts
+// them without ./).
+func parseGoPackageScopes(cmd string) []string {
+	fields := strings.Fields(cmd)
+	var scopes []string
+	for _, f := range fields {
+		f = strings.TrimSuffix(f, "...")
+		f = strings.TrimRight(f, "/")
+		if f == "" {
+			continue
+		}
+		if strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../") {
+			scopes = append(scopes, strings.TrimPrefix(f, "./"))
+			continue
+		}
+		// Bare relative internal path: contains a slash, no colon (urls),
+		// starts with a letter, and isn't a flag.
+		if !strings.HasPrefix(f, "-") && strings.Contains(f, "/") &&
+			!strings.Contains(f, ":") && isASCIIPathStart(f) {
+			scopes = append(scopes, strings.TrimSuffix(f, "/"))
+		}
+	}
+	return scopes
+}
+
+func isASCIIPathStart(f string) bool {
+	if f == "" {
+		return false
+	}
+	c := f[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
