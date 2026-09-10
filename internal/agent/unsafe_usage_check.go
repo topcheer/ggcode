@@ -149,19 +149,59 @@ func findUnsafeIssues(src string) []unsafeInstance {
 	})
 
 	// Pattern 3: stored uintptr from unsafe.Pointer (requires assignment context).
+	uintptrIdents := map[string]bool{}
 	ast.Inspect(file, func(node ast.Node) bool {
 		as, ok := node.(*ast.AssignStmt)
 		if !ok {
 			return true
 		}
 		for _, rhs := range as.Rhs {
-			if isUintptrOfUnsafePointer(rhs) {
+			stored := isUintptrOfUnsafePointer(rhs)
+			if !stored {
+				// #1520 case C first half: `off := uintptr(unsafe.Pointer(p)) + 16`
+				// stores a DERIVED uintptr - the bare-conversion check missed
+				// the arithmetic wrapper entirely.
+				stored = containsUintptrOfUnsafePointer(rhs)
+			}
+			if stored {
 				instances = append(instances, unsafeInstance{
 					category: unsafeCatStoredUint,
 					detail:   unsafeDetailStored,
 					line:     fset.Position(as.Pos()).Line,
 				})
+				// #1520 case C: track the LHS ident - the classic two-line
+				// idiom stores the (possibly arithmetic) uintptr in a
+				// variable and reconverts it lines later:
+				//   off := uintptr(unsafe.Pointer(p)) + 16
+				//   q  := unsafe.Pointer(off)
+				// Pattern 2 below requires the arithmetic INLINE, so the
+				// reconversion half was invisible. Remember derived-uintptr
+				// idents so unsafe.Pointer(<ident>) can be flagged.
+				if len(as.Lhs) == 1 {
+					if id, ok := as.Lhs[0].(*ast.Ident); ok {
+						uintptrIdents[id.Name] = true
+					}
+				}
 			}
+		}
+		return true
+	})
+
+	// #1520 case C second half: unsafe.Pointer(<ident>) where <ident> was
+	// assigned (possibly with arithmetic) from uintptr(unsafe.Pointer(...)).
+	// This is exactly the vet-unsafeptr pattern the header claims parity
+	// with; the inline-arithmetic-only check missed the two-line form.
+	ast.Inspect(file, func(node ast.Node) bool {
+		ce, ok := node.(*ast.CallExpr)
+		if !ok || !isUnsafePointerCall(ce) || len(ce.Args) == 0 {
+			return true
+		}
+		if id, ok := ce.Args[0].(*ast.Ident); ok && uintptrIdents[id.Name] {
+			instances = append(instances, unsafeInstance{
+				category: unsafeCatPtrArith,
+				detail:   unsafeDetailPtrArith,
+				line:     fset.Position(ce.Pos()).Line,
+			})
 		}
 		return true
 	})
@@ -237,6 +277,32 @@ func isUintptrCall(expr ast.Expr) bool {
 	}
 	ident, ok := ce.Fun.(*ast.Ident)
 	return ok && ident.Name == "uintptr"
+}
+
+// containsUintptrOfUnsafePointer reports whether expr anywhere contains a
+// uintptr(unsafe.Pointer(...)) conversion (e.g. as an arithmetic operand).
+func containsUintptrOfUnsafePointer(expr ast.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if isUintptrOfUnsafePointer(expr) {
+		return true
+	}
+	switch e := expr.(type) {
+	case *ast.BinaryExpr:
+		return containsUintptrOfUnsafePointer(e.X) || containsUintptrOfUnsafePointer(e.Y)
+	case *ast.ParenExpr:
+		return containsUintptrOfUnsafePointer(e.X)
+	case *ast.UnaryExpr:
+		return containsUintptrOfUnsafePointer(e.X)
+	case *ast.CallExpr:
+		for _, a := range e.Args {
+			if containsUintptrOfUnsafePointer(a) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isUintptrOfUnsafePointer returns true if expr is uintptr(unsafe.Pointer(...)).

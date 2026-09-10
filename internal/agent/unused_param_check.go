@@ -80,7 +80,7 @@ func checkUnusedParam(filePath, oldContent, src string) []string {
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"%s: parameter '%s' is never used in function '%s' "+
-				"-- consider removing it or renaming to '_'",
+				"-- if the signature is not an interface/callback contract, consider renaming it to '_' (never delete a parameter: implementations of Shutdown(ctx)/ServeHTTP/handler-adapter contracts fail to compile without it)",
 			upFormatPos(is.pos), is.param, is.funcName))
 	}
 	return warnings
