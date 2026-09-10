@@ -94,19 +94,30 @@ func TestFingerprintDifferentErrors(t *testing.T) {
 	}
 }
 
-// TestPathNormalization verifies that path differences don't affect fingerprint.
+// TestPathNormalization verifies the #1486 case-D path semantics: the
+// ./-vs-plain spelling variance still merges, full directory stripping is
+// GONE (sibling packages must not collide into one fingerprint), and
+// basename-only identity is no longer assumed.
 func TestPathNormalization(t *testing.T) {
+	// Same repo-relative file, ./-prefixed vs plain: same fingerprint.
 	out1 := "./internal/agent/foo.go:42:5: undefined: myFunc"
-	out2 := "/home/user/project/internal/agent/foo.go:42:5: undefined: myFunc"
-
-	fp1 := fingerprintBuildError(out1)
-	fp2 := fingerprintBuildError(out2)
-
+	out2 := "internal/agent/foo.go:42:5: undefined: myFunc"
+	fp1, fp2 := fingerprintBuildError(out1), fingerprintBuildError(out2)
 	if fp1 == "" {
 		t.Fatal("expected non-empty fingerprint")
 	}
 	if fp1 != fp2 {
-		t.Errorf("same error with different paths should match:\n  fp1=%s\n  fp2=%s", fp1, fp2)
+		t.Errorf("./-vs-plain spelling of the same path must match:\n  fp1=%s\n  fp2=%s", fp1, fp2)
+	}
+
+	// Sibling packages with the same basename: MUST stay distinct (#1486).
+	// The old full-basename-strip merged them, so a recurring error in
+	// internal/agent/util.go was silently counted as the same error as one
+	// in internal/tui/util.go.
+	fa := fingerprintBuildError("internal/agent/util.go:7: undefined: A")
+	ft := fingerprintBuildError("internal/tui/util.go:7: undefined: A")
+	if fa == ft {
+		t.Errorf("sibling-package errors must not collide:\n  fa=%s\n  ft=%s", fa, ft)
 	}
 }
 
@@ -284,16 +295,25 @@ func TestNormalizeErrorLine(t *testing.T) {
 	}
 }
 
-// TestStripPathToBasename verifies directory paths are stripped to basenames.
+// TestStripPathToBasename pins the #1486 case-D semantics: only LEADING
+// root markers (./, ../, /) are dropped; directory components are KEPT so
+// sibling packages stay distinct.
 func TestStripPathToBasename(t *testing.T) {
-	input := "./internal/agent/foo.go:42: undefined: myFunc"
-	result := stripPathToBasename(input)
-	// The "/" chars should be removed, leaving "foo.go:N: undefined: myFunc"
-	if strings.Contains(result, "internal/") {
-		t.Errorf("directory path not stripped: %s", result)
+	// ./-prefix dropped, directories preserved.
+	if got := stripPathToBasename("./internal/agent/foo.go:42: undefined: myFunc"); got != "internal/agent/foo.go:42: undefined: myFunc" {
+		t.Errorf("./-prefix not dropped cleanly: %q", got)
 	}
-	if !strings.Contains(result, "foo.go") {
-		t.Errorf("basename should be preserved: %s", result)
+	// ../-prefix dropped.
+	if got := stripPathToBasename("../internal/agent/foo.go:42: x"); got != "internal/agent/foo.go:42: x" {
+		t.Errorf("../-prefix not dropped cleanly: %q", got)
+	}
+	// Plain relative path untouched.
+	if got := stripPathToBasename("internal/agent/foo.go:42: x"); got != "internal/agent/foo.go:42: x" {
+		t.Errorf("plain relative path must be untouched: %q", got)
+	}
+	// Siblings stay distinct.
+	if stripPathToBasename("a/util.go") == stripPathToBasename("b/util.go") {
+		t.Error("sibling paths must not collide")
 	}
 }
 

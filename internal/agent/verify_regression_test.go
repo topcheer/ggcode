@@ -92,13 +92,19 @@ func TestVerifyRegression_PathStability(t *testing.T) {
 		"./internal/agent/foo.go:42: undefined: someFunc",
 	})
 
-	// Same error with absolute path — should NOT be NEW
+	// Same error, ./-vs-plain spelling — should NOT be REGRESSION.
 	result := v.classifyErrors([]string{
-		"/home/user/project/internal/agent/foo.go:42: undefined: someFunc",
+		"internal/agent/foo.go:42: undefined: someFunc",
 	})
 	if strings.Contains(result, "REGRESSION") {
-		t.Error("same error at different path should NOT be REGRESSION")
+		t.Error("same error with plain-path spelling should NOT be REGRESSION")
 	}
+	// NOTE (#1486 case D): an ABSOLUTE-path spelling of the same file no
+	// longer merges with the relative form — directory components are kept
+	// so sibling packages stay distinct. Within a session the path spelling
+	// is stable (same workingDir, same go toolchain output format), so the
+	// abs-vs-rel cross-spelling case is accepted as a deliberate trade-off,
+	// not a bug.
 }
 
 func TestVerifyRegression_PassClearsBaseline(t *testing.T) {
