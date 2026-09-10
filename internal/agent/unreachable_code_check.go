@@ -49,6 +49,7 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 	}
 
 	var warnings []string
+	var gotoTargetLabels map[string]bool
 
 	ast.Inspect(goAST, func(n ast.Node) bool {
 		blk, ok := n.(*ast.BlockStmt)
@@ -64,6 +65,21 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 		deadStmts := blk.List[termIdx+1:]
 		if len(deadStmts) == 0 {
 			return true
+		}
+
+		// #1520 case B: `goto done; done: cleanup()` - the label target and
+		// everything after it ARE reachable via the goto, yet BranchStmt
+		// (any position, tok included) was treated as a hard terminator.
+		// Conservative zero-FP rule: if any "dead" statement is a label
+		// targeted by ANY goto in the file, skip the report for this block
+		// (no control-flow analysis - we cannot soundly rank reachability).
+		if gotoTargetLabels == nil {
+			gotoTargetLabels = collectGotoLabels(goAST)
+		}
+		for _, ds := range deadStmts {
+			if ls, ok := ds.(*ast.LabeledStmt); ok && gotoTargetLabels[ls.Label.Name] {
+				return true
+			}
 		}
 
 		pos := fset.Position(deadStmts[0].Pos())
@@ -135,6 +151,19 @@ func renderNode(fset *token.FileSet, node ast.Node) string {
 		return ""
 	}
 	return buf.String()
+}
+
+// collectGotoLabels returns the set of labels targeted by goto statements
+// anywhere in the file (#1520 case B).
+func collectGotoLabels(file *ast.File) map[string]bool {
+	targets := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		if bs, ok := n.(*ast.BranchStmt); ok && bs.Tok == token.GOTO && bs.Label != nil {
+			targets[bs.Label.Name] = true
+		}
+		return true
+	})
+	return targets
 }
 
 // findTerminatingStmt returns the index of the first statement in the list that
