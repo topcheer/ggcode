@@ -2292,19 +2292,40 @@ func (a *App) imStartAdapter(name string) {
 		debug.Log("desktop", "IM start %s: manager not initialized", name)
 		return
 	}
-	cfg, _ := wailskit.LoadConfigForWorkspace(a.workDir)
+	cfg, err := wailskit.LoadConfigForWorkspace(a.workDir)
+	if err != nil { // #1811 case 3: the load error was discarded (cfg, _) - a broken yaml silently looked like "no config"
+		debug.Log("desktop", "IM start %s: config load failed: %v", name, err)
+		return
+	}
 	if cfg == nil {
 		debug.Log("desktop", "IM start %s: no config", name)
 		return
 	}
 	// Ensure session is bound so pairing and inbound work
 	a.bindCurrentIMSession()
+	if adapterCfg, ok := cfg.IM.Adapters[name]; ok && !adapterCfg.Enabled {
+		// #1811 case 3: binding a disabled adapter reported success while the
+		// adapter could never send or receive - surface the state so the user
+		// knows to enable it.
+		debug.Log("desktop", "IM start %s: adapter is bound but DISABLED in config - it will not connect until enabled", name)
+		a.emitIMAdapterNotice(name, "bound but disabled - enable it to connect")
+		return
+	}
 	debug.Log("desktop", "IM start: starting adapter %s", name)
 	if err := im.StartNamedAdapter(context.Background(), cfg.IM, name, a.imManager); err != nil {
 		debug.Log("desktop", "IM start %s failed: %v", name, err)
+		// #1811 case 3: an async start failure was debug-only - the UI kept
+		// showing a healthy binding while the adapter was down.
+		a.emitIMAdapterNotice(name, fmt.Sprintf("start failed: %v", err))
 	} else {
 		debug.Log("desktop", "IM start %s: ok", name)
 	}
+}
+
+// emitIMAdapterNotice surfaces adapter lifecycle problems to the frontend
+// event log (#1811 case 3) instead of debug-only logging.
+func (a *App) emitIMAdapterNotice(name, msg string) {
+	a.enqueueUIEvent(fmt.Sprintf("im:adapter:%s", name), map[string]string{"name": name, "message": msg})
 }
 
 // imStopAdapter stops a single adapter by name.
@@ -2365,6 +2386,11 @@ func (a *App) MuteIMAdapter(name string, muted bool) error {
 // BindIMAdapter binds an adapter to the current workspace.
 func (a *App) BindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Bind: name=%s workDir=%s", name, a.workDir)
+	// #1811 case 1: stop any RUNNING instance first, exactly like Rebind.
+	// Without this, binding from workspace B while the adapter ran on A
+	// replaced the cancel/sink maps - the old goroutine/connection leaked
+	// until process exit and the same account received messages twice.
+	a.imStopAdapter(name)
 	err := wailskit.BindIMAdapter(name, a.workDir, a.imManager)
 	if err != nil {
 		debug.Log("desktop", "IM Bind failed: %v", err)
@@ -2378,10 +2404,22 @@ func (a *App) BindIMAdapter(name string) error {
 // RebindIMAdapter re-binds an adapter to the current workspace.
 func (a *App) RebindIMAdapter(name string) error {
 	debug.Log("desktop", "IM Rebind: name=%s workDir=%s", name, a.workDir)
+	// #1811 case 2: capture the PREVIOUS workspace binding so a failed
+	// rebind can restore it - the old flow stopped the adapter, then
+	// returned the error on bind failure, leaving the adapter silently
+	// dead on its previous workspace while the user assumed nothing changed.
+	prevWorkspaces := a.imManager.AdapterBindings(name)
 	a.imStopAdapter(name)
 	err := wailskit.RebindIMAdapter(name, a.workDir, a.imManager)
 	if err != nil {
-		debug.Log("desktop", "IM Rebind failed: %v", err)
+		debug.Log("desktop", "IM Rebind failed: %v - restoring previous binding", err)
+		for _, prev := range prevWorkspaces {
+			if rerr := wailskit.BindIMAdapter(name, prev, a.imManager); rerr != nil {
+				debug.Log("desktop", "IM Rebind rollback bind %s->%s failed: %v", name, prev, rerr)
+			}
+		}
+		name := name
+		safego.Go("desktop.im-start-rollback", func() { a.imStartAdapter(name) })
 		return err
 	}
 	safego.Go("desktop.im-start-rebind", func() { a.imStartAdapter(name) })
