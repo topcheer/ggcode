@@ -563,6 +563,36 @@ func (c *Config) RemoveEndpoint(vendor, endpoint string) error {
 	}
 	delete(vc.Endpoints, endpoint)
 	c.Vendors[vendor] = vc
+	// #1517 case C: if the removed endpoint was the ACTIVE selection, c.Endpoint
+	// dangles - ResolveActiveEndpoint fails "endpoint not configured" with no
+	// fallback branch, and NeedsOnboard treats any resolve error as needing
+	// re-onboarding, so every launch popped onboarding until the user manually
+	// changed the selection. Fall back to the first remaining endpoint under
+	// the same vendor.
+	if c.Vendor == vendor && c.Endpoint == endpoint {
+		c.Endpoint = ""
+		for name := range vc.Endpoints {
+			if c.Endpoint == "" || name < c.Endpoint {
+				c.Endpoint = name
+			}
+		}
+		if c.Endpoint == "" {
+			// No endpoints left under this vendor - fall back to another vendor.
+			for name, v := range c.Vendors {
+				if name == vendor {
+					continue
+				}
+				for epName := range v.Endpoints {
+					c.Vendor = name
+					c.Endpoint = epName
+					break
+				}
+				if c.Endpoint != "" {
+					break
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -612,6 +642,23 @@ func (c *Config) RemoveVendor(name string) error {
 		return fmt.Errorf("vendor %q not found", name)
 	}
 	delete(c.Vendors, name)
+	// #1517 case C: same dangling-selection fallback as RemoveEndpoint -
+	// removing the ACTIVE vendor left c.Vendor dangling and popped
+	// onboarding on every launch until the selection was fixed manually.
+	if c.Vendor == name {
+		c.Vendor = ""
+		c.Endpoint = ""
+		for vName, v := range c.Vendors {
+			for epName := range v.Endpoints {
+				c.Vendor = vName
+				c.Endpoint = epName
+				break
+			}
+			if c.Endpoint != "" {
+				break
+			}
+		}
+	}
 	return nil
 }
 
