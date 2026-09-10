@@ -96,16 +96,25 @@ func checkRegexLoop(filePath, oldContent, newContent string) []string {
 	// introduced patterns pass silently) and over-reports (an added instance
 	// makes untouched old instances count as "new") (#1017).
 	if strings.TrimSpace(oldContent) != "" {
-		oldFPs := make(map[string]bool)
+		// #1488 case C(b): MULTISET delta, not set difference. The set form
+		// suppressed an ADDED instance of an already-present pattern (same
+		// pattern in a second loop stayed unflagged after an edit grew 1
+		// occurrence to 2) - #1017 fixed count-comparison, but the set
+		// difference reintroduced the under-report for the same-fingerprint
+		// growth case. Decrement per match: only the surplus occurrences
+		// count as newly introduced.
+		oldFPs := make(map[string]int)
 		for _, oi := range findRegexInLoops(filePath, oldContent) {
-			oldFPs[oi.fingerprint()] = true
+			oldFPs[oi.fingerprint()]++
 		}
 		if len(oldFPs) > 0 {
 			fresh := newIssues[:0]
 			for _, ni := range newIssues {
-				if !oldFPs[ni.fingerprint()] {
-					fresh = append(fresh, ni)
+				if oldFPs[ni.fingerprint()] > 0 {
+					oldFPs[ni.fingerprint()]--
+					continue
 				}
+				fresh = append(fresh, ni)
 			}
 			newIssues = fresh
 			if len(newIssues) == 0 {
@@ -158,6 +167,34 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 
 	var results []regexLoopIssue
 
+	// #1488 case C(a): resolve import aliases to canonical package names -
+	// `import r "regexp"` yields the call name "r.MustCompile", which the
+	// regexCompileFuncs table (canonical "regexp.*" keys) never matched:
+	// alias-importing files were completely undetected. Map every local
+	// alias of "regexp" back to the canonical prefix.
+	alias := make(map[string]string) // local name -> canonical pkg
+	for _, imp := range file.Imports {
+		path := strings.Trim(imp.Path.Value, `"`)
+		if path != "regexp" {
+			continue
+		}
+		local := "regexp"
+		if imp.Name != nil {
+			local = imp.Name.Name
+		}
+		if local != "." && local != "_" {
+			alias[local] = "regexp"
+		}
+	}
+	canonical := func(name string) string {
+		if i := strings.IndexByte(name, '.'); i > 0 {
+			if base, ok := alias[name[:i]]; ok {
+				return base + name[i:]
+			}
+		}
+		return name
+	}
+
 	// The outer Inspect visits nested loop statements after already scanning
 	// them as part of the enclosing loop body, so the same call is reached
 	// twice with the same position — dedup by pos (#1017).
@@ -185,7 +222,7 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 			if !ok {
 				return true
 			}
-			name := callFuncName(call)
+			name := canonical(callFuncName(call))
 			if regexCompileFuncs[name] {
 				if seenPos[call.Pos()] {
 					return true
