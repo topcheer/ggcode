@@ -85,11 +85,14 @@ func (m Model) renderModelPanel() string {
 	// Dynamically set model list visible rows based on available panel height.
 	// Reserve ~8 lines for panel chrome (title, vendor/endpoint info, hints).
 	availRows := m.panelAvailableHeight() - 8
-	if availRows > maxVisibleModelRows {
-		maxVisibleModelRows = availRows
-	} else if availRows < 6 {
-		maxVisibleModelRows = 6
+	// #1742 case 2: the old grow-only form kept a stale large max when the
+	// terminal SHRANK (avail=12 vs max=32 matched neither branch) - the
+	// list rendered past the panel with no scroll hint. Track the current
+	// height with a floor instead.
+	if availRows < 6 {
+		availRows = 6
 	}
+	maxVisibleModelRows = availRows
 	source := "built-in"
 	if panel.remote {
 		source = m.t("panel.model.source.remote")
