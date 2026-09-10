@@ -97,10 +97,20 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 		if fp != "" {
 			s.pendingUndoFiles[fp] = true
 		} else {
-			// For git operations without a specific file, we can't track precisely.
-			// Mark a generic sentinel. For git_reset/git_stash without file args,
-			// we track via a wildcard since we don't know which files changed.
-			if toolName == "git_reset" || toolName == "git_stash" || toolName == "git_checkout" {
+			// For git operations without a specific file, we can't track
+			// precisely. Mark a generic sentinel. For git_reset/git_stash/
+			// git_checkout/git_revert without file args, and for undo_edit
+			// (whose args carry only action/checkpoint_id/description - no path
+			// fields - so extraction is ALWAYS empty), we track via a wildcard
+			// since we can't know which files changed (#1518 case B: undo_edit
+			// is the charter's #1 scenario "undo_edit(file.go) ->
+			// edit_file(file.go) // BLIND" and was 100% dead: zero marks, zero
+			// warnings. git_revert joins the wildcard group too - bare revert
+			// has no path arg, and with a path arg it names a repo object, never
+			// a working-tree file, so it never matched file-level tracking
+			// either way).
+			if toolName == "git_reset" || toolName == "git_stash" || toolName == "git_checkout" ||
+				toolName == "git_revert" || toolName == "undo_edit" {
 				// Check if args contain specific file paths
 				if !undoBlindArgsHasFilePath(argsJSON) {
 					// Whole-tree revert — set a wildcard
@@ -117,8 +127,16 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 		if fp != "" {
 			delete(s.pendingUndoFiles, fp)
 		}
-		// For wildcard, any read clears it (conservative)
-		delete(s.pendingUndoFiles, "*")
+		// #1518 case D2: the wildcard used to be cleared by ANY read -
+		// including git_show/git_diff with no path arg (fp==""). The
+		// comment called that "conservative" but it is the opposite: an
+		// unrelated read silently disarmed the whole-tree guard, and the
+		// next blind edit went unwarned. Only a read that actually carries
+		// a file path (i.e. a real re-grounding of a specific file) clears
+		// the wildcard; the mutation-side warning still consumes it.
+		if fp != "" {
+			delete(s.pendingUndoFiles, "*")
+		}
 		return ""
 	}
 

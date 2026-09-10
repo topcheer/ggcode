@@ -217,7 +217,12 @@ func assertExprAt(file *ast.File, pos token.Pos) string {
 
 // assertFingerprint returns a content-based key for delta comparison.
 // Uses the expression text so the same assertion at different line numbers
-// is recognized as the same issue.
+// is recognized as the same issue (pinned by
+// TestCheckUncheckedTypeAssert_LineShiftNotReflagged). #1518 case D1
+// proposed adding the line (two identical assertions in one function
+// share a fingerprint, so fix-one-add-another nets to zero), but that
+// directly contradicts the deliberate line-shift-stability design - kept
+// as a documented trade-off, not changed.
 func assertFingerprint(a uncheckedAssertInfo) string {
 	return a.expr
 }

@@ -57,18 +57,23 @@ func (a *Agent) maybeFallbackCheckpoint() {
 		// #1437-A: the old skip made the safety net 100% DEAD CODE in its
 		// only target scenario - SummaryMsgID is non-empty ONLY after a
 		// successful summarization compaction, so 'summarization keeps
-		// failing' (this function's charter) always skipped. Fall back to
-		// the LAST message ID as the anchor: loadSession replays only what
-		// comes after the anchor, so anchoring at the tail is conservative
-		// and correct (the journal remains the full history).
-		if n := len(msgs); n > 0 {
-			fallbackID = msgs[n-1].ID
-		}
-		debug.Log("checkpoint", "fallback checkpoint: no summary message; anchoring at latest message")
+		// failing' (this function's charter) always skipped.
+		// #1518 case A: the interim fix anchored at the LAST message ID,
+		// but loadSession treats checkpoint_summary_msg_id as a summary
+		// SUBSTITUTE - it REPLACES everything before the anchor with that
+		// single message (store.go: ContextMessages = [summaryMsg]). With a
+		// real summary that one message carries the whole history forward;
+		// with a tail anchor it is one arbitrary message (possibly a bare
+		// tool_result whose paired tool_use is now dropped) and the extras
+		// are empty - resume context collapsed to ~1 message, WORSE than
+		// the no-checkpoint path which restores the last 200. In the exact
+		// scenario this net protects (long session, compaction never
+		// succeeded, crash), skip: no checkpoint -> loadSession takes the
+		// no-checkpoint path and restores the full tail window.
+		debug.Log("checkpoint", "fallback checkpoint: no summary message; skipping (tail anchor would replace history with one message)")
+		return
 	}
-	if fallbackID != "" {
-		fn(fallbackID, "", tokenCount)
-	}
+	fn(fallbackID, "", tokenCount)
 }
 
 // MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
