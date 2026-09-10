@@ -548,6 +548,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 	}
 
 	m := Model{
+		imEnsure:               &imEnsureGuard{}, // #1737 case 1: pre-built - lazy init raced across concurrent Cmd goroutines (duplicate starters, the exact registrations #1379-D killed)
 		input:                  ta,
 		chatList:               chat.NewList(80, 20),
 		chatStyles:             chat.DefaultStyles(),
