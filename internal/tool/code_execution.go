@@ -11,6 +11,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // readOnlyToolNames is the set of tools that code_execution is allowed to
@@ -166,7 +167,15 @@ func (c CodeExecution) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 	output := result.stdout
 	if len(output) > maxStdoutLen {
-		output = output[:maxStdoutLen] + fmt.Sprintf("\n... (truncated at %d bytes)", maxStdoutLen)
+		// #1835 case 3: bare byte slice could cut a multi-byte CJK rune in
+		// half - the invalid UTF-8 fragment entered the LLM context and the
+		// tool-call log appended AFTER it, so console.log-heavy CJK output
+		// reliably produced garbage the agent misread as "encoding
+		// corruption" or string-match failures. Snap like web_fetch (#1353)
+		// and mobile_device already do; the marker reports the pre-snap byte
+		// cut so the count stays truthful.
+		output = output[:util.SnapToRuneStart(output, maxStdoutLen)] +
+			fmt.Sprintf("\n... (truncated at %d bytes)", maxStdoutLen)
 	}
 	if output == "" {
 		output = "(code executed successfully, but produced no console.log output)"
