@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/auth"
 	"log"
 	"os"
 	"path/filepath"
@@ -148,6 +149,7 @@ type ChatBridge struct {
 	a2aRegistry      *a2a.Registry
 	a2aRemoteTool    *a2a.RemoteTool
 	a2aRefreshCancel context.CancelFunc
+	oauthRenewCancel context.CancelFunc
 	lanchatHub       *lanchat.Hub
 
 	// Pending approval/ask_user requests from agent
@@ -1978,6 +1980,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 
 	// Start A2A server for LAN agent-to-agent communication.
 	b.startA2A(b.cfg, a, b.registry)
+	b.startOAuthRenewalWatcher()
 
 	// Set interruption handler — agent checks for pending messages during compact etc.
 	// (mirrors Fyne line 836-839)
@@ -3803,8 +3806,57 @@ func (b *ChatBridge) startA2A(cfg *config.Config, ag *agent.Agent, reg *tool.Reg
 	}
 }
 
+// startOAuthRenewalWatcher silently renews an expired Anthropic OAuth token
+// (#1805 case 2): the running provider froze the access token at build time,
+// so a session that outlives expires_in 401'd on every message until restart
+// or a config change - despite a perfectly good refresh token. Once a minute,
+// when the stored token is OAuth+expired+refreshable, nudge
+// OnConfigProviderChanged: its resolve path performs the refresh (and the
+// #1805 case-1 cleanup when the refresh token is permanently dead).
+func (b *ChatBridge) startOAuthRenewalWatcher() {
+	if b.oauthRenewCancel != nil {
+		return // already running
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.oauthRenewCancel = cancel
+	safego.Go("desktop.oauth-renew-watcher", func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if !anthropicOAuthNeedsRenewal() {
+					continue
+				}
+				if bridge := GetChatBridge(); bridge != nil {
+					bridge.OnConfigProviderChanged()
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+}
+
+// anthropicOAuthNeedsRenewal reports whether the stored Anthropic credential
+// is an OAuth token that is expired but refreshable (disk check only - the
+// actual refresh happens in the resolve path).
+func anthropicOAuthNeedsRenewal() bool {
+	info, err := auth.DefaultStore().Load(auth.ProviderAnthropic)
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Type == "oauth" &&
+		info.IsExpired() &&
+		strings.TrimSpace(info.RefreshToken) != ""
+}
+
 // stopA2A shuts down the A2A server and cleans up.
 func (b *ChatBridge) stopA2A() {
+	if b.oauthRenewCancel != nil {
+		b.oauthRenewCancel()
+		b.oauthRenewCancel = nil
+	}
 	if b.a2aRefreshCancel != nil {
 		b.a2aRefreshCancel()
 		b.a2aRefreshCancel = nil

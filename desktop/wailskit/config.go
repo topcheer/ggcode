@@ -1238,23 +1238,18 @@ func GetModelLimits(vendor, endpoint string) []ModelLimitInfo {
 }
 
 // AnthropicOAuthStatus reports whether the stored Anthropic OAuth token is
-// usable OR recoverable (#599 O2). Previously it returned raw
-// HasUsableToken: in the ~5.5-minute window between IsExpired (5-min
-// early) and HasUsableToken (+30s grace), and worse — for any expired
-// token with an intact RefreshToken — the UI flipped to "not connected",
-// nudging users through a full browser re-auth when a single silent
-// refresh would recover. Return true when the token is valid OR
-// refreshable (refresh token present); "dead" (no refresh token, no
-// usable access token) still reports false so the UI keeps prompting
-// for a real re-auth.
+// usable OR recoverable (#599 O2 - disk fields only, deliberately no network
+// probe: the #1805 permanent-failure cleanup lives in the resolve path that
+// already owns the network - config_vendor.go deletes the token on
+// invalid_grant, which flips this status by itself).
 func AnthropicOAuthStatus() bool {
 	store := auth.DefaultStore()
 	usable, err := store.HasUsableToken(auth.ProviderAnthropic)
 	if err == nil && usable {
 		return true // valid
 	}
-	// Refreshable probe: a stored token with an access token AND a refresh
-	// token can self-recover — count it as connected.
+	// Refreshable: a stored token with an access token AND a refresh token
+	// can self-recover — count it as connected.
 	if info, ierr := store.Load(auth.ProviderAnthropic); ierr == nil && info != nil {
 		if strings.TrimSpace(info.AccessToken) != "" && strings.TrimSpace(info.RefreshToken) != "" {
 			return true // refreshable

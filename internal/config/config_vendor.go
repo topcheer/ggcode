@@ -119,6 +119,19 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 					// access token - downstream requests would 401 and mask the
 					// real cause (refresh failure). Fail loudly to trigger
 					// re-authentication.
+					// #1805 case 1: a PERMANENT rejection (invalid_grant - the refresh
+					// token was rotated on a Save that failed, or revoked) must also
+					// delete the stored token: the status bar reads disk fields and
+					// kept reporting "connected" while every chat 401'd, with /login
+					// as the only exit. Clearing the dead token flips the status to
+					// "not connected" immediately. Transient errors keep the token -
+					// the next resolve retries the refresh.
+					if isPermanentRefreshFailure(refreshErr) {
+						debug.Log("config", "claude oauth: refresh token permanently rejected (clearing dead token): %v", refreshErr)
+						if delErr := auth.DefaultStore().Delete(auth.ProviderAnthropic); delErr != nil {
+							debug.Log("config", "claude oauth: clearing dead token failed: %v", delErr)
+						}
+					}
 					debug.Log("config", "claude oauth: token refresh failed (re-authentication required): %v", refreshErr)
 					return nil, fmt.Errorf("claude oauth token refresh failed (run /login to re-authenticate): %w", refreshErr)
 				}
@@ -622,4 +635,15 @@ func (c *Config) SetEndpointModelLimits(vendor, endpoint string, contextWindow, 
 	vc.Endpoints[endpoint] = ep
 	c.Vendors[vendor] = vc
 	return c.SaveScoped("global")
+}
+
+// isPermanentRefreshFailure reports whether an OAuth refresh error is the
+// permanent invalid_grant rejection (rotated or revoked refresh token) as
+// opposed to a transient network/5xx failure (#1805 case 1).
+func isPermanentRefreshFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid_grant") || strings.Contains(msg, "invalid refresh token")
 }
