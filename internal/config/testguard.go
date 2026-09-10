@@ -90,6 +90,13 @@ func GuardRealHomePath(path, op string) error {
 	if err != nil {
 		abs = filepath.Clean(path)
 	}
+	if underTempRoot(abs) {
+		// On Windows the OS temp root lives under the user profile
+		// (...\AppData\Local\Temp), so the home-prefix check below
+		// would reject every t.TempDir() target. Explicit temp paths
+		// are the documented pass-through pattern on every platform.
+		return nil
+	}
 	home := filepath.Clean(realHomeSnapshot)
 	if strings.HasPrefix(abs+string(os.PathSeparator), home+string(os.PathSeparator)) {
 		return fmt.Errorf(
@@ -98,4 +105,21 @@ func GuardRealHomePath(path, op string) error {
 		)
 	}
 	return nil
+}
+
+// underTempRoot reports whether abs sits inside the current OS temp root.
+// On Unix that is /tmp (never under $HOME); on Windows it is
+// %LOCALAPPDATA%\Temp, which lives under the user profile, so the
+// home-prefix check needs this explicit exemption.
+func underTempRoot(abs string) bool {
+	tmp := os.TempDir()
+	if tmp == "" {
+		return false
+	}
+	if t, err := filepath.Abs(tmp); err == nil {
+		tmp = t
+	} else {
+		tmp = filepath.Clean(tmp)
+	}
+	return strings.HasPrefix(abs+string(os.PathSeparator), filepath.Clean(tmp)+string(os.PathSeparator))
 }
