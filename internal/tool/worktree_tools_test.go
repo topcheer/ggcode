@@ -622,3 +622,19 @@ func TestExitWorktreeRejectsInvalidAction(t *testing.T) {
 		}
 	}
 }
+
+// #1710 case 5: "." and ".." pass the per-character check (dot allowed) but
+// are path components - they must be rejected by the name gate, not left to
+// git's illegal-branch-name error as the only backstop.
+func Test1710WorktreeNameRejectsPathComponents(t *testing.T) {
+	for _, bad := range []string{".", ".."} {
+		if isSafeWorktreeName(bad) {
+			t.Errorf("name %q must be rejected as a path component", bad)
+		}
+	}
+	for _, ok := range []string{"fix-1710", "wt_dotted.name", "a"} {
+		if !isSafeWorktreeName(ok) {
+			t.Errorf("name %q should be accepted", ok)
+		}
+	}
+}
