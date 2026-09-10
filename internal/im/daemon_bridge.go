@@ -1408,7 +1408,11 @@ func (b *DaemonBridge) SendUserMessage(content []provider.ContentBlock) {
 	b.notifyUserMessage(content)
 
 	// Notify activity hook (Knight idle timer) for webchat messages too.
-	if text != "" {
+	// #1803 case 1: a pure-image message (text=="" but content blocks
+	// present) passed the early-return gate and reached the agent - only
+	// the ACTIVITY hook was skipped, so image-only webchat sessions were
+	// misjudged idle. #1628 fixed the IM path; this webchat twin lagged.
+	if text != "" || len(content) > 0 {
 		b.mu.Lock()
 		onActivity := b.onActivity
 		b.mu.Unlock()

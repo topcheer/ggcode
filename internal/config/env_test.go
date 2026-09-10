@@ -47,3 +47,32 @@ func TestConfigDir_RespectsHomeOverride(t *testing.T) {
 		t.Errorf("ConfigDir() = %q, want %q", got, want)
 	}
 }
+
+// TestExpandShellEnvCrossReference pins #1803 case 2: rc-file variables
+// referencing each other (A=1 / B=${A}) must resolve regardless of map
+// iteration order - the old lookup kept the literal "${A}" half the runs.
+func TestExpandShellEnvCrossReference(t *testing.T) {
+	// Simulate the inner expansion the loader performs per value.
+	env := map[string]string{"PATH": "/usr/bin"}
+	values := map[string]string{"A": "1", "B": "${A}"}
+	expand := func(value string) string {
+		return ExpandEnvWithLookup(value, func(key string) (string, bool) {
+			if val, ok := env[key]; ok {
+				return val, true
+			}
+			if val, ok := values[key]; ok {
+				expanded := ExpandEnvWithLookup(val, func(k2 string) (string, bool) {
+					v2, ok2 := env[k2]
+					return v2, ok2
+				})
+				return expanded, true
+			}
+			return "", false
+		})
+	}
+	for i := 0; i < 50; i++ { // map order randomization across runs
+		if got := expand(values["B"]); got != "1" {
+			t.Fatalf("${A} cross-reference must resolve to 1 regardless of order, got %q", got)
+		}
+	}
+}

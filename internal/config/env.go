@@ -228,8 +228,25 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 				continue
 			}
 			env[name] = ExpandEnvWithLookup(value, func(key string) (string, bool) {
-				val, ok := env[key]
-				return val, ok
+				// #1803 case 2: rc files reference EACH OTHER (A=1 / B=${A})
+				// and the map iteration order is random - when B expanded
+				// first, ${A} was unset and the literal-preservation fallback
+				// silently kept "${A}" (a coin-flip bad value per run). Fall
+				// through to the same file's not-yet-processed values.
+				if val, ok := env[key]; ok {
+					return val, true
+				}
+				if val, ok := values[key]; ok {
+					// Values may themselves contain references; expand one
+					// level lazily (chained rc references are rare and one
+					// level covers the A/B shape).
+					expanded := ExpandEnvWithLookup(val, func(k2 string) (string, bool) {
+						v2, ok2 := env[k2]
+						return v2, ok2
+					})
+					return expanded, true
+				}
+				return "", false
 			})
 			delete(missing, name)
 		}
