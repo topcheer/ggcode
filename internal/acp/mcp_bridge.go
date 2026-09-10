@@ -140,6 +140,18 @@ func acpMCPServerToConfig(srv MCPServer) config.MCPServerConfig {
 	if transportType == "" && srv.URL != "" {
 		transportType = "http"
 	}
+	// #1786 case 3: the config layer accepts "sse" as legal (validated
+	// alongside http), but the runtime transport switch only knows
+	// http/ws/stdio - a peer declaring {"type":"sse"} passed through
+	// verbatim, Start() returned unsupported, and ConnectServers merely
+	// debug-logged and continued: the mount failed with NO signal to the
+	// peer. Normalize SSE/streamable-http spellings to the http transport
+	// (the streamable-http protocol supersedes SSE and shares the URL
+	// client path).
+	switch strings.ToLower(transportType) {
+	case "sse", "streamable-http", "streamable_http", "https":
+		transportType = "http"
+	}
 
 	return config.MCPServerConfig{
 		Name:    srv.Name,

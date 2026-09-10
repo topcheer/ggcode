@@ -519,6 +519,22 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 
+	// #1786 case 1 (multi-file leg): same TOCTOU as the single-file path -
+	// plan.OldContent comes from the PreviewChanges first read, and the
+	// diffConfirm pause above opens an arbitrary window for external
+	// writers. Refresh each stale plan baseline so per-file undo restores
+	// the true pre-write state instead of erasing external changes.
+	for i := range plans {
+		cur, rerr := os.ReadFile(plans[i].Path)
+		if rerr != nil {
+			continue // unreadable now = executor will surface its own error
+		}
+		if string(cur) != plans[i].OldContent {
+			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
+			plans[i].OldContent = string(cur)
+		}
+	}
+
 	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	multiDur := time.Since(multiStart)
@@ -705,6 +721,35 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	a.mu.RUnlock()
 	// PreToolUse hook already run in executeTool - do NOT duplicate here (#1035)
 
+	// #1786 case 1 (TOCTOU): the oldContent baseline was read at
+	// computeFileChange; the diffConfirm pause above can last arbitrarily
+	// long, and an external writer (user, another agent, formatter) may
+	// have rewritten the file since. The executor below re-reads from disk,
+	// but the CHECKPOINT would still save the STALE first read - undo_edit
+	// would then silently erase the external changes. Re-read now: if the
+	// baseline is stale, refresh it (and fileExisted) so undo restores the
+	// true pre-write state, and tell the model what happened.
+	if fileExisted {
+		if cur, rerr := os.ReadFile(filePath); rerr == nil && string(cur) != oldContent {
+			debug.Log("agent", "#1786 baseline drift on %s: refreshing checkpoint baseline (%d -> %d bytes)",
+				filePath, len(oldContent), len(cur))
+			oldContent = string(cur)
+			// The dry-run gate above validated the ORIGINAL pair; re-run it
+			// on the refreshed baseline so a drifted file does not slip a
+			// guaranteed-failure write through the gate.
+			if diff.HasChanges(oldContent, newContent) {
+				if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
+					return tool.Result{Content: blockMsg, IsError: true}
+				}
+			}
+		}
+	} else if cur, rerr := os.ReadFile(filePath); rerr == nil {
+		// File was created externally between plan and write: undo semantics
+		// change from remove to restore.
+		fileExisted = true
+		oldContent = string(cur)
+	}
+
 	// Execute the actual tool (with panic recovery)
 	fileStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
@@ -725,6 +770,19 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	if !result.IsError {
 		if warning := checkWriteIntegrity(filePath, oldContent, newContent); warning != "" {
 			a.appendGuidance(&result, warning) // #1864 case 2: budgeted path
+		}
+		// #1786 case 2: the comment above has promised disk-content
+		// validation since this block existed, but the whole chain never
+		// read the file back - partial write failures, rename anomalies
+		// and post-write external rewrites all displayed as normal. One
+		// read-back comparing against the planned content closes that.
+		// (Auto-format legitimately diverges: report, don't fail.)
+		if disk, rerr := os.ReadFile(filePath); rerr == nil && string(disk) != newContent {
+			debug.Log("agent", "#1786 post-write drift on %s: %d planned vs %d on disk",
+				filePath, len(newContent), len(disk))
+			a.appendGuidance(&result,
+				"Note: content on disk after the write differs from the planned content "+
+					"(auto-format, or an external writer raced the write). Re-read the file if exact state matters.")
 		}
 	}
 
