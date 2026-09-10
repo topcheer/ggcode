@@ -183,8 +183,15 @@ var emptyResultPatterns = []string{
 	// steering the agent away from healthy search tools. Anchor to the
 	// count formats the tools actually emit.
 	"found 0",
-	"showing 0 of 0",
-	"0 files matched",
+	// #1796 case 1: anchor the five members whose zero-result formats the
+	// #1619 sweep missed - glob/code_search "No files matched pattern/query"
+	// ("matched" != "matching", so "no matching" never hit it), git_diff
+	// "No differences found.", git_show/git_blame "No output.". Period-suffixed
+	// where the tool's full text ends there, so file content that merely
+	// contains the words can't false-positive.
+	"no files matched",
+	"no differences found.",
+	"no output.",
 	"no changes",
 	"nothing to show",
 }
