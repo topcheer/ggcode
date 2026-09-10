@@ -116,6 +116,11 @@ func (b *Browser) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "CSS selector for click, type, extract, wait, scroll actions. Examples: 'button.submit', '#login-form', 'a[href*=\"github\"]', 'input[name=email]'."
 		},
+		"output_path": {
+			"type": "string",
+			"description": "screenshot action only: also save the PNG to this local file path (returned as absolute) so downstream tools that need a real file (e.g. sending it via IM) can reference it"
+		},
+
 		"text": {
 			"type": "string",
 			"description": "Text to type into the selected element (for 'type' action). For form fields, clears existing content first."
@@ -192,6 +197,7 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		WaitFor     string `json:"wait_for"`
 		WaitTimeout int    `json:"wait_timeout"`
 		Headless    *bool  `json:"headless"`
+		OutputPath  string `json:"output_path"` // screenshot: also save the PNG to this local file
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -230,7 +236,7 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return b.doExtract(ctx, args.Profile, args.Session, args.Selector, args.Headless)
 
 	case "screenshot":
-		return b.doScreenshot(ctx, args.Profile, args.Session, args.Selector, args.Headless)
+		return b.doScreenshot(ctx, args.Profile, args.Session, args.Selector, args.Headless, args.OutputPath)
 
 	case "evaluate":
 		if args.Expression == "" {
@@ -716,7 +722,7 @@ func (b *Browser) doExtract(ctx context.Context, profile, session, selector stri
 }
 
 // doScreenshot captures a PNG screenshot.
-func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector string, headless *bool) (Result, error) {
+func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector string, headless *bool, outputPath string) (Result, error) {
 	tab, err := b.getSession(profile, session, headless)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
@@ -739,8 +745,26 @@ func (b *Browser) doScreenshot(ctx context.Context, profile, session, selector s
 		}
 	}
 
+	content := fmt.Sprintf("Screenshot captured (%d bytes, PNG). The image is included as an image block for visual analysis.", len(buf))
+	if outputPath != "" {
+		// Optional local save: downstream tools that need a REAL file path
+		// (im send_file, external vision pipelines) can't consume an
+		// in-context base64 block. Resolve to an absolute path so the
+		// model can pass it on verbatim.
+		abs, err := filepath.Abs(outputPath)
+		if err != nil {
+			abs = outputPath
+		}
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("screenshot save failed (mkdir): %v", err)}, nil
+		}
+		if err := os.WriteFile(abs, buf, 0o644); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("screenshot save failed: %v", err)}, nil
+		}
+		content += fmt.Sprintf(" Saved to: %s", abs)
+	}
 	return Result{
-		Content: fmt.Sprintf("Screenshot captured (%d bytes, PNG). The image is included as an image block for visual analysis.", len(buf)),
+		Content: content,
 		Images:  []ResultImage{{MIME: "image/png", Base64: base64.StdEncoding.EncodeToString(buf)}},
 	}, nil
 }
