@@ -3,10 +3,13 @@ package tool
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,7 +245,40 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 	}
 
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		client := &http.Client{Timeout: skillHTTPTimeout}
+		// #1703 case 1: the imported SKILL.md is injected as a USER message
+		// ("forcing the model to act on them") - an arbitrary-URL #import is
+		// a remote prompt-injection delivery channel. Three guards:
+		// literal private/loopback hosts blocked, DNS-resolved private
+		// targets blocked (rebinding), and redirects re-checked so a public
+		// URL can't bounce to an internal one.
+		u, err := url.Parse(source)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid import URL: %w", err)
+		}
+		if isPrivateHost(u.Hostname()) {
+			return nil, nil, fmt.Errorf("refusing to import skill from private/loopback host %q", u.Hostname())
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), skillHTTPTimeout)
+		defer cancel()
+		if addrs, lerr := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname()); lerr == nil {
+			for _, a := range addrs {
+				if ip := a.IP; ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+					return nil, nil, fmt.Errorf("refusing to import skill from %q: resolves to private address %s", u.Hostname(), ip)
+				}
+			}
+		}
+		client := &http.Client{
+			Timeout: skillHTTPTimeout,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("too many redirects")
+				}
+				if isPrivateHost(req.URL.Hostname()) {
+					return fmt.Errorf("redirect to private host %q refused", req.URL.Hostname())
+				}
+				return nil
+			},
+		}
 		resp, err := client.Get(source)
 		if err != nil {
 			return nil, nil, fmt.Errorf("cannot download skill from %s: %w", source, err)

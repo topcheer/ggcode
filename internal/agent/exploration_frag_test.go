@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -175,4 +176,46 @@ func TestExploreFragSingleBatchNotFragmentation(t *testing.T) {
 func mustFragJSON(t *testing.T, p string) []byte {
 	t.Helper()
 	return []byte(`{"path":"` + p + `"}`)
+}
+
+// #1559-C: relative reads and absolute edits must key the same map entry
+// once the workspace root is wired via SetWorkingDir.
+func TestUnreadEditAnchoredNormalization1559(t *testing.T) {
+	a := &Agent{unreadEdit: newUnreadEditState(), expiredRead: newExpiredReadState()}
+	a.SetWorkingDir("/repo")
+	a.unreadEdit.recordRead("internal/agent/foo.go")
+	if !a.unreadEdit.hasBeenRead("/repo/internal/agent/foo.go") {
+		t.Fatal("relative read must match absolute form after anchoring")
+	}
+	a.expiredRead.recordRead("internal/agent/bar.go")
+	if hint := a.expiredRead.recordEdit("/repo/internal/agent/bar.go"); hint == "" {
+		t.Fatal("absolute edit of a relatively-read file must find the prior read (expiry fires)")
+	}
+}
+
+// #1559-D: firing empties the window - the very next exploration call must
+// not re-fire with the same full-window message.
+func TestExplorationFragWindowClearsOnFire1559(t *testing.T) {
+	s := newExploreFragState()
+	first := ""
+	for i := 0; i < exploreFragWindow+4 && first == ""; i++ {
+		iter := (i / 2) + 1 // spread across iterations (2-distinct gate)
+		first = s.recordToolCall("read_file", mustFragArgs(t, fmt.Sprintf("/x/dir%d/f%d.go", i%5, i)), iter)
+	}
+	if first == "" {
+		t.Fatal("expected fire once thresholds met")
+	}
+	s.warnings = 0 // isolate the window-clearing behavior from the max-2 cap
+	if second := s.recordToolCall("read_file", mustFragArgs(t, "/x/once.go"), 99); second != "" {
+		t.Fatal("window must empty on fire - next call cannot re-fire")
+	}
+}
+
+func mustFragArgs(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"path": p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

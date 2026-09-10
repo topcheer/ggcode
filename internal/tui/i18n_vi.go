@@ -393,7 +393,7 @@ func viCatalog(key string) string {
 	case "panel.provider.hint.edit":
 		return "Enter lưu • Esc hủy"
 	case "panel.provider.hint.main":
-		return "Tab/Shift+Tab đổi tập trung • j/k di chuyển • / tập trung lọc • Enter hoặc s áp dụng • a key nhà cung cấp • u key endpoint • b base URL • m mô hình tùy chỉnh • e thêm endpoint • Esc đóng"
+		return "Tab/Shift+Tab đổi tập trung • j/k di chuyển • / tập trung lọc • Enter hoặc s áp dụng • a key nhà cung cấp • u key endpoint • b base URL • m mô hình tùy chỉnh • e thêm endpoint • n nhà cung cấp mới • Esc đóng"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l đăng nhập • x đăng xuất • b sửa enterprise domain"
 	case "panel.provider.saved":

@@ -2,10 +2,10 @@ package config
 
 import (
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"os"
+	"strings"
 )
 
 // SetEndpointAPIKey updates the active endpoint or vendor-level API key.
@@ -26,12 +26,18 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	// If the value is already an env reference (${VAR}), store as-is.
 	if _, isRef := envReferenceVarName(apiKey); isRef || apiKey == "" {
 		if vendorScoped {
+			if apiKey == "" {
+				clearAPIKeyRefEnv(vc.APIKey) // #1706 case 3
+			}
 			vc.APIKey = apiKey
 			c.Vendors[vendor] = vc
 		} else {
 			ep, ok := vc.Endpoints[endpoint]
 			if !ok {
 				return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+			}
+			if apiKey == "" {
+				clearAPIKeyRefEnv(ep.APIKey) // #1706 case 3
 			}
 			ep.APIKey = apiKey
 			vc.Endpoints[endpoint] = ep
@@ -53,9 +59,13 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	os.Setenv(envVarName, apiKey)
 
 	// Persist to keys.env so the key survives restarts.
+	// #1706 case 2: a failure here used to be swallowed (debug-only) -
+	// the key lived in process env, vanished on restart, and NeedsOnboard
+	// could re-trigger. SetVendorAPIKey already hard-errors on this exact
+	// condition (#1517); same semantics now (os.Setenv above keeps the
+	// current session working even when the caller logs and continues).
 	if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
-		// Non-fatal: the key works for this session via os.Setenv above.
-		debug.Log("config", "failed to persist %s to keys.env: %v", envVarName, err)
+		return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpoint, err)
 	}
 
 	ref := "${" + envVarName + "}"
@@ -74,6 +84,18 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	return nil
 }
 
+// clearAPIKeyRefEnv removes the keys.env entry backing a ${VAR} ref (if
+// any) so a cleared key does not leave stale plaintext behind (#1706
+// case 3).
+func clearAPIKeyRefEnv(ref string) {
+	if name, ok := envReferenceVarName(ref); ok {
+		if err := removeKeysEnv([]string{name}); err != nil {
+			debug.Log("config", "failed to remove %s from keys.env: %v", name, err)
+		}
+		os.Unsetenv(name)
+	}
+}
+
 // SetVendorAPIKey sets the vendor-level API key.
 func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	if c == nil {
@@ -85,6 +107,8 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
+		// #1706 case 3: drop the keys.env entry backing the old ref.
+		clearAPIKeyRefEnv(vc.APIKey)
 		vc.APIKey = ""
 	} else if _, isRef := envReferenceVarName(apiKey); isRef {
 		vc.APIKey = apiKey

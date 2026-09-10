@@ -226,6 +226,44 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int)
 	return score, fileMatch
 }
 
+// readCmdPrefixes lists read-only listing tools whose OUTPUT mimics
+// failure evidence (#1528 case C): run_command("grep -rn FAIL ./...")
+// exits 0, yet its output carries the literal FAIL plus path.go:line:
+// lines - character-for-character causalErrorFileRe's shape - so every
+// content gate passed and an innocent recent edit got blamed. Layer 1
+// (the tool-name filter at the call site) cannot see through the shell.
+var readCmdPrefixes = []string{"grep", "rg", "cat ", "head", "tail", "awk", "sed -n", "find ", "less", "bat "}
+
+// looksLikeReadCommand reports whether the command text begins with a
+// read-only listing tool.
+func looksLikeReadCommand(cmd string) bool {
+	c := strings.TrimSpace(cmd)
+	for _, p := range readCmdPrefixes {
+		if strings.HasPrefix(c, p) || strings.HasPrefix(c, "./"+p) {
+			return true
+		}
+	}
+	// Common compound prefixes: cd dir && grep ...
+	if i := strings.LastIndex(c, "&&"); i >= 0 {
+		return looksLikeReadCommand(c[i+2:])
+	}
+	if i := strings.LastIndex(c, "|"); i >= 0 {
+		return looksLikeReadCommand(c[i+1:])
+	}
+	return false
+}
+
+// attributeFailureCmd is the call-site entry that knows the command text
+// and exit status (#1528 case C): a SUCCEEDED read-only command whose
+// output merely contains "FAIL" (grep/cat of logs or sources) must not
+// be attributed as a build/test failure.
+func (s *causalAttributionState) attributeFailureCmd(output, cmd string, errored bool) string {
+	if !errored && looksLikeReadCommand(cmd) {
+		return ""
+	}
+	return s.attributeFailure(output)
+}
+
 // attributeFailure traces backward from a failure to identify the most
 // likely causal edit step(s). Returns formatted guidance or "".
 func (s *causalAttributionState) attributeFailure(output string) string {

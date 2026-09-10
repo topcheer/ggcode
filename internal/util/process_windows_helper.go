@@ -3,6 +3,7 @@
 package util
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -23,10 +24,17 @@ func isProcessRunningWindows(proc *os.Process) bool {
 
 	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(proc.Pid))
 	if err != nil {
-		// #1535: ACCESS_DENIED means the process exists but belongs to
-		// another user/elevation - treating it as dead made daemon slot
-		// checks delete the PID file and fork a second daemon. Same
-		// principle as the WaitFor fallback below: when in doubt, alive.
+		// #1723 case 1: distinguish the errors. ACCESS_DENIED (5) means the
+		// process exists but belongs to another user/elevation - treating it
+		// as dead made daemon slot checks delete the PID file and fork a
+		// second daemon (#1535). ERROR_INVALID_PARAMETER (87) is what Windows
+		// returns for a NONEXISTENT pid - judging it alive wedged the slot
+		// forever after a daemon panic (CheckExistingDaemon -> alive ->
+		// empty cmdline -> same helper again). Everything else: when in
+		// doubt, alive.
+		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+			return false
+		}
 		return true
 	}
 	defer windows.CloseHandle(handle)

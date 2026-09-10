@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ValidateSchemaConstraints checks tool arguments against the JSON Schema beyond
@@ -126,11 +127,16 @@ func validateField(fieldName string, fieldSchema, val json.RawMessage) string {
 		if numType.Type == "string" {
 			var s string
 			if err := json.Unmarshal(val, &s); err == nil {
-				if spec.MinLength != nil && len(s) < *spec.MinLength {
-					return fmt.Sprintf("parameter %q must be at least %d characters, got %d", fieldName, *spec.MinLength, len(s))
+				// #1702 case 3: count RUNES, not bytes - 4 CJK chars are
+				// 12 bytes and sailed past minLength=10 while the error
+				// message said "characters". utf8.RuneCountInString is the
+				// metric the message (and JSON Schema) promise.
+				rlen := utf8.RuneCountInString(s)
+				if spec.MinLength != nil && rlen < *spec.MinLength {
+					return fmt.Sprintf("parameter %q must be at least %d characters, got %d", fieldName, *spec.MinLength, rlen)
 				}
-				if spec.MaxLength != nil && len(s) > *spec.MaxLength {
-					return fmt.Sprintf("parameter %q must be at most %d characters, got %d", fieldName, *spec.MaxLength, len(s))
+				if spec.MaxLength != nil && rlen > *spec.MaxLength {
+					return fmt.Sprintf("parameter %q must be at most %d characters, got %d", fieldName, *spec.MaxLength, rlen)
 				}
 			}
 		}

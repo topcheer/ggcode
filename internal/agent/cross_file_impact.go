@@ -416,6 +416,10 @@ func findSiblingGoFiles(dir, editedFile string, max int) []string {
 // referencesAnyImpactSymbol checks whether the given Go source references any
 // of the removed symbols.
 func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
+	if len(removed) == 0 {
+		return false
+	}
+	names := make(map[string]bool, len(removed))
 	for _, s := range removed {
 		var name string
 		switch s.category {
@@ -427,14 +431,48 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 		default:
 			name = s.name
 		}
-		if name == "" {
-			continue
-		}
-		if containsGoIdent(src, name) {
-			return true
+		if name != "" {
+			names[name] = true
 		}
 	}
-	return false
+	if len(names) == 0 {
+		return false
+	}
+	// #1773 case 5: scope discrimination. The old text scan matched a
+	// sibling's LOCAL variable that happens to share the deleted
+	// package-level symbol's name - an advisory claiming the agent
+	// "affected a file you did NOT edit" when the local shadow cannot
+	// break compilation. Parse the sibling and only count occurrences
+	// the resolver leaves UNRESOLVED: an ident with Obj != nil is defined
+	// in this file (local var/param/func/receiver), so it does not
+	// reference the cross-file symbol at all. Unparsable siblings fall
+	// back to the conservative text scan.
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "sibling.go", src, 0)
+	if err != nil {
+		for name := range names {
+			if containsGoIdent(src, name) {
+				return true
+			}
+		}
+		return false
+	}
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		id, ok := n.(*ast.Ident)
+		if !ok || !names[id.Name] {
+			return true
+		}
+		if id.Obj == nil {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // containsGoIdent checks if name appears as a Go identifier in src.

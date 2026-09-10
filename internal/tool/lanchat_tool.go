@@ -914,7 +914,15 @@ func (t LanChatTool) doSendTeam(ctx context.Context, content, team string, asAge
 	}
 
 	// Send to each team member
-	toRole := lanchat.RoleAgent // default: reach their agent for team coordination
+	// #1693 case 1 / #845: toRole must follow the sender's identity - a
+	// hardcoded RoleAgent delivered human-originated send_team messages to
+	// every member's AGENT, triggering their approval/reasoning loop (the
+	// same bug #845 fixed in doSend and doBroadcastAll; this path was
+	// missed).
+	toRole := lanchat.RoleAgent
+	if !asAgent {
+		toRole = lanchat.RoleHuman // human sender: land in the chat panel
+	}
 	var errors []string
 	sent := 0
 	for _, nodeID := range members {

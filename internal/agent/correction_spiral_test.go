@@ -265,3 +265,42 @@ func TestCorrectionSpiralNoNewEvidenceNoRewarn(t *testing.T) {
 		t.Fatal("warning must re-fire after new failure evidence")
 	}
 }
+
+// TestCorrectionSpiralCapSnapshotNotDeadlocked pins #1726 case 1: a first
+// warning firing exactly at len==12 (the cap) must not deadlock the second
+// - every later append caps back to 12, but the monotonic counter keeps
+// growing and counts as new evidence.
+func TestCorrectionSpiralCapSnapshotNotDeadlocked(t *testing.T) {
+	s := newCorrectionSpiralState()
+	// 12 entries with the escalation shape: front < back.
+	s.errorSequence = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	if got := s.maybeWarn(5); got == "" {
+		t.Fatal("first warning must fire at len==12")
+	}
+	// Frozen at the cap: no re-warn.
+	if got := s.maybeWarn(20); got != "" {
+		t.Fatal("frozen sequence must not re-warn")
+	}
+	// New correction: len stays 12 (capped) but the counter grows.
+	s.pendingEdit = true
+	s.recordVerifyResult("go test", "exit status 1", true, 0) // appends+caps+increments the counter
+	if got := s.maybeWarn(20); got == "" {
+		t.Fatal("second warning must fire - counter growth is new evidence (#1726 case 1)")
+	}
+}
+
+// TestCorrectionSpiralGreenResetsSnapshot pins #1726 case 2: a green result
+// clears the evidence AND the warning snapshot - a fresh spiral must not
+// inherit the old threshold.
+func TestCorrectionSpiralGreenResetsSnapshot(t *testing.T) {
+	s := newCorrectionSpiralState()
+	s.errorSequence = []int{1, 2, 3, 4}
+	if got := s.maybeWarn(5); got == "" {
+		t.Fatal("first warning must fire")
+	}
+	s.pendingEdit = true
+	s.recordVerifyResult("go test", "ok", false, 0) // green boundary
+	if s.lastWarnedSeqLen != 0 || s.lastWarnedTotal != 0 {
+		t.Fatalf("green must reset both snapshots, got len=%d total=%d", s.lastWarnedSeqLen, s.lastWarnedTotal)
+	}
+}

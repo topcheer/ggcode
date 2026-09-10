@@ -75,7 +75,9 @@ func TestTruncate(t *testing.T) {
 		{"maxRunes_1", "hello", 1, "h"},
 		{"empty", "", 10, ""},
 		{"multi_byte", "日本語テスト", 4, "日..."},
-		{"negative", "hello", -1, "hello"},
+		// #1849 case 2: negative budgets (width-arithmetic leaks on narrow
+		// terminals) mean NO room, not unlimited room.
+		{"negative", "hello", -1, ""},
 		{"zero", "hello", 0, ""},
 	}
 

@@ -1,8 +1,10 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -265,5 +267,23 @@ func TestLanChatSetIdentityRequiresOne(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Errorf("doSetIdentity with all empty should return error")
+	}
+}
+
+// #1693 case 1: doSendTeam must follow the sender identity for toRole -
+// human send_team landed in every member AGENT inbox (#845 same-class).
+func TestSendTeamToRoleFollowsIdentity1693(t *testing.T) {
+	// Static pin: the branch must exist and assign RoleHuman when not asAgent.
+	src, err := os.ReadFile("lanchat_tool.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	needle := "toRole = lanchat.RoleHuman // human sender: land in the chat panel"
+	if !bytes.Contains(src, []byte(needle)) {
+		t.Fatal("doSendTeam must set RoleHuman for human-identity sends (#845/#1693)")
+	}
+	// And the hardcoded default must no longer be unconditional.
+	if bytes.Contains(src, []byte("toRole := lanchat.RoleAgent // default: reach their agent")) {
+		t.Fatal("stale hardcoded toRole comment still present")
 	}
 }

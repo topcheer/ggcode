@@ -147,6 +147,35 @@ func countConcurrentMapIssues(src string) int {
 func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMapInstance {
 	var instances []concurrentMapInstance
 
+	// #1533-A: package-level `var counters map[string]int` is the canonical
+	// cross-goroutine shared-registry shape - the top-level GenDecl loop used
+	// to be skipped entirely (only FuncDecls were analyzed), so the detector's
+	// headline scenario went silent after #1445 required declaration proof.
+	pkgMaps := map[string]bool{}
+	for _, topDecl := range file.Decls {
+		gd, ok := topDecl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if _, isMap := vs.Type.(*ast.MapType); isMap {
+				for _, name := range vs.Names {
+					pkgMaps[name.Name] = true
+				}
+				continue
+			}
+			for i, val := range vs.Values {
+				if isMapValuedExpr(val) && i < len(vs.Names) {
+					pkgMaps[vs.Names[i].Name] = true
+				}
+			}
+		}
+	}
+
 	for _, topDecl := range file.Decls {
 		fn, ok := topDecl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -155,7 +184,7 @@ func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMa
 
 		// Collect function-level info (#1445-A: the FuncDecl seeds map-typed
 		// params/receivers into the declaration-proof set internally).
-		info := analyzeFuncForMapConcurrency(fn)
+		info := analyzeFuncForMapConcurrency(fn, pkgMaps)
 		if len(info.unsyncMapWrites) == 0 || !info.hasGoStatement {
 			continue
 		}
@@ -186,11 +215,17 @@ type mapConcurrencyInfo struct {
 // analyzeFuncForMapConcurrency inspects a function for concurrent map
 // access patterns (#1445-A: takes the FuncDecl so map-typed params and
 // receivers seed the declaration-proof set BEFORE the write scan).
-func analyzeFuncForMapConcurrency(fn *ast.FuncDecl) mapConcurrencyInfo {
+func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) mapConcurrencyInfo {
 	body := fn.Body
 	info := mapConcurrencyInfo{
 		unsyncMapWrites: make(map[string]token.Pos),
 		mapDeclared:     make(map[string]bool),
+	}
+	// #1533-A: package-level maps are proof BEFORE the inspect pass - the
+	// write detection consults mapDeclared while walking, so seeding after
+	// the call (as an earlier draft did) was a no-op.
+	for name := range pkgMaps {
+		info.mapDeclared[name] = true
 	}
 	// Params/receiver declared as maps are proof (func worker(m map...)).
 	seed := func(fl *ast.FieldList) {
@@ -238,6 +273,16 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl) mapConcurrencyInfo {
 					if _, isMap := vs.Type.(*ast.MapType); isMap {
 						for _, name := range vs.Names {
 							info.mapDeclared[name.Name] = true
+						}
+						continue
+					}
+					// #1533-B: `var m = make(map[string]int)` and
+					// `var m = map[string]int{}` fall between the DeclStmt
+					// (Type-only) and AssignStmt (isMapValuedExpr) branches -
+					// the idiomatic inferred declaration was never proven.
+					for i, val := range vs.Values {
+						if isMapValuedExpr(val) && i < len(vs.Names) {
+							info.mapDeclared[vs.Names[i].Name] = true
 						}
 					}
 				}
@@ -290,9 +335,30 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl) mapConcurrencyInfo {
 				}
 			}
 
+		case *ast.IncDecStmt:
+			// #1533-C: m[k]++ (concurrent counters are a top real-world
+			// concurrent-map crash shape) - IncDecStmt is NOT an AssignStmt,
+			// so it escaped the switch entirely.
+			if idx, ok := node.X.(*ast.IndexExpr); ok {
+				name := mapVarName(idx.X)
+				if name != "" && (strings.Contains(name, ".") || info.mapDeclared[name]) {
+					if _, exists := info.unsyncMapWrites[name]; !exists {
+						info.unsyncMapWrites[name] = node.Pos()
+					}
+				}
+			}
+
 		case *ast.AssignStmt:
-			// Detect map write: m[k] = v
-			if node.Tok == token.ASSIGN || node.Tok == token.DEFINE {
+			// Detect map write: m[k] = v  (#1533-C: and m[k] += v etc. -
+			// compound assignments used to be filtered out alongside :=/=).
+			isAssignTok := node.Tok == token.ASSIGN || node.Tok == token.DEFINE ||
+				node.Tok == token.ADD_ASSIGN || node.Tok == token.SUB_ASSIGN ||
+				node.Tok == token.MUL_ASSIGN || node.Tok == token.QUO_ASSIGN ||
+				node.Tok == token.REM_ASSIGN || node.Tok == token.AND_ASSIGN ||
+				node.Tok == token.OR_ASSIGN || node.Tok == token.XOR_ASSIGN ||
+				node.Tok == token.SHL_ASSIGN || node.Tok == token.SHR_ASSIGN ||
+				node.Tok == token.AND_NOT_ASSIGN
+			if isAssignTok {
 				for _, lhs := range node.Lhs {
 					if idx, ok := lhs.(*ast.IndexExpr); ok {
 						// #1445-A: plain identifiers need declaration proof (a

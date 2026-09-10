@@ -18,7 +18,7 @@ const (
 	providerMaxIdleConnsPerHost   = 5
 )
 
-func newProviderHTTPTransport() *http.Transport {
+func newProviderHTTPTransport() http.RoundTripper {
 	base := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   providerDialTimeout,
@@ -44,5 +44,15 @@ func newProviderHTTPTransport() *http.Transport {
 	// Restrict ALPN to HTTP/1.1 only — prevents the server from upgrading
 	// to HTTP/2 even if it advertises it.
 	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
+
+	// Outermost guard: cut off response bodies that stay silent past the
+	// idle-read window (dropped proxy tunnel hang). See
+	// idle_timeout_transport.go. Returns http.RoundTripper so callers cannot
+	// accidentally reach past the guard; none of them currently type-assert
+	// back to *http.Transport.
+	timeout := streamIdleReadTimeoutFromEnv()
+	if timeout > 0 {
+		return &idleTimeoutTransport{base: t, timeout: timeout}
+	}
 	return t
 }

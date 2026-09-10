@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -16,7 +17,18 @@ import (
 // AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
 type AutoMemory struct {
 	dir string
+	// #1752 case 2: Load/Merge/Save read-modify-write cycles from concurrent
+	// goroutines (reflection, /reflect, daemon) raced and the later write
+	// silently dropped the earlier one; a bare WriteFile also let a reader
+	// see a torn file. A package-level per-path mutex serializes writers,
+	// and writes go through temp+rename so readers never see partial files.
+	mu sync.Mutex
 }
+
+// writeMu serializes writes to the same memory FILE path across separate
+// AutoMemory instances (global + project memory share nothing, but two
+// project instances for the same dir can exist in one process).
+var writeMu sync.Map // path -> *sync.Mutex
 
 // NewAutoMemory creates an AutoMemory instance for global memory (~/.ggcode/memory/).
 func NewAutoMemory() *AutoMemory {
@@ -48,7 +60,38 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 	// stable hash for keys whose sanitization collides.
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
-	return os.WriteFile(path, []byte(content), 0644)
+
+	// #1752 case 2: atomic write - temp file in the same directory, then
+	// rename (atomic on POSIX and Windows-NT). Concurrent readers see
+	// either the old or the new content, never a torn file.
+	tmp, err := os.CreateTemp(am.dir, safe+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write([]byte(content)); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+
+	muAny, _ := writeMu.LoadOrStore(path, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // LoadKey reads a single memory key's content (#1388). LoadAll merges EVERY

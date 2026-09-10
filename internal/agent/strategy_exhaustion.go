@@ -52,6 +52,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -165,7 +166,7 @@ func (s *seStrategyExhaustionState) recordToolCall(toolName string, isError bool
 	// between the previous and current occurrence.
 	if cl.fingerprintsSeen > 0 && len(cl.toolsSinceLastError) > 0 {
 		sig := seStrategySignature(cl.toolsSinceLastError)
-		if !cl.strategySignatures[sig] {
+		if sig != seStrategySignature(nil) && !cl.strategySignatures[sig] {
 			cl.strategySignatures[sig] = true
 			debug.Log("agent", "strategy exhaustion: new distinct strategy #%d for error %s",
 				len(cl.strategySignatures), fp[:seMin(16, len(fp))])
@@ -220,11 +221,40 @@ func seFingerprintError(content string) string {
 	return hex.EncodeToString(h[:8])
 }
 
-// seStrategySignature computes a hash of the recovery tool-name sequence
-// to identify distinct strategies. Two sequences with the same set of tools
-// in the same order are considered the same strategy.
+// seRecoveryIrrelevantTools lists tools whose appearance between two
+// occurrences of an error carries no recovery information (#1498 case C):
+// reads/observations are context gathering, not strategy. Counting them
+// made {read}{run}{read,run}{run,read} four "distinct strategies" out of
+// pure noise - order-sensitivity alone could satisfy the 4-signature gate.
+var seRecoveryIrrelevantTools = map[string]bool{
+	"read_file": true, "grep": true, "glob": true, "search_files": true,
+	"list_directory": true, "code_search": true, "lsp_hover": true,
+	"lsp_symbols": true, "lsp_definition": true, "lsp_references": true,
+	"lsp_diagnostics": true, "web_search": true,
+}
+
+// seStrategySignature computes a hash of the recovery tool SET to identify
+// distinct strategies. Two recovery attempts using the same set of
+// MUTATION/recovery tools are the same strategy regardless of order
+// (#1498 case C: the old order-sensitive Join let {read,run} and {run,read}
+// count as two strategies - pure ordering noise inflated the "distinct
+// strategies" count toward the exhaustion gate). Read-only observation
+// tools are dropped before signing: they are context gathering, not a
+// strategy change.
 func seStrategySignature(tools []string) string {
-	joined := strings.Join(tools, "|")
+	set := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		if seRecoveryIrrelevantTools[t] {
+			continue
+		}
+		set[t] = true
+	}
+	names := make([]string, 0, len(set))
+	for t := range set {
+		names = append(names, t)
+	}
+	sort.Strings(names)
+	joined := strings.Join(names, "|")
 	h := sha256.Sum256([]byte(joined))
 	return hex.EncodeToString(h[:8])
 }

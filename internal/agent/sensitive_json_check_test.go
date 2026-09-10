@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -43,9 +44,14 @@ type User struct {
 	Password string
 }
 `
+	// #1492-A: an untagged exported sensitive field IS serialized under its
+	// field name - the old expectation of 0 warnings was the blind spot.
 	warnings := checkSensitiveJSONExposure("test.go", "", src)
-	if len(warnings) != 0 {
-		t.Fatalf("expected 0 warnings for field without json tag, got %d: %v", len(warnings), warnings)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for untagged sensitive field, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "NO json tag") {
+		t.Fatalf("expected untagged-field remediation, got: %s", warnings[0])
 	}
 }
 

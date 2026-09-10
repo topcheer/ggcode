@@ -314,12 +314,18 @@ func (b *iosBackend) scaleForDevice(device string) (int, int) {
 }
 
 func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, y int) (Result, error) {
-	// #1694 case 1: the pre-tap result was discarded on iOS too - a failed
-	// tap left focus elsewhere and the text went to the wrong control while
-	// the tool reported success. Fail instead of swallowing.
-	if x > 0 || y > 0 {
-		if r, _ := b.tap(ctx, device, "", x, y); r.IsError {
-			return Result{IsError: true, Content: fmt.Sprintf("pre-type tap at (%d, %d) failed: %s - text was NOT typed (it would have gone to whatever holds focus)", x, y, r.Content)}, nil
+	if x != 0 || y != 0 {
+		// #1694 case 1: the discarded tap result was the iOS twin of the
+		// #840 swallow - a failed pre-tap typed into whatever held focus
+		// while reporting success. Fail loud now.
+		if tapRes, err := b.tap(ctx, device, "", x, y); err != nil || tapRes.IsError {
+			// #1970 nit: when only tapRes.IsError fired (err == nil), the %v
+			// rendered "<nil>" - carry the result text instead.
+			reason := error(err)
+			if reason == nil {
+				reason = fmt.Errorf("%s", tapRes.Content)
+			}
+			return Result{IsError: true, Content: fmt.Sprintf("pre-tap at (%d,%d) failed: %v - aborting type to avoid sending text to the wrong control", x, y, reason)}, nil
 		}
 		time.Sleep(300 * time.Millisecond)
 	}

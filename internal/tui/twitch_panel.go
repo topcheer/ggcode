@@ -294,10 +294,20 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 		}
 		// #1367 family batch 3 final sweep: config write moved onto
 		// the Update loop via configMutationMsg (see config_mutation.go).
+		// #1767 case 1: the create path was fixed but the BIND path still
+		// enabled the adapter inside the Cmd goroutine (SetIMAdapterEnabled
+		// map write + save while the render loop ranges the same map).
+		// The enable decision now lives here, in apply, on the Update loop.
 		return configMutationMsg{
 			apply: func(m *Model) error {
 				m.config.IM.Enabled = true
-				return m.config.AddIMAdapter(name, adapter)
+				if err := m.config.AddIMAdapter(name, adapter); err != nil {
+					return err
+				}
+				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+					return m.config.SetIMAdapterEnabled(name, true)
+				}
+				return nil
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
@@ -351,7 +361,13 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 }
 
 func (m *Model) ensureTwitchRuntime() error {
-	return m.ensureCurrentWorkspaceIMManager(m.t("panel.twitch.error.config_unavailable"), "", true)
+	// #1767 case 2: route through the guarded brother - the imEnsure
+	// single-flight in ensureStartedCurrentWorkspaceIMRuntime collapses
+	// concurrent Cmd goroutines into one InitRuntime (duplicate instance
+	// registrations otherwise) and blocks waiters on the starter's REAL
+	// outcome (#1379-D/#1417-A). The unguarded ensureCurrentWorkspaceIMManager
+	// raced the config map and the imManager field against the Update loop.
+	return m.ensureStartedCurrentWorkspaceIMRuntime(m.t("panel.twitch.error.config_unavailable"), "", true)
 }
 
 func (m *Model) bindTwitchEntry(entry twitchBindingEntry) tea.Cmd {

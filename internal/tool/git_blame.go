@@ -62,6 +62,13 @@ func (t GitBlame) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	if revision == "" {
 		revision = "HEAD"
 	}
+	// #1687 case 4: the revision is argv'd BEFORE the "--" separator, so
+	// an agent-passed "-L10,20" or "--reverse" would be consumed by git as
+	// an OPTION, silently changing blame semantics. git_checkout guards
+	// its refs with validateRefName; blame was the loose sibling.
+	if err := validateRefName(revision); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid revision %q: %v", revision, err)}, nil
+	}
 
 	cmd := gitCommand(ctx, "blame", "--date=short", revision, "--", args.File)
 	cmd.Dir = resolveDir(args.Path, t.WorkingDir)

@@ -13,6 +13,7 @@ package tool
 //   - Structured report with categorized severity summary
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -158,8 +159,16 @@ func getReviewDiff(ctx context.Context, dir, scope string) (string, error) {
 // runReviewGit runs a git command and returns stdout.
 func runReviewGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	// #1699 case 5: cmd.Output() discards stderr - an unborn-HEAD exit 128
+	// surfaced as a bare "exit status 128" with the real git message
+	// ("does not have any commits yet") invisible in review diagnostics.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("%w: %s", err, msg)
+		}
 		return "", err
 	}
 	return string(out), nil
@@ -177,6 +186,12 @@ func getUntrackedFiles(ctx context.Context, dir string) []string {
 		if len(line) >= 3 {
 			status := line[:2]
 			file := strings.TrimSpace(line[2:])
+			// #1699 case 6: git quotes paths containing special characters
+			// C-style when core.quotePath is on; strip the quotes so the
+			// returned path is usable.
+			if len(file) >= 2 && file[0] == '"' && file[len(file)-1] == '"' {
+				file = file[1 : len(file)-1]
+			}
 			if strings.Contains(status, "?") {
 				untracked = append(untracked, file)
 			}
@@ -222,14 +237,23 @@ func parseReviewDiff(diff string) []*reviewDiffFile {
 			current.path = "(deleted)"
 		} else if strings.HasPrefix(line, "@@") {
 			newLineNum = parseReviewHunkStart(line)
-		} else if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+		} else if strings.HasPrefix(line, "+") {
+			// #1699 case 1: the header branches above already consumed the
+			// exact "+++ b/" / "+++ /dev/null" forms, so ANY remaining
+			// "+"-prefixed line is content. The old bare !HasPrefix("+++")
+			// guard skipped real content lines starting with ++ (a C-family
+			// "++i" in the diff), dropping them from added-count and
+			// comment-block detection while path extraction above used the
+			// exact form - two different judgments in one function.
 			current.addedLines = append(current.addedLines, reviewDiffLine{
 				lineNum: newLineNum,
 				content: line[1:],
 			})
 			current.addedCount++
 			newLineNum++
-		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+		} else if strings.HasPrefix(line, "-") {
+			// Same for removals: "--- a/" was consumed above; a remaining
+			// "--x" decrement line is content.
 			current.removedCount++
 		} else if strings.HasPrefix(line, " ") || line == "" {
 			newLineNum++

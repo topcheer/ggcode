@@ -26,6 +26,7 @@
 package toolreplay
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -119,8 +120,15 @@ func canonicalizeJSON(input json.RawMessage) []byte {
 	if len(input) == 0 {
 		return []byte("null")
 	}
+	// #1711 case 1: UseNumber keeps integers as json.Number - the default
+	// float64 decoding collapses 2^53-boundary integers (file sizes,
+	// nanosecond timestamps) to the SAME float, identical canonical bytes,
+	// identical tape key - and the non-strict FIFO lookup then returns the
+	// WRONG entry with no warning.
 	var v interface{}
-	if err := json.Unmarshal(input, &v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(input))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
 		// Not valid JSON — hash the raw bytes as-is.
 		return input
 	}

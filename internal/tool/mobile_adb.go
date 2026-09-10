@@ -283,18 +283,23 @@ func (a *androidBackend) typeText(ctx context.Context, device, ref, text string,
 		}
 		x, y = cx, cy
 	}
-	// Tap the field first if coordinates provided. #1694 case 1: the
-	// pre-tap error was swallowed ("Non-fatal, continue with typing") -
-	// with a focus elsewhere the text goes to the WRONG control while the
-	// tool reports success; the #840 comment described exactly this failure
-	// yet the fix only added the device selector. Fail instead. (0,0 stays
-	// the unset marker: ref-resolved coords or any positive coordinate
-	// trigger the pre-tap; a true top-left-corner target should use a ref.)
-	if ref != "" || x > 0 || y > 0 {
+	// Tap the field first if coordinates provided
+	// #1694 case 1: x=0/y=0 are LEGAL edge coordinates - the old x>0||y>0
+	// skipped the pre-tap there (text landed wherever focus was).
+	// #1694 case 2: ref-resolved coordinates arrive here too - they must
+	// pre-tap the resolved element center (the ref == "" guard would skip
+	// it and type into whatever holds focus).
+	if x != 0 || y != 0 {
+		// #840: include the device selector - without it, multi-device setups
+		// fail 'more than one device/emulator', the error was swallowed below,
+		// and the text went to whatever holds focus while the tool reported
+		// success. #1694: the swallow itself was the unfixed half - a failed
+		// pre-tap now fails LOUD (typing into the wrong control while
+		// reporting success is the worse outcome).
 		preArgs := adbDeviceArgs(device)
 		preArgs = append(preArgs, "shell", "input", "tap", strconv.Itoa(x), strconv.Itoa(y))
 		if _, _, err := runCommand(ctx, 5*time.Second, a.adbPath, preArgs...); err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("pre-type tap at (%d, %d) failed: %v - text was NOT typed (it would have gone to whatever holds focus)", x, y, err)}, nil
+			return Result{IsError: true, Content: fmt.Sprintf("pre-tap at (%d,%d) failed: %v - aborting type to avoid sending text to the wrong control", x, y, err)}, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
