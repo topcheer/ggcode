@@ -726,6 +726,13 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 					return "", err
 				}
 				if len(edits) == 0 {
+					// #1769: distinguish "server returned nothing" from
+					// "server returned an unsupported change form" (e.g.
+					// TypeScript Move-to-file) - the latter used to hide
+					// behind the same bare message.
+					if note := lsp.TakeUnsupportedNote(); note != "" {
+						return fmt.Sprintf("No rename edits returned - the server replied with an unsupported change form (%s). Manual refactoring or a different rename strategy is needed.", note), nil
+					}
 					return "No rename edits returned.", nil
 				}
 				return applyLSPFileEdits(edits, writeSandbox)
