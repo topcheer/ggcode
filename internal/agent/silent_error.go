@@ -46,6 +46,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -124,8 +125,20 @@ func (s *silentErrorState) recordToolAction(toolName, resourceKey string) string
 		return ""
 	}
 
+	// #1494 case D: tools whose resource model is "" (lsp_diagnostics,
+	// git_diff, code_execution, todo_write, batch_replace, file_ops,
+	// web_search, ...) must not count as silent advancement. The error
+	// side stores empty-key errors, but the action side's early return
+	// made EVERY uncovered-tool success an advancement++ - the standard
+	// recovery trio (lsp_diagnostics + git_diff + todo_write after a
+	// failed edit) triggered the "fix before continuing" indictment.
+	// Symmetric skip: no key, no signal either way.
+	if resourceKey == "" {
+		return ""
+	}
+
 	// Check if this action addresses an unresolved error.
-	if s.actionAddressesError(resourceKey) {
+	if s.actionAddressesError(resourceKey, toolName) {
 		// The agent is revisiting the error â clear matched errors.
 		s.clearAddressedErrors(resourceKey)
 		s.lastErrorResource = ""
@@ -148,7 +161,7 @@ func (s *silentErrorState) recordToolAction(toolName, resourceKey string) string
 // actionAddressesError checks if the current tool action targets the same
 // resource as an unresolved error (e.g., retrying the same edit, reading the
 // error file, running the same command with fixes).
-func (s *silentErrorState) actionAddressesError(resourceKey string) bool {
+func (s *silentErrorState) actionAddressesError(resourceKey string, toolName string) bool {
 	if resourceKey == "" {
 		return false
 	}
@@ -157,6 +170,15 @@ func (s *silentErrorState) actionAddressesError(resourceKey string) bool {
 		ueKey := normalizeResourceKey(ue.resourceKey)
 		if ueKey == "" {
 			continue
+		}
+		// #1494 case C: command-class errors (2-token keys like "go
+		// build") are canonically fixed by editing SOURCE FILES - a
+		// different resource. The same-key assumption turned the textbook
+		// "build fails -> edit source -> retest" flow into an
+		// unaddressed-error indictment. Any file-editing action addresses
+		// a command-class error.
+		if isCommandKey(ueKey) && isEditTool(toolName) {
+			return true
 		}
 		// Same resource key = directly addressing the error.
 		if resourceKey == ueKey {
@@ -177,14 +199,53 @@ func (s *silentErrorState) clearAddressedErrors(resourceKey string) {
 	filtered := s.unresolvedErrors[:0]
 	for _, ue := range s.unresolvedErrors {
 		ueKey := normalizeResourceKey(ue.resourceKey)
+		// #1494 case E(a): an empty stored key must never match -
+		// HasPrefix(k, "") is always true, so ONE legitimately addressed
+		// error cleared ALL empty-key errors in the same sweep.
+		if ueKey == "" {
+			filtered = append(filtered, ue)
+			continue
+		}
 		if ueKey == resourceKey ||
-			strings.HasPrefix(resourceKey, ueKey) ||
-			strings.HasPrefix(ueKey, resourceKey) {
+			pathPrefixMatch(resourceKey, ueKey) ||
+			pathPrefixMatch(ueKey, resourceKey) {
 			continue // Remove addressed error
 		}
 		filtered = append(filtered, ue)
 	}
 	s.unresolvedErrors = filtered
+}
+
+// pathPrefixMatch reports whether longer starts with shorter as a
+// filesystem-path prefix (separator boundary), not a byte prefix:
+// /a/foo.go must NOT match /a/foobar.go (#1494 case E(b)).
+func pathPrefixMatch(longer, shorter string) bool {
+	if !strings.HasPrefix(longer, shorter) {
+		return false
+	}
+	if len(longer) == len(shorter) {
+		return true
+	}
+	// Boundary: next char must be a separator (or the shorter endswith one).
+	if strings.HasSuffix(shorter, "/") {
+		return true
+	}
+	return len(longer) > len(shorter) && (longer[len(shorter)] == '/' || longer[len(shorter)] == filepath.Separator)
+}
+
+// isCommandKey reports whether a resource key is command-shaped (the
+// 2-token form normalizeResourceKey produces for go/npm/cargo/python
+// commands) rather than a file path or pattern.
+func isCommandKey(key string) bool {
+	fields := strings.Fields(key)
+	if len(fields) != 2 {
+		return false
+	}
+	switch fields[0] {
+	case "go", "npm", "cargo", "python", "python3", "yarn", "pnpm", "make", "pytest":
+		return true
+	}
+	return false
 }
 
 func (s *silentErrorState) buildGuidance() string {

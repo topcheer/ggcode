@@ -1548,6 +1548,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.editAbandon.reset()
 	a.toolCallBudget.reset()
 	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
+	// #1494 case A: per-run accumulation reset - without it the 80/95/100
+	// tier flags stay latched from the previous run (stopGiven=true makes
+	// Record permanently silent for every later run in this process).
+	a.resetSessionTokenUsage()
 
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
@@ -2137,6 +2141,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
+		// #1494 case A: session token budget consumption - setter/getter/
+		// check existed since #543 but the usage-accumulation site was never
+		// wired, so the whole feature was a no-op (10x over-budget ran with
+		// zero warnings or stop). Record here; guidance mirrors the cache-
+		// efficiency injection path.
+		if msg, stop := a.RecordSessionTokenUsage(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)); msg != "" {
+			a.crossDetectorConsensus.recordFiring("Session Token Budget", i+1)
+			a.injectGuidance(msg)
+			debug.Log("session-token-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
+			if stop {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
+				})
+			}
+		}
 		// Context Engineering: monitor cache efficiency and forecast context
 		// window pressure after each LLM call. Both are zero-LLM-cost
 		// deterministic analysis. Guidance is injected into the context
