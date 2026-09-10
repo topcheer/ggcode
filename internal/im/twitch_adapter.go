@@ -638,11 +638,24 @@ func stripTwitchMention(text, nick string) string {
 	// cleanly ("@bot @bot double" -> "double").
 	ln := strings.ToLower(nick)
 	kept := make([]string, 0, len(strings.Fields(text)))
-	for _, tok := range strings.Fields(text) {
-		if strings.ToLower(strings.TrimPrefix(tok, "@")) == ln {
-			continue
+	for _, word := range strings.Fields(text) {
+		// #1747: the gate tokenizes with FieldsFunc (any non
+		// letter/digit/underscore is a separator), so "@ggcode," passed the
+		// gate but the Fields+TrimPrefix strip kept "ggcode," - the mention
+		// survived into the agent's prompt. Tokenize each word the SAME way
+		// and drop it when ANY of its tokens is the nick.
+		drop := false
+		for _, tok := range strings.FieldsFunc(strings.ToLower(word), func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+		}) {
+			if tok == ln {
+				drop = true
+				break
+			}
 		}
-		kept = append(kept, tok)
+		if !drop {
+			kept = append(kept, word)
+		}
 	}
 	return strings.Join(kept, " ")
 }

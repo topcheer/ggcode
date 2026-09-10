@@ -698,6 +698,9 @@ func TestTwitchMentionTokenBoundary(t *testing.T) {
 	if got := stripTwitchMention("ggcodex is broken", "ggcode"); got != "ggcodex is broken" {
 		t.Fatalf("mid-word substring must not be stripped, got %q", got)
 	}
+	if got := stripTwitchMention("@GGCode, fix it", "ggcode"); got != "fix it" {
+		t.Fatalf("#1747: trailing-punctuation mention must be stripped, got %q", got)
+	}
 	if got := stripTwitchMention("@GGCode do X", "ggcode"); got != "do X" {
 		t.Fatalf("case-insensitive mention must be stripped, got %q", got)
 	}
