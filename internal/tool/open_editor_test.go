@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,10 @@ func TestOpenEditor_BuildCommandVSCode(t *testing.T) {
 	os.WriteFile(tmpFile, []byte("package main\n"), 0644)
 
 	// VS Code with line number
-	cmd := buildEditorCommand("code", tmpFile, 42, 0)
+	cmd, info := buildEditorCommand("code", tmpFile, 42, 0)
+	if info.platformOpener || info.lineDropped {
+		t.Fatalf("known editor must honor line: %+v", info)
+	}
 	if cmd == nil {
 		t.Fatal("expected non-nil command")
 	}
@@ -101,7 +105,7 @@ func TestOpenEditor_BuildCommandVSCode(t *testing.T) {
 	}
 
 	// VS Code with line and column
-	cmd = buildEditorCommand("code", tmpFile, 42, 10)
+	cmd, _ = buildEditorCommand("code", tmpFile, 42, 10)
 	found = false
 	for _, arg := range cmd.Args {
 		if strings.Contains(arg, ":42:10") {
@@ -119,7 +123,7 @@ func TestOpenEditor_BuildCommandVim(t *testing.T) {
 	os.WriteFile(tmpFile, []byte("package main\n"), 0644)
 
 	// Vim with line number
-	cmd := buildEditorCommand("vim", tmpFile, 10, 0)
+	cmd, _ := buildEditorCommand("vim", tmpFile, 10, 0)
 	if cmd == nil {
 		t.Fatal("expected non-nil command")
 	}
@@ -138,7 +142,7 @@ func TestOpenEditor_BuildCommandJetBrains(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.go")
 	os.WriteFile(tmpFile, []byte("package main\n"), 0644)
 
-	cmd := buildEditorCommand("idea", tmpFile, 25, 0)
+	cmd, _ := buildEditorCommand("idea", tmpFile, 25, 0)
 	if cmd == nil {
 		t.Fatal("expected non-nil command")
 	}
@@ -158,9 +162,30 @@ func TestOpenEditor_BuildCommandFallback(t *testing.T) {
 	os.WriteFile(tmpFile, []byte("hello\n"), 0644)
 
 	// Unknown editor should still produce a command
-	cmd := buildEditorCommand("myeditor", tmpFile, 0, 0)
+	cmd, info := buildEditorCommand("myeditor", tmpFile, 0, 0)
 	if cmd == nil {
 		t.Fatal("expected non-nil command for unknown editor")
+	}
+	// #1697 case 2: the fallback must flag what it actually did so the
+	// success message can be honest.
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		if !info.platformOpener {
+			t.Fatalf("unknown editor on %s must set platformOpener", runtime.GOOS)
+		}
+	}
+	if !info.lineDropped {
+		// lineDropped only set when a line was requested; this call has none.
+	}
+}
+
+// #1697 case 2: a requested line on an unknown editor must be reported as
+// dropped, never silently swallowed.
+func TestOpenEditor_FallbackReportsDroppedLine(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "x.txt")
+	os.WriteFile(tmpFile, []byte("hi\n"), 0644)
+	_, info := buildEditorCommand("myeditor", tmpFile, 42, 0)
+	if !info.lineDropped {
+		t.Fatal("unknown editor with requested line must report lineDropped")
 	}
 }
 

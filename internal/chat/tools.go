@@ -381,7 +381,7 @@ func (t *BaseToolItem) renderEditDiff() string {
 
 func (t *BaseToolItem) renderSearchCount() string {
 	// "Found N matches" or "Showing X of Y matches"
-	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|of (\d+) results?`)
+	re := regexp.MustCompile(`Showing \d+ of (\d+) matches?|Found (\d+) matches?|(?:Showing|Found|Listed|Returned) \d+ of (\d+) results?`)
 	m := re.FindStringSubmatch(t.result)
 	n := ""
 	if len(m) >= 4 {
@@ -437,6 +437,16 @@ func (t *BaseToolItem) renderGitStatus() string {
 			deleted++
 		case '?':
 			untracked++
+		case 'R':
+			// #1697 case 6: renames count as modified (content differs);
+			// previously a fully-renamed tree rendered an empty body.
+			modified++
+		case 'C':
+			// #1697 case 6: copies count as added.
+			added++
+		case 'U':
+			// #1697 case 6: unmerged conflicts count as modified.
+			modified++
 		}
 	}
 	if modified == 0 && added == 0 && deleted == 0 && untracked == 0 {
