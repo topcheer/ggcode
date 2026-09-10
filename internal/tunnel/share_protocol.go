@@ -213,6 +213,12 @@ func requestIssuedShareSession(ctx context.Context, relayURL string, cfg ShareRu
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session renew expiry: %w", err)
 	}
+	// #1822 case 3: omitempty lets a relay omit the expiries and the zero
+	// values sailed through with ambiguous IsZero semantics (never-expires
+	// vs already-expired). An incomplete descriptor is an error.
+	if authExpiresAt.IsZero() || renewExpiresAt.IsZero() {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("issue share session: incomplete descriptor (missing expiry)")
+	}
 	shareMode := strings.TrimSpace(issued.ShareMode)
 	if shareMode == "" {
 		shareMode = ShareModeV3
@@ -327,6 +333,10 @@ func refreshIssuedShareSession(ctx context.Context, relayURL string, server Shar
 	renewExpiresAt, err := parseShareTimestamp(refreshed.RenewExpiresAt)
 	if err != nil {
 		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session renew expiry: %w", err)
+	}
+	// #1822 case 3: same zero-expiry rejection on the refresh path.
+	if authExpiresAt.IsZero() || renewExpiresAt.IsZero() {
+		return ShareDescriptor{}, ShareDescriptor{}, fmt.Errorf("refresh share session: incomplete descriptor (missing expiry)")
 	}
 	updatedServer = server
 	if refreshed.ProtocolVersion != 0 {
