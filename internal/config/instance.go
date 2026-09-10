@@ -193,6 +193,14 @@ func MergeInstance(global, instance *Config) {
 	// Impersonation
 	if global.Impersonation.Preset == "" && instance.Impersonation.Preset != "" {
 		global.Impersonation = instance.Impersonation
+		// #1815 case 3: register the merged section like every other merge
+		// field. Without the registration, Save's instance-strip step never
+		// removed "impersonation" from the global view, so the instance's
+		// value (including CustomHeaders, which may carry gateway auth
+		// tokens) leaked into the global ggcode.yaml on the next unrelated
+		// cfg.Save() - the #524/#609 family, missed for this field. The dead
+		// "impersonation"→"impersonation" API mapping never triggered it.
+		global.instanceFields["impersonation"] = true
 	}
 
 	// Swarm
