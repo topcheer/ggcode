@@ -261,7 +261,13 @@ func (s *ProjectionStore) loadLocked(sessionID string) (*projectionFile, error) 
 
 	var state projectionFile
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
+		// #1801 case 1: a torn/zero-length file (crash mid-rename before
+		// the fsync fix) used to fail this session's every
+		// Append/ReplayEvents/CutAuthority FOREVER. Quarantine the bad
+		// file and rebuild fresh state instead.
+		debug.Log("tunnel-projection", "corrupt projection file for %s (%v) - quarantining and rebuilding", sessionID, err)
+		_ = os.Rename(s.sessionPath(sessionID), s.sessionPath(sessionID)+".corrupt")
+		return &projectionFile{Version: 1, SessionID: sessionID}, nil
 	}
 	if state.Version == 0 {
 		state.Version = 1
@@ -287,15 +293,52 @@ func (s *ProjectionStore) saveLocked(state *projectionFile) error {
 		return err
 	}
 	path := s.sessionPath(state.SessionID)
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return err
+	// #1801 case 3: the daemon and the desktop/agent EACH construct a
+	// store over the SAME directory - a FIXED tmp name meant two processes
+	// could interleave writes on one file (O_TRUNC, not O_EXCL) and
+	// publish mixed content via rename. Unique tmp per write.
+	tmp, cerr := os.CreateTemp(s.dir, ".projection-*.tmp")
+	if cerr != nil {
+		return cerr
 	}
-	return os.Rename(tmpPath, path)
+	tmpPath := tmp.Name()
+	if _, werr := tmp.Write(data); werr != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return werr
+	}
+	// #1801 case 1: fsync the file BEFORE rename - a crash between
+	// WriteFile and Rename could publish a torn/zero-length JSON, and the
+	// load side then failed that session FOREVER (the only way out was
+	// deleting the file by hand).
+	if serr := tmp.Sync(); serr != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return serr
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		os.Remove(tmpPath)
+		return cerr
+	}
+	if rerr := os.Rename(tmpPath, path); rerr != nil {
+		os.Remove(tmpPath)
+		return rerr
+	}
+	// Best-effort directory fsync so the rename itself survives a crash.
+	if d, derr := os.Open(s.dir); derr == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 func (s *ProjectionStore) sessionPath(sessionID string) string {
-	name := strings.ReplaceAll(sessionID, string(filepath.Separator), "_")
+	// #1801 case 2: only filepath.Separator was replaced - on Windows
+	// that is a backslash, so 'a/../../x' kept its forward slashes and
+	// Join escaped the directory. SessionID arrives from the gateway
+	// (remote input); replace BOTH separators.
+	name := strings.ReplaceAll(sessionID, "/", "_")
+	name = strings.ReplaceAll(name, "\\", "_")
 	return filepath.Join(s.dir, name+".json")
 }
 
