@@ -4080,7 +4080,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.editPropagation.recordGreenBuild()
 					// #1460-C: a green verification confirms the edit
 					// sequence was legitimate refinement, not churn.
-					a.fileChurn.recordVerifySuccess()
+					// #1561 case B: only failure-aware verification (test/
+					// build/vet-class) may clear, and the clear is scoped
+					// to the command's path arguments - `gofmt -l .` (green
+					// while REPORTING problems), `make clean` and
+					// scope-unrelated commands no longer wipe the books.
+					if isStrictVerifyCommand(cmd) {
+						a.fileChurn.recordVerifySuccess(cmd)
+					}
 				}
 			}
 			// Convergence lock: record verification result to detect post-verify
