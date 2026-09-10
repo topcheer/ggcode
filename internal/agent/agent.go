@@ -3640,7 +3640,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// "12 tool calls", not "12 edits"); only failed mutation edits
 			// feed the per-file counts (handled inside recordToolCall).
 			a.solutionFixation.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
-			a.redundantReverify.recordEdit(tc.Name)
+			// #1486 case E: a FAILED edit_file/write_file changed nothing on
+			// disk - counting it as editsSince wrongly told the reverify
+			// detector "sources changed since your last verify" and
+			// suppressed a legitimate redundant-rerun warning.
+			if !result.IsError {
+				a.redundantReverify.recordEdit(tc.Name)
+			}
 			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
 				a.injectGuidance(fixationHint)
