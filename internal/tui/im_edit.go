@@ -322,7 +322,12 @@ func (m *Model) isAdapterRunning(name string) bool {
 	}
 	for _, state := range m.imManager.Snapshot().Adapters {
 		if state.Name == name {
-			return true
+			// #1735 case 2: stopAdapter leaves the entry with
+			// Status="disconnected" (nothing deletes it) - a name-only
+			// match treated a STOPPED adapter as running, so editing any
+			// field of a manually-stopped (or crash-marked) adapter
+			// silently restarted it. Only live entries hot-reload.
+			return state.Status != "disconnected"
 		}
 	}
 	return false

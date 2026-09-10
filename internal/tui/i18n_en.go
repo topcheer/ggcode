@@ -761,6 +761,14 @@ func enCatalog(key string) string {
 		return "current: %s (latest: %s)"
 	case "update.unknown":
 		return "not checked yet"
+	case "update.restarting":
+		return "Restarting to apply the update..."
+	case "label.tools":
+		return "Tools"
+	case "label.active":
+		return "Active"
+	case "label.tasks":
+		return "tasks"
 	case "update.check_failed":
 		return "check failed: %s"
 	case "update.unavailable":
