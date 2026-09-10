@@ -27,6 +27,93 @@ import "github.com/topcheer/ggcode/internal/debug"
 // B-class detectors, leaving behavioral windows intact. Called after a
 // successful context compaction.
 func (a *Agent) resetGuidanceCounters() {
+	// #1826 case 1: family-level closure of the quota-reset enumeration
+	// gap. Historical fixes appended per-issue (#1465-A, #1572-C, #1605-A,
+	// #1646, #1651, #1843 case 3) with no mechanism forcing new detectors
+	// to register; the registration mechanism is the pin test in
+	// guidance_compact_reset_1826_test.go (quotaRegistry lists every
+	// quota-bearing detector field - a new detector gets added there by
+	// review convention and the source pin fails if the reset entry goes
+	// missing). Contract unchanged: ONLY injection quotas reset;
+	// behavioral windows (sliding buffers, ledgers, maps) survive.
+	// silent_error (fired quota-1; unresolvedErrors ledger is behavioral)
+	if a.silentError != nil {
+		a.silentError.fired = false
+	}
+	// scope_drift (fired quota-1; editedDirs/editFiles/productiveCount
+	// are behavioral facts)
+	if a.scopeDrift != nil {
+		a.scopeDrift.fired = false
+	}
+	// error_strategy_loop (warningCount quota only; recentResults/cats
+	// and firedFor are behavioral - firedFor re-arming would re-nag a
+	// strategy already warned about)
+	if a.errStrategyLoop != nil {
+		a.errStrategyLoop.warningCount = 0
+	}
+	// commit_hint_gate (fired quota-1)
+	if a.commitHint != nil {
+		a.commitHint.fired = false
+	}
+	// convergence_lock (warned quota-1)
+	if a.convergenceLock != nil {
+		a.convergenceLock.warned = false
+	}
+	// give_up+revert (#1823 case 2 re-add; fired quota-1 - the pairing
+	// evidence is behavioral but the warning budget reopens)
+	if a.giveupRevert != nil {
+		a.giveupRevert.mu.Lock()
+		a.giveupRevert.fired = false
+		a.giveupRevert.mu.Unlock()
+	}
+	// input_underspec (warned quota-1)
+	if a.inputUnderspec != nil {
+		a.inputUnderspec.warned = false
+	}
+	// tool_integration_monitor (warnings quota only; evidence ledger
+	// survives)
+	if a.integrationMonitor != nil {
+		a.integrationMonitor.warnings = 0
+	}
+	// iter_pressure (warningsFired quota only)
+	if a.iterPressure != nil {
+		a.iterPressure.warningsFired = 0
+	}
+	// premature_commit (warned quota-1)
+	if a.prematureCommit != nil {
+		a.prematureCommit.warned = false
+	}
+	// reproducer_lifecycle (warned quota only - the lifecycle stage
+	// machine is behavioral disk/test state)
+	if a.reproducerLifecycle != nil {
+		a.reproducerLifecycle.mu.Lock()
+		a.reproducerLifecycle.warned = false
+		a.reproducerLifecycle.mu.Unlock()
+	}
+	// reversibility_check (warnCount quota; observed-irreversible-actions
+	// ledger is behavioral)
+	if a.reversibility != nil {
+		a.reversibility.mu.Lock()
+		a.reversibility.warnCount = 0
+		a.reversibility.mu.Unlock()
+	}
+	// tool_result_redundancy (warnings quota only)
+	if a.toolRedundancy != nil {
+		a.toolRedundancy.warnings = 0
+	}
+	// tunnel_vision (warned quota-1)
+	if a.tunnelVision != nil {
+		a.tunnelVision.warned = false
+	}
+	// #1826 whitelist - quota-bearing fields deliberately NOT reset here:
+	//   monorepoScoper (no quota field; scoping decision is behavioral)
+	//   diminishingEdit / errorPropagate / falsePremise / perfBaseline /
+	//   prematureRefactor / recklessExec (quota fields live on inner
+	//   sub-states or fire paths covered by the per-run reset in
+	//   resetDetectors; none hold a run-scoped injection quota burned
+	//   across compaction)
+	//   diskSpace.fired (environmental state, not run-scoped)
+	//   overseer hard-escalation sequence (progression must survive)
 	// verify_debt
 	if a.verifyDebt != nil {
 		a.verifyDebt.mu.Lock()
