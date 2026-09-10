@@ -795,12 +795,15 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("🌙 Knight running: %s", goal))
 		m.setLoading(true)
-		m.spinner.Start("Knight task")
+		// #1758 case 2: spinner.Start returns the FIRST tick Cmd - dropping
+		// it left the animation frozen on frame one until Stop (the elapsed
+		// timer kept running). Batch it with the task Cmd.
+		tick := m.spinner.Start("Knight task")
 		m.statusActivity = "Knight task"
 		m.statusToolName = "knight"
 		m.statusToolArg = util.Truncate(goal, 80)
 		m.statusToolCount = 1
-		return func() tea.Msg {
+		return tea.Batch(tick, func() tea.Msg {
 			// #1364: cancellable at shutdown instead of context.Background.
 			taskCtx, handle := m.registerKnightTask()
 			defer m.releaseKnightTask(handle)
@@ -810,7 +813,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				Result: result,
 				Err:    err,
 			}
-		}
+		})
 	case "propose":
 		if len(parts) < 3 {
 			m.chatWriteSystem(nextSystemID(), "Usage: /knight propose <project-improvement-goal>")
@@ -823,12 +826,12 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		}
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("📝 Knight drafting project proposal: %s", goal))
 		m.setLoading(true)
-		m.spinner.Start("Knight proposal")
+		tick := m.spinner.Start("Knight proposal") // #1758 case 2: keep the tick
 		m.statusActivity = "Knight proposal"
 		m.statusToolName = "knight"
 		m.statusToolArg = util.Truncate(goal, 80)
 		m.statusToolCount = 1
-		return func() tea.Msg {
+		return tea.Batch(tick, func() tea.Msg {
 			// #1364: cancellable at shutdown instead of context.Background.
 			taskCtx, handle := m.registerKnightTask()
 			defer m.releaseKnightTask(handle)
@@ -839,7 +842,7 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 				Result:   result,
 				Err:      err,
 			}
-		}
+		})
 	case "proposals":
 		if len(parts) >= 4 {
 			action := strings.ToLower(parts[2])
