@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/topcheer/ggcode/internal/debug"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -30,11 +31,21 @@ func NewMCPManager(registry *tool.Registry) *MCPManager {
 // Each server is initialized, its tools are discovered via tools/list,
 // and registered in the tool registry with "mcp__" prefix.
 func (m *MCPManager) ConnectServers(ctx context.Context, servers []MCPServer) error {
+	var failures []string
 	for _, srv := range servers {
 		if err := m.connectServer(ctx, srv); err != nil {
 			debug.Log("acp", "failed to connect MCP server %q: %v", srv.Name, err)
-			// Non-fatal: continue with other servers
+			// #1797: this failure used to be debug-log-only - an ACP peer that
+			// legitimately mounted a type:"sse" server (per the stale upstream-spec
+			// comment on MCPServer.Type) got "unsupported transport" swallowed and
+			// a session that silently lacked the server's tools. Keep per-server
+			// isolation (one bad server must not kill the session) but surface the
+			// aggregate to the caller so the peer sees WHY tools are missing.
+			failures = append(failures, fmt.Sprintf("%s: %v", srv.Name, err))
 		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("failed to connect %d MCP server(s): %s", len(failures), strings.Join(failures, "; "))
 	}
 	return nil
 }
