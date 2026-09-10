@@ -252,9 +252,31 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 
 	// 7. Store ref for cleanup + create P2P upgrade manager.
 	h.mu.Lock()
+	// #1787 case 1: a second StartShare used to overwrite the old
+	// activeShare/upgradeMgr references WITHOUT stopping them - the old
+	// manager's PeerConnections and negotiation goroutines leaked for the
+	// process lifetime (#1501 documented exactly this for the Close path;
+	// the StartShare overwrite path never got the fix). Stop the previous
+	// share first, mirroring StopShare's teardown order.
+	if oldRef := h.activeShare; oldRef != nil {
+		h.activeShare = nil
+		oldMgr := h.upgradeMgr
+		h.upgradeMgr = nil
+		h.mu.Unlock()
+		if oldMgr != nil {
+			oldMgr.Stop()
+		}
+		if oldRef.broker != nil {
+			oldRef.broker.Stop()
+		}
+		h.DetachOnlineBroker()
+		h.mu.Lock()
+	}
 	h.activeShare = &tunnelSessionRef{session: sess, broker: broker}
+	var p2pMgr *tunnel.UpgradeManager
 	if h.p2pFactory != nil && h.p2pConfig.Enabled {
-		h.upgradeMgr = tunnel.NewUpgradeManager(broker, h.p2pFactory, h.p2pConfig)
+		p2pMgr = tunnel.NewUpgradeManager(broker, h.p2pFactory, h.p2pConfig)
+		h.upgradeMgr = p2pMgr // #1787 case 2: keep the read INSIDE the lock
 	}
 	h.mu.Unlock()
 
@@ -263,7 +285,6 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 	// Starting the upgrade before the mobile client has joined means the
 	// SDP offer is sent to an empty relay room and silently discarded.
 	onConnected := cfg.OnConnected
-	p2pMgr := h.upgradeMgr
 	broker.OnRelayConnected(func(info tunnel.RelayConnectedState) {
 		if onConnected != nil {
 			onConnected(info)
