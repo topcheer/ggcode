@@ -141,13 +141,14 @@ func coalesceGuidance(hints []string) []string {
 	}
 	if len(hints) <= coalesceMaxHints {
 		// Even with few hints, deduplicate by tag.
-		return dedupByTag(hints)
+		deduped, dropped := dedupByTag(hints)
+		return noteDedupDropped(deduped, dropped)
 	}
 
 	// Deduplicate first.
-	deduped := dedupByTag(hints)
+	deduped, dropped := dedupByTag(hints)
 	if len(deduped) <= coalesceMaxHints {
-		return deduped
+		return noteDedupDropped(deduped, dropped)
 	}
 
 	// Separate critical from advisory.
@@ -194,18 +195,23 @@ func coalesceGuidance(hints []string) []string {
 }
 
 // dedupByTag removes hints with duplicate tags, keeping the first
-// occurrence of each tag.
-func dedupByTag(hints []string) []string {
+// occurrence of each tag. Dropped copies are reported via the returned
+// count so the loss is visible (#1840 case 3): same-tag drops used to be
+// fully silent AND ran before the cap stage, so they never reached the
+// suppression summary - two detectors reusing one tag collided invisibly.
+func dedupByTag(hints []string) ([]string, int) {
 	if len(hints) <= 1 {
-		return hints
+		return hints, 0
 	}
 
 	seen := make(map[string]bool, len(hints))
 	result := make([]string, 0, len(hints))
+	dropped := 0
 
 	for _, h := range hints {
 		tag := extractHintTag(h)
 		if tag != "" && seen[tag] {
+			dropped++
 			continue
 		}
 		if tag != "" {
@@ -213,8 +219,18 @@ func dedupByTag(hints []string) []string {
 		}
 		result = append(result, h)
 	}
+	return result, dropped
+}
 
-	return result
+// noteDedupDropped appends a one-line visibility note when same-tag
+// dedup dropped content (#1840 case 3).
+func noteDedupDropped(result []string, dropped int) []string {
+	if dropped <= 0 {
+		return result
+	}
+	return append(result, fmt.Sprintf(
+		"[%d additional hint(s) with duplicate tags were merged into the ones above]",
+		dropped))
 }
 
 // appendWithSuppression adds a suppression summary when critical hints
