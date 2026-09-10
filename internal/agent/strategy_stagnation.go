@@ -48,8 +48,12 @@ const (
 	stagnationHistorySize = 8
 
 	// stagnationFailureThreshold: consecutive same-tool+target failures
+	// (#1498 case D: was 2 - a single transient failure retried verbatim,
+	// the exact recovery transient_retry endorses, got branded "local
+	// minimum / STOP retrying / waste of tokens" on its SECOND failure.
+	// Three consecutive failures with no approach change is a real rut.)
 	// needed to trigger a warning.
-	stagnationFailureThreshold = 2
+	stagnationFailureThreshold = 3
 
 	// stagnationMaxWarnings: max warnings per run.
 	stagnationMaxWarnings = 2

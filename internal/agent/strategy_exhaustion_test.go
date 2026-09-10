@@ -193,16 +193,19 @@ func TestStrategyExhaustion_StrategySignature(t *testing.T) {
 		t.Fatal("identical sequences should have same signature")
 	}
 
-	// Different order = different signature.
+	// #1498 case C: different ORDER = same signature (order-sensitivity let
+	// pure noise fabricate distinct strategies); different TOOL SET =
+	// different signature. grep is a read-only observation tool and is
+	// dropped from signatures entirely.
 	sig3 := seStrategySignature([]string{"run_command", "edit_file"})
-	if sig1 == sig3 {
-		t.Fatal("different order should have different signature")
+	if sig1 != sig3 {
+		t.Fatal("different order of the same recovery set must have same signature")
 	}
 
-	// Different tools = different signature.
-	sig4 := seStrategySignature([]string{"grep", "run_command"})
+	// Different recovery tools = different signature.
+	sig4 := seStrategySignature([]string{"edit_file", "write_file"})
 	if sig1 == sig4 {
-		t.Fatal("different tools should have different signature")
+		t.Fatal("different recovery tool sets should have different signature")
 	}
 }
 
