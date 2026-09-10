@@ -75,12 +75,24 @@ func NewDangerousDetector() *DangerousDetector {
 		// rm actually delete /) scored DangerNone and ran with zero
 		// confirmation in bypass/autopilot (config_policy only blocks >=Critical).
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\s*$`), "rm -rf / would delete the entire filesystem"},
+		// #1804 case 1: a PAIR OF QUOTES defeated the gate - 'rm -rf "/"'
+		// scored only Medium and ran with zero confirmation under
+		// bypass/autopilot (config_policy blocks >=Critical only). Same
+		// for $HOME expanding to the root of everything the user owns.
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']/["']\s*$`), "rm -rf quoted-root would delete the entire filesystem"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']?\$HOME["']?\s*$`), "rm -rf $HOME would delete the user's entire home directory"},
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
 		// --no-preserve-root alone turns `rm -rf /` from a guarded refusal
 		// into a real filesystem wipe; Critical wherever it appears.
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\b[^|;&\n]*--no-preserve-root`), "rm --no-preserve-root can delete the root filesystem"},
 		{DangerCritical, regexp.MustCompile(`(?i)\bmkfs\b`), "mkfs would format a disk"},
-		{DangerCritical, regexp.MustCompile(`(?i)\bdd\s+.*\bif=/dev/`), "dd with device input could destroy data"},
+		// #1804 case 2: bare if=/dev/ flagged 'dd if=/dev/zero of=blank.img'
+		// (the everyday blank-image build) as CRITICAL - the genuinely
+		// dangerous side (of= writing devices) has its own pattern below.
+		// Demote the read side to High and enumerate the RAW-DEVICE
+		// families only (Go's RE2 has no negative lookahead - the safe
+		// generators zero/urandom/random/stdin/null simply don't match).
+		{DangerHigh, regexp.MustCompile(`(?i)\bdd\s+.*\bif=/dev/(sd|hd|nvme|vd|r?disk|mmcblk|mapper|loop|dm-|xvd)`), "dd reading from a raw device is unusual - verify the operands"},
 		// #1595-A: the dd pattern only anchored on the READ side (if=) -
 		// 'dd of=/dev/sda if=disk.img' (write the image TO the device,
 		// the classic disk-destroy) matched nothing and bypass/autopilot
@@ -154,6 +166,13 @@ func NewDangerousDetector() *DangerousDetector {
 		// Patterns use (?:\s|$) after --force to exclude --force-with-lease.
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--force(?:\s|$)`), "git push --force can overwrite remote history irrevocably"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*\s-f(?:\s|$)`), "git push -f can overwrite remote history irrevocably"},
+		// #1804 case 3: documented force variants that ALL scored (none) -
+		// '+refspec' (the documented forced-push spelling), '--force=true'
+		// (the = form dodged the space-or-end anchor), and checkout/switch -f
+		// (discard working tree, same data loss family as reset --hard).
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b[^;|&]*\s\+\S+:\S+`), "git push +refspec forces the push (overwrites remote history)"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--force=`), "git push --force=<val> forces the push"},
+		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+(?:checkout|switch)\s+(?:-[a-zA-Z]*\s+)*-[a-zA-Z]*f[a-zA-Z]*\s+\S`), "git checkout/switch -f discards local changes"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--mirror\b`), "git push --mirror can force-delete remote branches"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+push\b.*--delete\b`), "git push --delete removes a remote branch"},
 		{DangerHigh, regexp.MustCompile(`(?i)\bgit\s+reset\s+--hard\b`), "git reset --hard discards ALL uncommitted changes permanently"},
@@ -187,7 +206,9 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*rm\s+-rf\s+/["\']`), "AppleScript do shell script with rm -rf /"},
 		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*rm\s+-rf\s+/\*["\']`), "AppleScript do shell script with rm -rf /*"},
 		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*mkfs\b`), "AppleScript do shell script with mkfs"},
-		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*dd\s+if=/dev/`), "AppleScript do shell script with dd device input"},
+		// #1804 case 2: raw-device READ side demoted to match the plain
+		// dd pattern above (device WRITE via AppleScript stays Critical).
+		{DangerHigh, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*dd\s+if=/dev/(sd|hd|nvme|vd|r?disk|mmcblk|mapper|loop|dm-|xvd)`), "AppleScript dd reading from a raw device"},
 		{DangerCritical, regexp.MustCompile(`(?i)do\s+shell\s+script\s+["\'].*chmod\s+-R\s+777\s+/["\']`), "AppleScript do shell script with chmod 777 /"},
 
 		// High: AppleScript privilege escalation and sensitive access
