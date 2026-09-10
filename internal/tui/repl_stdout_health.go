@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"golang.org/x/sys/unix"
 )
 
 // displaySleepMsg is sent by the stdout health monitor when stdout
@@ -97,7 +98,13 @@ func probeStdout() bool {
 	}
 
 	// Set non-blocking
-	if err := fdSetFlags(fd, flags|0x800); err != nil { // O_NONBLOCK
+	// #1753 case 1: 0x800 is O_NONBLOCK on LINUX only - on darwin it is
+	// O_EXCL, and F_SETFL silently ignores open-only bits, so the fd stayed
+	// BLOCKING: os.Stdout.Write hung forever on a dead/sleeping display,
+	// the health goroutine died with it, and the monitor was a placebo on
+	// the flagship darwin/arm64 platform (the file's own display-sleep
+	// scenario). The sibling repl_tty_guard.go always used the constant.
+	if err := fdSetFlags(fd, flags|unix.O_NONBLOCK); err != nil {
 		// #1389-A: surface the failure instead of proceeding with flags
 		// half-set (the old code ignored this AND the restore error).
 		return true // cannot probe safely - assume alive
