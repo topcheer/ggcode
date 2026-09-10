@@ -374,6 +374,28 @@ func UpdateConfig(values map[string]interface{}) error {
 		cfg.ProbeContext = v
 	}
 	if v, ok := values["impersonatePreset"].(string); ok {
+		// #1815 case 2: this path must go through the same validation and
+		// package-global update as ApplyImpersonation. Writing cfg directly
+		// left activeImpersonation stale, so the provider rebuild that
+		// App.UpdateConfig triggers still baked the OLD headers into the new
+		// provider; and an unknown preset id persisted silently and died at
+		// next init (#614's guard only covered the ApplyImpersonation path).
+		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
+			return fmt.Errorf("unknown impersonation preset %q", v)
+		}
+		var preset *provider.ImpersonationPreset
+		if v != "none" && v != "" {
+			for _, p := range provider.DefaultImpersonationPresets() {
+				if p.ID == v {
+					preset = &p
+					break
+				}
+			}
+		}
+		// Preserve CustomHeaders/CustomVersion already in cfg; version falls
+		// back to the persisted one so SetActiveImpersonation sees the same
+		// state the next cold init would rebuild from.
+		provider.SetActiveImpersonation(preset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
 		cfg.Impersonation.Preset = v
 	}
 	if v, ok := values["impersonateCustomVersion"].(string); ok {
@@ -712,7 +734,21 @@ func GetImpersonationPresets() []ImpersonationPresetInfo {
 // (#67/#69 struct-overwrite family, 4th instance).
 func ApplyImpersonation(presetID, version string, customHeaders map[string]string) error {
 	globalMu.Lock()
-	defer globalMu.Unlock()
+	chatSnap := activeChatBridge
+	err := applyImpersonationLocked(presetID, version, customHeaders)
+	globalMu.Unlock()
+	if err != nil {
+		return err
+	}
+	// #1815 case 1: push the new headers into the RUNNING provider (see
+	// comment inside applyImpersonationLocked tail / refreshRuntimeImpersonationHeaders).
+	if chatSnap != nil {
+		chatSnap.refreshRuntimeImpersonationHeaders()
+	}
+	return nil
+}
+
+func applyImpersonationLocked(presetID, version string, customHeaders map[string]string) error {
 	cfg := globalCfg
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
@@ -752,6 +788,38 @@ func ApplyImpersonation(presetID, version string, customHeaders map[string]strin
 	}
 	noteConfigFileSaved()
 	return nil
+}
+
+// refreshRuntimeImpersonationHeaders pushes the currently-active
+// impersonation headers into the bridge's running provider (TUI
+// impersonate_panel.go parity, #1815 case 1). Must not be called while
+// holding globalMu (b.mu inside).
+func (b *ChatBridge) refreshRuntimeImpersonationHeaders() {
+	b.mu.Lock()
+	ag := b.agent
+	cfg := b.cfg
+	b.mu.Unlock()
+	if ag == nil || cfg == nil {
+		return
+	}
+	p := ag.Provider()
+	if p == nil {
+		return
+	}
+	protocol := "openai"
+	if ep := cfg.ActiveEndpointConfig(); ep != nil && ep.Protocol != "" {
+		protocol = ep.Protocol
+	}
+	headers := provider.BuildHeadersForProvider(protocol)
+	if mutable, ok := p.(provider.HeaderMutable); ok {
+		mutable.UpdateRuntimeHeaders(headers)
+	}
+	// For the copilot provider, also set the UA directly (TUI parity).
+	if copilot, ok := p.(interface{ SetImpersonatedUA(string) }); ok {
+		if ua := headers.Get("User-Agent"); ua != "" {
+			copilot.SetImpersonatedUA(ua)
+		}
+	}
 }
 
 // Ensure unused imports are referenced.
