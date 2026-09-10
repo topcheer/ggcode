@@ -185,11 +185,48 @@ func (b *DaemonBridge) ModifiedFiles() (string, error) {
 	return sb.String(), nil
 }
 
+// sanitizeGitDiffArgs filters remote /diff arguments down to a safe
+// subset (#1752 case 1): IM text arrives via strings.Fields and was passed
+// through verbatim - `--output=~/.bashrc` made git WRITE the diff to any
+// file the process can touch, --ext-diff/-O widened the surface. No shell
+// is involved, but git's own options are attacker-reachable. Allowlist:
+// a few display flags, then anything after a `--` separator (paths).
+func SanitizeGitDiffArgs(args []string) []string {
+	allowed := map[string]bool{
+		"--cached": true, "--stat": true, "--numstat": true,
+		"--shortstat": true, "--name-only": true, "--name-status": true,
+	}
+	var out []string
+	pastSeparator := false
+	for _, a := range args {
+		if pastSeparator {
+			out = append(out, a)
+			continue
+		}
+		if a == "--" {
+			pastSeparator = true
+			out = append(out, a)
+			continue
+		}
+		if allowed[a] {
+			out = append(out, a)
+			continue
+		}
+		// Positional tokens (refs, paths - no leading dash) pass; every
+		// other `-`-prefixed token is dropped silently, so the resulting
+		// command is always a plain read-only diff.
+		if !strings.HasPrefix(a, "-") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 	b.mu.Lock()
 	dir := b.workingDir
 	b.mu.Unlock()
-	gitArgs := append([]string{"diff"}, args...)
+	gitArgs := append([]string{"diff"}, SanitizeGitDiffArgs(args)...)
 	cmd := exec.Command("git", gitArgs...)
 	if dir != "" {
 		cmd.Dir = dir
