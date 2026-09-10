@@ -564,6 +564,22 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 	if isFirst {
 		calCtx, cancel := context.WithTimeout(ctx, calibrateFirstTimeout)
 		defer cancel()
+		// #1795 case 1: the guard sat AFTER the remote call - the skip
+		// branch neither applied the result nor recorded a failure, so
+		// lastCalibrate stayed zero, shouldCalibrate was ALWAYS true, and
+		// every CountTokens made a synchronous 2s remote call (competing
+		// with the main API for rate limit) whose precise value was then
+		// DISCARDED for the local estimate. Guard first; when skipping,
+		// mark the calibration as done so the cadence holds.
+		// #1618-A: skip asymmetric samples - the local estimator counts
+		// only text, but image/tool_result-attachment/thinking blocks all
+		// land in the remote count. Feeding such a sample pinned the
+		// ratio at the 3.0 clamp for the whole visual session.
+		if messagesContainNonTextBlocks(messages) {
+			debug.Log("provider-calibrator", "first calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
+			p.calibrator.recordSkip()
+			return estimated, nil
+		}
 		realTokens, err := p.remoteCountTokens(calCtx, messages)
 		if err != nil {
 			debug.Log("provider-calibrator", "first calibration failed: %v", err)
@@ -571,16 +587,6 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 			// a synchronous remote attempt on every call (#708); permanent
 			// 404/403 errors disable inside remoteCountTokens.
 			p.calibrator.recordFailure()
-			return estimated, nil
-		}
-		// #1618-A: skip asymmetric samples - the local estimator counts
-		// only text, but image/tool_result-attachment/thinking blocks all
-		// land in the remote count. Feeding such a sample pinned the
-		// ratio at the 3.0 clamp for the whole visual session (every
-		// subsequent estimate x3 -> premature compaction), and it could
-		// never converge because images stay in context.
-		if messagesContainNonTextBlocks(messages) {
-			debug.Log("provider-calibrator", "first calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
 			return estimated, nil
 		}
 		p.calibrator.applyResult(estimated, realTokens)
@@ -594,15 +600,17 @@ func (p *AnthropicProvider) CountTokens(ctx context.Context, messages []Message)
 	safego.Go("provider.calibrateTokens", func() {
 		calCtx, cancel := context.WithTimeout(context.Background(), calibrateAsyncTimeout)
 		defer cancel()
+		// #1795 case 1: same reordering as the first-calibration path -
+		// guard BEFORE paying for the remote call.
+		if messagesContainNonTextBlocks(messages) {
+			debug.Log("provider-calibrator", "async calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
+			p.calibrator.recordSkip()
+			return
+		}
 		realTokens, err := p.remoteCountTokens(calCtx, messages)
 		if err != nil {
 			debug.Log("provider-calibrator", "async calibration failed: %v", err)
 			p.calibrator.recordFailure() // transient errors back off, don't disable (#708)
-			return
-		}
-		// #1618-A: same asymmetry guard as the first-calibration path.
-		if messagesContainNonTextBlocks(messages) {
-			debug.Log("provider-calibrator", "async calibration skipped: non-text blocks (image/thinking) make the sample asymmetric")
 			return
 		}
 		p.calibrator.applyResult(estimated, realTokens)
@@ -619,7 +627,15 @@ func messagesContainNonTextBlocks(messages []Message) bool {
 	for _, m := range messages {
 		for _, b := range m.Content {
 			switch b.Type {
-			case "image", "tool_result", "thinking", "redacted_thinking":
+			// #1795 case 2: tool_result was filtered WHOLESALE, but the
+			// local estimator already counts its Output text (symmetric) -
+			// only its EMBEDDED IMAGES are asymmetric. Agent sessions
+			// ALWAYS carry tool_result from the first tool call on, so the
+			// async calibration never ran for any real agent session and
+			// the ratio froze on the first pure-text sample. Images and
+			// thinking blocks remain asymmetric (counted remotely,
+			// invisible locally).
+			case "image", "thinking", "redacted_thinking":
 				return true
 			}
 		}
