@@ -34,7 +34,8 @@ package agent
 //     - each new attempt reveals the same deadlock - never escalates
 //
 // Existing ggcode detectors that are RELATED but do NOT cover this:
-//   - premature_surrender.go: detects giving up too EARLY (inverse problem).
+//   - (#1823: premature_surrender.go was removed in 387282a6; the narrow
+//     give-up+revert re-add lives in giveupRevertCheck in premature_success.go.)
 //   - error_strategy_loop.go: detects repeating the SAME error strategy.
 //     This detector catches DISTINCT approaches all failing.
 //   - error_compounding.go: detects errors in rapid succession.

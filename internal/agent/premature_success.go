@@ -30,8 +30,6 @@ import (
 //     imply correctness without naming a specific verification action.
 //   - truncated_completeness_fallacy: model stops generating due to output
 //     limits. This detector addresses the agent's JUDGMENT being wrong.
-//   - satisficing_settle: accepting "good enough" solution. This detector
-//     catches claiming success when the solution hasn't been verified at all.
 //   - fulfillment_gate: checks task completion criteria. This detector is
 //     about the TIMING gap between edits and verification.
 
