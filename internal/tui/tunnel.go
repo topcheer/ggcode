@@ -1445,8 +1445,19 @@ func tunnelSnapshotAgentEvents(agentID, textID, color string, events []subagent.
 	for _, ev := range events {
 		switch ev.Type {
 		case subagent.AgentEventReasoning:
+			// #1808: guard the EMPTY string only and normalize for the
+			// sentinel - do NOT trim. Pure-whitespace separator chunks
+			// (" ") are deliberately preserved by the runner (its comment
+			// warns trimming glues words together); routing them through
+			// NormalizeReasoningChunk returned "" here, so snapshot replay
+			// rebuilt the text with words glued - the runner's defense
+			// silently regressed on the replay path.
 			if ev.Text != "" {
-				reasoningBuf.WriteString(tunnel.NormalizeReasoningChunk(ev.Text))
+				if trimmed := strings.TrimSpace(ev.Text); trimmed == tunnel.RedactedReasoningSentinel {
+					reasoningBuf.WriteString(tunnel.RedactedReasoningPlaceholder)
+				} else {
+					reasoningBuf.WriteString(ev.Text)
+				}
 			}
 		case subagent.AgentEventToolCall:
 			flushReasoning(true)
