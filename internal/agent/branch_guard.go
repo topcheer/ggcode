@@ -1,8 +1,13 @@
 package agent
 
-// branch_guard.go implements Protected Branch Edit Warning — a pre-edit guard
-// that warns when the agent is about to modify files on a protected branch
-// (main, master, develop, release/*).
+// branch_guard.go implements Protected Branch Edit Warning — a post-edit
+// informational guard that fires after the first file edit of a run lands
+// on a protected branch (main, master, develop, release/*), warning before
+// the NEXT edit/commit rather than blocking the one that already happened.
+// (#1799 case 2: the header previously claimed "a pre-edit guard … warns
+// when the agent is about to modify files" — the wiring is in the
+// mutatesSourceTree result-handling branch, i.e. post-execution; the body
+// text and one-shot latch were already consistent with that.)
 //
 // Research basis: In 2025-2026, all major coding agents added branch protection
 // awareness as a safety feature:
