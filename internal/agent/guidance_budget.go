@@ -50,6 +50,16 @@ const (
 	// - or tool-hint bytes silently starve detector guidance and vice versa).
 	// Critical hints bypass the count cap but still charge this byte cap.
 	guidanceBudgetBytesPerTurn = 2048
+
+	// #1840 case 2: critical hints charge a DEDICATED sub-pool instead of
+	// competing with advisory in the shared one. The shared pool is
+	// allocated first-come-first-served across parallel tool results, so
+	// early results' advisory could eat all 2048 bytes and later results'
+	// [hardcoded-secret]/[git-destructive] notices were silently dropped -
+	// priority only existed WITHIN a single result. The dedicated pool
+	// keeps #1197's flood bound (a critical-tag stream is still capped,
+	// just separately) while making critical priority real cross-result.
+	guidanceBudgetCriticalBytesPerTurn = 1024
 )
 
 // #441: critical classification uses ONLY the head tag (extractHintTag)
@@ -68,6 +78,15 @@ type guidanceBudget struct {
 	// tool-result hint path (allowDeduped) and injectGuidance charge against it
 	// (#1206 symmetry fix).
 	appendedBytes int
+	// criticalBytes is the dedicated critical-hint byte pool (#1840 case 2).
+	criticalBytes int
+	// delivered records the guidance texts actually delivered this turn
+	// across BOTH paths (#1840 case 4) so conflict arbitration can see the
+	// union - injectGuidance guidance previously bypassed the conflict
+	// detector entirely (it only scanned a single tool result's hint set),
+	// so an errorRush "ACT NOW" injection could coexist with a later
+	// "EXPLORE" hint with no arbitration.
+	delivered []string
 	// seenHintTags records tags of tool-result hints already injected this
 	// turn (#607 B3: cross-result dedup - the same meta-hint must not be
 	// re-injected into every subsequent tool result).
@@ -84,22 +103,27 @@ func (g *guidanceBudget) reset() {
 	g.suppressed = 0
 	g.seenHintTags = nil
 	g.appendedBytes = 0
+	g.criticalBytes = 0
+	g.delivered = nil
 }
 
 // allow checks whether a guidance message with the given text should be
 // injected. Returns true if the message should proceed (either within
 // budget or critical), false if it should be suppressed.
 func (g *guidanceBudget) allow(text string) bool {
-	// Byte-level flood cap applies to EVERYTHING, including critical hints:
-	// a stream of [SECURITY]-tagged notices can otherwise drown a result
-	// just as effectively as advisory noise (#1197).
+	// Critical messages first, against their dedicated pool (#1840 case 2).
+	if isCriticalGuidance(text) {
+		if g.criticalBytes+len(text) > guidanceBudgetCriticalBytesPerTurn {
+			g.suppressed++
+			return false
+		}
+		return true
+	}
+	// Byte-level flood cap for advisory (#1197: a stream of tagged notices
+	// can otherwise drown a result just as effectively as noise).
 	if g.appendedBytes+len(text) > guidanceBudgetBytesPerTurn {
 		g.suppressed++
 		return false
-	}
-	// Critical messages always pass through.
-	if isCriticalGuidance(text) {
-		return true
 	}
 	if g.injected < guidanceBudgetPerTurn {
 		g.injected++
@@ -126,18 +150,34 @@ func (g *guidanceBudget) allowDeduped(text string) bool {
 			g.suppressed++
 			return false
 		}
-		g.seenHintTags[tag] = true
+		// #1840 case 1: mark the dedup slot ONLY on delivery. Marking
+		// before allow() left the tag permanently recorded when the byte
+		// pool rejected the hint - the same tag (including later CRITICAL
+		// copies, which check dedup before the critical bypass) was then
+		// blocked for the rest of the turn while the hint was never
+		// delivered: the #681 "returned != delivered" residue.
 	}
 	ok := g.allow(text)
 	if ok {
-		g.chargeBytes(len(text))
+		if tag != "" {
+			if g.seenHintTags == nil {
+				g.seenHintTags = make(map[string]bool)
+			}
+			g.seenHintTags[tag] = true
+		}
+		g.chargeBytes(len(text), isCriticalGuidance(text))
+		g.delivered = append(g.delivered, text)
 	}
 	return ok
 }
 
 // chargeBytes records that n bytes of hint text were actually appended to
 // a tool result (#1197). Called by allowDeduped after a successful allow.
-func (g *guidanceBudget) chargeBytes(n int) {
+func (g *guidanceBudget) chargeBytes(n int, critical bool) {
+	if critical {
+		g.criticalBytes += n
+		return
+	}
 	g.appendedBytes += n
 }
 
@@ -181,7 +221,21 @@ func (a *Agent) injectGuidance(text string) bool {
 	// gated by the byte cap but never charged it, so tool-hint bytes could
 	// silently starve iteration-level detector guidance (and unlimited
 	// iteration injections never filled the pool for tool hints either).
-	a.guidanceBudget.chargeBytes(len(text))
+	// #1840 case 4: iteration-level guidance joins the conflict scan set.
+	// detectGuidanceConflict previously ran only over one tool result's
+	// retained hints; this path's injections (errorRush "ACT NOW" etc.)
+	// could contradict them unimpeded.
+	if ch := detectGuidanceConflict(append(append([]string{}, a.guidanceBudget.delivered...), text)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: ch,
+			}},
+		})
+	}
+	a.guidanceBudget.chargeBytes(len(text), isCriticalGuidance(text))
+	a.guidanceBudget.delivered = append(a.guidanceBudget.delivered, text)
 	a.contextManager.Add(provider.Message{
 		Role: "user",
 		Content: []provider.ContentBlock{{

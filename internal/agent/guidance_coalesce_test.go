@@ -214,7 +214,7 @@ func TestDedupByTag(t *testing.T) {
 		"[C] third",
 		"[B] duplicate of B",
 	}
-	result := dedupByTag(hints)
+	result, _ := dedupByTag(hints)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 after dedup, got %d: %v", len(result), result)
 	}
