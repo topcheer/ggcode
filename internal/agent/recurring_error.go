@@ -186,7 +186,13 @@ var (
 	// Matches sequences like ./a/b/ or /a/b/c/ and removes them so only
 	// the final file.ext remains. This makes fingerprints stable across
 	// path relocations (relative vs absolute, different root directories).
-	pathPrefixPattern = regexp.MustCompile(`(?:/?[\w.\-]+/)+`)
+	// #1486 case D: strip only leading root markers (./ ../ and absolute
+	// slashes). The old greedy `(?:/?[\w.\-]+/)+` removed ALL directory
+	// segments, so a/util.go:42 and b/util.go:42 collided into one
+	// fingerprint and distinct real errors merged their counts toward the
+	// soft/hard guidance gates. Named segments are kept: ./pkg/a/util.go
+	// -> pkg/a/util.go; a/util.go stays a/util.go.
+	pathPrefixPattern = regexp.MustCompile(`^(?:\.\./+|\./+|/+)+`)
 	// wsPattern collapses multiple whitespace into single space
 	wsPattern = regexp.MustCompile(`\s+`)
 )
@@ -267,10 +273,10 @@ func normalizeErrorLine(line string) string {
 	return s
 }
 
-// stripPathToBasename replaces directory path prefixes with empty string,
-// leaving only the basename. E.g. ./internal/agent/foo.go → foo.go,
-// /home/user/project/foo.go → foo.go. This makes fingerprints stable across
-// path relocations.
+// stripPathToBasename drops leading root markers only (#1486 case D):
+// ./internal/agent/foo.go → internal/agent/foo.go — the ./-vs-plain
+// spelling variance still merges, while sibling packages (a/util.go vs
+// b/util.go) no longer collide into one fingerprint.
 func stripPathToBasename(s string) string {
 	return pathPrefixPattern.ReplaceAllString(s, "")
 }
