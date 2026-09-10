@@ -767,6 +767,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleTunnelThemeChangeMsg(msg)
 	case wechatQRCodeMsg:
 		return m.handleWechatQRCodeMsg(msg)
+	case wechatPollDueMsg:
+		// #1792 case 2: the paced re-poll fired - run the real poll.
+		if m.wechatPanel != nil {
+			return m, m.pollWechatQRStatus(msg.token)
+		}
+		return m, nil
+
 	case wechatQRPollMsg:
 		return m.handleWechatQRPollMsg(msg)
 
