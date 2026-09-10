@@ -478,9 +478,76 @@ func forcePushSingleLine(cmd string) bool {
 // in a flag group) without being a dry run (-n in any flag group)
 // (#1569-B).
 func isCleanForceCommand(cmd string) bool {
+	// #1774 case 1: judge per-line like forcePushSingleLine - Fields
+	// consumes newlines, and a second line's '-f' leaked into the scan.
+	for _, line := range strings.Split(cmd, "\n") {
+		if cleanForceSingleLine(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// isGitGlobalFlag reports whether tok is a flag that may sit BETWEEN 'git'
+// and its subcommand (-C/--no-pager/-c/--git-dir/--work-tree...) -
+// 'git -C /repo clean -fd' must still detect (#1774 case 2).
+func isGitGlobalFlag(tok string) bool {
+	if !strings.HasPrefix(tok, "-") {
+		return false
+	}
+	switch tok {
+	case "-C", "--no-pager", "--no-optional-locks", "--literal-pathspecs",
+		"--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+		"--no-replace-objects", "--bare", "--no-renames":
+		return true
+	}
+	// -c takes a key=value glued or as the NEXT token; --git-dir /
+	// --work-tree / --namespace likewise - treat them (and their glued
+	// = forms) as consuming one following token.
+	return strings.HasPrefix(tok, "-c") || strings.HasPrefix(tok, "--git-dir") ||
+		strings.HasPrefix(tok, "--work-tree") || strings.HasPrefix(tok, "--namespace")
+}
+
+// gitSubcommandIndex finds the index of the subcommand token after 'git'
+// plus any global flags; -1 if not a git invocation. The token after a
+// valued global flag is its value and is skipped.
+func gitSubcommandIndex(toks []string) int {
+	for i, t := range toks {
+		st := strings.Trim(t, "\"'")
+		if st != "git" || i == 0 && false {
+			continue
+		}
+		j := i + 1
+		for j < len(toks) {
+			if isGitGlobalFlag(strings.Trim(toks[j], "\"'")) {
+				j++
+				// flags of form --key=value carry the value inline.
+				if j <= len(toks) && strings.Contains(toks[j-1], "=") {
+					continue
+				}
+				// bare -C/--git-dir style: skip the value token.
+				if j < len(toks) {
+					j++
+				}
+				continue
+			}
+			return j
+		}
+		return -1
+	}
+	return -1
+}
+
+func cleanForceSingleLine(cmd string) bool {
 	toks := strings.Fields(cmd)
 	for i, t := range toks {
-		if t != "clean" || i == 0 || toks[i-1] != "git" {
+		st := strings.Trim(t, "\"'")
+		if st != "clean" || i == 0 {
+			continue
+		}
+		// #1774 case 2: the token before 'clean' is either 'git' or a
+		// run of global flags started by 'git' ('git -C /repo clean').
+		if !gitChainPrecedes(toks, i) {
 			continue
 		}
 		hasF, hasN := false, false
@@ -488,6 +555,13 @@ func isCleanForceCommand(cmd string) bool {
 			// #1600-B: long forms too - --dry-run must suppress, --force
 			// must trigger (the short-group-only check fired CRITICAL on
 			// 'git clean --dry-run -fd', which deletes nothing).
+			// #1774 case 1: stop at command separators - 'git clean . &&
+			// rm -f x' is a force-free clean whose SECOND command's -f
+			// fired CRITICAL before (#1600-A fixed push only).
+			if tok == "&&" || tok == "||" || tok == "|" || tok == "&" ||
+				strings.ContainsAny(tok, ";\n") || strings.HasPrefix(tok, ";") {
+				break
+			}
 			switch tok {
 			case "--dry-run":
 				hasN = true
@@ -506,6 +580,57 @@ func isCleanForceCommand(cmd string) bool {
 			}
 		}
 		return hasF && !hasN
+	}
+	return false
+}
+
+// gitChainPrecedes reports whether toks[:i] forms 'git [global-flags...]' -
+// either toks[i-1]=="git" or a flag chain rooted at an earlier 'git'.
+func gitChainPrecedes(toks []string, i int) bool {
+	if i == 0 {
+		return false
+	}
+	if strings.Trim(toks[i-1], "\"'") == "git" {
+		return true
+	}
+	// Walk backwards from the subcommand: the chain is [git][flag value?]*
+	// so from position i-1 we may see (value, flag) pairs. Step backwards
+	// in PAIRS: if toks[j] is a valued flag's VALUE, toks[j-1] must be the
+	// flag; root at the token before the flag run.
+	j := i - 1
+	for j >= 1 {
+		fl := strings.Trim(toks[j], "\"'")
+		if fl == "git" {
+			return true
+		}
+		if !isGitGlobalFlag(fl) {
+			// Maybe it's a value token: check whether the token before it
+			// is a valued global flag (only when that flag REQUIRES a
+			// separate value).
+			prev := strings.Trim(toks[j-1], "\"'")
+			if isGitGlobalFlag(prev) && flagTakesValue(prev) && !strings.Contains(toks[j-1], "=") {
+				j -= 2 // skip value + flag
+				continue
+			}
+			return false
+		}
+		// fl IS a global flag: --key=value carries its value; bare valued
+		// flags had their value AFTER them (already consumed by the loop
+		// above on a later iteration), so just step over the flag.
+		j--
+	}
+	return j >= 0 && strings.Trim(toks[j], "\"'") == "git"
+}
+
+// flagTakesValue reports whether the global flag requires a separate value
+// token (vs carrying it inline with '=' or taking none).
+func flagTakesValue(fl string) bool {
+	switch {
+	case fl == "-C", strings.HasPrefix(fl, "--git-dir"),
+		strings.HasPrefix(fl, "--work-tree"), strings.HasPrefix(fl, "--namespace"):
+		return true
+	case fl == "-c":
+		return true
 	}
 	return false
 }
