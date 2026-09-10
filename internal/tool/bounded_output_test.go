@@ -98,11 +98,17 @@ func BenchmarkBoundedOutputWriter_HeavyStream(b *testing.B) {
 // headCap boundary must not be split - the head cut snaps back to a rune
 // start and the dropped bytes are counted as overflow.
 func TestBoundedOutputWriterRuneSafeHeadCut(t *testing.T) {
-	// 3-byte CJK rune; headCap = 8. Write 7 ASCII bytes then force the cut
-	// mid-rune: 7 + first 1 byte of a 3-byte rune lands at exactly 8.
-	w := newBoundedOutputWriter(16) // headCap = 8
-	cjk := []byte("中")              // 3 bytes
-	w.Write([]byte("1234567"))      // 7 bytes
+	// #1820 case 2: this test NEVER exercised the head-cut path before -
+	// newBoundedOutputWriter(16) clamps to 4096 (headCap 2048), so the 17
+	// total input bytes always took the fast-path early return and the test
+	// was vacuously green. Construct the writer directly to keep headCap
+	// small and force the real cut. 3-byte CJK rune; headCap = 8: write 7
+	// ASCII bytes, then a rune whose first byte lands at exactly position 8 -
+	// snapForwardToRune must advance cut PAST room, and (case 1) the leftover
+	// slice must start at cut, not room.
+	w := &boundedOutputWriter{headCap: 8, tail: make([]byte, 0, 8), tailCap: 8}
+	cjk := []byte("中")         // 3 bytes
+	w.Write([]byte("1234567")) // 7 bytes
 	w.Write(append(append([]byte{}, cjk...), []byte("tail...")...))
 	out := w.String()
 	if !utf8.ValidString(out) {
@@ -110,6 +116,26 @@ func TestBoundedOutputWriterRuneSafeHeadCut(t *testing.T) {
 	}
 	if !strings.HasPrefix(out, "1234567") {
 		t.Errorf("head bytes lost, got %q", out)
+	}
+	// #1820 case 1 pin: the straddling rune's head-side bytes must NOT be
+	// duplicated into the tail (the old p[room:] duplicated p[room:cut]).
+	// With cut snapping past room, the tail starts after the full rune when
+	// it fits, or at a rune boundary otherwise; head never exceeds headCap+3.
+	if w.head.Len() > w.headCap+3 {
+		t.Errorf("head exceeded headCap+3 (rune snap bound): %d > %d", w.head.Len(), w.headCap+3)
+	}
+	// overflow must never be negative (the old room-cut addition could make
+	// it negative, disabling String's compaction branch entirely).
+	w.mu.Lock()
+	neg := w.overflow < 0
+	w.mu.Unlock()
+	if neg {
+		t.Error("overflow went negative - head-cut accounting is wrong")
+	}
+	// The rune either landed whole in the head (cut included it) or was
+	// dropped; the tail must never start with a continuation byte.
+	if len(w.tail) > 0 && w.tail[0]&0xC0 == 0x80 {
+		t.Error("tail starts with a bare continuation byte")
 	}
 }
 
