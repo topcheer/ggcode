@@ -61,7 +61,7 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- readlink -f (GNU only) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "readlink") && strings.Contains(cmd, " -f")) ||
+			return (strings.HasPrefix(strings.TrimSpace(cmd), "readlink ") && strings.Contains(cmd, " -f")) ||
 				strings.Contains(out, "readlink: illegal option") ||
 				strings.Contains(out, "readlink: invalid option -- 'f'")
 		},
@@ -70,7 +70,7 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- grep -P (GNU PCRE) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "grep") && strings.Contains(cmd, " -p")) ||
+			return (strings.HasPrefix(strings.TrimSpace(cmd), "grep ") && strings.Contains(cmd, " -p")) ||
 				strings.Contains(out, "grep: option requires an argument") ||
 				(strings.Contains(out, "grep:") && strings.Contains(out, "invalid option"))
 		},
@@ -79,7 +79,7 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- date -d (GNU) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "date") && strings.Contains(cmd, " -d")) ||
+			return (strings.HasPrefix(strings.TrimSpace(cmd), "date ") && strings.Contains(cmd, " -d")) ||
 				strings.Contains(out, "date: illegal option") ||
 				strings.Contains(out, "date: invalid option -- 'd'")
 		},
@@ -88,7 +88,7 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- stat -c (GNU) vs stat -f (BSD) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "stat") && strings.Contains(cmd, " -c")) ||
+			return (strings.HasPrefix(strings.TrimSpace(cmd), "stat ") && strings.Contains(cmd, " -c")) ||
 				strings.Contains(out, "stat: illegal option") ||
 				strings.Contains(out, "stat: invalid option -- 'c'")
 		},
@@ -129,8 +129,23 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- sort -V (GNU version sort) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "sort") && strings.Contains(cmd, "-v")) ||
-				(strings.Contains(out, "sort: unrecognized option") && strings.Contains(out, "v"))
+			// #1703 case 5: bare Contains(cmd, "-v") matched any -v flag of any
+			// later token ("sort -k2 file | grep -v x") and the diagnostic arm's
+			// single-letter Contains(out, "v") is pure noise; require the -V
+			// flag as a token of the sort invocation itself (version-sort is
+			// spelled -V).
+			if strings.HasPrefix(strings.TrimSpace(cmd), "sort ") {
+				for _, tok := range strings.Fields(cmd) {
+					if tok == "-V" || tok == "--version-sort" {
+						return true
+					}
+				}
+			}
+			// NOTE: out arrives lowercased (diagnoseShellCompat lowercases the
+			// combined stream), so the diagnostic arm matches the LOWERCASE
+			// option spelling.
+			return strings.Contains(out, "sort: unrecognized option") &&
+				(strings.Contains(out, "option `v'") || strings.Contains(out, "option 'v'"))
 		},
 		fix: "sort -V (version sort) is GNU-only. On macOS/BSD use: sort -t. -k1,1n  or install coreutils: brew install coreutils (provides gsort -V)",
 	},
@@ -157,15 +172,21 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- xargs -r / --no-run-if-empty (GNU) ---
 	{
 		match: func(cmd, out string) bool {
-			// #1703 case 2: bare substring matching misfired on
-			// 'grep -r pattern . | xargs ls' (macOS-legal) - the -r
-			// belonged to grep. Match the flag as a standalone token.
-			if !strings.Contains(cmd, "xargs") {
-				return false
-			}
-			for _, tok := range strings.Fields(cmd) {
-				if tok == "-r" || tok == "--no-run-if-empty" {
-					return true
+			// #1703 case 2: two independent substrings ("xargs" anywhere,
+			// " -r" anywhere) misfired on perfectly legal macOS pipelines like
+			// `grep -r pattern . | xargs ls` - the " -r" belongs to grep on the
+			// LEFT of the pipe. Tokenize and require the flag to be an argument
+			// of the xargs invocation itself (the segment containing "xargs").
+			for _, seg := range strings.Split(cmd, "|") {
+				if !strings.Contains(seg, "xargs") {
+					continue
+				}
+				for _, tok := range strings.Fields(seg) {
+					if tok == "-r" || tok == "--no-run-if-empty" || tok == "xargs" || tok == "xargs\"" {
+						if tok == "-r" || tok == "--no-run-if-empty" {
+							return true
+						}
+					}
 				}
 			}
 			return false
