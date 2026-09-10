@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -123,16 +124,32 @@ func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) Proj
 		if s, err := tunnel.NewDefaultProjectionStore(); err == nil {
 			h.projStore = s
 		} else {
+			// #1802 case 2: zero-log break - the mobile side saw an EMPTY
+			// replay and no diagnostic existed anywhere.
+			debug.Log("tunnel-host", "BindSession: projection store unavailable: %v (mobile replay will be empty)", err)
 			h.projBroken = true
 		}
 	}
 
-	h.projBroken = false
+	// #1802 case 2 small fix: this UNCONDITIONAL reset stomped the
+	// projBroken=true set above when the store was fine but a previous
+	// failure had marked it broken mid-flight.
+	if h.projStore == nil {
+		h.projBroken = false
+	}
 
 	// Prepare projection broker with event recorder
-	state, _ := PrepareProjectionBroker(h.projBroker, h.projStore, ses, func(ev tunnel.GatewayMessage) {
+	// #1802 case 1: the error was discarded with ZERO logging - an IO
+	// failure (disk full/permission/corrupt) left replay EMPTY, the
+	// authority epoch regressed to 1, and (PrepareProjectionBroker wires
+	// SetEventRecorder/SetAuthorityEpoch only on success) even NEW events
+	// stopped persisting until the next BindSession - silently.
+	state, perr := PrepareProjectionBroker(h.projBroker, h.projStore, ses, func(ev tunnel.GatewayMessage) {
 		h.recordEvent(ev)
 	})
+	if perr != nil {
+		debug.Log("tunnel-host", "BindSession: PrepareProjectionBroker failed: %v (session=%s replay empty, epoch=1, events not persisted until next bind)", perr, ses.ID)
+	}
 	return state
 }
 
@@ -712,6 +729,7 @@ func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 	// Write to projection store (always, even before Share)
 	if projStore != nil {
 		if err := AppendProjectionEvent(projStore, ev); err != nil {
+			debug.Log("tunnel-host", "AppendProjectionEvent failed: %v - projection circuit-broken (TunnelEvents now nil; snapshot+replay both empty)", err)
 			h.mu.Lock()
 			h.projBroken = true
 			h.mu.Unlock()
