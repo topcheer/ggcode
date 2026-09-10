@@ -210,7 +210,17 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 	// The executed command line is the most authoritative signal (#544): a
 	// schema-default action=push wrapped around an actual `git stash list`
 	// command must still classify as read-only. Scan string fields first.
-	for _, v := range m {
+	// #1527 case B: skip the free-text `description` field — it is the
+	// git tools' MANDATORY activity label (LLM-generated, near-guaranteed
+	// to mention a git verb), so "检查 git log 后执行 reset" matched the
+	// read-only `log` token FIRST and the real reset's invalidation
+	// warning was swallowed; likewise a stash description mentioning
+	// `list` bypassed the action=push classification. The loop was also
+	// map-iteration-order dependent across multiple string fields.
+	for k, v := range m {
+		if k == "description" {
+			continue
+		}
 		s, ok := v.(string)
 		if !ok {
 			continue
@@ -229,6 +239,23 @@ func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
 		}
 	}
 	return false
+}
+
+// runCommandMutatesTree reports whether a run_command call's command line
+// performs a mutating git operation (#1527 case C): run_command is the most
+// common tree-mutating path yet was never fed to checkMutation (the
+// isWTMutatingTool gate lists only the 8 dedicated git_* tools).
+func runCommandMutatesTree(argsJSON string) bool {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &m); err != nil {
+		return false
+	}
+	cmd, _ := m["command"].(string)
+	if cmd == "" {
+		return false
+	}
+	readOnly, found := classifyGitCommandLine(cmd)
+	return found && !readOnly
 }
 
 // checkMutation is called after a git state-changing tool call executes.
