@@ -159,52 +159,17 @@ func findCopylockIssues(fset *token.FileSet, file *ast.File) []copylockIssue {
 				issue.funcName = fn.Name.Name // delta key component (#213)
 				issues = append(issues, issue)
 			}
-			// #1447-B: the header's category 4 ("Assignments and function
-			// call arguments that copy a sync type") was never implemented -
-			// only signatures were scanned, while the CLASSIC copylocks
-			// shapes (range value copies, `snapshot := *lockedPtr`, value
-			// passing at call sites) all live in the function BODY.
-			if fn.Body != nil {
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					switch stmt := n.(type) {
-					case *ast.AssignStmt:
-						for _, rhs := range stmt.Rhs {
-							if u, ok := rhs.(*ast.UnaryExpr); ok && u.Op == token.MUL {
-								if typeName := syncOrLockStruct(u.X, lockStructs); typeName != "" {
-									issues = append(issues, copylockIssue{
-										pos:     fset.Position(stmt.Pos()),
-										message: fmt.Sprintf("assignment copies lock value: copying *%s", typeName),
-									})
-								}
-							}
-						}
-					case *ast.RangeStmt:
-						if stmt.Value != nil {
-							if typeName := syncOrLockStruct(stmt.Value, lockStructs); typeName != "" {
-								if id, ok := stmt.Value.(*ast.Ident); ok {
-									issues = append(issues, copylockIssue{
-										pos:     fset.Position(stmt.Pos()),
-										message: fmt.Sprintf("range var %s copies lock value: %s (contains sync field)", id.Name, typeName),
-									})
-								}
-							}
-						}
-					case *ast.CallExpr:
-						for i, arg := range stmt.Args {
-							if _, isStar := arg.(*ast.StarExpr); isStar {
-								continue // explicit deref of a pointer arg: pointer, not copy
-							}
-							if typeName := syncOrLockStruct(arg, lockStructs); typeName != "" {
-								issues = append(issues, copylockIssue{
-									pos:     fset.Position(stmt.Pos()),
-									message: fmt.Sprintf("call argument %d copies lock value: %s (contains sync field)", i+1, typeName),
-								})
-							}
-						}
-					}
-					return true
-				})
-			}
+			// #1536 case A: the body-level scan added in 5bd1ab3d (range
+			// value copies, deref assignments, call-arg copies) was "reverted"
+			// by 9c6bb693 as comment-only - the code kept running with no test
+			// coverage while the header went back to claiming bodies are not
+			// analyzed. Its name-based type matching (syncOrLockStruct resolves
+			// the variable NAME, not the TYPE) made exactly the false positives
+			// the revert message predicted: `for _, Cache := range caches`
+			// (caches []*Cache - pointer copy, legal) hit lockStructs["Cache"]
+			// and fired on every Go file write. This is the real revert: the
+			// scan is deleted, matching the header comment and the zero-test
+			// reality. Signature-path scanning (above) keeps its #213 delta keys.
 		}
 	}
 

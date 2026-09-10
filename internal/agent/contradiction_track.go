@@ -75,6 +75,18 @@ type contradictionClaim struct {
 	entity    string // normalized claimed location/cause
 	excerpt   string
 	iteration int
+	// acknowledged marks a claim that sits right after an ack phrase
+	// (#1536 case C): it enters history but skips pairing this iteration.
+	acknowledged bool
+	// superseded marks a claim retired by an acknowledged revision
+	// (#1536 case D): kept in history for audit, excluded from pairing.
+	superseded bool
+	// revision marks a claim following a STRONG revision phrase ("I was
+	// wrong", "correction:", ...). A revision retires the superseded
+	// prior claims (#1536 case D) so a later restatement of the corrected
+	// assertion cannot pair against the stale one. Weak openers like
+	// "actually, i" acknowledge without retiring anything.
+	revision bool
 }
 
 // contradictionInstance represents a detected cross-turn reversal.
@@ -194,11 +206,45 @@ func extractClaims(text string, iteration int) []contradictionClaim {
 	// 'without acknowledging' charter. Skip texts that explicitly
 	// acknowledge the revision.
 	lower := strings.ToLower(text)
+	// #1447-A + #1536 C/D: an ACKNOWLEDGED revision is not a contradiction -
+	// but the old whole-text exemption ("return nil") blinded the detector
+	// to every OTHER claim in the same message and dropped the corrected
+	// claims from history ("actually, i" is an extremely common opener:
+	// "Actually, I already ran the tests. The bug is in handler.go" washed
+	// out the handler.go root-cause migration entirely). Claim-level
+	// proximity instead: a claim is 'acknowledged' only when an ack phrase
+	// sits within a window before it; acknowledged claims are recorded in
+	// history (fixing the stale-pairing false positive when the corrected
+	// assertion is later restated) but skip contradiction pairing this
+	// iteration.
+	ackPositions := []int{}
+	revisionPositions := []int{}
 	for _, ack := range []string{"i was wrong", "i was mistaken", "i misread", "earlier i thought", "i previously thought", "let me correct", "correction:", "on second thought", "actually, i", "to correct myself"} {
-		if strings.Contains(lower, ack) {
-			return nil
+		strong := ack != "actually, i" // weak opener: acknowledges, does not retire
+		for start := 0; start < len(lower); {
+			idx := strings.Index(lower[start:], ack)
+			if idx < 0 {
+				break
+			}
+			ackPositions = append(ackPositions, start+idx)
+			if strong {
+				revisionPositions = append(revisionPositions, start+idx)
+			}
+			start += idx + len(ack)
 		}
 	}
+	nearAny := func(positions []int, entityStart int) bool {
+		// An ack phrase within 150 chars before the claim entity
+		// acknowledges THAT claim, not one three paragraphs later.
+		for _, pos := range positions {
+			if pos <= entityStart && entityStart-pos <= 150 {
+				return true
+			}
+		}
+		return false
+	}
+	nearAck := func(entityStart int) bool { return nearAny(ackPositions, entityStart) }
+	nearRevision := func(entityStart int) bool { return nearAny(revisionPositions, entityStart) }
 
 	for _, pat := range contradictionClaimPatterns {
 		locs := pat.FindAllStringSubmatchIndex(text, -1)
@@ -219,9 +265,11 @@ func extractClaims(text string, iteration int) []contradictionClaim {
 
 			excerpt := extractContradictionExcerpt(text, loc[0], loc[1])
 			claims = append(claims, contradictionClaim{
-				entity:    entity,
-				excerpt:   excerpt,
-				iteration: iteration,
+				entity:       entity,
+				excerpt:      excerpt,
+				iteration:    iteration,
+				acknowledged: nearAck(entityStart),
+				revision:     nearRevision(entityStart),
 			})
 		}
 	}
@@ -235,8 +283,39 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 	newClaims := extractClaims(text, iteration)
 
 	// Check new claims against prior claims for contradictions.
+	// #1536 case C: only non-acknowledged claims pair; acknowledged ones
+	// still enter history below (case D) so a later restatement of the
+	// corrected assertion pairs against the CURRENT belief instead of the
+	// superseded one.
+	hasRevision := false
 	for _, nc := range newClaims {
+		if nc.revision {
+			hasRevision = true
+		}
+	}
+	if hasRevision {
+		// #1536 case D: a strong revision retires prior claims not
+		// re-asserted in the revision message - the agent's standing
+		// belief moved; later restatements of the corrected assertion
+		// must pair against the CURRENT belief, not the stale one.
+		reasserted := make(map[string]bool, len(newClaims))
+		for _, nc := range newClaims {
+			reasserted[nc.entity] = true
+		}
+		for i := range s.claims {
+			if s.claims[i].iteration < iteration && !reasserted[s.claims[i].entity] {
+				s.claims[i].superseded = true
+			}
+		}
+	}
+	for _, nc := range newClaims {
+		if nc.acknowledged {
+			continue
+		}
 		for _, pc := range s.claims {
+			if pc.superseded {
+				continue // retired by an acknowledged revision
+			}
 			// A contradiction occurs when the new entity differs from a prior
 			// entity AND they aren't substrings of each other (e.g. "auth" vs
 			// "auth.go" are the same root, not a contradiction).
