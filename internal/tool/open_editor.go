@@ -112,7 +112,7 @@ func (t OpenEditorTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: "no editor detected. Set $EDITOR, $VISUAL, or $GGCODE_EDITOR, or pass the 'editor' parameter."}, nil
 	}
 
-	cmd := buildEditorCommand(editor, absPath, args.Line, args.Column)
+	cmd, launchInfo := buildEditorCommand(editor, absPath, args.Line, args.Column)
 	if cmd == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("could not build launch command for editor %q on %s", editor, runtime.GOOS)}, nil
 	}
@@ -123,12 +123,27 @@ func (t OpenEditorTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		return Result{IsError: true, Content: fmt.Sprintf("failed to launch editor %q: %v", editor, err)}, nil
 	}
 
+	// #1697 case 2: honest success message. Never claim the user's editor
+	// opened at line N when a platform opener ran and/or the position was
+	// dropped.
 	loc := ""
-	if args.Line > 0 {
+	if args.Line > 0 && !launchInfo.lineDropped {
 		loc = fmt.Sprintf(" at line %d", args.Line)
 		if args.Column > 0 {
 			loc += fmt.Sprintf(", column %d", args.Column)
 		}
+	}
+	if launchInfo.platformOpener {
+		msg := fmt.Sprintf("Opened %s with the system default opener", filepath.Base(absPath))
+		msg += fmt.Sprintf(" (editor %q is not in the known-editor list; it was not launched", editor)
+		if launchInfo.lineDropped {
+			msg += " and the requested line/column cannot be passed to the system opener"
+		}
+		msg += "). Set $EDITOR to a supported editor for line positioning."
+		return Result{Content: msg}, nil
+	}
+	if launchInfo.lineDropped {
+		return Result{Content: fmt.Sprintf("Opened %s in %s (line/column positioning not supported for this editor; position ignored)", filepath.Base(absPath), editorName(editor))}, nil
 	}
 	return Result{Content: fmt.Sprintf("Opened %s in %s%s", filepath.Base(absPath), editorName(editor), loc)}, nil
 }
@@ -197,9 +212,19 @@ func editorName(editor string) string {
 	}
 }
 
+// editorLaunchInfo reports what buildEditorCommand actually did, so the
+// caller can report an honest success message (#1697 case 2): the old
+// "Opened X in <editor> at line N" was false on both counts when the editor
+// was unknown - the platform opener ran instead of the user's editor, and
+// the line/column were silently dropped.
+type editorLaunchInfo struct {
+	platformOpener bool // the user's editor was NOT launched; system opener was
+	lineDropped    bool // a requested line/col could not be passed through
+}
+
 // buildEditorCommand constructs an exec.Cmd for the given editor, file, and
 // optional line/column. Returns nil if the editor/platform combo is unsupported.
-func buildEditorCommand(editor, file string, line, col int) *exec.Cmd {
+func buildEditorCommand(editor, file string, line, col int) (*exec.Cmd, editorLaunchInfo) {
 	base := strings.ToLower(filepath.Base(editor))
 	hasLine := line > 0
 
@@ -217,7 +242,7 @@ func buildEditorCommand(editor, file string, line, col int) *exec.Cmd {
 		} else {
 			args = append(args, file)
 		}
-		return exec.Command(editor, args...)
+		return exec.Command(editor, args...), editorLaunchInfo{}
 
 	case "subl":
 		// Sublime Text: subl file:line:column
@@ -226,16 +251,16 @@ func buildEditorCommand(editor, file string, line, col int) *exec.Cmd {
 			if col > 0 {
 				loc += fmt.Sprintf(":%d", col)
 			}
-			return exec.Command(editor, loc)
+			return exec.Command(editor, loc), editorLaunchInfo{}
 		}
-		return exec.Command(editor, file)
+		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "idea", "webstorm", "goland", "pycharm", "phpstorm", "rubymine", "clion":
 		// JetBrains IDEs: editor --line N file
 		if hasLine {
-			return exec.Command(editor, "--line", fmt.Sprintf("%d", line), file)
+			return exec.Command(editor, "--line", fmt.Sprintf("%d", line), file), editorLaunchInfo{}
 		}
-		return exec.Command(editor, file)
+		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "nvim", "vim":
 		// Vim/Neovim: editor +line file  (or +line,column for nvim)
@@ -244,36 +269,42 @@ func buildEditorCommand(editor, file string, line, col int) *exec.Cmd {
 			if col > 0 && base == "nvim" {
 				flag = fmt.Sprintf("+call cursor(%d,%d)", line, col)
 			}
-			return exec.Command(editor, flag, file)
+			return exec.Command(editor, flag, file), editorLaunchInfo{}
 		}
-		return exec.Command(editor, file)
+		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "emacs":
 		// Emacs: editor +N file
 		if hasLine {
-			return exec.Command(editor, fmt.Sprintf("+%d", line), file)
+			return exec.Command(editor, fmt.Sprintf("+%d", line), file), editorLaunchInfo{}
 		}
-		return exec.Command(editor, file)
+		return exec.Command(editor, file), editorLaunchInfo{}
 
 	case "nano", "micro", "jed", "joe":
 		// Terminal editors that support +line
 		if hasLine {
-			return exec.Command(editor, fmt.Sprintf("+%d", line), file)
+			return exec.Command(editor, fmt.Sprintf("+%d", line), file), editorLaunchInfo{}
 		}
-		return exec.Command(editor, file)
+		return exec.Command(editor, file), editorLaunchInfo{}
 	}
 
-	// Fallback: platform default openers
+	// Fallback (#1697 case 2): unknown editor. Report honestly what happens
+	// instead of letting the caller claim the user's editor opened at line N.
+	info := editorLaunchInfo{lineDropped: line > 0}
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", file)
+		info.platformOpener = true
+		return exec.Command("open", file), info
 	case "windows":
-		return exec.Command("cmd", "/c", "start", "", file)
+		info.platformOpener = true
+		return exec.Command("cmd", "/c", "start", "", file), info
 	default:
 		if path, _ := exec.LookPath("xdg-open"); path != "" {
-			return exec.Command(path, file)
+			info.platformOpener = true
+			return exec.Command(path, file), info
 		}
-		return exec.Command(editor, file)
+		// No platform opener: launch the editor bare (line still dropped).
+		return exec.Command(editor, file), info
 	}
 }
 

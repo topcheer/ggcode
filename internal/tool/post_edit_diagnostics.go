@@ -124,6 +124,7 @@ func checkSiblingDiagnostics(ctx context.Context, workingDir, filePath string) s
 
 	var errors []string
 	var warnings []string
+	var infos []string
 	for _, sd := range siblings {
 		msg := strings.TrimSpace(sd.Diagnostic.Message)
 		if msg == "" {
@@ -136,10 +137,15 @@ func checkSiblingDiagnostics(ctx context.Context, workingDir, filePath string) s
 			errors = append(errors, formatted)
 		} else if sd.Diagnostic.Severity == 2 {
 			warnings = append(warnings, formatted)
+		} else {
+			// #1697 case 5: mirror the #1332 main-path fix - gopls reports
+			// "imported and not used" as Info severity even though it blocks
+			// compilation; hiding it in sibling files left the build broken.
+			infos = append(infos, formatted)
 		}
 	}
 
-	if len(errors) == 0 && len(warnings) == 0 {
+	if len(errors) == 0 && len(warnings) == 0 && len(infos) == 0 {
 		return ""
 	}
 
@@ -174,6 +180,22 @@ func checkSiblingDiagnostics(ctx context.Context, workingDir, filePath string) s
 			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(warnings)-3))
 		}
 	}
+	if len(infos) > 0 {
+		if len(errors) > 0 || len(warnings) > 0 {
+			b.WriteString("\n")
+		}
+		// #1697 case 5: Info-level blockers (gopls "imported and not used")
+		// must surface in sibling files — mirroring the #1332 main-path fix.
+		b.WriteString(fmt.Sprintf("Info (%d) in other files (may block compilation, e.g. unused imports):\n", len(infos)))
+		shown := infos
+		if len(shown) > 5 {
+			shown = shown[:5]
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(infos)-5))
+		}
+		for _, in := range shown {
+			b.WriteString(in + "\n")
+		}
+	}
 	// #856: cached sibling diagnostics may predate this edit (no baseline
 	// diff available for other files), so don't assert causality — point the
 	// agent at verification instead of chasing edit-caused errors.
@@ -196,6 +218,7 @@ func checkCrossPackageDiagnostics(ctx context.Context, workingDir, filePath stri
 
 	var errors []string
 	var warnings []string
+	var infos []string
 	for _, sd := range cross {
 		msg := strings.TrimSpace(sd.Diagnostic.Message)
 		if msg == "" {
@@ -208,10 +231,14 @@ func checkCrossPackageDiagnostics(ctx context.Context, workingDir, filePath stri
 			errors = append(errors, formatted)
 		} else if sd.Diagnostic.Severity == 2 {
 			warnings = append(warnings, formatted)
+		} else {
+			// #1697 case 5: mirror #1332 - Info-level blockers ("imported and
+			// not used") must surface in cross-package files too.
+			infos = append(infos, formatted)
 		}
 	}
 
-	if len(errors) == 0 && len(warnings) == 0 {
+	if len(errors) == 0 && len(warnings) == 0 && len(infos) == 0 {
 		return ""
 	}
 
