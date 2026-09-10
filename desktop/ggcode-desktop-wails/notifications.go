@@ -492,17 +492,24 @@ func escapeAppleScriptText(s string) string {
 // deliverUnix synchronously delivers one non-Windows notification on the
 // queue worker: osascript on macOS, notify-send elsewhere (#1431-A).
 func (nm *NotificationManager) deliverUnix(title, body string) {
+	// #1504 case 3: bounded delivery. cmd.Run() without a deadline let a
+	// hung osascript/notify-send block the single worker FOREVER - with the
+	// queue cap 32, the 33rd notification then wedged the agent's event-
+	// dispatch goroutine (the whole chat stream froze). 10s covers the
+	// slowest legitimate cold start with two orders of margin.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if runtime.GOOS == "darwin" {
 		script := "display notification \"" + escapeAppleScriptText(body) +
 			"\" with title \"" + escapeAppleScriptText(title) +
 			"\" sound name \"Glass\""
-		cmd := exec.Command("osascript", "-e", script)
+		cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 		if err := cmd.Run(); err != nil {
 			debug.Log("desktop", "macOS notification failed: %v", err)
 		}
 		return
 	}
-	cmd := exec.Command("notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
+	cmd := exec.CommandContext(ctx, "notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
 	if err := cmd.Run(); err != nil {
 		debug.Log("desktop", "Linux notification failed: %v", err)
 	}

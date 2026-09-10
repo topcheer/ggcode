@@ -164,6 +164,12 @@ func main() {
 			UniqueId: "ggcode-desktop-singleton",
 			OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
 				debug.Log("desktop", "second instance attempted launch (args=%d); focusing existing", len(data.Args))
+				// #1504 case 4: the comment above promised "focuses the
+				// first" but the body only logged - after close-to-tray on
+				// macOS, relaunching from Finder/Dock looked dead ("clicked,
+				// nothing happened"). Show + unminimize the hidden window.
+				runtime.WindowShow(app.ctx)
+				runtime.WindowUnminimise(app.ctx)
 			},
 		},
 		MinWidth:  900,
