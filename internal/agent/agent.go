@@ -3875,7 +3875,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// on the most common background-test failure path.
 			if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
 				if result.IsError || looksLikeFailure(result.Content) {
-					if causalHint := a.causalAttribution.attributeFailure(result.Content); causalHint != "" {
+					// #1528 case C: pass the command text and exit status - a
+					// succeeded grep/cat of logs carrying "FAIL" must not be
+					// attributed as a build failure (shell bypasses the
+					// layer-1 tool-name filter).
+					if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, extractStringField(tc.Arguments, "command"), result.IsError); causalHint != "" {
 						a.appendGuidance(&result, causalHint)
 					}
 				}
