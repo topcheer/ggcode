@@ -1015,8 +1015,14 @@ func (h *Handler) connectMCPServers(ctx context.Context, session *Session, serve
 		}
 	}
 	mgr := NewMCPManager(h.toolRegistry)
+	// #1797: ConnectServers now returns an aggregate error so failures are
+	// no longer silent, but per-server isolation is preserved here - one
+	// bad server (e.g. a type:"sse" mount the client rejects) must not
+	// fail the whole session/resume. Log and continue with the servers
+	// that DID connect; the peer sees the missing tools plus a logged
+	// reason instead of a hard session error.
 	if err := mgr.ConnectServers(ctx, servers); err != nil {
-		return err
+		debug.Log("acp", "MCP server connection errors: %v", err)
 	}
 	session.mcpManager = mgr
 	return nil

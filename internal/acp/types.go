@@ -838,7 +838,7 @@ type AvailableCommand struct {
 type MCPServer struct {
 	Meta     json.RawMessage `json:"_meta,omitempty"`
 	Name     string          `json:"name"`
-	Type     string          `json:"type,omitempty"` // "http", "sse", "stdio" (default)
+	Type     string          `json:"type,omitempty"` // "http" (streamable HTTP, also default), "stdio"; "sse" is accepted by the wire type but REJECTED by the MCP client (unsupported transport) - see internal/mcp/client.go transport switch. "sse" remained listed here from the upstream ACP spec wording, which made spec-following peers mount an "sse" server that silently failed - #1797.
 	Command  string          `json:"command,omitempty"`
 	Args     []string        `json:"args,omitempty"`
 	Env      []EnvVariable   `json:"env,omitempty"`
