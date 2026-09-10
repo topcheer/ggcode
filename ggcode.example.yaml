@@ -527,7 +527,7 @@ im:
 max_iterations: 0
 
 # Maximum total tokens (input + output) per agent run (0 = unlimited)
-# Progressive warnings at 75% and 90%, hard stop at 100%.
+# Progressive warnings at 80% and 95%, hard stop at 100%.
 # session_token_budget: 0
 
 # Maximum total tool calls per agent run (0 = auto-derive from max_iterations)
