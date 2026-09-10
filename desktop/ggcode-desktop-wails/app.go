@@ -2131,6 +2131,12 @@ func (a *App) startIMAdapters() {
 			})
 			return nil
 		},
+		PendingApprovals: func() []string {
+			if a == nil || a.chat == nil {
+				return nil
+			}
+			return chat.PendingApprovalIDs()
+		},
 		CurrentApproval: func() (string, string, bool) {
 			if a == nil || a.chat == nil {
 				return "", "", false

@@ -3050,6 +3050,18 @@ func (b *ChatBridge) RespondApproval(requestID, decision string) {
 
 }
 
+// PendingApprovalIDs returns the pending approval request IDs in
+// registration order (#1657 case 2) - the text bridge uses this to detect
+// ambiguous bare "y" replies when several approvals are pending.
+func (b *ChatBridge) PendingApprovalIDs() []string {
+	reqs := b.interactions.PendingApprovals()
+	ids := make([]string, 0, len(reqs))
+	for _, r := range reqs {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
+
 func (b *ChatBridge) PendingApprovalRequest() (string, string, bool) {
 	req, ok := b.interactions.FirstPendingApproval()
 	if !ok {
