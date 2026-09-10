@@ -157,7 +157,18 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- xargs -r / --no-run-if-empty (GNU) ---
 	{
 		match: func(cmd, out string) bool {
-			return strings.Contains(cmd, "xargs") && (strings.Contains(cmd, " -r") || strings.Contains(cmd, "--no-run-if-empty"))
+			// #1703 case 2: bare substring matching misfired on
+			// 'grep -r pattern . | xargs ls' (macOS-legal) - the -r
+			// belonged to grep. Match the flag as a standalone token.
+			if !strings.Contains(cmd, "xargs") {
+				return false
+			}
+			for _, tok := range strings.Fields(cmd) {
+				if tok == "-r" || tok == "--no-run-if-empty" {
+					return true
+				}
+			}
+			return false
 		},
 		fix: "xargs -r/--no-run-if-empty is GNU-only. On macOS/BSD guard with: cmd | grep -q . && cmd | xargs ...  or use: if [ -s file ]; then ...",
 	},
