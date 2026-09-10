@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"os"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -34,9 +35,30 @@ const (
 // checkWriteIntegrity validates the content of a file after a write/edit.
 // Delegates to the Check Registry for parallel, language-aware execution.
 func checkWriteIntegrity(filePath, oldContent, newContent string) string {
+	// #1786 case 2: the "Post-write integrity check: validate file
+	// content" comments promised a DISK read-back; the checks validated
+	// the intended strings only - a partial write, a failed atomic
+	// rename, or a post-write gofmt reformat never surfaced. Read the
+	// file back once and compare.
+	if disk, rerr := osReadFileForIntegrity(filePath); rerr == nil {
+		if string(disk) != newContent {
+			trimmed := string(disk)
+			if len(trimmed) > 120 {
+				trimmed = trimmed[:120] + "..."
+			}
+			return fmt.Sprintf("post-write mismatch: file on disk differs from what was written (starts %q) - the write may be partial, or something (formatter/other agent) rewrote it immediately; re-read before further edits", trimmed)
+		}
+	}
 	ctx := newCheckContext(filePath, oldContent, newContent)
 	warnings := runChecksParallel(ctx)
 	return formatWarnings(warnings)
+}
+
+// osReadFileForIntegrity isolates the disk read for the mismatch check
+// (kept separate so tests can reason about failure semantics: an
+// unreadable file skips the read-back rather than failing the tool).
+func osReadFileForIntegrity(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 // registerAllChecks registers all post-write integrity checks with their

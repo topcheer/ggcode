@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -222,5 +224,28 @@ func (a *AnotherImpl) Method() {}
 	// detector is loaded by checking it doesn't crash
 	if strings.Contains(warning, "internal error") {
 		t.Fatalf("interface-design check caused internal error (may not be properly registered): %s", warning)
+	}
+}
+
+// TestCheckWriteIntegrityReadBack pins #1786 case 2: the promised disk
+// read-back actually happens - a file whose on-disk content differs from
+// what was written (partial write / immediate rewrite) surfaces a mismatch
+// warning; a matching file does not.
+func TestCheckWriteIntegrityReadBack(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(p, []byte("actual-on-disk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if w := checkWriteIntegrity(p, "old", "intended-new"); w == "" {
+		t.Fatal("disk != written must surface a mismatch warning")
+	}
+	if err := os.WriteFile(p, []byte("intended-new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Matching file: no mismatch warning (other checks may still fire; for
+	// plain text they don't).
+	if w := checkWriteIntegrity(p, "old", "intended-new"); w != "" {
+		t.Fatalf("matching disk content must not warn, got %q", w)
 	}
 }
