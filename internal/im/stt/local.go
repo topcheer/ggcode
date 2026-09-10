@@ -111,12 +111,23 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 
 	// #1562: ctx is the ADAPTER lifecycle context with no deadline - and
 	// Telegram (among others) processes updates serially inline, so a
-	// hanging transcription (openai-whisper's first run downloads its
-	// model for minutes-to-hours; whisper.cpp can wedge) froze the whole
+	// hanging transcription (whisper.cpp can wedge) froze the whole
 	// message pump: later texts/commands went unprocessed. The remote
 	// engine has a 60s HTTP timeout; give the local engine a generous
 	// wall-clock bound of its own.
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// #1743 case 3: openai-whisper's FIRST run downloads its model
+	// ("minutes-to-hours", no resume) before transcribing - the flat
+	// 10-minute bound killed the one-time download on slow links, looping
+	// the failure forever since nothing ever completes it. The transcription
+	// path (post-download, the recurring case) keeps the tight 10-minute
+	// bound; the openai flavor gets a one-time-wider bound to let the
+	// download land. The model is cached after the first success, so the
+	// wider bound is paid at most once per model.
+	bound := 10 * time.Minute
+	if w.flavor == flavorOpenAI {
+		bound = 60 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 
 	start := time.Now()
