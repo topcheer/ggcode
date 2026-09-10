@@ -530,3 +530,20 @@ func TestIsNonFailureExit(t *testing.T) {
 		t.Error("real failure exit codes must not be classified as non-failure")
 	}
 }
+
+// TestExtractFilePathFromArgsNotebookAndFileOps pins #1733 case 1: the
+// extractor must learn notebook_edit's notebook_path and file_ops's source
+// - both are fileEditingTools, and a "" return made checkEditInvalidation
+// skip for all four consumers.
+func TestExtractFilePathFromArgsNotebookAndFileOps(t *testing.T) {
+	if got := extractFilePathFromArgs("notebook_edit", json.RawMessage(`{"notebook_path":"/tmp/nb.ipynb","operation":"add"}`)); got != "/tmp/nb.ipynb" {
+		t.Fatalf("notebook_path not extracted: %q", got)
+	}
+	if got := extractFilePathFromArgs("file_ops", json.RawMessage(`{"operations":[{"action":"move","source":"/a.txt","destination":"/b.txt"}]}`)); got != "/a.txt" {
+		t.Fatalf("file_ops source not extracted: %q", got)
+	}
+	// Precedence unchanged for the classic shapes.
+	if got := extractFilePathFromArgs("edit_file", json.RawMessage(`{"file_path":"/c.txt"}`)); got != "/c.txt" {
+		t.Fatalf("classic file_path regressed: %q", got)
+	}
+}

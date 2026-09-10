@@ -508,6 +508,41 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 		}
 	}
 
+	// #1733 case 1: notebook_edit uses "notebook_path" and file_ops moves
+	// carry "source" - both were fileEditingTools (the gate) but the
+	// extractor returned "" for them, so checkEditInvalidation silently
+	// skipped and stale grep/lsp results went unflagged - for ALL FOUR
+	// consumers of this extractor (searchInvalidation, undo_blind,
+	// repetition_tracker, postEditVerifyHint). The sibling extractor
+	// below (#737) had learned these shapes; this one never did (#1547
+	// fixed the THIRD extractor only).
+	if v, ok := raw["notebook_path"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s != "" {
+			return s
+		}
+	}
+	if v, ok := raw["source"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s != "" {
+			return s
+		}
+	}
+	// file_ops nests its paths under operations[] (source/destination).
+	if opsRaw, ok := raw["operations"]; ok {
+		var ops []map[string]json.RawMessage
+		if json.Unmarshal(opsRaw, &ops) == nil {
+			for _, op := range ops {
+				if v, ok := op["source"]; ok {
+					var s string
+					if json.Unmarshal(v, &s) == nil && s != "" {
+						return s
+					}
+				}
+			}
+		}
+	}
+
 	return ""
 }
 
