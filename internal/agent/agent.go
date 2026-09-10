@@ -296,6 +296,7 @@ type Agent struct {
 	iterPressure              *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	diminishingEdit           *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	overcorrection            *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
+	giveupRevert              *giveupRevertState                    // #1823 case 2: give-up language + tree rollback pairing
 	prematureRefactor         *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
 	subgoalTrack              *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                 *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
@@ -476,6 +477,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		iterPressure:           newIterPressureState(maxIter),
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
+		giveupRevert:           &giveupRevertState{},
 		prematureRefactor:      newPrematureRefactorState(),
 		subgoalTrack:           newSubgoalState(),
 		infoScent:              newInfoScentState(),
@@ -1282,6 +1284,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// (removed: momentum/target-scatter resets — detectors deleted batch 1)
 	a.diminishingEdit.reset()
 	a.overcorrection.reset()
+	// #1823 case 2: give-up + rollback re-add is per-run.
+	a.giveupRevert = &giveupRevertState{}
 	a.prematureRefactor.reset()
 	a.errorCompound.reset()
 	a.correctionSpiral.reset()
@@ -2202,14 +2206,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			assistantText := textBuf
 			a.constraintViolation.recordReasoning(assistantText, i+1)
 			a.reasoningRedund.recordReasoning(assistantText, false)
+			a.recordGiveupText(assistantText)
 			// History error accumulation: check if assistant text addresses
 			// pending issues from a prior multi-issue tool result.
 			// Silent degradation propagation: check if the agent acknowledged
 			// a prior degraded tool result in its reasoning text. If not, it is
 			// silently building on corrupted state (Galileo error propagation chain).
-			// Over-reflection detection: check if the agent is producing
-			// text-heavy turns without tool calls (wasted test-time compute).
-			// arXiv:2506.12928 -- "Knowing when to reflect is important".
+			// (#1823 case 1: the over-reflection detector this comment announced was
+			// removed in 387282a6 — pure-text-turn waste is a recorded trade-off,
+			// partially compensated by errorStrategyLoop's rerun-same-command check.)
 			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
 				inlineToolCallNudges++
 				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
@@ -2239,19 +2244,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// entity) across multiple turns without evolving it. This is belief
 			// perseverance -- the agent keeps blaming the same file/function
 			// even as evidence accumulates.
-			// Satisficing settling detector: detect when the agent
-			// knowingly delivers a suboptimal/temporary/incomplete solution
-			// (arXiv:2505.23729, ICML 2025 -- bounded rationality satisficing).
+			// (#1823 case 1: the satisficing detector this comment announced was
+			// removed in 387282a6.)
 			// Metacognitive monitor: track cognitive state stability and detect
 			// self-contradiction, plan changes, and interpretive drift.
 			// Records each turn's tools, action summary, and interpretation.
 			// Fires guidance when consistency drops below threshold (Li et al. 2025, Peters 2026).
 			// Sycophancy detector: detect when the agent agrees with a
 			// user-stated premise without independent verification.
-			// Premature surrender detection: scan assistant text for give-up
-			// language ("this isn't possible", "I can't do this", etc.) and
-			// push the agent to try alternative strategies before abandoning.
-			// arXiv:2506.05109 -- intrinsic metacognitive awareness.
+			// (#1823 case 2: the premature-surrender detector this comment announced
+			// was removed in 387282a6 (noise trade-off); the narrow give-up+revert
+			// re-add lives in giveupRevertCheck — see premature_success.go.)
 			// Agentic abstention detection: track whether the assistant text
 			// acknowledges negative environment signals, and inject guidance
 			// if unacknowledged negatives accumulate. arXiv:2606.28733.
@@ -3306,8 +3309,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// Diminishing edit: track edit substance size for polish-spiral detection.
 					a.diminishingRecordEdit(tc.Name, tc.Arguments)
 					// Overcorrection cascade: track edit size vs error severity.
-					if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
-						a.appendGuidance(&result, ocHint)
+					// #1823 case 3: gated behind claimsSupervision — same class of
+					// lexical/byte-count heuristic as the claims family, same noise
+					// asymmetry argument. Ungated it enforced only the
+					// “shrink your edit” side while the “verify before claiming”
+					// side stayed opt-in — a directional bias opposite to the
+					// paired-axes design intent.
+					if a.claimsSupervision {
+						if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
+							a.appendGuidance(&result, ocHint)
+						}
 					}
 					// Fix cascade: track edits for wrong-hypothesis lock-in detection.
 					a.fixCascade.recordEdit()
@@ -3376,6 +3387,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// re-classify as a diagnostic error and self-trigger the recorder
 			// (issue #1141).
 			a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
+			// #1823 case 2: a successful rollback tool after observed give-up
+			// language completes the surrender pairing.
+			if !result.IsError && giveupRollbackTools[tc.Name] {
+				a.recordGiveupRollback()
+			}
 			// False premise detection: record tool errors for later contradiction
 			// analysis against assistant success claims.
 			//
