@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -267,4 +268,23 @@ func TestExecuteWithTransientRetry_ErrorReturn(t *testing.T) {
 func newTestAgent(t *testing.T) *Agent {
 	t.Helper()
 	return &Agent{}
+}
+
+// TestCancellationFlattenNote pins #1779: cancellation/deadline errors
+// flattened into tool results carry an explicit "not a tool failure" note
+// so the agent stops diagnosing what is really the run ending.
+func TestCancellationFlattenNote(t *testing.T) {
+	if got := cancellationFlattenNote(context.Canceled); got != " (cancelled - not a tool failure; the run is ending)" {
+		t.Fatalf("canceled note mismatch: %q", got)
+	}
+	if got := cancellationFlattenNote(context.DeadlineExceeded); got != " (deadline exceeded - not a tool failure)" {
+		t.Fatalf("deadline note mismatch: %q", got)
+	}
+	if got := cancellationFlattenNote(errors.New("boom")); got != "" {
+		t.Fatalf("ordinary errors must stay unannotated, got %q", got)
+	}
+	// Wrapped cancellation must be detected through the errors.Is chain.
+	if got := cancellationFlattenNote(fmt.Errorf("exec: %w", context.Canceled)); got == "" {
+		t.Fatal("wrapped cancellation must still be annotated")
+	}
 }
