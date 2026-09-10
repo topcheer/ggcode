@@ -122,11 +122,29 @@ func detectShell(goos string, lookPath lookPathFunc, stat statFunc, getenv geten
 
 	for _, name := range []string{"bash.exe", "bash"} {
 		if path, err := lookPath(name); err == nil {
+			// #1842: LookPath("bash.exe") can hit C:\\Windows\\System32\\bash.exe
+			// - the WSL entry point, present on PATH whenever WSL is installed.
+			// It accepts -c but executes the command inside the LINUX
+			// subsystem, where Windows paths (C:\\...), cwd, git, and npm all
+			// break or misbehave - and the spec was mislabeled "git-bash". Skip
+			// System32 (case-insensitive) and keep searching; bare "bash" (a
+			// Git-Bash-on-PATH install) is unaffected because System32 never ships
+			// an extensionless bash.
+			if isWSLBashPath(path) {
+				continue
+			}
 			return ShellSpec{Path: path, Args: []string{"-c"}, Name: "git-bash"}, nil
 		}
 	}
 
-	return ShellSpec{}, fmt.Errorf("no supported shell found on Windows (expected PowerShell or Git Bash)")
+	return ShellSpec{}, fmt.Errorf("no supported shell found on Windows (expected PowerShell or Git Bash; note WSL bash is not a Windows shell)")
+}
+
+// isWSLBashPath reports whether a resolved bash path is the WSL entry
+// point under Windows System32 (case-insensitive).
+func isWSLBashPath(path string) bool {
+	p := strings.ReplaceAll(strings.ToLower(path), "\\", "/")
+	return strings.Contains(p, "/windows/system32/") || strings.HasSuffix(p, "/windows/system32/bash.exe")
 }
 
 func windowsGitBashCandidates(getenv getenvFunc) []string {
