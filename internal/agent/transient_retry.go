@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -163,6 +164,23 @@ func isRetryableTool(toolName string) bool {
 // The execFn parameter is the single-attempt executor (typically calling
 // safeExecute). This indirection allows the caller to inject pre/post hooks
 // around each attempt.
+
+// cancellationFlattenNote labels a cancellation/deadline error being
+// flattened into a tool Result (#1779): #1597 taught the plugin adapter
+// to return these as ERRORS (cancellation is not a business failure),
+// but every flatten site rebuilt them as ordinary IsError tool output -
+// the agent loop then iterated against a dead context holding what read
+// like a plugin bug. Mark it for what it is.
+func cancellationFlattenNote(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return " (cancelled - not a tool failure; the run is ending)"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return " (deadline exceeded - not a tool failure)"
+	}
+	return ""
+}
+
 func (a *Agent) executeWithTransientRetry(
 	ctx context.Context,
 	toolName string,
@@ -173,7 +191,7 @@ func (a *Agent) executeWithTransientRetry(
 	if !isRetryableTool(toolName) {
 		result, err := execFn(ctx, args)
 		if err != nil {
-			return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+			return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 		}
 		return result
 	}
@@ -185,7 +203,7 @@ func (a *Agent) executeWithTransientRetry(
 	if budget <= 0 {
 		result, err := execFn(ctx, args)
 		if err != nil {
-			return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+			return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 		}
 		return result
 	}
@@ -210,7 +228,7 @@ func (a *Agent) executeWithTransientRetry(
 
 		if !shouldRetry {
 			if lastErr != nil {
-				return tool.Result{Content: fmt.Sprintf("tool error: %v", lastErr), IsError: true}
+				return tool.Result{Content: fmt.Sprintf("tool error: %v%s", lastErr, cancellationFlattenNote(lastErr)), IsError: true}
 			}
 			return lastResult
 		}

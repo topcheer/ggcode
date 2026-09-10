@@ -515,7 +515,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	multiDur := time.Since(multiStart)
 	if err != nil {
-		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+		return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 	}
 
 	if cpMgr != nil && len(plans) > 0 {
@@ -702,7 +702,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
 	fileDur := time.Since(fileStart)
 	if err != nil {
-		return tool.Result{Content: fmt.Sprintf("tool error: %v", err), IsError: true}
+		return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 	}
 
 	// Save checkpoint. fileExisted distinguishes a file-creating write from an
