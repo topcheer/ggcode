@@ -136,6 +136,17 @@ func (a *App) startup(ctx context.Context) {
 	// logged, not fatal (#615): the app still runs, just without the hotkey.
 	if err := a.initGlobalHotkey(); err != nil {
 		debug.Log("desktop", "global hotkey registration failed: %v", err)
+		// #1504 case 5: mirror the SetGlobalHotkeyEnabled rollback contract
+		// (#615) on the startup path - a persisted enabled=true left over
+		// from the pre-#615 stub era (or a newly conflicting combo) showed
+		// the settings page claiming "enabled" over a dead hotkey. Roll the
+		// persisted flag back to disabled so UI and reality stay in sync.
+		if a.dc.IsGlobalHotkeyEnabled() {
+			a.dc.SetGlobalHotkey(false)
+			if saveErr := a.dc.Save(); saveErr != nil {
+				debug.Log("desktop", "hotkey rollback save failed: %v", saveErr)
+			}
+		}
 	}
 
 	// Sync notification preference from config
