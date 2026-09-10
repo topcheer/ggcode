@@ -772,6 +772,14 @@ func zhCatalog(key string) string {
 		return "当前：%s（最新：%s）"
 	case "update.unknown":
 		return "尚未检查"
+	case "update.restarting":
+		return "正在重启以应用更新..."
+	case "label.tools":
+		return "工具调用"
+	case "label.active":
+		return "进行中"
+	case "label.tasks":
+		return "个任务"
 	case "update.check_failed":
 		return "检查失败：%s"
 	case "update.unavailable":

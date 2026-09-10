@@ -911,7 +911,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		// Vendors[""] zero-values and the enter-commit persisted a phantom
 		// "" vendor into the yaml.
 		if panel.selectedVendor() == "" {
-			panel.message = m.t("provider.panel.no_vendor_selected")
+			panel.message = m.t("panel.provider.no_vendor_selected") // #1735: the defined key is panel.provider.* - the reversed prefix never matched
 			return *m, nil
 		}
 		vc := m.config.Vendors[panel.selectedVendor()]
@@ -932,7 +932,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "m":
 		// #1387-C: same empty-state guard as "b".
 		if panel.selectedVendor() == "" {
-			panel.message = m.t("provider.panel.no_vendor_selected")
+			panel.message = m.t("panel.provider.no_vendor_selected") // #1735: the defined key is panel.provider.* - the reversed prefix never matched
 			return *m, nil
 		}
 		panel.startEditing("custom model", panel.selectedModel())
