@@ -162,7 +162,19 @@ func resolveFeishuSTTConfig(global config.IMSTTConfig, extra map[string]interfac
 		if global.Provider == "" && global.BaseURL == "" && global.APIKey == "" {
 			return nil
 		}
+		// #1743 case 2: the sibling contract (discord/slack/qq) is a
+		// 3-field STRICT check on the resolved config - a global with
+		// url+key but no Model built a primary that ALWAYS failed at
+		// openai.go ("STT is not configured") on every voice message,
+		// instead of falling straight to local whisper.
+		if strings.TrimSpace(global.BaseURL) == "" || strings.TrimSpace(global.APIKey) == "" || strings.TrimSpace(global.Model) == "" {
+			return nil
+		}
 		return &global
+	}
+	// Same strictness for the extras-resolved shape.
+	if strings.TrimSpace(cfg.BaseURL) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return nil
 	}
 	return &cfg
 }

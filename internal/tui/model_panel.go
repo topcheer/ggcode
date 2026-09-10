@@ -383,6 +383,14 @@ func (m *Model) handleModelPanelEditKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		} else if field == "max_tokens" {
 			mt = n
 		}
+		if n == 0 {
+			// #1743 case 1: clearing the field is a SESSION-level intent -
+			// persisting the zero wipes the endpoint default every future
+			// session inherits (and the running agent keeps the old value
+			// while the UI already reads the wiped config). Skip the
+			// endpoint write entirely on a clear.
+			return *m, nil
+		}
 		if err := m.config.SetEndpointModelLimits(vendor, endpoint, cw, mt); err != nil {
 			panel.message = fmt.Sprintf(m.t("panel.model.endpoint_save_failed"), err)
 			return *m, nil
