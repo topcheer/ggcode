@@ -382,7 +382,15 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 
 	// For file-editing tools: read old content, compute new, show diff, save checkpoint
-	if tc.Name == "multi_file_edit" {
+	// #1547 case A: every tool implementing PreviewChanges routes through
+	// the dry-run/preview/checkpoint path. Previously only multi_file_edit
+	// did - multi_edit_file, multi_file_write and batch_replace (the
+	// fan-out writers whose blast radius is largest) fell through to bare
+	// safeExecute with NO pre-write gate: one wrong batch edit punched
+	// through N files with only the post-write integrity floor left.
+	// notebook_edit/lsp_rename/file_ops stay exempt (no faithful preview).
+	if tc.Name == "multi_file_edit" || tc.Name == "multi_edit_file" ||
+		tc.Name == "multi_file_write" || tc.Name == "batch_replace" {
 		if previewer, ok := t.(interface {
 			PreviewChanges(input json.RawMessage) ([]tool.PlannedFileEdit, error)
 		}); ok {
