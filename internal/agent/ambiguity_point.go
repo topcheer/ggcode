@@ -144,7 +144,6 @@ var ambiguityPatterns = []struct {
 	{"latest items", ambQuantityVague, "how many of the latest items"},
 	{"latest entries", ambQuantityVague, "how many entries and by what cutoff"},
 	{"latest results", ambQuantityVague, "how many results and by what cutoff"},
-	{"oldest", ambQuantityVague, "how many of the oldest items"},
 
 	// Vague direction (for modifications)
 	{"improve the", ambDirectionVague, "improve toward what goal -- performance, readability, security?"},
@@ -178,7 +177,6 @@ var ambiguityPatterns = []struct {
 	{"重命名", ambNamingVague, "the new name convention and whether to update all references"},
 	{"改名", ambNamingVague, "the new name convention and whether to update all references"},
 	{"最新的", ambQuantityVague, "how many of the latest items, and by what cutoff"},
-	{"最近的", ambQuantityVague, "the time window or count for 'recent'"},
 	{"随便", ambScopeVague, "which specific item or criteria"},
 	{"大概", ambQuantityVague, "the exact count or selection criteria"},
 }
