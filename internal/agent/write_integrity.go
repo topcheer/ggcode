@@ -109,11 +109,44 @@ func deltaGateNew(fn func(string, string) string) func(CheckContext) []string {
 		// messages mean the untouched pre-existing problem (W4's target);
 		// a DIFFERENT message means this write introduced or moved a problem
 		// (different line/marker) and must surface.
-		if oldW := fn(ctx.FilePath, ctx.OldContent); oldW == newW {
+		if oldW := fn(ctx.FilePath, ctx.OldContent); normalizeIntegrityMsg(oldW) == normalizeIntegrityMsg(newW) {
 			return nil
 		}
 		return []string{newW}
 	}
+}
+
+// normalizeIntegrityMsg strips volatile position info from an integrity
+// warning for the pre-existing-problem comparison (#1527 case D): the
+// messages embed "line %d: ..." and similar offsets, so an edit that merely
+// INSERTS lines above an untouched pre-existing problem changed the message
+// text ("line 10" -> "line 15") and the gate reported the write as having
+// INTRODUCED it - firing on a clean edit and mis-attributing the problem to
+// this write, in direct conflict with the gate's own W4 contract ("a
+// problem already present in OldContent is not re-reported"). Line numbers
+// are stripped; everything else (the problem description itself) must still
+// differ for a genuinely NEW problem to surface.
+func normalizeIntegrityMsg(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	var b strings.Builder
+	i := 0
+	for i < len(msg) {
+		// Replace every decimal run with a placeholder so "line 10" and
+		// "line 15" normalize identically (and so counts do not mask a
+		// changed description either - conservative toward NOT reporting).
+		if msg[i] >= '0' && msg[i] <= '9' {
+			for i < len(msg) && msg[i] >= '0' && msg[i] <= '9' {
+				i++
+			}
+			b.WriteString("#")
+			continue
+		}
+		b.WriteByte(msg[i])
+		i++
+	}
+	return b.String()
 }
 
 func registerAllChecks() {

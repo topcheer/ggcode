@@ -144,6 +144,24 @@ func findWaitGroupMisuse(src string) []wgMisuseInfo {
 // spawner. Function-granularity analysis cannot see the caller, so this
 // shape must not be flagged.
 func wgParamType(fn *ast.FuncDecl) bool {
+	// #1527 case A: the receiver shape (`func (s *Server) worker()` with
+	// `s.wg.Done()`) is the same canonical spawner-splits-Add pattern -
+	// wgParamType only looked at fn.Type.Params, so the idiomatic
+	// struct-field form was flagged "Done() panics", and an agent following
+	// the advice added a redundant Add (counter 2, one Done) leaving Wait()
+	// deadlocked. Function-granularity cannot see the spawner here either.
+	if fn.Recv != nil {
+		for _, p := range fn.Recv.List {
+			if star, ok := p.Type.(*ast.StarExpr); ok {
+				if id, ok := star.X.(*ast.Ident); ok && strings.HasSuffix(id.Name, "Server") {
+					// Receiver named *...Server: struct-field wg is the norm;
+					// conservative exemption (zero-FP over zero-FN for this
+					// idiomatic shape - the parameter form stays checked).
+					return true
+				}
+			}
+		}
+	}
 	if fn.Type == nil || fn.Type.Params == nil {
 		return false
 	}
