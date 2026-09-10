@@ -4,15 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/topcheer/ggcode/internal/util"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
+	"github.com/topcheer/ggcode/internal/util"
 )
+
+// mcpConfigWriteMu serializes full-file MCP config rewrites (#1813 case 1).
+// See the comment on AddMCPServer.
+var mcpConfigWriteMu sync.Mutex
 
 // MCPServerInfo is a frontend-friendly representation of an MCP server config.
 type MCPServerInfo struct {
@@ -209,6 +216,14 @@ func reloadSessionMCPServers(chat *ChatBridge, cfg *config.Config) {
 //   - "headers_*": HTTP headers (keys like "headers_Authorization")
 //   - "env_*": environment variables (keys like "env_KEY")
 func AddMCPServer(values map[string]string) error {
+	// #1813 case 1: serialize the load→save critical section. Wails runs each
+	// bound method on its own goroutine; two concurrent Adds could interleave
+	// A-load→B-load→B-save→A-save and B's entry was silently erased from
+	// disk by A's stale full-view write (runtime kept it until restart -
+	// config/reality drift the hot-reload watcher cannot heal). The same
+	// mutex covers Remove/Update so every full-file rewrite is serialized.
+	mcpConfigWriteMu.Lock()
+	defer mcpConfigWriteMu.Unlock()
 	// #458: snapshot the bridge once so the scope decision and the reload
 	// below see the same session even if a workspace switch interleaves.
 	globalMu.RLock()
@@ -327,6 +342,9 @@ func AddMCPServer(values map[string]string) error {
 // even though their tools were live, and removing a yaml copy was resurrected
 // by the merge that reloadSessionMCPServers (and every startup) re-runs.
 func RemoveMCPServer(name string) error {
+	// #1813 case 1: same serialization as AddMCPServer (see comment there).
+	mcpConfigWriteMu.Lock()
+	defer mcpConfigWriteMu.Unlock()
 	// #458: snapshot the bridge once so the scope decision and the Disconnect
 	// below see the same session even if a workspace switch interleaves.
 	// Without this, a switchWorkspace between loadSessionScopedConfig and the
@@ -363,6 +381,16 @@ func RemoveMCPServer(name string) error {
 		// re-imports the server. The user's intent was DELETE: record the
 		// tombstone even on failure (idempotent) so survivors stay hidden.
 		cfg.RecordMCPDeleted(name)
+		// #1813 case 2: compensate the runtime side too. Returning early left
+		// the server connected and its tools callable through the residual
+		// origin even though the UI reported the delete as failed - a three-way
+		// drift (UI says gone, disk partially gone, runtime fully alive).
+		// Disconnect targets the merged set's residual origin; the reload
+		// pushes the tombstone-filtered set so nothing resurrects it.
+		if chatSnap != nil && chatSnap.mcpManager != nil {
+			_ = chatSnap.mcpManager.Disconnect(name)
+			reloadSessionMCPServers(chatSnap, cfg)
+		}
 		return err
 	}
 	if !removedYaml && !removedOrigin {
@@ -374,6 +402,16 @@ func RemoveMCPServer(name string) error {
 	// removeMigratedMCPServer cleaned the origin files, so this is the only
 	// remaining resurrect path. Re-adding via UpsertMCPServer clears it.
 	cfg.RecordMCPDeleted(name)
+	// #1813 case 3: drop the server-name OAuth credential. Tokens persist
+	// per server name; without this, re-adding the same name silently
+	// reused the old tenant's token. Best-effort: a delete failure must not
+	// fail the (already durable) server removal, and Handle401 self-heals
+	// by re-running the OAuth flow on the next 401/403.
+	if h := mcp.NewOAuthHandler(name, "", auth.DefaultStore()); h != nil {
+		if derr := h.DeleteServerToken(); derr != nil {
+			debug.Log("wailskit.mcp", "remove %q: delete server token failed (will self-heal on 401): %v", name, derr)
+		}
+	}
 	// Symmetric with SetMCPServerEnabled(false): disconnect immediately
 	// instead of waiting for the ~2s hot-reload poll (which may also miss
 	// workspace-scoped yaml changes) - without this the removed server's
