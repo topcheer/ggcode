@@ -14,7 +14,8 @@ func TestRouteInboundTextSlashWins(t *testing.T) {
 }
 
 func TestRouteInboundTextApproval(t *testing.T) {
-	route := RouteInboundText("always", true, true)
+	// #1833 case 2: approval-only pending routes "always" as before.
+	route := RouteInboundText("always", true, false)
 	if route.Kind != InboundRouteApproval {
 		t.Fatalf("Kind = %q, want %q", route.Kind, InboundRouteApproval)
 	}

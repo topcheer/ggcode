@@ -66,6 +66,18 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	}
 
 	if route.Kind == im.InboundRouteApproval {
+		// #1833 case 1: mirror the questionnaire branch's stale guard (and
+		// the daemon bridge's #569 A timeout drop). The route decision came
+		// from a snapshot taken before handleRemoteInbound; if the approval
+		// was already answered locally / timed out in between, the late IM
+		// "y" must be dropped - leaking it further would crash on the nil
+		// ToolName read below or, worse, resubmit "y" as a fresh prompt.
+		if m.pendingApproval == nil {
+			if msg.Response != nil {
+				msg.Response <- nil
+			}
+			return m, nil
+		}
 		toolName := m.pendingApproval.ToolName
 		decisionStr := "deny"
 		var cmd tea.Cmd
