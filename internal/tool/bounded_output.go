@@ -63,10 +63,16 @@ func (w *boundedOutputWriter) Write(p []byte) (int, error) {
 		}
 		cut := snapForwardToRune(p, room)
 		w.head.Write(p[:cut])
-		// Bytes of a split rune dropped here are counted as overflow so the
-		// omitted-byte marker stays truthful.
-		w.overflow += int64(room - cut)
-		p = p[room:]
+		// #1820 case 1: p[room:] was wrong when cut > room (a multi-byte
+		// rune straddles the headCap boundary): p[room:cut] was already
+		// written to head AND duplicated into the tail, overflow was increased
+		// by room-cut (a NEGATIVE count - String's `overflow > 0` guard then
+		// skipped compaction and concatenated head+tail over headCap), and the
+		// tail began with bare continuation bytes (invalid UTF-8 garbage in
+		// the TUI). Continue from the cut, not from room; the split rune's
+		// bytes belong to the head, so overflow is NOT adjusted (room-cut is
+		// not "dropped" - it is retained).
+		p = p[cut:]
 	}
 
 	// Tail phase: append, compacting whenever the staging slice exceeds
@@ -107,6 +113,10 @@ func (w *boundedOutputWriter) String() string {
 			// rune-alignment contract every OTHER truncation point in Write
 			// upholds via snapForwardToRune.
 			cut := snapForwardToRune(tail, len(tail)-w.tailCap)
+			// #1820 case 3: the <=3 snapped bytes are DROPPED here but were never
+			// counted - Write's two snap sites both count, so the marker
+			// under-reported against its truthful contract.
+			w.overflow += int64(cut - (len(tail) - w.tailCap))
 			tail = tail[cut:]
 		}
 		if w.head.Len() == 0 {
