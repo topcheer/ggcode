@@ -899,7 +899,13 @@ func (b *Broker) sendActiveSession(sessionID string) {
 		return
 	}
 	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
+	// #1793 case 2: this read raced the writer's whole-struct replace
+	// (SendSnapshot reads the same field under RLock - the asymmetry was
+	// an omission, not design). Multi-string torn reads sent corrupted
+	// workspace/provider to the relay; -race flagged it.
+	b.sessionMu.RLock()
 	info := b.cachedSessionInfo
+	b.sessionMu.RUnlock()
 	_ = b.session.SendActiveSessionWithParams(sessionID, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash, info.Workspace, info.Provider, info.Model)
 }
 
@@ -908,7 +914,10 @@ func (b *Broker) sendActiveSessionWithMode(sessionID, mode string) {
 		return
 	}
 	barrierEventID, barrierOrdinal, projectionHash := b.activeSessionBarrier()
+	// #1793 case 2: same torn-read fix as SendActiveSessionWithParams.
+	b.sessionMu.RLock()
 	info := b.cachedSessionInfo
+	b.sessionMu.RUnlock()
 	_ = b.session.SendActiveSessionWithMode(sessionID, mode, b.AuthorityEpoch(), barrierEventID, barrierOrdinal, projectionHash, info.Workspace, info.Provider, info.Model)
 }
 
