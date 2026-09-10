@@ -258,3 +258,30 @@ func TestClaimVerifyZeroResultPrefixVariants(t *testing.T) {
 		t.Errorf("mid-text mention must not trigger: %q", got)
 	}
 }
+
+// TestClaimVerifyWindowAndPatterns pins #1780 cases 1+2: the scan window
+// covers head AND tail (go test FAIL summaries live at the end), and
+// 'fail:0' count lines no longer trigger the failure-reversal note.
+func TestClaimVerifyWindowAndPatterns(t *testing.T) {
+	tail := strings.Repeat("x", 9000) + "--- FAIL: TestX"
+	if !claimVerifyMatch(strings.ToLower(tail), "--- fail:") {
+		t.Fatal("canonical form must still match")
+	}
+	if claimVerifyMatch("pass:120 fail:0 skipped:0", "re:fail:[1-9]") {
+		t.Fatal("fail:0 must NOT match the non-zero regex")
+	}
+	if !claimVerifyMatch("pass:12 fail:3 skipped:0", "re:fail:[1-9]") {
+		t.Fatal("fail:3 must match")
+	}
+	// THROUGH check() itself (#2035 review): the production path must see
+	// a tail-window failure and must not see a zero-count line.
+	s := newClaimVerifyState()
+	bigTail := strings.Repeat("x", 9000) + "\npass:12 fail:3 skipped:0"
+	if g := s.check("run_command", bigTail, false, "go test ./..."); g == "" {
+		t.Fatal("check() must fire on a tail-window fail count (head-only window would scroll it out)")
+	}
+	s2 := newClaimVerifyState()
+	if g := s2.check("run_command", "ok all\npass:120 fail:0 skipped:0", false, "go test ./..."); g != "" {
+		t.Fatalf("check() must NOT fire on fail:0, got %q", g)
+	}
+}

@@ -27,6 +27,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -73,11 +74,14 @@ var claimVerifyCommandTools = map[string]bool{
 // successful grep whose first matched line merely mentions the phrase (the
 // false-positive case) has match lines before/around it and will not match.
 var claimVerifyContentTools = map[string]bool{
-	"grep":            true,
-	"search_files":    true,
-	"glob":            true,
-	"read_file":       true,
-	"multi_file_read": true,
+	"grep":         true,
+	"search_files": true,
+	"glob":         true,
+	// #1780 case 3: read_file/multi_file_read REMOVED - their Content is
+	// ARBITRARY FILE DATA, and the meta-status prefixes ("no matches
+	// found"...) are emitted only by grep/search_files/glob. A file whose
+	// first line reads that text triggered a pure false positive (#1506
+	// widened the table without culling this side).
 	"code_search":     true,
 	"lsp_definition":  true,
 	"lsp_references":  true,
@@ -133,6 +137,30 @@ type claimVerifyPattern struct {
 	msg     string
 }
 
+// claimVerifyReCache compiles the "re:"-prefixed patterns once.
+var claimVerifyReCache = func() map[string]*regexp.Regexp {
+	m := make(map[string]*regexp.Regexp)
+	for _, cvp := range claimVerifyPatterns {
+		if strings.HasPrefix(cvp.pattern, "re:") {
+			if re, err := regexp.Compile(strings.TrimPrefix(cvp.pattern, "re:")); err == nil {
+				m[cvp.pattern] = re
+			}
+		}
+	}
+	return m
+}()
+
+// claimVerifyMatch dispatches plain-Contains vs "re:" regex patterns.
+func claimVerifyMatch(lower, pattern string) bool {
+	if strings.HasPrefix(pattern, "re:") {
+		if re := claimVerifyReCache[pattern]; re != nil {
+			return re.MatchString(lower)
+		}
+		return false
+	}
+	return strings.Contains(lower, pattern)
+}
+
 var claimVerifyPatterns = []claimVerifyPattern{
 	// Exit code failure masked in non-error output
 	{"exit code: 1", "Command exited with code 1 (failure). Do not claim this command succeeded."},
@@ -145,7 +173,13 @@ var claimVerifyPatterns = []claimVerifyPattern{
 	// Build/test failures
 	{"build failed", "Build failed. Do not claim the build passed."},
 	{"compilation failed", "Compilation failed. Do not claim compilation succeeded."},
-	{"fail:", "Test output contains FAIL. Do not claim all tests passed."},
+	// #1780 case 2: 'fail:' bare Contains hit COUNT lines like
+	// 'pass:120 fail:0' - a zero-failure summary was condemned as a
+	// failure (semantic reversal). The "re:" prefix marks regex patterns:
+	// require a non-zero digit after the colon/tab.
+	{"--- fail:", "Test output contains FAIL. Do not claim all tests passed."},
+	{"re:fail:[1-9]", "Test output contains FAIL. Do not claim all tests passed."},
+	{"re:fail\t[1-9]", "Test output contains FAIL. Do not claim all tests passed."},
 	{"fail\t", "Test output contains FAIL. Do not claim all tests passed."},
 	// File not found
 	{"no such file or directory", "File/path does not exist. Do not claim you accessed it."},
@@ -335,13 +369,18 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 
 	// Command-execution tools: scan the command output for status patterns.
 	lower := strings.ToLower(content)
-	// Only scan the first 4000 chars to keep cost low on huge outputs.
-	if len(lower) > 4000 {
-		lower = lower[:4000]
+	// #1780 case 1: go test prints its FAIL summary at the END - a
+	// head-only window scrolled the failure signal out for exit-0-but-FAIL
+	// masking cases ('|| true', truncated pipes). Head AND tail, 4000 each.
+	if len(lower) > 8000 {
+		lower = lower[:4000] + "\n" + lower[len(lower)-4000:]
 	}
 
 	for _, cvp := range claimVerifyPatterns {
-		if strings.Contains(lower, cvp.pattern) {
+		// #1780 case 2: dispatch plain Contains vs "re:" regex patterns -
+		// 'fail:' bare Contains condemned count lines like 'pass:120
+		// fail:0'; the regex form requires a non-zero digit.
+		if claimVerifyMatch(lower, cvp.pattern) {
 			c.injections++
 			debug.Log("claim_verify", "misinterpretation risk detected: tool=%s pattern=%q", toolName, cvp.pattern)
 			return fmt.Sprintf("[Verify] %s Re-read the tool output carefully before proceeding.", cvp.msg)
