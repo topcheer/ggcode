@@ -505,6 +505,21 @@ func extractFilePathFromArgs(toolName string, args json.RawMessage) string {
 					}
 				}
 			}
+		} else {
+			// #1522 case D: batch_replace's files[] is a bare []string - the
+			// map-only unmarshal above failed silently, so the first path
+			// was never extracted and postEditVerify's sourceEditsSinceHint
+			// under-counted (plus searchInvalidation/stalledConvergence
+			// missed those files). The sibling extractors (#737/#738)
+			// already handle both shapes; this was the third copy, unfixed.
+			var list []string
+			if json.Unmarshal(filesRaw, &list) == nil {
+				for _, s := range list {
+					if s != "" {
+						return s
+					}
+				}
+			}
 		}
 	}
 
