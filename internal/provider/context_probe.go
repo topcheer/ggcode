@@ -33,6 +33,12 @@ var probeTiers = []int{
 }
 
 // ProbeResult is delivered asynchronously after a probe completes.
+// probeInflight tracks running background probes by key (#1789 case 1).
+var (
+	probeInflightMu sync.Mutex
+	probeInflight   = map[string]bool{}
+)
+
 type ProbeResult struct {
 	Key           string // "vendor|baseURL|model"
 	ContextWindow int    // discovered value, 0 if probe failed
@@ -443,10 +449,28 @@ func ProbeContextWindow(ctx context.Context, p Provider, vendor, baseURL, model 
 		return
 	}
 
+	// #1789 case 1: five trigger points can fire while a tiered probe is
+	// still in flight (minutes for the 1M tier - ~2MB padding per request)
+	// - each miss launched ANOTHER full paid tier sequence, doubling real
+	// billing. Single-flight per key: a running probe suppresses new ones.
+	probeInflightMu.Lock()
+	if probeInflight[key] {
+		probeInflightMu.Unlock()
+		debug.Log("probe", "in-flight probe for key=%s suppressed duplicate launch", key)
+		return
+	}
+	probeInflight[key] = true
+	probeInflightMu.Unlock()
+
 	debug.Log("probe", "cache MISS: key=%s — launching background goroutine", key)
 
 	// Phase 2: fire background probe
 	safego.Go("provider.contextProbe", func() {
+		defer func() {
+			probeInflightMu.Lock()
+			delete(probeInflight, key)
+			probeInflightMu.Unlock()
+		}()
 		start := time.Now()
 		window := probeInBackground(ctx, p, key)
 		elapsed := time.Since(start)

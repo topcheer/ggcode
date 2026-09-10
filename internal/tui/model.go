@@ -781,6 +781,17 @@ func (m *Model) SetProgram(p *tea.Program) {
 // provider+model and applies the result to the agent's ContextManager.
 // Completely invisible to the user — no UI feedback at all.
 // Safe to call at any time; no-ops if agent/provider/config are not ready.
+// currentProbeKey rebuilds the probe key for the CURRENT provider
+// combination (#1789 case 2): a stale probe completing after a provider
+// switch must not write the old window onto the new session.
+func (m *Model) currentProbeKey() (string, bool) {
+	res, err := m.config.ResolveActiveEndpoint()
+	if err != nil || res.VendorID == "" || res.Model == "" {
+		return "", false
+	}
+	return provider.MakeProbeKey(res.VendorID, res.BaseURL, res.Model), true
+}
+
 func (m *Model) startContextProbe() {
 	if m.config == nil || !m.config.ProbeContext {
 		return
@@ -832,6 +843,15 @@ func (m *Model) startContextProbe() {
 	provider.ProbeContextWindow(context.Background(), prov,
 		resolved.VendorID, resolved.BaseURL, resolved.Model,
 		func(r provider.ProbeResult) {
+			// #1789 case 2: a probe started for model A completes after the
+			// user switched to model B - applying it wrote A's window onto
+			// the B session (persisted; the L809 guard then blocked a
+			// correct re-probe). Drop results whose key no longer matches
+			// the CURRENT combination.
+			if cur, ok := m.currentProbeKey(); ok && cur != r.Key {
+				debug.Log("probe", "dropping stale probe result key=%s (now %s)", r.Key, cur)
+				return
+			}
 			if r.ContextWindow > 0 {
 				debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
 					r.ContextWindow, r.FromCache)
