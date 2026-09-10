@@ -83,50 +83,26 @@ func startStdoutHealthMonitor(ctx context.Context, sendMsg func(any)) (stop func
 // probeStdout checks if stdout is still writable by attempting a
 // zero-byte write with a deadline. Returns true if stdout is healthy.
 func probeStdout() bool {
-	// Get file status flags
+	// #1753 case 2: the probe used to flip O_NONBLOCK and WRITE an SGR
+	// reset on the shared stdout fd - on Linux (where non-blocking now
+	// actually engages, #2018) a renderer frame mid-window hit EAGAIN and
+	// the escape byte interleaved into frames. unix.Poll checks the fd's
+	// error/hangup state with ZERO writes and NO flag flipping: no shared
+	// state touched, no interleaving possible.
 	fd := int(os.Stdout.Fd())
-
-	// Try a non-blocking probe: write zero bytes (doesn't actually
-	// send data but checks if the fd is in a valid state).
-	// On macOS, when the display sleeps, writing to the terminal
-	// will eventually return EIO or block indefinitely.
-
-	// Strategy: set non-blocking, attempt tiny write, check result
-	flags, err := fdGetFlags(fd)
+	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
+	n, err := unix.Poll(pollFds, 0)
 	if err != nil {
+		// EBADF and friends: the fd is gone.
 		return false
 	}
-
-	// Set non-blocking
-	// #1753 case 1: 0x800 is O_NONBLOCK on LINUX only - on darwin it is
-	// O_EXCL, and F_SETFL silently ignores open-only bits, so the fd stayed
-	// BLOCKING: os.Stdout.Write hung forever on a dead/sleeping display,
-	// the health goroutine died with it, and the monitor was a placebo on
-	// the flagship darwin/arm64 platform (the file's own display-sleep
-	// scenario). The sibling repl_tty_guard.go always used the constant.
-	if err := fdSetFlags(fd, flags|unix.O_NONBLOCK); err != nil {
-		// #1389-A: surface the failure instead of proceeding with flags
-		// half-set (the old code ignored this AND the restore error).
-		return true // cannot probe safely - assume alive
-	}
-	defer func() {
-		if rerr := fdSetFlags(fd, flags); rerr != nil {
-			debug.Log("stdout-health", "restore fd flags failed: %v", rerr)
-		}
-	}()
-
-	// Probe with a NON-EMPTY harmless write. #1389-A: the old probe wrote
-	// []byte{} - Go's internal/poll.FD.Write short-circuits empty buffers
-	// to (0, nil) WITHOUT issuing write(2), so a dead fd (SSH drop, closed
-	// terminal) still probed "alive" and the monitor was a placebo.
-	// ESC[0m (SGR reset) is invisible on any terminal and 4 bytes long.
-	probe := []byte("\x1b[0m")
-	if _, err := os.Stdout.Write(probe); err != nil {
-		// Write failed — stdout is dead
+	if n == 0 {
+		// Not writable RIGHT NOW - on a tty this is the sleep/death
+		// symptom (a healthy pty accepts kernel-buffered writes).
 		return false
 	}
-
-	return true
+	revents := pollFds[0].Revents
+	return revents&unix.POLLERR == 0 && revents&unix.POLLHUP == 0 && revents&unix.POLLNVAL == 0
 }
 
 func isTerminalStdout() bool {
