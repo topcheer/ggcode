@@ -358,7 +358,10 @@ func (d tuiSlashDeps) ModifiedFiles() (string, error) {
 }
 
 func (d tuiSlashDeps) GitDiff(args []string) (string, error) {
-	gitArgs := append([]string{"diff"}, args...)
+	// #1752 case 1: remote /diff args are attacker-reachable IM text -
+	// git options like --output must not pass through (shared allowlist
+	// lives in internal/im/slash_agent.go, used by both paths).
+	gitArgs := append([]string{"diff"}, im.SanitizeGitDiffArgs(args)...)
 	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = workingDirFromModel(d.m)
 	out, err := cmd.CombinedOutput()

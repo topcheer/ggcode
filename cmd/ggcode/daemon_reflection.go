@@ -28,7 +28,10 @@ func setupDaemonReflection(ag *agent.Agent, workingDir string) {
 		}
 
 		key := "run-insights"
-		existing, _, err := autoMem.LoadAll()
+		// #1752 case 3: LoadAll merges EVERY key - writing the merge back
+		// into run-insights cross-pollutes unrelated memories into every
+		// prompt injection (#1388; the TUI path already uses LoadKey).
+		existing, err := autoMem.LoadKey(key)
 		if err == nil && existing != "" {
 			insights = agent.MergeInsights(existing, insights)
 		}
