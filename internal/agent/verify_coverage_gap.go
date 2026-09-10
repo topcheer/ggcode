@@ -358,24 +358,40 @@ func coverageExtractVerifyScopes(cmd string) []string {
 
 	fields := strings.Fields(lc)
 
-	// Collect every ./-prefixed token as a scope.
+	// Collect every package-scope token (#1784 case 3: ./ prefix is
+	// OPTIONAL - "go test internal/agent/ internal/config/" is legal Go
+	// and previously produced zero scopes, degrading to ["."] where the
+	// last-edited-package heuristic marked only ONE package verified while
+	// the explicitly listed others got UNVERIFIED warnings).
 	var scopes []string
 	for _, f := range fields {
-		if !strings.HasPrefix(f, "./") {
-			continue
-		}
-		if strings.Contains(f, "...") {
+		if strings.Contains(f, "...") && (strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")) {
 			return []string{"ALL"}
+		}
+		isRel := strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")
+		if !isRel {
+			// Bare relative internal path: slash, no colon (urls), letter
+			// start, not a flag, and NOT a fully-qualified Go module path
+			// (first segment with a dot = domain-like: github.com/... stays
+			// unextractable per #354 - it can't be mapped to repo dirs).
+			if strings.HasPrefix(f, "-") || !strings.Contains(f, "/") ||
+				strings.Contains(f, ":") || !isASCIIPathStart(f) ||
+				firstSegHasDot(f) {
+				continue
+			}
+		}
+		if !isRel && !strings.HasSuffix(f, "/") && !strings.Contains(f, "/") {
+			continue
 		}
 		r := strings.TrimRight(f, "/")
 		r = strings.TrimPrefix(r, "./")
-		if r != "" {
+		if r != "" && r != "." {
 			// #550 B1: any NAMED directory is a real package scope — "./db/"
 			// previously failed the len>2 test and inflated to ALL, marking
 			// every edited package VERIFIED and masking the exact coverage
 			// gap this detector exists to surface.
 			scopes = append(scopes, r)
-		} else {
+		} else if isRel {
 			return []string{"ALL"} // "./" alone
 		}
 	}
@@ -524,4 +540,15 @@ func coveragePkgInScope(pkg, scope string) bool {
 		return strings.Contains("/"+tail+"/", "/"+head+"/")
 	}
 	return false
+}
+
+// firstSegHasDot reports whether the first path segment of f contains a dot
+// (domain-like: github.com, golang.org) - the signature of a fully-qualified
+// Go module path, which #354 keeps unextractable.
+func firstSegHasDot(f string) bool {
+	i := strings.IndexByte(f, '/')
+	if i < 0 {
+		return false
+	}
+	return strings.Contains(f[:i], ".")
 }
