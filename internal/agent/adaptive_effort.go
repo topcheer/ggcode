@@ -261,6 +261,16 @@ func (a *Agent) applyAdaptiveEffort() (applied string, previous string) {
 // restoreEffort restores the provider's reasoning effort to a previous value
 // after an adaptive adjustment.
 func (a *Agent) restoreEffort(previous string) {
+	// #1817 case 1: re-check the override flag at restore time. apply
+	// checked it before the call, but streamChatResponse runs for tens of
+	// seconds - a Ctrl+G in that window sets the user's explicit effort and
+	// parks the adapter; restoring the pre-apply value here would silently
+	// roll the user's fresh setting back to a stale one (flag says dormant,
+	// provider holds the old value).
+	if a.effortAdapter != nil && a.effortAdapter.hasUserOverride() {
+		debug.Log("adaptive-effort", "skip restore: user override landed during the call")
+		return
+	}
 	// previous=="" (provider had no explicit effort) is valid: clear back to
 	// "" so the provider returns to its default. The old early-return here
 	// made the restore branch unreachable on the apply path and leaked the
