@@ -359,6 +359,13 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	// SetSessionInfo, PrepareOnlineShare (replay, announce active_session).
 	// We just store refs and show the QR.
 	m.tunnelSession = msg.session
+	// #1825 case 1: replay a connected event that raced StartShare.
+	if m.pendingTunnelConnected {
+		m.pendingTunnelConnected = false
+		return m, func() tea.Msg {
+			return tunnelClientConnectedMsg{generation: m.tunnelGeneration}
+		}
+	}
 	m.tunnelBroker = msg.broker
 	m.tunnelSpawned = make(map[string]bool)
 
@@ -416,6 +423,12 @@ func (m *Model) handleTunnelClientConnectedMsgForGeneration(generation uint64) (
 		return m, nil
 	}
 	if m.tunnelSession == nil {
+		// #1825 case 1: a paired client can reconnect (or land via the P2P
+		// fast path) while StartShare is still executing - the connected
+		// message then arrives BEFORE tunnelStartMsg assigns the session,
+		// and OnConnected fires exactly once per connection. Cache it and
+		// replay once the session lands (the relay-replay pattern).
+		m.pendingTunnelConnected = true
 		return m, nil
 	}
 	if m.qrOverlay != nil {
@@ -2071,7 +2084,15 @@ func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea
 	if m.pendingApproval == nil {
 		return m, nil
 	}
-	if m.tunnelPendingApprovalID != "" && msg.id != "" && msg.id != m.tunnelPendingApprovalID {
+	// #1825 case 2: the old match required BOTH ids non-empty - an
+	// empty-id reply (stale/malformed) bypassed the match entirely and
+	// the decision below then applied to whatever approval happened to be
+	// pending. An empty id carries no identity: drop it.
+	if msg.id == "" {
+		debug.Log("tui", "tunnel approval response with empty id dropped (stale/malformed) - pending approval untouched")
+		return m, nil
+	}
+	if m.tunnelPendingApprovalID != "" && msg.id != m.tunnelPendingApprovalID {
 		return m, nil
 	}
 
@@ -2084,9 +2105,17 @@ func (m *Model) handleTunnelApprovalResponse(msg tunnelApprovalResponseMsg) (tea
 		cmd = m.handleApproval(decision)
 	case "always_allow", "always":
 		cmd = m.handleApprovalAllowAlways()
-	default: // "deny" or unknown
+	case "deny":
 		decision = permission.Deny
 		cmd = m.handleApproval(decision)
+	default:
+		// #1825 case 2: an UNKNOWN decision value (typo / protocol
+		// evolution) used to fall into Deny - and with the empty-id pass
+		// above, a stale/malformed reply with no id then KILLED the
+		// current pending approval with zero diagnostics. Fail-closed is
+		// for explicit deny; unknown values are dropped loudly.
+		debug.Log("tui", "tunnel approval response with unknown decision %q (id=%q) dropped - pending approval untouched", msg.decision, msg.id)
+		return m, nil
 	}
 
 	return m, cmd
