@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/auth"
@@ -85,55 +86,11 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		}
 		if info != nil {
 			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
-				// #1505: the sole production refresh call used
-				// context.Background() and RefreshClaudeToken uses
-				// http.DefaultClient (no timeout) - a TCP black hole froze
-				// every endpoint resolution for minutes to hours. Bound the
-				// refresh so a TCP black hole cannot hang every endpoint
-				// resolution; a FAILED refresh then fails LOUDLY (#1300
-				// below) to trigger re-auth. (Single-flight / cross-process
-				// safety remain open - see issue.)
-				refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
-				refreshed, refreshErr := auth.RefreshClaudeToken(refreshCtx, info.RefreshToken)
-				cancelRefresh()
-				if refreshErr == nil && refreshed != nil {
-					// #1300: Save errors were discarded. Anthropic rotates the
-					// refresh token on each refresh, so a failed Save leaves the
-					// OLD (now server-side invalidated) refresh token on disk -
-					// the next refresh gets invalid_grant with no self-healing
-					// path. Surface the error so the caller/user can re-auth.
-					if saveErr := auth.DefaultStore().Save(refreshed); saveErr != nil {
-						// #1336: returning the error (not just logging) makes the
-						// failure visible to the 27+ ResolveActiveEndpoint callers
-						// that key off the returned error to trigger re-auth.
-						// The in-memory token would keep THIS session alive while
-						// disk holds the server-side invalidated old refresh token:
-						// after restart the only outcome is invalid_grant and a
-						// forced /login anyway - fail now, while the user is present.
-						debug.Log("config", "claude oauth: token refreshed but persisting failed (refresh token lost on restart): %v", saveErr)
-						return nil, fmt.Errorf("claude oauth: refreshed token could not be persisted (disk/permission error); re-authenticate before restarting: %w", saveErr)
-					}
-					apiKey = strings.TrimSpace(refreshed.AccessToken)
-				} else {
-					// #1300: do NOT silently fall back to the known-expired
-					// access token - downstream requests would 401 and mask the
-					// real cause (refresh failure). Fail loudly to trigger
-					// re-authentication.
-					// #1805 case 1: a PERMANENT rejection (invalid_grant - the refresh
-					// token was rotated on a Save that failed, or revoked) must also
-					// delete the stored token: the status bar reads disk fields and
-					// kept reporting "connected" while every chat 401'd, with /login
-					// as the only exit. Clearing the dead token flips the status to
-					// "not connected" immediately. Transient errors keep the token -
-					// the next resolve retries the refresh.
-					if isPermanentRefreshFailure(refreshErr) {
-						debug.Log("config", "claude oauth: refresh token permanently rejected (clearing dead token): %v", refreshErr)
-						if delErr := auth.DefaultStore().Delete(auth.ProviderAnthropic); delErr != nil {
-							debug.Log("config", "claude oauth: clearing dead token failed: %v", delErr)
-						}
-					}
-					debug.Log("config", "claude oauth: token refresh failed (re-authentication required): %v", refreshErr)
-					return nil, fmt.Errorf("claude oauth token refresh failed (run /login to re-authenticate): %w", refreshErr)
+				// #1505 case 2: single-flight via refreshClaudeOAuthToken (re-read
+				// under the lock + one bounded refresh attempt).
+				apiKey, err = refreshClaudeOAuthToken(auth.DefaultStore())
+				if err != nil {
+					return nil, err
 				}
 			} else {
 				apiKey = strings.TrimSpace(info.AccessToken)
@@ -693,4 +650,82 @@ func isPermanentRefreshFailure(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "invalid_grant") || strings.Contains(msg, "invalid refresh token")
+}
+
+// claudeRefreshMu single-flights the Anthropic OAuth refresh (#1505 case 2).
+// Anthropic rotates the refresh token on every refresh and invalidates the
+// old one server-side, so two concurrent resolvers that both read the same
+// expired token replayed a single-use token: the loser got invalid_grant
+// and was told to /login even though the winner had already persisted the
+// rotated token to disk.
+var claudeRefreshMu sync.Mutex
+
+// refreshClaudeOAuthToken refreshes the stored Anthropic OAuth credential
+// under claudeRefreshMu and returns a usable access token. It re-reads the
+// store after acquiring the lock: a concurrent refresh that finished while
+// we waited has already persisted a fresh token, and reusing it avoids
+// replaying the (now invalidated) refresh token.
+func refreshClaudeOAuthToken(store *auth.Store) (string, error) {
+	claudeRefreshMu.Lock()
+	defer claudeRefreshMu.Unlock()
+	info, err := store.Load(auth.ProviderAnthropic)
+	if err != nil {
+		return "", err
+	}
+	if info == nil {
+		return "", fmt.Errorf("claude oauth: credentials missing; run /login to re-authenticate")
+	}
+	if !info.IsExpired() {
+		if at := strings.TrimSpace(info.AccessToken); at != "" {
+			return at, nil
+		}
+	}
+	if strings.TrimSpace(info.RefreshToken) == "" {
+		return "", fmt.Errorf("claude oauth: token expired and no refresh token available; run /login to re-authenticate")
+	}
+	// #1505: the sole production refresh call used context.Background() and
+	// RefreshClaudeToken uses http.DefaultClient (no timeout) - a TCP black
+	// hole froze every endpoint resolution for minutes to hours. Bound the
+	// refresh so a TCP black hole cannot hang every endpoint resolution; a
+	// FAILED refresh then fails LOUDLY (#1300) to trigger re-auth.
+	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
+	refreshed, refreshErr := auth.RefreshClaudeToken(refreshCtx, info.RefreshToken)
+	cancelRefresh()
+	if refreshErr == nil && refreshed != nil {
+		// #1300: Save errors were discarded. Anthropic rotates the refresh
+		// token on each refresh, so a failed Save leaves the OLD (now
+		// server-side invalidated) refresh token on disk - the next refresh
+		// gets invalid_grant with no self-healing path. Surface the error so
+		// the caller/user can re-auth.
+		if saveErr := store.Save(refreshed); saveErr != nil {
+			// #1336: returning the error (not just logging) makes the failure
+			// visible to the 27+ ResolveActiveEndpoint callers that key off
+			// the returned error to trigger re-auth. The in-memory token
+			// would keep THIS session alive while disk holds the
+			// server-side invalidated old refresh token: after restart the
+			// only outcome is invalid_grant and a forced /login anyway -
+			// fail now, while the user is present.
+			debug.Log("config", "claude oauth: token refreshed but persisting failed (refresh token lost on restart): %v", saveErr)
+			return "", fmt.Errorf("claude oauth: refreshed token could not be persisted (disk/permission error); re-authenticate before restarting: %w", saveErr)
+		}
+		return strings.TrimSpace(refreshed.AccessToken), nil
+	}
+	// #1300: do NOT silently fall back to the known-expired access token -
+	// downstream requests would 401 and mask the real cause (refresh
+	// failure). Fail loudly to trigger re-authentication.
+	// #1805 case 1: a PERMANENT rejection (invalid_grant - the refresh token
+	// was rotated on a Save that failed, or revoked) must also delete the
+	// stored token: the status bar reads disk fields and kept reporting
+	// "connected" while every chat 401'd, with /login as the only exit.
+	// Clearing the dead token flips the status to "not connected"
+	// immediately. Transient errors keep the token - the next resolve
+	// retries the refresh.
+	if isPermanentRefreshFailure(refreshErr) {
+		debug.Log("config", "claude oauth: refresh token permanently rejected (clearing dead token): %v", refreshErr)
+		if delErr := store.Delete(auth.ProviderAnthropic); delErr != nil {
+			debug.Log("config", "claude oauth: clearing dead token failed: %v", delErr)
+		}
+	}
+	debug.Log("config", "claude oauth: token refresh failed (re-authentication required): %v", refreshErr)
+	return "", fmt.Errorf("claude oauth token refresh failed (run /login to re-authenticate): %w", refreshErr)
 }

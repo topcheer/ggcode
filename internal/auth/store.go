@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -33,7 +34,32 @@ type Info struct {
 
 type Store struct {
 	path string
-	mu   sync.Mutex
+}
+
+var (
+	// storeMuRegistryMu guards storeMuRegistry itself.
+	storeMuRegistryMu sync.Mutex
+	// storeMuRegistry keys store paths to a mutex shared by EVERY Store
+	// instance bound to that path (#1505 case 3): DefaultStore() hands out a
+	// fresh instance per call, so a per-instance s.mu never serialized
+	// anything — overlapping background-refresh, login and panel saves ran
+	// interleaved load-modify-write cycles that silently rolled back rotated
+	// refresh tokens or dropped concurrent providers' entries.
+	storeMuRegistry = map[string]*sync.Mutex{}
+)
+
+// muFor returns the mutex shared by all Store instances using the same
+// path, so separate instances (DefaultStore is per-call) still serialize
+// their mutations.
+func muFor(path string) *sync.Mutex {
+	storeMuRegistryMu.Lock()
+	defer storeMuRegistryMu.Unlock()
+	if m, ok := storeMuRegistry[path]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	storeMuRegistry[path] = m
+	return m
 }
 
 func DefaultPath() string {
@@ -53,8 +79,9 @@ func DefaultStore() *Store {
 }
 
 func (s *Store) Load(providerID string) (*Info, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	m := muFor(s.path)
+	m.Lock()
+	defer m.Unlock()
 	return s.loadLocked(providerID)
 }
 
@@ -73,8 +100,9 @@ func (s *Store) loadLocked(providerID string) (*Info, error) {
 }
 
 func (s *Store) Save(info *Info) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	m := muFor(s.path)
+	m.Lock()
+	defer m.Unlock()
 	if info == nil {
 		return fmt.Errorf("auth info is nil")
 	}
@@ -94,18 +122,36 @@ func (s *Store) Save(info *Info) error {
 	next.ProviderID = providerID
 	next.UpdatedAt = time.Now()
 	all[providerID] = next
-	return s.saveAll(all)
+	return s.withFileLock(s.saveAll, all)
 }
 
 func (s *Store) Delete(providerID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	m := muFor(s.path)
+	m.Lock()
+	defer m.Unlock()
 	all, err := s.loadAll()
 	if err != nil {
 		return err
 	}
 	delete(all, strings.TrimSpace(providerID))
-	return s.saveAll(all)
+	return s.withFileLock(s.saveAll, all)
+}
+
+// withFileLock takes a best-effort cross-process exclusive lock around a
+// mutating store write (#1505 case 3): the in-process shared mutex cannot
+// see the desktop/daemon/TUI processes the product explicitly supports
+// running in parallel, whose interleaved load-modify-write cycles lose
+// updates the same way. Following the FileLock contract (#1337), lock
+// failure fails OPEN: the atomic rename still prevents torn files, only
+// update serialization is lost, and persistence never hard-fails.
+func (s *Store) withFileLock(fn func(map[string]Info) error, all map[string]Info) error {
+	unlock, err := util.FileLock(s.path + ".lock")
+	if err != nil {
+		debug.Log("auth", "auth store lock unavailable (proceeding unlocked): %v", err)
+		return fn(all)
+	}
+	defer unlock()
+	return fn(all)
 }
 
 // IsExpired returns true if the token is expired or will expire within 5 minutes.
@@ -120,8 +166,9 @@ func (i *Info) IsExpired() bool {
 }
 
 func (s *Store) HasUsableToken(providerID string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	m := muFor(s.path)
+	m.Lock()
+	defer m.Unlock()
 	info, err := s.loadLocked(providerID)
 	if err != nil || info == nil {
 		return false, err
@@ -172,9 +219,27 @@ func (s *Store) saveAll(all map[string]Info) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("creating auth store directory: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	// #1505 case 3: the fixed ".tmp" name let two writers (processes or
+	// unlocked instances) O_TRUNC the same scratch file concurrently, mixing
+	// two JSON documents before rename and permanently corrupting the store.
+	// CreateTemp gives every writer its own scratch file, created 0600.
+	f, err := os.CreateTemp(filepath.Dir(s.path), filepath.Base(s.path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating auth store temp file: %w", err)
+	}
+	tmp := f.Name()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("writing auth store: %w", err)
 	}
-	return os.Rename(tmp, s.path)
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("writing auth store: %w", err)
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming auth store: %w", err)
+	}
+	return nil
 }
