@@ -91,12 +91,25 @@ func (Jujutsu) CurrentBranch(ctx context.Context, dir string) (string, error) {
 }
 
 func (Jujutsu) IsClean(ctx context.Context, dir string) (bool, error) {
-	out, err := runVCSCmd(ctx, dir, "jj", "st")
+	// #1853: use the same machine-readable shape Status adopted in #1407-A:
+	// 'jj diff -r @ --summary' emits exactly one line per touched file, so
+	// empty output means clean. The old prose match ("The working copy has
+	// no changes") only exists since jj 0.26 (upstream 1e25101c renamed
+	// "is clean" in Feb 2025); on jj <= 0.25 a perfectly clean repo never
+	// matched and IsClean returned false forever, poisoning the
+	// agentruntime consumers.
+	out, err := runVCSCmd(ctx, dir, "jj", "diff", "-r", "@", "--summary")
+	if err == nil {
+		return strings.TrimSpace(out) == "", nil
+	}
+	// Fallback for jj releases without --summary: accept BOTH wordings so
+	// old and new jj releases judge a clean repo correctly.
+	out, err = runVCSCmd(ctx, dir, "jj", "st")
 	if err != nil {
 		return false, err
 	}
-	// jj prints "The working copy has no changes." when clean.
-	return strings.Contains(out, "The working copy has no changes"), nil
+	return strings.Contains(out, "The working copy has no changes") ||
+		strings.Contains(out, "The working copy is clean"), nil
 }
 
 // Checkout switches to an existing bookmark or creates a new one and

@@ -350,8 +350,12 @@ func TestJjStatus_CleanRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if !strings.Contains(out, "no changes") {
-		t.Errorf("expected 'no changes' in clean repo, got %q", out)
+	// #1407-A changed Status to 'jj diff -r @ --summary': a clean change
+	// yields EMPTY output (the old prose "no changes" line no longer flows
+	// through this path; the assertion had drifted and only survived
+	// because integration_local runs outside CI).
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("expected empty summary for clean repo, got %q", out)
 	}
 }
 
@@ -439,6 +443,17 @@ func TestJjIsClean(t *testing.T) {
 	}
 	if !clean {
 		t.Error("expected clean for empty working copy")
+	}
+	// #1853: IsClean uses 'jj diff -r @ --summary' (empty = clean) - the
+	// version-drifting prose line ("is clean" before jj 0.26, "has no
+	// changes" after) judged a clean repo permanently dirty on old jj.
+	writeFile(t, dir, "notes.txt", "dirty now\n")
+	clean, err = v.IsClean(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("IsClean (dirty): %v", err)
+	}
+	if clean {
+		t.Error("repo with a touched file must not be clean")
 	}
 }
 
