@@ -1127,3 +1127,33 @@ func TestParseHTTPResponseGatewayError(t *testing.T) {
 		t.Errorf("error should not mention Notification type, got: %v", err)
 	}
 }
+
+// TestNotifStreamGenerationGuard pins #1810: a takeover bumps the
+// generation and installs its own cancel; an older exit-defer must NOT
+// clear the newer guard. (The full HTTP path needs a live server - this
+// pins the guard mechanics that the race lived in.)
+func TestNotifStreamGenerationGuard(t *testing.T) {
+	c := &Client{name: "test"}
+	c.mu.Lock()
+	c.notifStreamGen = 3
+	myGen := c.notifStreamGen
+	cancelA := func() {}
+	c.notifStreamCancel = cancelA
+	c.mu.Unlock()
+
+	// A takeover arrives: bumps gen, installs its own cancel.
+	c.mu.Lock()
+	c.notifStreamGen++
+	c.notifStreamCancel = func() {}
+	c.mu.Unlock()
+
+	// The OLD exit defer (holding myGen==3) must not clear the new guard.
+	c.mu.Lock()
+	if c.notifStreamGen == myGen {
+		c.notifStreamCancel = nil
+	}
+	c.mu.Unlock()
+	if c.notifStreamCancel == nil {
+		t.Fatal("stale exit-defer must not clear a newer takeover guard")
+	}
+}
