@@ -31,6 +31,7 @@ type browserProfile struct {
 	allocCtx    context.Context
 	allocCancel context.CancelFunc
 	tabs        map[string]*browserTab
+	lastUsed    time.Time
 }
 
 // browserTab holds state for a single browser tab within a profile.
@@ -57,6 +58,7 @@ type browserTab struct {
 type Browser struct {
 	profiles map[string]*browserProfile
 	mu       sync.Mutex
+	gcOnce   sync.Once
 }
 
 // NewBrowser creates a new CDP-based browser tool.
@@ -413,8 +415,21 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 	defer b.mu.Unlock()
 
 	if p, ok := b.profiles[name]; ok {
+		p.touch()
 		return p, nil
 	}
+
+	// Profile-name hygiene: agents have passed shell syntax like
+	// "$(date +%H%M%S)" literally as a profile name, littering the
+	// browser-profiles root with metacharacter directories.
+	if name != "system" && name != "default" {
+		if err := validateBrowserProfileName(name); err != nil {
+			return nil, err
+		}
+	}
+
+	// Reclaim disk from dead profiles before possibly creating a new one.
+	b.startBrowserProfileGC()
 
 	// Pre-flight check: verify Chrome/Chromium is installed
 	chromePath := findChromeExecutable()
@@ -479,7 +494,11 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		allocCancel: allocCancel,
 		tabs:        make(map[string]*browserTab),
 	}
+	p.touch()
 	b.profiles[name] = p
+	// Enforce the concurrent-Chrome cap: evict least-recently-used
+	// profiles so one session cannot hold a dozen idle browser processes.
+	b.evictLRUBrowserProfiles()
 	return p, nil
 }
 
