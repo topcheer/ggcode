@@ -387,16 +387,44 @@ func detectNpmFrameworks(p *ProjectProfile, pkgPath string) {
 }
 
 // goolmTagUsage reports whether the Makefile uses the TAGS variable in a
-// go-build-shaped way (assignment or -tags reference), excluding unrelated
-// *_TAGS variables like DOCKER_TAGS. #1523
+// go-build-shaped way, excluding unrelated *_TAGS variables like
+// DOCKER_TAGS. #1523
 func goolmTagUsage(makefile string) bool {
 	for _, line := range strings.Split(makefile, "\n") {
 		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "TAGS") || strings.HasPrefix(t, "-tags $(TAGS)") || strings.Contains(t, "-tags=$(TAGS)") {
+		if strings.HasPrefix(t, "-tags $(TAGS)") || strings.Contains(t, "-tags=$(TAGS)") {
+			return true
+		}
+		// #2054: a bare TAGS assignment only counts when its VALUE names
+		// goolm (TAGS := goolm / TAGS ?= goolm). The old HasPrefix(t,
+		// "TAGS") matched any TAGS-prefixed line - release-image labels
+		// like `TAGS := v1.2.3 production`, `TAGS_APPEND := ...`,
+		// `TAGS ?= docker` - and injected `-tags goolm` into projects that
+		// never use it, the same #1523 false-positive class in a narrower
+		// form. TAGS_APPEND & friends cannot match: the operators below
+		// must immediately follow the exact word TAGS.
+		if v, ok := tagsAssignmentValue(t); ok && strings.Contains(v, "goolm") {
 			return true
 		}
 	}
 	return false
+}
+
+// tagsAssignmentValue parses a `TAGS <op> value` assignment (make
+// operators ::=, :=, ?=, +=, =) and returns the raw right-hand side.
+// Whitespace between TAGS and the operator is allowed (TAGS := goolm).
+// Returns ok=false for TAGS_SUFFIX-style names and non-assignments.
+func tagsAssignmentValue(line string) (string, bool) {
+	if !strings.HasPrefix(line, "TAGS") {
+		return "", false
+	}
+	rest := strings.TrimLeft(line[len("TAGS"):], " \t")
+	for _, op := range []string{"::=", ":=", "?=", "+=", "="} {
+		if strings.HasPrefix(rest, op) {
+			return strings.TrimSpace(rest[len(op):]), true
+		}
+	}
+	return "", false
 }
 
 // detectCargoFrameworks detects Rust frameworks from Cargo.toml.
