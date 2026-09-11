@@ -417,23 +417,29 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		}
 	}
 
-	// Build final list: always include all changed dirs, then add importers up to cap.
-	finalList := make([]string, 0, len(changedInList))
-	finalList = append(finalList, changedInList...)
-
-	remainingCap := 20 - len(changedInList)
-	var omittedImporters int
-	if remainingCap > 0 && len(importersInList) > 0 {
-		// Importers are already sorted from the earlier sort.Strings(dirList).
-		if len(importersInList) > remainingCap {
-			finalList = append(finalList, importersInList[:remainingCap]...)
-			omittedImporters = len(importersInList) - remainingCap
-		} else {
-			finalList = append(finalList, importersInList...)
+	// Build final list: changed dirs first, importers after, under the
+	// total cap. #1502 case F: the old code appended ALL changed dirs
+	// unconditionally ("Cap at 20" never applied when changed dirs alone
+	// exceeded it) and the `# +more` fallback annotated lists that had
+	// omitted NOTHING - 25 changed packages were all listed AND claimed
+	// omission. Enforce the cap on the TOTAL and only annotate real
+	// omissions.
+	const pkgCap = 20
+	finalList := make([]string, 0, pkgCap)
+	var omitted int
+	for _, d := range changedInList {
+		if len(finalList) >= pkgCap {
+			omitted++
+			continue
 		}
-	} else if len(importersInList) > 0 {
-		// No cap remaining but we have importers.
-		omittedImporters = len(importersInList)
+		finalList = append(finalList, d)
+	}
+	for _, d := range importersInList {
+		if len(finalList) >= pkgCap {
+			omitted++
+			continue
+		}
+		finalList = append(finalList, d)
 	}
 
 	parts := make([]string, len(finalList))
@@ -448,11 +454,8 @@ func impactScopedTestCommandWithDeps(workingDir string) string {
 		cmd += " -tags " + strings.Join(tags, ",")
 	}
 	cmd += " " + strings.Join(parts, " ")
-	if omittedImporters > 0 {
-		cmd += fmt.Sprintf(" # +%d importers omitted", omittedImporters)
-	} else if len(allDirs) > 20 {
-		// Fallback for edge cases: all changed, no importers, but still truncated.
-		cmd += " # +more"
+	if omitted > 0 {
+		cmd += fmt.Sprintf(" # +%d packages omitted", omitted)
 	}
 
 	if len(importerDirs) > 0 {
