@@ -32,6 +32,12 @@ type NotificationManager struct {
 	enabled bool        // master toggle from desktop config
 	unread  int         // unread notification count for dock badge
 
+	// #1809 case 4: delivery failures (TCC denial, notify-send absent)
+	// were debug.Log-only - a user who enabled notifications and was
+	// denied by the OS had no way to know why nothing arrived. Warn the
+	// frontend ONCE per process instead of per failure.
+	deliveryWarned bool
+
 	// lastShown keyed by title+body for storm dedup (#398): concurrent
 	// sessions completing with identical fixed titles ("Task completed")
 	// used to spawn one OS banner per event.
@@ -506,13 +512,38 @@ func (nm *NotificationManager) deliverUnix(title, body string) {
 		cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 		if err := cmd.Run(); err != nil {
 			debug.Log("desktop", "macOS notification failed: %v", err)
+			nm.warnDeliveryOnce("macOS", err)
 		}
 		return
 	}
 	cmd := exec.CommandContext(ctx, "notify-send", "--app-name=GGCode", "--icon=dialog-information", title, body)
 	if err := cmd.Run(); err != nil {
 		debug.Log("desktop", "Linux notification failed: %v", err)
+		nm.warnDeliveryOnce("Linux", err)
 	}
+}
+
+// warnDeliveryOnce surfaces a delivery failure to the frontend exactly
+// once per process (#1809 case 4): the OS denied us (permissions, missing
+// notifier) and debug.Log alone left the user wondering why nothing
+// arrived.
+func (nm *NotificationManager) warnDeliveryOnce(platform string, err error) {
+	nm.mu.Lock()
+	if nm.deliveryWarned {
+		nm.mu.Unlock()
+		return
+	}
+	nm.deliveryWarned = true
+	wctx, wok := nm.ctx.(context.Context)
+	nm.mu.Unlock()
+	if !wok {
+		return
+	}
+	wailsruntime.EventsEmit(wctx, "notification:delivery-failed", map[string]string{
+		"platform": platform,
+		"error":    err.Error(),
+		"hint":     "Check the OS notification permission for this app",
+	})
 }
 
 // notifyLinux was removed (#1852 case 1): Linux now rides the shared
