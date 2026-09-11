@@ -1035,12 +1035,12 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 	}
 	var total int
 	for _, img := range imgs {
-		decoded, err := base64.StdEncoding.DecodeString(img.Base64)
+		decoded, err := base64.StdEncoding.DecodeString(img.Data)
 		if err == nil {
 			total += len(decoded)
 		} else {
 			// Undecodable payload still counts by its raw length.
-			total += len(img.Base64)
+			total += len(img.Data)
 		}
 	}
 	if total > maxPasteTotalBytes {
@@ -1517,7 +1517,8 @@ func (a *App) resumeLatestSession() string {
 		// actual cause - a corrupt JSONL (silently falling back to an OLDER
 		// session, the newest conversation effectively disappearing) was
 		// indistinguishable from a transient lock.
-		if loadErr := chat.LoadSession(latest.ID); loadErr == nil {
+		loadErr := chat.LoadSession(latest.ID)
+		if loadErr == nil {
 			debug.Log("app", "resumed latest session: %s", latest.ID)
 			return latest.ID
 		}
