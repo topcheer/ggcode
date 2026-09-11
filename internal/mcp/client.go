@@ -64,6 +64,7 @@ type Client struct {
 	// long after the client closed. Set by startHTTPNotificationStream,
 	// cancelled by Close. Guarded by mu.
 	notifStreamCancel context.CancelFunc
+	notifStreamGen    uint64 // #1810: guards stale exit-defers from clearing a newer takeover
 	// #1275: hang-watchdog state. lastReadProgress is bumped (unix nano)
 	// after every successfully parsed stdio message; hangWatchdogArmed
 	// dedupes the watchdog across concurrent request timeouts.
@@ -1683,12 +1684,17 @@ func (c *Client) startHTTPNotificationStream() {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
 	if c.notifStreamCancel != nil {
-		// A previous stream is already running (e.g. Initialize retried);
-		// keep the oldest ctx alive and skip spawning a second loop.
-		c.mu.Unlock()
-		cancel()
-		return
+		// A previous stream is already running (e.g. Initialize retried).
+		// #1810: skipping was wrong when that previous loop was on its way
+		// OUT (its exit defer clears the guard under this same lock a
+		// microsecond after our check) - the skip then left NO stream
+		// until the next Initialize: the #1632 symptom narrowed to a race.
+		// Cancel the previous ctx (a live loop exits cleanly; a dying one
+		// loses nothing) and fall through to install ours.
+		go c.notifStreamCancel()
 	}
+	c.notifStreamGen++
+	myGen := c.notifStreamGen
 	c.notifStreamCancel = cancel
 	c.mu.Unlock()
 	safego.Go("mcp.client.httpNotifStream", func() {
@@ -1702,7 +1708,9 @@ func (c *Client) startHTTPNotificationStream() {
 		// a fresh client; #1602 re-inits in place.)
 		defer func() {
 			c.mu.Lock()
-			if c.notifStreamCancel != nil {
+			// #1810: generation check - a takeover installed a NEW cancel
+			// after seeing us exit; do not clear what we no longer own.
+			if c.notifStreamGen == myGen {
 				c.notifStreamCancel = nil
 			}
 			c.mu.Unlock()
