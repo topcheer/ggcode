@@ -26,13 +26,24 @@ type OpenAICompatible struct {
 	httpClient *http.Client
 }
 
+// MaxAudioSize bounds STT audio uploads (100MB). #2055: the #1893 fix
+// reused the IMAGE attachment ceiling (imagepkg.MaxSize, 20MB), which
+// legitimate audio routinely exceeds - a 1-hour mp3 is ~55MB, and
+// Telegram's ffmpeg conversion to uncompressed WAV expands files
+// further (16kHz/16bit mono passes 20MB at ~10 minutes of speech).
+// Audio keeps its own, larger bound instead of the unbounded pre-#1893
+// read.
+const MaxAudioSize = 100 * 1024 * 1024
+
 func NewOpenAICompatible(baseURL, apiKey, model, provider string) *OpenAICompatible {
 	return &OpenAICompatible{
-		baseURL:    strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		apiKey:     strings.TrimSpace(apiKey),
-		model:      strings.TrimSpace(model),
-		provider:   strings.TrimSpace(provider),
-		httpClient: util.NewInsecureAwareClient(60 * time.Second),
+		baseURL:  strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		apiKey:   strings.TrimSpace(apiKey),
+		model:    strings.TrimSpace(model),
+		provider: strings.TrimSpace(provider),
+		// #2055: 60s was set when uploads were capped at the 20MB image
+		// ceiling; a 100MB audio upload on a typical uplink takes minutes.
+		httpClient: util.NewInsecureAwareClient(300 * time.Second),
 	}
 }
 
@@ -76,15 +87,19 @@ func (t *OpenAICompatible) Transcribe(ctx context.Context, req Request) (Result,
 		return Result{}, fmt.Errorf("create STT form file: %w", err)
 	}
 	// #1893: same unbounded-read class as the image attachments - the
-	// path can be externally provided, so bound it the same way.
+	// path can be externally provided, so bound it; #2055: with the
+	// audio-appropriate ceiling, not the 20MB image one.
 	f, err := os.Open(audioPath)
 	if err != nil {
 		return Result{}, fmt.Errorf("read STT audio file: %w", err)
 	}
-	data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+	data, err := imagepkg.ReadLimited(f, MaxAudioSize)
 	f.Close()
 	if err != nil {
-		return Result{}, fmt.Errorf("read STT audio file: %w", err)
+		if fi, serr := os.Stat(audioPath); serr == nil {
+			return Result{}, fmt.Errorf("read STT audio file (size %d bytes exceeds limit %d bytes): %w", fi.Size(), int64(MaxAudioSize), err)
+		}
+		return Result{}, fmt.Errorf("read STT audio file (limit %d bytes): %w", int64(MaxAudioSize), err)
 	}
 	if _, err := part.Write(data); err != nil {
 		return Result{}, fmt.Errorf("write STT audio file: %w", err)
