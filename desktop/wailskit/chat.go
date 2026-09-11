@@ -4615,6 +4615,18 @@ func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) fu
 			b.mu.Lock()
 			b.resolved = r
 			b.mu.Unlock()
+			// #1670 case 2: the vision switch writes the TRANSIENT
+			// ep.SelectedModel on the SHARED cfg, and this desktop process
+			// has many cfg.Save() surfaces (settings panel, IM, config
+			// editors) that can fire mid-turn and persist that transient
+			// vision model. The model_switch core deliberately does not
+			// Save (session-scoped selection), so without this write-back
+			// the NEXT app start loaded the vision model. Persisting the
+			// restored user selection closes the window on this
+			// desktop-in-process path only.
+			if err := cfg.Save(); err != nil {
+				debug.Log("chat", "vision fallback: persisting restored model failed: %v", err)
+			}
 		} else {
 			debug.Log("chat", "vision fallback restore failed: %v", err)
 		}

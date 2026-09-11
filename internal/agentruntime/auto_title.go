@@ -49,7 +49,11 @@ var (
 	// markdownHeadingRe matches markdown headings (#, ##, etc.).
 	markdownHeadingRe = regexp.MustCompile(`^#{1,6}\s+`)
 	// markdownBoldItalicRe matches **bold**, *italic*, __bold__, _italic_.
-	markdownBoldItalicRe = regexp.MustCompile(`\*{1,3}([^*]+)\*{1,3}|_{1,3}([^_]+)_{1,3}`)
+	// #1670 Low 1: the underscore branch must not fire mid-word -
+	// `fix_user_id` matched _user_ (italic) and lost its underscores,
+	// gluing the identifier together. Word-boundary anchors on both sides
+	// keep genuine _italic_ working while snake_case identifiers survive.
+	markdownBoldItalicRe = regexp.MustCompile(`\*{1,3}([^*]+)\*{1,3}|(^|[\s（(\[【{"'，、])_{1,3}([^_]+)_{1,3}($|[\s，。！？)\]】}"'.,;:!?])`)
 	// longFilePathRe matches paths that look like file references (3+ segments).
 	longFilePathRe = regexp.MustCompile(`[\w\-./]+\b\.\w{1,5}\b`)
 	// commandPrefixRe strips leading shell comment or prompt artifacts.
@@ -78,7 +82,7 @@ func GenerateTitle(userMessage string) string {
 	s = markdownHeadingRe.ReplaceAllString(s, "")
 
 	// 5. Unwrap bold/italic markers, keep inner text.
-	s = markdownBoldItalicRe.ReplaceAllString(s, "$1$2")
+	s = markdownBoldItalicRe.ReplaceAllString(s, "$1$2$3$4")
 
 	// 6. Collapse file paths to just the basename (last segment).
 	s = longFilePathRe.ReplaceAllStringFunc(s, func(m string) string {
@@ -125,6 +129,19 @@ func firstSentence(s string) string {
 	endChars := ".!?。！？"
 	runeIdx := 0
 	for i, r := range s {
+		// #1670 Low 2: a period between digits is a decimal point, not a
+		// terminator - "支持 v2.0 的功能" was truncated to "支持 v2".
+		if r == '.' {
+			hasPrev := i > 0 && isASCIIDigit(s[i-1])
+			hasNext := i+1 < len(s) && isASCIIDigit(s[i+1])
+			if hasPrev && hasNext {
+				runeIdx++
+				if runeIdx >= titleMaxRunes*2 {
+					break
+				}
+				continue
+			}
+		}
 		if strings.ContainsRune(endChars, r) {
 			candidate := strings.TrimSpace(s[:i+utf8.RuneLen(r)])
 			if utf8.RuneCountInString(candidate) >= titleMinRunes {
@@ -138,6 +155,9 @@ func firstSentence(s string) string {
 	}
 	return s
 }
+
+// isASCIIDigit reports whether b is an ASCII digit.
+func isASCIIDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 // truncateTitle truncates to maxRunes at a word boundary (space for Latin,
 // any rune boundary for CJK). Appends "…" if truncated.

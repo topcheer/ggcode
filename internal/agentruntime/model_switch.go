@@ -45,6 +45,20 @@ func ActivateCurrentSelection(cfg *config.Config, vendor, endpoint, model string
 	if cfg == nil {
 		return nil, nil, fmt.Errorf("config is nil")
 	}
+	// #1670 case 1: empty vendor/endpoint means "inherit the CURRENT
+	// selection", not "look up vendor \"\"". The IM/daemon/desktop vision
+	// turn switchers all pass ("", "", visionModel) - the original TUI
+	// implementation passed the active cfg.Vendor/Endpoint explicitly, but
+	// the ported callers dropped them, so every switch died on
+	// `vendor "" is not configured`, the failure only hit the debug log,
+	// and the image was silently stripped to a non-vision model (the
+	// feature was dead on arrival for IM/desktop).
+	if vendor == "" {
+		vendor = cfg.Vendor
+	}
+	if endpoint == "" {
+		endpoint = cfg.Endpoint
+	}
 	if vendor != "" || endpoint != "" || model != "" {
 		// #1487: snapshot the active selection before SetActiveSelection
 		// rewrites it, so a failed Resolve can roll back. Without this, a
