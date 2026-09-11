@@ -56,13 +56,6 @@ type ClaudeTokenResponse struct {
 	Scope        string `json:"scope"`
 }
 
-// ClaudeProfile holds user profile information from the Anthropic API.
-type ClaudeProfile struct {
-	SubscriptionType string
-	DisplayName      string
-	RateLimitTier    string
-}
-
 // --- PKCE helpers ---
 
 func generateCodeVerifier() (string, error) {
@@ -380,97 +373,6 @@ func RefreshClaudeToken(ctx context.Context, refreshToken string) (*Info, error)
 	}
 
 	return info, nil
-}
-
-// CreateClaudeAPIKey creates a long-lived API key from an OAuth access token.
-func CreateClaudeAPIKey(ctx context.Context, accessToken string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, claudeOAuthAPIKeyURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("creating API key: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
-	if err != nil {
-		return "", fmt.Errorf("reading API key response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("API key creation failed [%d]: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return "", fmt.Errorf("parsing API key response: %w", err)
-	}
-
-	rawKey, _ := result["raw_key"].(string)
-	// Also check nested data structure
-	if rawKey == "" {
-		if d, ok := result["data"].(map[string]interface{}); ok {
-			rawKey, _ = d["raw_key"].(string)
-		}
-	}
-
-	return rawKey, nil
-}
-
-// FetchClaudeProfile fetches the user's profile information.
-func FetchClaudeProfile(ctx context.Context, accessToken string) (*ClaudeProfile, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, claudeOAuthProfileURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetching profile: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := util.ReadAll(resp.Body, util.ReadLimitAuth)
-	if err != nil {
-		return nil, fmt.Errorf("reading profile response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("profile fetch failed [%d]: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parsing profile response: %w", err)
-	}
-
-	profile := &ClaudeProfile{}
-	if org, ok := raw["organization"].(map[string]interface{}); ok {
-		orgType, _ := org["organization_type"].(string)
-		switch orgType {
-		case "claude_max":
-			profile.SubscriptionType = "max"
-		case "claude_pro":
-			profile.SubscriptionType = "pro"
-		case "claude_enterprise":
-			profile.SubscriptionType = "enterprise"
-		case "claude_team":
-			profile.SubscriptionType = "team"
-		default:
-			profile.SubscriptionType = orgType
-		}
-	}
-	profile.DisplayName, _ = raw["display_name"].(string)
-	profile.RateLimitTier, _ = raw["rate_limit_tier"].(string)
-
-	return profile, nil
 }
 
 // Close shuts down the callback HTTP server. If another goroutine is

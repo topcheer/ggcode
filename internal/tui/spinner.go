@@ -141,47 +141,6 @@ type ToolStatusMsg struct {
 // toolBulletStyle renders the ● prefix for tool call lines.
 var toolBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 
-// FormatToolStart formats the header line when a tool begins executing.
-func FormatToolStart(msg ToolStatusMsg) string {
-	var sb strings.Builder
-	sb.WriteString(toolBulletStyle.Render("● "))
-	sb.WriteString(formatToolInline(toolDisplayName(msg), toolDetail(msg)))
-	if msg.Args != "" && toolDetail(msg) == "" {
-		sb.WriteString("\n  │ ")
-		sb.WriteString(relativizeResult(msg.Args))
-	}
-	sb.WriteString("\n")
-	return sb.String()
-}
-
-// FormatToolResult formats the closing line when a tool finishes.
-func FormatToolResult(lang Language, msg ToolStatusMsg) string {
-	var sb strings.Builder
-	if msg.IsError {
-		sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("  └ " + tr(lang, "tool.failed")))
-	} else {
-		sb.WriteString("  └ " + tr(lang, "tool.done"))
-	}
-	if msg.Elapsed > 0 {
-		sb.WriteString(fmt.Sprintf(" (%s)", msg.Elapsed))
-	}
-	summary := summarizeToolResult(lang, msg)
-	if summary != "" {
-		sb.WriteString(": ")
-		sb.WriteString(summary)
-	}
-	sb.WriteString("\n\n")
-	return sb.String()
-}
-
-// FormatToolStatus formats a tool completion message (legacy compat).
-func FormatToolStatus(msg ToolStatusMsg) string {
-	if msg.Running {
-		return ""
-	}
-	return FormatToolResult(LangEnglish, msg)
-}
-
 func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
 	result := relativizeResult(strings.TrimSpace(msg.Result))
 	if msg.IsError {

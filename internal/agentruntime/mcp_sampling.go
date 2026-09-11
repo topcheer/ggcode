@@ -12,25 +12,9 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
-// mcpSamplingProvider holds the LLM provider used for MCP sampling requests.
-// It is set lazily after the agent (and its provider) are created, since the
-// provider is not available at MCPManager construction time.
-var (
-	samplingProvider   provider.Provider
-	samplingProviderMu sync.RWMutex
-	// samplingMaxTokensMu serializes the shared-provider maxTokens
-	// mutate->chat->restore window (#1612-A).
-	samplingMaxTokensMu sync.Mutex
-)
-
-// SetSamplingProvider sets the LLM provider used to handle MCP sampling
-// (sampling/createMessage) requests. Called after the agent is created.
-func SetSamplingProvider(p provider.Provider) {
-	samplingProviderMu.Lock()
-	samplingProvider = p
-	samplingProviderMu.Unlock()
-	debug.Log("mcp-sampling", "sampling provider set: %T", p)
-}
+// mcpSamplingMaxTokensMu serializes the shared-provider maxTokens
+// mutate->chat->restore window (#1612-A).
+var samplingMaxTokensMu sync.Mutex
 
 // newMCPSamplingHandler binds the sampling handler to ONE runtime's
 // provider getter (#1592-B): the package-global let a second session in
@@ -40,15 +24,6 @@ func newMCPSamplingHandler(providerFn func() provider.Provider) func(ctx context
 	return func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
 		return mcpSamplingHandlerWith(ctx, params, providerFn())
 	}
-}
-
-// mcpSamplingHandler implements mcp.SamplingHandler using the configured provider.
-// If no provider is set, it returns an error.
-func mcpSamplingHandler(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
-	samplingProviderMu.RLock()
-	p := samplingProvider
-	samplingProviderMu.RUnlock()
-	return mcpSamplingHandlerWith(ctx, params, p)
 }
 
 func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p provider.Provider) (*mcp.SamplingResult, error) {
