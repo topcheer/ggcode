@@ -20,7 +20,6 @@ import (
 //   - Start launches a goroutine that refreshes every refreshInterval.
 //   - The first refresh runs synchronously in Start so values are available
 //     immediately for the initial prompt build.
-//   - RefreshNow triggers an immediate refresh (useful after file saves).
 //   - If a refresh is slow, the previous cached value remains in use -
 //     prompt construction is never blocked.
 
@@ -221,13 +220,6 @@ func (sc *SectionCollector) loop() {
 			}
 		}
 	}
-}
-
-// RefreshNow triggers an immediate refresh in a non-blocking goroutine.
-// Call this after file edits or git operations to get fresh data without
-// waiting for the next tick.
-func (sc *SectionCollector) RefreshNow() {
-	go safego.Run("agentruntime.sectionCollector.refreshNow", sc.refresh)
 }
 
 // Snapshot returns a point-in-time copy of all cached sections.

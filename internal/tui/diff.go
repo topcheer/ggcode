@@ -50,13 +50,3 @@ func FormatDiff(diff string) string {
 	border := diffHeaderStyle.Render(strings.Repeat("─", 40))
 	return fmt.Sprintf("%s\n%s%s", border, result, border)
 }
-
-// IsDiffContent checks if text looks like a unified diff.
-func IsDiffContent(text string) bool {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "@@") {
-			return true
-		}
-	}
-	return false
-}
