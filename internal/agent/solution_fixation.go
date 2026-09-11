@@ -218,9 +218,21 @@ func normalizePathFixation(p string) string {
 	// failures against 4 DIFFERENT targets could stack into a false "fixated
 	// on the same location" warning (#393).
 	p = strings.ReplaceAll(p, "\\", "/")
-	// Clean duplicate separators without pulling in path for one join.
+	// #1496 D: path.Clean semantics - collapse "./" prefixes, trailing
+	// slashes and redundant segments so x.go / ./x.go / x.go/ share ONE
+	// counting key. Previously they split into three keys of 1 failure
+	// each and never reached the fixation threshold; the common recovery
+	// move (retry with an absolute path after a failure) silently reset
+	// the counter. Base-name merging stays OFF per #393.
+	for strings.HasPrefix(p, "./") {
+		p = p[2:]
+	}
 	for strings.Contains(p, "//") {
 		p = strings.ReplaceAll(p, "//", "/")
+	}
+	p = strings.TrimRight(p, "/")
+	if p == "" || p == "." {
+		return ""
 	}
 	// A path that normalizes to a bare separator carries no file identity.
 	if p == "/" {
@@ -299,6 +311,8 @@ func (s *solutionFixationState) checkAndWarn() string {
 		"Ask: (1) Is the bug actually triggered from a different caller or upstream module? " +
 		"(2) Could the error be environmental (config, dependency, env var) rather than code? " +
 		"(3) Should you add diagnostic logging or print the actual error to verify your assumption? " +
+		"(4) If the failures are 'old_text not found' style, the file changed since your last read - " +
+		"re-read the file and refresh your edit anchor instead of abandoning the hypothesis. " +
 		"Do not make another edit to %s until you have gathered new evidence."
 
 	return fmt.Sprintf(msg, worstCount, worstFile, worstFile)
