@@ -406,7 +406,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		latencyTracker:         NewLatencyTracker(),
 		toolSequence:           newToolSequenceValidator(),
 		adaptiveSampling:       newAdaptiveSamplingState(),
-		effortAdapter:          newAdaptiveEffortState(),
+		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
 		readHash:               newReadHashTracker(),
@@ -3783,7 +3783,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Record tool result for adaptive effort classification.
 			if a.effortAdapter != nil {
-				a.effortAdapter.recordToolResult(tc.Name, result.IsError)
+				a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
 			// Record tool result for adaptive sampling classification.
 			if a.adaptiveSampling != nil {
