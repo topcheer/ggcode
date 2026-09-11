@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -55,6 +56,13 @@ func quoteArgs(args []string) string {
 		if needsQuote(a) {
 			b = append(b, '"')
 			// Escape backslashes that precede a quote, and the quote itself.
+			// #1832 case 2: every other rune must be appended as its full
+			// UTF-8 encoding - the previous byte(c) kept only the low byte
+			// of code points > 255 (CJK usernames), destroying the UTF-8
+			// sequence before StringToUTF16Ptr ever saw it: a quoted
+			// manifest path like C:\Users\张三 伟\... reached the elevated
+			// helper as mojibake and the update failed to find its
+			// manifest.
 			for _, c := range a {
 				switch c {
 				case '"':
@@ -62,7 +70,7 @@ func quoteArgs(args []string) string {
 				case '\\':
 					b = append(b, '\\', '\\')
 				default:
-					b = append(b, byte(c))
+					b = utf8.AppendRune(b, c)
 				}
 			}
 			b = append(b, '"')

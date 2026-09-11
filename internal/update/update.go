@@ -229,14 +229,57 @@ func (s *Service) ApplyBinary(prepared PreparedUpdate) error {
 	if err != nil {
 		return fmt.Errorf("read staged binary: %w", err)
 	}
+	// #1832 case 1: mirror RunHelper's #1402/#1423 backup+rollback. This
+	// Unix path used to write every target bare, so a failure writing the
+	// second of two targets (npm/python wrapper installs) left the first
+	// already overwritten - a half-updated install with no repair entry
+	// point, exactly the state #1402 promised to eliminate on the helper
+	// path. Restore failures are reported but do not mask the original
+	// error. Unlike RunHelper there is no AV-lock retry loop - on Unix the
+	// running binary can be replaced directly, a single attempt is enough.
+	type applyBackup struct {
+		path    string
+		data    []byte
+		existed bool
+	}
+	var written []applyBackup
+	rollbackAll := func(curErr error) error {
+		var restoreErrs []string
+		for i := len(written) - 1; i >= 0; i-- {
+			w := written[i]
+			if !w.existed {
+				if rmErr := os.Remove(w.path); rmErr != nil {
+					restoreErrs = append(restoreErrs, fmt.Sprintf("remove fresh %s: %v", w.path, rmErr))
+				}
+				continue
+			}
+			if rsErr := install.WriteExecutable(w.path, w.data); rsErr != nil {
+				restoreErrs = append(restoreErrs, fmt.Sprintf("restore %s: %v", w.path, rsErr))
+			}
+		}
+		if len(restoreErrs) > 0 {
+			return fmt.Errorf("%w (rollback incomplete: %s)", curErr, strings.Join(restoreErrs, "; "))
+		}
+		return fmt.Errorf("%w (earlier targets rolled back)", curErr)
+	}
 	for _, target := range manifest.TargetPaths {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("create target dir for %s: %w", target, err)
+			return rollbackAll(fmt.Errorf("create target dir for %s: %w", target, err))
+		}
+		var prev []byte
+		existed := false
+		if old, err := os.ReadFile(target); err == nil {
+			prev, existed = old, true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			// Mirror #1423-A: an existing-but-unreadable target cannot be
+			// backed up; replacing it would leave no rollback path.
+			return rollbackAll(fmt.Errorf("target %s exists but is unreadable (no backup possible, refusing to replace): %w", target, err))
 		}
 		// On Unix, the running binary can be overwritten directly — no retry needed.
 		if err := install.WriteExecutable(target, sourceData); err != nil {
-			return fmt.Errorf("replace %s: %w", target, err)
+			return rollbackAll(fmt.Errorf("replace %s: %w", target, err))
 		}
+		written = append(written, applyBackup{path: target, data: prev, existed: existed})
 	}
 	_ = os.Remove(manifest.SourceBinary)
 	_ = os.Remove(prepared.ManifestPath)
