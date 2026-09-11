@@ -1023,6 +1023,29 @@ func (a *App) SendMessageWithImages(userMsg string, images []PastedImage) error 
 	}
 	text := strings.TrimSpace(userMsg)
 	imgs := append([]PastedImage(nil), images...)
+	// #1807 case 3: a single image is capped at 20MB, but an arbitrary
+	// array reached the agent untouched - 5x15MB originals became a
+	// ~100MB base64 message in context, persisted to the session JSONL
+	// and REPLAYED on every subsequent turn. Budget the entry point:
+	// count and total bytes.
+	const maxPasteImages = 5
+	const maxPasteTotalBytes = 30 << 20
+	if len(imgs) > maxPasteImages {
+		return fmt.Errorf("too many pasted images: %d (max %d) - send them in smaller batches", len(imgs), maxPasteImages)
+	}
+	var total int
+	for _, img := range imgs {
+		decoded, err := base64.StdEncoding.DecodeString(img.Base64)
+		if err == nil {
+			total += len(decoded)
+		} else {
+			// Undecodable payload still counts by its raw length.
+			total += len(img.Base64)
+		}
+	}
+	if total > maxPasteTotalBytes {
+		return fmt.Errorf("pasted images total %d bytes exceeds the %d byte budget - compress or send in batches", total, maxPasteTotalBytes)
+	}
 	safego.Go("wails-send-message-images", func() {
 		content := make([]provider.ContentBlock, 0, 1+len(imgs))
 		if text != "" {
