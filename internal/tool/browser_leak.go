@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -116,14 +115,6 @@ func singletonLockPID(profileDir string) int {
 		return 0
 	}
 	return pid
-}
-
-// processAlive reports whether pid currently exists (signal 0 probe).
-func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	return syscall.Kill(pid, 0) == nil
 }
 
 // gcStaleBrowserProfiles removes profile directories whose Chrome owner is
