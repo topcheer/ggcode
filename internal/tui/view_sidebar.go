@@ -117,58 +117,6 @@ func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 	return fmt.Sprintf("$%.4f", totalCost)
 }
 
-func (m Model) renderSidebarMetricsSection() string {
-	width := max(12, m.sidebarWidth()-4)
-	summary := metrics.Summarize(m.sidebarSessionMetrics())
-	rows := []string{m.renderSidebarSectionTitle(m.t("panel.metrics"))}
-	if !summary.HasData() {
-		rows = append(rows, util.Truncate(m.t("metrics.empty"), width))
-		return strings.Join(rows, "\n")
-	}
-	renderRow := func(label, value string) string {
-		return m.renderSidebarDetailRowWithLabelWidth(label, value, width, 12)
-	}
-	rows = append(rows,
-		renderRow(m.t("label.turns"), fmt.Sprintf("%d", summary.TurnCount)),
-		renderRow(m.t("label.avg_ttft"), metrics.FormatDuration(summary.AvgTTFT)),
-		renderRow(m.t("label.p95_ttft"), metrics.FormatDuration(summary.P95TTFT)),
-		renderRow(m.t("label.avg_duration"), metrics.FormatDuration(summary.AvgDuration)),
-		renderRow(m.t("label.p95_duration"), metrics.FormatDuration(summary.P95Duration)),
-		renderRow(m.t("label.avg_think"), metrics.FormatDuration(summary.AvgThink)),
-		renderRow(m.t("label.avg_tps"), metrics.FormatTPS(summary.AvgOutputTPS)),
-		renderRow(m.t("label.p95_tps"), metrics.FormatTPS(summary.P95OutputTPS)),
-		renderRow(m.t("label.tools"), fmt.Sprintf("%d", summary.ToolCallCount)),
-		renderRow(m.t("label.fail_rate"), fmt.Sprintf("%d%%", summary.ToolFailureRate())),
-	)
-	if slow := sidebarSlowTools(summary.SlowTools); slow != "" {
-		rows = append(rows, renderRow(m.t("label.slow_tools"), slow))
-	}
-	if recent := sidebarRecentTurns(summary.Turns); len(recent) > 0 {
-		rows = append(rows, util.Truncate(m.t("label.recent_turns"), width))
-		for _, line := range recent {
-			rows = append(rows, util.Truncate(line, width))
-		}
-	}
-	return strings.Join(rows, "\n")
-}
-
-func (m Model) renderSidebarContextSection() string {
-	width := max(12, m.sidebarWidth()-4)
-	rows := []string{m.renderSidebarSectionTitle(m.t("panel.context"))}
-	stats, ok := m.sidebarContextStats()
-	if !ok {
-		rows = append(rows, util.Truncate(m.t("context.unavailable"), width))
-		return strings.Join(rows, "\n")
-	}
-
-	rows = append(rows,
-		m.renderSidebarDetailRow(m.t("label.window"), humanizeTokenCount(stats.maxTokens), width),
-		m.renderSidebarDetailRow(m.t("label.usage"), fmt.Sprintf("%d%%", stats.usagePercent), width),
-		m.renderSidebarDetailRow(m.t("label.compact"), fmt.Sprintf("%d%% %s", stats.remainingPercent, m.t("context.until_compact")), width),
-	)
-	return strings.Join(rows, "\n")
-}
-
 func (m Model) renderSidebarMCPSection() string {
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.mcp"))}
@@ -540,16 +488,6 @@ func (m Model) renderSidebarDetailRowWithLabelWidth(label, value string, width, 
 		Render(truncateDisplayWidth(label, labelWidth))
 	valueWidth := max(1, width-labelWidth-1)
 	return lipgloss.JoinHorizontal(lipgloss.Top, key, " ", truncateDisplayWidth(value, valueWidth))
-}
-
-func (m Model) renderSidebarBadgeRow(label, badge string) string {
-	const labelWidth = 9
-	key := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("245")).
-		Width(labelWidth).
-		MaxWidth(labelWidth).
-		Render(truncateDisplayWidth(label, labelWidth))
-	return key + " " + badge
 }
 
 func truncateDisplayWidth(s string, maxWidth int) string {

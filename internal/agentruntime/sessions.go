@@ -223,23 +223,6 @@ func SaveSessionMessages(store session.Store, ses *session.Session, messages []p
 	return nil
 }
 
-func SaveAgentSessionSnapshot(store session.Store, ses *session.Session, agentInst *agent.Agent) error {
-	if agentInst == nil {
-		return SaveSessionMessages(store, ses, ses.Messages)
-	}
-	return SaveSessionMessages(store, ses, agentInst.Messages())
-}
-
-// SaveAgentSessionSnapshotWithExtra appends extra messages (e.g. turn
-// digests) after the agent snapshot so they survive reload.
-func SaveAgentSessionSnapshotWithExtra(store session.Store, ses *session.Session, agentInst *agent.Agent, extra []provider.Message) error {
-	msgs := agentInst.Messages()
-	if len(extra) > 0 {
-		msgs = append(msgs, extra...)
-	}
-	return SaveSessionMessages(store, ses, msgs)
-}
-
 // RestoreSessionIntoAgent loads session messages into the agent's context
 // manager and runs reconciliation + microcompaction. Returns whether
 // microcompaction occurred and the before/after token counts.
