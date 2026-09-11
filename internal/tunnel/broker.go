@@ -1927,7 +1927,17 @@ func (b *Broker) endProjectionSync() {
 	b.projectionMu.Unlock()
 }
 
-var projectionSyncWaitTimeout = 10 * time.Second
+// projectionSyncWaitTimeout bounds a stuck producer's wait (see
+// waitProjectionSync). Atomic because the leaked-goroutine hazard is real:
+// textFlushLoop calls waitProjectionSync from its own goroutine while tests
+// retune this knob mid-suite - a plain Duration var was a DATA RACE that
+// the race detector flagged on unrelated tests running later in the suite
+// (the broker's textFlushLoop outlives tests that never call Stop()).
+var projectionSyncWaitTimeout atomic.Int64 // time.Duration (nanoseconds)
+
+func init() {
+	projectionSyncWaitTimeout.Store(int64(10 * time.Second))
+}
 
 func (b *Broker) waitProjectionSync() {
 	b.projectionMu.Lock()
@@ -1940,7 +1950,7 @@ func (b *Broker) waitProjectionSync() {
 	// producer forever; wake up after the timeout and proceed degraded
 	// (possible interleave during replay) instead of a permanent stall.
 	timedOut := false
-	timer := time.AfterFunc(projectionSyncWaitTimeout, func() {
+	timer := time.AfterFunc(time.Duration(projectionSyncWaitTimeout.Load()), func() {
 		b.projectionMu.Lock()
 		timedOut = true
 		b.projectionMu.Unlock()
