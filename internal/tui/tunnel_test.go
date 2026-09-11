@@ -1226,6 +1226,129 @@ func TestHandleTunnelAskUserResponseDeliversPendingAnswer(t *testing.T) {
 	}
 }
 
+// TestHandleTunnelStartMsg_ReplayKeepsBrokerAndSkipsQR pins the #1825
+// case-1 replay path: the broker/spawned bookkeeping must still land when a
+// connected event raced StartShare (an earlier revision early-returned
+// before the assignments, leaving tunnelBroker nil for the whole share -
+// language/theme sends, snapshot publishing and the graceful stop all
+// degraded to no-ops).
+func TestHandleTunnelStartMsg_ReplayKeepsBrokerAndSkipsQR(t *testing.T) {
+	m := newTestModel()
+	m.pendingTunnelConnected = true
+	sess := tunnel.NewSession(tunnel.DefaultRelayURL)
+	broker := tunnel.NewBroker(sess)
+	broker.Stop() // no background loops in tests
+
+	got, cmd := m.handleTunnelStartMsg(tunnelStartMsg{
+		info:    &tunnel.SessionInfo{ConnectURL: "wss://test.local/ws", QRCode: "qr"},
+		session: sess,
+		broker:  broker,
+	})
+	updated := got.(*Model)
+	if updated.pendingTunnelConnected {
+		t.Fatal("expected pendingTunnelConnected to be consumed by the replay")
+	}
+	if updated.tunnelSession != sess {
+		t.Fatal("expected tunnel session to be assigned")
+	}
+	if updated.tunnelBroker != broker {
+		t.Fatal("expected tunnelBroker to be assigned even on the replay path")
+	}
+	if updated.tunnelSpawned == nil {
+		t.Fatal("expected tunnelSpawned map to be initialized even on the replay path")
+	}
+	if updated.qrOverlay != nil {
+		t.Fatal("expected QR overlay to stay closed on the replay path (client already connected)")
+	}
+	if cmd == nil {
+		t.Fatal("expected replay cmd producing tunnelClientConnectedMsg")
+	}
+	msg, ok := cmd().(tunnelClientConnectedMsg)
+	if !ok {
+		t.Fatalf("expected tunnelClientConnectedMsg, got %T", cmd())
+	}
+	if msg.generation != updated.tunnelGeneration {
+		t.Fatalf("expected replay generation %d, got %d", updated.tunnelGeneration, msg.generation)
+	}
+}
+
+func TestHandleTunnelApprovalResponse_DropsEmptyIDAndUnknownDecision(t *testing.T) {
+	m := newTestModel()
+	m.pendingApproval = &ApprovalMsg{ToolName: "run_command"}
+	m.tunnelPendingApprovalID = "req-1"
+
+	// Empty id carries no identity: must not touch the pending approval.
+	got, _ := m.handleTunnelApprovalResponse(tunnelApprovalResponseMsg{id: "", decision: "allow"})
+	updated := got.(*Model)
+	if updated.pendingApproval == nil || updated.tunnelPendingApprovalID != "req-1" {
+		t.Fatal("expected empty-id approval response to leave the pending approval untouched")
+	}
+
+	// Unknown decision values must be dropped loudly, not fall into Deny.
+	got, _ = updated.handleTunnelApprovalResponse(tunnelApprovalResponseMsg{id: "req-1", decision: "alow"})
+	updated = got.(*Model)
+	if updated.pendingApproval == nil || updated.tunnelPendingApprovalID != "req-1" {
+		t.Fatal("expected unknown-decision approval response to leave the pending approval untouched")
+	}
+}
+
+func TestHandleTunnelAskUserResponse_DropsEmptyID(t *testing.T) {
+	m := newTestModel()
+	respCh := make(chan toolpkg.AskUserResponse, 1)
+	req := toolpkg.AskUserRequest{
+		Title:     "Clarify",
+		Questions: []toolpkg.AskUserQuestion{{ID: "notes", Title: "Notes", Prompt: "Anything else?", Kind: toolpkg.AskUserKindText}},
+	}
+	m.pendingQuestionnaire = newQuestionnaireState(req, respCh, m.currentLanguage())
+	m.tunnelPendingAskUserID = "ask-1"
+
+	// A stale/malformed reply with no id must not kill the pending
+	// questionnaire (the old match let it through and normalized the empty
+	// status to "submitted" with zero answers).
+	got, _ := m.handleTunnelAskUserResponse(tunnelAskUserResponseMsg{id: "", status: toolpkg.AskUserStatusSubmitted})
+	updated := got.(*Model)
+	if updated.pendingQuestionnaire == nil {
+		t.Fatal("expected empty-id ask_user response to leave the pending questionnaire untouched")
+	}
+	if updated.tunnelPendingAskUserID != "ask-1" {
+		t.Fatalf("expected pending ask user id to remain, got %q", updated.tunnelPendingAskUserID)
+	}
+	select {
+	case resp := <-respCh:
+		t.Fatalf("expected no delivery for empty-id reply, got %+v", resp)
+	default:
+	}
+}
+
+func TestHandleTunnelAskUserResponse_IgnoresMismatchedID(t *testing.T) {
+	m := newTestModel()
+	respCh := make(chan toolpkg.AskUserResponse, 1)
+	req := toolpkg.AskUserRequest{
+		Title:     "Clarify",
+		Questions: []toolpkg.AskUserQuestion{{ID: "notes", Title: "Notes", Prompt: "Anything else?", Kind: toolpkg.AskUserKindText}},
+	}
+	m.pendingQuestionnaire = newQuestionnaireState(req, respCh, m.currentLanguage())
+	m.tunnelPendingAskUserID = "ask-1"
+
+	got, _ := m.handleTunnelAskUserResponse(tunnelAskUserResponseMsg{
+		id:      "ask-2",
+		status:  toolpkg.AskUserStatusSubmitted,
+		answers: []tunnel.AskUserAnswer{{QuestionID: "notes", FreeformText: "stale"}},
+	})
+	updated := got.(*Model)
+	if updated.pendingQuestionnaire == nil {
+		t.Fatal("expected mismatched ask_user response to be ignored")
+	}
+	if updated.tunnelPendingAskUserID != "ask-1" {
+		t.Fatalf("expected pending ask user id to remain, got %q", updated.tunnelPendingAskUserID)
+	}
+	select {
+	case resp := <-respCh:
+		t.Fatalf("expected no delivery for mismatched reply, got %+v", resp)
+	default:
+	}
+}
+
 // tinyValidPNG is a 1x1 pixel PNG encoded as base64.
 const tinyValidPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 

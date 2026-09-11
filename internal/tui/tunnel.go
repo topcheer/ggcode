@@ -359,15 +359,21 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	// SetSessionInfo, PrepareOnlineShare (replay, announce active_session).
 	// We just store refs and show the QR.
 	m.tunnelSession = msg.session
-	// #1825 case 1: replay a connected event that raced StartShare.
+	// The broker ref must land before the replay branch below: it drives
+	// language/theme sends, snapshot publishing, announce-on-session-switch,
+	// and closeTunnelGracefully's teardown. #2092's early return skipped it,
+	// leaving the broker nil for the whole share whenever the replay raced.
+	m.tunnelBroker = msg.broker
+	m.tunnelSpawned = make(map[string]bool)
+	// #1825 case 1: replay a connected event that raced StartShare. Only the
+	// QR flow is skipped - the client is already connected, so a QR would be
+	// noise (the replayed handler also closes any open overlay).
 	if m.pendingTunnelConnected {
 		m.pendingTunnelConnected = false
 		return m, func() tea.Msg {
 			return tunnelClientConnectedMsg{generation: m.tunnelGeneration}
 		}
 	}
-	m.tunnelBroker = msg.broker
-	m.tunnelSpawned = make(map[string]bool)
 
 	subtitle := "Scan with GGCode Mobile to connect"
 	if msg.info.CompatibilityNotice != "" {
@@ -2130,7 +2136,16 @@ func (m *Model) handleTunnelAskUserResponse(msg tunnelAskUserResponseMsg) (tea.M
 	if qs == nil {
 		return m, nil
 	}
-	if m.tunnelPendingAskUserID != "" && msg.id != "" && msg.id != m.tunnelPendingAskUserID {
+	// #1825 case 2 (ask_user counterpart of #2092): the old match required
+	// BOTH ids non-empty - an empty-id reply (stale/malformed) bypassed the
+	// match entirely, and its empty status (normalized to "submitted" with
+	// zero answers) then killed whatever questionnaire happened to be
+	// pending, with zero diagnostics. An empty id carries no identity: drop it.
+	if msg.id == "" {
+		debug.Log("tui", "tunnel ask_user response with empty id dropped (stale/malformed) - pending questionnaire untouched")
+		return m, nil
+	}
+	if m.tunnelPendingAskUserID != "" && msg.id != m.tunnelPendingAskUserID {
 		return m, nil
 	}
 
