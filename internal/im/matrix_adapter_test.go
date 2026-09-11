@@ -503,15 +503,17 @@ func TestSelfHealingSyncerResetsOnUnknownPos(t *testing.T) {
 	retry, fatal := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
 		RespError: &mautrix.RespError{ErrCode: "M_UNKNOWN_POS", StatusCode: http.StatusBadRequest},
 	})
-	if fatal != nil {
-		t.Fatalf("M_UNKNOWN_POS must be self-healed, not fatal: %v", fatal)
-	}
-	if retry <= 0 {
-		t.Fatalf("expected a positive retry delay, got %v", retry)
+	// #1851 case 1: the heal must make Sync EXIT (non-nil error) so the
+	// outer run() loop rebuilds the client - the old (retry>0, nil) kept
+	// mautrix's loop retrying its cached local token every 2s with the
+	// adapter showing "connected" but receiving zero events until restart.
+	if fatal == nil {
+		t.Fatal("M_UNKNOWN_POS must return an error so Sync exits and the outer loop reconnects with a fresh client")
 	}
 	if got, _ := store.LoadNextBatch(ctx, "@alice:example.org"); got != "" {
 		t.Fatalf("token must be reset after M_UNKNOWN_POS, got %q", got)
 	}
+	_ = retry
 	// Unrelated errors keep DefaultSyncer behavior (retry, non-fatal).
 	retry2, fatal2 := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
 		RespError: &mautrix.RespError{ErrCode: "M_LIMIT_EXCEEDED", StatusCode: http.StatusTooManyRequests},

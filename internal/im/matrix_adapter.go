@@ -234,7 +234,7 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	var syncStoreRef *fileSyncStore
 	syncDir := filepath.Join(config.ConfigDir(), "matrix-sync")
 	if err := os.MkdirAll(syncDir, 0o700); err == nil {
-		syncStoreRef = &fileSyncStore{path: filepath.Join(syncDir, sanitizeFileToken(a.name)+".json")}
+		syncStoreRef = newSyncStoreForAdapter(syncDir, a.name, a.userID)
 		client.Store = syncStoreRef
 	} else {
 		debug.Log("matrix", "adapter=%s sync-token persistence unavailable (falling back to memory): %v", a.name, err)
@@ -367,6 +367,36 @@ func sanitizeFileToken(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// newSyncStoreForAdapter builds the per-account sync-token store path.
+// #1851 case 2: the file is keyed by adapter name AND user ID - the
+// name-only key made two workspaces running same-named adapters overwrite
+// each other's token: the restart loser discarded its token, full
+// initial-synced, and the didFirstSync gate dropped the offline messages
+// collected while it was down. A one-time migration from the legacy
+// name-only path preserves the existing token (avoids one unnecessary
+// initial sync); migration failure only logs - worst case is an initial
+// sync.
+func newSyncStoreForAdapter(syncDir, adapterName, userID string) *fileSyncStore {
+	storeName := sanitizeFileToken(adapterName)
+	if uid := strings.TrimSpace(userID); uid != "" {
+		storeName += "-" + sanitizeFileToken(uid)
+	}
+	storePath := filepath.Join(syncDir, storeName+".json")
+	legacyPath := filepath.Join(syncDir, sanitizeFileToken(adapterName)+".json")
+	if storePath != legacyPath {
+		if _, err := os.Stat(storePath); os.IsNotExist(err) {
+			if _, lerr := os.Stat(legacyPath); lerr == nil {
+				if rerr := os.Rename(legacyPath, storePath); rerr != nil {
+					debug.Log("matrix", "adapter=%s sync-token migration failed (will initial sync): %v", adapterName, rerr)
+				} else {
+					debug.Log("matrix", "adapter=%s migrated sync token store to user-scoped key", adapterName)
+				}
+			}
+		}
+	}
+	return &fileSyncStore{path: storePath}
 }
 
 func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
@@ -1280,11 +1310,20 @@ type selfHealingSyncer struct {
 func (s *selfHealingSyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Duration, error) {
 	var httpErr *mautrix.HTTPError
 	if errors.As(err, &httpErr) && httpErr.RespError != nil && httpErr.RespError.ErrCode == "M_UNKNOWN_POS" {
-		debug.Log("matrix", "sync token rejected (M_UNKNOWN_POS) - resetting for initial sync")
+		debug.Log("matrix", "sync token rejected (M_UNKNOWN_POS) - resetting store and restarting sync")
 		if s.store != nil {
 			s.store.resetNextBatch()
 		}
-		return 2 * time.Second, nil
+		// #1851 case 1: returning nil used to keep mautrix's sync loop
+		// running with its CACHED local nextBatch (LoadNextBatch is read
+		// once before the loop), so the disk reset had no in-process effect:
+		// the loop retried the same rejected token every 2s, churning the
+		// store and receiving zero events while publishState stayed
+		// "connected" - exactly the wedge #1661 claimed to eliminate - until
+		// process restart. Return an error so Sync EXITS: the outer run()
+		// loop then rebuilds the client, whose LoadNextBatch reads the now
+		// empty store and performs a true initial sync.
+		return 0, fmt.Errorf("matrix: sync token rejected (M_UNKNOWN_POS); restarting sync with a fresh token")
 	}
 	return s.DefaultSyncer.OnFailedSync(res, err)
 }
