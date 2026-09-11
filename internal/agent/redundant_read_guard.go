@@ -58,18 +58,29 @@ type redundantReadState struct {
 	// by normalized path. Used to determine whether the file has changed since
 	// the last read - if unchanged, the re-read is redundant.
 	lastReadMtime map[string]int64
+
+	// lastReadHash stores the content fingerprint (hashFilePrefix) captured
+	// at the most recent read (#1824 case 2). mtime alone is weak evidence:
+	// coarse-grained (FAT 2s) or timestamp-preserving filesystems, NFS, and
+	// `touch -r` from a shared-workspace writer can change content while the
+	// mtime reads identical - the guard then false-positived "already read
+	// (XKB in context)" on genuinely changed content. When mtime matches,
+	// the content hash disambiguates: same hash = redundant, drift = fresh.
+	lastReadHash map[string]uint64
 }
 
 func newRedundantReadState() *redundantReadState {
 	return &redundantReadState{
 		warnedFiles:   make(map[string]bool),
 		lastReadMtime: make(map[string]int64),
+		lastReadHash:  make(map[string]uint64),
 	}
 }
 
 func (r *redundantReadState) reset() {
 	r.warnedFiles = make(map[string]bool)
 	r.lastReadMtime = make(map[string]int64)
+	r.lastReadHash = make(map[string]uint64)
 }
 
 // checkRedundantRead returns a non-empty hint if the agent is re-reading a file
@@ -128,6 +139,21 @@ func (r *redundantReadState) checkRedundantRead(path string, partial bool) strin
 		return ""
 	}
 
+	// #1824 case 2: mtime equality is weak evidence on coarse/timestamp-
+	// preserving filesystems (shared-workspace writers, format-on-save,
+	// touch -r). Require the content fingerprint to agree before declaring
+	// the re-read redundant; hash drift means the content changed and the
+	// re-read is legitimate. Missing prior hash (empty/unreadable at record
+	// time) keeps the old mtime-only verdict.
+	if prevHash, ok := r.lastReadHash[n]; ok {
+		if cur := hashFilePrefix(path); cur != 0 && cur != prevHash {
+			// Content drifted under an identical mtime: refresh the
+			// baseline so the NEXT read is judged against this content.
+			r.recordReadMtime(path)
+			return ""
+		}
+	}
+
 	// Redundant re-read detected: file hasn't changed since the last read.
 	r.warnedFiles[n] = true
 	debug.Log("agent", "redundant-read guard: %s re-read without changes (%d bytes already in context)", n, info.Size())
@@ -150,6 +176,13 @@ func (r *redundantReadState) recordReadMtime(path string) {
 	}
 	n := normalizePath(path)
 	r.lastReadMtime[n] = info.ModTime().UnixNano()
+	// #1824 case 2: pair the mtime with a content fingerprint so an
+	// mtime-preserving external write cannot masquerade as "unchanged".
+	if h := hashFilePrefix(path); h != 0 {
+		r.lastReadHash[n] = h
+	} else {
+		delete(r.lastReadHash, n)
+	}
 }
 
 // recordWrite clears the redundancy state for a file after it's been edited,
