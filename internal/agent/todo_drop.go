@@ -134,7 +134,7 @@ func (t *todoDropState) itemSurvives(item todoItem, curr []todoItem) bool {
 		}
 		// Fuzzy content match: item was reworded but carried forward.
 		if item.Content != "" && c.Content != "" {
-			sim := todoDropJaccard(item.Content, c.Content)
+			sim := todoDropSimilarityOf(item.Content, c.Content)
 			if sim >= todoDropSimilarity {
 				return true
 			}
@@ -201,6 +201,33 @@ func todoDropJaccard(a, b string) float64 {
 	return float64(intersection) / float64(union)
 }
 
+// hasCJK reports whether the string contains CJK runes.
+func hasCJK(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
+}
+
+// cjkBigramSet tokenizes a CJK string into overlapping character bigrams
+// (#1506 case A). strings.Fields splits on SPACES - a Chinese sentence is
+// one giant token, so rewording (修复登录bug -> 修复登录的bug) scored
+// Jaccard 0 and was branded an "abandoned item" despite the module's
+// promise to avoid flagging rewording as a drop.
+func cjkBigramSet(s string) map[string]bool {
+	runes := []rune(strings.ToLower(s))
+	set := make(map[string]bool, len(runes))
+	for i := 0; i+1 < len(runes); i++ {
+		set[string(runes[i:i+2])] = true
+	}
+	if len(runes) > 0 {
+		set[string(runes[len(runes)-1:])] = true
+	}
+	return set
+}
+
 // wordSet tokenizes a string into a lowercase word set.
 func wordSet(s string) map[string]bool {
 	words := strings.Fields(strings.ToLower(s))
@@ -215,12 +242,46 @@ func wordSet(s string) map[string]bool {
 	return set
 }
 
-// truncateStr shortens a string to maxLen, appending "..." if truncated.
+// todoDropSimilarityOf is Jaccard similarity with a CJK fallback: when
+// either side contains CJK (space-less language), compare character
+// bigrams instead of space-split words (#1506 case A).
+func todoDropSimilarityOf(a, b string) float64 {
+	if hasCJK(a) || hasCJK(b) {
+		return jaccardOfSets(cjkBigramSet(a), cjkBigramSet(b))
+	}
+	return todoDropJaccard(a, b)
+}
+
+// jaccardOfSets computes Jaccard over two arbitrary sets.
+func jaccardOfSets(a, b map[string]bool) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	intersection := 0
+	for k := range a {
+		if b[k] {
+			intersection++
+		}
+	}
+	union := len(a) + len(b) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+// truncateStr shortens a string to maxLen runes, appending "..." if
+// truncated (#1506 case A: byte slicing split multi-byte CJK runes and
+// produced mojibake in the guidance).
 func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
 }
 
 // checkTodoDrop is the entry point called from the agent loop after a
