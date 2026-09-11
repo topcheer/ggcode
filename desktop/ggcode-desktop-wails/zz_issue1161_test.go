@@ -55,6 +55,9 @@ func stripLineComments(s string) string {
 // TestIssue1161StartShareChecksChatSnapshotNotField: nil chat must fail fast
 // through the entry snapshot (dynamic contract).
 func TestIssue1161StartShareChecksChatSnapshotNotField(t *testing.T) {
+	// #2033 real-home guard: StartShare resolves the config path before
+	// the chat check; isolate HOME so the guard does not panic the suite.
+	t.Setenv("HOME", t.TempDir())
 	a := NewApp()
 	info, err := a.StartShare()
 	if err == nil {

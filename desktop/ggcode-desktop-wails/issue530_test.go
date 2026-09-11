@@ -34,6 +34,9 @@ func TestDeleteSessionNilChatNoPanic(t *testing.T) {
 // fresh share is created. Pre-fix, only tunnelSession was nil-ed — the old
 // session was never stopped and the dead broker stayed attached.
 func TestStartShareRefreshFailureClearsStaleTunnelState(t *testing.T) {
+	// #2033 real-home guard: StartShare resolves the config path, which
+	// must not touch the real user HOME from a test.
+	t.Setenv("HOME", t.TempDir())
 	app := &App{} // chat == nil so StartShare fails after the refresh path
 
 	// Stale session: a zero-value Session has no relay URL, so
