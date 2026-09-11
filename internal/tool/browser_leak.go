@@ -180,12 +180,25 @@ func (b *Browser) startBrowserProfileGC() {
 			b.gcStaleBrowserProfiles()
 			ticker := time.NewTicker(browserProfileGCInterval)
 			defer ticker.Stop()
-			for range ticker.C {
-				b.gcStaleBrowserProfiles()
+			for {
+				select {
+				case <-ticker.C:
+					b.gcStaleBrowserProfiles()
+				case <-b.gcStopped():
+					// #2096 bug A: Close() stops the loop so the goroutine
+					// (and the Browser it references) does not outlive the
+					// agent that owned it.
+					return
+				}
 			}
 		})
 	})
 }
+
+// gcStopped returns the GC termination signal; a nil channel (direct
+// &Browser{} construction) blocks forever, preserving the pre-#2096
+// behavior for tests that never Close.
+func (b *Browser) gcStopped() <-chan struct{} { return b.gcStop }
 
 // touch updates the profile's LRU timestamp. Callers hold b.mu.
 func (p *browserProfile) touch() {

@@ -59,12 +59,20 @@ type Browser struct {
 	profiles map[string]*browserProfile
 	mu       sync.Mutex
 	gcOnce   sync.Once
+	// gcStop is closed by Close to terminate the background profile-GC
+	// loop (#2096 bug A): the goroutine otherwise runs forever, holding a
+	// reference to this Browser while NewBrowser re-registers with every
+	// agent build - long-lived hosts accumulated one immortal goroutine
+	// (and a pinned Browser) per browser-using session.
+	gcStop  chan struct{}
+	gcClose sync.Once
 }
 
 // NewBrowser creates a new CDP-based browser tool.
 func NewBrowser() *Browser {
 	return &Browser{
 		profiles: make(map[string]*browserProfile),
+		gcStop:   make(chan struct{}),
 	}
 }
 
@@ -74,6 +82,13 @@ func (b *Browser) Name() string { return "browser" }
 // Implements the Closer interface for graceful cleanup on agent exit.
 func (b *Browser) Close() error {
 	b.mu.Lock()
+	// #2096 bug A: stop the GC loop so Close fully tears the Browser
+	// down. gcClose guards a second Close (double close panics); a nil
+	// gcStop (direct &Browser{} construction in tests) skips the stop and
+	// the loop simply never observes a signal, preserving old behavior.
+	if b.gcStop != nil {
+		b.gcClose.Do(func() { close(b.gcStop) })
+	}
 	defer b.mu.Unlock()
 
 	for name, p := range b.profiles {
@@ -516,6 +531,25 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	}
 
 	b.mu.Lock()
+	// #2096 bug B: getProfile released b.mu before returning p, so an
+	// evictLRUBrowserProfiles sweep in that window may have removed p and
+	// cancelled its allocCtx - creating a tab on it fails with an
+	// unrelated "failed to create browser tab: context canceled". No
+	// concurrent trigger exists today (browser calls are serialized per
+	// agent), but the type is written thread-safely; re-validate and
+	// re-resolve once instead of failing on a stale pointer.
+	if cur, ok := b.profiles[profileName]; !ok || cur != p {
+		b.mu.Unlock()
+		p, err = b.getProfile(profileName, headless)
+		if err != nil {
+			return nil, err
+		}
+		b.mu.Lock()
+		if cur2, ok2 := b.profiles[profileName]; !ok2 || cur2 != p {
+			b.mu.Unlock()
+			return nil, fmt.Errorf("browser profile %q was evicted while creating the session; retry the operation", profileName)
+		}
+	}
 	defer b.mu.Unlock()
 
 	if tab, ok := p.tabs[sessionID]; ok {
