@@ -1512,12 +1512,17 @@ func (a *App) resumeLatestSession() string {
 	// Try the latest session first (fast path).
 	latest, err := store.LatestForWorkspace(wd)
 	if err == nil && latest != nil {
+		// #1802 case 4: the load error's REASON was discarded ("unavailable")
+		// and the resume log claimed "latest was locked" regardless of the
+		// actual cause - a corrupt JSONL (silently falling back to an OLDER
+		// session, the newest conversation effectively disappearing) was
+		// indistinguishable from a transient lock.
 		if loadErr := chat.LoadSession(latest.ID); loadErr == nil {
 			debug.Log("app", "resumed latest session: %s", latest.ID)
 			return latest.ID
 		}
 		// Latest is locked or load failed — fall through to iterate.
-		debug.Log("app", "resumeLatestSession: latest session %s unavailable, trying others", latest.ID)
+		debug.Log("app", "resumeLatestSession: latest session %s failed to load: %v - trying older sessions", latest.ID, loadErr)
 	}
 
 	// Fall back: iterate all sessions for this workspace, try each until
@@ -1532,8 +1537,10 @@ func (a *App) resumeLatestSession() string {
 			continue
 		}
 		if err := chat.LoadSession(ses.ID); err == nil {
-			debug.Log("app", "resumed session: %s (latest was locked)", ses.ID)
+			debug.Log("app", "resumed older session %s (latest failed to load - see reason above)", ses.ID)
 			return ses.ID
+		} else {
+			debug.Log("app", "resumeLatestSession: session %s also failed: %v", ses.ID, err)
 		}
 	}
 	debug.Log("app", "resumeLatestSession: no unlocked sessions found for %s", wd)

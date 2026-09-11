@@ -1259,6 +1259,13 @@ func (b *ChatBridge) LoadSession(id string) error {
 				agent := b.agent
 				b.mu.Unlock()
 				agentruntime.ApplyProviderToAgent(agent, prov, resolved)
+			} else {
+				// #1802 case 3: the session's model was silently swapped for
+				// the global default on restore failure (model deleted /
+				// vendor gone). Every sibling restore field logs; the model
+				// must too, or the user never learns the conversation is no
+				// longer running on the model they saved it with.
+				debug.Log("chat", "LoadSession: restoring session model %q (vendor=%q endpoint=%q) failed: %v - keeping InitAgent's current model", sesModel, sesVendor, sesEndpoint, err)
 			}
 		}
 	}
