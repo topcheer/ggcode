@@ -435,7 +435,13 @@ func registerAllChecks() {
 		// #571: race-verify-hint — detects newly introduced concurrency primitives
 		// and suggests running `go test -race`. Covers temporal race conditions
 		// invisible to static analysis. Fully implemented + unit tested.
-		{Name: "race-verify-hint", Langs: []Language{LangGo}, Run: sliceCheck(checkRaceVerifyHint)},
+		// #1841 case 1: this check is safety-adjacent (data races), but as a
+		// bare default-severity check registered LAST it lost the single
+		// warning slot to any critical (or any earlier-registered default)
+		// finding on the same write - its effective visibility bore no
+		// relation to its documented purpose. Critical severity keeps it
+		// out of the registration-order tail.
+		{Name: "race-verify-hint", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkRaceVerifyHint)},
 
 		// --- Security (OWASP / CVE-class) ---
 		{Name: "sql-injection", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSQLInjection)},
