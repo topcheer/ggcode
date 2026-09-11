@@ -44,14 +44,24 @@ func streamWithStallDetection(stream <-chan provider.StreamEvent, stallThreshold
 					return
 				}
 				warned = false
+				// #1499 case D: the timer must measure UPSTREAM arrival
+				// gaps, not forward-completion gaps. It previously was
+				// reset BEFORE the send, so while a slow consumer (IM
+				// bridge, desktop rendering a large diff) blocked `out <-
+				// event`, the clock kept running; on unblock the already-
+				// fired timer branch won the next select and blamed the
+				// CONNECTION ("no data for 30s") for local backpressure.
+				// Stop the timer while forwarding; reset only after the
+				// send completes, so backpressure time never counts as a
+				// stall.
 				if !timer.Stop() {
 					select {
 					case <-timer.C:
 					default:
 					}
 				}
-				timer.Reset(stallThreshold)
 				out <- event
+				timer.Reset(stallThreshold)
 			case <-timer.C:
 				if !warned {
 					warned = true

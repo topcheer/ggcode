@@ -148,11 +148,35 @@ func (s *subgoalState) recordAssistantText(text string, iter int) {
 		return
 	}
 	subs := extractSubgoals(text)
-	if len(subs) >= sgMinSubgoals {
+	// #1499 case A: a numbered list is NOT necessarily a plan - diagnostic
+	// output ("Found 3 problems: 1. missing nil check ...") matched the
+	// same regex, got promoted to "planned subgoals", and the agent was
+	// later accused of skipping steps it never planned. Require plan
+	// intent in the surrounding text before adopting a list.
+	if len(subs) >= sgMinSubgoals && hasPlanIntent(text) {
 		s.subgoals = subs
 		s.planIter = iter
 		debug.Log("agent", "subgoal_track: plan detected at iter %d with %d subgoals", iter, len(subs))
 	}
+}
+
+// sgPlanIntentPhrases mark text that ANNOUNCES a plan (vs. text that
+// merely ENUMERATES findings, errors, options...).
+var sgPlanIntentPhrases = []string{
+	"plan", "steps", "going to", "will do", "todo", "to-do", "to do",
+	"approach", "roadmap", "checklist", "road map", "next up", "my tasks",
+	"任务", "计划", "步骤",
+}
+
+// hasPlanIntent reports whether the text carries plan-intent language.
+func hasPlanIntent(text string) bool {
+	lower := strings.ToLower(text)
+	for _, p := range sgPlanIntentPhrases {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // recordToolCall checks whether a tool call addresses any unaddressed subgoal.

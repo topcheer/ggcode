@@ -150,6 +150,21 @@ func (s *successDeclareState) recordAssistantText(text string, iter int) {
 	if sdHasCaveatWindowed(lower, declIdx, declIdx+len(declPhrase)) {
 		return
 	}
+	// #1499 case C: continuation openers veto even across the sentence
+	// boundary (see sdContinuationPhrases).
+	if sdHasContinuationWindowed(lower, declIdx+len(declPhrase)) {
+		return
+	}
+
+	// #1499 case B: NEGATION on the declaration itself inverts its meaning
+	// - "This part isn't done - I'll continue" hits bare "done" (word
+	// boundary passes) with no caveat, was recorded as a COMPLETION claim,
+	// and the follow-up work then "proved" it premature. #364 fixed
+	// negation only on the caveat side. A short lookbehind window before
+	// the phrase now vetoes negated declarations.
+	if sdHasNegationBefore(lower, declIdx) {
+		return
+	}
 
 	s.declarationIter = iter
 	// Store a short snippet for the debug log.
@@ -160,6 +175,32 @@ func (s *successDeclareState) recordAssistantText(text string, iter int) {
 	s.declarationTxt = snippet
 	s.actionsSince = 0
 	debug.Log("agent", "Success declaration recorded at iteration %d: %s", iter, snippet)
+}
+
+// sdNegationPatterns mark text directly contradicting a completion claim
+// within the lookbehind window before the declaration phrase.
+var sdNegationPatterns = []string{
+	"isn't done", "not done", "aren't done", "not finished",
+	"isn't complete", "not complete", "isn't working", "not working",
+	"isn't fixed", "not fixed", "isn't resolved", "not resolved",
+	"nothing is done", "not yet", "isn't ready", "not ready",
+}
+
+// sdHasNegationBefore reports whether a negation appears in the window
+// immediately before the declaration phrase (#1499 case B).
+func sdHasNegationBefore(lowerText string, declIdx int) bool {
+	const lookbehind = 48
+	start := declIdx - lookbehind
+	if start < 0 {
+		start = 0
+	}
+	window := lowerText[start:declIdx]
+	for _, n := range sdNegationPatterns {
+		if strings.Contains(window, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // recordToolCall increments the action counter if we're tracking a declaration.
@@ -298,6 +339,40 @@ func sdContainsDeclaration(lowerText string) bool {
 //     commentary ("All done. Note that I also refactored X.", "The task is
 //     complete. However, see the docs.") — does NOT veto.
 //   - Negated hedges ("no remaining issues") never veto.
+//
+// sdContinuationPhrases announce follow-up work in the same breath as a
+// component-level claim ("The fix works. Next, I'll clean up the tests.").
+// #1499 case C: they sit AFTER the sentence boundary, so the #352
+// trailing-veto and the caveat table both missed them (double miss) - the
+// announced wrap-up then counted as evidence of a premature TASK-level
+// declaration. Unlike hedging caveats, these veto ACROSS the sentence
+// boundary: a continuation opener always means more work is coming.
+var sdContinuationPhrases = []string{
+	"next,",
+	"next up",
+	"then i",
+	"now let's",
+	"now lets",
+	"moving on",
+	"after that",
+}
+
+// sdHasContinuationWindowed reports whether a continuation opener appears
+// within the caveat window after the declaration, sentence boundary or not.
+func sdHasContinuationWindowed(lowerText string, declEnd int) bool {
+	end := declEnd + sdCaveatWindow
+	if end > len(lowerText) {
+		end = len(lowerText)
+	}
+	after := lowerText[declEnd:end]
+	for _, c := range sdContinuationPhrases {
+		if strings.Contains(after, c) {
+			return true
+		}
+	}
+	return false
+}
+
 func sdHasCaveatWindowed(lowerText string, declStart, declEnd int) bool {
 	start := declStart - sdCaveatWindow
 	if start < 0 {

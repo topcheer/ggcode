@@ -1845,10 +1845,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Premature success declaration: if the agent claimed completion in a
 		// prior iteration but has since continued making tool calls, flag the
 		// metacognitive calibration gap.
-		if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
-			debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-			a.injectGuidance(sgMsg)
-			msgs = a.contextManager.Messages()
+		// #1499 case A: subgoal tracking is a lexical heuristic in the
+		// claims-supervision family - unconditioned, it interfered with
+		// every user by default while its sibling (success_declare) is
+		// opt-in. Same gate.
+		if a.claimsSupervision {
+			if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
+				debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
+				a.injectGuidance(sgMsg)
+				msgs = a.contextManager.Messages()
+			}
 		}
 		// Success-declaration calibration detector is gated behind
 		// claimsSupervision (default off): lexical success-phrase heuristics on
@@ -4311,7 +4317,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 				a.editPropagation.recordEdit(tc.Name, string(tc.Arguments))
 			}
-			a.successDeclare.recordToolCall()
+			// #1499 case C: only SIDE-EFFECTING calls count as post-
+			// declaration work - read-only exploration the agent announced
+			// in the same breath ("Next, I'll check the tests") executed as
+			// promised was tallied as "actions since declaring completion",
+			// turning a component-level claim plus its announced wrap-up
+			// into a false "premature declaration" accusation.
+			if fileEditingTools[tc.Name] || tc.Name == "run_command" {
+				a.successDeclare.recordToolCall()
+			}
 			a.subgoalTrack.recordToolCall(tc.Name, string(tc.Arguments))
 			// Attempt brief: record outcome for knowledge reuse.
 			a.attemptBrief.recordOutcome(tc.Name, extractToolTarget(tc.Name, string(tc.Arguments)), !result.IsError, i, result.Content)
