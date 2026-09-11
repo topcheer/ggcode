@@ -50,6 +50,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -75,13 +77,24 @@ func checkTestIsolation(filePath, oldContent, newContent string) string {
 	oldViolations := findGlobalStateMutations(filePath, oldContent)
 	newViolations := findGlobalStateMutations(filePath, newContent)
 
-	// Delta: only flag if new content has MORE violations than old.
-	if len(newViolations) <= len(oldViolations) {
+	typeCounts := computeNetCounts(newViolations, oldViolations)
+	// #1502 case F: the old TOTAL-count gate (`len(new) <= len(old)`)
+	// let a rewrite swap pollution kinds - old 3x os-setenv -> new 1x
+	// os-stdio was "fewer violations" and passed silently. Report when ANY
+	// kind has a net increase.
+	anyIncrease := false
+	introduced := 0
+	for _, c := range typeCounts {
+		if c > 0 {
+			anyIncrease = true
+		}
+		if c > 0 {
+			introduced += c
+		}
+	}
+	if !anyIncrease {
 		return ""
 	}
-
-	introduced := len(newViolations) - len(oldViolations)
-	typeCounts := computeNetCounts(newViolations, oldViolations)
 	details := formatIsolationDetails(typeCounts)
 
 	if len(details) == 0 {
@@ -155,12 +168,27 @@ func findGlobalStateMutations(filename, src string) []globalStateMutation {
 		return nil
 	}
 
+	// #1502 case B: package vars are almost always declared in the SOURCE
+	// file under test, not the test file itself - collecting only the test
+	// file's own VAR decls (plus the single-file Obj==nil resolution quirk)
+	// made global-var detection near-inert in real projects. Collect the
+	// sibling non-test .go files' package-level vars too.
 	packageVars := collectPackageVarNames(file)
+	for n := range collectSiblingPackageVarNames(filename) {
+		packageVars[n] = true
+	}
 
 	var mutations []globalStateMutation
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || !isTestFunction(fn.Name.Name) {
+			continue
+		}
+		// #1502 case C: TestMain has no *testing.T - t.Setenv is unusable
+		// there and the Go docs require env setup BEFORE m.Run via plain
+		// os.Setenv. Advising otherwise makes the agent emit code that does
+		// not compile. Exempt TestMain entirely from this check.
+		if fn.Name.Name == "TestMain" {
 			continue
 		}
 		mutations = append(mutations, inspectTestFuncBody(fn.Body, packageVars, fset)...)
@@ -193,6 +221,14 @@ func collectPackageVarNames(file *ast.File) map[string]bool {
 
 // inspectTestFuncBody walks a test function body and collects global state mutations.
 func inspectTestFuncBody(body *ast.BlockStmt, packageVars map[string]bool, fset *token.FileSet) []globalStateMutation {
+	// #1502 case D: the SNAPSHOT pattern (`old := X; X = v; defer func()
+	// { X = old }()`) is fully hermetic, but both the forward assignment
+	// and the restore count as mutations (net +2) - a perfectly restoring
+	// test was branded "global-state mutations" and the guidance pushed
+	// the agent to dismantle correct restoration code. Collect the names
+	// assigned inside defer/cleanup closures FIRST and treat their writes
+	// as restores.
+	restores := collectRestoredVars(body)
 	var mutations []globalStateMutation
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -201,11 +237,115 @@ func inspectTestFuncBody(body *ast.BlockStmt, packageVars map[string]bool, fset 
 				mutations = append(mutations, *m)
 			}
 		case *ast.AssignStmt:
-			mutations = append(mutations, detectAssignMutations(node, packageVars, fset)...)
+			mutations = append(mutations, detectAssignMutations(node, packageVars, restores, fset)...)
 		}
 		return true
 	})
 	return mutations
+}
+
+// collectRestoredVars returns the variable names assigned inside function
+// literals reached via defer or t.Cleanup (the restore half of the snapshot
+// pattern) plus any variable BOTH written outside and restored inside.
+func collectRestoredVars(body *ast.BlockStmt) map[string]bool {
+	restored := map[string]bool{}
+	var walkDefer bool
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.DeferStmt:
+			walkDefer = true
+			ast.Inspect(node.Call, func(m ast.Node) bool {
+				if fl, ok := m.(*ast.FuncLit); ok {
+					collectAssignedNames(fl.Body, restored)
+				}
+				return true
+			})
+			walkDefer = false
+		case *ast.CallExpr:
+			if !walkDefer {
+				if se, ok := node.Fun.(*ast.SelectorExpr); ok && se.Sel != nil && se.Sel.Name == "Cleanup" {
+					for _, arg := range node.Args {
+						ast.Inspect(arg, func(m ast.Node) bool {
+							if fl, ok := m.(*ast.FuncLit); ok {
+								collectAssignedNames(fl.Body, restored)
+							}
+							return true
+						})
+					}
+				}
+			}
+		}
+		return true
+	})
+	if len(restored) == 0 {
+		return nil
+	}
+	// Only names also assigned OUTSIDE the closures count as snapshotted
+	// (restore-without-write is dead code; write-without-restore must stay
+	// flagged).
+	snapshotted := map[string]bool{}
+	var outside func(n ast.Node) bool
+	outside = func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false // skip closure interiors; handled above
+		}
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && restored[id.Name] {
+					snapshotted[id.Name] = true
+				}
+			}
+		}
+		return true
+	}
+	ast.Inspect(body, outside)
+	return snapshotted
+}
+
+// collectAssignedNames records simple identifier LHS names in a body.
+func collectAssignedNames(body ast.Node, into map[string]bool) {
+	if body == nil {
+		return
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name != "" && id.Name != "_" {
+					into[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+}
+
+// collectSiblingPackageVarNames parses sibling non-test .go files in the
+// same directory and collects their package-level variable names (#1502 B).
+func collectSiblingPackageVarNames(testFilePath string) map[string]bool {
+	names := map[string]bool{}
+	dir := filepath.Dir(testFilePath)
+	if dir == "" || dir == "." {
+		return names
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return names
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(dir, n), nil, 0)
+		if err != nil || f == nil {
+			continue
+		}
+		for name := range collectPackageVarNames(f) {
+			names[name] = true
+		}
+	}
+	return names
 }
 
 // detectOSSetenvCall checks if a CallExpr is os.Setenv and returns a mutation if so.
@@ -228,9 +368,16 @@ func detectOSSetenvCall(node *ast.CallExpr, fset *token.FileSet) *globalStateMut
 }
 
 // detectAssignMutations inspects an AssignStmt's LHS for global state mutations.
-func detectAssignMutations(node *ast.AssignStmt, packageVars map[string]bool, fset *token.FileSet) []globalStateMutation {
+// restores (#1502 D): names in the snapshot-restore set are skipped.
+func detectAssignMutations(node *ast.AssignStmt, packageVars map[string]bool, restores map[string]bool, fset *token.FileSet) []globalStateMutation {
 	var mutations []globalStateMutation
 	for _, lhs := range node.Lhs {
+		if id, ok := lhs.(*ast.Ident); ok && restores != nil && restores[id.Name] {
+			continue
+		}
+		if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel != nil && restores != nil && restores["os."+sel.Sel.Name] {
+			continue
+		}
 		if m := detectOSGlobalAssignment(lhs, fset); m != nil {
 			mutations = append(mutations, *m)
 			continue
@@ -268,13 +415,15 @@ func detectOSGlobalAssignment(lhs ast.Expr, fset *token.FileSet) *globalStateMut
 // detectPackageVarAssignment checks if an LHS expression writes to a package-level variable.
 func detectPackageVarAssignment(lhs ast.Expr, packageVars map[string]bool, fset *token.FileSet) *globalStateMutation {
 	ident, ok := lhs.(*ast.Ident)
-	if !ok || !packageVars[ident.Name] || ident.Obj == nil {
+	if !ok || !packageVars[ident.Name] {
 		return nil
 	}
-	if ident.Obj.Kind == ast.Var {
-		return &globalStateMutation{kind: "global-var", line: fset.Position(lhs.Pos()).Line}
-	}
-	return nil
+	// #1502 case B: ident.Obj is ALWAYS nil for names resolved outside the
+	// single-file parse (i.e. declared in a sibling source file) - the old
+	// `ident.Obj == nil` + `Obj.Kind == Var` gate skipped exactly the
+	// cross-file mutations that matter most. packageVars membership (now
+	// sibling-aware) is the authority.
+	return &globalStateMutation{kind: "global-var", line: fset.Position(lhs.Pos()).Line}
 }
 
 // isTestFunction returns true if the function name matches Go test conventions:

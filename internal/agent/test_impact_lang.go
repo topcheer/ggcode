@@ -303,9 +303,22 @@ var rubyLangProfile = langProfile{
 	},
 	TargetedTestCmd: func(workingDir, srcFile string) string {
 		dir := filepath.Dir(srcFile)
-		// Check for rspec
-		if fileExists(filepath.Join(workingDir, ".rspec")) ||
-			strings.Contains(dir, "spec") {
+		// #1502 case F: (1) a directory merely CONTAINING the substring
+		// "spec" (app/services/spec_builder/) is not an RSpec project -
+		// Minitest projects got rspec commands that fail outright. Require
+		// the marker config, or a path segment that IS "spec".
+		// (2) `rspec <srcFile>` on a SOURCE (non-_spec) file matches 0
+		// examples: it "passes" without verifying anything. Only emit rspec
+		// for spec files themselves; for source files fall through to the
+		// project's test runner.
+		isRSpecProject := fileExists(filepath.Join(workingDir, ".rspec")) ||
+			fileExists(filepath.Join(workingDir, "spec"))
+		for _, seg := range strings.Split(filepath.ToSlash(dir), "/") {
+			if seg == "spec" {
+				isRSpecProject = true
+			}
+		}
+		if isRSpecProject && strings.HasSuffix(srcFile, "_spec.rb") {
 			return "rspec " + filepath.ToSlash(srcFile)
 		}
 		return "bundle exec rake test"
