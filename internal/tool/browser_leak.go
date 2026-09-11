@@ -163,6 +163,22 @@ func (b *Browser) gcStaleBrowserProfiles() {
 		if pid := singletonLockPID(dir); pid != 0 && processAlive(pid) {
 			continue // another live Chrome owns it
 		}
+		// #2091 review: the pre-loop `live` snapshot released b.mu before
+		// iteration began, but getProfile adopts an existing on-disk dir by
+		// name (its mtime stays TTL-aged until Chrome writes) - a profile
+		// created mid-sweep would pass every check above while its Chrome
+		// may not have written the SingletonLock yet, and RemoveAll would
+		// delete the dir out from under the just-spawned Chrome. The sweep
+		// iterates for a long time on incident-scale roots (hundreds of
+		// dirs), making the window real. Re-validate under the lock right
+		// before deleting; the residual window is the microseconds between
+		// this check and RemoveAll.
+		b.mu.Lock()
+		_, adopted := b.profiles[e.Name()]
+		b.mu.Unlock()
+		if adopted {
+			continue
+		}
 		if err := os.RemoveAll(dir); err == nil {
 			removed++
 			debug.Log("browser", "GC removed stale profile dir %s (owner dead, age %s)", dir, time.Since(info.ModTime()).Round(time.Hour))
