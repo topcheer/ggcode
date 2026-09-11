@@ -59,6 +59,14 @@ func TestApplyMCPServersUpdateIgnoresOtherServers(t *testing.T) {
 	if m.mcpPanel.pendingReconnect != "a" {
 		t.Fatalf("latch must survive unrelated server updates, got %q", m.mcpPanel.pendingReconnect)
 	}
+	// #1812: but when the pending server WAS listed and VANISHES from the
+	// update (uninstalled mid-reconnect), the latch must clear - the panel
+	// used to hang on "reconnecting..." until reopened.
+	m2 := &Model{mcpPanel: &mcpPanelState{pendingReconnect: "a"}, mcpServers: []MCPInfo{{Name: "a"}}}
+	m2.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{}})
+	if m2.mcpPanel.pendingReconnect != "" {
+		t.Fatalf("latch must clear when the pending server is removed, got %q", m2.mcpPanel.pendingReconnect)
+	}
 }
 
 // With no panel open the fresh list still lands in m.mcpServers.

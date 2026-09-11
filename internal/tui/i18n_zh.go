@@ -44,6 +44,8 @@ func zhCatalog(key string) string {
 		return "当前会话不支持重新连接。"
 	case "panel.mcp.reconnecting":
 		return "正在重新连接 %s..."
+	case "panel.mcp.removed":
+		return "%s 已在重连期间被移除"
 	case "panel.mcp.reconnected":
 		return "已重连 %s：%d 个工具。"
 	case "panel.mcp.reconnect_error":

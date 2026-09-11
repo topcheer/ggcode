@@ -21,15 +21,29 @@ type mcpServersUpdatedMsg struct {
 // is waiting on a reconnect, upgrades the static "reconnecting" message to
 // a terminal result the moment that server settles.
 func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
+	// #1812: capture the PRE-swap list - the pending server dropping OUT
+	// of the update (uninstalled mid-reconnect) is only distinguishable
+	// from an unrelated-server update by comparing against what we HAD.
+	wasListed := false
+	if m.mcpPanel != nil && m.mcpPanel.pendingReconnect != "" {
+		for _, srv := range m.mcpServers {
+			if srv.Name == m.mcpPanel.pendingReconnect {
+				wasListed = true
+				break
+			}
+		}
+	}
 	m.mcpServers = msg.servers
 	if m.mcpPanel == nil || m.mcpPanel.pendingReconnect == "" {
 		return
 	}
 	name := m.mcpPanel.pendingReconnect
+	found := false
 	for _, srv := range msg.servers {
 		if srv.Name != name {
 			continue
 		}
+		found = true
 		switch {
 		case srv.Connected:
 			m.mcpPanel.message = m.t("panel.mcp.reconnected", name, len(srv.ToolNames))
@@ -41,6 +55,17 @@ func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
 		// Still pending (dialing or awaiting OAuth): keep the reconnecting
 		// message until a terminal state arrives.
 		return
+	}
+	// #1812: the server WAS in our list and VANISHED from the update
+	// (uninstalled while its reconnect was pending) - the loop never
+	// matched, the latch stayed set, and the panel hung on
+	// "reconnecting..." until reopened. The server is gone; nothing is
+	// coming back - clear with a removal note. A name that was NEVER
+	// listed stays latched (unrelated-server updates must not disturb
+	// it - the pre-existing pin).
+	if !found && wasListed {
+		m.mcpPanel.pendingReconnect = ""
+		m.mcpPanel.message = m.t("panel.mcp.removed", name)
 	}
 }
 
