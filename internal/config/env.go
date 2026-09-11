@@ -150,12 +150,24 @@ func HomeDir() string {
 // ConfigDir returns ~/.ggcode
 func ConfigDir() string {
 	guardRealHomeDir("ConfigDir()")
-	return strings.Join([]string{HomeDir(), ".ggcode"}, string(os.PathSeparator))
+	// #1837 case 2: mirror util.ConfigDir's empty-home guard. HomeDir()
+	// returns "" when no home can be determined (HOME unset in a container
+	// and os.UserHomeDir failing); the old strings.Join then produced the
+	// ABSOLUTE path /.ggcode at the filesystem root, and the loader tried
+	// to read and create it. filepath.Join on "" degrades to a harmless
+	// relative path instead.
+	home := HomeDir()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".ggcode")
 }
 
 // ConfigPath returns the default config file path.
 func ConfigPath() string {
-	return strings.Join([]string{ConfigDir(), "ggcode.yaml"}, string(os.PathSeparator))
+	// filepath.Join("", name) = name (relative) — never a root-absolute
+	// path (#1837 case 2).
+	return filepath.Join(ConfigDir(), "ggcode.yaml")
 }
 
 var commonShellEnvFiles = []string{
