@@ -4,6 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pion/webrtc/v4"
 )
 
 func TestNewPeer(t *testing.T) {
@@ -128,4 +130,27 @@ func TestHandleDisconnectFiresExactlyOnce(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("disconnect callback fired %d times, want exactly 1", atomic.LoadInt32(&calls))
+}
+
+// #1854: only the terminal Failed state triggers teardown; Disconnected is
+// a transient state that pion often self-heals (regathering), and treating
+// it like Failed tore down the DataChannel on every wifi hiccup, costing a
+// full re-negotiation (~50MB per PeerConnection on the mobile side).
+func TestStateTriggersTeardown(t *testing.T) {
+	if stateTriggersTeardown(webrtc.PeerConnectionStateDisconnected) {
+		t.Error("Disconnected is transient self-heal territory and must NOT tear down")
+	}
+	if !stateTriggersTeardown(webrtc.PeerConnectionStateFailed) {
+		t.Error("Failed is terminal and MUST tear down")
+	}
+	for _, s := range []webrtc.PeerConnectionState{
+		webrtc.PeerConnectionStateNew,
+		webrtc.PeerConnectionStateConnecting,
+		webrtc.PeerConnectionStateConnected,
+		webrtc.PeerConnectionStateClosed,
+	} {
+		if stateTriggersTeardown(s) {
+			t.Errorf("state %s must not trigger teardown", s)
+		}
+	}
 }

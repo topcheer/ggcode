@@ -126,17 +126,35 @@ func NewPeer() (*Peer, error) {
 		case webrtc.PeerConnectionStateConnected:
 			// P2P connected (DataChannel may open shortly)
 		case webrtc.PeerConnectionStateDisconnected:
-			debug.Log("webrtc", "peer connection disconnected")
-			p.handleDisconnect()
+			// #1854: Disconnected is a TRANSIENT state - pion keeps
+			// consent-checking and often self-heals by regathering, and a
+			// recovered connection returns to Connected. Treating it like
+			// Failed tore down the DataChannel on every wifi hiccup and
+			// fell back to relay + a full re-negotiation (a new
+			// PeerConnection costs the mobile side ~50MB per host_factory
+			// comments) - abandoning the protocol layer's own recovery.
+			// The teardown still happens when pion escalates to Failed
+			// (persistent consent failure) or the DataChannel itself
+			// closes/errors (peer went away).
+			debug.Log("webrtc", "peer connection disconnected (transient; waiting for recovery or Failed)")
 		case webrtc.PeerConnectionStateFailed:
 			debug.Log("webrtc", "peer connection failed")
-			p.handleDisconnect()
+			if stateTriggersTeardown(state) {
+				p.handleDisconnect()
+			}
 		case webrtc.PeerConnectionStateClosed:
 			debug.Log("webrtc", "peer connection closed")
 		}
 	})
-
 	return p, nil
+}
+
+// stateTriggersTeardown reports whether a PeerConnection state warrants a
+// transport teardown. Only Failed (terminal) does: Disconnected is
+// transient self-heal territory (#1854) and Closed is the orderly shutdown
+// path handled by Close().
+func stateTriggersTeardown(state webrtc.PeerConnectionState) bool {
+	return state == webrtc.PeerConnectionStateFailed
 }
 
 // ─── Host role (offerer) ───
