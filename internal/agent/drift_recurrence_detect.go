@@ -85,6 +85,8 @@ type driftRecurrenceState struct {
 	// preWarnDirs is the set of unique directory signatures touched BEFORE
 	// any drift warning fired. Used to identify NEW directories post-warning.
 	preWarnDirs map[string]bool
+	// preWarnBaseline is the baseline size captured at arm time (#1544 C).
+	preWarnBaseline int
 
 	// postWarnDirs is the set of unique directory signatures touched AFTER
 	// a drift warning fired.
@@ -165,6 +167,13 @@ func (d *driftRecurrenceState) markWarning(iteration int) {
 	if !d.warned {
 		d.warned = true
 		d.warnIteration = iteration
+		// #1544 case C: the diff against preWarnDirs assumes the pre-warn
+		// baseline is FAT (scope_drift arms late, after ~5 dirs). plan_drift
+		// arms EARLY on the wrap-up path, where the baseline can be empty -
+		// every subsequent dir then counts as "new", and the normal
+		// src + _test two-dir workflow read as "STILL SCATTERING". Record
+		// the baseline size so check() can raise the bar for weak baselines.
+		d.preWarnBaseline = len(d.preWarnDirs)
 	}
 }
 
@@ -212,6 +221,15 @@ func (d *driftRecurrenceState) check() string {
 	// a single concentrated dir is convergence, not recurrence.
 	if newDirs < driftRecurrenceNewDirThreshold {
 		if newDirs <= 1 {
+			return ""
+		}
+		// #1544 case C: the relaxed 2-3-new-dirs scattering branch assumes
+		// a non-empty pre-warn baseline (late-armed scope_drift, #473's
+		// shape). An early-armed plan_drift with an EMPTY baseline makes
+		// every dir trivially "new" - a normal src+_test workflow was
+		// branded "STILL SCATTERING". With an empty baseline, require the
+		// FULL threshold; any non-empty baseline keeps #473 semantics.
+		if d.preWarnBaseline == 0 && newDirs <= 2 {
 			return ""
 		}
 		// Under threshold but scattering (2-3 new dirs): require zero
@@ -266,10 +284,16 @@ func (d *driftRecurrenceState) check() string {
 // lookup classified every run_command as verifying, contradicting the
 // debt detector on the same command.
 func (a *Agent) driftRecurrenceRecord(toolName string, fileHint string, args string, ok bool) {
-	if a.driftRecurrence == nil || !ok {
+	if a.driftRecurrence == nil {
 		return
 	}
-	if productiveEditTools[toolName] {
+	// #1544 case B: the blanket !ok gate also swallowed FAILED
+	// verifications - a red-phase `go test` (non-zero exit, IsError=true)
+	// is still verification RUN, but the warning then claimed "You have
+	// not run ANY verification" about an agent that just ran it. Only the
+	// EDIT side keeps the !ok gate (#1452-B, aligned with the sibling
+	// detectors' IsError gates); verification counting is outcome-blind.
+	if productiveEditTools[toolName] && ok {
 		a.driftRecurrence.recordEdit(fileHint)
 	}
 	if toolName == "run_command" {
