@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 // AdaptiveEffort automatically adjusts reasoning effort per LLM turn based on
@@ -45,33 +46,36 @@ const (
 // run of these, the next LLM turn can safely use lower effort. Extended from
 // overseer's readOnlyTools with additional status/metadata tools.
 var effortReadOnlyTools = map[string]bool{
-	"read_file":                  true,
-	"read_file_range":            true,
-	"multi_file_read":            true,
-	"search_files":               true,
-	"grep":                       true,
-	"glob":                       true,
-	"list_directory":             true,
-	"list_dir":                   true,
-	"git_status":                 true,
-	"git_diff":                   true,
-	"git_log":                    true,
-	"git_show":                   true,
-	"git_blame":                  true,
-	"git_branch_list":            true,
-	"git_remote":                 true,
-	"git_stash_list":             true,
-	"lsp_symbols":                true,
-	"lsp_hover":                  true,
-	"lsp_references":             true,
-	"lsp_definition":             true,
-	"lsp_diagnostics":            true,
-	"code_search":                true,
-	"code_health":                true,
-	"web_search":                 true,
-	"web_fetch":                  true,
-	"runtime":                    true,
-	"todo_write":                 true,
+	"read_file":       true,
+	"read_file_range": true,
+	"multi_file_read": true,
+	"search_files":    true,
+	"grep":            true,
+	"glob":            true,
+	"list_directory":  true,
+	"list_dir":        true,
+	"git_status":      true,
+	"git_diff":        true,
+	"git_log":         true,
+	"git_show":        true,
+	"git_blame":       true,
+	"git_branch_list": true,
+	"git_remote":      true,
+	"git_stash_list":  true,
+	"lsp_symbols":     true,
+	"lsp_hover":       true,
+	"lsp_references":  true,
+	"lsp_definition":  true,
+	"lsp_diagnostics": true,
+	"code_search":     true,
+	"code_health":     true,
+	"web_search":      true,
+	"web_fetch":       true,
+	"runtime":         true,
+	// #1836 case 3: todo_write REWRITES the whole todo list - a state-
+	// writing planning tool. Its typical successor turn is planning/
+	// decomposition, exactly the "planning -> higher effort" case in the
+	// module comment - keeping it here downgraded those turns to low.
 	"task_list":                  true,
 	"task_get":                   true,
 	"debug_log":                  true,
@@ -103,10 +107,46 @@ var editTools = sourceMutatingTools
 // 'recent edit failures -> high'. Both consumers read the same table now.
 var errorRecoverySignals = sourceMutatingTools
 
+// paramFormatFailureMarkers identify edit failures that are routine
+// argument problems - the model just needs to re-read and retry with a
+// corrected old_text/new_text. #1836 case 2: the most common edit_file
+// failure (old_text not found) used to count as an error-recovery signal,
+// pushing the next 6 LLM turns to high effort and burning thinking tokens
+// on a simple retry - #1436-A excluded read-tool errors but not edit
+// param errors.
+var paramFormatFailureMarkers = []string{
+	"not found",
+	"no match",
+	"old_text",
+	"does not match",
+	"failed to plan",
+	"invalid input",
+	"no edits",
+	"nothing to",
+}
+
+// isParamFormatEditFailure reports whether an edit-family error is a
+// param-format problem rather than a genuine execution failure.
+func isParamFormatEditFailure(toolName, lowerErrText string) bool {
+	if !errorRecoverySignals[toolName] || lowerErrText == "" {
+		return false
+	}
+	for _, m := range paramFormatFailureMarkers {
+		if strings.Contains(lowerErrText, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // effortEntry records a single tool interaction for effort classification.
 type effortEntry struct {
 	toolName string
 	isError  bool
+	// errText is a short prefix of a failed call's error content (#1836
+	// case 2: param-format failures like edit_file's old_text-not-found
+	// are routine retry material, not recovery puzzles).
+	errText string
 }
 
 // adaptiveEffortState tracks recent tool interactions and recommends a
@@ -123,12 +163,48 @@ func newAdaptiveEffortState() *adaptiveEffortState {
 
 // recordToolResult appends a tool interaction to the sliding window.
 func (s *adaptiveEffortState) recordToolResult(toolName string, isError bool) {
+	s.recordToolResultErr(toolName, isError, "")
+}
+
+// recordToolResultErr is recordToolResult with the error text for
+// param-format classification (#1836 case 2).
+func (s *adaptiveEffortState) recordToolResultErr(toolName string, isError bool, errText string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = append(s.entries, effortEntry{toolName: toolName, isError: isError})
+	et := ""
+	if isError {
+		et = strings.ToLower(errText)
+		if len(et) > 160 {
+			et = et[:160]
+		}
+	}
+	s.entries = append(s.entries, effortEntry{toolName: toolName, isError: isError, errText: et})
 	if len(s.entries) > adaptiveEffortWindow {
 		s.entries = s.entries[len(s.entries)-adaptiveEffortWindow:]
 	}
+}
+
+// newAdaptiveEffortStateDetectOverride builds the adapter and honors a
+// CONFIG-level effort already set on the provider. #1836 case 1: the yaml
+// path (`reasoning_effort: high`) sets the provider directly via the
+// registry and never passes through agent.SetReasoningEffort - the only
+// place userOverrideSet was set - so six consecutive read-only tools (a
+// normal exploration streak) silently downgraded turns the user had
+// explicitly configured to high, violating the module's own contract
+// ("user sets effort via /effort or config, that setting always wins and
+// the adapter stays dormant"). Probing the provider's already-set effort
+// restores the contract for the config path.
+func newAdaptiveEffortStateDetectOverride(p provider.Provider) *adaptiveEffortState {
+	s := newAdaptiveEffortState()
+	if p == nil {
+		return s
+	}
+	if ep, ok := p.(provider.ReasoningEffortProvider); ok {
+		if strings.TrimSpace(ep.ReasoningEffort()) != "" {
+			s.userOverrideSet = true
+		}
+	}
+	return s
 }
 
 // setUserOverride marks that the user has explicitly set effort — the adapter
@@ -183,7 +259,7 @@ func (s *adaptiveEffortState) recommendedEffort() string {
 			// errorRecoverySignals set declares (edit-family retries - the
 			// module comment's 'recent EDIT failures -> high' intent that
 			// was never wired) count as recovery signals.
-			if errorRecoverySignals[e.toolName] {
+			if errorRecoverySignals[e.toolName] && !isParamFormatEditFailure(e.toolName, e.errText) {
 				recentErrors++
 			}
 			continue
