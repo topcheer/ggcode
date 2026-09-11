@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/stream"
 )
 
@@ -64,7 +65,7 @@ func startConfigFileSync() {
 		if st, err := os.Stat(trackedConfigPathLocked()); err == nil {
 			cfgFileLastMod, cfgFileLastModOnce = st.ModTime(), true
 		}
-		go func() {
+		safego.Go("desktop.wailskit.configFileSync", func() {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
@@ -72,7 +73,7 @@ func startConfigFileSync() {
 				syncCfgFileLocked()
 				globalMu.Unlock()
 			}
-		}()
+		})
 	})
 }
 
