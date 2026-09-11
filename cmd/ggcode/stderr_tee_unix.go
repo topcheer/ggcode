@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"syscall"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // teeStderrFD duplicates fd 2 so runtime-level fatal dumps are captured too.
@@ -33,7 +35,16 @@ func teeStderrFD(w *os.File) (restore func(), ok bool) {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			_ = dupTo(origFD, 2)
+			// #1818 case 2: if dupTo fails (fd table exhausted - EMFILE),
+			// fd 2 still points at the tee pipe; closing origFD then
+			// destroyed the LAST copy of the real terminal stderr, and a
+			// runtime fatal dump (this mechanism's purpose) was lost to
+			// EPIPE. Keep the spare fd on failure - a later manual restore
+			// stays possible.
+			if err := dupTo(origFD, 2); err != nil {
+				debug.Log("stderr-tee", "restore dupTo failed (%v) - keeping spare fd %d open; stderr still teed", err, origFD)
+				return
+			}
 			_ = syscall.Close(origFD)
 		})
 	}, true
