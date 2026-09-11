@@ -344,7 +344,7 @@ func (a *matrixAdapter) openPersistentCryptoStore() (crypto.Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create crypto state dir: %w", err)
 	}
-	dbPath := filepath.Join(dir, fmt.Sprintf("%s.db", sanitizeFileToken(a.name)))
+	dbPath := newCryptoDBForAdapter(dir, a.name, a.userID)
 	uri := fmt.Sprintf("sqlite3://file:%s?_txlock=immediate", dbPath)
 	db, err := dbutil.NewWithDialect(uri, "sqlite3")
 	if err != nil {
@@ -397,6 +397,37 @@ func newSyncStoreForAdapter(syncDir, adapterName, userID string) *fileSyncStore 
 		}
 	}
 	return &fileSyncStore{path: storePath}
+}
+
+// newCryptoDBForAdapter builds the per-account crypto (Olm) SQLite path.
+// #1851 case 2 sibling: the db was keyed by adapter name alone, so two
+// workspaces running same-named adapters opened the SAME file - the second
+// user's OlmMachine loaded the first user's Olm account (E2EE identity
+// confusion: messages fail to decrypt, peers see spurious device churn).
+// Keyed by name AND user ID, with a one-time best-effort rename from the
+// legacy name-only path. The SQLCryptoStore accountID deliberately stays
+// homeserver|name: uniqueness only matters WITHIN a db file, and keeping it
+// stable avoids rotating the device identity (mass peer re-verification)
+// for existing single-user setups after the rename.
+func newCryptoDBForAdapter(dir, adapterName, userID string) string {
+	dbName := sanitizeFileToken(adapterName)
+	if uid := strings.TrimSpace(userID); uid != "" {
+		dbName += "-" + sanitizeFileToken(uid)
+	}
+	dbPath := filepath.Join(dir, dbName+".db")
+	legacyPath := filepath.Join(dir, sanitizeFileToken(adapterName)+".db")
+	if dbPath != legacyPath {
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			if _, lerr := os.Stat(legacyPath); lerr == nil {
+				if rerr := os.Rename(legacyPath, dbPath); rerr != nil {
+					debug.Log("matrix", "adapter=%s crypto db migration failed (fresh identity on first sync): %v", adapterName, rerr)
+				} else {
+					debug.Log("matrix", "adapter=%s migrated crypto db to user-scoped key", adapterName)
+				}
+			}
+		}
+	}
+	return dbPath
 }
 
 func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
