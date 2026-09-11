@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -104,6 +105,13 @@ type UpgradeManager struct {
 	// Used for debouncing rapid reconnect events.
 	restartAt time.Time
 
+	// stopped latches when Stop() tears the manager down: retries and
+	// relay-reconnect Restarts must not revive a stopped share (#1830
+	// review: a wasActive retry sleeping past a user Stop would otherwise
+	// pass Start's Idle gate and run a zombie negotiation, and a remote
+	// disconnect after Stop would flip the Idle state back to Failed).
+	stopped atomic.Bool
+
 	// onStateChange is an optional callback for UI status updates.
 	onStateChange func(UpgradeState)
 }
@@ -138,6 +146,10 @@ func (m *UpgradeManager) Start() {
 	if !m.cfg.Enabled {
 		return
 	}
+	if m.stopped.Load() {
+		debug.Log("tunnel", "upgrade: Start ignored, manager stopped")
+		return
+	}
 	m.mu.Lock()
 	if m.state == UpgradeNegotiating || m.state == UpgradeActive {
 		m.mu.Unlock()
@@ -165,6 +177,10 @@ func (m *UpgradeManager) Start() {
 // comment said 2s while the code uses 5s).
 func (m *UpgradeManager) Restart() {
 	if !m.cfg.Enabled {
+		return
+	}
+	if m.stopped.Load() {
+		debug.Log("tunnel", "upgrade: Restart ignored, manager stopped")
 		return
 	}
 	m.mu.Lock()
@@ -219,8 +235,9 @@ func (m *UpgradeManager) HandleSignalMessage(msg SignalMessage) {
 func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	debug.Log("tunnel", "upgrade: starting P2P negotiation")
 	m.broker.p2pNegotiating.Store(true)
-	// Note: p2pNegotiating stays true through P2P disconnect. It's cleared
-	// when P2P fails and we revert to relay (allowing recovery replay).
+	// Note: p2pNegotiating stays true through the P2P session; it is
+	// cleared on disconnect in the OnDisconnect handler (#1830 case 2),
+	// on ICE-timeout revert below, and by Stop (#1830 case 3).
 
 	// #923: every early-exit path MUST clear p2pNegotiating + trigger
 	// recovery replay, or a transient factory/startNeg failure permanently
@@ -295,14 +312,47 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 			return // stale peer from a previous negotiation
 		}
 		debug.Log("tunnel", "upgrade: P2P disconnected, reverting to relay")
+		wasActive := m.stateLocked() == UpgradeActive
 		m.broker.SetP2PTransport(nil)
-		m.setState(UpgradeFailed)
+		// #1830 case 2: clear the negotiating flag and trigger recovery
+		// replay HERE, before close(p2pDone), so cleanup completes before
+		// any new Start() can set the flag again - the old run clearing it
+		// after <-p2pDone raced a fresh run's Store(true) if scheduling
+		// stalled the old goroutine past the retry delay. Doing it in the
+		// handler also covers negotiation-era disconnects, where the main
+		// select's p2pDone branch previously returned without clearing
+		// anything despite its comment claiming this handler had.
+		m.broker.p2pNegotiating.Store(false)
+		m.broker.TriggerReplayNow()
+		// Guard the state write like failAndRevert does (stale gen /
+		// stopped manager): a remote disconnect arriving after Stop must
+		// not flip the Idle state back to Failed and fire notifyState
+		// (#1830 review). The flag clear + replay above stay
+		// unconditional - suppression must always lift.
+		if !staleGen() && !m.stopped.Load() {
+			m.setState(UpgradeFailed)
+		}
 		p2pDoneOnce.Do(func() { close(p2pDone) })
 		// Schedule retry
 		safego.Go("tunnel.upgrade.retry", func() {
-			select {
-			case <-time.After(m.cfg.RetryDelay):
-			case <-ctx.Done():
+			// #1830 case 1: the negotiation ctx only covers the negotiation
+			// period. Once P2P was ACTIVE, this disconnect is a session drop,
+			// not a negotiation failure: ctx may already be closed (ICE
+			// timeout expired while active), and a select between a ready
+			// ctx.Done and the ready retry timer picks randomly - ~50% of
+			// retries silently aborted with no self-healing (relay alive =
+			// nothing re-triggers Start, the session strands on relay).
+			if wasActive {
+				time.Sleep(m.cfg.RetryDelay)
+			} else {
+				select {
+				case <-time.After(m.cfg.RetryDelay):
+				case <-ctx.Done():
+					return
+				}
+			}
+			if m.stopped.Load() {
+				debug.Log("tunnel", "upgrade: retry aborted, manager stopped")
 				return
 			}
 			m.Start()
@@ -352,7 +402,7 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		return
 	}
 
-	// Wait for P2P disconnect. Once active, ignore ICE timeout —
+	// Wait for P2P disconnect. Once active, ignore ICE timeout -
 	// the DataChannel should persist until network disconnect or Stop().
 	select {
 	case <-p2pDone:
@@ -361,11 +411,11 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 		// #923: read state under the lock (setState writes under m.mu).
 		state := m.stateLocked()
 		if state == UpgradeActive {
-			// P2P is active — wait for disconnect instead of timing out.
+			// P2P is active - wait for disconnect instead of timing out.
+			// (#1830 case 2: negotiating-flag cleanup + replay trigger
+			// happen in the OnDisconnect handler before close(p2pDone).
 			debug.Log("tunnel", "upgrade: ctx done but P2P active, waiting for disconnect")
 			<-p2pDone
-			m.broker.p2pNegotiating.Store(false)
-			m.broker.TriggerReplayNow()
 		} else if ctx.Err() == context.DeadlineExceeded {
 			debug.Log("tunnel", "upgrade: ICE timeout, staying on relay")
 			m.broker.p2pNegotiating.Store(false)
@@ -413,6 +463,7 @@ func (m *UpgradeManager) notifyState() {
 
 // Stop cancels any ongoing upgrade negotiation and tears down P2P.
 func (m *UpgradeManager) Stop() {
+	m.stopped.Store(true)
 	m.mu.Lock()
 	cancel := m.cancelNeg
 	m.cancelNeg = nil
@@ -422,6 +473,12 @@ func (m *UpgradeManager) Stop() {
 		cancel()
 	}
 	m.broker.SetP2PTransport(nil)
+	// #1830 case 3: neither clearing condition in runUpgrade's exit select
+	// matches an Idle-plus-Cancelled exit (Stop resets the state to Idle and
+	// cancels the ctx), so p2pNegotiating stayed true after Stop -
+	// permanently suppressing the broker's recovery replay whenever the
+	// manager and broker do not share a lifecycle. Clear it explicitly.
+	m.broker.p2pNegotiating.Store(false)
 }
 
 // EncodeSignalMessage creates a GatewayMessage wrapping signaling data
