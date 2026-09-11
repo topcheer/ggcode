@@ -40,7 +40,9 @@ func TestProxyURLFromDirective(t *testing.T) {
 	}{
 		{"proxy", "PROXY 127.0.0.1:8888", mustURL("http://127.0.0.1:8888")},
 		{"proxy lower", "proxy corp-proxy:80", mustURL("http://corp-proxy:80")},
-		{"https directive", "HTTPS proxy.example:443", mustURL("http://proxy.example:443")},
+		// #1848 case 3: PAC "HTTPS" means TLS-to-proxy; the old mapping
+		// downgraded to plaintext http CONNECT.
+		{"https directive", "HTTPS proxy.example:443", mustURL("https://proxy.example:443")},
 		{"socks5", "SOCKS5 10.0.0.1:1080", mustURL("socks5://10.0.0.1:1080")},
 		{"socks maps to 5", "SOCKS 10.0.0.1:1080", mustURL("socks5://10.0.0.1:1080")},
 		{"socks4 unsupported", "SOCKS4 10.0.0.1:1080", nil},

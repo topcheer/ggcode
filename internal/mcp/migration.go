@@ -169,10 +169,14 @@ func loadClaudeServers(source migrationSource) ([]config.MCPServerConfig, []stri
 				warnings = append(warnings, fmt.Sprintf("warning: skipped MCP server %q from %s (stdio transport requires a command)", cfg.Name, source.Source))
 				continue
 			}
-		case "http", "ws":
+		case "http", "ws", "sse":
 			// ws is a first-class transport (install.go accepts stdio|http|ws,
 			// client.go runs a full WS implementation) - it used to fall into
 			// default:continue and vanish. Same URL requirement as http.
+			// #1848: sse migrates too - the client normalizes sse -> http at
+			// construction (Start's case only built the httpClient and the
+			// send path fell to stdio/"stdin closed"), so a migrated sse
+			// server now works end-to-end instead of being dropped.
 			if strings.TrimSpace(cfg.URL) == "" {
 				warnings = append(warnings, fmt.Sprintf("warning: skipped MCP server %q from %s (%s transport requires a URL)", cfg.Name, source.Source, cfg.Type))
 				continue

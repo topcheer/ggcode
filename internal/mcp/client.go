@@ -169,6 +169,19 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 			transport = "stdio"
 		}
 	}
+	// #1848 case 1: normalize sse -> http at construction. The #1659
+	// comment in Start claims this normalization but never assigned
+	// c.transport, so an explicit type:"sse" server passed Start (the case
+	// matches "sse") while staying "sse" everywhere else: oauth wiring
+	// (== "http"), the GET notification stream, and sendRequestUnlocked's
+	// switch all missed it - the request fell to the stdio default and
+	// failed with "stdin closed" on every Initialize. Normalizing here
+	// covers every downstream == "http" comparison; Start's case keeps
+	// "sse" for defense in depth.
+	if transport == "sse" {
+		debug.Log("mcp-client", "server %s: normalizing sse transport to http", cfg.Name)
+		transport = "http"
+	}
 	client := &Client{
 		name:             cfg.Name,
 		transport:        transport,

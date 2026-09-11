@@ -522,7 +522,16 @@ func acpToProviderContent(blocks []ContentBlock) []provider.ContentBlock {
 				} else if b.Resource.Blob != nil {
 					debug.Log("acp-bridge", "resource blob %q (%s) not inlinable - placeholder only", b.Resource.Blob.URI, b.Resource.Blob.MIMEType)
 					out = append(out, provider.TextBlock(fmt.Sprintf("[embedded binary resource: %s (%s)]", b.Resource.Blob.URI, b.Resource.Blob.MIMEType)))
+				} else {
+					// #1848 case 2: a resource block with neither text nor
+					// blob used to vanish without a trace - the same
+					// silent-drop this commit's default branch condemns.
+					debug.Log("acp-bridge", "dropping resource block (no text and no blob content)")
 				}
+			} else {
+				// #1848 case 2: a "resource" block without a Resource
+				// object is malformed - drop visibly, not silently.
+				debug.Log("acp-bridge", "dropping resource block with nil resource object (malformed payload)")
 			}
 		default:
 			// #1647: audio/resource/resource_link arriving without Text were

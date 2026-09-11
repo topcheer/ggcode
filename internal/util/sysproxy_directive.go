@@ -32,8 +32,14 @@ func ProxyURLFromDirective(directive string) *url.URL {
 	switch {
 	case d == "", upper == "DIRECT":
 		return nil
-	case strings.HasPrefix(upper, "PROXY "), strings.HasPrefix(upper, "HTTPS "):
+	case strings.HasPrefix(upper, "PROXY "):
 		return parseHostPortDirective(d[6:], "http")
+	case strings.HasPrefix(upper, "HTTPS "):
+		// #1848 case 3: PAC "HTTPS host:port" means TLS-to-proxy. The old
+		// mapping forced scheme http, so Go issued a plaintext CONNECT to
+		// a proxy expecting TLS and the connection failed. Go's transport
+		// natively supports https:// proxy URLs.
+		return parseHostPortDirective(d[6:], "https")
 	case strings.HasPrefix(upper, "SOCKS5 "):
 		return parseHostPortDirective(d[len("SOCKS5 "):], "socks5")
 	case strings.HasPrefix(upper, "SOCKS "):

@@ -57,9 +57,10 @@ func TestMigrationWSPassesSSEWarnsDropFieldsWarn(t *testing.T) {
 	if !got["stdio-server"] || !got["http-server"] {
 		t.Fatal("stdio/http servers must keep migrating")
 	}
-	// sse stays dropped (no client support) but must now warn.
-	if got["sse-server"] {
-		t.Fatal("sse must remain dropped until the client supports it")
+	// #1848: sse now migrates - the client normalizes sse -> http at
+	// construction, so a migrated sse server works end-to-end.
+	if !got["sse-server"] {
+		t.Fatal("#1848: sse server must migrate (client normalizes sse -> http)")
 	}
 	for _, name := range []string{"broken-stdio", "broken-http", "broken-ws"} {
 		if got[name] {
@@ -69,7 +70,6 @@ func TestMigrationWSPassesSSEWarnsDropFieldsWarn(t *testing.T) {
 
 	joined := strings.Join(warnings, "\n")
 	for _, want := range []string{
-		`sse-server"`, "unsupported transport",
 		`broken-stdio"`, "requires a command",
 		`broken-http"`, "requires a URL",
 		`broken-ws"`, "requires a URL",
