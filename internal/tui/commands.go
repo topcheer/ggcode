@@ -785,27 +785,6 @@ func levenshteinDistance(a, b string) int {
 	return prev[lb]
 }
 
-func buildInitPrompt(targetPath string, existed bool, bootstrap string) string {
-	action := "create"
-	if existed {
-		action = "update"
-	}
-	return fmt.Sprintf(`Analyze the current repository and %s the project memory file at %s.
-
-Before writing anything, inspect the repository with tools so the user can see an explicit knowledge-collection flow. Do not skip straight to writing the file. Read the relevant project files, confirm the architecture, tooling, validation commands, major directories, and durable conventions, then write the final GGCODE.md.
-
-Requirements:
-- The output file must be %s.
-- Collect repository knowledge first with tool calls; do not answer with only prose.
-- The file should contain current project facts and durable guidance, not an empty template.
-- Keep the document concise, practical, and easy for future agents to follow.
-- Overwrite the existing file if it already exists.
-
-Bootstrap snapshot collected locally to help you start, but you must verify and improve it with repo inspection before writing:
-
-%s`, action, targetPath, targetPath, bootstrap)
-}
-
 func min3(a, b, c int) int {
 	if b < a {
 		a = b
