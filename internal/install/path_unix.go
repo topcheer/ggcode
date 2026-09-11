@@ -142,7 +142,13 @@ func upsertPathBlockFor(target, content, dir string) (string, error) {
 
 func upsertBlockWith(content, block string) (string, error) {
 	if pathBlockPattern.MatchString(content) {
-		return pathBlockPattern.ReplaceAllString(content, block), nil
+		// #1827 case 1: ReplaceAllString would interpret $PATH (and any
+		// other $-prefixed text) in the block as capture-group references;
+		// the pattern has no groups, so the marker-exists branch of a
+		// re-run (version upgrade - the normal case) expanded $PATH to an
+		// empty string and truncated the user's shell PATH to a single
+		// directory. The replacement is a literal block, never a template.
+		return pathBlockPattern.ReplaceAllLiteralString(content, block), nil
 	}
 	suffix := ""
 	if content != "" && !strings.HasSuffix(content, "\n") {

@@ -26,6 +26,7 @@ type Peer struct {
 	closed      bool
 	closeOnce   sync.Once
 	dcReadyOnce sync.Once // guards dcReadyCh: closed exactly once by OnOpen or Close
+	disconnOnce sync.Once // guards the disconnect callback: fires exactly once per Peer lifecycle (#1827 case 2)
 
 	// Callbacks (set by caller before ICE completes)
 	onMessage      func(data []byte)
@@ -378,11 +379,19 @@ func (p *Peer) signalDCReady() {
 	})
 }
 
+// handleDisconnect fires the registered disconnect callback exactly once
+// per Peer lifecycle (#1827 case 2): four distinct trigger points
+// (PeerConnectionState Disconnected, Failed, DataChannel OnClose, OnError)
+// can all observe the same link failure within milliseconds of each other,
+// and every invocation spawned its own safego goroutine - the upgrade layer
+// then ran duplicate retry/Start cycles for a single connection loss.
 func (p *Peer) handleDisconnect() {
-	p.mu.Lock()
-	fn := p.onDisconnect
-	p.mu.Unlock()
-	if fn != nil {
-		safego.Go("webrtc.disconnect", fn)
-	}
+	p.disconnOnce.Do(func() {
+		p.mu.Lock()
+		fn := p.onDisconnect
+		p.mu.Unlock()
+		if fn != nil {
+			safego.Go("webrtc.disconnect", fn)
+		}
+	})
 }
