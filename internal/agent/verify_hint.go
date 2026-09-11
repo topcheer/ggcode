@@ -778,6 +778,25 @@ var verifyCommands = map[string]bool{
 	"cmake":         true,
 	"ctest":         true,
 	"rake test":     true,
+	// #1841 case 4: mainstream test runners were missing - a bazel/gradle/
+	// maven/dotnet/yarn/pnpm/vitest project that ran its FULL suite green
+	// still kept accumulating edits-until-hint, and the third edit got a
+	// "you've edited 3 source files since last build check" nudge premised
+	// on a false "never verified" - training the agent to ignore hints.
+	"bazel test":       true,
+	"bzl test":         true,
+	"gradle test":      true,
+	"gradlew test":     true,
+	"mvn test":         true,
+	"dotnet test":      true,
+	"yarn test":        true,
+	"pnpm test":        true,
+	"vitest":           true,
+	"jest":             true,
+	"dart test":        true,
+	"composer test":    true,
+	"go test-race":     false, // placeholder guard (never matched; see -race below)
+	"python -m pytest": true,
 	// Lint / format commands also count as verification - running them
 	// resets the post-edit verify hint counter.
 	"golangci-lint": true,
@@ -838,7 +857,13 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	defer a.mu.Unlock()
 
 	a.postEditVerify.sourceEditsSinceHint = 0
-	a.postEditVerify.lastBuildFailed = resultErr
+	// #1841 case 3: only a REAL test/build execution may update the
+	// failure flag. `make help`, `task --list`, `gofmt -l` (all exit 0)
+	// used to unconditionally clear lastBuildFailed after a FAILED go
+	// test, so the "(which FAILED)" urgency hint could never appear.
+	if isRealTestExecution(cmd) {
+		a.postEditVerify.lastBuildFailed = resultErr
+	}
 
 	debug.Log("agent", "verify hint counter reset: agent ran build command %q (failed=%v)", cmd, resultErr)
 }
@@ -925,6 +950,46 @@ func isVerifyCommandSegment(seg string) bool {
 		if words[0] == "make" || words[0] == "just" || words[0] == "task" {
 			return true
 		}
+	}
+	return false
+}
+
+// realTestCommands are verify commands that actually EXECUTE the project's
+// tests or build (#1841 case 3). Inspection/format/listing commands in the
+// broader verifyCommands table (gofmt -l, make help, cmake --help) exit 0
+// without testing anything and must not clear a failure flag.
+var realTestCommands = map[string]bool{
+	"go test": true, "go build": true, "go vet": true,
+	"cargo test": true, "cargo build": true,
+	"npm test": true, "npm run test": true, "npm run build": true,
+	"pytest": true, "python -m pytest": true,
+	"flutter test": true, "dart test": true,
+	"ctest": true, "rake test": true,
+	"bazel test": true, "bzl test": true,
+	"gradle test": true, "gradlew test": true,
+	"mvn test": true, "dotnet test": true,
+	"yarn test": true, "pnpm test": true,
+	"vitest": true, "jest": true, "composer test": true,
+}
+
+// isRealTestExecution reports whether the command runs a real test/build
+// target (not a listing/format/no-op invocation of a test-capable runner).
+func isRealTestExecution(cmd string) bool {
+	seg := strings.ToLower(strings.TrimSpace(stripEnvAssignments(cmd)))
+	if strings.Contains(seg, "--help") || strings.Contains(seg, " --list") ||
+		strings.Contains(seg, "help") && strings.HasPrefix(seg, "make ") {
+		return false
+	}
+	for prefix := range realTestCommands {
+		if strings.HasPrefix(seg, prefix+" ") || seg == prefix {
+			return true
+		}
+	}
+	words := strings.Fields(seg)
+	if len(words) >= 2 && (words[0] == "make" || words[0] == "just" || words[0] == "task") {
+		// make <target> runs a target (make help / make list do not).
+		t := words[1]
+		return t != "help" && t != "list" && !strings.HasPrefix(t, "-")
 	}
 	return false
 }

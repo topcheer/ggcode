@@ -83,16 +83,78 @@ func checkRaceVerifyHint(filePath, oldContent, newContent string) []string {
 	oldScore := countConcurrencyPrimitives(oldContent)
 	newScore := countConcurrencyPrimitives(newContent)
 
-	// Delta-aware: only trigger if new concurrency primitives were introduced.
-	if newScore <= oldScore {
-		return nil
+	// Delta-aware: trigger if new concurrency primitives were introduced...
+	if newScore > oldScore {
+		return raceVerifyHintMessages()
 	}
+	// #1841 case 2: ...AND if synchronization primitives were REMOVED while
+	// goroutines stayed (or grew) - deleting a mutex while keeping the
+	// goroutine is the classic race-introducing refactor (Mutex->channel /
+	// Mutex->atomic rewrites with a net-zero primitive count previously
+	// scored 1<=1 and slipped through silently, despite the file header's
+	// "NEWLY introduced or MODIFIED" claim). Sync-removal is a trigger on
+	// its own, decoupled from goroutine delta.
+	{
+		oldSync := countSyncPrimitives(oldContent)
+		newSync := countSyncPrimitives(newContent)
+		if newSync < oldSync {
+			oldGoroutines := countGoroutineLaunches(oldContent)
+			newGoroutines := countGoroutineLaunches(newContent)
+			if newGoroutines >= oldGoroutines && newGoroutines > 0 {
+				return raceVerifyHintMessages()
+			}
+		}
+	}
+	return nil
+}
 
+// countSyncPrimitives counts synchronization constructs (the combined
+// countConcurrencyPrimitives score does not necessarily cover plain
+// sync.Mutex DECLARATIONS, so removal detection needs its own counter).
+func countSyncPrimitives(src string) int {
+	if strings.TrimSpace(src) == "" {
+		return 0
+	}
+	n := 0
+	for _, marker := range []string{
+		"sync.Mutex", "sync.RWMutex", "sync.WaitGroup", "sync.Once",
+		"sync.Cond", "sync.Map",
+		".Lock()", ".Unlock()", ".RLock()", ".RUnlock()",
+		".Wait()", ".Add(", ".Done()",
+		"atomic.", "chan ",
+	} {
+		n += strings.Count(src, marker)
+	}
+	return n
+}
+
+// raceVerifyHintMessages is the single hint body shared by both triggers.
+func raceVerifyHintMessages() []string {
 	return []string{
 		"Concurrency code modified -- data races are invisible to static analysis. " +
 			"Verify with `go test -race ./...` to catch concurrent read/write hazards " +
 			"that compile fine but fail non-deterministically at runtime.",
 	}
+}
+
+// countGoroutineLaunches counts `go ` statement launches via AST.
+func countGoroutineLaunches(src string) int {
+	if strings.TrimSpace(src) == "" {
+		return 0
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "", src, 0)
+	if err != nil || file == nil {
+		return strings.Count(src, "go ")
+	}
+	count := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		if _, ok := n.(*ast.GoStmt); ok {
+			count++
+		}
+		return true
+	})
+	return count
 }
 
 // countConcurrencyPrimitives returns a count of concurrency-relevant patterns
