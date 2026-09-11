@@ -558,6 +558,11 @@ func (h *TunnelHost) TunnelEvents() []tunnel.GatewayMessage {
 	}
 	events, err := ProjectionReplay(store, ses.ID)
 	if err != nil {
+		// #1802 case 2: this was the third zero-log break site - once set,
+		// TunnelEvents stays nil and the PrepareOnlineShare snapshot
+		// provider (TunnelEvents itself) goes empty too, so BOTH replay
+		// and snapshot fallback vanish with no diagnostic anywhere.
+		debug.Log("tunnel-host", "ProjectionReplay failed: %v (session=%s) - projection circuit-broken; snapshot+replay both empty", err, ses.ID)
 		h.mu.Lock()
 		h.projBroken = true
 		h.mu.Unlock()
