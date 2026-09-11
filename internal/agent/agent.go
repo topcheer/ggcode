@@ -3152,7 +3152,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			var result tool.Result
 			memoHit := false
-			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
+			if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
 				result = memoResult
 				memoHit = true
 				// Annotate cache hits so the model knows this is cached content, not a
