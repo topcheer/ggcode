@@ -1,7 +1,9 @@
 package webrtc
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestNewPeer(t *testing.T) {
@@ -95,4 +97,35 @@ func TestDataChannelTransportInterface(t *testing.T) {
 	if tpt.IsConnected() {
 		t.Error("transport should not be connected")
 	}
+}
+
+// #1827 case 2: four distinct trigger points (PeerConnectionState
+// Disconnected/Failed, DataChannel OnClose/OnError) can all observe the
+// same link failure within milliseconds; handleDisconnect must fire the
+// callback exactly once per Peer lifecycle - every pre-fix invocation
+// spawned its own goroutine, driving duplicate retry/Start cycles.
+func TestHandleDisconnectFiresExactlyOnce(t *testing.T) {
+	peer, err := NewPeer()
+	if err != nil {
+		t.Fatalf("NewPeer failed: %v", err)
+	}
+	defer peer.Close()
+
+	var calls int32
+	peer.OnDisconnect(func() { atomic.AddInt32(&calls, 1) })
+
+	// Simulate the double-fire: state-change callback + DataChannel close
+	// arriving back to back for the same link failure.
+	peer.handleDisconnect()
+	peer.handleDisconnect()
+	peer.handleDisconnect()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&calls) == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("disconnect callback fired %d times, want exactly 1", atomic.LoadInt32(&calls))
 }
