@@ -241,19 +241,28 @@ func (s *SubAgent) Events() []AgentEvent {
 	return out
 }
 
-// EventsSince returns only events with index >= fromIdx.
+// EventsSince returns only events with ABSOLUTE index >= fromIdx.
 // This avoids copying the full event history when only incremental events
-// are needed (e.g. GUI agent panel updates). Returns the total event count
-// so callers can track the next fromIdx.
+// are needed (e.g. GUI agent panel updates). Returns the next absolute
+// cursor (len(events)+eventsDropped) so callers can track their position
+// across ring eviction - a relative cursor (plain len) fell BACKWARD when
+// the ring dropped old events, and a caller holding the old total then
+// saw fromIdx >= total and silently received nothing forever (#1636's
+// exact twin, fixed here before the first GUI consumer hits it).
 func (s *SubAgent) EventsSince(fromIdx int) ([]AgentEvent, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	total := len(s.events)
+	total := len(s.events) + s.eventsDropped
 	if fromIdx >= total {
 		return nil, total
 	}
+	if fromIdx < s.eventsDropped {
+		// Cursor predates the surviving window: replay from the oldest
+		// surviving event (repeatable, never a loss).
+		fromIdx = s.eventsDropped
+	}
 	out := make([]AgentEvent, total-fromIdx)
-	copy(out, s.events[fromIdx:])
+	copy(out, s.events[fromIdx-s.eventsDropped:])
 	return out, total
 }
 

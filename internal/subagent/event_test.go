@@ -138,3 +138,38 @@ func TestTruncateStr(t *testing.T) {
 		}
 	}
 }
+
+// TestEventsSinceSurvivesEviction pins #1816 case 2: the cursor is ABSOLUTE
+// (len+dropped) - after ring eviction the total never falls back, and a
+// caller holding the pre-eviction cursor still gets the surviving events.
+func TestEventsSinceSurvivesEviction(t *testing.T) {
+	const total = maxAgentEvents + 2 // force at least 2 evictions
+	s := &SubAgent{}
+	for i := 0; i < total; i++ {
+		// Alternate Text/ToolCall: consecutive same-type events coalesce
+		// (textMergeInterval) - alternation keeps every append a real event.
+		if i%2 == 0 {
+			s.appendEvent(AgentEvent{Type: AgentEventText, Text: fmt.Sprintf("e%d", i)})
+		} else {
+			s.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: fmt.Sprintf("t%d", i)})
+		}
+	}
+	events, got := s.EventsSince(0)
+	if got != total {
+		t.Fatalf("absolute total must be %d (kept+dropped), got %d", total, got)
+	}
+	if len(events) != maxAgentEvents {
+		t.Fatalf("cursor predating the window replays the survivors, got %d", len(events))
+	}
+	// Incremental consumption across eviction: hold an earlier cursor, then
+	// ask again after more evictions - must never silently return nothing.
+	mid := total - 1                                                      // one event exists beyond this cursor already
+	s.appendEvent(AgentEvent{Type: AgentEventToolCall, ToolName: "more"}) // evicts again
+	next, t2 := s.EventsSince(mid)
+	if t2 != total+1 {
+		t.Fatalf("cursor must advance monotonically, got %d", t2)
+	}
+	if len(next) == 0 {
+		t.Fatal("new events must be delivered across eviction")
+	}
+}

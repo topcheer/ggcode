@@ -897,5 +897,18 @@ func parseRetryAfterMs(closeText string) int64 {
 	}
 	var ms int64
 	fmt.Sscanf(s, "%d", &ms)
+	// #1816 case 1: the relay is a REMOTE party - a poisoned or malicious
+	// value had two failure modes: ms > ~9.2e12 overflows time.Duration
+	// NEGATIVE (time.After(negative) fires immediately -> a zero-backoff
+	// dial storm against a restarting relay), and ms ~ 1e12 (~31 years)
+	// silenced reconnection for the process lifetime. Clamp to the same
+	// ceiling the exponential ladder uses.
+	const maxRetryAfterMs = 5 * 60 * 1000 // 5 min, matches the ladder cap
+	if ms < 0 {
+		return 0
+	}
+	if ms > maxRetryAfterMs {
+		return maxRetryAfterMs
+	}
 	return ms
 }
