@@ -1474,14 +1474,6 @@ func writerIsTerminal(w io.Writer) bool {
 	return term.IsTerminal(int(fder.Fd()))
 }
 
-func shortCommit(commit string) string {
-	commit = strings.TrimSpace(commit)
-	if len(commit) > 12 {
-		return commit[:12]
-	}
-	return commit
-}
-
 // parseA2AMaxTasks guards the A2A task cap. #1422-A: on a first-run
 // --bypass install Validate's early return (FirstRun + empty vendor)
 // skips the MaxTasks=5 default fill, the zero then OVERRODE the

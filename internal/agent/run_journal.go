@@ -63,20 +63,8 @@ type RunJournalEntry struct {
 	Success     bool      `json:"success,omitempty"`
 }
 
-// RunJournal manages the run state journal file for a session.
-type RunJournal struct {
-	sessionDir string
-}
-
 func journalPath(sessionID string) string {
 	return filepath.Join(journalDir(), sessionID+"_"+journalFileName)
-}
-
-// NewRunJournal creates a RunJournal for the given session.
-func NewRunJournal(sessionID string) *RunJournal {
-	return &RunJournal{
-		sessionDir: journalDir(),
-	}
 }
 
 // MarkRunning writes a "running" journal entry at the start of a run.
