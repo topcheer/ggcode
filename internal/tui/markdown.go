@@ -5,16 +5,6 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
-// RenderMarkdown renders markdown text to ANSI at default width.
-func RenderMarkdown(text string) string {
-	return RenderMarkdownWidth(text, 80)
-}
-
-// RenderMarkdownWidth renders markdown text to ANSI at the given width.
-func RenderMarkdownWidth(text string, wrap int) string {
-	return markdown.Render(text, wrap)
-}
-
 // prewarmMarkdownRenderers warms up the markdown renderer cache in the background.
 func prewarmMarkdownRenderers(widths ...int) {
 	warmWidths := make([]int, 0, len(widths))
