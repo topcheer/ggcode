@@ -1005,3 +1005,33 @@ func TestManager_ShutdownTeammateFreesResult(t *testing.T) {
 		}
 	}
 }
+
+// TestGetTeammateResultAfterShutdown pins #1814: the stored result must
+// stay retrievable after the teammate was shut down and REMOVED - the
+// fallback used to sit behind the existence gate, so "shut the worker,
+// then collect the output" (the most common order) hit a result
+// blackhole while the data sat in m.results.
+func TestGetTeammateResultAfterShutdown(t *testing.T) {
+	m := NewManager(config.SwarmConfig{}, nil, nil, nil)
+	team := m.CreateTeam("result-team", "leader-1")
+	tm, err := m.SpawnTeammate(team.ID, "worker-1", "", nil)
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+	// Simulate a stored final result, then remove the teammate (what
+	// ShutdownTeammate's removal does once the goroutine exits).
+	m.mu.Lock()
+	m.results[tm.ID] = "final output"
+	// Drop the teammate from its team to model the post-shutdown state.
+	if t0, ok := m.teams[team.ID]; ok {
+		t0.mu.Lock()
+		delete(t0.Teammates, tm.ID)
+		t0.mu.Unlock()
+	}
+	m.mu.Unlock()
+
+	r, ok := m.GetTeammateResult(team.ID, tm.ID)
+	if !ok || r != "final output" {
+		t.Fatalf("stored result must survive teammate removal, got (%q, %v)", r, ok)
+	}
+}

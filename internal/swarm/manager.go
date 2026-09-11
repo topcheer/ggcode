@@ -677,22 +677,21 @@ func (m *Manager) GetTeammateResult(teamID, tmID string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Verify the teammate still exists in its team.
-	team, ok := m.teams[teamID]
-	if !ok {
-		return "", false
+	// #1814: the stored-result fallback used to sit AFTER the teammate
+	// existence gate - a shutdown removes the teammate, so "shut the
+	// worker down, THEN collect the output" (the most common order)
+	// returned "No result available" while the data sat in m.results.
+	// The fallback's own comment ("survives if teammate was removed")
+	// documented a purpose the gate made unreachable. Stored result
+	// first-checked without the gate; live teammate result still
+	// preferred when present.
+	if tm, ok := m.teams[teamID]; ok {
+		if live, ok := tm.getTeammate(tmID); ok {
+			if r := live.getResults(); r != "" {
+				return r, true
+			}
+		}
 	}
-	tm, ok := team.getTeammate(tmID)
-	if !ok {
-		return "", false
-	}
-
-	// Prefer the live result from the teammate (most up-to-date).
-	if r := tm.getResults(); r != "" {
-		return r, true
-	}
-
-	// Fall back to the stored result (survives if teammate was removed).
 	r, ok := m.results[tmID]
 	return r, ok && r != ""
 }
