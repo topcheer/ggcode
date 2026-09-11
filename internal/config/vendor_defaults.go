@@ -3204,15 +3204,27 @@ func populateDefaultModels(cfg *Config) {
 		}
 		providerIDs, ok := vendorToProvider[vendorName]
 		if !ok {
-			// Attribute unknown vendors to a provider by endpoint URL host so
-			// custom endpoints pointing at a known provider (e.g. a user-added
-			// vendor with base_url on api.z.ai) still receive that provider's
-			// model list. Read-only: builtin URLs in config.go are untouched.
-			if pid := matchProviderByBaseURL(firstNonEmptyBaseURL(vc)); pid != "" {
-				providerIDs = []string{pid}
-			} else {
-				continue
+			// #1668 case 3: attribute UNKNOWN vendors per ENDPOINT, not by
+			// the vendor's first sorted BaseURL. The old single-URL pick
+			// typed the whole vendor by one endpoint: a two-endpoint gateway
+			// (a -> api.z.ai, b -> api.deepseek.com) showed the GLM list on
+			// the deepseek endpoint's model panel, steering users to models
+			// the far side does not have. Each endpoint gets the list its
+			// OWN URL matches; unmatched endpoints stay empty. Read-only:
+			// builtin URLs in config.go are untouched.
+			for epName, ep := range vc.Endpoints {
+				if len(ep.Models) > 0 {
+					continue
+				}
+				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
+					if m := lookupVendorModels(pid); len(m) > 0 {
+						ep.Models = m
+						vc.Endpoints[epName] = ep
+					}
+				}
 			}
+			cfg.Vendors[vendorName] = vc
+			continue
 		}
 		for epName, ep := range vc.Endpoints {
 			if len(ep.Models) > 0 {

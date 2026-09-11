@@ -31,6 +31,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 const modelsDevAPIURL = "https://models.dev/api.json"
@@ -229,6 +230,7 @@ var builtinEndpointFallback = map[string][]string{
 
 func main() {
 	dryRun := flag.Bool("dry-run", false, "Print to stdout instead of writing file")
+	forceShrink := flag.Bool("force", false, "Allow >20%% entry-count shrinkage (checked against the existing output file)")
 	output := flag.String("output", "internal/config/context_window.go", "Output file path")
 	flag.Parse()
 
@@ -279,6 +281,15 @@ func main() {
 		}
 
 		sections = append(sections, desiredProviders[pid])
+		// #1668 case 2: a desired provider yielding ZERO usable entries is a
+		// fail-stop condition, not a WARNING - a models.dev schema change or a
+		// partially failed fetch used to delete the provider's whole model
+		// list from both generated files while the run exited 0 (bedrock was
+		// lost exactly this way).
+		if len(sectionEntries) == 0 {
+			fmt.Fprintf(os.Stderr, "FATAL: provider %q yielded 0 usable entries (models.dev schema change or partial fetch?) - aborting to protect existing tables\n", pid)
+			os.Exit(1)
+		}
 		allEntries = append(allEntries, sectionEntries...)
 		providers = append(providers, provider)
 	}
@@ -335,6 +346,22 @@ func main() {
 	if idx := strings.LastIndex(*output, "/"); idx >= 0 {
 		vendorDefaultsPath = (*output)[:idx+1] + "vendor_defaults.go"
 	}
+	// #1668 case 2: aggregate drop guard - even with every provider
+	// non-empty, a mass schema change (renamed IDs, dropped context data)
+	// could shrink the table >20%. Compare against the file we are about
+	// to overwrite and refuse suspicious shrinkage.
+	if !*dryRun {
+		if prev, rerr := os.ReadFile(*output); rerr == nil {
+			oldCount := strings.Count(string(prev), ": {ContextWindow")
+			newCount := len(dedupEntries(append([]modelEntry(nil), allEntries...)))
+			if oldCount > 0 && newCount < oldCount*8/10 {
+				fmt.Fprintf(os.Stderr, "FATAL: entry count %d is >20%% below existing %d - aborting (pass -force to override)\n", newCount, oldCount)
+				if !*forceShrink {
+					os.Exit(1)
+				}
+			}
+		}
+	}
 	vdCode := generateVendorDefaults(providers)
 	if *dryRun {
 		fmt.Print(vdCode)
@@ -348,7 +375,11 @@ func main() {
 }
 
 func fetchModelsDev() (*modelsDevDoc, error) {
-	resp, err := http.Get(modelsDevAPIURL)
+	// #1668 case 2/B6: a bare http.Get has NO timeout - a hung connection
+	// stalled the regen indefinitely, and a partially failed run still
+	// exited 0, making silent provider deletion look like success.
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(modelsDevAPIURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", modelsDevAPIURL, err)
 	}
@@ -358,7 +389,7 @@ func fetchModelsDev() (*modelsDevDoc, error) {
 		return nil, fmt.Errorf("fetch %s: HTTP %d", modelsDevAPIURL, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", modelsDevAPIURL, err)
 	}
@@ -907,15 +938,27 @@ func populateDefaultModels(cfg *Config) {
 		}
 		providerIDs, ok := vendorToProvider[vendorName]
 		if !ok {
-			// Attribute unknown vendors to a provider by endpoint URL host so
-			// custom endpoints pointing at a known provider (e.g. a user-added
-			// vendor with base_url on api.z.ai) still receive that provider's
-			// model list. Read-only: builtin URLs in config.go are untouched.
-			if pid := matchProviderByBaseURL(firstNonEmptyBaseURL(vc)); pid != "" {
-				providerIDs = []string{pid}
-			} else {
-				continue
+			// #1668 case 3: attribute UNKNOWN vendors per ENDPOINT, not by
+			// the vendor's first sorted BaseURL. The old single-URL pick
+			// typed the whole vendor by one endpoint: a two-endpoint gateway
+			// (a -> api.z.ai, b -> api.deepseek.com) showed the GLM list on
+			// the deepseek endpoint's model panel, steering users to models
+			// the far side does not have. Each endpoint gets the list its
+			// OWN URL matches; unmatched endpoints stay empty. Read-only:
+			// builtin URLs in config.go are untouched.
+			for epName, ep := range vc.Endpoints {
+				if len(ep.Models) > 0 {
+					continue
+				}
+				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
+					if m := lookupVendorModels(pid); len(m) > 0 {
+						ep.Models = m
+						vc.Endpoints[epName] = ep
+					}
+				}
 			}
+			cfg.Vendors[vendorName] = vc
+			continue
 		}
 		for epName, ep := range vc.Endpoints {
 			if len(ep.Models) > 0 {
