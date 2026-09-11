@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"sync"
 	"time"
 
@@ -124,6 +125,50 @@ const (
 type speculativeResult struct {
 	result   tool.Result
 	cachedAt time.Time
+	// #1831 cases 1+2: freshness snapshot of the primary file behind the
+	// speculated read, taken at speculation time. The TTL alone let an
+	// external writer's change (shared workspace, editor autosave) be
+	// served as a fresh read for up to 30s - and worse, agent.go then
+	// memoized the stale content with a CURRENT stat, making it
+	// effectively immortal (the memo's mtime self-heal could never fire
+	// because the recorded mtime always matched the already-changed disk).
+	// On hit, the snapshot is re-verified: any mtime/size drift is a miss.
+	// Empty for tools with no single-file primary arg (TTL-only, as before).
+	freshPath  string
+	freshMtime int64 // unix nanos
+	freshSize  int64
+}
+
+// statSnapshotFor returns the freshness snapshot for a speculated call, or
+// zero values when the tool has no single-file primary argument (#1831).
+func statSnapshotFor(toolName string, args json.RawMessage) (path string, mtime, size int64) {
+	p := extractFilePathFromArgs(toolName, args)
+	if p == "" {
+		return "", 0, 0
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		// Unstatable now: record the path with impossible sentinel values so
+		// any later successful stat (file appeared / became readable) reads
+		// as drift and forces a fresh execution.
+		return p, -1, -1
+	}
+	return p, st.ModTime().UnixNano(), st.Size()
+}
+
+// freshStill holds for a snapshot when the underlying file is unchanged.
+func (r *speculativeResult) freshStill() bool {
+	if r.freshPath == "" {
+		return true // no snapshot: TTL-only (previous behavior)
+	}
+	st, err := os.Stat(r.freshPath)
+	if err != nil {
+		return r.freshMtime == -1 // was already absent and still is
+	}
+	if r.freshMtime == -1 {
+		return false // appeared since speculation: drift
+	}
+	return st.ModTime().UnixNano() == r.freshMtime && st.Size() == r.freshSize
 }
 
 func newSpeculator() *speculator {
@@ -226,6 +271,17 @@ func (s *speculator) getCached(toolName string, args json.RawMessage) (tool.Resu
 		s.maybeAdaptThreshold()
 		return tool.Result{}, false
 	}
+	// #1831 cases 1+2: TTL freshness does not cover external writes - a
+	// shared-workspace edit lands in milliseconds, not after 30s. Serve the
+	// hit only when the stat snapshot still matches the disk.
+	if !cached.freshStill() {
+		s.removeFromCacheOrder(key)
+		delete(s.cache, key)
+		s.misses++
+		s.maybeAdaptThreshold()
+		debug.Log("speculate", "cache HIT rejected for %s: file changed since speculation (key=%s)", toolName, key)
+		return tool.Result{}, false
+	}
 	s.hits++
 	debug.Log("speculate", "cache HIT for %s (key=%s)", toolName, key)
 	return cached.result, true
@@ -277,9 +333,13 @@ func (s *speculator) store(toolName string, args json.RawMessage, result tool.Re
 		}
 	}
 
+	fp, fm, fs := statSnapshotFor(toolName, args)
 	s.cache[key] = &speculativeResult{
-		result:   result,
-		cachedAt: time.Now(),
+		result:     result,
+		cachedAt:   time.Now(),
+		freshPath:  fp,
+		freshMtime: fm,
+		freshSize:  fs,
 	}
 	s.cacheOrder = append(s.cacheOrder, key)
 }
@@ -303,7 +363,10 @@ func (s *speculator) hasCached(toolName string, args json.RawMessage) bool {
 	if !ok {
 		return false
 	}
-	return time.Since(cached.cachedAt) <= s.ttl
+	// #1831 case 3: same freshness contract as getCached. hasCached gates
+	// the PRE-EXECUTION batch (a true skip abandons a would-be-fresh
+	// execution); a stale-on-disk entry must not suppress it.
+	return time.Since(cached.cachedAt) <= s.ttl && cached.freshStill()
 }
 
 // predictArgs predicts the arguments for the next tool based on the pattern.
