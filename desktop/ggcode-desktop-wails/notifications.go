@@ -251,7 +251,14 @@ func (nm *NotificationManager) Notify(title, body string) {
 			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
 		}
 	} else {
-		nm.showOSNotification(title, body)
+		// #2095 bug A: the Linux/other branch used the void showOSNotification,
+		// whose notifyMacOS->enqueueUnixToast indirection swallowed the
+		// queue-full signal - the same failure mode the darwin branch above
+		// rolls back for (#1866), because Linux shares unixQueue with darwin.
+		if !nm.showOSNotification(title, body) {
+			nm.rollbackNotify(key)
+			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
+		}
 	}
 
 	// Also emit to frontend for in-app notification center
@@ -339,7 +346,20 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 			debug.Log("desktop", "approval notification rolled back after toast enqueue failure: %s", title)
 		}
 	} else {
-		nm.showOSNotification(title, body)
+		// #2095 bug A: non-Windows approvals went through the void
+		// showOSNotification too - macOS (the primary desktop platform)
+		// lost the approval banner on queue-full with no rollback, so the
+		// unread count included a banner that never displayed and the 5s
+		// dedup window blocked the retry.
+		if !nm.showOSNotification(title, body) {
+			nm.mu.Lock()
+			delete(nm.lastShown, apKey)
+			if !nm.focused && nm.unread > 0 {
+				nm.unread--
+			}
+			nm.mu.Unlock()
+			debug.Log("desktop", "approval notification rolled back after unix enqueue failure: %s", title)
+		}
 	}
 
 	// #427: approval notifications must also reach the in-app notification
@@ -400,23 +420,29 @@ func (nm *NotificationManager) GetUnread() int {
 
 // --- Platform-specific notification delivery ---
 
-func (nm *NotificationManager) showOSNotification(title, body string) {
+// showOSNotification delivers an OS notification synchronously-ish (via
+// the platform queue) and reports whether it was accepted for delivery.
+// #2095 bug A: the void return was the rollback-contract gap - Linux
+// shares darwin's unixQueue (and its queue-full failures) but its callers
+// could not roll back without this signal.
+func (nm *NotificationManager) showOSNotification(title, body string) bool {
 	switch runtime.GOOS {
 	case "darwin":
-		nm.notifyMacOS(title, body)
+		return nm.notifyMacOS(title, body)
 	case "linux":
 		// #1852 case 1: route Linux through the SAME bounded queue as
 		// macOS - the old notifyLinux call spawned one goroutine+process
 		// per notification and never touched unixQueue, so the #1431-A
 		// serialization contract was honored on darwin only. The worker
 		// (deliverUnix) already dispatches notify-send for non-darwin.
-		nm.notifyMacOS(title, body)
+		return nm.notifyMacOS(title, body)
 	case "windows":
-		nm.notifyWindows(title, body)
+		return nm.notifyWindows(title, body)
 	}
+	return true // unknown platform: nothing queued, nothing to roll back
 }
 
-func (nm *NotificationManager) notifyMacOS(title, body string) {
+func (nm *NotificationManager) notifyMacOS(title, body string) bool {
 	// Use osascript to display a native notification.
 	// #1431-A: the #399 storm fix (single worker, bounded queue) only
 	// covered Windows; macOS/Linux kept the unbounded one-goroutine-
@@ -425,10 +451,13 @@ func (nm *NotificationManager) notifyMacOS(title, body string) {
 	// dedup never folds them) meant N concurrent osascript processes.
 	// Same queue+worker pattern as winQueue, shared across platforms.
 	// #1866: enqueue via the non-blocking helper - Notify() rolls back on
-	// failure (see enqueueUnixToast).
+	// failure (see enqueueUnixToast). #2095: propagate acceptance to the
+	// caller instead of swallowing it here.
 	if !nm.enqueueUnixToast(title, body) {
 		debug.Log("desktop", "unix toast queue full; dropping notification: %s", title)
+		return false
 	}
+	return true
 }
 
 // enqueueUnixToast offers a toast to the single unix worker queue and
@@ -551,10 +580,11 @@ func (nm *NotificationManager) warnDeliveryOnce(platform string, err error) {
 // the single worker. The old one-goroutine-per-notification path was
 // the #399 storm shape that #1431-A fixed for darwin only.
 
-func (nm *NotificationManager) notifyWindows(title, body string) {
+func (nm *NotificationManager) notifyWindows(title, body string) bool {
 	// Kept for interface parity; real delivery goes through enqueueWinToast so
 	// callers can roll back their dedup/unread commits on queue-full (#600 N4).
-	_ = nm.enqueueWinToast(title, body)
+	// #2095: propagate acceptance for the same rollback contract.
+	return nm.enqueueWinToast(title, body)
 }
 
 // enqueueWinToast offers a toast to the single worker queue (#399) and
@@ -575,8 +605,16 @@ func (nm *NotificationManager) enqueueWinToast(title, body string) bool {
 
 // runWinToast executes one PowerShell toast synchronously (worker context).
 func (nm *NotificationManager) runWinToast(title, body string) {
+	// #2095 bug B: mirror deliverUnix's bounded delivery (#1504 case 3) -
+	// cmd.Run() without a deadline let a hung PowerShell (COM/WMI init,
+	// AV interference) block drainWinQueue, the ONLY winQueue worker,
+	// forever; winQueue then filled and every subsequent Windows OS
+	// notification (including approval banners) was dropped until restart.
+	// The script itself sleeps 6s, so 10s bounds it with margin.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	script := windowsToastScript(title, body)
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", script)
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", script)
 	if err := cmd.Run(); err != nil {
 		debug.Log("desktop", "Windows notification failed: %v", err)
 	}
