@@ -12,7 +12,7 @@ func TestValidateRequiredParams_AllPresent(t *testing.T) {
 		"required": ["path", "pattern"]
 	}`)
 	args := json.RawMessage(`{"path": "/tmp/test.go", "pattern": "TODO"}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("expected no missing params, got: %s", msg)
 	}
@@ -25,7 +25,7 @@ func TestValidateRequiredParams_OneMissing(t *testing.T) {
 		"required": ["path", "pattern"]
 	}`)
 	args := json.RawMessage(`{"path": "/tmp/test.go"}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
 		t.Fatal("expected missing param error, got empty")
 	}
@@ -41,7 +41,7 @@ func TestValidateRequiredParams_MultipleMissing(t *testing.T) {
 		"required": ["path", "pattern", "description"]
 	}`)
 	args := json.RawMessage(`{"path": "/tmp"}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
 		t.Fatal("expected missing params error, got empty")
 	}
@@ -60,7 +60,7 @@ func TestValidateRequiredParams_EmptyString(t *testing.T) {
 		"required": ["path"]
 	}`)
 	args := json.RawMessage(`{"path": ""}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
 		t.Fatal("expected missing param error for empty string")
 	}
@@ -76,7 +76,7 @@ func TestValidateRequiredParams_WhitespaceString(t *testing.T) {
 	// CheckRequired's Trim behavior in tool.go — a whitespace path or grep
 	// pattern is useless and previously bypassed the required-param gateway.
 	args := json.RawMessage(`{"path": "  "}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
 		t.Fatal("expected missing param error for whitespace-only string")
 	}
@@ -89,7 +89,7 @@ func TestValidateRequiredParams_NullValue(t *testing.T) {
 		"required": ["path"]
 	}`)
 	args := json.RawMessage(`{"path": null}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
 		t.Fatal("expected missing param error for null value")
 	}
@@ -103,7 +103,7 @@ func TestValidateRequiredParams_NumberZero(t *testing.T) {
 	}`)
 	// 0 is a valid value — should NOT be treated as missing
 	args := json.RawMessage(`{"offset": 0}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("0 should not be treated as missing, got: %s", msg)
 	}
@@ -117,7 +117,7 @@ func TestValidateRequiredParams_BooleanFalse(t *testing.T) {
 	}`)
 	// false is a valid value — should NOT be treated as missing
 	args := json.RawMessage(`{"headless": false}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("false should not be treated as missing, got: %s", msg)
 	}
@@ -132,15 +132,15 @@ func TestValidateRequiredParams_EmptyArray(t *testing.T) {
 		"required": ["files"]
 	}`)
 	args := json.RawMessage(`{"files": []}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("explicit empty array should be treated as provided, got: %s", msg)
 	}
 	// Absent key and null must still be reported as missing.
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`), ""); msg == "" {
 		t.Error("absent required field should be reported missing")
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":null}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":null}`), ""); msg == "" {
 		t.Error("null required field should be reported missing")
 	}
 }
@@ -152,7 +152,7 @@ func TestValidateRequiredParams_NonEmptyArray(t *testing.T) {
 		"required": ["files"]
 	}`)
 	args := json.RawMessage(`{"files": ["a.go"]}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("non-empty array should not be missing, got: %s", msg)
 	}
@@ -164,7 +164,7 @@ func TestValidateRequiredParams_NoRequiredFields(t *testing.T) {
 		"properties": {"path": {"type": "string"}}
 	}`)
 	args := json.RawMessage(`{}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("no required fields = no error, got: %s", msg)
 	}
@@ -172,7 +172,7 @@ func TestValidateRequiredParams_NoRequiredFields(t *testing.T) {
 
 func TestValidateRequiredParams_NoSchema(t *testing.T) {
 	args := json.RawMessage(`{"path": "/tmp"}`)
-	msg := ValidateRequiredParams(nil, args)
+	msg := ValidateRequiredParams(nil, args, "")
 	if msg != "" {
 		t.Errorf("nil schema = no error, got: %s", msg)
 	}
@@ -181,7 +181,7 @@ func TestValidateRequiredParams_NoSchema(t *testing.T) {
 func TestValidateRequiredParams_UnparseableSchema(t *testing.T) {
 	schema := json.RawMessage(`{invalid json}`)
 	args := json.RawMessage(`{"path": "/tmp"}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("unparseable schema should silently pass, got: %s", msg)
 	}
@@ -190,7 +190,7 @@ func TestValidateRequiredParams_UnparseableSchema(t *testing.T) {
 func TestValidateRequiredParams_UnparseableArgs(t *testing.T) {
 	schema := json.RawMessage(`{"required": ["path"]}`)
 	args := json.RawMessage(`{invalid}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg != "" {
 		t.Errorf("unparseable args should silently pass (let tool handle), got: %s", msg)
 	}

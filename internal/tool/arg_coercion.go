@@ -257,7 +257,35 @@ func coerceBoolean(val json.RawMessage) (json.RawMessage, bool) {
 // object {} counts as provided — it carries meaning (e.g. clearing a list).
 // Numeric and boolean values (including 0 and false) are always considered
 // present.
-func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage) string {
+// emptyStringLegalParams lists (tool, param) pairs where an EXPLICIT empty
+// string is a meaningful provided value, not an omission:
+//   - edit_file new_text: "" is the DELETE semantics - the handler's own
+//     CheckRequired deliberately omits new_text for exactly this reason
+//     (#742 presence-only decision). The blanket empty=missing rule (#542)
+//     silently overrode it upstream: every delete edit was rejected with
+//     "missing required parameter: new_text" and the suggested remedy
+//     (provide new_text) is unsatisfiable for a deletion - futile retry
+//     loop (#568 family) or a risky full-file rewrite instead (#1838).
+//   - write_file content: "" creates an empty file (legitimate).
+//   - batch_replace replacement: "" deletes the matches.
+//
+// Absence and null are still missing; only a PRESENT "" is accepted.
+var emptyStringLegalParams = map[string]map[string]bool{
+	"edit_file":     {"new_text": true},
+	"write_file":    {"content": true},
+	"batch_replace": {"replacement": true},
+}
+
+// emptyStringIsLegal reports whether tool/param accepts an explicit "".
+func emptyStringIsLegal(toolName, param string) bool {
+	if toolName == "" {
+		return false
+	}
+	m, ok := emptyStringLegalParams[toolName]
+	return ok && m[param]
+}
+
+func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage, toolName string) string {
 	if len(schema) == 0 || len(args) == 0 {
 		return ""
 	}
@@ -288,6 +316,12 @@ func ValidateRequiredParams(schema json.RawMessage, args json.RawMessage) string
 	for _, field := range requiredFields {
 		val, exists := argMap[field]
 		if !exists || isEmptyValue(val) {
+			// #1838: presence-only for params whose explicit "" is legal
+			// (delete semantics) - a PRESENT empty string passes; absence
+			// and null still fail.
+			if exists && emptyStringIsLegal(toolName, field) && !isNullValue(val) {
+				continue
+			}
 			missing = append(missing, field)
 		}
 	}
@@ -324,6 +358,11 @@ func isEmptyValue(val json.RawMessage) bool {
 		// Malformed quoted value — treat as non-empty so validation stays neutral.
 	}
 	return false
+}
+
+// isNullValue reports whether the raw JSON value is null.
+func isNullValue(val json.RawMessage) bool {
+	return strings.TrimSpace(string(val)) == "null"
 }
 
 // isJSONNumber returns true if val is a JSON number (not a string).
