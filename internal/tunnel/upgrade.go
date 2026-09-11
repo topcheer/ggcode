@@ -370,8 +370,13 @@ func (m *UpgradeManager) runUpgrade(signalCh chan SignalMessage) {
 	safego.Go("tunnel.upgrade.waitReady", func() {
 		select {
 		case <-readyCh:
-			if staleGen() {
-				debug.Log("tunnel", "upgrade: DataChannel ready but stale, discarding")
+			if staleGen() || m.stopped.Load() {
+				// Stale generation, or Stop() landed between the check and
+				// the transport swap below (#1830 review follow-up): without
+				// the stopped guard, the µs-window race wired the transport
+				// back into a stopped broker and fired a bogus
+				// UpgradeActive notify after teardown.
+				debug.Log("tunnel", "upgrade: DataChannel ready but stale/stopped, discarding")
 				return
 			}
 			debug.Log("tunnel", "upgrade: DataChannel ready, switching transport")

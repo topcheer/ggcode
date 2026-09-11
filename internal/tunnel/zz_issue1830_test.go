@@ -157,3 +157,63 @@ func TestUpgradeStopPreventsRevive(t *testing.T) {
 	_ = mock
 	_ = b
 }
+
+// TestUpgradeWaitReadyStoppedDoesNotAttachTransport pins the #1830 review
+// follow-up: if Stop() lands after the waitReady goroutine picked the
+// readyCh branch and passed the staleGen check but before the transport
+// swap, the stopped guard must discard the ready event - the old code wired
+// the transport back into the stopped broker and fired a bogus
+// UpgradeActive notify. Deterministic variant of the µs race: stopped is
+// latched directly while the ctx stays alive, so the select never sees a
+// closed ctx.Done and the readyCh branch is taken every run.
+func TestUpgradeWaitReadyStoppedDoesNotAttachTransport(t *testing.T) {
+	mock := &mockTransport{}
+	sess := NewSession("wss://test.local")
+	b := NewBroker(sess)
+	t.Cleanup(func() { b.Stop() })
+	ready := make(chan struct{}) // DataChannel NOT yet open
+	var factoryCalls int32
+	factory := func() (Transport, <-chan struct{}, func(func(SignalMessage), <-chan SignalMessage) error, func(), error) {
+		atomic.AddInt32(&factoryCalls, 1)
+		startNeg := func(func(SignalMessage), <-chan SignalMessage) error { return nil }
+		return mock, ready, startNeg, func() {}, nil
+	}
+	m := NewUpgradeManager(b, factory, UpgradeConfig{
+		Enabled:    true,
+		ICETimeout: 10 * time.Second, // ctx alive well past the ready event
+		RetryDelay: time.Hour,
+	})
+	t.Cleanup(func() { m.Stop() })
+
+	go m.runUpgrade(make(chan SignalMessage, 1))
+
+	// Park the waitReady goroutine on the select: runUpgrade waits the
+	// fixed 3s mobile-ready delay before the factory call, then spawns
+	// waitReady immediately before startNeg. Wait for the factory call,
+	// then give the goroutine time to park.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&factoryCalls) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if atomic.LoadInt32(&factoryCalls) != 1 {
+		t.Fatal("factory never called - runUpgrade did not reach negotiation")
+	}
+	time.Sleep(100 * time.Millisecond) // waitReady is parked on readyCh
+
+	// The race window: stopped latched while ctx still alive (Stop() also
+	// cancels the ctx, which would turn the select into a coin flip - the
+	// direct store keeps the readyCh branch deterministic).
+	m.stopped.Store(true)
+	close(ready)
+
+	time.Sleep(150 * time.Millisecond) // let waitReady run through the guard
+	if b.HasP2PTransport() {
+		t.Fatal("transport attached to a stopped broker after DataChannel ready")
+	}
+	if m.stateLocked() == UpgradeActive {
+		t.Fatal("bogus UpgradeActive notify fired after Stop")
+	}
+}
