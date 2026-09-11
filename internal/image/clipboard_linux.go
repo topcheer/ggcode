@@ -5,6 +5,7 @@ package image
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -129,9 +130,30 @@ func runClipboardCommand(name string, args ...string) ([]byte, error) {
 	cmd := exec.Command(name, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	// #1807 case 1: Output() buffers the WHOLE stdout before any size
+	// check - a 2GB bitmap paste filled ~2GB of RAM on a shared machine
+	// before the 20MB check ever ran. The file-path side got a Stat
+	// pre-check in #438; the clipboard side lagged. Stream through a
+	// capped reader instead: too-large never materializes in full.
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, commandOutputError("reading clipboard image", err, stderr.Bytes())
 	}
-	return out, nil
+	if err := cmd.Start(); err != nil {
+		return nil, commandOutputError("reading clipboard image", err, stderr.Bytes())
+	}
+	const clipHardCap = 64 << 20 // 3x the 20MB logical limit: decode slack
+	capped := io.LimitReader(stdout, clipHardCap+1)
+	data, rerr := io.ReadAll(capped)
+	werr := cmd.Wait()
+	if rerr != nil {
+		return nil, commandOutputError("reading clipboard image", rerr, stderr.Bytes())
+	}
+	if int64(len(data)) > clipHardCap {
+		return nil, fmt.Errorf("clipboard image exceeds %d bytes", clipHardCap)
+	}
+	if werr != nil {
+		return nil, commandOutputError("reading clipboard image", werr, stderr.Bytes())
+	}
+	return data, nil
 }
