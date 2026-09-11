@@ -23,7 +23,7 @@ func TestEmptyArrayRequiredNotMissing(t *testing.T) {
 	}`)
 	// The todo_write clear operation: "Existing todos not in this list are
 	// removed" — [] is the legitimate clearing value.
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":[]}`)); msg != "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":[]}`), ""); msg != "" {
 		t.Fatalf("explicit [] must be treated as provided, got: %s", msg)
 	}
 	if msg := isEmptyValue(json.RawMessage(`[]`)); msg {
@@ -33,13 +33,13 @@ func TestEmptyArrayRequiredNotMissing(t *testing.T) {
 		t.Fatal("isEmptyValue({}) must be false — explicit empty object is provided")
 	}
 	// Guards: key absent and null are still missing.
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`), ""); msg == "" {
 		t.Fatal("absent required field must still be missing")
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":null}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":null}`), ""); msg == "" {
 		t.Fatal("null required field must still be missing")
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":""}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"todos":""}`), ""); msg == "" {
 		t.Fatal("empty string required field must still be missing")
 	}
 }

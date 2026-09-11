@@ -267,7 +267,7 @@ func TestValidateRequiredParams_WhitespaceBypass(t *testing.T) {
 		"required": ["pattern"]
 	}`)
 	args := json.RawMessage(`{"pattern": " "}`)
-	msg := ValidateRequiredParams(schema, args)
+	msg := ValidateRequiredParams(schema, args, "")
 	if msg == "" {
 		t.Fatal("whitespace-only required param must be flagged as missing")
 	}
@@ -280,23 +280,23 @@ func TestValidateRequiredParams_WhitespaceBypass(t *testing.T) {
 // #568 — an explicit [] or {} counts as provided; absent and null stay missing.
 func TestValidateRequiredParams_ExplicitEmptyIsProvided(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"files":{"type":"array"}},"required":["files"]}`)
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":[]}`)); msg != "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":[]}`), ""); msg != "" {
 		t.Fatalf("explicit empty array must be provided, got: %s", msg)
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":["a"]}`)); msg != "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":["a"]}`), ""); msg != "" {
 		t.Fatalf("non-empty array flagged: %s", msg)
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":0}`)); msg != "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":0}`), ""); msg != "" {
 		t.Fatalf("numeric 0 must be considered present: %s", msg)
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{}`), ""); msg == "" {
 		t.Fatal("absent required field must still be flagged missing")
 	}
-	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":null}`)); msg == "" {
+	if msg := ValidateRequiredParams(schema, json.RawMessage(`{"files":null}`), ""); msg == "" {
 		t.Fatal("null required field must still be flagged missing")
 	}
 	objSchema := json.RawMessage(`{"type":"object","properties":{"opts":{"type":"object"}},"required":["opts"]}`)
-	if msg := ValidateRequiredParams(objSchema, json.RawMessage(`{"opts":{}}`)); msg != "" {
+	if msg := ValidateRequiredParams(objSchema, json.RawMessage(`{"opts":{}}`), ""); msg != "" {
 		t.Fatalf("explicit empty object must be provided, got: %s", msg)
 	}
 }

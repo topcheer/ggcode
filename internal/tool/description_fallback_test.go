@@ -44,7 +44,7 @@ func TestInjectDescriptionFallback_MissingUILabel(t *testing.T) {
 		t.Errorf("fallback should mention primary arg, got %q", m["description"])
 	}
 	// Injected args must now pass required validation - the rejection loop is broken.
-	if msg := ValidateRequiredParams(json.RawMessage(uiLabelSchema), out); msg != "" {
+	if msg := ValidateRequiredParams(json.RawMessage(uiLabelSchema), out, ""); msg != "" {
 		t.Errorf("after fallback, validation should pass, got: %s", msg)
 	}
 }
@@ -79,7 +79,7 @@ func TestInjectDescriptionFallback_SemanticDescriptionNotInjected(t *testing.T) 
 	if string(out) != string(in) {
 		t.Errorf("semantic description must NOT be auto-filled, got %s", out)
 	}
-	if msg := ValidateRequiredParams(json.RawMessage(semanticSchema), out); msg == "" {
+	if msg := ValidateRequiredParams(json.RawMessage(semanticSchema), out, ""); msg == "" {
 		t.Fatal("semantic description missing should still be rejected")
 	}
 }
