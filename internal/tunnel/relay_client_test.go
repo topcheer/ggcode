@@ -267,3 +267,22 @@ func TestRelayClientHandleKeyOfferRespondsWithWrappedKey(t *testing.T) {
 		t.Fatal("timed out waiting for key_accept")
 	}
 }
+
+// TestParseRetryAfterMsClamp pins #1816 case 1: a remote relay's value is
+// untrusted - overflow (negative Duration -> zero-backoff dial storm) and
+// absurd magnitudes (~31 years -> never reconnect) both clamp into the
+// ladder's ceiling.
+func TestParseRetryAfterMsClamp(t *testing.T) {
+	if got := parseRetryAfterMs("retry_after_ms=1000"); got != 1000 {
+		t.Fatalf("normal value must pass through, got %d", got)
+	}
+	if got := parseRetryAfterMs("retry_after_ms=9999999999999999"); got != 300000 {
+		t.Fatalf("overflow-scale value must clamp to 300000 (5min), got %d", got)
+	}
+	if got := parseRetryAfterMs("retry_after_ms=-5"); got != 0 {
+		t.Fatalf("negative must clamp to 0, got %d", got)
+	}
+	if got := parseRetryAfterMs("no marker here"); got != 0 {
+		t.Fatalf("absent marker is 0, got %d", got)
+	}
+}
