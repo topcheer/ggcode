@@ -377,7 +377,12 @@ func hasMakefileTamperingContent(content string) bool {
 var readOnlySearchVerbs = map[string]bool{
 	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ripgrep": true,
 	"ag": true, "ack": true, "find": true, "cat": true, "head": true,
-	"tail": true, "less": true, "more": true, "wc": true, "git": true, // git handled below (nested subcommand)
+	"tail": true, "less": true, "more": true, "wc": true,
+	// #1496 C(c): bare "git" MUST NOT be in this map - the flat lookup
+	// above returned true before the nested-subcommand check below ever
+	// ran, so `git commit -m "remove t.Skip"` was exempted as a read-only
+	// search. Only the nested forms (git grep / git log -S/-G ...) get the
+	// investigation exemption, via the branch below.
 }
 
 // isReadOnlySearchCommand returns true when the shell command's effective
@@ -402,10 +407,17 @@ func isReadOnlySearchCommand(cmd string) bool {
 		if fields[idx+1] == "grep" {
 			return true
 		}
-		// git log -S and git log -G are historical investigation
-		if fields[idx+1] == "log" && idx+2 < len(fields) &&
-			(fields[idx+2] == "-S" || fields[idx+2] == "-G") {
-			return true
+		// git log -S and git log -G are historical investigation.
+		// #1496 C(c): this branch was DEAD (the flat map's bare "git"
+		// returned first) and carried a latent bug of its own: real usage
+		// glues the pattern to the flag (-S't.Skip('), which never equals
+		// a bare "-S". Prefix-match both forms.
+		if fields[idx+1] == "log" && idx+2 < len(fields) {
+			f := fields[idx+2]
+			if f == "-S" || f == "-G" ||
+				strings.HasPrefix(f, "-S") || strings.HasPrefix(f, "-G") {
+				return true
+			}
 		}
 	}
 	return false
@@ -418,6 +430,29 @@ func isReadOnlySearchCommand(cmd string) bool {
 // isCIRelatedTask's #501 fix) to avoid substring hits like "latest".
 func isTestWritingTask(userPrompt string) bool {
 	lower := strings.ToLower(userPrompt)
+	// #1496 E(a): a bare test keyword ("修复测试"/"fix the tests") used to
+	// exempt the whole test-editing Pattern - but a task that also touches
+	// SOURCE (fix a bug found by the tests) still deserves protection when
+	// tests are being DELETED. The exemption now requires BOTH a test-side
+	// word and a source-side signal (fix/implement/add/feature/bug/...);
+	// pure test-writing tasks ("add unit tests for X") keep the exemption
+	// via the explicit test verbs below.
+	// NOTE: "add"/"新增" deliberately excluded - they lead pure test
+	// tasks ("add unit tests for X") and would kill the exemption.
+	sourceWords := []string{"fix", "bug", "修复", "implement", "实现",
+		"feature", "功能", "build", "构建", "refactor", "重构", "修改", "修复"}
+	hasSourceWord := false
+	for _, kw := range sourceWords {
+		if strings.Contains(lower, kw) {
+			hasSourceWord = true
+			break
+		}
+	}
+	if hasSourceWord {
+		// Task mixes source work with test work - do NOT blanket-exempt;
+		// fall through and let the per-file patterns decide.
+		return false
+	}
 	// CJK keywords: substring match is safe (no substring collision risk).
 	for _, kw := range []string{"测试", "回归", "用例"} {
 		if strings.Contains(lower, kw) {

@@ -258,17 +258,30 @@ func (s *speculator) getCached(toolName string, args json.RawMessage) (tool.Resu
 	defer s.mu.Unlock()
 
 	key := cacheKey(toolName, args)
+	// #1496 C(d): the miss denominator must only count queries from
+	// tools that could EVER be speculated. Every tool call - edit_file,
+	// run_command, git_commit ... - used to query this cache and inflate
+	// misses, structurally driving the hit rate toward zero and pushing
+	// the adaptive threshold to its ceiling (most conservative setting)
+	// forever.
+	countable := speculativeSafeTools[toolName]
+	// Non-speculatable tools cannot hit by construction; they skip the
+	// denominator entirely.
 	cached, ok := s.cache[key]
 	if !ok {
-		s.misses++
-		s.maybeAdaptThreshold()
+		if countable {
+			s.misses++
+			s.maybeAdaptThreshold()
+		}
 		return tool.Result{}, false
 	}
 	if time.Since(cached.cachedAt) > s.ttl {
 		s.removeFromCacheOrder(key)
 		delete(s.cache, key)
-		s.misses++
-		s.maybeAdaptThreshold()
+		if countable {
+			s.misses++
+			s.maybeAdaptThreshold()
+		}
 		return tool.Result{}, false
 	}
 	// #1831 cases 1+2: TTL freshness does not cover external writes - a
@@ -277,8 +290,10 @@ func (s *speculator) getCached(toolName string, args json.RawMessage) (tool.Resu
 	if !cached.freshStill() {
 		s.removeFromCacheOrder(key)
 		delete(s.cache, key)
-		s.misses++
-		s.maybeAdaptThreshold()
+		if countable {
+			s.misses++
+			s.maybeAdaptThreshold()
+		}
 		debug.Log("speculate", "cache HIT rejected for %s: file changed since speculation (key=%s)", toolName, key)
 		return tool.Result{}, false
 	}

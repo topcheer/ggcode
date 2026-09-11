@@ -275,13 +275,46 @@ func extractSliceIndexValue(idx ast.Expr) int {
 // the assignment line and the index access line (inclusive).
 func hasLengthGuard(lines []string, varName string, fromLine, toLine int) bool {
 	needle := "len(" + varName + ")"
-	for i := fromLine; i <= toLine && i < len(lines); i++ {
+	// #1496 C(a): two relaxations of the old any-line text match, which
+	// exempted EVERY later index after one legitimate guard - including
+	// bare m[2] thirty lines below - and even matched len(m) inside
+	// comments or string literals. (1) The guard must be CONTROL-FLOW NEAR
+	// the access (same line or within the 10 preceding lines) - a bounds
+	// check far above does not cover a later access. (2) Comment and
+	// string-literal occurrences do not count.
+	const guardWindow = 10
+	start := toLine - guardWindow
+	if start < fromLine {
+		start = fromLine
+	}
+	for i := start; i <= toLine && i < len(lines); i++ {
 		if i < 0 {
 			continue
 		}
-		if strings.Contains(lines[i], needle) {
+		if strings.Contains(stripCommentsAndStrings1496(lines[i]), needle) {
 			return true
 		}
 	}
 	return false
+}
+
+// stripCommentsAndStrings1496 removes line-comment tails and the contents
+// of string literals so textual guards inside them are not counted.
+func stripCommentsAndStrings1496(line string) string {
+	if idx := strings.Index(line, "//"); idx >= 0 {
+		line = line[:idx]
+	}
+	var out strings.Builder
+	inString := false
+	for _, r := range line {
+		switch {
+		case r == '"':
+			inString = !inString
+		case inString:
+			// drop string contents
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }

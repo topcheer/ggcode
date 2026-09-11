@@ -157,7 +157,8 @@ func TestSolutionFixation_ExtractPathJSON(t *testing.T) {
 		want string
 	}{
 		{"file_path field", `{"file_path":"/foo/bar.go","old_text":"x"}`, "/foo/bar.go"},
-		{"path field", `{"path":"./baz.go"}`, "./baz.go"},
+		// #1496 D: extraction normalizes ./ away - same counting key.
+		{"path field", `{"path":"./baz.go"}`, "baz.go"},
 		{"notebook_path field", `{"notebook_path":"/x/nb.ipynb"}`, "/x/nb.ipynb"},
 		{"empty", `{}`, ""},
 		{"invalid json", `not json`, ""},
@@ -197,7 +198,9 @@ func TestSolutionFixation_NormalizePath(t *testing.T) {
 		want  string
 	}{
 		{"/abs/path/file.go", "/abs/path/file.go"},
-		{"./relative/file.go", "./relative/file.go"},
+		// #1496 D: "./" is cleaned so the same file shares one counting
+		// key with its bare spelling.
+		{"./relative/file.go", "relative/file.go"},
 		{"file.go", "file.go"},
 		{"", ""},
 		{"/", ""},
