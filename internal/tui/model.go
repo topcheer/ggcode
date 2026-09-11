@@ -341,7 +341,11 @@ type Model struct {
 	tunnelUserMessageOverride *tunnel.MessageData
 	suppressNextTunnelSystem  string
 	tunnelClientNoticeShown   bool
-	tunnelSpawned             map[string]bool // tracks which subagents have been announced to mobile
+	// pendingTunnelConnected (#1825 case 1): a client connected while
+	// StartShare was still running - replay the connected handling once
+	// tunnelStartMsg lands.
+	pendingTunnelConnected bool
+	tunnelSpawned          map[string]bool // tracks which subagents have been announced to mobile
 
 	// External pane manager for sub-agent/teammate output
 	extPaneMgr *extpane.Manager
