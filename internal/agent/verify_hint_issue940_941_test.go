@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,8 +55,14 @@ func TestDetectBuildSystemTaskfileAnchoring(t *testing.T) {
 			"    cmds: [docker build .]\n"+
 			"    env:\n"+
 			"      image: node:latest\n"), 0644)
-	if cmd := detectBuildSystem(hyphenDir); cmd != "task" {
-		t.Errorf("hyphen-only Taskfile: expected bare %q fallback, got %q (substring match regression #940)", "task", cmd)
+	// #2123: the bare "task" fallback was REMOVED - bare `task` lists
+	// tasks or runs the default one (usually exit 0, unrelated output):
+	// a guaranteed false green. No matching recipe now falls through to
+	// the next probe, mirroring the Makefile branch. The #940 concern
+	// (hyphenated tasks must not satisfy "test:"/"build:") still holds -
+	// the result is anything but "task test"/"task build".
+	if cmd := detectBuildSystem(hyphenDir); cmd == "task test" || cmd == "task build" || strings.HasPrefix(cmd, "task ") {
+		t.Errorf("hyphen-only Taskfile: must not synthesize a task command, got %q (substring match regression #940)", cmd)
 	}
 
 	// Real indented task key: must be detected.

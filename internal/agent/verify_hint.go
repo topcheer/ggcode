@@ -247,7 +247,11 @@ func detectBuildSystem(workingDir string) string {
 					}
 				}
 			}
-			return "just"
+			// #2123: no matching recipe - fall through to the next probe like
+			// the Makefile branch. The old bare `return "just"` ran the FIRST
+			// recipe (just semantics) or a usage listing, typically exit 0 -
+			// a guaranteed false green with unrelated output.
+			continue
 		}
 	}
 
@@ -279,7 +283,9 @@ func detectBuildSystem(workingDir string) string {
 					}
 				}
 			}
-			return "task"
+			// #2123: no matching task - fall through (same rationale as the
+			// just branch; bare `task` lists or runs the default task).
+			continue
 		}
 	}
 
@@ -413,10 +419,34 @@ func runTouchedCode(runStats *RunStats) bool {
 // Handles compound commands like "make verify-ci" or "python -m pytest".
 // Returns true for shell builtins and commands that bypass PATH (e.g. "bash /path/script.sh").
 func verifyCommandAvailable(command string) bool {
+	// #2122: strip leading env-var assignments FIRST (#950's matcher-side
+	// helper, never reused here) - the oracle's prompt explicitly asks for
+	// the project's required flags, and this repo's canonical form is
+	// `GOFLAGS="-p=1" ... make verify-ci`: parts[0] was the ASSIGNMENT,
+	// LookPath failed, and every such verification was silently SKIPPED
+	// while reporting Passed=true (e2e probe: a literal `false` payload
+	// went green).
+	command = stripEnvAssignments(command)
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		return false
 	}
+	// Compound forms like `cd /app && go test ./...`: cd is a shell
+	// builtin with no Linux binary - probe the first segment that does
+	// real work instead of failing the preflight on it.
+	for _, seg := range splitCompoundCommand(command) {
+		segFields := strings.Fields(seg)
+		if len(segFields) == 0 || segFields[0] == "cd" {
+			continue
+		}
+		return verifyPrimaryAvailable(segFields)
+	}
+	return verifyPrimaryAvailable(parts)
+}
+
+// verifyPrimaryAvailable checks the primary binary of an already-split
+// command segment (script paths, builtins, PATH).
+func verifyPrimaryAvailable(parts []string) bool {
 	primary := parts[0]
 
 	// #941: for scripts run via bash/sh, check the script path instead — must
@@ -989,7 +1019,11 @@ func isRealTestExecution(cmd string) bool {
 	if len(words) >= 2 && (words[0] == "make" || words[0] == "just" || words[0] == "task") {
 		// make <target> runs a target (make help / make list do not).
 		t := words[1]
-		return t != "help" && t != "list" && !strings.HasPrefix(t, "-")
+		// #2123 (#1841 residue): clean/install are not test/build
+		// executions either - passing them used to CLEAR the
+		// lastBuildFailed urgency flag so the "(which FAILED)" hint
+		// never fired after a plain `make clean`.
+		return t != "help" && t != "list" && t != "clean" && t != "install" && !strings.HasPrefix(t, "-")
 	}
 	return false
 }
