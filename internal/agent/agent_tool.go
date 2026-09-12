@@ -562,7 +562,14 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		var integrityWarnings []string
 		for _, plan := range plans {
 			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := checkWriteIntegrity(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+				// #2138: the multi-file tools (multi_file_write/edit,
+				// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
+				// for .go files unconditionally - passing the raw plan.NewContent
+				// here made every gofmt-touched write report a fake post-write
+				// mismatch (#2132 fixed only the single-file leg). Mirror the
+				// write-time formatting so mismatch means REAL drift here too.
+				mirrored := mirrorWriteTimeGoFormat(plan.Path, plan.NewContent)
+				if w := checkWriteIntegrity(plan.Path, plan.OldContent, mirrored); w != "" {
 					integrityWarnings = append(integrityWarnings, w)
 				}
 			}
@@ -942,6 +949,13 @@ func simulateEditFile(content, oldText, newText string, replaceAll bool) (string
 	}
 	if mr.transform != "" {
 		newText = simAdjustNewText(content, newText, mr)
+	} else if strings.Contains(oldText, "\r\n") && !strings.Contains(newText, "\r\n") {
+		// #2138 annex 1: mirror edit_file's #1676 case 3 branch - a CRLF
+		// old_text with LF-only new_text lands CRLF-converted in the real
+		// tool, but the simulation kept the LF bytes and every such edit
+		// on non-Go files (no formatGoBytes rescue) then tripped a fake
+		// post-write mismatch at the integrity gate.
+		newText = strings.ReplaceAll(newText, "\n", "\r\n")
 	}
 	if replaceAll {
 		return strings.ReplaceAll(content, mr.canonical, newText), nil
