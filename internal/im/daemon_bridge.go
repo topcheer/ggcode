@@ -27,6 +27,11 @@ type pendingAskUser struct {
 	request     toolpkg.AskUserRequest
 	response    chan toolpkg.AskUserResponse
 	multiSelect bool // if true, accumulate selections until __done__
+	// msgIDs are the interactive-button message IDs THIS question emitted
+	// (adapter → platform ID). Correlation reads these, not the bridge-level
+	// map, so an old card can never submit as a successor question's answer
+	// (#2134).
+	msgIDs map[string]string
 }
 
 // DaemonBridge implements the Bridge interface for headless (daemon) mode.
@@ -136,19 +141,25 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	}
 
 	// Correlate the callback with the interactive message that carries the
-	// current question: when the pending question was sent via interactive
-	// buttons on this adapter, only accept callbacks originating from that
-	// exact platform message. Stale cards (an already-answered question's
-	// buttons, or a previous question in a multi-question sequence) must be
-	// dropped instead of silently submitted as the current answer.
-	// When there is no recorded message ID for the adapter (text-only pending,
-	// or adapter that returned no ID), there is nothing to compare — allow.
+	// CURRENT question: the pending question's own emitted IDs (#2134 - the
+	// bridge-level map previously tracked "last emitted" with no ownership,
+	// so stale cards fail-opened against text-only successors). When THIS
+	// question has no IDs (text-only) but an EARLIER button question's IDs
+	// are on record for the adapter, a callback can only be a stale card -
+	// drop it instead of fail-opening.
 	b.mu.Lock()
-	expectedMsgID := b.interactiveMsgIDs[cb.Adapter]
+	expectedMsgID := pending.msgIDs[cb.Adapter]
+	lastEmitted := b.interactiveMsgIDs[cb.Adapter]
 	b.mu.Unlock()
-	if expectedMsgID != "" && cb.MessageID != expectedMsgID {
-		debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q expected=%q",
-			cb.Adapter, cb.MessageID, expectedMsgID)
+	if expectedMsgID != "" {
+		if cb.MessageID != expectedMsgID {
+			debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q expected=%q",
+				cb.Adapter, cb.MessageID, expectedMsgID)
+			return
+		}
+	} else if lastEmitted != "" {
+		debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q - current question is text-only, no button was emitted for it",
+			cb.Adapter, cb.MessageID)
 		return
 	}
 
@@ -209,7 +220,10 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	if b.pendingAsk == pending {
 		b.pendingAsk = nil
 	}
-	b.interactiveMsgIDs = nil
+	// #2134: do NOT wipe interactiveMsgIDs here - it tracks the LAST
+	// EMITTED button set per adapter, which is exactly what lets a later
+	// text-only question reject stale cards. The old blind wipe raced a
+	// concurrent registration and fail-opened the successor.
 	b.mu.Unlock()
 }
 
@@ -754,6 +768,10 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			if len(msgIDs) > 0 {
 				b.mu.Lock()
 				b.interactiveMsgIDs = msgIDs
+				// #2134: ownership - record the IDs ON the question they belong
+				// to, so correlation survives registration races and text-only
+				// successors can reject stale cards.
+				pending.msgIDs = msgIDs
 				b.mu.Unlock()
 			}
 		} else {

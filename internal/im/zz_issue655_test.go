@@ -68,6 +68,12 @@ func TestIssue655SingleRegistrationChoice(t *testing.T) {
 	if pending == nil {
 		t.Fatal("pendingAsk never registered")
 	}
+	// #2134: production registration writes the emitted IDs onto the
+	// pending question itself - mirror that for the simulated interactive
+	// send (the empty test emitter emits nothing on its own).
+	b.mu.Lock()
+	pending.msgIDs = map[string]string{"test": "m1"}
+	b.mu.Unlock()
 
 	// Callback for the exact interactive message — must resolve the CURRENT
 	// registration (the only one) so HandleAskUser returns promptly.
@@ -102,6 +108,7 @@ func TestIssue655AnswerDoesNotClearNextRegistration(t *testing.T) {
 	first := &pendingAskUser{
 		request:  toolpkg.AskUserRequest{},
 		response: make(chan toolpkg.AskUserResponse, 1),
+		msgIDs:   map[string]string{"test": "m2"}, // #2134: ownership mirror
 	}
 	b.mu.Lock()
 	b.pendingAsk = first

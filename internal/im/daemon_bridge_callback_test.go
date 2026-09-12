@@ -29,6 +29,10 @@ func newCallbackTestBridge(msgIDs map[string]string, multi bool) (*DaemonBridge,
 			request:     req,
 			response:    ch,
 			multiSelect: multi,
+			// #2134: registration writes the emitted IDs onto the question
+			// itself (ownership) as well as the bridge-level last-emitted
+			// map - mirror both so the harness matches production state.
+			msgIDs: msgIDs,
 		},
 		interactiveMsgIDs: msgIDs,
 	}
