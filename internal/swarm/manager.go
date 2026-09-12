@@ -213,11 +213,20 @@ func (m *Manager) DeleteTeam(teamID string) error {
 		delete(m.results, tm.ID)
 	}
 	team.mu.Unlock()
+	m.mu.Unlock()
 
-	// #1633 case 3: wait for the idle-runner goroutines to actually exit,
-	// same per-teammate bounded pattern as CancelAll - without it a
-	// briefly-alive goroutine could emit an event onto a team already
-	// removed from the map.
+	// #2120: wait for the idle-runner goroutines OUTSIDE m.mu. The runner
+	// exit path emits an event (emit takes m.mu) BEFORE close(done), so
+	// holding m.mu across this wait formed a cycle - DeleteTeam held the
+	// lock waiting for done while the runner needed the lock to reach
+	// close(done). Only the 5s timeout broke it, freezing EVERY manager
+	// API (GetTeam/SendToTeammate/Broadcast/...) for the duration, and
+	// the normal path (a teammate mid-task returning ctx.Err() and
+	// emitting team_board_updated) hit it deterministically - no panic
+	// needed. Same lock-scope discipline as CancelAll.
+	// #1633 case 3 still holds: the map delete below happens after the
+	// bounded wait, and a re-lock identity check keeps the delete safe
+	// against a concurrent re-create of the same ID.
 	if len(doneChs) > 0 {
 		timedOut := false
 		for _, ch := range doneChs {
@@ -238,7 +247,10 @@ func (m *Manager) DeleteTeam(teamID string) error {
 		}
 	}
 
-	delete(m.teams, teamID)
+	m.mu.Lock()
+	if current, still := m.teams[teamID]; still && current == team {
+		delete(m.teams, teamID)
+	}
 	m.mu.Unlock()
 
 	m.emit(Event{Type: "team_deleted", TeamID: teamID, Timestamp: time.Now()})
