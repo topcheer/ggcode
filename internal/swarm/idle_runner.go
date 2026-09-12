@@ -411,8 +411,43 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	if board == nil {
 		return
 	}
+	// #2118: the panic path used to only flip Status back to pending,
+	// bypassing the #1295 retry cap entirely (the cap is only read on the
+	// taskErr path). A deterministically panicking task was then re-claimed
+	// by each surviving teammate in turn - bounded only by the team size
+	// (16), dismantling the whole team at one teammate per iteration.
+	// Mirror the taskErr path: increment retry_attempts and park the task
+	// as completed(max_retries) once the cap is hit.
+	current, ok := board.Get(taskID)
+	if !ok {
+		debug.Log("swarm", "panic rollback: task=%s vanished from board", taskID)
+		return
+	}
+	attempts := 0
+	if v, ok := current.Metadata["retry_attempts"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			attempts = n
+		}
+	}
+	attempts++
+	if attempts >= maxTransientTaskRetries {
+		completed := task.StatusCompleted
+		if _, uerr := board.Update(taskID, task.UpdateOptions{
+			Status: &completed,
+			Metadata: map[string]string{
+				"permanent_error": "max_retries_exceeded",
+				"error":           "teammate panicked repeatedly",
+				"retry_attempts":  strconv.Itoa(attempts),
+			},
+		}); uerr != nil {
+			debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
+		}
+		debug.Log("swarm", "panic rollback: task=%s exceeded %d retries (teammate panic), parking as completed(max_retries)", taskID, maxTransientTaskRetries)
+		return
+	}
 	pending := task.StatusPending
-	if _, uerr := board.Update(taskID, task.UpdateOptions{Status: &pending}); uerr != nil {
+	owner := ""
+	if _, uerr := board.Update(taskID, task.UpdateOptions{Status: &pending, Owner: &owner, Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)}}); uerr != nil {
 		debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
 	}
 }
