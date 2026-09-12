@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,10 +124,66 @@ func TestTransportWriteError(t *testing.T) {
 	}
 }
 
+// zzSyncBuffer is a mutex-guarded bytes.Buffer for tests of the async
+// outbound writer (#2109): the writer goroutine and the polling test
+// goroutine both touch the buffer.
+type zzSyncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *zzSyncBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *zzSyncBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+func (w *zzSyncBuffer) ReadString(delim byte) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.ReadString(delim)
+}
+
+// zzWaitLine polls an async-written bytes.Buffer until at least one
+// complete line is present (the #2109 outbound writer goroutine makes
+// notification writes asynchronous).
+func zzWaitLine(t *testing.T, buf *zzSyncBuffer) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := buf.String(); strings.HasSuffix(s, "\n") {
+			return s
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("async outbound writer did not flush within 2s")
+	return ""
+}
+
+func zzWaitReadLine(t *testing.T, buf *zzSyncBuffer) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := buf.String(); strings.Contains(s, "\n") {
+			line, _ := buf.ReadString('\n')
+			return line
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("async outbound writer did not flush within 2s")
+	return ""
+}
+
 // TestTransportWriteNotification tests writing JSON-RPC notifications
 func TestTransportWriteNotification(t *testing.T) {
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 
 	err := transport.WriteNotification("session/update", map[string]string{"sessionId": "abc"})
 	if err != nil {
@@ -134,7 +191,7 @@ func TestTransportWriteNotification(t *testing.T) {
 	}
 
 	// Parse the notification
-	line := buf.String()
+	line := zzWaitLine(t, buf)
 	if !strings.HasSuffix(line, "\n") {
 		t.Error("notification should end with newline")
 	}
@@ -154,11 +211,11 @@ func TestTransportWriteNotification(t *testing.T) {
 
 // TestTransportWriteResponseEndsWithNewline tests that messages end with \n
 func TestTransportWriteResponseEndsWithNewline(t *testing.T) {
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 
 	_ = transport.WriteResponse(1, "ok")
-	output := buf.String()
+	output := zzWaitLine(t, buf)
 	if !strings.HasSuffix(output, "\n") {
 		t.Error("response should end with newline")
 	}
@@ -1768,8 +1825,8 @@ func TestSessionUpdateToolCallUpdateWithContentArray(t *testing.T) {
 
 func TestHandleStreamEventToolCallFormat(t *testing.T) {
 	// Verify that tool_call notification uses plain tool name (not formatted)
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 	registry := tool.NewRegistry()
 	cfg := &config.Config{MaxIterations: 100}
 	session := NewSession("/tmp", nil)
@@ -1789,10 +1846,7 @@ func TestHandleStreamEventToolCallFormat(t *testing.T) {
 	}
 
 	// Read notification from buffer
-	line, err := buf.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	line := zzWaitReadLine(t, buf)
 
 	var notif map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &notif); err != nil {
@@ -1820,8 +1874,8 @@ func TestHandleStreamEventToolCallFormat(t *testing.T) {
 
 func TestHandleStreamEventToolCallUpdateFormat(t *testing.T) {
 	// Verify that tool_call_update uses DescribeTool formatted title
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 	registry := tool.NewRegistry()
 	cfg := &config.Config{MaxIterations: 100}
 	session := NewSession("/tmp", nil)
@@ -1842,10 +1896,7 @@ func TestHandleStreamEventToolCallUpdateFormat(t *testing.T) {
 		t.Fatalf("handleStreamEvent: %v", err)
 	}
 
-	line, err := buf.ReadString('\n')
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	line := zzWaitReadLine(t, buf)
 
 	var notif map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &notif); err != nil {
@@ -1870,8 +1921,8 @@ func TestHandleStreamEventToolCallUpdateFormat(t *testing.T) {
 }
 
 func TestHandleStreamEventToolCallUpdateFailed(t *testing.T) {
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 	registry := tool.NewRegistry()
 	cfg := &config.Config{MaxIterations: 100}
 	session := NewSession("/tmp", nil)
@@ -1889,7 +1940,7 @@ func TestHandleStreamEventToolCallUpdateFailed(t *testing.T) {
 		IsError: true,
 	})
 
-	line, _ := buf.ReadString('\n')
+	line := zzWaitReadLine(t, buf)
 	var notif map[string]interface{}
 	json.Unmarshal([]byte(line), &notif)
 	params, _ := notif["params"].(map[string]interface{})
@@ -1908,8 +1959,8 @@ func TestHandleStreamEventToolCallUpdateFailed(t *testing.T) {
 }
 
 func TestHandleStreamEventAgentMessage(t *testing.T) {
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 	registry := tool.NewRegistry()
 	cfg := &config.Config{MaxIterations: 100}
 	session := NewSession("/tmp", nil)
@@ -1921,7 +1972,7 @@ func TestHandleStreamEventAgentMessage(t *testing.T) {
 		Text: "Hello from the agent!",
 	})
 
-	line, _ := buf.ReadString('\n')
+	line := zzWaitReadLine(t, buf)
 	var notif map[string]interface{}
 	json.Unmarshal([]byte(line), &notif)
 	params, _ := notif["params"].(map[string]interface{})

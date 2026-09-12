@@ -1102,8 +1102,8 @@ func TestHandlerSessionLoadWithSavedSession(t *testing.T) {
 	session.AddMessage("assistant", []ContentBlock{{Type: "text", Text: "world"}})
 	session.Save(dir)
 
-	var buf bytes.Buffer
-	transport := NewTransport(strings.NewReader(""), &buf)
+	buf := &zzSyncBuffer{}
+	transport := NewTransport(strings.NewReader(""), buf)
 	cfg := &config.Config{}
 	registry := tool.NewRegistry()
 	h := NewHandler(cfg, registry, transport, nil)
@@ -1120,7 +1120,17 @@ func TestHandlerSessionLoadWithSavedSession(t *testing.T) {
 		t.Errorf("expected nil result after message replay, got %+v", result)
 	}
 
-	output := buf.String()
+	// The #2109 outbound writer goroutine is asynchronous - poll until
+	// the replay notifications are flushed.
+	output := ""
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		output = buf.String()
+		if strings.Contains(output, "hello") && strings.Contains(output, "world") {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	if !strings.Contains(output, "hello") {
 		t.Error("expected 'hello' in notification output")
 	}

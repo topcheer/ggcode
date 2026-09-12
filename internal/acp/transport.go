@@ -23,22 +23,54 @@ type Transport struct {
 	Writer  io.Writer
 	mu      sync.Mutex
 
+	// #2109: outbound queue + single writer goroutine. The old writeJSON
+	// held t.mu across a BLOCKING Write - when the editor side stopped
+	// reading and the pipe filled, every goroutine froze on t.mu and the
+	// whole agent process became unkillable-by-Stop (write(2) ignores
+	// ctx cancel). Notifications now enqueue fire-and-forget (dropped +
+	// logged when the queue is full - they are incremental chunks);
+	// requests/responses enqueue with an ack wait bounded by a deadline,
+	// so a dead peer fails them with an error instead of freezing the
+	// process. FIFO order across classes is preserved by the single queue.
+	outbox     chan outboundMsg
+	writerOnce sync.Once
+	dropped    atomic.Int64
+
 	// Bi-directional request support
 	nextID    atomic.Int64
 	pending   map[int64]chan *JSONRPCResponse
 	pendingMu sync.Mutex
 }
 
+// outboundMsg is one queued wire message. ack is non-nil for the
+// blocking class (requests/responses): closed once the bytes are
+// actually written, so callers keep write-completion semantics.
+type outboundMsg struct {
+	data []byte
+	ack  chan struct{}
+}
+
+// outboundDeadline bounds how long a blocking-class write may wait for
+// queue space and for the writer to hand the bytes to the OS.
+const outboundDeadline = 10 * time.Second
+
+// outboundQueueCap is the burst buffer for in-flight notifications; a
+// healthy reader drains it in microseconds, a dead one fills it and the
+// notification class starts dropping.
+const outboundQueueCap = 256
+
 // NewTransport creates a new Transport reading from r and writing to w.
 func NewTransport(r io.Reader, w io.Writer) *Transport {
 	s := bufio.NewScanner(r)
 	// Copilot ACP can emit large single-line NDJSON payloads for tool results.
 	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
-	return &Transport{
+	t := &Transport{
 		Scanner: s,
 		Writer:  w,
 		pending: make(map[int64]chan *JSONRPCResponse),
 	}
+	t.startWriter()
+	return t
 }
 
 // WriteRaw writes a raw byte slice to the transport followed by a newline.
@@ -321,23 +353,92 @@ func (t *Transport) WriteNotification(method string, params interface{}) error {
 		}
 		notif.Params = raw
 	}
-	return t.writeJSON(notif)
+	// #2109: notification class (incremental stream chunks) is
+	// fire-and-forget - a dead reader drops them instead of freezing the
+	// agent. Always nil: callers treat notification failure as non-fatal.
+	data, err := marshalOutbound(notif)
+	if err != nil {
+		return err
+	}
+	t.writeDroppable(data)
+	return nil
 }
 
-// writeJSON marshals v and writes it as a single line followed by \n.
-// Protected by mutex to ensure atomic writes.
-func (t *Transport) writeJSON(v interface{}) error {
+// startWriter lazily spawns the single writer goroutine (Transports
+// built as literals in tests skip NewTransport).
+func (t *Transport) startWriter() {
+	t.writerOnce.Do(func() {
+		t.outbox = make(chan outboundMsg, outboundQueueCap)
+		go func() {
+			for msg := range t.outbox {
+				t.mu.Lock()
+				_, werr := t.Writer.Write(msg.data)
+				if werr == nil {
+					_, werr = t.Writer.Write([]byte("\n"))
+				}
+				t.mu.Unlock()
+				if werr != nil {
+					debug.Log("acp", "outbound write failed: %v", werr)
+				}
+				if msg.ack != nil {
+					close(msg.ack)
+				}
+			}
+		}()
+	})
+}
+
+// marshalOutbound assembles one wire line.
+func marshalOutbound(v interface{}) ([]byte, error) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("marshaling JSON-RPC message: %w", err)
+		return nil, fmt.Errorf("marshaling JSON-RPC message: %w", err)
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if _, err := t.Writer.Write(data); err != nil {
-		return fmt.Errorf("writing JSON-RPC message: %w", err)
+	return data, nil
+}
+
+// writeBlocking enqueues a request/response-class message and waits for
+// the writer to hand the bytes to the OS (bounded by outboundDeadline) -
+// preserving the old synchronous write-completion semantics without ever
+// holding t.mu across a stuck write.
+func (t *Transport) writeBlocking(data []byte) error {
+	t.startWriter()
+	ack := make(chan struct{})
+	deadline := time.NewTimer(outboundDeadline)
+	defer deadline.Stop()
+	select {
+	case t.outbox <- outboundMsg{data: data, ack: ack}:
+	case <-deadline.C:
+		return fmt.Errorf("outbound queue full: peer is not reading (dropped %d notifications so far)", t.dropped.Load())
 	}
-	if _, err := t.Writer.Write([]byte("\n")); err != nil {
-		return fmt.Errorf("writing newline: %w", err)
+	select {
+	case <-ack:
+		return nil
+	case <-deadline.C:
+		return fmt.Errorf("outbound write stalled: peer is not reading")
 	}
-	return nil
+}
+
+// writeDroppable enqueues a notification-class message fire-and-forget;
+// when the queue is full it is dropped and counted - incremental stream
+// chunks must never freeze the agent.
+func (t *Transport) writeDroppable(data []byte) {
+	t.startWriter()
+	select {
+	case t.outbox <- outboundMsg{data: data}:
+	default:
+		n := t.dropped.Add(1)
+		if n == 1 || n%100 == 0 {
+			debug.Log("acp", "peer is not reading: dropped %d outbound notifications", n)
+		}
+	}
+}
+
+// writeJSON marshals v and enqueues it as a blocking-class message.
+func (t *Transport) writeJSON(v interface{}) error {
+	data, err := marshalOutbound(v)
+	if err != nil {
+		return err
+	}
+	return t.writeBlocking(data)
 }
