@@ -31,6 +31,12 @@ const (
 	// recentAgentMsgCap bounds the @agent message ID index consulted by
 	// NotifyAgentComplete after a manually approved agent run finishes.
 	recentAgentMsgCap = 256
+	// receiptCap bounds the received-receipts index (#2114): same FIFO
+	// discipline as seenMsgIDs - a receipt is only consulted shortly
+	// after arrival (AckMessage follow-ups), so 512 is far beyond the
+	// useful window and prevents the unbounded growth on long-lived
+	// daemon hubs.
+	receiptCap = 512
 	// maxPendingApprovals bounds pendingApproval so daemon-mode hubs with
 	// no human to approve cannot grow it without limit.
 	maxPendingApprovals = 100
@@ -109,6 +115,11 @@ type Hub struct {
 
 	// receipts received, keyed by message ID
 	receipts map[string]Receipt
+	// receiptOrder is the FIFO eviction order for receipts, bounded by
+	// receiptCap (#2114): receipts used to grow without bound - every DM
+	// receipt from every LAN agent added an entry (~150B) that was never
+	// evicted, a slow leak for long-lived daemon hubs on busy LANs.
+	receiptOrder []string
 
 	// store for per-session persistence
 	store     *Store
@@ -1449,7 +1460,7 @@ func (h *Hub) dispatchInboundReceipts(msg Message, needsApproval, autoApproved, 
 // HandleReceipt processes a receipt from a peer.
 func (h *Hub) HandleReceipt(r Receipt) {
 	h.mu.Lock()
-	h.receipts[r.MessageID] = r
+	h.storeReceiptLocked(r)
 	callback := h.onReceipt
 	h.mu.Unlock()
 
@@ -1573,7 +1584,15 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 
 	url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/receipt"
 	data, _ := json.Marshal(r)
-	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	// #2114: a malformed Endpoint (arbitrary string from presence JSON,
+	// no format constraint) makes NewRequest fail - the ignored error left
+	// req nil and req.Header.Set panicked; the safego wrapper recovered,
+	// but the receipt was silently lost (the peer never learns the
+	// message was delivered/approved/completed). Same guard as sendPresence.
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", h.APIKey())
 	resp, err := h.httpClient.Do(req)
@@ -1926,7 +1945,7 @@ func (h *Hub) handleReceiveMessageData(msg Message, source string) {
 func (h *Hub) handleReceiveReceiptData(r Receipt) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.receipts[r.MessageID] = r
+	h.storeReceiptLocked(r)
 	if h.onReceipt != nil {
 		rc := r
 		safego.Go("lanchat.onReceipt", func() { h.onReceipt(rc) })
@@ -1960,6 +1979,24 @@ func (h *Hub) handleNickChangeData(nc NickChange) {
 		nodeID := nc.NodeID
 		newNick := nc.HumanNick
 		safego.Go("lanchat.onNickChange", func() { callback(nodeID, oldNick, newNick) })
+	}
+}
+
+// storeReceiptLocked records an inbound receipt keyed by message ID with
+// FIFO eviction at receiptCap (#2114) - mirrors markSeenLocked/recordAgent
+// MsgLocked. Must hold h.mu.
+func (h *Hub) storeReceiptLocked(r Receipt) {
+	if h.receipts == nil {
+		h.receipts = make(map[string]Receipt)
+	}
+	if _, exists := h.receipts[r.MessageID]; !exists {
+		h.receiptOrder = append(h.receiptOrder, r.MessageID)
+	}
+	h.receipts[r.MessageID] = r
+	if len(h.receiptOrder) > receiptCap {
+		evict := h.receiptOrder[0]
+		h.receiptOrder = h.receiptOrder[1:]
+		delete(h.receipts, evict)
 	}
 }
 
