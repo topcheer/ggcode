@@ -798,11 +798,16 @@ func (h *Hub) resolveNickConflict() {
 	h.humanNick = newNick
 	h.agentNick = AgentNick(newNick)
 	sessionDir := h.store.dir
+	// #2128: capture role/team under the lock - reading h.role/h.team
+	// inside the goroutine closure evaluated them at goroutine time
+	// (after Unlock), racing SetNickRoleTeam's locked writes (-race
+	// confirmed). Same pattern as the L628 sibling call passing locals.
+	role, team := h.role, h.team
 	h.mu.Unlock()
 
 	debug.Log("lanchat", "nick conflict: %s -> %s", myNick, newNick)
 	_ = SaveNick(sessionDir, newNick)
-	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick, h.role, h.team) })
+	safego.Go("lanchat.broadcastNickChange", func() { h.broadcastNickChange(newNick, role, team) })
 }
 
 // HandlePresence processes an incoming presence announcement from a peer.
@@ -1287,6 +1292,7 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// append is a disk write that can take seconds on a slow volume, and
 	// running it under h.mu stalls every other hub operation (#991).
 	var persistSession string
+	var persistStore *Store // #2128: captured under h.mu, read after Unlock
 
 	// Cross-transport ID dedup (#987): TCP retries (postToPeerWithRetry) and
 	// the TCP→UDP fallback can deliver the same message ID twice, and the
@@ -1314,7 +1320,8 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 			h.messages = h.messages[len(h.messages)-maxHistoryPerSession:]
 		}
 		if h.store != nil {
-			persistSession = h.sessionID // append after unlock (#991)
+			persistSession = h.sessionID
+			persistStore = h.store // #2128: capture under lock (see below) // append after unlock (#991)
 		}
 	} else {
 		// Index @agent messages by ID: they never enter h.messages, but
@@ -1351,8 +1358,12 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// #991: session-store append moved outside h.mu — a slow disk write here
 	// used to hold the hub lock for seconds. Synchronous (not safego.Go) so
 	// store append order is preserved for this ingress path.
-	if persistSession != "" {
-		if err := h.store.Append(persistSession, msg); err != nil {
+	// #2128: capture the store INTERFACE under the lock like persistSession
+	// - re-reading h.store after Unlock races SetSessionID's whole-field
+	// replacement (h.store = NewStore(...)) at L279, -race confirmed; the
+	// worst case was a message persisted into the PREVIOUS session's dir.
+	if persistSession != "" && persistStore != nil {
+		if err := persistStore.Append(persistSession, msg); err != nil {
 			debug.Log("lanchat", "persist message: %v", err)
 		}
 	}
