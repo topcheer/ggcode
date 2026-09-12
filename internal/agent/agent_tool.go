@@ -768,22 +768,19 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// binary corruption, or content loss. Catches issues immediately so the
 	// agent can fix them in the same turn instead of wasting a build cycle.
 	if !result.IsError {
+		// #2132: write_file/edit_file persist gofmt-FORMATTED bytes for .go
+		// files (formatGoBytes) while newContent here held the RAW argument
+		// - every gofmt-touched write then mismatched and skipped ALL
+		// registered integrity checks. Mirror the same formatting so the
+		// comparison is apples-to-apples and mismatch means REAL drift.
+		newContent = mirrorWriteTimeGoFormat(filePath, newContent)
 		if warning := checkWriteIntegrity(filePath, oldContent, newContent); warning != "" {
 			a.appendGuidance(&result, warning) // #1864 case 2: budgeted path
 		}
-		// #1786 case 2: the comment above has promised disk-content
-		// validation since this block existed, but the whole chain never
-		// read the file back - partial write failures, rename anomalies
-		// and post-write external rewrites all displayed as normal. One
-		// read-back comparing against the planned content closes that.
-		// (Auto-format legitimately diverges: report, don't fail.)
-		if disk, rerr := os.ReadFile(filePath); rerr == nil && string(disk) != newContent {
-			debug.Log("agent", "#1786 post-write drift on %s: %d planned vs %d on disk",
-				filePath, len(newContent), len(disk))
-			a.appendGuidance(&result,
-				"Note: content on disk after the write differs from the planned content "+
-					"(auto-format, or an external writer raced the write). Re-read the file if exact state matters.")
-		}
+		// #1786 case 2 / #2132: the drift report now lives INSIDE
+		// checkWriteIntegrity (single message, checks still run against the
+		// disk bytes on real drift). The separate read-back + Note here was
+		// a duplicate report of the same condition - removed.
 	}
 
 	// Post-write missing test companion detection: warn when production Go

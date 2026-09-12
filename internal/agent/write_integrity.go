@@ -2,10 +2,12 @@ package agent
 
 import (
 	"fmt"
+	"go/format"
 	"go/parser"
 	"go/scanner"
 	"go/token"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -42,11 +44,23 @@ func checkWriteIntegrity(filePath, oldContent, newContent string) string {
 	// file back once and compare.
 	if disk, rerr := osReadFileForIntegrity(filePath); rerr == nil {
 		if string(disk) != newContent {
+			// #2132: a mismatch used to early-return, silently skipping EVERY
+			// registered check (binary corruption, secrets, syntax...) for the
+			// very writes that diverged - and gofmt-formatted Go writes
+			// diverged on EVERY write, so exactly the imperfect writes most in
+			// need of checking were systematically exempt. Keep checking: run
+			// the registry against what is ACTUALLY on disk and merge the
+			// mismatch notice into one report.
 			trimmed := string(disk)
 			if len(trimmed) > 120 {
 				trimmed = trimmed[:120] + "..."
 			}
-			return fmt.Sprintf("post-write mismatch: file on disk differs from what was written (starts %q) - the write may be partial, or something (formatter/other agent) rewrote it immediately; re-read before further edits", trimmed)
+			mismatchMsg := fmt.Sprintf("post-write mismatch: file on disk differs from what was written (starts %q) - the write may be partial, or something (formatter/other agent) rewrote it immediately; re-read before further edits", trimmed)
+			ctx := newCheckContext(filePath, oldContent, string(disk))
+			if extra := formatWarnings(runChecksParallel(ctx)); extra != "" {
+				return mismatchMsg + " | " + extra
+			}
+			return mismatchMsg
 		}
 	}
 	ctx := newCheckContext(filePath, oldContent, newContent)
@@ -145,6 +159,25 @@ func normalizeIntegrityMsg(msg string) string {
 			for i < len(msg) && msg[i] >= '0' && msg[i] <= '9' {
 				i++
 			}
+			// #2132: plural reference lists ("lines 3, 7, 11") - after the
+			// first number, keep consuming ", <digits>" groups so the whole
+			// list collapses into ONE placeholder instead of leaking the
+			// tail numbers (which shift with content movement like the head).
+			for i < len(msg) && (msg[i] == ',' || msg[i] == ' ') {
+				j := i
+				for j < len(msg) && (msg[j] == ',' || msg[j] == ' ') {
+					j++
+				}
+				k := j
+				for k < len(msg) && msg[k] >= '0' && msg[k] <= '9' {
+					k++
+				}
+				if k > j {
+					i = k
+				} else {
+					break
+				}
+			}
 			b.WriteString("#")
 			continue
 		}
@@ -157,8 +190,30 @@ func normalizeIntegrityMsg(msg string) string {
 // isLineRefPrefix reports whether the text before a digit run ends with
 // a line-reference marker: "line " or "line " at a message boundary -
 // matching the check messages' "line %d:" / "opened at line %d" shapes.
+// isLineRefPrefix reports whether the text before a digit run ends with
+// a line-reference marker: the singular "line N" / "opened at line N"
+// shapes AND the plural "lines N, M" shape emitted by the Python indent
+// check (#2132: the #2125 fix collapsed only the singular - plural lists
+// escaped normalization and surfaced as fake new problems on any line
+// shift).
 func isLineRefPrefix(before string) bool {
-	return strings.HasSuffix(before, "line ")
+	return strings.HasSuffix(before, "line ") || strings.HasSuffix(before, "lines ")
+}
+
+// mirrorWriteTimeGoFormat applies the same gofmt transform the write tools
+// apply at persist time (internal/tool formatGoBytes) so the integrity
+// pipeline compares against what was ACTUALLY written (#2132). Non-Go paths
+// and unparseable content pass through unchanged (the tools fall back the
+// same way).
+func mirrorWriteTimeGoFormat(path, content string) string {
+	if filepath.Ext(path) != ".go" {
+		return content
+	}
+	formatted, err := format.Source([]byte(content))
+	if err != nil {
+		return content
+	}
+	return string(formatted)
 }
 
 func registerAllChecks() {
