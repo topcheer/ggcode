@@ -4,10 +4,36 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/vcs"
 )
+
+// gitAddArgsDirLike reports whether any git_add file argument is
+// directory-shaped: "."/"..", trailing slash, glob chars, or - #2131 - a
+// BARE directory name ("config", no slash/glob), which is a directory in
+// git semantics and the most natural agent phrasing, yet matched none of
+// the #1687 shape checks. Bare names are resolved with os.Stat relative
+// to CWD and to the repo dir.
+func gitAddArgsDirLike(dir string, files []string) bool {
+	for _, f := range files {
+		tf := strings.TrimSpace(f)
+		if tf == "." || tf == ".." || strings.HasSuffix(tf, "/") || strings.ContainsAny(tf, "*?[") {
+			return true
+		}
+		if fi, err := os.Stat(f); err == nil && fi.IsDir() {
+			return true
+		}
+		if dir != "" {
+			if fi, err := os.Stat(filepath.Join(dir, f)); err == nil && fi.IsDir() {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // GitAdd implements the git_add tool.
 type GitAdd struct {
@@ -99,15 +125,7 @@ func (t GitAdd) Execute(ctx context.Context, input json.RawMessage) (Result, err
 	// advisory went silent exactly where mass-staging is most likely to
 	// sweep in secrets. Scan what actually landed in the index instead.
 	if secretWarning == "" {
-		dirLike := false
-		for _, f := range args.Files {
-			tf := strings.TrimSpace(f)
-			if tf == "." || tf == ".." || strings.HasSuffix(tf, "/") || strings.ContainsAny(tf, "*?[") {
-				dirLike = true
-				break
-			}
-		}
-		if dirLike {
+		if gitAddArgsDirLike(dir, args.Files) {
 			if staged := stagedSensitiveFiles(ctx, dir); len(staged) > 0 {
 				secretWarning = checkSensitiveFiles(staged)
 			}
