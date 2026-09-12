@@ -145,6 +145,20 @@ func (m *Model) renderIMEditSelect(s *imAdapterEditState) string {
 	return strings.Join(body, "\n")
 }
 
+// maskedEditValue masks the edit-input ECHO for secret-looking fields
+// (#2169): the input buffer keeps the real value (saving semantics
+// unchanged), but the rendered frame showed the whole plaintext -
+// Enter means "edit", not "reveal", and scrollback keeps the leak for
+// the session's lifetime. Mirrors the list view's #2158 masking; the
+// same-repo precedent (stream_panel/onboard) masks secret echoes too.
+func maskedEditValue(field, value string) string {
+	name := strings.TrimPrefix(field, "env.")
+	if looksLikeSecretField(name) {
+		return maskSecret(value)
+	}
+	return value
+}
+
 // renderIMEditInput renders the text input view for editing a field value.
 func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 	if s == nil || s.mode != imEditInput {
@@ -155,7 +169,7 @@ func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 		fmt.Sprintf(" %s", m.t("panel.im.edit.adapter", s.adapterName)),
 		"",
 		fmt.Sprintf(" %s", m.t("panel.im.edit.field", s.editField)),
-		fmt.Sprintf(" %s%s█", m.t("panel.im.edit.new_value"), s.editInput),
+		fmt.Sprintf(" %s%s█", m.t("panel.im.edit.new_value"), maskedEditValue(s.editField, s.editInput)),
 		"",
 		renderPasteShortcutHint(m.currentLanguage()),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.im.edit.input_hint")),
