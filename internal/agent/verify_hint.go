@@ -957,8 +957,12 @@ func stripEnvAssignments(cmd string) string {
 // (quote context is not tracked - build/verify commands in practice don't
 // quote these operators; worst case a segment is checked and mismatches).
 func splitCompoundCommand(cmd string) []string {
+	// '&' separates both `&&` sequences and background `cmd &` forms -
+	// #2122: without it, `cd /app && go test` stayed ONE segment whose
+	// first word is cd (a shell builtin with no Linux binary), so the
+	// preflight never reached the real command after it.
 	return strings.FieldsFunc(cmd, func(r rune) bool {
-		return r == ';' || r == '|'
+		return r == ';' || r == '|' || r == '&'
 	})
 }
 
