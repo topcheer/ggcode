@@ -8,7 +8,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -113,11 +112,6 @@ func WritePIDFile(path string, pid int, sessionID, workingDir string) error {
 	// cleanup paths). Caller is responsible for closing the file when the
 	// daemon shuts down.
 	return nil
-}
-
-// RemovePIDFile deletes the PID file.
-func RemovePIDFile(path string) error {
-	return os.Remove(path)
 }
 
 // ReadPIDFile reads daemon info from a PID file.
@@ -383,9 +377,4 @@ func CleanupDaemon(workingDir string) {
 		return
 	}
 	_ = os.Remove(pidPath)
-}
-
-// FormatPID returns a human-readable PID string.
-func FormatPID(pid int) string {
-	return strconv.Itoa(pid)
 }

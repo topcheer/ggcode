@@ -92,11 +92,6 @@ func WithTimeout(d time.Duration) HandlerOption {
 	return func(h *TaskHandler) { h.timeout = d }
 }
 
-// WithOnTaskEvent sets the callback for task lifecycle events.
-func WithOnTaskEvent(fn func(TaskEventMessage)) HandlerOption {
-	return func(h *TaskHandler) { h.onTaskEvent = fn }
-}
-
 // SetOnTaskEvent sets the callback at runtime.
 func (h *TaskHandler) SetOnTaskEvent(fn func(TaskEventMessage)) {
 	h.mu.Lock()
