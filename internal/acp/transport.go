@@ -56,7 +56,13 @@ type Transport struct {
 // actually written, so callers keep write-completion semantics.
 type outboundMsg struct {
 	data []byte
-	ack  chan struct{}
+	// ack (blocking class only) carries the write outcome: the writer
+	// goroutine sends the underlying Write error (nil on success) so the
+	// caller sees real failures (#2147 - ack used to mean merely
+	// "dequeued" and EPIPE etc. were swallowed, leaving permission
+	// requests silently lost while the caller waited out the full
+	// response timeout). Buffered 1: the writer never blocks on it.
+	ack chan error
 }
 
 // outboundDeadline bounds how long a blocking-class write may wait for
@@ -114,7 +120,18 @@ func (t *Transport) CloseWriter() error {
 	// it does not linger parked on the outbox channel after the underlying
 	// writer is closed - each Transport is one ACP agent connection, and a
 	// never-exiting writer leaked a goroutine per spawned agent.
+	// #2148 P2: "drain-then-exit" must actually WAIT for the drain -
+	// stopWriter only signals; closing the underlying writer immediately
+	// made every still-queued message fail against the closed writer
+	// (probe: 32 queued + slow writer -> 31-32 silently lost, CloseWriter
+	// returning in 5.75µs). Bounded wait, then close regardless: a stuck
+	// writer must not turn Close into a hang.
 	t.stopWriter()
+	select {
+	case <-t.writerDone:
+	case <-time.After(outboundDeadline):
+		debug.Log("acp", "CloseWriter: outbound drain timed out, closing anyway")
+	}
 	if c, ok := t.Writer.(io.Closer); ok {
 		return c.Close()
 	}
@@ -397,7 +414,8 @@ func (t *Transport) startWriter() {
 					debug.Log("acp", "outbound write failed: %v", werr)
 				}
 				if msg.ack != nil {
-					close(msg.ack)
+					// #2147: deliver the outcome, not just the completion.
+					msg.ack <- werr
 				}
 			}
 			close(t.writerDone)
@@ -438,30 +456,47 @@ func marshalOutbound(v interface{}) ([]byte, error) {
 // holding t.mu across a stuck write.
 func (t *Transport) writeBlocking(data []byte) error {
 	t.startWriter()
-	ack := make(chan struct{})
+	// #2147: ack carries the write OUTCOME, not just completion.
+	ack := make(chan error, 1)
 	deadline := time.NewTimer(outboundDeadline)
 	defer deadline.Stop()
-	// sendMu closes the race between this send and a concurrent stopWriter
-	// closing the channel (#2109 follow-up). A send case on a CLOSED channel
-	// is treated as ready by the select runtime and panics even when other
-	// cases are ready, so the only safe shape is check-stopped-then-send
-	// under the same mutex the closer holds.
-	t.sendMu.Lock()
-	select {
-	case <-t.stopped:
+	// #2148 P1: sendMu is held ONLY for the check-stopped + try-send -
+	// never while parking for queue space. The old shape (a select
+	// send/deadline park under sendMu) froze the droppable path (the
+	// per-token session/update stream, agent_loop.go:408/421/441/455)
+	// on sendMu.Lock for up to 10s whenever a blocking write was queued
+	// behind a full queue - probe: writeDroppable 166ns control vs
+	// 9.70s with a parked writeBlocking. A poll-retry loop keeps every
+	// channel send guarded (a send on the closed outbox would panic),
+	// and the sendMu hold shrinks to a non-blocking attempt, which also
+	// bounds stopWriter's lock wait.
+	for {
+		t.sendMu.Lock()
+		select {
+		case <-t.stopped:
+			t.sendMu.Unlock()
+			return fmt.Errorf("transport writer stopped: peer connection closed")
+		default:
+		}
+		select {
+		case t.outbox <- outboundMsg{data: data, ack: ack}:
+			t.sendMu.Unlock()
+			goto queued
+		default:
+		}
 		t.sendMu.Unlock()
-		return fmt.Errorf("transport writer stopped: peer connection closed")
-	default:
+		select {
+		case <-deadline.C:
+			return fmt.Errorf("outbound queue full: peer is not reading (dropped %d notifications so far)", t.dropped.Load())
+		case <-time.After(2 * time.Millisecond):
+		}
 	}
+queued:
 	select {
-	case t.outbox <- outboundMsg{data: data, ack: ack}:
-		t.sendMu.Unlock()
-	case <-deadline.C:
-		t.sendMu.Unlock()
-		return fmt.Errorf("outbound queue full: peer is not reading (dropped %d notifications so far)", t.dropped.Load())
-	}
-	select {
-	case <-ack:
+	case werr := <-ack:
+		if werr != nil {
+			return fmt.Errorf("writing JSON-RPC message: %w", werr)
+		}
 		return nil
 	case <-deadline.C:
 		return fmt.Errorf("outbound write stalled: peer is not reading")
