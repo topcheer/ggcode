@@ -583,6 +583,7 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 			if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
 				return fmt.Errorf("persisting API key for vendor %q: %w", name, err)
 			}
+			syncVendorKeyEnv(name, apiKey) // #2105: keep both historic names in lockstep
 			vc.APIKey = "${" + envVarName + "}"
 		}
 	}
