@@ -444,7 +444,16 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 
 					case "message_delta":
-						outputTokens = int(event.Usage.OutputTokens)
+						// #2129: symmetric zero-guard with the input/cache tokens
+						// below (#722/#1168): the SSE protocol allows MULTIPLE
+						// message_delta events (final value in the last one) - a
+						// gateway replaying/synthesizing a trailing delta with an
+						// all-zero Usage zeroed the accumulated output count,
+						// skewing cost/context stats low while input stayed
+						// guarded.
+						if event.Usage.OutputTokens > 0 {
+							outputTokens = int(event.Usage.OutputTokens)
+						}
 						// message_delta in the Anthropic SSE protocol only carries
 						// output_tokens reliably. input_tokens here is often 0 or
 						// just the non-cached portion. Do NOT overwrite inputTokens
