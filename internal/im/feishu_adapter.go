@@ -26,6 +26,8 @@ package im
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -620,6 +622,34 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #2110: Feishu's Encrypt Key callback protocol. When the console has
+	// an Encrypt Key configured, the ENTIRE body is {"encrypt":"<b64>"} -
+	// the signature above is computed over the raw (encrypted) body so it
+	// still passes, but header/token/challenge all live INSIDE the
+	// ciphertext. Previously the encrypt field was never read: the header
+	// assertion below failed, and every encrypted event was silently
+	// dropped with a bare 200 and no log of any level. Official scheme:
+	// AES-256-CBC, key = sha256(encrypt_key), IV = first 16 bytes of the
+	// key, PKCS7-padded JSON payload.
+	if enc, ok := payload["encrypt"].(string); ok && enc != "" {
+		if a.encryptKey == "" {
+			debug.Log("feishu", "adapter=%s webhook body is encrypted (encrypt key set in the console) but no encrypt_key configured - dropping", a.name)
+			http.Error(w, "encrypted callback but no encrypt_key configured", http.StatusBadRequest)
+			return
+		}
+		decrypted, derr := decryptFeishuPayload(enc, a.encryptKey)
+		if derr != nil {
+			debug.Log("feishu", "adapter=%s webhook decrypt failed: %v", a.name, derr)
+			http.Error(w, "decrypt failed", http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(decrypted, &payload); err != nil {
+			debug.Log("feishu", "adapter=%s decrypted webhook payload is not JSON: %v", a.name, err)
+			http.Error(w, "invalid decrypted JSON", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// Verify the verification token when configured (#955). Previously this
 	// config was dead (never checked), leaving an unauthenticated callback
 	// surface when encrypt_key was not set.
@@ -702,6 +732,37 @@ func (a *feishuAdapter) webhookTokenValid(payload map[string]any) bool {
 		token, _ = payload["token"].(string)
 	}
 	return token == a.verifyToken
+}
+
+// decryptFeishuPayload implements Feishu's Encrypt Key callback scheme
+// (#2110): AES-256-CBC with key = sha256(encrypt_key), IV = the first 16
+// bytes of that key, base64-encoded ciphertext, PKCS7-padded JSON payload.
+func decryptFeishuPayload(encB64, encryptKey string) ([]byte, error) {
+	ciphertext, err := base64.StdEncoding.DecodeString(encB64)
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode: %w", err)
+	}
+	key := sha256.Sum256([]byte(encryptKey))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("new cipher: %w", err)
+	}
+	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("ciphertext length %d is not a multiple of the block size", len(ciphertext))
+	}
+	plain := make([]byte, len(ciphertext))
+	cipher.NewCBCDecrypter(block, key[:aes.BlockSize]).CryptBlocks(plain, ciphertext)
+	// Strip PKCS7 padding.
+	pad := int(plain[len(plain)-1])
+	if pad <= 0 || pad > aes.BlockSize || pad > len(plain) {
+		return nil, fmt.Errorf("invalid PKCS7 padding")
+	}
+	for _, p := range plain[len(plain)-pad:] {
+		if int(p) != pad {
+			return nil, fmt.Errorf("invalid PKCS7 padding bytes")
+		}
+	}
+	return plain[:len(plain)-pad], nil
 }
 
 func (a *feishuAdapter) verifySignature(timestamp, nonce, body, signature string) bool {
