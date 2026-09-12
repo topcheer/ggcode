@@ -195,10 +195,16 @@ func (c *InteractiveRuntimeCore) Close() {
 		c.Tunnel.Close()
 	}
 	// Shut down tools that hold resources (e.g. browser Chrome processes).
-	// This prevents resource leaks — without it, Chrome processes accumulate.
+	// This prevents resource leaks - without it, Chrome processes accumulate.
 	if c.Registry != nil {
 		c.Registry.CloseAll()
 	}
+	// LSP sessions live in the lsp package's global manager and are NOT
+	// reachable via the Registry (the lsp tools do not implement
+	// tool.Closer) - CloseAll above never touched them. Tear them down with
+	// the proper shutdown/exit handshake so language servers do not rely on
+	// noticing stdin EOF at process death (exit-path review #R192).
+	lsp.ShutdownAll()
 }
 
 // MCPManagerCancel returns the MCP cancel function for callers that need

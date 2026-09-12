@@ -169,6 +169,50 @@ func (m *sessionManager) reapIdle() {
 	}
 }
 
+// shutdownOnce guards ShutdownAll's one-shot semantics: the app-exit path
+// may race a second Close (TUI quit + defer chains), and a double close of
+// stopCh would panic.
+var shutdownOnce sync.Once
+
+// ShutdownAll closes every live LSP session with the proper shutdown/exit
+// handshake and stops the idle reaper. Exit-path review (#R192): the TUI's
+// defer chain closed MCP clients, the browser, and the tunnel, but LSP
+// sessions were never torn down - globalSessions had no shutdown caller
+// (the lsp tools do not implement tool.Closer, so Registry.CloseAll skipped
+// them), and at process death the servers were left to notice stdin EOF on
+// their own: no LSP shutdown handshake, and any server that does not exit
+// on EOF lingered as an orphan. Sessions close in parallel because each
+// handshake is bounded (~2.5s worst case) and sequential N×2.5s would delay
+// app exit unacceptably.
+func ShutdownAll() {
+	shutdownOnce.Do(func() {
+		globalSessions.shutdownAll()
+	})
+}
+
+func (m *sessionManager) shutdownAll() {
+	// Stop the reaper first so it cannot race us re-keying the map. If the
+	// reaper never started, closing stopCh is harmless (nothing selects on
+	// it).
+	close(m.stopCh)
+	m.mu.Lock()
+	sessions := make([]*sessionClient, 0, len(m.sessions))
+	for key, s := range m.sessions {
+		delete(m.sessions, key)
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, s := range sessions {
+		wg.Add(1)
+		go safego.Run("lsp.shutdownSession", func() {
+			defer wg.Done()
+			s.close()
+		})
+	}
+	wg.Wait()
+}
+
 func (s *sessionClient) prepareDocument(ctx context.Context, path, languageID string) (string, error) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
