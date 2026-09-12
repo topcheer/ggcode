@@ -32,6 +32,21 @@ var probeTiers = []int{
 	64_000,    // 64K — minimum viable
 }
 
+// probeTokenBudget caps the total billed input tokens one tiered probe
+// run may spend (#2116). Every tier attempt bills ~tier tokens of padding
+// regardless of outcome, so a small-window model behind a gateway whose
+// overflow errors carry no exact number descended 1M+512K+256K ≈ 1.8M
+// tokens. The cap stops the descent and asks for explicit config; a model
+// that legitimately fits a tier succeeds within the budget because the
+// first tier that fits returns immediately.
+const probeTokenBudget = 1_500_000
+
+// tierFitsBudget reports whether firing the next tier keeps the run within
+// probeTokenBudget given what has already been spent (#2116).
+func tierFitsBudget(spent, nextTier, budget int) bool {
+	return spent+nextTier <= budget
+}
+
 // ProbeResult is delivered asynchronously after a probe completes.
 // probeInflight tracks running background probes by key (#1789 case 1).
 var (
@@ -529,12 +544,21 @@ func probeInBackground(ctx context.Context, p Provider, key string) int {
 	debug.Log("probe", "simple probe inconclusive, starting tiered probing with %d tiers", len(probeTiers))
 
 	// Phase 3: Tiered probing
+	// #2116: every tier attempt bills ~tier tokens of real input; cap the
+	// descent so gateway models whose errors carry no exact window number
+	// cannot silently burn an unbounded ladder.
+	spent := 0
 	for i, tier := range probeTiers {
 		if ctx.Err() != nil {
 			debug.Log("probe", "tiered probe cancelled at tier[%d]=%d: %v", i, tier, ctx.Err())
 			break
 		}
+		if !tierFitsBudget(spent, tier, probeTokenBudget) {
+			debug.Log("probe", "tiered probe budget exhausted after %d tokens (next tier %d would exceed %d) — set context_window in config to avoid probing", spent, tier, probeTokenBudget)
+			return 0
+		}
 		w := tryTierProbe(ctx, p, tier)
+		spent += tier
 		if w > 0 {
 			SetProbeCache(key, w)
 			return w
