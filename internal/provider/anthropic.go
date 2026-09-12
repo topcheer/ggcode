@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -146,14 +147,60 @@ func (p *AnthropicProvider) thinkingBudgetForEffort(effort string) int64 {
 	return budget
 }
 
-// isThinkingError reports whether an API error is related to extended thinking
-// (e.g., the model does not support thinking or budget_tokens is invalid).
+// isThinkingError reports whether an API error is a genuine "model does
+// not support / misconfigured extended thinking" parameter error.
+// #2115: this used to be a bare substring match on "thinking"/
+// "budget_tokens" over the WHOLE message, so unrelated errors mentioning
+// the words anywhere - upstream 5xx "error while streaming thinking
+// blocks", a gateway error whose MODEL NAME contains "thinking", or
+// "429 quota exceeded for budget_tokens plan" - were misjudged, stripped
+// thinking, and retried; the retry often succeeded and the session silently
+// ran without reasoning from then on. Now:
+//   - when a status code is extractable (anthropic SDK apierror) it must
+//     be a 4xx parameter class (400/404/422);
+//   - the message must contain an ANCHORED phrase from real
+//     thinking-rejection errors, not the bare word anywhere in the text.
 func isThinkingError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if sc, ok := asStatusCode(err); ok {
+		if sc != 400 && sc != 404 && sc != 422 {
+			return false
+		}
+	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "thinking") || strings.Contains(msg, "budget_tokens")
+	for _, anchor := range thinkingErrorAnchors {
+		if strings.Contains(msg, anchor) {
+			return true
+		}
+	}
+	return false
+}
+
+// thinkingErrorAnchors are phrases from real API thinking-rejection
+// errors (Anthropic direct and gateway-stringified variants).
+var thinkingErrorAnchors = []string{
+	"does not support thinking",
+	"thinking is not supported",
+	"thinking is not enabled",
+	"thinking is not available",
+	"does not support extended thinking",
+	"budget_tokens must",
+	"budget_tokens is",
+	"budget_tokens: ", // gateway field-error shape: "budget_tokens: ..."
+	"thinking parameter",
+	"max_tokens must be greater than budget_tokens",
+}
+
+// asStatusCode extracts an HTTP status code from a provider error when
+// the concrete type exposes one (the anthropic SDK's apierror.Error does).
+func asStatusCode(err error) (int, bool) {
+	var sc interface{ StatusCode() int }
+	if errors.As(err, &sc) {
+		return sc.StatusCode(), true
+	}
+	return 0, false
 }
 
 // NewAnthropicProvider creates a new Anthropic provider.
@@ -263,7 +310,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	}, providerRetryAttempts)
 	// Retry once without extended thinking if the model rejects it.
 	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
-		debug.Log("anthropic", "Chat: retrying without extended thinking")
+		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
@@ -457,7 +504,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					}
 					// Retry without extended thinking if the model rejects it.
 					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < providerRetryAttempts-1 {
-						debug.Log("anthropic", "Stream: retrying without extended thinking")
+						debug.Log("anthropic", "Stream: retrying without extended thinking (model rejected thinking parameters)")
+						// #2115: the downgrade must be VISIBLE - the user set a
+						// reasoning effort and silently losing it for the rest of
+						// the session looked like the model just being dumb.
+						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Model rejected extended thinking - retrying without it] "}
 						params.Thinking = anthropic.ThinkingConfigParamUnion{}
 						retry = true
 						return
