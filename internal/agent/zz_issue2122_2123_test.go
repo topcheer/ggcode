@@ -35,7 +35,9 @@ func TestVerifyPreflightStripsEnvAssignments(t *testing.T) {
 }
 
 func TestVerifyPreflightCdCompound(t *testing.T) {
-	if !verifyCommandAvailable("cd /tmp && go build ./...") {
+	// `true` is POSIX-guaranteed on every runner (go itself may be off
+	// the test process's PATH in CI).
+	if !verifyCommandAvailable("cd /tmp && true") {
 		t.Fatal("cd compound must probe the real segment (cd is a shell builtin with no Linux binary)")
 	}
 }
