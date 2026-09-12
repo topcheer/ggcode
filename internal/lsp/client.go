@@ -1034,7 +1034,15 @@ func (c *stdioClient) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = c.call(ctx, "shutdown", map[string]any{}, nil)
-	_ = c.notify(ctx, "exit", map[string]any{})
+	// #2144: the exit notification must not share the shutdown call's
+	// deadline - a slow/hung server that consumed the whole 2s budget left
+	// notify's ctx already Done, silently dropping exit and falling
+	// through to Kill (skipping the graceful cleanup the LSP spec's
+	// shutdown->exit sequence provides). Notifications await no response,
+	// so a fresh short deadline costs nothing.
+	exitCtx, exitCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer exitCancel()
+	_ = c.notify(exitCtx, "exit", map[string]any{})
 	_ = c.stdin.Close()
 	select {
 	case <-c.waitErr:

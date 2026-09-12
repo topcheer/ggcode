@@ -65,6 +65,11 @@ type sessionManager struct {
 	sessions map[string]*sessionClient
 	once     sync.Once
 	stopCh   chan struct{}
+	// closed is set under mu by shutdownAll; acquire rejects once set
+	// (#2144): a quit-path tool call racing ShutdownAll used to start a
+	// NEW server, insert it into the drained map, and leave it orphaned
+	// (shutdownOnce already spent, reaper stopped).
+	closed bool
 }
 
 var globalSessions = &sessionManager{sessions: make(map[string]*sessionClient), stopCh: make(chan struct{})}
@@ -104,6 +109,12 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	var session *sessionClient
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// #2144: reject once shutdownAll has drained - otherwise an in-flight
+	// tool call on the quit path (agent ctx is NOT cancelled by quit)
+	// spawned a fresh server AFTER the drain, orphaning it forever.
+	if m.closed {
+		return nil, fmt.Errorf("LSP sessions are shut down")
+	}
 	if existing := m.sessions[key]; existing != nil && !existing.isClosed() {
 		// A cached session whose server process died is worse than no
 		// session: call() would fail fast (#992) while touch() below keeps
@@ -196,6 +207,10 @@ func (m *sessionManager) shutdownAll() {
 	// it).
 	close(m.stopCh)
 	m.mu.Lock()
+	// #2144: set closed IN the same critical section as the drain so
+	// acquire either sees closed and rejects, or completes fully inside
+	// the lock before we drain (no interleave window).
+	m.closed = true
 	sessions := make([]*sessionClient, 0, len(m.sessions))
 	for key, s := range m.sessions {
 		delete(m.sessions, key)
