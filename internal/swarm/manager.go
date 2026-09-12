@@ -249,6 +249,21 @@ func (m *Manager) DeleteTeam(teamID string) error {
 
 	m.mu.Lock()
 	if current, still := m.teams[teamID]; still && current == team {
+		// #2121: a spawn may have inserted a teammate AFTER the drain
+		// phase above (it verified m.teams under both locks, which this
+		// delete had not yet reached). Cancel anything new so no ghost
+		// survives the map delete.
+		team.mu.Lock()
+		for _, tm := range team.Teammates {
+			tm.mu.Lock()
+			if tm.cancel != nil {
+				tm.cancel()
+			}
+			tm.Status = TeammateShuttingDown
+			tm.mu.Unlock()
+			delete(m.results, tm.ID)
+		}
+		team.mu.Unlock()
 		delete(m.teams, teamID)
 	}
 	m.mu.Unlock()
@@ -397,8 +412,20 @@ func (m *Manager) SpawnTeammate(teamID, name, color string, allowedTools []strin
 	tmID := fmt.Sprintf("tm-%d", m.nextTeamID)
 	m.mu.Unlock()
 
-	// Hold team.mu for both the max check and the insert to close the TOCTOU window.
+	// #2121: hold BOTH locks in the canonical order (m.mu -> team.mu,
+	// same as DeleteTeam) across the existence check and the insert.
+	// The old sequence - fetch pointer, drop m.mu, insert under
+	// team.mu only - let a concurrent DeleteTeam finish its map delete
+	// in between: the teammate landed on a detached team, invisible to
+	// ListTeams/SendToTeammate/Shutdown, its goroutine alive to
+	// rootCancel (a ghost teammate).
+	m.mu.Lock()
+	if _, ok := m.teams[teamID]; !ok {
+		m.mu.Unlock()
+		return TeammateSnapshot{}, fmt.Errorf("team %q not found", teamID)
+	}
 	team.mu.Lock()
+	m.mu.Unlock()
 	if len(team.Teammates) >= m.cfg.MaxTeammatesPerTeam {
 		team.mu.Unlock()
 		return TeammateSnapshot{}, fmt.Errorf("team %q already has max %d teammates", teamID, m.cfg.MaxTeammatesPerTeam)
@@ -728,16 +755,42 @@ func (m *Manager) GetTeamResults(teamID string) map[string]string {
 	return out
 }
 
+// teammateGoverned reports whether tmID is still a member of any live
+// team (#2121 late-emit guard).
+func (m *Manager) teammateGoverned(tmID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, team := range m.teams {
+		team.mu.RLock()
+		_, ok := team.Teammates[tmID]
+		team.mu.RUnlock()
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) emit(ev Event) {
 	// Persist teammate results in the results store.
 	// Hold m.mu to protect concurrent access to m.results.
 	switch ev.Type {
 	case "teammate_idle":
 		if ev.Result != "" {
-			debug.Log("swarm", "emit: storing result for %s len=%d", ev.TeammateID, len(ev.Result))
-			m.mu.Lock()
-			m.results[ev.TeammateID] = ev.Result
-			m.mu.Unlock()
+			// #2121: only store results for a teammate that is still
+			// governed by some team. ShutdownTeammate clears m.results
+			// and removes the teammate BEFORE its runner exits; a late
+			// idle emit otherwise wrote the result back AFTER that cleanup,
+			// leaving an entry no later DeleteTeam sweep could reach (its
+			// loop iterates team.Teammates, which no longer has the ID).
+			if m.teammateGoverned(ev.TeammateID) {
+				debug.Log("swarm", "emit: storing result for %s len=%d", ev.TeammateID, len(ev.Result))
+				m.mu.Lock()
+				m.results[ev.TeammateID] = ev.Result
+				m.mu.Unlock()
+			} else {
+				debug.Log("swarm", "emit: dropping late result for ungoverned %s", ev.TeammateID)
+			}
 		} else {
 			debug.Log("swarm", "emit: teammate_idle for %s but Result is empty", ev.TeammateID)
 		}
