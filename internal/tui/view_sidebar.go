@@ -521,35 +521,6 @@ func fitDisplayWidth(s string, maxWidth int) string {
 	return b.String()
 }
 
-type sidebarContextStatLine struct {
-	maxTokens        int
-	usagePercent     int
-	remainingPercent int
-}
-
-func (m Model) sidebarContextStats() (sidebarContextStatLine, bool) {
-	if m.agent == nil {
-		return sidebarContextStatLine{}, false
-	}
-	cm := m.agent.ContextManager()
-	if cm == nil {
-		return sidebarContextStatLine{}, false
-	}
-	maxTokens := cm.ContextWindow()
-	tokenCount := cm.TokenCount()
-	threshold := cm.AutoCompactThreshold()
-	display, ok := uiusage.BuildContextDisplay(tokenCount, maxTokens, threshold)
-	if !ok {
-		return sidebarContextStatLine{}, false
-	}
-
-	return sidebarContextStatLine{
-		maxTokens:        display.MaxTokens,
-		usagePercent:     display.UsagePercent,
-		remainingPercent: display.RemainingPercent,
-	}, true
-}
-
 func (m Model) sidebarSessionUsage() provider.TokenUsage {
 	if m.session == nil {
 		return provider.TokenUsage{}

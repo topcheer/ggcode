@@ -1550,11 +1550,6 @@ func extractSSEResponseForID(body []byte, reqID *ID) (*Response, error) {
 	return nil, fmt.Errorf("parsing SSE response: no Response found in %d event(s)", len(events))
 }
 
-func extractAllSSEData(body []byte) [][]byte {
-	events, _ := extractAllSSEDataChecked(body)
-	return events
-}
-
 // extractAllSSEDataChecked also surfaces scanner errors (#597 M2): a line
 // longer than the 1MB scanner buffer made Scan() stop silently and the old
 // code reported "no data event found" — misdiagnosing an oversized (>1MB)
@@ -1877,13 +1872,6 @@ func (c *Client) sleepUntilClosed(d time.Duration) bool {
 		time.Sleep(min(time.Until(deadline), time.Second))
 	}
 	return !c.closed.Load()
-}
-
-// extractNDJSONResponse parses newline-delimited JSON bodies and returns the
-// first message that parses as a JSON-RPC Response. Handles servers that send
-// a Notification (e.g. logging) before the actual Response, without SSE framing.
-func extractNDJSONResponse(body []byte) *Response {
-	return extractNDJSONResponseForID(body, nil)
 }
 
 // extractNDJSONResponseForID is the ID-matching NDJSON form (#597 M1/M2).

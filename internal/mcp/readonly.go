@@ -41,8 +41,6 @@ var writeKeywords = []string{
 // containsShortRoot reports whether the keyword is a short root (<= 4
 // chars) prone to false positives inside unrelated words ("set" in
 // "dataset", "run" in "truncate", "put" in "output").
-func containsShortRoot(kw string) bool { return len(kw) <= 4 }
-
 // camelToSnake inserts underscores at uppercase boundaries so camelCase
 // write names ("setValue") segment-match the same roots as their snake_case
 // twins ("set_value") - #997. Lowercases as it goes. Read names split
