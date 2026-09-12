@@ -558,9 +558,35 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	// Post-write integrity check: validate each written file's content.
-	if !result.IsError && len(plans) > 0 {
+	// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes
+	// NOTHING - running the read-back comparison against unwritten plans
+	// flagged every plan as a "post-write mismatch" with a wrong semantic
+	// ("write may be partial") on EVERY preview.
+	var dryProbe struct {
+		DryRun bool `json:"dry_run"`
+	}
+	isDryRun := json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
+	// #2143 P2: partial_success mode reports per-file outcomes -
+	// written_paths is authoritative (a pointer probe distinguishes "tool
+	// reports no such field" from "field present but empty", i.e. all
+	// files failed). Unwritten files keep their old disk content and must
+	// not trip the mismatch check.
+	var wpProbe struct {
+		WrittenPaths *[]string `json:"written_paths"`
+	}
+	writtenSet := map[string]bool(nil)
+	if json.Unmarshal([]byte(result.Content), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
+		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
+		for _, p := range *wpProbe.WrittenPaths {
+			writtenSet[p] = true
+		}
+	}
+	if !result.IsError && len(plans) > 0 && !isDryRun {
 		var integrityWarnings []string
 		for _, plan := range plans {
+			if writtenSet != nil && !writtenSet[plan.Path] {
+				continue // not actually written (failed/skipped in partial mode)
+			}
 			if diff.HasChanges(plan.OldContent, plan.NewContent) {
 				// #2138: the multi-file tools (multi_file_write/edit,
 				// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
