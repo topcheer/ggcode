@@ -254,10 +254,6 @@ func isPrivateHost(host string) bool {
 
 // IsPrivateIP returns true if the IP is in a private, loopback, or link-local range.
 // Exported for reuse by the TUI's URL auto-fetch expansion.
-func IsPrivateIP(ip net.IP) bool {
-	return isPrivateIP(ip)
-}
-
 // isPrivateIP returns true if the IP is in a private, loopback, or link-local range.
 func isPrivateIP(ip net.IP) bool {
 	networks, err := getPrivateNetworks()

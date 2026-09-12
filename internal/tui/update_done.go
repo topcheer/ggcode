@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -422,13 +421,4 @@ func (m Model) buildAgentTitleSummary(toolCount int) string {
 		return fmt.Sprintf("Agent task (%d tool calls)", toolCount)
 	}
 	return ""
-}
-
-// shortPath returns the last 1-2 path segments of a file path for brevity.
-func shortPath(path string) string {
-	segs := strings.Split(strings.ReplaceAll(path, "\\", "/"), "/")
-	if len(segs) <= 2 {
-		return strings.Join(segs, "/")
-	}
-	return strings.Join(segs[len(segs)-2:], "/")
 }

@@ -538,13 +538,6 @@ func (w *commandJobWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func partialLineCount(partial string) int {
-	if strings.TrimSpace(partial) == "" {
-		return 0
-	}
-	return 1
-}
-
 func selectCommandLines(lines []string, bufferedFrom, tailLines, sinceLine int) ([]string, bool) {
 	if len(lines) == 0 {
 		return nil, false

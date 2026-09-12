@@ -8,11 +8,6 @@ import (
 // Defaults to true. Can be disabled via configuration.
 var secretScanEnabled = true
 
-// SetSecretScanEnabled enables or disables post-write secret scanning globally.
-func SetSecretScanEnabled(enabled bool) {
-	secretScanEnabled = enabled
-}
-
 // scanAndWarn performs a secret scan on the given file content and returns
 // a formatted warning string if any secrets are found. Returns empty string
 // if scanning is disabled or no secrets are found.
