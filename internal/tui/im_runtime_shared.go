@@ -33,7 +33,7 @@ func (m *Model) ensureCurrentWorkspaceIMManager(unavailableErr, disabledErr stri
 	}
 
 	adapters := make(map[string]bool)
-	for name, acfg := range m.config.IM.Adapters {
+	for name, acfg := range m.config.IMSnapshot().Adapters {
 		adapters[name] = acfg.Enabled
 	}
 	runtimeInit, err := im.InitRuntime(im.RuntimeInitOptions{
@@ -122,7 +122,7 @@ func (m *Model) startIMRuntimeChain(unavailableErr, disabledErr string, autoEnab
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if _, err := im.StartCurrentBindingAdapter(ctx, m.config.IM, m.imManager); err != nil {
+	if _, err := im.StartCurrentBindingAdapter(ctx, m.config.IMSnapshot(), m.imManager); err != nil {
 		// Roll back: without this the next call sees imManager != nil and
 		// short-circuits to fake success forever (#1379).
 		mgr := m.imManager

@@ -269,7 +269,7 @@ func (m *Model) bindQQEntry(entry qqBindingEntry) tea.Cmd {
 		}
 		// #1387-B: a disabled adapter's auto-enable runs on the Update loop
 		// via configMutationMsg; the bind chain continues in next().
-		if cfg, ok := m.config.IM.Adapters[entry.Adapter]; m.config != nil && ok && !cfg.Enabled {
+		if cfg, ok := m.config.GetIMAdapter(entry.Adapter); m.config != nil && ok && !cfg.Enabled {
 			return configMutationMsg{
 				apply: func(m *Model) error {
 					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
@@ -397,7 +397,7 @@ func (m *Model) startQQAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return errors.New(m.t("panel.qq.error.not_configured", name))
 	}
@@ -410,7 +410,7 @@ func (m *Model) startQQAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformQQ)) {
 		return errors.New(m.t("panel.qq.error.not_qq_adapter", name))
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m Model) qqBindingEntries() []qqBindingEntry {
@@ -436,7 +436,7 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformQQ)) {
 			keys = append(keys, name)
 		}
@@ -457,7 +457,7 @@ func (m Model) qqBindingEntries() []qqBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     qqStatePtr(adapterStates[name]),
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}

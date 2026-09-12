@@ -68,7 +68,7 @@ func (m *Model) enterIMEditSelect(adapterName string) imAdapterEditState {
 	if m.config == nil {
 		return s
 	}
-	adapter, ok := m.config.IM.Adapters[adapterName]
+	adapter, ok := m.config.GetIMAdapter(adapterName)
 	if !ok {
 		return s
 	}
@@ -301,7 +301,7 @@ func (m *Model) saveIMEditField(adapterName, field, value string) tea.Cmd {
 					// down while the user saw "saved".
 					if m.imManager != nil && m.isAdapterRunning(adapterName) {
 						m.imManager.StopAdapter(adapterName)
-						if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
+						if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), adapterName, m.imManager); err != nil {
 							return imEditResultMsg{adapterName: adapterName, field: field, err: fmt.Errorf("saved, but adapter restart failed: %w", err)}
 						}
 					}

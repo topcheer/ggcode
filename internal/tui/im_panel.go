@@ -418,7 +418,7 @@ func (m *Model) disableAllIMChannels() tea.Cmd {
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
-					for name := range m.config.IM.Adapters {
+					for name := range m.config.IMSnapshot().Adapters {
 						if err := m.config.SetIMAdapterEnabled(name, false); err != nil {
 							return fmt.Errorf("persist disable %s failed: %w", name, err)
 						}
@@ -452,7 +452,7 @@ func (m *Model) enableAllIMChannels() tea.Cmd {
 		if m.config != nil {
 			return configMutationMsg{
 				apply: func(m *Model) error {
-					for name := range m.config.IM.Adapters {
+					for name := range m.config.IMSnapshot().Adapters {
 						if err := m.config.SetIMAdapterEnabled(name, true); err != nil {
 							return fmt.Errorf("persist enable %s failed: %w", name, err)
 						}
@@ -576,7 +576,7 @@ func (m Model) imChannelEntries() []imChannelEntry {
 		// instance changed it, or ApplyAdapterConfig hasn't run yet.
 		configDisabled := false
 		if m.config != nil {
-			if ac, ok := m.config.IM.Adapters[adapterName]; ok {
+			if ac, ok := m.config.GetIMAdapter(adapterName); ok {
 				configDisabled = !ac.Enabled
 			}
 		}

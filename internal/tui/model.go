@@ -1182,11 +1182,14 @@ func (m *Model) refreshIMRuntimeHooks() {
 		}
 	})
 	// Set up restart callback so UnmuteBinding/EnableBinding can reconnect adapters.
+	// #2152: snapshot the IM config at registration time — the callback outlives
+	// this frame and must not read the live Adapters map concurrently with
+	// Update-loop writers.
 	if m.config != nil {
-		cfg := m.config
+		snap := m.config.IMSnapshot()
 		mgr := m.imManager
 		m.imManager.SetOnRestart(func(adapterName string) error {
-			return im.StartNamedAdapter(context.Background(), cfg.IM, adapterName, mgr)
+			return im.StartNamedAdapter(context.Background(), snap, adapterName, mgr)
 		})
 	}
 }
@@ -1209,7 +1212,7 @@ func (m *Model) bindIMSession() {
 	})
 	if m.config != nil {
 		adapters := make(map[string]bool)
-		for name, cfg := range m.config.IM.Adapters {
+		for name, cfg := range m.config.IMSnapshot().Adapters {
 			adapters[name] = cfg.Enabled
 		}
 		m.imManager.ApplyAdapterConfig(adapters)

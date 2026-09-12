@@ -239,7 +239,7 @@ func (m *Model) bindDingtalkEntry(entry dingtalkBindingEntry) tea.Cmd {
 		// it. Follow the qq pattern: mutate via configMutationMsg, continue
 		// the bind in next().
 		if m.config != nil {
-			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
 					apply: func(m *Model) error {
 						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
@@ -340,7 +340,7 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 				// #1794 case 2: auto-enable on the Update loop - the next()
 				// closure's startXXXAdapterIfNeeded used to write the map
 				// from the Cmd goroutine (#1367 family).
-				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
 				return nil
@@ -381,7 +381,7 @@ func (m *Model) startDingtalkAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return errors.New(m.t("panel.dingtalk.error.not_configured", name))
 	}
@@ -395,7 +395,7 @@ func (m *Model) startDingtalkAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDingTalk)) {
 		return errors.New(m.t("panel.dingtalk.error.not_dingtalk_adapter", name))
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m Model) dingtalkBindingEntries() []dingtalkBindingEntry {
@@ -421,7 +421,7 @@ func (m Model) dingtalkBindingEntries() []dingtalkBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformDingTalk)) {
 			keys = append(keys, name)
 		}
@@ -442,7 +442,7 @@ func (m Model) dingtalkBindingEntries() []dingtalkBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     dingtalkStatePtr(adapterStates[name]),
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
@@ -523,7 +523,7 @@ func (m *Model) dingtalkEnableMutation(name string, next func(m *Model) tea.Msg)
 		},
 		next: func(m *Model) tea.Cmd {
 			return func() tea.Msg {
-				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
 					return dingtalkBindResultMsg{err: err}
 				}
 				if next == nil {

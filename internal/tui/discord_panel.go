@@ -240,7 +240,7 @@ func (m *Model) bindDiscordEntry(entry discordBindingEntry) tea.Cmd {
 		// it. Follow the qq pattern: mutate via configMutationMsg, continue
 		// the bind in next().
 		if m.config != nil {
-			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
 					apply: func(m *Model) error {
 						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
@@ -337,7 +337,7 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 				// #1794 case 2: auto-enable on the Update loop - the next()
 				// closure's startXXXAdapterIfNeeded used to write the map
 				// from the Cmd goroutine (#1367 family).
-				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
 				return nil
@@ -374,7 +374,7 @@ func (m *Model) startDiscordAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return errors.New(m.t("panel.discord.error.not_configured", name))
 	}
@@ -390,7 +390,7 @@ func (m *Model) startDiscordAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformDiscord)) {
 		return errors.New(m.t("panel.discord.error.not_discord_adapter", name))
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m Model) discordBindingEntries() []discordBindingEntry {
@@ -416,7 +416,7 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformDiscord)) {
 			keys = append(keys, name)
 		}
@@ -437,7 +437,7 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     discordStatePtr(adapterStates[name]),
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}
