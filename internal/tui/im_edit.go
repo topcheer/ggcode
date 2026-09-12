@@ -372,7 +372,7 @@ func maskSecret(value string) string {
 // Duplicated from config package to avoid import cycle concerns.
 func looksLikeSecretField(key string) bool {
 	lower := strings.ToLower(key)
-	for _, pattern := range []string{"secret", "token", "password", "credential"} {
+	for _, pattern := range []string{"secret", "token", "password", "credential", "key"} {
 		if strings.Contains(lower, pattern) {
 			return true
 		}

@@ -187,7 +187,7 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 // Matches: secret, token, password, credential (case-insensitive, as substring).
 func looksLikeSecretField(key string) bool {
 	lower := strings.ToLower(key)
-	for _, pattern := range []string{"secret", "token", "password", "credential"} {
+	for _, pattern := range []string{"secret", "token", "password", "credential", "key"} {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
