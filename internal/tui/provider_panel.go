@@ -208,11 +208,26 @@ func (p *providerPanelState) selectedModel() string {
 func (p *providerPanelState) startEditing(field, initialValue string) {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
+	// #2173: API-key-class fields echo masked - the repo's own convention
+	// (onboard.go, stream_panel.go) is EchoPassword for secret inputs; this
+	// panel echoed every typed character in cleartext (shoulder-surfing /
+	// screen-recording over /provider edit and the wizards). The buffer
+	// still holds the real value for saving.
+	if isProviderSecretField(field) {
+		ti.EchoMode = textinput.EchoPassword
+	}
 	ti.SetValue(initialValue)
 	ti.CursorEnd()
 	ti.Focus()
 	p.editingField = field
 	p.editInput = ti
+}
+
+// isProviderSecretField reports whether an edit field holds key
+// material (#2173): api_key-class fields on vendors and endpoints.
+func isProviderSecretField(field string) bool {
+	lower := strings.ToLower(field)
+	return strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "password")
 }
 
 func (m *Model) configView() *ConfigView {
@@ -1054,6 +1069,7 @@ func (m *Model) handleNewVendorStep() (Model, tea.Cmd) {
 		panel.newVendorStep = newVendorStepAPIKey
 		ti := textinput.New()
 		ti.Prompt = "❯ "
+		ti.EchoMode = textinput.EchoPassword // #2173: secret input echo
 		ti.Focus()
 		panel.newVendorInput = ti
 		panel.message = ""
@@ -1145,6 +1161,7 @@ func (m *Model) handleNewEndpointStep() (Model, tea.Cmd) {
 		panel.newEndpointStep = newEndpointStepAPIKey
 		ti := textinput.New()
 		ti.Prompt = "❯ "
+		ti.EchoMode = textinput.EchoPassword // #2173: secret input echo
 		ti.Focus()
 		panel.newVendorInput = ti
 		panel.message = ""

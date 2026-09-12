@@ -297,6 +297,13 @@ func (m *Model) generateQQShareLink(entry qqBindingEntry) tea.Cmd {
 			return qqBindResultMsg{err: err}
 		}
 		callbackData := qqShareCallbackData(m.currentWorkspacePath())
+		// #2172: an over-long (Chinese workspace names hit 33 bytes at 11
+		// chars) target ID used to yield an EMPTY callback silently - the
+		// QR rendered fine and claimed success, but scanning it could never
+		// pair (no workspace identifier in the callback). Fail loudly.
+		if callbackData == "" {
+			return qqBindResultMsg{err: fmt.Errorf("workspace directory name too long for QQ pairing callback (>32 bytes): %s", defaultQQTargetID(m.currentWorkspacePath()))}
+		}
 		link, err := m.imManager.GenerateShareLink(context.Background(), entry.Adapter, callbackData)
 		if err != nil {
 			return qqBindResultMsg{err: err}
