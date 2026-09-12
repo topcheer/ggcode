@@ -490,14 +490,27 @@ func (m *Manager) reapInactiveAgents() {
 	threshold := time.Now().Add(-m.inactivityTimeout)
 	m.mu.Lock()
 	var stale []string
+	var stalePending []string
 	for id, sa := range m.agents {
 		sa.mu.Lock()
 		isRunning := sa.Status == StatusRunning && sa.goroutineStarted
+		isPending := sa.Status == StatusPending && !sa.goroutineStarted
 		isStale := !sa.lastActivity.IsZero() && sa.lastActivity.Before(threshold)
 		toolRunning := sa.toolExecuting
 		sa.mu.Unlock()
 		if isRunning && isStale && !toolRunning {
 			stale = append(stale, id)
+			continue
+		}
+		// #2119: a Pending entry whose goroutine never started has NO other
+		// reclamation path - probe-verified: it holds a concurrency slot
+		// (Spawn counts Pending) and Wait blocks forever. Current callers
+		// start Run immediately after Spawn, so this only fires on future
+		// contract violations - the watchdog then fails the entry visibly
+		// instead of leaking the slot. Pending entries have zero
+		// lastActivity; use CreatedAt as the age clock.
+		if isPending && sa.CreatedAt.Before(threshold) {
+			stalePending = append(stalePending, id)
 		}
 	}
 	m.mu.Unlock()
@@ -512,6 +525,29 @@ func (m *Manager) reapInactiveAgents() {
 		safego.Go("subagent.watchdog.reclaim", func() {
 			m.ensureSlotReclaimed(staleID, m.reclaimGrace())
 		})
+	}
+	// #2119: fail never-started Pending entries so the slot frees and a
+	// blocked Wait unblocks. No goroutine exists, so there is nothing to
+	// cancel - flip the entry terminal directly.
+	for _, id := range stalePending {
+		m.mu.Lock()
+		sa, ok := m.agents[id]
+		if !ok {
+			m.mu.Unlock()
+			continue
+		}
+		sa.mu.Lock()
+		if sa.Status == StatusPending && !sa.goroutineStarted {
+			sa.Status = StatusFailed
+			sa.Error = fmt.Errorf("sub-agent never started (pending for over %v); spawn/Run contract violated", m.inactivityTimeout)
+			sa.EndedAt = time.Now()
+			if sa.done != nil {
+				close(sa.done)
+			}
+		}
+		sa.mu.Unlock()
+		m.mu.Unlock()
+		debug.Log("subagent", "watchdog: failed never-started pending sub-agent %s (slot reclaimed)", id)
 	}
 	// Also purge old terminal agents to bound memory growth
 	m.purgeTerminalAgents()
@@ -543,6 +579,30 @@ func (m *Manager) Shutdown() {
 
 // Spawn creates a new sub-agent with the given task and returns its ID.
 func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx context.Context) string {
+	// #2119: after Shutdown cancelled rootCtx there is no run loop left -
+	// a late Spawn used to register a permanently-Pending entry that held
+	// a concurrency slot forever and made Wait block indefinitely.
+	select {
+	case <-m.rootCtx.Done():
+		errID := fmt.Sprintf("sa-shutdown-%d", time.Now().UnixNano())
+		sa := &SubAgent{
+			ID:           errID,
+			Name:         name,
+			Task:         task,
+			DisplayTask:  displayTask,
+			Status:       StatusFailed,
+			CurrentPhase: "rejected",
+			CreatedAt:    time.Now(),
+			Error:        fmt.Errorf("subagent manager is shutting down"),
+			done:         make(chan struct{}),
+		}
+		close(sa.done)
+		m.mu.Lock()
+		m.agents[errID] = sa
+		m.mu.Unlock()
+		return errID
+	default:
+	}
 	// Enforce concurrent sub-agent limit to prevent resource exhaustion.
 	m.mu.Lock()
 	running := 0
