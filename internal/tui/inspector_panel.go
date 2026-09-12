@@ -36,6 +36,7 @@ const (
 
 type inspectorPanelState struct {
 	kind              inspectorPanelKind
+	allWorkspaces     bool // sessions: A-key toggle; default lists ONLY the current workspace's sessions
 	cursor            int
 	message           string
 	lspLanguageID     string
@@ -62,40 +63,51 @@ func (m *Model) openInspectorPanel(kind inspectorPanelKind) {
 	// Set itemsLoaded=true immediately so inspectorPanelItems() never falls through
 	// to the synchronous inspectorSessionItems() path.
 	if kind == inspectorPanelSessions && m.sessionStore != nil {
-		store := m.sessionStore
-		lang := m.currentLanguage()
-		storeDir := ""
-		if js, ok := store.(*session.JSONLStore); ok {
-			storeDir = js.Dir()
-		} else {
-			storeDir, _ = session.DefaultDir()
-		}
-		// When we have a program, load asynchronously to avoid blocking the UI.
-		// When program is nil (tests), load synchronously since there's no event loop.
-		if m.program != nil {
-			m.inspectorPanel.itemsLoaded = true
-			m.inspectorPanel.loading = true
-			go func() {
-				defer safego.Recover("tui.inspector.loadSessions")
-				sessions, err := store.List()
-				if err != nil {
-					m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: nil, loadErr: err})
-					return
-				}
-				items := buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName)
-				m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: items})
-			}()
-		} else {
-			// Synchronous fallback for headless/test mode
+		m.startSessionItemsLoad()
+	}
+}
+
+// startSessionItemsLoad (re)loads the sessions panel items, honoring the
+// allWorkspaces toggle. Called at panel open and when the user toggles the
+// workspace scope with A.
+func (m *Model) startSessionItemsLoad() {
+	if m.inspectorPanel == nil || m.sessionStore == nil {
+		return
+	}
+	store := m.sessionStore
+	lang := m.currentLanguage()
+	all := m.inspectorPanel.allWorkspaces
+	storeDir := ""
+	if js, ok := store.(*session.JSONLStore); ok {
+		storeDir = js.Dir()
+	} else {
+		storeDir, _ = session.DefaultDir()
+	}
+	// When we have a program, load asynchronously to avoid blocking the UI.
+	// When program is nil (tests), load synchronously since there's no event loop.
+	if m.program != nil {
+		m.inspectorPanel.itemsLoaded = true
+		m.inspectorPanel.loading = true
+		go func() {
+			defer safego.Recover("tui.inspector.loadSessions")
 			sessions, err := store.List()
 			if err != nil {
-				m.inspectorPanel.cachedItems = []inspectorPanelItem{{Title: inspectorText(lang, "sessions_error"), Detail: err.Error(), Disabled: true}}
-				m.inspectorPanel.itemsLoaded = true
+				m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, items: nil, loadErr: err})
 				return
 			}
-			m.inspectorPanel.cachedItems = buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName)
+			items := buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName, all)
+			m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, items: items})
+		}()
+	} else {
+		// Synchronous fallback for headless/test mode
+		sessions, err := store.List()
+		if err != nil {
+			m.inspectorPanel.cachedItems = []inspectorPanelItem{{Title: inspectorText(lang, "sessions_error"), Detail: err.Error(), Disabled: true}}
 			m.inspectorPanel.itemsLoaded = true
+			return
 		}
+		m.inspectorPanel.cachedItems = buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName, all)
+		m.inspectorPanel.itemsLoaded = true
 	}
 }
 
@@ -331,6 +343,20 @@ func (m *Model) handleInspectorPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		}
 	case "enter":
 		return m.handleInspectorPrimaryAction(items)
+	case "a", "A":
+		// Sessions panel: toggle between "current workspace only" (default)
+		// and "all workspaces". The global store holds every workspace's
+		// sessions; listing them all by default mixed unrelated workspaces'
+		// sessions (each locked by its own live instance) into the list.
+		if m.inspectorPanel.kind == inspectorPanelSessions {
+			m.inspectorPanel.allWorkspaces = !m.inspectorPanel.allWorkspaces
+			m.inspectorPanel.cursor = 0
+			m.inspectorPanel.filter = ""
+			m.inspectorPanel.filtering = false
+			m.inspectorPanel.cachedItems = nil
+			m.inspectorPanel.itemsLoaded = false
+			m.startSessionItemsLoad()
+		}
 	case "e", "E":
 		if m.inspectorPanel.kind == inspectorPanelSessions {
 			return m.handleInspectorSessionExport(items)
@@ -568,16 +594,33 @@ func (m Model) inspectorSessionItems() []inspectorPanelItem {
 	} else {
 		storeDir, _ = session.DefaultDir()
 	}
-	return buildSessionInspectorItems(sessions, m.currentLanguage(), storeDir, m.config.ResolveDisplayName)
+	all := m.inspectorPanel != nil && m.inspectorPanel.allWorkspaces
+	return buildSessionInspectorItems(sessions, m.currentLanguage(), storeDir, m.config.ResolveDisplayName, all)
 }
 
 // buildSessionInspectorItems converts session list to inspector items.
 // Extracted so it can be called from a goroutine without holding the Model.
 // storeDir is used to check session locks.
 // displayNameResolver converts vendor/endpoint keys to display names (may be nil).
-func buildSessionInspectorItems(sessions []*session.Session, lang Language, storeDir string, displayNameResolver func(vendor, endpoint string) (string, string)) []inspectorPanelItem {
+func buildSessionInspectorItems(sessions []*session.Session, lang Language, storeDir string, displayNameResolver func(vendor, endpoint string) (string, string), allWorkspaces bool) []inspectorPanelItem {
 	currentWD, _ := os.Getwd()
 	currentWS := session.NormalizeWorkspacePath(currentWD)
+	if !allWorkspaces {
+		// Default scope: only this workspace's sessions. The store is global
+		// (every workspace's sessions in one directory); without the filter the
+		// panel mixed unrelated workspaces' sessions into the list, each shown
+		// "locked" by the live instance working in that workspace.
+		kept := make([]*session.Session, 0, len(sessions))
+		for _, ses := range sessions {
+			if ses != nil && session.NormalizeWorkspacePath(ses.Workspace) == currentWS {
+				kept = append(kept, ses)
+			}
+		}
+		sessions = kept
+		if len(sessions) == 0 {
+			return []inspectorPanelItem{{Title: inspectorText(lang, "sessions_empty_ws"), Summary: inspectorText(lang, "sessions_empty_ws_hint"), Disabled: true}}
+		}
+	}
 	slices.SortStableFunc(sessions, func(a, b *session.Session) int {
 		aCurrent := a != nil && session.NormalizeWorkspacePath(a.Workspace) == currentWS
 		bCurrent := b != nil && session.NormalizeWorkspacePath(b.Workspace) == currentWS
@@ -1180,7 +1223,7 @@ func inspectorText(lang Language, key string, args ...any) string {
 	case LangZhCN:
 		switch key {
 		case "hint_sessions":
-			msg = "↑/↓ 选择 • Enter 恢复 • E 导出 • / 过滤 • Esc 关闭"
+			msg = "↑/↓ 选择 • Enter 恢复 • A 全部工作区 • E 导出 • / 过滤 • Esc 关闭"
 		case "session_filter":
 			msg = "过滤: %s (Esc 清除)"
 		case "hint_search":
@@ -1201,6 +1244,10 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ 选择 • Enter 执行安装 • Esc 返回 /status"
 		case "sessions_empty":
 			msg = "暂无会话。"
+		case "sessions_empty_ws":
+			msg = "当前 workspace 暂无会话"
+		case "sessions_empty_ws_hint":
+			msg = "按 A 显示所有工作区的会话"
 		case "sessions_loading":
 			msg = "正在加载会话..."
 		case "session_locked":
@@ -1374,6 +1421,10 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ select • Enter run installer • Esc back to /status"
 		case "sessions_empty":
 			msg = "No sessions saved."
+		case "sessions_empty_ws":
+			msg = "No sessions in the current workspace"
+		case "sessions_empty_ws_hint":
+			msg = "Press A to show sessions from every workspace"
 		case "sessions_loading":
 			msg = "Loading sessions..."
 		case "session_locked":
