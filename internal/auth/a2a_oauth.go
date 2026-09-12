@@ -481,11 +481,17 @@ func (v *TokenValidator) validateJWT(ctx context.Context, tokenString string) (m
 		return nil, fmt.Errorf("invalid JWT claims")
 	}
 
-	// Verify issuer against whitelist (config URL + any extras)
-	if iss, ok := claims["iss"].(string); ok {
-		if !v.isIssuerAllowed(iss) {
-			return nil, fmt.Errorf("token issuer %q not in allowed list", iss)
-		}
+	// Verify issuer against whitelist (config URL + any extras).
+	// iss is REQUIRED: an iss-less signed JWT used to skip the whitelist
+	// entirely (the if-ok guard fell through), so any key holder could
+	// mint issuer-unattributable tokens. OIDC ID tokens and RFC 9068 JWT
+	// access tokens always carry iss; reject without it.
+	iss, ok := claims["iss"].(string)
+	if !ok {
+		return nil, fmt.Errorf("token missing iss claim")
+	}
+	if !v.isIssuerAllowed(iss) {
+		return nil, fmt.Errorf("token issuer %q not in allowed list", iss)
 	}
 
 	// Verify expiration — reject tokens without exp claim or with wrong type
