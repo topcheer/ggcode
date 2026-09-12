@@ -6,9 +6,13 @@ package im
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+
+	"maunium.net/go/mautrix"
 )
 
 func TestSyncStoreKeyedByNameAndUser(t *testing.T) {
@@ -100,5 +104,37 @@ func TestCryptoDBEmptyUserFallsBackToNameOnly(t *testing.T) {
 	want := filepath.Join(dir, "work.db")
 	if got != want {
 		t.Fatalf("empty userID must keep the name-only path: got %q want %q", got, want)
+	}
+}
+
+// #2112: the M_UNKNOWN_POS self-heal must reset the didFirstSync gate via
+// onTokenReset - the in-process restart performs an initial sync whose
+// replayed timeline must be dropped, exactly like a process restart (the
+// gate existed precisely for that; 37e9de3b left it open and replayed
+// events were processed twice).
+func TestSelfHealingSyncerFiresTokenResetCallback(t *testing.T) {
+	dir := t.TempDir()
+	store := &fileSyncStore{path: filepath.Join(dir, "m.json")}
+	var reset int32
+	wrapped := &selfHealingSyncer{
+		DefaultSyncer: mautrix.NewDefaultSyncer(),
+		store:         store,
+		onTokenReset:  func() { atomic.AddInt32(&reset, 1) },
+	}
+	_, err := wrapped.OnFailedSync(nil, &mautrix.HTTPError{
+		RespError: &mautrix.RespError{ErrCode: "M_UNKNOWN_POS", StatusCode: http.StatusBadRequest},
+	})
+	if err == nil {
+		t.Fatal("M_UNKNOWN_POS must return an error (Sync exits, outer loop reconnects)")
+	}
+	if atomic.LoadInt32(&reset) != 1 {
+		t.Fatal("onTokenReset must fire exactly once on M_UNKNOWN_POS (didFirstSync gate reset #2112)")
+	}
+	// Non-M_UNKNOWN_POS must NOT reset the gate (no initial sync follows).
+	_, _ = wrapped.OnFailedSync(nil, &mautrix.HTTPError{
+		RespError: &mautrix.RespError{ErrCode: "M_LIMIT_EXCEEDED", StatusCode: http.StatusTooManyRequests},
+	})
+	if atomic.LoadInt32(&reset) != 1 {
+		t.Fatal("onTokenReset must not fire for unrelated sync errors")
 	}
 }

@@ -315,7 +315,12 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	// across workspaces, or the homeserver GC'd the stream position)
 	// resets the token and falls back to an initial sync, instead of the
 	// DefaultSyncer's infinite same-token retry loop.
-	client.Syncer = &selfHealingSyncer{DefaultSyncer: syncer, store: syncStoreRef}
+	client.Syncer = &selfHealingSyncer{DefaultSyncer: syncer, store: syncStoreRef, onTokenReset: func() {
+		// #2112: keep the self-heal path semantically identical to a
+		// process restart - the upcoming initial sync replays the recent
+		// per-room timeline, and the gate exists precisely to drop it.
+		a.didFirstSync.Store(false)
+	}}
 
 	a.publishState(true, "connected", "")
 	debug.Log("matrix", "adapter=%s entering sync loop", a.name)
@@ -1336,6 +1341,13 @@ func (s *fileSyncStore) LoadNextBatch(ctx context.Context, userID id.UserID) (st
 type selfHealingSyncer struct {
 	*mautrix.DefaultSyncer
 	store *fileSyncStore
+	// onTokenReset runs when the persisted token is discarded (#2112):
+	// the next Sync is an INITIAL sync whose replayed timeline must hit
+	// the didFirstSync drop gate, exactly like a process restart. Without
+	// this the gate stayed open across the in-process restart and every
+	// replayed event (per-room filter limit 50, seen-window only 5min)
+	// was processed a second time.
+	onTokenReset func()
 }
 
 func (s *selfHealingSyncer) OnFailedSync(res *mautrix.RespSync, err error) (time.Duration, error) {
@@ -1344,6 +1356,9 @@ func (s *selfHealingSyncer) OnFailedSync(res *mautrix.RespSync, err error) (time
 		debug.Log("matrix", "sync token rejected (M_UNKNOWN_POS) - resetting store and restarting sync")
 		if s.store != nil {
 			s.store.resetNextBatch()
+		}
+		if s.onTokenReset != nil {
+			s.onTokenReset()
 		}
 		// #1851 case 1: returning nil used to keep mautrix's sync loop
 		// running with its CACHED local nextBatch (LoadNextBatch is read
