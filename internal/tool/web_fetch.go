@@ -413,12 +413,32 @@ func extractFirstTag(s, tag string) string {
 	if openMatch == nil {
 		return ""
 	}
-	rest := s[openMatch[1]:]
-	closeMatch := closeRe.FindStringIndex(rest)
-	if closeMatch == nil {
-		return ""
+	// #2159: count same-name nesting to the MATCHING close - the old
+	// first-</tag> close handed a nested same-name block back as the
+	// container (an inner <article> comment block silently replaced the
+	// real body). Same discipline as extractTaggedBlock (#2151).
+	start := s[openMatch[1]:]
+	rest := start
+	consumed := 0
+	depth := 1
+	var inner string
+	for {
+		closeMatch := closeRe.FindStringIndex(rest)
+		if closeMatch == nil {
+			return ""
+		}
+		// Any same-name opens INSIDE the segment up to this close bump depth.
+		seg := rest[:closeMatch[0]]
+		nested := len(openRe.FindAllStringIndex(seg, -1))
+		depth += nested
+		depth--
+		if depth == 0 {
+			inner = start[:consumed+closeMatch[0]]
+			break
+		}
+		consumed += closeMatch[1]
+		rest = rest[closeMatch[1]:]
 	}
-	inner := rest[:closeMatch[0]]
 	// Only use if it contains meaningful text (>100 chars)
 	if len(strings.TrimSpace(stripTagsOnly(inner))) < 100 {
 		return ""
@@ -478,12 +498,18 @@ func extractTaggedBlock(s, attrTailRE string) string {
 
 // extractAttrMatch extracts content from a tag with a specific attribute value.
 func extractAttrMatch(s, attr, val string) string {
-	return extractTaggedBlock(s, `\s*`+regexp.QuoteMeta(attr)+`\s*=\s*["']`+regexp.QuoteMeta(val)+`["']`)
+	// #2159: the attribute must start after a delimiter (space/quote) -
+	// a bare `\s*attr=` tail let `data-role="main"` satisfy role= and
+	// the WRONG container win (and a short one silently starve the real
+	// id container of its retry).
+	return extractTaggedBlock(s, `[\s"']`+regexp.QuoteMeta(attr)+`\s*=\s*["']`+regexp.QuoteMeta(val)+`["']`)
 }
 
 // extractByID extracts content from a tag with a specific id attribute.
 func extractByID(s, id string) string {
-	return extractTaggedBlock(s, `[^>]*\bid\s*=\s*["']`+regexp.QuoteMeta(id)+`["']`)
+	// #2159: `\bid=` matched `data-id=` (\b holds across the hyphen);
+	// the delimited form requires a real attribute boundary.
+	return extractTaggedBlock(s, `[^>]*[\s"']id\s*=\s*["']`+regexp.QuoteMeta(id)+`["']`)
 }
 
 // stripTagsOnly removes HTML tags without any entity decoding or whitespace handling.

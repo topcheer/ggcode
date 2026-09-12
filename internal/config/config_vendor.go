@@ -599,6 +599,15 @@ func (c *Config) RemoveVendor(name string) error {
 	if _, ok := c.Vendors[name]; !ok {
 		return fmt.Errorf("vendor %q not found", name)
 	}
+	// #2161: purge the vendor's key material BEFORE the map delete - the
+	// APIKey ref becomes unreachable afterwards. RemoveVendor used to
+	// leave the secret in keys.env (both historic names, per #2105's
+	// lockstep) re-injected into every startup env, silently reused if
+	// the same vendor name was ever re-added.
+	if vc := c.Vendors[name]; vc.APIKey != "" {
+		clearAPIKeyRefEnv(vc.APIKey)
+	}
+	syncVendorKeyEnv(name, "") // both historic names + process env
 	delete(c.Vendors, name)
 	// #1517 case C: same dangling-selection fallback as RemoveEndpoint -
 	// removing the ACTIVE vendor left c.Vendor dangling and popped
