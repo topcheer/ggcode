@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -69,6 +70,11 @@ type matrixAdapter struct {
 
 	// E2EE
 	mach *crypto.OlmMachine
+	// cryptoDBCloser closes the SQLite handle backing the crypto store
+	// (#2126): runOnce re-enters on every reconnect - without closing the
+	// previous handle each cycle leaked one open file (and lock) per
+	// reconnect once the driver-name fix made the opens actually succeed).
+	cryptoDBCloser io.Closer
 
 	// State
 	mu        sync.RWMutex
@@ -350,11 +356,27 @@ func (a *matrixAdapter) openPersistentCryptoStore() (crypto.Store, error) {
 		return nil, fmt.Errorf("create crypto state dir: %w", err)
 	}
 	dbPath := newCryptoDBForAdapter(dir, a.name, a.userID)
-	uri := fmt.Sprintf("sqlite3://file:%s?_txlock=immediate", dbPath)
-	db, err := dbutil.NewWithDialect(uri, "sqlite3")
+	// #2126: the dialect string doubles as the database/sql DRIVER name
+	// (dbutil.NewWithDialect calls sql.Open(rawDialect, uri)). The
+	// dependency tree links modernc.org/sqlite only, whose registered
+	// driver name is "sqlite" - the previous "sqlite3" (mattn's name,
+	// absent from the tree) made every open fail with
+	// 'sql: unknown driver "sqlite3"', silently degrading to MemoryStore
+	// and rotating the Olm identity on every restart (the exact #1404-A
+	// symptom this store was built to fix). DSN drops the "sqlite3://"
+	// scheme - modernc takes a bare file: DSN.
+	uri := fmt.Sprintf("file:%s?_txlock=immediate", dbPath)
+	db, err := dbutil.NewWithDialect(uri, "sqlite")
 	if err != nil {
 		return nil, fmt.Errorf("open crypto db %s: %w", dbPath, err)
 	}
+	// Register the handle so the next runOnce re-entry closes it (#2126).
+	a.mu.Lock()
+	if a.cryptoDBCloser != nil {
+		_ = a.cryptoDBCloser.Close()
+	}
+	a.cryptoDBCloser = db
+	a.mu.Unlock()
 	accountID := fmt.Sprintf("%s|%s", a.homeserver, a.name)
 	deviceID := a.client.DeviceID
 	return crypto.NewSQLCryptoStore(db, nil, accountID, deviceID, []byte(matrixCryptoPickleKey)), nil
@@ -450,7 +472,11 @@ func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
 	// than losing the adapter entirely.
 	store, err := a.openPersistentCryptoStore()
 	if err != nil {
-		debug.Log("matrix", "adapter=%s persistent crypto store unavailable (%v) - falling back to in-memory (E2EE identity will rotate on reconnect)", a.name, err)
+		// #2126: keep the fallback, but make it visible - E2EE identity
+		// rotation is a security-relevant degradation (peers must
+		// re-verify; offline Megolm messages become undecryptable), not a
+		// debug-level detail.
+		debug.Log("matrix", "adapter=%s WARN: persistent crypto store unavailable (%v) - falling back to in-memory; E2EE identity WILL rotate on reconnect and peers must re-verify", a.name, err)
 		store = crypto.NewMemoryStore(nil)
 	}
 
