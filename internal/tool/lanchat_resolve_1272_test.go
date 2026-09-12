@@ -91,3 +91,57 @@ func TestResolveRecipientsUniqueNickStillWorks(t *testing.T) {
 		t.Fatalf("unique nick must resolve, resolved=%v ambiguous=%v", resolved, ambiguous)
 	}
 }
+
+// #2137 variant 1 (forward order): an ambiguous prefix must not swallow a
+// same-batch exact node_id - the old code marked seen BEFORE the ambiguity
+// determination, so "al" polluted both candidates and the later exact
+// "node-a" hit was silently dropped from resolved.
+func TestResolveRecipientsAmbiguousPrefixKeepsExactNodeID(t *testing.T) {
+	tool, hub := newTestLanChatTool(t)
+	addPeer(t, hub, "node-a", "alice")
+	addPeer(t, hub, "node-b", "alex")
+
+	resolved, ambiguous := tool.resolveRecipients([]string{"al", "node-a"})
+	if len(ambiguous) != 1 {
+		t.Fatalf("al must stay ambiguous (alice+alex), got %v", ambiguous)
+	}
+	// Even though doSend refuses the whole batch on ambiguity, the exact
+	// node_id must still RESOLVE - swallowing it made the resolution state
+	// unobservable and depended on the ambiguous short-circuit to look right.
+	if len(resolved) != 1 || resolved[0] != "node-a" {
+		t.Fatalf("exact node_id must resolve alongside the ambiguous prefix, got %v", resolved)
+	}
+}
+
+// #2137 variant 2 (reverse order): an already-resolved peer must NOT be
+// filtered out of a later prefix scan's ambiguity set - the old code let
+// "node-a" (alice) get seen-filtered, collapsing "al" to a unique hit on
+// alex and silently delivering what #1272 demands be refused.
+func TestResolveRecipientsResolvedPeerStillCountsForAmbiguity(t *testing.T) {
+	tool, hub := newTestLanChatTool(t)
+	addPeer(t, hub, "node-a", "alice")
+	addPeer(t, hub, "node-b", "alex")
+
+	resolved, ambiguous := tool.resolveRecipients([]string{"node-a", "al"})
+	if len(resolved) != 1 || resolved[0] != "node-a" {
+		t.Fatalf("node-a must resolve, got %v", resolved)
+	}
+	if len(ambiguous) != 1 {
+		t.Fatalf("al must remain ambiguous even though alice is already resolved, got %v", ambiguous)
+	}
+}
+
+// Unique prefix + already-resolved target in one batch still resolves once.
+func TestResolveRecipientsUniquePrefixDedupesResolved(t *testing.T) {
+	tool, hub := newTestLanChatTool(t)
+	addPeer(t, hub, "node-a", "alice")
+	addPeer(t, hub, "node-b", "bob")
+
+	resolved, ambiguous := tool.resolveRecipients([]string{"node-a", "alice"})
+	if len(ambiguous) != 0 {
+		t.Fatalf("no ambiguity expected, got %v", ambiguous)
+	}
+	if len(resolved) != 1 || resolved[0] != "node-a" {
+		t.Fatalf("duplicate reference to the same peer must resolve once, got %v", resolved)
+	}
+}

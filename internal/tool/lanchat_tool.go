@@ -487,15 +487,28 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 		}
 		// 3. Prefix match - #1272: the old "first wins" break delivered to an
 		// arbitrary peer when the prefix matched several; require uniqueness.
+		// #2137: collect hits WITHOUT touching `seen` first - marking during
+		// the scan (before the ambiguity determination) let one entry's
+		// prefix scan pollute the shared dedup set: a later exact node_id
+		// in the same batch was silently swallowed, and in the reverse
+		// order an ambiguous prefix lost its already-resolved candidate and
+		// was silently delivered to the remaining one - bypassing #1272.
+		// Ambiguity considers ALL matching peers; only the delivered unique
+		// hit enters `seen`. Multi-nick peers still dedupe within the scan
+		// via the local set.
 		var prefixHits []string
+		scanDedup := map[string]bool{}
 		for _, entry := range byPrefix {
-			if strings.HasPrefix(entry.nick, lower) && !seen[entry.id] {
-				seen[entry.id] = true // dedupe multi-nick peers within this scan
+			if strings.HasPrefix(entry.nick, lower) && !scanDedup[entry.id] {
+				scanDedup[entry.id] = true
 				prefixHits = append(prefixHits, entry.id)
 			}
 		}
 		if len(prefixHits) == 1 {
-			resolved = append(resolved, prefixHits[0])
+			if !seen[prefixHits[0]] {
+				resolved = append(resolved, prefixHits[0])
+				seen[prefixHits[0]] = true
+			}
 			continue
 		}
 		if len(prefixHits) > 1 {
