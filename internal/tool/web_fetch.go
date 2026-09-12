@@ -443,7 +443,9 @@ func extractTaggedBlock(s, attrTailRE string) string {
 		return ""
 	}
 	name := s[loc[2]:loc[3]]
-	rest := s[loc[1]:]
+	start := s[loc[1]:]
+	rest := start
+	consumed := 0
 	boundary := regexp.MustCompile(`(?i)<(/?)` + name + `(\s|>|/)`)
 	depth := 1
 	for {
@@ -454,7 +456,13 @@ func extractTaggedBlock(s, attrTailRE string) string {
 		if rest[m[2]:m[3]] == "/" {
 			depth--
 			if depth == 0 {
-				content := rest[:m[0]]
+				// #2151: slice from the ORIGINAL start (right after the
+				// opening tag), not from the advanced rest - rest has
+				// moved past every intermediate same-name tag, so the
+				// old content := rest[:m[0]] dropped each inner same-name
+				// block entirely (a 427B container yielded only its last
+				// 207B child; Wikipedia's #mw-content-text nests 109 divs).
+				content := start[:consumed+m[0]]
 				if len(strings.TrimSpace(stripTagsOnly(content))) < 100 {
 					return ""
 				}
@@ -463,6 +471,7 @@ func extractTaggedBlock(s, attrTailRE string) string {
 		} else {
 			depth++
 		}
+		consumed += m[1]
 		rest = rest[m[1]:]
 	}
 }
