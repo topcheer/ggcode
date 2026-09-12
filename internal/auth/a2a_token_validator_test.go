@@ -71,6 +71,35 @@ func TestTokenValidatorExpiredJWT(t *testing.T) {
 	}
 }
 
+// An iss-less JWT must be rejected even when correctly signed: the issuer
+// whitelist is the validator's core pinning guarantee, and the old if-ok
+// guard let issuer-unattributable tokens through silently.
+func TestTokenValidatorMissingIssRejected(t *testing.T) {
+	tv, err := NewTokenValidator("test-client", "https://example.com",
+		WithHMACSecret("test-hmac-secret"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claims := jwt.MapClaims{
+		"sub": "user123",
+		"aud": "test-client",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		// no "iss"
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte("test-hmac-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = tv.ValidateToken(context.Background(), tokenString)
+	if err == nil {
+		t.Fatal("expected error for iss-less token (issuer whitelist bypass)")
+	}
+}
+
 func TestTokenValidatorNonJWT(t *testing.T) {
 	tv, _ := NewTokenValidator("test-client", "https://example.com")
 	_, err := tv.ValidateToken(context.Background(), "opaque-token-abc123")
