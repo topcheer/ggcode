@@ -374,6 +374,35 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
+	// #2145: return the MultiFileEditContent JSON shape (like the
+	// multi_file_edit family) with the human-readable ✓/✗ lines in
+	// Summary. The previous plain-text result made every downstream
+	// JSON probe fail structurally: the #2143 integrity loop's
+	// written_paths gate (and the checkpoint unmarshal) never saw the
+	// per-file outcome, so partial_success mode kept reporting false
+	// post-write mismatches for files the summary itself listed as
+	// failed - and the tool never stored undo checkpoints.
+	out := MultiFileEditContent{
+		Mode:         "multi_file_write(" + mode + ")",
+		PlannedFiles: len(args.Files),
+		Summary:      sb.String(),
+	}
+	for _, r := range results {
+		switch r.Status {
+		case "written":
+			out.WrittenPaths = append(out.WrittenPaths, r.Path)
+		case "error":
+			out.FailedPaths = append(out.FailedPaths, r.Path)
+		case "skipped", "rolled_back":
+			out.SkippedPaths = append(out.SkippedPaths, r.Path)
+		}
+	}
+	out.WrittenFiles = len(out.WrittenPaths)
+	out.FailedFiles = len(out.FailedPaths)
+	out.SkippedFiles = len(out.SkippedPaths)
+	if content, err := json.Marshal(out); err == nil {
+		return Result{Content: string(content), IsError: isError}, nil
+	}
 	return Result{Content: strings.TrimSuffix(sb.String(), "\n"), IsError: isError}, nil
 }
 
