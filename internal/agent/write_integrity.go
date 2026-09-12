@@ -133,10 +133,15 @@ func normalizeIntegrityMsg(msg string) string {
 	var b strings.Builder
 	i := 0
 	for i < len(msg) {
-		// Replace every decimal run with a placeholder so "line 10" and
-		// "line 15" normalize identically (and so counts do not mask a
-		// changed description either - conservative toward NOT reporting).
-		if msg[i] >= '0' && msg[i] <= '9' {
+		// #2125: normalize ONLY digit runs that are LINE REFERENCES (the
+		// "line N" / "opened at line N" prefixes) so messages shift with
+		// content movement without surfacing as new problems. Count
+		// suffixes ("(%d unclosed total)", "(and %d more)") must keep
+		// their digits: #605 G4 deliberately makes counts part of the
+		// message so a 2→3 worsening write produces a DIFFERENT message -
+		// normalizing every digit made 2→3, 3→4 ... collapse equal and
+		// silenced every worsening past the first.
+		if msg[i] >= '0' && msg[i] <= '9' && isLineRefPrefix(msg[:i]) {
 			for i < len(msg) && msg[i] >= '0' && msg[i] <= '9' {
 				i++
 			}
@@ -147,6 +152,13 @@ func normalizeIntegrityMsg(msg string) string {
 		i++
 	}
 	return b.String()
+}
+
+// isLineRefPrefix reports whether the text before a digit run ends with
+// a line-reference marker: "line " or "line " at a message boundary -
+// matching the check messages' "line %d:" / "opened at line %d" shapes.
+func isLineRefPrefix(before string) bool {
+	return strings.HasSuffix(before, "line ")
 }
 
 func registerAllChecks() {
@@ -654,12 +666,20 @@ func checkEditBlastRadius(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
+	// #2125: build the line sets from the SAME trimmed content the
+	// denominator counts - trailing blank lines used to enter oldSet (and
+	// removed, when the write cleaned them up) while the denominator
+	// excluded them, so deleting 13 trailing blanks on a 20-line file
+	// reported "modified 13 of 20 lines (65%)" and tripped the 60% gate
+	// on pure whitespace cleanup.
+	trimmedOld := strings.TrimRight(oldContent, "\n")
+	trimmedNew := strings.TrimRight(newContent, "\n")
 	oldSet := make(map[string]int)
-	for _, line := range strings.Split(oldContent, "\n") {
+	for _, line := range strings.Split(trimmedOld, "\n") {
 		oldSet[line]++
 	}
 	newSet := make(map[string]int)
-	for _, line := range strings.Split(newContent, "\n") {
+	for _, line := range strings.Split(trimmedNew, "\n") {
 		newSet[line]++
 	}
 
