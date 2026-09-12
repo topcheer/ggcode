@@ -365,7 +365,7 @@ func (m *Model) wecomEnableMutation(name string, next func(m *Model) tea.Msg) te
 		},
 		next: func(m *Model) tea.Cmd {
 			return func() tea.Msg {
-				if err := im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager); err != nil {
+				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
 					return wecomBindResultMsg{err: err}
 				}
 				if next == nil {
@@ -394,7 +394,7 @@ func (m *Model) startWeComAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return fmt.Errorf(m.t("panel.wecom.error.not_configured"), name)
 	}
@@ -409,7 +409,7 @@ func (m *Model) startWeComAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformWeCom)) {
 		return fmt.Errorf(m.t("panel.wecom.error.not_wecom_adapter"), name)
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m *Model) ensureWeComRuntime() error {
@@ -492,7 +492,7 @@ func (m Model) wecomBindingEntries() []wecomBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformWeCom)) {
 			keys = append(keys, name)
 		}
@@ -517,7 +517,7 @@ func (m Model) wecomBindingEntries() []wecomBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}

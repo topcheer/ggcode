@@ -422,7 +422,7 @@ func (m *Model) nostrAdapterNeedsEnable(name string) (bool, error) {
 			return false, nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return false, fmt.Errorf(m.t("panel.nostr.error.not_configured"), name)
 	}
@@ -434,7 +434,7 @@ func (m *Model) nostrAdapterNeedsEnable(name string) (bool, error) {
 
 // startEnabledNostrAdapter brings the (already-enabled) adapter up.
 func (m *Model) startEnabledNostrAdapter(name string) error {
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 // enableNostrAdapterMutation returns the configMutationMsg that performs the
@@ -560,7 +560,7 @@ func (m Model) nostrBindingEntries() []nostrBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformNostr)) {
 			keys = append(keys, name)
 		}
@@ -585,7 +585,7 @@ func (m Model) nostrBindingEntries() []nostrBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}

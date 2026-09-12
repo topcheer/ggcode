@@ -421,7 +421,7 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 				adapterName := "wechat"
 				n := 2
 				for {
-					if _, exists := m.config.IM.Adapters[adapterName]; !exists {
+					if _, exists := func() (bool, bool) { _, ok := m.config.GetIMAdapter(adapterName); return ok, ok }(); !exists {
 						break
 					}
 					adapterName = fmt.Sprintf("wechat-%d", n)
@@ -445,7 +445,7 @@ func (m *Model) saveWechatBotToken(botToken string) tea.Cmd {
 					adapterName := m.lastWechatAdapterName
 					// Start the adapter (binding happens when the first inbound message triggers pairing)
 					if m.imManager != nil {
-						if err := im.StartNamedAdapter(context.Background(), m.config.IM, adapterName, m.imManager); err != nil {
+						if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), adapterName, m.imManager); err != nil {
 							debug.Log("wechat", "saveWechatBotToken: StartNamedAdapter failed: %v", err)
 							// #1398-C: adapter saved but NOT running - surfacing this as
 							// success made users believe the config was live. The token IS
@@ -484,14 +484,14 @@ func (m *Model) startWechatAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return fmt.Errorf("wechat adapter %s not configured", name)
 	}
 	if !adapterCfg.Enabled {
 		return fmt.Errorf("wechat adapter %s is disabled", name)
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 // This only registers the workspace association — the ChannelID/TargetID
@@ -605,7 +605,7 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 
 	// List all wechat adapters from config (not just bound ones)
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformWechat)) {
 			keys = append(keys, name)
 		}
@@ -619,7 +619,7 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 		}
 		entries = append(entries, wechatBindingEntry{
 			Adapter:      name,
-			Disabled:     !m.config.IM.Adapters[name].Enabled,
+			Disabled:     !m.config.IMAdapterEnabled(name),
 			OccupiedBy:   occupied[name],
 			AdapterState: state,
 			Bound:        bound[name],

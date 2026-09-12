@@ -158,40 +158,40 @@ func TestHasInstanceConfig(t *testing.T) {
 func TestMergeInstance_ScalarFields(t *testing.T) {
 	tests := []struct {
 		name      string
-		global    Config
-		instance  Config
+		global    *Config
+		instance  *Config
 		wantModel string
 		wantLang  string
 	}{
 		{
 			name:      "instance no longer fills global Model (session-scoped)",
-			global:    Config{Model: ""},
-			instance:  Config{Model: "gpt-4o-mini"},
+			global:    &Config{Model: ""},
+			instance:  &Config{Model: "gpt-4o-mini"},
 			wantModel: "", // Model is now session-scoped, instance does not override
 		},
 		{
 			name:      "instance does not override non-empty global",
-			global:    Config{Model: "gpt-4o"},
-			instance:  Config{Model: "gpt-4o-mini"},
+			global:    &Config{Model: "gpt-4o"},
+			instance:  &Config{Model: "gpt-4o-mini"},
 			wantModel: "gpt-4o",
 		},
 		{
 			name:     "instance language fills gap",
-			global:   Config{Language: ""},
-			instance: Config{Language: "zh-CN"},
+			global:   &Config{Language: ""},
+			instance: &Config{Language: "zh-CN"},
 			wantLang: "zh-CN",
 		},
 		{
 			name:     "instance language does not override",
-			global:   Config{Language: "en"},
-			instance: Config{Language: "zh-CN"},
+			global:   &Config{Language: "en"},
+			instance: &Config{Language: "zh-CN"},
 			wantLang: "en",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			MergeInstance(&tt.global, &tt.instance)
+			MergeInstance(tt.global, tt.instance)
 			if tt.wantModel != "" && tt.global.Model != tt.wantModel {
 				t.Errorf("Model = %q, want %q", tt.global.Model, tt.wantModel)
 			}

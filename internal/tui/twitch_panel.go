@@ -304,7 +304,7 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 				if err := m.config.AddIMAdapter(name, adapter); err != nil {
 					return err
 				}
-				if cfg, ok := m.config.IM.Adapters[name]; ok && !cfg.Enabled {
+				if cfg, ok := m.config.GetIMAdapter(name); ok && !cfg.Enabled {
 					return m.config.SetIMAdapterEnabled(name, true)
 				}
 				return nil
@@ -341,7 +341,7 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return fmt.Errorf(m.t("panel.twitch.error.not_configured"), name)
 	}
@@ -357,7 +357,7 @@ func (m *Model) startTwitchAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformTwitch)) {
 		return fmt.Errorf(m.t("panel.twitch.error.not_twitch_adapter"), name)
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m *Model) ensureTwitchRuntime() error {
@@ -445,7 +445,7 @@ func (m Model) twitchBindingEntries() []twitchBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformTwitch)) {
 			keys = append(keys, name)
 		}
@@ -470,7 +470,7 @@ func (m Model) twitchBindingEntries() []twitchBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}

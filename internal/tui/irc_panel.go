@@ -331,7 +331,7 @@ func (m *Model) startIRCAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return fmt.Errorf(m.t("panel.irc.error.not_configured"), name)
 	}
@@ -344,7 +344,7 @@ func (m *Model) startIRCAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformIRC)) {
 		return fmt.Errorf(m.t("panel.irc.error.not_irc_adapter"), name)
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m *Model) ensureIRCRuntime() error {
@@ -380,7 +380,7 @@ func (m *Model) bindIRCEntry(entry ircBindingEntry) tea.Cmd {
 			}
 			return ircBindResultMsg{message: m.t("panel.irc.message.bound_success")}
 		}
-		if cfg, ok := m.config.IM.Adapters[entry.Adapter]; m.config != nil && ok && !cfg.Enabled {
+		if cfg, ok := m.config.GetIMAdapter(entry.Adapter); m.config != nil && ok && !cfg.Enabled {
 			return configMutationMsg{
 				apply: func(m *Model) error {
 					return m.config.SetIMAdapterEnabled(entry.Adapter, true)
@@ -454,7 +454,7 @@ func (m Model) ircBindingEntries() []ircBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformIRC)) {
 			keys = append(keys, name)
 		}
@@ -479,7 +479,7 @@ func (m Model) ircBindingEntries() []ircBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}

@@ -290,7 +290,7 @@ func (m *Model) ensurePCReady() error {
 	if m.pcAdapter() != nil {
 		return nil
 	}
-	_, err := im.StartPCAdapterOnly(context.Background(), m.config.IM, m.imManager)
+	_, err := im.StartPCAdapterOnly(context.Background(), m.config.IMSnapshot(), m.imManager)
 	if err != nil {
 		return fmt.Errorf("starting PrivateClaw adapter: %w", err)
 	}
@@ -430,7 +430,7 @@ func (m *Model) pcAdapter() im.PCAdapterAPI {
 func (m *Model) pcAdapterName() string {
 	// Prefer explicit config adapter name
 	if m.config != nil {
-		for name, adapter := range m.config.IM.Adapters {
+		for name, adapter := range m.config.IMSnapshot().Adapters {
 			if adapter.Enabled && strings.EqualFold(adapter.Platform, string(im.PlatformPrivateClaw)) {
 				return name
 			}

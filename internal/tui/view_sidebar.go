@@ -297,7 +297,7 @@ func (m Model) sidebarIMAdapters() []im.AdapterState {
 			}
 			result = append(result, state)
 		} else if m.config != nil {
-			if adapter, ok := m.config.IM.Adapters[name]; ok && adapter.Enabled {
+			if adapter, ok := m.config.GetIMAdapter(name); ok && adapter.Enabled {
 				status := m.t("im.status.not_started")
 				if mutedAdapters[name] {
 					status = "muted"

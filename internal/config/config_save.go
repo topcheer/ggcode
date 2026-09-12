@@ -522,6 +522,8 @@ func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
 	adapterName = strings.TrimSpace(adapterName)
 	if adapterName == "" {
 		return fmt.Errorf("adapter name is required")
@@ -560,7 +562,7 @@ func (c *Config) AddIMTarget(adapterName string, target IMTargetConfig) error {
 	targetData, _ := yaml.Marshal(target)
 	targetMap := map[string]interface{}{}
 	yaml.Unmarshal(targetData, &targetMap)
-	return c.PatchIMAdapter(adapterName, func(a map[string]interface{}) {
+	return c.patchIMAdapterUnlocked(adapterName, func(a map[string]interface{}) {
 		targets, _ := a["targets"].([]interface{})
 		// Replace existing target with same ID, or append.
 		found := false
@@ -584,6 +586,8 @@ func (c *Config) AddIMAdapter(name string, adapter IMAdapterConfig) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("adapter name is required")
@@ -633,6 +637,8 @@ func (c *Config) RemoveIMAdapter(name string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("adapter name is required")
@@ -667,6 +673,8 @@ func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
 	name = strings.TrimSpace(name)
 	if c.IM.Adapters == nil {
 		return fmt.Errorf("IM adapter %q not found", name)
@@ -677,7 +685,7 @@ func (c *Config) SetIMAdapterEnabled(name string, enabled bool) error {
 	}
 	adapter.Enabled = enabled
 	c.IM.Adapters[name] = adapter
-	return c.PatchIMAdapter(name, func(a map[string]interface{}) {
+	return c.patchIMAdapterUnlocked(name, func(a map[string]interface{}) {
 		a["enabled"] = enabled
 	})
 }
@@ -688,6 +696,8 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
 	name = strings.TrimSpace(name)
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -705,7 +715,7 @@ func (c *Config) SetIMAdapterExtra(name, key, value string) error {
 	}
 	adapter.Extra[key] = value
 	c.IM.Adapters[name] = adapter
-	return c.PatchIMAdapter(name, func(a map[string]interface{}) {
+	return c.patchIMAdapterUnlocked(name, func(a map[string]interface{}) {
 		extra, _ := a["extra"].(map[string]interface{})
 		if extra == nil {
 			extra = map[string]interface{}{}
@@ -723,6 +733,8 @@ func (c *Config) SetIMAdapterEnv(name, key, value string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
 	name = strings.TrimSpace(name)
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -740,7 +752,7 @@ func (c *Config) SetIMAdapterEnv(name, key, value string) error {
 	}
 	adapter.Env[key] = value
 	c.IM.Adapters[name] = adapter
-	return c.PatchIMAdapter(name, func(a map[string]interface{}) {
+	return c.patchIMAdapterUnlocked(name, func(a map[string]interface{}) {
 		env, _ := a["env"].(map[string]interface{})
 		if env == nil {
 			env = map[string]interface{}{}
@@ -753,7 +765,16 @@ func (c *Config) SetIMAdapterEnv(name, key, value string) error {
 // PatchIMAdapter patches a single IM adapter. For global scope, it operates
 // on im.yaml (external file). For instance scope, it patches the instance
 // ggcode.yaml directly (instance configs keep inline im: section).
+// PatchIMAdapter patches a single IM adapter's persisted form. Public entry
+// takes imAdaptersMu; internal callers already holding the lock (Set*,
+// AddIMTarget) use patchIMAdapterUnlocked (#2152: mutex is not reentrant).
 func (c *Config) PatchIMAdapter(name string, patch func(adapter map[string]interface{})) error {
+	c.imAdaptersMu.Lock()
+	defer c.imAdaptersMu.Unlock()
+	return c.patchIMAdapterUnlocked(name, patch)
+}
+
+func (c *Config) patchIMAdapterUnlocked(name string, patch func(adapter map[string]interface{})) error {
 	// Instance scope: patch instance ggcode.yaml directly (old behavior)
 	if c.saveScope == "instance" {
 		return c.patchConfigFile(func(raw map[string]interface{}) {

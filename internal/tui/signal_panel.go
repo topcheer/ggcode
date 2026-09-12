@@ -480,7 +480,7 @@ func (m *Model) startSigAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
 	}
@@ -496,7 +496,7 @@ func (m *Model) startSigAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSignal)) {
 		return fmt.Errorf(m.t("panel.signal.error.not_signal_adapter"), name)
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m *Model) ensureSigRuntime() error {
@@ -517,7 +517,7 @@ func (m *Model) startSignalAdapterIfNeeded(name string) error {
 			return nil
 		}
 	}
-	adapterCfg, ok := m.config.IM.Adapters[name]
+	adapterCfg, ok := m.config.GetIMAdapter(name)
 	if !ok {
 		return fmt.Errorf(m.t("panel.signal.error.not_configured"), name)
 	}
@@ -533,7 +533,7 @@ func (m *Model) startSignalAdapterIfNeeded(name string) error {
 	if !strings.EqualFold(adapterCfg.Platform, string(im.PlatformSignal)) {
 		return fmt.Errorf(m.t("panel.signal.error.not_signal_adapter"), name)
 	}
-	return im.StartNamedAdapter(context.Background(), m.config.IM, name, m.imManager)
+	return im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager)
 }
 
 func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
@@ -550,7 +550,7 @@ func (m *Model) bindSigEntry(entry signalBindingEntry) tea.Cmd {
 		// config map from this Cmd goroutine while the render loop ranged
 		// it. qq pattern: mutate via configMutationMsg, continue in next().
 		if m.config != nil {
-			if cfg, ok := m.config.IM.Adapters[entry.Adapter]; ok && !cfg.Enabled {
+			if cfg, ok := m.config.GetIMAdapter(entry.Adapter); ok && !cfg.Enabled {
 				return configMutationMsg{
 					apply: func(m *Model) error {
 						return m.config.SetIMAdapterEnabled(entry.Adapter, true)
@@ -645,7 +645,7 @@ func (m Model) signalBindingEntries() []signalBindingEntry {
 		}
 	}
 	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IM.Adapters {
+	for name, adapter := range m.config.IMSnapshot().Adapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformSignal)) {
 			keys = append(keys, name)
 		}
@@ -670,7 +670,7 @@ func (m Model) signalBindingEntries() []signalBindingEntry {
 			WorkspaceChannel: workspaceChannel,
 			OccupiedBy:       occupied[name],
 			AdapterState:     statePtr,
-			Disabled:         !m.config.IM.Adapters[name].Enabled,
+			Disabled:         !m.config.IMAdapterEnabled(name),
 			Muted:            bindingByAdapter[name].Muted,
 		})
 	}

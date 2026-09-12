@@ -276,34 +276,38 @@ type Config struct {
 	// merge re-imports the deleted name on the next read and it "comes back"
 	// as an unconfigured row. Loaded from / persisted to mcp_deleted.yaml in
 	// the external config dir, never the main config file.
-	DeletedMCPServers []string                   `yaml:"-" json:"-"`
-	Hooks             hooks.HookConfig           `yaml:"hooks" json:"hooks"`
-	DefaultMode       string                     `yaml:"default_mode" json:"default_mode"`
-	SubAgents         SubAgentConfig             `yaml:"subagents" json:"subagents"`
-	Impersonation     ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
-	KnightConfig      KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
-	Swarm             SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
-	Verify            VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
-	A2A               A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
-	LanChat           LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
-	Stream            stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
-	LSPServers        map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
-	ProbeContext      bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
-	P2P               P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
-	OutputStyle       string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
-	Notifications     NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
-	Fallback          FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
-	Fallbacks         []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
-	FilePath          string                     `yaml:"-" json:"-"`
-	ProtectedPaths    []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
-	FirstRun          bool                       `yaml:"-" json:"-"`
-	instanceDir       string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
-	instancePath      string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
-	instanceWS        string                     `yaml:"-" json:"-"` // workspace path for SaveInstance
-	saveScope         string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
-	globalSnap        *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
-	instanceFields    map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
-	diskStrSnap       map[string]string          `yaml:"-" json:"-"` // #610: dotted path -> raw string value on disk at Load time (clear/tombstone basis)
+	DeletedMCPServers []string `yaml:"-" json:"-"`
+	// imAdaptersMu guards c.IM.Adapters for runtime read-modify-write
+	// (config_save.go writers) vs. locked readers (im_access.go). Load-time
+	// normalization and expandEnv are single-threaded and unguarded (#2152).
+	imAdaptersMu   sync.RWMutex
+	Hooks          hooks.HookConfig           `yaml:"hooks" json:"hooks"`
+	DefaultMode    string                     `yaml:"default_mode" json:"default_mode"`
+	SubAgents      SubAgentConfig             `yaml:"subagents" json:"subagents"`
+	Impersonation  ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
+	KnightConfig   KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`
+	Swarm          SwarmConfig                `yaml:"swarm,omitempty" json:"swarm,omitempty"`
+	Verify         VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
+	A2A            A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
+	LanChat        LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
+	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
+	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
+	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
+	P2P            P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
+	OutputStyle    string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
+	Notifications  NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Fallback       FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
+	Fallbacks      []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
+	FilePath       string                     `yaml:"-" json:"-"`
+	ProtectedPaths []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
+	FirstRun       bool                       `yaml:"-" json:"-"`
+	instanceDir    string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
+	instancePath   string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
+	instanceWS     string                     `yaml:"-" json:"-"` // workspace path for SaveInstance
+	saveScope      string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
+	globalSnap     *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
+	instanceFields map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
+	diskStrSnap    map[string]string          `yaml:"-" json:"-"` // #610: dotted path -> raw string value on disk at Load time (clear/tombstone basis)
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
