@@ -43,6 +43,14 @@ type approvalReply struct {
 	Always   bool
 }
 
+// staleReplySuppressWindow is how long after a pending approval/ask_user
+// expires that reply-shaped inbound text is dropped (#2111): text replies
+// carry no question correlation, so a late reply to the expired prompt is
+// indistinguishable from a reply to a successor registered seconds later.
+// 5s covers the human reaction window without annoying legitimate replies
+// to questions asked later in the conversation.
+const staleReplySuppressWindow = 5 * time.Second
+
 type DaemonBridge struct {
 	manager         *Manager
 	emitter         *IMEmitter
@@ -55,26 +63,33 @@ type DaemonBridge struct {
 	metricCollector *metrics.Collector
 	metricCancel    context.CancelFunc
 
-	mu                   sync.Mutex
-	cancelFunc           context.CancelFunc
-	pendingAsk           *pendingAskUser
-	pendingApproval      chan approvalReply // non-nil when waiting for IM approval reply
-	pendingInterruptions []pendingInterruption
-	interactiveMsgIDs    map[string]string // adapter → platform msg ID (for callback correlation)
-	multiSelectChosen    map[string]bool   // accumulated multi-select choices (choice value → selected)
-	followSink           daemon.FollowSink
-	onActivity           func()
-	onRunStateChange     func(bool)
-	onUserMessage        func([]provider.ContentBlock)
-	onRestart            func()                                               // trigger daemon self-restart
-	onProviderSwitch     func(vendor, endpoint, model string) (string, error) // switch provider/model, returns summary
-	visionTurnSelect     func() string                                        // returns turn-scoped vision model or "" (no comparable candidate)
-	visionTurnSwitch     func(model string) error                             // in-memory model switch, no session persistence
-	restartDebug         bool                                                 // set by /restart debug to enable debug logging on next launch
-	eventSubs            []*daemonBridgeSub
-	eventSubMu           sync.RWMutex
-	cascadeCancel        func()             // called to cascade-cancel sub-agents/delegates on interrupt
-	emitTextOverride     func(string) error // test hook: when set, replaces emitter.EmitText for shell passthrough
+	mu              sync.Mutex
+	cancelFunc      context.CancelFunc
+	pendingAsk      *pendingAskUser
+	pendingApproval chan approvalReply // non-nil when waiting for IM approval reply
+	// staleReplySuppressUntil is the deadline after a pending approval or
+	// ask_user expires during which inbound text that PARSES as a reply
+	// (y/n/a or questionnaire answer) is dropped instead of delivered to
+	// the NEXT registered question (#2111): text replies carry no question
+	// correlation, so a late reply to the expired prompt is indistinguishable
+	// from a reply to its successor and auto-approved/answered it.
+	staleReplySuppressUntil time.Time
+	pendingInterruptions    []pendingInterruption
+	interactiveMsgIDs       map[string]string // adapter → platform msg ID (for callback correlation)
+	multiSelectChosen       map[string]bool   // accumulated multi-select choices (choice value → selected)
+	followSink              daemon.FollowSink
+	onActivity              func()
+	onRunStateChange        func(bool)
+	onUserMessage           func([]provider.ContentBlock)
+	onRestart               func()                                               // trigger daemon self-restart
+	onProviderSwitch        func(vendor, endpoint, model string) (string, error) // switch provider/model, returns summary
+	visionTurnSelect        func() string                                        // returns turn-scoped vision model or "" (no comparable candidate)
+	visionTurnSwitch        func(model string) error                             // in-memory model switch, no session persistence
+	restartDebug            bool                                                 // set by /restart debug to enable debug logging on next launch
+	eventSubs               []*daemonBridgeSub
+	eventSubMu              sync.RWMutex
+	cascadeCancel           func()             // called to cascade-cancel sub-agents/delegates on interrupt
+	emitTextOverride        func(string) error // test hook: when set, replaces emitter.EmitText for shell passthrough
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -523,6 +538,22 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return nil
 	}
 
+	// #2111: a reply-shaped text arriving within the suppression window
+	// after a question expired is far more likely the late answer to the
+	// EXPIRED prompt than to a successor registered seconds ago — without
+	// question correlation the two are indistinguishable, and the wrong
+	// guess auto-approves a tool or answers a questionnaire (#2111 ProbeB).
+	if route.Kind == InboundRouteApproval || route.Kind == InboundRouteAskUser {
+		b.mu.Lock()
+		until := b.staleReplySuppressUntil
+		b.mu.Unlock()
+		if time.Now().Before(until) {
+			debug.Log("daemon-bridge", "dropping reply-shaped text inside stale-reply window: %q", truncateStr(text, 80))
+			_ = b.emitter.EmitText("⏱ That looked like a reply to the expired prompt, so it was ignored. Please resend it for the current question.")
+			return nil
+		}
+	}
+
 	// Check for pending approval — y/a/n reply for tool permission
 	b.mu.Lock()
 	approvalCh := b.pendingApproval
@@ -750,6 +781,9 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 			// NEXT - possibly selecting the wrong option. Symmetric
 			// visible stop sign on the stale screen.
 			if cleared {
+				b.mu.Lock()
+				b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
+				b.mu.Unlock()
 				_ = b.emitter.EmitText("⏱ The question above has expired. Any reply to it now will be treated as a NEW message, not an answer.")
 			}
 			return toolpkg.AskUserResponse{}, ctx.Err()
@@ -830,6 +864,9 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 		// when THIS question's registration dies, tell the user the
 		// prompt is void - a visible stop sign on the stale screen.
 		if cleared {
+			b.mu.Lock()
+			b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
+			b.mu.Unlock()
 			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
 		}
 		return permission.Deny
