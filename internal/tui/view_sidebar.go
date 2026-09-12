@@ -583,22 +583,6 @@ func sidebarSlowTools(tools []metrics.ToolSummary) string {
 	return strings.Join(parts, ", ")
 }
 
-func sidebarRecentTurns(turns []metrics.TurnSummary) []string {
-	if len(turns) == 0 {
-		return nil
-	}
-	lines := make([]string, 0, min(2, len(turns)))
-	for i := len(turns) - 1; i >= 0 && len(lines) < 2; i-- {
-		turn := turns[i]
-		line := fmt.Sprintf("#%d %s / %s / %dt", turn.TurnIndex, metrics.FormatDuration(turn.TTFT), metrics.FormatDuration(turn.Duration), turn.ToolCallCount)
-		if turn.ToolFailureCount > 0 {
-			line += " !"
-		}
-		lines = append(lines, line)
-	}
-	return lines
-}
-
 func (m Model) sidebarWorkingDirectory() string {
 	cwd, err := os.Getwd()
 	if err != nil {

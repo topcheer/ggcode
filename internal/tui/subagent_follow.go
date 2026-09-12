@@ -216,20 +216,6 @@ func (f *subAgentFollowState) currentSlotIndex() int {
 	return -1
 }
 
-// autoReturnIfNeeded is a no-op — user must press Esc to exit follow mode.
-func (f *subAgentFollowState) autoReturnIfNeeded(mgr *subagent.Manager) (returnedID string) {
-	if f.activeID == "" || mgr == nil {
-		return ""
-	}
-	_, ok := mgr.Snapshot(f.activeID)
-	if !ok {
-		id := f.activeID
-		f.activeID = ""
-		return id
-	}
-	return ""
-}
-
 func (f *subAgentFollowState) getOrCreateView(agentID string, width, height int) *followViewEntry {
 	if f.views == nil {
 		f.views = make(map[string]*followViewEntry)
