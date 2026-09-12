@@ -347,6 +347,21 @@ func stripImageBlocks(content []provider.ContentBlock) []provider.ContentBlock {
 	return out
 }
 
+// contentEffectivelyEmpty reports whether every block is a blank text
+// block - the #1628-C ProviderContent fallback emits one empty text block
+// for truly-empty messages, so the #2140 inbound gate must look through it.
+func contentEffectivelyEmpty(content []provider.ContentBlock) bool {
+	if len(content) == 0 {
+		return true
+	}
+	for _, c := range content {
+		if c.Type != "text" || strings.TrimSpace(c.Text) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // contentHasImageBlocks reports whether any block is an image.
 func contentHasImageBlocks(content []provider.ContentBlock) bool {
 	for _, c := range content {
@@ -677,7 +692,18 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// text+image pair whose text part was empty) - image-only IM sends
 	// vanished silently, no run, no notice. Gate on CONTENT, not text;
 	// text still informs the follow sink when present.
-	if route.Kind == InboundRouteEmpty || (text == "" && len(content) == 0) {
+	// #2140: the original condition's FIRST disjunct (route.Kind ==
+	// InboundRouteEmpty) logically absorbed the second - RouteInboundText
+	// returns Empty for ANY empty text regardless of attachments, so the
+	// gate degenerated to "text-only" and a pure image (text=="",
+	// content=[image]) was silently dropped again - the exact regression
+	// #1584-A fixed, reintroduced by the 203b5879 refactor and directly
+	// contradicting this comment. Gate on EFFECTIVE content: drop only
+	// when there is nothing meaningful to process (no text AND every
+	// content block is blank - ProviderContent's #1628-C fallback always
+	// emits at least an empty text block, so a bare len()==0 check would
+	// let truly-empty messages queue an empty block).
+	if text == "" && contentEffectivelyEmpty(content) {
 		return nil
 	}
 	b.notifyUserMessage(content)
