@@ -494,6 +494,16 @@ func (a *matrixAdapter) setupCrypto(ctx context.Context) error {
 	mach := crypto.NewOlmMachine(a.client, nil, store, &cryptoStateStore{adapter: a})
 
 	if err := mach.Load(ctx); err != nil {
+		// #2133 annex 1: openPersistentCryptoStore already CLOSED the
+		// previous db handle before opening the new one - leaving a.mach
+		// pointing at the old machine (bound to the closed db) made every
+		// subsequent encrypted event fail against a closed db and drop
+		// silently (debug-only) until the next reconnect. Drop the stale
+		// machine so the explicit nil path reports "no crypto machine"
+		// instead of a confusing closed-db error.
+		a.mu.Lock()
+		a.mach = nil
+		a.mu.Unlock()
 		return fmt.Errorf("load olm machine: %w", err)
 	}
 

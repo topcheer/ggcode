@@ -96,6 +96,16 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		if args.Name == "" {
 			return Result{IsError: true, Content: "name is required for create action"}, nil
 		}
+		// #2133: fifth instance of the git flag-family guard
+		// (#1325/#1687/#1689/#1690). name goes into the command line
+		// BEFORE "--" on the lightweight path, so "-d" DELETED the tag the
+		// caller meant to create (probe: name="-d" commit="v1.0" printed
+		// "Deleted tag 'v1.0'") and "-f" silently force-moved it. The
+		// annotated path degenerates into a usage error (exit 129) - safe
+		// by accident; the guard covers both uniformly.
+		if strings.HasPrefix(args.Name, "-") {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid name %q: leading dash (refusing option injection)", args.Name)}, nil
+		}
 		gitArgs := []string{"tag"}
 		if args.Message != "" {
 			gitArgs = append(gitArgs, "-a", args.Name, "-m", args.Message)
