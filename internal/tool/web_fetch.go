@@ -116,7 +116,6 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		// The per-fetch transport owns a connection pool nobody will reuse
 		// (a fresh one is built next call) - drain idle fds when done.
 		defer transport.CloseIdleConnections()
-
 		// When a proxy is configured (HTTP_PROXY/HTTPS_PROXY), the custom
 		// DialContext receives the proxy address (often localhost/internal)
 		// rather than the target host. Skip the DialContext override in that
@@ -137,6 +136,18 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 				}
 				return origDial(dialCtx, network, dialAddr)
 			}
+		} else if !t.AllowPrivate {
+			// #2165: the proxy resolves the hostname itself, so the dial-level
+			// guard above never runs - and the old comment claimed "SSRF still
+			// enforced at URL level", but that check is LITERAL (localhost
+			// variants / .internal / ParseIP): a domain whose A record points
+			// at a private IP passed straight through to the proxy, which then
+			// dialed the internal network. Resolve locally and reject on any
+			// private IP before the request leaves (lookup failures still go -
+			// the proxy may resolve differently than we can).
+			if err := rejectIfHostResolvesPrivate(ctx, u.Hostname(), net.DefaultResolver.LookupIPAddr); err != nil {
+				return Result{IsError: true, Content: fmt.Sprintf("fetch failed: %v", err)}, nil
+			}
 		}
 		client.Transport = transport
 	} else {
@@ -145,9 +156,22 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		client.Transport = transport
 	}
 
+	// #2165: redirect guard needs the transport even on the plain path.
+	var redirectGuardTransport *http.Transport
+	if ht, ok := client.Transport.(*http.Transport); ok {
+		redirectGuardTransport = ht
+	}
+
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if !t.AllowPrivate && isPrivateHost(req.URL.Hostname()) {
 			return fmt.Errorf("redirect to private/internal network address is not allowed")
+		}
+		// #2165: same DNS-level guard for redirects - the literal check
+		// alone let a redirect to a private-A-record domain through.
+		if !t.AllowPrivate && redirectGuardTransport != nil && isProxyConfigured(redirectGuardTransport, req.URL) {
+			if err := rejectIfHostResolvesPrivate(req.Context(), req.URL.Hostname(), net.DefaultResolver.LookupIPAddr); err != nil {
+				return err
+			}
 		}
 		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
@@ -292,6 +316,27 @@ func resolvePublicDialAddress(ctx context.Context, host, port string, lookup fun
 		}
 	}
 	return net.JoinHostPort(ips[0].IP.String(), port), nil
+}
+
+// rejectIfHostResolvesPrivate enforces the DNS-level SSRF guard on the
+// proxy path (#2165): the proxy resolves the hostname itself, so the
+// dial-level check never fires - resolve locally and reject when ANY
+// address is private. Lookup failures do not reject (the proxy may
+// resolve differently than the local resolver).
+func rejectIfHostResolvesPrivate(ctx context.Context, host string, lookup func(context.Context, string) ([]net.IPAddr, error)) error {
+	if host == "" || net.ParseIP(host) != nil {
+		return nil // literal IPs already covered by isPrivateHost
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return nil
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip.IP) {
+			return fmt.Errorf("access to private/internal IP %s is not allowed", ip.IP)
+		}
+	}
+	return nil
 }
 
 func getPrivateNetworks() ([]*net.IPNet, error) {
