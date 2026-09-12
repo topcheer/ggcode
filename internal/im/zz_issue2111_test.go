@@ -71,3 +71,25 @@ func TestReplyUnaffectedWithoutExpiry(t *testing.T) {
 		t.Fatal("reply must deliver when no expiry armed the window")
 	}
 }
+
+// #2127 (ProbeB2, the empty-window half): after expiry with NO successor
+// registered, a bare approval-shaped token routes as an ordinary Message
+// and must NOT be submitted to the agent as a fresh prompt.
+func TestStaleWindowDropsBareApprovalTokenAsNewPrompt(t *testing.T) {
+	b := &DaemonBridge{
+		// No pendingApproval: route.Kind for "y" is Message now.
+		staleReplySuppressUntil: time.Now().Add(4 * time.Second),
+	}
+	if err := b.SubmitInboundMessage(context.Background(), InboundMessage{Text: "y"}); err != nil {
+		t.Fatalf("SubmitInboundMessage: %v", err)
+	}
+	// Discriminators: ordinary message text must not parse as an approval
+	// reply (the guard must never over-drop real messages), while a bare
+	// "y" must parse (and thus be dropped inside the window).
+	if _, isApproval := ParseApprovalReply("please refactor the auth module"); isApproval {
+		t.Fatal("ordinary message text must not parse as an approval reply (guard would over-drop)")
+	}
+	if _, isApproval := ParseApprovalReply(" y "); !isApproval {
+		t.Fatal("bare y must parse as an approval reply")
+	}
+}

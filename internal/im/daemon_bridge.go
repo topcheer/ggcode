@@ -543,14 +543,26 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// EXPIRED prompt than to a successor registered seconds ago — without
 	// question correlation the two are indistinguishable, and the wrong
 	// guess auto-approves a tool or answers a questionnaire (#2111 ProbeB).
-	if route.Kind == InboundRouteApproval || route.Kind == InboundRouteAskUser {
-		b.mu.Lock()
-		until := b.staleReplySuppressUntil
-		b.mu.Unlock()
-		if time.Now().Before(until) {
+	// #2127: the empty-window half (ProbeB2) needs the same guard on the
+	// MESSAGE route - after expiry the pending registration is cleared, so
+	// a bare "y" routes as an ordinary message and was submitted to the
+	// agent as a fresh prompt. Narrow scope: only approval-SHAPED tokens
+	// (ParseApprovalReply-recognizable), so real messages are untouched.
+	b.mu.Lock()
+	staleUntil := b.staleReplySuppressUntil
+	b.mu.Unlock()
+	if time.Now().Before(staleUntil) {
+		if route.Kind == InboundRouteApproval || route.Kind == InboundRouteAskUser {
 			debug.Log("daemon-bridge", "dropping reply-shaped text inside stale-reply window: %q", truncateStr(text, 80))
 			_ = b.emitter.EmitText("⏱ That looked like a reply to the expired prompt, so it was ignored. Please resend it for the current question.")
 			return nil
+		}
+		if route.Kind == InboundRouteMessage {
+			if _, ok := ParseApprovalReply(strings.TrimSpace(text)); ok {
+				debug.Log("daemon-bridge", "dropping bare approval token inside stale-reply window (ProbeB2): %q", truncateStr(text, 80))
+				_ = b.emitter.EmitText("⏱ That looked like a reply to the expired approval, so it was ignored. Send your actual message again if you meant it as one.")
+				return nil
+			}
 		}
 	}
 

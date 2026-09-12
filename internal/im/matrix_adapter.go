@@ -335,7 +335,18 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
 	a.cancelFn = cancel
+	// #2127: Close can land anywhere in the multi-RTT setup above
+	// (Whoami, ShareKeys, fetchDMRooms) - at that point cancelFn was
+	// still nil, so Close cancelled nothing and this Sync would keep a
+	// ghost connection alive after Close, delivering events and even
+	// broadcasting "connected". Re-check under the SAME lock that
+	// registered the cancel: if Close ran, self-cancel now.
+	closedNow := a.closed
 	a.mu.Unlock()
+	if closedNow {
+		cancel()
+		return nil
+	}
 
 	err = client.SyncWithContext(ctx)
 	if err != nil && ctx.Err() == nil {
