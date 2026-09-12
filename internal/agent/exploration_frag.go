@@ -262,13 +262,18 @@ func (s *exploreFragState) recordToolCall(toolName string, args []byte, iteratio
 	}
 
 	s.warnings++
+	// #2103: capture the counts BEFORE the #1559-D fire-and-clear - the
+	// old order read len(s.entries) after nil-ing it, so the debug log
+	// and the message's first %d were always 0 ("0 calls across 6+
+	// distinct targets" - mathematically self-contradictory guidance).
+	callCount := len(s.entries)
 	// #1559-D: fire-and-keep made the very next exploration call re-fire
 	// with a byte-identical message (window still full), burning both
 	// warnings back-to-back. Mirror attention_fragment: the window empties
 	// on fire, so a re-fire needs a full fresh window of exploration.
 	s.entries = nil
 	debug.Log("agent", "Iteration %d: exploration fragmentation detected (%d calls, %d unique targets)",
-		iteration, len(s.entries), len(uniqueTargets))
+		iteration, callCount, len(uniqueTargets))
 
 	return fmt.Sprintf(
 		"[Exploration Fragmentation] %d exploration tool calls across %d+ distinct targets "+
@@ -277,5 +282,5 @@ func (s *exploreFragState) recordToolCall(toolName string, args []byte, iteratio
 			"Consider: (1) Use code_search or lsp_workspace_symbols for semantic discovery instead of many narrow reads. "+
 			"(2) Read a key file fully (without offset/limit) to understand structure before exploring specifics. "+
 			"(3) If you have enough context, start acting (edit/build) rather than exploring further.",
-		len(s.entries), len(uniqueTargets), exploreFragWindow)
+		callCount, len(uniqueTargets), exploreFragWindow)
 }

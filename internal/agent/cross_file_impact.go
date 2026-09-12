@@ -420,6 +420,13 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 		return false
 	}
 	names := make(map[string]bool, len(removed))
+	// #2100: method names carry their owner type so a selector hit can be
+	// qualified. go/parser never sets Obj on SelectorExpr.Sel or composite
+	// literal keys, so the old Obj==nil-only rule fired on ANY same-named
+	// method of ANY type, package-qualified calls (impossible for
+	// unexported symbols), and field keys - "these files may fail to
+	// compile" advisories pointing at unrelated files.
+	methodOwners := make(map[string]map[string]bool)
 	for _, s := range removed {
 		var name string
 		switch s.category {
@@ -427,6 +434,18 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 			parts := strings.Split(s.name, ").")
 			if len(parts) == 2 {
 				name = parts[1]
+			} else if idx := strings.LastIndex(s.name, "."); idx > 0 {
+				name = s.name[idx+1:]
+			}
+			if name != "" {
+				idx := strings.LastIndex(s.name, ".")
+				owner := strings.Trim(s.name[:idx], "(* )")
+				if owner != "" {
+					if methodOwners[name] == nil {
+						methodOwners[name] = make(map[string]bool)
+					}
+					methodOwners[name][owner] = true
+				}
 			}
 		default:
 			name = s.name
@@ -457,22 +476,77 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 		}
 		return false
 	}
-	found := false
-	ast.Inspect(file, func(n ast.Node) bool {
-		if found {
-			return false
+	v := &impactRefVisitor{names: names, methodOwners: methodOwners}
+	ast.Walk(v, file)
+	return v.found
+}
+
+// impactRefVisitor walks a sibling AST counting only genuine references
+// to removed symbols (#2100).
+type impactRefVisitor struct {
+	names        map[string]bool
+	methodOwners map[string]map[string]bool
+	found        bool
+}
+
+func (v *impactRefVisitor) Visit(n ast.Node) ast.Visitor {
+	if v.found || n == nil {
+		return nil
+	}
+	switch node := n.(type) {
+	case *ast.SelectorExpr:
+		// Method-expression form (Type.method / (*T).method): a genuine
+		// reference only when the receiver's base type owns the removed
+		// method. Anything else (variable receivers, other packages)
+		// cannot be verified and never fires a package-level hit - the
+		// Sel ident itself is never a candidate.
+		if owners := v.methodOwners[node.Sel.Name]; len(owners) > 0 {
+			if base := selectorBaseTypeName(node.X); base != "" && owners[base] {
+				v.found = true
+				return nil
+			}
 		}
-		id, ok := n.(*ast.Ident)
-		if !ok || !names[id.Name] {
-			return true
+		// Walk ONLY the receiver manually - returning a visitor here would
+		// make ast.Walk descend into Sel as a plain Ident candidate too.
+		ast.Walk(v, node.X)
+		return nil
+	case *ast.CompositeLit:
+		for _, elt := range node.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				// Field keys are struct metadata, not references.
+				ast.Walk(v, kv.Value)
+				continue
+			}
+			ast.Walk(v, elt)
 		}
-		if id.Obj == nil {
-			found = true
-			return false
+		return nil
+	case *ast.Ident:
+		// Package-level (non-method) symbol: only a standalone unresolved
+		// ident counts. Method bare names never match here - a bare use
+		// cannot reference a method.
+		if v.names[node.Name] && len(v.methodOwners[node.Name]) == 0 && node.Obj == nil {
+			v.found = true
+			return nil
 		}
-		return true
-	})
-	return found
+	}
+	return v
+}
+
+// selectorBaseTypeName peels parens/stars off a selector receiver to its
+// base type identifier name ("" when not a plain identifier chain).
+func selectorBaseTypeName(x ast.Expr) string {
+	for {
+		switch e := x.(type) {
+		case *ast.ParenExpr:
+			x = e.X
+		case *ast.StarExpr:
+			x = e.X
+		case *ast.Ident:
+			return e.Name
+		default:
+			return ""
+		}
+	}
 }
 
 // containsGoIdent checks if name appears as a Go identifier in src.
