@@ -85,7 +85,15 @@ func (m *Model) enterIMEditSelect(adapterName string) imAdapterEditState {
 	for k, v := range adapter.Env {
 		key := "env." + k
 		s.originalExtra[key] = v
-		s.fieldValues[key] = v
+		// #2158: the Extra loop five lines up masks secret-looking keys,
+		// this loop stored the plaintext outright - opening the edit
+		// panel alone leaked every env secret (BOT_TOKEN/API_KEY...),
+		// already ExpandEnv-resolved to real values at load time.
+		if looksLikeSecretField(k) {
+			s.fieldValues[key] = maskSecret(v)
+		} else {
+			s.fieldValues[key] = v
+		}
 	}
 
 	keys := make([]string, 0, len(s.fieldValues))
