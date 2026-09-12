@@ -3194,7 +3194,12 @@ func populateDefaultModels(cfg *Config) {
 				}
 				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
 					if m := lookupVendorModels(pid); len(m) > 0 {
-						ep.Models = m
+						// #2157: copy out of the package-level registry - direct
+						// assignment shares the backing array across Configs, so
+						// concurrent Loads racing expandEnvWithLookup's in-place
+						// ep.Models[i] writes corrupt the shared table (and each
+						// other) - deterministic darwin -race DATA RACE.
+						ep.Models = append([]string(nil), m...)
 						vc.Endpoints[epName] = ep
 					}
 				}
@@ -3218,7 +3223,8 @@ func populateDefaultModels(cfg *Config) {
 				}
 				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
 					if m := lookupVendorModels(pid); len(m) > 0 {
-						ep.Models = m
+						// #2157: same shared-registry copy as the ai-gateway branch.
+						ep.Models = append([]string(nil), m...)
 						vc.Endpoints[epName] = ep
 					}
 				}

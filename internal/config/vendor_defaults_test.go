@@ -270,3 +270,39 @@ func TestPopulateDefaultModelsNoDuplicates(t *testing.T) {
 		t.Fatal("expected populated models")
 	}
 }
+
+// #2157: populateDefaultModels must hand out COPIES of the package-level
+// registry lists. The ai-gateway and unknown-vendor branches used to assign
+// lookupVendorModels(pid) directly, sharing the backing array across Configs -
+// an in-place ep.Models[i] write (expandEnvWithLookup) then raced concurrent
+// Loads and cross-contaminated the global model table.
+func TestPopulateDefaultModels_DoesNotShareRegistryBackingArray(t *testing.T) {
+	cfg := DefaultConfig()
+	// Find a built-in endpoint URL whose host maps to a provider with a
+	// registry model list (e.g. zai's coding endpoint).
+	var probeURL string
+	for _, ep := range cfg.Vendors["zai"].Endpoints {
+		if len(lookupVendorModels(matchProviderByBaseURL(ep.BaseURL))) > 0 {
+			probeURL = ep.BaseURL
+			break
+		}
+	}
+	if probeURL == "" {
+		t.Fatal("no built-in endpoint URL maps to a provider with registry models")
+	}
+	// An UNKNOWN vendor name (not in vendorToProvider) with a provider-matched
+	// URL drives the #1668 per-endpoint branch that used to alias the registry.
+	cfg.Vendors["my-unknown-relay"] = defaultVendor("My Relay", "${MY_RELAY_KEY}", map[string]EndpointConfig{
+		"gw": {BaseURL: probeURL, Protocol: "openai"},
+	})
+	populateDefaultModels(cfg)
+	ep := cfg.Vendors["my-unknown-relay"].Endpoints["gw"]
+	if len(ep.Models) == 0 {
+		t.Fatal("unknown-vendor endpoint should be populated from its URL's provider")
+	}
+	pid := matchProviderByBaseURL(probeURL)
+	ep.Models[0] = "zz-#2157-mutated"
+	if lookupVendorModels(pid)[0] == "zz-#2157-mutated" {
+		t.Fatal("endpoint Models shares backing array with the package registry (#2157 regression)")
+	}
+}

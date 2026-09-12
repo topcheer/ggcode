@@ -28,6 +28,7 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 		if vendorScoped {
 			if apiKey == "" {
 				clearAPIKeyRefEnv(vc.APIKey) // #1706 case 3
+				syncVendorKeyEnv(vendor, "") // #2105: purge the sibling name too
 			}
 			vc.APIKey = apiKey
 			c.Vendors[vendor] = vc
@@ -67,6 +68,12 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
 		return fmt.Errorf("persisting API key for %s/%s: %w", vendor, endpoint, err)
 	}
+	if vendorScoped {
+		// #2105: the vendor-level key has a second historic env name -
+		// write it too or a later clear via the other path leaves this
+		// entry resurrecting the old secret at every startup.
+		syncVendorKeyEnv(vendor, apiKey)
+	}
 
 	ref := "${" + envVarName + "}"
 	if vendorScoped {
@@ -82,6 +89,38 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 		c.Vendors[vendor] = vc
 	}
 	return nil
+}
+
+// syncVendorKeyEnv keeps the TWO historic vendor-level env var names in
+// lockstep (#2105). SetEndpointAPIKey(vendorScoped) writes
+// preferredVendorAPIKeyEnvVar (ZAI_API_KEY) while SetVendorAPIKey/
+// AddVendor write preferredEndpointAPIKeyEnvVar(vendor,"default")
+// (ZAI_DEFAULT_API_KEY): one logical object, two physical names. A set
+// via one path and a clear via the other left the sibling entry in
+// keys.env forever - the "cleared" secret was re-injected into every
+// startup's environment. Sets now write BOTH names; clears purge BOTH.
+func syncVendorKeyEnv(vendor, apiKey string) {
+	primary := preferredVendorAPIKeyEnvVar(vendor)
+	sibling := preferredEndpointAPIKeyEnvVar(vendor, "default")
+	if apiKey == "" {
+		if err := removeKeysEnv([]string{primary, sibling}); err != nil {
+			debug.Log("config", "failed to remove vendor key env %v: %v", []string{primary, sibling}, err)
+		}
+		os.Unsetenv(primary)
+		os.Unsetenv(sibling)
+		return
+	}
+	os.Setenv(primary, apiKey)
+	if sibling != primary {
+		os.Setenv(sibling, apiKey)
+	}
+	entries := map[string]string{primary: apiKey}
+	if sibling != primary {
+		entries[sibling] = apiKey
+	}
+	if err := writeKeysEnv(entries); err != nil {
+		debug.Log("config", "failed to sync vendor key env for %s: %v", vendor, err)
+	}
 }
 
 // clearAPIKeyRefEnv removes the keys.env entry backing a ${VAR} ref (if
@@ -109,6 +148,7 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	if apiKey == "" {
 		// #1706 case 3: drop the keys.env entry backing the old ref.
 		clearAPIKeyRefEnv(vc.APIKey)
+		syncVendorKeyEnv(vendor, "") // #2105: purge BOTH historic names
 		vc.APIKey = ""
 	} else if _, isRef := envReferenceVarName(apiKey); isRef {
 		vc.APIKey = apiKey
@@ -122,6 +162,7 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 		if err := writeKeysEnv(map[string]string{envVarName: apiKey}); err != nil {
 			return fmt.Errorf("persisting API key for vendor %s: %w", vendor, err)
 		}
+		syncVendorKeyEnv(vendor, apiKey) // #2105: keep both names in lockstep
 		vc.APIKey = "${" + envVarName + "}"
 	}
 	c.Vendors[vendor] = vc
