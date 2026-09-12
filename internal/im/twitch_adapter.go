@@ -180,6 +180,9 @@ func (a *twitchAdapter) Close() error {
 
 	// Send QUIT and close OUTSIDE the lock to avoid self-deadlock:
 	// sendRaw acquires a.mu.RLock(), which deadlocks if we hold a.mu.Lock().
+	// #2113 F2: sendRaw's write is deadline-bounded now, so a wedged prior
+	// writer can delay (not forever-block) this QUIT; conn.Close below then
+	// unblocks any remaining writer immediately.
 	if conn != nil {
 		a.sendRaw("QUIT :ggcode shutting down")
 		conn.Close()
@@ -292,6 +295,16 @@ func (a *twitchAdapter) connectAndServe(ctx context.Context) error {
 	}
 
 	a.mu.Lock()
+	// #2113 F1: re-check closed under the SAME lock that stores the conn -
+	// the earlier RLock check released before this store, and a Close in
+	// that window captured a nil conn (dropping nothing) while this fresh
+	// connection got stored, published "connected", and leaked until the
+	// serve loop happened to exit.
+	if a.closed {
+		a.mu.Unlock()
+		conn.Close()
+		return nil
+	}
 	a.conn = conn
 	a.connected = true
 	a.mu.Unlock()
@@ -932,6 +945,16 @@ func (a *twitchAdapter) sendRaw(line string) error {
 	// line and the server drops the connection.
 	a.writeMu.Lock()
 	defer a.writeMu.Unlock()
+	// #2113 F2: bound the write. On a half-dead connection (peer stopped
+	// reading, TCP send buffer full) this write used to block FOREVER
+	// while holding writeMu - the keepalive PING itself became the wedged
+	// writer (its pong-timeout check runs before sendRaw), Close's QUIT
+	// queued behind it, and the conn.Close() that would unblock everything
+	// sat behind the QUIT: StopAdapter then held the IM Manager's m.mu for
+	// the TCP retransmit timeout (15-30min) - a global manager stall.
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	}
 	_, err := fmt.Fprintf(c, "%s\r\n", line)
 	return err
 }
