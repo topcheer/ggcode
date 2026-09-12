@@ -147,6 +147,14 @@ func (t GitTag) Execute(ctx context.Context, input json.RawMessage) (Result, err
 		if args.Name == "" {
 			return Result{IsError: true, Content: "name is required for delete action"}, nil
 		}
+		// #2139: symmetric with the create guard (#2133). No exploitable
+		// side effect exists here (probe: the delete option set has no
+		// deleterious flags), but "-d"/"--delete" was silently swallowed
+		// as a duplicate option - git exited 0 with NO tag deleted and the
+		// empty-output fallback reported "Deleted tag -d." (fake success).
+		if strings.HasPrefix(args.Name, "-") {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid name %q: leading dash (refusing option injection)", args.Name)}, nil
+		}
 		cmd := gitCommand(ctx, "tag", "-d", args.Name)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()

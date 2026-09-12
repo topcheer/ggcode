@@ -333,6 +333,12 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 
 	// 6. Run sync (blocking)
 	ctx, cancel := context.WithCancel(ctx)
+	// #2139: the error return below (sync failed, run() re-enters) never
+	// called cancel - each re-entry replaced a.cancelFn with the NEW
+	// cancel, leaking the old child context onto the parent until the
+	// process exits (~115B per flap). Cancel is idempotent, so this defer
+	// composes safely with the closedNow path and Close().
+	defer cancel()
 	a.mu.Lock()
 	a.cancelFn = cancel
 	// #2127: Close can land anywhere in the multi-RTT setup above
