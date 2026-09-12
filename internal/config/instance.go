@@ -432,7 +432,23 @@ func (c *Config) SaveInstance(workspace string) error {
 	// Compute the minimal diff: fields in current config that differ from globalSnap.
 	delta := c.marshalInstanceDelta()
 
-	if len(delta) == 0 {
+	// Read the existing instance file BEFORE deciding emptiness: reset
+	// detection (#2106) needs the on-disk keys to turn "current == global"
+	// fields into explicit deletions, otherwise a partial reset resurrects
+	// from the file on the next MergeInstance (deep-merge never deletes).
+	var existingRaw map[string]interface{}
+	existingData, readErr := os.ReadFile(path)
+	if readErr == nil && len(existingData) > 0 {
+		existingRaw = map[string]interface{}{}
+		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr != nil {
+			existingRaw = nil // unparseable — overwrite with delta below
+		}
+	}
+	if existingRaw != nil {
+		applyInstanceResets(existingRaw, delta, c.instanceFields)
+	}
+
+	if len(delta) == 0 && (existingRaw == nil || len(existingRaw) == 0) {
 		// No overrides — remove the instance file if it exists.
 		if _, err := os.Stat(path); err == nil {
 			if err := os.Remove(path); err != nil {
@@ -444,26 +460,24 @@ func (c *Config) SaveInstance(workspace string) error {
 
 	// Merge delta onto existing instance file, or write delta as new file.
 	var data []byte
-	existingData, readErr := os.ReadFile(path)
-	if readErr == nil && len(existingData) > 0 {
-		existingRaw := map[string]interface{}{}
-		if yamlErr := yaml.Unmarshal(existingData, &existingRaw); yamlErr == nil {
-			deepMergeYAMLMaps(existingRaw, delta)
-			var marshalErr error
-			data, marshalErr = yaml.Marshal(existingRaw)
-			if marshalErr != nil {
-				return fmt.Errorf("marshaling merged instance config: %w", marshalErr)
+	if existingRaw != nil && len(existingRaw) > 0 {
+		deepMergeYAMLMaps(existingRaw, delta)
+		// After applying reset deletions the file may have become empty —
+		// every override was reset back to global (#2106).
+		if len(existingRaw) == 0 {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				debug.Log("config", "SaveInstance: failed to remove fully-reset instance config: %v", err)
 			}
-		} else {
-			// Existing file unparseable — overwrite with delta.
-			var marshalErr error
-			data, marshalErr = yaml.Marshal(delta)
-			if marshalErr != nil {
-				return fmt.Errorf("marshaling instance config: %w", marshalErr)
-			}
+			return nil
+		}
+		var marshalErr error
+		data, marshalErr = yaml.Marshal(existingRaw)
+		if marshalErr != nil {
+			return fmt.Errorf("marshaling merged instance config: %w", marshalErr)
 		}
 	} else {
-		// File doesn't exist — write delta directly.
+		// File doesn't exist (or unparseable) — write delta directly. A delta
+		// computed against no existing file cannot contain reset markers.
 		var marshalErr error
 		data, marshalErr = yaml.Marshal(delta)
 		if marshalErr != nil {

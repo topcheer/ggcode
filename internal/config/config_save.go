@@ -184,6 +184,13 @@ func globalOnlyVendors(merged, globalSnapVendors map[string]VendorConfig) map[st
 // wholesale (honoring additions and removals from the current process).
 func deepMergeYAMLMaps(dst, src map[string]interface{}) {
 	for key, srcVal := range src {
+		// nil is an explicit deletion marker (#2106): the source wants the
+		// key gone from the merged result (e.g. an instance override reset
+		// back to the global value), not a YAML null written to disk.
+		if srcVal == nil {
+			delete(dst, key)
+			continue
+		}
 		if dstVal, exists := dst[key]; exists {
 			srcMap, srcIsMap := srcVal.(map[string]interface{})
 			dstMap, dstIsMap := dstVal.(map[string]interface{})
