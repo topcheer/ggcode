@@ -425,7 +425,7 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 	byPrefix := make([]struct{ nick, id string }, 0)
 
 	// Also build team+role index for archive fallback
-	byTeamRole := make(map[string]string) // "team|role" -> nodeID
+	byTeamRole := make(map[string]map[string]bool) // "team|role" -> node-id set (#2142)
 
 	for _, p := range participants {
 		if p.NodeID == t.Hub.NodeID() {
@@ -445,9 +445,15 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 		}
 		if p.Team != "" && p.Role != "" {
 			key := p.Team + "|" + p.Role
-			if _, exists := byTeamRole[key]; !exists {
-				byTeamRole[key] = p.NodeID
+			// #2142: collect ALL nodes per team|role - the old first-wins
+			// picked whichever peer Go's randomized map iteration visited
+			// first, so the archive fallback delivered to a random "colleague"
+			// sharing the team+role with zero ambiguity report (#1272's
+			// refuse-coin-flip semantics must cover this path too).
+			if byTeamRole[key] == nil {
+				byTeamRole[key] = make(map[string]bool)
 			}
+			byTeamRole[key][p.NodeID] = true
 		}
 	}
 
@@ -534,12 +540,22 @@ func (t LanChatTool) resolveRecipients(ids []string) ([]string, []string) {
 
 		if ap != nil && ap.Team != "" && ap.Role != "" {
 			// Found in archive - try to find a currently active peer
-			// with the same team+role (the peer may have restarted)
+			// with the same team+role (the peer may have restarted).
+			// #2142: 2+ active peers sharing the exact team|role is a
+			// coin-flip - report it instead of silently picking one (#1272
+			// semantics on the archive path).
 			key := ap.Team + "|" + ap.Role
-			if id, ok := byTeamRole[key]; ok {
-				if !seen[id] {
-					resolved = append(resolved, id)
-					seen[id] = true
+			if ids, ok := byTeamRole[key]; ok {
+				if len(ids) > 1 {
+					ambiguous = append(ambiguous, fmt.Sprintf("archived %q maps to team|role %s shared by %d active peers: %s - address by node_id instead",
+						raw, key, len(ids), joinNodeIDs(ids)))
+					continue
+				}
+				for id := range ids {
+					if !seen[id] {
+						resolved = append(resolved, id)
+						seen[id] = true
+					}
 				}
 				continue
 			}

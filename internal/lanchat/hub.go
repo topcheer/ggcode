@@ -502,6 +502,19 @@ func (h *Hub) Participants() []Participant {
 
 // archivePeer adds a snapshot of the participant to the archive ring
 // buffer. If the archive is full (maxArchiveEntries), the oldest entry
+// ArchivePeer snapshots a participant into the archive ring buffer.
+// Exported counterpart of the internal archival that runs on peer
+// deletion - lets callers (and tests) populate the fallback index
+// directly, alongside the exported Archive()/LookupArchive* readers.
+func (h *Hub) ArchivePeer(p Participant) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cp := p
+	h.archivePeer(&cp)
+}
+
+// archivePeer adds a snapshot of the participant to the archive ring
+// buffer. If the archive is full (maxArchiveEntries), the oldest entry
 // is evicted (FIFO). Must be called with h.mu held.
 func (h *Hub) archivePeer(p *Participant) {
 	entry := ArchivedPeer{
