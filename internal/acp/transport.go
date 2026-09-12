@@ -35,6 +35,15 @@ type Transport struct {
 	outbox     chan outboundMsg
 	writerOnce sync.Once
 	dropped    atomic.Int64
+	// stopped is closed by stopWriter before outbox is closed; enqueue
+	// paths select on it to fail cleanly instead of racing a closed
+	// channel. sendMu serializes enqueue-vs-close. writerDone closes when
+	// the writer goroutine has drained and exited (CloseWriter waits on it
+	// via stopWriter's contract; tests observe it directly).
+	stopped    chan struct{}
+	sendMu     sync.Mutex
+	stopOnce   sync.Once
+	writerDone chan struct{}
 
 	// Bi-directional request support
 	nextID    atomic.Int64
@@ -101,6 +110,11 @@ func (t *Transport) ReadRaw() ([]byte, error) {
 
 // CloseWriter closes the underlying writer if it implements io.Closer.
 func (t *Transport) CloseWriter() error {
+	// #2109 follow-up: stop the writer goroutine FIRST (drain-then-exit) so
+	// it does not linger parked on the outbox channel after the underlying
+	// writer is closed - each Transport is one ACP agent connection, and a
+	// never-exiting writer leaked a goroutine per spawned agent.
+	t.stopWriter()
 	if c, ok := t.Writer.(io.Closer); ok {
 		return c.Close()
 	}
@@ -369,6 +383,8 @@ func (t *Transport) WriteNotification(method string, params interface{}) error {
 func (t *Transport) startWriter() {
 	t.writerOnce.Do(func() {
 		t.outbox = make(chan outboundMsg, outboundQueueCap)
+		t.stopped = make(chan struct{})
+		t.writerDone = make(chan struct{})
 		go func() {
 			for msg := range t.outbox {
 				t.mu.Lock()
@@ -384,7 +400,26 @@ func (t *Transport) startWriter() {
 					close(msg.ack)
 				}
 			}
+			close(t.writerDone)
 		}()
+	})
+}
+
+// stopWriter closes the outbound queue exactly once so the writer
+// goroutine drains what is already queued and then exits. Each Transport
+// owns one ACP agent connection (client.go spawns one per agent), so a
+// writer that never exits leaked a goroutine plus its queue for every
+// agent the editor session ever spawned (#2109 follow-up). Sends after the
+// close are guarded by sendMu: the closer holds sendMu while closing, so an
+// enqueue either lands before the close or observes the stopped channel and
+// fails cleanly - a send on a closed channel can never race.
+func (t *Transport) stopWriter() {
+	t.startWriter()
+	t.stopOnce.Do(func() {
+		t.sendMu.Lock()
+		close(t.outbox)
+		close(t.stopped)
+		t.sendMu.Unlock()
 	})
 }
 
@@ -406,9 +441,23 @@ func (t *Transport) writeBlocking(data []byte) error {
 	ack := make(chan struct{})
 	deadline := time.NewTimer(outboundDeadline)
 	defer deadline.Stop()
+	// sendMu closes the race between this send and a concurrent stopWriter
+	// closing the channel (#2109 follow-up). A send case on a CLOSED channel
+	// is treated as ready by the select runtime and panics even when other
+	// cases are ready, so the only safe shape is check-stopped-then-send
+	// under the same mutex the closer holds.
+	t.sendMu.Lock()
+	select {
+	case <-t.stopped:
+		t.sendMu.Unlock()
+		return fmt.Errorf("transport writer stopped: peer connection closed")
+	default:
+	}
 	select {
 	case t.outbox <- outboundMsg{data: data, ack: ack}:
+		t.sendMu.Unlock()
 	case <-deadline.C:
+		t.sendMu.Unlock()
 		return fmt.Errorf("outbound queue full: peer is not reading (dropped %d notifications so far)", t.dropped.Load())
 	}
 	select {
@@ -424,9 +473,24 @@ func (t *Transport) writeBlocking(data []byte) error {
 // chunks must never freeze the agent.
 func (t *Transport) writeDroppable(data []byte) {
 	t.startWriter()
+	// Check-stopped-then-send under sendMu (a select send case on a closed
+	// channel panics even with default/stopped ready - see writeBlocking).
+	t.sendMu.Lock()
+	select {
+	case <-t.stopped:
+		t.sendMu.Unlock()
+		n := t.dropped.Add(1)
+		if n == 1 || n%100 == 0 {
+			debug.Log("acp", "peer is not reading: dropped %d outbound notifications", n)
+		}
+		return
+	default:
+	}
 	select {
 	case t.outbox <- outboundMsg{data: data}:
+		t.sendMu.Unlock()
 	default:
+		t.sendMu.Unlock()
 		n := t.dropped.Add(1)
 		if n == 1 || n%100 == 0 {
 			debug.Log("acp", "peer is not reading: dropped %d outbound notifications", n)
