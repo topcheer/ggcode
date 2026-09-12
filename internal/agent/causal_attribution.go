@@ -93,7 +93,13 @@ var causalEditTools = sourceMutatingTools
 var causalVerifyRe = regexp.MustCompile(`(?i)(go\s+(build|test|vet)|make\s+\w+|npm\s+(test|run)|cargo\s+(build|test)|pytest|jest|\.\/gradlew)`)
 
 // errorFileRe extracts file paths from common build/test error output.
-var causalErrorFileRe = regexp.MustCompile(`(?:^|\s)((?:\./)?[\w\-./]+\.go):(?:\d+)?:`)
+// #2099: causalVerifyRe deliberately covers non-Go toolchains (npm,
+// cargo, pytest, jest, gradlew) but the capture group matched ONLY .go
+// - errorFiles stayed empty on TS/JS/Python/Rust failures, every CRS
+// scoring path (file-match/same-package/same-dir) sat inside the
+// empty-range loop, and the detector never fired once outside Go
+// projects: a silent dead zone for every toolchain it claims to cover.
+var causalErrorFileRe = regexp.MustCompile(`(?:^|\s)((?:\./)?[\w\-./]+\.(?:go|ts|tsx|js|jsx|mjs|py|rs|java|rb|kt|swift|c|cc|cpp|h|hpp)):(?:\d+)?:`)
 
 // recordEdit logs a mutation step.
 func (s *causalAttributionState) recordEdit(toolName, filePath string, iteration int) {

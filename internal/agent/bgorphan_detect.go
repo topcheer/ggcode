@@ -300,6 +300,56 @@ func (s *bgOrphanState) checkOrphanedCommands(iteration int) string {
 	return sb.String()
 }
 
+// indexFoldASCII finds the byte offset of an ASCII needle in s ignoring
+// letter case, WITHOUT building a lowered copy - offsets stay valid on
+// the original string even when ToLower would change byte lengths
+// (#2098: İ 2B->1B, ẞ 3B->2B shifted the slice cut). Returns -1 when
+// absent.
+func indexFoldASCII(s, needle string) int {
+	if needle == "" {
+		return 0
+	}
+	first := needle[0]
+	lo, hi := lowerASCII(first), upperASCII(first)
+	for i := 0; i+len(needle) <= len(s); i++ {
+		c := s[i]
+		if c != lo && c != hi {
+			continue
+		}
+		if equalFoldASCII(s[i:i+len(needle)], needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
+}
+
+func upperASCII(c byte) byte {
+	if c >= 'a' && c <= 'z' {
+		return c - 'a' + 'A'
+	}
+	return c
+}
+
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := lowerASCII(a[i]), lowerASCII(b[i])
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
 // extractJobID parses a start_command result to find the returned job_id.
 // The result text typically contains "job_id": "<id>" or "Job ID: <id>".
 func extractJobID(result string) string {
@@ -308,7 +358,13 @@ func extractJobID(result string) string {
 		return id
 	}
 	// Try "Job ID: xxx" format
-	if idx := strings.Index(strings.ToLower(result), "job id:"); idx >= 0 {
+	// #2098: the old strings.Index(strings.ToLower(result), ...) computed
+	// the offset on the LOWERED copy but sliced the ORIGINAL - ToLower
+	// changes byte length for some runes (İ 2B->1B, ẞ 3B->2B), so any
+	// such char in a prepended Rules block shifted the cut onto garbage
+	// (extracted ":" as the job id: orphan detection went blind on the
+	// real job and nudged a fake one).
+	if idx := indexFoldASCII(result, "job id:"); idx >= 0 {
 		rest := result[idx+7:]
 		rest = strings.TrimSpace(rest)
 		// Take first token/quoted string
