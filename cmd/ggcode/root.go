@@ -620,11 +620,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
-		systemPrompt = nextPrompt
+		// #2102: systemPrompt is written from THREE goroutines (the
+		// save_memory tool goroutine via SetAfterSave, the 2s skills
+		// ticker via SetSkillsChangedHook, and the bubbletea Update
+		// goroutine via SetSystemPromptRebuilder) - the mutex next door
+		// covered only promptSkillRefs, leaving the string's ptr+len
+		// header to tear under concurrent writes (-race mandatory fail).
 		promptSkillRefsMu.Lock()
+		systemPrompt = nextPrompt
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
 		promptSkillRefsMu.Unlock()
-		ag.UpdateSystemPrompt(systemPrompt)
+		ag.UpdateSystemPrompt(nextPrompt)
 		if knightAgent != nil {
 			knightAgent.RecordSkillPromptExposure(nextRefs)
 		}
@@ -887,8 +893,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	repl.SetSkillsChangedHook(refreshAgentSystemPrompt)
 	repl.SetSystemPromptRebuilder(func() string {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
+		promptSkillRefsMu.Lock() // #2102: same three-goroutine guard
 		systemPrompt = nextPrompt
-		promptSkillRefsMu.Lock()
 		promptSkillRefs = append(promptSkillRefs[:0], nextRefs...)
 		promptSkillRefsMu.Unlock()
 		return nextPrompt

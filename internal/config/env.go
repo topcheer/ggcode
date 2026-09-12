@@ -357,7 +357,11 @@ func parseEnvAssignment(line string) (string, string, bool) {
 	if value == "" {
 		return name, "", true
 	}
-	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+	// #2104: len >= 2 guards the lone double-quote typo (`export FOO="`) -
+	// prefix AND suffix both match a single '"', Unquote fails, and the
+	// #1519 fall-through below sliced value[1:0] -> panic at STARTUP from
+	// any shell rc line. The single-quote branch already had this guard.
+	if len(value) >= 2 && strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
 		unquoted, err := strconv.Unquote(value)
 		if err == nil {
 			return name, unquoted, true
