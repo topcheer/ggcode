@@ -108,7 +108,6 @@ func fsCaseInsensitive() bool {
 	return goos == "darwin" || goos == "windows"
 }
 
-// segEqualsFS compares two path segments under the local FS semantics.
 // matchSegFS matches one pattern segment against one path segment under
 // the local FS semantics (fold before filepath.Match on insensitive FSes).
 func matchSegFS(pattern, name string) bool {

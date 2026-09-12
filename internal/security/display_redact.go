@@ -1,7 +1,6 @@
 package security
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -128,10 +127,4 @@ func HasSecretPattern(content string) bool {
 		}
 	}
 	return false
-}
-
-// FormatRedactionNotice returns a notice string explaining that secrets were
-// masked in the display. Returns empty if no redaction notice is needed.
-func FormatRedactionNotice() string {
-	return fmt.Sprintf("[显示脱敏: 检测到敏感信息已做掩码处理 / Display redacted: sensitive values masked for safety]\n")
 }

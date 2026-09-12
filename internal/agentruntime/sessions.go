@@ -324,9 +324,3 @@ func CheckCrashRecovery(sessionID string) string {
 	info := agent.CheckCrashedRun(sessionID)
 	return agent.FormatCrashRecoveryMessage(info)
 }
-
-// CleanupJournals removes stale run journals older than maxAge. Call this at
-// application startup to prevent unbounded journal file accumulation.
-func CleanupJournals(maxAge time.Duration) {
-	agent.CleanupOldJournals(maxAge)
-}

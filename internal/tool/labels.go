@@ -21,15 +21,11 @@ type ToolResultPresentation struct {
 	PayloadMode string // "", "text", "task_fields", "task_list"
 }
 
-// namedAgentModelResolver returns the model configured for a named agent
-// template, or "" if unknown. Set by the TUI at startup.
+// namedAgentModelResolver resolves a named agent template's model override
+// by name. Returns "" if the template has no model override. (Its historical
+// setter was removed as dead code; the resolver is read by DescribeTool's
+// use_namedagent label and stays nil until re-wired.)
 var namedAgentModelResolver func(name string) string
-
-// SetNamedAgentModelResolver registers a function that resolves the model
-// configured for a named agent template by name.
-func SetNamedAgentModelResolver(fn func(name string) string) {
-	namedAgentModelResolver = fn
-}
 
 // DescribeTool returns a human-readable presentation for a tool call.
 // It picks the key argument(s) for each tool and formats them compactly.
