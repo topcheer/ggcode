@@ -100,8 +100,19 @@ func assessSearchResults(query string, results []searchResult, allowedDomains []
 	var filtered []searchResult
 	for _, res := range results {
 		domain := domainFromURL(res.URL)
-		if isSpamDomain(domain) && !allowed[domain] {
-			continue
+		if isSpamDomain(domain) {
+			// #2146: mirror the dedup-side semantics (#1428-B). The
+			// allow-list keys are www-stripped (normalizeDomains) while
+			// domainFromURL KEEPS www, and filterByDomain admits subdomains
+			// - the exact-key lookup missed both, and since DDG returns
+			// www-prefixed URLs for most spam-list domains,
+			// allowed=["w3schools.com"] killed every result the filter had
+			// kept ("No results found" for the domain the user explicitly
+			// asked for; configuring was worse than not configuring).
+			normalized := strings.TrimPrefix(domain, "www.")
+			if !allowed[normalized] && !subdomainOfAny(normalized, allowed) {
+				continue
+			}
 		}
 		filtered = append(filtered, res)
 	}

@@ -426,30 +426,55 @@ func extractFirstTag(s, tag string) string {
 	return inner
 }
 
+// extractTaggedBlock finds the first opening tag whose attribute tail
+// matches attrTailRE (a pattern matching the rest of the tag after the
+// name) and returns its inner HTML up to the MATCHING same-name closing
+// tag (#2146). The old `(.*?)</\w+>` closed on the first closing tag of
+// ANY name - a container's first child element ended the capture
+// (short child: silent <100-char failure fell through every phase-2
+// tier; long child: a truncated product was returned, silently dropping
+// everything after it). Go's RE2 has no backreferences, so same-name
+// matching is a two-step scan: capture the opening name, then count
+// nested opens/closes of that name.
+func extractTaggedBlock(s, attrTailRE string) string {
+	re := regexp.MustCompile(`(?is)<(\w+)[^>]*` + attrTailRE + `[^>]*>`)
+	loc := re.FindStringSubmatchIndex(s)
+	if loc == nil || len(loc) < 4 {
+		return ""
+	}
+	name := s[loc[2]:loc[3]]
+	rest := s[loc[1]:]
+	boundary := regexp.MustCompile(`(?i)<(/?)` + name + `(\s|>|/)`)
+	depth := 1
+	for {
+		m := boundary.FindStringSubmatchIndex(rest)
+		if m == nil {
+			return ""
+		}
+		if rest[m[2]:m[3]] == "/" {
+			depth--
+			if depth == 0 {
+				content := rest[:m[0]]
+				if len(strings.TrimSpace(stripTagsOnly(content))) < 100 {
+					return ""
+				}
+				return content
+			}
+		} else {
+			depth++
+		}
+		rest = rest[m[1]:]
+	}
+}
+
 // extractAttrMatch extracts content from a tag with a specific attribute value.
 func extractAttrMatch(s, attr, val string) string {
-	re := regexp.MustCompile(`(?is)<\w+\s+[^>]*` + attr + `\s*=\s*["']` + val + `["'][^>]*>(.*?)</\w+>`)
-	m := re.FindStringSubmatch(s)
-	if m == nil || len(m) < 2 {
-		return ""
-	}
-	if len(strings.TrimSpace(stripTagsOnly(m[1]))) < 100 {
-		return ""
-	}
-	return m[1]
+	return extractTaggedBlock(s, `\s*`+regexp.QuoteMeta(attr)+`\s*=\s*["']`+regexp.QuoteMeta(val)+`["']`)
 }
 
 // extractByID extracts content from a tag with a specific id attribute.
 func extractByID(s, id string) string {
-	re := regexp.MustCompile(`(?is)<\w+\s+[^>]*id\s*=\s*["']` + regexp.QuoteMeta(id) + `["'][^>]*>(.*?)</\w+>`)
-	m := re.FindStringSubmatch(s)
-	if m == nil || len(m) < 2 {
-		return ""
-	}
-	if len(strings.TrimSpace(stripTagsOnly(m[1]))) < 100 {
-		return ""
-	}
-	return m[1]
+	return extractTaggedBlock(s, `[^>]*\bid\s*=\s*["']`+regexp.QuoteMeta(id)+`["']`)
 }
 
 // stripTagsOnly removes HTML tags without any entity decoding or whitespace handling.
