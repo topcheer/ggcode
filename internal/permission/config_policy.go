@@ -232,19 +232,25 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	case PlanMode:
 		// Plan mode: mode control tools + read-only tools allowed, everything else denied
 		// enter_plan_mode is always allowed (entering read-only mode is safe).
-		// exit_plan_mode requires user confirmation in supervised mode — the plan
-		// determines what code changes the agent will make next.
+		// exit_plan_mode is allowed: it restores the user's own previous mode.
 		if toolName == "enter_plan_mode" {
 			return Allow, nil
 		}
 		if toolName == "exit_plan_mode" {
-			// Exiting plan mode restores write tools and the presented plan
-			// determines what code changes the agent makes next, so it needs
-			// user confirmation — Ask, not unconditional Allow (#551-D). The
-			// doc comment above has required confirmation all along; this branch
-			// previously contradicted it and let a plan-mode agent exit on its
-			// own, silently regaining write access without review.
-			return Ask, nil
+			// Exiting plan mode restores the mode the USER had chosen before
+			// entering plan mode (c47a99ec): returning to a state the user
+			// themselves selected is not an escalation and needs no gate.
+			// This reverses #551-D's Ask: that fix aligned the code with an
+			// old doc comment without challenging the comment itself, and it
+			// broke both symmetry (enter was Allow, exit was Ask — an agent
+			// that entered plan mode mid-run was trapped, needing human
+			// rescue to resume an autopilot/bypass run) and user sovereignty
+			// (a user on bypass/autopilot who detoured through plan mode
+			// needed "permission" to go back to their own chosen mode). The
+			// real escalation vector — a switch_mode call that NAMES bypass
+			// or autopilot — is still gated with Ask below and in every other
+			// mode (#1705 case 1).
+			return Allow, nil
 		}
 		if IsReadOnlyTool(toolName) {
 			if d := p.checkPlanReadOnlyExceptions(toolName, input); d != Allow {

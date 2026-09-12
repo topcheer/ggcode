@@ -7,20 +7,30 @@ import (
 	"testing"
 )
 
-// TestIssue551D_ExitPlanModeRequiresConfirmation verifies that in Plan
-// mode, exit_plan_mode returns Ask (user confirmation) instead of an
-// unconditional Allow (#551-D). The comment above the branch has always
-// required confirmation; the implementation contradicted it, letting a
-// plan-mode agent exit on its own and silently regain write tools.
-func TestIssue551D_ExitPlanModeRequiresConfirmation(t *testing.T) {
+// TestIssue551D_ExitPlanModeRestoresWithoutGate verifies that in Plan
+// mode, exit_plan_mode returns Allow. #551-D made it Ask by aligning the
+// code with an old doc comment; that ignored two things: exiting restores
+// the mode the USER chose before entering plan mode (user sovereignty —
+// a bypass/autopilot user detouring through plan mode needed "permission"
+// to go back), and enter/exit symmetry (enter was Allow, exit was Ask —
+// an agent that entered plan mode mid-run was trapped until a human
+// confirmed its way out). The genuine escalation vector — switch_mode
+// naming bypass/autopilot — remains gated by Ask (#1705 case 1), which
+// this test also pins.
+func TestIssue551D_ExitPlanModeRestoresWithoutGate(t *testing.T) {
 	p := NewConfigPolicyWithMode(nil, []string{t.TempDir()}, PlanMode)
 
 	d, err := p.Check("exit_plan_mode", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Check error: %v", err)
 	}
-	if d != Ask {
-		t.Fatalf("exit_plan_mode in plan mode: got %v, want Ask (user confirmation)", d)
+	if d != Allow {
+		t.Fatalf("exit_plan_mode in plan mode: got %v, want Allow (restores the user's own previous mode)", d)
+	}
+	// The real escalation gate stays: switch_mode naming bypass/autopilot
+	// still asks, so an injected exit→re-escalate detour is not opened up.
+	if d, _ := p.Check("switch_mode", json.RawMessage(`{"mode":"bypass"}`)); d != Ask {
+		t.Fatalf("switch_mode→bypass in plan mode: got %v, want Ask (#1705)", d)
 	}
 
 	// Guard rails: entering plan mode stays allowed, read-only tools stay

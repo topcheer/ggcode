@@ -109,11 +109,13 @@ func TestIssue712PlanModeNormalWebToolsStillAllowed(t *testing.T) {
 	}
 }
 
-func TestIssue712PlanModeExitStillAsk(t *testing.T) {
-	// #551-D regression guard: exit_plan_mode keeps requiring confirmation.
+func TestIssue712PlanModeExitNowAllow(t *testing.T) {
+	// #551-D's Ask was reversed (see zz_issue551_test.go for the full
+	// rationale): exiting plan mode restores the user's own previous mode
+	// and is not an escalation. switch_mode→bypass/autopilot stays Ask.
 	policy := NewConfigPolicyWithMode(nil, []string{"."}, PlanMode)
 	d, err := policy.Check("exit_plan_mode", json.RawMessage(`{}`))
-	if err != nil || d != Ask {
-		t.Errorf("#712: exit_plan_mode should remain Ask, got %v err=%v", d, err)
+	if err != nil || d != Allow {
+		t.Errorf("#712: exit_plan_mode should be Allow, got %v err=%v", d, err)
 	}
 }
