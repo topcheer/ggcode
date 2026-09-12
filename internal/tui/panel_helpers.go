@@ -68,23 +68,89 @@ func padPanelLine(line string, width int) string {
 	// upstream sanitizers into spaces BEFORE measuring; lipgloss counts them
 	// as width 0 while the terminal expands TABs to tab stops, so a padded
 	// line could still land past the border column.
+	//
+	// R201 fix: the expansion must be ANSI-AWARE. The panel renders its rows
+	// through lipgloss FIRST (e.g. summaries in Foreground(Color("8")) =
+	// SGR 90, the cursor row Bold+Color("12") = SGR 1;94), so styled lines
+	// legitimately contain ESC sequences. The old blanket r<0x20 expansion
+	// replaced the ESC byte of those sequences with a space, leaving the
+	// sequence body visible as literal text - every row showed "[90m ... [m"
+	// in the /sessions panel. Escape sequences are zero-width for
+	// lipgloss.Width and are copied through verbatim; every OTHER control
+	// character (TAB/CR/0x7f, the actual #1014 concern) still expands.
 	if strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		var b strings.Builder
-		b.Grow(len(line))
-		for _, r := range line {
-			if r < 0x20 || r == 0x7f {
-				b.WriteByte(' ')
-			} else {
-				b.WriteRune(r)
-			}
-		}
-		line = b.String()
+		line = expandControlCharsANSIAware(line)
 	}
 	visible := lipgloss.Width(line)
 	if visible >= width {
 		return line
 	}
 	return line + strings.Repeat(" ", width-visible)
+}
+
+// expandControlCharsANSIAware replaces control characters with spaces while
+// copying ANSI escape sequences through untouched. A sequence started by ESC
+// is consumed as: CSI (ESC [ ... final byte @-~), OSC/DCS/APC/PM (ESC ] / P /
+// X / ^ / _ ... terminated by BEL or ESC \), or a two-byte escape (ESC <char>).
+// A lone ESC at end-of-line expands to a space like any other control char.
+func expandControlCharsANSIAware(line string) string {
+	var b strings.Builder
+	b.Grow(len(line))
+	i := 0
+	for i < len(line) {
+		c := line[i]
+		if c != 0x1b {
+			if c < 0x20 || c == 0x7f {
+				b.WriteByte(' ')
+			} else {
+				b.WriteByte(c)
+			}
+			i++
+			continue
+		}
+		if i+1 >= len(line) {
+			b.WriteByte(' ') // lone trailing ESC
+			break
+		}
+		switch line[i+1] {
+		case '[': // CSI: copy through the final byte (@-~)
+			j := i + 2
+			for j < len(line) {
+				if line[j] >= 0x40 && line[j] <= 0x7e {
+					break
+				}
+				j++
+			}
+			if j < len(line) {
+				j++ // include the final byte
+			}
+			b.WriteString(line[i:j])
+			i = j
+		case ']', 'P', 'X', '^', '_': // string sequences: BEL or ESC \ terminate
+			j := i + 2
+			end := -1
+			for j < len(line) {
+				if line[j] == 0x07 {
+					end = j + 1
+					break
+				}
+				if line[j] == 0x1b && j+1 < len(line) && line[j+1] == '\\' {
+					end = j + 2
+					break
+				}
+				j++
+			}
+			if end < 0 {
+				end = len(line)
+			}
+			b.WriteString(line[i:end])
+			i = end
+		default: // two-byte escape (ESC 7, ESC (, ...)
+			b.WriteString(line[i : i+2])
+			i += 2
+		}
+	}
+	return b.String()
 }
 
 func hardWrapPanelLine(line string, width int) []string {
