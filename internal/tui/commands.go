@@ -158,6 +158,14 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 		for atPos >= 0 && value[atPos] != '@' {
 			atPos--
 		}
+		// #2149: no '@' to the left of the cursor - a stale completion
+		// state (the readline shortcuts ctrl+a/k/u/w return without
+		// recalculating, so the flag outlives the token) could reach here
+		// with atPos == -1 and value[:atPos] panicked the whole TUI
+		// (slice bounds out of range [:-1]). Safe no-op instead.
+		if atPos < 0 {
+			return nil
+		}
 		if strings.HasSuffix(selected, "/") {
 			// Directory: no trailing space so user can keep navigating
 			replacement = "@" + selected

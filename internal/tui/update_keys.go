@@ -661,6 +661,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	case "ctrl+a":
 		// Move cursor to start of line
 		m.input.CursorStart()
+		// #2149: the readline shortcuts mutate the line/cursor but used to
+		// return WITHOUT recalculating the completion state - a mention
+		// completion stayed "active" with a cursor no longer on any '@'
+		// token, and the next Enter applied it into value[:-1] (TUI panic).
+		m.updateAutoComplete()
 		return m, nil
 	case "ctrl+e":
 		// Move cursor to end of line
@@ -670,16 +675,19 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// Delete from cursor to end of line
 		deleteFromCursorToEnd(&m.input)
 		m.inputHint = ""
+		m.updateAutoComplete() // #2149: no stale completion state
 		return m, nil
 	case "ctrl+u":
 		// Delete from start of line to cursor
 		deleteFromLineStartToCursor(&m.input)
 		m.inputHint = ""
+		m.updateAutoComplete() // #2149: no stale completion state
 		return m, nil
 	case "ctrl+w":
 		// Delete the word before cursor
 		deleteWordBeforeCursor(&m.input)
 		m.inputHint = ""
+		m.updateAutoComplete() // #2149: no stale completion state
 		return m, nil
 	}
 
