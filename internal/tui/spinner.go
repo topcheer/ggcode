@@ -2,8 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -138,88 +136,6 @@ type ToolStatusMsg struct {
 	Elapsed     time.Duration
 }
 
-// toolBulletStyle renders the ● prefix for tool call lines.
-var toolBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-
-func summarizeToolResult(lang Language, msg ToolStatusMsg) string {
-	result := relativizeResult(strings.TrimSpace(msg.Result))
-	if msg.IsError {
-		if exit := firstMatch(result, `exit status \d+`); exit != "" {
-			return exit
-		}
-		return toolDisplayName(msg)
-	}
-
-	switch msg.ToolName {
-	case "run_command":
-		if result == "" || result == "Command completed with no output." {
-			return tr(lang, "tool.no_output")
-		}
-		return summarizeTextPayload(lang, result, tr(lang, "tool.output"))
-	case "start_command", "read_command_output", "stop_command", "write_command_input", "list_commands":
-		if summary := summarizeAsyncCommandResult(result); summary != "" {
-			return summary
-		}
-		return toolDisplayName(msg)
-	case "read_file", "web_fetch", "web_search", "git_diff", "git_status", "git_log":
-		return summarizeTextPayload(lang, result, tr(lang, "tool.content"))
-	case "glob":
-		if result == "No files matched the pattern." {
-			return pluralize(lang, 0, tr(lang, "tool.match"))
-		}
-		return pluralize(lang, len(nonEmptyLines(result)), tr(lang, "tool.match"))
-	case "list_directory":
-		return pluralize(lang, len(nonEmptyLines(result)), tr(lang, "tool.entry"))
-	case "search_files":
-		if match := regexp.MustCompile(`(?:Showing \d+ of |\bFound )(\d+) matches`).FindStringSubmatch(result); len(match) == 2 {
-			return pluralize(lang, parseInt(match[1]), tr(lang, "tool.match"))
-		}
-		return summarizeTextPayload(lang, result, tr(lang, "tool.matches"))
-	case "write_file", "edit_file":
-		return compactSingleLine(result)
-	default:
-		if result == "" {
-			return toolDisplayName(msg)
-		}
-		return summarizeTextPayload(lang, result, tr(lang, "tool.result"))
-	}
-}
-
-func summarizeAsyncCommandResult(result string) string {
-	lines := strings.Split(result, "\n")
-	status := ""
-	total := ""
-	last := ""
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "Status: "):
-			status = strings.TrimPrefix(line, "Status: ")
-		case strings.HasPrefix(line, "Total lines: "):
-			total = strings.TrimPrefix(line, "Total lines: ")
-		case line == "" || strings.HasSuffix(line, ":"):
-		case strings.HasPrefix(line, "Job ID:"),
-			strings.HasPrefix(line, "Duration:"),
-			strings.HasPrefix(line, "Timeout:"),
-			strings.HasPrefix(line, "Buffered lines start at:"),
-			strings.HasPrefix(line, "Error:"):
-		default:
-			last = line
-		}
-	}
-	parts := make([]string, 0, 3)
-	if status != "" {
-		parts = append(parts, status)
-	}
-	if total != "" {
-		parts = append(parts, total+" lines")
-	}
-	if last != "" && last != "(no output yet)" {
-		parts = append(parts, last)
-	}
-	return strings.Join(parts, " • ")
-}
-
 func toolDisplayName(msg ToolStatusMsg) string {
 	if msg.DisplayName != "" {
 		return msg.DisplayName
@@ -237,75 +153,8 @@ func toolDetail(msg ToolStatusMsg) string {
 	return msg.Args
 }
 
-func summarizeTextPayload(lang Language, result, noun string) string {
-	lines := nonEmptyLines(result)
-	if len(lines) == 0 {
-		if lang == LangZhCN {
-			return "无" + noun
-		}
-		return "no " + noun
-	}
-	if len(lines) == 1 {
-		if lang == LangZhCN {
-			return "1 行" + noun
-		}
-		return "1 line of " + noun
-	}
-	if lang == LangZhCN {
-		return fmt.Sprintf("%d 行%s", len(lines), noun)
-	}
-	return fmt.Sprintf("%d lines of %s", len(lines), noun)
-}
-
-func pluralize(lang Language, n int, noun string) string {
-	if lang == LangZhCN {
-		return fmt.Sprintf("%d %s", n, noun)
-	}
-	if n == 1 {
-		return "1 " + noun
-	}
-	switch {
-	case strings.HasSuffix(noun, "y") && len(noun) > 1:
-		prev := noun[len(noun)-2]
-		if !strings.ContainsRune("aeiou", rune(prev)) {
-			return fmt.Sprintf("%d %sies", n, noun[:len(noun)-1])
-		}
-	case strings.HasSuffix(noun, "s"),
-		strings.HasSuffix(noun, "x"),
-		strings.HasSuffix(noun, "z"),
-		strings.HasSuffix(noun, "ch"),
-		strings.HasSuffix(noun, "sh"):
-		return fmt.Sprintf("%d %ses", n, noun)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
-}
-
-func nonEmptyLines(s string) []string {
-	raw := strings.Split(strings.TrimSpace(s), "\n")
-	lines := make([]string, 0, len(raw))
-	for _, line := range raw {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines
-}
-
 func compactSingleLine(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.Join(strings.Fields(s), " ")
 	return s
-}
-
-func firstMatch(s, pattern string) string {
-	re := regexp.MustCompile(pattern)
-	return re.FindString(s)
-}
-
-func parseInt(s string) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return n
 }

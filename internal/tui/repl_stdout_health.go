@@ -24,11 +24,6 @@ type displayWakeMsg struct{}
 // the renderer. When true, the renderer should skip Write() calls.
 var stdoutDeadFlag atomic.Bool
 
-// IsStdoutDead returns true if stdout has been detected as dead.
-func IsStdoutDead() bool {
-	return stdoutDeadFlag.Load()
-}
-
 // stdoutHealthInterval is how often we check if stdout is still writable.
 const stdoutHealthInterval = 2 * time.Second
 

@@ -1,12 +1,7 @@
 package lanchat
 
 import (
-	"context"
-	"io"
-	"mime"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -175,78 +170,6 @@ func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *
 }
 
 // attachmentDownloadClient is a shared HTTP client with a timeout for peer attachment downloads.
-var attachmentDownloadClient = &http.Client{
-	Timeout: 30 * time.Second,
-}
-
-// DownloadAttachment fetches an attachment from a peer's URL.
-func DownloadAttachment(url, apiKey string) ([]byte, string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	if apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
-
-	resp, err := attachmentDownloadClient.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", &AttachmentDownloadError{StatusCode: resp.StatusCode, URL: url}
-	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAttachmentSize+1))
-	if err != nil {
-		return nil, "", err
-	}
-	if len(data) > maxAttachmentSize {
-		return nil, "", &AttachmentDownloadError{StatusCode: http.StatusRequestEntityTooLarge, URL: url}
-	}
-
-	// Guess MIME type from URL path extension if Content-Type is generic
-	mimeType := resp.Header.Get("Content-Type")
-	if mimeType == "" || mimeType == "application/octet-stream" {
-		ext := strings.ToLower(filepath.Ext(url))
-		mimeType = mime.TypeByExtension(ext)
-		if mimeType == "" {
-			mimeType = "application/octet-stream"
-		}
-	}
-
-	return data, mimeType, nil
-}
-
-// ReadFileForAttachment reads a local file and returns attachment metadata.
-func ReadFileForAttachment(path string) (string, []byte, string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return "", nil, "", err
-	}
-	if info.Size() > maxAttachmentSize {
-		return "", nil, "", &AttachmentDownloadError{StatusCode: http.StatusRequestEntityTooLarge, URL: path}
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", nil, "", err
-	}
-
-	name := filepath.Base(path)
-	mimeType := mime.TypeByExtension(filepath.Ext(name))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
-	return name, data, mimeType, nil
-}
-
 // AttachmentDownloadError represents a failed attachment download.
 type AttachmentDownloadError struct {
 	StatusCode int

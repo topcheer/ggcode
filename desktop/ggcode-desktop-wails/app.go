@@ -2790,14 +2790,6 @@ func (a *App) clearAskUserRequest() {
 	a.askUserReq = tool.AskUserRequest{}
 }
 
-// storeAskUserRequest stores the current ask_user request for later mobile response mapping.
-func (a *App) storeAskUserRequest(req tool.AskUserRequest) {
-	a.askUserMu.Lock()
-	defer a.askUserMu.Unlock()
-	a.askUserReq = req
-	a.hasAskUserReq = true
-}
-
 func encodeQRBase64(pngData []byte) string {
 	if len(pngData) == 0 {
 		return ""
