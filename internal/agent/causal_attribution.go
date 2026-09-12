@@ -99,7 +99,13 @@ var causalVerifyRe = regexp.MustCompile(`(?i)(go\s+(build|test|vet)|make\s+\w+|n
 // scoring path (file-match/same-package/same-dir) sat inside the
 // empty-range loop, and the detector never fired once outside Go
 // projects: a silent dead zone for every toolchain it claims to cover.
-var causalErrorFileRe = regexp.MustCompile(`(?:^|\s)((?:\./)?[\w\-./]+\.(?:go|ts|tsx|js|jsx|mjs|py|rs|java|rb|kt|swift|c|cc|cpp|h|hpp)):(?:\d+)?:`)
+// #2171: the class lacked '\' and ':' entirely, so Windows-native
+// output (C:\src\api.rs:12:5, src\main.rs:3:9, even go's .\pkg\file.go
+// on Windows) matched NOTHING - a platform-wide dead zone older than
+// the #2099 widening. The class now admits both separators and drive
+// letters, and the tsc paren form `path(12,3):` is accepted alongside
+// `path:12:`.
+var causalErrorFileRe = regexp.MustCompile("(?:^|\\s)((?:[\\w\\-./\\\\:]+)\\.(?:go|ts|tsx|js|jsx|mjs|py|rs|java|rb|kt|swift|c|cc|cpp|h|hpp))(?::(?:\\d+)?:|\\(\\d+,\\d+\\):)")
 
 // recordEdit logs a mutation step.
 func (s *causalAttributionState) recordEdit(toolName, filePath string, iteration int) {
@@ -145,6 +151,11 @@ func extractErrorFiles(output string) []string {
 	for _, m := range matches {
 		// Normalize: strip leading ./ for consistent comparison
 		f := strings.TrimSpace(m[1])
+		// #2171: Windows-native output uses backslashes - fold them to
+		// '/' FIRST (a `.\pkg\file.go` only becomes `./pkg/file.go` after
+		// folding) so the ./ strip and the same-dir/same-package
+		// attribution work uniformly on every platform.
+		f = strings.ReplaceAll(f, "\\", "/")
 		f = strings.TrimPrefix(f, "./")
 		if !seen[f] {
 			seen[f] = true
