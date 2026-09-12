@@ -1095,11 +1095,20 @@ func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) e
 	// so the caller learns about delivery failures immediately.
 	h.mu.RLock()
 	peer, ok := h.peers[msg.ToNodeID]
+	// #2135: peers is map[string]*Participant - the map lookup only
+	// copies the POINTER. Dereferencing peer.NodeID/Endpoint after
+	// RUnlock races the locked struct writes in HandlePresence/UpdatePeers
+	// (-race confirmed, #2128 family). Copy the VALUE under the lock,
+	// same as the broadcast paths.
+	var peerCopy Participant
+	if ok {
+		peerCopy = *peer
+	}
 	h.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("unknown peer: %s", msg.ToNodeID)
 	}
-	return h.postToPeerWithRetry(ctx, peer.NodeID, peer.Endpoint, msg, 2)
+	return h.postToPeerWithRetry(ctx, peerCopy.NodeID, peerCopy.Endpoint, msg, 2)
 }
 
 // postToPeerWithRetry sends a message to a peer, retrying up to maxRetries
@@ -1260,7 +1269,15 @@ func (h *Hub) broadcastNickChange(newNick, newRole, newTeam string) {
 	for _, peer := range peers {
 		safego.Go("lanchat.nickChangePeer", func() {
 			url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/nick"
-			req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+			// #2135: the last unguarded NewRequest in this file (#2114
+			// fixed sendPresence/sendReceipt; postToPeer was already safe) -
+			// a malformed peer Endpoint (presence JSON is unvalidated) made
+			// req nil and the Header.Set panicked inside safego, silently
+			// dropping this peer's nick/role/team change notice.
+			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+			if err != nil {
+				return
+			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-API-Key", h.APIKey())
 			resp, err := h.httpClient.Do(req)
@@ -1588,12 +1605,18 @@ func (h *Hub) sendReceipt(originalMsg Message, status, reason string) {
 	// Find sender's endpoint
 	h.mu.RLock()
 	peer, ok := h.peers[originalMsg.FromNodeID]
+	// #2135: same use-after-unlock as deliverMessage - copy the struct
+	// VALUE under the lock before dereferencing Endpoint below.
+	var peerCopy Participant
+	if ok {
+		peerCopy = *peer
+	}
 	h.mu.RUnlock()
 	if !ok {
 		return
 	}
 
-	url := strings.TrimRight(peer.Endpoint, "/") + "/lanchat/receipt"
+	url := strings.TrimRight(peerCopy.Endpoint, "/") + "/lanchat/receipt"
 	data, _ := json.Marshal(r)
 	// #2114: a malformed Endpoint (arbitrary string from presence JSON,
 	// no format constraint) makes NewRequest fail - the ignored error left
