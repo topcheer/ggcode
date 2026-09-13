@@ -12,20 +12,22 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 
 	"google.golang.org/genai"
+	"sync/atomic"
 )
 
 // GeminiProvider implements Provider using the Google Generative AI API.
 type GeminiProvider struct {
-	client          *genai.Client
-	model           string
-	maxTokens       int
-	cap             *adaptiveCap
-	reasoningEffort string                    // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
-	toolChoice      string                    // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
-	temperature     float64                   // 0 = provider default
-	stopSequences   []string                  // #2239: MCP sampling per-call stop sequences
-	topP            float64                   // 0 = provider default
-	transport       *headerInjectingTransport // kept for runtime header updates
+	client           *genai.Client
+	model            string
+	maxTokens        int
+	cap              *adaptiveCap
+	reasoningEffort  string                           // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
+	toolChoice       string                           // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
+	temperature      float64                          // 0 = provider default
+	stopSequences    []string                         // #2239: MCP sampling per-call stop sequences
+	samplingOverride atomic.Pointer[SamplingOverride] // #2248
+	topP             float64                          // 0 = provider default
+	transport        *headerInjectingTransport        // kept for runtime header updates
 }
 
 // ModelName returns the current model name used by this provider.
@@ -78,7 +80,13 @@ func (p *GeminiProvider) SetStopSequences(seqs []string) { p.stopSequences = seq
 
 // StopSequences implements provider.StopSequenceSetter (#2239).
 func (p *GeminiProvider) StopSequences() []string { return p.stopSequences }
-func (p *GeminiProvider) Temperature() float64    { return p.temperature }
+
+// SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
+func (p *GeminiProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
+
+// SamplingOverride implements provider.SamplingOverrideSetter (#2248).
+func (p *GeminiProvider) SamplingOverride() *SamplingOverride { return p.samplingOverride.Load() }
+func (p *GeminiProvider) Temperature() float64                { return p.temperature }
 
 // SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
 func (p *GeminiProvider) SetTopP(topP float64) { p.topP = topP }
@@ -528,8 +536,12 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 		config.TopP = ptrToFloat32(float32(p.topP))
 	}
 	// #2239: per-call stop sequences (MCP sampling contract).
-	if len(p.stopSequences) > 0 {
-		config.StopSequences = p.stopSequences
+	seqs := p.stopSequences
+	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
+		seqs = o.StopSequences // #2248: active sampling window wins
+	}
+	if len(seqs) > 0 {
+		config.StopSequences = seqs
 	}
 }
 

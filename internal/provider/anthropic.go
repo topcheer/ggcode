@@ -14,21 +14,23 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"net/http"
+	"sync/atomic"
 )
 
 // AnthropicProvider implements Provider using the Anthropic SDK.
 type AnthropicProvider struct {
-	client          anthropic.Client
-	model           string
-	maxTokens       int
-	stopSequences   []string // #2239: MCP sampling per-call stop sequences
-	cap             *adaptiveCap
-	transport       *headerInjectingTransport // kept for runtime header updates
-	calibrator      *tokenCountCalibrator     // periodic real-API token calibration
-	reasoningEffort string                    // "", "low", "medium", "high" — maps to thinking budget
-	toolChoice      string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
-	temperature     float64                   // 0 = provider default
-	topP            float64                   // 0 = provider default
+	client           anthropic.Client
+	model            string
+	maxTokens        int
+	stopSequences    []string                         // #2239: MCP sampling per-call stop sequences
+	samplingOverride atomic.Pointer[SamplingOverride] // #2248: reader-side race-free override
+	cap              *adaptiveCap
+	transport        *headerInjectingTransport // kept for runtime header updates
+	calibrator       *tokenCountCalibrator     // periodic real-API token calibration
+	reasoningEffort  string                    // "", "low", "medium", "high" — maps to thinking budget
+	toolChoice       string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
+	temperature      float64                   // 0 = provider default
+	topP             float64                   // 0 = provider default
 }
 
 // ModelName returns the current model name used by this provider.
@@ -89,7 +91,13 @@ func (p *AnthropicProvider) SetStopSequences(seqs []string) { p.stopSequences = 
 
 // StopSequences implements provider.StopSequenceSetter (#2239).
 func (p *AnthropicProvider) StopSequences() []string { return p.stopSequences }
-func (p *AnthropicProvider) Temperature() float64    { return p.temperature }
+
+// SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
+func (p *AnthropicProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
+
+// SamplingOverride implements provider.SamplingOverrideSetter (#2248).
+func (p *AnthropicProvider) SamplingOverride() *SamplingOverride { return p.samplingOverride.Load() }
+func (p *AnthropicProvider) Temperature() float64                { return p.temperature }
 
 // SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
 func (p *AnthropicProvider) SetTopP(topP float64) { p.topP = topP }
@@ -107,6 +115,9 @@ func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) e
 }
 
 func (p *AnthropicProvider) effectiveMaxTokens() int {
+	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
+		return o.MaxTokens // #2248: active sampling window wins
+	}
 	if p.cap != nil {
 		if v := p.cap.Get(); v > 0 {
 			return v

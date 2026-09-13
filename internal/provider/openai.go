@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/util"
+	"sync/atomic"
 )
 
 const (
@@ -25,18 +26,19 @@ const (
 
 // OpenAIProvider implements Provider using the OpenAI-compatible API.
 type OpenAIProvider struct {
-	client          *openai.Client
-	model           string
-	maxTokens       int
-	cap             *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
-	reasoningEffort string
-	toolChoice      string // "", "auto", "required", "none"
-	temperature     float64
-	stopSequences   []string // #2239: MCP sampling per-call stop sequences
-	topP            float64
-	name            string
-	baseURL         string                    // endpoint URL, for logging
-	transport       *headerInjectingTransport // kept for runtime header updates
+	client           *openai.Client
+	model            string
+	maxTokens        int
+	cap              *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
+	reasoningEffort  string
+	toolChoice       string // "", "auto", "required", "none"
+	temperature      float64
+	stopSequences    []string                         // #2239
+	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
+	topP             float64
+	name             string
+	baseURL          string                    // endpoint URL, for logging
+	transport        *headerInjectingTransport // kept for runtime header updates
 }
 
 // ModelName returns the current model name, implementing ModelNameProvider.
@@ -132,7 +134,13 @@ func (p *OpenAIProvider) SetStopSequences(seqs []string) { p.stopSequences = seq
 
 // StopSequences implements provider.StopSequenceSetter (#2239).
 func (p *OpenAIProvider) StopSequences() []string { return p.stopSequences }
-func (p *OpenAIProvider) Temperature() float64    { return p.temperature }
+
+// SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
+func (p *OpenAIProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
+
+// SamplingOverride implements provider.SamplingOverrideSetter (#2248).
+func (p *OpenAIProvider) SamplingOverride() *SamplingOverride { return p.samplingOverride.Load() }
+func (p *OpenAIProvider) Temperature() float64                { return p.temperature }
 
 // SetTopP sets the nucleus sampling parameter. A value of 0 means "use provider
 // default". Values between 0 and 1 are valid.
@@ -150,8 +158,12 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 		req.TopP = float32(p.topP)
 	}
 	// #2239: per-call stop sequences (MCP sampling contract).
-	if len(p.stopSequences) > 0 {
-		req.Stop = p.stopSequences
+	seqs := p.stopSequences
+	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
+		seqs = o.StopSequences // #2248: active sampling window wins
+	}
+	if len(seqs) > 0 {
+		req.Stop = seqs
 	}
 }
 
@@ -162,6 +174,9 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 // went out without max_tokens and the backend's small default truncated
 // them into a finish_reason=length continue-loop).
 func (p *OpenAIProvider) effectiveMaxTokens() int {
+	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
+		return o.MaxTokens // #2248: active sampling window wins
+	}
 	if p.cap != nil {
 		if v := p.cap.Get(); v > 0 {
 			return v

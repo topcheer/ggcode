@@ -16,9 +16,10 @@ import (
 )
 
 type stopSeqStubProvider struct {
-	mu   sync.Mutex
-	seqs []string
-	sets [][]string
+	mu       sync.Mutex
+	seqs     []string
+	sets     [][]string
+	override *provider.SamplingOverride // #2248 contract
 }
 
 func (s *stopSeqStubProvider) Name() string { return "stub" }
@@ -26,7 +27,11 @@ func (s *stopSeqStubProvider) Name() string { return "stub" }
 func (s *stopSeqStubProvider) Chat(ctx context.Context, messages []provider.Message, tools []provider.ToolDefinition) (*provider.ChatResponse, error) {
 	// Record what was live DURING the chat.
 	s.mu.Lock()
-	s.sets = append(s.sets, append([]string(nil), s.seqs...))
+	live := s.seqs
+	if s.override != nil && len(s.override.StopSequences) > 0 {
+		live = s.override.StopSequences
+	}
+	s.sets = append(s.sets, append([]string(nil), live...))
 	s.mu.Unlock()
 	return &provider.ChatResponse{
 		Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("ok")}},
@@ -43,7 +48,12 @@ func (s *stopSeqStubProvider) CountTokens(ctx context.Context, messages []provid
 }
 
 func (s *stopSeqStubProvider) SetStopSequences(seqs []string) { s.seqs = seqs }
-func (s *stopSeqStubProvider) StopSequences() []string        { return s.seqs }
+
+// #2248: the handler now swaps ONE atomic override pointer instead of
+// field writes; the stub records the live override during the chat.
+func (s *stopSeqStubProvider) SetSamplingOverride(o *provider.SamplingOverride) { s.override = o }
+func (s *stopSeqStubProvider) SamplingOverride() *provider.SamplingOverride     { return s.override }
+func (s *stopSeqStubProvider) StopSequences() []string                          { return s.seqs }
 
 func TestIssue2239StopSequencesReachProviderAndRestore(t *testing.T) {
 	stub := &stopSeqStubProvider{seqs: []string{"PREV"}}
@@ -63,6 +73,9 @@ func TestIssue2239StopSequencesReachProviderAndRestore(t *testing.T) {
 	}
 	if got := stub.StopSequences(); len(got) != 1 || got[0] != "PREV" {
 		t.Fatalf("previous sequences must be restored, got %v", got)
+	}
+	if o := stub.SamplingOverride(); o != nil {
+		t.Fatalf("override pointer must be restored to its previous value, got %+v", o)
 	}
 }
 
