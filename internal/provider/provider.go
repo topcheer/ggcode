@@ -230,6 +230,12 @@ type ToolChoiceProvider interface {
 type SamplingOverride struct {
 	MaxTokens     int
 	StopSequences []string
+	// Temperature is the MCP sampling contract's per-call temperature
+	// (#1592-A family, third member): parsed but never forwarded before,
+	// so a server's temperature hint was silently ignored. 0 means "no
+	// override" - matching the MCP omitempty semantics, where an absent
+	// field leaves the choice to the model.
+	Temperature float64
 }
 
 // SamplingOverrideSetter is implemented by providers whose request

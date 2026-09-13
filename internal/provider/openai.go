@@ -151,8 +151,12 @@ func (p *OpenAIProvider) TopP() float64        { return p.topP }
 // Following the OpenAI API guidance, both can be set simultaneously (unlike
 // Anthropic which recommends using only one).
 func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
-	if p.temperature > 0 {
-		req.Temperature = float32(p.temperature)
+	temp := p.temperature
+	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
+		temp = o.Temperature // #1592-A family: server's temperature hint wins
+	}
+	if temp > 0 {
+		req.Temperature = float32(temp)
 	}
 	if p.topP > 0 {
 		req.TopP = float32(p.topP)

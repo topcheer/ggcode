@@ -127,6 +127,7 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		so.SetSamplingOverride(&provider.SamplingOverride{
 			MaxTokens:     maxTokens,
 			StopSequences: params.StopSequences,
+			Temperature:   params.Temperature,
 		})
 		defer func() { so.SetSamplingOverride(prev) }()
 	}
