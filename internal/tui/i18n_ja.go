@@ -927,6 +927,8 @@ func jaCatalog(key string) string {
 		return "バインド: %s"
 	case "panel.qq.entry.muted":
 		return "ミュート"
+	case "panel.qq.entry.disabled":
+		return "無効"
 	case "panel.qq.details":
 		return "詳細"
 	case "panel.qq.status":

@@ -886,6 +886,8 @@ func esCatalog(key string) string {
 		return "Vinculado: %s"
 	case "panel.qq.entry.muted":
 		return "Silenciado"
+	case "panel.qq.entry.disabled":
+		return "Deshabilitado"
 	case "panel.qq.details":
 		return "Detalles"
 	case "panel.qq.status":

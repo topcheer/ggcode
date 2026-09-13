@@ -886,6 +886,8 @@ func viCatalog(key string) string {
 		return "Liên kết: %s"
 	case "panel.qq.entry.muted":
 		return "Đã tắt tiếng"
+	case "panel.qq.entry.disabled":
+		return "Đã tắt"
 	case "panel.qq.details":
 		return "Chi tiết"
 	case "panel.qq.status":
