@@ -695,6 +695,17 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, resumeID)
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			replPendingSessionLock = lock
+		} else if lockErr != nil {
+			// #1487-D: an IO/permission failure acquiring the lock is NOT a
+			// competing instance - the old merged message told the user
+			// "locked by another instance", sending them hunting for a rival
+			// process that does not exist. Name the real cause; behavior
+			// stays the safe fallback (new session).
+			shortID := resumeID
+			if len(shortID) > 8 {
+				shortID = shortID[:8]
+			}
+			fmt.Fprintf(os.Stderr, "  Warning: session lock check for %s failed (%v). Starting a new session.\n", shortID, lockErr)
 		} else {
 			shortID := resumeID
 			if len(shortID) > 8 {

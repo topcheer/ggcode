@@ -901,8 +901,13 @@ func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	// of the placeholder used at startup.
 	if m.sessionCreatedCallback != nil && ses.ID != "" {
 		m.sessionCreatedCallback(ses.ID)
-		// Fire only once: clear the callback after first invocation
-		m.sessionCreatedCallback = nil
+		// #1487-E: do NOT nil the callback after the first fire. The old
+		// once-only semantics froze the port file at the FIRST session:
+		// --resume A then /clear to B kept the port file pointing at A for
+		// the rest of the run (WebUI/mobile attach landed on the wrong
+		// session) while the exit defer deleted A's file. The callback now
+		// fires on every session switch; onSessionCreated is idempotent
+		// for same-ID re-fires and rewrites+re-points cleanup on changes.
 	}
 	// Propagate session ID to agent so todos are scoped to this session.
 	if m.agent != nil {
