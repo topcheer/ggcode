@@ -508,3 +508,22 @@ func f(x *T, y bool) {
 		t.Fatal("`x != nil || y` is not a guard - warning expected")
 	}
 }
+
+// sa-179 third-audit shape: a parenthesized same-operator group on the
+// right arm must not lose its leaves (companion pin for the zz matrix).
+func TestCheckRangeNilPtr_ParenthesizedChainGuardSuppressed(t *testing.T) {
+	src := `package main
+
+type P struct{ A, B []int }
+
+func f(p *P) {
+	if p != nil && (p.A != nil && p.B != nil) {
+		for range *p.A {
+		}
+	}
+}
+`
+	if w := checkRangeNilPtr("test.go", "", src); w != "" {
+		t.Fatalf("parenthesized nested guard must suppress the warning, got: %s", w)
+	}
+}
