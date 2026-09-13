@@ -20,6 +20,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
+	"io"
 )
 
 // Backend abstracts a terminal's tab creation/destruction.
@@ -137,7 +138,10 @@ func (m *Manager) goBackend(fn func()) {
 }
 
 // EnsurePane creates a tab + log file for the given agent if one doesn't exist yet.
-// Uses a `creating` set to prevent duplicate tab creation during the async backend call.
+// Uses a `creating` set to prevent duplicate tab creation during the
+// backend call. #1722 case 3: the call is SYNCHRONOUS on the Update
+// goroutine, but bounded by a 5s CreateTab timeout (not the unbounded
+// "async" the old comment claimed).
 func (m *Manager) EnsurePane(agentID, name, kind string) {
 	if !m.Available() {
 		return
@@ -256,6 +260,27 @@ func (m *Manager) WriteText(agentID, text string) {
 	m.mu.Unlock()
 }
 
+// maxExtPaneLogSize caps a single agent's extpane log file (#1722 case 2):
+// hour-long teammates write with no bound anywhere in this package while
+// cmdpane has had 5MB truncation all along. Same in-place truncation
+// pattern - the pane's tail -f detects truncation and resets on its own.
+const maxExtPaneLogSize = 5 << 20 // 5 MB
+
+// writeExtCapped writes text to the pane log, truncating first when the
+// write would exceed maxExtPaneLogSize (#1722 case 2).
+func writeExtCapped(ep *ExtPane, text string) {
+	if ep.LogFile == nil {
+		return
+	}
+	if info, err := ep.LogFile.Stat(); err == nil && info.Size()+int64(len(text)) > maxExtPaneLogSize {
+		_ = ep.LogFile.Truncate(0)
+		_, _ = ep.LogFile.Seek(0, io.SeekStart)
+	}
+	if _, err := ep.LogFile.WriteString(text); err != nil {
+		debug.Logf("extpane: log write failed for %s: %v", ep.LogPath, err)
+	}
+}
+
 // WriteTextImmediate writes text to the log file without buffering.
 func (m *Manager) WriteTextImmediate(agentID, text string) {
 	if !m.Available() || text == "" {
@@ -268,9 +293,8 @@ func (m *Manager) WriteTextImmediate(agentID, text string) {
 	if !ok || ep.LogFile == nil {
 		return
 	}
-	if _, err := ep.LogFile.WriteString(text); err != nil {
-		debug.Logf("extpane: log write failed for %s: %v", ep.LogPath, err)
-	}
+	// #1722 case 2: capped write (immediate path).
+	writeExtCapped(ep, text)
 }
 
 // WriteToolCall writes a formatted tool call line.
@@ -321,8 +345,9 @@ func (m *Manager) HandleDone(agentID, name string, isError bool) {
 	text := ep.buffer.String()
 	ep.buffer.Reset()
 	ep.dirty = false
-	if text != "" && ep.LogFile != nil {
-		ep.LogFile.WriteString(text)
+	if text != "" {
+		// #1722 case 2: capped write (done flush).
+		writeExtCapped(ep, text)
 	}
 	m.mu.Unlock()
 	status := "done"
@@ -453,10 +478,9 @@ func (m *Manager) flushAgent(agentID string) {
 	ep.buffer.Reset()
 	ep.dirty = false
 	// Write under the mutex to avoid racing with closePane.
-	if text != "" && ep.LogFile != nil {
-		if _, err := ep.LogFile.WriteString(text); err != nil {
-			debug.Logf("extpane: flush write failed: %v", err)
-		}
+	// #1722 case 2: capped write - the buffer path used to grow unbounded.
+	if text != "" {
+		writeExtCapped(ep, text)
 	}
 	m.mu.Unlock()
 }
