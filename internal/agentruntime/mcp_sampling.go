@@ -113,16 +113,23 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 	// silently violating the MCP sampling contract (maxTokens:50 ran to
 	// the model default). Best-effort: providers without the optional
 	// setter keep their configured default.
+	// #1612-A: set/restore with NO mutex - two concurrent samplings
+	// interleaved (A reads 8192 -> sets 50; B reads 50 -> sets 200; A
+	// restores 8192; B restores 50) and the SHARED provider stayed at
+	// 50 forever, truncating every main-agent chat until restart; the
+	// naked writes also raced Chat's reads. Serialize the whole
+	// mutate->chat->restore window; the sampling chat itself runs
+	// inside so the restore is guaranteed before the next sampler.
+	// #2239: stop sequences join the SAME window - a second lock would
+	// deadlock (not reentrant) and an unlocked window would interleave.
+	samplingMaxTokensMu.Lock()
+	defer samplingMaxTokensMu.Unlock()
+	if ss, ok := p.(provider.StopSequenceSetter); ok && len(params.StopSequences) > 0 {
+		prevSeqs := ss.StopSequences()
+		ss.SetStopSequences(params.StopSequences)
+		defer func() { ss.SetStopSequences(prevSeqs) }()
+	}
 	if ms, ok := p.(provider.MaxTokensSetter); ok {
-		// #1612-A: set/restore with NO mutex - two concurrent samplings
-		// interleaved (A reads 8192 -> sets 50; B reads 50 -> sets 200; A
-		// restores 8192; B restores 50) and the SHARED provider stayed at
-		// 50 forever, truncating every main-agent chat until restart; the
-		// naked writes also raced Chat's reads. Serialize the whole
-		// mutate->chat->restore window; the sampling chat itself runs
-		// inside so the restore is guaranteed before the next sampler.
-		samplingMaxTokensMu.Lock()
-		defer samplingMaxTokensMu.Unlock()
 		prevField := reflect.ValueOf(ms).Elem().FieldByName("maxTokens")
 		// Third-party MaxTokensSetter impls may not carry this field -
 		// FieldByName on a missing field yields an invalid Value whose

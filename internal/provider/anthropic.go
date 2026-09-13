@@ -21,6 +21,7 @@ type AnthropicProvider struct {
 	client          anthropic.Client
 	model           string
 	maxTokens       int
+	stopSequences   []string // #2239: MCP sampling per-call stop sequences
 	cap             *adaptiveCap
 	transport       *headerInjectingTransport // kept for runtime header updates
 	calibrator      *tokenCountCalibrator     // periodic real-API token calibration
@@ -82,7 +83,13 @@ func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
-func (p *AnthropicProvider) Temperature() float64        { return p.temperature }
+
+// SetStopSequences implements provider.StopSequenceSetter (#2239).
+func (p *AnthropicProvider) SetStopSequences(seqs []string) { p.stopSequences = seqs }
+
+// StopSequences implements provider.StopSequenceSetter (#2239).
+func (p *AnthropicProvider) StopSequences() []string { return p.stopSequences }
+func (p *AnthropicProvider) Temperature() float64    { return p.temperature }
 
 // SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
 func (p *AnthropicProvider) SetTopP(topP float64) { p.topP = topP }
@@ -942,6 +949,11 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 	// Apply temperature when set (0 means use provider default).
 	if p.temperature > 0 {
 		params.Temperature = param.NewOpt(p.temperature)
+		// #2239: per-call stop sequences (MCP sampling contract) - the
+		// response side already maps "stop_sequence" (#1484-C).
+		if len(p.stopSequences) > 0 {
+			params.StopSequences = p.stopSequences
+		}
 	}
 	// Apply top_p when set (0 means use provider default).
 	if p.topP > 0 {
