@@ -36,17 +36,18 @@ type sessionJSON struct {
 }
 
 type turnJSON struct {
-	Index   int    `json:"index"`
-	Model   string `json:"model,omitempty"`
-	Input   int    `json:"input"`
-	Output  int    `json:"output"`
-	Cache   int    `json:"cache"`
-	TTFTMs  int64  `json:"ttftMs"`
-	DurMs   int64  `json:"durMs"`
-	ThinkMs int64  `json:"thinkMs"`
-	Day     string `json:"day,omitempty"`
-	TS      string `json:"ts,omitempty"`
-	SID     string `json:"sid,omitempty"`
+	Index    int    `json:"index"`
+	Model    string `json:"model,omitempty"`
+	Input    int    `json:"input"`
+	Output   int    `json:"output"`
+	Cache    int    `json:"cache"`
+	LLMCalls int    `json:"llmCalls"`
+	TTFTMs   int64  `json:"ttftMs"`
+	DurMs    int64  `json:"durMs"`
+	ThinkMs  int64  `json:"thinkMs"`
+	Day      string `json:"day,omitempty"`
+	TS       string `json:"ts,omitempty"`
+	SID      string `json:"sid,omitempty"`
 }
 
 type toolJSON struct {
@@ -125,6 +126,7 @@ func buildReport(results []*scanResult) reportData {
 			sj.TotalCache += t.Cache
 			// #1448-B: count actual streaming calls, not deduped turns - an
 			// agentic turn makes N LLM calls under one TurnIndex.
+			llmCallsBefore := sj.LLMCalls
 			if t.LLMCalls > 0 {
 				sj.LLMCalls += t.LLMCalls
 			} else {
@@ -132,15 +134,16 @@ func buildReport(results []*scanResult) reportData {
 			}
 
 			tj := turnJSON{
-				Index:   t.Index,
-				Model:   t.Model,
-				Input:   t.Input,
-				Output:  t.Output,
-				Cache:   t.Cache,
-				TTFTMs:  t.TTFTMs,
-				DurMs:   t.DurMs,
-				ThinkMs: t.ThinkMs,
-				SID:     sj.ID,
+				Index:    t.Index,
+				Model:    t.Model,
+				Input:    t.Input,
+				Output:   t.Output,
+				Cache:    t.Cache,
+				LLMCalls: sj.LLMCalls - llmCallsBefore,
+				TTFTMs:   t.TTFTMs,
+				DurMs:    t.DurMs,
+				ThinkMs:  t.ThinkMs,
+				SID:      sj.ID,
 			}
 			// Use turn's actual timestamp for daily aggregation
 			if !t.Timestamp.IsZero() {
@@ -169,7 +172,13 @@ func buildReport(results []*scanResult) reportData {
 				modelTTFT[m] = mp
 			}
 			mp.TurnIdx = append(mp.TurnIdx, idx)
-			mp.TTFTMs = append(mp.TTFTMs, t.TTFTMs)
+			// #1537-D: zero TTFT (no metric recorded) must not enter the
+			// average - the frontend already excludes zeros (report_html
+			// L586/L841); the Go side counting them dragged ModelPerf
+			// ranking down and the two numbers disagreed on one screen.
+			if t.TTFTMs > 0 {
+				mp.TTFTMs = append(mp.TTFTMs, t.TTFTMs)
+			}
 			mp.DurMs = append(mp.DurMs, t.DurMs)
 		}
 

@@ -215,7 +215,20 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 
 	for i, path := range paths {
 		go safego.Run("cmd.reportScan.file", func() {
-			sr, err := scanSessionFile(path)
+			// #1537-C: send EXACTLY once via defer - a recovered panic between
+			// scan and the send used to skip the send entirely, and the
+			// len(paths)-iteration collect loop below wedged the whole report.
+			// defer fires whether we return normally or safego recovers a panic.
+			var sr *scanResult
+			defer func() {
+				if sr != nil && (sr.hasMeta || len(sr.turns) > 0) {
+					ch <- fileResult{idx: i, sr: sr}
+				} else {
+					ch <- fileResult{idx: i, sr: nil}
+				}
+			}()
+			var err error
+			sr, err = scanSessionFile(path)
 			// #1537: scanSessionFile deliberately returns partial results
 			// alongside errors (the 4MB single-line cap trips on
 			// screenshot-laden turns AFTER earlier turns were already
@@ -226,7 +239,6 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 				fmt.Fprintf(os.Stderr, "report: partial session scan %s: %v\n", path, err)
 			}
 			if sr == nil {
-				ch <- fileResult{idx: i, sr: nil}
 				return
 			}
 			if sr.meta.ID == "" {
@@ -237,7 +249,7 @@ func scanAllSessions(sessionsDir string) ([]*scanResult, error) {
 					sr.meta.CreatedAt = info.ModTime()
 				}
 			}
-			ch <- fileResult{idx: i, sr: sr}
+			// send happens in the defer above - exactly once (#1537-C)
 		})
 	}
 
