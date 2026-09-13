@@ -946,14 +946,18 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 		}
 	}
 
+	// #2239: per-call stop sequences (MCP sampling contract) - the
+	// response side already maps "stop_sequence" (#1484-C). #2246: this
+	// used to sit INSIDE the temperature>0 guard, so the default config
+	// (temperature 0 = provider default) silently dropped stop_sequences
+	// - the #2239 symptom reincarnated on Anthropic only, while the
+	// openai/gemini siblings were unconditional.
+	if len(p.stopSequences) > 0 {
+		params.StopSequences = p.stopSequences
+	}
 	// Apply temperature when set (0 means use provider default).
 	if p.temperature > 0 {
 		params.Temperature = param.NewOpt(p.temperature)
-		// #2239: per-call stop sequences (MCP sampling contract) - the
-		// response side already maps "stop_sequence" (#1484-C).
-		if len(p.stopSequences) > 0 {
-			params.StopSequences = p.stopSequences
-		}
 	}
 	// Apply top_p when set (0 means use provider default).
 	if p.topP > 0 {
