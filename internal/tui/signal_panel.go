@@ -62,6 +62,21 @@ type signalQRCodeMsg struct {
 	err error
 }
 
+// maskSignalCreateEcho masks the create-input echo (#2178 same-shape):
+// the spec is `name base_url account` - the 3rd field is the phone
+// number (PII). First two fields stay readable; later ones are masked.
+func maskSignalCreateEcho(input string) string {
+	fields := strings.Fields(input)
+	if len(fields) <= 2 {
+		return input
+	}
+	masked := []string{fields[0], fields[1]}
+	for _, f := range fields[2:] {
+		masked = append(masked, maskSecret(f))
+	}
+	return strings.Join(masked, " ")
+}
+
 func checkSignalDaemonCmd() tea.Cmd {
 	return func() tea.Msg {
 		err := im.CheckSignalDaemon("")
@@ -247,7 +262,7 @@ func (m Model) renderSignalPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.signal.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.signal.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.signal.bot_input", maskSignalCreateEcho(panel.createInput)+"█"),
 			" "+m.t("panel.signal.create_format"),
 			" "+m.t("panel.signal.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),

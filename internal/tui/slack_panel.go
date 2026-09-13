@@ -50,6 +50,23 @@ func (m *Model) closeSlackPanel() {
 	m.slackPanel = nil
 }
 
+// maskSlackCreateEcho masks the create-input echo (#2178): the spec is
+// `name botToken appToken` - the tokens are POSITIONAL (2nd/3rd field),
+// so the field name is unknown at render time. The name (first field)
+// stays readable for review; every later field is token material and
+// is masked. The buffer keeps the real value for the Enter parse.
+func maskSlackCreateEcho(input string) string {
+	fields := strings.Fields(input)
+	if len(fields) <= 1 {
+		return input
+	}
+	masked := []string{fields[0]}
+	for _, f := range fields[1:] {
+		masked = append(masked, maskSecret(f))
+	}
+	return strings.Join(masked, " ")
+}
+
 func (m Model) renderSlackPanel() string {
 	panel := m.slackPanel
 	if panel == nil {
@@ -108,7 +125,7 @@ func (m Model) renderSlackPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.slack.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.slack.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.slack.bot_input", maskSlackCreateEcho(panel.createInput)+"█"),
 			" "+m.t("panel.slack.create_format"),
 			" "+m.t("panel.slack.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),
