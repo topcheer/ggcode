@@ -171,3 +171,67 @@ func f(a, b *T) {
 		}
 	}
 }
+
+// sa-179 (#2220 follow-up): parenthesized same-operator chains and a
+// parenthesized whole condition both dropped guards entirely.
+func TestIssue1677ParenthesizedChainAllLeaves(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"parenthesized nested AND", `package main
+
+type P struct{ A, B []int }
+
+func f(p *P) {
+	if p != nil && (p.A != nil && p.B != nil) {
+		for range *p.A {
+		}
+	}
+}`},
+		{"parenthesized single guard", `package main
+
+type T struct{}
+
+func f(p *T) {
+	if (p != nil) {
+		for range *p {
+		}
+	}
+}`},
+		{"parenthesized nested OR early-return", `package main
+
+type T struct{}
+
+func f(a, b *T) {
+	if (a == nil || b == nil) {
+		return
+	}
+	for range *b {
+	}
+}`},
+	}
+	for _, c := range cases {
+		if w := checkRangeNilPtr("test.go", "", c.src); w != "" {
+			t.Fatalf("%s: guarded range still warned: %s", c.name, w)
+		}
+	}
+}
+
+// The empty-string filter must keep garbage leaves out of the guard table.
+func TestIssue1677NoEmptyGuardRecords(t *testing.T) {
+	fd := rnpParseFunc(t, `func f(a, b *T) {
+	if a != nil && b == nil {
+		for range *a {
+		}
+	}
+}`)
+	g := rnpCollectNilGuards(fd.Body)
+	if _, ok := g[""]; ok {
+		t.Fatal("empty-name guard record leaked into the table")
+	}
+	// mixed-polarity AND: only the a leaf qualifies
+	if _, ok := g["b"]; ok {
+		t.Fatal("b == nil leaf under AND must not be a then-guard")
+	}
+	if len(g["a"]) == 0 {
+		t.Fatal("a != nil leaf must be collected")
+	}
+}
