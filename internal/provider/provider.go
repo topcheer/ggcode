@@ -222,6 +222,24 @@ type ToolChoiceProvider interface {
 	ToolChoice() string
 }
 
+// SamplingOverride is the per-call MCP sampling override snapshot
+// (#2248): the sampling handler swaps ONE atomic pointer for the whole
+// mutate->chat->restore window, so the main agent's concurrent Chat
+// reads a consistent view instead of racing naked field writes (the
+// #1612 lock serialized samplers but never the reader side).
+type SamplingOverride struct {
+	MaxTokens     int
+	StopSequences []string
+}
+
+// SamplingOverrideSetter is implemented by providers whose request
+// builders honor the atomic sampling override (#2248): override values
+// win over configured defaults while set; nil means provider default.
+type SamplingOverrideSetter interface {
+	SetSamplingOverride(o *SamplingOverride)
+	SamplingOverride() *SamplingOverride
+}
+
 // StopSequenceSetter is implemented by providers that can pass per-call
 // stop sequences to the model API. MCP sampling (#2239) uses it to honor
 // the server's stopSequences - parsed then dropped before, silently
