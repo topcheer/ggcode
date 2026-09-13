@@ -12,7 +12,7 @@ type fakeRestartRequester struct {
 	debugMode bool
 }
 
-func (f *fakeRestartRequester) RequestRestart(debugMode bool) {
+func (f *fakeRestartRequester) RequestRestart(reason string, debugMode bool) {
 	f.called = true
 	f.debugMode = debugMode
 }

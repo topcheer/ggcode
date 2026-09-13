@@ -204,7 +204,14 @@ func detectPrecommitBuildCommand(dir string) string {
 func hasPrecommitMakeTarget(content, target string) bool {
 	prefix := target + ":"
 	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimLeft(line, " \t")
+		// #1698 case 5: only a TAB-indented line is a make recipe; TrimLeft
+		// used to strip tabs too, so a recipe line `\tbuild:` misread as a
+		// TARGET definition and the gate reported a missing target as
+		// present (then ran make and produced advisory noise).
+		if strings.HasPrefix(line, "\t") {
+			continue // recipe line - never a target definition
+		}
+		trimmed := strings.TrimLeft(line, " ")
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}

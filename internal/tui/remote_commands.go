@@ -26,6 +26,10 @@ const (
 // assistant text are persisted.
 type armRestartMsg struct {
 	debug bool
+	// reason is ANNOUNCED to the user before the restart fires (#1698
+	// case 3 - the tool schema promises "Shown to the user before the
+	// process restarts").
+	reason string
 }
 
 // restartFallbackMsg fires after restartFallbackTimeout when an armed

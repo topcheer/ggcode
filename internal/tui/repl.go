@@ -1091,15 +1091,17 @@ type replRestartRequester struct {
 	repl *REPL
 }
 
-func (rr *replRestartRequester) RequestRestart(debugMode bool) {
-	debug.Log("restart", "agent-requested restart armed (turn-aware, fires at turn end or 30s fallback)")
+func (rr *replRestartRequester) RequestRestart(reason string, debugMode bool) {
+	debug.Log("restart", "agent-requested restart armed (turn-aware, fires at turn end or 30s fallback): %s", reason)
 	if debugMode {
 		os.Setenv("GGCODE_DEBUG", "1")
 	}
-	// Arm the restart. The tool result is persisted synchronously in the agent
-	// loop before this goroutine runs, so arming immediately is safe.
+	// #1698 case 3: the tool schema promises the reason is "Shown to the
+	// user before the process restarts" - it rides armRestartMsg and the
+	// model_update handler renders it as a system chat notice (the old
+	// path never showed it anywhere but the debug log).
 	go safego.Run("tui.restart.arm", func() {
-		rr.repl.sendProgramMsgs(armRestartMsg{debug: debugMode})
+		rr.repl.sendProgramMsgs(armRestartMsg{debug: debugMode, reason: reason})
 	})
 }
 

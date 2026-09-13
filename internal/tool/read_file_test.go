@@ -202,9 +202,15 @@ func TestReadFileStreamingTruncationReportsTotal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Must include "of ~100" so the agent knows the file size
-	if !strings.Contains(text, "of ~100") {
-		t.Errorf("expected 'of ~100' in truncation message: %s", text[strings.LastIndex(text, "["):])
+	// #1698 case 6: the reader stops at the limit instead of scanning to
+	// EOF for an exact count (a multi-GB file paid full IO just for the
+	// "~N" hint), so the hint now reports a LOWER BOUND from the lines
+	// already seen (~10 here), never an exact total.
+	if !strings.Contains(text, "of ~") {
+		t.Errorf("expected a '~N' lower-bound hint in truncation message: %s", text[strings.LastIndex(text, "["):])
+	}
+	if strings.Contains(text, "of ~100") {
+		t.Errorf("hint must not claim an exact EOF count (that required a full scan): %s", text[strings.LastIndex(text, "["):])
 	}
 }
 

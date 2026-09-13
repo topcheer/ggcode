@@ -126,9 +126,11 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 		}
 		if readCount >= effectiveLimit {
 			hitLimit = true
-			// Don't break — keep scanning to count total lines
-			lineNum++
-			continue
+			// #1698 case 6: stop scanning once past the range - the old code
+			// kept scanning a multi-GB file to EOF solely to compute an exact
+			// total-line count for the "~N lines" hint, defeating the point
+			// of streaming range reads.
+			break
 		}
 		fmt.Fprintf(&buf, "%6d\t%s\n", lineNum+1, scanner.Text())
 		readCount++
