@@ -529,8 +529,12 @@ func ptrToInt32(v int32) *int32 { return &v }
 // applySamplingConfig injects temperature and top_p into the Gemini config
 // when they are set (non-zero). Both map directly to genai fields.
 func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig) {
-	if p.temperature > 0 {
-		config.Temperature = ptrToFloat32(float32(p.temperature))
+	temp := p.temperature
+	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
+		temp = o.Temperature // #1592-A family: server's temperature hint wins
+	}
+	if temp > 0 {
+		config.Temperature = ptrToFloat32(float32(temp))
 	}
 	if p.topP > 0 {
 		config.TopP = ptrToFloat32(float32(p.topP))

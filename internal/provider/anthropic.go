@@ -974,9 +974,15 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 	if len(seqs) > 0 {
 		params.StopSequences = seqs
 	}
-	// Apply temperature when set (0 means use provider default).
-	if p.temperature > 0 {
-		params.Temperature = param.NewOpt(p.temperature)
+	// Apply temperature when set (0 means use provider default). The
+	// active sampling override (#1592-A family) wins over the configured
+	// default so an MCP server's temperature hint reaches the request.
+	temp := p.temperature
+	if o := p.samplingOverride.Load(); o != nil && o.Temperature > 0 {
+		temp = o.Temperature
+	}
+	if temp > 0 {
+		params.Temperature = param.NewOpt(temp)
 	}
 	// Apply top_p when set (0 means use provider default).
 	if p.topP > 0 {
