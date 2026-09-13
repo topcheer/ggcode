@@ -85,6 +85,13 @@ func (c *StreamConfig) Validate() error {
 		if strings.TrimSpace(t.URL) == "" {
 			return fmt.Errorf("stream: target[%d] (%s): url is required", i, t.Name)
 		}
+		// #1631 case 4: a missing scheme or typo passed Validate (only
+		// checked non-empty) and NewTarget forwards the raw url to ffmpeg,
+		// which fails at RUNTIME with "Unable to find a suitable output
+		// format" - far from the cause. Fail at config time instead.
+		if u := strings.TrimSpace(t.URL); !strings.HasPrefix(u, "rtmp://") && !strings.HasPrefix(u, "srt://") {
+			return fmt.Errorf("stream: target[%d] (%s): url must start with rtmp:// or srt:// (got %q)", i, t.Name, u)
+		}
 		if strings.TrimSpace(t.Key) == "" {
 			return fmt.Errorf("stream: target[%d] (%s): key is required", i, t.Name)
 		}
