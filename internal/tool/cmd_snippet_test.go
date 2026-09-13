@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -279,5 +280,25 @@ func TestCmdSnippet_TagsSearch(t *testing.T) {
 	}
 	if !strings.Contains(result.Content, "my-build") {
 		t.Errorf("tag search should find 'my-build': %s", result.Content)
+	}
+}
+
+// #1644 case 6: tag truncation is visible in the save result (Execute-level
+// companion to the zz_issue1644 doSave pin).
+func TestCmdSnippet_TagTruncationNoted(t *testing.T) {
+	tool, _ := newCmdSnippetTool(t)
+	tags := make([]string, cmdSnippetMaxTags+3)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("tag%d", i)
+	}
+	input, _ := json.Marshal(map[string]interface{}{
+		"action": "save", "name": "tagged", "command": "echo hi", "tags": tags,
+	})
+	result, _ := tool.Execute(context.Background(), input)
+	if result.IsError {
+		t.Fatalf("save failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "tags truncated") {
+		t.Fatalf("silent truncation: %s", result.Content)
 	}
 }
