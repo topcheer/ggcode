@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/extract"
 	"github.com/topcheer/ggcode/internal/image"
 )
 
@@ -93,6 +94,21 @@ func (t ReadFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: msg}, nil
 	}
 	if info.Size() > maxFileSize {
+		// #1698 case 1: mime sniff BEFORE the range branch - a >10MB image
+		// or PDF with offset/limit used to stream raw binary as numbered
+		// text straight into context (the dispatch below only ran on the
+		// <=10MB path), and the no-offset error told the agent to use
+		// offset/limit - guiding it into the same bad path.
+		if image.IsImageFile(args.Path) {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"%s is an image (%d MB) - too large for multimodal decode; image range reading is not supported. Downscale the file externally if you need its contents.",
+				filepath.Base(args.Path), info.Size()/(1024*1024))}, nil
+		}
+		if extract.IsDocumentFile(args.Path) {
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"%s is a document (%s, %d MB) - too large for text extraction; range reading is not supported for extracted documents. Extract the relevant section externally first.",
+				filepath.Base(args.Path), filepath.Ext(args.Path), info.Size()/(1024*1024))}, nil
+		}
 		if args.Offset > 0 || args.Limit > 0 {
 			// Streaming range read: only read the requested lines
 			text, err := readFileRangeStreaming(args.Path, args.Offset, args.Limit, readFileRangeOptions{

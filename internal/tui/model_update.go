@@ -243,6 +243,12 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		if msg.debug {
 			m.restartDebug = true
 		}
+		// #1698 case 3: announce WHY the session is restarting - the
+		// schema promises the reason is shown to the user before the
+		// process restarts.
+		if strings.TrimSpace(msg.reason) != "" {
+			m.chatWriteSystem("restart-announce", fmt.Sprintf("Restarting: %s (your session resumes automatically)", msg.reason))
+		}
 		if !m.loading {
 			debug.Log("restart", "agent-requested restart: agent idle, firing now")
 			return m, tea.Batch(firePendingRestartCmd(), armRestartFallbackCmd())

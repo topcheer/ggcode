@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -11,8 +12,12 @@ import (
 // RestartRequester is implemented by the hosting UI (TUI/Desktop) to perform
 // a self-restart that PRESERVES the current session (equivalent to the
 // /restart slash command: exec the binary with --resume <session-id>).
+// reason is ANNOUNCED to the user before the process restarts (#1698 case
+// 3: the schema promises "Shown to the user before the process restarts" -
+// the old interface dropped it and the implementation only logged to
+// debug, so the user was never told WHY their session was restarting).
 type RestartRequester interface {
-	RequestRestart(debugMode bool)
+	RequestRestart(reason string, debugMode bool)
 }
 
 // RestartTool lets the LLM restart the ggcode process after changes that
@@ -69,10 +74,16 @@ func (t *RestartTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "restart is not available in this host — no restart requester was injected. Ask the user to restart the process manually if a restart is truly required."}, nil
 	}
 
+	// #1698 case 4: the schema marks reason REQUIRED - enforce it (an
+	// empty reason silently passed and restarted the process with no
+	// announcement at all).
+	if strings.TrimSpace(args.Reason) == "" {
+		return Result{IsError: true, Content: "reason is REQUIRED: explain why the restart is needed (e.g. 'binary updated to fix #123') - it is shown to the user before the process restarts."}, nil
+	}
 	debug.Log("restart", "restart tool invoked: reason=%q debug=%v", args.Reason, args.Debug)
 	// Signal the host UI. The restart is deferred until the current agent turn
 	// finishes (sibling tool results and trailing assistant text are persisted
 	// first); a timeout fallback force-restarts if the turn never ends (#347).
-	t.Requester.RequestRestart(args.Debug)
+	t.Requester.RequestRestart(args.Reason, args.Debug)
 	return Result{Content: "OK: restart armed. The process restarts as soon as this turn finishes (with a short fallback timeout). Do NOT issue any further tool calls — end your turn now. The session resumes automatically after restart."}, nil
 }
