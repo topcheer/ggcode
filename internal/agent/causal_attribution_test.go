@@ -274,3 +274,23 @@ func TestComputeCRSDetail_FileMatchNotInferableFromScore(t *testing.T) {
 		t.Fatalf("exact match must set fileMatch with weight, got matched=%v score=%d", matched2, score2)
 	}
 }
+
+// #2218 case A end-to-end: a directory-suffix reference matching two
+// distinct edit paths must not produce the authority wording for the
+// recency winner (companion to the unit-level zz_issue2218 suite).
+func TestCausalAttribution_SuffixAmbiguityEndToEnd(t *testing.T) {
+	s := newCausalAttributionState()
+	s.recordEdit("edit_file", "pkg/api/types.go", 1)
+	s.recordEdit("edit_file", "internal/api/types.go", 2)
+
+	output := `api/types.go:12:5: undefined: Foo
+FAIL	github.com/x/y [build failed]`
+
+	hint := s.attributeFailure(output)
+	if hint == "" {
+		t.Fatal("expected attribution guidance (weak tier), got empty")
+	}
+	if contains(hint, "references this file") {
+		t.Fatalf("ambiguous suffix match must not use authority wording: %s", hint)
+	}
+}
