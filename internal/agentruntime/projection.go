@@ -59,7 +59,14 @@ func PrepareProjectionBroker(broker *tunnel.Broker, store *tunnel.ProjectionStor
 	if broker == nil || ses == nil || strings.TrimSpace(ses.ID) == "" {
 		return state, nil
 	}
-	broker.SwitchSession(ses.ID)
+	// #1493-B: replay-then-switch. SwitchSession used to run FIRST, so a
+	// transient PrepareProjectionReplay failure (disk full/permission/corrupt
+	// store) left a HALF-SWITCHED broker: the new session was active but the
+	// authority epoch stayed 1 and no event recorder was bound - stale-epoch
+	// events were refused by the store guard (or worse, a residual HIGHER
+	// epoch from a previous session persisted with the wrong value) and new
+	// events silently stopped persisting. Everything that can fail now
+	// happens before the first mutating call.
 	if store != nil {
 		epoch, replay, err := PrepareProjectionReplay(store, ses)
 		if err != nil {
@@ -67,9 +74,12 @@ func PrepareProjectionBroker(broker *tunnel.Broker, store *tunnel.ProjectionStor
 		}
 		state.AuthorityEpoch = epoch
 		state.Replay = replay
+		broker.SwitchSession(ses.ID)
 		if len(replay) > 0 {
 			broker.PrimeEventIDs(replay)
 		}
+	} else {
+		broker.SwitchSession(ses.ID)
 	}
 	broker.SetAuthorityEpoch(state.AuthorityEpoch)
 	broker.SetEventRecorder(recorder)

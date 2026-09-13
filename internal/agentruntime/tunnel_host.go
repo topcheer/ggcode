@@ -131,10 +131,12 @@ func (h *TunnelHost) BindSession(ses *session.Session, store session.Store) Proj
 		}
 	}
 
-	// #1802 case 2 small fix: this UNCONDITIONAL reset stomped the
-	// projBroken=true set above when the store was fine but a previous
-	// failure had marked it broken mid-flight.
-	if h.projStore == nil {
+	// #1802 case 2 small fix, corrected by #1493-B: the earlier patch had
+	// the condition INVERTED (`store == nil` cleared the flag), which still
+	// stomped the projBroken=true set seconds earlier on the failure path
+	// while never clearing a stale broken mark once the store became
+	// available again. Clear only when the store actually exists.
+	if h.projStore != nil {
 		h.projBroken = false
 	}
 
