@@ -141,8 +141,11 @@ func normalizeGitGlobalFlags(cmd string) string {
 	lines := strings.Split(cmd, "\n")
 	for li, line := range lines {
 		toks := strings.Fields(line)
-		for i, t := range toks {
-			if strings.Trim(t, "\"'") != "git" {
+		// explicit index loop: after a rewrite the scan continues from
+		// the rewritten position (a range variable assignment would not
+		// affect the iteration).
+		for i := 0; i < len(toks); i++ {
+			if strings.Trim(toks[i], "\"'") != "git" {
 				continue
 			}
 			j := i + 1
@@ -159,10 +162,15 @@ func normalizeGitGlobalFlags(cmd string) string {
 				}
 			}
 			if j > i+1 && j <= len(toks) {
+				// rewrite in place and KEEP SCANNING from the rewritten
+				// position - a later git in the same line still needs its
+				// -C segment stripped (#2255 F4 review residual: `git
+				// status && git -C /b push --force`).
 				out := append(append([]string{}, toks[:i+1]...), toks[j:]...)
 				lines[li] = strings.Join(out, " ")
+				toks = out
+				i = j - 1
 			}
-			break // first git occurrence per line is enough
 		}
 	}
 	return strings.Join(lines, "\n")
