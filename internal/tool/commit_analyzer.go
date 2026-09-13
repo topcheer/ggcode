@@ -202,18 +202,66 @@ type diffStats struct {
 	deletions int
 }
 
+// diffBinaryHeader matches the "Binary files a/x and b/x differ" marker.
+// Binary changes carry no hunks, so without this the file never entered
+// stats.files (#1650 case 1: pure-deletion and binary changes silently
+// bypassed the maxFilesPerCommit/maxLinesPerCommit warnings).
+var diffBinaryHeader = regexp.MustCompile(`^Binary files a/(.+) and b/(.+) differ`)
+
+// diffModeChange matches the pure mode-change markers ("old mode"/
+// "new mode") - these hunks carry no +/- lines and previously no file
+// was registered at all.
+var diffModeChange = regexp.MustCompile(`^(old|new) mode `)
+
 // parseDiffStats extracts file paths and counts additions/deletions from
 // a unified diff output (e.g. from "git diff --cached").
 func parseDiffStats(diffOutput string) diffStats {
 	var stats diffStats
 	seen := make(map[string]bool)
+	add := func(path string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		stats.files = append(stats.files, path)
+	}
+	lastOldFile := ""
+	lastGitPath := ""
 
 	for _, line := range strings.Split(diffOutput, "\n") {
+		// Track the b/ path from "diff --git a/x b/x" headers - the only
+		// source for pure mode-change hunks.
+		if m := diffGitHeader.FindStringSubmatch(line); m != nil && len(m) > 1 {
+			lastGitPath = m[1]
+		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
-			if !seen[m[1]] {
-				seen[m[1]] = true
-				stats.files = append(stats.files, m[1])
-			}
+			lastOldFile = ""
+			add(m[1])
+			continue
+		}
+		// Deleted file: "--- a/path" followed by "+++ /dev/null" - the +++
+		// line has no b/ prefix so it never matches diffFileHeader. Same
+		// #1319 lineage as parseFileChanges, applied to the aggregate twin.
+		if diffDevNullHeader.MatchString(line) {
+			add(lastOldFile)
+			lastOldFile = ""
+			continue
+		}
+		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
+			lastOldFile = m[1]
+			continue
+		}
+		// Binary change: no hunks, no +/- lines - extract the b/ path.
+		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
+			add(m[2])
+			lastOldFile = ""
+			continue
+		}
+		// Pure mode change: no hunks. The preceding "diff --git a/x b/x"
+		// line is the only path source - register on the mode marker so
+		// mode-only changes stop vanishing.
+		if diffModeChange.MatchString(line) {
+			add(lastGitPath)
 			continue
 		}
 		// Count additions (lines starting with '+', but not "+++").
