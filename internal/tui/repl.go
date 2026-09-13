@@ -718,8 +718,13 @@ func (r *REPL) onSessionCreated(sessionID string) {
 	initial := r.initialSessionID
 	r.currentSessionMu.RUnlock()
 	if initial != "" && initial != sessionID {
-		// For resumed sessions, the initial ID was already correct
-		return
+		// #1487-E: the session switched mid-run (e.g. --resume A then
+		// /clear created B). The old once-only callback never fired here,
+		// so the port file kept pointing at the stale ID for the rest of
+		// the run and the exit defer deleted the wrong file. Fall through
+		// and rewrite: the write below re-points the port file at the new
+		// session and updates the cleanup key to match.
+		debug.Log("repl", "onSessionCreated: session switched %s -> %s, rewriting port file", initial, sessionID)
 	}
 	if initial == "" {
 		// Placeholder case: remove any stale __new__ file (legacy safety)
