@@ -33,7 +33,6 @@ type OpenAIProvider struct {
 	reasoningEffort  string
 	toolChoice       string // "", "auto", "required", "none"
 	temperature      float64
-	stopSequences    []string                         // #2239
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
 	topP             float64
 	name             string
@@ -129,11 +128,8 @@ func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
 // default" (which is typically 1.0). Values between 0 and 2 are valid.
 func (p *OpenAIProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// SetStopSequences implements provider.StopSequenceSetter (#2239).
-func (p *OpenAIProvider) SetStopSequences(seqs []string) { p.stopSequences = seqs }
-
-// StopSequences implements provider.StopSequenceSetter (#2239).
-func (p *OpenAIProvider) StopSequences() []string { return p.stopSequences }
+// #2271 follow-up: StopSequenceSetter (Set/Get) removed - per-call stop
+// sequences ride the sampling override exclusively; no production caller.
 
 // SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *OpenAIProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
@@ -161,13 +157,11 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	if p.topP > 0 {
 		req.TopP = float32(p.topP)
 	}
-	// #2239: per-call stop sequences (MCP sampling contract).
-	seqs := p.stopSequences
+	// #2239: per-call stop sequences (MCP sampling contract). #2271
+	// follow-up: the p.stopSequences field had no writer left - the
+	// override is the sole source.
 	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
-		seqs = o.StopSequences // #2248: active sampling window wins
-	}
-	if len(seqs) > 0 {
-		req.Stop = seqs
+		req.Stop = o.StopSequences
 	}
 }
 
