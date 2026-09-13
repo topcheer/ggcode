@@ -38,6 +38,10 @@ const (
 	// symbolMapTimeBudget is the maximum wall-clock time spent parsing. This
 	// ensures system-prompt construction stays fast even for large repos.
 	symbolMapTimeBudget = 200 * time.Millisecond
+	// symbolMapMaxFilesPerPackage bounds a single uninterruptible ParseDir
+	// call (#1493-C): the filter runs per file before parsing, so a giant
+	// package stops admitting files at this count.
+	symbolMapMaxFilesPerPackage = 200
 )
 
 // buildGoPackageSymbolsSection generates a compact summary of exported Go
@@ -196,6 +200,13 @@ func collectGoPackageDirs(root string, deadline time.Time) []string {
 			continue
 		}
 		for _, e2 := range level2 {
+			// #1493-C: the depth-1 loop checks the deadline but this inner
+			// loop did not - a deep tree with many level-2 dirs blew the
+			// 200ms soft budget (the collector goroutine churns CPU on
+			// giant workspaces for seconds).
+			if time.Now().After(deadline) {
+				return dirs
+			}
 			if !e2.IsDir() || overviewSkipDirs[e2.Name()] || strings.HasPrefix(e2.Name(), ".") {
 				continue
 			}
@@ -233,9 +244,20 @@ func dirHasGoFiles(dir string) bool {
 // plus the number of files parsed.
 func extractPackageSymbols(dir string) ([]string, int) {
 	fset := token.NewFileSet()
+	// #1493-C: ParseDir itself is uninterruptible - a single giant package
+	// (this repo's internal/agent is 290+ files) parses for far longer than
+	// the 200ms soft budget with no checkpoint inside. Cap the number of
+	// files per package: the filter runs per file BEFORE parsing, so
+	// returning false skips the parse; symbol coverage of a 200-file
+	// package is already comprehensive for prompt purposes.
+	fileCount := 0
 	pkgs, firstErr := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
 		name := fi.Name()
-		return strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go")
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return false
+		}
+		fileCount++
+		return fileCount <= symbolMapMaxFilesPerPackage
 	}, parser.SkipObjectResolution)
 
 	// Even if ParseDir returns an error, it may still return partial ASTs.
@@ -249,11 +271,11 @@ func extractPackageSymbols(dir string) ([]string, int) {
 	}
 
 	seen := make(map[string]bool)
-	fileCount := 0
+	parsedFiles := 0
 
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
-			fileCount++
+			parsedFiles++
 			for _, decl := range file.Decls {
 				switch d := decl.(type) {
 				case *ast.FuncDecl:
@@ -275,7 +297,7 @@ func extractPackageSymbols(dir string) ([]string, int) {
 	}
 
 	if len(seen) == 0 {
-		return nil, fileCount
+		return nil, parsedFiles
 	}
 
 	symbols := make([]string, 0, len(seen))
@@ -283,5 +305,5 @@ func extractPackageSymbols(dir string) ([]string, int) {
 		symbols = append(symbols, s)
 	}
 	sort.Strings(symbols)
-	return symbols, fileCount
+	return symbols, parsedFiles
 }
