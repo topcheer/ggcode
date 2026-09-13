@@ -131,7 +131,7 @@ func (m Model) renderPCPanel() string {
 		)
 	} else {
 		body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
-			"  n:new  q:QR  r:renew  x:close  g:group  e:edit config  enter:bind  esc:close",
+			"  n:new  q:QR  r:renew  x:close  e:edit config  enter:bind  esc:close",
 		))
 	}
 
@@ -446,7 +446,7 @@ func (m *Model) pcAdapterName() string {
 func (m Model) pcConnectionStatus() string {
 	adapter := m.pcAdapter()
 	if adapter == nil {
-		return "starting..."
+		return m.t("panel.pc.status.starting")
 	}
 	// Check adapter state from IM manager snapshot
 	if m.imManager != nil {
@@ -456,13 +456,13 @@ func (m Model) pcConnectionStatus() string {
 				case "connected":
 					sessions := adapter.ListSessions()
 					if len(sessions) == 0 {
-						return "connected (no sessions)"
+						return m.t("panel.pc.status.connected_none")
 					}
-					return fmt.Sprintf("connected (%d session(s))", len(sessions))
+					return m.t("panel.pc.status.connected_sessions", len(sessions))
 				case "error":
 					return fmt.Sprintf("error: %s", a.LastError)
 				case "stopped":
-					return "stopped"
+					return m.t("panel.pc.status.stopped")
 				default:
 					return a.Status
 				}
