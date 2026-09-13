@@ -24,7 +24,7 @@ func TestIssue1644CanWriteWhitelist(t *testing.T) {
 		"readonly": false,
 		"staged":   true,
 		"auto":     true,
-		"":         false, // empty defaults elsewhere; canWrite itself must not fail open
+		"":         true, // #2213 review: empty defaults to staged, matching the auto_policy call site's audit-panel rendering
 		// the exact fail-open inputs from the issue: typos read as writable before
 		"read-only": false,
 		"HIGH":      false,

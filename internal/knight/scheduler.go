@@ -825,7 +825,15 @@ func (k *Knight) hasCapability(cap string) bool {
 // panel's display of write policies and the scheduler's actual writes can
 // never disagree again.
 func (k *Knight) canWrite() bool {
-	return trustCanWrite(strings.ToLower(strings.TrimSpace(k.cfg.TrustLevel)))
+	trust := strings.ToLower(strings.TrimSpace(k.cfg.TrustLevel))
+	// #2213 review: match the auto_policy call site's empty-value default
+	// - an unset trust_level renders write policies ENABLED in the audit
+	// panel ("" -> "staged"), so the scheduler must agree instead of
+	// failing closed and splitting display from behavior in reverse.
+	if trust == "" {
+		trust = "staged"
+	}
+	return trustCanWrite(trust)
 }
 
 // reviewStagingSkills checks staging skills and auto-promotes if trust_level=auto.
