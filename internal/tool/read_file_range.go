@@ -119,6 +119,7 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 	lineNum := 0 // 0-based
 	readCount := 0
 	hitLimit := false
+	sawConflict := false // #2269: raw-line conflict marker seen in range
 	for scanner.Scan() {
 		if lineNum < startIdx {
 			lineNum++
@@ -133,6 +134,14 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 			break
 		}
 		fmt.Fprintf(&buf, "%6d\t%s\n", lineNum+1, scanner.Text())
+		// #2269: detect merge-conflict markers on the RAW line before it
+		// receives the line-number prefix - CheckContentForConflicts
+		// anchors markers at column 0 and the "%6d\t" prefix shifts them
+		// off it, so a caller-side guard on the formatted text never
+		// fired (read_file >10MB ranged reads lost the warning).
+		if raw := scanner.Text(); strings.HasPrefix(raw, "<<<<<<<") || strings.HasPrefix(raw, "=======") || strings.HasPrefix(raw, ">>>>>>>") {
+			sawConflict = true
+		}
 		readCount++
 		lineNum++
 	}
@@ -152,6 +161,13 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 	if hitLimit {
 		fmt.Fprintf(&buf, "[Showing lines %d-%d of ~%d. %s]\n",
 			startIdx+1, startIdx+readCount, totalLines, opts.moreHint)
+	}
+
+	// #2269: report the conflict warning the caller-side guard could
+	// never produce (its input was this line-numbered text). Mirrors
+	// CheckContentForConflicts' banner format.
+	if sawConflict {
+		buf.WriteString("\n[WARNING] File contains merge conflict markers in this range. Resolve conflicts before editing.\n")
 	}
 
 	return buf.String(), nil

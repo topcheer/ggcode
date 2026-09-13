@@ -138,7 +138,11 @@ func hasCommandToken(tokens []string, words ...string) bool {
 // mention of the pattern cannot fire the gate.
 func hasCommandBigram(tokens []string, a, b string) bool {
 	for i := 0; i+1 < len(tokens); i++ {
-		if tokens[i] == a && tokens[i+1] == b {
+		// #2268: mirror #1600-C quote stripping - `sh -c 'git reset'`
+		// tokenizes 'git with the quote glued and a bare == never saw
+		// it, blinding this layer's bigrams while the sibling layer's
+		// token helpers all strip quotes.
+		if strings.Trim(tokens[i], "\"'") == a && strings.Trim(tokens[i+1], "\"'") == b {
 			return true
 		}
 	}
@@ -212,7 +216,7 @@ func isGitPush(s string) bool {
 		// Prefix keeps the #1194 conservative posture: `git pushd` and
 		// fused forms still fire; a mere mention in a comment/grep
 		// cannot (git must be the adjacent owner token).
-		if tokens[i] == "git" && strings.HasPrefix(tokens[i+1], "push") {
+		if strings.Trim(tokens[i], "\"'") == "git" && strings.HasPrefix(strings.Trim(tokens[i+1], "\"'"), "push") {
 			return true
 		}
 	}
@@ -256,6 +260,10 @@ func isDestructiveGitSub(s string) bool {
 			if u == ";" || strings.HasPrefix(u, ";") {
 				goto nextGit
 			}
+			// #2268: strip trailing quote/backslash glue - the JSON-escaped
+			// closing quote of `sh -c "git reset --hard"` makes the last
+			// token `--hard\"` and the exact compare missed it.
+			u = strings.TrimRight(u, "\"'\\")
 			switch sub {
 			case "reset":
 				if u == "--hard" {
