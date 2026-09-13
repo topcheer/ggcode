@@ -213,6 +213,11 @@ var diffBinaryHeader = regexp.MustCompile(`^Binary files a/(.+) and b/(.+) diffe
 // was registered at all.
 var diffModeChange = regexp.MustCompile(`^(old|new) mode `)
 
+// diffRenameTo matches the "rename to <path>" marker of a pure rename
+// (similarity 100%). A pure-rename hunk has NO +++/--- header, no mode
+// line, no binary line - the rename-to path is the file's new identity.
+var diffRenameTo = regexp.MustCompile(`^rename to (.+)`)
+
 // parseDiffStats extracts file paths and counts additions/deletions from
 // a unified diff output (e.g. from "git diff --cached").
 func parseDiffStats(diffOutput string) diffStats {
@@ -262,6 +267,14 @@ func parseDiffStats(diffOutput string) diffStats {
 		// mode-only changes stop vanishing.
 		if diffModeChange.MatchString(line) {
 			add(lastGitPath)
+			continue
+		}
+		// Pure rename (similarity 100%): only diff --git + similarity index
+		// 100% + rename from/to - no hunk headers at all (#2233). Register
+		// the NEW path so the file lands in the set (the old path is gone).
+		if m := diffRenameTo.FindStringSubmatch(line); m != nil && len(m) > 1 {
+			add(strings.TrimSpace(m[1]))
+			lastGitPath = ""
 			continue
 		}
 		// Count additions (lines starting with '+', but not "+++").
