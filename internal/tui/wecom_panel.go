@@ -330,14 +330,19 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					if err := m.ensureWeComRuntime(); err != nil {
-						return wecomBindResultMsg{err: err}
+						// #2232: roll back the just-persisted adapter - the dirty
+						// Enabled:true credentials retried forever (#2215 tg pattern).
+						return m.rollbackWecomCreate(name, err)
 					}
 					if err := m.startWeComAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errWecomEnableNeeded) {
 							// #1792 case 3: enable on the Update loop, then restart.
-							return m.wecomEnableMutation(name, nil)
+							// #2232: a failure inside the enable mutation also rolls
+							// back (its single caller is this create flow).
+							return m.wecomEnableMutation(name, m.wecomEnableRollback(name))
 						}
-						return wecomBindResultMsg{err: err}
+						// #2232: generic start failure rolls back too.
+						return m.rollbackWecomCreate(name, err)
 					}
 					return wecomBindResultMsg{message: m.t("panel.wecom.message.added_bot", name)}
 				}
@@ -346,6 +351,35 @@ func (m *Model) createWeComAdapterCmd(spec string) tea.Cmd {
 				return wecomBindResultMsg{err: err}
 			},
 		}
+	}
+}
+
+// wecomEnableRollback adapts the #2232 create-flow rollback into the
+// next-continuation shape wecomEnableMutation expects.
+func (m *Model) wecomEnableRollback(name string) func(m *Model) tea.Msg {
+	return func(m *Model) tea.Msg {
+		return m.rollbackWecomCreate(name, fmt.Errorf("wecom enable-restart failed for %s", name))
+	}
+}
+
+// rollbackWecomCreate removes a just-persisted wecom adapter whose
+// runtime start failed (#2232) - mirrors rollbackTGCreate (#2215):
+// map REMOVE rides configMutationMsg (#1370 pattern), the original
+// error still surfaces, and a failed rollback is appended to it.
+func (m *Model) rollbackWecomCreate(name string, origErr error) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+				return rerr
+			}
+			return m.saveConfig()
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg { return wecomBindResultMsg{err: origErr} }
+		},
+		fail: func(rerr error) tea.Msg {
+			return wecomBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+		},
 	}
 }
 
@@ -369,7 +403,9 @@ func (m *Model) wecomEnableMutation(name string, next func(m *Model) tea.Msg) te
 		next: func(m *Model) tea.Cmd {
 			return func() tea.Msg {
 				if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), name, m.imManager); err != nil {
-					return wecomBindResultMsg{err: err}
+					// #2232: create-flow enable-restart failure rolls back the
+					// just-added adapter instead of a bare error over dirty config.
+					return m.rollbackWecomCreate(name, err)
 				}
 				if next == nil {
 					return nil
