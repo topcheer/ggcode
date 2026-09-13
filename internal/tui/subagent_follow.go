@@ -315,6 +315,12 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 	toolCalls := make(map[string]int)
 	toolCallCount := make(map[string]int)
 	toolResultCount := make(map[string]int)
+	// #1761 case 2: per-name FIFO of pending (unfinished) call keys for the
+	// empty-ToolID fallback. The old independent counters mismatched when a
+	// result was missing: call1(no result) + call2 + result2 matched call1,
+	// leaving call2 pending forever. With the queue, a result always binds
+	// to the OLDEST unfinished same-name call.
+	pendingByName := make(map[string][]string)
 	var textBuf strings.Builder
 
 	for _, ev := range data.Events {
@@ -330,6 +336,9 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 				key = fmt.Sprintf("%s-%d", ev.ToolName, toolCallCount[ev.ToolName])
 			}
 			toolCalls[key] = list.Len()
+			if ev.ToolID == "" {
+				pendingByName[ev.ToolName] = append(pendingByName[ev.ToolName], key)
+			}
 			present := describeTool("en", ev.ToolName, ev.ToolArgs)
 			if ev.ToolDisplayName != "" {
 				present.DisplayName = ev.ToolDisplayName
@@ -359,9 +368,15 @@ func buildFollowList(data followEventData, list *chat.List, styles chat.Styles) 
 			}
 			key := ev.ToolID
 			if key == "" {
-				// Match tool results to calls sequentially when no stable tool ID exists.
-				toolResultCount[ev.ToolName]++
-				key = fmt.Sprintf("%s-%d", ev.ToolName, toolResultCount[ev.ToolName])
+				// #1761 case 2: bind to the oldest unfinished same-name call
+				// (FIFO) instead of an independent result counter.
+				if q := pendingByName[ev.ToolName]; len(q) > 0 {
+					key = q[0]
+					pendingByName[ev.ToolName] = q[1:]
+				} else {
+					toolResultCount[ev.ToolName]++
+					key = fmt.Sprintf("%s-%d", ev.ToolName, toolResultCount[ev.ToolName])
+				}
 			}
 			if idx, ok := toolCalls[key]; ok {
 				existing := list.ItemAt(idx)
@@ -596,7 +611,27 @@ func (m *Model) renderSubAgentFollowStrip() string {
 		maxShow = len(m.subAgentFollow.slots)
 	}
 
-	for i := 0; i < maxShow; i++ {
+	// #1761 case 3: anchor the strip window on the ACTIVE slot. Navigation
+	// wraps to any index, but the strip only rendered the first maxShow
+	// chips - activating the 6th+ agent showed only "+N more" with no
+	// indicator of who was being followed. Slide the window so the active
+	// chip is always visible (active last when beyond the head).
+	start := 0
+	activeIdx := -1
+	for i, s := range m.subAgentFollow.slots {
+		if s.ID == m.subAgentFollow.activeID {
+			activeIdx = i
+			break
+		}
+	}
+	if activeIdx >= maxShow {
+		start = activeIdx - maxShow + 1
+	}
+	if tailMax := len(m.subAgentFollow.slots) - maxShow; start > tailMax {
+		start = tailMax
+	}
+
+	for i := start; i < start+maxShow; i++ {
 		slot := m.subAgentFollow.slots[i]
 
 		label := slot.Name
