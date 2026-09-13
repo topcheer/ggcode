@@ -95,6 +95,7 @@ type DaemonBridge struct {
 	eventSubMu              sync.RWMutex
 	cascadeCancel           func()             // called to cascade-cancel sub-agents/delegates on interrupt
 	emitTextOverride        func(string) error // test hook: when set, replaces emitter.EmitText for shell passthrough
+	remoteDangerousOverride *bool              // test hook (#2205): when non-nil, replaces the config lookup for the im.remote_dangerous_commands gate
 }
 
 // NewDaemonBridge creates a bridge that submits IM messages directly to the agent.
@@ -106,6 +107,14 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		store:    store,
 		sess:     sess,
 		language: emitter.Language(),
+	}
+	// #2205: the remote-dangerous-commands gate resolves the workspace
+	// instance config via workingDir - inherit it from the agent so the
+	// opt-in is actually readable in production daemon deployments (an
+	// unset workingDir hashed the empty string and the gate was stuck
+	// fail-closed even with im.remote_dangerous_commands: true configured).
+	if ag != nil {
+		b.workingDir = ag.WorkingDir()
 	}
 	if sess != nil {
 		b.usageTurnIndex = daemonSessionTurnIndex(sess)
@@ -563,6 +572,18 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// loop. Order mirrors RouteInboundText: after slash, before approval/ask
 	// (approval replies y/n/a never start with $ or !).
 	if route.Kind == InboundRouteShell {
+		// #2205: mirror the TUI-side gate (#2185/PR #2203) - arbitrary
+		// shell from a remote IM peer is the dominant attack surface and
+		// is hard-denied without the im.remote_dangerous_commands opt-in
+		// (fail closed, same semantics as the TUI remote path).
+		if !b.remoteDangerousAllowed() {
+			if b.emitTextOverride != nil {
+				_ = b.emitTextOverride("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
+			} else {
+				_ = b.emitter.EmitText("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
+			}
+			return nil
+		}
 		b.handleShellInbound(route.Text)
 		return nil
 	}

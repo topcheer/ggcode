@@ -117,6 +117,20 @@ func (b *DaemonBridge) CurrentMode() string {
 }
 
 func (b *DaemonBridge) SwitchMode(name string) error {
+	// #2205: mirror the TUI-side gate (#2185/PR #2203) on the daemon
+	// bridge - the second consumer of IM-remote mode switching. Escalation
+	// to bypass/autopilot requires the im.remote_dangerous_commands opt-in;
+	// downgrade/level switches and plan/auto stay ungated. Fail closed on
+	// missing config. Unknown mode names error instead of silently
+	// falling back to supervised.
+	if !permission.IsValidPermissionMode(name) {
+		return fmt.Errorf("unknown permission mode %q (valid: supervised, plan, auto, bypass, autopilot)", name)
+	}
+	newMode := permission.ParsePermissionMode(name)
+	if (newMode == permission.BypassMode || newMode == permission.AutopilotMode) &&
+		!b.remoteDangerousAllowed() {
+		return fmt.Errorf("switching to %s over IM requires the im.remote_dangerous_commands opt-in (config yaml) - refusing zero-confirmation privilege escalation (#2185/#2205)", newMode)
+	}
 	a := b.liveAgent()
 	if a == nil {
 		return fmt.Errorf("no agent attached")
@@ -126,8 +140,18 @@ func (b *DaemonBridge) SwitchMode(name string) error {
 	if !ok {
 		return fmt.Errorf("mode switching not supported by the active policy (%T)", policy)
 	}
-	cp.SetMode(permission.ParsePermissionMode(name))
+	cp.SetMode(newMode)
 	return nil
+}
+
+// remoteDangerousAllowed reports whether the #2185 im.remote_dangerous_commands
+// opt-in is set for this bridge's workspace (fail closed: nil config denies).
+func (b *DaemonBridge) remoteDangerousAllowed() bool {
+	if b.remoteDangerousOverride != nil {
+		return *b.remoteDangerousOverride
+	}
+	cfg := config.LoadInstanceConfig(b.workingDir)
+	return cfg != nil && cfg.IM.RemoteDangerousCommands
 }
 
 func (b *DaemonBridge) ToolList() (string, error) {
