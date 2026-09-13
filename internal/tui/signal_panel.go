@@ -66,15 +66,7 @@ type signalQRCodeMsg struct {
 // the spec is `name base_url account` - the 3rd field is the phone
 // number (PII). First two fields stay readable; later ones are masked.
 func maskSignalCreateEcho(input string) string {
-	fields := strings.Fields(input)
-	if len(fields) <= 2 {
-		return input
-	}
-	masked := []string{fields[0], fields[1]}
-	for _, f := range fields[2:] {
-		masked = append(masked, maskSecret(f))
-	}
-	return strings.Join(masked, " ")
+	return maskPositionalCreateEcho(input, 2)
 }
 
 func checkSignalDaemonCmd() tea.Cmd {

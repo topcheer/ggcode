@@ -138,7 +138,7 @@ func (m Model) renderMatrixPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.matrix.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.matrix.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.matrix.bot_input", maskPositionalCreateEcho(panel.createInput, 2)+"█"),
 			" "+m.t("panel.matrix.create_format"),
 			" "+m.t("panel.matrix.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),

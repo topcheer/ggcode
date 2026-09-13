@@ -56,15 +56,7 @@ func (m *Model) closeSlackPanel() {
 // stays readable for review; every later field is token material and
 // is masked. The buffer keeps the real value for the Enter parse.
 func maskSlackCreateEcho(input string) string {
-	fields := strings.Fields(input)
-	if len(fields) <= 1 {
-		return input
-	}
-	masked := []string{fields[0]}
-	for _, f := range fields[1:] {
-		masked = append(masked, maskSecret(f))
-	}
-	return strings.Join(masked, " ")
+	return maskPositionalCreateEcho(input, 1)
 }
 
 func (m Model) renderSlackPanel() string {

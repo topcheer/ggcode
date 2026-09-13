@@ -138,7 +138,7 @@ func (m Model) renderTwitchPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.twitch.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.twitch.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.twitch.bot_input", maskCreateEchoIndices(panel.createInput, 1)+"█"),
 			" "+m.t("panel.twitch.create_format"),
 			" "+m.t("panel.twitch.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),

@@ -410,6 +410,49 @@ func maskSecret(value string) string {
 	return "****" + string(runes[len(runes)-4:])
 }
 
+// maskPositionalCreateEcho masks the create-input echo for positional
+// (space-separated) IM panel specs (#2178 family): fields are POSITIONAL,
+// so field names are unknown at render time. Fields before secretFrom
+// (typically just the adapter name) stay readable for review; every field
+// from secretFrom on is secret material and is masked. The buffer keeps
+// the real value for the Enter parse.
+func maskPositionalCreateEcho(input string, secretFrom int) string {
+	fields := strings.Fields(input)
+	if secretFrom < 0 {
+		secretFrom = 0
+	}
+	if len(fields) <= secretFrom {
+		return input
+	}
+	masked := append([]string{}, fields[:secretFrom]...)
+	for _, f := range fields[secretFrom:] {
+		masked = append(masked, maskSecret(f))
+	}
+	return strings.Join(masked, " ")
+}
+
+// maskCreateEchoIndices masks only the listed field indices of a
+// positional create-input echo (#2178 family): for interleaved specs
+// (e.g. `name token nick channels`) where secret fields sit between
+// non-sensitive ones. Unlisted fields stay readable.
+func maskCreateEchoIndices(input string, indices ...int) string {
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return input
+	}
+	mask := make(map[int]bool, len(indices))
+	for _, i := range indices {
+		mask[i] = true
+	}
+	masked := append([]string{}, fields...)
+	for i := range masked {
+		if mask[i] {
+			masked[i] = maskSecret(masked[i])
+		}
+	}
+	return strings.Join(masked, " ")
+}
+
 // looksLikeSecretField checks if a key name suggests it holds a secret.
 // Duplicated from config package to avoid import cycle concerns.
 func looksLikeSecretField(key string) bool {

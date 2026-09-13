@@ -138,7 +138,7 @@ func (m Model) renderMattermostPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.mattermost.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.mattermost.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.mattermost.bot_input", maskPositionalCreateEcho(panel.createInput, 2)+"█"),
 			" "+m.t("panel.mattermost.create_format"),
 			" "+m.t("panel.mattermost.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),
