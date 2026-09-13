@@ -308,7 +308,7 @@ func (d tuiSlashDeps) SwitchMode(name string) error {
 	}
 	newMode := permission.ParsePermissionMode(name)
 	if (newMode == permission.BypassMode || newMode == permission.AutopilotMode) &&
-		d.m.config != nil && !d.m.config.IM.RemoteDangerousCommands {
+		(d.m.config == nil || !d.m.config.IM.RemoteDangerousCommands) {
 		return fmt.Errorf("switching to %s over IM requires the im.remote_dangerous_commands opt-in (config yaml) - refusing zero-confirmation privilege escalation (#2185)", newMode)
 	}
 	d.m.mode = newMode

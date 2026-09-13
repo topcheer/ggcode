@@ -87,3 +87,15 @@ func TestIssue2185ShellPassthroughGate(t *testing.T) {
 		t.Fatal("nil config must fail closed")
 	}
 }
+
+func TestIssue2185NilConfigFailsClosed(t *testing.T) {
+	// R82 acceptance: the TUI-side gate must fail closed on nil config,
+	// matching the family invariant (update_remote shell gate and the
+	// daemon-bridge gate both deny when config is unavailable).
+	var m Model
+	deps := tuiSlashDeps{m: &m}
+	err := deps.SwitchMode("bypass")
+	if err == nil {
+		t.Fatal("nil config must deny escalation (fail closed, family invariant)")
+	}
+}

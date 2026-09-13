@@ -261,7 +261,7 @@ func TestComputeCRSRecencyAloneInsufficient(t *testing.T) {
 func TestComputeCRSDetail_FileMatchNotInferableFromScore(t *testing.T) {
 	edit := causalEditStep{filePath: "internal/agent/my_edit.go", dirPath: "internal/agent"}
 	// Error file UNRELATED to the edit (different package, different dir).
-	score, matched := computeCRSDetail(edit, []string{"cmd/app/main.go:12: oops"}, 8)
+	score, matched := computeCRSDetail(edit, []string{"cmd/app/main.go:12: oops"}, 8, nil)
 	if matched {
 		t.Fatal("unrelated error file must not set fileMatch")
 	}
@@ -269,7 +269,7 @@ func TestComputeCRSDetail_FileMatchNotInferableFromScore(t *testing.T) {
 		t.Logf("note: recency-heavy score %d still exceeds 50 - wording must rely on fileMatch only", score)
 	}
 	// Matching error file sets it.
-	score2, matched2 := computeCRSDetail(edit, []string{"internal/agent/my_edit.go"}, 1)
+	score2, matched2 := computeCRSDetail(edit, []string{"internal/agent/my_edit.go"}, 1, nil)
 	if !matched2 || score2 < causalWtErrorFileMatch {
 		t.Fatalf("exact match must set fileMatch with weight, got matched=%v score=%d", matched2, score2)
 	}
