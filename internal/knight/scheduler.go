@@ -901,7 +901,11 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			continue
 		}
 
-		if k.cfg.TrustLevel == "auto" {
+		// #1644 family / sa-169: the promotion branch used the RAW value while
+		// canWrite and the audit panel normalize - "AUTO"/" auto " rendered
+		// auto-promotion ENABLED and let the review run, but promotion never
+		// fired. Compare normalized, sharing the canWrite default chain.
+		if k.canWrite() && strings.EqualFold(strings.TrimSpace(k.cfg.TrustLevel), "auto") {
 			if allowed, reason := canAutoPromoteStagingSkill(s, result, isRevision); !allowed {
 				if k.markStagingNotified(s.Scope + ":" + s.Name) {
 					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",

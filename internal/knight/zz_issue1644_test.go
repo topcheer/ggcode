@@ -61,3 +61,20 @@ func TestIssue1644ReviewStagingSkillsTypoTrustNoWrite(t *testing.T) {
 		t.Fatal("scheduler and audit panel disagree on write access")
 	}
 }
+
+// #1644 family / #2213 follow-up (sa-169): the staging-promotion branch
+// compared the RAW TrustLevel against "auto" while canWrite and the audit
+// panel normalize - "AUTO"/" auto " showed auto-promotion ENABLED but never
+// promoted. Source-level pin: no raw cfg.TrustLevel comparison may return.
+func TestIssue1644PromotionBranchNormalizes(t *testing.T) {
+	src, err := os.ReadFile("scheduler.go")
+	if err != nil {
+		t.Skipf("source layout changed: %v", err)
+	}
+	for i, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, `k.cfg.TrustLevel == "auto"`) {
+			t.Fatalf("scheduler.go:%d still compares the raw trust value: %s", i+1, line)
+		}
+	}
+}
