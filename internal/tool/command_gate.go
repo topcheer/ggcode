@@ -157,7 +157,10 @@ func NewCommandGate() *CommandGate {
 
 		// --- System control ---
 		{kind: "catastrophic", desc: "system shutdown/reboot",
-			pattern: regexp.MustCompile(`(?i)\b(shutdown\b.*(-h|-r|now)|\breboot\b|\bhalt\b|\bpoweroff\b|init\s+[06])`)},
+			// #1648-2: quotedInert — grepping a log/doc that contains the word
+			// 'shutdown' or 'reboot' must not hard-Block (rm-family parity).
+			quotedInert: true,
+			pattern:     regexp.MustCompile(`(?i)\b(shutdown\b.*(-h|-r|now)|\breboot\b|\bhalt\b|\bpoweroff\b|init\s+[06])`)},
 		{kind: "catastrophic", desc: "kernel module manipulation",
 			pattern: regexp.MustCompile(`(?i)\b(rmmod|insmod|modprobe)\s+`)},
 
@@ -171,11 +174,16 @@ func NewCommandGate() *CommandGate {
 
 		// --- History manipulation to hide tracks ---
 		{kind: "catastrophic", desc: "history manipulation to hide tracks",
-			pattern: regexp.MustCompile(`(?i)(unset\s+HISTFILE|export\s+HISTFILE=/dev/null|history\s+(-c|--clear)|>\s*~?/\.(bash_history|zsh_history))`)},
+			// #1648-2: quotedInert — same quoted-text parity as rm rules.
+			quotedInert: true,
+			pattern:     regexp.MustCompile(`(?i)(unset\s+HISTFILE|export\s+HISTFILE=/dev/null|history\s+(-c|--clear)|>\s*~?/\.(bash_history|zsh_history))`)},
 
 		// --- Disable security tools ---
 		{kind: "catastrophic", desc: "disable security tooling",
-			pattern: regexp.MustCompile(`(?i)\b(killall|pkill)\s+(-[0-9]+\s+)?(Little.?Snitch|LuLu|SecuritySpy|fseventsd|sandboxd)`)},
+			// #1648-2: quotedInert — quoted text mentioning Little Snitch etc.
+			// is prose, not a killall invocation.
+			quotedInert: true,
+			pattern:     regexp.MustCompile(`(?i)\b(killall|pkill)\s+(-[0-9]+\s+)?(Little.?Snitch|LuLu|SecuritySpy|fseventsd|sandboxd)`)},
 
 		// --- Overwrite critical files (block, not ask — no legitimate use for AI) ---
 		{kind: "catastrophic", desc: "overwrite critical system files",
@@ -277,6 +285,15 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	result := GateResult{
 		Behavior:   Allow,
 		CleanedCmd: cmd,
+	}
+
+	// #1648-3: backslash-newline continuations split a single logical
+	// command across lines, so every per-line regex missed the assembled
+	// form. Join continuations BEFORE any layer sees the command (the
+	// original cmd is preserved in CleanedCmd for display).
+	joined := strings.ReplaceAll(strings.ReplaceAll(cmd, "\\\r\n", " "), "\\\n", " ")
+	if joined != cmd {
+		cmd = joined
 	}
 
 	// ---- Layer 0: Pre-checks (Claude Code's parseForSecurity pre-checks) ----
