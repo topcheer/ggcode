@@ -171,10 +171,26 @@ func isRetryLoop(body *ast.BlockStmt) bool {
 
 // loopBodyHasFailingCall returns true if the body contains a call to a
 // common failing network/IO function that returns an error.
+// #2250: nested loop barrier - the SAME ownership rule #2242 added to
+// loopBodyHasErrorRetry but never to these sibling scanners: a nested
+// for/range inside the loop body belongs to its OWN candidate visit,
+// never to this one (an inner skip-continue or inner failing call is
+// evidence about the INNER loop, not the outer).
+func rnpNestedLoopBarrier(node ast.Node) bool {
+	switch node.(type) {
+	case *ast.ForStmt, *ast.RangeStmt:
+		return false // do not descend
+	}
+	return true
+}
+
 func loopBodyHasFailingCall(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
+			return false
+		}
+		if !rnpNestedLoopBarrier(node) {
 			return false
 		}
 		call, ok := node.(*ast.CallExpr)
@@ -271,6 +287,9 @@ func branchContinuesOnError(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
+			return false
+		}
+		if !rnpNestedLoopBarrier(node) {
 			return false
 		}
 		if cs, ok := node.(*ast.BranchStmt); ok && cs.Tok == token.CONTINUE {
