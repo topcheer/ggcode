@@ -30,6 +30,12 @@ type PortFile struct {
 	SessionID string `json:"session_id"` // ggcode session ID
 	Workspace string `json:"workspace"`  // working directory
 	Mode      string `json:"mode"`       // startup permission mode (supervised, auto, etc.)
+	// StartTime is the kernel start time of the PID (unix /proc stat
+	// field 22) - the process-identity half of the #1624 case C fix: a
+	// recycled PID passes signal-0 liveness forever, so ghost port files
+	// of dead owners were never cleaned. Empty on platforms without
+	// /proc (identity check degrades to liveness-only).
+	StartTime string `json:"start_time,omitempty"`
 }
 
 // runDir is the subdirectory under ~/.ggcode/ for port files.
@@ -56,6 +62,11 @@ func path(sessionID string) string {
 func Write(pf PortFile) error {
 	if pf.SessionID == "" {
 		return fmt.Errorf("session ID is required")
+	}
+	// #1624 case C: stamp the owner's identity so a later reader can tell
+	// this PID from an unrelated process that recycled it.
+	if pf.PID > 0 && pf.StartTime == "" {
+		pf.StartTime = procStartTime(pf.PID)
 	}
 	p := path(pf.SessionID)
 	if p == "" {
@@ -158,6 +169,20 @@ func readAtPath(p string) (*PortFile, error) {
 		_ = os.Remove(p)
 		debug.Log("runfile", "readAtPath: removed legacy port file without session_id: %s", p)
 		return nil, fmt.Errorf("legacy port file without session_id, removed")
+	}
+	// #1624 case C: PID-identity check. A live-looking PID may be an
+	// unrelated recycled process (the original owner died, the OS reused
+	// the number) - signal-0 cannot tell them apart, so the ghost entry
+	// pointed clients at a port nobody listens on, forever. When the
+	// recorded start time disagrees with the current one, the owner is
+	// certainly gone: remove. When /proc is unavailable ("" on both
+	// sides) this degrades to the pre-existing liveness rule.
+	if pf.StartTime != "" {
+		if now := procStartTime(pf.PID); now != "" && now != pf.StartTime {
+			_ = os.Remove(p)
+			debug.Log("runfile", "readAtPath: pid %d was recycled (start time %s -> %s), removed ghost port file: %s", pf.PID, pf.StartTime, now, p)
+			return nil, fmt.Errorf("process %d is not the port file owner (pid recycled, removed)", pf.PID)
+		}
 	}
 	if !isAlive(pf.PID) {
 		_ = os.Remove(p)
