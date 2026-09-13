@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
@@ -16,12 +17,66 @@ import (
 // mutate->chat->restore window (#1612-A).
 var samplingMaxTokensMu sync.Mutex
 
+// #1484-D: sampling is the only LLM-consumption path with no gate - a
+// buggy/malicious server could loop sampling requests and burn the
+// budget with no prompt or breaker. Package-level rate limiter +
+// concurrency cap apply to every sampling request regardless of the
+// mcp_sampling_disabled switch.
+const (
+	samplingRateLimit   = 60          // requests per window
+	samplingRateWindow  = time.Minute // sliding window
+	samplingMaxInFlight = 2           // concurrent sampling chats
+)
+
+var (
+	samplingGateMu      sync.Mutex
+	samplingWindowStart time.Time
+	samplingWindowCount int
+	samplingInFlight    int
+)
+
+// samplingGateAllow admits one sampling request under the rate+inflight
+// caps; release() must be called when the chat finishes.
+func samplingGateAllow() (release func(), err error) {
+	samplingGateMu.Lock()
+	defer samplingGateMu.Unlock()
+	now := time.Now()
+	if now.Sub(samplingWindowStart) >= samplingRateWindow {
+		samplingWindowStart = now
+		samplingWindowCount = 0
+	}
+	if samplingWindowCount >= samplingRateLimit {
+		return nil, fmt.Errorf("mcp sampling rate limit exceeded (%d/min) - refusing to protect the token budget (#1484-D)", samplingRateLimit)
+	}
+	if samplingInFlight >= samplingMaxInFlight {
+		return nil, fmt.Errorf("mcp sampling concurrency limit reached (%d) - refusing concurrent sampling chats (#1484-D)", samplingMaxInFlight)
+	}
+	samplingWindowCount++
+	samplingInFlight++
+	return func() {
+		samplingGateMu.Lock()
+		samplingInFlight--
+		samplingGateMu.Unlock()
+	}, nil
+}
+
 // newMCPSamplingHandler binds the sampling handler to ONE runtime's
 // provider getter (#1592-B): the package-global let a second session in
 // the same process overwrite the first's provider - session A's sampling
 // then ran on B's model and API key, with results tagged B.Name().
-func newMCPSamplingHandler(providerFn func() provider.Provider) func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
+func newMCPSamplingHandler(providerFn func() provider.Provider, disabled bool) func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
 	return func(ctx context.Context, params mcp.SamplingParams) (*mcp.SamplingResult, error) {
+		// #1484-D: the kill switch (config mcp_sampling_disabled) fails
+		// closed with an explanatory error instead of silently burning
+		// budget on a path no permission system covers.
+		if disabled {
+			return nil, fmt.Errorf("mcp sampling disabled by config (mcp_sampling_disabled) - refusing server sampling request (#1484-D)")
+		}
+		release, err := samplingGateAllow()
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		return mcpSamplingHandlerWith(ctx, params, providerFn())
 	}
 }
