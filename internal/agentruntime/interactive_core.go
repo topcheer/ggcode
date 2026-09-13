@@ -67,7 +67,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})
 	mcpMgr.SetSamplingHandler(newMCPSamplingHandler(func() provider.Provider {
 		return core.samplingProvider
-	}))
+	}, cfg.MCPSamplingDisabled))
 	mcpMgr.SetElicitationHandler(newMCPElicitationHandler(registry))
 
 	pluginMgr := plugin.NewManager()

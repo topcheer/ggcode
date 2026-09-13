@@ -270,6 +270,13 @@ type Config struct {
 	ToolPerms          map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
 	Plugins            []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
 	MCPServers         []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	// MCPSamplingDisabled (#1484-D) turns the MCP sampling handler off
+	// entirely - sampling is the only LLM-consumption path with no gate:
+	// a buggy/malicious server could loop sampling requests and burn the
+	// budget with no prompt, breaker, or even an off switch. Zero value
+	// keeps sampling ON (backward compat); a per-minute rate cap applies
+	// regardless (see mcp_sampling.go).
+	MCPSamplingDisabled bool `yaml:"mcp_sampling_disabled,omitempty" json:"mcp_sampling_disabled,omitempty"`
 	// DeletedMCPServers records user-deleted MCP server names (tombstones).
 	// External apps (e.g. Pen.app) rewrite their Claude registration files
 	// (~/.claude.json) behind our back; without a tombstone the startup/panel
