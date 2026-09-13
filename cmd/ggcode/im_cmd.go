@@ -15,6 +15,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/secretfield"
 	"github.com/topcheer/ggcode/internal/session"
 )
 
@@ -937,11 +938,9 @@ func valueOr(v, fallback string) string {
 func emptyStr(s string) string { return s }
 
 func isSecretKey(key string) bool {
-	lower := strings.ToLower(key)
-	return strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "token") ||
-		strings.Contains(lower, "password") ||
-		strings.Contains(lower, "key")
+	// #2188: delegate to the single source (#2180) - the local four-word
+	// list lacked "credential" and would drift again on the next copy.
+	return secretfield.LooksLikeSecretField(key)
 }
 
 func maskSecret(s string) string {

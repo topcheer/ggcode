@@ -11,6 +11,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
+	"github.com/topcheer/ggcode/internal/secretfield"
 )
 
 // --- Config API ---
@@ -521,11 +522,7 @@ func maskIMConfig(cfg config.IMConfig) config.IMConfig {
 		if len(a.Extra) > 0 {
 			masked := make(map[string]interface{}, len(a.Extra))
 			for k, v := range a.Extra {
-				if s, ok := v.(string); ok && sensitiveExtraKey(k) && s != "" {
-					masked[k] = "__unchanged__"
-				} else {
-					masked[k] = v
-				}
+				masked[k] = maskExtraValue(k, v)
 			}
 			a.Extra = masked
 		}
@@ -538,12 +535,37 @@ func maskIMAdapter(a config.IMAdapterConfig) config.IMAdapterConfig {
 	return maskIMConfig(config.IMConfig{Adapters: map[string]config.IMAdapterConfig{"": a}}).Adapters[""]
 }
 
-// sensitiveExtraKey matches credential-bearing adapter Extra keys (#1021),
-// aligned with the im package's isDingTalkSensitiveKey substring rule.
+// sensitiveExtraKey matches credential-bearing adapter Extra keys (#1021).
+// #2188: delegate to the single source (internal/secretfield, #2180) -
+// the local three-word list predated it and missed the whole key family
+// (nostr private_key, dingtalk app_key rendered in cleartext over the
+// API; the comment's "aligned with the im package" had silently gone
+// false, the same drift #2167 caught in the TUI).
 func sensitiveExtraKey(key string) bool {
-	lower := strings.ToLower(key)
-	return strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "password")
+	return secretfield.LooksLikeSecretField(key)
+}
+
+// maskExtraValue masks one Extra value (#2188): sensitive string values
+// become the "__unchanged__" sentinel (restore path reverts them), and
+// NESTED maps recurse - the five adapters' stt.api_key lived in
+// Extra["stt"]["api_key"] and the old top-level-only mask returned the
+// whole map verbatim.
+func maskExtraValue(key string, v interface{}) interface{} {
+	switch val := v.(type) {
+	case string:
+		if val != "" && sensitiveExtraKey(key) {
+			return "__unchanged__"
+		}
+		return val
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(val))
+		for kk, vv := range val {
+			out[kk] = maskExtraValue(kk, vv)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // restoreMaskedIMCredentials copies masked fields back from prev: any Env
@@ -559,15 +581,35 @@ func restoreMaskedIMCredentials(prev, next config.IMConfig) config.IMConfig {
 			a.Env = old.Env
 		}
 		for k, v := range a.Extra {
-			if s, ok := v.(string); ok && s == "__unchanged__" && sensitiveExtraKey(k) {
-				if oldV, ok := old.Extra[k]; ok {
-					a.Extra[k] = oldV
-				}
-			}
+			a.Extra[k] = restoreExtraValue(old.Extra[k], v)
 		}
 		next.Adapters[name] = a
 	}
 	return next
+}
+
+// restoreExtraValue reverts masked sentinels at any depth (#2188):
+// nested maps carry their own "__unchanged__" entries (maskExtraValue
+// recurses), so restoring only top-level strings would PERSIST the
+// mask into storage on a full-replace PUT and destroy e.g. stt config.
+func restoreExtraValue(oldV, newV interface{}) interface{} {
+	if s, ok := newV.(string); ok && s == "__unchanged__" {
+		return oldV
+	}
+	newMap, ok := newV.(map[string]interface{})
+	if !ok {
+		return newV
+	}
+	oldMap, _ := oldV.(map[string]interface{})
+	out := make(map[string]interface{}, len(newMap))
+	for k, v := range newMap {
+		var ov interface{}
+		if oldMap != nil {
+			ov = oldMap[k]
+		}
+		out[k] = restoreExtraValue(ov, v)
+	}
+	return out
 }
 
 // GET/PUT /api/im -- IM config
