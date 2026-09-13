@@ -108,6 +108,14 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 		sess:     sess,
 		language: emitter.Language(),
 	}
+	// #2205: the remote-dangerous-commands gate resolves the workspace
+	// instance config via workingDir - inherit it from the agent so the
+	// opt-in is actually readable in production daemon deployments (an
+	// unset workingDir hashed the empty string and the gate was stuck
+	// fail-closed even with im.remote_dangerous_commands: true configured).
+	if ag != nil {
+		b.workingDir = ag.WorkingDir()
+	}
 	if sess != nil {
 		b.usageTurnIndex = daemonSessionTurnIndex(sess)
 	}
