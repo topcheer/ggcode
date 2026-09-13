@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/session"
+	"unicode"
 )
 
 // SessionAnalyzer analyzes session history to discover reusable patterns.
@@ -691,6 +692,9 @@ func buildCorrectionSkillName(text string) string {
 	words := strings.Fields(textLower)
 	var parts []string
 	cjkOnly := true
+	// #1825 case 3: whether ANY word carried CJK content (pure-ASCII
+	// joins that are merely short must keep the plain fallback).
+	hasCJK := false
 	for _, w := range words {
 		w = strings.Trim(w, "，。,.!?！？、")
 		// #1604-D: byte-length gate vs the rune-length gate upstream - a
@@ -712,14 +716,27 @@ func buildCorrectionSkillName(text string) string {
 		if w != "" && isASCIIIdentifierWord(w) {
 			cjkOnly = false
 		}
+		for _, r := range w {
+			if unicode.Is(unicode.Han, r) {
+				hasCJK = true
+				break
+			}
+		}
 		if len(parts) >= 3 {
 			break
 		}
 	}
-	if len(parts) > 0 {
-		return strings.Join(parts, "-")
+	if join := strings.Join(parts, "-"); join != "" {
+		// #1825 case 3: a MIXED word like "好v2" carries CJK AND ASCII -
+		// sanitize strips the CJK ("v2" < 8 chars fails the candidate
+		// length) but cjkOnly is false, so the hash fallback never ran
+		// and the correction was silently dropped. When the join cannot
+		// produce a valid candidate but CJK content existed, hash too.
+		if len(join) >= 8 || !hasCJK {
+			return join
+		}
 	}
-	if cjkOnly {
+	if cjkOnly || hasCJK {
 		// Deterministic readable-enough name for pure-CJK corrections:
 		// survives isValidCandidateName (>=8, not the correction-N
 		// fallback pattern) instead of being silently dropped.
