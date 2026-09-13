@@ -963,8 +963,16 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 	// (temperature 0 = provider default) silently dropped stop_sequences
 	// - the #2239 symptom reincarnated on Anthropic only, while the
 	// openai/gemini siblings were unconditional.
-	if len(p.stopSequences) > 0 {
-		params.StopSequences = p.stopSequences
+	// #2266: the #2248 snapshot switch wired anthropic's MaxTokens half
+	// (effectiveMaxTokens) but left this block reading the field only -
+	// an active sampling override's sequences never reached the request
+	// body. Override wins (the provider.go contract), siblings merged.
+	seqs := p.stopSequences
+	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
+		seqs = o.StopSequences
+	}
+	if len(seqs) > 0 {
+		params.StopSequences = seqs
 	}
 	// Apply temperature when set (0 means use provider default).
 	if p.temperature > 0 {

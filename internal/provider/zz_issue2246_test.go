@@ -27,3 +27,19 @@ func TestIssue2246StopSequencesWithoutTemperature(t *testing.T) {
 		t.Fatalf("no sequences configured must omit the field, got %v", got)
 	}
 }
+
+func TestIssue2266OverrideSequencesReachAnthropicParams(t *testing.T) {
+	p := newAnthropicProvider("k", "m", 1024, "")
+	p.SetSamplingOverride(&SamplingOverride{MaxTokens: 100, StopSequences: []string{"END"}})
+	params := p.buildParams(nil, nil)
+	if !reflect.DeepEqual(params.StopSequences, []string{"END"}) {
+		t.Fatalf("override sequences must reach the request body, got %v", params.StopSequences)
+	}
+	if params.MaxTokens != 100 {
+		t.Fatalf("override maxTokens must win, got %d", params.MaxTokens)
+	}
+	p.SetSamplingOverride(nil)
+	if got := p.buildParams(nil, nil).StopSequences; len(got) != 0 {
+		t.Fatalf("cleared override must fall back to defaults, got %v", got)
+	}
+}
