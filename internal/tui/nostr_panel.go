@@ -147,7 +147,7 @@ func (m Model) renderNostrPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.nostr.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.nostr.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.nostr.bot_input", maskCreateEchoIndices(panel.createInput, 1)+"█"),
 			" "+m.t("panel.nostr.create_format"),
 			" "+m.t("panel.nostr.create_example"),
 			" "+m.t("panel.nostr.create_full_example"),

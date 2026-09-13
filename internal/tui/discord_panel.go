@@ -108,7 +108,7 @@ func (m Model) renderDiscordPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.discord.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.discord.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.discord.bot_input", maskPositionalCreateEcho(panel.createInput, 1)+"█"),
 			" "+m.t("panel.discord.create_format"),
 			" "+m.t("panel.discord.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),

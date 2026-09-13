@@ -112,7 +112,7 @@ func (m Model) renderTGPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.tg.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.tg.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.tg.bot_input", maskPositionalCreateEcho(panel.createInput, 1)+"█"),
 			" "+m.t("panel.tg.create_format"),
 			" "+m.t("panel.tg.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),

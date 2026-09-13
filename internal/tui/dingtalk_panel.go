@@ -107,7 +107,7 @@ func (m Model) renderDingtalkPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.dingtalk.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.dingtalk.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.dingtalk.bot_input", maskPositionalCreateEcho(panel.createInput, 1)+"█"),
 			" "+m.t("panel.dingtalk.create_format"),
 			" "+m.t("panel.dingtalk.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),

@@ -134,7 +134,7 @@ func (m Model) renderWeComPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.wecom.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.wecom.bot_input", panel.createInput+"█"),
+			" "+m.t("panel.wecom.bot_input", maskPositionalCreateEcho(panel.createInput, 2)+"█"),
 			" "+m.t("panel.wecom.create_format"),
 			" "+m.t("panel.wecom.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),
