@@ -3,6 +3,7 @@
 package util
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"syscall"
@@ -23,7 +24,13 @@ func IsProcessAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	if proc.Signal(syscall.Signal(0)) != nil {
+	// #2190: kill(pid, 0) EPERM means the process EXISTS but we lack
+	// permission to signal it (POSIX) - treating it as dead mirrors the
+	// exact bug Windows fixed in #1723 (a privileged daemon probed by an
+	// unprivileged caller: false-dead deletes the PID file and forks a
+	// second instance, or triggers concurrent crash recovery - the Unix
+	// twin of #1490). Only a real error (ESRCH et al.) means dead.
+	if err := proc.Signal(syscall.Signal(0)); err != nil && !errors.Is(err, syscall.EPERM) {
 		return false
 	}
 	return !isZombieUnix(pid)
