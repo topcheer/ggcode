@@ -332,9 +332,17 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	msg := convertAnthropicResponse(resp.Content)
 	usage := anthropicUsage(resp.Usage)
 
+	// #1484-C: relay the real stop reason (SDK field; nil on some
+	// backends) so callers stop guessing from usage numbers.
+	stopReason := ""
+	if resp.StopReason != "" {
+		stopReason = string(resp.StopReason)
+	}
+
 	return &ChatResponse{
-		Message: Message{Role: "assistant", Content: msg},
-		Usage:   usage,
+		Message:    Message{Role: "assistant", Content: msg},
+		Usage:      usage,
+		StopReason: stopReason,
 	}, nil
 }
 

@@ -94,9 +94,23 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		}
 	}
 
+	// #1484-C: prefer the provider-reported stop reason (relayed through
+	// ChatResponse since #1484-C) over the length heuristic. The heuristic
+	// false-positived (natural output >= budget with no truncation →
+	// reported max_tokens for a completion that was never cut) and made
+	// the stop_sequence branch unreachable. Map non-MCP values (refusal,
+	// tool_use, ...) to end_turn: MCP spec allows only end_turn /
+	// stop_sequence / max_tokens.
 	stopReason := "end_turn"
-	if resp.Usage.OutputTokens >= maxTokens {
-		stopReason = "max_tokens"
+	switch resp.StopReason {
+	case "max_tokens", "stop_sequence":
+		stopReason = resp.StopReason
+	case "":
+		// Provider did not report one — keep the pre-#1484-C heuristic as
+		// the fallback for providers without stop-reason relay.
+		if resp.Usage.OutputTokens >= maxTokens && maxTokens > 0 {
+			stopReason = "max_tokens"
+		}
 	}
 
 	result := &mcp.SamplingResult{
