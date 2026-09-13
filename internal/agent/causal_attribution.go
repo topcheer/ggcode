@@ -157,6 +157,14 @@ func extractErrorFiles(output string) []string {
 		// attribution work uniformly on every platform.
 		f = strings.ReplaceAll(f, "\\", "/")
 		f = strings.TrimPrefix(f, "./")
+		// #2179: URL-shaped text satisfies the class wholesale (both
+		// separators plus ':') and was captured as an "error file" - it
+		// never matches any edited file, but a NON-EMPTY errorFiles list
+		// alone earned the recency weight, handing URL-bearing outputs a
+		// free attribution score. Skip http(s) captures outright.
+		if strings.HasPrefix(f, "http://") || strings.HasPrefix(f, "https://") {
+			continue
+		}
 		if !seen[f] {
 			seen[f] = true
 			files = append(files, f)
