@@ -3592,6 +3592,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// but verification command only covers a subset.
 			if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
 				debug.Log("agent", "Iteration %d: verification coverage gap detected", i+1)
+				// #1821 case 3: scopeNarrow's message for the SAME command
+				// is near-identical - let it skip once instead of double-
+				// injecting on one tool call.
+				if cmd := extractCommandFromToolCall(tc.Arguments); cmd != "" {
+					a.scopeNarrow.lastCoverageWarnedCmd = cmd
+				}
 				a.contextManager.Add(provider.Message{
 					Role:    "user",
 					Content: []provider.ContentBlock{{Type: "text", Text: covWarn}},
