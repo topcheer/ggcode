@@ -682,6 +682,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Clean up stale lock files from crashed/killed processes.
 	storeDir, _ := session.DefaultDir()
 	session.CleanupStaleLocks(storeDir)
+	// #1490-E: CleanupOldJournals existed but was never wired into any
+	// production caller (only tests) - each session's ~300B crash journal
+	// accumulated forever because MarkCompleted keeps its file and
+	// CheckCrashedRun only removes >24h journals on a lucky resume. The
+	// design doc (run-state-journaling.md) says "called at startup"; now
+	// it actually is, alongside the lock cleanup.
+	agent.CleanupOldJournals(24 * time.Hour)
 
 	var replPendingSessionLock *session.SessionLock
 

@@ -105,6 +105,19 @@ func hasCommandToken(tokens []string, words ...string) bool {
 	return false
 }
 
+// hasCommandBigram reports whether a and b appear as ADJACENT tokens -
+// the ownership anchor for subcommand matching (#1490-D): `git` must
+// immediately precede `push`/`reset`/`clean` so a grep or quoted
+// mention of the pattern cannot fire the gate.
+func hasCommandBigram(tokens []string, a, b string) bool {
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i] == a && tokens[i+1] == b {
+			return true
+		}
+	}
+	return false
+}
+
 // checkPreAction evaluates whether a high-stakes tool call should trigger
 // a reversibility warning. Returns non-empty guidance if the action is
 // potentially irreversible AND the agent hasn't demonstrated safety verification.
@@ -161,12 +174,40 @@ func (r *reversibilityState) checkPreAction(toolName, args string) string {
 	return ""
 }
 
+// #1490-D: raw substring tests on the whole args ("git push" in a
+// comment line, "reset --hard" inside a grep pattern) fired the gate
+// on harmless commands - the same false-positive family #1194 fixed
+// for test/build. Now tokenized with ownership bigrams: `git` must be
+// the adjacent predecessor token of the subcommand.
 func isGitPush(s string) bool {
-	return strings.Contains(s, "git push")
+	tokens := commandTokens(s)
+	for i := 0; i+1 < len(tokens); i++ {
+		// Prefix keeps the #1194 conservative posture: `git pushd` and
+		// fused forms still fire; a mere mention in a comment/grep
+		// cannot (git must be the adjacent owner token).
+		if tokens[i] == "git" && strings.HasPrefix(tokens[i+1], "push") {
+			return true
+		}
+	}
+	return false
 }
 
 func isDestructiveGit(s string) bool {
-	return strings.Contains(s, "reset --hard") ||
-		strings.Contains(s, "clean -f") ||
-		strings.Contains(s, "checkout -- ")
+	tokens := commandTokens(s)
+	if hasCommandBigram(tokens, "git", "reset") && hasCommandToken(tokens, "--hard") {
+		return true
+	}
+	if hasCommandBigram(tokens, "git", "clean") {
+		// -f may be fused with more flags (-fd, -fx...) because '-' is
+		// deliberately not a token separator (#1194) - match by prefix.
+		for _, tok := range tokens {
+			if len(tok) > 1 && tok != "--force" && tok[0] == '-' && tok[1] == 'f' {
+				return true
+			}
+		}
+	}
+	if hasCommandBigram(tokens, "git", "checkout") && hasCommandToken(tokens, "--") {
+		return true
+	}
+	return false
 }
