@@ -612,8 +612,16 @@ func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) st
 	// wait_command/read_command_output only carry job_id - without this
 	// header the gate's read-command probe saw "" and misattributed a
 	// succeeded grep's output as a build failure.
+	// #2244 case A layer 1: multi-line commands indent their continuation
+	// lines so the extractor (causalCmdForGate) can tell command body from
+	// the next snapshot header - a raw embedded newline would terminate
+	// the block at line 1 (the `# comment` convention line).
 	if snapshot.Command != "" {
-		sb.WriteString(fmt.Sprintf("Command: %s\n", snapshot.Command))
+		cmdBlock := snapshot.Command
+		if strings.Contains(cmdBlock, "\n") {
+			cmdBlock = strings.ReplaceAll(cmdBlock, "\n", "\n    ")
+		}
+		sb.WriteString(fmt.Sprintf("Command: %s\n", cmdBlock))
 	}
 	sb.WriteString(fmt.Sprintf("Status: %s\n", snapshot.Status))
 	sb.WriteString(fmt.Sprintf("Duration: %s\n", snapshot.Duration))

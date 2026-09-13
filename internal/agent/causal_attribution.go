@@ -241,6 +241,21 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 			}
 			return false, false
 		}
+		// #2244 case B: the ambiguity map is keyed by ERROR references, but
+		// the symmetric arm (suffixTier(efN, editN)) probed bareAmbiguous[editN]
+		// - the edit name is never a key, so the probe was effectively always
+		// false (strong) and the arm bypassed the ambiguity resolution the
+		// primary arm applies. Probe the error reference (efN), the shared
+		// anchor of both arms, in the caller below via suffixTier2.
+		suffixTier2 := func(long, short, ambiguityAnchor string) (hit, strong bool) {
+			if strings.Contains(short, "/") {
+				return strings.HasSuffix(long, "/"+short), !bareAmbiguous[ambiguityAnchor]
+			}
+			if filepath.Base(long) == short {
+				return true, !bareAmbiguous[ambiguityAnchor]
+			}
+			return false, false
+		}
 		if hit, strong := suffixTier(editN, efN); hit {
 			if strong {
 				score += causalWtErrorFileMatch
@@ -250,7 +265,7 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 			}
 			continue
 		}
-		if hit, strong := suffixTier(efN, editN); hit {
+		if hit, strong := suffixTier2(efN, editN, efN); hit {
 			if strong {
 				score += causalWtErrorFileMatch
 				fileMatch = true
@@ -348,11 +363,29 @@ func causalCmdForGate(tc provider.ToolCallDelta, content string) string {
 		return cmd
 	}
 	if tc.Name == "wait_command" || tc.Name == "read_command_output" {
+		// #2244 case A: the snapshot header carries the FULL multi-line
+		// command (the repo convention prefixes a `# comment` first line).
+		// Returning only the first line made the gate probe the comment
+		// and the read-command exemption never fired for multi-line jobs.
+		// Collect lines from the Command: header until a blank line or a
+		// known snapshot header (Status:/Job ID:/...) ends the block.
+		var lines []string
+		inBlock := false
 		for _, ln := range strings.Split(content, "\n") {
-			if v, ok := strings.CutPrefix(ln, "Command: "); ok {
-				return strings.TrimSpace(v)
+			if !inBlock {
+				if v, ok := strings.CutPrefix(ln, "Command: "); ok {
+					inBlock = true
+					lines = append(lines, strings.TrimSpace(v))
+				}
+				continue
 			}
+			if v, ok := strings.CutPrefix(ln, "    "); ok {
+				lines = append(lines, v) // continuation lines are indented
+				continue
+			}
+			break // any non-indented line ends the block
 		}
+		return strings.Join(lines, "\n")
 	}
 	return ""
 }
@@ -360,6 +393,22 @@ func causalCmdForGate(tc provider.ToolCallDelta, content string) string {
 // looksLikeReadCommand reports whether the command text begins with a
 // read-only listing tool.
 func looksLikeReadCommand(cmd string) bool {
+	// #2244 case A layer 2: multi-line commands (repo convention prefixes
+	// a `# comment` first line) are probed per line, skipping comment and
+	// blank lines - the single-entry TrimSpace below only ever saw the
+	// comment line and the read-command exemption never fired.
+	if strings.Contains(cmd, "\n") {
+		for _, ln := range strings.Split(cmd, "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln == "" || strings.HasPrefix(ln, "#") {
+				continue
+			}
+			if looksLikeReadCommand(ln) {
+				return true
+			}
+		}
+		return false
+	}
 	c := strings.TrimSpace(cmd)
 	for _, p := range readCmdPrefixes {
 		if strings.HasPrefix(c, p) || strings.HasPrefix(c, "./"+p) {
