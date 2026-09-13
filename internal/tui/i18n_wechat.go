@@ -25,6 +25,7 @@ func enWechatModule() map[string]string {
 		"panel.wechat.removed":         "Removed binding for %s",
 		"panel.wechat.message.no_bot":  "No WeChat bot available. Create or enable one first.",
 		"panel.wechat.help":            "[a] Scan QR  [b] Bind  [e] Edit  [d] Disable/Enable  [r] Remove  [↑↓] Navigate  [esc] Close",
+		"panel.wechat.auth_failed":     "QR auth ended (%s). Press 'a' to restart.",
 	}
 }
 
@@ -49,5 +50,6 @@ func zhWechatModule() map[string]string {
 		"panel.wechat.removed":         "已移除 %s 的绑定",
 		"panel.wechat.message.no_bot":  "暂无可用微信机器人，请先创建或启用。",
 		"panel.wechat.help":            "[a] 扫码授权  [b] 绑定目录  [e] 编辑  [d] 禁用/启用  [r] 移除  [↑↓] 导航  [esc] 关闭",
+		"panel.wechat.auth_failed":     "扫码授权已结束（%s）。按 'a' 重新开始。",
 	}
 }

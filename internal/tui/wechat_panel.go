@@ -396,9 +396,17 @@ func (m *Model) handleWechatQRPollMsg(msg wechatQRPollMsg) (Model, tea.Cmd) {
 		panel.pollFailures = 0                       // #1398-A: healthy poll resets the streak
 		return *m, wechatPollTick(panel.qrcodeToken) // #1792 case 2: paced
 	default:
-		if msg.err != nil {
-			panel.message = fmt.Sprintf("Poll error: %v", msg.err)
-			return *m, m.pollWechatQRStatus(panel.qrcodeToken)
+		// #1792 case 1: the err check below was dead code (the error
+		// path already returned at the top) - expired/canceled/timeout
+		// statuses fell here and silently stopped polling: the QR
+		// overlay kept showing the EXPIRED code, authPhase froze in
+		// polling, and the user had no signal to press 'a' and restart.
+		// Terminal states now surface: message + overlay closed + a
+		// failed phase the 'a' restart path already handles.
+		panel.authPhase = "failed"
+		panel.message = fmt.Sprintf(m.t("panel.wechat.auth_failed"), msg.status)
+		if m.qrOverlay != nil {
+			m.closeQROverlay()
 		}
 		return *m, nil
 	}
