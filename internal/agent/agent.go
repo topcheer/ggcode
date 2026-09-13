@@ -3982,7 +3982,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// succeeded grep/cat of logs carrying "FAIL" must not be
 					// attributed as a build failure (shell bypasses the
 					// layer-1 tool-name filter).
-					if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, extractStringField(tc.Arguments, "command"), result.IsError); causalHint != "" {
+					if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, causalCmdForGate(tc, result.Content), result.IsError); causalHint != "" {
 						a.appendGuidance(&result, causalHint)
 					}
 				}

@@ -42,6 +42,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 const (
@@ -335,6 +337,25 @@ func bareAmbiguousNames(edits []causalEditStep, errorFiles []string) map[string]
 // content gate passed and an innocent recent edit got blamed. Layer 1
 // (the tool-name filter at the call site) cannot see through the shell.
 var readCmdPrefixes = []string{"grep", "rg", "cat ", "head", "tail", "awk", "sed -n", "find ", "less", "bat "}
+
+// causalCmdForGate resolves the command text the causal gate probes.
+// Direct command tools carry "command" in their args; the job polling
+// channels (wait_command/read_command_output) only carry job_id, so the
+// gate falls back to the "Command: " header the tool layer emits in
+// every job snapshot (#2218 case B).
+func causalCmdForGate(tc provider.ToolCallDelta, content string) string {
+	if cmd := extractStringField(tc.Arguments, "command"); cmd != "" {
+		return cmd
+	}
+	if tc.Name == "wait_command" || tc.Name == "read_command_output" {
+		for _, ln := range strings.Split(content, "\n") {
+			if v, ok := strings.CutPrefix(ln, "Command: "); ok {
+				return strings.TrimSpace(v)
+			}
+		}
+	}
+	return ""
+}
 
 // looksLikeReadCommand reports whether the command text begins with a
 // read-only listing tool.

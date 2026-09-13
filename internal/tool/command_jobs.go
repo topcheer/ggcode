@@ -607,6 +607,14 @@ func capCommandOutputText(s, label string) string {
 func formatCommandJobSnapshot(snapshot CommandJobSnapshot, includeLines bool) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Job ID: %s\n", snapshot.ID))
+	// #2218 case B: the job's original command. The causal-attribution
+	// gate at the call site extracts "command" from the tool ARGS, but
+	// wait_command/read_command_output only carry job_id - without this
+	// header the gate's read-command probe saw "" and misattributed a
+	// succeeded grep's output as a build failure.
+	if snapshot.Command != "" {
+		sb.WriteString(fmt.Sprintf("Command: %s\n", snapshot.Command))
+	}
 	sb.WriteString(fmt.Sprintf("Status: %s\n", snapshot.Status))
 	sb.WriteString(fmt.Sprintf("Duration: %s\n", snapshot.Duration))
 	if snapshot.Timeout > 0 {
