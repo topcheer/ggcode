@@ -285,7 +285,11 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 			if panel.cursor < panel.scrollOffset {
 				panel.scrollOffset = panel.cursor
 			}
-			m.syncImpersonateVersionToCursor()
+			// #1737 case 2: NO versionInput sync on cursor moves - the
+			// input used to flip to the target preset's default here while
+			// currentPreset only updated at presets-area Enter, so a header
+			// edit + Enter in ANOTHER section persisted preset A with
+			// preset B's default version (mismatched pair).
 		}
 		return *m, nil
 
@@ -298,7 +302,7 @@ func (m *Model) handleImpersonatePanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) 
 			if panel.cursor >= panel.scrollOffset+impMaxVisible {
 				panel.scrollOffset = panel.cursor - impMaxVisible + 1
 			}
-			m.syncImpersonateVersionToCursor()
+			// #1737 case 2: no versionInput sync here either (see "up").
 		}
 		return *m, nil
 
@@ -428,6 +432,10 @@ func (m *Model) applyImpersonatePreset() (Model, tea.Cmd) {
 
 	preset := panel.presets[panel.cursor]
 	panel.currentPreset = preset.ID
+	// #1737 case 2: versionInput syncs HERE (same point currentPreset
+	// updates) - preset and version always change as a matched pair, so
+	// an apply from any section persists a coherent combination.
+	m.syncImpersonateVersionToCursor()
 
 	// Apply and persist
 	applyCmd := m.applyImpersonateSettings()
