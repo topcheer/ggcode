@@ -469,3 +469,42 @@ func process(items *[]int) {
 		t.Errorf("expected no warning for range inside `if items != nil` then block, got: %s", w)
 	}
 }
+
+// #1677 case 1a: composite-condition guards must suppress the warning
+// (end-to-end detector direction, complementing the guard-table matrix in
+// zz_issue1677_case1a_test.go).
+func TestCheckRangeNilPtr_CompositeAndGuardSuppressed(t *testing.T) {
+	src := `package main
+
+type T struct{ F string }
+
+func f(x *T) {
+	if x != nil && x.F != "" {
+		for range *x {
+		}
+	}
+}
+`
+	if w := checkRangeNilPtr("test.go", "", src); w != "" {
+		t.Fatalf("composite `x != nil && x.F != \"\"` guard must suppress the warning, got: %s", w)
+	}
+}
+
+func TestCheckRangeNilPtr_CompositeOrNeqNilStillWarns(t *testing.T) {
+	// `x != nil || y` does not prove non-nil on the then path - the warning
+	// must still fire.
+	src := `package main
+
+type T struct{}
+
+func f(x *T, y bool) {
+	if x != nil || y {
+		for range *x {
+		}
+	}
+}
+`
+	if w := checkRangeNilPtr("test.go", "", src); w == "" {
+		t.Fatal("`x != nil || y` is not a guard - warning expected")
+	}
+}
