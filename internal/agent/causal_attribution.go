@@ -197,7 +197,7 @@ func normalizeCausalPath(p string) string {
 // computeCRS computes the Causal Responsibility Score for an edit step
 // given the error files extracted from the failure output.
 func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
-	score, _ := computeCRSDetail(edit, errorFiles, recencyRank)
+	score, _ := computeCRSDetail(edit, errorFiles, recencyRank, nil)
 	return score
 }
 
@@ -206,7 +206,7 @@ func computeCRS(edit causalEditStep, errorFiles []string, recencyRank int) int {
 // score (#1771: recency alone reaches 10x10=100 >= 50, so a total-score
 // gate asserted "error output references this file" for edits with ZERO
 // file-match evidence, sending the agent to fix an unrelated recent edit).
-func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int) (int, bool) {
+func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int, bareAmbiguous map[string]bool) (int, bool) {
 	score := 0
 	fileMatch := false
 
@@ -214,9 +214,45 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int)
 		efN := normalizeCausalPath(ef)
 		editN := normalizeCausalPath(edit.filePath)
 		// Exact file match — strongest signal
-		if efN == editN || strings.HasSuffix(editN, efN) || strings.HasSuffix(efN, editN) {
+		if efN == editN {
 			score += causalWtErrorFileMatch
 			fileMatch = true
+			continue
+		}
+		// #2171 gap 2: tier the suffix match by path evidence. A suffix
+		// match where the SHORT side carries directory structure is a
+		// genuine path-aware match. A BARE basename from the error output
+		// is strong evidence only when it is UNambiguous - probe 2 kept
+		// same-directory bare references at full weight. When multiple
+		// edits share that basename across directories (bareAmbiguous,
+		// precomputed by the caller), a bare hit is weak evidence - any
+		// same-suffix file qualifies - so it takes the same-dir weight and
+		// must NOT set fileMatch. The symmetric arm gets the same boundary.
+		suffixTier := func(long, short string) (hit, strong bool) {
+			if strings.Contains(short, "/") {
+				return strings.HasSuffix(long, "/"+short), true
+			}
+			if filepath.Base(long) == short {
+				return true, !bareAmbiguous[short]
+			}
+			return false, false
+		}
+		if hit, strong := suffixTier(editN, efN); hit {
+			if strong {
+				score += causalWtErrorFileMatch
+				fileMatch = true
+			} else {
+				score += causalWtSameDir
+			}
+			continue
+		}
+		if hit, strong := suffixTier(efN, editN); hit {
+			if strong {
+				score += causalWtErrorFileMatch
+				fileMatch = true
+			} else {
+				score += causalWtSameDir
+			}
 			continue
 		}
 
@@ -249,6 +285,31 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int)
 	}
 
 	return score, fileMatch
+}
+
+// bareAmbiguousNames (#2171 gap 2) precomputes which BARE error-file
+// basenames are ambiguous across the recorded edits: the basename hits
+// two or more DISTINCT edit paths, so a bare hit cannot tell them apart
+// and must be tiered down to weak evidence at scoring time.
+func bareAmbiguousNames(edits []causalEditStep, errorFiles []string) map[string]bool {
+	ambiguous := map[string]bool{}
+	for _, ef := range errorFiles {
+		efN := normalizeCausalPath(ef)
+		if strings.Contains(efN, "/") {
+			continue // directory-carrying matches are anchored, never bare
+		}
+		seen := map[string]bool{}
+		for _, e := range edits {
+			editN := normalizeCausalPath(e.filePath)
+			if filepath.Base(editN) == efN {
+				seen[editN] = true
+			}
+		}
+		if len(seen) >= 2 {
+			ambiguous[efN] = true
+		}
+	}
+	return ambiguous
 }
 
 // readCmdPrefixes lists read-only listing tools whose OUTPUT mimics
@@ -346,7 +407,7 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	for i, edit := range recent {
 		// Recency rank: most recent edit gets highest rank (i+1)
 		recencyRank := i + 1
-		score, matched := computeCRSDetail(edit, errorFiles, recencyRank)
+		score, matched := computeCRSDetail(edit, errorFiles, recencyRank, bareAmbiguousNames(s.edits, errorFiles))
 		results = append(results, scored{step: edit, score: score, rank: i, fileMatch: matched})
 	}
 
