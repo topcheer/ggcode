@@ -99,6 +99,22 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 	// plugin failed until restart ("leaked but working" regressed to
 	// "all dead"). Unregister the old adapters first (the API existed
 	// but was never called), then kill, then register fresh.
+	// List tools from the plugin
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	resp, err := toolClient.ListTools(ctx, &pb.ListToolsRequest{})
+	if err != nil {
+		client.Kill()
+		return fmt.Errorf("ListTools: %w", err)
+	}
+
+	// #1804 case 4 (#1630 family): the retire block used to run BEFORE
+	// ListTools - when the NEW client's ListTools failed, the old
+	// instance was already killed and unregistered, leaving the config
+	// with ZERO live instances (both dead). Retire only after the new
+	// instance is confirmed usable; the brief overlap is bounded by the
+	// immediate register-replace below.
 	m.mu.Lock()
 	if old, ok := m.plugins[cfg.Name]; ok && old != nil && old.Client != nil {
 		m.mu.Unlock()
@@ -109,16 +125,6 @@ func (m *Manager) loadOne(cfg GRPCPluginConfig, registry *tool.Registry) error {
 		old.Client.Kill()
 	} else {
 		m.mu.Unlock()
-	}
-
-	// List tools from the plugin
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	resp, err := toolClient.ListTools(ctx, &pb.ListToolsRequest{})
-	if err != nil {
-		client.Kill()
-		return fmt.Errorf("ListTools: %w", err)
 	}
 
 	inst := &PluginInstance{
