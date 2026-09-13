@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/topcheer/ggcode/internal/secretfield"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -186,13 +187,9 @@ func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
 // looksLikeSecretField returns true if the key name suggests it holds a secret.
 // Matches: secret, token, password, credential (case-insensitive, as substring).
 func looksLikeSecretField(key string) bool {
-	lower := strings.ToLower(key)
-	for _, pattern := range []string{"secret", "token", "password", "credential", "key"} {
-		if strings.Contains(lower, pattern) {
-			return true
-		}
-	}
-	return false
+	// #2180: single source - this was copy #1 of four diverging word
+	// lists (tui, provider panel, desktop registry the others).
+	return secretfield.LooksLikeSecretField(key)
 }
 
 // secretFieldEnvVar builds an env var name for an IM adapter secret field.

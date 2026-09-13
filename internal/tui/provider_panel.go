@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/secretfield"
 	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"time"
@@ -224,10 +225,15 @@ func (p *providerPanelState) startEditing(field, initialValue string) {
 }
 
 // isProviderSecretField reports whether an edit field holds key
-// material (#2173): api_key-class fields on vendors and endpoints.
+// material (#2173/#2180): an explicit auditable list for the panel's
+// FIXED field set first, then the single-source wide table as fallback
+// so any future key-bearing field name is covered without a copy.
 func isProviderSecretField(field string) bool {
-	lower := strings.ToLower(field)
-	return strings.Contains(lower, "api_key") || strings.Contains(lower, "apikey") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || strings.Contains(lower, "password")
+	switch field {
+	case "api_key", "apikey", "secret", "token", "password":
+		return true
+	}
+	return secretfield.LooksLikeSecretField(field)
 }
 
 func (m *Model) configView() *ConfigView {

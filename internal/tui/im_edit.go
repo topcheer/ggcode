@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/topcheer/ggcode/internal/im"
+	"github.com/topcheer/ggcode/internal/secretfield"
 )
 
 // imAdapterEditMode represents the current editing sub-state.
@@ -412,11 +413,8 @@ func maskSecret(value string) string {
 // looksLikeSecretField checks if a key name suggests it holds a secret.
 // Duplicated from config package to avoid import cycle concerns.
 func looksLikeSecretField(key string) bool {
-	lower := strings.ToLower(key)
-	for _, pattern := range []string{"secret", "token", "password", "credential", "key"} {
-		if strings.Contains(lower, pattern) {
-			return true
-		}
-	}
-	return false
+	// #2180: single source - the former "Duplicated from config package
+	// to avoid import cycle concerns" copy is gone; secretfield is a
+	// leaf package with no cycle risk.
+	return secretfield.LooksLikeSecretField(key)
 }
