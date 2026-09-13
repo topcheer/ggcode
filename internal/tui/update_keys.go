@@ -670,6 +670,11 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	case "ctrl+e":
 		// Move cursor to end of line
 		m.input.CursorEnd()
+		// #2182: the #2149 enumeration missed this twin of ctrl+a -
+		// pure cursor movement still leaves a stale completion state
+		// that the next Enter applies (panic-guarded since 47741904,
+		// but a stale list still fires).
+		m.updateAutoComplete()
 		return m, nil
 	case "ctrl+k":
 		// Delete from cursor to end of line
