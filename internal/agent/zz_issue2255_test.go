@@ -59,11 +59,28 @@ func TestIssue2255CrossSegmentFlagNoFalsePositive(t *testing.T) {
 	if isDestructiveGit("git checkout main && git log -- file") {
 		t.Error("second command's -- after && must not fire the checkout branch")
 	}
+	if isDestructiveGit("git checkout main; git log -- file") {
+		t.Error("second command's -- after ; must not fire (semicolon segment, review residual F2)")
+	}
 	if isDestructiveGit("git clean -n && rm -f /tmp/x") {
 		t.Error("rm -f after && must not fire the clean branch (clean -n is a dry run)")
 	}
 	if !isDestructiveGit("git reset --hard") {
 		t.Error("bare destructive form must still fire")
+	}
+}
+
+func TestIssue2255ReviewResidualsF3F4(t *testing.T) {
+	// F3: a destructive flag on the SECOND git in an && chain must fire.
+	if !isDestructiveGit("git status && git reset --hard") {
+		t.Error("reset --hard as second && segment must fire (F3)")
+	}
+	// F4: a later git -C in the same line must have its flags stripped.
+	if !isDestructiveGit("git status && git -C /repo reset --hard") {
+		t.Error("git -C reset --hard as second && segment must fire (F4)")
+	}
+	if !isForcePushCommand("git status && git -C /repo push --force origin main") {
+		t.Error("force push behind a later git -C must fire (F4)")
 	}
 }
 
