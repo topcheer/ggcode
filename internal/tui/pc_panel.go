@@ -460,16 +460,23 @@ func (m Model) pcConnectionStatus() string {
 					}
 					return m.t("panel.pc.status.connected_sessions", len(sessions))
 				case "error":
-					return fmt.Sprintf("error: %s", a.LastError)
+					// #2224: hardcoded "error: %s" - the error state is
+					// routinely reachable (relay connect/request failures)
+					// and is the key diagnostic surface.
+					return m.t("panel.pc.status.error", a.LastError)
 				case "stopped":
 					return m.t("panel.pc.status.stopped")
 				default:
-					return a.Status
+					// #2224: idle/connecting/reconnecting arrived as raw
+					// English adapter statuses; pass them through the
+					// status-key convention with the raw value preserved.
+					return m.t("panel.pc.status.raw", a.Status)
 				}
 			}
 		}
 	}
-	return "starting..."
+	// #2224: tail fallback bypassed the existing starting key.
+	return m.t("panel.pc.status.starting")
 }
 
 func (m Model) pcSessionEntries() []im.PCSessionInfo {
