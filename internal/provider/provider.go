@@ -250,4 +250,13 @@ type RateLimitProvider interface {
 type ChatResponse struct {
 	Message Message
 	Usage   TokenUsage
+	// StopReason (#1484-C) is the provider-reported stop reason, normalized
+	// to the anthropic value family: "end_turn", "max_tokens",
+	// "stop_sequence", "refusal" (mapped from openai content_filter /
+	// gemini SAFETY), or a provider-specific lowercase string. Empty means
+	// the provider did not report one — callers fall back to their own
+	// heuristics. Previously the field did not exist, so the MCP sampling
+	// handler guessed "max_tokens" from Usage.OutputTokens >= maxTokens,	// which both false-positived (natural length >= budget with no
+	// truncation) and made the stop_sequence branch unreachable.
+	StopReason string
 }

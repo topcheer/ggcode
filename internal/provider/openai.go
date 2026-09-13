@@ -349,6 +349,25 @@ func (p *OpenAIProvider) SetSessionID(sessionID string) {
 	p.transport.UpdateHeaders(existing)
 }
 
+// normalizeOpenAIFinishReason maps openai finish_reason values onto the
+// anthropic value family used by ChatResponse.StopReason (#1484-C).
+func normalizeOpenAIFinishReason(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "stop":
+		return "end_turn"
+	case "length", "max_tokens", "max_output_tokens":
+		return "max_tokens"
+	case "content_filter":
+		return "refusal"
+	case "":
+		return ""
+	default:
+		// tool_calls, function_call and relay-specific values: pass through
+		// lowercase so callers keep the information.
+		return strings.ToLower(strings.TrimSpace(reason))
+	}
+}
+
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
 	chatMsgs := p.convertMessages(messages)
 	req := openai.ChatCompletionRequest{
@@ -411,9 +430,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		}
 	}
 
+	// #1484-C: normalize finish_reason into the anthropic value family so
+	// downstream consumers (MCP sampling) see one vocabulary.
 	return &ChatResponse{
-		Message: Message{Role: "assistant", Content: content},
-		Usage:   usage,
+		Message:    Message{Role: "assistant", Content: content},
+		Usage:      usage,
+		StopReason: normalizeOpenAIFinishReason(string(choice.FinishReason)),
 	}, nil
 }
 

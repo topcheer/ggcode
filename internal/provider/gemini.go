@@ -148,6 +148,24 @@ func (p *GeminiProvider) UpdateRuntimeHeaders(headers http.Header) {
 	}
 }
 
+// normalizeGeminiFinishReason maps genai FinishReason values onto the
+// anthropic value family used by ChatResponse.StopReason (#1484-C).
+func normalizeGeminiFinishReason(r genai.FinishReason) string {
+	switch r {
+	case genai.FinishReasonMaxTokens:
+		return "max_tokens"
+	case genai.FinishReasonStop:
+		return "end_turn"
+	case genai.FinishReasonSafety, genai.FinishReasonRecitation,
+		genai.FinishReasonProhibitedContent, genai.FinishReasonSPII:
+		return "refusal"
+	case genai.FinishReasonUnspecified:
+		return ""
+	default:
+		return strings.ToLower(string(r))
+	}
+}
+
 func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
 	contents, systemInstruction := p.convertMessages(messages)
 
@@ -188,9 +206,17 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	content, usage := p.convertResponse(resp)
+	// #1484-C: relay the real finish reason, normalized to the anthropic
+	// value family (MAX_TOKENS→max_tokens, STOP→end_turn, safety family→
+	// refusal) so MCP sampling stops guessing from usage numbers.
+	finishReason := ""
+	if len(resp.Candidates) > 0 {
+		finishReason = normalizeGeminiFinishReason(resp.Candidates[0].FinishReason)
+	}
 	return &ChatResponse{
-		Message: Message{Role: "assistant", Content: content},
-		Usage:   usage,
+		Message:    Message{Role: "assistant", Content: content},
+		Usage:      usage,
+		StopReason: finishReason,
 	}, nil
 }
 
