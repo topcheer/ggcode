@@ -216,6 +216,16 @@ func rnpCollectNilGuards(body *ast.BlockStmt) map[string][]rnpNilGuard {
 // unguarded - `p != nil && p.Field != nil { for range *p.Field }` still
 // misfired when the plain name came first (sa-174, #1677-1a follow-up).
 func rnpNilCompareIdents(cond ast.Expr) (names []string, negated, found bool) {
+	// sa-179: a parenthesized whole condition (`if (p != nil)`) is a
+	// ParenExpr wrapping the BinaryExpr - unwrap before the type assert
+	// or the guard vanishes entirely.
+	for {
+		paren, isParen := cond.(*ast.ParenExpr)
+		if !isParen {
+			break
+		}
+		cond = paren.X
+	}
 	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok {
 		return nil, false, false
@@ -255,15 +265,50 @@ func rnpNilCompareIdents(cond ast.Expr) (names []string, negated, found bool) {
 // OR). Leaf comparisons on either arm qualify; a subtree of the opposite
 // operator guarantees neither side and yields nothing.
 func rnpNilCompareLeaves(e ast.Expr, want, chainOp token.Token) []string {
-	if bin, ok := e.(*ast.BinaryExpr); ok && bin.Op == chainOp {
-		return append(rnpNilCompareLeaves(bin.X, want, chainOp), rnpLeafNilCompare(bin.Y, want))
+	// unwrap parenthesized groups at any arm: `(p.A != nil && p.B != nil)`
+	// parses as ParenExpr{BinaryExpr} - treat it as the chain it wraps.
+	for {
+		paren, isParen := e.(*ast.ParenExpr)
+		if !isParen {
+			break
+		}
+		e = paren.X
 	}
-	return []string{rnpLeafNilCompare(e, want)}
+	if bin, ok := e.(*ast.BinaryExpr); ok && bin.Op == chainOp {
+		// sa-179: the right arm only matched flat leaves, so an explicitly
+		// parenthesized same-operator chain (`p != nil && (p.A != nil &&
+		// p.B != nil)`) lost every leaf inside the Y-side subtree - the
+		// parenthesized group parses as a nested BinaryExpr, not a leaf.
+		// Recurse both arms and drop empty non-matches so they never reach
+		// the guard table as "" records.
+		var out []string
+		for _, n := range append(
+			rnpNilCompareLeaves(bin.X, want, chainOp),
+			rnpNilCompareLeaves(bin.Y, want, chainOp)...,
+		) {
+			if n != "" {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	if n := rnpLeafNilCompare(e, want); n != "" {
+		return []string{n}
+	}
+	return nil
 }
 
 // rnpLeafNilCompare matches a plain `x == nil` / `x != nil` (either operand
-// order) for dotted-name x; empty for anything else.
+// order) for dotted-name x; empty for anything else. A parenthesized leaf
+// (`(p != nil)`) is unwrapped first.
 func rnpLeafNilCompare(e ast.Expr, want token.Token) string {
+	for {
+		paren, isParen := e.(*ast.ParenExpr)
+		if !isParen {
+			break
+		}
+		e = paren.X
+	}
 	bin, ok := e.(*ast.BinaryExpr)
 	if !ok || bin.Op != want {
 		return ""

@@ -329,7 +329,10 @@ window.__DATA__ = ` + jsonData + `;
     for (const t of turns) { tIn+=t.input; tOut+=t.output; tCache+=t.cache; tLLM+=(t.llmCalls||0); }
     const dayMap = {}, wsMap = {}, ttfts = [];
     turns.forEach(t => {
-      tIn += t.input; tOut += t.output; tCache += t.cache;
+      // #2221 case A: the aggregate loop above already summed
+      // tIn/tOut/tCache; re-adding here doubled the Overview cards
+      // (Overview Input = 2 x Daily-chart sum, visible to the eye).
+      // This forEach legitimately collects ttfts and dayMap only.
       if (t.ttftMs > 0) ttfts.push(t.ttftMs);
       // Daily
       const dr = dayMap[t.day] || (dayMap[t.day] = {date:t.day, input:0, output:0, cache:0});
