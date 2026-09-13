@@ -253,10 +253,10 @@ type SamplingOverrideSetter interface {
 // ran past its END marker). Symmetric getter/setter: the sampling handler
 // snapshots the previous value for restore inside the shared lock window
 // (#1612-A), no reflection like the legacy maxTokens path.
-type StopSequenceSetter interface {
-	SetStopSequences(seqs []string)
-	StopSequences() []string
-}
+// StopSequenceSetter (#2239) was removed in the #2271 follow-up: since
+// the #2248 override switch per-call stop sequences ride
+// SamplingOverride/SamplingOverrideSetter exclusively and the Set/Get
+// pair had no production caller.
 
 // SamplingConfigProvider is implemented by providers that support temperature
 // and top_p (nucleus sampling) inference parameters. Temperature controls

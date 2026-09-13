@@ -22,7 +22,6 @@ type AnthropicProvider struct {
 	client           anthropic.Client
 	model            string
 	maxTokens        int
-	stopSequences    []string                         // #2239: MCP sampling per-call stop sequences
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: reader-side race-free override
 	cap              *adaptiveCap
 	transport        *headerInjectingTransport // kept for runtime header updates
@@ -86,11 +85,9 @@ func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// SetStopSequences implements provider.StopSequenceSetter (#2239).
-func (p *AnthropicProvider) SetStopSequences(seqs []string) { p.stopSequences = seqs }
-
-// StopSequences implements provider.StopSequenceSetter (#2239).
-func (p *AnthropicProvider) StopSequences() []string { return p.stopSequences }
+// #2271 follow-up: StopSequenceSetter (Set/Get) is removed - the
+// per-call stop sequences ride the sampling override exclusively
+// since #2248/#2266 and no production caller set the field.
 
 // SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *AnthropicProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
@@ -967,12 +964,11 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 	// (effectiveMaxTokens) but left this block reading the field only -
 	// an active sampling override's sequences never reached the request
 	// body. Override wins (the provider.go contract), siblings merged.
-	seqs := p.stopSequences
+	// #2271 follow-up: the p.stopSequences field had NO writer left
+	// (SetStopSequences has been dead since the override switch) - the
+	// override is now the sole source.
 	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
-		seqs = o.StopSequences
-	}
-	if len(seqs) > 0 {
-		params.StopSequences = seqs
+		params.StopSequences = o.StopSequences
 	}
 	// Apply temperature when set (0 means use provider default). The
 	// active sampling override (#1592-A family) wins over the configured

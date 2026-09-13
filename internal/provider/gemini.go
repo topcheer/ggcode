@@ -24,7 +24,6 @@ type GeminiProvider struct {
 	reasoningEffort  string                           // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
 	toolChoice       string                           // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
 	temperature      float64                          // 0 = provider default
-	stopSequences    []string                         // #2239: MCP sampling per-call stop sequences
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248
 	topP             float64                          // 0 = provider default
 	transport        *headerInjectingTransport        // kept for runtime header updates
@@ -75,11 +74,8 @@ func (p *GeminiProvider) ReasoningEffort() string { return p.reasoningEffort }
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *GeminiProvider) SetTemperature(temp float64) { p.temperature = temp }
 
-// SetStopSequences implements provider.StopSequenceSetter (#2239).
-func (p *GeminiProvider) SetStopSequences(seqs []string) { p.stopSequences = seqs }
-
-// StopSequences implements provider.StopSequenceSetter (#2239).
-func (p *GeminiProvider) StopSequences() []string { return p.stopSequences }
+// #2271 follow-up: StopSequenceSetter (Set/Get) removed - per-call stop
+// sequences ride the sampling override exclusively; no production caller.
 
 // SetSamplingOverride implements provider.SamplingOverrideSetter (#2248).
 func (p *GeminiProvider) SetSamplingOverride(o *SamplingOverride) { p.samplingOverride.Store(o) }
@@ -539,13 +535,11 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 	if p.topP > 0 {
 		config.TopP = ptrToFloat32(float32(p.topP))
 	}
-	// #2239: per-call stop sequences (MCP sampling contract).
-	seqs := p.stopSequences
+	// #2239: per-call stop sequences (MCP sampling contract). #2271
+	// follow-up: the p.stopSequences field had no writer left - the
+	// override is the sole source.
 	if o := p.samplingOverride.Load(); o != nil && len(o.StopSequences) > 0 {
-		seqs = o.StopSequences // #2248: active sampling window wins
-	}
-	if len(seqs) > 0 {
-		config.StopSequences = seqs
+		config.StopSequences = o.StopSequences
 	}
 }
 

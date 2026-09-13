@@ -14,7 +14,9 @@ import (
 func TestIssue2246StopSequencesWithoutTemperature(t *testing.T) {
 	p := newAnthropicProvider("k", "m", 1024, "")
 	p.SetTemperature(0) // explicit default - the guard must not eat the sequences
-	p.SetStopSequences([]string{"END", "\n\nUSER:"})
+	// #2271 follow-up: the field setter is gone; the sampling override is
+	// the sole carrier - same contract, still serialized at temperature=0.
+	p.SetSamplingOverride(&SamplingOverride{StopSequences: []string{"END", "\n\nUSER:"}})
 
 	params := p.buildParams(nil, nil)
 	if !reflect.DeepEqual(params.StopSequences, []string{"END", "\n\nUSER:"}) {
