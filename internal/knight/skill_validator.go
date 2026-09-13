@@ -226,12 +226,45 @@ func CheckDuplicate(entry *SkillEntry, existing []*SkillEntry) bool {
 		// description scores ~|short|/|long| and passes.
 		existingDesc := strings.ToLower(e.Meta.Description)
 		if len(desc) > 20 && len(existingDesc) > 20 {
-			if jaccardSimilarity(tokenSet(desc), tokenSet(existingDesc)) >= 0.75 {
+			threshold := 0.75
+			// #1624-B: CJK-rune token sets have no stopword structure -
+			// two equal-length n-char descriptions differing in ONE
+			// character score (n-1)/(n+1), already >= 0.75 at n=7
+			// ("自动格式化代码工具" vs "自动格式化日志工具" = 7/9) - semantically
+			// distinct skills were rejected (and the staging loop deleted
+			// them). For CJK-dominated sets require near-verbatim (0.85);
+			// exact copies still score 1.0, honest rewrites stay caught by
+			// the word-token half of the set.
+			if cjkRatio(tokenSet(desc)) >= 0.5 {
+				threshold = 0.85
+			}
+			if jaccardSimilarity(tokenSet(desc), tokenSet(existingDesc)) >= threshold {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// cjkRatio reports the fraction of set tokens that are single CJK runes
+// (#1624-B): a set dominated by them is comparing character overlap, not
+// word overlap, and needs the stricter threshold.
+func cjkRatio(set map[string]struct{}) float64 {
+	if len(set) == 0 {
+		return 0
+	}
+	cjk := 0
+	for t := range set {
+		rs := []rune(t)
+		if len(rs) == 1 {
+			r := rs[0]
+			if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hangul, r) ||
+				unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) {
+				cjk++
+			}
+		}
+	}
+	return float64(cjk) / float64(len(set))
 }
 
 // tokenSet splits a lowercase description into a deduplicated word set
