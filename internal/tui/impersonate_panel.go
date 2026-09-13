@@ -121,49 +121,6 @@ func (m *Model) closeImpersonatePanel() {
 	m.impersonatePanel = nil
 }
 
-// syncImpersonateVersionToCursor updates the version input when the user
-// moves the cursor to a different preset. If the user has a persisted
-// custom version for this preset, it is loaded; otherwise the preset's
-// default version is used.
-func (m *Model) syncImpersonateVersionToCursor() {
-	panel := m.impersonatePanel
-	if panel == nil || panel.cursor < 0 || panel.cursor >= len(panel.presets) {
-		return
-	}
-	preset := panel.presets[panel.cursor]
-
-	// Check if the persisted version matches this preset (i.e. user
-	// previously customized the version for this specific preset).
-	// Since config stores a single CustomVersion (not per-preset), we
-	// check if the current config's version differs from the old preset's
-	// default — if so, it's a user-customized version and we keep it
-	// only when switching to the same preset type.
-	var persistedVersion string
-	if m.config != nil {
-		persistedVersion = m.config.Impersonation.CustomVersion
-	}
-
-	// If the persisted version is non-empty AND it's different from all
-	// preset defaults, it's a user override — only carry it over when
-	// the target preset is the currently active one.
-	if persistedVersion != "" {
-		isUserCustom := true
-		for _, p := range panel.presets {
-			if p.DefaultVersion == persistedVersion {
-				isUserCustom = false
-				break
-			}
-		}
-		if isUserCustom && panel.currentPreset == preset.ID {
-			panel.versionInput.SetValue(persistedVersion)
-			return
-		}
-	}
-
-	// Otherwise use the preset's default version
-	panel.versionInput.SetValue(preset.DefaultVersion)
-}
-
 func (m Model) renderImpersonatePanel() string {
 	panel := m.impersonatePanel
 	if panel == nil {
@@ -431,11 +388,21 @@ func (m *Model) applyImpersonatePreset() (Model, tea.Cmd) {
 	}
 
 	preset := panel.presets[panel.cursor]
+	// #2202 (regression from the #1737 case 2 fix): syncing via
+	// syncImpersonateVersionToCursor here is wrong - the :157 guard
+	// (currentPreset == preset.ID) is always true at this point because
+	// currentPreset was just assigned, so (A) re-Enter on the same preset
+	// clobbered whatever the user had typed in the version field and
+	// re-persisted the OLD value, and (B) switching presets never loaded
+	// the target preset's default version (the isUserCustom branch ate the
+	// fallback). Only a REAL preset switch resets the version field - to
+	// the target preset's default (a persisted custom version belongs to
+	// the previous preset and must not leak into the new one).
+	switched := panel.currentPreset != preset.ID
 	panel.currentPreset = preset.ID
-	// #1737 case 2: versionInput syncs HERE (same point currentPreset
-	// updates) - preset and version always change as a matched pair, so
-	// an apply from any section persists a coherent combination.
-	m.syncImpersonateVersionToCursor()
+	if switched {
+		panel.versionInput.SetValue(preset.DefaultVersion)
+	}
 
 	// Apply and persist
 	applyCmd := m.applyImpersonateSettings()
