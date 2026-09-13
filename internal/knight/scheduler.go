@@ -173,7 +173,13 @@ func (k *Knight) Start(ctx context.Context) error {
 			return fmt.Errorf("knight: create dir %s: %w", dir, err)
 		}
 	}
-	if !strings.EqualFold(k.cfg.TrustLevel, "readonly") {
+	// #1644-2: the five raw !EqualFold(TrustLevel, "readonly") checks here
+	// were fail-open - a typo'd trust_level (e.g. "read-only", "HIGH") read
+	// as writable by the scheduler while auto_policy's trustCanWrite
+	// whitelist reported every write policy disabled: the audit panel said
+	// "no writes" while the scheduler kept writing. Route through the same
+	// whitelist (normalized like the auto_policy call site).
+	if k.canWrite() {
 		if migrated, err := k.normalizeActiveSkillLayout(); err != nil {
 			debug.Log("knight", "normalize active skill layout failed: %v", err)
 		} else if migrated > 0 {
@@ -813,9 +819,26 @@ func (k *Knight) hasCapability(cap string) bool {
 	return false
 }
 
+// canWrite reports whether the configured trust level grants the scheduler
+// write access (#1644-2): routes through the auto_policy trustCanWrite
+// whitelist with the same normalization as its call site, so the audit
+// panel's display of write policies and the scheduler's actual writes can
+// never disagree again.
+func (k *Knight) canWrite() bool {
+	trust := strings.ToLower(strings.TrimSpace(k.cfg.TrustLevel))
+	// #2213 review: match the auto_policy call site's empty-value default
+	// - an unset trust_level renders write policies ENABLED in the audit
+	// panel ("" -> "staged"), so the scheduler must agree instead of
+	// failing closed and splitting display from behavior in reverse.
+	if trust == "" {
+		trust = "staged"
+	}
+	return trustCanWrite(trust)
+}
+
 // reviewStagingSkills checks staging skills and auto-promotes if trust_level=auto.
 func (k *Knight) reviewStagingSkills(ctx context.Context) {
-	if strings.EqualFold(k.cfg.TrustLevel, "readonly") {
+	if !k.canWrite() {
 		return
 	}
 	staging, err := k.index.StagingSkills()
@@ -878,7 +901,11 @@ func (k *Knight) reviewStagingSkills(ctx context.Context) {
 			continue
 		}
 
-		if k.cfg.TrustLevel == "auto" {
+		// #1644 family / sa-169: the promotion branch used the RAW value while
+		// canWrite and the audit panel normalize - "AUTO"/" auto " rendered
+		// auto-promotion ENABLED and let the review run, but promotion never
+		// fired. Compare normalized, sharing the canWrite default chain.
+		if k.canWrite() && strings.EqualFold(strings.TrimSpace(k.cfg.TrustLevel), "auto") {
 			if allowed, reason := canAutoPromoteStagingSkill(s, result, isRevision); !allowed {
 				if k.markStagingNotified(s.Scope + ":" + s.Name) {
 					k.emitReportKeyed(fmt.Sprintf("📝 Skill candidate requires review: %s\n%s\nReason: %s\n👉 /knight approve %s to promote / /knight reject %s to decline",
@@ -1313,7 +1340,7 @@ func (k *Knight) analyzeRecentSessions(ctx context.Context) error {
 			_ = k.queue.Remove(c)
 			continue
 		}
-		if k.shouldStageCandidate(c) && k.getFactory() != nil && !strings.EqualFold(k.cfg.TrustLevel, "readonly") {
+		if k.shouldStageCandidate(c) && k.getFactory() != nil && k.canWrite() {
 			if generatedCount >= knightMaxGeneratedSkills {
 				deferredCount++
 				_ = k.queue.Upsert(c)
@@ -1698,7 +1725,7 @@ func (k *Knight) syncSkillMetadata(ref string) {
 }
 
 func (k *Knight) maybeStageSkillPatch(ctx context.Context, skill *SkillEntry, avgScore float64, samples int) {
-	if skill == nil || strings.EqualFold(k.cfg.TrustLevel, "readonly") || !k.hasCapability("skill_creation") {
+	if skill == nil || !k.canWrite() || !k.hasCapability("skill_creation") {
 		return
 	}
 	content, err := readSkillContent(skill.Path)
@@ -1727,7 +1754,7 @@ Requirements:
 }
 
 func (k *Knight) maybeStagePromptSignalPatch(ctx context.Context, skill *SkillEntry, skillRef string) {
-	if skill == nil || k.usage == nil || strings.EqualFold(k.cfg.TrustLevel, "readonly") || !k.hasCapability("skill_creation") {
+	if skill == nil || k.usage == nil || !k.canWrite() || !k.hasCapability("skill_creation") {
 		return
 	}
 	uses, _, _ := k.usage.GetUsage(skillRef)
