@@ -119,6 +119,8 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 	lineNum := 0 // 0-based
 	readCount := 0
 	hitLimit := false
+	sawConflict := false  // #2269: raw-line conflict marker seen in range
+	conflictOpen := false // #2269 R100: region state (only <<<<<<< opens)
 	for scanner.Scan() {
 		if lineNum < startIdx {
 			lineNum++
@@ -133,6 +135,21 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 			break
 		}
 		fmt.Fprintf(&buf, "%6d\t%s\n", lineNum+1, scanner.Text())
+		// #2269 (R100 tightening): a conflict region STATE MACHINE,
+		// mirroring DetectMergeConflicts semantics - only "<<<<<<<" opens
+		// a region, "=======" must be exactly 7 equals AND inside an open
+		// region, ">>>>>>>" closes it. The first cut fired on any of the
+		// three markers independently, so a lone setext underline or a
+		// quoted ">>>>>>>" in a >10MB markdown file raised a false
+		// WARNING (review: sa-211).
+		if raw := scanner.Text(); strings.HasPrefix(raw, "<<<<<<<") {
+			sawConflict = true
+			conflictOpen = true
+		} else if conflictOpen && raw == "=======" {
+			// in-region divider: nothing extra to set
+		} else if conflictOpen && strings.HasPrefix(raw, ">>>>>>>") {
+			conflictOpen = false
+		}
 		readCount++
 		lineNum++
 	}
@@ -152,6 +169,13 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 	if hitLimit {
 		fmt.Fprintf(&buf, "[Showing lines %d-%d of ~%d. %s]\n",
 			startIdx+1, startIdx+readCount, totalLines, opts.moreHint)
+	}
+
+	// #2269: report the conflict warning the caller-side guard could
+	// never produce (its input was this line-numbered text). Mirrors
+	// CheckContentForConflicts' banner format.
+	if sawConflict {
+		buf.WriteString("\n[WARNING] File contains merge conflict markers in this range. Resolve conflicts before editing.\n")
 	}
 
 	return buf.String(), nil
