@@ -337,6 +337,11 @@ type IMConfig struct {
 	Streaming           IMStreamingConfig          `yaml:"streaming,omitempty" json:"streaming,omitempty"`
 	STT                 IMSTTConfig                `yaml:"stt,omitempty" json:"stt,omitempty"`
 	Adapters            map[string]IMAdapterConfig `yaml:"adapters,omitempty" json:"adapters,omitempty"`
+	// RemoteDangerousCommands (#2185) is the opt-in gate for dangerous
+	// remote operations over IM: /mode escalation to bypass/autopilot and
+	// the $/! shell passthrough. Both are hard-denied when false (default)
+	// so a bound IM peer cannot escalate privileges with zero confirmation.
+	RemoteDangerousCommands bool `yaml:"remote_dangerous_commands,omitempty" json:"remote_dangerous_commands,omitempty"`
 }
 
 type IMStreamingConfig struct {

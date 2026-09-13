@@ -297,7 +297,20 @@ func (d tuiSlashDeps) CurrentMode() string {
 func (d tuiSlashDeps) SwitchMode(name string) error {
 	// Mirror handleModeCommand semantics: parse, apply to model + policy,
 	// drop stale approvals, persist the preference to session metadata.
+	//
+	// #2185: this path is IM-remote-only (the local TUI goes through
+	// handleModeCommand instead). Escalation to bypass/autopilot is a
+	// privilege escalation from a remote peer - require the explicit
+	// im.remote_dangerous_commands opt-in. Downgrade/level switches and
+	// plan/auto stay ungated (they reduce or hold the trust level).
+	if !permission.IsValidPermissionMode(name) {
+		return fmt.Errorf("unknown permission mode %q (valid: supervised, plan, auto, bypass, autopilot)", name)
+	}
 	newMode := permission.ParsePermissionMode(name)
+	if (newMode == permission.BypassMode || newMode == permission.AutopilotMode) &&
+		d.m.config != nil && !d.m.config.IM.RemoteDangerousCommands {
+		return fmt.Errorf("switching to %s over IM requires the im.remote_dangerous_commands opt-in (config yaml) - refusing zero-confirmation privilege escalation (#2185)", newMode)
+	}
 	d.m.mode = newMode
 	if cp, ok := d.m.policy.(*permission.ConfigPolicy); ok {
 		cp.SetMode(newMode)
