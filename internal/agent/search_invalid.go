@@ -69,13 +69,22 @@ var searchResultTools = map[string]bool{
 var pathInOutputRe = regexp.MustCompile(`(?:^|[\s\n])(\.?/?[a-zA-Z0-9_./-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|rb|c|cpp|h|hpp|css|scss|html|vue|svelte|sql|sh|yaml|yml|json|toml|md)):\d+`)
 
 // pathOnlyRe extracts bare file paths without line numbers (for lsp_diagnostics
-// and lsp_symbols which may output paths differently).
-var pathOnlyRe = regexp.MustCompile(`(?:^|[\s\n"'])(\.?/?[a-zA-Z0-9_./-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|rb|c|cpp|h|hpp|css|scss|html|vue|svelte|sql|sh|yaml|yml|json|toml|md))(?:[\s"':]|$)`)
+// and lsp_symbols which may output paths differently, and #1491-A: grep
+// files_with_matches / code_search default output). (?m) anchors ^ at line
+// starts so CONSECUTIVE bare-path lines all match - without it the shared \n
+// prefix was consumed by the previous match and only every other line landed.
+var pathOnlyRe = regexp.MustCompile(`(?m)(?:^|[\s"'])(\.?/?[a-zA-Z0-9_./-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|rb|c|cpp|h|hpp|css|scss|html|vue|svelte|sql|sh|yaml|yml|json|toml|md))(?:[\s"':]|$)`)
 
 // searchInvalidationState tracks search results that may become stale.
 type searchInvalidationState struct {
 	// searchResultFiles maps normalized file paths to the tool name that found them.
 	searchResultFiles map[string]string
+
+	// baseDir anchors relative-vs-absolute path normalization (#1491-A
+	// layer 3): search-side keys are often relative (bare grep output
+	// lines) while edit-side keys are absolute - without anchoring the
+	// two never met and the map was dead.
+	baseDir string
 
 	// invalidatedWarned tracks file paths for which the invalidation notice
 	// has already fired (avoids nagging).
@@ -98,12 +107,34 @@ func (s *searchInvalidationState) reset() {
 	s.warningCount = 0
 }
 
+func (s *searchInvalidationState) setBaseDir(dir string) {
+	s.baseDir = dir
+}
+
+// normalize anchors the path to the workspace root (same semantics as
+// unreadEditState.normalize / normalizeCompanionPath, #1559-C family):
+// a relative search hit and an absolute edit target land on ONE key.
+func (s *searchInvalidationState) normalize(p string) string {
+	return normalizeCompanionPath(s.baseDir, normalizePath(p))
+}
+
 // lspTools lists tools that may output bare paths (no line:col prefix).
 var lspTools = map[string]bool{
 	"lsp_diagnostics":       true,
 	"lsp_symbols":           true,
 	"lsp_workspace_symbols": true,
 	"lsp_references":        true,
+}
+
+// barePathTools are tools whose DEFAULT output format carries bare paths
+// with no `:N` suffix (#1491-A layer 2): grep files_with_matches lists one
+// bare path per line, code_search prints "N. path (relevance: %d%%)". The
+// old pathInOutputRe-only extraction matched neither, so even enqueued
+// results yielded zero tracked files.
+var barePathTools = map[string]bool{
+	"grep":         true,
+	"search_files": true,
+	"code_search":  true,
 }
 
 // recordSearchResult is called when a search-type tool completes. It extracts
@@ -113,7 +144,7 @@ func (s *searchInvalidationState) recordSearchResult(toolName, output string) {
 		return
 	}
 	s.extractPaths(pathInOutputRe, output, toolName)
-	if lspTools[toolName] {
+	if lspTools[toolName] || barePathTools[toolName] {
 		s.extractPaths(pathOnlyRe, output, toolName)
 	}
 }
@@ -125,7 +156,7 @@ func (s *searchInvalidationState) extractPaths(re *regexp.Regexp, output, toolNa
 		if len(m) < 2 {
 			continue
 		}
-		n := normalizePath(strings.TrimSpace(m[1]))
+		n := s.normalize(strings.TrimSpace(m[1]))
 		if n == "" || !isValidFilePath(n) {
 			continue
 		}
@@ -142,7 +173,7 @@ func (s *searchInvalidationState) checkEditInvalidation(path string) string {
 	if path == "" {
 		return ""
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	if n == "" {
 		return ""
 	}

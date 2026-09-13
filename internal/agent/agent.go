@@ -1092,6 +1092,10 @@ func (a *Agent) SetWorkingDir(dir string) {
 	if a.expiredRead != nil {
 		a.expiredRead.baseDir = dir
 	}
+	// #1491-A layer 3: search-invalidation keys share the same anchor.
+	if a.searchInvalidation != nil {
+		a.searchInvalidation.setBaseDir(dir)
+	}
 }
 func (a *Agent) WorkingDir() string {
 	a.mu.RLock()
@@ -4299,6 +4303,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					// Search-result invalidation: record search-type tool results
 					// for later invalidation detection on file edits.
+					// #1491-A layer 1: this call sits OUTSIDE the readPaths
+					// else-if - extractFilePathsFromArgs only knows path-carrying
+					// argument keys (file/path/directory/...), so a repo-wide
+					// grep with no explicit path (the most common form) starved
+					// the detector; recordSearchResult carries its own
+					// searchResultTools whitelist gate.
 					a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 				}
 			}
