@@ -37,6 +37,11 @@ func TestIssue1490D_RealCommandsStillFire(t *testing.T) {
 	if !isDestructiveGit("git clean -fd") {
 		t.Error("git clean -f must still fire")
 	}
+	// #1490-D review: the long form is equally destructive and must
+	// fire too (the prefix test alone could never see it).
+	if !isDestructiveGit("git clean --force") {
+		t.Error("git clean --force must still fire")
+	}
 	if !isDestructiveGit("git checkout -- internal/tui/repl.go") {
 		t.Error("git checkout -- must still fire")
 	}

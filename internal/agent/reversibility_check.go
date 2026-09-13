@@ -199,9 +199,12 @@ func isDestructiveGit(s string) bool {
 	}
 	if hasCommandBigram(tokens, "git", "clean") {
 		// -f may be fused with more flags (-fd, -fx...) because '-' is
-		// deliberately not a token separator (#1194) - match by prefix.
+		// deliberately not a token separator (#1194) - match by prefix;
+		// the --force long form is a separate token (#1490-D review:
+		// the prefix test can never see it and the gate stayed silent
+		// on an equally destructive spelling).
 		for _, tok := range tokens {
-			if len(tok) > 1 && tok != "--force" && tok[0] == '-' && tok[1] == 'f' {
+			if tok == "--force" || (len(tok) > 1 && tok[0] == '-' && tok[1] == 'f') {
 				return true
 			}
 		}
