@@ -15,7 +15,14 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
+	"regexp"
 )
+
+// tgTokenForm matches the structural shape of a Telegram bot token
+// (#2215): "<numeric id>:<secret>" - digits, colon, then the
+// alphanumeric-secret alphabet BotFather issues. Form validation, not
+// secrecy validation.
+var tgTokenForm = regexp.MustCompile(`^[0-9]+:[A-Za-z0-9_-]{8,}$`)
 
 type tgPanelState struct {
 	selected    int
@@ -294,6 +301,15 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 		}
 		name := strings.TrimSpace(fields[0])
 		botToken := strings.TrimSpace(fields[1])
+		// #2215: zero format checks persisted arbitrary garbage into the
+		// yaml (Enabled:true), which then retried-and-failed on every
+		// restart - the slack path got prefix validation in #1392-B(1)
+		// and the tg path never followed. Telegram bot tokens are
+		// structurally "digits:alphanumerics" - validate the form, not
+		// the secrecy.
+		if !tgTokenForm.MatchString(botToken) {
+			return tgBindResultMsg{err: errors.New(m.t("panel.tg.error.token_format"))}
+		}
 		adapter := config.IMAdapterConfig{
 			Enabled:  true,
 			Platform: string(im.PlatformTelegram),
@@ -311,10 +327,13 @@ func (m *Model) createTGAdapterCmd(spec string) tea.Cmd {
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
 					if err := m.ensureTGRuntime(false); err != nil {
-						return tgBindResultMsg{err: err}
+						return m.rollbackTGCreate(name, err)
 					}
 					if err := m.startTGAdapterIfNeeded(name); err != nil {
-						return tgBindResultMsg{err: err}
+						// #2215: a failed start left the dirty adapter
+						// persisted forever (slack got rollback in
+						// #1392-B(1); tg never followed).
+						return m.rollbackTGCreate(name, err)
 					}
 					return tgBindResultMsg{message: m.t("panel.tg.message.added_bot", name)}
 				}
@@ -555,4 +574,26 @@ func (m Model) waitForTGAdapterHealthy(mgr *im.Manager, adapter string, timeout 
 		}
 	}
 	return errors.New(m.t("panel.tg.error.not_online", adapter))
+}
+
+// rollbackTGCreate removes a just-persisted tg adapter whose runtime
+// start failed (#2215) - the dirty Enabled:true config used to stay in
+// the yaml forever, retrying and failing on every restart (the slack
+// path got this in #1392-B(1)). Map REMOVE rides configMutationMsg
+// (#1370 pattern).
+func (m *Model) rollbackTGCreate(name string, origErr error) tea.Msg {
+	return configMutationMsg{
+		apply: func(m *Model) error {
+			if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+				return rerr
+			}
+			return m.saveConfig()
+		},
+		next: func(m *Model) tea.Cmd {
+			return func() tea.Msg { return tgBindResultMsg{err: origErr} }
+		},
+		fail: func(rerr error) tea.Msg {
+			return tgBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+		},
+	}
 }
