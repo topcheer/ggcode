@@ -202,11 +202,26 @@ func retryCallFuncName(call *ast.CallExpr) string {
 
 // loopBodyHasErrorRetry returns true if the body checks an error and
 // continues/loops back on failure (the hallmark of a retry loop).
+// #1490-C: error-continue evidence is only searched in THIS loop's own
+// body - ast.Inspect previously descended into nested loops, so an
+// inner for-range's skip-invalid pattern (`for _, it := range q { if
+// err := w.write(it); err != nil { continue } }`) was absorbed as retry
+// evidence for the OUTER loop (whose Pos() the issue then cited),
+// flagging legitimate loops as missing-backoff. Nested loops stop the
+// descent: their retry semantics belong to their own candidate visit
+// (ForStmt) or stay unjudged (RangeStmt), never to the parent.
 func loopBodyHasErrorRetry(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
 		if found {
 			return false
+		}
+		switch node.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			// Inspect starts AT body (a BlockStmt), so reaching a loop
+			// node here means it is nested - stop the descent (#1490-C).
+			return false
+		default:
 		}
 		ifs, ok := node.(*ast.IfStmt)
 		if !ok {

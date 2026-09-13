@@ -21,6 +21,8 @@ func scoreRunForTest(s *ResponseQualityScorer, iterations int, errCount int, suc
 	for i := 0; i < errCount; i++ {
 		stats.Errors = append(stats.Errors, "err")
 	}
+	// #1490-A: scorers read ErrorCount, not len(Errors) - keep in sync.
+	stats.ErrorCount = errCount
 	s.ScoreRun(stats, provider, model)
 }
 

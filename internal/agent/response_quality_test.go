@@ -46,10 +46,12 @@ func TestResponseQuality_ScoreRun_WithErrors(t *testing.T) {
 			"edit_file": 3,
 		},
 		FilesEdited: []string{"a.go"},
-		Errors:      []string{"edit failed", "another error"},
-		Duration:    30 * time.Second,
-		Iterations:  8,
-		Success:     false,
+		// #1490-A: scorers read ErrorCount, not len(Errors).
+		Errors:     []string{"edit failed", "another error"},
+		ErrorCount: 2,
+		Duration:   30 * time.Second,
+		Iterations: 8,
+		Success:    false,
 	}
 	stats.runID = "test-run-2"
 
@@ -87,6 +89,7 @@ func TestResponseQuality_Compare(t *testing.T) {
 	stats := &RunStats{
 		ToolCalls:  map[string]int{"edit_file": 1},
 		Errors:     []string{"failed"},
+		ErrorCount: 1, // #1490-A: scorer reads the counter
 		Duration:   60 * time.Second,
 		Iterations: 10,
 		Success:    false,

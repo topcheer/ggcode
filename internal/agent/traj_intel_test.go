@@ -54,6 +54,7 @@ func TestTrajIntel_ExtractInsights_Recovery(t *testing.T) {
 		Success:     true,
 		ToolCalls:   map[string]int{"edit_file": 3, "read_file": 2, "run_command": 1},
 		Errors:      []string{"edit failed: old_text not found"},
+		ErrorCount:  1, // #1490-A
 		FilesEdited: []string{"a.go"},
 	}
 
@@ -98,6 +99,7 @@ func TestTrajIntel_ExtractInsights_HighErrorRate(t *testing.T) {
 		Success:     false,
 		ToolCalls:   map[string]int{"edit_file": 6, "run_command": 4}, // 10 total
 		Errors:      []string{"err1", "err2", "err3"},                 // 30% error rate
+		ErrorCount:  3,                                                // #1490-A
 		FilesEdited: []string{},
 	}
 
@@ -143,6 +145,7 @@ func TestTrajIntel_ExtractInsights_NoProgressFailure(t *testing.T) {
 		Success:     false,
 		ToolCalls:   map[string]int{"read_file": 3},
 		Errors:      []string{"permission denied"},
+		ErrorCount:  1, // #1490-A
 		FilesEdited: []string{},
 	}
 

@@ -81,7 +81,12 @@ func (s *ResponseQualityScorer) computeScore(stats *RunStats, providerName, mode
 	for _, count := range stats.ToolCalls {
 		totalTools += count
 	}
-	errorCount := len(stats.Errors)
+	// #1490-A: use the untruncated counter, not len(Errors) - the list
+	// caps at 10 for the reflection prompt, so error-heavy runs (22
+	// failures in 25 calls) read as 10/25 and the quality score
+	// systematically OVERESTIMATED bad runs exactly where reflection
+	// and provider A/B need the most discrimination.
+	errorCount := stats.ErrorCount
 	if totalTools > 0 {
 		failedTools := 0
 		if errorCount <= totalTools {

@@ -272,10 +272,17 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 	}
 
 	entry := perfBaselineEntry{
-		RunID:       stats.RunID(),
-		Iterations:  stats.Iterations,
-		ToolCalls:   totalTC,
-		Errors:      len(stats.Errors),
+		RunID:      stats.RunID(),
+		Iterations: stats.Iterations,
+		ToolCalls:  totalTC,
+		// #1490-A: the baseline must store the UNCAPPED counter - len(Errors)
+		// freezes at 10 for the reflection prompt, so a 22-error run and a
+		// 9-error baseline both recorded 10 and error-rate regression
+		// (2x baseline) stayed invisible exactly in the high-error region
+		// it exists to watch. Baselines recorded before this change hold
+		// capped values; the mixed window self-corrects as pre-change
+		// baselines age out of the rolling window (short-lived by design).
+		Errors:      stats.ErrorCount,
 		FilesEdited: len(stats.FilesEdited),
 		DurationSec: int(stats.Duration.Round(time.Second).Seconds()),
 		Compactions: stats.CompactionCount,
