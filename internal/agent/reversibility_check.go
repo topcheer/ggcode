@@ -52,11 +52,38 @@ func (r *reversibilityState) recordSafetySignal(toolName, args string) {
 	switch toolName {
 	case "run_command":
 		tokens := commandTokens(args)
-		if hasCommandToken(tokens, "test", "pytest") {
-			r.testsRan = true
+		// #2255 M2: owner-anchor the signal - the test/build token must
+		// belong to a real test/build COMMAND OWNER (the command's first
+		// token), not merely appear anywhere in the token stream.
+		// `git commit -m "build: bump version"` tokenizes `build:` to a
+		// bare `build` and used to flip buildRan, silently disarming the
+		// commit/push gate: a message CLAIMING verification counted as
+		// verification. commandTokens leaves the JSON `command` key in the
+		// stream, so the command's first token is tokens[1] when present.
+		cmd0 := ""
+		if len(tokens) > 0 {
+			cmd0 = tokens[0]
+			if cmd0 == "command" && len(tokens) > 1 {
+				cmd0 = tokens[1]
+			}
 		}
-		if hasCommandToken(tokens, "build", "make") {
+		switch cmd0 {
+		case "go", "npm", "yarn", "pnpm", "cargo", "python", "python3":
+			if hasCommandToken(tokens[1:], "test", "pytest", "vitest", "jest") {
+				r.testsRan = true
+			}
+			if hasCommandToken(tokens[1:], "build") {
+				r.buildRan = true
+			}
+		case "make", "build":
 			r.buildRan = true
+			if hasCommandToken(tokens[1:], "test", "check") {
+				r.testsRan = true
+			}
+		case "test", "pytest":
+			// pytest as the command's first token IS the test command
+			// (#1194: `pytest -q scripts/` has no `test` token following).
+			r.testsRan = true
 		}
 	case "git_add", "git_commit":
 		r.stagingSeen = true
@@ -194,7 +221,11 @@ func isGitPush(s string) bool {
 
 func isDestructiveGit(s string) bool {
 	tokens := commandTokens(s)
-	if hasCommandBigram(tokens, "git", "reset") && hasCommandToken(tokens, "--hard") {
+	// #2255 H1: see through git global flags (-C <path>, --git-dir=X) so
+	// the bigrams anchor on the real subcommand, mirroring the sibling
+	// layer's normalizeGitGlobalFlags.
+	tokens = stripGitGlobalFlagTokens(tokens)
+	if hasCommandBigram(tokens, "git", "reset") && segmentHasToken(tokens, "git", "--hard") {
 		return true
 	}
 	if hasCommandBigram(tokens, "git", "clean") {
@@ -203,14 +234,74 @@ func isDestructiveGit(s string) bool {
 		// the --force long form is a separate token (#1490-D review:
 		// the prefix test can never see it and the gate stayed silent
 		// on an equally destructive spelling).
-		for _, tok := range tokens {
-			if tok == "--force" || (len(tok) > 1 && tok[0] == '-' && tok[1] == 'f') {
+		// #2255 M1: the flag scan is scoped to the git command's own
+		// segment - it stops at command separators, mirroring the
+		// sibling layer's forcePushSingleLine, so a later command's
+		// flags cannot fire this branch.
+		if segmentHasTokenFunc(tokens, "git", func(tok string) bool {
+			return tok == "--force" || (len(tok) > 1 && tok[0] == '-' && tok[1] == 'f')
+		}) {
+			return true
+		}
+	}
+	if hasCommandBigram(tokens, "git", "checkout") && segmentHasToken(tokens, "git", "--") {
+		return true
+	}
+	return false
+}
+
+// stripGitGlobalFlagTokens removes the global-flag segment (plus consumed
+// values) sitting between `git` and its subcommand. #2255 H1, reversibility layer.
+func stripGitGlobalFlagTokens(tokens []string) []string {
+	for i, t := range tokens {
+		if strings.Trim(t, "\"'") != "git" {
+			continue
+		}
+		j := i + 1
+		for j < len(tokens) {
+			ft := strings.Trim(tokens[j], "\"'")
+			if !isGitGlobalFlag(ft) {
+				break
+			}
+			j++
+			if !strings.Contains(ft, "=") && j < len(tokens) {
+				j++
+			}
+		}
+		if j > i+1 && j <= len(tokens) {
+			return append(append([]string{}, tokens[:i+1]...), tokens[j:]...)
+		}
+		return tokens
+	}
+	return tokens
+}
+
+// segmentHasToken reports whether tok appears in the same command segment as
+// the `git` token - the scan stops at command separators.
+// #2255 M1: `git checkout main && git log -- file` must not fire the
+// checkout branch via the second command's `--`.
+func segmentHasToken(tokens []string, owner, tok string) bool {
+	return segmentHasTokenFunc(tokens, owner, func(t string) bool { return t == tok })
+}
+
+func segmentHasTokenFunc(tokens []string, owner string, match func(string) bool) bool {
+	for i, t := range tokens {
+		if strings.Trim(t, "\"'") != owner {
+			continue
+		}
+		for _, u := range tokens[i+1:] {
+			switch u {
+			case "&&", "||", "|", "&":
+				return false
+			}
+			if u == ";" || strings.HasPrefix(u, ";") {
+				return false
+			}
+			if match(u) {
 				return true
 			}
 		}
-	}
-	if hasCommandBigram(tokens, "git", "checkout") && hasCommandToken(tokens, "--") {
-		return true
+		return false
 	}
 	return false
 }
