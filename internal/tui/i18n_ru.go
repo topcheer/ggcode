@@ -962,6 +962,8 @@ func ruCatalog(key string) string {
 		return "Привязан: %s"
 	case "panel.qq.entry.muted":
 		return "Заглушен"
+	case "panel.qq.entry.disabled":
+		return "Отключен"
 	case "panel.qq.details":
 		return "Детали"
 	case "panel.qq.status":

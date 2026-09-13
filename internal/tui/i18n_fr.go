@@ -886,6 +886,8 @@ func frCatalog(key string) string {
 		return "Lie: %s"
 	case "panel.qq.entry.muted":
 		return "Muet"
+	case "panel.qq.entry.disabled":
+		return "Désactivé"
 	case "panel.qq.details":
 		return "Détails"
 	case "panel.qq.status":

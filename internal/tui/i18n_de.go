@@ -970,6 +970,8 @@ func deCatalog(key string) string {
 		return "Gebunden: %s"
 	case "panel.qq.entry.muted":
 		return "Stummgeschaltet"
+	case "panel.qq.entry.disabled":
+		return "Deaktiviert"
 	case "panel.qq.details":
 		return "Details"
 	case "panel.qq.status":

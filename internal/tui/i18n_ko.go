@@ -892,6 +892,8 @@ func koCatalog(key string) string {
 		return "바인딩됨: %s"
 	case "panel.qq.entry.muted":
 		return "음소거됨"
+	case "panel.qq.entry.disabled":
+		return "비활성화됨"
 	case "panel.qq.details":
 		return "상세"
 	case "panel.qq.status":

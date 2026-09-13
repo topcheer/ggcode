@@ -1263,6 +1263,8 @@ func ptCatalog(key string) string {
 		return "Vinculado: %s"
 	case "panel.qq.entry.muted":
 		return "Silenciado"
+	case "panel.qq.entry.disabled":
+		return "Desativado"
 	case "panel.qq.error.adapter_required":
 		return "Nome do adaptador QQ é obrigatório"
 	case "panel.qq.error.config_format":
