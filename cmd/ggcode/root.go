@@ -706,6 +706,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				shortID = shortID[:8]
 			}
 			fmt.Fprintf(os.Stderr, "  Warning: session lock check for %s failed (%v). Starting a new session.\n", shortID, lockErr)
+			// #2245: mirror the conflict branch - without this reset the
+			// path silently resumed with no lock held (double-writer window).
+			resumeID = ""
 		} else {
 			shortID := resumeID
 			if len(shortID) > 8 {
