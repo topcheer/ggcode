@@ -32,7 +32,7 @@ func TestAskUserToolExecutesWithNormalizedRequest(t *testing.T) {
 			t.Fatal("expected missing question id to be normalized")
 		}
 		if req.Questions[0].AllowFreeform {
-			t.Log("note: AllowFreeform=false now honored (#804); test payload did not set it, default stays true")
+			t.Log("note: AllowFreeform=true here means the payload set it or used a *_with_freeform alias (#804 default false, #1677-4b alias sets it)")
 		}
 		return AskUserResponse{
 			Status: AskUserStatusSubmitted,

@@ -133,7 +133,7 @@ func (t *AskUserTool) Parameters() json.RawMessage {
 						},
 						"allow_freeform": {
 							"type": "boolean",
-							"description": "Whether the user may also enter freeform notes. Defaults to true for single and multi questions."
+							"description": "Whether the user may also enter freeform notes alongside the choices. Defaults to false; the *_with_freeform kind aliases enable it. Text questions are always freeform."
 						},
 						"placeholder": {
 							"type": "string",
@@ -266,6 +266,11 @@ func normalizeAskUserQuestion(index int, q AskUserQuestion) (AskUserQuestion, er
 	if err != nil {
 		return AskUserQuestion{}, fmt.Errorf("%s: %w", q.ID, err)
 	}
+	// #1677-4b: the *_with_freeform aliases promised freeform but the
+	// normalized kind dropped the marker and AllowFreeform stayed at its
+	// zero value - an omitted allow_freeform made the alias a plain
+	// select. Honor the alias before the kind is overwritten.
+	withFreeform := strings.Contains(strings.ToLower(strings.TrimSpace(q.Kind)), "with_freeform")
 	q.Kind = kind
 	q.Placeholder = strings.TrimSpace(q.Placeholder)
 	if q.Kind == AskUserKindSingle || q.Kind == AskUserKindMulti {
@@ -294,6 +299,9 @@ func normalizeAskUserQuestion(index int, q AskUserQuestion) (AskUserQuestion, er
 			choices = append(choices, choice)
 		}
 		q.Choices = choices
+		if withFreeform {
+			q.AllowFreeform = true
+		}
 		return q, nil
 	}
 	q.AllowFreeform = true
