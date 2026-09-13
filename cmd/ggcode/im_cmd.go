@@ -675,15 +675,13 @@ func newIMConfigShowCmd(cfgFile *string) *cobra.Command {
 			fmt.Fprintf(out, "  Transport: %s\n", valueOr(emptyStr(adapter.Transport), "-"))
 			if len(adapter.Extra) > 0 {
 				fmt.Fprintln(out, "  Extra:")
+				// #2191: mask FIRST (recursively), then print - the old
+				// inline check only handled top-level strings and %v on a
+				// nested map printed every key/value in cleartext.
+				masked := maskedAdapterExtra(adapter.Extra)
 				keys := sortedKeys(adapter.Extra)
 				for _, k := range keys {
-					v := adapter.Extra[k]
-					// Mask common secret fields
-					if isSecretKey(k) {
-						fmt.Fprintf(out, "    %s: %s\n", k, maskSecret(fmt.Sprintf("%v", v)))
-					} else {
-						fmt.Fprintf(out, "    %s: %v\n", k, v)
-					}
+					fmt.Fprintf(out, "    %s: %v\n", k, masked[k])
 				}
 			}
 			if len(adapter.AllowFrom) > 0 {
@@ -909,19 +907,34 @@ func printJSON(out io.Writer, v interface{}) error {
 // Extra verbatim - and --json is the MACHINE path, piped into logs,
 // jq, CI - so plaintext credentials spread farther than any human-read
 // text ever would. Both JSON paths now mask with the same rules.
+// #2191: NESTED maps recurse - the five adapters' stt overrides carry
+// apiKey/api_key at Extra["stt"]["api_key"] and the top-level-only
+// mask passed the whole map through on all three read paths.
 func maskedAdapterExtra(extra map[string]interface{}) map[string]interface{} {
 	if extra == nil {
 		return nil
 	}
 	out := make(map[string]interface{}, len(extra))
 	for k, v := range extra {
-		if isSecretKey(k) {
-			out[k] = maskSecret(fmt.Sprintf("%v", v))
-		} else {
-			out[k] = v
-		}
+		out[k] = maskedExtraValue(k, v)
 	}
 	return out
+}
+
+// maskedExtraValue masks one CLI Extra value at any depth (#2191),
+// mirroring the webui's maskExtraValue.
+func maskedExtraValue(key string, v interface{}) interface{} {
+	if m, ok := v.(map[string]interface{}); ok {
+		out := make(map[string]interface{}, len(m))
+		for kk, vv := range m {
+			out[kk] = maskedExtraValue(kk, vv)
+		}
+		return out
+	}
+	if isSecretKey(key) {
+		return maskSecret(fmt.Sprintf("%v", v))
+	}
+	return v
 }
 
 func normalizeWorkspacePath(p string) string {
