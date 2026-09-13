@@ -113,7 +113,8 @@ func (s *trajIntelState) extractInsights(stats *RunStats) []trajectoryLearning {
 	task := truncateTask(stats.UserPrompt, 120)
 	now := time.Now()
 	totalToolCalls := totalToolCallCount(stats.ToolCalls)
-	failedCalls := len(stats.Errors)
+	// #1490-A: uncapped counter - len(Errors) freezes at 10 (prompt cap).
+	failedCalls := stats.ErrorCount
 	errorRatio := 0.0
 	if totalToolCalls > 0 {
 		errorRatio = float64(failedCalls) / float64(totalToolCalls)
