@@ -159,6 +159,33 @@ func maskedEditValue(field, value string) string {
 	return value
 }
 
+// maskedNewFieldEcho masks the ADD-NEW-FIELD mode echo (#2177): that
+// mode shares the render path with editField=="" and the buffer holds
+// `name=value` - maskedEditValue("") always passed the plaintext
+// through. The '=' separator is the structural handle: a secret-looking
+// name masks only the value half, the name stays readable for review.
+func maskedNewFieldEcho(input string) string {
+	eq := strings.Index(input, "=")
+	if eq < 0 {
+		return input
+	}
+	name, value := input[:eq], input[eq+1:]
+	if looksLikeSecretField(strings.TrimSpace(name)) {
+		return name + "=" + maskSecret(value)
+	}
+	return input
+}
+
+// imEditEcho picks the right echo mask for the edit-input view: the
+// edit mode masks by field name (#2169), the add-new-field mode masks
+// by the `name=value` buffer's name half (#2177).
+func imEditEcho(s *imAdapterEditState) string {
+	if s.editField == "" {
+		return maskedNewFieldEcho(s.editInput)
+	}
+	return maskedEditValue(s.editField, s.editInput)
+}
+
 // renderIMEditInput renders the text input view for editing a field value.
 func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 	if s == nil || s.mode != imEditInput {
@@ -169,7 +196,7 @@ func (m *Model) renderIMEditInput(s *imAdapterEditState) string {
 		fmt.Sprintf(" %s", m.t("panel.im.edit.adapter", s.adapterName)),
 		"",
 		fmt.Sprintf(" %s", m.t("panel.im.edit.field", s.editField)),
-		fmt.Sprintf(" %s%s█", m.t("panel.im.edit.new_value"), maskedEditValue(s.editField, s.editInput)),
+		fmt.Sprintf(" %s%s█", m.t("panel.im.edit.new_value"), imEditEcho(s)),
 		"",
 		renderPasteShortcutHint(m.currentLanguage()),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" " + m.t("panel.im.edit.input_hint")),
