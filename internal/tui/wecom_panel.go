@@ -110,6 +110,9 @@ func (m Model) renderWeComPanel() string {
 		status := m.t("panel.wecom.entry.available")
 		if entry.Disabled {
 			status = m.t("panel.wecom.entry.disabled")
+		} else if entry.Muted {
+			// #2211 family: details ignored Muted (same #887 gap as feishu).
+			status = m.t("panel.wecom.entry.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.wecom.entry.bound")
 		}

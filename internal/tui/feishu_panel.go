@@ -81,6 +81,11 @@ func (m Model) renderFeishuPanel() string {
 		status := m.t("panel.feishu.entry.available")
 		if entry.Disabled {
 			status = m.t("panel.feishu.entry.disabled")
+		} else if entry.Muted {
+			// #2211: the #887 fix never reached feishu - the list label
+			// showed "Muted" while the details said "Bound"/"Available"
+			// on the same screen.
+			status = m.t("panel.feishu.entry.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.feishu.entry.bound")
 		}

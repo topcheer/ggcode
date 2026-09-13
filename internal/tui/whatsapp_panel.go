@@ -120,6 +120,9 @@ func (m Model) renderWhatsAppPanel() string {
 		status := m.t("panel.whatsapp.status.available")
 		if entry.Disabled {
 			status = m.t("panel.whatsapp.status.disabled")
+		} else if entry.Muted {
+			// #2211 family: details ignored Muted (same #887 gap as feishu).
+			status = m.t("panel.whatsapp.status.muted")
 		} else if entry.OccupiedBy != "" {
 			status = m.t("panel.whatsapp.status.bound")
 		}
