@@ -3160,31 +3160,40 @@ func dedupMessageRecords(records []jsonlRecord) []jsonlRecord {
 	if len(records) <= 1 {
 		return records
 	}
-	seen := make(map[string]bool, len(records))
+	// IDs are stable identities: dedupe by ID globally (a replayed write
+	// of the same message must collapse wherever it lands).
+	seenIDs := make(map[string]bool, len(records))
+	// #1628 case A: the ID-less fingerprint used to sit in the SAME global
+	// map - but a fingerprint is only "the same message" for the adjacent
+	// double-append race it exists for. Globally it swallowed LEGITIMATE
+	// repeats (a user sending "continue" twice, identical build outputs) in
+	// legacy ID-less sessions. Adjacent-only: collapse the race, keep the
+	// repeats.
+	var prevFP string
 	out := records[:0]
 	for _, rec := range records {
 		if rec.Message == nil {
+			prevFP = ""
 			out = append(out, rec)
 			continue
 		}
-		key := dedupKey(rec.Message)
-		if seen[key] {
+		if id := rec.Message.ID; id != "" {
+			if seenIDs[id] {
+				continue
+			}
+			seenIDs[id] = true
+			prevFP = ""
+			out = append(out, rec)
 			continue
 		}
-		seen[key] = true
+		fp := messageFingerprint(rec.Message)
+		if fp == prevFP {
+			continue // adjacent duplicate of the entry just emitted
+		}
+		prevFP = fp
 		out = append(out, rec)
 	}
 	return out
-}
-
-// dedupKey returns a deduplication key for a message. Messages with a
-// non-empty ID are deduped by ID; messages without an ID fall back to a
-// content fingerprint.
-func dedupKey(msg *provider.Message) string {
-	if msg.ID != "" {
-		return "id:" + msg.ID
-	}
-	return "fp:" + messageFingerprint(msg)
 }
 
 // dedupLightweightEntries removes duplicate message-type entries from a
@@ -3194,18 +3203,31 @@ func dedupLightweightEntries(entries []localLightweightEntry) []localLightweight
 	if len(entries) <= 1 {
 		return entries
 	}
-	seen := make(map[string]bool, len(entries))
+	// #1628 case A (second path): same split as dedupMessageRecords - IDs
+	// dedupe globally, ID-less fingerprints collapse only ADJACENT repeats.
+	seenIDs := make(map[string]bool, len(entries))
+	var prevFP string
 	out := entries[:0]
 	for _, e := range entries {
 		if e.recType != "message" || e.record.Message == nil {
+			prevFP = ""
 			out = append(out, e)
 			continue
 		}
-		key := dedupKey(e.record.Message)
-		if seen[key] {
+		if id := e.record.Message.ID; id != "" {
+			if seenIDs[id] {
+				continue
+			}
+			seenIDs[id] = true
+			prevFP = ""
+			out = append(out, e)
 			continue
 		}
-		seen[key] = true
+		fp := messageFingerprint(e.record.Message)
+		if fp == prevFP {
+			continue
+		}
+		prevFP = fp
 		out = append(out, e)
 	}
 	return out

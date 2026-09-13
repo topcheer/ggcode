@@ -45,9 +45,12 @@ func TestDedupMessageRecords_PassesThroughNonMessages(t *testing.T) {
 		{Type: "meta"},
 	}
 	got := dedupMessageRecords(records)
-	// checkpoint, message(hi), usage, meta = 4 (second message(hi) removed)
-	if len(got) != 4 {
-		t.Fatalf("expected 4 records, got %d", len(got))
+	// #1628 case A: ID-less fingerprints dedupe ADJACENT repeats only -
+	// this "duplicate" is separated by usage/meta records, i.e. a distant
+	// repeat that global fingerprinting used to swallow. 5 survive now
+	// (checkpoint, hi, usage, hi, meta).
+	if len(got) != 5 {
+		t.Fatalf("expected 5 records (distant repeat survives), got %d", len(got))
 	}
 }
 
@@ -114,10 +117,12 @@ func TestDedupLightweightEntries_MixedTypes(t *testing.T) {
 		{recType: "message", record: jsonlRecord{Type: "message", Message: &provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "unique"}}}}},
 	}
 	got := dedupLightweightEntries(entries)
-	// Expected: message(dup), cost, cost, message(unique) = 4
-	// The second message(dup) is removed
-	if len(got) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(got))
+	// #1628 case A: the second message(dup) is separated by cost records -
+	// a distant repeat under adjacent-only fingerprint dedup, so it stays.
+	// All 5 survive (adjacent ID-less dups still collapse - see
+	// TestIssue1628AdjacentDuplicateCollapses).
+	if len(got) != 5 {
+		t.Fatalf("expected 5 entries (distant repeat survives), got %d", len(got))
 	}
 }
 
