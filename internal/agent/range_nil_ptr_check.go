@@ -184,90 +184,81 @@ func rnpCollectNilGuards(body *ast.BlockStmt) map[string][]rnpNilGuard {
 		if !ok {
 			return true
 		}
-		name, negated, found := rnpNilCompareIdent(ifStmt.Cond)
+		names, negated, found := rnpNilCompareIdents(ifStmt.Cond)
 		if !found {
 			return true
 		}
 		_, isPlainElse := ifStmt.Else.(*ast.BlockStmt)
-		guards[name] = append(guards[name], rnpNilGuard{
-			negated:    negated,
-			ifPos:      ifStmt.Pos(),
-			thenEnd:    ifStmt.Body.End(),
-			ifEnd:      ifStmt.End(),
-			hasElse:    isPlainElse,
-			terminates: ifBodyTerminates(ifStmt.Body), // reused from nil_deref_check (#265)
-		})
+		for _, name := range names {
+			guards[name] = append(guards[name], rnpNilGuard{
+				negated:    negated,
+				ifPos:      ifStmt.Pos(),
+				thenEnd:    ifStmt.Body.End(),
+				ifEnd:      ifStmt.End(),
+				hasElse:    isPlainElse,
+				terminates: ifBodyTerminates(ifStmt.Body), // reused from nil_deref_check (#265)
+			})
+		}
 		return true
 	})
 	return guards
 }
 
-// rnpNilCompareIdent checks whether cond is `x == nil`, `nil == x`,
-// `x != nil`, or `nil != x` for a plain identifier or a field-selector chain
-// rooted at one (x, p.Field, a.b.c), returning the dotted variable name and
-// whether the comparison is negated (!=).
-func rnpNilCompareIdent(cond ast.Expr) (name string, negated, found bool) {
+// rnpNilCompareIdents returns every variable compared to nil under cond:
+// plain `x == nil`/`x != nil` (either operand order) for dotted names, plus
+// - with polarity - the qualifying leaves of a composite chain. On the then
+// path of an AND every arm holds, so each `!= nil` leaf proves non-nil
+// there; on the surviving path of a terminating OR (`if x == nil || y
+// { return }`) each `== nil` leaf proves non-nil. Opposite polarity inside
+// each context proves nothing, and nested opposite-operator subtrees
+// guarantee neither side, so they yield nothing. All qualifying leaves are
+// returned: a first-hit-only return left the second arm's variable
+// unguarded - `p != nil && p.Field != nil { for range *p.Field }` still
+// misfired when the plain name came first (sa-174, #1677-1a follow-up).
+func rnpNilCompareIdents(cond ast.Expr) (names []string, negated, found bool) {
 	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok {
-		return "", false, false
+		return nil, false, false
 	}
-	// #1677-1a: composite conditions (LANDAND/LOR) used to be rejected
-	// wholesale, so `if x != nil && x.F != ""` never entered the guard
-	// table and idiomatic-safe code got advised to add the very guard it
-	// already had. Descend with polarity: on the then path of an AND every
-	// arm holds, so a `!= nil` arm proves non-nil there; on the surviving
-	// path of a terminating OR (`if x == nil || y { return }`) an `== nil`
-	// arm proves non-nil. The opposite polarity inside each context proves
-	// nothing (AND can't guarantee `== nil`; OR's `!= nil` arm lets the
-	// other arm carry the truth), and nested opposite-operator subtrees
-	// guarantee neither side, so they yield no guard.
 	if bin.Op == token.LAND {
-		if n := rnpNilCompareUnder(cond, token.NEQ, token.LAND); n != "" {
-			return n, true, true
+		if ns := rnpNilCompareLeaves(cond, token.NEQ, token.LAND); len(ns) > 0 {
+			return ns, true, true
 		}
-		return "", false, false
+		return nil, false, false
 	}
 	if bin.Op == token.LOR {
-		if n := rnpNilCompareUnder(cond, token.EQL, token.LOR); n != "" {
-			return n, false, true
+		if ns := rnpNilCompareLeaves(cond, token.EQL, token.LOR); len(ns) > 0 {
+			return ns, false, true
 		}
-		return "", false, false
+		return nil, false, false
 	}
 	if bin.Op != token.EQL && bin.Op != token.NEQ {
-		return "", false, false
+		return nil, false, false
 	}
 	negated = bin.Op == token.NEQ
 	if rnpIsNilIdent(bin.Y) {
 		if n := rnpDottedName(bin.X); n != "" {
-			return n, negated, true
+			return []string{n}, negated, true
 		}
 	}
 	if rnpIsNilIdent(bin.X) {
 		if n := rnpDottedName(bin.Y); n != "" {
-			return n, negated, true
+			return []string{n}, negated, true
 		}
 	}
-	return "", false, false
+	return nil, false, false
 }
 
-// rnpDottedName returns the dotted path for an identifier or a chain of
-// field selectors rooted at an identifier (x, p.Field, a.b.c). Empty for
-// anything else (calls, index, type assertions). Selector guards are the
-// most idiomatic Go nil-protection form (#1483): `if p.Field != nil` must
-// guard `for range *p.Field` the same way plain idents do.
-// rnpNilCompareUnder finds the first variable compared to nil with the
+// rnpNilCompareLeaves returns every variable compared to nil with the
 // requested polarity (want==token.NEQ: `x != nil`; want==token.EQL:
 // `x == nil`) inside a composite chain of chainOp (AND under AND, OR under
 // OR). Leaf comparisons on either arm qualify; a subtree of the opposite
 // operator guarantees neither side and yields nothing.
-func rnpNilCompareUnder(e ast.Expr, want, chainOp token.Token) string {
+func rnpNilCompareLeaves(e ast.Expr, want, chainOp token.Token) []string {
 	if bin, ok := e.(*ast.BinaryExpr); ok && bin.Op == chainOp {
-		if n := rnpNilCompareUnder(bin.X, want, chainOp); n != "" {
-			return n
-		}
-		return rnpLeafNilCompare(bin.Y, want)
+		return append(rnpNilCompareLeaves(bin.X, want, chainOp), rnpLeafNilCompare(bin.Y, want))
 	}
-	return rnpLeafNilCompare(e, want)
+	return []string{rnpLeafNilCompare(e, want)}
 }
 
 // rnpLeafNilCompare matches a plain `x == nil` / `x != nil` (either operand
@@ -287,6 +278,11 @@ func rnpLeafNilCompare(e ast.Expr, want token.Token) string {
 }
 
 func rnpDottedName(e ast.Expr) string {
+	// rnpDottedName: the dotted path for an identifier or a chain of field
+	// selectors rooted at one (x, p.Field, a.b.c). Empty for anything else
+	// (calls, index, type assertions). Selector guards are the most
+	// idiomatic Go nil-protection form (#1483): `if p.Field != nil` must
+	// guard `for range *p.Field` the same way plain idents do.
 	switch v := e.(type) {
 	case *ast.Ident:
 		return v.Name

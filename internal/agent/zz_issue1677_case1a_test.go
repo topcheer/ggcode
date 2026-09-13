@@ -125,3 +125,49 @@ func TestIssue1677MixedSubtreeYieldsNothing(t *testing.T) {
 		t.Fatal("c != nil leaf under AND must be collected")
 	}
 }
+
+// sa-174 follow-up: the first-hit-only implementation left the second
+// arm's variable unguarded - the plain-first #1483 ordering
+// (`p != nil && p.Field != nil { for range *p.Field }`) still misfired
+// end-to-end even though g["p"] was populated. These pins go through
+// checkRangeNilPtr itself.
+func TestIssue1677AllLeavesCollectedEndToEnd(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"selector second arm", `package main
+
+type P struct{ Field []int }
+
+func f(p *P) {
+	if p != nil && p.Field != nil {
+		for range *p.Field {
+		}
+	}
+}`},
+		{"two idents second arm", `package main
+
+type T struct{}
+
+func f(a, b *T) {
+	if a != nil && b != nil {
+		for range *b {
+		}
+	}
+}`},
+		{"or early-return second arm", `package main
+
+type T struct{}
+
+func f(a, b *T) {
+	if a == nil || b == nil {
+		return
+	}
+	for range *b {
+	}
+}`},
+	}
+	for _, c := range cases {
+		if w := checkRangeNilPtr("test.go", "", c.src); w != "" {
+			t.Fatalf("%s: guarded range still warned: %s", c.name, w)
+		}
+	}
+}
