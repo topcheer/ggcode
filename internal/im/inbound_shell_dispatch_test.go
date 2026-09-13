@@ -18,7 +18,8 @@ import (
 
 func TestSubmitInboundMessage_ShellExecutesNotQueued(t *testing.T) {
 	em := &captureEmitter{}
-	b := &DaemonBridge{emitTextOverride: em.EmitText}
+	allowDangerous := true // #2205: these tests predate the im.remote_dangerous_commands gate
+	b := &DaemonBridge{emitTextOverride: em.EmitText, remoteDangerousOverride: &allowDangerous}
 
 	err := b.SubmitInboundMessage(context.Background(), InboundMessage{Text: "$ printf submitshell-ok"})
 	if err != nil {
@@ -44,7 +45,8 @@ func TestSubmitInboundMessage_ShellWithPendingAskStillImmediate(t *testing.T) {
 	// Agent busy + ask_user pending: $ cmd must STILL route to shell, not be
 	// swallowed by the ask-reply channel.
 	em := &captureEmitter{}
-	b := &DaemonBridge{emitTextOverride: em.EmitText}
+	allowDangerous := true // #2205: these tests predate the im.remote_dangerous_commands gate
+	b := &DaemonBridge{emitTextOverride: em.EmitText, remoteDangerousOverride: &allowDangerous}
 	b.mu.Lock()
 	b.pendingAsk = &pendingAskUser{
 		response: make(chan tool.AskUserResponse, 1),
@@ -75,7 +77,8 @@ func TestSubmitInboundMessage_PlainTextStillQueues(t *testing.T) {
 	// The bare bridge has no agent loop, so the queue path may panic/nil-deref
 	// — recover it; the assertion is only that no shell pushback happened.
 	em := &captureEmitter{}
-	b := &DaemonBridge{emitTextOverride: em.EmitText}
+	allowDangerous := true // #2205: these tests predate the im.remote_dangerous_commands gate
+	b := &DaemonBridge{emitTextOverride: em.EmitText, remoteDangerousOverride: &allowDangerous}
 
 	func() {
 		defer func() { _ = recover() }()
