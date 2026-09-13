@@ -32,12 +32,14 @@ package agent
 // This is distinct from existing detectors:
 //   - bare_edit_streak.go: checks if NO verification was run at all.
 //     This checks whether verification COVERS all edited packages.
-//   - verify_scope_decay.go: tracks narrowing scope over TIME (trajectory).
-//     This checks coverage at each verification point (spatial).
 //   - verify_scope_narrow.go: detects command argument narrowing (gaming).
 //     This checks whether verification scope matches edited scope (mismatch).
 //   - change_reconcile.go: checks stated vs actual file changes.
 //     This checks verified vs edited files (verification mismatch).
+//
+// (#1821 case 2: verify_scope_decay was deleted in 387282a6 - its
+// trajectory-narrowing surface is partially carried by outcomeMisattrib
+// (recordResult) - and is no longer a division partner.)
 //   - test_impact.go: SUGGESTS which tests to run.
 //     This DETECTS when verification didn't cover edited files.
 //

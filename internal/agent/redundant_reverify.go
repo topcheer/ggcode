@@ -19,8 +19,10 @@ package agent
 // This is distinct from:
 //   - futile_cycle: tracks re-READS (information gathering without mutation)
 //   - phantom_verify: claims verification success without running commands
-//   - verify_scope_decay: progressive narrowing of verification scope
-//   - verify_disconnect: verification failures that get advanced past
+//
+// (#1821 case 2: verify_scope_decay and verify_disconnect were deleted in
+// 387282a6 - the advance-past-failures surface is partially carried by
+// outcomeMisattrib (recordResult) - neither remains a division partner.)
 //
 // This detector specifically catches: "you ran `go test`, it passed, you made
 // no edits, then you ran `go test` again." The second run cannot produce new

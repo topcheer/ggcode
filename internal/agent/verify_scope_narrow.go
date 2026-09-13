@@ -52,6 +52,11 @@ type scopeNarrowState struct {
 	history []scopeEntry
 	// fired prevents duplicate warnings.
 	fired bool
+	// #1821 case 3: when the coverage-gap detector fires for the SAME
+	// command in the same tool call, its near-identical guidance would
+	// double-inject - remember the command and let scopeNarrow skip
+	// once (set by agent.go when covWarn fires).
+	lastCoverageWarnedCmd string
 }
 
 type scopeEntry struct {
@@ -253,6 +258,13 @@ func extractAfterKeyword(cmd, keyword string) string {
 // Returns a non-empty warning string if scope narrowing is detected.
 func (s *scopeNarrowState) recordVerificationCommand(toolName, cmd string, output string, isError bool) string {
 	if s.fired {
+		return ""
+	}
+	// #1821 case 3: coverage already injected its near-identical guidance
+	// for THIS command in this tool call - skip ours, clear the slot so a
+	// different command still narrows normally.
+	if s.lastCoverageWarnedCmd != "" && s.lastCoverageWarnedCmd == cmd {
+		s.lastCoverageWarnedCmd = ""
 		return ""
 	}
 
