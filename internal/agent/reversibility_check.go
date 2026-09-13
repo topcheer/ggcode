@@ -220,32 +220,61 @@ func isGitPush(s string) bool {
 }
 
 func isDestructiveGit(s string) bool {
+	// #2255 F2 (review residual): commandTokens cuts on ';' and newlines,
+	// so those segment boundaries vanish from the token stream - split the
+	// raw string on them first and judge each subcommand independently.
+	for _, sub := range strings.FieldsFunc(s, func(r rune) bool { return r == ';' || r == '\n' }) {
+		if isDestructiveGitSub(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func isDestructiveGitSub(s string) bool {
 	tokens := commandTokens(s)
 	// #2255 H1: see through git global flags (-C <path>, --git-dir=X) so
 	// the bigrams anchor on the real subcommand, mirroring the sibling
 	// layer's normalizeGitGlobalFlags.
 	tokens = stripGitGlobalFlagTokens(tokens)
-	if hasCommandBigram(tokens, "git", "reset") && segmentHasToken(tokens, "git", "--hard") {
-		return true
-	}
-	if hasCommandBigram(tokens, "git", "clean") {
-		// -f may be fused with more flags (-fd, -fx...) because '-' is
-		// deliberately not a token separator (#1194) - match by prefix;
-		// the --force long form is a separate token (#1490-D review:
-		// the prefix test can never see it and the gate stayed silent
-		// on an equally destructive spelling).
-		// #2255 M1: the flag scan is scoped to the git command's own
-		// segment - it stops at command separators, mirroring the
-		// sibling layer's forcePushSingleLine, so a later command's
-		// flags cannot fire this branch.
-		if segmentHasTokenFunc(tokens, "git", func(tok string) bool {
-			return tok == "--force" || (len(tok) > 1 && tok[0] == '-' && tok[1] == 'f')
-		}) {
-			return true
+	// #2255 F3 (review residual): judge each git SEGMENT as a unit - the
+	// subcommand bigram and the destructive flag must come from the SAME
+	// command segment. A whole-stream bigram plus a whole-stream flag scan
+	// let `git checkout main && git log -- file` combine checkout (segment
+	// 1) with -- (segment 2); a per-segment-only flag scan let `git status
+	// && git reset --hard` hide the flag on segment 2. Both were wrong.
+	for i := 0; i+1 < len(tokens); i++ {
+		if strings.Trim(tokens[i], "\"'") != "git" {
+			continue
 		}
-	}
-	if hasCommandBigram(tokens, "git", "checkout") && segmentHasToken(tokens, "git", "--") {
-		return true
+		sub := tokens[i+1]
+		for _, u := range tokens[i+1:] {
+			switch u {
+			case "&&", "||", "|", "&":
+				goto nextGit
+			}
+			if u == ";" || strings.HasPrefix(u, ";") {
+				goto nextGit
+			}
+			switch sub {
+			case "reset":
+				if u == "--hard" {
+					return true
+				}
+			case "clean":
+				// -f may be fused (-fd, -fx...) because '-' is not a
+				// token separator (#1194); --force is a separate token
+				// (#1490-D).
+				if u == "--force" || (len(u) > 1 && u[0] == '-' && u[1] == 'f') {
+					return true
+				}
+			case "checkout":
+				if u == "--" {
+					return true
+				}
+			}
+		}
+	nextGit:
 	}
 	return false
 }
@@ -269,9 +298,10 @@ func stripGitGlobalFlagTokens(tokens []string) []string {
 			}
 		}
 		if j > i+1 && j <= len(tokens) {
-			return append(append([]string{}, tokens[:i+1]...), tokens[j:]...)
+			// rewrite in place and KEEP SCANNING (#2255 F4): later git
+			// occurrences in the same token stream need stripping too.
+			tokens = append(append([]string{}, tokens[:i+1]...), tokens[j:]...)
 		}
-		return tokens
 	}
 	return tokens
 }
@@ -285,23 +315,29 @@ func segmentHasToken(tokens []string, owner, tok string) bool {
 }
 
 func segmentHasTokenFunc(tokens []string, owner string, match func(string) bool) bool {
+	// every owner segment is checked: a destructive flag on the SECOND
+	// git in `git status && git reset --hard` must still be seen
+	// (#2255 F3 review residual).
 	for i, t := range tokens {
 		if strings.Trim(t, "\"'") != owner {
 			continue
 		}
+		segmentDone := false
 		for _, u := range tokens[i+1:] {
 			switch u {
 			case "&&", "||", "|", "&":
-				return false
+				segmentDone = true
+			}
+			if segmentDone {
+				break
 			}
 			if u == ";" || strings.HasPrefix(u, ";") {
-				return false
+				break
 			}
 			if match(u) {
 				return true
 			}
 		}
-		return false
 	}
 	return false
 }
