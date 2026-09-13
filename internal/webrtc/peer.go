@@ -311,17 +311,33 @@ func (p *Peer) attachDataChannel(dc *webrtc.DataChannel) {
 		debug.Log("webrtc", "data channel closed")
 		// #928: dcReady must reset on close or IsReady() lies and Send()
 		// writes to a closed channel.
+		// #2194: only when THIS channel is still the current one - after
+		// a renegotiation the OLD channel's close arrives late and used
+		// to knock the NEW (already-ready) channel back to not-ready and
+		// burn disconnOnce on a phantom disconnect.
 		p.mu.Lock()
-		p.dcReady = false
+		stale := p.dc != dc
+		if !stale {
+			p.dcReady = false
+		}
 		p.mu.Unlock()
+		if stale {
+			return
+		}
 		p.handleDisconnect()
 	})
 
 	dc.OnError(func(err error) {
 		debug.Log("webrtc", "data channel error: %v", err)
 		p.mu.Lock()
-		p.dcReady = false
+		stale := p.dc != dc
+		if !stale {
+			p.dcReady = false
+		}
 		p.mu.Unlock()
+		if stale {
+			return
+		}
 		p.handleDisconnect()
 	})
 }
