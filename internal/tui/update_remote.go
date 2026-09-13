@@ -11,6 +11,12 @@ import (
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 )
 
+// remoteShellAllowed reports whether the #2185 im.remote_dangerous_commands
+// opt-in is set (nil config counts as not allowed - fail closed).
+func (m Model) remoteShellAllowed() bool {
+	return m.config != nil && m.config.IM.RemoteDangerousCommands
+}
+
 // handleRemoteInbound handles the remoteInboundMsg case.
 func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 	// Track the originating adapter for per-channel echo suppression.
@@ -54,7 +60,16 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	// Shell passthrough ($ cmd / ! cmd): execute immediately even while a
 	// turn is running, mirroring the daemon bridge and the local TUI escape.
 	// Never queued as an agent submission - the user expects direct output.
+	// #2185: same opt-in gate as /mode escalation - arbitrary shell from a
+	// remote IM peer is the dominant attack surface, hard-denied by default.
 	if route.Kind == im.InboundRouteShell {
+		if !m.remoteShellAllowed() {
+			if msg.Response != nil {
+				msg.Response <- nil
+			}
+			m.emitIMText("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185)")
+			return m, nil
+		}
 		if msg.Response != nil {
 			msg.Response <- nil
 		}
