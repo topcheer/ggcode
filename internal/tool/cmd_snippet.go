@@ -145,14 +145,76 @@ func (t *CmdSnippetTool) storePath() string {
 	return t.filePath
 }
 
+// load returns a READ-ONLY snapshot: the cached Entries slice is copied
+// under the lock so callers can never race a concurrent doSave/doGet/
+// doDelete mutation (#1644 case 3: load used to hand out t.cache itself,
+// then released the lock while callers mutated the shared struct).
 func (t *CmdSnippetTool) load() (*cmdSnippetStore, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.loadLocked()
+}
 
+// loadLocked is load without locking - callers must hold t.mu.
+func (t *CmdSnippetTool) loadLocked() (*cmdSnippetStore, error) {
 	if t.loaded && t.cache != nil {
-		return t.cache, nil
+		return t.cloneLocked(), nil
 	}
+	path := t.storePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.cache = &cmdSnippetStore{}
+			t.loaded = true
+			return t.cloneLocked(), nil
+		}
+		return nil, err
+	}
+	var store cmdSnippetStore
+	if err := json.Unmarshal(data, &store); err != nil {
+		return nil, fmt.Errorf("corrupt snippet store: %w", err)
+	}
+	t.cache = &store
+	t.loaded = true
+	return t.cloneLocked(), nil
+}
 
+// cloneLocked deep-copies the entries slice so the snapshot and the cache
+// diverge safely. Callers must hold t.mu.
+func (t *CmdSnippetTool) cloneLocked() *cmdSnippetStore {
+	if t.cache == nil {
+		return &cmdSnippetStore{}
+	}
+	clone := &cmdSnippetStore{Entries: make([]cmdSnippetEntry, len(t.cache.Entries))}
+	copy(clone.Entries, t.cache.Entries)
+	return clone
+}
+
+// mutate runs fn against the store with the lock held for the whole
+// read-modify-write sequence (#1644 case 3: load and persist each took the
+// lock separately, so two interleaved actions could load the same snapshot
+// and the second persist silently clobbered the first). fn receives the
+// authoritative store; persisting is skipped when persist is false.
+func (t *CmdSnippetTool) mutate(persist bool, fn func(store *cmdSnippetStore) error) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cache == nil || !t.loaded {
+		if _, err := t.loadForMutationLocked(); err != nil {
+			return err
+		}
+	}
+	if err := fn(t.cache); err != nil {
+		return err
+	}
+	if !persist {
+		return nil
+	}
+	return t.persistLocked(t.cache)
+}
+
+// loadForMutationLocked primes the cache from disk without copying -
+// mutate works on the authoritative store, not a snapshot.
+func (t *CmdSnippetTool) loadForMutationLocked() (*cmdSnippetStore, error) {
 	path := t.storePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -163,7 +225,6 @@ func (t *CmdSnippetTool) load() (*cmdSnippetStore, error) {
 		}
 		return nil, err
 	}
-
 	var store cmdSnippetStore
 	if err := json.Unmarshal(data, &store); err != nil {
 		return nil, fmt.Errorf("corrupt snippet store: %w", err)
@@ -176,7 +237,11 @@ func (t *CmdSnippetTool) load() (*cmdSnippetStore, error) {
 func (t *CmdSnippetTool) persist(store *cmdSnippetStore) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.persistLocked(store)
+}
 
+// persistLocked is persist without locking - callers must hold t.mu.
+func (t *CmdSnippetTool) persistLocked(store *cmdSnippetStore) error {
 	path := t.storePath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -210,64 +275,65 @@ func (t *CmdSnippetTool) doSave(name, command, desc string, tags []string) (Resu
 	if utf8.RuneCountInString(desc) > cmdSnippetMaxDesc {
 		desc = truncateRunes(desc, cmdSnippetMaxDesc-3) + "..."
 	}
+	tagNote := ""
 	if len(tags) > cmdSnippetMaxTags {
+		// #1644 case 6: silent truncation - the caller must know the save
+		// kept fewer tags than submitted.
 		tags = tags[:cmdSnippetMaxTags]
-	}
-
-	store, err := t.load()
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to load snippet store: %v", err)}, nil
-	}
-
-	now := time.Now()
-	updated := false
-	for idx := range store.Entries {
-		if strings.EqualFold(store.Entries[idx].Name, name) {
-			store.Entries[idx].Command = command
-			store.Entries[idx].Description = desc
-			store.Entries[idx].Tags = tags
-			store.Entries[idx].UpdatedAt = now
-			store.Entries[idx].UseCount++
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		if len(store.Entries) >= cmdSnippetMaxEntries {
-			// Evict least recently used entry (lowest UpdatedAt).
-			oldest := 0
-			for idx := range store.Entries {
-				if store.Entries[idx].UpdatedAt.Before(store.Entries[oldest].UpdatedAt) {
-					oldest = idx
-				}
-			}
-			store.Entries = append(store.Entries[:oldest], store.Entries[oldest+1:]...)
-		}
-		store.Entries = append(store.Entries, cmdSnippetEntry{
-			Name:        name,
-			Command:     command,
-			Description: desc,
-			Tags:        tags,
-			UseCount:    1,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		})
-	}
-
-	// Keep sorted by name for readability.
-	sort.SliceStable(store.Entries, func(a, b int) bool {
-		return strings.ToLower(store.Entries[a].Name) < strings.ToLower(store.Entries[b].Name)
-	})
-
-	if err := t.persist(store); err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to save snippet: %v", err)}, nil
+		tagNote = fmt.Sprintf(" [note: tags truncated to first %d]", cmdSnippetMaxTags)
 	}
 
 	verb := "saved"
-	if updated {
-		verb = "updated"
+	var total int
+	err := t.mutate(true, func(store *cmdSnippetStore) error {
+		now := time.Now()
+		updated := false
+		for idx := range store.Entries {
+			if strings.EqualFold(store.Entries[idx].Name, name) {
+				store.Entries[idx].Command = command
+				store.Entries[idx].Description = desc
+				store.Entries[idx].Tags = tags
+				store.Entries[idx].UpdatedAt = now
+				store.Entries[idx].UseCount++
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			if len(store.Entries) >= cmdSnippetMaxEntries {
+				// Evict least recently used entry (lowest UpdatedAt).
+				oldest := 0
+				for idx := range store.Entries {
+					if store.Entries[idx].UpdatedAt.Before(store.Entries[oldest].UpdatedAt) {
+						oldest = idx
+					}
+				}
+				store.Entries = append(store.Entries[:oldest], store.Entries[oldest+1:]...)
+			}
+			store.Entries = append(store.Entries, cmdSnippetEntry{
+				Name:        name,
+				Command:     command,
+				Description: desc,
+				Tags:        tags,
+				UseCount:    1,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			})
+		}
+		// Keep sorted by name for readability.
+		sort.SliceStable(store.Entries, func(a, b int) bool {
+			return strings.ToLower(store.Entries[a].Name) < strings.ToLower(store.Entries[b].Name)
+		})
+		total = len(store.Entries)
+		if updated {
+			verb = "updated"
+		}
+		return nil
+	})
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to save snippet: %v", err)}, nil
 	}
-	return Result{Content: fmt.Sprintf("Snippet %q %s (%d total).", name, verb, len(store.Entries))}, nil
+	return Result{Content: fmt.Sprintf("Snippet %q %s (%d total).%s", name, verb, total, tagNote)}, nil
 }
 
 func (t *CmdSnippetTool) doList() (Result, error) {
@@ -303,31 +369,40 @@ func (t *CmdSnippetTool) doGet(name string) (Result, error) {
 	if name == "" {
 		return Result{IsError: true, Content: "name is required"}, nil
 	}
-	store, err := t.load()
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to load snippet store: %v", err)}, nil
-	}
-	for idx := range store.Entries {
-		if strings.EqualFold(store.Entries[idx].Name, name) {
-			// Increment use count and persist.
-			store.Entries[idx].UseCount++
-			store.Entries[idx].UpdatedAt = time.Now()
-			_ = t.persist(store)
-
-			entry := store.Entries[idx]
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("Name: %s\n", entry.Name))
-			sb.WriteString(fmt.Sprintf("Command: %s\n", entry.Command))
-			if entry.Description != "" {
-				sb.WriteString(fmt.Sprintf("Description: %s\n", entry.Description))
+	var found *cmdSnippetEntry
+	err := t.mutate(true, func(store *cmdSnippetStore) error {
+		for idx := range store.Entries {
+			if strings.EqualFold(store.Entries[idx].Name, name) {
+				// Increment use count and persist - whole read-modify-write
+				// under the lock (#1644 case 3).
+				store.Entries[idx].UseCount++
+				store.Entries[idx].UpdatedAt = time.Now()
+				entry := store.Entries[idx]
+				found = &entry
+				return nil
 			}
-			if len(entry.Tags) > 0 {
-				sb.WriteString(fmt.Sprintf("Tags: %s\n", strings.Join(entry.Tags, ", ")))
-			}
-			return Result{Content: strings.TrimSpace(sb.String())}, nil
 		}
+		return nil
+	})
+	if err != nil {
+		// #1644 case 5: the use-count persist failure used to be silently
+		// discarded (`_ = t.persist(store)`) - surface it.
+		return Result{IsError: true, Content: fmt.Sprintf("failed to persist snippet use count: %v", err)}, nil
 	}
-	return Result{IsError: true, Content: fmt.Sprintf("snippet %q not found", name)}, nil
+	if found == nil {
+		return Result{IsError: true, Content: fmt.Sprintf("snippet %q not found", name)}, nil
+	}
+	entry := *found
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Name: %s\n", entry.Name))
+	sb.WriteString(fmt.Sprintf("Command: %s\n", entry.Command))
+	if entry.Description != "" {
+		sb.WriteString(fmt.Sprintf("Description: %s\n", entry.Description))
+	}
+	if len(entry.Tags) > 0 {
+		sb.WriteString(fmt.Sprintf("Tags: %s\n", strings.Join(entry.Tags, ", ")))
+	}
+	return Result{Content: strings.TrimSpace(sb.String())}, nil
 }
 
 func (t *CmdSnippetTool) doDelete(name string) (Result, error) {
@@ -335,20 +410,26 @@ func (t *CmdSnippetTool) doDelete(name string) (Result, error) {
 	if name == "" {
 		return Result{IsError: true, Content: "name is required"}, nil
 	}
-	store, err := t.load()
-	if err != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("failed to load snippet store: %v", err)}, nil
-	}
-	for idx := range store.Entries {
-		if strings.EqualFold(store.Entries[idx].Name, name) {
-			store.Entries = append(store.Entries[:idx], store.Entries[idx+1:]...)
-			if err := t.persist(store); err != nil {
-				return Result{IsError: true, Content: fmt.Sprintf("failed to persist deletion: %v", err)}, nil
+	deleted := false
+	remaining := 0
+	err := t.mutate(true, func(store *cmdSnippetStore) error {
+		for idx := range store.Entries {
+			if strings.EqualFold(store.Entries[idx].Name, name) {
+				store.Entries = append(store.Entries[:idx], store.Entries[idx+1:]...)
+				deleted = true
+				break
 			}
-			return Result{Content: fmt.Sprintf("Snippet %q deleted (%d remaining).", name, len(store.Entries))}, nil
 		}
+		remaining = len(store.Entries)
+		return nil
+	})
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to persist deletion: %v", err)}, nil
 	}
-	return Result{IsError: true, Content: fmt.Sprintf("snippet %q not found", name)}, nil
+	if !deleted {
+		return Result{IsError: true, Content: fmt.Sprintf("snippet %q not found", name)}, nil
+	}
+	return Result{Content: fmt.Sprintf("Snippet %q deleted (%d remaining).", name, remaining)}, nil
 }
 
 func (t *CmdSnippetTool) doSearch(query string) (Result, error) {
