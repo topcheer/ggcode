@@ -32,6 +32,14 @@ type RunStats struct {
 	// Truncated to 500 chars each, max 10 entries.
 	Errors []string
 
+	// ErrorCount is the TOTAL number of recorded errors, unaffected by
+	// the 10-entry Errors cap (#1490-A). The cap exists to bound the
+	// reflection prompt; scorers reading len(Errors) systematically
+	// underestimated error-heavy runs (22 failures in 25 calls read as
+	// 10/25). Scoring paths must use ErrorCount; prompt paths keep
+	// using Errors.
+	ErrorCount int
+
 	// Duration is the wall-clock time from run start to completion.
 	Duration time.Duration
 
@@ -123,6 +131,10 @@ func (s *RunStats) recordCommand(cmd string) {
 // extraction. The format includes the tool name so the LLM can categorize
 // the rule correctly. Max 10 entries, each truncated to 500 chars.
 func (s *RunStats) recordToolError(toolName, errMsg string) {
+	// #1490-A: count EVERY error; the 10-entry list only bounds the
+	// reflection prompt. Scorers reading len(Errors) underestimated
+	// error-heavy runs (22 failures in 25 calls read as 10/25).
+	s.ErrorCount++
 	if len(s.Errors) >= 10 {
 		return
 	}
@@ -159,7 +171,7 @@ func (s *RunStats) Summary() string {
 	if tc := s.totalToolCalls(); tc > 0 {
 		part := fmt.Sprintf("%d tool calls", tc)
 		if len(s.Errors) > 0 {
-			part += fmt.Sprintf(" (%d errors)", len(s.Errors))
+			part += fmt.Sprintf(" (%d errors)", s.ErrorCount)
 		}
 		parts = append(parts, part)
 	}
