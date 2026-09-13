@@ -187,7 +187,12 @@ func parseCatalogCases(t *testing.T, filename string) map[string]string {
 	if err != nil {
 		t.Fatalf("read %s: %v", filename, err)
 	}
-	re := regexp.MustCompile(`(?m)^\tcase "([^"]+)":\n\t\treturn "((?:[^"\\]|\\.)*)"`)
+	// #2259: case blocks may carry translation-decision comments (the
+	// house convention since the #1372/#1373/#1416 verb rounds) or blank
+	// lines between the case and the return - the old tight pattern
+	// silently dropped those keys from the consistency防线 (9 keys across
+	// 4 catalogs), exactly the sensitive keys the comments marked.
+	re := regexp.MustCompile(`(?m)^\tcase "([^"]+)":\n(?:\t*//[^\n]*\n|\t*\n)*\t\treturn "((?:[^"\\]|\\.)*)"`)
 	entries := map[string]string{}
 	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
 		entries[m[1]] = m[2]

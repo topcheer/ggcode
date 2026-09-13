@@ -308,7 +308,11 @@ func jaCatalog(key string) string {
 	case "lang.current":
 		// #1372: en baseline takes the language name; keep the verb so the
 		// argument is not silently dropped if this key is wired up.
-		return "現在の言語: %s"
+		// #2259: en carries TWO %s (name + interactive-hint block) - the ja
+		// catalog's single %s made this the one REAL verb mismatch the
+		// #2259 regex blindspot was hiding; wiring it up would have
+		// printed %!(EXTRA ...) garbage.
+		return "現在の言語: %s\n/lang で対話的に選択、または /lang <en|ja> で直接切り替え。\n%s\n\n"
 	case "lang.invalid":
 		return "サポートされていない言語: %s\n%s\n\n"
 	case "lang.switch":
