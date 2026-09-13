@@ -98,9 +98,22 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		if role != "user" && role != "assistant" {
 			role = "user"
 		}
+		// #1592-A family follow-up (R232 audit item): image content was
+		// silently stripped - only TextBlock was forwarded, so a vision
+		// server's image sampling request degraded to empty text. All
+		// three providers consume ImageBlock (anthropic base64 / openai
+		// data URI / gemini inline), so the conversion is complete.
+		var block provider.ContentBlock
+		switch {
+		case msg.Content.Type == "image" && msg.Content.Data != "":
+			block = provider.ImageBlock(msg.Content.MIMEType, msg.Content.Data)
+		default:
+			// "text" or an unknown/empty type - keep the text contract.
+			block = provider.TextBlock(msg.Content.Text)
+		}
 		messages = append(messages, provider.Message{
 			Role:    role,
-			Content: []provider.ContentBlock{provider.TextBlock(msg.Content.Text)},
+			Content: []provider.ContentBlock{block},
 		})
 	}
 
