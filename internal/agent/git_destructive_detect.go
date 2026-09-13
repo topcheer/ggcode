@@ -131,12 +131,50 @@ var (
 	reRmRf = regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*f\b|-[a-zA-Z]*f[a-zA-Z]*[rR]\b|-[rR]f\b|-[rR]\s+-f\b|-f\s+-[rR]\b|--recursive\s+--force\b|--force\s+--recursive\b|--recursive\s+-f\b|-f\s+--recursive\b)`)
 )
 
+// normalizeGitGlobalFlags rewrites `git -C <path> <sub>` / `git --git-dir=X
+// <sub>` invocations into the bare `git <sub>` form, line by line, so the
+// adjacency-anchored regex family and token helpers see through global flags.
+// #2255 H1: six op classes (reset --hard, branch -D, stash drop, filter-branch,
+// checkout -f, push --force) were silent on every -C variant because the
+// patterns require git and the subcommand to be adjacent.
+func normalizeGitGlobalFlags(cmd string) string {
+	lines := strings.Split(cmd, "\n")
+	for li, line := range lines {
+		toks := strings.Fields(line)
+		for i, t := range toks {
+			if strings.Trim(t, "\"'") != "git" {
+				continue
+			}
+			j := i + 1
+			for j < len(toks) {
+				ft := strings.Trim(toks[j], "\"'")
+				if !isGitGlobalFlag(ft) {
+					break
+				}
+				// --key=value carries the value inline; bare -C/--git-dir
+				// consume one following token as their value.
+				j++
+				if !strings.Contains(ft, "=") && j < len(toks) {
+					j++
+				}
+			}
+			if j > i+1 && j <= len(toks) {
+				out := append(append([]string{}, toks[:i+1]...), toks[j:]...)
+				lines[li] = strings.Join(out, " ")
+			}
+			break // first git occurrence per line is enough
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // detectDestructiveInShellCommand analyzes a shell command string for destructive
 // git operations. Returns patterns found, or nil if none.
 func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	if cmd == "" {
 		return nil
 	}
+	cmd = normalizeGitGlobalFlags(cmd)
 	var found []destructivePattern
 
 	type patternCheck struct {
@@ -407,6 +445,10 @@ func isForcePushCommand(cmd string) bool {
 	// lines and judge each line independently - a push on ANY line is a
 	// push of this command; a non-push line's flags never leak into
 	// another line's scan.
+	// #2255 H1: strip the global-flag segment first so `git -C /repo push
+	// --force` reaches the adjacency check (toks[i-1]=="git" strict
+	// adjacency never saw past -C).
+	cmd = normalizeGitGlobalFlags(cmd)
 	for _, line := range strings.Split(cmd, "\n") {
 		if forcePushSingleLine(line) {
 			return true
