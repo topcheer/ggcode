@@ -75,6 +75,32 @@ func (t SwarmTaskCreateTool) Execute(_ context.Context, input json.RawMessage) (
 
 	metadata := map[string]string{}
 	if args.Assignee != "" {
+		// #1705 case 2: validate the assignee BEFORE creating the task.
+		// idle_runner matches assignee against teammate IDs only, so an
+		// unknown ID (typo) or a NAME left the task permanently stranded:
+		// metadata carried the bogus assignee, the poller skipped it
+		// (assignee mismatch), and the create-then-warn fallback below
+		// kept it invisible on the board forever.
+		team, ok := t.Manager.GetTeam(args.TeamID)
+		if !ok {
+			return Result{IsError: true, Content: fmt.Sprintf("team %q not found", args.TeamID)}, nil
+		}
+		found := false
+		for _, tmSnap := range team.Teammates {
+			if tmSnap.ID == args.Assignee {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ids := make([]string, 0, len(team.Teammates))
+			for _, tmSnap := range team.Teammates {
+				ids = append(ids, tmSnap.ID)
+			}
+			return Result{IsError: true, Content: fmt.Sprintf(
+				"assignee %q is not a teammate ID of team %q (have: %v) - the idle runner matches assignees by ID only, so this task would never run",
+				args.Assignee, args.TeamID, ids)}, nil
+		}
 		metadata["assignee"] = args.Assignee
 	}
 
@@ -338,6 +364,14 @@ func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage)
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 
+	// #1705 case 2: duplicate-complete guard. The tool layer has no caller
+	// identity, so full ownership enforcement lives with the claim path's
+	// ExpectedStatus (#861); what IS enforceable here is idempotence - a
+	// second complete on an already-completed task (stale board view,
+	// double-fire) must not silently succeed and bump board counters.
+	if cur, ok := tm.Get(args.TaskID); ok && cur.Status == task.StatusCompleted {
+		return Result{IsError: true, Content: fmt.Sprintf("task %s is already completed (owner %q)", cur.ID, cur.Owner)}, nil
+	}
 	completed := task.TaskStatus(task.StatusCompleted)
 	updated, err := tm.Update(args.TaskID, task.UpdateOptions{
 		Status: &completed,

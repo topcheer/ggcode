@@ -16,13 +16,19 @@ import (
 func TestSwarmTaskCreateTool(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("test", "leader")
+	// #1705 case 2: assignee must be a real teammate ID - spawn one so the
+	// legacy expectation (assignee accepted) holds under the new gate.
+	tmSnap, err := mgr.SpawnTeammate(team.ID, "worker", "32", nil)
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
 
 	tool := SwarmTaskCreateTool{Manager: mgr}
 	input, _ := json.Marshal(map[string]interface{}{
 		"team_id":     team.ID,
 		"subject":     "Investigate API",
 		"description": "Look into the REST endpoints",
-		"assignee":    "tm-1",
+		"assignee":    tmSnap.ID,
 	})
 
 	result, err := tool.Execute(context.Background(), input)
