@@ -25,14 +25,23 @@ func (m *Manager) LoadAll(entries []config.PluginConfigEntry) {
 	// first-error return aborted the whole startup, violating this
 	// function's own header promise. Skip config-loaded absolute paths.
 	loaded := make(map[string]bool, len(entries))
+	home := config.HomeDir()
 	for _, entry := range entries {
 		if p := entry.Path; p != "" {
+			// #1631 case 2: the dedup key must use the SAME expansion as
+			// loadGoPlugin - "~/.ggcode/x.so" was keyed as "cwd/~/.ggcode/x.so"
+			// (filepath.Abs does not expand ~) while the real file loaded from
+			// the expanded path, so the key never matched scanDirExcluding's
+			// real-absolute exclusion key and the same .so loaded twice (#1601-B
+			// residue: duplicate tool Register kills startup).
+			if strings.HasPrefix(p, "~/") {
+				p = filepath.Join(home, p[2:])
+			}
 			if abs, err := filepath.Abs(p); err == nil {
 				loaded[abs] = true
 			}
 		}
 	}
-	home := config.HomeDir()
 	pluginDir := filepath.Join(home, ".ggcode", "plugins")
 	m.scanDirExcluding(pluginDir, loaded)
 }
@@ -49,9 +58,12 @@ func (m *Manager) loadEntry(entry config.PluginConfigEntry) {
 		// fell to loadCommandPlugin (Path empty) and recorded a FAILURE
 		// the inspector panel displayed - a healthy plugin shown as
 		// broken. Record the handoff as success instead.
+		// #1631 case 3: with Success=true but Error non-nil the inspector
+		// panel (which appends an error line whenever Error != nil) showed
+		// "error: handled by gRPC plugin manager" on every healthy grpc
+		// entry - the marker must not ride the Error field.
 		m.results = append(m.results, LoadResult{
 			Name: entry.Name, Success: true,
-			Error: fmt.Errorf("handled by gRPC plugin manager"),
 		})
 	default:
 		if strings.HasSuffix(entry.Path, ".so") {

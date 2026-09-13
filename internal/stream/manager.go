@@ -281,6 +281,32 @@ func (m *Manager) frameLoop() {
 					// Single broadcaster goroutine reads encoder, broadcasts to all targets
 					safego.Go("stream.fanOutBroadcaster", func() { m.fanOutBroadcaster() })
 					frameLoopInit = true
+
+					// #1631 case 1: Stop() and the first-frame init raced.
+					// Stop read m.encoder while it was still nil (skipping
+					// enc.Stop), then init completed AFTER Stop returned -
+					// leaking the encoder ffmpeg process, re-connected
+					// targets and the broadcaster goroutine, while a second
+					// Start() succeeded and overwrote the stale encoder.
+					// With both select cases ready Go picks randomly, so the
+					// tick branch could still run after close(stopCh). Now
+					// the init path re-checks stopCh once it is complete and
+					// reaps everything itself if Stop already fired.
+					select {
+					case <-m.stopCh:
+						debug.Log("stream", "stop raced first-frame init: reaping encoder/targets")
+						m.encoderMu.RLock()
+						enc := m.encoder
+						m.encoderMu.RUnlock()
+						if enc != nil {
+							enc.Stop()
+						}
+						for _, target := range snapshot {
+							target.Stop()
+						}
+						return
+					default:
+					}
 				}
 				// On resize: only the renderer is recreated above. The encoder
 				// resolution is locked at first frame (encW/encH don't change
