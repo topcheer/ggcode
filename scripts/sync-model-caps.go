@@ -330,6 +330,27 @@ func main() {
 	// 2. Generate Go source code.
 	code := generateGoCode(allEntries, sections)
 
+	// #1668 case 2: aggregate drop guard - even with every provider
+	// non-empty, a mass schema change (renamed IDs, dropped context data)
+	// could shrink the table >20%. Compare against the file we are about
+	// to overwrite and refuse suspicious shrinkage.
+	// #2193: this guard ran AFTER the write and re-read the freshly
+	// written output (oldCount == newCount, the check was mathematically
+	// false, -force was unreachable dead code, and the abort happened
+	// post-overwrite anyway). Read the OLD table first, judge, THEN write.
+	var prevTable []byte
+	if !*dryRun {
+		prevTable, _ = os.ReadFile(*output)
+		oldCount := strings.Count(string(prevTable), ": {ContextWindow")
+		newCount := len(dedupEntries(append([]modelEntry(nil), allEntries...)))
+		if oldCount > 0 && newCount < oldCount*8/10 {
+			fmt.Fprintf(os.Stderr, "FATAL: entry count %d is >20%% below existing %d - aborting (pass -force to override)\n", newCount, oldCount)
+			if !*forceShrink {
+				os.Exit(1) // before any write - the old table survives
+			}
+		}
+	}
+
 	// 3. Write output.
 	if *dryRun {
 		fmt.Print(code)
@@ -345,22 +366,6 @@ func main() {
 	vendorDefaultsPath := "internal/config/vendor_defaults.go"
 	if idx := strings.LastIndex(*output, "/"); idx >= 0 {
 		vendorDefaultsPath = (*output)[:idx+1] + "vendor_defaults.go"
-	}
-	// #1668 case 2: aggregate drop guard - even with every provider
-	// non-empty, a mass schema change (renamed IDs, dropped context data)
-	// could shrink the table >20%. Compare against the file we are about
-	// to overwrite and refuse suspicious shrinkage.
-	if !*dryRun {
-		if prev, rerr := os.ReadFile(*output); rerr == nil {
-			oldCount := strings.Count(string(prev), ": {ContextWindow")
-			newCount := len(dedupEntries(append([]modelEntry(nil), allEntries...)))
-			if oldCount > 0 && newCount < oldCount*8/10 {
-				fmt.Fprintf(os.Stderr, "FATAL: entry count %d is >20%% below existing %d - aborting (pass -force to override)\n", newCount, oldCount)
-				if !*forceShrink {
-					os.Exit(1)
-				}
-			}
-		}
 	}
 	vdCode := generateVendorDefaults(providers)
 	if *dryRun {
