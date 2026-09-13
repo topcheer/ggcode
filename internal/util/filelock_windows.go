@@ -14,17 +14,28 @@ var (
 	procUnlockFile = kernel32.NewProc("UnlockFileEx")
 )
 
-// FileLock acquires a blocking exclusive cross-process lock on the given
+// FileLock acquires a bounded exclusive cross-process lock on the given
 // lock file path, serializing read-modify-write cycles between ggcode
 // processes that share state files (cron stores, probe caches). Mirrors
 // internal/session's index lock, which proved this pattern on Windows.
+//
+// #1834 case 2 (Windows dual of the unix flock fix): LockFileEx now
+// combines LOCKFILE_FAIL_IMMEDIATELY with a bounded retry loop. The old
+// blocking acquisition hung forever when the holder was alive-but-slow.
+// On timeout the error is returned; every caller degrades to its
+// unlocked merge-and-write path (fail-open).
 func FileLock(lockPath string) (func(), error) {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	const lockfileExclusiveLock = 0x00000002
-	if err := lockFileEx(syscall.Handle(f.Fd()), lockfileExclusiveLock); err != nil {
+	const (
+		lockfileExclusiveLock   = 0x00000002
+		lockfileFailImmediately = 0x00000001
+	)
+	if err := acquireWithRetry(func() error {
+		return lockFileEx(syscall.Handle(f.Fd()), lockfileExclusiveLock|lockfileFailImmediately)
+	}); err != nil {
 		f.Close()
 		return nil, err
 	}
