@@ -325,7 +325,8 @@ window.__DATA__ = ` + jsonData + `;
   function renderOverview() {
     const turns = getFilteredTurns();
     // Aggregate
-    let tIn=0, tOut=0, tCache=0, tLLM=turns.length;
+    let tIn=0, tOut=0, tCache=0, tLLM=0;
+    for (const t of turns) { tIn+=t.input; tOut+=t.output; tCache+=t.cache; tLLM+=(t.llmCalls||0); }
     const dayMap = {}, wsMap = {}, ttfts = [];
     turns.forEach(t => {
       tIn += t.input; tOut += t.output; tCache += t.cache;
@@ -535,7 +536,7 @@ window.__DATA__ = ` + jsonData + `;
     const tEnd = filtered.length ? fmtTurnTime(filtered[filtered.length-1]) : '-';
     document.getElementById('detailCards').innerHTML =
       card('Messages', s.msgCount) +
-      card('LLM Calls', filtered.length, tStart + ' ~ ' + tEnd) +
+      card('LLM Calls', filtered.reduce((a,t)=>a+(t.llmCalls||0),0), tStart + ' ~ ' + tEnd) +
       card('Tool Calls', s.toolCalls) +
       card('Input', fmt(sumIn), 'tokens') +
       card('Output', fmt(sumOut), 'tokens') +
@@ -827,7 +828,7 @@ window.__DATA__ = ` + jsonData + `;
 
     switchTab('dailyDetails');
     document.getElementById('dailyTitle').textContent = dateStr;
-    document.getElementById('dailyInfo').textContent = dayTurns.length + ' LLM calls across all sessions';
+    document.getElementById('dailyInfo').textContent = dayTurns.reduce((a,t)=>a+(t.llmCalls||0),0) + ' LLM calls across all sessions';
 
     // Aggregate by model
     const byModel = {};
@@ -849,7 +850,7 @@ window.__DATA__ = ` + jsonData + `;
     const sumCache = models.reduce((a,m)=>a+m.cache, 0);
     document.getElementById('dailyDetailCards').innerHTML =
       card('Models', models.length) +
-      card('LLM Calls', dayTurns.length) +
+      card('LLM Calls', dayTurns.reduce((a,t)=>a+(t.llmCalls||0),0)) +
       card('Input', fmt(sumIn), 'tokens') +
       card('Output', fmt(sumOut), 'tokens') +
       card('Cache', fmt(sumCache), 'tokens') +
