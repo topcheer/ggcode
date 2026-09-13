@@ -1,3 +1,5 @@
+//go:build !windows
+
 package util
 
 // #2190 regression: kill(pid,0) EPERM means the process EXISTS but is
