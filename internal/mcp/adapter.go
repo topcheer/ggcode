@@ -228,6 +228,15 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		parts = append(parts, fmt.Sprintf("[%s content omitted by MCP adapter]", c.Type))
 	}
 
+	// #1644 case 6: a spec-legal 2025-06-18 server may return ONLY
+	// structuredContent with zero content blocks - the loop above ran zero
+	// times and produced Content="" with IsError=false, a clueless empty
+	// success. Render the structured payload as JSON text so the agent
+	// sees the data instead of nothing.
+	if len(parts) == 0 && len(result.StructuredContent) > 0 {
+		parts = append(parts, string(result.StructuredContent))
+	}
+
 	content := strings.Join(parts, "\n")
 	// When the MCP server itself reports an error (IsError=true), prefix
 	// the content with the server name so the agent knows which server failed.

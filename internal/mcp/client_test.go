@@ -135,6 +135,21 @@ func TestCallToolResultFields(t *testing.T) {
 	if len(r2.Content) != 1 || r2.Content[0].Text != "hello" {
 		t.Error("round-trip failed")
 	}
+
+	// #1644 case 6: structuredContent must survive the JSON round-trip -
+	// spec-legal servers return only this field.
+	r3 := &CallToolResult{StructuredContent: json.RawMessage(`{"rows":3}`)}
+	data3, err := json.Marshal(r3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r4 CallToolResult
+	if err := json.Unmarshal(data3, &r4); err != nil {
+		t.Fatal(err)
+	}
+	if string(r4.StructuredContent) != `{"rows":3}` {
+		t.Errorf("structuredContent round-trip failed: %s", r4.StructuredContent)
+	}
 }
 
 func TestInitializeParams(t *testing.T) {

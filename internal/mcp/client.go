@@ -2739,6 +2739,11 @@ type CallToolParams struct {
 type CallToolResult struct {
 	Content []ToolContent `json:"content"`
 	IsError bool          `json:"isError,omitempty"`
+	// StructuredContent carries the MCP 2025-06-18 spec's optional
+	// structured output. A spec-legal server may return ONLY this field
+	// with no content blocks (#1644 case 6) - without it the adapter
+	// produced Content="" with IsError=false, an empty success.
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
 }
 
 type ToolContent struct {

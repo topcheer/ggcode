@@ -222,6 +222,18 @@ type ToolChoiceProvider interface {
 	ToolChoice() string
 }
 
+// StopSequenceSetter is implemented by providers that can pass per-call
+// stop sequences to the model API. MCP sampling (#2239) uses it to honor
+// the server's stopSequences - parsed then dropped before, silently
+// violating the sampling contract (sentinel-delimited structured output
+// ran past its END marker). Symmetric getter/setter: the sampling handler
+// snapshots the previous value for restore inside the shared lock window
+// (#1612-A), no reflection like the legacy maxTokens path.
+type StopSequenceSetter interface {
+	SetStopSequences(seqs []string)
+	StopSequences() []string
+}
+
 // SamplingConfigProvider is implemented by providers that support temperature
 // and top_p (nucleus sampling) inference parameters. Temperature controls
 // randomness: 0.0 is fully deterministic, 1.0 is the default for most models.

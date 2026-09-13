@@ -23,6 +23,7 @@ type GeminiProvider struct {
 	reasoningEffort string                    // "", "low", "medium", "high" — maps to Gemini ThinkingConfig
 	toolChoice      string                    // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
 	temperature     float64                   // 0 = provider default
+	stopSequences   []string                  // #2239: MCP sampling per-call stop sequences
 	topP            float64                   // 0 = provider default
 	transport       *headerInjectingTransport // kept for runtime header updates
 }
@@ -71,7 +72,13 @@ func (p *GeminiProvider) ReasoningEffort() string { return p.reasoningEffort }
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *GeminiProvider) SetTemperature(temp float64) { p.temperature = temp }
-func (p *GeminiProvider) Temperature() float64        { return p.temperature }
+
+// SetStopSequences implements provider.StopSequenceSetter (#2239).
+func (p *GeminiProvider) SetStopSequences(seqs []string) { p.stopSequences = seqs }
+
+// StopSequences implements provider.StopSequenceSetter (#2239).
+func (p *GeminiProvider) StopSequences() []string { return p.stopSequences }
+func (p *GeminiProvider) Temperature() float64    { return p.temperature }
 
 // SetTopP sets the nucleus sampling parameter. 0 means "use provider default".
 func (p *GeminiProvider) SetTopP(topP float64) { p.topP = topP }
@@ -519,6 +526,10 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 	}
 	if p.topP > 0 {
 		config.TopP = ptrToFloat32(float32(p.topP))
+	}
+	// #2239: per-call stop sequences (MCP sampling contract).
+	if len(p.stopSequences) > 0 {
+		config.StopSequences = p.stopSequences
 	}
 }
 

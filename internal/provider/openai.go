@@ -32,6 +32,7 @@ type OpenAIProvider struct {
 	reasoningEffort string
 	toolChoice      string // "", "auto", "required", "none"
 	temperature     float64
+	stopSequences   []string // #2239: MCP sampling per-call stop sequences
 	topP            float64
 	name            string
 	baseURL         string                    // endpoint URL, for logging
@@ -125,7 +126,13 @@ func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
 // SetTemperature sets the sampling temperature. A value of 0 means "use provider
 // default" (which is typically 1.0). Values between 0 and 2 are valid.
 func (p *OpenAIProvider) SetTemperature(temp float64) { p.temperature = temp }
-func (p *OpenAIProvider) Temperature() float64        { return p.temperature }
+
+// SetStopSequences implements provider.StopSequenceSetter (#2239).
+func (p *OpenAIProvider) SetStopSequences(seqs []string) { p.stopSequences = seqs }
+
+// StopSequences implements provider.StopSequenceSetter (#2239).
+func (p *OpenAIProvider) StopSequences() []string { return p.stopSequences }
+func (p *OpenAIProvider) Temperature() float64    { return p.temperature }
 
 // SetTopP sets the nucleus sampling parameter. A value of 0 means "use provider
 // default". Values between 0 and 1 are valid.
@@ -141,6 +148,10 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 	}
 	if p.topP > 0 {
 		req.TopP = float32(p.topP)
+	}
+	// #2239: per-call stop sequences (MCP sampling contract).
+	if len(p.stopSequences) > 0 {
+		req.Stop = p.stopSequences
 	}
 }
 
