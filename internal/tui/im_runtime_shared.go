@@ -13,6 +13,20 @@ import (
 )
 
 func (m *Model) ensureCurrentWorkspaceIMManager(unavailableErr, disabledErr string, autoEnable bool) error {
+	// #2175: this lazy-ensure runs in Cmd goroutines (ensurePCReady and
+	// 8 panels' key handlers) while the Update loop keeps reading
+	// m.imManager - the entry used to check-and-set with NO guard, so
+	// concurrent panels raced duplicate InitRuntime calls and the
+	// config.IM.Enabled flip + saveConfig fired unlocked from the Cmd
+	// goroutine. Mirror the sister function's guard (#1379/#1417):
+	// serialize the whole ensure on the same imEnsure mutex and re-check
+	// the manager under it. (Field reads elsewhere remain the broader
+	// #2152-family work; this closes the write side.)
+	if m.imEnsure == nil {
+		m.imEnsure = &imEnsureGuard{}
+	}
+	m.imEnsure.mu.Lock()
+	defer m.imEnsure.mu.Unlock()
 	if m.imManager != nil {
 		return nil
 	}
