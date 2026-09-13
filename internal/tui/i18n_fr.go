@@ -411,7 +411,7 @@ func frCatalog(key string) string {
 	case "panel.provider.login.browser_opened":
 		return "Pâge de vérification ouverte dans votre navigateur."
 	case "panel.provider.login.browser_failed":
-		return "Erreur lors de l'ouverture de la pâge de vérification: %s"
+		return "Erreur lors de l'ouverture de la page de vérification: %s"
 	case "panel.provider.login.success":
 		return "GitHub Copilot connecté."
 	case "panel.provider.login.failed":
@@ -421,7 +421,7 @@ func frCatalog(key string) string {
 	case "panel.provider.refreshing_vendor":
 		return "Actualisation des modèles pour %s..."
 	case "panel.provider.refresh.save_failed":
-		return "Modèles actualisés, mais erreur de sauvegardé de config: %s"
+		return "Modèles actualisés, mais erreur de sauvegarde de config: %s"
 	case "panel.provider.refresh.partial":
 		return "Actualisé(s) %d endpoint(s), découvert(s) %d modèle(s). Certains endpoints ont échoué: %v"
 	case "panel.provider.refresh.success":
@@ -467,7 +467,7 @@ func frCatalog(key string) string {
 	case "panel.model.switched":
 		return "Modèle change en %s."
 	case "panel.model.refresh.save_failed":
-		return "Modèles actualisés, mais erreur de sauvegardé de config: %s"
+		return "Modèles actualisés, mais erreur de sauvegarde de config: %s"
 	case "panel.model.refresh.builtin_reason":
 		return "Utilisation des modèles intégrés: %s"
 	case "panel.model.refresh.remote_loaded":
@@ -689,17 +689,17 @@ func frCatalog(key string) string {
 	case "update.restart_failed":
 		return "Mise à jour préparée, mais erreur de redémarrage: %v\n\n"
 	case "update.pm_hint.brew":
-		return "Mise à jour installée. Noté: ggcode a été installe via Homebrew.\nExécutez `brew upgrade ggcode` pour garder Homebrew synchronisé.\n\n"
+		return "Mise à jour installée. Note : ggcode a été installé via Homebrew.\nExécutez `brew upgrade ggcode` pour garder Homebrew synchronisé.\n\n"
 	case "update.pm_hint.scoop":
-		return "Mise à jour installée. Noté: ggcode a été installe via Scoop.\nExécutez `scoop update ggcode` pour garder Scoop synchronisé.\n\n"
+		return "Mise à jour installée. Note : ggcode a été installé via Scoop.\nExécutez `scoop update ggcode` pour garder Scoop synchronisé.\n\n"
 	case "update.pm_hint.winget":
-		return "Mise à jour installée. Noté: ggcode a été installe via winget.\nExécutez `winget upgrade ggcode` pour garder winget synchronisé.\n\n"
+		return "Mise à jour installée. Note : ggcode a été installé via winget.\nExécutez `winget upgrade ggcode` pour garder winget synchronisé.\n\n"
 	case "update.pm_hint.snap":
-		return "Mise à jour installée. Noté: ggcode a été installe via Snap.\nExécutez `sudo snap refresh ggcode` pour garder Snap synchronisé.\n\n"
+		return "Mise à jour installée. Note : ggcode a été installé via Snap.\nExécutez `sudo snap refresh ggcode` pour garder Snap synchronisé.\n\n"
 	case "update.other_installs":
 		return "Autres installations de ggcode détectées sur ce système:\n%s\nSi un ggcode différent apparaît en premier dans PATH, envisagez de le mettre à jour aussi ou d'ajuster l'ordre de PATH.\n\n"
 	case "update.dual_scope":
-		return "Attention: Installations utilisateur et système de ggcode trouvées:\n  Utilisateur: %s\n  Système: %s\nCela peut causer des conflits de PATH. Envisâgez de desinstaller une via Parametrès > Applications.\n\n"
+		return "Attention: Installations utilisateur et système de ggcode trouvées:\n  Utilisateur: %s\n  Système: %s\nCela peut causer des conflits de PATH. Envisagez de désinstaller une via Paramètres > Applications.\n\n"
 	case "plugins.unavailable":
 		return "Gestionnaire de plugins non disponible.\n\n"
 	case "plugins.none":
@@ -1141,7 +1141,7 @@ Souris:
 	case "pairing.rejected":
 		return "La demandé de liaison actuelle a été rejetée. Veuillez redémarrer pour continuer."
 	case "pairing.blacklisted":
-		return "Ce canal a été bloque en raison de multiples rejets."
+		return "Ce canal a été bloqué en raison de multiples rejets."
 	default:
 		return enCatalog(key)
 	}
