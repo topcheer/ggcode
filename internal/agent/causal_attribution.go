@@ -230,7 +230,9 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 		// must NOT set fileMatch. The symmetric arm gets the same boundary.
 		suffixTier := func(long, short string) (hit, strong bool) {
 			if strings.Contains(short, "/") {
-				return strings.HasSuffix(long, "/"+short), true
+				// #2218 case A: anchored but possibly not unique - the same
+				// ambiguity probe as bare names applies (precomputed above).
+				return strings.HasSuffix(long, "/"+short), !bareAmbiguous[short]
 			}
 			if filepath.Base(long) == short {
 				return true, !bareAmbiguous[short]
@@ -287,21 +289,35 @@ func computeCRSDetail(edit causalEditStep, errorFiles []string, recencyRank int,
 	return score, fileMatch
 }
 
-// bareAmbiguousNames (#2171 gap 2) precomputes which BARE error-file
-// basenames are ambiguous across the recorded edits: the basename hits
-// two or more DISTINCT edit paths, so a bare hit cannot tell them apart
-// and must be tiered down to weak evidence at scoring time.
+// bareAmbiguousNames (#2171 gap 2, #2218 case A) precomputes which
+// normalized error-file references are ambiguous across the recorded
+// edits: the reference matches two or more DISTINCT edit paths, so a
+// hit cannot tell them apart and must be tiered down to weak evidence at
+// scoring time. Bare basenames match via filepath.Base; directory-
+// carrying references (api/types.go) match via the same "/"+ref suffix
+// anchor the suffix tier uses - anchored is NOT unique, so both shapes
+// get the ambiguity probe.
 func bareAmbiguousNames(edits []causalEditStep, errorFiles []string) map[string]bool {
 	ambiguous := map[string]bool{}
 	for _, ef := range errorFiles {
 		efN := normalizeCausalPath(ef)
-		if strings.Contains(efN, "/") {
-			continue // directory-carrying matches are anchored, never bare
+		if efN == "" {
+			continue
 		}
 		seen := map[string]bool{}
 		for _, e := range edits {
 			editN := normalizeCausalPath(e.filePath)
-			if filepath.Base(editN) == efN {
+			var hit bool
+			if strings.Contains(efN, "/") {
+				// #2218: same anchor as the suffix tier - two edits ending in
+				// "/api/types.go" (pkg/api + internal/api) both match a
+				// relative "api/types.go" compile error at full weight without
+				// this probe (recency broke the tie with max-authority wording).
+				hit = strings.HasSuffix(editN, "/"+efN)
+			} else {
+				hit = filepath.Base(editN) == efN
+			}
+			if hit {
 				seen[editN] = true
 			}
 		}
