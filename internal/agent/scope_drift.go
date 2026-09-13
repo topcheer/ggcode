@@ -111,19 +111,32 @@ func dirSignature(dir string) string {
 	// #473: strip leading separators (and Windows drive letters) so
 	// absolute paths ("/project/pkgA" -> "project/pkgA") keep their two
 	// meaningful segments instead of collapsing every sibling under "/project".
+	// #1491-D residue: on a DEEP absolute path ("/Volumes/x/repo/internal/agent")
+	// the top-2 segments ("Volumes/x") are the same for every directory in
+	// the workspace - the signature stopped discriminating and the
+	// per-directory threshold was structurally unreachable. Absolute paths
+	// now take the LAST two segments (the semantically meaningful ones);
+	// relative paths keep top-2.
+	wasAbs := strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "\\") || (len(dir) >= 2 && dir[1] == ':')
 	dir = strings.TrimLeft(dir, "/\\")
 	if len(dir) >= 2 && dir[1] == ':' {
 		dir = dir[2:]
 	}
 	parts := strings.Split(dir, "/")
-	if len(parts) <= 1 {
+	// Drop empty segments (double separators) before slicing.
+	clean := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			clean = append(clean, p)
+		}
+	}
+	if len(clean) <= 1 {
 		return dir
 	}
-	// Keep top 2 segments for meaningful grouping.
-	if len(parts) >= 2 {
-		return parts[0] + "/" + parts[1]
+	if wasAbs && len(clean) > 2 {
+		return clean[len(clean)-2] + "/" + clean[len(clean)-1]
 	}
-	return dir
+	return clean[0] + "/" + clean[1]
 }
 
 // check returns a guidance message if scope drift is detected, empty otherwise.
