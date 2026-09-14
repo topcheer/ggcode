@@ -73,6 +73,19 @@ func LoadInstanceConfig(workspace string) *Config {
 		debug.Log("config", "instance config parse error %s: %v", path, err)
 		return nil
 	}
+	// #2284-C: also unmarshal as a raw map to record which top-level keys
+	// the instance file EXPLICITLY contains. yaml cannot distinguish
+	// "max_iterations: 0" from an absent key after typed unmarshal, and the
+	// zero-value merge gate resurrected cleared values (set 80 -> clear to
+	// 0 -> SaveInstance -> reload -> 80 back). With the explicit set, the
+	// merge treats a present key as an override even when its value is zero.
+	var rawKeys map[string]interface{}
+	if err := yaml.Unmarshal(data, &rawKeys); err == nil {
+		cfg.explicitKeys = make(map[string]bool, len(rawKeys))
+		for k := range rawKeys {
+			cfg.explicitKeys[k] = true
+		}
+	}
 	cfg.FilePath = path
 	return &cfg
 }
@@ -100,23 +113,27 @@ func MergeInstance(global, instance *Config) {
 		global.instanceFields = make(map[string]bool)
 	}
 
-	// Simple scalar fields — only override if global is zero.
+	// Simple scalar fields — only override if global is zero, OR when the
+	// instance file explicitly contains the key (#2284-C: an explicit
+	// "max_iterations: 0" is a deliberate clear-to-default, not a gap to
+	// fill - the old gate resurrected the cleared global value).
 	// NOTE: Vendor, Endpoint, and Model are now SESSION-scoped (persisted in
 	// session JSONL). Instance config no longer overrides them — each session
 	// remembers its own model selection independently.
-	if global.Language == "" && instance.Language != "" {
+	explicit := func(key string) bool { return instance.explicitKeys[key] }
+	if (global.Language == "" && instance.Language != "") || (explicit("language") && instance.Language != "") {
 		global.Language = instance.Language
 		global.instanceFields["language"] = true
 	}
-	if global.ExtraPrompt == "" && instance.ExtraPrompt != "" {
+	if (global.ExtraPrompt == "" && instance.ExtraPrompt != "") || explicit("system_prompt") {
 		global.ExtraPrompt = instance.ExtraPrompt
 		global.instanceFields["system_prompt"] = true
 	}
-	if global.DefaultMode == "" && instance.DefaultMode != "" {
+	if (global.DefaultMode == "" && instance.DefaultMode != "") || (explicit("default_mode") && instance.DefaultMode != "") {
 		global.DefaultMode = instance.DefaultMode
 		global.instanceFields["default_mode"] = true
 	}
-	if global.MaxIterations == 0 && instance.MaxIterations != 0 {
+	if (global.MaxIterations == 0 && instance.MaxIterations != 0) || explicit("max_iterations") {
 		global.MaxIterations = instance.MaxIterations
 		global.instanceFields["max_iterations"] = true
 	}
