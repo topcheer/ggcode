@@ -476,9 +476,34 @@ func (m *Model) bindWeComEntry(entry wecomBindingEntry) tea.Cmd {
 func (m *Model) wecomBindTail(entry wecomBindingEntry, ws string) tea.Msg {
 	if err := m.startWeComAdapterIfNeeded(entry.Adapter); err != nil {
 		if errors.Is(err, errWecomEnableNeeded) {
-			return m.wecomEnableMutation(entry.Adapter, func(mm *Model) tea.Msg {
-				return mm.wecomBindTail(entry, ws)
-			})
+			// #2337: wecomEnableMutation's enable-restart failure calls
+			// rollbackWecomCreate, which DELETES the adapter - correct for the
+			// create flow (dirty just-persisted config), catastrophic for bind:
+			// a pre-existing adapter would vanish because its restart hiccuped.
+			// Inline the same enable mutation, but bind-only: a restart failure
+			// surfaces as a plain bind error and the adapter is left as-is.
+			return configMutationMsg{
+				apply: func(m *Model) error {
+					if err := m.config.SetIMAdapterEnabled(entry.Adapter, true); err != nil {
+						return fmt.Errorf("enable %s: %w", entry.Adapter, err)
+					}
+					if m.imManager != nil {
+						_ = m.imManager.EnableBinding(entry.Adapter)
+					}
+					return nil
+				},
+				next: func(m *Model) tea.Cmd {
+					return func() tea.Msg {
+						if err := im.StartNamedAdapter(context.Background(), m.config.IMSnapshot(), entry.Adapter, m.imManager); err != nil {
+							return wecomBindResultMsg{err: err}
+						}
+						return m.wecomBindTail(entry, ws)
+					}
+				},
+				fail: func(err error) tea.Msg {
+					return wecomBindResultMsg{err: err}
+				},
+			}
 		}
 		return wecomBindResultMsg{err: err}
 	}
@@ -544,8 +569,11 @@ func (m Model) wecomBindingEntries() []wecomBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	// #2337: take the snapshot once - the live-map len below raced the
+	// Update loop's locked writes (capacity hint only, but -race trips).
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformWeCom)) {
 			keys = append(keys, name)
 		}
