@@ -159,10 +159,13 @@ func TestIssue731MergeInstanceVendorsFlagMatrix(t *testing.T) {
 			wantMerged: []string{"a", "b"},
 		},
 		{
-			name:       "fully global no new keys",
+			// #2289: same key with a DIFFERENT value now wins and flags
+			// (instance-wins, aligned with #524 ToolPerms); identical
+			// values stay unflagged.
+			name:       "same key different value now overrides",
 			global:     map[string]VendorConfig{"a": vend("https://a.example.com")},
 			instance:   map[string]VendorConfig{"a": vend("https://other.example.com")},
-			wantFlag:   false,
+			wantFlag:   true,
 			wantMerged: []string{"a"},
 		},
 		{

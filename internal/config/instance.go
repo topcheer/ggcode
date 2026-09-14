@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -126,7 +127,14 @@ func MergeInstance(global, instance *Config) {
 	// IM
 	mergeIMConfig(&global.IM, &instance.IM, global.instanceFields)
 
-	// Vendors — add instance vendors not in global
+	// Vendors - add instance vendors not in global
+	// #2289: vendors - instance-wins on conflict, mirroring the #524
+	// ToolPerms read-side semantics (same fix shape). The old merge only
+	// adopted instance keys ABSENT from global, but diffVendors
+	// deliberately persists in-place edits of globally configured vendors
+	// (marshal-compare branch) - those persisted deltas were silently
+	// dropped on reload: SaveInstanceScoped wrote them, MergeInstance
+	// ignored them, the user's change vanished.
 	if global.Vendors == nil && instance.Vendors != nil {
 		global.Vendors = make(map[string]VendorConfig, len(instance.Vendors))
 	}
@@ -137,7 +145,9 @@ func MergeInstance(global, instance *Config) {
 	// write-back gate (InstanceFields() contains "vendors") never opened and
 	// AddCustomEndpoint/SaveAPIKey changes were silently lost on restart.
 	for k, v := range instance.Vendors {
-		if _, exists := global.Vendors[k]; !exists {
+		// VendorConfig contains maps (Endpoints) so it is not ==-comparable;
+		// same deep-equality shape diffVendors uses on the write side.
+		if gv, exists := global.Vendors[k]; !exists || !reflect.DeepEqual(gv, v) {
 			global.Vendors[k] = v
 			global.instanceFields["vendors"] = true
 		}

@@ -248,9 +248,11 @@ func TestMergeInstance_VendorsNoOverride(t *testing.T) {
 
 	MergeInstance(global, instance)
 
-	// Global vendor should NOT be overridden (same key exists in global)
-	if global.Vendors["openai"].Endpoints["main"].BaseURL != "https://api.openai.com" {
-		t.Errorf("global vendor base_url should not be overridden, got %s", global.Vendors["openai"].Endpoints["main"].BaseURL)
+	// #2289: instance-wins on conflict (aligned with #524 ToolPerms and
+	// diffVendors' persist-in-place branch) - the old global-wins merge
+	// silently dropped persisted instance deltas on reload.
+	if global.Vendors["openai"].Endpoints["main"].BaseURL != "https://custom.api.com" {
+		t.Errorf("instance vendor override should win, got %s", global.Vendors["openai"].Endpoints["main"].BaseURL)
 	}
 }
 
