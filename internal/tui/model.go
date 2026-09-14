@@ -1478,6 +1478,12 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	m.activeVendor = strings.TrimSpace(vendor)
 	m.activeEndpoint = strings.TrimSpace(endpoint)
 	m.activeModel = strings.TrimSpace(model)
+	// #2365-②: the sidebar usage snapshot belongs to the PREVIOUS vendor -
+	// the section renders no vendor name, so a stale balance/quota bar
+	// would present as the new vendor's numbers indefinitely (the only two
+	// writers fire on probe replies). Drop it; the sidebar returns to the
+	// no-data state until the new vendor's probe lands.
+	m.sidebarUsage = nil
 	// Keep LAN peers informed of the current model. Switching models also
 	// clears any degraded health status (different quota pool / credential).
 	if m.lanChatHub != nil {
