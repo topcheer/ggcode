@@ -773,7 +773,15 @@ func filterEnviron(environ []string, keys ...string) []string {
 
 // pathParamFields lists tool argument fields that hold a filesystem path.
 // Order matters: most specific first.
-var pathParamFields = []string{"file_path", "path", "filename", "file"}
+// #1542-C: aligned with the wider labels.go table ("directory"/
+// "source"/"destination"/"notebook_path" were missing — glob/
+// list_directory's directory and file_ops move's source/destination
+// fell through to the raw-JSON contains() fallback, mis-triggering on
+// path-like content inside unrelated fields).
+var pathParamFields = []string{
+	"file_path", "path", "filename", "file",
+	"directory", "source", "destination", "notebook_path",
+}
 
 // contentValueFields lists argument fields whose string value is arbitrary
 // user/agent content rather than a path. ExtractFilePath ignores these keys

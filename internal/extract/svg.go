@@ -14,7 +14,9 @@ import (
 // whitelist to aria-label attributes.
 func svgTextElement(name string) bool {
 	switch name {
-	case "text", "tspan", "title", "desc":
+	case "text", "tspan", "title", "desc", "textPath", "a":
+		// #1542-C: textPath (SVG 1.1/2 curve text — visible) and a (link
+		// labels — visible) were silently dropped by the strict whitelist.
 		return true
 	}
 	return false

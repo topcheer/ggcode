@@ -152,8 +152,15 @@ func (p *rtfParser) handleEscape() bool {
 				} else {
 					p.writeRune(decodeCodePageByte(p.ansiCP, byte(val)))
 				}
+				p.i += 3
+				return true
 			}
-			p.i += 3
+			// #1542-C: invalid hex (e.g. \':x — the quoted char is not a
+			// hex digit) - the old code still skipped 3 bytes, swallowing the
+			// two bytes after the quote along with the \' itself. Only the
+			// escape prefix was consumed; fall through so the next byte is
+			// emitted verbatim.
+			p.i += 2
 			return true
 		}
 	case 'u':
