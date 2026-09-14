@@ -77,6 +77,9 @@ func AnalyzeCacheFromSessionCost(sc SessionCost, pricing PricingTable) CacheAnal
 }
 
 func analyzeCacheLocked(sc SessionCost, pricing PricingTable) CacheAnalysis {
+	// #1529: subset normalization now happens at the Tracker.Record write
+	// boundary (DisplayInputTokens), so the SessionCost numbers arriving
+	// here are already disjoint addends for every provider.
 	a := CacheAnalysis{
 		CacheReadTokens:      sc.CacheReadTokens,
 		CacheWriteTokens:     sc.CacheWriteTokens,

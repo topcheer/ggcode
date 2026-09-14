@@ -78,7 +78,13 @@ func NewTracker(provider, model string, pricing PricingTable) *Tracker {
 func (t *Tracker) Record(usage TokenUsage) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.cost.InputTokens += int64(usage.InputTokens)
+	// #1529: OpenAI-compat usage is SUBSET semantics (InputTokens already
+	// contains CacheRead); Anthropic/Gemini are disjoint addends. Normalize
+	// at the write boundary with the same DisplayInputTokens the UI uses,
+	// so the cost-side analysis (totalRead denominator, PercentSaved) and
+	// every downstream consumer see disjoint numbers like the #1441
+	// sibling monitor already does.
+	t.cost.InputTokens += int64(usage.DisplayInputTokens())
 	t.cost.OutputTokens += int64(usage.OutputTokens)
 	t.cost.CacheReadTokens += int64(usage.CacheRead)
 	t.cost.CacheWriteTokens += int64(usage.CacheWrite)
@@ -92,7 +98,7 @@ func (t *Tracker) Record(usage TokenUsage) {
 func (t *Tracker) RecordForAgent(agentID string, usage TokenUsage) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.cost.InputTokens += int64(usage.InputTokens)
+	t.cost.InputTokens += int64(usage.DisplayInputTokens()) // #1529 subset normalization
 	t.cost.OutputTokens += int64(usage.OutputTokens)
 	t.cost.CacheReadTokens += int64(usage.CacheRead)
 	t.cost.CacheWriteTokens += int64(usage.CacheWrite)
@@ -110,7 +116,7 @@ func (t *Tracker) recordAgentLocked(agentID string, usage TokenUsage) {
 		entry = &AgentCostEntry{AgentID: agentID}
 		t.agentCosts[agentID] = entry
 	}
-	entry.InputTokens += int64(usage.InputTokens)
+	entry.InputTokens += int64(usage.DisplayInputTokens()) // #1529 subset normalization
 	entry.OutputTokens += int64(usage.OutputTokens)
 	entry.CacheRead += int64(usage.CacheRead)
 	entry.CacheWrite += int64(usage.CacheWrite)
