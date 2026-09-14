@@ -1691,6 +1691,17 @@ func (a *App) ListCronJobs() ([]wailskit.CronJobInfo, error) {
 	return bridge.ListCronJobs()
 }
 
+// GetUsageInfo returns the active vendor's live balance/rolling-window
+// usage for the status-bar badge (#2150 batch 3). Mirrors the bridge's
+// soft-degradation contract: config/probe failures come back as a result
+// with Error set, never as a thrown Wails error.
+func (a *App) GetUsageInfo() wailskit.UsageInfoResult {
+	if bridge := wailskit.GetChatBridge(); bridge != nil {
+		return bridge.GetUsageInfo()
+	}
+	return wailskit.UsageInfoResult{Windows: []wailskit.UsageWindowInfo{}, Error: "chat bridge not available"}
+}
+
 // GetCronJob returns a single cron job by ID.
 func (a *App) GetCronJob(id string) (wailskit.CronJobInfo, error) {
 	if bridge := wailskit.GetChatBridge(); bridge != nil {

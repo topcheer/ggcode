@@ -5,6 +5,7 @@ import type { StatusBarData } from '../types'
 import { useOnlineStatus } from '../hooks/useOnlineStatus'
 import { useTranslation } from '../i18n'
 import { parseTokenValue, formatTokenValue, isValidTokenValue } from '../utils/tokenFormat'
+import { UsageBadge } from './UsageBadge'
 
 interface StatusBarProps {
   onContextToggle?: () => void
@@ -384,6 +385,8 @@ export function StatusBar({ onContextToggle, data, zoom, onZoomIn, onZoomOut, on
         </div>
       )}
       <div style={{ flex: 1 }} />
+      {/* Vendor usage/balance badge (#2150) - renders nothing without data */}
+      <UsageBadge />
       {/* IM adapter count */}
       {imCount > 0 && (
         <span title={`${imCount} IM adapter(s) active`} style={{

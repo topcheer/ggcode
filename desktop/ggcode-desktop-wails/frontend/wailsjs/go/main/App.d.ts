@@ -50,6 +50,8 @@ export function GetAvailableModels():Promise<Array<string>>;
 
 export function GetConfig():Promise<wailskit.FullConfig>;
 
+export function GetUsageInfo():Promise<wailskit.UsageInfoResult>;
+
 export function GetCronJob(arg1:string):Promise<wailskit.CronJobInfo>;
 
 export function GetCurrentSessionID():Promise<string>;

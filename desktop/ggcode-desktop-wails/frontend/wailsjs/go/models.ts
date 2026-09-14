@@ -427,6 +427,61 @@ export namespace swarm {
 
 export namespace wailskit {
 	
+	export class UsageWindowInfo {
+	    label: string;
+	    usedPercent: number;
+	    resetsAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new UsageWindowInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.usedPercent = source["usedPercent"];
+	        this.resetsAt = source["resetsAt"];
+	    }
+	}
+	export class UsageInfoResult {
+	    vendor: string;
+	    source: string;
+	    balance: number | null;
+	    windows: UsageWindowInfo[];
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new UsageInfoResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.vendor = source["vendor"];
+	        this.source = source["source"];
+	        this.balance = source["balance"];
+	        this.windows = this.convertValues(source["windows"], UsageWindowInfo);
+	        this.error = source["error"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            const obj: any = {};
+		            const keys = Object.keys(a);
+		            keys.forEach(k => obj[k] = new classs(a[k]));
+		            return obj;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class CronJobInfo {
 	    id: string;
 	    cronExpr: string;

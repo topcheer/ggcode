@@ -90,6 +90,10 @@ export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }
 
+export function GetUsageInfo() {
+  return window['go']['main']['App']['GetUsageInfo']();
+}
+
 export function GetCronJob(arg1) {
   return window['go']['main']['App']['GetCronJob'](arg1);
 }
