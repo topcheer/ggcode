@@ -109,7 +109,14 @@ func (m Model) renderDeviceCodeBanner() string {
 			codeStyle,
 		)
 	}
-	return m.renderContextBox("MCP Device Authorization", strings.Join(lines, "\n"), lipgloss.Color("11"))
+	// renderContextBoxAuto, NOT renderContextBox: the banner is a compact
+	// strip sized to its content. renderContextBox forces Height(availH)
+	// (full main-content area, a panel-only behavior); View() subtracts the
+	// banner's height from the panel budget assuming natural height, so the
+	// full-height variant overflowed the viewport and pushed the composer
+	// off-screen, leaving a giant empty box below the URL (user report
+	// 2026-09-14: "下半部分呢").
+	return m.renderContextBoxAuto("MCP Device Authorization", strings.Join(lines, "\n"), lipgloss.Color("11"))
 }
 
 func (m Model) renderMCPPanel() string {
