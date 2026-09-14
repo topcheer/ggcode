@@ -82,6 +82,11 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
+	// #2327: serialize the whole read→match→write sequence per path,
+	// same as write_file - a parallel same-path writer could otherwise
+	// pass its own guard inside our window.
+	unlockEdit := LockWritePath(args.FilePath)
+	defer unlockEdit()
 	data, err := os.ReadFile(args.FilePath)
 	if err != nil {
 		msg := fmt.Sprintf("error reading file: %v", err)

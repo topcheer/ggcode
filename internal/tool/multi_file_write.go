@@ -222,10 +222,15 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			continue
 		}
 
+		// #2327: hold the per-path write mutex across stale-check→write for
+		// this file, same as write_file. Unlocked, a parallel write to the
+		// same path could pass its own stale check inside our window.
+		unlockW := LockWritePath(f.Path)
 		// Stale-read guard: refuse to overwrite if the file was modified
 		// externally since the agent's last read/write.
 		if info, err := os.Stat(f.Path); err == nil && info.Size() > 0 {
 			if stale, since := defaultFileTracker.CheckStale(f.Path); stale {
+				unlockW()
 				failed++
 				results = append(results, writeResult{
 					Path:   f.Path,
@@ -243,6 +248,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 
 		// No-op guard: skip if existing content is identical.
 		if oldData, rErr := os.ReadFile(f.Path); rErr == nil && string(writeData) == string(oldData) {
+			unlockW()
 			skipped++
 			results = append(results, writeResult{
 				Path:   f.Path,
@@ -253,6 +259,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 
 		if err := atomicWriteFile(f.Path, writeData, 0o644); err != nil {
+			unlockW()
 			failed++
 			results = append(results, writeResult{
 				Path:   f.Path,
@@ -264,6 +271,7 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 
 		// Record the new mtime so subsequent writes don't see false staleness.
 		defaultFileTracker.RecordWrite(f.Path)
+		unlockW()
 
 		written++
 		results = append(results, writeResult{
@@ -292,9 +300,15 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 			// restore (disk full, permission change) left new content on
 			// disk while the summary still claimed all-or-nothing.
 			if snap.existed {
+				// #2327: rollback restores must also take the per-path lock so
+				// they serialize against a concurrent writer of the same file.
+				unlockR := LockWritePath(r.Path)
 				if err := atomicWriteFile(r.Path, snap.content, 0o644); err != nil {
 					rollbackErrs = append(rollbackErrs, fmt.Sprintf("%s: restore failed: %v", r.Path, err))
+				} else {
+					defaultFileTracker.RecordWrite(r.Path)
 				}
+				unlockR()
 				restored++
 			} else {
 				if err := os.Remove(r.Path); err != nil && !os.IsNotExist(err) {

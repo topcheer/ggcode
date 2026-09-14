@@ -92,6 +92,11 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
+	// #2327: serialize stale-check→write per path, same as write_file -
+	// a parallel same-path writer could otherwise pass its own guard
+	// inside our window.
+	unlockNB := LockWritePath(args.NotebookPath)
+	defer unlockNB()
 	// #1696 case 1: notebook_edit was the only writer in the package not
 	// running the stale guard - it silently overwrote notebooks modified
 	// externally after the agent's last read.

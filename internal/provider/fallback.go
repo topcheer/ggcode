@@ -199,6 +199,17 @@ func (f *FallbackProvider) maybeFailover(err error, failedIdx int) (error, bool)
 	}
 
 	if !immediate {
+		// R250: stale fast-path BEFORE counting - the caller grabbed the OLD
+		// active before an earlier failure advanced the chain (#164 shape).
+		// Checking via the atomic load (no lock) and returning early keeps a
+		// stale call from inflating consecutiveFail - the old order ran
+		// Add(1) first, so a burst of stale calls pushed the counter to the
+		// threshold and a LATER single real failure advanced the chain early.
+		// The authoritative re-check under the lock below stays: the fast
+		// path can pass and still go stale before L210 acquires the mutex.
+		if failedIdx != int(f.activeIdx.Load()) {
+			return err, true
+		}
 		// Transient error - increment counter and check threshold.
 		count := f.consecutiveFail.Add(1)
 		if count < int32(failoverThreshold) {
