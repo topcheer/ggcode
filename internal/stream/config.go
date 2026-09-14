@@ -74,6 +74,12 @@ func (c *StreamConfig) Validate() error {
 	if c.Height < 120 || c.Height > 2160 {
 		return fmt.Errorf("stream: height must be between 120 and 2160, got %d", c.Height)
 	}
+	// #2305: yuv420p/H.264 requires even dimensions - an odd value passed
+	// Validate and ffmpeg failed at RUNTIME ("width not divisible by 2"),
+	// far from the cause.
+	if c.Width%2 != 0 || c.Height%2 != 0 {
+		return fmt.Errorf("stream: width and height must be even (yuv420p requires it), got %dx%d", c.Width, c.Height)
+	}
 	if c.Quality < 10 || c.Quality > 51 {
 		return fmt.Errorf("stream: quality (QP) must be between 10 and 51, got %d", c.Quality)
 	}
@@ -92,8 +98,17 @@ func (c *StreamConfig) Validate() error {
 		// #2274: rtmps:// (TLS ingest) is first-class - presets.go ships
 		// rtmps URLs for YouTube/Twitch/Facebook and the struct docs use
 		// rtmps examples; rejecting it pushed users back to cleartext.
-		if u := strings.TrimSpace(t.URL); !strings.HasPrefix(u, "rtmp://") && !strings.HasPrefix(u, "rtmps://") && !strings.HasPrefix(u, "srt://") {
-			return fmt.Errorf("stream: target[%d] (%s): url must start with rtmp://, rtmps:// or srt:// (got %q)", i, t.Name, u)
+		// #2305: srt:// is REMOVED from the allowlist. It was listed here but
+		// nothing downstream ever supported it: FullURL path-appends the key
+		// (SRT wants ?streamid=) and Connect hardcodes -f flv (SRT wants
+		// mpegts) - every srt target failed 100% at runtime while Validate
+		// promised support. Reject at config time with an honest message
+		// until real SRT support lands.
+		if u := strings.TrimSpace(t.URL); !strings.HasPrefix(u, "rtmp://") && !strings.HasPrefix(u, "rtmps://") {
+			if strings.HasPrefix(u, "srt://") {
+				return fmt.Errorf("stream: target[%d] (%s): srt:// targets are not supported yet (use rtmp:// or rtmps://)", i, t.Name)
+			}
+			return fmt.Errorf("stream: target[%d] (%s): url must start with rtmp:// or rtmps:// (got %q)", i, t.Name, u)
 		}
 		if strings.TrimSpace(t.Key) == "" {
 			return fmt.Errorf("stream: target[%d] (%s): key is required", i, t.Name)
@@ -128,9 +143,12 @@ func (c *StreamConfig) ExpandEnv() {
 }
 
 // FullURL returns the complete RTMP URL with stream key appended.
+// #2305: TrimSpace matches Validate (which checks the trimmed copy) so a
+// URL with stray leading/trailing whitespace cannot pass validation yet
+// fail at the ffmpeg runtime.
 func (t *StreamTarget) FullURL() string {
 	key := expandEnvVar(t.Key)
-	return strings.TrimRight(t.URL, "/") + "/" + key
+	return strings.TrimRight(strings.TrimSpace(t.URL), "/") + "/" + key
 }
 
 // expandEnvVar expands ${VAR} and $VAR in the input string using os.Getenv.
