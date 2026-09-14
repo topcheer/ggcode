@@ -161,3 +161,18 @@ func (s *Service) InvalidateSuccess(vendor string) {
 		delete(s.cached, vendor)
 	}
 }
+
+// RefreshInvalidate drops SUCCESS cache entries only; negative entries -
+// including Retry-After-sized 429 back-offs - survive (#2366-①). The TUI
+// r-key wants fresh data for healthy vendors, NOT to hammer an endpoint
+// the server just rate-limited: replacing the whole Service instance
+// discarded that per-vendor pacing state entirely.
+func (s *Service) RefreshInvalidate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for v, c := range s.cached {
+		if c.err == nil {
+			delete(s.cached, v)
+		}
+	}
+}
