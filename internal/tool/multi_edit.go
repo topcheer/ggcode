@@ -92,6 +92,11 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: "Error: path not allowed by sandbox policy"}, nil
 	}
 
+	// #2327: serialize the whole read→plan→write sequence per path,
+	// same as write_file - a parallel same-path writer could otherwise
+	// pass its own guard inside our window.
+	unlockMulti := LockWritePath(args.FilePath)
+	defer unlockMulti()
 	data, err := os.ReadFile(args.FilePath)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil
