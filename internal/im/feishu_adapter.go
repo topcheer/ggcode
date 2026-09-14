@@ -941,11 +941,25 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 	messageID, _ := message["message_id"].(string)
 	content, _ := message["content"].(string)
 	chatType, _ := message["chat_type"].(string)
+	// #1550: the WS branch reads message_type and routes non-text types
+	// through processAttachments; the webhook branch did neither, so an
+	// image message's {"image_key":...} JSON fell through
+	// parseMessageContent (no text key, no post structure) and the RAW
+	// JSON string reached the agent as text.
+	msgType, _ := message["message_type"].(string)
 
 	// Parse text content
 	text := a.parseMessageContent(content)
 	text = strings.TrimSpace(text)
-	if text == "" {
+	attachments, voiceText := a.processAttachments(ctx, msgType, content, messageID)
+	if voiceText != "" {
+		if text != "" {
+			text += "\n\n" + voiceText
+		} else {
+			text = voiceText
+		}
+	}
+	if text == "" && len(attachments) == 0 {
 		return
 	}
 
@@ -960,7 +974,8 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 			MessageID:  messageID,
 			ReceivedAt: time.Now(),
 		},
-		Text: text,
+		Text:        text,
+		Attachments: attachments,
 	}
 
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
@@ -1272,6 +1287,14 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 			}
 		}
 		return strings.Join(texts, "")
+	}
+	// #1550: the content IS structured JSON but carries no text/post
+	// (image_key, file_key, ... media payloads). Returning the raw JSON
+	// string fed it to the agent as message text; the WS branch routes
+	// these through processAttachments. Structured-but-textless means
+	// empty TEXT - the attachments pipeline owns the payload.
+	if strings.HasPrefix(strings.TrimSpace(content), "{") {
+		return ""
 	}
 	return content
 }
