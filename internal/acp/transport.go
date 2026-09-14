@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // Transport manages JSON-RPC 2.0 communication over stdio.
@@ -402,7 +403,12 @@ func (t *Transport) startWriter() {
 		t.outbox = make(chan outboundMsg, outboundQueueCap)
 		t.stopped = make(chan struct{})
 		t.writerDone = make(chan struct{})
-		go func() {
+		// Goroutine-protection gate: wrap in safego.Go (same treatment as
+		// e48fc4c2 for the wailskit poller) - a panic in the writer loop
+		// would take down the whole process; Recover logs and the loop's
+		// close(writerDone) still runs via defer semantics of safego.Run.
+		safego.Go("acp.transportWriter", func() {
+			defer close(t.writerDone)
 			for msg := range t.outbox {
 				t.mu.Lock()
 				_, werr := t.Writer.Write(msg.data)
@@ -418,8 +424,7 @@ func (t *Transport) startWriter() {
 					msg.ack <- werr
 				}
 			}
-			close(t.writerDone)
-		}()
+		})
 	})
 }
 
