@@ -121,8 +121,30 @@ var criticalFileCategories = []criticalFileCategory{
 	},
 	{
 		matchFn: func(base, _ string) bool {
-			return base == "docker-compose.yml" || base == "docker-compose.yaml" ||
-				strings.HasPrefix(base, "docker-compose.")
+			// #1652-4 (#828 sibling): the bare 'docker-compose.' prefix
+			// matched docker-compose.readme.md / docker-compose.notes - doc
+			// files masquerading as orchestration configs. Exact names plus
+			// known variant suffixes (docker-compose.prod.yml), mirroring the
+			// Dockerfile whitelist above.
+			if base == "docker-compose.yml" || base == "docker-compose.yaml" ||
+				base == "compose.yml" || base == "compose.yaml" {
+				return true
+			}
+			lower := strings.ToLower(base)
+			if !strings.HasPrefix(lower, "docker-compose.") {
+				return false
+			}
+			ext := lower[len("docker-compose."):]
+			for _, suffix := range []string{"yml", "yaml"} {
+				for _, variant := range []string{"base", "dev", "prod", "production",
+					"development", "local", "test", "stage", "staging", "build",
+					"override", "ci", "web", "api", "app"} {
+					if ext == variant+"."+suffix {
+						return true
+					}
+				}
+			}
+			return false
 		},
 		warning: "docker-compose file defines multi-container orchestration. " +
 			"After modifying, verify with `docker compose config` to validate syntax.",

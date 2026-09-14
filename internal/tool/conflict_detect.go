@@ -141,10 +141,18 @@ func FormatConflictWarning(regions []ConflictRegion) string {
 			conflictLabel(r.Branch1), conflictLabel(r.Branch2),
 		))
 	} else {
+		// #1652-3: regions are capped at maxConflictRegions - when the cap
+		// is exactly full the file may hold MORE conflicts than listed, and
+		// a precise "5 unresolved" sent the agent hunting for exactly 5.
+		// "at least" costs nothing when 5 was exact.
+		countWord := fmt.Sprintf("%d", n)
+		if n >= maxConflictRegions {
+			countWord = fmt.Sprintf("at least %d (list truncated)", n)
+		}
 		sb.WriteString(fmt.Sprintf(
-			"\n\n[WARNING] This file contains %d unresolved merge conflicts. "+
+			"\n\n[WARNING] This file contains %s unresolved merge conflicts. "+
 				"Resolve all conflicts before editing — editing across conflict markers can corrupt the file.",
-			n,
+			countWord,
 		))
 		for _, r := range regions {
 			// Fix #1041(a): render unclosed regions honestly, not 'Lines X-0'
