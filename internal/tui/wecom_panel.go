@@ -464,21 +464,35 @@ func (m *Model) bindWeComEntry(entry wecomBindingEntry) tea.Cmd {
 		if m.imManager == nil {
 			return wecomBindResultMsg{err: errors.New(m.t("panel.wecom.error.config_unavailable"))}
 		}
-		if err := m.startWeComAdapterIfNeeded(entry.Adapter); err != nil {
-			return wecomBindResultMsg{err: err}
-		}
-		targetID := defaultWeComTargetID(ws)
-		_, err := m.imManager.BindChannel(im.ChannelBinding{
-			Workspace: ws,
-			Platform:  im.PlatformWeCom,
-			Adapter:   entry.Adapter,
-			TargetID:  targetID,
-		})
-		if err != nil {
-			return wecomBindResultMsg{err: err}
-		}
-		return wecomBindResultMsg{message: m.t("panel.wecom.message.bound_success")}
+		return m.wecomBindTail(entry, ws)
 	}
+}
+
+// wecomBindTail is the bind flow after the guards: start the adapter
+// (auto-enabling on the #1792 sentinel - the CREATE flow intercepted
+// errWecomEnableNeeded and ran wecomEnableMutation, but the BIND flow
+// passed it through raw, so the user saw the bare internal sentinel
+// string and the bind never ran; #2333), then bind the channel.
+func (m *Model) wecomBindTail(entry wecomBindingEntry, ws string) tea.Msg {
+	if err := m.startWeComAdapterIfNeeded(entry.Adapter); err != nil {
+		if errors.Is(err, errWecomEnableNeeded) {
+			return m.wecomEnableMutation(entry.Adapter, func(mm *Model) tea.Msg {
+				return mm.wecomBindTail(entry, ws)
+			})
+		}
+		return wecomBindResultMsg{err: err}
+	}
+	targetID := defaultWeComTargetID(ws)
+	_, err := m.imManager.BindChannel(im.ChannelBinding{
+		Workspace: ws,
+		Platform:  im.PlatformWeCom,
+		Adapter:   entry.Adapter,
+		TargetID:  targetID,
+	})
+	if err != nil {
+		return wecomBindResultMsg{err: err}
+	}
+	return wecomBindResultMsg{message: m.t("panel.wecom.message.bound_success")}
 }
 
 func (m *Model) unbindWeComEntry(adapterName string) tea.Cmd {
