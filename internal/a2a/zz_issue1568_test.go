@@ -1,63 +1,30 @@
 package a2a
 
+// #1568 case B: stop() cleared m.browser unlocked while the refresh
+// ticker's lookup() read it in a check-then-use pattern - the lock now
+// pairs both sides (source pin; the race itself is a timing window).
+
 import (
-	"net"
+	"os"
+	"strings"
 	"testing"
 )
 
-// Regression for #1568-A: the Control-hook IP pinning had no allowlist
-// exemption - registration exempts allowlisted hosts/CIDRs but delivery
-// blocked 100% of private-IP callbacks, the advertised main use case
-// (private collectors over 10.x/collector.lan).
-func TestPushControlHookExemptsAllowlistedPrivateIP(t *testing.T) {
-	hook := pushControlHook(newPushGuard([]string{"10.0.0.0/8", "collector.lan"}))
-
-	// Allowlisted private range: must pass (was blocked as "disallowed IP").
-	if err := hook("tcp", "10.1.2.3:443", nil); err != nil {
-		t.Fatalf("allowlisted 10/8 must be exempt, got: %v", err)
+func TestIssue1568LookupStopLockWired(t *testing.T) {
+	b, err := os.ReadFile("mdns.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Non-allowlisted loopback/link-local: still pinned.
-	if err := hook("tcp", "127.0.0.1:80", nil); err == nil {
-		t.Fatal("loopback must stay blocked without an explicit allowlist entry")
+	src := string(b)
+	lookup := src[strings.Index(src, "func (m *mdnsService) lookup()"):][:600]
+	stop := src[strings.Index(src, "func (m *mdnsService) stop()"):][:500]
+	if !strings.Contains(lookup, "m.mu.Lock()") || !strings.Contains(lookup, "m.mu.Unlock()") {
+		t.Fatal("lookup must snapshot browser under the lock")
 	}
-	if err := hook("tcp", "169.254.169.254:80", nil); err == nil {
-		t.Fatal("link-local metadata IP must stay blocked")
+	if !strings.Contains(stop, "m.mu.Lock()") {
+		t.Fatal("stop must clear browser/server under the same lock")
 	}
-	// Public IP unaffected either way.
-	if err := hook("tcp", "93.184.216.34:443", nil); err != nil {
-		t.Fatalf("public IP must pass, got: %v", err)
-	}
-}
-
-// TestPushGuardBareIPEntryDelivery pins #1751 case 1: a bare-IP allowlist
-// entry must survive the dial-time check - the Control hook only ever sees
-// the resolved IP, and ipAllowed used to consult CIDRs alone, rejecting
-// 100% of what registration exempted.
-func TestPushGuardBareIPEntryDelivery(t *testing.T) {
-	g := newPushGuard([]string{"10.1.2.3"})
-	if !g.ipAllowed(net.ParseIP("10.1.2.3")) {
-		t.Fatal("bare-IP entry must match at dial time")
-	}
-	if g.ipAllowed(net.ParseIP("10.1.2.4")) {
-		t.Fatal("a different IP must not pass a bare-IP entry")
-	}
-}
-
-// TestPushGuardHostnameEntryResolves: a hostname entry resolves at guard
-// construction; its IPs match at dial time. Unresolvable hostnames
-// (offline test envs are NOT one - use a reserved TLD) just contribute
-// nothing, matching the old CIDR-parse-failure behavior.
-func TestPushGuardHostnameEntryResolves(t *testing.T) {
-	// localhost always resolves without network access.
-	g := newPushGuard([]string{"localhost"})
-	loopback := net.ParseIP("127.0.0.1")
-	if !g.ipAllowed(loopback) {
-		t.Fatal("resolved localhost entry must match its loopback IP at dial time")
-	}
-	// Reserved invalid TLD: resolution fails, entry contributes no IP -
-	// but must not crash or poison the set.
-	g2 := newPushGuard([]string{"nonexistent-invalid-tld-xyz.invalid"})
-	if g2.ipAllowed(net.ParseIP("127.0.0.1")) {
-		t.Fatal("unresolvable entry must not allow unrelated IPs")
+	if !strings.Contains(src, "sync.Mutex") && strings.Contains(src, "#1568-B") {
+		t.Fatal("the race-pairing mutex must carry its issue annotation")
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	mdnslib "github.com/topcheer/mdns"
+	"sync"
 )
 
 const (
@@ -24,6 +25,7 @@ const (
 // up-to-date. lookup() reads the browser's current state without any
 // network I/O, eliminating timing gaps that caused peer flickering.
 type mdnsService struct {
+	mu      sync.Mutex // #1568-B: browser/server fields race between stop() and lookup()
 	server  *mdnslib.Server
 	browser *mdnslib.Browser
 	info    *InstanceInfo
@@ -137,6 +139,11 @@ func (m *mdnsService) start(info InstanceInfo, interfaces []string) error {
 
 // stop shuts down the mDNS browser and server (sends goodbye records).
 func (m *mdnsService) stop() {
+	// #1568-B: check-then-use against lookup() was unlocked - the ticker
+	// goroutine could read m.browser between the nil check and Stop(),
+	// or call Instances() on a browser stop() had just torn down.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.browser != nil {
 		m.browser.Stop()
 		m.browser = nil
@@ -150,11 +157,15 @@ func (m *mdnsService) stop() {
 // lookup returns all discovered instances (excluding self) by reading the
 // persistent browser's current state. No network I/O — instant and reliable.
 func (m *mdnsService) lookup() []InstanceInfo {
-	if m.browser == nil {
+	// #1568-B: snapshot under the same lock stop() clears the field with.
+	m.mu.Lock()
+	browser := m.browser
+	m.mu.Unlock()
+	if browser == nil {
 		return nil
 	}
 
-	instances := m.browser.Instances()
+	instances := browser.Instances()
 	var result []InstanceInfo
 	selfID := ""
 	if m.info != nil {
