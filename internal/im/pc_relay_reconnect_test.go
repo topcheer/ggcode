@@ -207,7 +207,7 @@ func TestPCAdapterReconnectsAfterRelayDrop(t *testing.T) {
 	adapter.Start(ctx)
 	defer adapter.Close()
 
-	if err := adapter.ensureConnected(context.Background()); err != nil {
+	if _, err := adapter.ensureConnected(context.Background()); err != nil {
 		t.Fatalf("initial connect: %v", err)
 	}
 	first := adapter.currentClient()
@@ -263,7 +263,7 @@ func TestPCAdapterEnsureConnectedConcurrentSingleConnection(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			errs[i] = adapter.ensureConnected(context.Background())
+			_, errs[i] = adapter.ensureConnected(context.Background())
 		}(i)
 	}
 	wg.Wait()

@@ -262,12 +262,10 @@ func (a *pcAdapter) loadSessionsFromStore() {
 }
 
 func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
-	if err := a.ensureConnected(ctx); err != nil {
+	client, err := a.ensureConnected(ctx)
+	if err != nil {
 		return fmt.Errorf("PrivateClaw adapter %q: %w", a.name, err)
 	}
-	a.mu.RLock()
-	client := a.client
-	a.mu.RUnlock()
 
 	sessionID := strings.TrimSpace(binding.TargetID)
 	if sessionID == "" {
@@ -351,10 +349,15 @@ func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 
 // Internal methods
 
-// ensureConnected connects to the relay if not already connected.
-func (a *pcAdapter) ensureConnected(ctx context.Context) error {
+// ensureConnected connects to the relay if not already connected and
+// returns the live client. #1555: callers previously re-read a.client
+// AFTER the return - a disconnect racing in that window cleared the
+// field and the read handed back nil for a fresh panic. Returning the
+// verified client closes the TOCTOU window; a client that dies mid-call
+// is handled by its own onDisconnected path, same as before.
+func (a *pcAdapter) ensureConnected(ctx context.Context) (*pcRelayClient, error) {
 	if client := a.currentClient(); client != nil && client.isAlive() {
-		return nil
+		return client, nil
 	}
 
 	// Serialize connection attempts (see connectMu comment). A second
@@ -365,7 +368,7 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) error {
 	// Re-check after acquiring connectMu: another goroutine may have
 	// finished connecting while we were waiting.
 	if client := a.currentClient(); client != nil && client.isAlive() {
-		return nil
+		return client, nil
 	}
 
 	a.publishState(false, "connecting", "")
@@ -385,7 +388,7 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) error {
 	if err := client.Connect(ctx); err != nil {
 		client.Dispose()
 		a.publishState(false, "error", err.Error())
-		return err
+		return nil, err
 	}
 
 	a.mu.Lock()
@@ -399,7 +402,7 @@ func (a *pcAdapter) ensureConnected(ctx context.Context) error {
 
 	a.publishState(true, "connected", "")
 	debug.Log("pc", "adapter=%s connected to relay", a.name)
-	return nil
+	return client, nil
 }
 
 // currentClient returns the installed relay client (may be nil).
@@ -453,7 +456,7 @@ func (a *pcAdapter) reconnectLoop(ctx context.Context) {
 			debug.Log("pc", "adapter=%s relay reconnected (attempt %d)", a.name, attempt)
 			return
 		}
-		if err := a.ensureConnected(context.Background()); err == nil {
+		if _, err := a.ensureConnected(context.Background()); err == nil {
 			debug.Log("pc", "adapter=%s relay reconnected (attempt %d)", a.name, attempt)
 			return
 		} else {
@@ -655,12 +658,10 @@ func (a *pcAdapter) sendPayload(sessionID string, sess *pcSession, payload pcPay
 
 // CreateSession creates a new session on the relay and returns the invite.
 func (a *pcAdapter) CreateSession(ctx context.Context, label string, groupMode bool) (*PCInvite, string, error) {
-	if err := a.ensureConnected(ctx); err != nil {
+	client, err := a.ensureConnected(ctx)
+	if err != nil {
 		return nil, "", fmt.Errorf("connect relay: %w", err)
 	}
-	a.mu.RLock()
-	client := a.client
-	a.mu.RUnlock()
 
 	sessionKey, err := pcGenerateSessionKey()
 	if err != nil {
@@ -738,13 +739,11 @@ func (a *pcAdapter) GetSession(sessionID string) (*pcSession, bool) {
 
 // CloseSession closes a session on the relay.
 func (a *pcAdapter) CloseSession(sessionID string) error {
-	if err := a.ensureConnected(context.Background()); err != nil {
+	client, err := a.ensureConnected(context.Background())
+	if err != nil {
 		return err
 	}
-	a.mu.RLock()
-	client := a.client
-	a.mu.RUnlock()
-	err := client.CloseSession(sessionID, "provider_terminated")
+	err = client.CloseSession(sessionID, "provider_terminated")
 	a.sessions.Delete(sessionID)
 	a.saveSessionsToStore()
 	return err
@@ -752,12 +751,10 @@ func (a *pcAdapter) CloseSession(sessionID string) error {
 
 // KickParticipant removes a participant from a group session.
 func (a *pcAdapter) KickParticipant(sessionID, appID string) error {
-	if err := a.ensureConnected(context.Background()); err != nil {
+	client, err := a.ensureConnected(context.Background())
+	if err != nil {
 		return err
 	}
-	a.mu.RLock()
-	client := a.client
-	a.mu.RUnlock()
 	sess, ok := a.GetSession(sessionID)
 	if !ok {
 		return fmt.Errorf("session %s not found", sessionID)
@@ -768,12 +765,10 @@ func (a *pcAdapter) KickParticipant(sessionID, appID string) error {
 
 // RenewSession renews a session's TTL.
 func (a *pcAdapter) RenewSession(ctx context.Context, sessionID string) error {
-	if err := a.ensureConnected(ctx); err != nil {
+	client, err := a.ensureConnected(ctx)
+	if err != nil {
 		return err
 	}
-	a.mu.RLock()
-	client := a.client
-	a.mu.RUnlock()
 	resp, err := client.RenewSession(ctx, sessionID, a.sessionTTLMs)
 	if err != nil {
 		return err
