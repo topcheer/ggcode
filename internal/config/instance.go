@@ -686,6 +686,15 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	// This uses "instance wins" semantics (unlike MergeInstance's "global wins").
 	if a2aOverride := LoadA2AOverride(workspace); a2aOverride != nil {
 		MergeA2AConfig(&cfg.A2A, a2aOverride)
+		// #1519-B: register the merged section like mergeA2AConfigFields does
+		// on the instance path. Without the registration, Save's strip step
+		// never removed "a2a" from the global view, so a workspace's legacy
+		// port/api_key deep-merged into the GLOBAL ggcode.yaml - inherited by
+		// every other workspace (#524/#609/#1815 family, missed for this path).
+		if cfg.instanceFields == nil {
+			cfg.instanceFields = make(map[string]bool)
+		}
+		cfg.instanceFields["a2a"] = true
 	}
 
 	return cfg, nil
@@ -737,6 +746,15 @@ func MigrateA2AYaml(workspace string) bool {
 	instPath := filepath.Join(instDir, "ggcode.yaml")
 	if err := writeFileAtomic(instPath, out, secureConfigFileMode); err != nil {
 		return false
+	}
+
+	// #1519-B: the migration wrote the instance config - remove the legacy
+	// file so every subsequent load stops re-merging it (the legacy path
+	// deep-merged its values into BOTH the global yaml via the missing
+	// registration above AND the instance file via diffA2A - double
+	// definition, never converging).
+	if err := os.Remove(legacyPath); err != nil {
+		debug.Log("config", "a2a migration: legacy file left in place (remove failed, values may re-merge): %v", err)
 	}
 
 	return true
