@@ -153,6 +153,20 @@ ggcode acp --model <name>              # Override model
 
 > See [ACP Guide](acp.md) for the full guide.
 
+### usage (slash command)
+
+Available inside the TUI and over IM (`/usage`):
+
+- Shows the active vendor's live balance and coding-plan window usage
+  (5h / weekly bars with reset countdowns) for the eight supported
+  vendors: zai, kimi, minimax, deepseek, moonshot, anthropic-oauth,
+  openrouter, siliconflow.
+- The right sidebar renders the same data continuously (refreshes every
+  3 minutes; yellow at 80% window usage, red at 95%).
+- Vendors without a usage endpoint show nothing (ambient information -
+  never an error). Data is cached 3 minutes; rate-limited endpoints are
+  re-probed only after the server's Retry-After window (#2150).
+
 ### llm-probe
 
 Test LLM provider connectivity, authentication, and token usage accuracy:
