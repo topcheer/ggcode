@@ -79,3 +79,33 @@ func TestApplyMCPServersUpdateWithoutPanel(t *testing.T) {
 		t.Fatalf("server list must update even without an open panel, got %+v", m.mcpServers)
 	}
 }
+
+// #2348: every m.mcpServers swap must converge the panel cursor. The
+// action keys r/f/space/a/x index m.mcpServers[panel.selected] with only a
+// len==0 guard; a stale selected after the list shrank crashed Update with
+// index-out-of-range (bubbletea does not recover panics).
+func TestApplyMCPServersUpdateConvergesShrunkSelection(t *testing.T) {
+	m := &Model{mcpPanel: &mcpPanelState{selected: 3}} // cursor beyond a 2-item list
+	m.mcpServers = []MCPInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}}
+
+	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: []MCPInfo{
+		{Name: "a"}, {Name: "b"},
+	}})
+	if got := m.mcpPanel.selected; got != 1 {
+		t.Fatalf("selection must clamp to len-1 after shrink, got %d", got)
+	}
+
+	// Shrinking to empty clamps to 0, never -1.
+	m.applyMCPServersUpdate(mcpServersUpdatedMsg{servers: nil})
+	if got := m.mcpPanel.selected; got != 0 {
+		t.Fatalf("selection must clamp to 0 on empty list, got %d", got)
+	}
+
+	// SetMCPServers (external setter) converges too.
+	m.mcpServers = []MCPInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	m.mcpPanel.selected = 2
+	m.SetMCPServers([]MCPInfo{{Name: "a"}})
+	if got := m.mcpPanel.selected; got != 0 {
+		t.Fatalf("SetMCPServers must converge selection, got %d", got)
+	}
+}

@@ -20,6 +20,28 @@ type mcpServersUpdatedMsg struct {
 // applyMCPServersUpdate swaps in the fresh server list and, when the panel
 // is waiting on a reconnect, upgrades the static "reconnecting" message to
 // a terminal result the moment that server settles.
+// convergeMCPSelection clamps the MCP panel cursor into the current list
+// bounds (#2348). The render-side clamp is a LOCAL variable (renderMCPPanel
+// has a value receiver - it cannot write back), and the action keys
+// r/f/space/a/x index m.mcpServers[panel.selected] after only checking
+// len==0, so a stale selected - list shrank between messages, or the
+// uninstall result raced a server update - crashed Update with
+// index-out-of-range; bubbletea does not recover panics. Called at every
+// m.mcpServers swap site (applyMCPServersUpdate, SetMCPServers;
+// update_mcp.go keeps its inline #1396-A clamp, openMCPPanel builds a
+// fresh panel from the new list so it cannot be stale).
+func (m *Model) convergeMCPSelection() {
+	if m.mcpPanel == nil {
+		return
+	}
+	if m.mcpPanel.selected >= len(m.mcpServers) {
+		m.mcpPanel.selected = len(m.mcpServers) - 1
+	}
+	if m.mcpPanel.selected < 0 {
+		m.mcpPanel.selected = 0
+	}
+}
+
 func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
 	// #1812: capture the PRE-swap list - the pending server dropping OUT
 	// of the update (uninstalled mid-reconnect) is only distinguishable
@@ -34,6 +56,8 @@ func (m *Model) applyMCPServersUpdate(msg mcpServersUpdatedMsg) {
 		}
 	}
 	m.mcpServers = msg.servers
+	// #2348: converge the cursor at every list swap - see convergeMCPSelection.
+	m.convergeMCPSelection()
 	if m.mcpPanel == nil || m.mcpPanel.pendingReconnect == "" {
 		return
 	}

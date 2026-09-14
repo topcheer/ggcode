@@ -1368,6 +1368,7 @@ func (m *Model) closeActivePanel() bool {
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
 	m.mcpServers = servers
+	m.convergeMCPSelection() // #2348: external setter can shrink under an open panel
 }
 
 // SetA2AHandler connects the A2A task handler so the sidebar can show
