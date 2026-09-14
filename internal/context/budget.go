@@ -116,11 +116,6 @@ func AnalyzeBudget(msgs []provider.Message) *BudgetBreakdown {
 			}
 			catMap[blockCat].Tokens += blockTokens
 			catMap[blockCat].Count++
-
-			// Track tool results for largest-consumer analysis
-			if blockCat == CategoryToolResult {
-				// Merge into message-level tracking
-			}
 		}
 
 		bd.TotalTokens += msgTokens
