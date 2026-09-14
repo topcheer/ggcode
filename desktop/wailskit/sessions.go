@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -165,7 +166,7 @@ func RenameSession(id string, title string) error {
 	// (usage/limits/permission-mode persists serialize b.currentSes) would
 	// otherwise resurrect the pre-rename title on disk, silently rolling
 	// back the rename the user just made.
-	if bridge := activeChatBridge; bridge != nil {
+	if bridge := GetChatBridge(); bridge != nil {
 		bridge.syncRenamedTitle(id, title)
 	}
 	return nil
@@ -174,14 +175,22 @@ func RenameSession(id string, title string) error {
 // NewSession clears the current session so next chat creates a fresh one.
 // The chat bridge must be set via SetChatBridge before calling.
 var activeChatBridge *ChatBridge
+var activeChatBridgeMu sync.RWMutex
 
 // SetChatBridge stores the active chat bridge for session management.
+// Guarded by its own RWMutex: teardown (workspace switch / shutdown) runs
+// on a different goroutine than the frontend-bound App methods that read
+// the bridge - an unguarded write raced every borrowed-lock read below.
 func SetChatBridge(cb *ChatBridge) {
+	activeChatBridgeMu.Lock()
+	defer activeChatBridgeMu.Unlock()
 	activeChatBridge = cb
 }
 
 // GetChatBridge returns the active chat bridge.
 func GetChatBridge() *ChatBridge {
+	activeChatBridgeMu.RLock()
+	defer activeChatBridgeMu.RUnlock()
 	return activeChatBridge
 }
 
@@ -191,10 +200,11 @@ func GetChatBridge() *ChatBridge {
 // session switching was a trap for future callers.
 
 func LoadSession(id string) error {
-	if activeChatBridge == nil {
+	bridge := GetChatBridge()
+	if bridge == nil {
 		return fmt.Errorf("no active chat bridge")
 	}
-	return activeChatBridge.LoadSession(id)
+	return bridge.LoadSession(id)
 }
 
 // SessionMessage is a message from session history for the frontend.
@@ -364,9 +374,7 @@ func buildSessionHistoryFromMessages(msgs []provider.Message) []SessionMessage {
 
 // GetSessionHistory loads messages from the current session.
 func GetSessionHistory() ([]SessionMessage, error) {
-	globalMu.RLock()
-	chat := activeChatBridge
-	globalMu.RUnlock()
+	chat := GetChatBridge()
 	if chat == nil {
 		return nil, nil
 	}
@@ -529,9 +537,7 @@ func formatMessagesAsJSON(msgs []SessionMessage, title string) (string, error) {
 // If sessionID is empty, uses the current active session.
 func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 	if sessionID == "" {
-		globalMu.RLock()
-		chat := activeChatBridge
-		globalMu.RUnlock()
+		chat := GetChatBridge()
 		if chat == nil {
 			return nil, "", fmt.Errorf("no active session")
 		}
