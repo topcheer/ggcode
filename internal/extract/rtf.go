@@ -198,10 +198,15 @@ func (p *rtfParser) handleUnicodeEscape() bool {
 	// rejected high surrogates (55357 etc.), silently dropping emoji halves.
 	if val, err := strconv.ParseInt(numStr, 10, 32); err == nil {
 		p.writeRune(rune(uint16(val & 0xFFFF)))
+		// #1542-D: substitutes only follow a SUCCESSFUL \uN. The old code
+		// set subSkip unconditionally - an out-of-range value (ParseInt err,
+		// e.g. \u99999999999) emitted nothing yet armed ucSkip substitute
+		// drops, silently swallowing the next N text bytes.
+		p.subSkip = p.ucSkip
 	}
 	// #566(B): the next ucSkip characters (usually a literal '?' or \'XX
 	// bytes) are ANSI substitutes for this \uN and must not also appear.
-	p.subSkip = p.ucSkip
+	// (moved inside the success branch - see #1542-D above)
 	// A control word's single trailing delimiter space is consumed syntax,
 	// not text (RTF spec): `\u233 ?` means "é" + substitute, not "é" + " ?".
 	if k < p.n && p.raw[k] == ' ' {
@@ -318,7 +323,12 @@ func (p *rtfParser) parse() string {
 			p.i++
 		default:
 			// A literal '?' right after \uN is the ANSI substitute (#566-B)
-			// — consume it without emitting.
+			// — consume it without emitting. Deliberately NARROW: widening to
+			// any literal byte (to catch Word's non-'?' substitutes, #1542-D)
+			// was tried and eats real text after \uN when NO substitute was
+			// emitted (e.g. `\u55357 end` - the 'e' becomes collateral). A
+			// duplicated substitute char is cheaper than lost text; the
+			// lingering-subSkip-eats-a-later-'?' residual is a known trade-off.
 			if p.subSkip > 0 && ch == '?' {
 				p.subSkip--
 				p.i++
