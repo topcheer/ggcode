@@ -145,7 +145,7 @@ type Model struct {
 	mcpServers              []MCPInfo
 	a2aHandler              *a2a.TaskHandler
 	a2aEventBuf             []a2a.TaskEventMessage // cached recent events for display
-	a2aEventState           *a2aEventBufferState
+	a2aEventState           *a2aEventBufferState   // built at NewModel; ensureA2AEventState nil-check is a legacy fallback only
 	config                  *config.Config
 	language                Language
 	startupVendor           string
@@ -656,6 +656,9 @@ func (m *Model) storeIMInstanceDetect(detect *im.InstanceDetect) {
 }
 
 func (m *Model) ensureA2AEventState() *a2aEventBufferState {
+	// #2277: lazy nil-check-and-assign from a callback goroutine is racy
+	// (two first-entry callbacks built forked states). Real Models get
+	// their state at NewModel; this fallback only serves legacy paths.
 	if m.a2aEventState == nil {
 		events := append([]a2a.TaskEventMessage(nil), m.a2aEventBuf...)
 		m.a2aEventState = &a2aEventBufferState{events: events}
@@ -680,9 +683,13 @@ func (m *Model) appendA2AEvent(msg a2a.TaskEventMessage) {
 	if len(state.events) > 20 {
 		state.events = state.events[len(state.events)-20:]
 	}
-	events := append([]a2a.TaskEventMessage(nil), state.events...)
 	state.mu.Unlock()
-	m.a2aEventBuf = events
+	// #2277: a mirror write `m.a2aEventBuf = events` used to live here -
+	// a racy dead store. The a2a event callback (one goroutine per task
+	// event) wrote the captured startup-snapshot Model's bare field
+	// outside the lock; concurrent callbacks raced on it (production
+	// -race guaranteed). View reads the live model's field, rebuilt
+	// under lock by syncA2AEventCache from the authoritative state.events.
 }
 
 func (m *Model) syncAsyncStateCaches() {
