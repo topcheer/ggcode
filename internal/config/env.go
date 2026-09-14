@@ -215,6 +215,14 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 		// now reads from this map instead - see applyFirstLaunchAnthropicBootstrap.
 	}
 
+	// #2293: instance-scope keys.env joins the resolver map the same way
+	// (instance wins over global keys, lookup-time - never os.Setenv).
+	if len(instanceKeysEnv) > 0 {
+		for k, v := range instanceKeysEnv {
+			env[k] = v
+		}
+	}
+
 	needed := referencedEnvVars(raw)
 	if len(needed) == 0 && raw == nil {
 		for _, name := range defaultRuntimeEnvNames() {
