@@ -314,7 +314,11 @@ type Config struct {
 	saveScope      string                     `yaml:"-" json:"-"` // current save scope: "global" or "instance"
 	globalSnap     *Config                    `yaml:"-" json:"-"` // deep copy of global config before instance merge
 	instanceFields map[string]bool            `yaml:"-" json:"-"` // fields that were filled by instance config
-	diskStrSnap    map[string]string          `yaml:"-" json:"-"` // #610: dotted path -> raw string value on disk at Load time (clear/tombstone basis)
+	// explicitKeys (#2284-C): top-level keys PRESENT in this file's yaml -
+	// lets the instance merge treat "explicitly set to zero/empty" as an
+	// override instead of resurrecting the cleared global value.
+	explicitKeys map[string]bool   `yaml:"-" json:"-"`
+	diskStrSnap  map[string]string `yaml:"-" json:"-"` // #610: dotted path -> raw string value on disk at Load time (clear/tombstone basis)
 }
 
 // ImpersonationConfig holds persisted impersonation settings.
