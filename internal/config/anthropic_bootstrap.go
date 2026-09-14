@@ -170,7 +170,11 @@ func upsertAnthropicBootstrapVendor(cfg *Config, baseURL, apiKey, model, authVar
 	}
 
 	// Fallback: match against known host patterns (e.g. bigmodel → zai/cn-coding-anthropic).
-	if vendorID, endpointID := matchKnownAnthropicEndpoint(cfg, apiKey, model); vendorID != "" {
+	// #1515 case C: the fallback must re-check the URL against the pattern
+	// table - the entry gate (isBootstrapKnownHost) only verified the URL
+	// contains SOME pattern's substring; picking the first table entry
+	// unconditionally was correct only while the table had a single row.
+	if vendorID, endpointID := matchKnownAnthropicEndpoint(cfg, normalizedBaseURL, apiKey, model); vendorID != "" {
 		return vendorID, endpointID
 	}
 
@@ -189,10 +193,17 @@ var knownAnthropicHostPatterns = []struct {
 	{"bigmodel", "zai", "cn-coding-anthropic"},
 }
 
-// matchKnownAnthropicEndpoint finds the first known built-in anthropic endpoint
-// and injects the API key and model. Called only when isBootstrapKnownHost is true.
-func matchKnownAnthropicEndpoint(cfg *Config, apiKey, model string) (string, string) {
+// matchKnownAnthropicEndpoint finds the built-in anthropic endpoint whose
+// host pattern matches baseURL and injects the API key and model. Called
+// only when isBootstrapKnownHost is true. Each table row is matched
+// against the URL with the same Contains(lower) test as the entry gate,
+// so adding rows to knownAnthropicHostPatterns stays correct (#1515 C).
+func matchKnownAnthropicEndpoint(cfg *Config, baseURL, apiKey, model string) (string, string) {
+	lower := strings.ToLower(strings.TrimSpace(baseURL))
 	for _, p := range knownAnthropicHostPatterns {
+		if !strings.Contains(lower, p.substring) {
+			continue
+		}
 		vendor, ok := cfg.Vendors[p.vendorID]
 		if !ok {
 			continue
