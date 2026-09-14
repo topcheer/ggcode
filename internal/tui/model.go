@@ -1350,6 +1350,12 @@ func (m *Model) closeActivePanel() bool {
 		m.closeSkillsPanel()
 	case m.statsPanel != nil:
 		m.closeStatsPanel()
+	case m.usagePanel != nil:
+		// #2363: hasActivePanel counted usagePanel but this switch had no
+		// case - ctrl+c only closed it via the later key-handler fallback
+		// (dispatch-order luck), and any future closeActivePanel caller
+		// would silently no-op with the panel open.
+		m.usagePanel = nil
 	case m.inspectorPanel != nil:
 		m.closeInspectorPanel()
 	case m.streamPanel != nil:

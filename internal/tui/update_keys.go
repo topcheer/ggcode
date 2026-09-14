@@ -18,8 +18,8 @@ import (
 // source of truth for panel state. The hand-enumerated list here covered
 // only 9 states while the dispatch chain below handles ~22 more
 // (model/qr/tg/discord/feishu/slack/dingtalk/wechat/wecom/mattermost/
-// matrix/signal/irc/nostr/twitch/whatsapp/im/knight/skills/stats/hooks/
-// inspector/lanChat/initPrompt) - for every diff-set panel the cycle
+// matrix/signal/irc/nostr/twitch/whatsapp/im/knight/skills/stats/usage/
+// hooks/inspector/lanChat/initPrompt) - for every diff-set panel the cycle
 // keys still switched sessions and leaked the panel, the exact bug this
 // guard exists to prevent. hasActivePanel stays in sync with
 // closeActivePanel's switch (audited #904); the four states it does not
