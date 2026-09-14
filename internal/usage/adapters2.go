@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -152,9 +153,17 @@ func (OpenrouterProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*Usag
 			TotalUsage   float64 `json:"total_usage"`
 		} `json:"data"`
 	}
-	if err := getJSON(ctx, base+"/api/v1/credits", apiKey, &payload); err == nil {
+	creditsErr := getJSON(ctx, base+"/api/v1/credits", apiKey, &payload)
+	var rl *RateLimitedError
+	if creditsErr == nil {
 		b := payload.Data.TotalCredits - payload.Data.TotalUsage
 		return &UsageInfo{Vendor: "openrouter", Balance: f64(b), Source: "credits"}, nil
+	}
+	if errors.As(creditsErr, &rl) {
+		// #2366 part 3: a rate-limited credits endpoint must not fall through
+		// to the limit endpoint (that would double-request a throttled host),
+		// and must surface Retry-After so the Service sizes the negative cache.
+		return nil, creditsErr
 	}
 	// Degrade: per-key usage limit.
 	var keyPayload struct {
