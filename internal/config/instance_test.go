@@ -1598,9 +1598,10 @@ func TestLoadInstanceKeysEnv(t *testing.T) {
 	if _, exists := os.LookupEnv("GGCODE_I_abc123_OPENAI_API_KEY"); exists {
 		t.Error("instance key must NOT be set in the process environment (#2293)")
 	}
-	if instanceKeysEnv["GGCODE_I_abc123_OPENAI_API_KEY"] != "sk-inst-key" {
-		t.Errorf("resolver map not set correctly: got %q, want %q",
-			instanceKeysEnv["GGCODE_I_abc123_OPENAI_API_KEY"], "sk-inst-key")
+	// #2308: read via the atomic pointer (writer swaps it COW).
+	if p := instanceKeysEnvPointer.Load(); p == nil || (*p)["GGCODE_I_abc123_OPENAI_API_KEY"] != "sk-inst-key" {
+		t.Errorf("resolver map not set correctly: got %v, want %q",
+			p, "sk-inst-key")
 	}
 }
 
