@@ -197,6 +197,10 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		msg += " (auto-formatted)"
 	}
 	msg += scanAndWarn(args.Path, string(writeData))
+	// #1652 case 2: edit_file(:214)/read_file both guard conflict markers,
+	// but the overwrite path did not - overwriting a file whose content
+	// carries <<<<<<< markers passed unflagged.
+	msg += CheckContentForConflicts(string(writeData))
 	msg += criticalFileWarning(args.Path)
 	msg += blindWriteWarning(args.Path)
 	// #1358: record our own write like edit_file/multi_edit do - the

@@ -138,6 +138,10 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 		result += " (auto-formatted)"
 	}
 	result += scanAndWarn(args.FilePath, string(writeData))
+	// #1652 case 2: same guard as edit_file/write_file - the final
+	// assembled content (old text kept by partial matches included) may
+	// carry conflict markers that none of the edits touched.
+	result += CheckContentForConflicts(string(writeData))
 	result += criticalFileWarning(args.FilePath)
 	result += syntaxCheck(args.FilePath, writeData)
 	result += postEditDiagnostics(t.WorkingDir, args.FilePath)
