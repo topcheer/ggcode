@@ -147,21 +147,6 @@ func (s *Service) Invalidate(vendor string) {
 	delete(s.cached, vendor)
 }
 
-// InvalidateSuccess drops only the SUCCESS entry for a vendor, keeping
-// error entries (including Retry-After-sized 429 negative-cache rows) so
-// they expire on their own schedule (#2366-①). Used by the TUI "r" refresh:
-// an explicit user request means "give me fresh numbers", not "forget the
-// server told us to back off" - replacing the whole Service per refresh
-// also dropped singleflight and every other vendor's negative cache,
-// turning N rapid r-presses into N unbackoffed full re-probes.
-func (s *Service) InvalidateSuccess(vendor string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c, ok := s.cached[vendor]; ok && c.err == nil {
-		delete(s.cached, vendor)
-	}
-}
-
 // RefreshInvalidate drops SUCCESS cache entries only; negative entries -
 // including Retry-After-sized 429 back-offs - survive (#2366-①). The TUI
 // r-key wants fresh data for healthy vendors, NOT to hammer an endpoint
