@@ -1593,11 +1593,15 @@ func TestLoadInstanceKeysEnv(t *testing.T) {
 		t.Fatalf("LoadInstanceKeysEnv error: %v", err)
 	}
 
-	val, ok := os.LookupEnv("GGCODE_I_abc123_OPENAI_API_KEY")
-	if !ok || val != "sk-inst-key" {
-		t.Errorf("env var not set correctly: got %q, want %q", val, "sk-inst-key")
+	// #2293: keys land in the resolver map, NOT the process environment
+	// (the old os.Setenv leg leaked them to every child command).
+	if _, exists := os.LookupEnv("GGCODE_I_abc123_OPENAI_API_KEY"); exists {
+		t.Error("instance key must NOT be set in the process environment (#2293)")
 	}
-	os.Unsetenv("GGCODE_I_abc123_OPENAI_API_KEY")
+	if instanceKeysEnv["GGCODE_I_abc123_OPENAI_API_KEY"] != "sk-inst-key" {
+		t.Errorf("resolver map not set correctly: got %q, want %q",
+			instanceKeysEnv["GGCODE_I_abc123_OPENAI_API_KEY"], "sk-inst-key")
+	}
 }
 
 func TestLoadInstanceKeysEnv_EmptyDir(t *testing.T) {

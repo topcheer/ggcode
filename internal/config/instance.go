@@ -694,8 +694,12 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 	// Attempt to migrate legacy .ggcode/a2a.yaml if instance config doesn't exist yet.
 	MigrateA2AYaml(workspace)
 
-	// Load instance-level API keys into the environment so ${VAR} expansion
-	// in the instance config can resolve them. Instance keys override globals.
+	// Load instance-level API keys into the resolver map (NOT the process
+	// env) so ${VAR} expansion can resolve them. Instance keys override
+	// globals at lookup time. #2293: the old wholesale os.Setenv leg here
+	// leaked every instance key to child commands and MCP subprocesses;
+	// the "${VAR} expansion needs it" comment was false - LoadInstanceConfig
+	// does no expansion and lookups walk the resolver map (see loadRuntimeEnv).
 	instDir := InstanceDir(workspace)
 	LoadInstanceKeysEnv(instDir)
 

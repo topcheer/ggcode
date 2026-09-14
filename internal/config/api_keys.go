@@ -466,13 +466,31 @@ func LoadKeysEnv() error {
 	return loadKeysEnvInto(os.Setenv, KeysEnvPath())
 }
 
-// LoadInstanceKeysEnv loads API keys from an instance directory's keys.env.
-// Instance keys override global keys for the current process.
+// instanceKeysEnv holds the instance-scope keys.env contents loaded by
+// LoadWithInstance. It feeds the runtime ${VAR} resolver (loadRuntimeEnv)
+// instead of the process environment - #2293: the wholesale os.Setenv
+// leg leaked every instance key to any child command (`env` dumped them
+// all) and to MCP server subprocesses, same shape #2284-A phase 1 (#2285)
+// removed for the global keys.env.
+var instanceKeysEnv map[string]string
+
+// LoadInstanceKeysEnv loads API keys from an instance directory's keys.env
+// into the in-process resolver map (NOT the process environment). Instance
+// keys override global keys at lookup time.
 func LoadInstanceKeysEnv(instanceDir string) error {
 	if instanceDir == "" {
 		return nil
 	}
-	return loadKeysEnvInto(os.Setenv, filepath.Join(instanceDir, "keys.env"))
+	m := map[string]string{}
+	if err := loadKeysEnvInto(func(key, val string) error {
+		// instance keys win over already-captured globals within the map
+		m[key] = val
+		return nil
+	}, filepath.Join(instanceDir, "keys.env")); err != nil {
+		return err
+	}
+	instanceKeysEnv = m
+	return nil
 }
 
 func loadKeysEnvInto(setenv func(string, string) error, path string) error {
