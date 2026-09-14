@@ -31,12 +31,14 @@ func TestRefreshUsagePanelClearsStale(t *testing.T) {
 	if !m.usagePanel.fetching {
 		t.Fatal("refresh did not set fetching")
 	}
-	// #2366-① supersedes the original #2365 cache-bypass-by-replacement
-	// design: the Service instance must SURVIVE the refresh (singleflight
-	// + Retry-After-sized negative cache are instance state); only the
-	// per-vendor SUCCESS rows are invalidated.
+	// #2366-① inverted the cache policy: the Service instance is now KEPT
+	// (singleflight + negative/429 pacing survive); only success entries
+	// are dropped via RefreshInvalidate.
 	if m.usageService != oldSvc {
-		t.Fatal("refresh dropped the service instance (negative cache + singleflight gone)")
+		t.Fatal("refresh dropped the Service instance (429 pacing lost)")
+	}
+	if oldSvc == nil {
+		t.Fatal("ensureUsageService returned nil")
 	}
 }
 

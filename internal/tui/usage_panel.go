@@ -105,18 +105,13 @@ func (m *Model) refreshUsagePanel() tea.Cmd {
 	// count, flipping fetching=false before the tail vendors answered.
 	m.usagePanel.infos = map[string]*usage.UsageInfo{}
 	m.usagePanel.errs = map[string]string{}
-	// #2366-①: keep the Service instance. The old code nil'd it ("fresh
-	// Service per refresh"), which also threw away singleflight and every
-	// negative-cache row - including Retry-After-sized 429 entries - so N
-	// rapid r-presses after a 429 meant N unbackoffed full re-probes of
-	// all probeable vendors. "r" means fresh numbers, not "forget the
-	// server said back off": invalidate only success rows; errors expire
-	// on their own schedule.
-	if m.usageService != nil {
-		for _, v := range m.probeableVendors() {
-			m.usageService.InvalidateSuccess(v)
-		}
-	}
+	// #2366-①: refresh via RefreshInvalidate, NOT dropping the Service
+	// instance. The old `m.usageService = nil` rebuilt an empty Service, so
+	// singleflight AND every negative entry - including Retry-After-sized
+	// 429 back-offs - were discarded: pressing r repeatedly hammered ALL
+	// probeable vendors with no back-off. RefreshInvalidate keeps negative
+	// pacing state and only re-probes vendors with a cached success.
+	m.ensureUsageService().RefreshInvalidate()
 	m.usagePanel.fetching = true
 	return m.fetchAllUsageCmd()
 }
