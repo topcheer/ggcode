@@ -256,7 +256,17 @@ func (b *DaemonBridge) GitDiff(args []string) (string, error) {
 		cmd.Dir = dir
 	}
 	out, err := cmd.CombinedOutput()
-	if err != nil && len(out) == 0 {
+	if err != nil {
+		// #1560-B: CombinedOutput merges stderr - "fatal: bad revision"
+		// plus the full usage text used to be handed back as the DIFF
+		// BODY when the exit was non-zero with non-empty output (the TUI
+		// path fixed this in #909; the IM path was the un-synced parity
+		// copy). Any error now surfaces as an error, carrying the first
+		// line of output for diagnosis.
+		first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+		if first != "" {
+			return "", fmt.Errorf("git diff: %v (%s)", err, first)
+		}
 		return "", fmt.Errorf("git diff: %v", err)
 	}
 	trimmed := strings.TrimRight(string(out), "\n")
