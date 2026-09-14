@@ -1332,10 +1332,7 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 }
 
 func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
-	a.mu.RLock()
-	connected := a.connected
-	a.mu.RUnlock()
-	if !connected {
+	if !a.isConnected() {
 		return fmt.Errorf("Feishu bot %q is not online", a.name)
 	}
 	chatID := strings.TrimSpace(binding.ChannelID)
@@ -1368,6 +1365,13 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			debug.Log("feishu", "adapter=%s post send failed, falling back to text: %v", a.name, err)
 			msgID, err = a.sendTextMessage(ctx, chatID, stripMarkdown(chunk))
 			if err != nil {
+				// #2297-form post-verification: a Close racing past the entry
+				// gate (check-then-use window) surfaces here as a raw API
+				// error that hides the real state - re-check and report the
+				// honest "not online" instead.
+				if !a.isConnected() {
+					return fmt.Errorf("Feishu bot %q is not online", a.name)
+				}
 				return err
 			}
 		}
@@ -1383,6 +1387,13 @@ func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 		}
 	}
 	return nil
+}
+
+// isConnected snapshots the connection gate under one lock read.
+func (a *feishuAdapter) isConnected() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.connected
 }
 
 func (a *feishuAdapter) outboundText(event OutboundEvent) string {
