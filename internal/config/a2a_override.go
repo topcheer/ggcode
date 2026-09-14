@@ -21,6 +21,13 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil
 	}
+	// #1515-A: the main config, vendors and IM sections all expand ${VAR}
+	// references - the a2a override was the one config surface that did
+	// not, so `auth: {api_key: ${A2A_KEY}}` merged the LITERAL
+	// "${A2A_KEY}" string over the real value and auth failed silently.
+	// Expand before the legacy-key migration below so both the flat
+	// api_key form and the nested auth form resolve identically.
+	raw = ExpandEnvRecursive(raw)
 	// a2a.yaml override files are flat (no "a2a:" wrapper), so check
 	// top-level api_key and move it to auth.api_key directly.
 	if legacyKey, hasLegacy := raw["api_key"]; hasLegacy {
