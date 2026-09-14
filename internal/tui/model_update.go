@@ -516,36 +516,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleSubAgentUpdateMsg(msg)
 
 	case subAgentSystemMsg:
-		// Display sub-agent system events (retry, compaction) in the main
-		// panel as system messages. Group consecutive retry events from the
-		// same LLM turn into one item, but allocate a new item when a new
-		// retry sequence starts (detected by "Retry 1/" prefix).
-		if m.saSysItemIDs == nil {
-			m.saSysItemIDs = make(map[string]string)
-		}
-		itemID := m.saSysItemIDs[msg.AgentID]
-		// New retry sequence: "Retry 1/" signals the start of a fresh
-		// provider retry chain — allocate a new item ID. The text may be
-		// prefixed with "[agentName] " so we use Contains, not HasPrefix.
-		if strings.Contains(msg.Text, "[Retry 1/") || itemID == "" {
-			itemID = nextSystemID()
-			m.saSysItemIDs[msg.AgentID] = itemID
-			m.chatWriteSystem(itemID, msg.Text)
-		} else {
-			// Replace (not append) so only the latest retry status is shown,
-			// matching how the main agent renders retry messages.
-			if item := m.chatList.FindByID(itemID); item != nil {
-				if sys, ok := item.(*chat.SystemItem); ok {
-					sys.SetText(msg.Text)
-					m.chatListFollowOutput()
-				} else {
-					m.chatWriteSystem(itemID, msg.Text)
-				}
-			} else {
-				m.chatWriteSystem(itemID, msg.Text)
-			}
-		}
-		return m, nil
+		return m.handleSubAgentSystemMsg(msg)
 
 	case subAgentTunnelStreamTextMsg:
 		return m.handleSubAgentTunnelStreamTextMsg(msg)
