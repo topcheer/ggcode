@@ -907,16 +907,16 @@ type localLightweightEntry struct {
 
 // loadSession is the lock-free internal version of Load.
 
-// dedupeConsecutiveUserMsgs collapses runs of back-to-back USER messages
-// with byte-identical text content (#2324-report). A killed
-// endless-retry run persists the same user prompt once per retry attempt
-// (each Add gets a fresh message ID, so the write-side ID dedup never
-// sees them as the same); on reload the transcript - and worse, the
-// rebuilt LLM context - replayed the prompt N times. Only plain-text
-// user messages participate: a message carrying tool_result blocks is a
-// different animal and never collapses.
-func dedupeConsecutiveUserMsgs(msgs []provider.Message) []provider.Message {
-	userText := func(m provider.Message) (string, bool) {
+// dedupeUserMsgs collapses plain-text USER messages whose FULL text is
+// byte-identical, keeping the first occurrence (user-reported: a session
+// killed after an endless autopilot/retry loop had the same prompt on
+// disk up to 859 times - the strategist budget notice alone re-fired
+// every cycle, the autopilot cron prompt hundreds of times - all
+// NON-consecutive, separated by assistant runs, so a consecutive-only
+// heuristic missed them entirely). Distinct texts never collide;
+// messages carrying tool_result blocks never participate.
+func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
+	userKey := func(m provider.Message) (string, bool) {
 		if m.Role != "user" {
 			return "", false
 		}
@@ -931,18 +931,62 @@ func dedupeConsecutiveUserMsgs(msgs []provider.Message) []provider.Message {
 		}
 		return sb.String(), true
 	}
+	seen := make(map[string]bool)
 	out := make([]provider.Message, 0, len(msgs))
-	var lastKey string
-	var lastIsUser bool
 	for _, m := range msgs {
-		key, isUser := userText(m)
-		if isUser && lastIsUser && key == lastKey && key != "" {
-			continue // retry-loop duplicate: same prompt, consecutive user turn
+		key, isUser := userKey(m)
+		if isUser {
+			if key == "" || seen[key] {
+				continue // byte-identical re-fire of an already-kept turn
+			}
+			seen[key] = true
 		}
 		out = append(out, m)
-		lastKey, lastIsUser = key, isUser
 	}
 	return out
+}
+
+// capContextTail applies the MaxContextMessages window to a loaded
+// context slice (#2325: the checkpoint paths loaded EVERY post-summary
+// record with no cap - a session whose compaction stopped firing
+// accumulated 7.5k real messages after the last checkpoint and handed
+// the agent a 2.82M-token context on resume; the 200-message cap only
+// guarded the no-checkpoint path). The window never opens with an
+// orphan tool half-pair, shifts (not collapses) to keep the newest
+// user turn inside, and prepends the truncation note.
+func capContextTail(msgs []provider.Message) []provider.Message {
+	if len(msgs) <= MaxContextMessages {
+		return msgs
+	}
+	omitted := len(msgs) - MaxContextMessages
+	start := len(msgs) - MaxContextMessages
+	for start > 0 && isOrphanToolMessage(msgs[start]) {
+		start--
+		omitted--
+	}
+	if lastUser := lastDialogueIndex(msgs); lastUser >= 0 && start > lastUser {
+		tailLen := len(msgs) - lastUser
+		back := MaxContextMessages - tailLen
+		if back < 0 {
+			back = 0
+		}
+		if lastUser-back > 0 {
+			start = lastUser - back
+		} else {
+			start = 0
+		}
+		for start > 0 && isOrphanToolMessage(msgs[start]) {
+			start--
+		}
+		omitted = start
+	}
+	return append([]provider.Message{{
+		Role: "system",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: fmt.Sprintf("[Note: %d earlier messages were truncated to fit the context window. The conversation starts mid-way. Re-read relevant files if you need earlier context.]", omitted),
+		}},
+	}}, msgs[start:]...)
 }
 
 func (s *JSONLStore) loadSession(id string) (*Session, error) {
@@ -1202,7 +1246,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// the history filtering the warning above forbids - the collapsed
 	// copies are write-side artifacts of a killed endless-retry run, not
 	// distinct turns the user expects to see.
-	ses.Messages = dedupeConsecutiveUserMsgs(ses.Messages)
+	ses.Messages = dedupeUserMsgs(ses.Messages)
 
 	// ── ses.ContextMessages: compacted context for agent (for LLM) ──
 	// Contains the LAST checkpoint (compaction summary) + messages appended
@@ -1349,51 +1393,22 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 				unwindowed = append(unwindowed, *entry.record.Message)
 			}
 		}
-		if len(unwindowed) > MaxContextMessages {
-			omitted := len(unwindowed) - MaxContextMessages
-			start := len(unwindowed) - MaxContextMessages
-			// Avoid starting the context with an orphan tool_result or tool_use.
-			// If the first message at the truncation boundary is a user
-			// tool_result, extend backward to include its paired assistant
-			// tool_use (and the user prompt that triggered it, if necessary).
-			// LLM APIs require tool_use and tool_result to appear as a pair;
-			// leaving half of the pair at the start of context causes validation
-			// errors on the next agent turn.
-			for start > 0 && isOrphanToolMessage(unwindowed[start]) {
-				start--
-				omitted--
-			}
-			// #607: guarantee the window contains real dialogue. Long-running
-			// sessions can end with a tail of system notes (checkpoint markers,
-			// resume notes); counting any role toward the MaxContextMessages
-			// quota could fill the entire window with system records and push
-			// every user/assistant exchange out of the agent's input - same
-			// family as the render-window anchor bug (#601), with the LLM as
-			// the victim instead of the TUI. Clamp the window start so the most
-			// recent user message stays inside.
-			if lastUser := lastDialogueIndex(unwindowed); lastUser >= 0 && start > lastUser {
-				omitted -= start - lastUser
-				start = lastUser
-			}
-			ses.ContextMessages = unwindowed[start:]
-			// Prepend a system note so the agent knows earlier context was truncated,
-			// rather than silently losing the conversation beginning.
-			ses.ContextMessages = append([]provider.Message{{
-				Role: "system",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf("[Note: %d earlier messages were truncated to fit the context window. The conversation starts mid-way. Re-read relevant files if you need earlier context.]", omitted),
-				}},
-			}}, ses.ContextMessages...)
-		} else {
-			ses.ContextMessages = unwindowed
-		}
+		ses.ContextMessages = capContextTail(unwindowed)
 	}
 
 	// #2324-report: same dedup on the LLM context rebuild - the replayed
 	// prompt N times is not just a rendering artifact, the agent literally
 	// saw the same question N times in a row on resume.
-	ses.ContextMessages = dedupeConsecutiveUserMsgs(ses.ContextMessages)
+	// DEDUP FIRST, CAP SECOND: the storm tail can be thousands of
+	// identical user copies (4,405 in the observed victim); capping
+	// first would window in only duplicates and the dedup would collapse
+	// the context to a handful of messages, silently discarding recent
+	// assistant turns.
+	ses.ContextMessages = dedupeUserMsgs(ses.ContextMessages)
+	// #2325: the checkpoint paths above load EVERY post-summary record
+	// uncapped - cap them with the same window the no-checkpoint path
+	// uses.
+	ses.ContextMessages = capContextTail(ses.ContextMessages)
 
 	// Diagnostic summary: log the final ContextMessages state so that
 	// context-loss issues can be diagnosed via debug_log without needing
