@@ -31,6 +31,30 @@ type FileIntegrityTracker struct {
 // defaultFileTracker is the package-level singleton used by all file tools.
 var defaultFileTracker = NewFileIntegrityTracker()
 
+// #2318: per-path in-process write mutexes. CheckStale only compares mtimes;
+// everything between the check and the final rename (os.ReadFile, gofmt,
+// diagnostic baseline capture, temp-file write) ran UNLOCKED, so two
+// concurrent writes to the same path - same-process parallel batch calls are
+// the primary face - could both pass the stale check and the later rename
+// silently clobbered the earlier write. Serializing the whole check→write
+// critical section per path closes that window inside the process.
+// (Cross-process races remain governed by the stale check itself: the mtime
+// baseline is re-stat'ed on the next writer's CheckStale.)
+var writePathLocks sync.Map // normalizePath(path) → *sync.Mutex
+
+// LockWritePath acquires the per-path write mutex and returns the unlock
+// function. Call it BEFORE CheckStale and hold it until the write (or edit)
+// has fully landed so check→write is atomic per path within this process.
+func LockWritePath(path string) func() {
+	v, _ := writePathLocks.LoadOrStore(normalizePath(path), &sync.Mutex{})
+	mu, ok := v.(*sync.Mutex)
+	if !ok { // unreachable: only *sync.Mutex is ever stored
+		return func() {}
+	}
+	mu.Lock()
+	return mu.Unlock
+}
+
 // NewFileIntegrityTracker creates a new tracker instance.
 func NewFileIntegrityTracker() *FileIntegrityTracker {
 	return &FileIntegrityTracker{
