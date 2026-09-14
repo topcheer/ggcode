@@ -417,7 +417,12 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 			continue
 		}
 		u := entry.Usage
-		total += float64(u.InputTokens)*rate.InputPerM/1e6 +
+		// #2315: DisplayInputTokens - OpenAI-compat vendors fill
+		// InputTokens as a SUPERSET that already contains CacheRead, so
+		// the raw value billed cached tokens twice (full input price +
+		// cache-read price). Same normalization the sidebar and the
+		// #2310 write boundary use; disjoint-addend vendors are a no-op.
+		total += float64(u.DisplayInputTokens())*rate.InputPerM/1e6 +
 			float64(u.OutputTokens)*rate.OutputPerM/1e6 +
 			float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
 			float64(u.CacheWrite)*rate.CacheWritePerM/1e6
