@@ -97,6 +97,14 @@ func (m *Model) refreshUsagePanel() tea.Cmd {
 	if m.usagePanel == nil {
 		return nil
 	}
+	// #2365-①: clear both maps before refetching. The old code kept them,
+	// so (a) a vendor whose round-2 result flipped to an error kept showing
+	// its round-1 balance forever (render prefers infos, the fresh error
+	// was permanently masked - stale balance presented as current), and
+	// (b) a vendor present in BOTH maps inflated the fetch-completion
+	// count, flipping fetching=false before the tail vendors answered.
+	m.usagePanel.infos = map[string]*usage.UsageInfo{}
+	m.usagePanel.errs = map[string]string{}
 	// Bypass the cache: "r" is an explicit user request. Re-registering is
 	// idempotent; a fresh Service per refresh is the simplest correct
 	// invalidation for a rare, user-triggered action.

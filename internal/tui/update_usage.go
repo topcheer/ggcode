@@ -22,9 +22,15 @@ func (m *Model) ensureUsageService() *usage.Service {
 // slice of the #2357 complexity refactor (zero behavior change).
 func (m *Model) handleUsageInfoUpdated(msg usageInfoUpdatedMsg) (Model, tea.Cmd) {
 	if m.usagePanel != nil {
+		// #2365-①b: infos/errs are mutually exclusive per vendor - a
+		// flipped result (ok→err or err→ok) must evict its opposite entry,
+		// or the completion count double-counts and the render prefers a
+		// stale info over a fresh error.
 		if msg.err != nil {
+			delete(m.usagePanel.infos, msg.vendor)
 			m.usagePanel.errs[msg.vendor] = msg.err.Error()
 		} else if msg.info != nil {
+			delete(m.usagePanel.errs, msg.vendor)
 			m.usagePanel.infos[msg.vendor] = msg.info
 		}
 		if len(m.usagePanel.infos)+len(m.usagePanel.errs) >= len(m.probeableVendors()) {
