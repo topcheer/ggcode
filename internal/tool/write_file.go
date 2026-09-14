@@ -137,6 +137,13 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	// Stale-read guard: if the file was modified externally since the agent's
 	// last read/write, refuse the overwrite to prevent silent data loss.
+	// #2318: hold the per-path write mutex across the ENTIRE
+	// CheckStale→ReadFile→gofmt→no-op-check→baseline→rename sequence.
+	// Without it, a parallel write_file to the same path (same-process
+	// batch calls) could pass its own stale check inside our window and
+	// the later rename silently clobbered the earlier write.
+	unlockWrite := LockWritePath(args.Path)
+	defer unlockWrite()
 	// This is critical in multi-agent scenarios where concurrent edits can
 	// cause lost updates.
 	// #881: run the guard whenever the file EXISTS, not only when size>0 —
