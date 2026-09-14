@@ -430,11 +430,26 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 	if p.reasoningEffort == "" {
 		return
 	}
-	maxTok := p.maxTokens
-	if p.cap != nil {
-		if v := p.cap.Get(); v > 0 {
-			maxTok = v
+	maxTok := p.effectiveMaxTokens() // #2300: override-aware - the old
+	// p.maxTokens/p.cap chain ignored an active sampling window, so a
+	// small MCP override (512) still derived budget from the static cap
+	// (8192): budget clamped to >=512 exceeded MaxOutputTokens 4-12x -
+	// either a hard 400 (#1610-B family) or a reply fully consumed by
+	// thinking (FinishReason=MAX_TOKENS, empty text).
+	// Circuit-breaker mirrors anthropic's dual-guarantee form: below 1024
+	// there is no room for both meaningful thinking and a reply.
+	if maxTok <= 1024 {
+		if isGemini3Model(p.model) {
+			config.ThinkingConfig = &genai.ThinkingConfig{
+				ThinkingLevel: genai.ThinkingLevelMinimal,
+			}
+			return
 		}
+		// Non-3 models: budget 0 disables thinking entirely.
+		config.ThinkingConfig = &genai.ThinkingConfig{
+			ThinkingBudget: ptrToInt32(0),
+		}
+		return
 	}
 	// #1610-B: gemini-3 models REJECT thinkingBudget and only accept
 	// thinkingLevel - routing them through the budget path 400'd every
@@ -453,19 +468,8 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 		default:
 			return
 		}
-		if maxTok <= 512 {
-			level = genai.ThinkingLevelMinimal
-		}
 		config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
 		debug.Log("gemini", "thinking level=%s (effort=%s, gemini-3)", level, p.reasoningEffort)
-		return
-	}
-	if maxTok <= 512 {
-		// Not enough room for meaningful thinking — set budget to 0
-		// which disables thinking on Gemini (non-3 models).
-		config.ThinkingConfig = &genai.ThinkingConfig{
-			ThinkingBudget: ptrToInt32(0),
-		}
 		return
 	}
 	var budget int32
