@@ -84,7 +84,7 @@ func (t *toolRedundancyState) recordCall(toolName string, args []byte) string {
 		t.warnings++
 		return fmt.Sprintf(
 			"Efficiency hint: You have called %s with these exact arguments %d times in this session "+
-				"(not consecutively). The result has not changed between calls. "+
+				"(not consecutively). "+
 				"If you need this information, it is already in your context from earlier calls. "+
 				"Avoid re-invoking the same search with identical parameters.",
 			toolName, count,
