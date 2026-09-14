@@ -82,11 +82,17 @@ func (t *toolRedundancyState) recordCall(toolName string, args []byte) string {
 	count := t.counts[fp]
 	if count == scatterDupWarnThreshold {
 		t.warnings++
+		// #2343: assert only what the detector can prove. The counts map
+		// totals calls without order, so the old consecutiveness adverb
+		// was unprovable (a 3-in-a-row streak read as scattered); and
+		// memoize expires read_file by mtime, LSP by TTL, git_* by TTL,
+		// so the old "results are in your context" claim was false for
+		// stateful tools - the fresh result may differ from every earlier
+		// one in context.
 		return fmt.Sprintf(
-			"Efficiency hint: You have called %s with these exact arguments %d times in this session "+
-				"(not consecutively). "+
-				"If you need this information, it is already in your context from earlier calls. "+
-				"Avoid re-invoking the same search with identical parameters.",
+			"Efficiency hint: You have called %s with identical arguments %d times in this session. "+
+				"If the earlier results are still valid for your current question, reuse them "+
+				"instead of re-invoking the same call.",
 			toolName, count,
 		)
 	}
