@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/usage"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -285,25 +288,49 @@ func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 }
 
 func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
-	if d.m.session == nil {
-		return im.BuildCrossSessionCostSummary()
+	var sb strings.Builder
+	if d.m.session != nil {
+		// #2319: same lock as the local twin (see SessionCostSummary above).
+		mu := d.m.sessionMutex()
+		mu.Lock()
+		u := d.m.session.TokenUsage
+		mu.Unlock()
+		if u.Total() > 0 {
+			sb.WriteString("Session Token Usage:\n\n")
+			sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(u.InputTokens)))
+			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(u.OutputTokens)))
+			if u.CacheRead > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanizeTokenCount(u.CacheRead)))
+			}
+			if u.CacheWrite > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanizeTokenCount(u.CacheWrite)))
+			}
+		}
 	}
-	// #2319: same lock as the local twin (see SessionCostSummary above).
-	mu := d.m.sessionMutex()
-	mu.Lock()
-	u := d.m.session.TokenUsage
-	mu.Unlock()
-	if u.Total() > 0 {
-		var sb strings.Builder
-		sb.WriteString("Session Token Usage:\n\n")
-		sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(u.InputTokens)))
-		sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(u.OutputTokens)))
-		if u.CacheRead > 0 {
-			sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanizeTokenCount(u.CacheRead)))
+	// #2358 follow-up (cross-entry parity): the daemon-attached IM path
+	// renders live vendor balance/windows (#2358); this TUI-attached path
+	// used to render ONLY token counts - the same /usage command meant two
+	// different things depending on which surface received it. Append the
+	// active vendor's probe result so both paths carry the same vendor
+	// payload (tokens stay - TUI sessions have them; daemon sessions do
+	// not). Vendor-probe failures stay silent: usage is ambient.
+	if vendor := util.FirstNonEmpty(d.m.activeVendor, d.m.startupVendor); vendor != "" {
+		if svc := d.m.ensureUsageService(); svc != nil && svc.Has(vendor) {
+			baseURL, apiKey := d.m.resolveVendorEndpoint(vendor)
+			if apiKey != "" {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				info, err := svc.Get(ctx, vendor, baseURL, apiKey)
+				cancel()
+				if err == nil && info != nil {
+					if sb.Len() > 0 {
+						sb.WriteString("\n")
+					}
+					sb.WriteString(usage.RenderText(vendor, info, nil))
+				}
+			}
 		}
-		if u.CacheWrite > 0 {
-			sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanizeTokenCount(u.CacheWrite)))
-		}
+	}
+	if sb.Len() > 0 {
 		return sb.String(), nil
 	}
 	return im.BuildCrossSessionCostSummary()
