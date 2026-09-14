@@ -45,6 +45,16 @@ func deCatalog(key string) string {
 		return "Kontext"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "Nutzung"
+	case "usage.refreshing":
+		return "wird geladen…"
+	case "usage.no_probes":
+		return "Keine Nutzungssonde für die konfigurierten Anbieter."
+	case "label.balance":
+		return "Guthaben"
+	case "label.resets":
+		return "zurückgesetzt in"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

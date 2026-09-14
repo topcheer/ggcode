@@ -236,6 +236,10 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m.handleStatsPanelKey(msg)
 	}
 
+	if m.usagePanel != nil {
+		return m.handleUsagePanelKey(msg)
+	}
+
 	if m.hooksPanel != nil {
 		return m.handleHooksPanelKey(msg)
 	}

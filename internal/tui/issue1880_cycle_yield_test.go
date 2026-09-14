@@ -15,6 +15,7 @@ func TestSessionCycleKeysYieldToDiffSetPanels(t *testing.T) {
 		"modelPanel":      func(m *Model) { m.modelPanel = &modelPanelState{} },
 		"knightPanel":     func(m *Model) { m.knightPanel = &knightPanelState{} },
 		"statsPanel":      func(m *Model) { m.statsPanel = &statsPanelState{} },
+		"usagePanel":      func(m *Model) { m.usagePanel = &usagePanelState{} }, // #2150 batch 2
 		"skillsPanel":     func(m *Model) { m.skillsPanel = &skillsPanelState{} },
 		"hooksPanel":      func(m *Model) { m.hooksPanel = &hooksPanelState{} },
 		"inspectorPanel":  func(m *Model) { m.inspectorPanel = &inspectorPanelState{} },

@@ -44,6 +44,16 @@ func koCatalog(key string) string {
 		return "컨텍스트"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "사용량"
+	case "usage.refreshing":
+		return "가져오는 중…"
+	case "usage.no_probes":
+		return "구성된 벤더에 사용량 프로브가 없습니다."
+	case "label.balance":
+		return "잔액"
+	case "label.resets":
+		return "리셋"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

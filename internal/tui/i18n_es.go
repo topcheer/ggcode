@@ -40,6 +40,16 @@ func esCatalog(key string) string {
 		return "Contexto"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "Uso"
+	case "usage.refreshing":
+		return "obteniendo…"
+	case "usage.no_probes":
+		return "No hay sonda de uso para los proveedores configurados."
+	case "label.balance":
+		return "Saldo"
+	case "label.resets":
+		return "reinicia en"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

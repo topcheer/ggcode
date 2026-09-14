@@ -40,6 +40,16 @@ func viCatalog(key string) string {
 		return "Ngữ cảnh"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "Sử dụng"
+	case "usage.refreshing":
+		return "đang lấy…"
+	case "usage.no_probes":
+		return "Không có đầu dò sử dụng cho các nhà cung cấp đã cấu hình."
+	case "label.balance":
+		return "Số dư"
+	case "label.resets":
+		return "đặt lại sau"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":
