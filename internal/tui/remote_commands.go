@@ -257,11 +257,19 @@ type tuiSlashDeps struct{ m *Model }
 
 func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 	if d.m.session != nil {
+		// #2319: the local /cost twin takes sessionMutex for this exact
+		// read (#1366-C - "a data race that trips -race when /cost is
+		// pressed during streaming"); the IM path was the un-synced twin,
+		// racing model.go's guarded TokenUsage.Add writes.
+		mu := d.m.sessionMutex()
+		mu.Lock()
 		usage := d.m.session.TokenUsage
+		model, vendor := d.m.session.Model, d.m.session.Vendor
+		mu.Unlock()
 		if usage.Total() > 0 {
 			var sb strings.Builder
 			sb.WriteString("Session Cost:\n\n")
-			sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n", d.m.session.Model, d.m.session.Vendor))
+			sb.WriteString(fmt.Sprintf("  Model:  %s (%s)\n", model, vendor))
 			sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(usage.InputTokens)))
 			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanizeTokenCount(usage.OutputTokens)))
 			if usage.CacheRead > 0 {
@@ -277,8 +285,15 @@ func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 }
 
 func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
-	if d.m.session != nil && d.m.session.TokenUsage.Total() > 0 {
-		u := d.m.session.TokenUsage
+	if d.m.session == nil {
+		return im.BuildCrossSessionCostSummary()
+	}
+	// #2319: same lock as the local twin (see SessionCostSummary above).
+	mu := d.m.sessionMutex()
+	mu.Lock()
+	u := d.m.session.TokenUsage
+	mu.Unlock()
+	if u.Total() > 0 {
 		var sb strings.Builder
 		sb.WriteString("Session Token Usage:\n\n")
 		sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanizeTokenCount(u.InputTokens)))
