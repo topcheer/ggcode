@@ -101,13 +101,22 @@ func (c *Config) marshalInstanceDelta() map[string]interface{} {
 // --- diff helpers ---
 
 func (*Config) diffScalar(key, current, global string, delta map[string]interface{}) {
-	if current != global && current != "" {
+	// #1519-C: no zero-value suppression. The delta is a MAP - an explicit
+	// "" overwrites the deep-merged old value correctly, and Save() strips
+	// registered fields either way. The old guard made a reset-to-default
+	// (e.g. clearing system_prompt) silently impossible: the diff dropped
+	// it, SaveInstance kept the stale merged value, and the old value
+	// resurrected on reload with no error. The im.enabled bool diff never
+	// had this suppression - it round-trips false fine.
+	if current != global {
 		delta[key] = current
 	}
 }
 
 func (*Config) diffInt(key string, current, global int, delta map[string]interface{}) {
-	if current != global && current != 0 {
+	// #1519-C: same reasoning as diffScalar - clearing max_iterations to 0
+	// ("use the global default") was silently dropped and 80 resurrected.
+	if current != global {
 		delta[key] = current
 	}
 }
@@ -240,19 +249,19 @@ func (*Config) diffA2A(current, global *A2AConfig, delta map[string]interface{})
 	if current.Disabled != global.Disabled {
 		a2aDelta["disabled"] = current.Disabled
 	}
-	if current.Port != global.Port && current.Port != 0 {
+	if current.Port != global.Port {
 		a2aDelta["port"] = current.Port
 	}
-	if current.Host != global.Host && current.Host != "" {
+	if current.Host != global.Host {
 		a2aDelta["host"] = current.Host
 	}
-	if current.Auth.APIKey != global.Auth.APIKey && current.Auth.APIKey != "" {
+	if current.Auth.APIKey != global.Auth.APIKey {
 		a2aDelta["auth"] = map[string]any{"api_key": current.Auth.APIKey}
 	}
-	if current.MaxTasks != global.MaxTasks && current.MaxTasks != 0 {
+	if current.MaxTasks != global.MaxTasks {
 		a2aDelta["max_tasks"] = current.MaxTasks
 	}
-	if current.TaskTimeout != global.TaskTimeout && current.TaskTimeout != "" {
+	if current.TaskTimeout != global.TaskTimeout {
 		a2aDelta["task_timeout"] = current.TaskTimeout
 	}
 	// Auth

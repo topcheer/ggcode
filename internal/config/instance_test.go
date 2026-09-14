@@ -1285,9 +1285,12 @@ func TestMigrateA2AYaml_Success(t *testing.T) {
 		t.Errorf("A2A.Host = %q, want %q", inst.A2A.Host, "0.0.0.0")
 	}
 
-	// Legacy file should still exist (not deleted)
-	if _, err := os.Stat(filepath.Join(workspace, ".ggcode", "a2a.yaml")); err != nil {
-		t.Error("legacy .ggcode/a2a.yaml should still exist after migration")
+	// #1519-B: the legacy file is REMOVED after a successful migration -
+	// keeping it made every load re-merge its values (into the global
+	// yaml via the missing registration AND the instance file via
+	// diffA2A) - double definition, never converging.
+	if _, err := os.Stat(filepath.Join(workspace, ".ggcode", "a2a.yaml")); !os.IsNotExist(err) {
+		t.Errorf("legacy .ggcode/a2a.yaml must be removed after migration, stat err=%v", err)
 	}
 
 	// Second call should return false (already migrated)
