@@ -218,13 +218,27 @@ func normalizeHeading(line string) (string, bool) {
 	content := strings.TrimSpace(rest[level:])
 	// #1588-C: CommonMark closing sequences require whitespace BEFORE the
 	// '#'s - a bare TrimRight mangled legitimate trailing characters
-	// ('## C#' -> 'C'). Only strip space-delimited closing sequences.
-	if idx := strings.LastIndex(content, " #"); idx >= 0 && strings.TrimRight(content[idx+1:], "# ") == "" {
-		content = strings.TrimRight(content[:idx], " ")
-	} else if strings.TrimRight(content, "#") == "" {
-		// All-# content (e.g. '###' as heading text) - keep as-is.
-	} else {
-		content = strings.TrimRight(content, " 	")
+	// ('## C#' -> 'C'). Only strip whitespace-delimited closing sequences.
+	// #1644-7: the delimiter is ANY whitespace (space OR tab) - the
+	// literal " #" probe missed tab closers ('## heading\t#' kept its '#').
+	if n := len(content); n > 0 {
+		j := n
+		for j > 0 && content[j-1] == '#' {
+			j--
+		}
+		switch {
+		case j == n:
+			// no trailing '#'s - just trim trailing spaces/tabs
+			content = strings.TrimRight(content, " \t")
+		case j == 0:
+			// All-# content (e.g. '###' as heading text) - keep as-is.
+		default:
+			if c := content[j-1]; c == ' ' || c == '\t' {
+				// whitespace-delimited closing sequence - strip it
+				content = strings.TrimRight(content[:j-1], " \t")
+			}
+			// else '## C#': a word char before the '#'s - keep
+		}
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {
