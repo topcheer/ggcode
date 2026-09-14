@@ -105,10 +105,18 @@ func (m *Model) refreshUsagePanel() tea.Cmd {
 	// count, flipping fetching=false before the tail vendors answered.
 	m.usagePanel.infos = map[string]*usage.UsageInfo{}
 	m.usagePanel.errs = map[string]string{}
-	// Bypass the cache: "r" is an explicit user request. Re-registering is
-	// idempotent; a fresh Service per refresh is the simplest correct
-	// invalidation for a rare, user-triggered action.
-	m.usageService = nil
+	// #2366-①: keep the Service instance. The old code nil'd it ("fresh
+	// Service per refresh"), which also threw away singleflight and every
+	// negative-cache row - including Retry-After-sized 429 entries - so N
+	// rapid r-presses after a 429 meant N unbackoffed full re-probes of
+	// all probeable vendors. "r" means fresh numbers, not "forget the
+	// server said back off": invalidate only success rows; errors expire
+	// on their own schedule.
+	if m.usageService != nil {
+		for _, v := range m.probeableVendors() {
+			m.usageService.InvalidateSuccess(v)
+		}
+	}
 	m.usagePanel.fetching = true
 	return m.fetchAllUsageCmd()
 }
