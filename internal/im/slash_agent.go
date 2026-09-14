@@ -1,15 +1,19 @@
 package im
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/usage"
 )
 
 // Path-A (daemon bridge) implementation of SlashDeps. The agent and disk
@@ -24,11 +28,10 @@ func BuildCrossSessionCostSummary() (string, error) {
 	return "Cross-session cost totals are being rebuilt on the live usage pipeline (#2150). Session /cost is available.", nil
 }
 
-// buildDiskUsageSummary is retired with the same ruling (#2312 B): it
-// aggregated the same writer-less .cost.json store. See
-// BuildCrossSessionCostSummary above.
+// buildDiskUsageSummary is retired (#2312 ruling B: writer-less .cost.json
+// aggregation) and superseded by SessionUsageSummary's live wiring above.
 func buildDiskUsageSummary() (string, error) {
-	return "All-time token totals are being rebuilt on the live usage pipeline (#2150).", nil
+	return "usage: no active vendor", nil
 }
 
 func humanCount(n int64) string {
@@ -56,7 +59,43 @@ func (b *DaemonBridge) SessionCostSummary() (string, error) {
 }
 
 func (b *DaemonBridge) SessionUsageSummary() (string, error) {
-	return buildDiskUsageSummary()
+	// #2150 batch 3: live vendor usage/balance via the shared probe layer.
+	// Instance config follows the #2205 pattern (LoadInstanceConfig with the
+	// bridge's workingDir inherited from the agent) - the daemon process
+	// keeps keys.env seeds in-process, so the resolved active endpoint and
+	// API key are readable here. The Service is a package-level singleton so
+	// repeated /usage commands (and any other im consumer) share the
+	// 3min cache instead of cold-querying every time.
+	cfg := config.LoadInstanceConfig(b.workingDir)
+	if cfg == nil || cfg.Vendor == "" {
+		return "usage: no active vendor", nil
+	}
+	baseURL, apiKey := "", ""
+	if v, ok := cfg.Vendors[cfg.Vendor]; ok {
+		if ep, ok := v.Endpoints[cfg.Endpoint]; ok {
+			baseURL, apiKey = ep.BaseURL, ep.APIKey
+		}
+	}
+	if apiKey == "" {
+		return fmt.Sprintf("usage: %s (no API key resolved for the active endpoint)", cfg.Vendor), nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	info, err := imUsageService().Get(ctx, cfg.Vendor, baseURL, apiKey)
+	return usage.RenderText(cfg.Vendor, info, err), nil
+}
+
+// imUsageServiceOnce guards the process-wide probe service for the IM
+// /usage path (usage.DefaultService builds a fresh Service per call; a
+// singleton preserves its cache across commands).
+var imUsageServiceOnce sync.Once
+var imUsageServiceInst *usage.Service
+
+func imUsageService() *usage.Service {
+	imUsageServiceOnce.Do(func() {
+		imUsageServiceInst = usage.DefaultService()
+	})
+	return imUsageServiceInst
 }
 
 func (b *DaemonBridge) CurrentMode() string {
