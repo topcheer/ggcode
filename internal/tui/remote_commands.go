@@ -327,15 +327,24 @@ func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
 		if svc := d.m.ensureUsageService(); svc != nil && svc.Has(vendor) {
 			baseURL, apiKey := d.m.resolveVendorEndpoint(vendor)
 			if apiKey != "" {
-				emitter := d.m
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					info, err := svc.Get(ctx, vendor, baseURL, apiKey)
-					cancel()
-					if err == nil && info != nil {
-						emitter.emitIMText(usage.RenderText(vendor, info, nil))
-					}
-				}()
+				// #2377: snapshot the EMITTER VALUE on the Update side. The
+				// first async cut captured the whole *Model (`emitter := d.m`)
+				// so emitIMText re-read m.imEmitter from the probe goroutine
+				// while storeIMRuntime/syncIMRuntimeCache/storeIMInstanceDetect
+				// write it on Update - a data race the -race detector owns.
+				// Reading the field here (same goroutine as the writers) and
+				// calling EmitText directly on the snapshot closes it.
+				emitter := d.m.imEmitter
+				if emitter != nil {
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						info, err := svc.Get(ctx, vendor, baseURL, apiKey)
+						cancel()
+						if err == nil && info != nil {
+							emitter.EmitText(usage.RenderText(vendor, info, nil))
+						}
+					}()
+				}
 			}
 		}
 	}
