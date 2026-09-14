@@ -906,6 +906,45 @@ type localLightweightEntry struct {
 }
 
 // loadSession is the lock-free internal version of Load.
+
+// dedupeConsecutiveUserMsgs collapses runs of back-to-back USER messages
+// with byte-identical text content (#2324-report). A killed
+// endless-retry run persists the same user prompt once per retry attempt
+// (each Add gets a fresh message ID, so the write-side ID dedup never
+// sees them as the same); on reload the transcript - and worse, the
+// rebuilt LLM context - replayed the prompt N times. Only plain-text
+// user messages participate: a message carrying tool_result blocks is a
+// different animal and never collapses.
+func dedupeConsecutiveUserMsgs(msgs []provider.Message) []provider.Message {
+	userText := func(m provider.Message) (string, bool) {
+		if m.Role != "user" {
+			return "", false
+		}
+		var sb strings.Builder
+		for _, b := range m.Content {
+			if b.Type == "tool_result" {
+				return "", false
+			}
+			if b.Type == "text" {
+				sb.WriteString(b.Text)
+			}
+		}
+		return sb.String(), true
+	}
+	out := make([]provider.Message, 0, len(msgs))
+	var lastKey string
+	var lastIsUser bool
+	for _, m := range msgs {
+		key, isUser := userText(m)
+		if isUser && lastIsUser && key == lastKey && key != "" {
+			continue // retry-loop duplicate: same prompt, consecutive user turn
+		}
+		out = append(out, m)
+		lastKey, lastIsUser = key, isUser
+	}
+	return out
+}
+
 func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	path := s.sessionPath(id)
 
@@ -1159,6 +1198,11 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.Messages = append(ses.Messages, *rec.Message)
 		}
 	}
+	// #2324-report: collapse retry-loop duplicate user turns. This is NOT
+	// the history filtering the warning above forbids - the collapsed
+	// copies are write-side artifacts of a killed endless-retry run, not
+	// distinct turns the user expects to see.
+	ses.Messages = dedupeConsecutiveUserMsgs(ses.Messages)
 
 	// ── ses.ContextMessages: compacted context for agent (for LLM) ──
 	// Contains the LAST checkpoint (compaction summary) + messages appended
@@ -1345,6 +1389,11 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 			ses.ContextMessages = unwindowed
 		}
 	}
+
+	// #2324-report: same dedup on the LLM context rebuild - the replayed
+	// prompt N times is not just a rendering artifact, the agent literally
+	// saw the same question N times in a row on resume.
+	ses.ContextMessages = dedupeConsecutiveUserMsgs(ses.ContextMessages)
 
 	// Diagnostic summary: log the final ContextMessages state so that
 	// context-loss issues can be diagnosed via debug_log without needing
