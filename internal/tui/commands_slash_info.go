@@ -149,24 +149,62 @@ func publishCurrentSessionCmd(reset bool) tea.Cmd {
 	}
 }
 
+func (m *Model) snapshotDisplayNameResolver() func(vendor, endpoint string) (string, string) {
+	if m.config == nil {
+		return func(vendor, endpoint string) (string, string) { return vendor, endpoint }
+	}
+	vendors := make(map[string]config.VendorConfig, len(m.config.Vendors))
+	for k, vc := range m.config.Vendors {
+		eps := make(map[string]config.EndpointConfig, len(vc.Endpoints))
+		for ek, ev := range vc.Endpoints {
+			eps[ek] = ev
+		}
+		vc.Endpoints = eps
+		vendors[k] = vc
+	}
+	lang := m.config.Language
+	return func(vendor, endpoint string) (string, string) {
+		vd, ed := vendor, endpoint
+		if vc, ok := vendors[vendor]; ok {
+			if vc.DisplayName != "" {
+				vd = config.LocalizedVendorDisplay(vendor, vc.DisplayName, lang)
+			}
+			if ep, ok := vc.Endpoints[endpoint]; ok {
+				epName := ep.DisplayName
+				if epName == "" {
+					epName = endpoint
+				}
+				ed = config.LocalizedEndpointDisplay(vendor, endpoint, epName, lang)
+			}
+		}
+		return vd, ed
+	}
+}
+
 func (m *Model) exportSession(id string) tea.Cmd {
+	// #2347: snapshot everything the flying goroutine reads. The tea.Cmd
+	// closure runs off the Update loop; reading m.config.Vendors (nested
+	// maps, fatal on concurrent write via ResolveDisplayName) races a
+	// provider switch serialized in Update. Copy the display-name data
+	// HERE - under the Update loop's serialization - and resolve against
+	// the copy inside the closure.
+	displayResolve := m.snapshotDisplayNameResolver()
+	store := m.sessionStore
+	tr := m.t
 	return func() tea.Msg {
-		if m.sessionStore == nil {
-			return streamMsg(m.t("session.store_missing"))
+		if store == nil {
+			return streamMsg(tr("session.store_missing"))
 		}
 		// Load session first, then render with display names from config.
-		resolved, err := resolveSessionID(m.sessionStore, id)
+		resolved, err := resolveSessionID(store, id)
 		if err != nil {
-			return streamMsg(m.t("session.export_failed", err))
+			return streamMsg(tr("session.export_failed", err))
 		}
-		ses, err := m.sessionStore.Load(resolved)
+		ses, err := store.Load(resolved)
 		if err != nil {
-			return streamMsg(m.t("session.export_failed", err))
+			return streamMsg(tr("session.export_failed", err))
 		}
-		vendorDisplay, endpointDisplay := "", ""
-		if m.config != nil {
-			vendorDisplay, endpointDisplay = m.config.ResolveDisplayName(ses.Vendor, ses.Endpoint)
-		}
+		vendorDisplay, endpointDisplay := displayResolve(ses.Vendor, ses.Endpoint)
 		md := session.ExportSessionMarkdownWithDisplay(ses, vendorDisplay, endpointDisplay)
 		filename := fmt.Sprintf("session-%s.md", resolved)
 		if err := os.WriteFile(filename, []byte(md), 0644); err != nil {
@@ -184,34 +222,44 @@ func (m *Model) exportSession(id string) tea.Cmd {
 // directory and is suitable for offline analysis, sharing, or piping into
 // observability platforms.
 func (m *Model) exportTraceSession(id string) tea.Cmd {
+	// #2347: snapshot the LIVE session's fields and the Metrics slice
+	// header here, under the Update loop - the metrics recorder appends
+	// from Update-serialized handlers, so copying now is race-free, while
+	// reading m.session.* from the closure raced those appends (torn slice
+	// header -> ExportTrace iterates out of bounds).
+	var events []metrics.MetricEvent
+	var sessionID, vendor, endpoint, model string
+	var createdAt time.Time
+	hasCurrent := false
+	if id == "" && m.session != nil {
+		hasCurrent = true
+		sessionID = m.session.ID
+		vendor = m.session.Vendor
+		endpoint = m.session.Endpoint
+		model = m.session.Model
+		createdAt = m.session.CreatedAt
+		events = m.session.Metrics
+	}
+	store := m.sessionStore
+	tr := m.t
 	return func() tea.Msg {
-		var events []metrics.MetricEvent
-		var sessionID, vendor, endpoint, model string
-		var createdAt time.Time
-
 		if id == "" {
 			// Export current session metrics.
-			if m.session == nil {
-				return streamMsg(m.t("trace.no_session"))
+			if !hasCurrent {
+				return streamMsg(tr("trace.no_session"))
 			}
-			sessionID = m.session.ID
-			vendor = m.session.Vendor
-			endpoint = m.session.Endpoint
-			model = m.session.Model
-			createdAt = m.session.CreatedAt
-			events = m.session.Metrics
 		} else {
 			// Export by session ID.
-			if m.sessionStore == nil {
-				return streamMsg(m.t("session.store_missing"))
+			if store == nil {
+				return streamMsg(tr("session.store_missing"))
 			}
-			resolved, err := resolveSessionID(m.sessionStore, id)
+			resolved, err := resolveSessionID(store, id)
 			if err != nil {
-				return streamMsg(m.t("trace.export_failed", err))
+				return streamMsg(tr("trace.export_failed", err))
 			}
-			ses, err := m.sessionStore.Load(resolved)
+			ses, err := store.Load(resolved)
 			if err != nil {
-				return streamMsg(m.t("trace.export_failed", err))
+				return streamMsg(tr("trace.export_failed", err))
 			}
 			sessionID = resolved
 			vendor = ses.Vendor
@@ -222,21 +270,21 @@ func (m *Model) exportTraceSession(id string) tea.Cmd {
 		}
 
 		if len(events) == 0 {
-			return streamMsg(m.t("trace.no_metrics"))
+			return streamMsg(tr("trace.no_metrics"))
 		}
 
 		data, err := metrics.ExportTrace(sessionID, vendor, endpoint, model, createdAt, events)
 		if err != nil {
-			return streamMsg(m.t("trace.export_failed", err))
+			return streamMsg(tr("trace.export_failed", err))
 		}
 
 		filename := fmt.Sprintf("trace-%s.json", sessionID)
 		if err := os.WriteFile(filename, data, 0644); err != nil {
-			return streamMsg(m.t("trace.write_failed", err))
+			return streamMsg(tr("trace.write_failed", err))
 		}
 
 		summary := metrics.Summarize(events)
-		return streamMsg(m.t("trace.exported",
+		return streamMsg(tr("trace.exported",
 			sessionID, filename,
 			summary.TurnCount, summary.LLMCallCount, summary.ToolCallCount,
 			summary.TotalInputTokens, summary.TotalOutputTokens))
@@ -348,48 +396,64 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 }
 
 func (m *Model) handleBugCommand() tea.Cmd {
+	// #2347: snapshot the scalars the closure reports - reading
+	// m.config.Vendor/Model, m.session.ID/Messages and m.mcpServers from
+	// the flying goroutine raced Update-serialized writers.
+	cfgVendor, cfgModel := "", ""
+	hasCfg := m.config != nil
+	if hasCfg {
+		cfgVendor, cfgModel = m.config.Vendor, m.config.Model
+	}
+	sesID, sesMsgs := "", 0
+	hasSes := m.session != nil
+	if hasSes {
+		sesID, sesMsgs = m.session.ID, len(m.session.Messages)
+	}
+	nServers := len(m.mcpServers)
+	chatList := m.chatList // chat.List guards itself with an internal RWMutex
+	trFn := m.t
 	return func() tea.Msg {
 		var b strings.Builder
-		b.WriteString(m.t("bug.title"))
+		b.WriteString(trFn("bug.title"))
 
 		// Version info
-		b.WriteString(m.t("bug.version", version.Display()))
-		b.WriteString(m.t("bug.os", runtime.GOOS, runtime.GOARCH))
-		b.WriteString(m.t("bug.go", runtime.Version()))
+		b.WriteString(trFn("bug.version", version.Display()))
+		b.WriteString(trFn("bug.os", runtime.GOOS, runtime.GOARCH))
+		b.WriteString(trFn("bug.go", runtime.Version()))
 
 		// Config info
-		if m.config != nil {
-			b.WriteString(m.t("bug.provider", m.config.Vendor))
-			b.WriteString(m.t("bug.model", m.config.Model))
+		if hasCfg {
+			b.WriteString(trFn("bug.provider", cfgVendor))
+			b.WriteString(trFn("bug.model", cfgModel))
 		}
 
 		// Session info
-		if m.session != nil {
-			b.WriteString(m.t("bug.session", m.session.ID, len(m.session.Messages)))
+		if hasSes {
+			b.WriteString(trFn("bug.session", sesID, sesMsgs))
 		}
 
 		// MCP info
-		if len(m.mcpServers) > 0 {
-			b.WriteString(m.t("bug.mcp", len(m.mcpServers)))
+		if nServers > 0 {
+			b.WriteString(trFn("bug.mcp", nServers))
 		}
 
 		// Recent errors from chatList items
-		if m.chatList != nil {
-			for i := m.chatList.Len() - 1; i >= 0; i-- {
-				item := m.chatList.ItemAt(i)
+		if chatList != nil {
+			for i := chatList.Len() - 1; i >= 0; i-- {
+				item := chatList.ItemAt(i)
 				text := stripAnsiForChat(item.Render(200))
 				if idx := strings.LastIndex(text, "Error:"); idx >= 0 {
 					end := idx + 500
 					if end > len(text) {
 						end = len(text)
 					}
-					b.WriteString(m.t("bug.last_error", text[idx:end]))
+					b.WriteString(trFn("bug.last_error", text[idx:end]))
 					break
 				}
 			}
 		}
 
-		b.WriteString(m.t("bug.hint"))
+		b.WriteString(trFn("bug.hint"))
 		return streamMsg(b.String())
 	}
 }

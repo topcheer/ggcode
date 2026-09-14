@@ -87,3 +87,16 @@ func localizedEndpointDisplay(vendorID, endpointID, englishName, lang string) st
 	}
 	return englishName
 }
+
+// LocalizedVendorDisplay / LocalizedEndpointDisplay are thin exported
+// wrappers for consumers outside config (e.g. the TUI's display-name
+// snapshot resolver, #2347) that hold a copied map snapshot and must apply
+// the same localization rules Config.ResolveDisplayName uses.
+func LocalizedVendorDisplay(vendorID, englishName, lang string) string {
+	return localizedVendorDisplay(vendorID, englishName, lang)
+}
+
+// LocalizedEndpointDisplay mirrors LocalizedVendorDisplay for endpoints.
+func LocalizedEndpointDisplay(vendorID, endpointID, englishName, lang string) string {
+	return localizedEndpointDisplay(vendorID, endpointID, englishName, lang)
+}
