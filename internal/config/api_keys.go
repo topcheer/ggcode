@@ -464,7 +464,13 @@ var keysEnvPathOverride string
 // process environment. Keys that are already set in the environment take
 // precedence and are not overwritten.
 func LoadKeysEnv() error {
-	return loadKeysEnvInto(os.Setenv, KeysEnvPath())
+	// #2284-A: register the names so command tools strip them from child
+	// envs (the values still go to the process env - same-process ${VAR}
+	// expansion depends on it, per the R240 audit).
+	return loadKeysEnvInto(func(key, val string) error {
+		util.RegisterSecretEnv(key)
+		return os.Setenv(key, val)
+	}, KeysEnvPath())
 }
 
 // instanceKeysEnv holds the instance-scope keys.env contents loaded by
@@ -709,6 +715,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 		if !ok || !isPlaintextAPIKeyValue(value) {
 			return
 		}
+		util.RegisterSecretEnv(f.EnvVar) // #2284-A
 		os.Setenv(f.EnvVar, value)
 		envEntries[f.EnvVar] = value
 		vendorMap["api_key"] = "${" + f.EnvVar + "}"
@@ -722,6 +729,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 		if !ok || !isPlaintextAPIKeyValue(value) {
 			return
 		}
+		util.RegisterSecretEnv(f.EnvVar) // #2284-A
 		os.Setenv(f.EnvVar, value)
 		envEntries[f.EnvVar] = value
 		epMap["api_key"] = "${" + f.EnvVar + "}"
@@ -750,6 +758,7 @@ func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries ma
 	if !ok || !isPlaintextAPIKeyValue(value) {
 		return
 	}
+	util.RegisterSecretEnv(f.EnvVar) // #2284-A
 	os.Setenv(f.EnvVar, value)
 	envEntries[f.EnvVar] = value
 	extra[keyName] = "${" + f.EnvVar + "}"
@@ -800,6 +809,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			if !ok || !isPlaintextAPIKeyValue(value) {
 				return
 			}
+			util.RegisterSecretEnv(f.EnvVar) // #2284-A
 			os.Setenv(f.EnvVar, value)
 			envEntries[f.EnvVar] = value
 			headers[keyName] = "${" + f.EnvVar + "}"
@@ -810,6 +820,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			if !ok || !isPlaintextAPIKeyValue(value) {
 				return
 			}
+			util.RegisterSecretEnv(f.EnvVar) // #2284-A
 			os.Setenv(f.EnvVar, value)
 			envEntries[f.EnvVar] = value
 			env[keyName] = "${" + f.EnvVar + "}"

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 	"strings"
 	"testing"
 	"time"
@@ -291,4 +292,43 @@ func TestDiagnoseCommandFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// #2284-A: registered secret names must not leak into child shells. A key
+// set via /config (Setenv for same-process ${VAR} expansion) must be
+// invisible to an arbitrary `env` the agent spawns.
+func TestNormalizedCommandEnvStripsRegisteredSecrets(t *testing.T) {
+	util.ResetSecretEnvForTests()
+	defer util.ResetSecretEnvForTests()
+	util.RegisterSecretEnv("ZZ_TEST_SECRET_KEY")
+	t.Setenv("ZZ_TEST_SECRET_KEY", "sk-leak-me")
+
+	env := normalizedCommandEnv()
+	for _, e := range env {
+		if strings.HasPrefix(e, "ZZ_TEST_SECRET_KEY=") {
+			t.Fatalf("secret leaked to child env: %s", e)
+		}
+	}
+	found := false
+	for _, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("PATH must survive the filter")
+	}
+	// Overrides still applied (last-wins semantics).
+	if !containsExact(env, "TERM=dumb") {
+		t.Error("terminal overrides must still be applied")
+	}
+}
+
+func containsExact(env []string, want string) bool {
+	for _, e := range env {
+		if e == want {
+			return true
+		}
+	}
+	return false
 }

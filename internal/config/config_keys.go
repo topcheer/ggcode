@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"os"
@@ -57,6 +58,7 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 
 	// Set the actual value in the current process environment so it works
 	// immediately for the current session.
+	util.RegisterSecretEnv(envVarName) // #2284-A
 	os.Setenv(envVarName, apiKey)
 
 	// Persist to keys.env so the key survives restarts.
@@ -110,6 +112,7 @@ func syncVendorKeyEnv(vendor, apiKey string) {
 		os.Unsetenv(sibling)
 		return
 	}
+	util.RegisterSecretEnv(primary, sibling) // #2284-A
 	os.Setenv(primary, apiKey)
 	if sibling != primary {
 		os.Setenv(sibling, apiKey)
@@ -154,6 +157,7 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 		vc.APIKey = apiKey
 	} else {
 		envVarName := preferredEndpointAPIKeyEnvVar(vendor, "default")
+		util.RegisterSecretEnv(envVarName) // #2284-A
 		os.Setenv(envVarName, apiKey)
 		// #1517: #1435 fixed this exact class for AddVendor/AddEndpoint
 		// but missed SetVendorAPIKey - the key lived only in process env,

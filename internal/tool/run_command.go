@@ -894,7 +894,12 @@ var commandEnvOverrides = []string{
 // overrides applied. Later entries take precedence in Go's cmd.Env semantics,
 // so the overrides replace any user-set TERM, NO_COLOR, COLUMNS, or CI values.
 func normalizedCommandEnv() []string {
-	return append(os.Environ(), commandEnvOverrides...)
+	// #2284-A: strip config-managed secret names first - an arbitrary
+	// child shell must not inherit (and be able to dump) every key
+	// ggcode injected into the process env. Values stay in the process
+	// env for same-process ${VAR} expansion; only child inheritance is
+	// blocked (R240 audit option 2).
+	return append(util.StripSecretEnv(os.Environ()), commandEnvOverrides...)
 }
 
 // wireCommandOutput attaches stdout/stderr capture to the cmd with the best

@@ -469,6 +469,7 @@ func (c *Config) AddEndpoint(vendor, endpointName, protocol, baseURL, apiKey str
 			ep.APIKey = apiKey
 		} else {
 			envVarName := preferredEndpointAPIKeyEnvVar(vendor, endpointName)
+			util.RegisterSecretEnv(envVarName) // #2284-A
 			os.Setenv(envVarName, apiKey)
 			// #1435-A: same as AddVendor - persist, or the key lives only
 			// in this process and onboarding loops on fresh terminals.
@@ -574,6 +575,7 @@ func (c *Config) AddVendor(name, displayName, apiKey string) error {
 			vc.APIKey = apiKey
 		} else {
 			envVarName := preferredEndpointAPIKeyEnvVar(name, "default")
+			util.RegisterSecretEnv(envVarName) // #2284-A
 			os.Setenv(envVarName, apiKey)
 			// #1435-A: without persisting to keys.env the value lived ONLY in
 			// this process's env; a fresh terminal (NeedsOnboard LookupEnv
