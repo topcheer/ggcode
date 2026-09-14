@@ -314,19 +314,28 @@ func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
 	// active vendor's probe result so both paths carry the same vendor
 	// payload (tokens stay - TUI sessions have them; daemon sessions do
 	// not). Vendor-probe failures stay silent: usage is ambient.
+	//
+	// #2373: the probe runs OFF the Update goroutine. This handler is
+	// reached from remoteInboundMsg (bubbletea Update), and svc.Get is a
+	// synchronous HTTP call - on a cache miss it froze the whole TUI for
+	// up to 5s. Snapshot everything the goroutine touches on the Update
+	// side (vendor, baseURL, apiKey, svc - resolveVendorEndpoint reads
+	// m.config), return the token block immediately, and emit the vendor
+	// payload via emitIMText when the probe lands (#2371's "probes never
+	// occupy Update" rule).
 	if vendor := util.FirstNonEmpty(d.m.activeVendor, d.m.startupVendor); vendor != "" {
 		if svc := d.m.ensureUsageService(); svc != nil && svc.Has(vendor) {
 			baseURL, apiKey := d.m.resolveVendorEndpoint(vendor)
 			if apiKey != "" {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				info, err := svc.Get(ctx, vendor, baseURL, apiKey)
-				cancel()
-				if err == nil && info != nil {
-					if sb.Len() > 0 {
-						sb.WriteString("\n")
+				emitter := d.m
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					info, err := svc.Get(ctx, vendor, baseURL, apiKey)
+					cancel()
+					if err == nil && info != nil {
+						emitter.emitIMText(usage.RenderText(vendor, info, nil))
 					}
-					sb.WriteString(usage.RenderText(vendor, info, nil))
-				}
+				}()
 			}
 		}
 	}
