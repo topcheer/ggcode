@@ -37,6 +37,9 @@ Download from GitHub Releases:
 - **Session management** — create, switch, filter by workspace, and manage coding sessions
 - **Multiple workspaces** — manage several projects side by side
 - **Window state persistence** — window position, size, and maximized state are saved on exit and restored on next launch
+- **Usage badge** — the status bar shows the active vendor's balance or
+  main window usage (same data as the TUI sidebar and `/usage`; blank
+  when the vendor has no usage endpoint)
 - **System tray icon** — native macOS status bar item with quick actions (Show GGCode, New Session, Quit). Closing the window hides it to the tray; close again within 3 seconds to actually quit
 - **Always-on-top pinning** — pin the window above other applications via title bar toggle
 
