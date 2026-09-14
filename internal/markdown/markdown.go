@@ -244,5 +244,11 @@ func normalizeHeading(line string) (string, bool) {
 	if content == "" {
 		return line, false
 	}
-	return strings.Repeat(" ", indentLen) + content, true
+	// #2299: rebuild WITH the ATX prefix - the old reconstruction dropped
+	// the #'s ("## hello" -> "hello" + isHeading=true), so Render handed
+	// glamour a prefix-less line and every heading degraded to paragraph
+	// styling on all surfaces. The closing-sequence strip (#1588-C/#1644-7)
+	// already normalized `content`; CommonMark allows 0-3 leading spaces,
+	// normalize to none.
+	return strings.Repeat("#", level) + " " + content, true
 }

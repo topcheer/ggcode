@@ -16,7 +16,10 @@ func TestNormalizePreservesHeadingBlockBoundaryBeforeOrderedList(t *testing.T) {
 func TestNormalizePreservesHeadingBlockBoundaryAfterParagraph(t *testing.T) {
 	input := "Intro paragraph\n## Phase 3\n10. ARCH-01\n"
 	normalized := Normalize(input)
-	if !strings.Contains(normalized, "Intro paragraph\n\nPhase 3\n\n10. ARCH-01") {
+	// #2299: the heading keeps its ATX prefix (was stripped - a first-day
+	// defect pinned here as "Phase 3" without the #'s) while staying
+	// isolated as a block.
+	if !strings.Contains(normalized, "Intro paragraph\n\n## Phase 3\n\n10. ARCH-01") {
 		t.Fatalf("expected normalized heading to stay isolated as a block, got %q", normalized)
 	}
 }
