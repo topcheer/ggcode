@@ -37,3 +37,7 @@ func processExists(pid int) bool {
 
 // PID is a convenience helper for the current process.
 var _ = os.Getpid
+
+// procStartTime is the unix identity token (#1624 case C); Windows has no
+// /proc, so the identity check degrades to signal-0 liveness.
+func procStartTime(pid int) string { return "" }

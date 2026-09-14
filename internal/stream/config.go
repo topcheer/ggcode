@@ -89,8 +89,11 @@ func (c *StreamConfig) Validate() error {
 		// checked non-empty) and NewTarget forwards the raw url to ffmpeg,
 		// which fails at RUNTIME with "Unable to find a suitable output
 		// format" - far from the cause. Fail at config time instead.
-		if u := strings.TrimSpace(t.URL); !strings.HasPrefix(u, "rtmp://") && !strings.HasPrefix(u, "srt://") {
-			return fmt.Errorf("stream: target[%d] (%s): url must start with rtmp:// or srt:// (got %q)", i, t.Name, u)
+		// #2274: rtmps:// (TLS ingest) is first-class - presets.go ships
+		// rtmps URLs for YouTube/Twitch/Facebook and the struct docs use
+		// rtmps examples; rejecting it pushed users back to cleartext.
+		if u := strings.TrimSpace(t.URL); !strings.HasPrefix(u, "rtmp://") && !strings.HasPrefix(u, "rtmps://") && !strings.HasPrefix(u, "srt://") {
+			return fmt.Errorf("stream: target[%d] (%s): url must start with rtmp://, rtmps:// or srt:// (got %q)", i, t.Name, u)
 		}
 		if strings.TrimSpace(t.Key) == "" {
 			return fmt.Errorf("stream: target[%d] (%s): key is required", i, t.Name)
