@@ -1,5 +1,7 @@
 package cost
 
+import "fmt"
+
 // TokenUsage records token consumption for a single API call.
 // Defined in the cost package to avoid circular imports.
 type TokenUsage struct {
@@ -30,4 +32,18 @@ func (u TokenUsage) DisplayInputTokens() int {
 		}
 	}
 	return u.InputTokens
+}
+
+// FormatCost renders a USD amount (moved here from the retired manager -
+// it formats LIVE per-session costs, not the dead .cost.json store).
+func FormatCost(usd float64) string {
+	sign := ""
+	if usd < 0 {
+		sign = "-"
+		usd = -usd
+	}
+	if usd < 0.01 {
+		return fmt.Sprintf("%s$%.4f", sign, usd)
+	}
+	return fmt.Sprintf("%s$%.2f", sign, usd)
 }

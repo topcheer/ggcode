@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -741,85 +740,13 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 	return nil
 }
 
-// handleCostAllCommand displays cross-session cost totals by loading all
-// .cost.json files from the cost data directory.
+// handleCostAllCommand is retired (#2312 ruling B): the .cost.json store
+// it read has had no live writer since the session-domain usage pipeline
+// took over - the cross-session summary and its cache-efficiency section
+// rendered empty or stale legacy data. The first-class usage/balance
+// surface (#2150, in flight) will serve this need from live data.
 func (m *Model) handleCostAllCommand() tea.Cmd {
-	dataDir := filepath.Join(config.ConfigDir(), "cost")
-	mgr := cost.NewManager(cost.DefaultPricingTable(), dataDir)
-	loaded := mgr.LoadAllFromDisk()
-
-	var sb strings.Builder
-	sb.WriteString("Cross-Session Cost Summary:\n\n")
-
-	if loaded == 0 {
-		sb.WriteString("  No cost data found. Cost files are saved in:\n")
-		sb.WriteString(fmt.Sprintf("  %s\n", dataDir))
-		m.chatWriteSystem(nextSystemID(), sb.String())
-		return nil
-	}
-
-	allCosts := mgr.AllCosts()
-	agg := mgr.AggregateAllCosts()
-
-	// Per-session breakdown (top 10 by cost)
-	maxShow := 10
-	if len(allCosts) < maxShow {
-		maxShow = len(allCosts)
-	}
-	sb.WriteString(fmt.Sprintf("  Sessions tracked: %d (showing top %d)\n\n", loaded, maxShow))
-	for i := 0; i < maxShow; i++ {
-		sc := allCosts[i]
-		// #703: an unpriced session previously rendered a fake-precise
-		// "$0.0000" (FormatCost of 0), violating the #683 single-session
-		// contract on the /cost all list path. Honor HasPricing here too.
-		costStr := cost.FormatCost(sc.TotalCostUSD)
-		if !sc.HasPricing {
-			costStr = "(no pricing data)"
-		}
-		sb.WriteString(fmt.Sprintf("  %s (%s) — %s\n",
-			sc.Model, sc.Provider, costStr))
-	}
-	if len(allCosts) > maxShow {
-		sb.WriteString(fmt.Sprintf("  ... and %d more\n\n", len(allCosts)-maxShow))
-	} else {
-		sb.WriteString("\n")
-	}
-
-	// Grand totals
-	sb.WriteString("--- All-Time Totals ---\n")
-	// #687: when part of the summed sessions lack pricing data, the total is
-	// a partial sum — annotate instead of presenting a false-precise number.
-	totalCostStr := cost.FormatCost(agg.TotalCostUSD)
-	if agg.SessionsWithoutPricing > 0 && !agg.HasPricing && agg.SessionsWithoutPricing == len(allCosts) {
-		// #703: when EVERY session lacks pricing, the coverage of this "sum"
-		// is zero — leading with a dollar figure is the aggregate form of the
-		// fake-precise "$0.0000" #683 eliminated on the single-session path.
-		totalCostStr = "(no pricing data for any session)"
-	} else if agg.SessionsWithoutPricing > 0 {
-		totalCostStr += fmt.Sprintf(" (partial: %d sessions without pricing data)", agg.SessionsWithoutPricing)
-	}
-	sb.WriteString(fmt.Sprintf("  Total cost:         %s\n", totalCostStr))
-	sb.WriteString(fmt.Sprintf("  Input tokens:       %s\n", humanizeTokenCount(int(agg.InputTokens))))
-	sb.WriteString(fmt.Sprintf("  Output tokens:      %s\n", humanizeTokenCount(int(agg.OutputTokens))))
-	if agg.CacheReadTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache read:         %s\n", humanizeTokenCount(int(agg.CacheReadTokens))))
-	}
-	if agg.CacheWriteTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache write:        %s\n", humanizeTokenCount(int(agg.CacheWriteTokens))))
-	}
-
-	// Cache efficiency analysis: shows whether prompt caching is actually
-	// saving money or losing it (cache thrashing). Uses the aggregate
-	// SessionCost with the default pricing table.
-	if agg.CacheReadTokens > 0 || agg.CacheWriteTokens > 0 {
-		cacheAnalysis := cost.AnalyzeCacheFromSessionCost(agg, cost.DefaultPricingTable())
-		if cacheLine := cost.FormatCacheAnalysis(cacheAnalysis); cacheLine != "" {
-			sb.WriteString("\n--- Cache Efficiency ---\n")
-			sb.WriteString(cacheLine + "\n")
-		}
-	}
-
-	m.chatWriteSystem(nextSystemID(), sb.String())
+	m.chatWriteSystem(nextSystemID(), "Cross-session cost totals are being rebuilt on the live usage pipeline (#2150). /cost shows the current session.")
 	return nil
 }
 
