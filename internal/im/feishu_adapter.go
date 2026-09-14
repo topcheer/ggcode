@@ -1260,8 +1260,23 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 	if text, ok := parsed["text"].(string); ok {
 		return text
 	}
-	// Rich text (post) format
-	for _, langContent := range parsed {
+	// Rich text (post) format. Official payloads wrap the language map:
+	// {"post":{"zh_cn":{"content":[...]}, ...}} - unwrap first (#2309),
+	// otherwise the range below walks the wrapper layer (no "content"
+	// key) and every post message collapses to "".
+	if post, ok := parsed["post"].(map[string]any); ok {
+		parsed = post
+	}
+	// #2309: a post is ONE message rendered in several languages - pick a
+	// single language's text, never join them (that would duplicate the
+	// content per language). The old loop returned the FIRST language
+	// block that had a "content" key even when its texts were empty, and
+	// map iteration order is random - multi-language posts (auto-translation
+	// / forwarded messages) randomly lost their text with no log. Preference
+	// order: zh_cn, en_us, then first non-empty.
+	var bestText string
+	bestRank := -1
+	for lang, langContent := range parsed {
 		langMap, ok := langContent.(map[string]any)
 		if !ok {
 			continue
@@ -1286,7 +1301,24 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 				}
 			}
 		}
-		return strings.Join(texts, "")
+		joined := strings.Join(texts, "")
+		if joined == "" {
+			continue
+		}
+		rank := 2
+		switch lang {
+		case "zh_cn":
+			rank = 0
+		case "en_us":
+			rank = 1
+		}
+		if rank < bestRank || bestRank < 0 {
+			bestText = joined
+			bestRank = rank
+		}
+	}
+	if bestRank >= 0 {
+		return bestText
 	}
 	// #1550: the content IS structured JSON but carries no text/post
 	// (image_key, file_key, ... media payloads). Returning the raw JSON
