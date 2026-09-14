@@ -1704,10 +1704,26 @@ func (s *JSONLStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := s.sessionPath(id)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	// Index first, file second. The old order (file -> index) left a
+	// permanent ghost when removeFromIndex failed after the file was
+	// already gone (flock timeout after 3 retries, index read error):
+	// the index entry survived, List() kept showing the session, and
+	// pruneInvalidIndexEntries cannot self-heal it - loadSessionFull
+	// errors on the missing file, and #709 keeps entries on load errors
+	// (correctly - that guard is for TRANSIENT io errors). The reversed
+	// order's failure mode is far lighter: if the file remove fails after
+	// the index entry is gone, the leftover file is invisible disk garbage
+	// (nothing in List() points at it) instead of a visible, permanently
+	// unloadable row.
+	if err := s.removeFromIndex(id); err != nil {
 		return err
 	}
-	return s.removeFromIndex(id)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		// The index entry is already gone - surface the error so the
+		// caller knows the file survived, but the store stays consistent.
+		return fmt.Errorf("removing session file after index update: %w", err)
+	}
+	return nil
 }
 
 // HasUserInteractionOnDisk streams the session's JSONL file and reports
