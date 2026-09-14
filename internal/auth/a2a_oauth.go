@@ -368,6 +368,8 @@ type TokenValidator struct {
 	mu           sync.Mutex
 	jwksKeys     map[string]interface{} // cached JWKS public keys (kid → key)
 	jwksExp      time.Time              // when JWKS cache expires
+	introURL     string                 // introspection endpoint from discovery doc (#1503)
+	introExp     time.Time              // when the introspection-endpoint lookup expires
 	validIssuers []string               // allowed issuer URLs (defaults to issuerURL)
 	hmacSecret   string                 // HMAC signing key (must not be clientID)
 }
@@ -716,7 +718,17 @@ func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) 
 	v.mu.Lock()
 	introspectURL := v.issuerURL
 	v.mu.Unlock()
-	if strings.HasSuffix(introspectURL, "/token") {
+
+	// #1503: the old derivation guessed the endpoint from the issuer URL
+	// (suffix-swap "/token"->"/introspect", else append) - RFC 7662 says
+	// the introspection endpoint comes from the provider's discovery
+	// document (introspection_endpoint). The guessed URL is wrong for
+	// every OIDC issuer (Google's discovery URL appended "/introspect"
+	// 404s). Consult the discovery document first; keep the guess as the
+	// fallback for non-OIDC issuers without one.
+	if ep := v.discoverIntrospectionEndpoint(ctx); ep != "" {
+		introspectURL = ep
+	} else if strings.HasSuffix(introspectURL, "/token") {
 		introspectURL = strings.Replace(introspectURL, "/token", "/introspect", 1)
 	} else {
 		introspectURL = strings.TrimRight(introspectURL, "/") + "/introspect"
@@ -741,6 +753,55 @@ func (v *TokenValidator) validateOpaqueToken(ctx context.Context, token string) 
 		return nil, fmt.Errorf("token is not active")
 	}
 	return result, nil
+}
+
+// discoverIntrospectionEndpoint fetches the issuer's OIDC discovery
+// document and returns its introspection_endpoint field (RFC 7662 §2.1:
+// the endpoint MUST come from server metadata/discovery, not guessed).
+// Returns "" on any failure (network, decode, missing field); callers fall
+// back to the legacy URL derivation. Cached for 5 minutes to avoid a
+// discovery round-trip per introspection call.
+func (v *TokenValidator) discoverIntrospectionEndpoint(ctx context.Context) string {
+	v.mu.Lock()
+	if v.introURL != "" && time.Now().Before(v.introExp) {
+		ep := v.introURL
+		v.mu.Unlock()
+		return ep
+	}
+	discoveryURL := v.jwksURL
+	v.mu.Unlock()
+
+	// jwksURL is set in NewTokenValidator to the issuer's
+	// /.well-known/openid-configuration URL (or passed through when the
+	// issuer URL already contains /.well-known). Without it there is no
+	// discovery document to consult.
+	if discoveryURL == "" || !strings.Contains(discoveryURL, "/.well-known/") {
+		return ""
+	}
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", discoveryURL, nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var doc struct {
+		IntrospectionEndpoint string `json:"introspection_endpoint"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil || doc.IntrospectionEndpoint == "" {
+		return ""
+	}
+
+	v.mu.Lock()
+	v.introURL = doc.IntrospectionEndpoint
+	v.introExp = time.Now().Add(5 * time.Minute)
+	v.mu.Unlock()
+	return doc.IntrospectionEndpoint
 }
 
 // base64URLDecode decodes base64url-encoded data (no padding).
