@@ -111,5 +111,10 @@ func DefaultService() *Service {
 	s.Register(ZaiProbe{})
 	s.Register(DeepSeekProbe{})
 	s.Register(MoonshotProbe{})
+	s.Register(KimiProbe{})
+	s.Register(MinimaxProbe{})
+	s.Register(AnthropicOAuthProbe{})
+	s.Register(OpenrouterProbe{})
+	s.Register(SiliconflowProbe{})
 	return s
 }
