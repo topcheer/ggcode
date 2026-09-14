@@ -38,6 +38,16 @@ func enCatalog(key string) string {
 		return "Context"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "Usage"
+	case "usage.refreshing":
+		return "fetching..."
+	case "usage.no_probes":
+		return "No usage probe for the configured vendors."
+	case "label.balance":
+		return "Balance"
+	case "label.resets":
+		return "resets in"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

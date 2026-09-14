@@ -34,6 +34,16 @@ func zhCatalog(key string) string {
 		return "指标"
 	case "panel.context":
 		return "上下文"
+	case "panel.usage":
+		return "用量"
+	case "usage.refreshing":
+		return "获取中…"
+	case "usage.no_probes":
+		return "当前配置的厂商暂不支持用量查询。"
+	case "label.balance":
+		return "余额"
+	case "label.resets":
+		return "重置倒计时"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

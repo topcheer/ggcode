@@ -299,6 +299,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/stats":
 			m.openStatsPanel()
 			return nil
+		case "/usage":
+			return m.openUsagePanel()
 		case "/model":
 			if len(parts) > 1 {
 				if err := m.config.SetActiveSelection(m.config.Vendor, m.config.Endpoint, parts[1]); err == nil {

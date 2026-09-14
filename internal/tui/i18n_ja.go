@@ -39,6 +39,16 @@ func jaCatalog(key string) string {
 		return "コンテキスト"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "使用量"
+	case "usage.refreshing":
+		return "取得中…"
+	case "usage.no_probes":
+		return "設定済みベンダーの使用量プローブはありません。"
+	case "label.balance":
+		return "残高"
+	case "label.resets":
+		return "リセット"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

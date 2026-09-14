@@ -62,6 +62,8 @@ func (m Model) renderContextPanel() string {
 		return m.renderSkillsPanel()
 	case m.statsPanel != nil:
 		return m.renderStatsPanel()
+	case m.usagePanel != nil:
+		return m.renderUsagePanel()
 	case m.hooksPanel != nil:
 		return m.renderHooksPanel()
 	case m.inspectorPanel != nil:

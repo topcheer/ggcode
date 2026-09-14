@@ -1041,6 +1041,16 @@ func ptCatalog(key string) string {
 		return "Arquivos:"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "Uso"
+	case "usage.refreshing":
+		return "buscando…"
+	case "usage.no_probes":
+		return "Nenhuma sonda de uso para os fornecedores configurados."
+	case "label.balance":
+		return "Saldo"
+	case "label.resets":
+		return "reinicia em"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

@@ -107,6 +107,33 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		m.applyMCPServersUpdate(msg)
 		return m, nil
 
+	case usageInfoUpdatedMsg:
+		// #2150 batch 2: probe results land on the Update loop - both the
+		// panel table and the sidebar snapshot read model state under the
+		// same serialization.
+		if m.usagePanel != nil {
+			if msg.err != nil {
+				m.usagePanel.errs[msg.vendor] = msg.err.Error()
+			} else if msg.info != nil {
+				m.usagePanel.infos[msg.vendor] = msg.info
+			}
+			if len(m.usagePanel.infos)+len(m.usagePanel.errs) >= len(m.probeableVendors()) {
+				m.usagePanel.fetching = false
+			}
+		}
+		active := m.activeVendor
+		if active == "" {
+			active = m.startupVendor
+		}
+		if msg.vendor == active {
+			if msg.err != nil {
+				m.sidebarUsage = nil // keep stale data off the sidebar on error
+			} else {
+				m.sidebarUsage = msg.info
+			}
+		}
+		return m, nil
+
 	case systemMsg:
 		m.chatWriteSystem(nextSystemID(), msg.msg)
 		return m, nil

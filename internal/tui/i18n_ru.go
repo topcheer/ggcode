@@ -45,6 +45,16 @@ func ruCatalog(key string) string {
 		return "Контекст"
 	case "panel.im":
 		return "IM"
+	case "panel.usage":
+		return "Использование"
+	case "usage.refreshing":
+		return "получение…"
+	case "usage.no_probes":
+		return "Нет датчика использования для настроенных вендоров."
+	case "label.balance":
+		return "Баланс"
+	case "label.resets":
+		return "сброс через"
 	case "panel.mcp":
 		return "MCP"
 	case "panel.mcp.install_spec_required":

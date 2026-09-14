@@ -49,6 +49,7 @@ func (m Model) renderSidebar() string {
 		m.renderSidebarDetailRow(m.t("label.skills"), fmt.Sprintf("%d", m.loadedSkillCount()), m.sidebarWidth()-4),
 		"",
 		m.renderSidebarSessionUsageSection(),
+		m.renderSidebarVendorUsageSection(),
 		m.renderSidebarUpdateSection(),
 		"",
 		m.renderSidebarIMSection(),

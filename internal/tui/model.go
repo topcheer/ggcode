@@ -46,6 +46,7 @@ import (
 	extpane "github.com/topcheer/ggcode/internal/tui/extpane"
 	"github.com/topcheer/ggcode/internal/tunnel"
 	"github.com/topcheer/ggcode/internal/update"
+	"github.com/topcheer/ggcode/internal/usage"
 )
 
 // logoMsg is sent on startup to display the ASCII art logo.
@@ -210,6 +211,9 @@ type Model struct {
 	pendingDeviceCodes    []deviceCodeInfo
 	skillsPanel           *skillsPanelState
 	statsPanel            *statsPanelState
+	usagePanel            *usagePanelState // #2150 batch 2: /usage panel
+	usageService          *usage.Service   // lazy; shared by panel + sidebar
+	sidebarUsage          *usage.UsageInfo // last probe result for the active vendor (nil = render nothing)
 	hooksPanel            *hooksPanelState
 	inspectorPanel        *inspectorPanelState
 	swarmMgr              *swarm.Manager
@@ -1289,7 +1293,7 @@ func (m *Model) hasActivePanel() bool {
 		m.skillsPanel != nil ||
 		m.streamPanel != nil ||
 		m.knightPanel != nil ||
-		m.statsPanel != nil ||
+		m.statsPanel != nil || m.usagePanel != nil ||
 		len(m.langOptions) > 0
 }
 
