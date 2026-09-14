@@ -205,10 +205,14 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 		}
 		return nil
 	}, KeysEnvPath()); err == nil {
-		// Also set into process env so subsequent lookups work.
-		for name, value := range env {
-			os.Setenv(name, value)
-		}
+		// #2284-A phase 1: the wholesale os.Setenv loop is REMOVED. It copied
+		// every vendor API key / A2A secret into the PROCESS environment, so
+		// any child command inherited all of them (`env` alone dumped every
+		// key in plaintext) and MCP servers leaked them by default. The
+		// comment claimed "subsequent lookups" needed it - false: this lookup
+		// walks the local map above, and a fresh Load re-reads keys.env from
+		// disk. The one real consumer (anthropic_bootstrap's os.Getenv trio)
+		// now reads from this map instead - see applyFirstLaunchAnthropicBootstrap.
 	}
 
 	needed := referencedEnvVars(raw)

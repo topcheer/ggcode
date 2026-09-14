@@ -1121,7 +1121,7 @@ func Load(path string) (*Config, error) {
 			cfg.FirstRun = true
 			skipAuto := skipAutoConfig()
 			if !skipAuto {
-				applyFirstLaunchAnthropicBootstrap(cfg)
+				applyFirstLaunchAnthropicBootstrapWith(cfg, lookup)
 			}
 			// #591: a missing main config does not mean no config exists at
 			// all — external sections (im.yaml etc.) can predate it (e.g.
@@ -1169,7 +1169,7 @@ func Load(path string) (*Config, error) {
 	migrateLegacyA2AAPIKey(raw)
 	skipAuto := skipAutoConfig()
 	if !skipAuto && shouldApplyFirstLaunchAnthropicBootstrap(raw) {
-		applyFirstLaunchAnthropicBootstrap(cfg)
+		applyFirstLaunchAnthropicBootstrapWith(cfg, lookup)
 	}
 
 	// Auto-migrate plaintext API keys to environment variable references.
