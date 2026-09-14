@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/chat"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
@@ -313,4 +315,38 @@ func (m Model) extPaneHandleDone(msg subAgentDoneMsg) {
 	}
 	name, _ := m.extPaneResolveName(msg.AgentID)
 	m.extPaneMgr.HandleDone(msg.AgentID, name, msg.IsError)
+}
+
+// handleSubAgentSystemMsg displays sub-agent system events (retry,
+// compaction) in the main panel (#2357 slice 4: extracted from
+// Model.Update - body moved verbatim, zero behavior change). Consecutive
+// retry events from the same LLM turn group into one item; a new retry
+// sequence (detected by "[Retry 1/") allocates a new item.
+func (m *Model) handleSubAgentSystemMsg(msg subAgentSystemMsg) (Model, tea.Cmd) {
+	if m.saSysItemIDs == nil {
+		m.saSysItemIDs = make(map[string]string)
+	}
+	itemID := m.saSysItemIDs[msg.AgentID]
+	// New retry sequence: "Retry 1/" signals the start of a fresh
+	// provider retry chain - allocate a new item ID. The text may be
+	// prefixed with "[agentName] " so we use Contains, not HasPrefix.
+	if strings.Contains(msg.Text, "[Retry 1/") || itemID == "" {
+		itemID = nextSystemID()
+		m.saSysItemIDs[msg.AgentID] = itemID
+		m.chatWriteSystem(itemID, msg.Text)
+	} else {
+		// Replace (not append) so only the latest retry status is shown,
+		// matching how the main agent renders retry messages.
+		if item := m.chatList.FindByID(itemID); item != nil {
+			if sys, ok := item.(*chat.SystemItem); ok {
+				sys.SetText(msg.Text)
+				m.chatListFollowOutput()
+			} else {
+				m.chatWriteSystem(itemID, msg.Text)
+			}
+		} else {
+			m.chatWriteSystem(itemID, msg.Text)
+		}
+	}
+	return *m, nil
 }
