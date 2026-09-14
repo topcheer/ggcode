@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +21,11 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
+		// #1515-E1: a parse error used to silently return nil - a typo'd
+		// a2a.yaml disabled the WHOLE override file with zero signal and
+		// the user kept the global config with no hint why. The main Load
+		// path returns the error; mirror at least a debug log line.
+		debug.Log("config", "a2a override %s: parse error (override ignored): %v", path, err)
 		return nil
 	}
 	// #1515-A: the main config, vendors and IM sections all expand ${VAR}
@@ -44,6 +51,7 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 
 	migrated, err := yaml.Marshal(raw)
 	if err != nil {
+		debug.Log("config", "a2a override %s: re-marshal error (override ignored): %v", path, err)
 		return nil
 	}
 
