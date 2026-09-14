@@ -649,7 +649,11 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 				sb.WriteString(fmt.Sprintf("    Cost:               included in %s\n\n", planLabel))
 			} else {
 				hasMeteredRate = true
-				modelCost := float64(gu.InputTokens)*rate.InputPerM/1e6 +
+				// #2315: DisplayInputTokens - cached tokens were billed
+				// at full input price AND cache-read price on
+				// subset-semantics vendors (InputTokens already contains
+				// CacheRead). Matches the sidebar and the #2310 boundary.
+				modelCost := float64(gu.DisplayInputTokens())*rate.InputPerM/1e6 +
 					float64(gu.OutputTokens)*rate.OutputPerM/1e6 +
 					float64(gu.CacheRead)*rate.CacheReadPerM/1e6 +
 					float64(gu.CacheWrite)*rate.CacheWritePerM/1e6
