@@ -204,13 +204,16 @@ func TestReadFileStreamingTruncationReportsTotal(t *testing.T) {
 	}
 	// #1698 case 6: the reader stops at the limit instead of scanning to
 	// EOF for an exact count (a multi-GB file paid full IO just for the
-	// "~N" hint), so the hint now reports a LOWER BOUND from the lines
-	// already seen (~10 here), never an exact total.
-	if !strings.Contains(text, "of ~") {
-		t.Errorf("expected a '~N' lower-bound hint in truncation message: %s", text[strings.LastIndex(text, "["):])
+	// "~N" hint). #2306: with the early break, totalLines == the last
+	// DISPLAYED line, so "~N" was not a lower bound but the count already
+	// shown ("1-2000 of ~2000") - agents stopped paginating. The hint now
+	// says "more below" WITHOUT a number; an honest total would need the
+	// very EOF scan case 6 removed.
+	if !strings.Contains(text, "More lines exist below") {
+		t.Errorf("truncation must hint continuation without a total: %s", text[strings.LastIndex(text, "["):])
 	}
-	if strings.Contains(text, "of ~100") {
-		t.Errorf("hint must not claim an exact EOF count (that required a full scan): %s", text[strings.LastIndex(text, "["):])
+	if strings.Contains(text, "~") {
+		t.Errorf("no fabricated total in truncation message: %s", text[strings.LastIndex(text, "["):])
 	}
 }
 

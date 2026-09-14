@@ -167,8 +167,15 @@ func readFileRangeStreaming(path string, offset, limit int, opts readFileRangeOp
 	}
 
 	if hitLimit {
-		fmt.Fprintf(&buf, "[Showing lines %d-%d of ~%d. %s]\n",
-			startIdx+1, startIdx+readCount, totalLines, opts.moreHint)
+		// #2306: totalLines == startIdx+readCount here (the #1698 case-6
+		// early break stops the scan at the limit), so printing "of ~N"
+		// showed the COUNT ALREADY DISPLAYED as the approximate total -
+		// "lines 1-2000 of ~2000" - and the agent concluded the file was
+		// fully read and stopped paginating. When truncated, the total is
+		// unknowable without an EOF scan; say "more below" without a
+		// number instead of fabricating one.
+		fmt.Fprintf(&buf, "[Showing lines %d-%d. More lines exist below - %s]\n",
+			startIdx+1, startIdx+readCount, opts.moreHint)
 	}
 
 	// #2269: report the conflict warning the caller-side guard could
