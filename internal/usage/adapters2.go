@@ -97,6 +97,13 @@ func (AnthropicOAuthProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// #2366-2: this probe bypasses getJSON (beta header), so the only
+		// RateLimitedError producer never ran for anthropic-oauth - the
+		// Retry-After-sized negative cache (#2360) degraded to plain 1min
+		// negativeTTL and every-minute re-probing survived for this vendor.
+		return nil, &RateLimitedError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("usage probe %s: status %d", base+"/api/oauth/usage", resp.StatusCode)
 	}

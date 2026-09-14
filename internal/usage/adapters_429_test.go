@@ -94,6 +94,31 @@ func (w *wrapperProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*Usag
 	return nil, getJSON(ctx, w.url, apiKey, &struct{}{})
 }
 
+// TestAnthropicOAuth429SurfacesRateLimited verifies #2366-2: the beta-header
+// probe bypasses getJSON, so its self-built status check must produce the
+// same *RateLimitedError - otherwise the Retry-After-sized negative cache
+// (#2360) never engages for anthropic-oauth and every-minute re-probing
+// survives.
+func TestAnthropicOAuth429SurfacesRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("anthropic-beta"); got != "oauth-2025-04-20" {
+			t.Errorf("beta header = %q", got)
+		}
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	_, err := AnthropicOAuthProbe{}.Fetch(context.Background(), srv.URL, "tok")
+	var rl *RateLimitedError
+	if !errors.As(err, &rl) {
+		t.Fatalf("429 not surfaced as RateLimitedError: %v", err)
+	}
+	if rl.RetryAfter != 2*time.Minute {
+		t.Fatalf("RetryAfter = %v, want 2m", rl.RetryAfter)
+	}
+}
+
 // TestDefaultServiceRegistersAllP1 anchors the central registration site:
 // every P1 vendor must be present exactly once, so consumers switching to
 // DefaultService cannot silently lose a probe again.
