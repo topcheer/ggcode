@@ -39,6 +39,7 @@ type inspectorPanelState struct {
 	allWorkspaces     bool // sessions: A-key toggle; default lists ONLY the current workspace's sessions
 	cursor            int
 	message           string
+	loadSeq           int // sessions: generation marker - stale async loads are dropped on arrival
 	lspLanguageID     string
 	lspLanguageName   string
 	lspInstallOptions []lsp.InstallOption
@@ -83,6 +84,12 @@ func (m *Model) startSessionItemsLoad() {
 	} else {
 		storeDir, _ = session.DefaultDir()
 	}
+	// R248: generation marker. The A-key toggle reloads the panel while a
+	// prior load's goroutine may still be in store.List(); without a seq,
+	// a LATE old result (previous allWorkspaces scope) wins the race and
+	// leaves stale items on screen with the toggle already flipped.
+	m.inspectorPanel.loadSeq++
+	seq := m.inspectorPanel.loadSeq
 	// When we have a program, load asynchronously to avoid blocking the UI.
 	// When program is nil (tests), load synchronously since there's no event loop.
 	if m.program != nil {
@@ -92,11 +99,11 @@ func (m *Model) startSessionItemsLoad() {
 			defer safego.Recover("tui.inspector.loadSessions")
 			sessions, err := store.List()
 			if err != nil {
-				m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, items: nil, loadErr: err})
+				m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, seq: seq, items: nil, loadErr: err})
 				return
 			}
 			items := buildSessionInspectorItems(sessions, lang, storeDir, m.config.ResolveDisplayName, all)
-			m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, items: items})
+			m.program.Send(inspectorItemsLoadedMsg{kind: inspectorPanelSessions, seq: seq, items: items})
 		}()
 	} else {
 		// Synchronous fallback for headless/test mode
@@ -190,6 +197,7 @@ func (m *Model) setInspectorMessage(message string) {
 // inspectorItemsLoadedMsg is sent asynchronously when session items are loaded.
 type inspectorItemsLoadedMsg struct {
 	kind    inspectorPanelKind
+	seq     int // generation at dispatch time - consumer drops stale generations
 	items   []inspectorPanelItem
 	loadErr error
 }
