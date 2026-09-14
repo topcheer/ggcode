@@ -91,7 +91,12 @@ func runOnboardAndRestart(cfg *config.Config) error {
 		cfg.KnightConfig = config.KnightConfig{Enabled: true}
 	}
 	if result.A2A {
-		cfg.A2A = config.A2AConfig{Disabled: false}
+		// #1515-B: single-field enable. The old whole-struct replace
+		// (`cfg.A2A = config.A2AConfig{Disabled: false}`) zeroed every
+		// existing A2A setting (Host/Port/MaxTasks/TaskTimeout/Auth) on
+		// re-run onboard - the retry-after-failed-first-run shape wiped a
+		// configured server and persisted the wipe. Only the flag flips.
+		cfg.A2A.Disabled = false
 	}
 
 	// Apply IM adapters from onboard.
