@@ -430,12 +430,15 @@ func (p *GeminiProvider) applyReasoningEffort(config *genai.GenerateContentConfi
 	if p.reasoningEffort == "" {
 		return
 	}
-	maxTok := p.maxTokens
-	if p.cap != nil {
-		if v := p.cap.Get(); v > 0 {
-			maxTok = v
-		}
-	}
+	// #2300: budget off the EFFECTIVE budget chain (sampling override >
+	// adaptive cap > configured default), same as anthropic's
+	// thinkingBudgetForEffort. The old p.maxTokens (+cap) base ignored an
+	// active MCP sampling override: maxTok=8192 default + override
+	// maxTokens=512 + any effort (even low: 2048) produced a thinking
+	// budget far above MaxOutputTokens - hard 400 or an all-thinking
+	// empty reply. The <=512 disable below then also fires on small
+	// overrides, which is the correct outcome.
+	maxTok := p.effectiveMaxTokens()
 	// #1610-B: gemini-3 models REJECT thinkingBudget and only accept
 	// thinkingLevel - routing them through the budget path 400'd every
 	// request once an effort was set (user or adaptive). Level-based for
