@@ -107,6 +107,24 @@ func (s *Service) Get(ctx context.Context, vendor, baseURL, apiKey string) (*Usa
 		// freely). Canceled propagates from the PARENT ctx; the probe's own
 		// httpTimeout surfaces as DeadlineExceeded and stays cacheable.
 		if err == nil || !errors.Is(err, context.Canceled) {
+			// #2150 batch 2b blind-spot linkage: a 429 sizes the negative
+			// cache to the server's Retry-After (clamped 1s..10min) instead
+			// of the default negativeTTL - the old behavior re-probed a
+			// rate-limited endpoint every minute, exactly the hammering the
+			// negative cache exists to prevent.
+			var rl *RateLimitedError
+			if errors.As(err, &rl) && rl.RetryAfter > 0 {
+				d := rl.RetryAfter
+				if d < time.Second {
+					d = time.Second
+				}
+				if d > 10*time.Minute {
+					d = 10 * time.Minute
+				}
+				// Forward-date the entry so negativeTTL expiry (since(at) <
+				// negativeTTL) lands exactly when Retry-After elapses.
+				res.at = time.Now().Add(d - negativeTTL)
+			}
 			s.cached[vendor] = res
 		}
 		delete(s.inflight, vendor)

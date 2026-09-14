@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // getJSON is the shared probe transport: Bearer auth, JSON body, bounded
@@ -22,10 +24,52 @@ func getJSON(ctx context.Context, url, apiKey string, out any) error {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		// #2150 batch 2b: surface the server's Retry-After so the Service
+		// can size its negative cache to the rate-limit window instead of
+		// hammering the endpoint every negativeTTL tick.
+		return &RateLimitedError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("usage probe %s: status %d", url, resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// RateLimitedError marks a 429 response. The Service turns RetryAfter into
+// the negative-cache lifetime (clamped), so a rate-limited vendor is probed
+// again only when the server says it is allowed.
+type RateLimitedError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("rate limited (retry after %s)", e.RetryAfter)
+	}
+	return "rate limited"
+}
+
+// parseRetryAfter accepts both RFC 7231 forms: delta-seconds and
+// HTTP-date. Returns 0 when absent/unparseable (caller then uses the
+// default negative TTL).
+func parseRetryAfter(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func f64(v float64) *float64 { return &v }
