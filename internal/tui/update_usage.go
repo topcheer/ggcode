@@ -33,7 +33,9 @@ func (m *Model) handleUsageInfoUpdated(msg usageInfoUpdatedMsg) (Model, tea.Cmd)
 			delete(m.usagePanel.errs, msg.vendor)
 			m.usagePanel.infos[msg.vendor] = msg.info
 		}
-		if len(m.usagePanel.infos)+len(m.usagePanel.errs) >= len(m.probeableVendors()) {
+		// #2371: denominator is the pinned snapshot size, not a live
+		// probeableVendors() recount.
+		if len(m.usagePanel.infos)+len(m.usagePanel.errs) >= m.usagePanel.expected {
 			m.usagePanel.fetching = false
 		}
 	}

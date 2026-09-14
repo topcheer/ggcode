@@ -25,6 +25,11 @@ type usagePanelState struct {
 	infos    map[string]*usage.UsageInfo
 	errs     map[string]string
 	fetching bool
+	// expected is the completion denominator pinned by fetchAllUsageCmd
+	// to its snapshot size (#2371): numerator (infos+errs) and denominator
+	// share one source, so config changes mid-fetch cannot wedge the
+	// spinner (added vendor never msgs) or double-count it away.
+	expected int
 }
 
 type usageInfoUpdatedMsg struct {
@@ -122,23 +127,52 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 		return func() tea.Msg { return nil }
 	}
 	svc := m.ensureUsageService()
+	// #2371: snapshot {vendor, baseURL, apiKey} triples HERE, on the
+	// Update goroutine, before the closure - bubbletea runs Cmds on their
+	// own goroutine, and the old closure called m.resolveVendorEndpoint
+	// (unlocked reads of m.config maps) racing SetConfig's bare writes
+	// from /model, /provider hot-switches. The closure below touches
+	// nothing on m. Vendors without a key drop out of the snapshot, so
+	// the expected count matches exactly what will produce messages.
+	type vendorTarget struct {
+		vendor  string
+		baseURL string
+		apiKey  string
+	}
+	targets := make([]vendorTarget, 0, len(vendors))
+	for _, v := range vendors {
+		baseURL, apiKey := m.resolveVendorEndpoint(v)
+		if apiKey == "" {
+			continue
+		}
+		targets = append(targets, vendorTarget{vendor: v, baseURL: baseURL, apiKey: apiKey})
+	}
+	// #2371-②: pin the completion denominator to the snapshot size.
+	// handleUsageInfoUpdated used to recompute probeableVendors() as the
+	// denominator - a vendor added mid-flight never sends a msg, so the
+	// count could never reach it and the spinner stuck on "refreshing"
+	// until a manual r/Esc. Numerator and denominator now share one
+	// source (the snapshot); config changes during a fetch neither wedge
+	// nor double-count.
+	if m.usagePanel != nil {
+		m.usagePanel.expected = len(targets)
+	}
+	if len(targets) == 0 {
+		return func() tea.Msg { return nil }
+	}
 	return func() tea.Msg {
 		// Sequential per vendor is fine: 2-3 vendors max, each bounded by
 		// the service's 10s HTTP timeout, and the panel renders
 		// incrementally as messages arrive.
-		var msgs []usageInfoUpdatedMsg
-		for _, v := range vendors {
-			baseURL, apiKey := m.resolveVendorEndpoint(v)
-			if apiKey == "" {
-				continue
-			}
+		var msgs []usageInfoUpdatedMsg = make([]usageInfoUpdatedMsg, 0, len(targets))
+		for _, t := range targets {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			info, err := svc.Get(ctx, v, baseURL, apiKey)
+			info, err := svc.Get(ctx, t.vendor, t.baseURL, t.apiKey)
 			cancel()
 			if err != nil {
-				debug.Log("usage", "probe vendor=%s failed: %v", v, err)
+				debug.Log("usage", "probe vendor=%s failed: %v", t.vendor, err)
 			}
-			msgs = append(msgs, usageInfoUpdatedMsg{vendor: v, info: info, err: err})
+			msgs = append(msgs, usageInfoUpdatedMsg{vendor: t.vendor, info: info, err: err})
 		}
 		// bubbletea delivers one msg per Cmd; fan out via a batch.
 		cmds := make([]tea.Cmd, 0, len(msgs))
