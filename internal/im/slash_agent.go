@@ -3,13 +3,11 @@ package im
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 )
@@ -18,66 +16,19 @@ import (
 // stores are the data sources; the TUI-attached path supplies its own live
 // implementation from the model state.
 
-// BuildCrossSessionCostSummary renders the cross-session cost summary from
-// disk - the same authoritative source as the TUI's /cost all. Package-level
-// so both inbound paths (daemon bridge and TUI remote) share one rendering.
+// BuildCrossSessionCostSummary is retired (#2312 ruling B): the .cost.json
+// store it loaded has no live writer - the IM fallback rendered empty or
+// stale legacy data. The first-class usage/balance surface (#2150, in
+// flight) will serve cross-session totals from live data.
 func BuildCrossSessionCostSummary() (string, error) {
-	dataDir := filepath.Join(config.ConfigDir(), "cost")
-	mgr := cost.NewManager(cost.DefaultPricingTable(), dataDir)
-	loaded := mgr.LoadAllFromDisk()
-	if loaded == 0 {
-		return "No cost data found yet. Cost files will appear under:\n" + dataDir, nil
-	}
-	allCosts := mgr.AllCosts()
-	agg := mgr.AggregateAllCosts()
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Cross-Session Cost Summary (%d sessions):\n\n", loaded))
-	maxShow := 10
-	if len(allCosts) < maxShow {
-		maxShow = len(allCosts)
-	}
-	for i := 0; i < maxShow; i++ {
-		sc := allCosts[i]
-		costStr := cost.FormatCost(sc.TotalCostUSD)
-		if !sc.HasPricing {
-			costStr = "(no pricing data)"
-		}
-		sb.WriteString(fmt.Sprintf("  %s (%s) - %s\n", sc.Model, sc.Provider, costStr))
-	}
-	if len(allCosts) > maxShow {
-		sb.WriteString(fmt.Sprintf("  ... and %d more\n", len(allCosts)-maxShow))
-	}
-	sb.WriteString("\nAll-time total: " + cost.FormatCost(agg.TotalCostUSD))
-	if agg.SessionsWithoutPricing > 0 {
-		sb.WriteString(fmt.Sprintf(" (%d sessions without pricing data)", agg.SessionsWithoutPricing))
-	}
-	return sb.String(), nil
+	return "Cross-session cost totals are being rebuilt on the live usage pipeline (#2150). Session /cost is available.", nil
 }
 
-// buildDiskUsageSummary aggregates token counts across all persisted
-// sessions - the /usage view when no live session object is at hand.
+// buildDiskUsageSummary is retired with the same ruling (#2312 B): it
+// aggregated the same writer-less .cost.json store. See
+// BuildCrossSessionCostSummary above.
 func buildDiskUsageSummary() (string, error) {
-	dataDir := filepath.Join(config.ConfigDir(), "cost")
-	mgr := cost.NewManager(cost.DefaultPricingTable(), dataDir)
-	loaded := mgr.LoadAllFromDisk()
-	if loaded == 0 {
-		return "No usage data found yet.", nil
-	}
-	agg := mgr.AggregateAllCosts()
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Token Usage (%d sessions, all-time):\n\n", loaded))
-	sb.WriteString(fmt.Sprintf("  Input tokens:  %s\n", humanCount(agg.InputTokens)))
-	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", humanCount(agg.OutputTokens)))
-	if agg.CacheReadTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache read:    %s\n", humanCount(agg.CacheReadTokens)))
-	}
-	if agg.CacheWriteTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache write:   %s\n", humanCount(agg.CacheWriteTokens)))
-	}
-	total := agg.InputTokens + agg.OutputTokens + agg.CacheReadTokens + agg.CacheWriteTokens
-	sb.WriteString(fmt.Sprintf("\n  Total: %s", humanCount(total)))
-	return sb.String(), nil
+	return "All-time token totals are being rebuilt on the live usage pipeline (#2150).", nil
 }
 
 func humanCount(n int64) string {
