@@ -64,8 +64,16 @@ var twitchDefaultHelixClient = &http.Client{Timeout: 20 * time.Second}
 // ---------------------------------------------------------------------------
 
 type twitchAdapter struct {
-	name    string
-	manager *Manager
+	// #1565 case B: PRIVMSG pacing is per-CONNECTION, not per-call: the
+	// old local `sent` flags paced only within one Send while concurrent
+	// Sends (fanOutSend runs one goroutine per target) interleaved their
+	// first messages freely - Twitch's 20-msg/30s limit is global per
+	// user across channels, and over-limit PRIVMSGs are dropped by the
+	// server silently. This pair serializes the wait-then-send step.
+	privMsgMu     sync.Mutex
+	lastPrivMsgAt time.Time
+	name          string
+	manager       *Manager
 
 	// Connection
 	token    string // OAuth token (oauth:xxxxx)
@@ -701,7 +709,6 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 	// sent as a separate PRIVMSG, matching the standard IRC pattern.
 	// The delay applies between ALL messages (not just chunks within a line),
 	// so a multi-line message doesn't burst all lines at once.
-	sent := false
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.TrimSpace(line) == "" {
@@ -709,19 +716,47 @@ func (a *twitchAdapter) sendTwitchMessage(ctx context.Context, target, text stri
 		}
 		chunks := splitIRCMessage(line, twitchMaxMessageLen)
 		for _, chunk := range chunks {
-			if sent {
-				select {
-				case <-time.After(twitchInterMessageDelay):
-				case <-ctx.Done():
-					return ctx.Err()
-				}
+			// #1565 case B: connection-level pacing (concurrent Sends
+			// share the budget); the old per-call `sent` flag is retired.
+			if err := a.pacePrivMsg(ctx); err != nil {
+				return err
 			}
 			if err := a.sendRaw(fmt.Sprintf("PRIVMSG %s :%s", target, chunk)); err != nil {
 				return fmt.Errorf("send to %s: %w", target, err)
 			}
-			sent = true
 		}
 	}
+	return nil
+}
+
+// pacePrivMsg blocks until at least twitchInterMessageDelay has passed
+// since the previous PRIVMSG on THIS connection (#1565 case B): the
+// server's 20/30s budget is global per user, so pacing must be shared
+// across concurrent Sends, not per-call.
+func (a *twitchAdapter) pacePrivMsg(ctx context.Context) error {
+	a.privMsgMu.Lock()
+	wait := twitchInterMessageDelay - time.Since(a.lastPrivMsgAt)
+	if wait > 0 {
+		a.privMsgMu.Unlock()
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		a.privMsgMu.Lock()
+		wait = twitchInterMessageDelay - time.Since(a.lastPrivMsgAt)
+		if wait > 0 { // lost the race to another sender - wait out the rest
+			a.privMsgMu.Unlock()
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			a.privMsgMu.Lock()
+		}
+	}
+	a.lastPrivMsgAt = time.Now()
+	a.privMsgMu.Unlock()
 	return nil
 }
 

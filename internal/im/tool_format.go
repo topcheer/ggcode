@@ -500,7 +500,13 @@ func formatSpecialIMToolResult(tr *ToolResultInfo) (bool, string) {
 	case "exit_plan_mode":
 		plan := extractArgValue(tr.Args, "plan")
 		if plan == "" {
-			plan = extractArgValue(tr.Detail, "plan")
+			// #1565 case C: tr.Detail is the human-readable display string
+			// (describeTool text or "" in daemon mode), never JSON -
+			// extractArgValue returned "" for it unconditionally, so the
+			// fallback was dead code and the plan notification was
+			// swallowed whenever Args lacked the field. Use Detail
+			// directly, exactly like task_create/task_update above.
+			plan = tr.Detail
 		}
 		if plan != "" {
 			return true, plan
