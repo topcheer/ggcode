@@ -522,6 +522,23 @@ func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, to
 // ptrToInt32 returns a pointer to the given int32 value.
 func ptrToInt32(v int32) *int32 { return &v }
 
+// effectiveMaxTokens mirrors the anthropic/openai legs (#1592-A
+// family, third member): the active sampling override's budget wins,
+// then the adaptive cap, then the configured default. Gemini previously
+// consumed Temperature/StopSequences but silently dropped MaxTokens -
+// MCP sampling budgets ran to the model default on this provider.
+func (p *GeminiProvider) effectiveMaxTokens() int {
+	if o := p.samplingOverride.Load(); o != nil && o.MaxTokens > 0 {
+		return o.MaxTokens // #2248/#2282: active sampling window wins
+	}
+	if p.cap != nil {
+		if v := p.cap.Get(); v > 0 {
+			return v
+		}
+	}
+	return p.maxTokens
+}
+
 // applySamplingConfig injects temperature and top_p into the Gemini config
 // when they are set (non-zero). Both map directly to genai fields.
 func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig) {
@@ -534,6 +551,10 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 	}
 	if p.topP > 0 {
 		config.TopP = ptrToFloat32(float32(p.topP))
+	}
+	// #2282: the output-budget leg the other two providers already had.
+	if v := p.effectiveMaxTokens(); v > 0 {
+		config.MaxOutputTokens = int32(v)
 	}
 	// #2239: per-call stop sequences (MCP sampling contract). #2271
 	// follow-up: the p.stopSequences field had no writer left - the

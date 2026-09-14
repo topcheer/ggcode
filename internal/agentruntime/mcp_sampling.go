@@ -106,7 +106,16 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		var block provider.ContentBlock
 		switch {
 		case msg.Content.Type == "image" && msg.Content.Data != "":
-			block = provider.ImageBlock(msg.Content.MIMEType, msg.Content.Data)
+			// #2283: mimeType is OPTIONAL in the MCP schema - a
+			// spec-legal omission used to pass "" straight through and
+			// hard-fail all three providers (anthropic/gemini 400,
+			// openai malformed data URL). Default to PNG, the most
+			// interoperable choice per the spec's own examples.
+			mime := msg.Content.MIMEType
+			if mime == "" {
+				mime = "image/png"
+			}
+			block = provider.ImageBlock(mime, msg.Content.Data)
 		default:
 			// "text" or an unknown/empty type - keep the text contract.
 			block = provider.TextBlock(msg.Content.Text)
