@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 
@@ -472,7 +473,12 @@ func LoadKeysEnv() error {
 // leg leaked every instance key to any child command (`env` dumped them
 // all) and to MCP server subprocesses, same shape #2284-A phase 1 (#2285)
 // removed for the global keys.env.
-var instanceKeysEnv map[string]string
+// #2308: stored behind an atomic pointer - writers (9 wailskit bridge
+// goroutines) swap a COW map; resident pollers read it from
+// loadRuntimeEnv, so a plain package-level map variable was a word-size
+// data race (non-fatal - COW, never mutated in place - but -race flaky
+// and a reader could see the previous instance's keys for one Load).
+var instanceKeysEnvPointer atomic.Pointer[map[string]string]
 
 // LoadInstanceKeysEnv loads API keys from an instance directory's keys.env
 // into the in-process resolver map (NOT the process environment). Instance
@@ -489,7 +495,13 @@ func LoadInstanceKeysEnv(instanceDir string) error {
 	}, filepath.Join(instanceDir, "keys.env")); err != nil {
 		return err
 	}
-	instanceKeysEnv = m
+	// #2308: COW build + atomic pointer swap - LoadInstanceKeysEnv runs from
+	// 9 wailskit bridge goroutines while two resident pollers
+	// (startConfigFileSync / config_hotreload) read the map via
+	// loadRuntimeEnv, so a plain assignment is a word-size data race
+	// (-race flake in CI; readers could observe the previous instance's
+	// keys for one Load). The published map is never mutated in place.
+	instanceKeysEnvPointer.Store(&m)
 	return nil
 }
 

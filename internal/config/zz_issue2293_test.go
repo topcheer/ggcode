@@ -25,8 +25,8 @@ func TestIssue2293InstanceKeysStayOutOfProcessEnv(t *testing.T) {
 	if _, exists := os.LookupEnv(key); exists {
 		t.Fatal("instance key must NOT be written to the process environment")
 	}
-	if instanceKeysEnv[key] != "supersecret" {
-		t.Fatalf("instance key must land in the resolver map, got %q", instanceKeysEnv[key])
+	if p := instanceKeysEnvPointer.Load(); p == nil || (*p)[key] != "supersecret" {
+		t.Fatalf("instance key must land in the resolver map, got %v", p)
 	}
 	// and the resolver serves it (instance wins)
 	if got, ok := runtimeEnvLookup(nil)(key); !ok || got != "supersecret" {
@@ -35,11 +35,18 @@ func TestIssue2293InstanceKeysStayOutOfProcessEnv(t *testing.T) {
 }
 
 func TestIssue2293EmptyDirNoop(t *testing.T) {
-	before := len(instanceKeysEnv)
+	before := 0
+	if p := instanceKeysEnvPointer.Load(); p != nil {
+		before = len(*p)
+	}
 	if err := LoadInstanceKeysEnv(""); err != nil {
 		t.Fatal(err)
 	}
-	if len(instanceKeysEnv) != before {
+	after := 0
+	if p := instanceKeysEnvPointer.Load(); p != nil {
+		after = len(*p)
+	}
+	if after != before {
 		t.Fatal("empty dir must be a no-op")
 	}
 }
@@ -53,8 +60,8 @@ func TestIssue2293ExportPrefixTolerated(t *testing.T) {
 	if err := LoadInstanceKeysEnv(dir); err != nil {
 		t.Fatal(err)
 	}
-	if instanceKeysEnv["GGCODE_I_2293_B"] != "v2" {
-		t.Fatalf("export-prefixed key must parse, got %q", instanceKeysEnv["GGCODE_I_2293_B"])
+	if p := instanceKeysEnvPointer.Load(); p == nil || (*p)["GGCODE_I_2293_B"] != "v2" {
+		t.Fatalf("export-prefixed key must parse, got %v", p)
 	}
 	_ = strings.TrimSpace("")
 }

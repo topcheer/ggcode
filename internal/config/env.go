@@ -217,8 +217,9 @@ func loadRuntimeEnv(raw map[string]interface{}) map[string]string {
 
 	// #2293: instance-scope keys.env joins the resolver map the same way
 	// (instance wins over global keys, lookup-time - never os.Setenv).
-	if len(instanceKeysEnv) > 0 {
-		for k, v := range instanceKeysEnv {
+	// #2308: read via the atomic pointer (writer swaps it COW).
+	if p := instanceKeysEnvPointer.Load(); p != nil {
+		for k, v := range *p {
 			env[k] = v
 		}
 	}
