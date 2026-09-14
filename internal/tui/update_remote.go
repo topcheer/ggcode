@@ -1,14 +1,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/usage"
 )
 
 // remoteShellAllowed reports whether the #2185 im.remote_dangerous_commands
@@ -50,10 +53,18 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 			if strings.TrimSpace(response) != "" {
 				m.emitIMText(response)
 			}
+			// #2373: /usage flagged a vendor-probe tail - run it off the
+			// Update goroutine (the whole point of the fix) and emit the
+			// rendered tail when it lands.
+			var tailCmd tea.Cmd
+			if m.usageTailVendor != "" {
+				tailCmd = m.scheduleUsageTail(m.usageTailVendor)
+				m.usageTailVendor = ""
+			}
 			if msg.Response != nil {
 				msg.Response <- nil
 			}
-			return m, nil
+			return m, tailCmd
 		}
 	}
 
@@ -172,4 +183,28 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	}
 	return m, m.submitText(prompt, false)
 
+}
+
+// scheduleUsageTail probes the flagged vendor OFF the Update goroutine
+// (#2373) and emits the rendered usage tail when it lands. Probe failures
+// stay silent: usage is ambient information, never an IM error.
+func (m Model) scheduleUsageTail(vendor string) tea.Cmd {
+	return func() tea.Msg {
+		svc := m.ensureUsageService()
+		if svc == nil || !svc.Has(vendor) {
+			return nil
+		}
+		baseURL, apiKey := m.resolveVendorEndpoint(vendor)
+		if apiKey == "" {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		info, err := svc.Get(ctx, vendor, baseURL, apiKey)
+		cancel()
+		if err != nil || info == nil {
+			return nil // ambient: silent on failure
+		}
+		m.emitIMText(usage.RenderText(vendor, info, nil))
+		return nil
+	}
 }

@@ -212,6 +212,7 @@ type Model struct {
 	skillsPanel           *skillsPanelState
 	statsPanel            *statsPanelState
 	usagePanel            *usagePanelState // #2150 batch 2: /usage panel
+	usageTailVendor       string           // #2373: /usage vendor-probe tail pending (rendered async off the Update loop)
 	usageService          *usage.Service   // lazy; shared by panel + sidebar
 	sidebarUsage          *usage.UsageInfo // last probe result for the active vendor (nil = render nothing)
 	hooksPanel            *hooksPanelState

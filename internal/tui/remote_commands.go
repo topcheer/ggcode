@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
-	"github.com/topcheer/ggcode/internal/usage"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -288,8 +286,12 @@ func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 }
 
 func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
+	if d.m.session == nil {
+		return im.BuildCrossSessionCostSummary()
+	}
 	var sb strings.Builder
-	if d.m.session != nil {
+	if true { // (was: d.m.session != nil) - guarded above, keeps indentation stable
+		_ = d.m.session
 		// #2319: same lock as the local twin (see SessionCostSummary above).
 		mu := d.m.sessionMutex()
 		mu.Lock()
@@ -314,26 +316,22 @@ func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
 	// active vendor's probe result so both paths carry the same vendor
 	// payload (tokens stay - TUI sessions have them; daemon sessions do
 	// not). Vendor-probe failures stay silent: usage is ambient.
+	// #2373: the vendor probe tail renders ASYNC. The first cut ran
+	// svc.Get (a real HTTP call, up to its 10s timeout) inline on the
+	// bubbletea Update goroutine - the entire TUI froze while probing.
+	// Following the RESTART:/MUTES: response protocol, the summary
+	// returns immediately with the token section and flags the vendor;
+	// handleRemoteInbound schedules a tea.Cmd that probes and appends the
+	// tail as its own message. Failures stay silent (ambient contract).
 	if vendor := util.FirstNonEmpty(d.m.activeVendor, d.m.startupVendor); vendor != "" {
 		if svc := d.m.ensureUsageService(); svc != nil && svc.Has(vendor) {
-			baseURL, apiKey := d.m.resolveVendorEndpoint(vendor)
-			if apiKey != "" {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				info, err := svc.Get(ctx, vendor, baseURL, apiKey)
-				cancel()
-				if err == nil && info != nil {
-					if sb.Len() > 0 {
-						sb.WriteString("\n")
-					}
-					sb.WriteString(usage.RenderText(vendor, info, nil))
-				}
+			if baseURL, apiKey := d.m.resolveVendorEndpoint(vendor); apiKey != "" {
+				_ = baseURL
+				d.m.usageTailVendor = vendor
 			}
 		}
 	}
-	if sb.Len() > 0 {
-		return sb.String(), nil
-	}
-	return im.BuildCrossSessionCostSummary()
+	return sb.String(), nil
 }
 
 func (d tuiSlashDeps) CurrentMode() string {
