@@ -209,132 +209,27 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	}
 	if panel.installMode {
-		switch msg.String() {
-		case "esc", "ctrl+c":
-			panel.installMode = false
-			panel.installInput = ""
-			return *m, nil
-		case "enter":
-			spec := strings.TrimSpace(panel.installInput)
-			if spec == "" {
-				panel.message = m.t("panel.mcp.install_spec_required")
-				return *m, nil
-			}
-			panel.installMode = false
-			panel.message = m.t("panel.mcp.installing_server")
-			return *m, m.installMCPServer(spec)
-		case "backspace":
-			runes := []rune(panel.installInput)
-			if len(runes) > 0 {
-				panel.installInput = string(runes[:len(runes)-1])
-			}
-			return *m, nil
-		case "space", " ":
-			panel.installInput += " "
-			return *m, nil
-		}
-		if len(msg.Text) > 0 {
-			panel.installInput += msg.Text
-		}
-		return *m, nil
+		return m.handleMCPInstallInput(panel, msg)
 	}
 	switch msg.String() {
-	case "up", "k":
-		if len(m.mcpServers) > 0 {
-			panel.selected = (panel.selected - 1 + len(m.mcpServers)) % len(m.mcpServers)
-		}
+	case "up", "k", "shift+tab":
+		mcpPanelNavigate(panel, -1, len(m.mcpServers))
 	case "down", "j", "tab":
-		if len(m.mcpServers) > 0 {
-			panel.selected = (panel.selected + 1) % len(m.mcpServers)
-		}
-	case "shift+tab":
-		if len(m.mcpServers) > 0 {
-			panel.selected = (panel.selected - 1 + len(m.mcpServers)) % len(m.mcpServers)
-		}
+		mcpPanelNavigate(panel, +1, len(m.mcpServers))
 	case "enter", "r", "R":
-		if len(m.mcpServers) == 0 {
-			break
-		}
-		if m.mcpManager == nil {
-			panel.message = m.t("panel.mcp.reconnect_unavailable")
-			break
-		}
-		name := m.mcpServers[panel.selected].Name
-		if m.mcpManager.Retry(name) {
-			panel.message = m.t("panel.mcp.reconnecting", name)
-			panel.pendingReconnect = name
-		} else {
-			panel.message = m.t("panel.mcp.reconnect_failed", name)
-		}
+		m.mcpPanelReconnect(panel)
 	case "f", "F":
-		if len(m.mcpServers) == 0 {
-			break
-		}
-		if m.mcpManager == nil {
-			panel.message = m.t("panel.mcp.refresh_unavailable")
-			break
-		}
-		name := m.mcpServers[panel.selected].Name
-		found, outcome, count := m.mcpManager.Refresh(name)
-		switch {
-		case !found:
-			panel.message = m.t("panel.mcp.reconnect_failed", name)
-		case outcome == plugin.RefreshNotConnected:
-			panel.message = m.t("panel.mcp.refresh_not_connected", name)
-		case outcome == plugin.RefreshThrottled:
-			panel.message = m.t("panel.mcp.refresh_throttled")
-		case outcome == plugin.RefreshFailed:
-			panel.message = m.t("panel.mcp.refresh_failed", name)
-		case outcome == plugin.RefreshUnchanged:
-			panel.message = m.t("panel.mcp.refresh_unchanged", name, count)
-		default:
-			panel.message = m.t("panel.mcp.refreshed", name, count)
-		}
+		m.mcpPanelRefresh(panel)
 	case " ", "space":
-		if len(m.mcpServers) == 0 {
-			break
-		}
-		srv := m.mcpServers[panel.selected]
-		willDisable := !srv.Disabled
-		if err := plugin.SetMCPDisabled(srv.Name, willDisable); err != nil {
-			// #1740 case 2: surface the persist failure instead of the
-			// unconditional "disabled and disconnected" claim - the server
-			// silently revives on restart when the write failed.
-			panel.message = fmt.Sprintf("persist failed (will revert on restart): %v", err)
+		if m.mcpPanelToggle(panel) {
 			return *m, nil
-		}
-		m.mcpServers[panel.selected].Disabled = willDisable
-		if willDisable {
-			if m.mcpManager != nil {
-				m.mcpManager.Disconnect(srv.Name)
-			}
-			panel.message = fmt.Sprintf(" %s disabled and disconnected", srv.Name)
-		} else {
-			if m.mcpManager != nil {
-				m.mcpManager.Reconnect(srv.Name)
-				panel.pendingReconnect = srv.Name
-			}
-			panel.message = fmt.Sprintf(" %s enabled, reconnecting...", srv.Name)
 		}
 	case "i", "I":
 		panel.installMode = true
 		panel.installInput = ""
 		panel.message = ""
 	case "a", "A":
-		if len(m.mcpServers) == 0 {
-			break
-		}
-		if m.mcpManager == nil {
-			panel.message = m.t("panel.mcp.reconnect_unavailable")
-			break
-		}
-		name := m.mcpServers[panel.selected].Name
-		if m.mcpManager.ForceReauth(name) {
-			panel.message = fmt.Sprintf(" Reset credentials for %s — reconnecting...", name)
-			panel.pendingReconnect = name
-		} else {
-			panel.message = fmt.Sprintf(" %s: no OAuth handler (not an HTTP/WS server?)", name)
-		}
+		m.mcpPanelResetAuth(panel)
 	case "x", "X", "u", "U":
 		if len(m.mcpServers) == 0 {
 			break
@@ -346,6 +241,141 @@ func (m *Model) handleMCPPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.closeMCPPanel()
 	}
 	return *m, nil
+}
+
+// handleMCPInstallInput routes keys while the install spec prompt is open.
+func (m *Model) handleMCPInstallInput(panel *mcpPanelState, msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		panel.installMode = false
+		panel.installInput = ""
+		return *m, nil
+	case "enter":
+		spec := strings.TrimSpace(panel.installInput)
+		if spec == "" {
+			panel.message = m.t("panel.mcp.install_spec_required")
+			return *m, nil
+		}
+		panel.installMode = false
+		panel.message = m.t("panel.mcp.installing_server")
+		return *m, m.installMCPServer(spec)
+	case "backspace":
+		runes := []rune(panel.installInput)
+		if len(runes) > 0 {
+			panel.installInput = string(runes[:len(runes)-1])
+		}
+		return *m, nil
+	case "space", " ":
+		panel.installInput += " "
+		return *m, nil
+	}
+	if len(msg.Text) > 0 {
+		panel.installInput += msg.Text
+	}
+	return *m, nil
+}
+
+// mcpPanelNavigate moves the selection by delta (wraps around). No-op on an
+// empty server list.
+func mcpPanelNavigate(panel *mcpPanelState, delta, n int) {
+	if n == 0 {
+		return
+	}
+	panel.selected = (panel.selected + delta + n) % n
+}
+
+// mcpPanelReconnect handles enter/r/R: retry the selected server.
+func (m *Model) mcpPanelReconnect(panel *mcpPanelState) {
+	if len(m.mcpServers) == 0 {
+		return
+	}
+	if m.mcpManager == nil {
+		panel.message = m.t("panel.mcp.reconnect_unavailable")
+		return
+	}
+	name := m.mcpServers[panel.selected].Name
+	if m.mcpManager.Retry(name) {
+		panel.message = m.t("panel.mcp.reconnecting", name)
+		panel.pendingReconnect = name
+	} else {
+		panel.message = m.t("panel.mcp.reconnect_failed", name)
+	}
+}
+
+// mcpPanelRefresh handles f/F: refresh tool metadata for the selected server.
+func (m *Model) mcpPanelRefresh(panel *mcpPanelState) {
+	if len(m.mcpServers) == 0 {
+		return
+	}
+	if m.mcpManager == nil {
+		panel.message = m.t("panel.mcp.refresh_unavailable")
+		return
+	}
+	name := m.mcpServers[panel.selected].Name
+	found, outcome, count := m.mcpManager.Refresh(name)
+	switch {
+	case !found:
+		panel.message = m.t("panel.mcp.reconnect_failed", name)
+	case outcome == plugin.RefreshNotConnected:
+		panel.message = m.t("panel.mcp.refresh_not_connected", name)
+	case outcome == plugin.RefreshThrottled:
+		panel.message = m.t("panel.mcp.refresh_throttled")
+	case outcome == plugin.RefreshFailed:
+		panel.message = m.t("panel.mcp.refresh_failed", name)
+	case outcome == plugin.RefreshUnchanged:
+		panel.message = m.t("panel.mcp.refresh_unchanged", name, count)
+	default:
+		panel.message = m.t("panel.mcp.refreshed", name, count)
+	}
+}
+
+// mcpPanelToggle handles space: enable/disable the selected server.
+// Returns true when the caller must return immediately (persist failure).
+func (m *Model) mcpPanelToggle(panel *mcpPanelState) bool {
+	if len(m.mcpServers) == 0 {
+		return false
+	}
+	srv := m.mcpServers[panel.selected]
+	willDisable := !srv.Disabled
+	if err := plugin.SetMCPDisabled(srv.Name, willDisable); err != nil {
+		// #1740 case 2: surface the persist failure instead of the
+		// unconditional "disabled and disconnected" claim - the server
+		// silently revives on restart when the write failed.
+		panel.message = fmt.Sprintf("persist failed (will revert on restart): %v", err)
+		return true
+	}
+	m.mcpServers[panel.selected].Disabled = willDisable
+	if willDisable {
+		if m.mcpManager != nil {
+			m.mcpManager.Disconnect(srv.Name)
+		}
+		panel.message = fmt.Sprintf(" %s disabled and disconnected", srv.Name)
+	} else {
+		if m.mcpManager != nil {
+			m.mcpManager.Reconnect(srv.Name)
+			panel.pendingReconnect = srv.Name
+		}
+		panel.message = fmt.Sprintf(" %s enabled, reconnecting...", srv.Name)
+	}
+	return false
+}
+
+// mcpPanelResetAuth handles a/A: clear stored OAuth credentials and retry.
+func (m *Model) mcpPanelResetAuth(panel *mcpPanelState) {
+	if len(m.mcpServers) == 0 {
+		return
+	}
+	if m.mcpManager == nil {
+		panel.message = m.t("panel.mcp.reconnect_unavailable")
+		return
+	}
+	name := m.mcpServers[panel.selected].Name
+	if m.mcpManager.ForceReauth(name) {
+		panel.message = fmt.Sprintf(" Reset credentials for %s — reconnecting...", name)
+		panel.pendingReconnect = name
+	} else {
+		panel.message = fmt.Sprintf(" %s: no OAuth handler (not an HTTP/WS server?)", name)
+	}
 }
 
 func (m *Model) installMCPServer(spec string) tea.Cmd {
