@@ -519,7 +519,11 @@ func loadKeysEnvInto(setenv func(string, string) error, path string) error {
 			continue
 		}
 		// Do not overwrite existing env vars — user's shell env takes precedence.
-		if _, exists := os.LookupEnv(name); exists {
+		// #1515-D: but an EMPTY shell placeholder (export OPENAI_API_KEY= in an
+		// rc file) must NOT mask the real key in keys.env — exists-with-empty
+		// is a placeholder, not a choice. Skip only when a non-empty value is
+		// already set.
+		if v, exists := os.LookupEnv(name); exists && v != "" {
 			continue
 		}
 		_ = setenv(name, value)
