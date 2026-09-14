@@ -148,6 +148,16 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 	if m.workingDir != "" {
 		cmd.Dir = m.workingDir
 	}
+	// #2350: this is the one path that builds its own exec.Cmd (via
+	// util.NewShellCommandContext), and a nil cmd.Env inherits the FULL
+	// parent environment - including every config-managed secret
+	// RegisterSecretEnv put into the process env (#2284-A threat model).
+	// The run_command main path strips at :282/:298; Manager.Start bypassed
+	// it, so `start_command printenv` dumped all keys into job output.
+	// Apply the same normalization (StripSecretEnv + TERM/NO_COLOR/...).
+	// StartExisting is NOT touched: it reuses a cmd the caller already
+	// configured (run_command path arrives pre-stripped).
+	cmd.Env = normalizedCommandEnv()
 
 	_, snapshot, err := m.startExisting(jobCtx, command, timeout, cancel, cmd)
 	return snapshot, err
