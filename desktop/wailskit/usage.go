@@ -32,13 +32,11 @@ type UsageInfoResult struct {
 
 // usageService is the process-wide cache (3min TTL + negative cache +
 // singleflight from #2352); desktop polling and any later consumer share it.
-var usageService = func() *usage.Service {
-	s := usage.NewService()
-	s.Register(usage.ZaiProbe{})
-	s.Register(usage.DeepSeekProbe{})
-	s.Register(usage.MoonshotProbe{})
-	return s
-}()
+// #2150 batch 2b: DefaultService is the single registration site for all
+// P1 probes - consumers no longer inline their own (three-list drift made
+// kimi/minimax/anthropic-oauth/openrouter/siliconflow invisible here and
+// in the TUI until both were updated in lockstep).
+var usageService = usage.DefaultService()
 
 // GetUsageInfo resolves the ACTIVE vendor from the global config and returns
 // its live usage/balance through the cached probe layer. Meant to be polled
