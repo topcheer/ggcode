@@ -22,6 +22,15 @@ type claudeSettingsFile struct {
 }
 
 func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
+	return applyFirstLaunchAnthropicBootstrapWith(cfg, nil)
+}
+
+// applyFirstLaunchAnthropicBootstrapWith bootstraps from env credentials.
+// lookup is the runtime env map (process env + keys.env, #2284-A): after the
+// wholesale Setenv loop was removed, keys.env values no longer live in the
+// process environment, so the trio is resolved through the map first and
+// only then through the real shell environment (launchctl/export users).
+func applyFirstLaunchAnthropicBootstrapWith(cfg *Config, lookup func(string) (string, bool)) bool {
 	if cfg == nil {
 		return false
 	}
@@ -31,8 +40,17 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 		return false
 	}
 
-	baseURL := strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL"))
-	authVar, authValue := preferredAnthropicCredential()
+	envOr := func(name string) string {
+		if lookup != nil {
+			if v, ok := lookup(name); ok {
+				return v
+			}
+		}
+		return os.Getenv(name)
+	}
+
+	baseURL := strings.TrimSpace(envOr("ANTHROPIC_BASE_URL"))
+	authVar, authValue := preferredAnthropicCredentialWith(envOr)
 	if baseURL == "" || authValue == "" {
 		return false
 	}
@@ -45,7 +63,7 @@ func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
 
 	claudeEnv := loadClaudeEnv()
 	model := util.FirstNonEmpty(
-		strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")),
+		strings.TrimSpace(envOr("ANTHROPIC_MODEL")),
 		strings.TrimSpace(claudeEnv["ANTHROPIC_MODEL"]),
 		strings.TrimSpace(claudeEnv["ANTHROPIC_DEFAULT_OPUS_MODEL"]),
 		defaultBootstrapAnthropicModel,
@@ -74,10 +92,14 @@ func isBootstrapKnownHost(rawURL string) bool {
 }
 
 func preferredAnthropicCredential() (string, string) {
-	if value := strings.TrimSpace(os.Getenv("ANTHROPIC_AUTH_TOKEN")); value != "" {
+	return preferredAnthropicCredentialWith(os.Getenv)
+}
+
+func preferredAnthropicCredentialWith(envOr func(string) string) (string, string) {
+	if value := strings.TrimSpace(envOr("ANTHROPIC_AUTH_TOKEN")); value != "" {
 		return "ANTHROPIC_AUTH_TOKEN", value
 	}
-	if value := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); value != "" {
+	if value := strings.TrimSpace(envOr("ANTHROPIC_API_KEY")); value != "" {
 		return "ANTHROPIC_API_KEY", value
 	}
 	return "", ""
