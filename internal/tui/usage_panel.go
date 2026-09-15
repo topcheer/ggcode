@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -40,29 +39,31 @@ type usageInfoUpdatedMsg struct {
 
 // probeableVendors lists vendors that have both a registered probe and a
 // configured API key. Sorted for deterministic panel rows.
+// probeableVendors returns the vendors whose balances the usage panel
+// probes. Owner ruling (2026-09-15): the panel shows the CURRENT vendor -
+// a fleet view that listed every keyed vendor (the original #2150 cut)
+// surfaced providers the user never switched to and read as garbage rows.
+// The active vendor (startupVendor as fallback) is the single probe
+// target; no toggle.
 func (m *Model) probeableVendors() []string {
 	svc := m.ensureUsageService()
 	if m.config == nil {
 		return nil
 	}
-	var out []string
-	for vendor, vc := range m.config.Vendors {
-		if !svc.Has(vendor) {
-			continue
-		}
-		hasKey := false
-		for _, ep := range vc.Endpoints {
-			if strings.TrimSpace(ep.APIKey) != "" {
-				hasKey = true
-				break
-			}
-		}
-		if hasKey {
-			out = append(out, vendor)
+	vendor := util.FirstNonEmpty(m.activeVendor, m.startupVendor)
+	if vendor == "" {
+		return nil
+	}
+	vc, ok := m.config.Vendors[vendor]
+	if !ok || !svc.Has(vendor) {
+		return nil
+	}
+	for _, ep := range vc.Endpoints {
+		if strings.TrimSpace(ep.APIKey) != "" {
+			return []string{vendor}
 		}
 	}
-	sort.Strings(out)
-	return out
+	return nil
 }
 
 // resolveVendorEndpoint returns the baseURL+apiKey the probe should use:

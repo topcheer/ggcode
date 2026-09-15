@@ -43,6 +43,7 @@ func TestRefreshUsagePanelKeepsNegativeCache(t *testing.T) {
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
 		"e": {APIKey: "k"},
 	}}
+	m.startupVendor = "zai"
 	m.SetConfig(cfg)
 	m.usageService = svc
 	m.usagePanel = &usagePanelState{

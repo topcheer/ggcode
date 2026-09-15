@@ -29,6 +29,9 @@ func TestUsagePanelRendersAnchors(t *testing.T) {
 	m := newTestModel()
 	m.width = 100
 	m.height = 30
+	m.startupVendor = "zai"
+	m.width = 100
+	m.height = 30
 	m.config = &config.Config{
 		Vendor:   "zai",
 		Endpoint: "e1",
