@@ -69,3 +69,48 @@ func TestIssue2411ApprovalDedicatedLane(t *testing.T) {
 		t.Fatal("approval path must enqueue into the dedicated lane")
 	}
 }
+
+// TestIssue2411ApprovalWorkerNeverReentersBulkLane pins the #2411 rework:
+// the approval worker must DELIVER directly (deliverUnix / runWinToast),
+// never route through showOSNotification -> enqueueUnixToast/enqueueWinToast
+// which re-queued the banner behind Task-completed storms and swallowed the
+// queue-full false return after enqueueApproval had already committed (a
+// silent loss with no rollback). The body-slicing pins on
+// NotifyApprovalNeeded alone missed this - the worker is pinned in its own
+// function body.
+func TestIssue2411ApprovalWorkerNeverReentersBulkLane(t *testing.T) {
+	b, err := os.ReadFile("notifications.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "func (nm *NotificationManager) drainApprovalQueue")
+	if i < 0 {
+		t.Fatal("drainApprovalQueue not found")
+	}
+	j := strings.Index(s[i:], "\nfunc ")
+	if j < 0 {
+		j = len(s) - i
+	} else {
+		j += i
+	}
+	body := s[i:j]
+	for _, banned := range []string{
+		"showOSNotification",
+		"enqueueUnixToast",
+		"enqueueWinToast",
+	} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("approval worker re-enters the bulk lane: %q", banned)
+		}
+	}
+	for _, want := range []string{
+		"deliverUnix",
+		"runWinToast",
+		`safego.Run("notify-approval-toast"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("approval worker missing direct-delivery element: %q", want)
+		}
+	}
+}

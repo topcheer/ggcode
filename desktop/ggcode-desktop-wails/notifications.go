@@ -130,6 +130,18 @@ func (nm *NotificationManager) SetEnabled(enabled bool) {
 
 // dropQueuedToasts empties both bounded queues non-blockingly (#1866).
 func (nm *NotificationManager) dropQueuedToasts() {
+	// #2411 review: the approval lane drains here too - the user just
+	// turned notifications OFF, and a queued approval banner popping out
+	// afterwards would violate that explicit global intent. Approvals are
+	// not lost: the IM channel and the in-app center still carry them.
+	for {
+		select {
+		case <-nm.approvalQueue:
+		default:
+			goto approvalDone
+		}
+	}
+approvalDone:
 	for {
 		select {
 		case <-nm.winQueue:
@@ -356,6 +368,13 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 		delete(nm.lastShown, apKey)
 		if !nm.focused && nm.unread > 0 {
 			nm.unread--
+			// #2411 review: re-read after the rollback - the count snapshot
+			// below still feeds the frontend emit, which would otherwise
+			// briefly report the rolled-back bump (title +1 too high).
+			count = nm.unread
+			if count > 0 {
+				nm.setBadge(count)
+			}
 		}
 		nm.mu.Unlock()
 		debug.Log("desktop", "approval notification rolled back after approval-lane enqueue failure: %s", title)
@@ -477,11 +496,28 @@ func (nm *NotificationManager) enqueueApproval(title, body string) bool {
 }
 
 // drainApprovalQueue is the approval-lane worker: one banner at a time,
-// platform dispatch identical to the bulk lanes but never queued behind
-// Task-completed storms (#2411).
+// never queued behind Task-completed storms (#2411).
+// #2411 rework (review): deliver DIRECTLY via the per-platform delivery
+// functions, mirroring drainUnixQueue - the previous form routed through
+// showOSNotification, which re-enqueued the approval into the BULK OS
+// queues (enqueueUnixToast/enqueueWinToast): under a Task-completed storm
+// the bulk queue's drop-new silently discarded the banner AND the false
+// return was swallowed here while enqueueApproval had already committed,
+// so the #600 N4/#2095 rollback in NotifyApprovalNeeded never ran - a
+// strictly worse silent loss than the pre-#2411 behavior. #701: per-event
+// recover keeps the only approval worker alive.
 func (nm *NotificationManager) drainApprovalQueue() {
 	for t := range nm.approvalQueue {
-		_ = nm.showOSNotification(t.title, t.body)
+		t := t
+		if runtime.GOOS == "windows" {
+			safego.Run("notify-approval-toast", func() {
+				nm.runWinToast(t.title, t.body)
+			})
+		} else {
+			safego.Run("notify-approval-toast", func() {
+				nm.deliverUnix(t.title, t.body)
+			})
+		}
 	}
 }
 

@@ -715,7 +715,7 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const handleBlur = () => {
       windowFocusedRef.current = false
     }
-  window.addEventListener('focus', handleFocus)
+    window.addEventListener('focus', handleFocus)
     window.addEventListener('blur', handleBlur)
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') handleFocus()
@@ -2096,6 +2096,20 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     })
     return () => { off() }
   }, [])
+  // #2410 sixth emit site: "notification:delivery-failed" (#1809 case 4)
+  // previously had zero frontend subscribers - the delivery-failure
+  // warning the fix chain was built around did not exist on the consumer
+  // side. Surface it as a transient in-app toast; the payload carries the
+  // platform, the error and the permission hint from warnDeliveryOnce.
+  const [deliveryWarn, setDeliveryWarn] = useState<string | null>(null)
+  useEffect(() => {
+    const off = EventsOn('notification:delivery-failed', (d: { platform?: string; error?: string; hint?: string }) => {
+      const parts = [d?.platform, d?.error].filter(Boolean).join(': ')
+      setDeliveryWarn(parts || 'notification delivery failed')
+      window.setTimeout(() => setDeliveryWarn(null), 8000)
+    })
+    return () => { off() }
+  }, [])
   useEffect(() => {
     localStorage.setItem('ggcode-font-size', String(fontSize))
     document.documentElement.style.setProperty('--font-size-base', `${fontSize}px`)
@@ -2232,6 +2246,12 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
 
   return (
     <div style={{ display: 'flex', height: '100%', minWidth: 0 }}>
+      {/* #2410: transient OS-delivery-failure toast (notification:delivery-failed) */}
+      {deliveryWarn && (
+        <div style={{ position: 'fixed', bottom: '1rem', right: '1rem', zIndex: 50, background: 'rgba(220,38,38,0.92)', color: '#fff', padding: '0.5rem 0.75rem', borderRadius: '0.375rem', fontSize: '0.875rem' }}>
+          {deliveryWarn}
+        </div>
+      )}
       <div
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
