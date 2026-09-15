@@ -15,8 +15,14 @@ type KimiProbe struct{}
 
 func (KimiProbe) Vendor() string { return "kimi" }
 
-// MatchesURL: kimi shares moonshot hosts (cn platform account view).
-func (KimiProbe) MatchesURL(host string) bool { return hostMatch(host, "api.moonshot.cn") }
+// MatchesURL (#2394): Kimi claims NO host. Kimi's API lives on
+// api.moonshot.cn - the same host the Moonshot probe already owns - and
+// with both declared, Service.Resolve's random map order handed
+// moonshot.cn users to the Kimi probe on ~1/8 of runs (flaky CI +
+// randomly mislabeled panel). URL matching must be single-owner, so the
+// Moonshot probe keeps both moonshot hosts; Kimi remains reachable via
+// direct vendor Get (probe registry), just not via Resolve.
+func (KimiProbe) MatchesURL(host string) bool { return false }
 
 func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
