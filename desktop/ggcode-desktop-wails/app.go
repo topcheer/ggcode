@@ -2574,7 +2574,7 @@ func (a *App) stopShareForSessionChange() {
 	}
 }
 
-func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) {
+func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) bool {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
 	// #2401: a StartShare that began BEFORE the user pressed stop must
@@ -2583,11 +2583,16 @@ func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) {
 	// drops its session/broker instead of wiring them live. >= because a
 	// stop-count that has caught up to the start-count means every start
 	// has been superseded (equality is the 1:1 race; > covers re-stops).
+	// Returns whether the wire happened so the caller (#2404 teardown)
+	// can tear a refused result down instead of leaking it: refusing here
+	// while the caller binds commands anyway recreates the half-wired
+	// state #2404 closed at the wide window.
 	if a.tunnelStopSeq != a.tunnelStartStopEq {
-		return
+		return false
 	}
 	a.tunnelSession = sess
 	a.tunnelBroker = broker
+	return true
 }
 
 func (a *App) clearTunnelState() {
@@ -2744,13 +2749,29 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		return nil, fmt.Errorf("share was stopped while starting")
 	}
 
+	// Wire the session under the generation guard first, atomically under
+	// tunnelMu. A stop racing between the stale check above and this point
+	// makes the wire refuse HERE - without this second refusal that stop
+	// slipped through: setTunnelState dropped the session, yet the bind
+	// below had already attached handlers to the untracked broker and the
+	// caller still received a ConnectURL nothing could ever tear down
+	// (the narrow-window reappearance of the #2404 half-alive leak).
+	if !a.setTunnelState(result.Session, result.Broker) {
+		if chat != nil {
+			chat.DetachTunnelBroker()
+		}
+		agentruntime.StopSharedTunnelGracefully(result.Session, result.Broker, 2*time.Second)
+		return nil, fmt.Errorf("share was stopped while starting")
+	}
+
 	// Wire share commands (OnCommand handler, language switching, ask_user approval)
 	// #1161: bind through the entry snapshot. Re-reading the field here could
 	// attach commands to an already-closed bridge after a workspace switch,
 	// silently routing all mobile commands into the dead bridge.
-	// #2404: this must run AFTER the stale check above - binding first
-	// attached handlers to a broker the generation guard would refuse,
-	// leaving a half-wired command channel alive while IsSharing() was false.
+	// #2404: this must run AFTER the stale check AND the guarded wire above -
+	// binding before them attached handlers to a broker the generation
+	// guard would refuse, leaving a half-wired command channel alive while
+	// IsSharing() was false.
 	if result.Broker != nil {
 		chat.BindShareCommands(result.Broker, func(language string) {
 			c, _ := wailskit.LoadConfigForWorkspace(a.workDir)
@@ -2759,8 +2780,6 @@ func (a *App) StartShare() (*ShareInfo, error) {
 			}
 		}, a.currentAskUserRequest, a.clearAskUserRequest)
 	}
-
-	a.setTunnelState(result.Session, result.Broker)
 
 	return &ShareInfo{
 		ConnectURL:   result.ConnectURL,
