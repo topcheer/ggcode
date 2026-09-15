@@ -28,7 +28,7 @@ func TestSetMCPServerEnabledDisablePathPersistWins(t *testing.T) {
 	// Manager with zero live plugins: Disconnect("ghost") deterministically
 	// returns false (the mcp_loader loop falls through) - exactly the
 	// conditional window the issue describes.
-	activeChatBridge = &ChatBridge{mcpManager: plugin.NewMCPManager(nil, nil)}
+	activeChatBridge = &ChatBridge{mcpManager: plugin.NewMCPManager(nil, nil, "")}
 	globalMu.Unlock()
 	t.Cleanup(func() {
 		globalMu.Lock()
@@ -40,7 +40,7 @@ func TestSetMCPServerEnabledDisablePathPersistWins(t *testing.T) {
 		t.Fatal("disable path returned false with a successful persist (UI shows failed for a change that took effect)")
 	}
 	// And the persist really happened.
-	if !plugin.MCPDisabled("ghost-server") {
+	if !plugin.MCPDisabledIn("", "ghost-server") {
 		t.Fatal("disable did not persist")
 	}
 }

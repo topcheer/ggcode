@@ -93,7 +93,7 @@ func TestIssue1285_DisconnectThenReconnect(t *testing.T) {
 	server := issue1285MockServer(t)
 	manager := NewMCPManager([]config.MCPServerConfig{{
 		Name: "cycle-http", Type: "http", URL: server.URL,
-	}}, tool.NewRegistry())
+	}}, tool.NewRegistry(), "")
 	manager.ConnectAll(context.Background())
 	if infos := manager.Snapshot(); len(infos) != 1 || infos[0].Status != MCPStatusConnected {
 		t.Fatalf("expected connected, got %+v", infos)

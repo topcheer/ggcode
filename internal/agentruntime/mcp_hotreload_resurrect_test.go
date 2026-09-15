@@ -44,7 +44,7 @@ func TestMCPHotReloadDeletedServerNotResurrectedFromClaudeSource(t *testing.T) {
 	// Manager starts with the startup-merged set (both entries resolve to
 	// the same name, so one plugin) - mirroring interactive_core.go.
 	startup := []config.MCPServerConfig{{Name: "shared-srv", Command: "echo"}}
-	mgr := plugin.NewMCPManager(startup, tool.NewRegistry())
+	mgr := plugin.NewMCPManager(startup, tool.NewRegistry(), "")
 	w := NewMCPHotReload(globalDir, ws, mgr)
 
 	ctx := context.Background()

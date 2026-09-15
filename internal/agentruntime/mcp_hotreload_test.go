@@ -51,7 +51,7 @@ func TestMCPHotReloadGlobalEditKeepsWorkspaceServers(t *testing.T) {
 	// mirrors BuildInteractiveRuntimeCore with LoadConfigForWorkspace cfg).
 	mgr := plugin.NewMCPManager([]config.MCPServerConfig{
 		{Name: "ws-only-srv", Type: "stdio", Command: "echo"},
-	}, tool.NewRegistry())
+	}, tool.NewRegistry(), "")
 
 	w := NewMCPHotReload(globalDir, ws, mgr)
 	// Force the initial baselines past both files' mtimes so the reload below
@@ -93,7 +93,7 @@ func TestMCPHotReloadWorkspaceFileTriggersReload(t *testing.T) {
 	wsPath := filepath.Join(ws, "mcp_servers.yaml")
 	writeMCPYAML(t, wsPath, "ws-only-srv")
 
-	mgr := plugin.NewMCPManager(nil, tool.NewRegistry())
+	mgr := plugin.NewMCPManager(nil, tool.NewRegistry(), "")
 	w := NewMCPHotReload(globalDir, ws, mgr)
 	w.Start(context.Background())
 	defer func() { /* goroutine exits with test process */ }()
@@ -127,7 +127,7 @@ func TestMCPHotReloadNoReloadStormWithoutGlobalFile(t *testing.T) {
 	wsPath := filepath.Join(ws, "mcp_servers.yaml")
 	writeMCPYAML(t, wsPath, "ws-only-srv")
 
-	mgr := plugin.NewMCPManager(nil, tool.NewRegistry())
+	mgr := plugin.NewMCPManager(nil, tool.NewRegistry(), "")
 	w := NewMCPHotReload(globalDir, ws, mgr)
 
 	// Simulate one triggered reload followed by quiet ticks: after the first

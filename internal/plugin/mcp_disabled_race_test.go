@@ -11,10 +11,7 @@ func TestMCPDisabledConcurrentReadWrite(t *testing.T) {
 	// the developer's REAL ~/.ggcode/disabled_mcp.json (a random subset as
 	// the final state) and leaked the package-global cache to other tests.
 	t.Setenv("HOME", t.TempDir())
-	mcpDisabledMu.Lock()
-	mcpDisabledCache = nil
-	mcpDisabledCacheOK = false
-	mcpDisabledMu.Unlock()
+	resetDisabledCache()
 	var wg sync.WaitGroup
 	// Concurrent readers
 	for i := 0; i < 10; i++ {
@@ -22,7 +19,7 @@ func TestMCPDisabledConcurrentReadWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 1000; j++ {
-				MCPDisabled("test")
+				MCPDisabledIn("", "test")
 			}
 		}()
 	}
@@ -32,7 +29,7 @@ func TestMCPDisabledConcurrentReadWrite(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				SetMCPDisabled(fmt.Sprintf("srv-%d-%d", n, j), true)
+				SetMCPDisabledIn(fmt.Sprintf("ws-race-%d", n%2), fmt.Sprintf("srv-%d-%d", n, j), true)
 			}
 		}(i)
 	}

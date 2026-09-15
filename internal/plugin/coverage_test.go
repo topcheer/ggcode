@@ -11,21 +11,18 @@ func TestSetMCPDisabled(t *testing.T) {
 	// #1782 case 2: same isolation as the race test - never touch the
 	// developer's real ~/.ggcode.
 	t.Setenv("HOME", t.TempDir())
-	mcpDisabledMu.Lock()
-	mcpDisabledCache = nil
-	mcpDisabledCacheOK = false
-	mcpDisabledMu.Unlock()
+	resetDisabledCache()
 	// Should not panic; #1740 case 2 also returns nil error on success.
-	if err := SetMCPDisabled("test-server", true); err != nil {
+	if err := SetMCPDisabledIn("", "test-server", true); err != nil {
 		t.Fatalf("disable should succeed: %v", err)
 	}
-	if !MCPDisabled("test-server") {
+	if !MCPDisabledIn("", "test-server") {
 		t.Fatal("disabled set must be visible")
 	}
-	if err := SetMCPDisabled("test-server", false); err != nil {
+	if err := SetMCPDisabledIn("", "test-server", false); err != nil {
 		t.Fatalf("enable should succeed: %v", err)
 	}
-	if MCPDisabled("test-server") {
+	if MCPDisabledIn("", "test-server") {
 		t.Fatal("re-enable must clear the entry")
 	}
 }
@@ -35,10 +32,10 @@ func TestSetMCPDisabled(t *testing.T) {
 // via the persisted set - the markPending state transition is skipped
 // entirely.
 func TestConnectOneRefusesDisabled(t *testing.T) {
-	if err := SetMCPDisabled("test-disabled-server", true); err != nil {
+	if err := SetMCPDisabledIn("", "test-disabled-server", true); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = SetMCPDisabled("test-disabled-server", false) }()
+	defer func() { _ = SetMCPDisabledIn("", "test-disabled-server", false) }()
 	p := &MCPPlugin{cfg: config.MCPServerConfig{Name: "test-disabled-server"}}
 	before := p.Status()
 	m := &MCPManager{}

@@ -61,7 +61,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	// Placeholder core so the closure below can reach the per-runtime
 	// provider field set later by SetConfigAgent (#1592-B).
 	core := &InteractiveRuntimeCore{}
-	mcpMgr := plugin.NewMCPManager(mergedServers, registry)
+	mcpMgr := plugin.NewMCPManager(mergedServers, registry, workingDir)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.ReadMCPResourceTool{Runtime: mcpMgr})

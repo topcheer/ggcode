@@ -41,7 +41,7 @@ func TestMCPManagerConnectAllTimesOutHungServer(t *testing.T) {
 		Name: "hung-http",
 		Type: "http",
 		URL:  server.URL,
-	}}, tool.NewRegistry())
+	}}, tool.NewRegistry(), "")
 	manager.timeout = 20 * time.Millisecond
 
 	manager.ConnectAll(t.Context())
@@ -58,7 +58,7 @@ func TestMCPManagerConnectAllTimesOutHungServer(t *testing.T) {
 }
 
 func TestNewMCPManagerUsesLongerTimeoutForStdio(t *testing.T) {
-	manager := NewMCPManager(nil, tool.NewRegistry())
+	manager := NewMCPManager(nil, tool.NewRegistry(), "")
 	if got := manager.connectTimeoutFor(NewMCPPlugin(config.MCPServerConfig{Type: "stdio"})); got != 2*time.Minute {
 		t.Fatalf("expected stdio timeout 2m, got %v", got)
 	}
@@ -79,7 +79,7 @@ func TestMCPManagerConnectAllTimesOutHungStdioServer(t *testing.T) {
 		Type:    "stdio",
 		Command: command,
 		Args:    args,
-	}}, tool.NewRegistry())
+	}}, tool.NewRegistry(), "")
 	manager.stdioTimeout = 20 * time.Millisecond
 
 	start := time.Now()
@@ -250,7 +250,7 @@ func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 		Name: "rich-http",
 		Type: "http",
 		URL:  server.URL,
-	}}, tool.NewRegistry())
+	}}, tool.NewRegistry(), "")
 	manager.ConnectAll(context.Background())
 
 	prompt, err := manager.GetPrompt(context.Background(), "rich-http", "summarize", nil)
@@ -300,7 +300,7 @@ func TestMCPManagerInstallAddsServer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	manager := NewMCPManager(nil, tool.NewRegistry())
+	manager := NewMCPManager(nil, tool.NewRegistry(), "")
 	if err := manager.Install(context.Background(), config.MCPServerConfig{
 		Name: "fetcher",
 		Type: "http",
@@ -347,7 +347,7 @@ func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 	defer server.Close()
 
 	registry := tool.NewRegistry()
-	manager := NewMCPManager(nil, registry)
+	manager := NewMCPManager(nil, registry, "")
 	if err := manager.Install(context.Background(), config.MCPServerConfig{
 		Name: "fetcher",
 		Type: "http",

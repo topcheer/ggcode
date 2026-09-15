@@ -50,7 +50,7 @@ func TestMCPHotReloadWatcherKeepsMigratedServersOnYAMLEdit(t *testing.T) {
 		{Name: "yaml-srv", Command: "echo"},
 		{Name: "migrated-srv", Command: "echo"},
 	}
-	mgr := plugin.NewMCPManager(startup, tool.NewRegistry())
+	mgr := plugin.NewMCPManager(startup, tool.NewRegistry(), "")
 	w := NewMCPHotReload(globalDir, ws, mgr)
 
 	ctx := context.Background()
@@ -104,7 +104,7 @@ func TestMCPHotReloadWatcherTombstoneBlocksResurrectOnReload(t *testing.T) {
 	writeMCPYAML(t, wsPath, "shared-srv")
 
 	startup := []config.MCPServerConfig{{Name: "shared-srv", Command: "echo"}}
-	mgr := plugin.NewMCPManager(startup, tool.NewRegistry())
+	mgr := plugin.NewMCPManager(startup, tool.NewRegistry(), "")
 	w := NewMCPHotReload(globalDir, ws, mgr)
 
 	// Drive the same code path the watcher goroutine would (deterministic,
