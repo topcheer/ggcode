@@ -20,7 +20,7 @@ func newTestBridgeWithMCP(t *testing.T, workingDir string) *ChatBridge {
 	t.Helper()
 	bridge := &ChatBridge{
 		workingDir: workingDir,
-		mcpManager: plugin.NewMCPManager(nil, tool.NewRegistry()),
+		mcpManager: plugin.NewMCPManager(nil, tool.NewRegistry(), ""),
 	}
 	return bridge
 }

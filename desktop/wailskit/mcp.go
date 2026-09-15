@@ -102,7 +102,7 @@ func ListMCPServers() ([]MCPServerInfo, error) {
 			URL:      s.URL,
 			Headers:  s.Headers,
 			Status:   "unknown",
-			Disabled: plugin.MCPDisabled(s.Name),
+			Disabled: plugin.MCPDisabledIn(chatScope(chatSnap), s.Name),
 		})
 	}
 	chat := chatSnap
@@ -131,6 +131,7 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 	globalMu.RLock()
 	chat := activeChatBridge
 	globalMu.RUnlock()
+	scope := chatScope(chat)
 	if chat == nil || chat.mcpManager == nil {
 		// Persist the toggle FIRST so the UI state matches disk (#408):
 		// returning false after writing misled the frontend into showing
@@ -138,13 +139,13 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 		// #1893: but a FAILED persist must surface as failure - the old
 		// call dropped the error, the UI reported success, and the
 		// server resurrected on restart (memory-only disable).
-		if err := plugin.SetMCPDisabled(name, disabled); err != nil {
+		if err := plugin.SetMCPDisabledIn(scope, name, disabled); err != nil {
 			return false
 		}
 		return true
 	}
 	// #1893: propagate here too - a failed persist is not a success.
-	if err := plugin.SetMCPDisabled(name, disabled); err != nil {
+	if err := plugin.SetMCPDisabledIn(scope, name, disabled); err != nil {
 		return false
 	}
 	if disabled {
@@ -161,6 +162,16 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 		return true
 	}
 	return chat.mcpManager.Reconnect(name)
+}
+
+// chatScope returns the workspace scope for MCP disabled-state operations
+// (#2390): the active chat session's working directory, or "" (the global
+// bucket) when no session is bound. Nil-safe.
+func chatScope(chat *ChatBridge) string {
+	if chat == nil {
+		return ""
+	}
+	return chat.WorkingDir()
 }
 
 func ReconnectMCPServer(name string) bool {

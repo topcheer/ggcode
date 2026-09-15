@@ -65,6 +65,13 @@ type Manager struct {
 	// writing it back would silently corrupt the file (issue #517).
 	evictedRuns map[string]bool
 
+	// fileExisted remembers the Existed value recorded by each file's FIRST
+	// checkpoint. FIFO eviction can remove that earliest entry, after which
+	// ModifiedFiles would derive IsNew from the first surviving (mid-life)
+	// checkpoint and misreport an agent-created file as pre-existing
+	// (#1539 case D). Display-only: rollback correctness is unaffected.
+	fileExisted map[string]bool
+
 	// corrections records user-initiated undos so the agent can be told its
 	// previous approach was rejected. Cleared at the start of each new run.
 	corrections []Correction
@@ -117,6 +124,15 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 	}
 
 	m.checkpoints = append(m.checkpoints, cp)
+
+	// Record each file's first-known Existed before eviction can remove the
+	// checkpoint that carries it (#1539 case D).
+	if m.fileExisted == nil {
+		m.fileExisted = make(map[string]bool)
+	}
+	if _, seen := m.fileExisted[filePath]; !seen {
+		m.fileExisted[filePath] = existed
+	}
 
 	// Evict oldest if over limit. Prefer evicting entries that do NOT
 	// belong to the active run, so the tail run segment — and with it the
@@ -362,8 +378,12 @@ func (m *Manager) ModifiedFiles() []FileSummary {
 		fs, ok := summary[cp.FilePath]
 		if !ok {
 			fs = &FileSummary{
-				Path:     cp.FilePath,
-				IsNew:    !cp.Existed, // absent before the first checkpoint — NOT merely empty OldContent, which also matches pre-existing empty files (issue #554 C)
+				Path: cp.FilePath,
+				// IsNew must reflect the file's state before its first recorded
+				// checkpoint even when that entry was FIFO-evicted (#1539 case D);
+				// NOT merely empty OldContent, which also matches pre-existing
+				// empty files (issue #554 C).
+				IsNew:    !m.firstExisted(cp.FilePath),
 				LastTool: cp.ToolCall,
 			}
 			summary[cp.FilePath] = fs
@@ -378,6 +398,17 @@ func (m *Manager) ModifiedFiles() []FileSummary {
 		out = append(out, *summary[p])
 	}
 	return out
+}
+
+// firstExisted reports whether the file existed before its first recorded
+// checkpoint, an answer that must survive FIFO eviction of that entry
+// (#1539 case D). Paths never recorded default to existed=true so unknown
+// files are conservatively reported as pre-existing, never as new.
+func (m *Manager) firstExisted(path string) bool {
+	if v, ok := m.fileExisted[path]; ok {
+		return v
+	}
+	return true
 }
 
 // UndoRun reverts all checkpoints belonging to the most recent run in one

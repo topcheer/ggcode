@@ -12,7 +12,7 @@ import (
 // Regression test for issue #315: multiple OAuth MCP servers must be able to
 // be pending simultaneously without overwriting each other.
 func TestPendingOAuthMultiServerCoexistence(t *testing.T) {
-	mgr := NewMCPManager(nil, tool.NewRegistry())
+	mgr := NewMCPManager(nil, tool.NewRegistry(), "")
 	a := &MCPOAuthRequiredError{ServerName: "serverA", Handler: &mcp.OAuthHandler{}}
 	b := &MCPOAuthRequiredError{ServerName: "serverB", Handler: &mcp.OAuthHandler{}}
 
@@ -77,7 +77,7 @@ func TestReloadClearsPendingOAuthForRemovedServer(t *testing.T) {
 	mgr := NewMCPManager([]config.MCPServerConfig{
 		{Name: "oauthA", Type: "http", URL: "http://a.invalid"},
 		{Name: "oauthB", Type: "http", URL: "http://b.invalid"},
-	}, tool.NewRegistry())
+	}, tool.NewRegistry(), "")
 
 	pending := &MCPOAuthRequiredError{ServerName: "oauthA", Handler: &mcp.OAuthHandler{}}
 	mgr.mu.Lock()
