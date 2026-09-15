@@ -2602,18 +2602,23 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	// under the SAME mutex the state reads use, so a re-entrant call
 	// (dialog remount, background press while loading) sees it and
 	// short-circuits instead of racing a second relay session.
+	// #2396: the starting branch previously only unlocked and FELL
+	// THROUGH to th.StartShare - the exact double-room race the guard
+	// exists to prevent (a second relay session was created while the
+	// first was still connecting). Return an explicit "already starting"
+	// error; the sharing branch below keeps its #530-aware refresh path.
 	a.tunnelMu.Lock()
-	if a.tunnelSession != nil || a.tunnelStarting {
+	if a.tunnelStarting {
 		a.tunnelMu.Unlock()
-	} else {
-		a.tunnelStarting = true
-		a.tunnelMu.Unlock()
-		defer func() {
-			a.tunnelMu.Lock()
-			a.tunnelStarting = false
-			a.tunnelMu.Unlock()
-		}()
+		return nil, fmt.Errorf("tunnel session is already starting")
 	}
+	a.tunnelStarting = true
+	a.tunnelMu.Unlock()
+	defer func() {
+		a.tunnelMu.Lock()
+		a.tunnelStarting = false
+		a.tunnelMu.Unlock()
+	}()
 	// If already sharing, try to refresh the invite (same room, new ticket).
 	// This allows mobile to reconnect seamlessly after a brief relay hiccup.
 	if sess := a.currentTunnelSession(); sess != nil {
