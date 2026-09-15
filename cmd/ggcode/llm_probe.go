@@ -159,7 +159,16 @@ func runLLMProbe(cfgFile, vendorFilter, endpointFilter, modelOverride string, li
 			continue
 		}
 
-		if resolved.Model == "" {
+		// #2419: honor the --model flag. It was declared, threaded through
+		// the signature, and documented ("Override model for all endpoints")
+		// from day one, but never consumed - probes silently ran the
+		// endpoint's configured model while the user believed they were
+		// validating a different one, basing model-switch decisions on
+		// wrong conclusions. Applying the override BEFORE the NO_MODEL
+		// check also lets --model rescue endpoints with no configured
+		// model, which is exactly what "for all endpoints" promises.
+		if modelOverride != "" {
+			resolved.Model = modelOverride
 		}
 		if resolved.Model == "" {
 			results = append(results, &probeResult{
@@ -289,9 +298,6 @@ func perCallTimeout(_ context.Context, cancel context.CancelFunc, timeoutSec int
 	cancel()
 	return context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 }
-
-// fetchFirstModel calls the provider's ListModels API and returns the first available model.
-// Falls back to a protocol-specific default if the API call fails.
 
 // runListModels lists available models for each endpoint using the provider's ListModels API.
 func runListModels(cfg *config.Config, refs []endpointRef, timeoutSec int) error {
