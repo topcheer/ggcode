@@ -27,6 +27,7 @@ func TestUsageFetchDenominatorPinnedToSnapshot(t *testing.T) {
 	}
 
 	// Mid-flight: a second keyed vendor appears in the config.
+	m.startupVendor = "zai"
 	cfg.Vendors["deepseek"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
 		"e": {APIKey: "k2"},
 	}}
@@ -60,6 +61,7 @@ func TestUsageFetchSnapshotExcludesKeyless(t *testing.T) {
 		"e": {APIKey: "k"},
 	}}
 	m.SetConfig(cfg)
+	m.startupVendor = "zai" // #2150 rework: panel probes the ACTIVE vendor only
 	m.usageService = svc
 	m.usagePanel = &usagePanelState{
 		infos: map[string]*usage.UsageInfo{},
