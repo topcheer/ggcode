@@ -680,13 +680,33 @@ func (a *App) ReadClipboardImage() (*PastedImage, error) {
 	}, nil
 }
 
+// Clipboard-read budget mirrors the #1807 send-side dual budget
+// (count<=5, total bytes<=30MB). #2386: the send-side budget rejected only
+// AFTER the full transfer - reading 200x10MB from a Finder multi-select
+// already peaked ~5GB on both sides of the webview bridge. Enforcing at
+// the read layer keeps the unbounded array from ever crossing the bridge.
+const (
+	maxClipboardAttachmentCount        = 5
+	maxClipboardAttachmentTotalBytes   = 30 << 20
+	clipboardAttachmentBudgetErrorText = "skipped: clipboard attachment budget exceeded (max %d files, %d MB total)"
+)
+
 func (a *App) ReadClipboardAttachments() ([]ClipboardAttachment, error) {
 	paths, err := clipboardFilePaths()
 	if err != nil {
 		return nil, err
 	}
+	return readClipboardAttachmentsFromPaths(paths), nil
+}
+
+// readClipboardAttachmentsFromPaths is the testable core of
+// ReadClipboardAttachments (#2386): budget-enforcing read of the given
+// clipboard file paths.
+func readClipboardAttachmentsFromPaths(paths []string) []ClipboardAttachment {
 	attachments := make([]ClipboardAttachment, 0, len(paths))
 	seen := map[string]struct{}{}
+	totalBytes := 0
+	budgetHit := false
 	for _, path := range paths {
 		path = strings.TrimSpace(path)
 		if path == "" {
@@ -701,9 +721,28 @@ func (a *App) ReadClipboardAttachments() ([]ClipboardAttachment, error) {
 			continue
 		}
 		seen[abs] = struct{}{}
-		attachments = append(attachments, readClipboardFileAttachment(abs))
+		if budgetHit || len(seen) > maxClipboardAttachmentCount {
+			budgetHit = true
+			attachments = append(attachments, ClipboardAttachment{Path: abs, Name: filepath.Base(abs), Kind: "binary", Error: fmt.Sprintf(clipboardAttachmentBudgetErrorText, maxClipboardAttachmentCount, maxClipboardAttachmentTotalBytes>>20)})
+			continue
+		}
+		att := readClipboardFileAttachment(abs)
+		// Budget counts the FILE size (att.Size), not just inlined data:
+		// binary attachments never inline their payload, but they still
+		// cross the bridge as a path the frontend will re-read.
+		if totalBytes+int(att.Size) > maxClipboardAttachmentTotalBytes {
+			budgetHit = true
+			att.Error = fmt.Sprintf(clipboardAttachmentBudgetErrorText, maxClipboardAttachmentCount, maxClipboardAttachmentTotalBytes>>20)
+			att.Data = ""
+		} else {
+			// Accumulate on pass. Error may carry a business notice
+			// ("not pasted as text") - that is not a budget failure and
+			// must not stop the running total.
+			totalBytes += int(att.Size)
+		}
+		attachments = append(attachments, att)
 	}
-	return attachments, nil
+	return attachments
 }
 
 func clipboardFilePaths() ([]string, error) {
