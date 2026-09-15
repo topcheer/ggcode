@@ -1265,115 +1265,78 @@ func (m *Model) rejectPendingPairing() tea.Cmd {
 	}
 }
 
+// panelEntry couples a panel's open-predicate with its close action so
+// hasActivePanel and closeActivePanel share ONE source of truth. The two
+// hand-maintained lists drifted twice before (#904 hooksPanel, #2363
+// usagePanel: a panel counted as active but had no close case, so Ctrl+C
+// fell through to exit-confirmation) - a registry entry that forgets the
+// close side is now structurally impossible.
+type panelEntry struct {
+	// name is the Model field (or "langOptions") this entry guards; the
+	// mirror-consistency test in zz_issue2422_test.go diffs this set against
+	// Model's *Panel pointer fields so a new panel cannot be forgotten.
+	name  string
+	open  func() bool
+	close func()
+}
+
+// panelRegistry lists every active-panel slot in closeActivePanel's priority
+// order (the order the original switch resolved when multiple panels were
+// somehow open at once - preserved for behavioral parity, not style).
+func (m *Model) panelRegistry() []panelEntry {
+	return []panelEntry{
+		{"modelPanel", func() bool { return m.modelPanel != nil }, m.closeModelPanel},
+		{"hooksPanel", func() bool { return m.hooksPanel != nil }, m.closeHooksPanel},
+		{"providerPanel", func() bool { return m.providerPanel != nil }, m.closeProviderPanel},
+		{"tgPanel", func() bool { return m.tgPanel != nil }, m.closeTGPanel},
+		{"qqPanel", func() bool { return m.qqPanel != nil }, m.closeQQPanel},
+		{"pcPanel", func() bool { return m.pcPanel != nil }, m.closePCPanel},
+		{"discordPanel", func() bool { return m.discordPanel != nil }, m.closeDiscordPanel},
+		{"feishuPanel", func() bool { return m.feishuPanel != nil }, m.closeFeishuPanel},
+		{"slackPanel", func() bool { return m.slackPanel != nil }, m.closeSlackPanel},
+		{"dingtalkPanel", func() bool { return m.dingtalkPanel != nil }, m.closeDingtalkPanel},
+		{"imPanel", func() bool { return m.imPanel != nil }, m.closeIMPanel},
+		{"wechatPanel", func() bool { return m.wechatPanel != nil }, func() { m.closeWechatPanel(); m.closeIMPanel() }},
+		{"wecomPanel", func() bool { return m.wecomPanel != nil }, func() { m.closeWeComPanel(); m.closeIMPanel() }},
+		{"mattermostPanel", func() bool { return m.mattermostPanel != nil }, m.closeMattermostPanel},
+		{"matrixPanel", func() bool { return m.matrixPanel != nil }, m.closeMatrixPanel},
+		{"signalPanel", func() bool { return m.signalPanel != nil }, m.closeSignalPanel},
+		{"ircPanel", func() bool { return m.ircPanel != nil }, m.closeIRCPanel},
+		{"nostrPanel", func() bool { return m.nostrPanel != nil }, m.closeNostrPanel},
+		{"twitchPanel", func() bool { return m.twitchPanel != nil }, m.closeTwitchPanel},
+		{"whatsappPanel", func() bool { return m.whatsappPanel != nil }, m.closeWhatsAppPanel},
+		{"mcpPanel", func() bool { return m.mcpPanel != nil }, m.closeMCPPanel},
+		{"skillsPanel", func() bool { return m.skillsPanel != nil }, m.closeSkillsPanel},
+		{"statsPanel", func() bool { return m.statsPanel != nil }, m.closeStatsPanel},
+		{"usagePanel", func() bool { return m.usagePanel != nil }, func() { m.usagePanel = nil }}, // #2363: no dedicated closer
+		{"inspectorPanel", func() bool { return m.inspectorPanel != nil }, m.closeInspectorPanel},
+		{"streamPanel", func() bool { return m.streamPanel != nil }, m.closeStreamPanel},
+		{"knightPanel", func() bool { return m.knightPanel != nil }, m.closeKnightPanel},
+		{"impersonatePanel", func() bool { return m.impersonatePanel != nil }, m.closeImpersonatePanel},
+		{"lanChatPanel", func() bool { return m.lanChatPanel != nil }, m.closeLanChatPanel},
+		{"langOptions", func() bool { return len(m.langOptions) > 0 }, func() { m.langOptions = nil }},
+	}
+}
+
 func (m *Model) hasActivePanel() bool {
-	return m.modelPanel != nil ||
-		m.hooksPanel != nil ||
-		m.providerPanel != nil ||
-		m.tgPanel != nil ||
-		m.qqPanel != nil ||
-		m.pcPanel != nil ||
-		m.discordPanel != nil ||
-		m.feishuPanel != nil ||
-		m.slackPanel != nil ||
-		m.dingtalkPanel != nil ||
-		m.wechatPanel != nil ||
-		m.wecomPanel != nil ||
-		m.matrixPanel != nil ||
-		m.mattermostPanel != nil ||
-		m.signalPanel != nil ||
-		m.ircPanel != nil ||
-		m.nostrPanel != nil ||
-		m.twitchPanel != nil ||
-		m.whatsappPanel != nil ||
-		m.mcpPanel != nil ||
-		m.imPanel != nil ||
-		m.inspectorPanel != nil ||
-		m.impersonatePanel != nil ||
-		m.lanChatPanel != nil ||
-		m.skillsPanel != nil ||
-		m.streamPanel != nil ||
-		m.knightPanel != nil ||
-		m.statsPanel != nil || m.usagePanel != nil ||
-		len(m.langOptions) > 0
+	for _, p := range m.panelRegistry() {
+		if p.open() {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) closeActivePanel() bool {
-	switch {
-	case m.modelPanel != nil:
-		m.closeModelPanel()
-	// #904: hasActivePanel counts hooksPanel but this switch had no case —
-	// Ctrl+C fell through to exit-confirmation (second press could quit the
-	// TUI) instead of closing a mere panel.
-	case m.hooksPanel != nil:
-		m.closeHooksPanel()
-	case m.providerPanel != nil:
-		m.closeProviderPanel()
-	case m.tgPanel != nil:
-		m.closeTGPanel()
-	case m.qqPanel != nil:
-		m.closeQQPanel()
-	case m.pcPanel != nil:
-		m.closePCPanel()
-	case m.discordPanel != nil:
-		m.closeDiscordPanel()
-	case m.feishuPanel != nil:
-		m.closeFeishuPanel()
-	case m.slackPanel != nil:
-		m.closeSlackPanel()
-	case m.dingtalkPanel != nil:
-		m.closeDingtalkPanel()
-	case m.imPanel != nil:
-		m.closeIMPanel()
-	case m.wechatPanel != nil:
-		m.closeWechatPanel()
-		m.closeIMPanel()
-	case m.wecomPanel != nil:
-		m.closeWeComPanel()
-		m.closeIMPanel()
-	case m.mattermostPanel != nil:
-		m.closeMattermostPanel()
-	case m.matrixPanel != nil:
-		m.closeMatrixPanel()
-	case m.signalPanel != nil:
-		m.closeSignalPanel()
-	case m.ircPanel != nil:
-		m.closeIRCPanel()
-	case m.nostrPanel != nil:
-		m.closeNostrPanel()
-	case m.twitchPanel != nil:
-		m.closeTwitchPanel()
-	case m.whatsappPanel != nil:
-		m.closeWhatsAppPanel()
-	case m.mcpPanel != nil:
-		m.closeMCPPanel()
-	case m.skillsPanel != nil:
-		m.closeSkillsPanel()
-	case m.statsPanel != nil:
-		m.closeStatsPanel()
-	case m.usagePanel != nil:
-		// #2363: hasActivePanel counted usagePanel but this switch had no
-		// case - ctrl+c only closed it via the later key-handler fallback
-		// (dispatch-order luck), and any future closeActivePanel caller
-		// would silently no-op with the panel open.
-		m.usagePanel = nil
-	case m.inspectorPanel != nil:
-		m.closeInspectorPanel()
-	case m.streamPanel != nil:
-		m.closeStreamPanel()
-	case m.knightPanel != nil:
-		m.closeKnightPanel()
-	case m.impersonatePanel != nil:
-		m.closeImpersonatePanel()
-	case m.lanChatPanel != nil:
-		m.closeLanChatPanel()
-	case len(m.langOptions) > 0:
-		m.langOptions = nil
-	default:
-		return false
+	for _, p := range m.panelRegistry() {
+		if p.open() {
+			p.close()
+			m.resetExitConfirm()
+			m.resetCancelConfirm()
+			return true
+		}
 	}
-	m.resetExitConfirm()
-	m.resetCancelConfirm()
-	return true
+	return false
 }
 
 func (m *Model) SetMCPServers(servers []MCPInfo) {
