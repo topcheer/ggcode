@@ -2603,9 +2603,18 @@ func (a *App) StartShare() (*ShareInfo, error) {
 	// (dialog remount, background press while loading) sees it and
 	// short-circuits instead of racing a second relay session.
 	a.tunnelMu.Lock()
-	if a.tunnelSession != nil || a.tunnelStarting {
+	switch {
+	case a.tunnelSession != nil:
+		// Live session: fall through to the refresh path below.
 		a.tunnelMu.Unlock()
-	} else {
+	case a.tunnelStarting:
+		// #2396: an in-flight start is ALREADY creating the session -
+		// return busy. The first cut merely unlocked and fell through to
+		// a second th.StartShare, so a dialog remount still raced two
+		// sessions; only the session!=nil case may fall through.
+		a.tunnelMu.Unlock()
+		return nil, fmt.Errorf("share start already in progress")
+	default:
 		a.tunnelStarting = true
 		a.tunnelMu.Unlock()
 		defer func() {
