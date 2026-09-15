@@ -43,15 +43,7 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		m.handleResize(msg.Width, msg.Height)
-		// Reset the startup clock when Bubble Tea sends the first WindowSizeMsg.
-		// This ensures the startup input gate window is measured from the moment
-		// the TUI event loop actually starts, not from model creation time (which
-		// can be hundreds of milliseconds earlier due to config loading, IM setup, etc.).
-		if m.startedAt.IsZero() || time.Since(m.startedAt) > startupInputGateWindow {
-			m.startedAt = time.Now()
-		}
-		return m, nil
+		return m.handleWindowSizeMsg(msg)
 
 	case imRuntimeUpdatedMsg:
 		return m, nil
@@ -190,68 +182,13 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case armRestartMsg:
-		// Agent-requested restart armed (#347): defer the quit until the current
-		// agent turn finishes so sibling tool results and trailing assistant
-		// text are persisted first. If the agent is idle (turn already done),
-		// fire immediately. A fallback timer force-restarts if the turn hangs.
-		m.pendingRestart = true
-		if msg.debug {
-			m.restartDebug = true
-		}
-		// #1698 case 3: announce WHY the session is restarting - the
-		// schema promises the reason is shown to the user before the
-		// process restarts.
-		if strings.TrimSpace(msg.reason) != "" {
-			m.chatWriteSystem("restart-announce", fmt.Sprintf("Restarting: %s (your session resumes automatically)", msg.reason))
-		}
-		if !m.loading {
-			debug.Log("restart", "agent-requested restart: agent idle, firing now")
-			return m, tea.Batch(firePendingRestartCmd(), armRestartFallbackCmd())
-		}
-		debug.Log("restart", "agent-requested restart: agent busy, deferring to turn end (30s fallback)")
-		return m, armRestartFallbackCmd()
+		return m.handleArmRestartMsg(msg)
 
 	case restartFallbackMsg:
-		// 30s stall fallback: force the restart only when the turn is NOT
-		// making progress. A tick landing while tools are legitimately still
-		// running (LLM called restart + a >30s build in the same batch) used to
-		// kill the turn mid-tool and lose unpersisted results — the exact
-		// hazard #347 was meant to prevent (#362). Recent stream/reasoning/tool
-		// activity re-arms the timer; only a genuinely stalled turn (no
-		// activity for the full fallback window) forces the quit.
-		if !m.pendingRestart {
-			return m, nil
-		}
-		if m.loading && time.Since(m.lastTurnActivityAt) < restartFallbackTimeout {
-			debug.Log("restart", "restart fallback fired but turn is active; re-arming")
-			return m, armRestartFallbackCmd()
-		}
-		debug.Log("restart", "agent-requested restart: turn stalled or finished, forcing restart")
-		return m, firePendingRestartCmd()
+		return m.handleRestartFallbackMsg(msg)
 
 	case remoteRestartMsg:
-		// Guard (#362): firePendingRestartCmd is an async Cmd — a user message
-		// submitted in the millisecond window after a turn ended can already
-		// have started a NEW run (m.loading=true, pendingRestart stale).
-		// Quitting then would kill the new turn.
-		// Explicit user requests (IM /restart, desktop InjectRestart) are
-		// exempt: being silently swallowed after the user already received a
-		// "Restarting..." confirmation is worse than deferring. They arm the
-		// restart to fire at turn end instead (#374).
-		if m.loading && !m.pendingRestart {
-			if msg.explicit {
-				debug.Log("restart", "explicit restart during active turn; arming to fire at turn end")
-				m.pendingRestart = true
-				m.noteTurnActivity()
-				return m, armRestartFallbackCmd()
-			}
-			debug.Log("restart", "remoteRestartMsg during a new active turn; ignoring")
-			return m, nil
-		}
-		m.quitting = true
-		m.restartRequested = true
-		m.shutdownAll()
-		return m, tea.Quit
+		return m.handleRemoteRestartMsg(msg)
 
 	case remoteInboundMsg:
 		return m.handleRemoteInbound(msg, spinnerCmd)
@@ -689,74 +626,22 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 		return m.handleMcpHealthCheckTick(msg)
 
 	case setProgramMsg:
-		debug.Log("tui", "setProgramMsg received, program was nil=%v", m.program == nil)
-		m.program = msg.Program
-		// Set startedAt for startup gate if not already set.
-		if m.startedAt.IsZero() {
-			m.startedAt = time.Now()
-		}
-		// Clear any terminal response garbage that leaked into the input
-		// field before we had a chance to set up the drain guard.
-		// Only clear when the content looks like terminal response fragments
-		// (contains ;, :, /, digits etc.) to avoid wiping legitimate input
-		// set programmatically by callers (e.g. IM tests).
-		if val := m.input.Value(); val != "" && looksLikeStartupGarbage(val) {
-			debug.Log("tui", "clearing pre-drain input garbage: %q", util.Truncate(val, 80))
-			m.input.Reset()
-		}
-		// Start the input drain window. Terminal responses (OSC 11 color
-		// query, CPR, Kitty mode report, mouse-mode/altscreen ACKs) arrive
-		// as individual KeyPressMsg events that are indistinguishable from
-		// real typing. We suppress all keyboard input until inputDrainEndMsg
-		// arrives. The window is intentionally generous (~250ms) because
-		// some terminals (and especially when re-running the binary right
-		// after a build, with leftover sequences from the previous process
-		// in the input buffer) take longer than 50ms to settle.
-		m.inputDrainUntil = time.Now().Add(250 * time.Millisecond)
-		return m, tea.Tick(250*time.Millisecond, func(_ time.Time) tea.Msg {
-			return inputDrainEndMsg{}
-		})
+		return m.handleSetProgramMsg(msg)
 
 	case inputDrainEndMsg:
-		m.inputDrainUntil = time.Time{} // zero = drain ended
-		m.inputReady = true
-		debug.Log("tui", "input drain ended, input ready")
-		return m, nil
+		return m.handleInputDrainEndMsg(msg)
 
 	case imageAttachedMsg:
-		m.pendingImages = append(m.pendingImages, msg)
-		return m, nil
+		return m.handleImageAttachedMsg(msg)
 
 	case textPasteMsg:
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(tea.PasteMsg{Content: msg.Content})
-		return m, cmd
+		return m.handleTextPasteMsg(msg)
 
 	case statusMsg:
-		if m.runCanceled || !m.loading {
-			return m, nil
-		}
-		m.statusActivity = msg.Activity
-		m.statusToolName = msg.ToolName
-		m.statusToolArg = msg.ToolArg
-		if msg.ToolCount > 0 {
-			m.statusToolCount = msg.ToolCount
-		}
-		m.pushTunnelCurrentActivity()
-		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
+		return m.handleStatusMsg(msg, spinnerCmd)
 
 	case agentStatusMsg:
-		if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
-			return m, nil
-		}
-		m.statusActivity = msg.Activity
-		m.statusToolName = msg.ToolName
-		m.statusToolArg = msg.ToolArg
-		if msg.ToolCount > 0 {
-			m.statusToolCount = msg.ToolCount
-		}
-		m.pushTunnelCurrentActivity()
-		return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
+		return m.handleAgentStatusMsg(msg, spinnerCmd)
 
 	case agentRoundProgressMsg:
 		return m, nil
