@@ -25,7 +25,10 @@ func (m *Model) handleStreamSlash(args string) (string, bool) {
 		return m.streamStatus(), false
 	case "config":
 		m.openStreamPanel()
-		return "", false
+		// #2408: the remote path drops empty responses (update_remote.go
+		// only emits non-empty text), so an empty return left the IM side
+		// with zero feedback while the local TUI popped its panel.
+		return "stream config panel opened in the local TUI terminal", false
 	default:
 		return m.streamHelp(), false
 	}
