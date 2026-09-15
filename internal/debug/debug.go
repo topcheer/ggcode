@@ -444,17 +444,29 @@ func MainLogPath() string {
 	return mainSink.basePath
 }
 
+// ensureMu serializes EnsureFileLogging's whole check-reset-init sequence.
+// mu alone cannot: the sequence spans Close()/Init(), which take mu
+// internally, so the unguarded window between the Active() check and
+// Close() let a second caller's cleanup glob delete every log file the
+// first caller had just written (#1539 case B).
+var ensureMu sync.Mutex
+
 // EnsureFileLogging turns on debug file logging at runtime when it was not
 // enabled at startup. It is idempotent: a no-op when logging is already
 // active. Intended for blind-spot error paths — an unrecognized error shape
 // is undiagnosable without logs, so the first occurrence turns logging on
 // and the user is told where the file is.
 //
-// The goroutine-safety story: callers may race, but the reset+Init sequence
-// is guarded by mu and sync.Once replacement; worst case two callers both
-// reinitialize and the second Init wins, losing a few early log lines —
-// acceptable against losing all of them.
+// The goroutine-safety story: concurrent callers are serialized by ensureMu
+// across the entire sequence, so the loser of a race observes logging
+// already active and returns without touching anything — the winner's log
+// lines survive intact. (Before #1539 case B the loser's Close() cleanup
+// deleted the full segment the winner had written, not "a few early
+// lines" as the old comment claimed.)
 func EnsureFileLogging() (wasEnabled bool, path string) {
+	ensureMu.Lock()
+	defer ensureMu.Unlock()
+
 	if Active() {
 		return true, MainLogPath()
 	}
