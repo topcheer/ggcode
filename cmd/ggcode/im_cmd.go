@@ -19,6 +19,50 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 )
 
+// imSupportedPlatforms is the CLI-side platform registry used to validate
+// and canonicalize the platform field before it is persisted (#2417).
+// Desktop already guards this at save time (#637 unknown-platform reject +
+// #648 canonical-ID normalize, desktop/wailskit/im.go); the CLI's add/set/
+// wizard accepted any string, a typo like "telegarm" or "Telegram" saved
+// fine and the runtime startConfiguredAdapter switch then skipped it in
+// its default branch with only a debug-level log - the adapter silently
+// never started. Kept as a name-only set (validated + normalized via
+// im.AdapterPlatformCanonical) rather than a duplicated wailskit-style
+// field registry: the CLI wizard keeps its own extras prompts.
+var imSupportedPlatforms = []string{
+	"qq", "telegram", "feishu", "dingtalk", "discord", "slack", "privateclaw",
+}
+
+// imValidatePlatform returns the canonical platform ID for the given
+// (possibly cased) input, or an error naming the supported set (#2417,
+// mirroring the desktop #637/#648 guard for the CLI entry points).
+// Canonicalization is case-insensitive over the platform constants the
+// runtime startConfiguredAdapter switch actually matches (internal/im
+// types.go) - the desktop wailskit registry (IMPlatformMeta) carries UI
+// field metadata the CLI wizard does not need, so this stays a local
+// type-switch instead of importing wailskit from the CLI.
+func imValidatePlatform(platform string) (string, error) {
+	switch strings.ToLower(platform) {
+	case string(im.PlatformQQ):
+		return string(im.PlatformQQ), nil
+	case string(im.PlatformTelegram):
+		return string(im.PlatformTelegram), nil
+	case string(im.PlatformFeishu):
+		return string(im.PlatformFeishu), nil
+	case string(im.PlatformDingTalk):
+		return string(im.PlatformDingTalk), nil
+	case string(im.PlatformDiscord):
+		return string(im.PlatformDiscord), nil
+	case string(im.PlatformSlack):
+		return string(im.PlatformSlack), nil
+	case "privateclaw":
+		return "privateclaw", nil
+	default:
+		supported := strings.Join(imSupportedPlatforms, ", ")
+		return "", fmt.Errorf("unknown platform %q (supported: %s)", platform, supported)
+	}
+}
+
 func newIMCmd(cfgFile *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "im",
@@ -563,6 +607,15 @@ Examples:
 			if platform == "" {
 				return fmt.Errorf("--platform is required (qq, telegram, feishu, dingtalk, discord, slack, privateclaw)")
 			}
+			// #2417: reject unknown platforms and normalize to the canonical
+			// registry ID before persisting (same guard as desktop #637/#648) -
+			// a typo like "telegarm" used to save fine and the adapter then
+			// silently never started.
+			canonical, err := imValidatePlatform(platform)
+			if err != nil {
+				return err
+			}
+			platform = canonical
 
 			ctx, err := loadIMConfig(*cfgFile)
 			if err != nil {
@@ -766,6 +819,14 @@ Examples:
 					return err
 				}
 			case "platform":
+				// #2417: same unknown-platform guard as `config add` - a
+				// typo'd or cased platform used to persist directly and the
+				// adapter silently never started. Normalize to canonical ID.
+				canonical, err := imValidatePlatform(value)
+				if err != nil {
+					return err
+				}
+				value = canonical
 				adapter.Platform = value
 				cfg.IM.Adapters[name] = adapter
 				if err := cfg.PatchIMAdapter(name, func(a map[string]interface{}) {
@@ -1020,7 +1081,16 @@ func imConfigAddWizard(out io.Writer) (string, string, []string, error) {
 	}
 	plt := platformMap[platformChoice]
 	if plt == "" {
-		plt = platformChoice // allow raw input
+		// #2417: raw input is still allowed, but it must name a real
+		// platform - unknown strings (typos) used to fall through the
+		// extras switch with requiredExtras=nil and "succeed" into
+		// ggcode.yaml, then silently never start. Normalize to the
+		// canonical ID ("Telegram" → "telegram").
+		canonical, err := imValidatePlatform(platformChoice)
+		if err != nil {
+			return "", "", nil, err
+		}
+		plt = canonical
 	}
 
 	// Step 3: Platform-specific extras
