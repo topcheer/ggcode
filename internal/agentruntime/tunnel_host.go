@@ -288,6 +288,13 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 		if oldRef.broker != nil {
 			oldRef.broker.Stop()
 		}
+		// #2413: mirror StopShare's teardown order - the relay websocket
+		// lives on the session's client; stopping only the broker left the
+		// overwritten session's relay connection alive until process exit,
+		// unreachable by any later StopShare.
+		if oldRef.session != nil {
+			oldRef.session.Stop()
+		}
 		h.DetachOnlineBroker()
 		h.mu.Lock()
 	}

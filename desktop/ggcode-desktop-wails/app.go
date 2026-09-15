@@ -2670,9 +2670,21 @@ func (a *App) StartShare() (*ShareInfo, error) {
 			// #2401: the teardown above bumped stopSeq; the restart below
 			// is the SAME user action still in flight - re-snapshot so
 			// setTunnelState wires the fresh session instead of dropping it.
+			// #2413: the restart is also a long th.StartShare round-trip -
+			// guard it with tunnelStarting exactly like the default branch.
+			// This path runs precisely when the relay is flaky (refresh
+			// failed), i.e. when users retry: without the flag the window
+			// reports IsSharing()===false and a re-entrant StartShare races
+			// a SECOND relay session whose loser leaks as an orphan.
 			a.tunnelMu.Lock()
 			a.tunnelStartStopEq = a.tunnelStopSeq
+			a.tunnelStarting = true
 			a.tunnelMu.Unlock()
+			defer func() {
+				a.tunnelMu.Lock()
+				a.tunnelStarting = false
+				a.tunnelMu.Unlock()
+			}()
 		} else {
 			return &ShareInfo{
 				ConnectURL:   info.ConnectURL,
