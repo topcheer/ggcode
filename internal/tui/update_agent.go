@@ -37,34 +37,8 @@ func (m Model) handleAgentInterruptMsg(msg agentInterruptMsg) (tea.Model, tea.Cm
 	return m, nil
 }
 
-func (m Model) handleStatusMsg(msg statusMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
-	if m.runCanceled || !m.loading {
-		return m, nil
-	}
-	m.statusActivity = msg.Activity
-	m.statusToolName = msg.ToolName
-	m.statusToolArg = msg.ToolArg
-	if msg.ToolCount > 0 {
-		m.statusToolCount = msg.ToolCount
-	}
-	m.pushTunnelCurrentActivity()
-	return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
-}
-
-func (m Model) handleAgentStatusMsg(msg agentStatusMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
-	if msg.RunID != m.activeAgentRunID || m.runCanceled || !m.loading {
-		return m, nil
-	}
-	m.statusActivity = msg.Activity
-	m.statusToolName = msg.ToolName
-	m.statusToolArg = msg.ToolArg
-	if msg.ToolCount > 0 {
-		m.statusToolCount = msg.ToolCount
-	}
-	m.pushTunnelCurrentActivity()
-	return m, combineCmds(spinnerCmd, m.ensureLoadingSpinner(m.statusActivity))
-}
-
+// removed: handleStatusMsg/handleAgentStatusMsg live in update_status.go
+// (#2423 slice 1). Anchor retained for history; safe to delete.
 func (m Model) handleAgentRoundSummaryMsg(msg agentRoundSummaryMsg) (tea.Model, tea.Cmd) {
 	if msg.RunID != m.activeAgentRunID {
 		return m, nil
@@ -102,3 +76,6 @@ func (m Model) handleVerifyResultMsg(msg verifyResultMsg) (tea.Model, tea.Cmd) {
 	m.chatListFollowOutput()
 	return m, nil
 }
+
+// removed: handleStatusMsg / handleAgentStatusMsg live in update_status.go
+// (#2423 slice 1, merged to main first).

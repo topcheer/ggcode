@@ -287,16 +287,9 @@ func init() {
 	regUpdatePlain(func(m Model, msg mcpOAuthResultMsg) (tea.Model, tea.Cmd) { return m.handleMcpOAuthResultMsg(msg) })
 	regUpdatePlain(func(m Model, msg mcpHealthCheckTickMsg) (tea.Model, tea.Cmd) { return m.handleMcpHealthCheckTick(msg) })
 	regUpdatePlain(func(m Model, msg setProgramMsg) (tea.Model, tea.Cmd) { return m.handleSetProgramMsg(msg) })
-	regUpdatePlain(func(m Model, msg inputDrainEndMsg) (tea.Model, tea.Cmd) { return m.handleInputDrainEndMsg() })
-	regUpdatePlain(func(m Model, msg imageAttachedMsg) (tea.Model, tea.Cmd) {
-		m.pendingImages = append(m.pendingImages, msg)
-		return m, nil
-	})
-	regUpdatePlain(func(m Model, msg textPasteMsg) (tea.Model, tea.Cmd) {
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(tea.PasteMsg{Content: msg.Content})
-		return m, cmd
-	})
+	regUpdatePlain(func(m Model, msg inputDrainEndMsg) (tea.Model, tea.Cmd) { return m.handleInputDrainEndMsg(msg) })
+	regUpdatePlain(func(m Model, msg imageAttachedMsg) (tea.Model, tea.Cmd) { return m.handleImageAttachedMsg(msg) })
+	regUpdatePlain(func(m Model, msg textPasteMsg) (tea.Model, tea.Cmd) { return m.handleTextPasteMsg(msg) })
 	regUpdate(func(m Model, msg statusMsg, spinnerCmd tea.Cmd) (tea.Model, tea.Cmd) {
 		return m.handleStatusMsg(msg, spinnerCmd)
 	})
