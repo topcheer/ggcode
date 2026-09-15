@@ -10,14 +10,6 @@ var (
 	moduleCatalogsMu sync.RWMutex
 	enModuleCatalogs = make(map[string]string)
 	zhModuleCatalogs = make(map[string]string)
-	jaModuleCatalogs = make(map[string]string)
-	koModuleCatalogs = make(map[string]string)
-	esModuleCatalogs = make(map[string]string)
-	frModuleCatalogs = make(map[string]string)
-	deModuleCatalogs = make(map[string]string)
-	ruModuleCatalogs = make(map[string]string)
-	ptModuleCatalogs = make(map[string]string)
-	viModuleCatalogs = make(map[string]string)
 )
 
 // registerCatalog merges a module's key-value pairs into the global extension catalogs.
@@ -33,58 +25,20 @@ func registerCatalog(en, zh map[string]string) {
 	}
 }
 
+// lookupModuleCatalog resolves a key in the module catalogs. Only English and
+// Chinese have module dictionaries; every other language's main switch
+// delegates straight to enCatalog on a miss (#1372/#1376), so the old
+// ja/ko/es/fr/de/ru/pt/vi maps and their lookup cases were dead architecture
+// from an earlier per-lang design: the maps were never written, and the only
+// callers are the en and zh switch defaults. Behavior is unchanged - any
+// non-zh language still resolves through the en module fallback (zh-TW
+// reuses the zh-CN catalogs, as before).
 func lookupModuleCatalog(lang Language, key string) (string, bool) {
 	moduleCatalogsMu.RLock()
 	defer moduleCatalogsMu.RUnlock()
-	switch lang {
-	case LangZhCN:
+	if lang == LangZhCN || lang == LangZhTW {
 		v, ok := zhModuleCatalogs[key]
 		return v, ok
-	case LangJa:
-		v, ok := jaModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangKo:
-		v, ok := koModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangEs:
-		v, ok := esModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangFr:
-		v, ok := frModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangDe:
-		v, ok := deModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangRu:
-		v, ok := ruModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangPt:
-		v, ok := ptModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangVi:
-		v, ok := viModuleCatalogs[key]
-		if ok {
-			return v, true
-		}
-	case LangZhTW:
-		v, ok := zhModuleCatalogs[key] // reuse zh-CN module catalogs
-		if ok {
-			return v, true
-		}
 	}
 	v, ok := enModuleCatalogs[key]
 	return v, ok
