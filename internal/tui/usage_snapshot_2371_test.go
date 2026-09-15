@@ -16,7 +16,7 @@ func TestUsageFetchDenominatorPinnedToSnapshot(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {APIKey: "k"},
+		"e": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k"},
 	}}
 	m.SetConfig(cfg)
 	m.usagePanel = &usagePanelState{
@@ -29,7 +29,7 @@ func TestUsageFetchDenominatorPinnedToSnapshot(t *testing.T) {
 	// Mid-flight: a second keyed vendor appears in the config.
 	m.startupVendor = "zai"
 	cfg.Vendors["deepseek"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {APIKey: "k2"},
+		"e": {BaseURL: "https://api.deepseek.com", APIKey: "k2"},
 	}}
 	m.SetConfig(cfg)
 
@@ -54,14 +54,18 @@ func TestUsageFetchSnapshotExcludesKeyless(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {APIKey: "k"},
+		"e": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k"},
 	}}
-	// Keyed config entry but NO probe registered: excluded by probeable.
+	// Keyed config entry but the session only probes the ACTIVE vendor's
+	// CURRENT endpoint: orphan is another vendor - never probed.
+	// URL-matchable host but the session's active vendor is zai, so deepseek
+	// is never a probe target this session.
 	cfg.Vendors["orphan"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
 		"e": {APIKey: "k"},
 	}}
 	m.SetConfig(cfg)
-	m.startupVendor = "zai" // #2150 rework: panel probes the ACTIVE vendor only
+	m.startupVendor = "zai" // #2150 rework: active vendor only
+	m.activeEndpoint = "e"  // ...and only its CURRENT endpoint (URL-matched)
 	m.usageService = svc
 	m.usagePanel = &usagePanelState{
 		infos: map[string]*usage.UsageInfo{},

@@ -15,6 +15,9 @@ type KimiProbe struct{}
 
 func (KimiProbe) Vendor() string { return "kimi" }
 
+// MatchesURL: kimi shares moonshot hosts (cn platform account view).
+func (KimiProbe) MatchesURL(host string) bool { return hostMatch(host, "api.moonshot.cn") }
+
 func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
 	var payload struct {
@@ -53,6 +56,10 @@ type MinimaxProbe struct{}
 
 func (MinimaxProbe) Vendor() string { return "minimax" }
 
+func (MinimaxProbe) MatchesURL(host string) bool {
+	return hostMatch(host, "api.minimax.io", "api.minimaxi.com")
+}
+
 func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
 	var payload struct {
@@ -84,6 +91,8 @@ func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 type AnthropicOAuthProbe struct{}
 
 func (AnthropicOAuthProbe) Vendor() string { return "anthropic-oauth" }
+
+func (AnthropicOAuthProbe) MatchesURL(host string) bool { return hostMatch(host, "api.anthropic.com") }
 
 func (AnthropicOAuthProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
@@ -142,6 +151,8 @@ type OpenrouterProbe struct{}
 
 func (OpenrouterProbe) Vendor() string { return "openrouter" }
 
+func (OpenrouterProbe) MatchesURL(host string) bool { return hostMatch(host, "openrouter.ai") }
+
 func (OpenrouterProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
 	if !strings.Contains(base, "openrouter.ai") && !strings.HasPrefix(base, "http") {
@@ -189,6 +200,10 @@ func (OpenrouterProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*Usag
 type SiliconflowProbe struct{}
 
 func (SiliconflowProbe) Vendor() string { return "siliconflow" }
+
+func (SiliconflowProbe) MatchesURL(host string) bool {
+	return hostMatch(host, "api.siliconflow.cn", "api.siliconflow.com")
+}
 
 func (SiliconflowProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")

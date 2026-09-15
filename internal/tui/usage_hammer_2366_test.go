@@ -18,6 +18,12 @@ type countingProbe struct {
 	rl     atomic.Bool // true -> 429-shaped error
 }
 
+// MatchesURL lets the counting fake participate in URL-based probe
+// resolution (owner ruling: adapters are chosen by endpoint URL).
+func (c *countingProbe) MatchesURL(host string) bool {
+	return host == "open.bigmodel.cn"
+}
+
 func (p *countingProbe) Vendor() string { return p.vendor }
 
 func (p *countingProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*usage.UsageInfo, error) {
@@ -41,9 +47,10 @@ func TestRefreshUsagePanelKeepsNegativeCache(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {APIKey: "k"},
+		"e": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k"},
 	}}
 	m.startupVendor = "zai"
+	m.activeEndpoint = "e"
 	m.SetConfig(cfg)
 	m.usageService = svc
 	m.usagePanel = &usagePanelState{

@@ -25,6 +25,12 @@ type UsageInfo struct {
 	Source  string // probe endpoint short name, for diagnostics
 }
 
+// URLMatcher is the optional second face of a Probe: probes claim the
+// hosts they can actually query (owner ruling: URL-based matching).
+type URLMatcher interface {
+	MatchesURL(host string) bool
+}
+
 // Probe fetches usage for one vendor. Implementations must be safe for
 // concurrent use. apiKey/baseURL come from the resolved active vendor
 // config; the context bounds the HTTP call (service applies a timeout).
