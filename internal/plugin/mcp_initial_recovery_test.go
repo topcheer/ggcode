@@ -12,7 +12,7 @@ import (
 // the given config, for guard-logic tests.
 func newRecoveryTestManager(t *testing.T, cfg config.MCPServerConfig) (*MCPManager, *MCPPlugin) {
 	t.Helper()
-	m := NewMCPManager(nil, nil)
+	m := NewMCPManager(nil, nil, "")
 	p := NewMCPPlugin(cfg)
 	m.mu.Lock()
 	m.plugins = append(m.plugins, p)
@@ -88,13 +88,14 @@ func TestInitialRecoveryStopsWhenDisabled(t *testing.T) {
 	// Inject the disabled flag via the package-level cache (same package),
 	// restoring the prior cache state afterwards so other tests are unaffected.
 	mcpDisabledMu.Lock()
-	prevCache, prevOK := mcpDisabledCache, mcpDisabledCacheOK
-	mcpDisabledCache = map[string]bool{"srv-recovery-disabled": true}
+	prevG, prevW, prevOK := mcpDisabledGlobal, mcpDisabledWS, mcpDisabledCacheOK
+	mcpDisabledGlobal = map[string]bool{"srv-recovery-disabled": true}
+	mcpDisabledWS = map[string]map[string]bool{}
 	mcpDisabledCacheOK = true
 	mcpDisabledMu.Unlock()
 	defer func() {
 		mcpDisabledMu.Lock()
-		mcpDisabledCache, mcpDisabledCacheOK = prevCache, prevOK
+		mcpDisabledGlobal, mcpDisabledWS, mcpDisabledCacheOK = prevG, prevW, prevOK
 		mcpDisabledMu.Unlock()
 	}()
 	if m.initialRecoveryShouldProbe(p) {

@@ -722,7 +722,14 @@ func (m *MCPPlugin) Init(cfg map[string]interface{}) error {
 }
 
 type MCPManager struct {
-	plugins            []*MCPPlugin
+	plugins []*MCPPlugin
+	// scope is the workspace path this manager's server set belongs to
+	// (#2390): disabled-state lookups consult the global bucket plus this
+	// workspace's bucket instead of a bare global name match, so disabling
+	// "github" in workspace A no longer disables the same-name server in
+	// workspace B. Empty scope (ACP bridge, legacy callers) consults only
+	// the global bucket - the pre-#2390 semantics.
+	scope              string
 	registry           *tool.Registry
 	onUpdate           func([]MCPServerInfo)
 	mu                 sync.RWMutex
@@ -736,7 +743,7 @@ type MCPManager struct {
 	elicitationHandler mcp.ElicitationHandler
 }
 
-func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry) *MCPManager {
+func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, scope string) *MCPManager {
 	plugins := make([]*MCPPlugin, 0, len(servers))
 	for _, server := range servers {
 		p := NewMCPPlugin(server)
@@ -746,9 +753,16 @@ func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry) *M
 	return &MCPManager{
 		plugins:      plugins,
 		registry:     registry,
+		scope:        scope,
 		timeout:      8 * time.Second,
 		stdioTimeout: 2 * time.Minute,
 	}
+}
+
+// isDisabled reports whether the named server is disabled for this
+// manager's scope (#2390).
+func (m *MCPManager) isDisabled(name string) bool {
+	return MCPDisabledIn(m.scope, name)
 }
 
 func (m *MCPManager) SetOnUpdate(fn func([]MCPServerInfo)) {
@@ -837,7 +851,7 @@ func (m *MCPManager) Snapshot() []MCPServerInfo {
 	out := make([]MCPServerInfo, 0, len(plugins))
 	for _, plugin := range plugins {
 		info := plugin.Info()
-		info.Disabled = MCPDisabled(plugin.Name())
+		info.Disabled = m.isDisabled(plugin.Name())
 		info.OAuthRequired = pendingOAuthNames[info.Name]
 		out = append(out, info)
 	}
@@ -877,7 +891,7 @@ func (m *MCPManager) connectOne(ctx context.Context, p *MCPPlugin) {
 	// came back alive in-process and re-died on next start. The "human
 	// intent revives" comment means an explicit UN-disable, not a reconnect
 	// keypress. ConnectAll/attemptReconnect already gate on this.
-	if MCPDisabled(p.Name()) {
+	if m.isDisabled(p.Name()) {
 		debug.Log("mcp-connect", "refusing connect of disabled server=%s", p.Name())
 		return
 	}
@@ -944,7 +958,7 @@ func (m *MCPManager) StartBackground(ctx context.Context) {
 		m.emitUpdate()
 		for _, plugin := range m.plugins {
 			plugin := plugin
-			if MCPDisabled(plugin.Name()) {
+			if m.isDisabled(plugin.Name()) {
 				continue
 			}
 			pluginCopy := plugin
@@ -957,7 +971,7 @@ func (m *MCPManager) ConnectAll(ctx context.Context) []string {
 	m.emitUpdate()
 	var wg sync.WaitGroup
 	for _, plugin := range m.plugins {
-		if MCPDisabled(plugin.Name()) {
+		if m.isDisabled(plugin.Name()) {
 			continue
 		}
 		wg.Add(1)
@@ -1251,7 +1265,7 @@ func (m *MCPManager) initialRecoveryShouldProbe(p *MCPPlugin) bool {
 	if p.IsConnected() {
 		return false
 	}
-	if MCPDisabled(p.Name()) {
+	if m.isDisabled(p.Name()) {
 		return false
 	}
 	p.mu.RLock()
@@ -1432,7 +1446,7 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 
 	// Connect new + changed plugins in background.
 	for _, p := range connectPlugins {
-		if MCPDisabled(p.Name()) {
+		if m.isDisabled(p.Name()) {
 			continue
 		}
 		pluginCopy := p

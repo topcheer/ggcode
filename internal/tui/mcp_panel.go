@@ -337,7 +337,7 @@ func (m *Model) mcpPanelToggle(panel *mcpPanelState) bool {
 	}
 	srv := m.mcpServers[panel.selected]
 	willDisable := !srv.Disabled
-	if err := plugin.SetMCPDisabled(srv.Name, willDisable); err != nil {
+	if err := plugin.SetMCPDisabledIn(workingDirFromModel(m), srv.Name, willDisable); err != nil {
 		// #1740 case 2: surface the persist failure instead of the
 		// unconditional "disabled and disconnected" claim - the server
 		// silently revives on restart when the write failed.
