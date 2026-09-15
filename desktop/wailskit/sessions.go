@@ -385,6 +385,20 @@ func ExportSessionToMarkdown(sessionID string) (string, error) {
 
 // formatMessagesAsMarkdown converts session messages into a Markdown document.
 // Extracted for testability (no session store dependency).
+// redactAndClamp applies the export body protection (#2381): the Markdown
+// export used to write user/assistant message bodies verbatim while the
+// JSON export redacted and truncated every role - pasted API keys and log
+// dumps landed in shared .md files in plaintext. Same treatment as the
+// tool branch: RedactForDisplay first (mask secrets), then a 2000-rune
+// truncation on a rune boundary (#301).
+func redactAndClamp(s string) string {
+	out := security.RedactForDisplay(s)
+	if len(out) > 2000 {
+		out = out[:util.SnapToRuneStart(out, 2000)] + "\n... (truncated)\n"
+	}
+	return out
+}
+
 func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 	var b strings.Builder
 	b.WriteString("# ")
@@ -399,11 +413,11 @@ func formatMessagesAsMarkdown(msgs []SessionMessage, title string) string {
 		switch msg.Role {
 		case "user":
 			b.WriteString("## User\n\n")
-			b.WriteString(msg.Content)
+			b.WriteString(redactAndClamp(msg.Content))
 			b.WriteString("\n\n")
 		case "assistant":
 			b.WriteString("## Assistant\n\n")
-			b.WriteString(msg.Content)
+			b.WriteString(redactAndClamp(msg.Content))
 			b.WriteString("\n\n")
 		case "tool":
 			label := msg.ToolDisplay
