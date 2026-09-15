@@ -298,15 +298,17 @@ func (c *Config) UpsertMCPServer(server MCPServerConfig) (replaced bool) {
 //     a form with every env line deleted silently kept the old env.
 //
 // When switching server types, type-incompatible fields are cleared:
-// - http/sse types: Command and Args are cleared
-// - stdio type: URL and Headers are cleared (#584 M2-case2)
+//   - http/sse/ws types: Command and Args are cleared (ws is URL-shaped
+//     like http - a stdio→ws switch used to resurrect dead Command/Args
+//     in the yaml, #2391)
+//   - stdio type: URL and Headers are cleared (#584 M2-case2)
 func patchMCPServerConfig(base, patch MCPServerConfig) MCPServerConfig {
 	merged := base
 
 	// Type switch: clear type-incompatible fields when type changes
 	if patch.Type != "" && patch.Type != merged.Type {
-		// Switching to http or sse: clear stdio fields
-		if patch.Type == "http" || patch.Type == "sse" {
+		// Switching to http, sse, or ws: clear stdio fields
+		if patch.Type == "http" || patch.Type == "sse" || patch.Type == "ws" {
 			merged.Command = ""
 			merged.Args = nil
 		}

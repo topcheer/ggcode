@@ -476,8 +476,12 @@ func UnbindIMAdapter(name string, imMgr interface{ UnbindAdapter(string) error }
 func imAdapterExistsInConfig(name string) error {
 	cfg, err := config.Load(config.ConfigPath())
 	if err != nil {
-		// Config unreadable: do not block binding on a load failure — the
-		// manager may still be able to resolve the adapter at runtime.
+		// #2392: fail-CLOSED, deliberately. An unreadable config cannot prove
+		// the adapter exists, and letting the bind proceed would persist a
+		// ghost binding the UI cannot render (the #556 failure this guard
+		// exists for). The old comment described a fail-open that the code
+		// never implemented; the code is the safer truth, the comment now
+		// matches it.
 		return fmt.Errorf("load config: %w", err)
 	}
 	if cfg.IM.Adapters == nil {

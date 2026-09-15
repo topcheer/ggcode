@@ -148,7 +148,17 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 		return false
 	}
 	if disabled {
-		return chat.mcpManager.Disconnect(name)
+		// #2389: the persisted state IS the answer. Disconnect() returns
+		// false when name is not in the live plugin set (migration-added
+		// server, stale scope after a workspace switch) even though the
+		// disable already hit disk - the no-manager branch above returns
+		// true for the same persist. Reporting failure for a change that
+		// took effect is the #408 lie in mirror image; demote the live
+		// result to a log line.
+		if !chat.mcpManager.Disconnect(name) {
+			debug.Log("wailskit", "SetMCPServerEnabled: %s disabled on disk but not live in manager (not connected or unknown)", name)
+		}
+		return true
 	}
 	return chat.mcpManager.Reconnect(name)
 }
@@ -207,6 +217,11 @@ func reloadSessionMCPServers(chat *ChatBridge, cfg *config.Config) {
 }
 
 // AddMCPServer adds a new MCP server configuration.
+// Channel defaults are heterogeneous BY CONTRACT (#2391): "args" is
+// clear-on-missing (an absent or empty key writes a non-nil empty Args;
+// the frontend relies on this to clear by omitting the key), while
+// env_*/headers_* keys are preserve-on-missing (cleared only via the
+// env_clear/headers_clear sentinels - #979/#1434-B).
 // The values map may contain:
 //   - "name" (required): server name
 //   - "type": "stdio", "http", "ws" (default: "stdio")
