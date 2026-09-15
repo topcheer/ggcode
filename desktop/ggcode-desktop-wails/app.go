@@ -50,7 +50,12 @@ type App struct {
 	tunnelMu       sync.RWMutex
 	tunnelSession  *tunnel.Session
 	tunnelStarting bool // #2387: in-flight StartShare (check-then-act window)
-	tunnelBroker   *tunnel.Broker
+	// #2401 generation guard: a start snapshots the CURRENT stopSeq;
+	// setTunnelState wires in only while stopSeq is unchanged since that
+	// snapshot - any stop (bumping stopSeq) invalidates in-flight results.
+	tunnelStopSeq     int // bumped by every stop/teardown
+	tunnelStartStopEq int // stopSeq snapshot taken when a start goes in-flight
+	tunnelBroker      *tunnel.Broker
 
 	// Current ask_user request (for mobile response mapping)
 	askUserMu     sync.Mutex
@@ -2572,6 +2577,15 @@ func (a *App) stopShareForSessionChange() {
 func (a *App) setTunnelState(sess *tunnel.Session, broker *tunnel.Broker) {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
+	// #2401: a StartShare that began BEFORE the user pressed stop must
+	// not resurrect a session the stop cleared - the generation guard
+	// (stopSeq) records the stop intent; a stale start finishing later
+	// drops its session/broker instead of wiring them live. >= because a
+	// stop-count that has caught up to the start-count means every start
+	// has been superseded (equality is the 1:1 race; > covers re-stops).
+	if a.tunnelStopSeq != a.tunnelStartStopEq {
+		return
+	}
 	a.tunnelSession = sess
 	a.tunnelBroker = broker
 }
@@ -2582,6 +2596,12 @@ func (a *App) clearTunnelState() {
 	a.tunnelSession = nil
 	a.tunnelBroker = nil
 	a.tunnelStarting = false // #2387: a stop during an in-flight start ends it
+	// #2401: record the stop intent so a still-flying StartShare cannot
+	// resurrect state afterwards (the old comment above claimed "ends it"
+	// but nothing enforced that - th.StartShare is not cancellable, so a
+	// stop during the relay round-trip merely cleared the markers and the
+	// finishing start wired the session back in unconditionally).
+	a.tunnelStopSeq++
 }
 
 // IsSharing returns whether a tunnel is active. An in-flight StartShare
@@ -2616,6 +2636,9 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		return nil, fmt.Errorf("share start already in progress")
 	default:
 		a.tunnelStarting = true
+		// #2401: snapshot the stop generation this start belongs to;
+		// any stop after this point invalidates the result at wire time.
+		a.tunnelStartStopEq = a.tunnelStopSeq
 		a.tunnelMu.Unlock()
 		defer func() {
 			a.tunnelMu.Lock()
@@ -2635,6 +2658,12 @@ func (a *App) StartShare() (*ShareInfo, error) {
 			// run the full stopShare() teardown instead.
 			debug.Log("share", "refresh invite failed, restarting share: %v", err)
 			a.stopShare()
+			// #2401: the teardown above bumped stopSeq; the restart below
+			// is the SAME user action still in flight - re-snapshot so
+			// setTunnelState wires the fresh session instead of dropping it.
+			a.tunnelMu.Lock()
+			a.tunnelStartStopEq = a.tunnelStopSeq
+			a.tunnelMu.Unlock()
 		} else {
 			return &ShareInfo{
 				ConnectURL:   info.ConnectURL,
