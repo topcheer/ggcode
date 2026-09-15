@@ -2604,6 +2604,15 @@ func (a *App) clearTunnelState() {
 	a.tunnelStopSeq++
 }
 
+// tunnelStartStale reports whether a stop was issued after the in-flight
+// start snapshotted its stop generation (#2401 semantics, read side for
+// #2404: the caller tears the stale result down instead of wiring it).
+func (a *App) tunnelStartStale() bool {
+	a.tunnelMu.RLock()
+	defer a.tunnelMu.RUnlock()
+	return a.tunnelStopSeq != a.tunnelStartStopEq
+}
+
 // IsSharing returns whether a tunnel is active. An in-flight StartShare
 // counts as sharing (#2387): during the relay round-trip the old code
 // reported a false negative, letting the ShareDialog background/X button
@@ -2722,10 +2731,26 @@ func (a *App) StartShare() (*ShareInfo, error) {
 		return nil, fmt.Errorf("start share: %w", err)
 	}
 
+	// #2404: if a stop landed while this start was in flight, the result
+	// is stale - tear it down instead of leaking the relay session until
+	// app exit, and tell the caller the share was stopped rather than
+	// handing back a ConnectURL the app no longer tracks (a scanned QR
+	// would join a session StopShare can never terminate).
+	if a.tunnelStartStale() {
+		if chat != nil {
+			chat.DetachTunnelBroker()
+		}
+		agentruntime.StopSharedTunnelGracefully(result.Session, result.Broker, 2*time.Second)
+		return nil, fmt.Errorf("share was stopped while starting")
+	}
+
 	// Wire share commands (OnCommand handler, language switching, ask_user approval)
 	// #1161: bind through the entry snapshot. Re-reading the field here could
 	// attach commands to an already-closed bridge after a workspace switch,
 	// silently routing all mobile commands into the dead bridge.
+	// #2404: this must run AFTER the stale check above - binding first
+	// attached handlers to a broker the generation guard would refuse,
+	// leaving a half-wired command channel alive while IsSharing() was false.
 	if result.Broker != nil {
 		chat.BindShareCommands(result.Broker, func(language string) {
 			c, _ := wailskit.LoadConfigForWorkspace(a.workDir)
