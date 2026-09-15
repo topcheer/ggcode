@@ -79,10 +79,18 @@ func (b *DaemonBridge) SessionUsageSummary() (string, error) {
 	if apiKey == "" {
 		return fmt.Sprintf("usage: %s (no API key resolved for the active endpoint)", cfg.Vendor), nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// #2399: BY-URL probe selection (owner ruling) - the config vendor
+	// name never picks the probe here either; unknown host => no probe.
+	probeID := imUsageService().Resolve(baseURL)
+	if probeID == "" {
+		return fmt.Sprintf("usage: %s (no usage probe for this endpoint)", cfg.Vendor), nil
+	}
+	// #2400: outer 15s aligned with the TUI baseline; the probe's own 10s
+	// budget rules (a 5s outer clamp made 5-10s endpoints fail outright).
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	info, err := imUsageService().Get(ctx, cfg.Vendor, baseURL, apiKey)
-	return usage.RenderText(cfg.Vendor, info, err), nil
+	info, err := imUsageService().Get(ctx, probeID, baseURL, apiKey)
+	return usage.RenderText(probeID, info, err), nil
 }
 
 // imUsageServiceOnce guards the process-wide probe service for the IM

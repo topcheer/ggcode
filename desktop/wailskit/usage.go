@@ -2,7 +2,6 @@ package wailskit
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -57,9 +56,21 @@ func (b *ChatBridge) GetUsageInfo() UsageInfoResult {
 		return res
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// #2399: probe selection is BY URL (owner ruling 2026-09-15) - resolve
+	// the probe id from the ACTIVE endpoint's base URL, never the config
+	// vendor name; unknown hosts mean no probe (ambient, stays silent).
+	probeID := usageService.Resolve(ep.baseURL)
+	if probeID == "" {
+		res.Error = "no usage probe for this endpoint"
+		return res
+	}
+	// #2400: the outer ctx must not clamp the probe's own 10s budget -
+	// 5s outer x 10s inner made 5-10s endpoints fail deterministically
+	// with DeadlineExceeded AND poisoned the negative cache. Aligned with
+	// the TUI baseline (15s outer).
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	info, err := usageService.Get(ctx, cfg.Vendor, ep.baseURL, ep.apiKey)
+	info, err := usageService.Get(ctx, probeID, ep.baseURL, ep.apiKey)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -96,24 +107,4 @@ func usageEndpointFor(cfg *config.Config) usageEndpoint {
 		return usageEndpoint{}
 	}
 	return usageEndpoint{baseURL: ep.BaseURL, apiKey: ep.APIKey}
-}
-
-// FormatUsageForIM renders the same probe result as a short multi-line text
-// for the IM /usage path (batch 3 second slice wires it into the slash
-// registry); exported now so the renderer is testable without IM state.
-func FormatUsageForIM(r UsageInfoResult) string {
-	if r.Error != "" {
-		return fmt.Sprintf("usage: %s (%s)", r.Vendor, r.Error)
-	}
-	out := fmt.Sprintf("usage %s", r.Vendor)
-	if r.Balance != nil {
-		out += fmt.Sprintf(" | balance %.2f", *r.Balance)
-	}
-	for _, w := range r.Windows {
-		out += fmt.Sprintf("\n  %s window: %.0f%% used", w.Label, w.UsedPercent)
-		if w.ResetsAt != "" {
-			out += " (resets " + w.ResetsAt + ")"
-		}
-	}
-	return out
 }
