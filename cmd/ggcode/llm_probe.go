@@ -463,8 +463,13 @@ func printProbeResults(results []*probeResult, verbose bool) {
 	}
 
 	// Table mode
+	// #2419 follow-up: a MODEL column makes the actually-probed model
+	// visible in the default output - without it the table could not show
+	// whether --model took effect, which is exactly how the silently-
+	// ignored flag (fixed in #2420) hid for so long: only -v verbose
+	// printed the model. NO_MODEL rows show an empty cell.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "VENDOR/ENDPOINT\tPROTOCOL\tAUTH\tCHAT\tSTREAM\tCHAT_IN\tCHAT_OUT\tSTREAM_IN\tSTREAM_OUT\tESTIMATE\tRATIO\tLATENCY")
+	fmt.Fprintln(w, "VENDOR/ENDPOINT\tPROTOCOL\tMODEL\tAUTH\tCHAT\tSTREAM\tCHAT_IN\tCHAT_OUT\tSTREAM_IN\tSTREAM_OUT\tESTIMATE\tRATIO\tLATENCY")
 
 	for _, r := range results {
 		label := fmt.Sprintf("%s/%s", r.Vendor, r.Endpoint)
@@ -482,8 +487,8 @@ func printProbeResults(results []*probeResult, verbose bool) {
 			latency = fmt.Sprintf("%.1fs", r.ChatLatency.Seconds())
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			label, r.Protocol, r.AuthStatus, r.ChatStatus, r.StreamStatus,
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			label, r.Protocol, r.Model, r.AuthStatus, r.ChatStatus, r.StreamStatus,
 			chatIn, chatOut, streamIn, streamOut, estimate, ratio, latency)
 	}
 	w.Flush()
