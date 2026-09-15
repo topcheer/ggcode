@@ -707,11 +707,15 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
         titleFlashRef.current.interval = null
         document.title = titleFlashRef.current.origTitle
       }
+      // #2410: focus also clears the unread-count prefix.
+      if (/^\(\d+\) /.test(document.title)) {
+        document.title = titleFlashRef.current.origTitle
+      }
     }
     const handleBlur = () => {
       windowFocusedRef.current = false
     }
-    window.addEventListener('focus', handleFocus)
+  window.addEventListener('focus', handleFocus)
     window.addEventListener('blur', handleBlur)
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') handleFocus()
@@ -2076,6 +2080,22 @@ export function ChatView({ onShare, sessionId, workspace, onWorkspaceSelected, s
     const saved = localStorage.getItem('ggcode-font-size')
     return saved ? parseInt(saved) : 15
   })
+
+  // #2410: the backend "notification" events had ZERO subscribers - six
+  // emit sites fired into the void while comments kept calling them "the
+  // integration point". Consume the count and surface it in the title,
+  // which is exactly the document.title listener contract (#201) the
+  // unread machine was built against.
+  useEffect(() => {
+    const off = EventsOn('notification', (n: { title: string; body: string; count?: string }) => {
+      const c = parseInt(n?.count || '0', 10)
+      if (Number.isFinite(c) && c > 0 && !windowFocusedRef.current) {
+        const orig = titleFlashRef.current.origTitle || 'GGCode'
+        if (!document.title.startsWith('(')) document.title = `(${c}) ${orig}`
+      }
+    })
+    return () => { off() }
+  }, [])
   useEffect(() => {
     localStorage.setItem('ggcode-font-size', String(fontSize))
     document.documentElement.style.setProperty('--font-size-base', `${fontSize}px`)

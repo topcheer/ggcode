@@ -51,6 +51,8 @@ type NotificationManager struct {
 	// unixQueue serializes macOS/Linux notifications (#1431-A) - the
 	// non-Windows twin of winQueue (#399).
 	unixQueue chan unixToast
+	// approvalQueue is the #2411 fast lane (never shared with bulk).
+	approvalQueue chan unixToast
 }
 
 // winToast is one queued Windows notification (#399).
@@ -74,12 +76,18 @@ func NewNotificationManager() *NotificationManager {
 		lastShown: make(map[string]time.Time),
 		winQueue:  make(chan winToast, 32),
 		unixQueue: make(chan unixToast, 32),
+		// #2411: approvals never share the 32-slot bulk queues - a stuck
+		// worker (10s banner cap) or a cold-start backlog could drop the
+		// NEWEST item, and the newest is exactly what approvals are.
+		approvalQueue: make(chan unixToast, 8),
 	}
 	// Single worker drains the Windows toast queue serially (#399): at most
 	// ONE powershell process is alive at a time regardless of storm size.
 	safego.Go("notify-win-worker", nm.drainWinQueue)
 	// #1431-A: same single-worker discipline for osascript/notify-send.
 	safego.Go("notify-unix-worker", nm.drainUnixQueue)
+	// #2411: dedicated approval lane - never starved by Task-completed bulk.
+	safego.Go("notify-approval-worker", nm.drainApprovalQueue)
 	return nm
 }
 
@@ -174,6 +182,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 		// the user was looking at the app (the "center still receives every
 		// event" comment only held inside the dedup branch). Only the OS
 		// banner/badge path is suppressed when focused.
+		count := nm.unread // focused: not bumped, but the listener still needs it
 		ctx := nm.ctx
 		nm.mu.Unlock()
 		if ctx != nil {
@@ -181,6 +190,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 					"title": title,
 					"body":  body,
+					"count": itoa(count), // #2410: the title-listener contract
 				})
 			}
 		}
@@ -201,6 +211,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 					"title": title,
 					"body":  body,
+					"count": itoa(count), // #2410
 				})
 			}
 		}
@@ -267,6 +278,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 				"title": title,
 				"body":  body,
+				"count": itoa(count), // #2410: the title-listener contract
 			})
 		}
 	}
@@ -304,6 +316,7 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 				wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 					"title": title,
 					"body":  body,
+					"count": itoa(count), // #2410
 				})
 			}
 		}
@@ -334,32 +347,18 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 	if count > 0 {
 		nm.setBadge(count)
 	}
-	// #600 N4: same queue-full rollback contract as Notify (Windows only).
-	if runtime.GOOS == "windows" {
-		if !nm.enqueueWinToast(title, body) {
-			nm.mu.Lock()
-			delete(nm.lastShown, apKey)
-			if !nm.focused && nm.unread > 0 {
-				nm.unread--
-			}
-			nm.mu.Unlock()
-			debug.Log("desktop", "approval notification rolled back after toast enqueue failure: %s", title)
+	// #2411: approvals ride a DEDICATED lane, never the 32-slot bulk
+	// queues - bulk drop-new under backlog would discard exactly the
+	// highest-priority signal (approval even-when-focused). Same rollback
+	// contract (#600 N4/#2095 bug A) on the approval lane's own bound.
+	if !nm.enqueueApproval(title, body) {
+		nm.mu.Lock()
+		delete(nm.lastShown, apKey)
+		if !nm.focused && nm.unread > 0 {
+			nm.unread--
 		}
-	} else {
-		// #2095 bug A: non-Windows approvals went through the void
-		// showOSNotification too - macOS (the primary desktop platform)
-		// lost the approval banner on queue-full with no rollback, so the
-		// unread count included a banner that never displayed and the 5s
-		// dedup window blocked the retry.
-		if !nm.showOSNotification(title, body) {
-			nm.mu.Lock()
-			delete(nm.lastShown, apKey)
-			if !nm.focused && nm.unread > 0 {
-				nm.unread--
-			}
-			nm.mu.Unlock()
-			debug.Log("desktop", "approval notification rolled back after unix enqueue failure: %s", title)
-		}
+		nm.mu.Unlock()
+		debug.Log("desktop", "approval notification rolled back after approval-lane enqueue failure: %s", title)
 	}
 
 	// #427: approval notifications must also reach the in-app notification
@@ -370,6 +369,7 @@ func (nm *NotificationManager) NotifyApprovalNeeded(title, body string) {
 			wailsruntime.EventsEmit(wctx, "notification", map[string]string{
 				"title": title,
 				"body":  body,
+				"count": itoa(count), // #2410: the title-listener contract
 			})
 		}
 	}
@@ -465,6 +465,26 @@ func (nm *NotificationManager) notifyMacOS(title, body string) bool {
 // is full - Notify() must then roll back its lastShown/unread commits,
 // mirroring the Windows contract (#600 N4). Platform-independent by
 // design so the rollback path stays unit-testable on any host.
+// enqueueApproval offers a toast to the dedicated approval lane (#2411).
+func (nm *NotificationManager) enqueueApproval(title, body string) bool {
+	select {
+	case nm.approvalQueue <- unixToast{title: title, body: body}:
+		return true
+	default:
+		debug.Log("desktop", "approval queue full; dropping approval banner: %s", title)
+		return false
+	}
+}
+
+// drainApprovalQueue is the approval-lane worker: one banner at a time,
+// platform dispatch identical to the bulk lanes but never queued behind
+// Task-completed storms (#2411).
+func (nm *NotificationManager) drainApprovalQueue() {
+	for t := range nm.approvalQueue {
+		_ = nm.showOSNotification(t.title, t.body)
+	}
+}
+
 func (nm *NotificationManager) enqueueUnixToast(title, body string) bool {
 	select {
 	case nm.unixQueue <- unixToast{title: title, body: body}:
