@@ -295,6 +295,16 @@ done
 trap 'rm -rf "${VC_LOCK_DIR}" 2>/dev/null || true' EXIT
 echo $$ > "${VC_LOCK_DIR}/pid" 2>/dev/null || true
 
+# #2406: whole-run tee to a stable path - buffered transcript heads were
+# lost on long runs (v1.3.239 observability question became undecidable
+# because the "was OOM-killed" lines scrolled out of the cmd-3 buffer).
+# Skippable with VERIFY_CI_NO_TEE=1 for callers that already capture.
+if [ "${VERIFY_CI_NO_TEE:-0}" != "1" ]; then
+  _tee_log="${TMPDIR:-/tmp}/verify-ci-$(date +%Y%m%d-%H%M%S).log"
+  echo "[verify-ci] full log: ${_tee_log}"
+  exec > >(tee "${_tee_log}") 2>&1
+fi
+
 if [ -n "${VERIFY_CI_GOMAXPROCS:-}" ]; then
   # Manual pin (existing override knob): value applies to -p, -parallel and
   # GOMAXPROCS alike; OOM kills will NOT downgrade below it.
@@ -367,6 +377,10 @@ run_with_oom_retry() {
       return 0
     fi
     status=$?
+    # #2406: attribute every failed attempt in the stream - a bare FAIL
+    # blob could not be traced back to its attempt/rc, which left the
+    # v1.3.239 observability question undecidable from the transcript.
+    echo "[verify-ci] ${desc}: attempt ${attempt} failed, rc=${status}"
     if grep -q "signal: killed" "${log}" || [ "${status}" -eq 137 ]; then
       if [ "${attempt}" -eq 5 ]; then
         echo "[verify-ci] ${desc} was OOM-killed 5 times; giving up"
