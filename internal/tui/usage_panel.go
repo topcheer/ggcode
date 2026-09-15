@@ -39,55 +39,68 @@ type usageInfoUpdatedMsg struct {
 
 // probeableVendors lists vendors that have both a registered probe and a
 // configured API key. Sorted for deterministic panel rows.
-// probeableVendors returns the vendors whose balances the usage panel
-// probes. Owner ruling (2026-09-15): the panel shows the CURRENT vendor -
-// a fleet view that listed every keyed vendor (the original #2150 cut)
-// surfaced providers the user never switched to and read as garbage rows.
-// The active vendor (startupVendor as fallback) is the single probe
-// target; no toggle.
+// probeableVendors returns the single vendor whose balance the usage
+// panel probes. Owner ruling (2026-09-15, second cut): adapter selection
+// is BY THE CURRENT ENDPOINT'S URL - never by config vendor name - and
+// only the endpoint the session is actually using is ever probed (other
+// endpoints' usage is meaningless for this session). A custom vendor
+// pointed at open.bigmodel.cn gets the zai probe; a zhipu-NAMED vendor
+// pointed anywhere else gets nothing.
 func (m *Model) probeableVendors() []string {
-	svc := m.ensureUsageService()
-	if m.config == nil {
+	baseURL, apiKey, ok := m.currentEndpointForUsage()
+	if !ok {
 		return nil
+	}
+	vendor := m.ensureUsageService().Resolve(baseURL)
+	if vendor == "" || strings.TrimSpace(apiKey) == "" {
+		return nil
+	}
+	return []string{vendor}
+}
+
+// currentEndpointForUsage resolves the endpoint THIS session is using:
+// runtime activeVendor+activeEndpoint first, config Vendor+Endpoint as
+// fallback (daemon/IM attached sessions resolve through config). It
+// deliberately never scans sibling endpoints.
+func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
+	if m.config == nil {
+		return "", "", false
 	}
 	vendor := util.FirstNonEmpty(m.activeVendor, m.startupVendor)
 	if vendor == "" {
-		return nil
+		vendor = m.config.Vendor
 	}
-	vc, ok := m.config.Vendors[vendor]
-	if !ok || !svc.Has(vendor) {
-		return nil
+	if vendor == "" {
+		return "", "", false
 	}
-	for _, ep := range vc.Endpoints {
-		if strings.TrimSpace(ep.APIKey) != "" {
-			return []string{vendor}
-		}
+	vc, found := m.config.Vendors[vendor]
+	if !found {
+		return "", "", false
 	}
-	return nil
+	epID := m.activeEndpoint
+	if epID == "" && m.config.Vendor == vendor {
+		epID = m.config.Endpoint
+	}
+	if ep, found := vc.Endpoints[epID]; found {
+		return ep.BaseURL, ep.APIKey, true
+	}
+	return "", "", false
 }
 
 // resolveVendorEndpoint returns the baseURL+apiKey the probe should use:
 // the active endpoint when it belongs to the vendor, else the first
 // endpoint carrying a key.
+// resolveVendorEndpoint returns the baseURL+apiKey of the endpoint THIS
+// session uses for the given (URL-resolved) vendor. Owner ruling: never
+// fall through to sibling endpoints - if the current endpoint is not
+// usable there is nothing to probe.
 func (m *Model) resolveVendorEndpoint(vendor string) (baseURL, apiKey string) {
-	if m.config == nil {
-		return "", ""
-	}
-	vc, ok := m.config.Vendors[vendor]
+	b, k, ok := m.currentEndpointForUsage()
 	if !ok {
 		return "", ""
 	}
-	if m.config.Vendor == vendor {
-		if ep, ok := vc.Endpoints[m.config.Endpoint]; ok && strings.TrimSpace(ep.APIKey) != "" {
-			return ep.BaseURL, ep.APIKey
-		}
-	}
-	for _, ep := range vc.Endpoints {
-		if strings.TrimSpace(ep.APIKey) != "" {
-			return ep.BaseURL, ep.APIKey
-		}
-	}
-	return "", ""
+	_ = vendor // URL-resolved id; the endpoint is the single source
+	return b, k
 }
 
 func (m *Model) openUsagePanel() tea.Cmd {

@@ -80,6 +80,9 @@ type ZaiProbe struct{}
 
 func (ZaiProbe) Vendor() string { return "zai" }
 
+// MatchesURL: open.bigmodel.cn is the only zai balance host.
+func (ZaiProbe) MatchesURL(host string) bool { return hostMatch(host, "open.bigmodel.cn") }
+
 func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
 	// The chat base is .../api/paas/v4; the monitor endpoint sits at the
@@ -112,6 +115,8 @@ type DeepSeekProbe struct{}
 
 func (DeepSeekProbe) Vendor() string { return "deepseek" }
 
+func (DeepSeekProbe) MatchesURL(host string) bool { return hostMatch(host, "api.deepseek.com") }
+
 func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
 	var payload struct {
@@ -135,6 +140,10 @@ func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 type MoonshotProbe struct{}
 
 func (MoonshotProbe) Vendor() string { return "moonshot" }
+
+func (MoonshotProbe) MatchesURL(host string) bool {
+	return hostMatch(host, "api.moonshot.cn", "api.moonshot.ai")
+}
 
 func (MoonshotProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
@@ -161,4 +170,13 @@ func DefaultService() *Service {
 	s.Register(OpenrouterProbe{})
 	s.Register(SiliconflowProbe{})
 	return s
+}
+
+func hostMatch(host string, known ...string) bool {
+	for _, k := range known {
+		if host == k || strings.HasSuffix(host, "."+k) {
+			return true
+		}
+	}
+	return false
 }

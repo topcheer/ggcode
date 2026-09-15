@@ -12,26 +12,46 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
-func TestUsagePanelProbesActiveVendorOnly(t *testing.T) {
+func TestUsagePanelProbesByURLCurrentEndpointOnly(t *testing.T) {
+	// Custom vendor NAME pointed at the zai host: URL matching must hand
+	// it the zai probe (owner ruling: URL, never config name).
 	var m Model
+	m.activeVendor = "mycustom"
+	m.activeEndpoint = "e1"
 	m.config = &config.Config{Vendors: map[string]config.VendorConfig{
-		"zai":        {Endpoints: map[string]config.EndpointConfig{"e": {APIKey: "k1"}}},
-		"openrouter": {Endpoints: map[string]config.EndpointConfig{"e": {APIKey: "k2"}}},
+		"mycustom": {Endpoints: map[string]config.EndpointConfig{
+			"e1": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k1"},
+		}},
+		"openrouter": {Endpoints: map[string]config.EndpointConfig{
+			"e": {BaseURL: "https://openrouter.ai/api/v1", APIKey: "k2"},
+		}},
 	}}
-	m.startupVendor = "zai"
-	m.activeVendor = "zai"
-	// no service adapters registered -> Has() false -> empty is fine; we
-	// assert the CANDIDATE SET is filtered by active vendor before Has.
-	// Direct check: probeableVendors must never return the non-active
-	// keyed vendor.
+	m.ensureUsageService() // registers DefaultService probes
 	got := m.probeableVendors()
-	for _, v := range got {
-		if v != "zai" {
-			t.Fatalf("probeableVendors returned non-active vendor %q", v)
-		}
+	if len(got) != 1 || got[0] != "zai" {
+		t.Fatalf("URL-matched probe = %v, want [zai]", got)
 	}
-	if len(got) > 1 {
-		t.Fatalf("expected at most the active vendor, got %v", got)
+
+	// A zhipu-NAMED vendor pointed at an unknown host: nothing probes.
+	m2 := m
+	m2.config.Vendors["mycustom"].Endpoints["e1"] = config.EndpointConfig{
+		BaseURL: "https://internal-gw.corp/api", APIKey: "k1",
+	}
+	if got2 := m2.probeableVendors(); len(got2) != 0 {
+		t.Fatalf("unknown-host vendor must not probe, got %v", got2)
+	}
+
+	// Sibling endpoint of the SAME vendor is never consulted: kill e1's
+	// key, keep a keyed sibling - still nothing probes.
+	m3 := m
+	m3.config.Vendors["mycustom"].Endpoints["e1"] = config.EndpointConfig{
+		BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "",
+	}
+	m3.config.Vendors["mycustom"].Endpoints["sibling"] = config.EndpointConfig{
+		BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k2",
+	}
+	if got3 := m3.probeableVendors(); len(got3) != 0 {
+		t.Fatalf("keyless CURRENT endpoint must not probe (no sibling fallback), got %v", got3)
 	}
 }
 
