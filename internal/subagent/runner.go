@@ -489,11 +489,11 @@ func formatProgressSummary(snap Snapshot) string {
 		sb.WriteString(fmt.Sprintf(" · %s", snap.CurrentPhase))
 	}
 	if summary := strings.TrimSpace(snap.ProgressSummary); summary != "" {
-		trunced := summary
-		if len(trunced) > 80 {
-			trunced = trunced[:77] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("\n  %s", trunced))
+		// #520 class: truncate on a rune boundary - the old byte cut at 77
+		// split a multi-byte CJK rune mid-sequence and the TUI progress line
+		// rendered U+FFFD. util.Truncate is rune-safe (and #1849 negative-
+		// budget safe); for ASCII it is byte-identical to the old cut.
+		sb.WriteString(fmt.Sprintf("\n  %s", util.Truncate(summary, 80)))
 	}
 	return sb.String()
 }
