@@ -13,6 +13,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/usage"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -336,14 +337,16 @@ func (d tuiSlashDeps) SessionUsageSummary() (string, error) {
 				// calling EmitText directly on the snapshot closes it.
 				emitter := d.m.imEmitter
 				if emitter != nil {
-					go func() {
+					// safego per the repo goroutine gate: a panic inside
+					// EmitText must never take the process down.
+					safego.Go("tui.usageProbe.emit", func() {
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 						info, err := svc.Get(ctx, vendor, baseURL, apiKey)
 						cancel()
 						if err == nil && info != nil {
 							emitter.EmitText(usage.RenderText(vendor, info, nil))
 						}
-					}()
+					})
 				}
 			}
 		}
