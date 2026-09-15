@@ -47,9 +47,10 @@ type App struct {
 	imController     *im.AdapterController
 	imInstanceDetect *im.InstanceDetect
 	// Mobile tunnel
-	tunnelMu      sync.RWMutex
-	tunnelSession *tunnel.Session
-	tunnelBroker  *tunnel.Broker
+	tunnelMu       sync.RWMutex
+	tunnelSession  *tunnel.Session
+	tunnelStarting bool // #2387: in-flight StartShare (check-then-act window)
+	tunnelBroker   *tunnel.Broker
 
 	// Current ask_user request (for mobile response mapping)
 	askUserMu     sync.Mutex
@@ -2541,15 +2542,39 @@ func (a *App) clearTunnelState() {
 	defer a.tunnelMu.Unlock()
 	a.tunnelSession = nil
 	a.tunnelBroker = nil
+	a.tunnelStarting = false // #2387: a stop during an in-flight start ends it
 }
 
-// IsSharing returns whether a tunnel is active.
+// IsSharing returns whether a tunnel is active. An in-flight StartShare
+// counts as sharing (#2387): during the relay round-trip the old code
+// reported a false negative, letting the ShareDialog background/X button
+// and every dialog remount re-enter StartShare and race a second session.
 func (a *App) IsSharing() bool {
-	return a.currentTunnelSession() != nil
+	a.tunnelMu.RLock()
+	sess := a.tunnelSession
+	starting := a.tunnelStarting
+	a.tunnelMu.RUnlock()
+	return sess != nil || starting
 }
 
 // StartShare starts a tunnel session and returns connection info for the frontend.
 func (a *App) StartShare() (*ShareInfo, error) {
+	// #2387: close the check-then-act window. The in-flight flag is set
+	// under the SAME mutex the state reads use, so a re-entrant call
+	// (dialog remount, background press while loading) sees it and
+	// short-circuits instead of racing a second relay session.
+	a.tunnelMu.Lock()
+	if a.tunnelSession != nil || a.tunnelStarting {
+		a.tunnelMu.Unlock()
+	} else {
+		a.tunnelStarting = true
+		a.tunnelMu.Unlock()
+		defer func() {
+			a.tunnelMu.Lock()
+			a.tunnelStarting = false
+			a.tunnelMu.Unlock()
+		}()
+	}
 	// If already sharing, try to refresh the invite (same room, new ticket).
 	// This allows mobile to reconnect seamlessly after a brief relay hiccup.
 	if sess := a.currentTunnelSession(); sess != nil {
