@@ -26,6 +26,10 @@ type Adapter struct {
 	// registeredTools are the names THIS adapter actually owns in the
 	// registry (collision-skips excluded, #1594-A).
 	registeredTools []string
+	// breaker is the per-server circuit breaker (sa-21) shared by every
+	// mcpTool this adapter registers. One dead server must fast-fail all
+	// of its tools, so the state lives here, not per tool.
+	breaker *serverBreaker
 }
 
 // NewAdapter creates an MCP adapter from server config and tool definitions.
@@ -34,6 +38,7 @@ func NewAdapter(serverName string, caller toolCaller, tools []ToolDefinition) *A
 		serverName: serverName,
 		caller:     caller,
 		tools:      tools,
+		breaker:    newServerBreaker(serverName),
 	}
 }
 
@@ -44,6 +49,7 @@ func NewReadOnlyAdapter(serverName string, caller toolCaller, tools []ToolDefini
 		caller:     caller,
 		tools:      tools,
 		readOnly:   true,
+		breaker:    newServerBreaker(serverName),
 	}
 }
 
@@ -76,6 +82,7 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 			readOnly: a.readOnly,
 			blocked:  blocked,
 			srvName:  a.serverName,
+			breaker:  a.breaker, // shared per-server state (sa-21)
 		}
 		if err := registry.Register(t); err != nil {
 			// Log but continue — name collision is non-fatal. Whoever already
@@ -126,6 +133,13 @@ type mcpTool struct {
 	blocked  bool
 	srvName  string
 
+	// breaker is the per-server circuit breaker (sa-21). Shared by ALL
+	// tools of the same server - including across Registry.Clone() copies
+	// (Clone copies the pointer, so swarm teammates share outage state;
+	// that is correct: a dead server is dead for every agent). Nil in
+	// hand-built test fixtures → breaker disabled, zero behavior change.
+	breaker *serverBreaker
+
 	// ContextFill mirrors the agent guard's fill ratio (current tokens /
 	// compaction threshold, 0.0-1.0+). When ≥0.50 the result cap shrinks to
 	// stay under the guard's corresponding limit, avoiding a second
@@ -172,6 +186,7 @@ func (t *mcpTool) Clone() tool.Tool {
 		readOnly: t.readOnly,
 		blocked:  t.blocked,
 		srvName:  t.srvName,
+		breaker:  t.breaker,
 	}
 }
 
@@ -193,6 +208,14 @@ func (t *mcpTool) Parameters() json.RawMessage {
 }
 
 func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Result, error) {
+	// sa-21: per-server circuit breaker gate. When OPEN, fail fast WITHOUT
+	// a transport attempt - a dead server cannot succeed, and every retry
+	// burns a full LLM round-trip (often 120s+ of stdio timeout).
+	if t.breaker != nil {
+		if blocked, msg := t.breaker.gate(); blocked {
+			return tool.Result{Content: msg, IsError: true}, nil
+		}
+	}
 	if t.blocked {
 		return tool.Result{
 			Content: fmt.Sprintf("MCP server '%s' is in read-only mode, tool '%s' is not allowed", t.srvName, t.toolName),
@@ -206,6 +229,12 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		}
 	}
 	if t.caller == nil {
+		// Never-connected counts as infrastructure: no tool on this server
+		// can work until it is (re)started, so it feeds the breaker.
+		err := error(errNotConnected{server: t.srvName})
+		if t.breaker != nil {
+			t.breaker.recordFailure(err)
+		}
 		return tool.Result{
 			Content: fmt.Sprintf("mcp[%s]: tool '%s' is not connected (server may have crashed or not started)", t.srvName, t.toolName),
 			IsError: true,
@@ -213,10 +242,23 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	}
 	result, err := t.caller.CallTool(ctx, t.toolName, args)
 	if err != nil {
+		// Classify before surfacing: only transport-level failures feed the
+		// breaker. Semantic errors (server answered) never trip it.
+		if t.breaker != nil {
+			if isInfraError(err) {
+				t.breaker.recordFailure(err)
+			} else {
+				t.breaker.recordSuccess()
+			}
+		}
 		return tool.Result{
 			Content: fmt.Sprintf("mcp[%s]: %s → %v", t.srvName, t.toolName, err),
 			IsError: true,
 		}, nil
+	}
+	// The server answered (even isError=true results mean it is reachable).
+	if t.breaker != nil {
+		t.breaker.recordSuccess()
 	}
 
 	// Extract text from content blocks
