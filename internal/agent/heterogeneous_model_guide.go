@@ -103,8 +103,11 @@ func (s *heterogeneousModelState) recordToolCall(toolName string, iteration int)
 	s.categoryCounts[cat]++
 	s.totalTools++
 
-	// Trim to lookback window
-	if len(s.toolHistory) > hmLookbackWindow {
+	// Trim to lookback window. #2427: the trim must leave room for the
+	// record we are about to append (`>=`, not `>`) so the steady-state
+	// window is exactly hmLookbackWindow entries, and it must happen BEFORE
+	// the ratio calculation below reads the slice.
+	if len(s.toolHistory) >= hmLookbackWindow {
 		s.toolHistory = s.toolHistory[1:]
 	}
 	s.toolHistory = append(s.toolHistory, hmToolRecord{
@@ -123,11 +126,30 @@ func (s *heterogeneousModelState) recordToolCall(toolName string, iteration int)
 		return ""
 	}
 
-	// Calculate ratios
-	execTools := s.categoryCounts[hmCategoryRead] + s.categoryCounts[hmCategoryWrite] +
-		s.categoryCounts[hmCategorySearch] + s.categoryCounts[hmCategoryExecution]
-	execRatio := float64(execTools) / float64(s.totalTools)
-	reasoningRatio := float64(s.categoryCounts[hmCategoryReasoning]) / float64(s.totalTools)
+	// Calculate ratios over the SLIDING WINDOW, not lifetime cumulative
+	// counts (#2427). The old code summed categoryCounts / totalTools -
+	// lifetime aggregates since the last reset - so an exploration-then-
+	// execution run (the module's own Plan-and-Execute flagship scenario:
+	// early lsp/glob/list calls permanently diluted the denominator) never
+	// reached the 70% threshold even when the last 10 calls were pure
+	// execution, silently dropping the FinOps downgrade hint. The window
+	// slice recorded above is now the ratio's actual data source.
+	winLen := len(s.toolHistory)
+	if winLen == 0 {
+		return ""
+	}
+	execCount := 0
+	reasoningCount := 0
+	for _, rec := range s.toolHistory {
+		switch rec.category {
+		case hmCategoryRead, hmCategoryWrite, hmCategorySearch, hmCategoryExecution:
+			execCount++
+		case hmCategoryReasoning:
+			reasoningCount++
+		}
+	}
+	execRatio := float64(execCount) / float64(winLen)
+	reasoningRatio := float64(reasoningCount) / float64(winLen)
 
 	// Determine workload type
 	if execRatio >= hmExecutionThreshold {
@@ -186,16 +208,23 @@ func (s *heterogeneousModelState) reset() {
 }
 
 // GetHeterogeneousModelGuidance returns any pending heterogeneous model guidance.
+// #2427: take the state mutex - recordToolCall writes s.guidance under it;
+// an unlocked read here raced the string write (multi-word torn read).
 func (a *Agent) GetHeterogeneousModelGuidance() string {
 	if a.heterogeneousModel == nil {
 		return ""
 	}
+	a.heterogeneousModel.mu.Lock()
+	defer a.heterogeneousModel.mu.Unlock()
 	return a.heterogeneousModel.guidance
 }
 
 // ClearHeterogeneousModelGuidance clears the pending guidance after it's been consumed.
+// #2427: same mutex as the writer.
 func (a *Agent) ClearHeterogeneousModelGuidance() {
 	if a.heterogeneousModel != nil {
+		a.heterogeneousModel.mu.Lock()
 		a.heterogeneousModel.guidance = ""
+		a.heterogeneousModel.mu.Unlock()
 	}
 }
