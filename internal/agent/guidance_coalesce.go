@@ -88,6 +88,7 @@ var criticalHintTags = map[string]bool{
 	"hardcoded-secret":      true,
 	"path-traversal":        true,
 	"git-destructive":       true,
+	"non-atomic":            true,
 }
 
 // extractHintTag returns the bracketed tag at the start of a hint, or ""

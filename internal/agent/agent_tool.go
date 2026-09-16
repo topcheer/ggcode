@@ -442,10 +442,19 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		}
 	}
 	toolStart := time.Now()
+	// Non-atomic failure semantics (arXiv:2608.02645): if this exact mutating
+	// call previously ended ambiguous (timeout/cancel/panic), the model is
+	// re-issuing blind -- annotate the result with double-apply risk.
+	prevMutAmbiguous := a.mutateLedger.lookupAmbiguous(t.Name(), tc.Arguments)
 	result := a.executeWithTransientRetry(ctx, t.Name(), tc.Arguments, func(execCtx context.Context, args []byte) (tool.Result, error) {
 		return a.safeExecute(t, execCtx, args)
 	})
 	toolDur := time.Since(toolStart)
+	// Classify the outcome of mutating calls (pre-exec rejection vs ambiguous
+	// mid-execution failure) and append verify-before-retry guidance. No-op
+	// for read-only tools and clean results without an outstanding ambiguous
+	// attempt.
+	result = a.annotateMutatingOutcome(t.Name(), tc.Arguments, result, prevMutAmbiguous)
 
 	// Diff pre/post workspace state and checkpoint shell-made mutations so
 	// undo_edit and checkpoint revert cover them uniformly. Skipped when the
