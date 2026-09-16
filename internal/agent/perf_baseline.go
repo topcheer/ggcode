@@ -20,6 +20,9 @@ package agent
 //   3. WARNS: If current performance has regressed on key metrics (iterations,
 //      error rate, duration), injects a concise advisory so the agent can
 //      adjust strategy (e.g., be more direct, avoid re-reading files).
+//   4. DIAGNOSES: duration/iterations advisories append the regressed run's
+//      shape (iterations, tool calls, top tools, sec/iter) so the feedback
+//      path names the dominant waste pattern instead of only the total.
 //
 // Competitor mapping:
 //   - Claude Code: shows /cost per session, no cross-session comparison
@@ -40,6 +43,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -69,6 +73,10 @@ const (
 
 	// perfBaselineFile is the filename for persisted baseline data.
 	perfBaselineFile = "perf-baseline.json"
+
+	// perfTopToolsCount is how many dominant tools the run-shape
+	// diagnostics line reports per regressed run.
+	perfTopToolsCount = 3
 )
 
 // perfBaselineEntry is a compact summary of a single run for trend analysis.
@@ -83,6 +91,17 @@ type perfBaselineEntry struct {
 	ContextPeak int    `json:"ctx"`
 	Success     bool   `json:"ok"`
 	Timestamp   int64  `json:"ts"`
+
+	// TopTools holds this run's most-invoked tools as "name:count" entries
+	// (top 3, count desc then name asc). It feeds the regression advisory a
+	// where-did-the-time-go breakdown: an advisory stating only "duration
+	// regressed 9.8x" is a fact the agent cannot act on, while
+	// "run_command:48, read_file:30" points at the behavior to change —
+	// loop-prevention research (arXiv:2607.01641) shows runaway loops
+	// persist exactly when the feedback path carries no specifics, and
+	// AgentDiet (FSE 2026) triages trajectories segment-by-segment for the
+	// same reason. nil for baselines recorded before this field existed.
+	TopTools []string `json:"top_tools,omitempty"`
 }
 
 // perfBaselineData is the on-disk JSON structure.
@@ -289,6 +308,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		ContextPeak: stats.ContextPeakTokens,
 		Success:     stats.Success,
 		Timestamp:   time.Now().Unix(),
+		TopTools:    topToolMix(stats.ToolCalls, perfTopToolsCount),
 	}
 
 	runs := loadPerfBaseline(workingDir)
@@ -484,11 +504,13 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 	case "iterations":
 		return formatPerfRegressionLine("iteration count",
 			baseline.Iterations, latest.Iterations,
-			"Be more direct: avoid redundant reads and searches. Plan before acting.")
+			"Be more direct: avoid redundant reads and searches. Plan before acting.") +
+			formatRunShapeDiagnostics(latest, 0)
 	case "duration":
 		return formatPerfRegressionLine("run duration (seconds)",
 			baseline.DurationSec, latest.DurationSec,
-			"Longer runs may indicate unnecessary rework. Verify changes incrementally.")
+			"Longer runs may indicate unnecessary rework. Verify changes incrementally.") +
+			formatRunShapeDiagnostics(latest, latest.DurationSec)
 	case "error_rate":
 		return formatPerfRegressionLine("error rate",
 			baseline.Errors, latest.Errors,
@@ -517,6 +539,51 @@ func formatPerfRegressionLine(metricName string, baseline, current int, advice s
 		out += " (" + trimZeros(floatToString(factor)) + "x baseline)"
 	}
 	out += ". " + advice
+	return out
+}
+
+// topToolMix returns the n most-invoked tools from a per-tool call-count
+// map as "name:count" strings, ordered by count desc then name asc so the
+// output is deterministic across map iterations. An empty map yields nil.
+func topToolMix(m map[string]int, n int) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if m[names[i]] != m[names[j]] {
+			return m[names[i]] > m[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	if len(names) > n {
+		names = names[:n]
+	}
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = name + ":" + intToStr(m[name])
+	}
+	return out
+}
+
+// formatRunShapeDiagnostics appends a where-did-the-time-go breakdown to a
+// regression advisory. The bare advisory states a total the agent cannot
+// decompose; the shape line names iterations, per-iteration latency and the
+// dominant tools so rework can be targeted instead of guessed away. Legacy
+// baselines without TopTools degrade gracefully to a counts-only line.
+func formatRunShapeDiagnostics(hit perfBaselineEntry, durSec int) string {
+	out := " Run shape of the regressed run: iterations=" + intToStr(hit.Iterations)
+	out += ", tool_calls=" + intToStr(hit.ToolCalls)
+	if durSec > 0 && hit.Iterations > 0 {
+		out += ", sec/iter≈" + trimZeros(floatToString(float64(durSec)/float64(hit.Iterations)))
+	}
+	if len(hit.TopTools) > 0 {
+		out += "; top tools: " + strings.Join(hit.TopTools, ", ")
+		out += ". Target the dominant tool pattern first (batch shell commands, narrow reads) and stop once the change verifies."
+	}
 	return out
 }
 
