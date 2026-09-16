@@ -409,8 +409,24 @@ func findChromeExecutable() string {
 
 // getChromeVersion returns the major version number of the installed Chrome.
 // Returns 0 if the version cannot be determined (non-fatal — we warn but don't block).
+//
+// Windows hang guard: chrome.exe is a GUI-subsystem binary; under
+// antivirus/EDR hooks or sandboxed service sessions, `chrome --version`
+// may never write output and never exit. The old cmd.Output() had no
+// deadline, so this pre-flight step could hang an entire browser action
+// indefinitely — and because a failed profile start is not cached, EVERY
+// subsequent action re-ran this chain, presenting as "all browser calls
+// time out". The version probe is advisory only, so a timeout just means
+// version 0 (warn path), never a hang.
 func getChromeVersion(chromePath string) int {
-	cmd := exec.Command(chromePath, "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, chromePath, "--version")
+	// Kill the whole process tree on deadline: Chrome on Windows spawns
+	// launcher children that outlive the direct child otherwise.
+	cmd.Cancel = func() error {
+		return cmd.Process.Kill()
+	}
 	output, err := cmd.Output()
 	if err != nil {
 		return 0
@@ -560,9 +576,21 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	}
 
 	taskCtx, cancel := chromedp.NewContext(p.allocCtx)
-	if err := chromedp.Run(taskCtx); err != nil {
+	// Tab-start timeout: this first Run boots Chrome if the profile is
+	// fresh and performs the DevTools handshake + new-target dance. Both
+	// the allocator's internal wsURL wait (20s) and the handshake can be
+	// stretched past usefulness on heavily instrumented Windows machines
+	// (AV/EDR hooking every chrome.exe child), leaving a half-alive
+	// process that neither starts nor errors - taskCtx has no deadline of
+	// its own, so the Run would hang the whole action. A bounded window
+	// here fails THIS tab attempt cleanly; the profile stays usable and
+	// the next action retries rather than stacking zombie Chrome processes.
+	startRunCtx, startCancel := context.WithTimeout(taskCtx, 60*time.Second)
+	runErr := chromedp.Run(startRunCtx)
+	startCancel()
+	if runErr != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to create browser tab: %w", err)
+		return nil, fmt.Errorf("failed to create browser tab (startup handshake timed out or failed): %w", runErr)
 	}
 
 	// Auto-dismiss JS dialogs (alert/confirm/prompt/beforeunload) to prevent
