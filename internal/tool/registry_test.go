@@ -45,6 +45,33 @@ func TestToolRegistry_ToDefinitions(t *testing.T) {
 	}
 }
 
+// List() must be deterministic: it backs ToDefinitions(), whose output forms
+// the front of the provider prompt prefix. Non-deterministic tool order breaks
+// provider-side prompt/KV caching on every run (see List() doc comment).
+func TestToolRegistry_ListDeterministicOrder(t *testing.T) {
+	r := registerTestTools(t)
+	first := r.ToDefinitions()
+	if len(first) < 2 {
+		t.Skipf("need multiple tools to test ordering, got %d", len(first))
+	}
+	for i := 0; i < 20; i++ {
+		again := r.ToDefinitions()
+		if len(again) != len(first) {
+			t.Fatalf("iteration %d: definition count changed: %d vs %d", i, len(again), len(first))
+		}
+		for j := range first {
+			if again[j].Name != first[j].Name {
+				t.Fatalf("iteration %d: order changed at position %d: %q vs %q (prompt-cache prefix instability)", i, j, first[j].Name, again[j].Name)
+			}
+		}
+	}
+	for i := 1; i < len(first); i++ {
+		if first[i-1].Name >= first[i].Name {
+			t.Fatalf("definitions not sorted by name at position %d: %q >= %q", i, first[i-1].Name, first[i].Name)
+		}
+	}
+}
+
 func TestToolRegistry_Unregister(t *testing.T) {
 	r := registerTestTools(t)
 	before := len(r.ToolNames())
