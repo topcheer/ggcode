@@ -192,6 +192,12 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 		}
 	}
 
+	// Sync the task board with the target session: restored from a resumed
+	// session's persisted snapshot, reset for a brand-new session (the field
+	// is empty there). Keeps the board session-scoped instead of leaking
+	// across sessions in a long-running process.
+	m.restoreTasksFromSession(ses)
+
 	m.rebuildConversationFromMessages(ses.Messages)
 
 	// Refresh cached git branch — sessions from other workspaces may have
@@ -682,6 +688,11 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 	branched.TokenUsage = oldSes.TokenUsage
 	branched.CostJSON = append([]byte(nil), oldSes.CostJSON...)
 	branched.PermissionMode = oldSes.PermissionMode
+	// Snapshot the current board into the source session (for its own meta
+	// flush) and copy it: a branch inherits the conversation, so it inherits
+	// the task board too.
+	m.snapshotTasksInto(oldSes)
+	branched.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
 		branched.SidebarVisible = &val

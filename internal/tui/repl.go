@@ -946,6 +946,9 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 
 // SetTaskManager wires the task manager and registers task tools.
 func (r *REPL) SetTaskManager(mgr *task.Manager, tools *tool.Registry) {
+	// The Model keeps the manager reference so the board can be snapshotted
+	// into session metadata (persist) and restored on session switch/resume.
+	r.model.taskMgr = mgr
 	tools.Register(tool.TaskCreateTool{Manager: mgr})
 	tools.Register(tool.TaskGetTool{Manager: mgr})
 	tools.Register(tool.TaskListTool{Manager: mgr})
