@@ -646,23 +646,36 @@ func (s *JSONLStore) saveIndex(idx []indexEntry) error {
 	return os.Rename(tmp, s.indexPath())
 }
 
-func (s *JSONLStore) updateIndex(ses *Session) error {
-	// Retry flock acquisition with exponential backoff to handle transient
-	// lock contention from other processes (desktop + TUI).
+// lockWithBackoff retries flock acquisition with exponential backoff (10ms,
+// 20ms, 40ms) to handle transient lock contention from other processes
+// (desktop + TUI). It is the single implementation shared by updateIndex,
+// removeFromIndex, appendRecordLines, and migrateMessageIDs - previously four
+// copy-pasted retry loops that could drift independently.
+// On success it returns the unlock func. On persistent failure it logs
+// "<op>: failed to acquire <kind> lock after 3 retries" and returns the last
+// error; callers decide the fallback (mark index dirty, abort append, skip
+// migration). Failure behavior is per-IAL guidance: every retry path is
+// bounded at 3 attempts, never a spin loop.
+func lockWithBackoff(lockFn func() (func(), error), op string, kind string) (func(), error) {
 	var unlock func()
 	var lockErr error
 	for i := 0; i < 3; i++ {
-		unlock, lockErr = lockIndexFile(s.indexPath())
+		unlock, lockErr = lockFn()
 		if lockErr == nil {
-			break
+			return unlock, nil
 		}
 		if i < 2 {
 			// Exponential backoff: 10ms, 20ms, 40ms
 			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
 		}
 	}
+	debug.Log("session", "%s: failed to acquire %s lock after 3 retries: %v", op, kind, lockErr)
+	return nil, lockErr
+}
+
+func (s *JSONLStore) updateIndex(ses *Session) error {
+	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockIndexFile(s.indexPath()) }, "updateIndex", "index")
 	if lockErr != nil {
-		debug.Log("session", "updateIndex: failed to acquire index lock after 3 retries: %v", lockErr)
 		s.indexDirty = true
 		return lockErr
 	}
@@ -712,22 +725,9 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 }
 
 func (s *JSONLStore) removeFromIndex(id string) error {
-	// Retry flock acquisition with exponential backoff to handle transient
-	// lock contention from other processes (desktop + TUI). Matches updateIndex.
-	var unlock func()
-	var lockErr error
-	for i := 0; i < 3; i++ {
-		unlock, lockErr = lockIndexFile(s.indexPath())
-		if lockErr == nil {
-			break
-		}
-		if i < 2 {
-			// Exponential backoff: 10ms, 20ms, 40ms
-			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
-		}
-	}
+	// Matches updateIndex.
+	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockIndexFile(s.indexPath()) }, "removeFromIndex", "index")
 	if lockErr != nil {
-		debug.Log("session", "removeFromIndex: failed to acquire index lock after 3 retries: %v", lockErr)
 		s.indexDirty = true
 		return lockErr
 	}
@@ -2480,19 +2480,9 @@ func (s *JSONLStore) migrateMessageIDs(id string) (int, error) {
 	// (load from the original file) rather than proceeding unlocked - the
 	// rename would silently drop concurrent appends, and the fast-path
 	// marker would make the loss permanent. Mirrors appendRecordLines.
-	var unlock func()
-	var lockErr error
-	for i := 0; i < 3; i++ {
-		unlock, lockErr = lockSessionFile(path)
-		if lockErr == nil {
-			break
-		}
-		if i < 2 {
-			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
-		}
-	}
+	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockSessionFile(path) }, "migrateMessageIDs", "session")
 	if lockErr != nil {
-		debug.Log("session", "migrateMessageIDs: failed to acquire session lock after 3 retries, skipping migration: %v", lockErr)
+		debug.Log("session", "migrateMessageIDs: skipping migration after lock retry exhaustion: %v", lockErr)
 		return 0, nil //nolint:nilerr // migration is best-effort; skipping is safe, proceeding unlocked is not
 	}
 	defer func() {
@@ -2859,24 +2849,11 @@ func appendRecordLines(path string, recs []jsonlRecord) error {
 	// rename) in another process cannot drop this append between its read
 	// and its rename. Within one process the store mutex already serializes.
 	//
-	// Retry flock acquisition with exponential backoff to handle transient
-	// lock contention. If all retries fail, abort the append rather than
+	// If all retries fail, abort the append rather than
 	// continuing with unlocked O_APPEND writes that can be lost to concurrent
 	// renames (60/60 appends lost in probes without this guard).
-	var unlock func()
-	var lockErr error
-	for i := 0; i < 3; i++ {
-		unlock, lockErr = lockSessionFile(path)
-		if lockErr == nil {
-			break
-		}
-		if i < 2 {
-			// Exponential backoff: 10ms, 20ms, 40ms
-			time.Sleep(time.Duration(10*(1<<i)) * time.Millisecond)
-		}
-	}
+	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockSessionFile(path) }, "appendRecordLines", "session")
 	if lockErr != nil {
-		debug.Log("session", "appendRecordLines: failed to acquire session lock after 3 retries: %v", lockErr)
 		return lockErr
 	}
 	defer func() {
