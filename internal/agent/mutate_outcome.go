@@ -174,7 +174,12 @@ func newMutatingLedger() *mutatingLedger {
 	return &mutatingLedger{entries: make(map[string]int)}
 }
 
+// Nil-receiver safe: Agent literals in tests (&Agent{}) must not panic when
+// the executeToolCall wiring probes the ledger.
 func (l *mutatingLedger) reset() {
+	if l == nil {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = make(map[string]int)
@@ -191,6 +196,9 @@ func mutatingLedgerKey(toolName string, args []byte) string {
 // lookupAmbiguous returns how many ambiguous attempts were recorded for this
 // exact call, or 0.
 func (l *mutatingLedger) lookupAmbiguous(toolName string, args []byte) int {
+	if l == nil {
+		return 0
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.entries[mutatingLedgerKey(toolName, args)]
@@ -198,6 +206,9 @@ func (l *mutatingLedger) lookupAmbiguous(toolName string, args []byte) int {
 
 // recordAmbiguous registers an ambiguous outcome for this exact call.
 func (l *mutatingLedger) recordAmbiguous(toolName string, args []byte) {
+	if l == nil {
+		return
+	}
 	key := mutatingLedgerKey(toolName, args)
 	l.mu.Lock()
 	defer l.mu.Unlock()

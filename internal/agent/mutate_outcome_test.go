@@ -152,3 +152,22 @@ func TestNonAtomicTagIsCritical(t *testing.T) {
 		t.Fatal("[non-atomic] must be registered in criticalHintTags to bypass the per-turn guidance cap")
 	}
 }
+
+// TestMutatingLedgerNilSafe: Agent literals in tests (&Agent{}) leave
+// mutateLedger nil; the executeToolCall wiring must not panic on it.
+func TestMutatingLedgerNilSafe(t *testing.T) {
+	var l *mutatingLedger
+	if got := l.lookupAmbiguous("git_commit", []byte("{}")); got != 0 {
+		t.Fatalf("nil lookup should be 0, got %d", got)
+	}
+	l.recordAmbiguous("git_commit", []byte("{}")) // must not panic
+	l.reset()                                     // must not panic
+	// Full nil-Agent path through annotateMutatingOutcome.
+	a := &Agent{}
+	a.guidanceBudget.reset()
+	res := tool.Result{Content: "tool error: timed out", IsError: true}
+	out := a.annotateMutatingOutcome("git_commit", []byte("{}"), res, 0)
+	if !strings.Contains(out.Content, nonAtomicResultTag) {
+		t.Fatalf("nil-ledger agent must still annotate:\n%s", out.Content)
+	}
+}
