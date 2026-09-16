@@ -64,9 +64,15 @@ var shellCkptSkipDirs = map[string]bool{
 }
 
 // shellFileState is the captured pre/post state of one workspace file.
+// captured=false means the file EXISTED but its content could not be
+// captured (oversized, budget exhausted, or read failure). Such files are
+// NOT restorable and MUST be skipped by checkpointMutations: a checkpoint
+// with empty oldContent and existed=true would make undo_edit ZERO the
+// file on disk (real data loss, the #2441 review blocker).
 type shellFileState struct {
-	content string
-	existed bool
+	content  string
+	existed  bool
+	captured bool
 }
 
 // shellSnapshot is a point-in-time map of workspace-relative path -> state,
@@ -116,8 +122,8 @@ func takeShellSnapshotIn(workDir string) *shellSnapshot {
 		if status == "??" && skipUntrackedPath(path) {
 			continue
 		}
-		content, existed := readSnapshotFile(filepath.Join(workDir, path), &budget)
-		snap.files[path] = shellFileState{content: content, existed: existed}
+		content, existed, captured := readSnapshotFile(filepath.Join(workDir, path), &budget)
+		snap.files[path] = shellFileState{content: content, existed: existed, captured: captured}
 	}
 	return snap
 }
@@ -160,29 +166,33 @@ func skipUntrackedPath(path string) bool {
 }
 
 // readSnapshotFile reads one file into the snapshot budget. Returns
-// existed=false (and empty content) for missing files and oversized files
-// (oversized-but-existing files are represented as existed=true with empty
-// content so their deletion is still detectable, though not restorable).
-func readSnapshotFile(path string, budget *int) (string, bool) {
+// (content, existed, captured): existed=false only for missing/non-regular
+// files -- absence is itself fully captured, so captured=TRUE there (a
+// false would make Pass 1 skip deletion checkpoints for clean tracked
+// files, regressing delete-undo). captured=false ONLY when the file
+// existed but its content could not be captured (oversized, budget
+// exhausted, read failure) -- callers must treat uncaptured files as NOT
+// restorable and never checkpoint them.
+func readSnapshotFile(path string, budget *int) (string, bool, bool) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return "", false
+		return "", false, true // absent: state fully represented
 	}
 	if !fi.Mode().IsRegular() {
-		return "", false
+		return "", false, true // non-regular: treated as absent
 	}
 	if fi.Size() > shellCkptMaxFileBytes {
-		return "", true
+		return "", true, false
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", true
+		return "", true, false
 	}
 	if len(data) > *budget {
-		return "", true
+		return "", true, false
 	}
 	*budget -= len(data)
-	return string(data), true
+	return string(data), true, true
 }
 
 // checkpointMutations diffs the post-command snapshot against the captured
@@ -200,12 +210,25 @@ func (s *shellSnapshot) checkpointMutations(after *shellSnapshot, toolCall strin
 			break
 		}
 		pre, hadPre := s.files[path]
+		if hadPre && !pre.captured {
+			// Pre-state uncaptured (oversize/budget/read-failure): a checkpoint
+			// here would carry empty oldContent with existed=true and undo_edit
+			// would ZERO the file. Not restorable => skip (#2441 review fix).
+			debug.Log("shell-checkpoint", "pre-state of %s not captured (oversize/budget); not checkpointed", path)
+			continue
+		}
+		if !post.captured {
+			// Post-state uncaptured (file grew past the cap): recording it would
+			// store empty newContent and a redo would zero the file. Skip.
+			debug.Log("shell-checkpoint", "post-state of %s not captured (oversize/budget); not checkpointed", path)
+			continue
+		}
 		if !hadPre {
 			// Not dirty before, but appears dirty now (created, or a clean
 			// tracked file the command modified). The pre-state of a clean
 			// tracked file is its committed content at the recorded HEAD; a
 			// path absent from git is a file the command CREATED.
-			cur, existed := readSnapshotFileForDiff(after.root, path)
+			cur, existed, curCaptured := readSnapshotFileForDiff(after.root, path)
 			if !existed {
 				// Gone from disk. If it was tracked at HEAD, the command
 				// DELETED it - record a deletion checkpoint so undo restores
@@ -215,6 +238,10 @@ func (s *shellSnapshot) checkpointMutations(after *shellSnapshot, toolCall strin
 					cpMgr.SaveWithExistence(filepath.Join(after.root, path), preContent, "", toolCall, true)
 					created++
 				}
+				continue
+			}
+			if !curCaptured {
+				debug.Log("shell-checkpoint", "current content of %s not captured; not checkpointed", path)
 				continue
 			}
 			preContent, preExisted := gitShowFile(s.root, s.head, path)
@@ -233,9 +260,13 @@ func (s *shellSnapshot) checkpointMutations(after *shellSnapshot, toolCall strin
 		if pre.content == post.content {
 			continue // content unchanged (e.g. index-only churn)
 		}
-		cur, existed := readSnapshotFileForDiff(after.root, path)
-		if existed && cur == pre.content {
+		cur, existed, curCaptured := readSnapshotFileForDiff(after.root, path)
+		if existed && curCaptured && cur == pre.content {
 			continue // reverted to exactly the pre-state -- nothing to undo
+		}
+		if existed && !curCaptured {
+			debug.Log("shell-checkpoint", "current content of %s not captured; not checkpointed", path)
+			continue
 		}
 		cpMgr.SaveWithExistence(filepath.Join(after.root, path), pre.content, post.content, toolCall, true)
 		created++
@@ -246,11 +277,22 @@ func (s *shellSnapshot) checkpointMutations(after *shellSnapshot, toolCall strin
 			debug.Log("shell-checkpoint", "cap %d reached; remaining shell mutations are NOT undoable", shellCkptMaxFiles)
 			break
 		}
+		if !pre.captured {
+			// Uncaptured pre-state: a deletion checkpoint would restore an
+			// EMPTY file on undo, a modification checkpoint would zero an
+			// existing one. Not restorable => skip (#2441 review fix).
+			debug.Log("shell-checkpoint", "pre-state of %s not captured (oversize/budget); not checkpointed", path)
+			continue
+		}
 		if _, stillListed := after.files[path]; stillListed {
 			continue
 		}
-		cur, existed := readSnapshotFileForDiff(after.root, path)
+		cur, existed, curCaptured := readSnapshotFileForDiff(after.root, path)
 		if existed {
+			if !curCaptured {
+				debug.Log("shell-checkpoint", "current content of %s not captured; not checkpointed", path)
+				continue
+			}
 			if cur == pre.content {
 				continue // restored to exactly the pre-state, nothing to undo
 			}
@@ -273,20 +315,22 @@ func (s *shellSnapshot) checkpointMutations(after *shellSnapshot, toolCall strin
 
 // readSnapshotFileForDiff reads the CURRENT content of a workspace file
 // with the same size/budget guards, without consuming the pre-state budget.
-func readSnapshotFileForDiff(root, relPath string) (string, bool) {
+// captured=false marks oversized/unreadable files -- callers must not
+// checkpoint them (empty newContent would zero the file on redo).
+func readSnapshotFileForDiff(root, relPath string) (string, bool, bool) {
 	full := filepath.Join(root, relPath)
 	fi, err := os.Stat(full)
 	if err != nil || !fi.Mode().IsRegular() {
-		return "", false
+		return "", false, true // absent: state fully represented
 	}
 	if fi.Size() > shellCkptMaxFileBytes {
-		return "", true
+		return "", true, false
 	}
 	data, err := os.ReadFile(full)
 	if err != nil {
-		return "", true
+		return "", true, false
 	}
-	return string(data), true
+	return string(data), true, true
 }
 
 // gitShowFile returns a path's committed content at the given revision.

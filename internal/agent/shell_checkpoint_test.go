@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -196,5 +197,87 @@ func TestShellCheckpointSkipUntrackedDeps(t *testing.T) {
 	// Nothing changed except dependency noise -> no checkpoints.
 	if n := pre.checkpointMutations(pre, "run_command", mgr); n != 0 {
 		t.Fatalf("got %d checkpoints, want 0 for dep-dir noise", n)
+	}
+}
+
+// --- #2441 review fix: oversize files must never be checkpointed ---
+
+// oversizedContent exceeds shellCkptMaxFileBytes (1 MiB).
+var oversizedContent = strings.Repeat("x", (1<<20)+64)
+
+// TestShellCheckpointOversizePreModified: a >1MiB dirty file that a shell
+// command shrinks (e.g. sed) must NOT get a checkpoint. Old behavior:
+// readSnapshotFile returned ("", true), Pass 1 saved oldContent="" with
+// existed=true, and undo_edit ZEROED the file on disk (real data loss).
+func TestShellCheckpointOversizePreModified(t *testing.T) {
+	dir := initTestGitRepo(t)
+	f := filepath.Join(dir, "big.log")
+	if err := os.WriteFile(f, []byte(oversizedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pre := takeShellSnapshotIn(dir)
+	if pre == nil {
+		t.Fatal("expected snapshot")
+	}
+	if st, ok := pre.files["big.log"]; !ok || !st.existed || st.captured {
+		t.Fatalf("oversize pre-state misclassified: %+v ok=%v", st, ok)
+	}
+
+	// Command shrinks it below the cap with different content.
+	if err := os.WriteFile(f, []byte("small"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := newTestCpMgr()
+	if n := pre.checkpointMutations(takeShellSnapshotIn(dir), "run_command", mgr); n != 0 {
+		t.Fatalf("got %d checkpoints for oversize pre-state, want 0 (undo would zero the file)", n)
+	}
+	// And undoing everything else must leave the shrunk file untouched.
+	got, _ := os.ReadFile(f)
+	if string(got) != "small" {
+		t.Fatalf("file altered: %q", got)
+	}
+}
+
+// TestShellCheckpointOversizePreDeleted: deleting an uncaptured dirty file
+// must not produce a checkpoint -- a deletion checkpoint with empty
+// oldContent would restore an EMPTY file on undo instead of the content.
+func TestShellCheckpointOversizePreDeleted(t *testing.T) {
+	dir := initTestGitRepo(t)
+	f := filepath.Join(dir, "big2.log")
+	if err := os.WriteFile(f, []byte(oversizedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pre := takeShellSnapshotIn(dir)
+	if err := os.Remove(f); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := newTestCpMgr()
+	if n := pre.checkpointMutations(takeShellSnapshotIn(dir), "rm", mgr); n != 0 {
+		t.Fatalf("got %d checkpoints for deleted oversize file, want 0", n)
+	}
+}
+
+// TestShellCheckpointOversizePost: a file the command GREW past the cap must
+// not be checkpointed either -- empty newContent would zero it on redo.
+func TestShellCheckpointOversizePost(t *testing.T) {
+	dir := initTestGitRepo(t)
+	f := filepath.Join(dir, "grow.log")
+	if err := os.WriteFile(f, []byte("tiny"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commitAll(t, dir)
+
+	pre := takeShellSnapshotIn(dir)
+	if err := os.WriteFile(f, []byte(oversizedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := newTestCpMgr()
+	if n := pre.checkpointMutations(takeShellSnapshotIn(dir), "run_command", mgr); n != 0 {
+		t.Fatalf("got %d checkpoints for oversize post-state, want 0 (redo would zero the file)", n)
 	}
 }
