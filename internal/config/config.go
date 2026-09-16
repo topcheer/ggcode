@@ -417,6 +417,14 @@ type VerifyConfig struct {
 	// their changes in-loop per the system prompt mandate. Opt in only for
 	// models that habitually claim success without testing.
 	ClaimsSupervision bool `yaml:"claims_supervision" json:"claims_supervision"` // enable success-claim heuristic detectors
+
+	// AdversarialReview enables the independent evaluator gate (generator-
+	// evaluator separation): before completion, a fresh-context LLM evaluator
+	// reviews the run's diff against the original task with a skeptical rubric
+	// and FAIL findings are injected back into the loop for repair (max 2
+	// rounds per task). Complements the command-oracle gates (build/test/lint)
+	// with semantic review that self-assessment cannot provide. Default off.
+	AdversarialReview bool `yaml:"adversarial_review" json:"adversarial_review"`
 }
 type SwarmConfig struct {
 	MaxTeammatesPerTeam int           `yaml:"max_teammates_per_team"` // default: 16

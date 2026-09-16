@@ -124,7 +124,18 @@ type Agent struct {
 	// in-loop scoped verification, find these injections pure noise; the
 	// heuristics also fire on legitimate claims. Opt-in via config
 	// verify.claims_supervision for weaker models.
-	claimsSupervision         bool
+	claimsSupervision bool
+
+	// adversarialReview enables the independent evaluator gate (generator-
+	// evaluator separation, per Anthropic "Harness design for long-running
+	// apps", 2026-03): before the agent declares done, a fresh-context LLM
+	// evaluator skeptically reviews the run's diff against the original task
+	// and returns structured findings. Self-review is demonstrably lenient;
+	// separation of judge from generator is the lever. Default off; opt in
+	// via config verify.adversarial_review.
+	adversarialReview         bool
+	adversarialReviewRounds   int
+	adversarialReviewLastRun  string // task prompt of the last review; resets rounds per task
 	hookConfig                hooks.HookConfig
 	workingDir                string
 	sessionID                 string // current session ID; determines todo file path
@@ -2883,6 +2894,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: reconcileMsg,
+					}},
+				})
+				continue
+			}
+			// Adversarial evaluator gate (generator-evaluator separation):
+			// independent fresh-context LLM review of the run's diff against
+			// the original task. Complements the deterministic gates above
+			// with semantic review; FAIL findings loop the agent back to
+			// repair (bounded rounds in the gate itself).
+			if evalMsg := a.checkAdversarialReviewGate(ctx, runStats, userPromptForStats); evalMsg != "" {
+				debug.Log("agent", "Iteration %d: adversarial evaluator returned findings", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: evalMsg,
 					}},
 				})
 				continue
