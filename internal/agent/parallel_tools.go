@@ -90,67 +90,36 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		args  json.RawMessage
 	}
 	var batch []pending
-	// #1475-A: a batch containing ANY source-mutating tool (or a mutating
-	// run_command - gofmt -w, git checkout, pip install...) invalidates the
-	// very reads being pre-executed: the old shape ran read_file X
-	// concurrently with edit_file X and then handed the model the
-	// PRE-EDIT content unlabeled after the edit landed - the model judged
-	// the edit failed and re-applied it. Skip pre-execution entirely for
-	// mixed batches (conservative; pure read-only batches are unaffected).
-	// #1590-A: the original guard only checked mutatesSourceTree (edit-tool
-	// + git-tool families) while this very comment promised mutating
-	// run_command coverage - shell mutations (gofmt -w x.go, git checkout,
-	// codegen) slipped through and re-created the stale-read hazard.
-	for _, tc := range toolCalls {
-		if mutatesSourceTree(tc.Name) {
-			return nil
-		}
-		// #1607-A: ANY shell command in a mixed batch skips pre-execution,
-		// conservatively. The #1590-A shape routed through the
-		// shellMutatesSources heuristic - tuned for the BUILD-CACHE cost
-		// model (FP = lost cache reuse) where narrow is right - but the
-		// guard's failure asymmetry is the opposite (FP = lost parallelism
-		// only; FN = a High-severity stale read after 'git checkout
-		// fix-branch'/'git restore'/'stash pop'/codegen/tee/redirects
-		// rewrote the tree between pre-read and serial consumption).
-		// Borrowing the narrow heuristic parked the risk on the dangerous
-		// side, using this comment's own examples.
-		if tc.Name == "run_command" || tc.Name == "start_command" {
-			return nil
-		}
-		// #1649: delegate escapes every guard set (only the orchestration
-		// file references it). On assemblies WITHOUT SubAgentManager the
-		// CLI fallback runs SYNCHRONOUSLY in the serial loop and rewrites
-		// the tree before a pre-executed read is consumed - the #1607-A
-		// shape via a different channel. Treat it like a shell command.
-		if tc.Name == "delegate" {
-			return nil
-		}
-		// #1829 case 1: spawn_agent/teammate_spawn (and their task-delivery
-		// companions send_message/swarm_task_create on tm-* targets) leak
-		// async tree mutations past every guard: the spawned agent inherits
-		// the parent WorkingDir with edit tools enabled, and can rewrite the
-		// tree while pre-executed reads sit unconsumed. Weaker than #1649's
-		// deterministic delegate (the first sub-agent edit needs an LLM
-		// round-trip, so the race window opens in seconds, not ms) but the
-		// failure shape is identical: stale pre-read content delivered
-		// unlabeled. FN = High-severity stale read / FP = lost parallelism
-		// - the guard's own asymmetry says block.
-		if tc.Name == "spawn_agent" || tc.Name == "teammate_spawn" ||
-			tc.Name == "send_message" || tc.Name == "swarm_task_create" ||
-			tc.Name == "a2a_send_task" || tc.Name == "a2a_remote" {
-			return nil
-		}
-		// #1829 case 2: warp's input/new_tab surfaces execute arbitrary shell
-		// (executeInput(args.Command)+send_key enter) in one call - a
-		// run_command-equivalent mutation channel the shell guard never
-		// covered. Narrow trigger (macOS + Warp), but same stale-read shape.
-		if tc.Name == "warp" {
-			return nil
-		}
+	// #1475-A: a batch containing ANY source-mutating tool used to disable
+	// pre-execution entirely - the old shape ran read_file X concurrently
+	// with edit_file X and then handed the model the PRE-EDIT content
+	// unlabeled after the edit landed - the model judged the edit failed
+	// and re-applied it. #1590-A/#1607-A/#1649/#1829 extended that guard
+	// to shell commands, delegate, sub-agent spawns and warp, whose write
+	// sets are not statically knowable.
+	//
+	// Conflict-aware scheduling (parallel_scheduling.go): for file-scoped
+	// mutators (edit_file/write_file/multi_edit_file/notebook_edit) the
+	// write target IS knowable, so only reads whose scan scope covers the
+	// mutated path are withheld from pre-execution; unrelated reads keep
+	// their parallel latency win (the guard's own asymmetry note: FP =
+	// lost parallelism only). Colliding reads fall back to the sequential
+	// loop, preserving emitted-order semantics exactly as the serial path
+	// does.
+	mutatedPaths, schedulable := partitionBatchForParallelism(toolCalls)
+	if !schedulable {
+		return nil
 	}
+	// Withhold reads whose scan scope covers a pending mutation target:
+	// they stay on the sequential path so the model sees post-mutation
+	// content when emitted after the mutation (and pre-mutation content
+	// when emitted before it - identical to plain serial execution).
 	for i, tc := range toolCalls {
 		if !speculativeSafeTools[tc.Name] {
+			continue
+		}
+		if len(mutatedPaths) > 0 && readAffectedByMutation(tc.Name, tc.Arguments, mutatedPaths) {
+			debug.Log("parallel", "withholding %s (index=%d) from pre-exec: collides with pending mutation", tc.Name, i)
 			continue
 		}
 		// Skip if already in speculative cache.
