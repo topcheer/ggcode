@@ -193,6 +193,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 
 	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil, nil)
+	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
+		_ = registry.Register(&tool.TrialForkTool{
+			Provider:     prov,
+			Tools:        registry,
+			AgentFactory: skillAgentFactory,
+			WorkingDir:   workingDir,
+		})
+	}
 	skillTool.OnSkillUsed = func(ref string) {
 		if knightAgent != nil {
 			knightAgent.RecordSkillUse(ref)
