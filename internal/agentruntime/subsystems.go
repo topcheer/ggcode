@@ -111,8 +111,18 @@ func NewSubAgentManager(
 		OnUsage:             onUsage,
 		SystemPromptBuilder: systemPromptBuilder,
 	})
-	_ = registry.Register(tool.WaitAgentTool{Manager: mgr})
-	_ = registry.Register(tool.ListAgentsTool{Manager: mgr})
+	cascadeHints := tool.NewCascadeHintTracker()
+	parentModel := tool.ParentModelFromProviderGetter(providerGetter)
+	_ = registry.Register(tool.WaitAgentTool{
+		Manager:      mgr,
+		ParentModel:  parentModel,
+		CascadeHints: cascadeHints,
+	})
+	_ = registry.Register(tool.ListAgentsTool{
+		Manager:      mgr,
+		ParentModel:  parentModel,
+		CascadeHints: cascadeHints,
+	})
 
 	// Named subagent templates (persisted per-workspace)
 	tmplStore := subagent.NewTemplateStore(workingDir)

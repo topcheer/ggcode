@@ -15,6 +15,11 @@ import (
 // ListAgentsTool implements the list_agents tool.
 type ListAgentsTool struct {
 	Manager *subagent.Manager
+	// ParentModel resolves the parent agent's current model name for the
+	// one-shot cascade escalation hint on failed alternate-model runs
+	// (see subagent_cascade.go). Shares CascadeHints with wait_agent.
+	ParentModel  func() string
+	CascadeHints *CascadeHintTracker
 }
 
 func (t ListAgentsTool) Name() string { return "list_agents" }
@@ -61,7 +66,7 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		if !ok {
 			continue
 		}
-		lines = append(lines, formatSubAgentSnapshot(snap))
+		lines = append(lines, appendCascadeHint(t.CascadeHints, t.ParentModel, snap))
 	}
 	if len(lines) == 0 {
 		return Result{Content: "No agent runs have been spawned."}, nil

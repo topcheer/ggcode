@@ -835,8 +835,17 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
 		SystemPromptBuilder: r.systemPromptBuilder,
 	})
-	tools.Register(tool.WaitAgentTool{Manager: mgr})
-	tools.Register(tool.ListAgentsTool{Manager: mgr})
+	cascadeHints := tool.NewCascadeHintTracker()
+	tools.Register(tool.WaitAgentTool{
+		Manager:      mgr,
+		ParentModel:  spawnAgentModelResolver,
+		CascadeHints: cascadeHints,
+	})
+	tools.Register(tool.ListAgentsTool{
+		Manager:      mgr,
+		ParentModel:  spawnAgentModelResolver,
+		CascadeHints: cascadeHints,
+	})
 	tools.Register(tool.CancelAgentTool{Manager: mgr})
 
 	// Named subagent templates (persisted per-workspace)
