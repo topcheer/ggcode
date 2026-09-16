@@ -83,60 +83,8 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		}
 	}
 
-	// Identify which tool calls are read-only and not cached.
-	type pending struct {
-		index int
-		name  string
-		args  json.RawMessage
-	}
-	var batch []pending
-	// #1475-A: a batch containing ANY source-mutating tool used to disable
-	// pre-execution entirely - the old shape ran read_file X concurrently
-	// with edit_file X and then handed the model the PRE-EDIT content
-	// unlabeled after the edit landed - the model judged the edit failed
-	// and re-applied it. #1590-A/#1607-A/#1649/#1829 extended that guard
-	// to shell commands, delegate, sub-agent spawns and warp, whose write
-	// sets are not statically knowable.
-	//
-	// Conflict-aware scheduling (parallel_scheduling.go): for file-scoped
-	// mutators (edit_file/write_file/multi_edit_file/notebook_edit) the
-	// write target IS knowable, so only reads whose scan scope covers the
-	// mutated path are withheld from pre-execution; unrelated reads keep
-	// their parallel latency win (the guard's own asymmetry note: FP =
-	// lost parallelism only). Colliding reads fall back to the sequential
-	// loop, preserving emitted-order semantics exactly as the serial path
-	// does.
-	mutatedPaths, schedulable := partitionBatchForParallelism(toolCalls)
-	if !schedulable {
-		return nil
-	}
-	// Withhold reads whose scan scope covers a pending mutation target:
-	// they stay on the sequential path so the model sees post-mutation
-	// content when emitted after the mutation (and pre-mutation content
-	// when emitted before it - identical to plain serial execution).
-	for i, tc := range toolCalls {
-		if !speculativeSafeTools[tc.Name] {
-			continue
-		}
-		if len(mutatedPaths) > 0 && readAffectedByMutation(tc.Name, tc.Arguments, mutatedPaths) {
-			debug.Log("parallel", "withholding %s (index=%d) from pre-exec: collides with pending mutation", tc.Name, i)
-			continue
-		}
-		// Skip if already in speculative cache.
-		if a.speculator.hasCached(tc.Name, tc.Arguments) {
-			continue
-		}
-		// Skip if already in memoization cache (avoids redundant execution
-		// when the same read-only tool was called earlier in this run).
-		if a.toolMemo != nil {
-			if _, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
-				continue
-			}
-		}
-		batch = append(batch, pending{i, tc.Name, tc.Arguments})
-	}
-
-	if len(batch) == 0 {
+	batch, ok := a.buildPreExecBatch(toolCalls)
+	if !ok || len(batch) == 0 {
 		return nil
 	}
 	// Cap at maxConcurrent to bound resource usage.
@@ -154,27 +102,10 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 			defer wg.Done()
 			defer safego.Recover("agent.parallel.preExec")
 
-			if ctx.Err() != nil {
-				return
-			}
-
-			t, ok := a.tools.Get(p.name)
+			result, dur, ok := a.preExecOne(ctx, p)
 			if !ok {
 				return
 			}
-
-			execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-
-			start := time.Now()
-			result, err := t.Execute(execCtx, p.args)
-			dur := time.Since(start)
-
-			if err != nil {
-				debug.Log("parallel", "parallel pre-exec %s failed: %v (after %v)", p.name, err, dur)
-				return
-			}
-
 			mu.Lock()
 			results[p.index] = preExecutedResult{result, dur}
 			mu.Unlock()
@@ -189,6 +120,78 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	}
 	debug.Log("parallel", "pre-executed %d/%d read-only tools concurrently", len(results), len(batch))
 	return results
+}
+
+// pending is one read-only call queued for speculative pre-execution.
+type pending struct {
+	index int
+	name  string
+	args  json.RawMessage
+}
+
+// buildPreExecBatch selects the calls worth pre-executing. Scheduling guards
+// first: #1475-A used to drop ALL pre-execution when ANY mutating tool was
+// present - read_file X racing edit_file X handed back pre-edit content
+// unlabeled, and the model re-applied the edit. #1590-A/#1607-A/#1649/#1829
+// extended that to shell commands, delegate, sub-agent spawns and warp,
+// whose write sets are not statically knowable.
+//
+// Conflict-aware scheduling (parallel_scheduling.go): for file-scoped
+// mutators (edit_file/write_file/multi_edit_file/notebook_edit) the write
+// target IS knowable, so only reads whose scan scope covers the mutated
+// path are withheld; unrelated reads keep their parallel latency win (the
+// guard's own asymmetry note: FP = lost parallelism only). Colliding reads
+// fall back to the sequential loop, preserving emitted-order semantics
+// exactly as the serial path does. Speculative-cache and memoized hits are
+// skipped as redundant.
+func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending, bool) {
+	mutatedPaths, schedulable := partitionBatchForParallelism(toolCalls)
+	if !schedulable {
+		return nil, false
+	}
+	batch := make([]pending, 0, len(toolCalls))
+	for i, tc := range toolCalls {
+		if !speculativeSafeTools[tc.Name] {
+			continue
+		}
+		if len(mutatedPaths) > 0 && readAffectedByMutation(tc.Name, tc.Arguments, mutatedPaths) {
+			debug.Log("parallel", "withholding %s (index=%d) from pre-exec: collides with pending mutation", tc.Name, i)
+			continue
+		}
+		if a.speculator.hasCached(tc.Name, tc.Arguments) {
+			continue
+		}
+		if a.toolMemo != nil {
+			if _, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
+				continue
+			}
+		}
+		batch = append(batch, pending{index: i, name: tc.Name, args: tc.Arguments})
+	}
+	return batch, true
+}
+
+// preExecOne speculatively executes a single read-only call with a short
+// timeout; failures are logged and dropped - the sequential loop re-executes
+// them, so a dropped speculative result is never visible to the model.
+func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Duration, bool) {
+	if ctx.Err() != nil {
+		return tool.Result{}, 0, false
+	}
+	t, ok := a.tools.Get(p.name)
+	if !ok {
+		return tool.Result{}, 0, false
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	result, err := t.Execute(execCtx, p.args)
+	dur := time.Since(start)
+	if err != nil {
+		debug.Log("parallel", "parallel pre-exec %s failed: %v (after %v)", p.name, err, dur)
+		return tool.Result{}, dur, false
+	}
+	return result, dur, true
 }
 
 // usePreExecutedWithPermission runs the permission check for a tool and,
