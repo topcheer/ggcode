@@ -139,12 +139,18 @@ var guidanceCounterResets = []func(*Agent){
 
 	// #1826 whitelist - quota-bearing fields deliberately NOT reset here:
 	//   monorepoScoper (no quota field; scoping decision is behavioral)
-	//   diminishingEdit / errorPropagate / falsePremise / perfBaseline /
-	//   prematureRefactor / recklessExec (quota fields live on inner
-	//   sub-states or fire paths covered by the per-run reset in
-	//   resetDetectors; none hold a run-scoped injection quota burned
-	//   across compaction)
-	//   diskSpace.fired (environmental state, not run-scoped)
+	//   diminishingEdit / errorPropagate / prematureRefactor /
+	//   recklessExec (quota fields live on inner sub-states or fire paths
+	//   covered by the per-run reset in resetDetectors; none hold a
+	//   run-scoped injection quota burned across compaction)
+	//   perfBaseline.warnedThisSession (#1180: session-once by design -
+	//   injection only happens at run start, no post-compaction re-inject
+	//   need)
+	//   monorepoScoper.suppressions (#687: re-arm cap is deliberate
+	//   anti-retry)
+	//   diskSpace IS reset below (fired is a run-scoped quota; the old
+	//   note claiming "environmental state, not run-scoped" was stale -
+	//   #2440)
 	//   overseer hard-escalation sequence (progression must survive)
 
 	// verify_debt
@@ -676,6 +682,111 @@ var guidanceCounterResets = []func(*Agent){
 	func(a *Agent) {
 		if a.diskSpace != nil {
 			a.diskSpace.fired = false
+		}
+	},
+
+	// ---- #2440: the seven-plus-eight quota-bearing detectors that the
+	// hand-maintained registry missed (each verified: field increments ONLY
+	// after guidance injection, short-circuits at its cap, and the field is
+	// per-run — the same classification as every entry above). ----
+
+	// batch_coupling: warnsIssued (max 2/run)
+	func(a *Agent) {
+		if a.batchCoupling != nil {
+			a.batchCoupling.warnsIssued = 0
+		}
+	},
+	// taint_influence (SECURITY): direct-taint and influence-taint warning
+	// quotas (3/2 per run). Post-compaction silence here closes the safety
+	// alert window for tainted data flowing to destructive sinks.
+	func(a *Agent) {
+		if a.taintInfluence != nil {
+			a.taintInfluence.warnedDirect = 0
+			a.taintInfluence.warnedInfluence = 0
+			// warnedPaths is a behavioral ledger (dedup) and stays.
+		}
+	},
+	// orphan_file: warnings (max 2/run)
+	func(a *Agent) {
+		if a.orphanFile != nil {
+			a.orphanFile.warnings = 0
+		}
+	},
+	// arg_size_guard: fires once per run by design - resetting it after
+	// compaction restores the guard for the post-compaction context, which
+	// is exactly what a fresh long-run segment needs.
+	func(a *Agent) {
+		a.argSizeGuardFires = 0
+	},
+	// cross_detector_consensus: alertsIssued
+	func(a *Agent) {
+		if a.crossDetectorConsensus != nil {
+			a.crossDetectorConsensus.alertsIssued = 0
+		}
+	},
+	// scope_creep: warnings
+	func(a *Agent) {
+		if a.scopeCreep != nil {
+			a.scopeCreep.warnings = 0
+		}
+	},
+	// search_param_guard: fires
+	func(a *Agent) {
+		if a.searchParamGuard != nil {
+			a.searchParamGuard.fires = 0
+		}
+	},
+	// premature_success: guidanceFired
+	func(a *Agent) {
+		if a.prematureSuccess != nil {
+			a.prematureSuccess.guidanceFired = 0
+		}
+	},
+	// verify_coverage_gap (field: editCoverage): warnCount
+	func(a *Agent) {
+		if a.editCoverage != nil {
+			a.editCoverage.warnCount = 0
+		}
+	},
+	// false_premise: warningCount
+	func(a *Agent) {
+		if a.falsePremise != nil {
+			a.falsePremise.warningCount = 0
+		}
+	},
+	// complexity_gate: fires
+	func(a *Agent) {
+		if a.complexityGate != nil {
+			a.complexityGate.fires = 0
+		}
+	},
+	// permission_deny_streak: fires (streak itself is behavioral and stays)
+	func(a *Agent) {
+		if a.permDenyStreak != nil {
+			a.permDenyStreak.fires = 0
+		}
+	},
+	// wt_invalidation: warnedCount
+	func(a *Agent) {
+		if a.wtInvalidation != nil {
+			a.wtInvalidation.warnedCount = 0
+		}
+	},
+	// tool_effectiveness: firedCount is per-tool guidance quota (map of
+	// counts); effectiveness stats themselves are behavioral and stay.
+	func(a *Agent) {
+		if a.toolEff != nil {
+			a.toolEff.mu.Lock()
+			for k := range a.toolEff.firedCount {
+				delete(a.toolEff.firedCount, k)
+			}
+			a.toolEff.mu.Unlock()
+		}
+	},
+	// patch_exhaust: fires
+	func(a *Agent) {
+		if a.patchExhaust != nil {
+			a.patchExhaust.fires = 0
 		}
 	},
 }
