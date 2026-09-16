@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -152,12 +153,24 @@ func (r *Registry) List() []Tool {
 	for _, t := range r.tools {
 		out = append(out, t)
 	}
+	// Deterministic order by name. r.tools is a map, so Go map iteration
+	// randomizes the order across calls. Downstream consumers of List() -
+	// ToolNames() and ToDefinitions() - feed the provider request payload,
+	// and tool definitions sit at the very front of the prompt prefix
+	// (tools → system → messages on Anthropic; same conceptual position for
+	// OpenAI-compatible auto prefix caching). A randomized tool order
+	// produces a different byte prefix on every run, invalidating the
+	// provider-side prompt/KV cache before any cache_control breakpoint can
+	// take effect, which inflates TTFT and input-token cost (Manus,
+	// "Context Engineering for AI Agents", 2025: KV-cache hit rate is the
+	// single most cost-impactful property of an agent's prompt prefix).
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
 	return out
 }
 
 // CloseAll calls Close() on every registered tool that implements Closer.
 // This releases resources like browser processes, network connections, etc.
-// Errors are collected but do not stop cleanup — all tools are attempted.
+// Errors are collected but do not stop cleanup - all tools are attempted.
 func (r *Registry) CloseAll() []error {
 	r.mu.RLock()
 	tools := make([]Tool, 0, len(r.tools))
@@ -179,7 +192,7 @@ func (r *Registry) CloseAll() []error {
 
 // ToDefinitions converts all available tools to provider.ToolDefinition for
 // the LLM. Tools implementing AvailabilityChecker with Available()==false are
-// excluded — e.g. restart before a host injects its requester (#346), so
+// excluded - e.g. restart before a host injects its requester (#346), so
 // hosts without restart support never advertise a guaranteed-failing tool.
 func (r *Registry) ToDefinitions() []provider.ToolDefinition {
 	tools := r.List()
@@ -229,7 +242,7 @@ func (r *Registry) GetMeta(name string) (ToolMeta, bool) {
 // Cloner is an optional interface that tools can implement to provide a deep copy.
 // Tools that hold mutable state (e.g., WorkingDir) MUST implement Clone so that
 // each agent gets its own independent tool instances. Tools without mutable state
-// can safely skip this interface — they will be shared between agents.
+// can safely skip this interface - they will be shared between agents.
 //
 // This is critical for correctness in concurrent scenarios (sub-agents, swarm
 // teammates using different worktrees). Without cloning, syncToolWorkingDir would
@@ -251,7 +264,7 @@ func (r *Registry) Clone() *Registry {
 		if c, ok := t.(Cloner); ok {
 			newReg.tools[name] = c.Clone()
 		} else {
-			// Stateless tool — safe to share the same instance.
+			// Stateless tool - safe to share the same instance.
 			newReg.tools[name] = t
 		}
 	}
