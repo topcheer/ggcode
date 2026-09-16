@@ -126,3 +126,36 @@ func TestNumericTaskID(t *testing.T) {
 func ptrStatus(s TaskStatus) *TaskStatus { return &s }
 
 var _ = time.Now // keep time imported if unused by future edits
+
+func TestBoardStats(t *testing.T) {
+	m := NewManager()
+	a := m.Create("done task", "", "", nil)
+	b := m.Create("active task", "", "", nil)
+	c := m.Create("queued task", "", "", nil)
+	if _, err := m.Update(a.ID, UpdateOptions{Status: ptrStatus(StatusCompleted)}); err != nil {
+		t.Fatalf("complete a: %v", err)
+	}
+	if _, err := m.Update(b.ID, UpdateOptions{Status: ptrStatus(StatusInProgress)}); err != nil {
+		t.Fatalf("start b: %v", err)
+	}
+	_ = c // stays pending
+
+	data, err := m.SnapshotJSON()
+	if err != nil {
+		t.Fatalf("SnapshotJSON: %v", err)
+	}
+	completed, inProgress, pending, ok := BoardStats(data)
+	if !ok {
+		t.Fatal("BoardStats should decode a valid snapshot")
+	}
+	if completed != 1 || inProgress != 1 || pending != 1 {
+		t.Errorf("got completed=%d inProgress=%d pending=%d, want 1/1/1", completed, inProgress, pending)
+	}
+
+	if _, _, _, ok := BoardStats(nil); ok {
+		t.Error("empty snapshot should not be ok")
+	}
+	if _, _, _, ok := BoardStats([]byte("{corrupt")); ok {
+		t.Error("corrupt snapshot should not be ok")
+	}
+}

@@ -68,6 +68,17 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		}
 	}
 
+	// Layer 2.5: named prompt layers (e.g. resume reconciliation). Same
+	// dynamic bucket as layer 2 — rebuilt every run, never cached.
+	for _, layer := range a.systemPromptLayers {
+		if layer.fn == nil {
+			continue
+		}
+		if extra := strings.TrimSpace(layer.fn()); extra != "" {
+			dynamicParts = append(dynamicParts, extra)
+		}
+	}
+
 	// Layer 3: proactive ratchet rules.
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if rs := NewRuleStore(workingDir); rs != nil {

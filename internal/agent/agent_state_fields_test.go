@@ -37,6 +37,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 	// fields here just to make the test pass for a detector state.
 	nilFieldsAllowed := map[string]string{
 		"systemPromptInjector": "optional callback, injected via setter",
+		"systemPromptLayers":   "optional named prompt layers (e.g. resume reconciliation), registered via AddSystemPromptLayer",
 		"onVerifyProgress":     "optional callback, injected via setter",
 		"onVerifyResult":       "optional callback, injected via setter",
 		"onToolProgress":       "optional callback, injected via setter",
