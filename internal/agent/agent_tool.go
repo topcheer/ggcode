@@ -484,12 +484,13 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		a.appendGuidance(&result, destructiveWarning)
 	}
 
-	// Prompt injection defense: sanitize tool results that may contain
-	// adversarial content from external sources (web pages, files, command
-	// output). Wraps suspicious content with explicit untrusted-data markers.
-	// No-op for file-writing tools and tools that produce self-generated results.
+	// Prompt injection defense (unified pipeline): scan tool results that
+	// may contain adversarial content from external sources (web pages,
+	// files, command output, MCP servers). Wraps suspicious content with a
+	// security notice and untrusted-content delimiters. Idempotent, so the
+	// later guard call in RunStreamWithContent on the same result is a no-op.
 	if !result.IsError {
-		result.Content = sanitizeToolResult(tc.Name, result.Content)
+		result.Content = guardPromptInjection(tc.Name, tc.Arguments, result.Content)
 	}
 
 	return result
