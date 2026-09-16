@@ -64,9 +64,24 @@ func (tc *TokenCache) Save(provider string, token *PKCEToken, clientID string) e
 
 	// Atomic write: temp file + rename to prevent corruption on crash.
 	// os.WriteFile is non-atomic — a crash mid-write leaves a truncated file.
+	// #1505 case 3 (same class as Store.saveAll): the fixed ".tmp" name let
+	// two processes (desktop/daemon/TUI each running an A2A server refreshing
+	// the same provider token) O_TRUNC the same scratch file concurrently,
+	// mixing two JSON documents before rename. CreateTemp gives every writer
+	// its own scratch file, created 0600.
 	path := tc.path(provider)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)
