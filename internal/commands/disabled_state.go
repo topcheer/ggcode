@@ -29,6 +29,12 @@ func loadDisabledSet() map[string]bool {
 	}
 	disabledMu.RUnlock()
 
+	// Cache miss: upgrade to the write lock before populating -
+	// loadDisabledSetLocked requires the writer lock, and an unlocked call
+	// races with PersistEnabledState's locked writes to the same globals
+	// (lost update of a just-disabled skill + data race).
+	disabledMu.Lock()
+	defer disabledMu.Unlock()
 	return loadDisabledSetLocked()
 }
 
