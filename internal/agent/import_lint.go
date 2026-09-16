@@ -1,5 +1,18 @@
 package agent
 
+// DEAD CODE SINCE fc5c4aad (the critical-only write-integrity refactor
+// removed the wiring). Nothing in production calls checkGoImports* or reads
+// commonGoStdlib - only tests do (#2430, the "#499 dead-detector class").
+// DO NOT keep improving this file as if it were live: 7eed8704 and 41094857
+// both landed blind improvements after the unwiring.
+//
+// If you want to resurrect it (#1020 precedent: regex-loop was re-wired
+// once), read #2430 first: the missing-import detector suggests imports
+// that BREAK legal code (local `scanner := bufio.NewScanner(f)` followed
+// by `scanner.Scan()` triggers "add import text/scanner", which collides
+// with the local binding). Resurrection requires local-binding exclusion
+// before the map-based suggestion is safe to emit.
+//
 // Proactive import analysis for Go files at write time.
 //
 // Research basis: AI coding agents (Claude Code, Cursor, Cline, Aider) frequently
@@ -17,10 +30,11 @@ package agent
 //   - Claude Code: Relies on LSP diagnostics (requires running language server)
 //   - Cline/OpenHands: Reactive only - catches import errors after build fails
 //
-// ggcode's approach: zero-cost AST-based analysis that runs synchronously after
-// each Go file write/edit, catching unused imports and suggesting missing stdlib
-// imports BEFORE the agent runs a build. Uses go/ast from the standard library
-// (no external dependencies, <1ms per file).
+// ggcode's approach (historical - see DEAD banner above): zero-cost AST-based
+// analysis that USED TO run synchronously after each Go file write/edit via
+// the write-integrity hook, catching unused imports and suggesting missing
+// stdlib imports before the agent ran a build. Uses go/ast from the standard
+// library (no external dependencies, <1ms per file).
 //
 // Design decisions:
 //   - Only runs on .go files (highest value - Go has strict import rules)
@@ -52,8 +66,14 @@ type goImportInfo struct {
 }
 
 // commonGoStdlib maps short package identifiers to their full import paths.
-// Used for missing-import suggestions. Only includes packages whose short name
-// is unlikely to be a user-defined variable or type (to minimize false positives).
+// Used for missing-import suggestions.
+//
+// #2430: the original claim that this map "only includes packages whose short
+// name is unlikely to be a user-defined variable" is FALSE - it lists
+// scanner/env/user/text/hash/rand/signal/driver/tar/zip/bits/cipher/uuid/html,
+// all idiomatic lowercase Go local-variable names, and the detector has no
+// local-binding exclusion. Following its suggestion on `scanner.Scan()` (a
+// method on a bufio.Scanner local) breaks compilable code.
 var commonGoStdlib = map[string]string{
 	"fmt":       "fmt",
 	"os":        "os",
