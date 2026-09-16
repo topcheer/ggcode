@@ -43,6 +43,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -126,6 +127,24 @@ func countLocksWithoutUnlock(src string) int {
 
 // findLocksWithoutUnlock parses Go source and returns all lock-without-unlock
 // instances found, ordered by position.
+//
+// #2433: the old implementation was flow-insensitive receiver-set matching -
+// ANY same-receiver Unlock anywhere in the function exempted ALL its Lock
+// calls, so the headline case (mu.Lock(); if err != nil { return }; mu.Unlock())
+// was invisible: the early return held the lock yet zero warnings fired.
+// Worse, the inverse misfired: legitimate indirect releases
+// (defer s.release(), unlock := mu.Unlock; defer unlock()) warned.
+//
+// Strategy now: per-function, if an INDIRECT release shape exists (any
+// defer whose called method looks like unlock/release, or a defer on a
+// plain variable - the method-value idiom), fall back to the old
+// flow-insensitive check (conservative silence on that function).
+// Otherwise run a sequential lock-holding simulation: Lock acquires,
+// Unlock/defer-Unlock releases, return statements (and the implicit
+// function-end return) report still-held receivers, and branch bodies
+// (if/else/for/switch) are simulated on a COPY of the held set so
+// per-branch acquires do not leak across joins (branch returns are still
+// checked inside the branch, which is exactly where early exits live).
 func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 	if strings.TrimSpace(src) == "" {
 		return nil
@@ -145,27 +164,251 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 			continue
 		}
 
-		funcName := fn.Name.Name
-		locks := findLockCalls(fn)
-		if len(locks) == 0 {
+		if findLockCalls(fn) == nil {
 			continue
 		}
 
-		unlockedReceivers := findUnlockCalls(fn)
-		for _, lock := range locks {
-			if unlockedReceivers[lock.receiver] {
+		if fnHasIndirectRelease(fn) {
+			// Indirect-release shapes (defer s.release(), the method-value
+			// idiom) make precise simulation unsound without type info, and
+			// the old flow-insensitive check misfires on them as FPs - so
+			// exempt the whole function (#2433 issue recommendation:
+			// downgrade/exempt rather than warn).
+			continue
+		}
+
+		instances = append(instances, simulateHeldLocks(fn, fset)...)
+	}
+
+	return instances
+}
+
+// fnHasIndirectRelease reports whether fn contains any release shape the
+// sequential simulator cannot model precisely (#2433 FP side):
+//   - defer on a bare variable call (defer unlock()) - the
+//     `v := mu.Unlock` method-value idiom
+//   - defer calling a method whose name suggests release but is not the
+//     canonical Unlock/RUnlock on the same receiver (defer s.release())
+func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
+	indirect := false
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		d, ok := node.(*ast.DeferStmt)
+		if !ok {
+			return true
+		}
+		switch callee := d.Call.Fun.(type) {
+		case *ast.Ident:
+			// defer unlock() - variable call: cannot resolve the receiver
+			// it releases without type info; treat as indirect.
+			indirect = true
+		case *ast.SelectorExpr:
+			if callee.Sel.Name != "Unlock" && callee.Sel.Name != "RUnlock" {
+				lower := strings.ToLower(callee.Sel.Name)
+				if strings.Contains(lower, "unlock") || strings.Contains(lower, "release") {
+					// defer s.release() - releases some lock the simulator
+					// cannot see through.
+					indirect = true
+				}
+			}
+		}
+		return true
+	})
+	return indirect
+}
+
+// simHeldEntry is one receiver currently held in the sequential lock
+// simulation (#2433).
+type simHeldEntry struct {
+	lock lockCall
+	// reported guards against duplicate warnings when multiple early
+	// returns hold the same receiver: one warning per (func, receiver,
+	// method) keeps the delta anchor stable (#1099).
+	reported bool
+}
+
+// simulateHeldLocks walks fn's statements sequentially tracking which
+// receivers are held, and reports every receiver still held at a return
+// statement (early exit) or at the function's implicit end-of-body return.
+// Branch bodies run on a copy of the held set (joins do not accumulate
+// per-branch state), but returns inside them ARE checked in-context.
+func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnlockInstance {
+	held := map[string]*simHeldEntry{}
+	var instances []lockWithoutUnlockInstance
+
+	var reportHeld func(where string)
+	reportHeld = func(where string) {
+		for _, recv := range sortedSimKeys(held) {
+			e := held[recv]
+			if e.reported {
 				continue
 			}
+			e.reported = true
 			instances = append(instances, lockWithoutUnlockInstance{
-				receiver: lock.receiver,
-				method:   lock.method,
-				funcName: funcName,
-				posStr:   fset.Position(lock.pos).String(),
+				receiver: recv,
+				method:   e.lock.method,
+				funcName: fn.Name.Name,
+				posStr:   fset.Position(e.lock.pos).String() + " (" + where + ")",
 			})
 		}
 	}
 
+	var applyCall func(call *ast.CallExpr)
+	applyCall = func(call *ast.CallExpr) {
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return
+		}
+		recv := exprToString(sel.X)
+		if recv == "" {
+			return
+		}
+		if _, isLock := lockMethodNames[sel.Sel.Name]; isLock {
+			if _, exists := held[recv]; !exists {
+				held[recv] = &simHeldEntry{lock: lockCall{receiver: recv, method: sel.Sel.Name, pos: call.Pos()}}
+			}
+			return
+		}
+		if sel.Sel.Name == "Unlock" || sel.Sel.Name == "RUnlock" {
+			delete(held, recv)
+		}
+	}
+
+	var applyDefer func(call *ast.CallExpr)
+	applyDefer = func(call *ast.CallExpr) {
+		// defer mu.Unlock() schedules the release for every remaining
+		// path: the receiver is no longer "at risk".
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if sel.Sel.Name == "Unlock" || sel.Sel.Name == "RUnlock" {
+				if recv := exprToString(sel.X); recv != "" {
+					delete(held, recv)
+				}
+			}
+		}
+		// Non-canonical defer releases were routed to the conservative
+		// fallback by fnHasIndirectRelease before we get here.
+	}
+
+	var walkStmts func(stmts []ast.Stmt)
+	walkStmts = func(stmts []ast.Stmt) {
+		for _, st := range stmts {
+			switch s := st.(type) {
+			case *ast.ExprStmt:
+				if call, ok := s.X.(*ast.CallExpr); ok {
+					applyCall(call)
+				}
+			case *ast.DeferStmt:
+				applyDefer(s.Call)
+			case *ast.ReturnStmt:
+				reportHeld("held across return")
+			case *ast.AssignStmt:
+				// v := mu.Unlock method-value bindings are handled by the
+				// indirect-release fallback; assignments of plain calls
+				// (rare: go-less bare call in expr) still get scanned.
+				for _, rhs := range s.Rhs {
+					if call, ok := rhs.(*ast.CallExpr); ok {
+						applyCall(call)
+					}
+				}
+			case *ast.BlockStmt:
+				walkStmts(s.List)
+			case *ast.IfStmt:
+				if s.Init != nil {
+					walkStmts([]ast.Stmt{s.Init})
+				}
+				thenHeld := copySimHeld(held)
+				saved := held
+				held = thenHeld
+				// The condition acquires on the taken path (TryLock idiom):
+				// `if mu.TryLock() { ... }` holds only inside the branch.
+				if call, ok := s.Cond.(*ast.CallExpr); ok {
+					applyCall(call)
+				}
+				walkStmts(s.Body.List)
+				// A receiver still held at the branch end leaks on that path
+				// (the TryLock idiom's forgotten-Unlock shape).
+				reportHeld("held at branch end")
+				held = saved
+				if s.Else != nil {
+					elseHeld := copySimHeld(held)
+					saved = held
+					held = elseHeld
+					switch e := s.Else.(type) {
+					case *ast.BlockStmt:
+						walkStmts(e.List)
+					case *ast.IfStmt:
+						walkStmts([]ast.Stmt{e})
+					default:
+						walkStmts([]ast.Stmt{e})
+					}
+					reportHeld("held at branch end")
+					held = saved
+				}
+			case *ast.ForStmt:
+				loopHeld := copySimHeld(held)
+				saved := held
+				held = loopHeld
+				if s.Body != nil {
+					walkStmts(s.Body.List)
+				}
+				held = saved
+			case *ast.RangeStmt:
+				loopHeld := copySimHeld(held)
+				saved := held
+				held = loopHeld
+				if s.Body != nil {
+					walkStmts(s.Body.List)
+				}
+				held = saved
+			case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
+				var body *ast.BlockStmt
+				switch e := st.(type) {
+				case *ast.SwitchStmt:
+					body = e.Body
+				case *ast.TypeSwitchStmt:
+					body = e.Body
+				case *ast.SelectStmt:
+					body = e.Body
+				}
+				if body != nil {
+					caseHeld := copySimHeld(held)
+					saved := held
+					held = caseHeld
+					walkStmts(body.List)
+					held = saved
+				}
+			default:
+				// Labeled statements, decls, inc/dec, send, go, etc: not
+				// lock-relevant in their statement form; nested blocks inside
+				// them are rare and the conservative branch-copy pattern
+				// above covers the common shapes.
+				_ = s
+			}
+		}
+	}
+
+	walkStmts(fn.Body.List)
+	// Implicit end-of-function return.
+	reportHeld("held at function end")
+
 	return instances
+}
+
+func copySimHeld(held map[string]*simHeldEntry) map[string]*simHeldEntry {
+	out := make(map[string]*simHeldEntry, len(held))
+	for k, v := range held {
+		cp := *v // deep copy: branch-local reporting must not mark the shared entry
+		out[k] = &cp
+	}
+	return out
+}
+
+func sortedSimKeys(m map[string]*simHeldEntry) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // lockCall represents a detected lock acquisition.
