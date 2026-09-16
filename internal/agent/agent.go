@@ -313,6 +313,7 @@ type Agent struct {
 	systemPromptInjector      func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	baseSystemPrompt          string                                // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt  string                                // cache of last injected prompt to skip redundant updates
+	harnessFPLast             string                                // last harness fingerprint sum; stamps scaffolding changes into the debug log (harness_fingerprint.go)
 	onVerifyProgress          func(text string)                     // called during async verification (status updates)
 	onVerifyResult            func(VerifyResult)                    // called when async verification completes
 	onToolProgress            func(toolID, toolName, output string) // called for streaming tool output (e.g. wait_command)
