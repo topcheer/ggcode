@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/task"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -1668,6 +1669,78 @@ func TestApplyResumedSessionSavesOldSession(t *testing.T) {
 	}
 	if loaded.ID != "sess-old" {
 		t.Errorf("expected old session preserved on disk, got %s", loaded.ID)
+	}
+}
+
+// TestApplyResumedSessionSnapshotsTaskBoard verifies the board wiring end
+// to end: the outgoing session captures the live board before the async
+// meta flush (and it lands on disk), and the resumed session's persisted
+// board replaces the live one.
+func TestApplyResumedSessionSnapshotsTaskBoard(t *testing.T) {
+	storeDir := t.TempDir()
+	store, err := session.NewJSONLStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+
+	m := newTestModel()
+	m.taskMgr = task.NewManager()
+	m.agent = agent.NewAgent(nil, toolpkg.NewRegistry(), "", 1)
+	m.sessionStore = store
+
+	oldSes := &session.Session{
+		ID:        "sess-old-board",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("old message")}},
+		},
+	}
+	if err := store.Save(oldSes); err != nil {
+		t.Fatalf("save old: %v", err)
+	}
+	m.session = oldSes
+	m.persistedMsgCount = len(oldSes.Messages)
+
+	// The live board belongs to the outgoing session.
+	m.taskMgr.Create("wire task", "", "", nil)
+
+	// The resumed session carries its own, different persisted board
+	// (built with a scratch manager for snapshot-format fidelity).
+	scratch := task.NewManager()
+	resumed := scratch.Create("resumed task", "", "", nil)
+	snap, err := scratch.SnapshotJSON()
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	newSes := &session.Session{
+		ID: "sess-resumed-board",
+		Messages: []provider.Message{
+			{Role: "user", Content: []provider.ContentBlock{provider.TextBlock("new message")}},
+		},
+		TasksJSON: snap,
+	}
+
+	m.applyResumedSession(newSes)
+
+	// Live manager now holds the resumed board, not the outgoing one.
+	got := m.taskMgr.List()
+	if len(got) != 1 || got[0].ID != resumed.ID || got[0].Subject != "resumed task" {
+		t.Errorf("live board not swapped to resumed session's board: %+v", got)
+	}
+	// Outgoing session captured the live board before the switch.
+	if !strings.Contains(string(oldSes.TasksJSON), "wire task") {
+		t.Errorf("outgoing session missing board snapshot: %s", oldSes.TasksJSON)
+	}
+
+	// Give the async meta flush a moment, then verify disk persistence.
+	time.Sleep(100 * time.Millisecond)
+	loaded, err := store.Load("sess-old-board")
+	if err != nil {
+		t.Fatalf("load old session: %v", err)
+	}
+	if !strings.Contains(string(loaded.TasksJSON), "wire task") {
+		t.Errorf("board snapshot not persisted for outgoing session: %s", loaded.TasksJSON)
 	}
 }
 
