@@ -289,6 +289,18 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 	}
 
 	var walkStmts func(stmts []ast.Stmt)
+	// simBranch runs body on a COPY of the held set and reports any
+	// receiver still held when it ends (the branch-end leak check that
+	// catches the TryLock idiom's forgotten-Unlock), restoring the caller's
+	// set afterwards so per-branch acquires do not leak across joins.
+	simBranch := func(body func()) {
+		branchHeld := copySimHeld(held)
+		saved := held
+		held = branchHeld
+		body()
+		reportHeld("held at branch end")
+		held = saved
+	}
 	walkStmts = func(stmts []ast.Stmt) {
 		for _, st := range stmts {
 			switch s := st.(type) {
@@ -315,50 +327,34 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 				if s.Init != nil {
 					walkStmts([]ast.Stmt{s.Init})
 				}
-				thenHeld := copySimHeld(held)
-				saved := held
-				held = thenHeld
-				// The condition acquires on the taken path (TryLock idiom):
-				// `if mu.TryLock() { ... }` holds only inside the branch.
-				if call, ok := s.Cond.(*ast.CallExpr); ok {
-					applyCall(call)
-				}
-				walkStmts(s.Body.List)
-				// A receiver still held at the branch end leaks on that path
-				// (the TryLock idiom's forgotten-Unlock shape).
-				reportHeld("held at branch end")
-				held = saved
-				if s.Else != nil {
-					elseHeld := copySimHeld(held)
-					saved = held
-					held = elseHeld
-					switch e := s.Else.(type) {
-					case *ast.BlockStmt:
-						walkStmts(e.List)
-					case *ast.IfStmt:
-						walkStmts([]ast.Stmt{e})
-					default:
-						walkStmts([]ast.Stmt{e})
+				simBranch(func() {
+					// The condition acquires on the taken path (TryLock idiom):
+					// `if mu.TryLock() { ... }` holds only inside the branch.
+					if call, ok := s.Cond.(*ast.CallExpr); ok {
+						applyCall(call)
 					}
-					reportHeld("held at branch end")
-					held = saved
+					walkStmts(s.Body.List)
+				})
+				if s.Else != nil {
+					simBranch(func() {
+						switch e := s.Else.(type) {
+						case *ast.BlockStmt:
+							walkStmts(e.List)
+						case *ast.IfStmt:
+							walkStmts([]ast.Stmt{e})
+						default:
+							walkStmts([]ast.Stmt{e})
+						}
+					})
 				}
 			case *ast.ForStmt:
-				loopHeld := copySimHeld(held)
-				saved := held
-				held = loopHeld
 				if s.Body != nil {
-					walkStmts(s.Body.List)
+					simBranch(func() { walkStmts(s.Body.List) })
 				}
-				held = saved
 			case *ast.RangeStmt:
-				loopHeld := copySimHeld(held)
-				saved := held
-				held = loopHeld
 				if s.Body != nil {
-					walkStmts(s.Body.List)
+					simBranch(func() { walkStmts(s.Body.List) })
 				}
-				held = saved
 			case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
 				var body *ast.BlockStmt
 				switch e := st.(type) {
@@ -370,11 +366,7 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 					body = e.Body
 				}
 				if body != nil {
-					caseHeld := copySimHeld(held)
-					saved := held
-					held = caseHeld
-					walkStmts(body.List)
-					held = saved
+					simBranch(func() { walkStmts(body.List) })
 				}
 			default:
 				// Labeled statements, decls, inc/dec, send, go, etc: not
