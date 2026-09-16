@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -259,5 +260,76 @@ func TestPerfBaselineDataFile(t *testing.T) {
 	savePerfBaseline(tmp, []perfBaselineEntry{{RunID: "test", Success: true}})
 	if _, err := os.Stat(dir); err != nil {
 		t.Errorf("expected directory created, got error: %v", err)
+	}
+}
+
+func TestTopToolMix(t *testing.T) {
+	m := map[string]int{"run_command": 48, "read_file": 30, "edit_file": 12, "grep": 30}
+	got := topToolMix(m, 3)
+	want := []string{"run_command:48", "grep:30", "read_file:30"}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d entries, got %d: %v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestTopToolMixEmpty(t *testing.T) {
+	if got := topToolMix(nil, 3); got != nil {
+		t.Errorf("expected nil for empty map, got %v", got)
+	}
+}
+
+func TestFormatPerfRegressionWarningIncludesRunShape(t *testing.T) {
+	baseline := perfBaselineEntry{DurationSec: 100, Iterations: 10}
+	hit := perfBaselineEntry{
+		Iterations: 45, ToolCalls: 120, DurationSec: 982,
+		TopTools: []string{"run_command:48", "read_file:30"},
+	}
+	msg := formatPerfRegressionWarning("duration", baseline, hit)
+	for _, want := range []string{"iterations=45", "tool_calls=120", "sec/iter≈21.8", "run_command:48", "read_file:30"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("duration advisory missing %q: %s", want, msg)
+		}
+	}
+	msg = formatPerfRegressionWarning("iterations", baseline, hit)
+	if !strings.Contains(msg, "run_command:48") {
+		t.Errorf("iterations advisory should carry run-shape diagnostics: %s", msg)
+	}
+
+	// Legacy baseline recorded before TopTools existed: must not panic or
+	// fabricate a top-tools segment.
+	legacyMsg := formatPerfRegressionWarning("duration",
+		perfBaselineEntry{DurationSec: 100},
+		perfBaselineEntry{DurationSec: 200, Iterations: 5})
+	if strings.Contains(legacyMsg, "top tools") {
+		t.Errorf("legacy entry should not claim top tools: %s", legacyMsg)
+	}
+}
+
+func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
+	tmp := t.TempDir()
+	stats := &RunStats{
+		ToolCalls:  map[string]int{"read_file": 3, "edit_file": 2, "run_command": 5},
+		Iterations: 10,
+		Duration:   30 * time.Second,
+	}
+	stats.Success = true
+	recordPerfBaseline(tmp, stats)
+	loaded := loadPerfBaseline(tmp)
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(loaded))
+	}
+	want := []string{"run_command:5", "read_file:3", "edit_file:2"}
+	if len(loaded[0].TopTools) != len(want) {
+		t.Fatalf("expected top tools %v, got %v", want, loaded[0].TopTools)
+	}
+	for i := range want {
+		if loaded[0].TopTools[i] != want[i] {
+			t.Errorf("top tool %d: got %q, want %q", i, loaded[0].TopTools[i], want[i])
+		}
 	}
 }
