@@ -269,9 +269,21 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		))
 	}
 
+	// MCP Tool Search meta-tool: handled agent-side (not registry-backed) so
+	// it never appears in ToDefinitions and activation state stays per-agent.
+	if tc.Name == ToolSearchToolName && a.toolSearch != nil {
+		return a.toolSearch.executeResult(tc.Arguments)
+	}
+
 	t, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}
+	}
+	// Deferred MCP tool called by name (history carry-over or model prior):
+	// activate its schema so subsequent requests stay consistent with tools
+	// the conversation already references, then execute normally.
+	if a.toolSearch != nil && a.toolSearch.maybeAutoActivate(tc.Name) {
+		debug.Log("agent", "tool search: auto-activated schema for %s called by name", tc.Name)
 	}
 
 	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,

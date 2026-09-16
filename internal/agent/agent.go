@@ -171,6 +171,7 @@ type Agent struct {
 	toolCallBudget            *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	commandCache              *commandCache                         // deterministic build/test command result caching
 	effectLedger              *effectLedgerState                    // side-effect ledger: duplicate-effect awareness on retries (LangEffect/RAC-inspired)
+	toolSearch                *toolSearchState                      // deferred MCP tool schema disclosure (Anthropic Tool Search-inspired)
 	postEditVerify            postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
 	planner                   *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness             *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
@@ -370,6 +371,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolCallBudget:         newToolCallBudget(),
 		commandCache:           newCommandCache(),
 		effectLedger:           newEffectLedger(),
+		toolSearch:             newToolSearchState(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
@@ -1519,6 +1521,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectRatchetRules()
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
+	a.toolSearch.init(toolDefs)
+	if a.toolSearch.enabled {
+		debug.Log("agent", "tool search: %d MCP tool schemas deferred behind %s", len(a.toolSearch.deferred), ToolSearchToolName)
+	}
 	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
 		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
 	}
@@ -2067,7 +2073,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// contexts), and description truncation misleads the model into
 		// guessing tool behavior from names. All registered tools are sent
 		// with their full, unmodified descriptions.
-		activeToolDefs := toolDefs
+		activeToolDefs := a.toolSearch.activeDefs(toolDefs)
+		if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
+			cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(activeToolDefs))
+		}
 		// #1672: read the manager snapshot HERE, at the consumption point.
 		// msgs is initialized once before the loop and only refreshed at
 		// 37 conditional sites; the recovery nudges and final gates Add to
