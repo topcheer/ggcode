@@ -159,6 +159,7 @@ type Agent struct {
 	editAbandon               *editAbandonState                     // edit abandonment detection (PASTE/LLMCompiler-inspired attention-shift tracking)
 	toolCallBudget            *toolCallBudget                       // per-session tool invocation limit (action-level guardrail)
 	commandCache              *commandCache                         // deterministic build/test command result caching
+	effectLedger              *effectLedgerState                    // side-effect ledger: duplicate-effect awareness on retries (LangEffect/RAC-inspired)
 	postEditVerify            postEditVerifyState                   // tracks source-code edits to inject periodic verification hints
 	planner                   *planState                            // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness             *todoStalenessState                   // mid-run stale todo detection (plan abandonment awareness)
@@ -357,6 +358,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editAbandon:            newEditAbandonState(),
 		toolCallBudget:         newToolCallBudget(),
 		commandCache:           newCommandCache(),
+		effectLedger:           newEffectLedger(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
 		todoStaleness:          newTodoStalenessState(),
@@ -3206,6 +3208,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// Cache deterministic command results (build, test, lint, etc.)
 				// for reuse when the same command is called again without file changes.
 				a.storeCommandResult(tc.Name, tc.Arguments, result)
+				// Effect ledger (LangEffect/RAC-inspired): record failed/uncertain
+				// shell executions and, when the identical command is retried after
+				// such an attempt, annotate the retry result so the model verifies
+				// external state instead of trusting an outcome that may duplicate
+				// side effects. Runs after storeCommandResult: only raw results are
+				// cached (annotation text must never be cached).
+				if hint := a.recordEffectAttempt(tc.Name, tc.Arguments, result); hint != "" {
+					result.Content += hint
+				}
 			}
 			// Secret redaction (#1195): mask secret values in external-content
 			// tool results BEFORE any recorder, cache annotation, context append,
