@@ -116,6 +116,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Productivity
 		NewAskUserTool(),
 		NewTodoWrite(""), // session ID set later via agent.SetSessionID()
+		NewCurrentTimeTool(),
 
 		// Permission
 		NewSwitchModeTool(policy),

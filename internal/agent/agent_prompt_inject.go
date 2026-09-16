@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -92,7 +93,9 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	// Skip entirely when there is no system prompt and no dynamic content.
 	// This preserves backward compatibility: tests and setups that rely on
 	// the absence of a system message are not disturbed.
-	base = strings.TrimSpace(base)
+	// Anchor temporal context to session start and fold it into the cacheable
+	// base layer (Temporal Context Injection baseline practice).
+	base = a.withTemporalContext(base)
 	if base == "" && len(dynamicParts) == 0 {
 		return
 	}
@@ -146,6 +149,41 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 			{Type: "text", Text: dynamicText},
 		},
 	})
+}
+
+// temporalContextLine renders the session-anchored temporal header. The
+// timestamp is anchored to the agent's session start (lazily captured on
+// first call) rather than sampled on every invocation, so the rendered
+// bytes stay identical across all iterations of a run. This preserves
+// KV-cache prefix reuse within the session (see #2445 prefix-stability
+// findings); sessions that outlive the header's freshness are expected to
+// call the current_time tool for a live reading instead.
+func (a *Agent) temporalContextLine() string {
+	a.mu.Lock()
+	if a.temporalAnchor.IsZero() {
+		a.temporalAnchor = time.Now()
+	}
+	now := a.temporalAnchor
+	a.mu.Unlock()
+
+	name, _ := now.Zone()
+	utcOffset := now.Format("-07:00")
+	return fmt.Sprintf("Current date/time: %s (%s), %s %s (UTC offset %s). "+
+		"Treat this as the reference point for all time-sensitive reasoning; "+
+		"call the current_time tool if the actual wall-clock time matters and may have drifted.",
+		now.Format("2006-01-02"), now.Format("Monday"), now.Format("15:04"), name, utcOffset)
+}
+
+// withTemporalContext prepends the temporal header to a non-empty base
+// system prompt. Placement at the very start of the system prompt follows
+// temporal-grounding research showing date-sensitive reasoning is most
+// reliable when the timestamp leads the prompt. Empty bases stay empty so
+// setups that rely on the absence of a system message are undisturbed.
+func (a *Agent) withTemporalContext(base string) string {
+	if strings.TrimSpace(base) == "" {
+		return base
+	}
+	return a.temporalContextLine() + "\n\n" + base
 }
 
 // maybeInjectRatchetRules is a no-op retained for backward compatibility.
