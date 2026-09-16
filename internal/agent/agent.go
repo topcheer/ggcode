@@ -328,6 +328,7 @@ type Agent struct {
 	baseSystemPrompt          string                                // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt  string                                // cache of last injected prompt to skip redundant updates
 	harnessFPLast             string                                // last harness fingerprint sum; stamps scaffolding changes into the debug log (harness_fingerprint.go)
+	temporalAnchor            time.Time                             // session-start wall clock anchoring the temporal header (stays byte-stable per run)
 	onVerifyProgress          func(text string)                     // called during async verification (status updates)
 	onVerifyResult            func(VerifyResult)                    // called when async verification completes
 	onToolProgress            func(toolID, toolName, output string) // called for streaming tool output (e.g. wait_command)
