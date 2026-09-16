@@ -96,6 +96,18 @@ type MetaProvider interface {
 	ToolMeta() ToolMeta
 }
 
+// SandboxSafe is an optional interface for tools that declare themselves
+// safe to invoke from the code_execution sandbox (sa-19, MCP bridge).
+// Only tools whose registered invocation is read-only may return true.
+// It gates which MCP tools (mcp__ prefix) are injected into the sandbox:
+// tools from servers configured with read_only: true are exposed; tools
+// from servers without the flag are never exposed because their Execute
+// may have side effects and must keep going through the normal per-call
+// permission flow.
+type SandboxSafe interface {
+	SandboxSafe() bool
+}
+
 // Registry manages the set of available tools.
 type Registry struct {
 	tools     map[string]Tool
