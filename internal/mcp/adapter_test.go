@@ -192,3 +192,40 @@ func TestAdapterToolConflict_ErrorMessage(t *testing.T) {
 		t.Errorf("error should mention 'already registered', got: %s", err.Error())
 	}
 }
+
+// TestAdapterSandboxSafeFlag verifies the sandbox-eligibility marker used by
+// the code_execution MCP bridge (sa-19): only tools from a read_only adapter
+// declare themselves sandbox-safe; tools from a write-capable adapter must
+// not, so they keep going through the per-call permission flow.
+func TestAdapterSandboxSafeFlag(t *testing.T) {
+	defs := []ToolDefinition{
+		{Name: "query", Description: "Query data", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}
+	registry := tool.NewRegistry()
+
+	ro := NewReadOnlyAdapter("ro-srv", nil, defs)
+	if err := ro.RegisterTools(registry); err != nil {
+		t.Fatalf("RegisterTools (read_only): %v", err)
+	}
+	rw := NewAdapter("rw-srv", nil, defs)
+	if err := rw.RegisterTools(registry); err != nil {
+		t.Fatalf("RegisterTools (write): %v", err)
+	}
+
+	for name, want := range map[string]bool{
+		"mcp__ro-srv__query": true,  // read_only server: sandbox-eligible
+		"mcp__rw-srv__query": false, // write-capable server: never exposed
+	} {
+		registered, ok := registry.Get(name)
+		if !ok {
+			t.Fatalf("tool %q not found in registry", name)
+		}
+		ss, implements := registered.(tool.SandboxSafe)
+		if !implements {
+			t.Fatalf("tool %q does not implement tool.SandboxSafe", name)
+		}
+		if got := ss.SandboxSafe(); got != want {
+			t.Errorf("%q SandboxSafe() = %v, want %v", name, got, want)
+		}
+	}
+}
