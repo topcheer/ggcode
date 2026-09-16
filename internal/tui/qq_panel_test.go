@@ -234,6 +234,29 @@ func TestQQPanelRenderCreateHint(t *testing.T) {
 	}
 }
 
+// #2178 family: the qq create echo must mask the appsecret field at the
+// render layer (wiring pin - the family test pins the helper, this pins
+// that renderQQPanel actually routes createInput through it).
+func TestQQPanelRenderMasksCreateEchoSecret(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.handleResize(160, 50)
+	m.SetConfig(&config.Config{IM: config.IMConfig{
+		Adapters: map[string]config.IMAdapterConfig{
+			"qq-a": {Enabled: true, Platform: "qq"},
+		},
+	}})
+	m.openQQPanel()
+	m.qqPanel.createMode = true
+	m.qqPanel.createInput = "qq-main 123456 app-secret-value"
+	rendered := m.renderQQPanel()
+	if strings.Contains(rendered, "app-secret-value") {
+		t.Fatalf("appsecret leaked in create echo:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "qq-main") || !strings.Contains(rendered, "123456") {
+		t.Fatalf("name and appid must stay readable in create echo:\n%s", rendered)
+	}
+}
+
 func TestQQPanelRenderShowsBotCountsAndBindingStatus(t *testing.T) {
 	m := NewModel(nil, nil)
 	m.SetConfig(&config.Config{

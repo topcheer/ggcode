@@ -119,7 +119,11 @@ func (m Model) renderQQPanel() string {
 	body = append(body, "", lipgloss.NewStyle().Bold(true).Render(m.t("panel.qq.create")))
 	if panel.createMode {
 		body = append(body,
-			" "+m.t("panel.qq.bot_input", panel.createInput+"█"),
+			// #2178 family: spec is `name appid appsecret` (parser
+			// createQQAdapter: fields[2]=appsecret -> Extra["appsecret"]).
+			// appid stays readable like wecom's bot_id; the secret field is
+			// masked frame-by-frame so it never enters scrollback.
+			" "+m.t("panel.qq.bot_input", maskPositionalCreateEcho(panel.createInput, 2)+"█"),
 			" "+m.t("panel.qq.create_format"),
 			" "+m.t("panel.qq.create_example"),
 			renderPasteShortcutHint(m.currentLanguage()),
