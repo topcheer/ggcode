@@ -70,6 +70,7 @@ func TestIssue2178FamilyPanels(t *testing.T) {
 		{"dingtalk", "bot dingkey dingsecret", "dingsecret", "bot"},
 		{"feishu", "bot cli_a1 feishusecret", "feishusecret", "bot"},
 		{"wecom", "bot WWID123 wecomsecret", "wecomsecret", "bot"},
+		{"qq", "qq-main 123456 appsecret-value", "appsecret-value", "qq-main"},
 		{"mattermost", "bot https://mm.example.com mmtoken", "mmtoken", "bot"},
 		{"matrix", "bot https://hs.example.com sytoken", "sytoken", "bot"},
 	}
@@ -92,8 +93,8 @@ func secretFromFor(panel string) int {
 	switch panel {
 	case "tg", "discord", "dingtalk":
 		return 1 // name <secret...> from field 2 (dingtalk app_key hits the key family)
-	case "feishu", "wecom", "mattermost", "matrix":
-		return 2 // name <public-id/url> <secret...>
+	case "feishu", "wecom", "mattermost", "matrix", "qq":
+		return 2 // name <public-id/url> <secret...> (qq: name appid appsecret)
 	default:
 		return 1
 	}
