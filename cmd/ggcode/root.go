@@ -602,6 +602,19 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	_ = registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: workingDir})
 	trace.Mark("register create_skill tool")
 
+	// Register trial_fork tool (experimental, off by default): forks N git
+	// worktrees so sub-agents explore strategies in parallel, then reports
+	// a non-destructive recommendation.
+	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
+		_ = registry.Register(&tool.TrialForkTool{
+			Provider:     prov,
+			Tools:        registry,
+			AgentFactory: skillAgentFactory,
+			WorkingDir:   workingDir,
+		})
+		trace.Mark("register trial_fork tool")
+	}
+
 	var promptSkillRefsMu sync.RWMutex
 	currentPromptSkillRefs := func() []string {
 		promptSkillRefsMu.RLock()
