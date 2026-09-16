@@ -125,10 +125,15 @@ func TestPreExecuteReadOnly_SkipsMemoizedTools(t *testing.T) {
 	}
 }
 
-// TestPreExecuteReadOnly_MixedBatchSkipped pins #1475-A: a batch containing
-// a mutating tool must NOT pre-execute its reads - [edit_file X, read_file
-// X] handed back pre-edit content with no annotation and provoked duplicate
-// edits. Pure read-only batches keep the speedup.
+// TestPreExecuteReadOnly_MixedBatchSkipped pins #1475-A's scenario under the
+// conflict-aware scheduler (parallel_scheduling.go): a COLLIDING read - one
+// whose scan scope covers a pending mutation target - must NOT be
+// pre-executed: [edit_file X, read_file X] used to hand back pre-edit
+// content with no annotation and provoked duplicate edits. Under the new
+// semantics this batch still fully skips because every read collides;
+// unrelated reads are pre-executed instead (see
+// TestPreExecuteReadOnly_PartialParallelMixedBatch), and unknown-scope
+// mutators keep the batch-wide skip.
 func TestPreExecuteReadOnly_MixedBatchSkipped(t *testing.T) {
 	a := &Agent{
 		tools:      tool.NewRegistry(),

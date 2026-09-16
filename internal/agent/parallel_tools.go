@@ -83,91 +83,8 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		}
 	}
 
-	// Identify which tool calls are read-only and not cached.
-	type pending struct {
-		index int
-		name  string
-		args  json.RawMessage
-	}
-	var batch []pending
-	// #1475-A: a batch containing ANY source-mutating tool (or a mutating
-	// run_command - gofmt -w, git checkout, pip install...) invalidates the
-	// very reads being pre-executed: the old shape ran read_file X
-	// concurrently with edit_file X and then handed the model the
-	// PRE-EDIT content unlabeled after the edit landed - the model judged
-	// the edit failed and re-applied it. Skip pre-execution entirely for
-	// mixed batches (conservative; pure read-only batches are unaffected).
-	// #1590-A: the original guard only checked mutatesSourceTree (edit-tool
-	// + git-tool families) while this very comment promised mutating
-	// run_command coverage - shell mutations (gofmt -w x.go, git checkout,
-	// codegen) slipped through and re-created the stale-read hazard.
-	for _, tc := range toolCalls {
-		if mutatesSourceTree(tc.Name) {
-			return nil
-		}
-		// #1607-A: ANY shell command in a mixed batch skips pre-execution,
-		// conservatively. The #1590-A shape routed through the
-		// shellMutatesSources heuristic - tuned for the BUILD-CACHE cost
-		// model (FP = lost cache reuse) where narrow is right - but the
-		// guard's failure asymmetry is the opposite (FP = lost parallelism
-		// only; FN = a High-severity stale read after 'git checkout
-		// fix-branch'/'git restore'/'stash pop'/codegen/tee/redirects
-		// rewrote the tree between pre-read and serial consumption).
-		// Borrowing the narrow heuristic parked the risk on the dangerous
-		// side, using this comment's own examples.
-		if tc.Name == "run_command" || tc.Name == "start_command" {
-			return nil
-		}
-		// #1649: delegate escapes every guard set (only the orchestration
-		// file references it). On assemblies WITHOUT SubAgentManager the
-		// CLI fallback runs SYNCHRONOUSLY in the serial loop and rewrites
-		// the tree before a pre-executed read is consumed - the #1607-A
-		// shape via a different channel. Treat it like a shell command.
-		if tc.Name == "delegate" {
-			return nil
-		}
-		// #1829 case 1: spawn_agent/teammate_spawn (and their task-delivery
-		// companions send_message/swarm_task_create on tm-* targets) leak
-		// async tree mutations past every guard: the spawned agent inherits
-		// the parent WorkingDir with edit tools enabled, and can rewrite the
-		// tree while pre-executed reads sit unconsumed. Weaker than #1649's
-		// deterministic delegate (the first sub-agent edit needs an LLM
-		// round-trip, so the race window opens in seconds, not ms) but the
-		// failure shape is identical: stale pre-read content delivered
-		// unlabeled. FN = High-severity stale read / FP = lost parallelism
-		// - the guard's own asymmetry says block.
-		if tc.Name == "spawn_agent" || tc.Name == "teammate_spawn" ||
-			tc.Name == "send_message" || tc.Name == "swarm_task_create" ||
-			tc.Name == "a2a_send_task" || tc.Name == "a2a_remote" {
-			return nil
-		}
-		// #1829 case 2: warp's input/new_tab surfaces execute arbitrary shell
-		// (executeInput(args.Command)+send_key enter) in one call - a
-		// run_command-equivalent mutation channel the shell guard never
-		// covered. Narrow trigger (macOS + Warp), but same stale-read shape.
-		if tc.Name == "warp" {
-			return nil
-		}
-	}
-	for i, tc := range toolCalls {
-		if !speculativeSafeTools[tc.Name] {
-			continue
-		}
-		// Skip if already in speculative cache.
-		if a.speculator.hasCached(tc.Name, tc.Arguments) {
-			continue
-		}
-		// Skip if already in memoization cache (avoids redundant execution
-		// when the same read-only tool was called earlier in this run).
-		if a.toolMemo != nil {
-			if _, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
-				continue
-			}
-		}
-		batch = append(batch, pending{i, tc.Name, tc.Arguments})
-	}
-
-	if len(batch) == 0 {
+	batch, ok := a.buildPreExecBatch(toolCalls)
+	if !ok || len(batch) == 0 {
 		return nil
 	}
 	// Cap at maxConcurrent to bound resource usage.
@@ -185,27 +102,10 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 			defer wg.Done()
 			defer safego.Recover("agent.parallel.preExec")
 
-			if ctx.Err() != nil {
-				return
-			}
-
-			t, ok := a.tools.Get(p.name)
+			result, dur, ok := a.preExecOne(ctx, p)
 			if !ok {
 				return
 			}
-
-			execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-
-			start := time.Now()
-			result, err := t.Execute(execCtx, p.args)
-			dur := time.Since(start)
-
-			if err != nil {
-				debug.Log("parallel", "parallel pre-exec %s failed: %v (after %v)", p.name, err, dur)
-				return
-			}
-
 			mu.Lock()
 			results[p.index] = preExecutedResult{result, dur}
 			mu.Unlock()
@@ -220,6 +120,78 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	}
 	debug.Log("parallel", "pre-executed %d/%d read-only tools concurrently", len(results), len(batch))
 	return results
+}
+
+// pending is one read-only call queued for speculative pre-execution.
+type pending struct {
+	index int
+	name  string
+	args  json.RawMessage
+}
+
+// buildPreExecBatch selects the calls worth pre-executing. Scheduling guards
+// first: #1475-A used to drop ALL pre-execution when ANY mutating tool was
+// present - read_file X racing edit_file X handed back pre-edit content
+// unlabeled, and the model re-applied the edit. #1590-A/#1607-A/#1649/#1829
+// extended that to shell commands, delegate, sub-agent spawns and warp,
+// whose write sets are not statically knowable.
+//
+// Conflict-aware scheduling (parallel_scheduling.go): for file-scoped
+// mutators (edit_file/write_file/multi_edit_file/notebook_edit) the write
+// target IS knowable, so only reads whose scan scope covers the mutated
+// path are withheld; unrelated reads keep their parallel latency win (the
+// guard's own asymmetry note: FP = lost parallelism only). Colliding reads
+// fall back to the sequential loop, preserving emitted-order semantics
+// exactly as the serial path does. Speculative-cache and memoized hits are
+// skipped as redundant.
+func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending, bool) {
+	mutatedPaths, schedulable := partitionBatchForParallelism(toolCalls)
+	if !schedulable {
+		return nil, false
+	}
+	batch := make([]pending, 0, len(toolCalls))
+	for i, tc := range toolCalls {
+		if !speculativeSafeTools[tc.Name] {
+			continue
+		}
+		if len(mutatedPaths) > 0 && readAffectedByMutation(tc.Name, tc.Arguments, mutatedPaths) {
+			debug.Log("parallel", "withholding %s (index=%d) from pre-exec: collides with pending mutation", tc.Name, i)
+			continue
+		}
+		if a.speculator.hasCached(tc.Name, tc.Arguments) {
+			continue
+		}
+		if a.toolMemo != nil {
+			if _, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit {
+				continue
+			}
+		}
+		batch = append(batch, pending{index: i, name: tc.Name, args: tc.Arguments})
+	}
+	return batch, true
+}
+
+// preExecOne speculatively executes a single read-only call with a short
+// timeout; failures are logged and dropped - the sequential loop re-executes
+// them, so a dropped speculative result is never visible to the model.
+func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Duration, bool) {
+	if ctx.Err() != nil {
+		return tool.Result{}, 0, false
+	}
+	t, ok := a.tools.Get(p.name)
+	if !ok {
+		return tool.Result{}, 0, false
+	}
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	result, err := t.Execute(execCtx, p.args)
+	dur := time.Since(start)
+	if err != nil {
+		debug.Log("parallel", "parallel pre-exec %s failed: %v (after %v)", p.name, err, dur)
+		return tool.Result{}, dur, false
+	}
+	return result, dur, true
 }
 
 // usePreExecutedWithPermission runs the permission check for a tool and,
