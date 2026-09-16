@@ -103,15 +103,17 @@ func (s *heterogeneousModelState) recordToolCall(toolName string, iteration int)
 	s.categoryCounts[cat]++
 	s.totalTools++
 
-	// Trim to lookback window
-	if len(s.toolHistory) > hmLookbackWindow {
-		s.toolHistory = s.toolHistory[1:]
-	}
 	s.toolHistory = append(s.toolHistory, hmToolRecord{
 		tool:      toolName,
 		category:  cat,
 		iteration: iteration,
 	})
+	// Keep only the lookback window. #2427: trim AFTER append so the
+	// steady-state window is exactly hmLookbackWindow entries (the old
+	// trim-before-append with `>` left an 11-entry window).
+	if len(s.toolHistory) > hmLookbackWindow {
+		s.toolHistory = s.toolHistory[len(s.toolHistory)-hmLookbackWindow:]
+	}
 
 	// Only check after minimum actions
 	if s.totalTools < hmMinToolActions {
@@ -123,11 +125,26 @@ func (s *heterogeneousModelState) recordToolCall(toolName string, iteration int)
 		return ""
 	}
 
-	// Calculate ratios
-	execTools := s.categoryCounts[hmCategoryRead] + s.categoryCounts[hmCategoryWrite] +
-		s.categoryCounts[hmCategorySearch] + s.categoryCounts[hmCategoryExecution]
-	execRatio := float64(execTools) / float64(s.totalTools)
-	reasoningRatio := float64(s.categoryCounts[hmCategoryReasoning]) / float64(s.totalTools)
+	// Calculate ratios over the sliding window (#2427): the documented
+	// semantics — "recent tool calls", not lifetime cumulative. A lifetime
+	// ratio let an early exploration phase (glob/list/todo calls in the
+	// denominator but not the exec numerator) permanently dilute a later
+	// pure-execution burst: 8 explore + 12 exec = 0.60 cumulative, below
+	// the 0.70 threshold forever, while the window is 100% exec — the
+	// module's own Plan-and-Execute flagship scenario never fired.
+	// categoryCounts stays maintained for information only.
+	windowExec, windowReasoning := 0, 0
+	for _, rec := range s.toolHistory {
+		switch rec.category {
+		case hmCategoryRead, hmCategoryWrite, hmCategorySearch, hmCategoryExecution:
+			windowExec++
+		case hmCategoryReasoning:
+			windowReasoning++
+		}
+	}
+	windowLen := len(s.toolHistory)
+	execRatio := float64(windowExec) / float64(windowLen)
+	reasoningRatio := float64(windowReasoning) / float64(windowLen)
 
 	// Determine workload type
 	if execRatio >= hmExecutionThreshold {
@@ -190,12 +207,18 @@ func (a *Agent) GetHeterogeneousModelGuidance() string {
 	if a.heterogeneousModel == nil {
 		return ""
 	}
+	// #2427: guidance is written under s.mu by recordToolCall — take the
+	// same lock instead of an unlocked read (torn string header race).
+	a.heterogeneousModel.mu.Lock()
+	defer a.heterogeneousModel.mu.Unlock()
 	return a.heterogeneousModel.guidance
 }
 
 // ClearHeterogeneousModelGuidance clears the pending guidance after it's been consumed.
 func (a *Agent) ClearHeterogeneousModelGuidance() {
 	if a.heterogeneousModel != nil {
+		a.heterogeneousModel.mu.Lock()
 		a.heterogeneousModel.guidance = ""
+		a.heterogeneousModel.mu.Unlock()
 	}
 }
