@@ -33,6 +33,12 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	fn := a.systemPromptInjector
 	a.mu.Unlock()
 
+	// Stamp the harness configuration (system prompt + check registry + tool
+	// set) into the debug ring. Deferred so it captures the prompt rebuilt by
+	// this function on every return path; logs only on change (first run or
+	// scaffolding mutation). See harness_fingerprint.go for rationale.
+	defer a.logHarnessFingerprint()
+
 	// Collect dynamic layers.
 	var dynamicParts []string
 
