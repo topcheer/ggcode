@@ -415,11 +415,38 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}
+	// Shell-mutation checkpointing (checkpoint-exclusions fix): editor tools
+	// snapshot their writes, but mutations THROUGH run_command (sed -i,
+	// go fmt -w, codegen, patch) were invisible to undo_edit/revert - a
+	// misleading restore. Capture the pre-state so the post-execution diff
+	// can record normal checkpoints. No-op outside git workspaces.
+	var shellPre *shellSnapshot
+	if tc.Name == "run_command" {
+		a.mu.RLock()
+		shellCpMgr := a.checkpoints
+		a.mu.RUnlock()
+		if shellCpMgr != nil {
+			shellPre = a.takeShellSnapshot()
+		}
+	}
 	toolStart := time.Now()
 	result := a.executeWithTransientRetry(ctx, t.Name(), tc.Arguments, func(execCtx context.Context, args []byte) (tool.Result, error) {
 		return a.safeExecute(t, execCtx, args)
 	})
 	toolDur := time.Since(toolStart)
+
+	// Diff pre/post workspace state and checkpoint shell-made mutations so
+	// undo_edit and checkpoint revert cover them uniformly. Skipped when the
+	// command failed (partial state mid-pipeline is NOT a finished mutation
+	// worth snapshotting) or when no pre-state was captured.
+	if shellPre != nil && !result.IsError {
+		a.mu.RLock()
+		shellCpMgr := a.checkpoints
+		a.mu.RUnlock()
+		if shellCpMgr != nil {
+			shellPre.checkpointMutations(takeShellSnapshotIn(shellPre.root), tc.Name, shellCpMgr)
+		}
+	}
 
 	// Post-tool-use hooks
 	postEnv := env
