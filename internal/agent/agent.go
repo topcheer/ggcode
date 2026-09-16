@@ -269,6 +269,7 @@ type Agent struct {
 	phantomVerify             *phantomVerifyState                   // phantom verification detection (category-specific verification claims without matching commands)
 	redundantReverify         *redundantReverifyState               // redundant re-verification detection (same verification cmd re-run without file edits)
 	truncClaim                *truncClaimState                      // truncated output completeness fallacy detection (claims after truncated results)
+	outputOffload             *outputOffloader                      // tool output offloading (full truncated results persisted to disk for re-reading)
 	circularReasoning         *circularReasoningState               // circular reasoning detection (tautological justification)
 	contradiction             *contradictionState                   // cross-turn contradiction detection (root-cause reversals)
 	actionHedging             *actionHedgingState                   // action hedging detection (verbalized uncertainty during mutations)
@@ -461,6 +462,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		solutionFixation:       newSolutionFixationState(),
 		reproducerLifecycle:    newReproducerLifecycleState(),
 		truncClaim:             newTruncClaimState(),
+		outputOffload:          newOutputOffloader(),
 		circularReasoning:      newCircularReasoningState(),
 		contradiction:          newContradictionState(),
 		actionHedging:          newActionHedgingState(),
@@ -4444,7 +4446,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
 					if truncated := guardToolOutput(result.Content, fillRatio); len(truncated) < len(result.Content) {
 						debug.Log("agent", "tool output guarded: tool=%s tokens=%d threshold=%d fill=%.0f%% %d→%d bytes", tc.Name, a.contextManager.TokenCount(), threshold, fillRatio*100, len(result.Content), len(truncated))
-						result.Content = withTruncationAdvisory(truncated, tc.Name, len(result.Content))
+						guarded := truncated
+						// Tool Output Offloading: persist the FULL original
+						// output to disk so the discarded middle section is
+						// recoverable via read_file/grep on the spill path
+						// instead of being lost forever (LangChain harness
+						// anatomy, 2026). Best-effort: on failure fall back
+						// to plain truncation.
+						if spillPath := a.outputOffload.spill(tc.Name, result.Content); spillPath != "" {
+							guarded += spillNotice(spillPath, len(result.Content))
+							debug.Log("agent", "tool output offloaded: tool=%s path=%s originalLen=%d", tc.Name, spillPath, len(result.Content))
+						}
+						result.Content = withTruncationAdvisory(guarded, tc.Name, len(result.Content))
 						a.truncClaim.recordTruncation(tc.Name, i)
 						// #1664: errorPropagate.recordResult ran BEFORE the
 						// guard with the raw content, so this truncation - the
