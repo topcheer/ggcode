@@ -41,7 +41,7 @@ func (t UseNamedAgentTool) currentProvider() provider.Provider {
 func (t UseNamedAgentTool) Name() string { return "use_namedagent" }
 
 func (t UseNamedAgentTool) Description() string {
-	return `Invoke a named subagent template to execute a task. Returns an agent_id for use with wait_agent/list_agents. Each invocation is a fresh session with no persisted history.`
+	return `Invoke a named subagent template to execute a task. Returns an agent_id for use with wait_agent/list_agents. Each invocation is a fresh session with no persisted history. Supports an optional per-invocation model override (escalation lever for model-tiered cascades: re-run a failed cheap-tier run on a stronger model).`
 }
 
 func (t UseNamedAgentTool) Parameters() json.RawMessage {
@@ -59,6 +59,10 @@ func (t UseNamedAgentTool) Parameters() json.RawMessage {
 			"context": {
 				"type": "string",
 				"description": "Optional additional context for the task"
+			},
+			"model": {
+				"type": "string",
+				"description": "Optional per-invocation model override. Takes precedence over the template's configured model. Must be one of the models listed in 'Sub-agent models' in the system prompt Environment section. Use it to escalate a failed cheap-tier run to a stronger model."
 			}
 		},
 		"required": ["name", "task"]
@@ -73,6 +77,7 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		Name    string `json:"name"`
 		Task    string `json:"task"`
 		Context string `json:"context"`
+		Model   string `json:"model"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -136,16 +141,26 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 	}
 
-	// Validate the template's model override against available models on
+	// Resolve the effective model override: a per-invocation model takes
+	// precedence over the template's Model field. The invocation-level
+	// override is the escalation lever for model-tiered cascades: when a
+	// cheap-tier run fails, the parent escalates by re-invoking the same
+	// template with model=<stronger> instead of editing the template.
+	effectiveModel := strings.TrimSpace(args.Model)
+	if effectiveModel == "" {
+		effectiveModel = strings.TrimSpace(tmpl.Model)
+	}
+
+	// Validate the effective model override against available models on
 	// the current endpoint (#551-C). spawn_agent has enforced this since its
-	// L131-148 whitelist; without the same gate here, a template configured
-	// with a stale/unknown model silently spawned on the parent's model.
-	if m := strings.TrimSpace(tmpl.Model); m != "" && t.AvailableModels != nil {
+	// L131-148 whitelist; without the same gate here, an unknown model
+	// silently spawned on the parent's model.
+	if effectiveModel != "" && t.AvailableModels != nil {
 		available := t.AvailableModels()
-		if len(available) > 0 && !sliceContains(available, m) {
+		if len(available) > 0 && !sliceContains(available, effectiveModel) {
 			return Result{IsError: true, Content: fmt.Sprintf(
 				"named subagent '%s' requires model %q which is not available on the current endpoint. Available models: %s",
-				tmpl.Name, m, strings.Join(available, ", "))}, nil
+				tmpl.Name, effectiveModel, strings.Join(available, ", "))}, nil
 		}
 	}
 
@@ -156,13 +171,13 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 	// asked for and may not even support. Checked BEFORE Spawn so a rejected
 	// override does not leave a zombie sub-agent entry behind.
 	runProv := t.currentProvider()
-	if m := strings.TrimSpace(tmpl.Model); m != "" {
+	if effectiveModel != "" {
 		if c, ok := runProv.(provider.ClonableWithModel); ok {
-			runProv = c.CloneWithModel(m)
+			runProv = c.CloneWithModel(effectiveModel)
 		} else {
 			return Result{IsError: true, Content: fmt.Sprintf(
 				"named subagent '%s' requires model %q but the current provider (%T) does not support model overrides",
-				tmpl.Name, m, runProv)}, nil
+				tmpl.Name, effectiveModel, runProv)}, nil
 		}
 	}
 
@@ -203,7 +218,7 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 			Manager:             t.Manager,
 			SubAgentID:          id,
 			AgentFactory:        t.AgentFactory,
-			Model:               tmpl.Model,
+			Model:               effectiveModel,
 			WorkingDir:          t.WorkingDir,
 			OnUsage:             t.OnUsage,
 			SystemPromptBuilder: customBuilder,

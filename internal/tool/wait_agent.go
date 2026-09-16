@@ -12,6 +12,13 @@ import (
 // WaitAgentTool implements the wait_agent tool.
 type WaitAgentTool struct {
 	Manager *subagent.Manager
+	// ParentModel resolves the parent agent's current model name. When a
+	// failed run used an alternate model, the snapshot is annotated with a
+	// one-shot cascade escalation hint (see subagent_cascade.go).
+	ParentModel func() string
+	// CascadeHints deduplicates escalation hints across wait_agent and
+	// list_agents so each failed run is annotated at most once.
+	CascadeHints *CascadeHintTracker
 }
 
 func (t WaitAgentTool) Name() string { return "wait_agent" }
@@ -88,5 +95,5 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
 		return Result{Content: snap.Result}, nil
 	}
-	return Result{Content: formatSubAgentSnapshot(snap)}, nil
+	return Result{Content: appendCascadeHint(t.CascadeHints, t.ParentModel, snap)}, nil
 }
