@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/topcheer/ggcode/internal/session"
+import (
+	"encoding/json"
+
+	"github.com/topcheer/ggcode/internal/session"
+)
 
 // snapshotTasksInto serializes the live task board into the session's
 // persisted field. Call it before a session's metadata is flushed to disk
@@ -12,6 +16,14 @@ func (m *Model) snapshotTasksInto(ses *session.Session) {
 	}
 	if data, err := m.taskMgr.SnapshotJSON(); err == nil {
 		ses.TasksJSON = data
+		// Capture the workspace fingerprint alongside the board so a later
+		// resume can reconcile persisted claims against environment drift.
+		// Best-effort: a fingerprint failure must not block the snapshot.
+		if fp := captureEnvFingerprint(cwdOrEmpty()); fp != nil {
+			if fpJSON, err := json.Marshal(fp); err == nil {
+				ses.TasksEnvJSON = fpJSON
+			}
+		}
 	}
 }
 

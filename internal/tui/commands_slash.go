@@ -197,6 +197,7 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	// is empty there). Keeps the board session-scoped instead of leaking
 	// across sessions in a long-running process.
 	m.restoreTasksFromSession(ses)
+	m.setResumeNote("") // never leak the previous session's reconciliation note
 
 	m.rebuildConversationFromMessages(ses.Messages)
 
@@ -213,6 +214,14 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 		// context without scrolling through the full conversation history.
 		if recap := sessionRecap(ses, time.Now()); recap != "" {
 			m.chatWriteSystem(nextSystemID(), recap)
+		}
+
+		// Resume reconciliation: the restored board is a static handoff signal,
+		// but the workspace kept living while the session was paused. Diff the
+		// snapshot-time fingerprint against the live workspace and surface any
+		// drift (user-visible note + model-facing prompt layer).
+		if rec := m.prepareResumeReconciliation(ses); rec != "" {
+			m.chatWriteSystem(nextSystemID(), rec)
 		}
 	}
 

@@ -88,6 +88,11 @@ type Session struct {
 	// internal/task must not import internal/session. Restored on session
 	// resume so the task board survives process restarts and /resume.
 	TasksJSON []byte `json:"tasks,omitempty"`
+	// TasksEnvJSON is a bounded VCS fingerprint (branch, HEAD, dirty-file
+	// sample) captured when the board was snapshotted. On resume it is
+	// diffed against the live workspace to reconcile persisted task-board
+	// claims with environment drift (see tui/resume_reconciliation.go).
+	TasksEnvJSON []byte `json:"tasks_env,omitempty"`
 	// endpointStatsMu is nested inside higher-level session/bridge locks and only
 	// guards the per-endpoint aggregate maps used by live readers/writers.
 	endpointStatsMu sync.RWMutex
@@ -808,6 +813,8 @@ type jsonlRecord struct {
 	MaxTokens      int    `json:"max_tokens,omitempty"`
 	// Session task board snapshot (opaque task.Manager JSON; see Session.TasksJSON).
 	TasksJSON []byte `json:"tasks,omitempty"`
+	// Workspace fingerprint captured alongside TasksJSON (see Session.TasksEnvJSON).
+	TasksEnvJSON []byte `json:"tasks_env,omitempty"`
 	// Checkpoint fields: after compaction, only the summary message ID is stored.
 	// The summary message itself is written to JSONL as a type:"message" record.
 	// Restore scans from summary_msg_id forward to rebuild context.
@@ -1216,6 +1223,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		}
 		// Latest meta record wins: the board is a full snapshot each write.
 		ses.TasksJSON = rec.TasksJSON
+		ses.TasksEnvJSON = rec.TasksEnvJSON
 	}
 
 	// Fallback: if no meta record contained a workspace (sessions created
@@ -2247,6 +2255,7 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		ContextWindow:        ses.ContextWindow,
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,
+		TasksEnvJSON:         ses.TasksEnvJSON,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err

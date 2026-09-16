@@ -139,3 +139,27 @@ func numericTaskID(id string) int {
 	}
 	return n
 }
+
+// BoardStats summarizes a persisted task-board snapshot without building a
+// live Manager. Used by resume reconciliation to report board scale alongside
+// environment-drift findings. ok is false for empty or undecodable snapshots.
+func BoardStats(data []byte) (completed, inProgress, pending int, ok bool) {
+	if len(data) == 0 {
+		return 0, 0, 0, false
+	}
+	var snap snapshotFormat
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return 0, 0, 0, false
+	}
+	for _, t := range snap.Tasks {
+		switch t.Status {
+		case StatusCompleted:
+			completed++
+		case StatusInProgress:
+			inProgress++
+		case StatusPending:
+			pending++
+		}
+	}
+	return completed, inProgress, pending, true
+}

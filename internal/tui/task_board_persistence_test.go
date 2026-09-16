@@ -19,6 +19,15 @@ func TestTaskBoardHelpersRoundTrip(t *testing.T) {
 	if len(ses.TasksJSON) == 0 {
 		t.Fatal("snapshotTasksInto did not populate session.TasksJSON")
 	}
+	// The workspace fingerprint must be captured alongside the board (used
+	// by resume reconciliation). The package dir lives inside the ggcode git
+	// checkout, so capture should succeed here.
+	if len(ses.TasksEnvJSON) == 0 {
+		t.Fatal("snapshotTasksInto did not populate session.TasksEnvJSON")
+	}
+	if fp := decodeEnvFingerprint(ses.TasksEnvJSON); fp == nil || fp.Head == "" {
+		t.Errorf("TasksEnvJSON not a decodable fingerprint: %s", ses.TasksEnvJSON)
+	}
 
 	m2 := &Model{taskMgr: task.NewManager()}
 	m2.restoreTasksFromSession(ses)

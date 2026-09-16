@@ -325,6 +325,7 @@ type Agent struct {
 	lastRunStats              *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer             *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector      func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
+	systemPromptLayers        []systemPromptLayer                   // named extra layers (e.g. resume reconciliation); replaced by name, applied after systemPromptInjector
 	baseSystemPrompt          string                                // the fully built static system prompt; used as reset base for dynamic injection
 	lastInjectedSystemPrompt  string                                // cache of last injected prompt to skip redundant updates
 	harnessFPLast             string                                // last harness fingerprint sum; stamps scaffolding changes into the debug log (harness_fingerprint.go)
@@ -647,6 +648,30 @@ func (a *Agent) SetSystemPromptInjector(fn func() string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.systemPromptInjector = fn
+}
+
+// systemPromptLayer is a named dynamic system-prompt layer. Layers are
+// applied after the single-slot injector and are keyed by name so callers
+// can re-register them idempotently.
+type systemPromptLayer struct {
+	name string
+	fn   func() string
+}
+
+// AddSystemPromptLayer registers (or replaces, by name) a dynamic system
+// prompt layer. Unlike SetSystemPromptInjector, multiple components can
+// contribute layers without overwriting each other. A layer returning an
+// empty string contributes nothing, matching the injector contract.
+func (a *Agent) AddSystemPromptLayer(name string, fn func() string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := range a.systemPromptLayers {
+		if a.systemPromptLayers[i].name == name {
+			a.systemPromptLayers[i].fn = fn
+			return
+		}
+	}
+	a.systemPromptLayers = append(a.systemPromptLayers, systemPromptLayer{name: name, fn: fn})
 }
 
 // SetVerifyCallbacks sets callbacks for async post-run verification.
