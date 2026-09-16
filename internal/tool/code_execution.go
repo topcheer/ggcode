@@ -91,6 +91,13 @@ Available tools (call via await tools.NAME(args)):
   lsp_hover, lsp_definition, lsp_references, lsp_diagnostics, lsp_workspace_symbols, lsp_implementation, lsp_document_highlights, lsp_code_actions, lsp_incoming_calls, lsp_outgoing_calls, lsp_prepare_call_hierarchy
   web_search, web_fetch, runtime, debug_log, list_agents, list_mcp_capabilities, read_mcp_resource, task_list, task_get
 
+MCP tools: tools from read_only MCP servers are bridged into this sandbox:
+  await tools['mcp__server__tool']({...})
+Discover them with JSON.parse(await tools.mcpList()) → [{name, description, sandbox}] (sandbox:true = callable here).
+Fetch one schema on demand: await tools.mcpDescribe('mcp__server__tool') → {name, description, parameters}.
+Large MCP results stay inside the sandbox — filter/map/reduce them in JS and console.log only summaries.
+Budget: at most 30 MCP tool calls per run.
+
 Tool results are strings — use JSON.parse() if needed. async/await supported.
 console.log(...) output is returned to you.
 
@@ -98,7 +105,7 @@ Example:
   const r = await tools.grep({pattern: "TODO", path: "/workspace"});
   console.log(r.split("\\n").length + " matches");
 
-Rules: Only read-only tools. Execution timeout: 30 seconds.`
+Rules: Only read-only tools (MCP tools only from read_only servers). Execution timeout: 30 seconds.`
 }
 
 func (CodeExecution) Parameters() json.RawMessage {
@@ -120,6 +127,29 @@ func (CodeExecution) Parameters() json.RawMessage {
 
 // codeExecTimeout is the maximum wall-clock time for a single execution.
 const codeExecTimeout = 30 * time.Second
+
+// mcpToolNamePrefix marks dynamically registered MCP tools
+// (mcp__server__tool naming from the MCP adapter).
+const mcpToolNamePrefix = "mcp__"
+
+// maxMCPCallsPerRun caps how many MCP tool calls a single code_execution
+// run may make, so a runaway JS loop cannot hammer an MCP server for the
+// full 30s window. The per-call timeout still applies on top.
+const maxMCPCallsPerRun = 30
+
+// mcpListDescMaxRunes caps how many runes of an MCP tool description
+// mcpList() returns, keeping the discovery payload small.
+const mcpListDescMaxRunes = 120
+
+// truncateSandboxText shortens s to at most max runes, appending "..." when
+// truncated. Rune-safe so multi-byte descriptions are not cut mid-character.
+func truncateSandboxText(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "..."
+}
 
 // maxStdoutLen caps the stdout capture to prevent unbounded memory if the
 // model writes a tight loop with console.log.
@@ -242,13 +272,12 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 
 	// Inject tools object: each whitelisted tool becomes an async function.
 	toolsObj := vm.NewObject()
-	for toolName := range readOnlyToolNames {
-		t, ok := c.Registry.Get(toolName)
-		if !ok {
-			continue // tool not registered (e.g., optional tools like tmux)
-		}
+
+	// injectSandboxTool wraps a registry tool as a promise-returning JS
+	// function on toolsObj. preCall, when non-nil, runs before execution
+	// and may reject the call (used for the MCP per-run budget).
+	injectSandboxTool := func(name string, t Tool, preCall func() error) {
 		toolRef := t
-		name := toolName
 
 		// goja supports async functions via goja.AssertFunction.
 		// We wrap each tool call as a promise-returning function.
@@ -261,6 +290,14 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 					rv = rejectPromise(vm, fmt.Errorf("%s panicked: %v", name, r))
 				}
 			}()
+			if preCall != nil {
+				if err := preCall(); err != nil {
+					toolCallsMu.Lock()
+					toolCalls = append(toolCalls, fmt.Sprintf("%s → rejected: %v", name, err))
+					toolCallsMu.Unlock()
+					return rejectPromise(vm, err)
+				}
+			}
 			// Convert the JS argument (first positional arg) to JSON.
 			var inputJSON json.RawMessage
 			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) && !goja.IsNull(call.Arguments[0]) {
@@ -325,6 +362,111 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 			return resolvePromise(vm, result.Content)
 		})
 	}
+
+	for toolName := range readOnlyToolNames {
+		t, ok := c.Registry.Get(toolName)
+		if !ok {
+			continue // tool not registered (e.g., optional tools like tmux)
+		}
+		injectSandboxTool(toolName, t, nil)
+	}
+
+	// sa-19 (MCP code-execution bridge): tools from read_only MCP servers
+	// are injected so multi-call MCP workflows run in one sandbox pass.
+	// Results stay in JS and only summaries reach the context window
+	// (Anthropic, "Code execution with MCP", Dec 2025). Write-capable
+	// servers are excluded: their Execute may have side effects and must
+	// keep going through the normal per-call permission flow with UI
+	// diff preview and approval.
+	mcpCalls := 0
+	for _, toolName := range c.Registry.ToolNames() {
+		if !strings.HasPrefix(toolName, mcpToolNamePrefix) {
+			continue
+		}
+		t, ok := c.Registry.Get(toolName)
+		if !ok {
+			continue
+		}
+		if ss, ok := t.(SandboxSafe); !ok || !ss.SandboxSafe() {
+			continue
+		}
+		if ac, ok := t.(AvailabilityChecker); ok && !ac.Available() {
+			continue // registered but unavailable: not callable
+		}
+		injectSandboxTool(toolName, t, func() error {
+			toolCallsMu.Lock()
+			defer toolCallsMu.Unlock()
+			if mcpCalls >= maxMCPCallsPerRun {
+				return fmt.Errorf("MCP call budget exceeded: at most %d MCP tool calls per code_execution run", maxMCPCallsPerRun)
+			}
+			mcpCalls++
+			return nil
+		})
+	}
+
+	// mcpList() resolves with a JSON array [{name, description, sandbox}]
+	// describing every MCP tool in the registry. sandbox=true entries are
+	// callable from this sandbox; sandbox=false entries must go through
+	// direct tool calls (their results land in the context window).
+	toolsObj.Set("mcpList", func(call goja.FunctionCall) goja.Value {
+		type mcpEntry struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Sandbox     bool   `json:"sandbox"`
+		}
+		var list []mcpEntry
+		for _, toolName := range c.Registry.ToolNames() {
+			if !strings.HasPrefix(toolName, mcpToolNamePrefix) {
+				continue
+			}
+			t, ok := c.Registry.Get(toolName)
+			if !ok {
+				continue
+			}
+			entry := mcpEntry{
+				Name:        toolName,
+				Description: truncateSandboxText(t.Description(), mcpListDescMaxRunes),
+			}
+			if ss, ok := t.(SandboxSafe); ok && ss.SandboxSafe() {
+				entry.Sandbox = true
+			}
+			list = append(list, entry)
+		}
+		b, err := json.Marshal(list)
+		if err != nil {
+			return rejectPromise(vm, fmt.Errorf("mcpList failed: %v", err))
+		}
+		return resolvePromise(vm, string(b))
+	})
+
+	// mcpDescribe(name) resolves with JSON {name, description, parameters}
+	// for one MCP tool. On-demand schema retrieval (progressive
+	// disclosure): a schema is fetched exactly when needed instead of
+	// loading every MCP tool definition into the request context.
+	// Describing is read-only, so it works for sandbox=false tools too.
+	toolsObj.Set("mcpDescribe", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) == 0 || goja.IsUndefined(call.Arguments[0]) || goja.IsNull(call.Arguments[0]) {
+			return rejectPromise(vm, fmt.Errorf("mcpDescribe requires an MCP tool name"))
+		}
+		name := call.Arguments[0].ToString().String()
+		if !strings.HasPrefix(name, mcpToolNamePrefix) {
+			return rejectPromise(vm, fmt.Errorf("%q is not an MCP tool (expected mcp__server__tool)", name))
+		}
+		t, ok := c.Registry.Get(name)
+		if !ok {
+			return rejectPromise(vm, fmt.Errorf("MCP tool %q not found in registry", name))
+		}
+		b, err := json.Marshal(struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		}{Name: t.Name(), Description: t.Description(), Parameters: t.Parameters()})
+		if err != nil {
+			return rejectPromise(vm, fmt.Errorf("mcpDescribe failed: %v", err))
+		}
+		return resolvePromise(vm, string(b))
+	})
+
 	vm.Set("tools", toolsObj)
 
 	// Set up context cancellation → vm.Interrupt.

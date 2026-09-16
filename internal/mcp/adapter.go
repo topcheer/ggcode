@@ -175,6 +175,14 @@ func (t *mcpTool) Clone() tool.Tool {
 	}
 }
 
+// SandboxSafe (tool.SandboxSafe, sa-19) reports whether this tool may be
+// invoked from the code_execution sandbox. It mirrors the server-level
+// read_only contract: a read_only server's tools are already enforced
+// against write-shaped names at registration time, so exposing them to
+// the sandbox adds no new capability. Tools from servers without
+// read_only are never sandbox-safe — their Execute may have side effects.
+func (t *mcpTool) SandboxSafe() bool { return t.readOnly }
+
 func (t *mcpTool) Name() string        { return t.name }
 func (t *mcpTool) Description() string { return t.desc }
 func (t *mcpTool) Parameters() json.RawMessage {
