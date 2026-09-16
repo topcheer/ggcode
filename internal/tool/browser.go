@@ -352,7 +352,7 @@ func chromeNotFoundHelp() string {
 	case "darwin":
 		return "Chrome or Chromium not found. Install from https://www.google.com/chrome/ or run: brew install --cask google-chrome"
 	case "windows":
-		return "Chrome or Chromium not found. Install from https://www.google.com/chrome/ or: winget install Google.Chrome"
+		return "No Chrome, Chromium, or Edge found. Install Chrome (https://www.google.com/chrome/ or: winget install Google.Chrome) - or use the preinstalled Edge (winget install Microsoft.Edge to restore it). Edge works too: the tool falls back to it automatically."
 	default:
 		return "Chrome or Chromium not found. Install via your package manager, e.g.: sudo apt install google-chrome-stable OR sudo snap install chromium"
 	}
@@ -376,6 +376,14 @@ func findChromeExecutable() string {
 			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
 			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Google\Chrome\Application\chrome.exe`),
 			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Chromium\Application\chrome.exe`),
+			// Edge fallback: same Chromium engine, full CDP support. Windows
+			// ships Edge on virtually every machine, so "no Chrome installed"
+			// no longer means "browser tool unavailable". Chrome stays first
+			// (a deliberate Chrome install wins), Edge is the zero-install
+			// floor. --version output parses identically ("Microsoft Edge 138.x").
+			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
+			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
+			filepath.Join(os.Getenv("USERPROFILE"), `AppData\Local\Microsoft\Edge\Application\msedge.exe`),
 		}
 	default:
 		// Linux and other Unix-like systems
