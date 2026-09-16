@@ -112,3 +112,51 @@ func containsString(s, substr string) bool {
 	}
 	return false
 }
+
+// TestHeterogeneousModelMixedExplorationThenExecution pins #2427: the
+// documented sliding-window semantics. An early exploration phase (glob/
+// todo calls -> hmCategoryOther, counted in a lifetime denominator but not
+// in the exec numerator) used to permanently dilute a later pure-execution
+// burst: 8 explore + 12 exec = 0.60 lifetime, below the 0.70 threshold
+// forever, so the FinOps downgrade hint was silently dropped in exactly the
+// Plan-and-Execute scenario the module cites as its flagship. The window of
+// the last 10 calls is 100% exec by call 18, so guidance must fire.
+func TestHeterogeneousModelMixedExplorationThenExecution(t *testing.T) {
+	state := newHeterogeneousModelState()
+
+	// Exploration phase: 8 non-exec, non-reasoning calls.
+	for i := 0; i < 8; i++ {
+		if g := state.recordToolCall("glob", 1); g != "" {
+			t.Fatalf("unexpected guidance during exploration phase at call %d", i+1)
+		}
+	}
+
+	// Execution burst: with a true 10-call window the last 10 calls are
+	// all exec once 10 edit_file calls have accumulated (call 18 overall);
+	// the old lifetime ratio (12/20 = 0.60) never reached 0.70.
+	fired := false
+	for i := 0; i < 12; i++ {
+		if g := state.recordToolCall("edit_file", 2); g != "" {
+			fired = true
+			break
+		}
+	}
+	if !fired {
+		t.Error("expected sliding-window guidance during pure-execution burst after exploration phase; lifetime-ratio bug (#2427) would drop it")
+	}
+}
+
+// TestHeterogeneousModelWindowTrimBoundary pins the #2427 off-by-one: the
+// old trim-before-append (len > window) left an 11-entry steady-state
+// window. After trimming post-append, len(toolHistory) must stay exactly
+// hmLookbackWindow.
+func TestHeterogeneousModelWindowTrimBoundary(t *testing.T) {
+	state := newHeterogeneousModelState()
+
+	for i := 0; i < 15; i++ {
+		state.recordToolCall("read_file", 1)
+	}
+	if got := len(state.toolHistory); got != hmLookbackWindow {
+		t.Errorf("toolHistory length = %d, want exactly %d (off-by-one in trim)", got, hmLookbackWindow)
+	}
+}
