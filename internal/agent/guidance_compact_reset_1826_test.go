@@ -27,6 +27,12 @@ var quotaRegistry = []string{
 	"convergenceLock", "giveupRevert", "inputUnderspec", "integrationMonitor",
 	"iterPressure", "prematureCommit", "reproducerLifecycle", "reversibility",
 	"toolRedundancy", "tunnelVision",
+	// #2440 closure: the quota-bearing detectors that shipped without
+	// registry entries (found issue-by-issue, same as pre-#1826 gaps).
+	"batchCoupling", "taintInfluence", "orphanFile", "argSizeGuardFires",
+	"crossDetectorConsensus", "scopeCreep", "searchParamGuard",
+	"prematureSuccess", "falsePremise", "complexityGate", "permDenyStreak",
+	"wtInvalidation", "toolEff", "patchExhaust",
 }
 
 // Test1826QuotaRegistryPin asserts every registered quota detector has an
