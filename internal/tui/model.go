@@ -40,6 +40,7 @@ import (
 	"github.com/topcheer/ggcode/internal/stream"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/swarm"
+	"github.com/topcheer/ggcode/internal/task"
 	"github.com/topcheer/ggcode/internal/tmux"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tui/cmdpane"
@@ -91,8 +92,9 @@ type Model struct {
 	chatList                *chat.List // virtual-scrolling conversation list
 	chatStyles              chat.Styles
 	cronScheduler           *cron.Scheduler
-	lastQueuedChatID        string   // chat item ID of last visible queued msg (for de-queue removal)
-	queuedChatIDs           []string // chat item IDs of all queued-msg bubbles (for restorePendingInput cleanup)
+	taskMgr                 *task.Manager // session task board; snapshotted into session meta, restored on resume
+	lastQueuedChatID        string        // chat item ID of last visible queued msg (for de-queue removal)
+	queuedChatIDs           []string      // chat item IDs of all queued-msg bubbles (for restorePendingInput cleanup)
 	shellMode               bool
 	shellRunning            bool // true while a $ shell command is executing (independent of agent loading)
 	shellOwnedLoading       bool // true when shell set m.loading (agent wasn't running)

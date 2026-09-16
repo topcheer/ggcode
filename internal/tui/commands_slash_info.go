@@ -129,6 +129,9 @@ func (m *Model) applyResumedSession(ses *session.Session) {
 	if m.session != nil && m.session.ID != ses.ID && m.sessionStore != nil {
 		oldSes := m.session
 		oldStore := m.sessionStore
+		// Snapshot the board into the session we are leaving, before the
+		// async meta flush: the live board belongs to the outgoing session.
+		m.snapshotTasksInto(oldSes)
 		safego.Go("tui.applyResumedSession.metaFlush", func() {
 			if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
 				if err := jsonlStore.AppendMetaToDisk(oldSes); err != nil {
