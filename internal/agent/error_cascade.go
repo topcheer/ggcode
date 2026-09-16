@@ -294,9 +294,9 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 	case 3:
 		e.firedTier[rootKey] = tier
 		guidance = fmt.Sprintf(
-			"[Error Cascade: ABORT] %d tool failures share root cause %s '%s'. "+
+			"[Error Cascade: ABORT] %d tool failures share root cause %s %q. "+
 				"The current approach is not working -- every operation touching this "+
-				"%s fails. STOP attempting operations on '%s'. Instead: (1) re-read "+
+				"%s fails. STOP attempting operations on %q. Instead: (1) re-read "+
 				"the %s from scratch to understand its current state, (2) check if "+
 				"another process or agent modified it, (3) consider reverting to a "+
 				"known-good state, or (4) escalate to the user if this is an "+
@@ -306,9 +306,9 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 	case 2:
 		e.firedTier[rootKey] = tier
 		guidance = fmt.Sprintf(
-			"[Error Cascade: ROOT CAUSE] %d tool failures share root cause %s '%s'. "+
+			"[Error Cascade: ROOT CAUSE] %d tool failures share root cause %s %q. "+
 				"These are NOT independent errors -- they all stem from the same "+
-				"underlying problem with this %s. FIX '%s' first before attempting "+
+				"underlying problem with this %s. FIX %q first before attempting "+
 				"any other dependent operations. Common root causes: syntax error, "+
 				"missing import, incorrect type, renamed symbol, or file corruption.",
 			count, rootType, rootKey, rootType, rootKey,
@@ -316,9 +316,9 @@ func (e *errorCascadeState) recordError(toolName, content string) string {
 	case 1:
 		e.firedTier[rootKey] = tier
 		guidance = fmt.Sprintf(
-			"[Error Cascade] %d tool failures share root cause %s '%s'. "+
+			"[Error Cascade] %d tool failures share root cause %s %q. "+
 				"Multiple errors are clustering around this %s -- they likely share "+
-				"a common root cause. Focus on fixing '%s' first; fixing it may "+
+				"a common root cause. Focus on fixing %q first; fixing it may "+
 				"resolve several downstream errors at once.",
 			count, rootType, rootKey, rootType, rootKey,
 		)
