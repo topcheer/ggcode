@@ -25,16 +25,17 @@ type AnthropicProvider struct {
 	maxTokens        int
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: reader-side race-free override
 	cap              *adaptiveCap
-	transport        *headerInjectingTransport // kept for runtime header updates
-	calibrator       *tokenCountCalibrator     // periodic real-API token calibration
-	files            *fileUploader             // Anthropic Files API (large-image file_id referencing)
-	reasoningEffort  string                    // "", "low", "medium", "high", "xhigh", "max" — maps to thinking budget
-	toolChoice       string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
-	temperature      float64                   // 0 = provider default
-	topP             float64                   // 0 = provider default
-	serverTools      []ServerToolConfig        // Anthropic server-side tools (web_search/web_fetch), executed in-API
-	memoryTool       bool                      // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
-	thinkingMode     string                    // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
+	transport        *headerInjectingTransport            // kept for runtime header updates
+	calibrator       *tokenCountCalibrator                // periodic real-API token calibration
+	files            *fileUploader                        // Anthropic Files API (large-image file_id referencing)
+	reasoningEffort  string                               // "", "low", "medium", "high", "xhigh", "max" — maps to thinking budget
+	toolChoice       string                               // "", "auto", "required", "none" — maps to Anthropic tool_choice
+	temperature      float64                              // 0 = provider default
+	topP             float64                              // 0 = provider default
+	serverTools      []ServerToolConfig                   // Anthropic server-side tools (web_search/web_fetch), executed in-API
+	memoryTool       bool                                 // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
+	thinkingMode     string                               // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
+	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -517,6 +518,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
 		resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
+		resp, callErr = p.client.Messages.New(ctx, params, p.contextEditingOptions()...)
 		return callErr
 	}, providerRetryAttempts)
 	// Retry once without extended thinking if the model rejects it
@@ -528,6 +530,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
+			resp, callErr = p.client.Messages.New(ctx, params, p.contextEditingOptions()...)
 			return callErr
 		}, providerRetryAttempts)
 	}
@@ -540,6 +543,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
+			resp, callErr = p.client.Messages.New(ctx, params, p.contextEditingOptions()...)
 			return callErr
 		}, providerRetryAttempts)
 	}
@@ -552,6 +556,14 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	}
 	if string(resp.StopReason) == "max_tokens" {
 		p.cap.OnTruncated()
+	}
+
+	// Surface server-side context edits so long-session token savings are
+	// observable (context_management.applied_edits, beta response block).
+	if p.contextEditing.Load() != nil {
+		if summary, ok := parseAppliedEdits([]byte(resp.RawJSON())); ok {
+			debug.Log("anthropic", "Chat %s", summary)
+		}
 	}
 
 	msg := convertAnthropicResponse(resp.Content)
@@ -604,7 +616,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			truncated = false
 
 			func() {
-				stream := p.client.Messages.NewStreaming(ctx, params, callOpts...)
+				stream := p.client.Messages.NewStreaming(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 				defer func() {
 					_ = stream.Close()
 				}()
@@ -729,6 +741,13 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 						if event.Usage.CacheReadInputTokens > 0 {
 							cacheReadTokens = int(event.Usage.CacheReadInputTokens)
+						}
+						// Surface server-side context edits applied by
+						// context_management so the user sees what was cleared.
+						if p.contextEditing.Load() != nil {
+							if summary, ok := parseAppliedEdits([]byte(event.RawJSON())); ok {
+								ch <- StreamEvent{Type: StreamEventSystem, Text: "[" + summary + "] "}
+							}
 						}
 						// Check stop_reason for truncation / policy errors.
 						if stopReason := string(event.Delta.StopReason); stopReason != "" {
@@ -1499,4 +1518,51 @@ func anthropicStopReasonError(reason string) error {
 	default:
 		return fmt.Errorf("anthropic stream ended with stop_reason=%s", reason)
 	}
+}
+
+// SetContextEditing opts this endpoint into Anthropic server-side context
+// management. nil disables the feature and strips the beta flag from the
+// request header. The flag is toggled on the transport (the same injection
+// point SetSessionID uses) so the value merges with any configured
+// anthropic-beta header instead of clobbering it.
+func (p *AnthropicProvider) SetContextEditing(cfg *ContextEditingConfig) {
+	p.contextEditing.Store(cfg)
+	if p.transport == nil {
+		return
+	}
+	hdrs := p.transport.snapshotHeaders()
+	beta := toggleBetaToken(hdrs.Get("anthropic-beta"), anthropicContextManagementBeta, cfg != nil)
+	if beta != "" {
+		hdrs.Set("anthropic-beta", beta)
+	} else {
+		hdrs.Del("anthropic-beta")
+	}
+	p.transport.UpdateHeaders(hdrs)
+}
+
+// toggleBetaToken adds or removes a comma-separated token from an
+// anthropic-beta header value. Idempotent in both directions; preserves
+// unrelated tokens (including their original order).
+func toggleBetaToken(header, token string, add bool) string {
+	var kept []string
+	for _, part := range strings.Split(header, ",") {
+		if t := strings.TrimSpace(part); t != "" && t != token {
+			kept = append(kept, t)
+		}
+	}
+	if add {
+		kept = append(kept, token)
+	}
+	return strings.Join(kept, ",")
+}
+
+// contextEditingOptions returns the per-call request options attaching the
+// context_management field. Nil when the feature is off, so the spread at
+// the call sites is a no-op.
+func (p *AnthropicProvider) contextEditingOptions() []option.RequestOption {
+	payload := contextManagementPayload(p.contextEditing.Load())
+	if payload == nil {
+		return nil
+	}
+	return []option.RequestOption{option.WithJSONSet("context_management", payload)}
 }

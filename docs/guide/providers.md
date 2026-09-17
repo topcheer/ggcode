@@ -226,6 +226,13 @@ model generation:
 
 `thinking_mode` overrides the auto-detection per endpoint (`auto` is the
 default; unknown models always fall back to the manual carrier):
+## Context Editing (Anthropic)
+
+Server-side context management: once Claude has processed a tool result or a
+thinking block, the API itself can clear those blocks from the conversation on
+later turns. Long agent sessions stay inside the context window and input-token
+spend drops, with no client-side compaction involved. Supported by the
+`anthropic` protocol (beta flag `context-management-2025-06-27`).
 
 ```yaml
 vendors:
@@ -240,6 +247,26 @@ vendors:
 
 Use `adaptive` when your endpoint fronts a Claude 4.6+/5.x model under a
 renamed model ID, or `manual` to force `budget_tokens` on newer models.
+    context_editing: all    # tool_results | thinking | all (empty = off)
+    endpoints:
+      default:
+        model: claude-sonnet-4
+```
+
+Modes:
+
+- `tool_results` — `clear_tool_uses_20250919`: older tool results are cleared
+  after the input reaches the trigger threshold (API default 100k input tokens);
+  the most recent 3 tool uses are preserved by default.
+- `thinking` — `clear_thinking_20251015`: thinking blocks from earlier turns are
+  cleared (the latest thinking turn is always kept).
+- `all` — both strategies.
+
+When the API applies an edit, the cleared block count and token savings are
+surfaced as a system message in streaming output (and in debug logs for
+non-streaming calls). Because edits are server-side, prompt cache prefixes
+rewrite accordingly and no conversation history is removed from ggcode's local
+session files.
 
 ## Tool Choice
 

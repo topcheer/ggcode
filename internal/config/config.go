@@ -114,6 +114,9 @@ type EndpointConfig struct {
 	SelectedModel  string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
 	Models         []string `yaml:"models,omitempty" json:"models,omitempty"`
 	Tags           []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	// ContextEditing (anthropic): "tool_results", "thinking", or "all"
+	// (empty = off) — server-side context-management beta.
+	ContextEditing string `yaml:"context_editing,omitempty" json:"context_editing,omitempty"`
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -148,6 +151,7 @@ type ResolvedEndpoint struct {
 	ServerTools     []ServerToolConfig
 	MemoryTool      bool
 	ThinkingMode    string
+	ContextEditing  string
 	SupportsVision  bool
 	Models          []string
 	Tags            []string
