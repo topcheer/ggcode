@@ -70,8 +70,20 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 		name := fmt.Sprintf("mcp__%s__%s", a.serverName, td.Name)
 		desc := td.Description
 		blocked := a.readOnly && isWriteToolName(td.Name)
+		if blocked && td.annotationAllowsReadOnly() {
+			// 2025-06-18 tool annotations: the server's own readOnlyHint
+			// declaration overrides the name heuristic (see annotations.go).
+			// Contradicting destructiveHint=true keeps the block (the more
+			// dangerous hint wins).
+			blocked = false
+			debug.Log("mcp", "read-only server %q: tool %q allowed via readOnlyHint annotation despite write-like name", a.serverName, td.Name)
+		}
 		if a.readOnly {
 			desc = desc + " (read-only)"
+		} else if td.DeclaredReadOnly() {
+			// Risk vocabulary for the model: surface the server's own
+			// declaration so the agent can weight side effects correctly.
+			desc = desc + " (server declares read-only)"
 		}
 		t := &mcpTool{
 			name:     name,
