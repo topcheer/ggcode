@@ -3,8 +3,14 @@
 package tool
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -59,5 +65,58 @@ func TestSeatbeltProfile_RejectsUnsafePath(t *testing.T) {
 	profile, err := seatbeltProfile(t.TempDir(), NewSandboxPolicy(true, nil, []string{`bad"quote`}))
 	if err == nil {
 		t.Fatalf("unsafe path must fail closed, got profile:\n%s", profile)
+	}
+}
+
+func TestRunCommand_SandboxDeniesHomeWrite(t *testing.T) {
+	// NOTE: this package's TestMain redirects HOME to a scratch dir that
+	// lives under TMPDIR (and is therefore sandbox-allowed). The denial
+	// probe must target the REAL user home, so resolve it from the passwd
+	// database instead of the environment.
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" {
+		t.Skipf("cannot resolve real home dir: %v", err)
+	}
+	probe := filepath.Join(u.HomeDir, "ggcode-sbx-probe.txt")
+	t.Cleanup(func() { os.Remove(probe) })
+
+	rc := RunCommand{WorkingDir: t.TempDir(), Sandbox: NewSandboxPolicy(true, nil, nil)}
+	res, execErr := rc.Execute(context.Background(), json.RawMessage(
+		fmt.Sprintf(`{"command": "echo pwned > %s"}`, probe)))
+	if execErr != nil {
+		t.Fatalf("execute: %v", execErr)
+	}
+	if !res.IsError {
+		t.Fatalf("home write must fail under sandbox, got: %s", res.Content)
+	}
+	if errors.Is(errors.New(res.Content), errSandboxUnavailable) || strings.Contains(res.Content, errSandboxUnavailable.Error()) {
+		t.Skipf("sandbox-exec unavailable on this machine: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "sandbox") {
+		t.Fatalf("denial must carry the sandbox hint, got: %s", res.Content)
+	}
+	if _, statErr := os.Stat(probe); statErr == nil {
+		t.Fatal("probe file must not exist after denied write")
+	}
+}
+
+func TestRunCommand_SandboxAllowsTmpWrite(t *testing.T) {
+	tmp := t.TempDir()
+	out := filepath.Join(tmp, "out.txt")
+	rc := RunCommand{WorkingDir: tmp, Sandbox: NewSandboxPolicy(true, nil, nil)}
+	res, execErr := rc.Execute(context.Background(), json.RawMessage(
+		fmt.Sprintf(`{"command": "echo ok > %s"}`, out)))
+	if execErr != nil {
+		t.Fatalf("execute: %v", execErr)
+	}
+	if strings.Contains(res.Content, errSandboxUnavailable.Error()) {
+		t.Skipf("sandbox-exec unavailable: %s", res.Content)
+	}
+	if res.IsError {
+		t.Fatalf("temp write must succeed under sandbox, got: %s", res.Content)
+	}
+	data, readErr := os.ReadFile(out)
+	if readErr != nil || strings.TrimSpace(string(data)) != "ok" {
+		t.Fatalf("allowed write produced %q (err=%v)", data, readErr)
 	}
 }

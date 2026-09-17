@@ -320,3 +320,21 @@ func TestCommandJobs_RunningJobNeverEvicted(t *testing.T) {
 		t.Fatalf("running job evicted: %v", err)
 	}
 }
+
+func TestCommandJobManager_SandboxPolicyDisabled(t *testing.T) {
+	mgr := NewCommandJobManager(t.TempDir())
+	// Disabled policy must be accepted and change nothing.
+	mgr.SetSandboxPolicy(NewSandboxPolicy(false, nil, nil))
+
+	started, err := mgr.Start(context.Background(), "printf 'job-ok'", false, 5*time.Second)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	snap, err := mgr.Wait(context.Background(), started.ID, 2*time.Second, 20, 0)
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if snap.Status != CommandJobCompleted || snap.TotalLines != 1 || snap.Lines[0] != "job-ok" {
+		t.Fatalf("unexpected job result: %+v", snap)
+	}
+}
