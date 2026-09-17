@@ -300,7 +300,13 @@ type Agent struct {
 	// GGCODE_TOOL_TAPE env var: "record:<path>" persists every (tool, input)
 	// → result pair; "replay:<path>" serves results from the tape without
 	// ever invoking real tools. nil = off (the default).
-	toolTape                 *toolTapeState
+	toolTape *toolTapeState
+
+	// auditLedger seals every tool action through the safeExecute choke
+	// point into a tamper-evident SHA-256 hash-chained ledger (internal/
+	// audit). Opt-in via the GGCODE_AUDIT_LEDGER env var; non-nil with an
+	// internal nil ledger when off (issue #341 pointer-field guard).
+	auditLedger              *auditLedgerState
 	outcomeMisattrib         *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
 	trajectoryHealth         *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	tokenWasteBudget         *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
@@ -534,6 +540,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		integrationMonitor:     newIntegrationState(),
 		toolTargetMismatch:     newToolTargetState(),
 		toolTape:               newToolTapeState(),
+		auditLedger:            newAuditLedgerState(),
 	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()

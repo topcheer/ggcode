@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/audit"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -29,7 +30,7 @@ import (
 // denied, and without the mode in the message the model misattributes the
 // failures to its own parameters and enters a degenerate retry loop.
 // switch_mode is always allowed (IsAlwaysAllowedTool), so it is the
-// self-rescue channel in autonomous sessions where no user is watching —
+// self-rescue channel in autonomous sessions where no user is watching -
 // the old "ask the user to press Shift+Tab" advice was dead-end guidance
 // there.
 func (a *Agent) permissionDeniedMessage(toolName string) string {
@@ -149,7 +150,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 }
 
 // defaultToolTimeout is the maximum time a single tool call can take when no
-// adaptive or category-specific timeout applies. This is the hard ceiling —
+// adaptive or category-specific timeout applies. This is the hard ceiling -
 // the adaptive system may compute a lower timeout based on tool category and
 // historical latency data (see adaptive_timeout.go).
 //
@@ -733,11 +734,15 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 // forever on a tool that ignores its context parameter. The goroutine may continue
 // running in the background (we can't kill it), but the agent loop is unblocked.
 func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessage) (result tool.Result, err error) {
+	startTime := time.Now()
 	// Pre-flight required-parameter check (schema-driven, #first-call-fail
 	// root cause): reject before dispatch with an error that embeds each
 	// missing parameter's schema description, so the LLM fixes the call in
 	// one retry instead of guessing from a bare parameter name.
 	if r := preflightRequiredCheck(t, args); r != nil {
+		// Rejected before execution - from a governance standpoint this is
+		// an audited action attempt, not silence (audit.StatusInvalid).
+		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
 		return *r, nil
 	}
 	// Deterministic replay (GGCODE_TOOL_TAPE=replay:<path>): serve recorded
@@ -778,9 +783,15 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 	select {
 	case r := <-ch:
 		a.recordToolCall(ctx, t.Name(), args, r.result, r.err)
+		a.auditToolExecution(t.Name(), args, r.result, r.err, time.Since(startTime))
 		return r.result, r.err
 	case <-ctx.Done():
 		debug.Log("agent", "tool %s cancelled via context (Execute did not honor cancellation, goroutine leaked)", t.Name())
+		// The tape skips cancellations (they reflect the harness, not the
+		// tool); the audit ledger deliberately records them - a cancelled
+		// side-effecting action is exactly what an auditor needs to see.
+		a.auditToolResult(t.Name(), args, audit.StatusCancelled,
+			"cancelled via context; tool may still be finishing in the background", time.Since(startTime))
 		return tool.Result{
 			Content: fmt.Sprintf("tool %s was cancelled (it did not respond to cancellation and may still be finishing in the background)", t.Name()),
 			IsError: true,
@@ -1754,7 +1765,7 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 		}
 		// Existed (not OldContent=="") distinguishes created files from
 		// pre-existing empty files (issue #554 B/C). With Existed=false the
-		// manager has already REMOVED the file, so the report must say so —
+		// manager has already REMOVED the file, so the report must say so -
 		// claiming "restored" would mislead the agent about disk state.
 		isNew := !cp.Existed
 		// #1559-A: clear the file's read/edit bookkeeping HERE, at the
