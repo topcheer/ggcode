@@ -63,4 +63,5 @@ Updated to declare `roots.listChanged: true` in client capabilities, signaling t
 
 - **MCP Sampling**: `sampling/createMessage` lets MCP servers request LLM completions from the client. Requires routing through the agent's provider.
 - **MCP Elicitation**: Server-initiated user input requests. Requires TUI integration.
-- **Resource Subscriptions**: `resources/subscribe` + `notifications/resources/updated` for live resource tracking.
+
+Resource Subscriptions (`resources/subscribe` + `notifications/resources/updated`) were originally listed here and are now implemented: see `internal/mcp/client.go` (`SubscribeResource`/`UnsubscribeResource`) and `internal/plugin/mcp_loader.go` (lazy subscribe-on-read, freshness stamps, unsubscribe-on-close).

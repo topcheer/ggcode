@@ -506,6 +506,37 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 	return &result, nil
 }
 
+// SubscribeResource sends a resources/subscribe request for uri (MCP
+// specification 2025-06-18). Subscribed resources generate
+// notifications/resources/updated when the server-side content changes.
+// The request is gated on the server's resources.subscribe capability so a
+// server that does not advertise subscriptions receives no unsupported call.
+func (c *Client) SubscribeResource(ctx context.Context, uri string) error {
+	if !c.HasResourceSubscribe() {
+		return fmt.Errorf("mcp[%s]: server does not advertise resources.subscribe", c.name)
+	}
+	params := ReadResourceParams{URI: uri}
+	var result struct{}
+	if err := c.sendRequest(ctx, "resources/subscribe", params, &result); err != nil {
+		return fmt.Errorf("mcp[%s]: resources/subscribe: %w", c.name, err)
+	}
+	return nil
+}
+
+// UnsubscribeResource sends a resources/unsubscribe request for uri. It is
+// gated by the same resources.subscribe capability as SubscribeResource.
+func (c *Client) UnsubscribeResource(ctx context.Context, uri string) error {
+	if !c.HasResourceSubscribe() {
+		return fmt.Errorf("mcp[%s]: server does not advertise resources.subscribe", c.name)
+	}
+	params := ReadResourceParams{URI: uri}
+	var result struct{}
+	if err := c.sendRequest(ctx, "resources/unsubscribe", params, &result); err != nil {
+		return fmt.Errorf("mcp[%s]: resources/unsubscribe: %w", c.name, err)
+	}
+	return nil
+}
+
 // CallTool invokes a tool on the MCP server.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]interface{}) (*CallToolResult, error) {
 	params := CallToolParams{

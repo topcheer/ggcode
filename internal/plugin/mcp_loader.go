@@ -68,6 +68,14 @@ type MCPPlugin struct {
 	prompts   []string
 	resources []string
 
+	// Resource subscription state (MCP 2025-06-18). subscribed tracks URIs
+	// with an in-flight or confirmed resources/subscribe request so repeated
+	// reads of the same resource do not re-subscribe; resourceUpdated records
+	// the wall-clock time of the latest notifications/resources/updated per
+	// URI. All access is guarded by mu.
+	subscribed      map[string]bool
+	resourceUpdated map[string]time.Time
+
 	// toolsHash is the content hash of the last-applied tool definitions.
 	// refreshTools compares a fresh ListTools result against it and skips
 	// the unregister/rebuild/re-register cycle when nothing changed - the
@@ -293,7 +301,8 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 // setupNotificationHandler registers a notification handler on the MCP client
 // to process server-initiated notifications:
 //   - notifications/tools/list_changed: triggers hot tool list refresh
-//   - notifications/resources/list_changed: logs for awareness
+//   - notifications/resources/list_changed: triggers resource list refresh
+//   - notifications/resources/updated: records a per-URI freshness stamp
 //   - notifications/message (logging): forwards to debug log
 //
 // This enables dynamic MCP servers that add/remove tools at runtime.
@@ -306,6 +315,8 @@ func (m *MCPPlugin) setupNotificationHandler(client *mcp.Client) {
 		case "notifications/resources/list_changed":
 			debug.Log("mcp-notif", "server=%s resources/list_changed received, refreshing resources", m.cfg.Name)
 			m.refreshResources(client)
+		case "notifications/resources/updated":
+			m.markResourceUpdatedFromParams(params)
 		case "notifications/prompts/list_changed":
 			debug.Log("mcp-notif", "server=%s prompts/list_changed received", m.cfg.Name)
 		case "notifications/message":
@@ -680,6 +691,7 @@ func (m *MCPPlugin) Close() error {
 	m.connected = false
 	m.status = MCPStatusPending
 	m.mu.Unlock()
+	m.unsubscribeAll(client)
 	return client.Close()
 }
 
@@ -700,7 +712,104 @@ func (m *MCPPlugin) ReadResource(ctx context.Context, uri string) (*mcp.ReadReso
 	if client == nil {
 		return nil, fmt.Errorf("mcp server %q is not connected", m.cfg.Name)
 	}
-	return client.ReadResource(ctx, uri)
+	result, err := client.ReadResource(ctx, uri)
+	if err == nil {
+		// Lazily subscribe after a successful read (MCP 2025-06-18) so
+		// future server-side changes to this resource surface as
+		// notifications/resources/updated. Best-effort and deduplicated.
+		m.subscribeResourceAsync(client, uri)
+	}
+	return result, err
+}
+
+// subscribeResourceAsync issues resources/subscribe for uri in the
+// background when the server advertises resources.subscribe. The in-flight
+// marker in m.subscribed deduplicates concurrent reads of the same URI and
+// is rolled back on failure so a later read can retry. Errors are logged
+// and never propagated: losing a subscription only degrades freshness
+// signalling, it must not fail the original successful read.
+func (m *MCPPlugin) subscribeResourceAsync(client *mcp.Client, uri string) {
+	if client == nil || !client.HasResourceSubscribe() {
+		return
+	}
+	m.mu.Lock()
+	if m.subscribed == nil {
+		m.subscribed = make(map[string]bool)
+	}
+	if m.subscribed[uri] {
+		m.mu.Unlock()
+		return
+	}
+	m.subscribed[uri] = true
+	m.mu.Unlock()
+	safego.Go("mcp-resource-subscribe", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := client.SubscribeResource(ctx, uri); err != nil {
+			m.mu.Lock()
+			delete(m.subscribed, uri)
+			m.mu.Unlock()
+			debug.Log("mcp-notif", "server=%s resource subscribe %s failed: %v", m.cfg.Name, uri, err)
+			return
+		}
+		debug.Log("mcp-notif", "server=%s subscribed to resource %s", m.cfg.Name, uri)
+	})
+}
+
+// markResourceUpdatedFromParams parses a notifications/resources/updated
+// payload ({"uri": ...}) and records a freshness stamp for the URI.
+func (m *MCPPlugin) markResourceUpdatedFromParams(params json.RawMessage) {
+	var p struct {
+		URI string `json:"uri"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || strings.TrimSpace(p.URI) == "" {
+		debug.Log("mcp-notif", "server=%s resource updated with malformed params: %s", m.cfg.Name, string(params))
+		return
+	}
+	m.markResourceUpdated(p.URI)
+}
+
+// markResourceUpdated records the time of the latest resource update.
+func (m *MCPPlugin) markResourceUpdated(uri string) {
+	m.mu.Lock()
+	if m.resourceUpdated == nil {
+		m.resourceUpdated = make(map[string]time.Time)
+	}
+	m.resourceUpdated[uri] = time.Now()
+	m.mu.Unlock()
+	debug.Log("mcp-notif", "server=%s resource updated: %s", m.cfg.Name, uri)
+}
+
+// ResourceUpdatedAt reports when the server last pushed a
+// notifications/resources/updated for uri, if it did.
+func (m *MCPPlugin) ResourceUpdatedAt(uri string) (time.Time, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.resourceUpdated[uri]
+	return t, ok
+}
+
+// unsubscribeAll drops every active resource subscription before the
+// transport is closed. Best-effort: failures are logged and skipped so
+// Close never fails because a server is unresponsive.
+func (m *MCPPlugin) unsubscribeAll(client *mcp.Client) {
+	m.mu.Lock()
+	uris := make([]string, 0, len(m.subscribed))
+	for uri := range m.subscribed {
+		uris = append(uris, uri)
+	}
+	m.subscribed = nil
+	m.mu.Unlock()
+	if client == nil || len(uris) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, uri := range uris {
+		if err := client.UnsubscribeResource(ctx, uri); err != nil {
+			debug.Log("mcp-notif", "server=%s resource unsubscribe %s failed: %v", m.cfg.Name, uri, err)
+		}
+	}
 }
 
 func (m *MCPPlugin) markPending() {
