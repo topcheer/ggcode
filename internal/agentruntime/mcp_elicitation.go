@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sync/atomic"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -40,6 +41,13 @@ func newMCPElicitationHandler(registry *toolpkg.Registry) mcp.ElicitationHandler
 		}
 		if askTool == nil {
 			return nil, fmt.Errorf("ask_user tool unavailable; cannot route MCP elicitation")
+		}
+
+		// MCP 2025-11-25 URL mode: out-of-band interaction (auth, payment)
+		// that must not pass through the client. Route as an explicit
+		// consent prompt instead of the form questions below.
+		if params.EffectiveMode() == mcp.ElicitationModeURL {
+			return handleURLElicitation(ctx, askTool, params)
 		}
 
 		reqID := fmt.Sprintf("elicit-%d", nextElicitCounter())
@@ -235,4 +243,72 @@ var elicitationCounter int64
 // answer never arrived; only the 5-minute timeout fired) (#1589-A).
 func nextElicitCounter() int64 {
 	return atomic.AddInt64(&elicitationCounter, 1)
+}
+
+// handleURLElicitation routes a URL mode elicitation (MCP 2025-11-25)
+// through ask_user as an explicit consent prompt. Per spec the client MUST
+// clearly display the target domain/host and gather user consent before
+// navigation; the sensitive interaction itself happens out-of-band in the
+// user's browser — ggcode only displays the URL and never reads data back
+// (the accept response omits content). The URL is shown verbatim but NOT
+// auto-opened: consent is about navigation, and a headless/IM surface may
+// not have a browser to hand off to.
+func handleURLElicitation(ctx context.Context, askTool *toolpkg.AskUserTool, params mcp.ElicitationParams) (*mcp.ElicitationResult, error) {
+	host := displayHost(params.URL)
+	req := toolpkg.AskUserRequest{
+		Title: "MCP Server Request — Out-of-Band URL",
+		Questions: []toolpkg.AskUserQuestion{{
+			ID:     "consent",
+			Title:  params.Message,
+			Prompt: fmt.Sprintf("The MCP server asks you to complete an out-of-band interaction (e.g. authorization or payment) at:\n%s\n(host: %s)\nApproving only tells the server you consented to visit; it does NOT share any data through ggcode.", params.URL, host),
+			Kind:   toolpkg.AskUserKindSingle,
+			Choices: []toolpkg.AskUserChoice{
+				{ID: "accept", Label: "I opened the URL and want to continue"},
+				{ID: "decline", Label: "Decline"},
+			},
+			AllowFreeform: false,
+		}},
+	}
+	resp, err := askTool.AskDirect(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("url elicitation interrupted: %w", err)
+	}
+	switch {
+	case resp.Status == toolpkg.AskUserStatusCancelled:
+		return &mcp.ElicitationResult{Action: mcp.ElicitationActionCancel}, nil
+	case resp.Status == toolpkg.AskUserStatusSubmitted && urlConsented(resp):
+		return &mcp.ElicitationResult{Action: mcp.ElicitationActionAccept}, nil
+	default:
+		return &mcp.ElicitationResult{Action: mcp.ElicitationActionDecline}, nil
+	}
+}
+
+// urlConsented reports whether the user picked the accept choice on the
+// URL-mode consent question.
+func urlConsented(resp toolpkg.AskUserResponse) bool {
+	for _, ans := range resp.Answers {
+		if ans.ID != "consent" {
+			continue
+		}
+		for _, id := range ans.SelectedChoiceIDs {
+			if id == "accept" {
+				return true
+			}
+		}
+		for _, id := range ans.SelectedChoices {
+			if id == "accept" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// displayHost extracts the host from a URL for the consent prompt; on parse
+// failure the raw string is shown so the user always sees what was sent.
+func displayHost(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Host
+	}
+	return raw
 }

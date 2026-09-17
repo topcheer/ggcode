@@ -108,7 +108,12 @@ type Client struct {
 	// elicitationHandler processes elicitation/create requests from the
 	// server (MCP 2025-06-18+). If nil, elicitation requests are rejected
 	// with an error.
-	elicitationHandler ElicitationHandler
+	// MCP 2025-11-25 URL-mode elicitation bookkeeping: elicitationIds of
+	// in-flight elicitation/create requests sent by this server.
+	// notifications/elicitation/complete entries are matched against (and
+	// retired from) this set; unknown IDs are ignored per spec.
+	pendingURLElicitations map[string]struct{}
+	elicitationHandler     ElicitationHandler
 
 	// serverCaps holds the capabilities advertised by the server during
 	// initialize. Used to gate feature-specific requests (e.g., logging).
@@ -326,7 +331,10 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		caps.Sampling = &struct{}{}
 	}
 	if c.elicitationHandlerLocked() != nil {
-		caps.Elicitation = &struct{}{}
+		// MCP 2025-11-25: advertise both elicitation modes. ggcode supports
+		// form mode in-band (ask_user surfaces) and URL mode as a
+		// consent-gated out-of-band handoff (it never auto-opens URLs).
+		caps.Elicitation = &ElicitationCapability{Form: &struct{}{}, URL: &struct{}{}}
 	}
 	params := InitializeParams{
 		ProtocolVersion: latestMCPProtocolVersion,
@@ -2329,9 +2337,15 @@ func (c *Client) handleElicitation(req *Request) error {
 		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid elicitation params: %v", err))
 	}
 
-	// Validate the server-provided schema before presenting it to the user.
-	if err := ValidateElicitationSchema(params.Schema); err != nil {
-		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid elicitation schema: %v", err))
+	// Validate per mode before presenting anything to the user (MCP
+	// 2025-11-25): form mode checks the restricted schema bounds; URL mode
+	// requires url + elicitationId and an https (or local) URL.
+	if err := validateElicitationParams(params); err != nil {
+		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid elicitation params: %v", err))
+	}
+	if params.EffectiveMode() == ElicitationModeURL {
+		// Track the ID so notifications/elicitation/complete can be matched.
+		c.trackURLElicitation(params.ElicitationID)
 	}
 
 	// Bounded timeout to prevent blocking the MCP read loop indefinitely.
@@ -2342,7 +2356,48 @@ func (c *Client) handleElicitation(req *Request) error {
 	if err != nil {
 		return c.writeErrorResponse(req.ID, -32603, fmt.Sprintf("elicitation failed: %v", err))
 	}
+	if params.EffectiveMode() == ElicitationModeURL && result != nil {
+		// Spec: a URL-mode response omits content — the interaction happens
+		// out-of-band and no data passes through the client.
+		result.Content = nil
+	}
 	return c.writeResultResponse(req.ID, result)
+}
+
+// trackURLElicitation records an in-flight URL mode elicitation ID (MCP
+// 2025-11-25) so the completion notification can be matched.
+func (c *Client) trackURLElicitation(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingURLElicitations == nil {
+		c.pendingURLElicitations = make(map[string]struct{})
+	}
+	c.pendingURLElicitations[id] = struct{}{}
+}
+
+// handleElicitationComplete processes notifications/elicitation/complete
+// (MCP 2025-11-25). Per spec clients MUST ignore notifications referencing
+// unknown or already-completed IDs; known ones are retired from the pending
+// set. Matching is bookkeeping only today — surfaces can subscribe via the
+// generic notification handler if they want UI updates on completion.
+func (c *Client) handleElicitationComplete(params json.RawMessage) {
+	var p struct {
+		ElicitationID string `json:"elicitationId"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil || p.ElicitationID == "" {
+		debug.Log("mcp-client", "elicitation complete notification without elicitationId ignored")
+		return
+	}
+	c.mu.Lock()
+	_, known := c.pendingURLElicitations[p.ElicitationID]
+	delete(c.pendingURLElicitations, p.ElicitationID)
+	c.mu.Unlock()
+	if !known {
+		// Spec MUST: ignore unknown or already-completed elicitation IDs.
+		debug.Log("mcp-client", "elicitation complete for unknown id %q ignored", p.ElicitationID)
+		return
+	}
+	debug.Log("mcp-client", "url elicitation %q completed out-of-band", p.ElicitationID)
 }
 
 // SetElicitationHandler registers a handler for elicitation/create requests.
@@ -2513,6 +2568,13 @@ func (c *Client) processNotification(notif *Notification) {
 	if notif == nil {
 		return
 	}
+	// MCP 2025-11-25: URL mode elicitation completion. Handled internally
+	// (pending-ID bookkeeping, MUST ignore unknown IDs) instead of being
+	// forwarded to the user notification handler.
+	if notif.Method == "notifications/elicitation/complete" {
+		c.handleElicitationComplete(notif.Params)
+		return
+	}
 	// Read the handler pointer without acquiring c.mu. sendRequest holds c.mu
 	// during the write phase, and processNotification is called from within
 	// the read loop. A function-pointer read is atomic on 64-bit platforms;
@@ -2615,8 +2677,17 @@ type ClientCaps struct {
 	Roots struct {
 		ListChanged bool `json:"listChanged,omitempty"`
 	} `json:"roots,omitempty"`
-	Sampling    *struct{} `json:"sampling,omitempty"`
-	Elicitation *struct{} `json:"elicitation,omitempty"`
+	Sampling    *struct{}              `json:"sampling,omitempty"`
+	Elicitation *ElicitationCapability `json:"elicitation,omitempty"`
+}
+
+// ElicitationCapability is the initialize capability object for elicitation
+// (MCP 2025-11-25). Per spec an empty capability object is equivalent to
+// declaring form-only support; ggcode declares both modes when an elicitation
+// handler is set.
+type ElicitationCapability struct {
+	Form *struct{} `json:"form,omitempty"`
+	URL  *struct{} `json:"url,omitempty"`
 }
 
 type Implementation struct {
