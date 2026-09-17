@@ -27,6 +27,40 @@ func TestAnthropicBuildParamsMarshalsValidToolUseInput(t *testing.T) {
 	}
 }
 
+func TestAnthropicBuildParamsImageRoutingFallback(t *testing.T) {
+	// Regression pin for the ctx-aware buildParams: with the Files uploader
+	// unavailable (nil), image blocks in user messages and tool_results must
+	// degrade to inline base64 sources and marshal cleanly.
+	tiny := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
+	params := p.buildParams(context.Background(), []Message{
+		{Role: "user", Content: []ContentBlock{{Type: "image", ImageMIME: "image/png", ImageData: tiny}}},
+		{
+			Role: "user",
+			Content: []ContentBlock{{
+				Type:   "tool_result",
+				ToolID: "tool-1",
+				Images: []ContentImage{{MIME: "image/png", Base64: tiny}},
+			}},
+		},
+	}, nil)
+
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(params.Messages))
+	}
+	img := params.Messages[0].Content[0].OfImage
+	if img == nil || img.Source.OfBase64 == nil {
+		t.Fatal("user image should stay inline base64 when uploader is nil")
+	}
+	tr := params.Messages[1].Content[0].OfToolResult
+	if tr == nil || len(tr.Content) != 1 || tr.Content[0].OfImage == nil || tr.Content[0].OfImage.Source.OfBase64 == nil {
+		t.Fatal("tool_result image should stay inline base64 when uploader is nil")
+	}
+	if _, err := json.Marshal(params); err != nil {
+		t.Fatalf("expected params to marshal, got %v", err)
+	}
+}
+
 func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
 	// Truncated JSON that can be repaired (missing closing brace).
 	// normalizeToolInputValue should repair it to valid JSON.
