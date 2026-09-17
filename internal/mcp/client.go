@@ -55,12 +55,22 @@ type Client struct {
 	httpNotifLastEventID string
 	negotiatedVersion    string // protocol version agreed upon during initialize
 	instructions         string // server-authored usage notes from initialize (guarded by mu; surfaced on tool descriptions)
-	mu                   sync.Mutex
-	stderrMu             sync.RWMutex
-	stderrBuf            strings.Builder
-	abortOnce            sync.Once
-	nextID               atomic.Int64
-	closed               atomic.Bool
+	// MCP 2026-07-28 stateless mode (SEP-2575, see discover.go). stateless
+	// opts the client into modern per-request _meta operation on the next
+	// Initialize; modernVersion records the selected modern protocol version
+	// ("" while operating in legacy handshake mode); modernServerInfo and
+	// legacyServerInfo hold the identity advertised by server/discover and
+	// the initialize result respectively. All guarded by mu.
+	stateless        bool
+	modernVersion    string
+	modernServerInfo *Implementation
+	legacyServerInfo Implementation
+	mu               sync.Mutex
+	stderrMu         sync.RWMutex
+	stderrBuf        strings.Builder
+	abortOnce        sync.Once
+	nextID           atomic.Int64
+	closed           atomic.Bool
 	// httpNotifDisabled permanently stops the standalone HTTP GET SSE
 	// stream after the server answered 405 (spec-allowed: servers MAY not
 	// offer the stream) or a non-SSE 200 body. Safe to flip from the stream
@@ -221,6 +231,10 @@ func NewClientFromConfig(cfg config.MCPServerConfig) *Client {
 			client.oauthHandler.SetClientCredentials(cfg.OAuthClientID, cfg.OAuthClientSecret)
 		}
 	}
+	// MCP 2026-07-28 stateless opt-in (SEP-2575, discover.go).
+	if cfg.Stateless {
+		client.EnableStateless()
+	}
 	return client
 }
 
@@ -346,28 +360,36 @@ func (c *Client) Instructions() string {
 }
 
 // Initialize sends the initialize request and returns server capabilities.
+// With the 2026-07-28 stateless opt-in (EnableStateless, SEP-2575) it first
+// probes server/discover; a modern server skips the handshake entirely (the
+// probe result synthesizes the returned InitializeResult) and only a
+// failure that is not a recognized modern error reaches the legacy
+// handshake below (dual-era client, spec basic/versioning). stdio clients
+// SHOULD probe first so legacy servers fail deterministically instead of
+// hanging on an era-ambiguous sessionless request.
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
-	caps := ClientCaps{
-		Roots: struct {
-			ListChanged bool `json:"listChanged,omitempty"`
-		}{ListChanged: true},
+	if c.statelessWanted() {
+		result, probeErr := c.probeModern(ctx)
+		if probeErr == nil {
+			// streamable HTTP only: best-effort idle notification stream.
+			// 2026-07-28 replaces the GET endpoint with subscriptions/listen;
+			// a conformant modern server 405s this and the stream
+			// self-disables (httpNotifDisabled), so legacy machinery stays
+			// harmless in modern mode.
+			c.startHTTPNotificationStream()
+			return result, nil
+		}
+		// Dual-era fallback: a recognized modern error (-32022) identifies a
+		// modern server and never reaches here (probeModern's mutual-version
+		// selection handles it); anything else — method-not-found, transport
+		// failure, timeout — identifies a legacy (handshake-era) server.
+		debug.Log("mcp-client", "server=%s stateless probe failed, falling back to initialize handshake: %v", c.name, probeErr)
 	}
-	if c.samplingHandlerLocked() != nil {
-		// MCP 2025-11-25 (SEP-1577): ggcode's sampling path accepts tools and
-		// toolChoice, forwards them to the LLM provider, and relays tool_use
-		// results with stopReason "toolUse" - advertise that support.
-		caps.Sampling = &SamplingCapability{Tools: &struct{}{}}
-	}
-	if c.elicitationHandlerLocked() != nil {
-		// MCP 2025-11-25: advertise both elicitation modes. ggcode supports
-		// form mode in-band (ask_user surfaces) and URL mode as a
-		// consent-gated out-of-band handoff (it never auto-opens URLs).
-		caps.Elicitation = &ElicitationCapability{Form: &struct{}{}, URL: &struct{}{}}
-	}
+	caps := c.clientCaps()
 	params := InitializeParams{
 		ProtocolVersion: latestMCPProtocolVersion,
 		Capabilities:    caps,
-		ClientInfo:      Implementation{Name: "ggcode", Version: "0.1.0"},
+		ClientInfo:      clientMetaName(),
 	}
 	var result InitializeResult
 	if err := c.sendRequest(ctx, "initialize", params, &result); err != nil {
@@ -395,6 +417,12 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	// with the negotiated version, so capability readers never observe a
 	// torn half-updated state (#562 Bug F).
 	c.setNegotiatedState(serverVersion, result.Capabilities)
+
+	// sa-68: remember the handshake-identified server so ServerInfo() also
+	// works in legacy mode.
+	c.mu.Lock()
+	c.legacyServerInfo = result.ServerInfo
+	c.mu.Unlock()
 
 	// Send initialized notification
 	notif := Notification{
@@ -782,7 +810,37 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	if c.closed.Load() {
 		return fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
+	err := c.sendRequestOnce(ctx, method, params, result)
+	// MCP 2026-07-28 (SEP-2575): a modern server rejects an unsupported
+	// protocol version with -32022 and lists the versions it does support.
+	// If one is mutually supported and different from the version we sent,
+	// switch and retry once; retrying with the version the server just
+	// rejected can only reproduce the failure. With the current
+	// single-version modern matrix this is future-proofing — the typed
+	// UnsupportedProtocolVersionError surfaces either way.
+	if uerr, ok := asUnsupportedProtocolVersion(err); ok && method != "initialize" && method != "server/discover" {
+		if nv := selectModernVersion(uerr.Supported); nv != "" && c.setModernVersionIfChanged(nv) {
+			debug.Log("mcp-client", "server=%s switching to protocol version %s after UnsupportedProtocolVersionError", c.name, nv)
+			retryErr := c.sendRequestOnce(ctx, method, params, result)
+			if _, stillVersion := asUnsupportedProtocolVersion(retryErr); !stillVersion {
+				return retryErr
+			}
+			// Retry was rejected as a version error too — fall through to
+			// the typed error below.
+		}
+		// No futile retry (no mutual change) or the retry was rejected too:
+		// surface the typed, spec-named error carrying the server's
+		// supported version list so callers can render actionable guidance.
+		return uerr
+	}
+	return err
+}
 
+// sendRequestOnce performs a single request/response round trip, attaching
+// the 2026-07-28 per-request _meta envelope when the client is operating in
+// stateless mode (legacy traffic is untouched). Each attempt gets its own
+// mcpRequestTimeout budget.
+func (c *Client) sendRequestOnce(ctx context.Context, method string, params interface{}, result interface{}) error {
 	// Apply per-request timeout so a slow/hung MCP server can't block forever.
 	// If the caller's ctx already has a shorter deadline, that takes priority.
 	ctx, cancel := context.WithTimeout(ctx, mcpRequestTimeout)
@@ -792,6 +850,10 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	if err != nil {
 		return fmt.Errorf("mcp[%s]: marshal params for %s: %w", c.name, method, err)
 	}
+
+	// MCP 2026-07-28 (SEP-2575): stateless mode carries protocol version,
+	// client info and client capabilities on every request. Legacy: no-op.
+	paramsJSON = c.envelopeModernMeta(method, paramsJSON)
 
 	req := Request{
 		JSONRPC: "2.0",

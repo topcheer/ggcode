@@ -160,9 +160,15 @@ type MCPServerConfig struct {
 	OAuthClientID     string            `yaml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
 	OAuthClientSecret string            `yaml:"oauth_client_secret,omitempty" json:"oauth_client_secret,omitempty"`
 	ReadOnly          bool              `yaml:"read_only,omitempty" json:"read_only,omitempty"`
-	Source            string            `yaml:"-" json:"-"`
-	OriginPath        string            `yaml:"-" json:"-"`
-	Migrated          bool              `yaml:"-" json:"-"`
+	// Stateless opts the MCP client into the 2026-07-28 stateless protocol
+	// core (SEP-2575): the client probes server/discover and operates modern
+	// (per-request _meta versioning) instead of the legacy initialize
+	// handshake, falling back to the handshake on non-modern errors.
+	// Default false — legacy behavior is unchanged.
+	Stateless  bool   `yaml:"stateless,omitempty" json:"stateless,omitempty"`
+	Source     string `yaml:"-" json:"-"`
+	OriginPath string `yaml:"-" json:"-"`
+	Migrated   bool   `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.
