@@ -51,6 +51,10 @@ type OpenAIResponsesProvider struct {
 	reasoningEffort   string
 	toolChoice        string
 	maxTokensOverride int
+
+	// Hosted (server-side) tools configured via server_tools (sa-62), e.g.
+	// web_search. Declared once in config and executed inside the API.
+	serverTools []ServerToolConfig
 }
 
 // NewOpenAIResponsesProvider creates a provider for an OpenAI-compatible
@@ -129,11 +133,28 @@ type responsesInputItem struct {
 	// tool loops. For non-reasoning items both stay empty and are omitted.
 	Summary          json.RawMessage `json:"summary,omitempty"`
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
+	// RawReplay (sa-62) carries a verbatim output item (hosted tool call such
+	// as web_search_call) that must be echoed back byte-for-byte under
+	// store=false; see MarshalJSON.
+	RawReplay json.RawMessage `json:"-"`
+}
+
+// MarshalJSON emits RawReplay verbatim when set - hosted-tool items replay
+// byte-for-byte, so re-encoding through the structured fields is not an
+// option. Without RawReplay the structured fields are marshalled as before.
+func (i responsesInputItem) MarshalJSON() ([]byte, error) {
+	if len(i.RawReplay) > 0 {
+		return i.RawReplay, nil
+	}
+	type plain responsesInputItem
+	return json.Marshal(plain(i))
 }
 
 type responsesTool struct {
-	Type        string          `json:"type"` // "function"
-	Name        string          `json:"name"`
+	// Type is "function" for declared client tools, or a hosted tool type
+	// ("web_search", "web_search_preview", ...) for server-side tools (sa-62).
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"` // hosted tools carry no name
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      bool            `json:"strict,omitempty"`
@@ -226,6 +247,16 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 					args = "{}"
 				}
 				items = append(items, responsesInputItem{Type: "function_call", CallID: b.ToolID, Name: b.ToolName, Args: args})
+			case "server_tool":
+				// sa-62: hosted web_search items from a previous Responses turn.
+				// Replay the raw item verbatim - store=false discards server
+				// state, so an unechoed web_search_call loses the search context.
+				// Foreign provider blocks fail the type probe and are dropped,
+				// keeping cross-provider failover leak-free.
+				if it, ok := decodeResponsesServerToolItem(b.Raw); ok {
+					flushText()
+					items = append(items, it)
+				}
 			case "text":
 				if isToolRole {
 					// Text in a tool-role message is decoration; the output is the payload.
@@ -322,6 +353,13 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
 		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: params})
+	}
+	// Hosted (server-side) tools (sa-62): appended after the declared
+	// function tools. OpenAI addresses them purely by type.
+	for _, st := range p.serverTools {
+		if rt, ok := responsesHostedTool(st); ok {
+			req.Tools = append(req.Tools, rt)
+		}
 	}
 	switch strings.ToLower(p.toolChoice) {
 	case "required":
@@ -434,6 +472,11 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 				Type:              "thinking",
 				ThinkingSignature: string(rawItem),
 			})
+		case "web_search_call":
+			// sa-62: hosted web_search executed inside the Responses API;
+			// keep the raw item verbatim so the next stateless request
+			// echoes the full search exchange back.
+			out.Message.Content = append(out.Message.Content, responsesServerToolBlock(rawItem))
 		}
 	}
 	if len(texts) > 0 {
@@ -537,6 +580,12 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
 						ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
 					}}
+				}
+				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "web_search_call" {
+					// sa-62: hosted web_search item finished; forward it once
+					// through the server-tool channel so the agent stores the
+					// raw item and the next stateless request echoes it back.
+					ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}
 				}
 			case "response.completed", "response.incomplete":
 				usage, stop := parseResponsesFinal(data)
