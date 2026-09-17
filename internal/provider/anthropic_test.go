@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -8,7 +9,7 @@ import (
 
 func TestAnthropicBuildParamsMarshalsValidToolUseInput(t *testing.T) {
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
-	params := p.buildParams([]Message{
+	params := p.buildParams(context.Background(), []Message{
 		{
 			Role: "assistant",
 			Content: []ContentBlock{
@@ -26,11 +27,45 @@ func TestAnthropicBuildParamsMarshalsValidToolUseInput(t *testing.T) {
 	}
 }
 
+func TestAnthropicBuildParamsImageRoutingFallback(t *testing.T) {
+	// Regression pin for the ctx-aware buildParams: with the Files uploader
+	// unavailable (nil), image blocks in user messages and tool_results must
+	// degrade to inline base64 sources and marshal cleanly.
+	tiny := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
+	params := p.buildParams(context.Background(), []Message{
+		{Role: "user", Content: []ContentBlock{{Type: "image", ImageMIME: "image/png", ImageData: tiny}}},
+		{
+			Role: "user",
+			Content: []ContentBlock{{
+				Type:   "tool_result",
+				ToolID: "tool-1",
+				Images: []ContentImage{{MIME: "image/png", Base64: tiny}},
+			}},
+		},
+	}, nil)
+
+	if len(params.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(params.Messages))
+	}
+	img := params.Messages[0].Content[0].OfImage
+	if img == nil || img.Source.OfBase64 == nil {
+		t.Fatal("user image should stay inline base64 when uploader is nil")
+	}
+	tr := params.Messages[1].Content[0].OfToolResult
+	if tr == nil || len(tr.Content) != 1 || tr.Content[0].OfImage == nil || tr.Content[0].OfImage.Source.OfBase64 == nil {
+		t.Fatal("tool_result image should stay inline base64 when uploader is nil")
+	}
+	if _, err := json.Marshal(params); err != nil {
+		t.Fatalf("expected params to marshal, got %v", err)
+	}
+}
+
 func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
 	// Truncated JSON that can be repaired (missing closing brace).
 	// normalizeToolInputValue should repair it to valid JSON.
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
-	params := p.buildParams([]Message{
+	params := p.buildParams(context.Background(), []Message{
 		{
 			Role: "assistant",
 			Content: []ContentBlock{
@@ -59,7 +94,7 @@ func TestAnthropicBuildParamsFallsBackForInvalidToolUseInput(t *testing.T) {
 func TestAnthropicBuildParamsFallsBackForUnrepairableInput(t *testing.T) {
 	// Truly garbled input that cannot be repaired.
 	p := &AnthropicProvider{model: "test-model", maxTokens: 128}
-	params := p.buildParams([]Message{
+	params := p.buildParams(context.Background(), []Message{
 		{
 			Role: "assistant",
 			Content: []ContentBlock{
@@ -140,7 +175,7 @@ func TestAnthropicBuildParamsWithThinking(t *testing.T) {
 	p := &AnthropicProvider{model: "claude-sonnet-4-6", maxTokens: 64000}
 	p.SetReasoningEffort("medium")
 
-	params := p.buildParams(nil, nil)
+	params := p.buildParams(context.Background(), nil, nil)
 
 	if params.Thinking.OfEnabled == nil {
 		t.Fatal("expected thinking config to be enabled for medium effort")
@@ -154,7 +189,7 @@ func TestAnthropicBuildParamsWithThinking(t *testing.T) {
 func TestAnthropicBuildParamsWithoutThinking(t *testing.T) {
 	p := &AnthropicProvider{model: "claude-sonnet-4-6", maxTokens: 64000}
 	// No effort set — thinking should not be configured
-	params := p.buildParams(nil, nil)
+	params := p.buildParams(context.Background(), nil, nil)
 
 	if params.Thinking.OfEnabled != nil {
 		t.Fatal("expected thinking config to be nil when effort is not set")

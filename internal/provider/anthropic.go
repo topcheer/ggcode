@@ -26,6 +26,7 @@ type AnthropicProvider struct {
 	cap              *adaptiveCap
 	transport        *headerInjectingTransport // kept for runtime header updates
 	calibrator       *tokenCountCalibrator     // periodic real-API token calibration
+	files            *fileUploader             // Anthropic Files API (large-image file_id referencing)
 	reasoningEffort  string                    // "", "low", "medium", "high", "xhigh", "max" — maps to thinking budget
 	toolChoice       string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
 	temperature      float64                   // 0 = provider default
@@ -158,7 +159,7 @@ func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 // probeChat sends a single messages request without retry or adaptive
 // cap tracking. Used by context window probing.
 func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
-	params := p.buildParams(messages, nil)
+	params := p.buildParams(ctx, messages, nil)
 	_, err := p.client.Messages.New(ctx, params)
 	return err
 }
@@ -335,13 +336,15 @@ func newAnthropicProvider(apiKey, model string, maxTokens int, baseURL string) *
 	opts = append(opts, option.WithHTTPClient(&http.Client{Transport: transport}))
 	client := anthropic.NewClient(opts...)
 	debug.Log("provider", "AnthropicProvider created: model=%s maxTokens=%d baseURL=%s", model, maxTokens, baseURL)
-	return &AnthropicProvider{
+	p := &AnthropicProvider{
 		client:     client,
 		model:      model,
 		maxTokens:  maxTokens,
 		transport:  transport,
 		calibrator: newTokenCountCalibrator(),
 	}
+	p.files = newFileUploader(&p.client, baseURL)
+	return p
 }
 
 func anthropicProviderOptions(apiKey, baseURL string) []option.RequestOption {
@@ -400,7 +403,7 @@ func (p *AnthropicProvider) SetSessionID(sessionID string) {
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
-	params := p.buildParams(messages, tools)
+	params := p.buildParams(ctx, messages, tools)
 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -461,7 +464,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
-	params := p.buildParams(messages, tools)
+	params := p.buildParams(ctx, messages, tools)
 
 	ch := make(chan StreamEvent, 64)
 
@@ -942,7 +945,10 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 	}
 }
 
-func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
+// buildParams converts internal messages to MessageNewParams. ctx is used to
+// resolve large images into Files API file_ids (the upload happens inline here,
+// at most once per unique image, and is cancellable with the request).
+func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
 	var msgParams []anthropic.MessageParam
 	// Collect system content blocks preserving cache hints so we can emit
 	// separate Anthropic text blocks with selective cache_control breakpoints.
@@ -970,22 +976,26 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 			case "text":
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
 			case "image":
-				blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
+				blocks = append(blocks, p.imageContentBlock(ctx, b.ImageMIME, b.ImageData))
 			case "tool_use":
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
 			case "tool_result":
 				if len(b.Images) > 0 && !b.IsError {
-					var content []anthropic.ToolResultBlockParamContentUnion
+					content := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(b.Images)+1)
 					for _, img := range b.Images {
-						content = append(content, anthropic.ToolResultBlockParamContentUnion{
-							OfImage: &anthropic.ImageBlockParam{
-								Source: anthropic.ImageBlockParamSourceUnion{
-									OfBase64: &anthropic.Base64ImageSourceParam{
-										Data:      img.Base64,
-										MediaType: anthropic.Base64ImageSourceMediaType(img.MIME),
-									},
+						var src anthropic.ImageBlockParamSourceUnion
+						if fsrc, ok := p.filesImageSource(ctx, img.MIME, img.Base64); ok {
+							src = fsrc
+						} else {
+							src = anthropic.ImageBlockParamSourceUnion{
+								OfBase64: &anthropic.Base64ImageSourceParam{
+									Data:      img.Base64,
+									MediaType: anthropic.Base64ImageSourceMediaType(img.MIME),
 								},
-							},
+							}
+						}
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfImage: &anthropic.ImageBlockParam{Source: src},
 						})
 					}
 					if b.Output != "" {

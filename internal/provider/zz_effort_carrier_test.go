@@ -8,6 +8,7 @@ package provider
 // per-turn oscillation produced by the adaptive-effort adapter.
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -128,7 +129,7 @@ func TestBuildParamsOutputConfigCarrier(t *testing.T) {
 		p := newCarrierProvider()
 		p.beginEffortTracking()
 		p.beginEffortTracking()
-		params := p.buildParams(nil, nil)
+		params := p.buildParams(context.Background(), nil, nil)
 		if params.OutputConfig.Effort != anthropic.OutputConfigEffortHigh {
 			t.Errorf("OutputConfig.Effort = %q, want %q", params.OutputConfig.Effort, anthropic.OutputConfigEffortHigh)
 		}
@@ -137,7 +138,7 @@ func TestBuildParamsOutputConfigCarrier(t *testing.T) {
 	t.Run("suppressed during stability window", func(t *testing.T) {
 		p := newCarrierProvider()
 		p.beginEffortTracking() // first call: window opens
-		params := p.buildParams(nil, nil)
+		params := p.buildParams(context.Background(), nil, nil)
 		if params.OutputConfig.Effort != "" {
 			t.Errorf("first call attached carrier: %q", params.OutputConfig.Effort)
 		}
@@ -148,7 +149,7 @@ func TestBuildParamsOutputConfigCarrier(t *testing.T) {
 		p.SetReasoningEffort("high")
 		p.lastCallEffort = "high"
 		p.conversationEffort = "high"
-		params := p.buildParams(nil, nil)
+		params := p.buildParams(context.Background(), nil, nil)
 		if params.OutputConfig.Effort != "" {
 			t.Errorf("disabled provider attached carrier: %q", params.OutputConfig.Effort)
 		}
