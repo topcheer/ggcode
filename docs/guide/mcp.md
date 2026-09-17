@@ -214,3 +214,12 @@ mcp_servers:
 ```
 
 Each server registers tools with distinct names (e.g., `mcp__cf__execute` vs `mcp__cf2__execute`) and distinct descriptions (e.g., different embedded account IDs), so the agent can correctly target the right account when you mention a specific server name.
+
+## Listing Cache
+
+Servers implementing the MCP 2026-07-28 spec (SEP-2549) attach a `ttlMs` freshness hint to `tools/list`, `prompts/list`, `resources/list` and `resources/read` results. When present, ggcode serves repeated listings from a short-lived cache instead of re-polling the server, which cuts startup latency and network chatter with spec-compliant servers.
+
+- The cache lives per server connection and expires automatically after `ttlMs`.
+- `notifications/tools/list_changed`, `notifications/prompts/list_changed`, `notifications/resources/list_changed` and `notifications/resources/updated` invalidate the affected entries immediately, so hot tool refreshes still observe fresh data.
+- Re-initializing a connection (including reconnects) clears the whole cache.
+- Servers that do not send `ttlMs` (all pre-2026-07-28 servers) are never cached — behavior is unchanged for them.
