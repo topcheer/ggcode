@@ -371,6 +371,13 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	}
 	var result InitializeResult
 	if err := c.sendRequest(ctx, "initialize", params, &result); err != nil {
+		// MCP 2026-07-28: recognize the spec's UnsupportedProtocolVersionError
+		// (renumbered -32022; draft -32004) and render an actionable
+		// diagnostic instead of an opaque JSON-RPC error.
+		if je, ok := jsonRPCErrorOf(err); ok && isUnsupportedProtocolVersionCode(je.Code) {
+			debug.Log("mcp-client", "server=%s initialize rejected with UnsupportedProtocolVersion: %v", c.name, err)
+			return nil, unsupportedProtocolVersionError(c.name, err)
+		}
 		return nil, fmt.Errorf("mcp[%s]: initialize: %w", c.name, err)
 	}
 
@@ -564,7 +571,10 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 	params := ReadResourceParams{URI: uri}
 	var result ReadResourceResult
 	if err := c.callWithMRTR(ctx, "resources/read", &params, &result); err != nil {
-		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, err)
+		// sa-70: normalize the 2026-07-28 resource-not-found change
+		// (legacy -32002 vs new -32602 Invalid Params) into a message the
+		// agent can act on.
+		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, annotateResourceReadError(err, uri))
 	}
 	c.storeListingsCache(cacheResourceRead, uri, result, []CacheableResult{result.CacheableResult})
 	return &result, nil
@@ -825,7 +835,10 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	}
 
 	if resp.IsError() {
-		return resp.Error
+		// sa-70: annotate spec-defined error codes (reserved range
+		// -32020..-32099 and grandfathered legacy numbering) with their
+		// spec names so the agent sees WHY, not just a bare JSON-RPC code.
+		return decorateSpecError(resp.Error)
 	}
 
 	if result != nil && resp.Result != nil {
