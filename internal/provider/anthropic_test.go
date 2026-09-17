@@ -195,3 +195,34 @@ func TestAnthropicBuildParamsWithoutThinking(t *testing.T) {
 		t.Fatal("expected thinking config to be nil when effort is not set")
 	}
 }
+
+// TestAnthropicMemoryToolDeclaration pins the memory_20250818 declaration
+// contract: absent by default, exactly one memory tool in the union when
+// enabled, and a cache breakpoint on it when it is the trailing static
+// declaration (no server tools).
+func TestAnthropicMemoryToolDeclaration(t *testing.T) {
+	p := &AnthropicProvider{model: "claude-sonnet-4-6", maxTokens: 64000}
+
+	params := p.buildParams(context.Background(), nil, nil)
+	for _, u := range params.Tools {
+		if u.OfMemoryTool20250818 != nil {
+			t.Fatal("memory tool must not be declared by default")
+		}
+	}
+
+	p.SetMemoryTool(true)
+	params = p.buildParams(context.Background(), nil, nil)
+	count := 0
+	for _, u := range params.Tools {
+		if u.OfMemoryTool20250818 == nil {
+			continue
+		}
+		count++
+		if u.OfMemoryTool20250818.CacheControl.Type == "" {
+			t.Fatal("expected cache breakpoint on the trailing memory declaration")
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 memory tool declaration, got %d", count)
+	}
+}

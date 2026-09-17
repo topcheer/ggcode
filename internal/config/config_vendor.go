@@ -146,6 +146,7 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		ReasoningEffort: strings.TrimSpace(ep.ReasoningEffort),
 		ToolChoice:      strings.TrimSpace(ep.ToolChoice),
 		ServerTools:     append([]ServerToolConfig(nil), ep.ServerTools...),
+		MemoryTool:      ep.MemoryTool,
 		SupportsVision:  supportsVision,
 		Models:          append([]string(nil), ep.Models...),
 		Tags:            append([]string(nil), ep.Tags...),

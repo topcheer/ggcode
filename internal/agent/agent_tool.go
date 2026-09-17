@@ -291,6 +291,13 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		return a.toolSearch.executeResult(tc.Arguments)
 	}
 
+	// Anthropic Memory Tool: client-side executor for the API-declared
+	// memory_20250818 tool. Never registry-backed, so it stays out of
+	// ToDefinitions for every other provider.
+	if tc.Name == memoryToolName && a.memoryTool != nil {
+		return a.memoryTool.executeResult(tc.Arguments, a.workingDir)
+	}
+
 	t, ok := a.tools.Get(tc.Name)
 	if !ok {
 		return tool.Result{Content: tool.FormatUnknownToolError(a.tools, tc.Name), IsError: true}

@@ -29,3 +29,19 @@ func TestCheckDenyFastPathConcurrentWithOverride(t *testing.T) {
 	}
 	<-done
 }
+
+// TestMemoryToolAlwaysAllowed pins the fast-path approval of the Anthropic
+// Memory Tool: it writes only to its confined per-project store
+// (internal/agent/memory_tool.go), the memory-tool analogue of save_memory,
+// so it must be allowed without prompting in every permission mode -
+// including plan mode, where the model may legitimately record findings.
+func TestMemoryToolAlwaysAllowed(t *testing.T) {
+	modes := []PermissionMode{SupervisedMode, PlanMode, AutoMode, BypassMode, AutopilotMode}
+	for _, mode := range modes {
+		p := NewConfigPolicyWithMode(nil, nil, mode)
+		d, err := p.Check("memory", json.RawMessage(`{"command":"view","path":"/memories/x.txt"}`))
+		if err != nil || d != Allow {
+			t.Fatalf("memory tool must be allowed in mode %d: got %v err=%v", mode, d, err)
+		}
+	}
+}

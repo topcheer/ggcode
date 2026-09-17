@@ -32,6 +32,7 @@ type AnthropicProvider struct {
 	temperature      float64                   // 0 = provider default
 	topP             float64                   // 0 = provider default
 	serverTools      []ServerToolConfig        // Anthropic server-side tools (web_search/web_fetch), executed in-API
+	memoryTool       bool                      // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -144,6 +145,17 @@ func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
 func (p *AnthropicProvider) SetServerTools(tools []ServerToolConfig) {
 	p.serverTools = tools
 }
+
+// SetMemoryTool enables the Anthropic Memory Tool declaration
+// (memory_20250818). Unlike server tools, memory is client-executed: the
+// agent's handler (internal/agent/memory_tool.go) fulfills the model's
+// tool_use calls against a local /memories store. Opt in per endpoint via
+// config (`memory_tool: true`).
+func (p *AnthropicProvider) SetMemoryTool(enabled bool) { p.memoryTool = enabled }
+
+// MemoryToolEnabled reports whether requests carry the memory tool
+// declaration; the agent probes this to install its client-side handler.
+func (p *AnthropicProvider) MemoryToolEnabled() bool { return p.memoryTool }
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
@@ -1222,6 +1234,19 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		}
 	}
 
+	// Anthropic Memory Tool (memory_20250818): declared with no input schema
+	// — the schema is fixed API-side. Execution happens agent-side (see
+	// internal/agent/memory_tool.go). Place a cache breakpoint here only when
+	// this is the trailing static declaration; otherwise the loop above
+	// already put one on the last server tool.
+	if p.memoryTool {
+		u := anthropic.ToolUnionParam{OfMemoryTool20250818: &anthropic.MemoryTool20250818Param{}}
+		if len(p.serverTools) == 0 {
+			setToolUnionCacheControl(&u)
+		}
+		params.Tools = append(params.Tools, u)
+	}
+
 	// Apply tool_choice when set. Only sent when tools are present (API requirement).
 	if len(tools) > 0 {
 		switch p.toolChoice {
@@ -1308,6 +1333,8 @@ func setToolUnionCacheControl(u *anthropic.ToolUnionParam) {
 		u.OfWebSearchTool20250305.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	case u.OfWebFetchTool20250910 != nil:
 		u.OfWebFetchTool20250910.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case u.OfMemoryTool20250818 != nil:
+		u.OfMemoryTool20250818.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 }
 
