@@ -362,16 +362,17 @@ func pollDeviceToken(ctx context.Context, cfg A2AOAuth2Config, deviceCode string
 //   - JWT tokens: verifies signature (via JWKS or HMAC), expiration, issuer, audience
 //   - Opaque tokens: uses token introspection endpoint
 type TokenValidator struct {
-	clientID     string
-	issuerURL    string
-	jwksURL      string
-	mu           sync.Mutex
-	jwksKeys     map[string]interface{} // cached JWKS public keys (kid → key)
-	jwksExp      time.Time              // when JWKS cache expires
-	introURL     string                 // introspection endpoint from discovery doc (#1503)
-	introExp     time.Time              // when the introspection-endpoint lookup expires
-	validIssuers []string               // allowed issuer URLs (defaults to issuerURL)
-	hmacSecret   string                 // HMAC signing key (must not be clientID)
+	clientID      string
+	issuerURL     string
+	jwksURL       string
+	mu            sync.Mutex
+	jwksKeys      map[string]interface{} // cached JWKS public keys (kid → key)
+	jwksExp       time.Time              // when JWKS cache expires
+	jwksFetchedAt time.Time              // last successful JWKS fetch (stale-window anchor, #H-05)
+	introURL      string                 // introspection endpoint from discovery doc (#1503)
+	introExp      time.Time              // when the introspection-endpoint lookup expires
+	validIssuers  []string               // allowed issuer URLs (defaults to issuerURL)
+	hmacSecret    string                 // HMAC signing key (must not be clientID)
 }
 
 // ValidatorOption configures a TokenValidator.
@@ -542,6 +543,14 @@ func (v *TokenValidator) isIssuerAllowed(iss string) bool {
 }
 
 // getPublicKey fetches a public key from JWKS, with caching.
+//
+// #H-05 stale-while-revalidate: when the cache TTL lapses (or an unknown kid
+// forces a re-fetch) and the IdP/JWKS endpoint is unreachable, this used to
+// hard-fail even though the cached key set could still verify the JWT
+// signature — bricking A2A auth for the duration of the outage. The fetch
+// error is now absorbed in favor of serving the stale key set, but only for
+// maxJWKSStaleAge after the last successful fetch, so long-revoked keys can
+// never be trusted indefinitely.
 func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interface{}, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -556,6 +565,11 @@ func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interfac
 
 	// Fetch JWKS
 	if err := v.refreshJWKS(ctx); err != nil {
+		if key, ok := v.staleKeyLocked(kid); ok {
+			debug.Log("auth", "JWKS refresh failed (%v); serving stale key set fetched %s ago",
+				err, time.Since(v.jwksFetchedAt).Round(time.Second))
+			return key, nil
+		}
 		return nil, fmt.Errorf("fetch JWKS: %w", err)
 	}
 
@@ -564,6 +578,24 @@ func (v *TokenValidator) getPublicKey(ctx context.Context, kid string) (interfac
 	}
 
 	return nil, fmt.Errorf("key ID %q not found in JWKS", kid)
+}
+
+// maxJWKSStaleAge bounds how long a previously fetched JWKS key set may be
+// served after its TTL lapses while refreshes keep failing. After this window
+// validation must fail again (defense against trusting keys revoked long ago).
+const maxJWKSStaleAge = 72 * time.Hour
+
+// staleKeyLocked reports the cached key for kid when the cached set was
+// fetched within maxJWKSStaleAge. Caller must hold v.mu.
+func (v *TokenValidator) staleKeyLocked(kid string) (interface{}, bool) {
+	if len(v.jwksKeys) == 0 || v.jwksFetchedAt.IsZero() {
+		return nil, false
+	}
+	if time.Since(v.jwksFetchedAt) > maxJWKSStaleAge {
+		return nil, false
+	}
+	key, ok := v.jwksKeys[kid]
+	return key, ok
 }
 
 // refreshJWKS fetches and caches the JWKS from the OIDC discovery endpoint.
@@ -648,6 +680,7 @@ func (v *TokenValidator) refreshJWKS(ctx context.Context) error {
 
 	v.jwksKeys = keys
 	v.jwksExp = time.Now().Add(1 * time.Hour) // cache for 1 hour
+	v.jwksFetchedAt = time.Now()              // stamps the bounded stale window (#H-05)
 	return nil
 }
 
