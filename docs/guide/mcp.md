@@ -101,8 +101,17 @@ During the MCP handshake, ggcode detects and caches the server's advertised capa
 - **Resources** with `subscribe` and `listChanged` — enables resource change tracking
 - **Prompts** with `listChanged` — enables prompt list refresh
 - **Logging** — enables `logging/setLevel` for server log control
+- **Completions** (`completions`) — enables `completion/complete` argument autocompletion
 
 This capability-aware design means ggcode only sends feature-specific requests to servers that support them, avoiding protocol errors.
+
+## Argument Completion (`completion/complete`)
+
+Servers that advertise the `completions` capability (spec 2025-06-18 "Completion") can provide argument autocompletion suggestions for prompt arguments and resource template URIs. ggcode exposes this via the MCP client (`Client.Complete`):
+
+- Completion requests carry a reference (a prompt name or a resource template URI), the argument being completed, its current partial value, and optionally already-resolved sibling arguments for context-aware suggestions.
+- Requests are gated on the server's advertised capability, so servers without completion support never receive an unsupported call.
+- Results include relevance-ranked values (spec max 100 per response), an optional total, and a `hasMore` flag for pagination.
 
 ## MCP Sampling (Server-to-Client LLM Requests)
 

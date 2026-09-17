@@ -2770,11 +2770,24 @@ type InitializeResult struct {
 }
 
 type ServerCaps struct {
-	Tools      *ToolsCapability     `json:"tools,omitempty"`
-	Resources  *ResourcesCapability `json:"resources,omitempty"`
-	Prompts    *PromptsCapability   `json:"prompts,omitempty"`
-	Logging    *struct{}            `json:"logging,omitempty"`
-	Completion *struct{}            `json:"completion,omitempty"`
+	Tools     *ToolsCapability     `json:"tools,omitempty"`
+	Resources *ResourcesCapability `json:"resources,omitempty"`
+	Prompts   *PromptsCapability   `json:"prompts,omitempty"`
+	Logging   *struct{}            `json:"logging,omitempty"`
+	// Completions mirrors the MCP completion capability key. Per spec
+	// (2025-06-18, "Completion": Capabilities) servers that support argument
+	// autocompletion declare `{"capabilities": {"completions": {}}}` — the
+	// plural form. The field previously decoded the singular "completion" key,
+	// so a spec-conformant server's declaration was silently dropped and any
+	// completion request gating would never have fired.
+	Completions *struct{} `json:"completions,omitempty"`
+}
+
+// HasCompletion reports whether the server advertised the completions
+// capability (MCP completion/complete argument autocompletion).
+func (c *Client) HasCompletion() bool {
+	_, caps := c.negotiatedState()
+	return caps.Completions != nil
 }
 
 // ToolsCapability describes the server's tool capabilities.
