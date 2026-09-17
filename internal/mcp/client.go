@@ -47,6 +47,7 @@ type Client struct {
 	wsConn            *websocket.Conn
 	sessionID         string
 	negotiatedVersion string // protocol version agreed upon during initialize
+	instructions      string // server-authored usage notes from initialize (guarded by mu; surfaced on tool descriptions)
 	mu                sync.Mutex
 	stderrMu          sync.RWMutex
 	stderrBuf         strings.Builder
@@ -320,6 +321,14 @@ func (c *Client) NegotiatedVersion() string {
 	return c.negotiatedVersion
 }
 
+// Instructions returns the server-authored usage guidance carried in the
+// initialize result ("" when the server sent none).
+func (c *Client) Instructions() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.instructions
+}
+
 // Initialize sends the initialize request and returns server capabilities.
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	caps := ClientCaps{
@@ -345,6 +354,12 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	if err := c.sendRequest(ctx, "initialize", params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: initialize: %w", c.name, err)
 	}
+
+	// sa-44: keep the server's optional usage instructions (MCP spec) for
+	// the adapter layer, which surfaces them on tool descriptions.
+	c.mu.Lock()
+	c.instructions = result.Instructions
+	c.mu.Unlock()
 
 	// Version negotiation: the server may respond with the same version
 	// (if it supports ours) or a different one (its latest supported).
@@ -2699,6 +2714,12 @@ type InitializeResult struct {
 	ProtocolVersion string         `json:"protocolVersion"`
 	Capabilities    ServerCaps     `json:"capabilities"`
 	ServerInfo      Implementation `json:"serverInfo"`
+	// Instructions is the optional server-authored usage guidance from
+	// the initialize result (MCP 2025-03-26+ spec: "instructions
+	// describing how to use this server"). Clients SHOULD surface it to
+	// the model; stored on the Client and appended to tool descriptions
+	// by the adapter (sa-44).
+	Instructions string `json:"instructions,omitempty"`
 }
 
 type ServerCaps struct {

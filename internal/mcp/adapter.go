@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 type toolCaller interface {
@@ -30,6 +31,10 @@ type Adapter struct {
 	// mcpTool this adapter registers. One dead server must fast-fail all
 	// of its tools, so the state lives here, not per tool.
 	breaker *serverBreaker
+	// serverInstructions carries the MCP initialize-result instructions
+	// (server-authored usage guidance, 2025-03-26+ spec). Surfaced by
+	// RegisterTools on every tool description (sa-44).
+	serverInstructions string
 }
 
 // NewAdapter creates an MCP adapter from server config and tool definitions.
@@ -53,6 +58,20 @@ func NewReadOnlyAdapter(serverName string, caller toolCaller, tools []ToolDefini
 	}
 }
 
+// serverInstructionsMaxRunes bounds how much server-authored instruction
+// text is surfaced per tool description (keeps model context compact even
+// if a server embeds a whole README).
+const serverInstructionsMaxRunes = 1200
+
+// SetServerInstructions records the MCP server's initialize instructions
+// so RegisterTools can surface them to the model. Call before
+// RegisterTools; safe for concurrent use.
+func (a *Adapter) SetServerInstructions(instructions string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.serverInstructions = strings.TrimSpace(instructions)
+}
+
 // IsReadOnly returns true if this adapter is in read-only mode.
 func (a *Adapter) IsReadOnly() bool { return a.readOnly }
 
@@ -66,6 +85,13 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.registeredTools = a.registeredTools[:0]
+	// sa-44: read server instructions once here, already under mu.
+	// SetServerInstructions is documented to be called before
+	// RegisterTools, so this snapshot is the final value; locking
+	// a.mu again inside the loop below would self-deadlock (Go
+	// mutexes are not reentrant - this exact bug hung the first
+	// sa-44 test run).
+	notes := a.serverInstructions
 	for _, td := range a.tools {
 		name := fmt.Sprintf("mcp__%s__%s", a.serverName, td.Name)
 		desc := td.Description
@@ -84,6 +110,14 @@ func (a *Adapter) RegisterTools(registry *tool.Registry) error {
 			// Risk vocabulary for the model: surface the server's own
 			// declaration so the agent can weight side effects correctly.
 			desc = desc + " (server declares read-only)"
+		}
+		if notes != "" {
+			// MCP spec (2025-03-26+): the initialize result MAY carry
+			// server-authored usage instructions; clients SHOULD surface
+			// them to the model. The tool-description channel is
+			// protocol-safe on every provider, so append them here,
+			// rune-bounded (sa-44).
+			desc = desc + "\n\nServer usage notes: " + util.Truncate(notes, serverInstructionsMaxRunes)
 		}
 		t := &mcpTool{
 			name:     name,

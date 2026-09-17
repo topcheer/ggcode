@@ -78,6 +78,8 @@ func (m *MCPManager) connectServer(ctx context.Context, srv MCPServer) error {
 		} else {
 			adapter = mcp.NewAdapter(srv.Name, client, tools)
 		}
+		// sa-44: surface the server's initialize instructions on its tools.
+		adapter.SetServerInstructions(client.Instructions())
 		if err := adapter.RegisterTools(m.registry); err != nil {
 			debug.Log("acp", "failed to register tools from %q: %v", srv.Name, err)
 		}
