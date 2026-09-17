@@ -4544,12 +4544,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						}
 						result.Content = withTruncationAdvisory(guarded, tc.Name, len(result.Content))
 						a.truncClaim.recordTruncation(tc.Name, i)
-						// #1664: errorPropagate.recordResult ran BEFORE the
-						// guard with the raw content, so this truncation - the
-						// exact degraded output the chain tracker exists to
-						// flag - was invisible to it (the #1554-C marker
-						// pairing never fired at runtime). Back-fill the chain.
-						a.errorPropagate.recordGuardedTruncation(tc.Name)
+						// Back-fill the chain. The (post-advisory) content is passed so a
+						// truncation that carries its own recovery advisory is skipped -
+						// same exemption classifyDegraded applies to designed paging
+						// footers.
+						a.errorPropagate.recordGuardedTruncation(tc.Name, result.Content)
 					}
 				}
 			}

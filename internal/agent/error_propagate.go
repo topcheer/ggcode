@@ -283,9 +283,21 @@ func isContentTool(toolName string) bool {
 // (recordResult already counted this step) and without duplicating a chain
 // the raw content may have legitimately started (tool-internal footers like
 // read_file's "[File truncated:...]" exist pre-record).
-func (e *errorPropagateState) recordGuardedTruncation(toolName string) {
+//
+// A guard truncation that carries the tool's designed recovery advisory
+// (truncationAdvisory: offset/limit paging, since_line, web_search,
+// narrow-the-search) is the same continuation-signal class that #1457-A
+// exempts inside classifyDegraded. Back-filling a chain for it re-created
+// the false positive at the call site: every normally-paged large result
+// started a propagation chain and burned the 2-per-run warning budget on
+// noise (observed live: a web_fetch whose advisory names web_search / the
+// browser tool still yielded "verify whether the output was valid").
+func (e *errorPropagateState) recordGuardedTruncation(toolName, content string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if hasPaginationGuidance(content) {
+		return
+	}
 	for i := len(e.chains) - 1; i >= 0; i-- {
 		c := e.chains[i]
 		if c.origin.step < e.totalSteps {
@@ -399,8 +411,16 @@ func hasPaginationGuidance(content string) bool {
 		lines = lines[len(lines)-5:]
 	}
 	tail := strings.ToLower(strings.Join(lines, "\n"))
+	// Web/search truncation advisories (truncationAdvisory, tool-specific):
+	// web_fetch's advisory routes recovery through web_search or the browser
+	// tool; grep/search_files/code_search route it through narrowing the
+	// query. These are explicit continuation paths, not lost content.
 	return strings.Contains(tail, "offset/limit") ||
 		strings.Contains(tail, "offset and limit") ||
 		strings.Contains(tail, "use read_command_output") ||
-		strings.Contains(tail, "use wait_command")
+		strings.Contains(tail, "use wait_command") ||
+		strings.Contains(tail, "use web_search") ||
+		strings.Contains(tail, "use the browser tool") ||
+		strings.Contains(tail, "narrow your search") ||
+		strings.Contains(tail, "refine your query")
 }
