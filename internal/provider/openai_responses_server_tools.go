@@ -32,29 +32,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// SetServerTools implements provider.ServerToolsSetter: tools declared with
-// config `server_tools: [{type: ...}]`. Two families exist:
-//   - hosted, executed in-API: "web_search" (aliases
-//     "web_search_2025_08_26", "web_search_preview")
-//   - declared in-API, executed CLIENT-side: "apply_patch" (sa-67) - the
-//     model emits apply_patch_call V4A diffs that ggcode applies locally via
-//     internal/tool.ApplyPatch and answers with apply_patch_call_output
-//
-// Unknown declarations are ignored (fail closed), mirroring the Anthropic and
-// Gemini legs; a declaration set with no recognized entry leaves the
-// previously stored set untouched so config reloads cannot wipe it.
-func (p *OpenAIResponsesProvider) SetServerTools(tools []ServerToolConfig) {
-	kept := make([]ServerToolConfig, 0, len(tools))
-	for _, t := range tools {
-		if _, ok := responsesHostedTool(t); ok {
-			kept = append(kept, t)
-		}
-	}
-	if len(kept) > 0 {
-		p.serverTools = kept
-	}
-}
-
 // hasHostedTools reports whether any hosted (server-side) tool is configured.
 func (p *OpenAIResponsesProvider) hasHostedTools() bool { return len(p.serverTools) > 0 }
 
