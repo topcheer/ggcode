@@ -135,6 +135,11 @@ type Client struct {
 	// initialized under serverReqOnce so struct-literal clients are safe too.
 	serverReqOnce sync.Once
 	serverReqSem  chan struct{}
+
+	// listingCache holds MCP 2026-07-28 CacheableResult (SEP-2549) freshness
+	// entries for the List*/ReadResource calls (see cacheable.go). Zero value
+	// is usable, so struct-literal clients (tests) stay safe.
+	listingCache listingCache
 }
 
 // negotiatedState returns the protocol version and server capabilities
@@ -154,6 +159,10 @@ func (c *Client) setNegotiatedState(version string, caps ServerCaps) {
 	c.negotiatedVersion = version
 	c.serverCaps = caps
 	c.mu.Unlock()
+	// MCP 2026-07-28: a fresh initialize/reconnect invalidates every cached
+	// listing — the server may have restarted with different capabilities or
+	// content, and cached freshness hints from the old session are void.
+	c.listingCache.clear()
 }
 
 // NewClient creates a new MCP client for the given server config.
@@ -434,7 +443,14 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 		debug.Log("mcp-client", "server=%s tools capability not advertised; returning empty tool list", c.name)
 		return []ToolDefinition{}, nil
 	}
+	// MCP 2026-07-28 CacheableResult (SEP-2549): serve from the freshness
+	// cache while the previous fetch's ttlMs hint is unexpired;
+	// tools/list_changed notifications and re-initialize invalidate it.
+	if v, ok := c.listingCache.get(cacheTools, ""); ok {
+		return cloneCachedSlice(v.([]ToolDefinition)), nil
+	}
 	var all []ToolDefinition
+	var pages []CacheableResult
 	cursor := ""
 	for page := 0; page < maxPaginationPages; page++ {
 		var result ListToolsResult
@@ -448,7 +464,9 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 			return nil, fmt.Errorf("mcp[%s]: tools/list: %w", c.name, err)
 		}
 		all = append(all, result.Tools...)
+		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
+			c.storeListingsCache(cacheTools, "", all, pages)
 			return all, nil
 		}
 		cursor = result.NextCursor
@@ -458,7 +476,12 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 }
 
 func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
+	// SEP-2549 freshness cache (see ListTools).
+	if v, ok := c.listingCache.get(cachePrompts, ""); ok {
+		return cloneCachedSlice(v.([]PromptDefinition)), nil
+	}
 	var all []PromptDefinition
+	var pages []CacheableResult
 	cursor := ""
 	for page := 0; page < maxPaginationPages; page++ {
 		params := struct {
@@ -473,7 +496,9 @@ func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
 			return nil, fmt.Errorf("mcp[%s]: prompts/list: %w", c.name, err)
 		}
 		all = append(all, result.Prompts...)
+		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
+			c.storeListingsCache(cachePrompts, "", all, pages)
 			return all, nil
 		}
 		cursor = result.NextCursor
@@ -483,7 +508,12 @@ func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
 }
 
 func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error) {
+	// SEP-2549 freshness cache (see ListTools).
+	if v, ok := c.listingCache.get(cacheResources, ""); ok {
+		return cloneCachedSlice(v.([]ResourceDefinition)), nil
+	}
 	var all []ResourceDefinition
+	var pages []CacheableResult
 	cursor := ""
 	for page := 0; page < maxPaginationPages; page++ {
 		params := struct {
@@ -498,7 +528,9 @@ func (c *Client) ListResources(ctx context.Context) ([]ResourceDefinition, error
 			return nil, fmt.Errorf("mcp[%s]: resources/list: %w", c.name, err)
 		}
 		all = append(all, result.Resources...)
+		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
+			c.storeListingsCache(cacheResources, "", all, pages)
 			return all, nil
 		}
 		cursor = result.NextCursor
@@ -520,11 +552,18 @@ func (c *Client) GetPrompt(ctx context.Context, name string, args map[string]int
 }
 
 func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceResult, error) {
+	// SEP-2549: serve the cached copy while its ttlMs hint is fresh;
+	// resources/updated subscription notifications drop the per-URI entry.
+	if v, ok := c.listingCache.get(cacheResourceRead, uri); ok {
+		res := v.(ReadResourceResult)
+		return &res, nil
+	}
 	params := ReadResourceParams{URI: uri}
 	var result ReadResourceResult
 	if err := c.sendRequest(ctx, "resources/read", params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, err)
 	}
+	c.storeListingsCache(cacheResourceRead, uri, result, []CacheableResult{result.CacheableResult})
 	return &result, nil
 }
 
@@ -2739,6 +2778,11 @@ func (c *Client) processNotification(notif *Notification) {
 		c.handleElicitationComplete(notif.Params)
 		return
 	}
+	// MCP 2026-07-28 CacheableResult (SEP-2549): drop cached listings/read
+	// results affected by change notifications BEFORE the handler runs, so a
+	// hot refresh (ListTools etc.) observes fresh data. Mutex-only work —
+	// safe on the read loop (never blocks on I/O).
+	c.cacheInvalidateForNotification(notif.Method, notif.Params)
 	// Read the handler pointer without acquiring c.mu. sendRequest holds c.mu
 	// during the write phase, and processNotification is called from within
 	// the read loop. A function-pointer read is atomic on 64-bit platforms;
@@ -2912,16 +2956,30 @@ type ListToolsParams struct {
 	Cursor string `json:"cursor,omitempty"`
 }
 
+// CacheableResult carries the MCP 2026-07-28 (SEP-2549) cache metadata that
+// spec-compliant servers attach to tools/list, prompts/list, resources/list
+// and resources/read results: ttlMs is a freshness hint in milliseconds and
+// cacheScope ("public"|"private") tells shared intermediaries whether the
+// response may be reused. As an embedded struct its fields are promoted, so
+// encoding/json decodes them from the flat result object. Servers predating
+// 2026-07-28 omit them (ttlMs<=0), which disables caching — legacy behavior.
+type CacheableResult struct {
+	TTLms      int64  `json:"ttlMs,omitempty"`
+	CacheScope string `json:"cacheScope,omitempty"`
+}
+
 type ListToolsResult struct {
 	Tools []ToolDefinition `json:"tools"`
 	// NextCursor is the pagination cursor for the next tools/list page (#562 A).
 	NextCursor string `json:"nextCursor,omitempty"`
+	CacheableResult
 }
 
 type ListPromptsResult struct {
 	Prompts []PromptDefinition `json:"prompts"`
 	// NextCursor is the pagination cursor for the next prompts/list page (#562 A).
 	NextCursor string `json:"nextCursor,omitempty"`
+	CacheableResult
 }
 
 type PromptDefinition struct {
@@ -2955,6 +3013,7 @@ type ListResourcesResult struct {
 	Resources []ResourceDefinition `json:"resources"`
 	// NextCursor is the pagination cursor for the next resources/list page (#562 A).
 	NextCursor string `json:"nextCursor,omitempty"`
+	CacheableResult
 }
 
 type ResourceDefinition struct {
@@ -2970,6 +3029,7 @@ type ReadResourceParams struct {
 
 type ReadResourceResult struct {
 	Contents []ResourceContent `json:"contents"`
+	CacheableResult
 }
 
 type ResourceContent struct {
