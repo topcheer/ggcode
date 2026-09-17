@@ -92,6 +92,10 @@ type CommandJobManager struct {
 	// outputTee is an optional writer that receives a copy of all command
 	// stdout/stderr in real time. Set per-call by StartCommandTool.
 	outputTee io.Writer
+
+	// sandbox, when non-nil and Enabled, wraps managed job spawns in the
+	// OS-level containment sandbox (same policy as run_command).
+	sandbox *SandboxPolicy
 }
 
 func NewCommandJobManager(workingDir string) *CommandJobManager {
@@ -108,6 +112,14 @@ func (m *CommandJobManager) SetOutputTee(w io.Writer) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.outputTee = w
+}
+
+// SetSandboxPolicy wires the OS-level containment policy applied to every
+// managed job spawn. Pass nil to disable.
+func (m *CommandJobManager) SetSandboxPolicy(p *SandboxPolicy) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sandbox = p
 }
 
 func (m *CommandJobManager) Start(ctx context.Context, command string, detach bool, timeout time.Duration) (*CommandJobSnapshot, error) {
@@ -158,6 +170,19 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 	// StartExisting is NOT touched: it reuses a cmd the caller already
 	// configured (run_command path arrives pre-stripped).
 	cmd.Env = normalizedCommandEnv()
+
+	// OS-level containment for managed jobs: the same kernel-enforced
+	// boundary run_command applies, so auto-backgrounding a command cannot
+	// be used to escape the sandbox policy.
+	if m.sandbox != nil && m.sandbox.Enabled {
+		if _, wrapErr := wrapShellCommandOS(cmd, m.workingDir, m.sandbox); wrapErr != nil {
+			cancel()
+			job := m.newJob(command, timeout, cancel)
+			job.finish(CommandJobFailed, wrapErr.Error())
+			snapshot := m.snapshot(job)
+			return &snapshot, nil
+		}
+	}
 
 	_, snapshot, err := m.startExisting(jobCtx, command, timeout, cancel, cmd)
 	return snapshot, err

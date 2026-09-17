@@ -688,7 +688,7 @@ func TestACPStreamHelperProcess(t *testing.T) {
 	transport := NewTransport(os.Stdin, os.Stdout)
 	cfg := &config.Config{MaxIterations: 5}
 	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, nil, filepath.Dir(readmePath), nil); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, nil, filepath.Dir(readmePath), nil, nil); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
 	handler := NewHandler(cfg, registry, transport, &mockProvider{

@@ -12,7 +12,7 @@ func TestReadToolsNotBlockedByFileGuard(t *testing.T) {
 	dir := t.TempDir()
 	reg := NewRegistry()
 	// Default-protected patterns include .env / .git — the regression case.
-	if err := RegisterBuiltinTools(reg, nil, dir, []string{".env*", ".git/"}); err != nil {
+	if err := RegisterBuiltinTools(reg, nil, dir, []string{".env*", ".git/"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	envPath := dir + "/.env"

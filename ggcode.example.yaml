@@ -430,6 +430,21 @@ allowed_dirs:
 #   - "*.lock"
 #   - "go.sum"
 
+# OS-level containment for agent-driven shell commands (run_command /
+# start_command). When enabled, spawned commands run inside a kernel sandbox
+# (macOS Seatbelt via sandbox-exec). Writes are limited to the workspace,
+# temp directories, and the extra roots below; on platforms without native
+# sandboxing this is a no-op. This complements protected_paths: the policy
+# decides WHAT is allowed, the kernel enforces it at the OS level.
+# sandbox:
+#   enabled: true
+#   # Allow outbound network inside the sandbox (default: true).
+#   allow_network: false
+#   # Additional writable directories, e.g. for module builds:
+#   extra_write_paths:
+#     - "~/go/pkg/mod"
+#     - "~/.cache/go-build"
+
 # ------------------------------------------------------------------
 # IM (Instant Messaging) integration
 # Connect ggcode to chat platforms for remote coding via IM.
