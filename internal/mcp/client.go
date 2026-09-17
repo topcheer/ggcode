@@ -140,6 +140,18 @@ type Client struct {
 	// entries for the List*/ReadResource calls (see cacheable.go). Zero value
 	// is usable, so struct-literal clients (tests) stay safe.
 	listingCache listingCache
+
+	// Subscription-stream registry (MCP 2026-07-28 subscriptions/listen,
+	// see subscriptions.go). subs maps the normalized listen-request ID JSON
+	// to its Subscription, used by routeSubscriptionNotification for ack
+	// correlation and MUST-gating. Guarded by subMu. modernSub holds the
+	// default list-change stream opened by enableModernSubscriptions;
+	// subListenState caches the server's protocol support so a legacy server
+	// never sees a second subscriptions/listen call.
+	subMu          sync.Mutex
+	subs           map[string]*Subscription
+	modernSub      *Subscription
+	subListenState atomic.Int32
 }
 
 // negotiatedState returns the protocol version and server capabilities
@@ -710,6 +722,12 @@ func (c *Client) Abort() {
 		if c.notificationDone != nil {
 			close(c.notificationDone)
 		}
+
+		// End every open subscriptions/listen stream: the transport is gone,
+		// so no acknowledged notification or correlated traffic can arrive
+		// anymore (subscriptions.go). No notifications/cancelled is sent on
+		// this path — there is no connection left to deliver it on.
+		c.closeAllSubscriptions(fmt.Errorf("mcp[%s]: connection closed", c.name))
 	})
 }
 
@@ -2786,6 +2804,15 @@ func (c *Client) processNotification(notif *Notification) {
 	// forwarded to the user notification handler.
 	if notif.Method == "notifications/elicitation/complete" {
 		c.handleElicitationComplete(notif.Params)
+		return
+	}
+	// MCP 2026-07-28 subscriptions/listen: consume subscription control
+	// traffic and gate listen-stream notifications per the protocol MUSTs
+	// (unknown/unacked subscription ⇒ drop). Valid correlated traffic falls
+	// through so cache invalidation and the user handler still fire — the
+	// legacy dispatch is unchanged, this only adds correlation. Mutex-only
+	// work, safe on the read loop.
+	if c.routeSubscriptionNotification(notif) {
 		return
 	}
 	// MCP 2026-07-28 CacheableResult (SEP-2549): drop cached listings/read

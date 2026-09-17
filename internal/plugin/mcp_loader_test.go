@@ -30,7 +30,18 @@ func TestMCPManagerConnectAllTimesOutHungServer(t *testing.T) {
 		if req.Method == "initialize" {
 			time.Sleep(100 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			writeEcho(w, req.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}`)
+			return
+		}
+		if req.Method == mcp.MethodSubscriptionsListen {
+			// MCP 2026-07-28 probe: legacy mock — spec downgrade error.
+			w.Header().Set("Content-Type", "application/json")
+			echo, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]interface{}{"code": -32601, "message": "Method not found"},
+			})
+			_, _ = w.Write(echo)
 			return
 		}
 		t.Fatalf("unexpected method %s", req.Method)
@@ -112,15 +123,24 @@ func TestMCPPluginInfoIncludesPromptAndResourceNames(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.Method {
 		case "initialize":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			writeEcho(w, req.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}`)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)
 		case "tools/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"fetch","description":"Fetch","inputSchema":{"type":"object"}}]}}`))
+			writeEcho(w, req.ID, `{"tools":[{"name":"fetch","description":"Fetch","inputSchema":{"type":"object"}}]}`)
 		case "prompts/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"prompts":[{"name":"summarize"},{"name":"translate"}]}}`))
+			writeEcho(w, req.ID, `{"prompts":[{"name":"summarize"},{"name":"translate"}]}`)
 		case "resources/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"resources":[{"name":"docs"},{"uri":"file:///tmp/readme.md"}]}}`))
+			writeEcho(w, req.ID, `{"resources":[{"name":"docs"},{"uri":"file:///tmp/readme.md"}]}`)
+		case mcp.MethodSubscriptionsListen:
+			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
+			// client with the spec method-not-found error.
+			echo, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]interface{}{"code": -32601, "message": "Method not found"},
+			})
+			_, _ = w.Write(echo)
 		default:
 			t.Fatalf("unexpected method %s", req.Method)
 		}
@@ -163,15 +183,24 @@ func TestMCPPluginInfoDoesNotBlockWhileConnectIsInFlight(t *testing.T) {
 		case "initialize":
 			close(initialized)
 			<-release
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			writeEcho(w, req.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}`)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)
 		case "tools/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+			writeEcho(w, req.ID, `{"tools":[]}`)
 		case "prompts/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"prompts":[]}}`))
+			writeEcho(w, req.ID, `{"prompts":[]}`)
 		case "resources/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"resources":[]}}`))
+			writeEcho(w, req.ID, `{"resources":[]}`)
+		case mcp.MethodSubscriptionsListen:
+			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
+			// client with the spec method-not-found error.
+			echo, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]interface{}{"code": -32601, "message": "Method not found"},
+			})
+			_, _ = w.Write(echo)
 		default:
 			t.Fatalf("unexpected method %s", req.Method)
 		}
@@ -227,19 +256,28 @@ func TestMCPManagerPromptAndResourceAccess(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.Method {
 		case "initialize":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			writeEcho(w, req.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}`)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)
 		case "tools/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}`))
+			writeEcho(w, req.ID, `{"tools":[]}`)
 		case "prompts/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"prompts":[{"name":"summarize"}]}}`))
+			writeEcho(w, req.ID, `{"prompts":[{"name":"summarize"}]}`)
 		case "resources/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"resources":[{"uri":"docs"}]}}`))
+			writeEcho(w, req.ID, `{"resources":[{"uri":"docs"}]}`)
 		case "prompts/get":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":5,"result":{"description":"Prompt","messages":[{"role":"user","content":{"type":"text","text":"hello prompt"}}]}}`))
+			writeEcho(w, req.ID, `{"description":"Prompt","messages":[{"role":"user","content":{"type":"text","text":"hello prompt"}}]}`)
 		case "resources/read":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":6,"result":{"contents":[{"uri":"docs","mimeType":"text/plain","text":"hello resource"}]}}`))
+			writeEcho(w, req.ID, `{"contents":[{"uri":"docs","mimeType":"text/plain","text":"hello resource"}]}`)
+		case mcp.MethodSubscriptionsListen:
+			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
+			// client with the spec method-not-found error.
+			echo, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]interface{}{"code": -32601, "message": "Method not found"},
+			})
+			_, _ = w.Write(echo)
 		default:
 			t.Fatalf("unexpected method %s", req.Method)
 		}
@@ -285,15 +323,24 @@ func TestMCPManagerInstallAddsServer(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.Method {
 		case "initialize":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			writeEcho(w, req.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}`)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)
 		case "tools/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"fetch","description":"Fetch","inputSchema":{"type":"object"}}]}}`))
+			writeEcho(w, req.ID, `{"tools":[{"name":"fetch","description":"Fetch","inputSchema":{"type":"object"}}]}`)
 		case "prompts/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"prompts":[]}}`))
+			writeEcho(w, req.ID, `{"prompts":[]}`)
 		case "resources/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"resources":[]}}`))
+			writeEcho(w, req.ID, `{"resources":[]}`)
+		case mcp.MethodSubscriptionsListen:
+			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
+			// client with the spec method-not-found error.
+			echo, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]interface{}{"code": -32601, "message": "Method not found"},
+			})
+			_, _ = w.Write(echo)
 		default:
 			t.Fatalf("unexpected method %s", req.Method)
 		}
@@ -331,15 +378,24 @@ func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.Method {
 		case "initialize":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+			writeEcho(w, req.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"mock","version":"1.0.0"}}`)
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusNoContent)
 		case "tools/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"fetch","description":"Fetch","inputSchema":{"type":"object"}}]}}`))
+			writeEcho(w, req.ID, `{"tools":[{"name":"fetch","description":"Fetch","inputSchema":{"type":"object"}}]}`)
 		case "prompts/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":3,"result":{"prompts":[]}}`))
+			writeEcho(w, req.ID, `{"prompts":[]}`)
 		case "resources/list":
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":4,"result":{"resources":[]}}`))
+			writeEcho(w, req.ID, `{"resources":[]}`)
+		case mcp.MethodSubscriptionsListen:
+			// MCP 2026-07-28 probe: this mock is legacy — downgrade the
+			// client with the spec method-not-found error.
+			echo, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]interface{}{"code": -32601, "message": "Method not found"},
+			})
+			_, _ = w.Write(echo)
 		default:
 			t.Fatalf("unexpected method %s", req.Method)
 		}
@@ -368,4 +424,24 @@ func TestMCPManagerUninstallRemovesServerAndTools(t *testing.T) {
 	if _, ok := registry.Get("mcp__fetcher__fetch"); ok {
 		t.Fatal("expected MCP tool to be unregistered after uninstall")
 	}
+}
+
+// writeEcho frames a JSON-RPC success payload echoing the request id. The
+// client assigns request ids dynamically (and since the subscriptions/listen
+// probe occupies one slot, hardcoded ids in mocks no longer line up), so
+// every mock response must echo the actual request id instead.
+func writeEcho(w http.ResponseWriter, id *mcp.ID, result string) {
+	resp, err := json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      *mcp.ID         `json:"id"`
+		Result  json.RawMessage `json:"result"`
+	}{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  json.RawMessage(result),
+	})
+	if err != nil {
+		return
+	}
+	_, _ = w.Write(resp)
 }
