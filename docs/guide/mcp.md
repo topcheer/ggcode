@@ -160,6 +160,21 @@ ggcode handles these requests by routing them through the same `ask_user` intera
 
 No configuration is needed — elicitation is enabled automatically when an interactive session is active.
 
+## Subscription Streams (MCP 2026-07-28)
+
+Protocol revision 2026-07-28 added correlated notification streams: a client may open a subscription with the `subscriptions/listen` request, and every notification the server sends on that stream carries a `_meta` field binding it to the subscription. This closes a long-standing ambiguity — when an agent talks to several MCP servers concurrently, a bare `notifications/tools/list_changed` cannot be attributed to a specific connection with certainty.
+
+ggcode opens this stream automatically when a server connects, and self-detects protocol support:
+
+- The listen request asks for the exact change set ggcode cares about (tool/prompt/resource list changes, resource subscriptions). The server replies with a `notifications/subscriptions/acknowledged` control message confirming the granted subset.
+- If the server answers `-32601` (method not found), ggcode downgrades permanently for that connection — legacy servers never see a second `subscriptions/listen` call, and the classic uncorrelated notifications keep working exactly as before.
+- Cancelling a subscription (client shutdown or transport teardown) follows the spec by sending `notifications/cancelled` with the listen request id.
+- Per the protocol MUSTs, notifications with a subscription id for an unknown or unacknowledged subscription are dropped rather than forwarded, so a server bug cannot poison the client's cache invalidation logic.
+
+**Transport support**: stdio (streaming) today; the HTTP transport only probes for the feature and treats unsupported responses as a graceful downgrade. WebSocket servers currently keep using uncorrelated notifications.
+
+No configuration is needed — enablement is automatic and transparent, with fallback to the pre-2026-07-28 behavior on any server that predates the revision.
+
 ## Request Cancellation (Client-to-Server)
 
 When ggcode gives up on an in-flight MCP request — the user interrupts a tool call, or a request exceeds its deadline — it sends the server a `notifications/cancelled` notification referencing the outstanding request id (MCP spec 2025-03-26). Spec-compliant servers stop processing the cancelled request and free associated resources instead of finishing orphaned work (a long-running database query, a partial file upload, etc.).

@@ -295,9 +295,30 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.prompts = prompts
 	m.resources = resources
 	m.setupNotificationHandler(client)
+	// MCP 2026-07-28: self-detecting upgrade to the correlated subscription
+	// stream (subscriptions/listen). Legacy servers answer -32601 and are
+	// downgraded permanently for this client; modern servers ack the filter
+	// and subsequent list-change notifications arrive correlated (see
+	// internal/mcp/subscriptions.go). The legacy dispatch above is unchanged
+	// either way.
+	m.setupModernSubscriptions(client)
 	m.startReconnectWatcher(client)
 	m.startWSHealthProbe(client)
 	return m.adapter, nil
+}
+
+// setupModernSubscriptions attempts the MCP 2026-07-28 subscriptions/listen
+// upgrade for this server connection. It is deliberately self-detecting and
+// best-effort: success opens a correlated notification stream, a legacy
+// server's method-not-found response downgrades silently, and any other
+// failure only costs a debug log. Called from the shared connect path so
+// auto-reconnect re-opens the stream automatically.
+func (m *MCPPlugin) setupModernSubscriptions(client *mcp.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if client.EnableModernSubscriptions(ctx) {
+		debug.Log("mcp-notif", "server=%s modern subscription stream active", m.cfg.Name)
+	}
 }
 
 // setupNotificationHandler registers a notification handler on the MCP client
