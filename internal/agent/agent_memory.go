@@ -30,7 +30,11 @@ func (a *Agent) pendingProjectMemoryForTool(tc provider.ToolCallDelta) (content 
 		if resolved == "" {
 			continue
 		}
-		projectFiles, err := memory.ProjectMemoryFilesForPath(resolved)
+		// AGENTS.md nested discovery: walk from the target's directory up to
+		// the repository root so monorepo-level memory files (e.g.
+		// packages/api/AGENTS.md) are discovered when the agent touches files
+		// inside that subtree. Deeper files are returned last (closest wins).
+		projectFiles, err := memory.NestedProjectMemoryFilesForPath(resolved)
 		if err != nil || len(projectFiles) == 0 {
 			continue
 		}

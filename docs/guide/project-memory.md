@@ -19,6 +19,31 @@ ggcode reads context files from the project root. All files are loaded and merge
 | `.clinerules` | Cline | Cline rules file (compatibility) |
 | `.github/copilot-instructions.md` | GitHub Copilot | Copilot instructions (compatibility) |
 
+## Nested Discovery (Monorepos)
+
+Following the [AGENTS.md](https://agents.md) open standard, ggcode discovers
+nested memory files inside monorepos. When the agent works on a file, it looks
+for memory files from that file's directory up to the repository root:
+
+```
+repo/
+├── AGENTS.md              # repo-wide conventions
+└── packages/
+    └── api/
+        ├── AGENTS.md      # API-specific conventions (takes precedence)
+        └── src/
+            └── main.go    # editing this file discovers both files above
+```
+
+Rules:
+
+- **Closest wins** — memory files closer to the file being edited are applied
+  after (and therefore override) repo-level files on the same topic.
+- Discovery stops at the repository root (the directory containing `.git`).
+  Memory from unrelated ancestor directories is never loaded.
+- Discovered files are injected lazily, the first time the agent touches a
+  file in that subtree, and each file is injected at most once per session.
+
 ## What to Put in These Files
 
 - **Coding standards** — style rules, naming conventions
