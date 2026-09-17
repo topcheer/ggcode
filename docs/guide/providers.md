@@ -382,7 +382,28 @@ vendors:
 Declare provider-executed tools with `server_tools` — these run inside the
 provider's API, never client-side, so they need no approval flow:
 
-- **Anthropic**: `web_search_20250305`, `web_fetch_20250910`
+- **Anthropic**: `web_search_20250305`, `web_fetch_20250910`, and the
+  Tool Search Tool variants `tool_search_tool_regex` /
+  `tool_search_tool_bm25` (beta). The Tool Search Tool moves MCP tool
+  schema discovery server-side: MCP schemas ride every request flagged
+  `defer_loading` (kept out of the model's context until discovered), the
+  API expands them on demand via `tool_reference`, and the required
+  `anthropic-beta: advanced-tool-use-2025-11-20` header is attached
+  automatically. This replaces ggcode's client-side `tool_search` meta-tool
+  (which is disabled while the server variant is active) — configure one,
+  not both:
+
+```yaml
+vendors:
+  anthropic:
+    protocol: anthropic
+    server_tools:
+      - type: tool_search_tool_regex
+    endpoints:
+      default:
+        model: claude-sonnet-4-5
+```
+
 - **Gemini**: `google_search` (alias `web_search`) enables Google Search
   grounding; `url_context` lets the model fetch URLs named in the prompt
   (including PDFs/images). Grounding queries and source URLs are surfaced
