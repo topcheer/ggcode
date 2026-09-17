@@ -36,17 +36,7 @@ type AnthropicProvider struct {
 	memoryTool       bool                                 // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
 	thinkingMode     string                               // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
 	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
-	transport        *headerInjectingTransport            // kept for runtime header updates
-	calibrator       *tokenCountCalibrator                // periodic real-API token calibration
-	files            *fileUploader                        // Anthropic Files API (large-image file_id referencing)
-	reasoningEffort  string                               // "", "low", "medium", "high", "xhigh", "max" — maps to thinking budget
-	toolChoice       string                               // "", "auto", "required", "none" — maps to Anthropic tool_choice
 	strictTools      map[string]bool                      // strict tool use allowlist (empty = disabled)
-	temperature      float64                              // 0 = provider default
-	topP             float64                              // 0 = provider default
-	serverTools      []ServerToolConfig                   // Anthropic server-side tools (web_search/web_fetch), executed in-API
-	memoryTool       bool                                 // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
-	thinkingMode     string                               // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
