@@ -112,13 +112,15 @@ func newToolDedupLedger() *toolDedupLedger {
 	}
 }
 
+// dedupLedger returns the agent's ledger. NewAgent creates it eagerly
+// (TestNewAgentInitializesAllStateFields guards against nil state fields);
+// the Once evaluates the GGCODE_TOOL_DEDUP kill switch exactly once and also
+// covers Agent literals built without NewAgent (ledger stays nil → dedup off).
 func (a *Agent) dedupLedger() *toolDedupLedger {
 	a.toolDedupOnce.Do(func() {
 		if os.Getenv("GGCODE_TOOL_DEDUP") == "0" {
 			a.toolDedup = nil
-			return
 		}
-		a.toolDedup = newToolDedupLedger()
 	})
 	return a.toolDedup
 }

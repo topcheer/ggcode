@@ -433,6 +433,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		selfCorrectionGate:     newSelfCorrectionGateState(),
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
 		latencyTracker:         NewLatencyTracker(),
+		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
 		adaptiveSampling:       newAdaptiveSamplingState(),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
