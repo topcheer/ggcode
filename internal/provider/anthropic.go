@@ -26,10 +26,19 @@ type AnthropicProvider struct {
 	cap              *adaptiveCap
 	transport        *headerInjectingTransport // kept for runtime header updates
 	calibrator       *tokenCountCalibrator     // periodic real-API token calibration
-	reasoningEffort  string                    // "", "low", "medium", "high" — maps to thinking budget
+	reasoningEffort  string                    // "", "low", "medium", "high", "xhigh", "max" — maps to thinking budget
 	toolChoice       string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
 	temperature      float64                   // 0 = provider default
 	topP             float64                   // 0 = provider default
+
+	// Top-level effort carrier (output_config.effort, GA effort parameter).
+	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
+	// change does not preserve cached prefixes, so the carrier is attached
+	// only once a level stabilizes across consecutive requests — per-turn
+	// adaptive-effort oscillation never touches it (see beginEffortTracking).
+	effortCarrier      atomic.Bool // true until the endpoint rejects output_config
+	lastCallEffort     string      // effort level observed on the previous request
+	conversationEffort string      // effort level established for the cached prefix
 }
 
 // ModelName returns the current model name used by this provider.
@@ -37,7 +46,7 @@ func (p *AnthropicProvider) ModelName() string { return p.model }
 
 // CloneWithModel returns a shallow copy of this provider with a different model.
 func (p *AnthropicProvider) CloneWithModel(model string) Provider {
-	return &AnthropicProvider{
+	clone := &AnthropicProvider{
 		client:    p.client,
 		model:     model,
 		maxTokens: p.maxTokens,
@@ -52,11 +61,29 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		temperature:     p.temperature,
 		topP:            p.topP,
 	}
+	// Inherit the endpoint capability latch (an endpoint that rejected
+	// output_config stays off), but reset the per-conversation stability
+	// window: the clone re-learns effort stabilization for its own cache
+	// prefix over its first two requests.
+	clone.effortCarrier.Store(p.effortCarrier.Load())
+	return clone
 }
 
-// SetReasoningEffort sets the reasoning effort, which maps to Anthropic's
-// extended thinking budget_tokens parameter. Effort levels: "low" (~5K),
-// "medium" (~16K), "high" (~32K). Empty string disables thinking.
+// SetReasoningEffort sets the reasoning effort. It maps to Anthropic's
+// extended thinking budget_tokens parameter ("low" ~5K, "medium" ~16K,
+// "high" ~32K) and, once the level stabilizes, to the top-level
+// output_config.effort carrier ("xhigh"/"max" are carrier-only). Empty
+// string disables both.
+func (p *AnthropicProvider) SetReasoningEffort(effort string) {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "", "low", "medium", "high", "xhigh", "max":
+		p.reasoningEffort = effort
+	}
+}
+
+func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort }
+
 // SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
 func (p *AnthropicProvider) SetMaxTokens(n int) {
 	if n > 0 {
@@ -64,15 +91,40 @@ func (p *AnthropicProvider) SetMaxTokens(n int) {
 	}
 }
 
-func (p *AnthropicProvider) SetReasoningEffort(effort string) {
-	effort = strings.ToLower(strings.TrimSpace(effort))
-	switch effort {
-	case "", "low", "medium", "high":
-		p.reasoningEffort = effort
+// beginEffortTracking updates the cache-aware effort-carrier bookkeeping
+// for this request. Returns whether buildParams should attach
+// output_config.effort.
+//
+// Hysteresis (Anthropic effort guidance, 2026): hold the top-level effort
+// constant within a conversation. A level is adopted as the carrier only
+// after TWO consecutive requests at the same level — the adaptive-effort
+// adapter sets a level before each call and restores the previous level
+// right after, so its oscillation never stabilizes and never reaches the
+// carrier (budget_tokens alone modulates per-turn thinking, which is
+// cache-neutral). A user switch (/effort, config) persists across calls
+// and re-establishes the carrier on the second call: one deliberate,
+// one-time cache rewrite instead of a storm.
+func (p *AnthropicProvider) beginEffortTracking() bool {
+	if !p.effortCarrier.Load() {
+		return false
 	}
+	effort := strings.ToLower(strings.TrimSpace(p.reasoningEffort))
+	if effort == "" {
+		// Effort off (or adaptive restored its previous level): reset the
+		// stability window so oscillation can never establish a carrier.
+		p.lastCallEffort = ""
+		return false
+	}
+	if p.lastCallEffort != effort {
+		p.lastCallEffort = effort
+		return false
+	}
+	if p.conversationEffort != effort {
+		debug.Log("anthropic", "effort carrier established: %s (top-level output_config changes restart the prompt cache)", effort)
+		p.conversationEffort = effort
+	}
+	return true
 }
-
-func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort }
 
 // SetToolChoice sets the tool_choice parameter: "auto" (model decides),
 // "required" (force tool use), "none" (disable tools), or "" (API default).
@@ -208,6 +260,38 @@ var thinkingErrorAnchors = []string{
 	"max_tokens must be greater than budget_tokens",
 }
 
+// effortErrorAnchors are phrases from real output_config/effort rejection
+// errors (Anthropic direct and gateway-stringified variants).
+var effortErrorAnchors = []string{
+	"output_config", // unknown-parameter and field-error shapes
+	"per-turn effort",
+	"per-message effort",
+	"does not support effort",
+	"effort is not supported",
+}
+
+// isEffortError reports whether an API error is a genuine rejection of the
+// top-level output_config effort carrier — e.g. an Anthropic-compatible
+// gateway that predates the parameter. Mirrors isThinkingError: status must
+// be a 4xx parameter class and the message must contain an anchored phrase.
+func isEffortError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if sc, ok := asStatusCode(err); ok {
+		if sc != 400 && sc != 404 && sc != 422 {
+			return false
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	for _, anchor := range effortErrorAnchors {
+		if strings.Contains(msg, anchor) {
+			return true
+		}
+	}
+	return false
+}
+
 // asStatusCode extracts an HTTP status code from a provider error when
 // the concrete type exposes one (the anthropic SDK's apierror.Error does).
 func asStatusCode(err error) (int, bool) {
@@ -315,6 +399,7 @@ func (p *AnthropicProvider) SetSessionID(sessionID string) {
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
+	p.beginEffortTracking()
 	params := p.buildParams(messages, tools)
 
 	var resp *anthropic.Message
@@ -327,6 +412,18 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
+		err = retryWithBackoffCtx(ctx, func() error {
+			var callErr error
+			resp, callErr = p.client.Messages.New(ctx, params)
+			return callErr
+		}, providerRetryAttempts)
+	}
+	// Retry once without the effort carrier if the endpoint rejects
+	// output_config (Anthropic-compatible gateways predating the parameter).
+	// The latch keeps effort semantics on budget_tokens for the session.
+	if err != nil && isEffortError(err) && p.effortCarrier.CompareAndSwap(true, false) {
+		debug.Log("anthropic", "Chat: retrying without output_config (endpoint rejected the effort carrier)")
+		params.OutputConfig = anthropic.OutputConfigParam{}
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params)
@@ -363,6 +460,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
+	p.beginEffortTracking()
 	params := p.buildParams(messages, tools)
 
 	ch := make(chan StreamEvent, 64)
@@ -542,6 +640,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						// the session looked like the model just being dumb.
 						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Model rejected extended thinking - retrying without it] "}
 						params.Thinking = anthropic.ThinkingConfigParamUnion{}
+						retry = true
+						return
+					}
+					// Retry without the effort carrier if the endpoint rejects it.
+					if !emitted && isEffortError(err) && p.effortCarrier.CompareAndSwap(true, false) {
+						debug.Log("anthropic", "Stream: retrying without output_config (endpoint rejected the effort carrier)")
+						ch <- StreamEvent{Type: StreamEventSystem, Text: "[Endpoint rejected output_config effort - retrying without it] "}
+						params.OutputConfig = anthropic.OutputConfigParam{}
 						retry = true
 						return
 					}
@@ -988,6 +1094,21 @@ func (p *AnthropicProvider) buildParams(messages []Message, tools []ToolDefiniti
 	// Enable extended thinking when reasoning effort is set.
 	if budget := p.thinkingBudgetForEffort(p.reasoningEffort); budget > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
+	}
+
+	// Effort via the top-level output_config (GA effort parameter, 2026):
+	// attach only the established conversation level (see beginEffortTracking)
+	// so the request prefix stays constant across calls. Composed with
+	// budget_tokens this is the documented best practice for models that
+	// support effort alongside extended thinking: effort governs total token
+	// volume, the budget caps explicit thinking. The per-message
+	// output_config marker (cache-preserving mid-conversation switching) is
+	// not expressible in SDK v1.68 typed params; when the SDK gains it, flip
+	// re-establishments to the marker form.
+	if p.effortCarrier.Load() && p.conversationEffort != "" && p.lastCallEffort == p.conversationEffort {
+		params.OutputConfig = anthropic.OutputConfigParam{
+			Effort: anthropic.OutputConfigEffort(p.conversationEffort),
+		}
 	}
 
 	if len(tools) > 0 {
