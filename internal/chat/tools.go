@@ -76,7 +76,10 @@ func (t *BaseToolItem) SetStatus(s ToolStatus) {
 
 // SetResult updates the tool result and invalidates cache.
 func (t *BaseToolItem) SetResult(result string, isError bool) {
-	t.result = security.RedactForDisplay(result)
+	// Display boundary: neutralize terminal control sequences before secret
+	// redaction (sa-41, ATR-2026-00259) — untrusted tool output must reach
+	// the screen with OSC/CSI hijack primitives and raw control bytes gone.
+	t.result = security.RedactForDisplay(security.SanitizeTerminalForDisplay(result))
 	t.isError = isError
 	t.Invalidate()
 }
@@ -84,7 +87,9 @@ func (t *BaseToolItem) SetResult(result string, isError bool) {
 // SetStreamingBody sets live intermediate output shown while the tool is running.
 // When the tool finishes, the final result replaces this via SetResult.
 func (t *BaseToolItem) SetStreamingBody(body string) {
-	t.streamingBody = body
+	// Same display boundary as SetResult; streaming bodies are rendered
+	// live and previously reached the screen completely unfiltered.
+	t.streamingBody = security.RedactForDisplay(security.SanitizeTerminalForDisplay(body))
 	t.Invalidate()
 }
 
