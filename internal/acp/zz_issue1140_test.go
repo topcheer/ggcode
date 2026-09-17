@@ -50,7 +50,7 @@ func issue1140Setup(t *testing.T) (issue1140Executor, *io.PipeReader, *io.PipeWr
 
 	registry := tool.NewRegistry()
 	policy := permission.NewConfigPolicyWithMode(nil, nil, permission.AutoMode)
-	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp", nil); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, "/tmp", nil, nil); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
 

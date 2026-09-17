@@ -14,7 +14,9 @@ import (
 // If policy is nil, no sandbox path checking is enforced (permissive mode).
 // protectedPaths are optional glob patterns that block write tools from
 // modifying sensitive files (e.g. ".env*", ".git/", "*.lock").
-func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string, protectedPaths []string) error {
+// sandbox, when non-nil and Enabled, activates OS-level containment for
+// shell execution (no-op where the OS lacks native sandboxing).
+func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string, protectedPaths []string, sandbox *SandboxPolicy) error {
 	fileGuard := NewFileGuard(protectedPaths)
 	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
 
@@ -41,6 +43,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		}
 	}
 	jobManager := NewCommandJobManager(workingDir)
+	jobManager.SetSandboxPolicy(sandbox)
 	codeIndex := NewCodeIndexManager(workingDir)
 	registry.codeIndex = codeIndex
 	tools := []Tool{
@@ -81,7 +84,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
-		&RunCommand{WorkingDir: workingDir, Policy: policy},
+		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox},
 		StartCommandTool{Manager: jobManager, Policy: policy},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},

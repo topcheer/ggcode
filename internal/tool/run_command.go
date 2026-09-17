@@ -39,6 +39,10 @@ type RunCommand struct {
 	OnPreExec func(command, description string)
 	// OnPostExec, if non-nil, is called after the command finishes.
 	OnPostExec func(exitCode int, err error)
+	// Sandbox, if non-nil and Enabled, wraps every agent-driven shell spawn
+	// in an OS-level containment sandbox (Seatbelt on macOS). See
+	// shell_sandbox.go for the policy model.
+	Sandbox *SandboxPolicy
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -301,6 +305,21 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		}
 	}
 
+	// Layered OS-level containment: wrap the resolved shell spawn so the
+	// KERNEL (not the heuristic gates above) enforces the write/network
+	// boundary. Skipped for GUI launches - detached editors/builders need
+	// their real file system access (#568/#1245).
+	sandboxed := false
+	if !isGUI {
+		wrapped, wrapErr := wrapShellCommandOS(cmd, t.WorkingDir, t.Sandbox)
+		if wrapErr != nil {
+			// Fail closed: an opted-in sandbox that cannot be enforced must
+			// never silently degrade into an unsandboxed execution.
+			return Result{IsError: true, Content: "Error: " + wrapErr.Error()}, nil
+		}
+		sandboxed = wrapped
+	}
+
 	if t.OnPreExec != nil {
 		t.OnPreExec(args.Command, args.Description)
 	}
@@ -374,7 +393,13 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	output := util.StripANSI(stdout.String())
 	errOutput := util.StripANSI(stderr.String())
 
-	return t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot), nil
+	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
+	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
+	// config knob so the agent adapts instead of retrying blindly.
+	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
+		result.Content += sandboxEPERMHint
+	}
+	return result, nil
 }
 
 // finalizeCommandResult assembles the tool Result after cmd.Run() returns:
@@ -563,6 +588,7 @@ func (t RunCommand) Clone() Tool {
 		OutputTee:  t.OutputTee,
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
+		Sandbox:    t.Sandbox,
 	}
 }
 

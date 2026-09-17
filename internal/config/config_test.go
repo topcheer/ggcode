@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/auth"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoad_KnightDailyBudgetZeroDisablesBudgetChecking(t *testing.T) {
@@ -1813,5 +1814,39 @@ func TestMergeDefaultEndpointsDeterministic(t *testing.T) {
 		if got.BaseURL != ep.BaseURL || got.Protocol != ep.Protocol {
 			t.Fatalf("nondeterministic merge: run %d picked %v/%v, want %v/%v", i, got.BaseURL, got.Protocol, ep.BaseURL, ep.Protocol)
 		}
+	}
+}
+
+func TestConfigSandboxSectionParse(t *testing.T) {
+	src := `
+vendor: zai
+sandbox:
+  enabled: true
+  allow_network: false
+  extra_write_paths:
+    - ~/go/pkg/mod
+    - ~/.cache/go-build
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !cfg.Sandbox.Enabled {
+		t.Fatal("sandbox.enabled must parse")
+	}
+	if cfg.Sandbox.AllowNetwork == nil || *cfg.Sandbox.AllowNetwork {
+		t.Fatalf("sandbox.allow_network: false must parse as false, got %v", cfg.Sandbox.AllowNetwork)
+	}
+	if len(cfg.Sandbox.ExtraWritePaths) != 2 || cfg.Sandbox.ExtraWritePaths[0] != "~/go/pkg/mod" {
+		t.Fatalf("extra_write_paths parse mismatch: %v", cfg.Sandbox.ExtraWritePaths)
+	}
+
+	// Absent section must yield the zero value (sandbox off).
+	var def Config
+	if err := yaml.Unmarshal([]byte("vendor: zai\n"), &def); err != nil {
+		t.Fatalf("unmarshal default: %v", err)
+	}
+	if def.Sandbox.Enabled || def.Sandbox.AllowNetwork != nil || len(def.Sandbox.ExtraWritePaths) != 0 {
+		t.Fatalf("absent sandbox section must be zero value, got %+v", def.Sandbox)
 	}
 }
