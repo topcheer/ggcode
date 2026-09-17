@@ -84,6 +84,23 @@ mcp_servers:
 
 When `read_only: true`, ggcode blocks any MCP tool whose name matches a write/create/delete/execute keyword: short roots (`set`, `put`, `post`, `run`, `exec`, `edit`, `move`) must match a whole underscore- or camelCase-delimited word segment (`set_value`, `setValue` blocked; `get_dataset` allowed), while longer keywords (`write`, `delete`, `create`, `update`, `insert`, `patch`, `execute`, `shell`, `rename`, `upload`, `install`, `deploy`, `upsert`) match anywhere in the name. Read-only tools such as `read`, `get`, `list`, `search`, `fetch`, `query`, `stat`, and `show` are still allowed. Blocked tool calls return an error result explaining that the server is in read-only mode.
 
+## Stateless Protocol Mode (MCP 2026-07-28)
+
+The MCP 2026-07-28 revision (SEP-2575) removes the protocol-level session and the initialize handshake: every request carries its protocol version, client info and client capabilities as per-request `_meta` members, and servers advertise themselves via a new `server/discover` method. ggcode supports this as an opt-in per server:
+
+```yaml
+mcp_servers:
+  - name: modern
+    command: ./modern-server
+    stateless: true
+```
+
+With `stateless: true`, ggcode acts as a dual-era client:
+
+- **Modern server** — the next `Initialize` probes `server/discover` first; on success the handshake is skipped entirely, the negotiated modern version (`2026-07-28`) and capabilities are cached exactly like the legacy handshake state (capability gates, dynamic refresh and the HTTP `MCP-Protocol-Version` header keep working), and every request carries the `_meta` envelope.
+- **Legacy server** — any probe failure that is not a recognized modern error (typically method-not-found) falls back to the unchanged legacy initialize handshake, and legacy traffic stays byte-compatible (no `_meta` is added).
+- **Version mismatch** — a modern server rejecting a protocol version answers with the `UnsupportedProtocolVersionError` (JSON-RPC `-32022`, `data.supported` lists what it supports). ggcode surfaces this as a typed `*mcp.UnsupportedProtocolVersionError` and retries once when a mutually supported, different version exists.
+
 ## Dynamic Tool Refresh
 
 When an MCP server signals that its tool list has changed (via the `notifications/tools/list_changed` notification), ggcode automatically re-fetches and re-registers the updated tools — no restart needed. This keeps the agent in sync with servers that add, remove, or update tools at runtime (e.g., a database server exposing new tables, or a plugin system loading new capabilities).
