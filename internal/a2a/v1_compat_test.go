@@ -228,3 +228,28 @@ func TestWriteRPCContentTypeNegotiation(t *testing.T) {
 		t.Fatalf("negotiated error CT=%q", ct)
 	}
 }
+
+// The server's agent card must serialize the required protocolVersion field
+// (spec-mandatory since 0.2.5) so v1 clients can negotiate media types and
+// enum encodings against ggcode.
+func TestServerCardSerializesProtocolVersion(t *testing.T) {
+	if A2AProtocolVersion != "1.0" {
+		t.Fatalf("A2AProtocolVersion=%q, want \"1.0\"", A2AProtocolVersion)
+	}
+	card := AgentCard{
+		Name:              "ggcode",
+		URL:               "http://127.0.0.1:1",
+		ProtocolReversion: A2AProtocolVersion,
+	}
+	b, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("marshal card: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("unmarshal card: %v", err)
+	}
+	if string(raw["protocolVersion"]) != `"1.0"` {
+		t.Fatalf("wire protocolVersion=%s, want \"1.0\"", raw["protocolVersion"])
+	}
+}
