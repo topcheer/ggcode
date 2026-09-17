@@ -195,6 +195,11 @@ func responsesImagePart(mime, base64 string) map[string]any {
 // separated by a role boundary violation - both are flat items in one input array.
 func buildResponsesInput(messages []Message) []responsesInputItem {
 	var items []responsesInputItem
+	// sa-67: call ids already seen as apply_patch_call blocks in this history;
+	// their tool_result items map back to apply_patch_call_output instead of
+	// function_call_output. A single forward pass suffices: a tool_result is
+	// always preceded in history by its assistant tool_use block.
+	applyPatchCalls := make(map[string]bool)
 	for _, msg := range messages {
 		var textParts []map[string]any
 		isToolRole := msg.Role == "tool"
@@ -239,9 +244,33 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 				if out == "" && len(b.Images) == 0 {
 					out = "(empty output)"
 				}
+				if applyPatchCalls[b.ToolID] {
+					// sa-67: route the executor's outcome back as the
+					// apply_patch_call_output item the Responses API expects;
+					// status mirrors the Result error flag (failed/completed).
+					items = append(items, responsesInputItem{
+						Type:      "apply_patch_call_output",
+						CallID:    b.ToolID,
+						RawReplay: responsesApplyPatchOutputReplay(b.ToolID, out, b.IsError),
+					})
+					continue
+				}
 				items = append(items, responsesInputItem{Type: "function_call_output", CallID: b.ToolID, Output: out})
 			case "tool_use":
 				flushText()
+				if b.ToolName == applyPatchInternalToolName {
+					// sa-67: replay the model's apply_patch_call verbatim so the
+					// stateless request re-presents its V4A patch (store=false),
+					// then record the call id so the paired tool_result maps to an
+					// apply_patch_call_output item below.
+					items = append(items, responsesInputItem{
+						Type:      "apply_patch_call",
+						CallID:    b.ToolID,
+						RawReplay: responsesApplyPatchCallReplay(b.ToolID, b.Input),
+					})
+					applyPatchCalls[b.ToolID] = true
+					continue
+				}
 				args := string(b.Input)
 				if args == "" || args == "null" {
 					args = "{}"
@@ -477,6 +506,19 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 			// keep the raw item verbatim so the next stateless request
 			// echoes the full search exchange back.
 			out.Message.Content = append(out.Message.Content, responsesServerToolBlock(rawItem))
+		default:
+			// sa-67: apply_patch_call is a client-executed tool call. Convert it
+			// to a ToolUseBlock naming the hidden apply_patch executor so the
+			// standard agent loop applies the V4A diff and returns a tool_result,
+			// which buildResponsesInput maps back to apply_patch_call_output.
+			if id, op, ok := decodeResponsesApplyPatchCall(rawItem); ok {
+				args := op
+				if len(args) == 0 {
+					args = json.RawMessage("{}")
+				}
+				out.Message.Content = append(out.Message.Content,
+					ToolUseBlock(id, applyPatchInternalToolName, args))
+			}
 		}
 	}
 	if len(texts) > 0 {
@@ -553,6 +595,18 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 						ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
 					}}
 				}
+				// sa-67: apply_patch_call is a client-executed tool call; surface
+				// it through the same channel as function_call so the agent loop
+				// runs the V4A executor and pairs the result back.
+				if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
+					args := op
+					if len(args) == 0 {
+						args = json.RawMessage("{}")
+					}
+					ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
+						ID: id, Name: applyPatchInternalToolName, Arguments: args,
+					}}
+				}
 			case "response.output_item.done":
 				var item struct {
 					Type      string `json:"type"`
@@ -579,6 +633,17 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 					}
 					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
 						ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
+					}}
+				}
+				// sa-67: final apply_patch_call item; emit the authoritative done
+				// event so the call is executed exactly once per patch.
+				if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
+					args := op
+					if len(args) == 0 {
+						args = json.RawMessage("{}")
+					}
+					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+						ID: id, Name: applyPatchInternalToolName, Arguments: args,
 					}}
 				}
 				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "web_search_call" {

@@ -252,7 +252,13 @@ provider's API, never client-side, so they need no approval flow:
   search inside the Responses API. `web_search_call` items are surfaced as
   server-tool blocks and, because ggcode runs stateless (`store=false`),
   replayed verbatim on follow-up requests so the model keeps its search
-  context across turns.
+  context across turns. `apply_patch` (sa-67) is declared in-API but
+  executed **client-side**: the model emits `apply_patch_call` items with a
+  V4A diff, ggcode applies them to the working tree through the hidden
+  `apply_patch` executor (create/update/delete/move, monotonic hunk
+  matching), and answers with `apply_patch_call_output` so the exchange
+  replays losslessly in stateless history. Subject to the normal sandbox
+  (`sandbox.paths` / approval) like any file-write tool.
 
 ```yaml
 vendors:
