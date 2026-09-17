@@ -28,32 +28,39 @@ import (
 
 // Client connects to an MCP server via stdio transport.
 type Client struct {
-	name              string
-	transport         string
-	command           string
-	args              []string
-	env               map[string]string
-	url               string
-	headers           map[string]string
-	cmd               *exec.Cmd
-	procCancel        context.CancelFunc
-	stdin             io.WriteCloser
-	stdout            io.Reader
-	reader            *bufio.Reader // reused stdout reader
-	httpClient        *http.Client
-	wsMu              sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
-	readMu            sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
-	waiters           map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
-	wsConn            *websocket.Conn
-	sessionID         string
-	negotiatedVersion string // protocol version agreed upon during initialize
-	instructions      string // server-authored usage notes from initialize (guarded by mu; surfaced on tool descriptions)
-	mu                sync.Mutex
-	stderrMu          sync.RWMutex
-	stderrBuf         strings.Builder
-	abortOnce         sync.Once
-	nextID            atomic.Int64
-	closed            atomic.Bool
+	name       string
+	transport  string
+	command    string
+	args       []string
+	env        map[string]string
+	url        string
+	headers    map[string]string
+	cmd        *exec.Cmd
+	procCancel context.CancelFunc
+	stdin      io.WriteCloser
+	stdout     io.Reader
+	reader     *bufio.Reader // reused stdout reader
+	httpClient *http.Client
+	wsMu       sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
+	readMu     sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
+	waiters    map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
+	wsConn     *websocket.Conn
+	sessionID  string
+	// httpNotifLastEventID is the SSE redelivery cursor (MCP Streamable HTTP
+	// "Resumability and Redelivery", spec 2025-03-26..2025-11-25): the id of
+	// the last SSE event seen on any stream. On reconnect of the standalone
+	// GET stream it is sent as the Last-Event-ID header so a compliant
+	// server can redeliver events missed while the connection was down.
+	// Guarded by mu; reset whenever the server assigns a different session.
+	httpNotifLastEventID string
+	negotiatedVersion    string // protocol version agreed upon during initialize
+	instructions         string // server-authored usage notes from initialize (guarded by mu; surfaced on tool descriptions)
+	mu                   sync.Mutex
+	stderrMu             sync.RWMutex
+	stderrBuf            strings.Builder
+	abortOnce            sync.Once
+	nextID               atomic.Int64
+	closed               atomic.Bool
 	// httpNotifDisabled permanently stops the standalone HTTP GET SSE
 	// stream after the server answered 405 (spec-allowed: servers MAY not
 	// offer the stream) or a non-SSE 200 body. Safe to flip from the stream
@@ -1149,6 +1156,11 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	defer resp.Body.Close()
 	if newSession := strings.TrimSpace(resp.Header.Get("Mcp-Session-Id")); newSession != "" {
 		c.mu.Lock()
+		if newSession != c.sessionID {
+			// New (or first) session: SSE event ids from the old session are
+			// not redeliverable across sessions - drop the replay cursor.
+			c.httpNotifLastEventID = ""
+		}
 		c.sessionID = newSession
 		c.mu.Unlock()
 	}
@@ -1179,6 +1191,7 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 		debug.Log("mcp-http", "server=%s 404 with session - dropping stale session and re-initializing", c.name)
 		c.mu.Lock()
 		c.sessionID = ""
+		c.httpNotifLastEventID = ""
 		c.mu.Unlock()
 		if _, err := c.Initialize(ctx); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: re-init after 404: %w", c.name, err)
@@ -1655,6 +1668,7 @@ func (c *Client) streamHTTPSSEResponse(r io.Reader, reqID *ID) (*Response, error
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
 	var dataLines []string
+	var pendingEventID string
 	var found *Response
 	var lastParseErr error
 	events := 0
@@ -1667,6 +1681,8 @@ func (c *Client) streamHTTPSSEResponse(r io.Reader, reqID *ID) (*Response, error
 		payload := []byte(strings.Join(dataLines, "\n"))
 		dataLines = nil
 		events++
+		c.noteSSEEventID(pendingEventID)
+		pendingEventID = ""
 		msg, err := ParseMessage(payload)
 		if err != nil {
 			lastParseErr = err
@@ -1693,6 +1709,8 @@ func (c *Client) streamHTTPSSEResponse(r io.Reader, reqID *ID) (*Response, error
 		switch {
 		case strings.HasPrefix(line, "data:"):
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.HasPrefix(line, "id:"):
+			pendingEventID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 		case strings.TrimSpace(line) == "":
 			flush()
 			if found != nil {
@@ -1849,6 +1867,12 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
 	}
+	// Resumability: replay cursor for a reconnecting GET stream. Only sent
+	// when we have actually seen event ids before - never on the first dial.
+	if lastEventID := c.lastEventIDSnapshot(); lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+		debug.Log("mcp-http", "notif-stream server=%s reconnecting with Last-Event-ID=%s", c.name, lastEventID)
+	}
 	if oauthHandler != nil {
 		if token, _ := oauthHandler.GetAccessToken(req.Context()); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
@@ -1882,12 +1906,21 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var dataLines []string
+	var pendingEventID string
 	flush := func() {
 		if len(dataLines) == 0 {
+			// An id-only event (no data) still advances the redelivery cursor
+			// (server keep-alive priming events, protocol >= 2025-11-25).
+			if pendingEventID != "" {
+				c.noteSSEEventID(pendingEventID)
+				pendingEventID = ""
+			}
 			return
 		}
 		payload := []byte(strings.Join(dataLines, "\n"))
 		dataLines = nil
+		c.noteSSEEventID(pendingEventID)
+		pendingEventID = ""
 		msg, err := ParseMessage(payload)
 		if err != nil {
 			debug.Log("mcp-http", "notif-stream server=%s unparsable event: %v", c.name, err)
@@ -1911,6 +1944,8 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 		switch {
 		case strings.HasPrefix(line, "data:"):
 			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.HasPrefix(line, "id:"):
+			pendingEventID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 		case strings.TrimSpace(line) == "":
 			flush()
 		}
@@ -1928,6 +1963,25 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 		return httpNotifClosing
 	}
 	return httpNotifDrop
+}
+
+// noteSSEEventID records the id of the last SSE event observed on any
+// stream (POST response or standalone GET). Empty ids are ignored so an
+// id-less stream never manufactures a bogus cursor.
+func (c *Client) noteSSEEventID(id string) {
+	if id == "" {
+		return
+	}
+	c.mu.Lock()
+	c.httpNotifLastEventID = id
+	c.mu.Unlock()
+}
+
+// lastEventIDSnapshot returns the current SSE redelivery cursor.
+func (c *Client) lastEventIDSnapshot() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.httpNotifLastEventID
 }
 
 // sleepUntilClosed waits for d, but wakes at most every second to check the
