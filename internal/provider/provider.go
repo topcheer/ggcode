@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+
+	"github.com/topcheer/ggcode/internal/config"
 )
 
 // Message represents a single message in the conversation.
@@ -29,6 +31,24 @@ type ContentBlock struct {
 	ThinkingSignature string          `json:"thinking_signature,omitempty"` // Anthropic extended thinking signature (must be echoed back)
 	ThinkingData      string          `json:"thinking_data,omitempty"`      // Anthropic redacted thinking data (must be echoed back)
 	Cache             bool            `json:"cache,omitempty"`              // hint for providers to apply cache_control on this block
+
+	// Anthropic server-tool blocks (server_tool_use / web_search_tool_result /
+	// web_fetch_tool_result): Raw keeps the verbatim API JSON so follow-up
+	// requests echo the full exchange back losslessly (the API requires the
+	// pair; a dropped result makes it re-run the tool).
+	Raw json.RawMessage `json:"raw,omitempty"`
+	ID  string          `json:"id,omitempty"` // server_tool_use block id
+
+	// Anthropic server-side tool blocks (server_tool_use / web_search_tool_result
+	// / web_fetch_tool_result). These execute INSIDE Anthropic's infrastructure:
+	// ggcode never receives a client-side tool_use for them. The blocks are stored
+	// verbatim so follow-up requests echo the full exchange back (the API requires
+	// the server_tool_use + result pair on subsequent requests, and a dropped
+	// result block makes the API treat the call as deferred and re-run it).
+	ServerTool    string               `json:"server_tool,omitempty"`    // producing tool: "web_search" / "web_fetch"
+	ServerResults []ServerSearchResult `json:"server_results,omitempty"` // web_search_tool_result payload
+	ServerFetch   *ServerFetchResult   `json:"server_fetch,omitempty"`   // web_fetch_tool_result payload
+	ServerError   string               `json:"server_error,omitempty"`   // error code when the server tool failed
 }
 
 // ImageBlock creates an image content block with base64-encoded data.
@@ -60,6 +80,26 @@ func ToolResultNamedBlock(id, name, output string, isError bool) ContentBlock {
 type ContentImage struct {
 	MIME   string `json:"mime"`
 	Base64 string `json:"base64"`
+}
+
+// ServerSearchResult is one web_search result, kept verbatim for round-trip
+// echo: the API requires encrypted_content (and the other fields) to be
+// replayed unchanged on subsequent requests.
+type ServerSearchResult struct {
+	Title            string `json:"title,omitempty"`
+	URL              string `json:"url,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+	PageAge          string `json:"page_age,omitempty"`
+}
+
+// ServerFetchResult is the payload of a web_fetch_tool_result block. The page
+// document travels by URL source (Anthropic re-resolves it server-side), so
+// only the metadata is retained.
+type ServerFetchResult struct {
+	URL         string `json:"url,omitempty"`
+	Title       string `json:"title,omitempty"`
+	RetrievedAt string `json:"retrieved_at,omitempty"`
+	Citations   bool   `json:"citations,omitempty"` // citations.enabled on the returned document
 }
 
 // ToolResultWithImages creates a tool result that carries both text and images.
@@ -148,6 +188,7 @@ type StreamEvent struct {
 	Error             error         // for Error
 	Truncated         bool          // for Done: true if output was cut off by length/max_tokens limit
 	PolicyBlocked     bool          // for Done: true if the stream was cut by a provider policy filter (safety/recitation/blocklist/etc.) — not recoverable by continuation (#266)
+	Block             ContentBlock  // for ServerTool: the complete server-side tool block (server_tool_use or result)
 }
 
 type StreamEventType int
@@ -159,16 +200,18 @@ const (
 	StreamEventToolResult
 	StreamEventDone
 	StreamEventError
-	StreamEventReasoning // thinking/reasoning content (DeepSeek, etc.)
-	StreamEventSystem    // system notification (retry status, etc.)
+	StreamEventServerTool // Anthropic server-side tool block (web_search/web_fetch): not executable client-side
+	StreamEventReasoning  // thinking/reasoning content (DeepSeek, etc.)
+	StreamEventSystem     // system notification (retry status, etc.)
 )
 
 // ToolCallDelta represents a (possibly partial) tool call from a streaming response.
 type ToolCallDelta struct {
-	ID        string          // tool call ID (stable across chunks)
-	Index     int             // position in the tool call list
-	Name      string          // tool name (may be empty in early chunks)
-	Arguments json.RawMessage // accumulated arguments so far
+	ID         string          // tool call ID (stable across chunks)
+	Index      int             // position in the tool call list
+	Name       string          // tool name (may be empty in early chunks)
+	ServerTool bool            // true for Anthropic server_tool_use blocks (executed in-API; never a client tool call)
+	Arguments  json.RawMessage // accumulated arguments so far
 	// ThoughtSignature carries the Gemini thought signature attached to a
 	// function call part (#1610-A); it must ride the SAME tool_use block so
 	// the functionResponse can echo it back.
@@ -212,6 +255,19 @@ type ReasoningEffortProvider interface {
 	SetReasoningEffort(effort string)
 	ReasoningEffort() string
 }
+
+// ServerToolsSetter is implemented by providers that support Anthropic
+// server-side tools (web_search / web_fetch): tools declared once and
+// executed inside the provider's infrastructure, with results returned
+// in-band instead of as client-side tool_use calls.
+type ServerToolsSetter interface {
+	SetServerTools(tools []ServerToolConfig)
+}
+
+// ServerToolConfig declares one server-side tool. Defined in config (the
+// declaration is endpoint configuration); aliased here so provider code and
+// tests reference a single type.
+type ServerToolConfig = config.ServerToolConfig
 
 // ToolChoiceProvider is implemented by providers that support the
 // tool_choice API parameter. Values: "auto" (default, model decides),

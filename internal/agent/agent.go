@@ -4886,6 +4886,13 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
 			blk.ThinkingSignature = string(event.Tool.ThoughtSignature) // #1610-A
 			content = append(content, blk)
+		case provider.StreamEventServerTool:
+			// Anthropic server-side tool blocks (web_search/web_fetch): executed
+			// in-API, never client-side. Store verbatim so the next request
+			// echoes the full server_tool_use + result pair back.
+			flushText()
+			onEvent(event)
+			content = append(content, event.Block)
 		case provider.StreamEventDone:
 			if event.Usage != nil {
 				usage = *event.Usage

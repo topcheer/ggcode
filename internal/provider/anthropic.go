@@ -31,6 +31,7 @@ type AnthropicProvider struct {
 	toolChoice       string                    // "", "auto", "required", "none" — maps to Anthropic tool_choice
 	temperature      float64                   // 0 = provider default
 	topP             float64                   // 0 = provider default
+	serverTools      []ServerToolConfig        // Anthropic server-side tools (web_search/web_fetch), executed in-API
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -61,6 +62,7 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		toolChoice:      p.toolChoice,
 		temperature:     p.temperature,
 		topP:            p.topP,
+		serverTools:     p.serverTools,
 	}
 	// Inherit the endpoint capability latch (an endpoint that rejected
 	// output_config stays off), but reset the per-conversation stability
@@ -134,6 +136,14 @@ func (p *AnthropicProvider) SetToolChoice(choice string) {
 }
 
 func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
+
+// SetServerTools implements provider.ServerToolsSetter: declarative Anthropic
+// server-side tools (web_search/web_fetch) executed inside the API. Results
+// arrive in-band as server_tool_use/web_search_tool_result blocks and are
+// echoed back verbatim on subsequent requests.
+func (p *AnthropicProvider) SetServerTools(tools []ServerToolConfig) {
+	p.serverTools = tools
+}
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
@@ -510,6 +520,21 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
 							toolCalls[idx] = tc
 							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
+						case "server_tool_use":
+							// Anthropic server-side tool invocation (executed in-API).
+							// Input arrives via input_json_delta like a client tool_use,
+							// but the block must NOT be surfaced as a client tool call —
+							// it is emitted verbatim at content_block_stop.
+							idx := int(event.Index)
+							toolCalls[idx] = &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name, ServerTool: true}
+						case "web_search_tool_result", "web_fetch_tool_result":
+							// Result blocks arrive complete (no deltas). Keep the raw
+							// JSON verbatim for echo-back on the next request.
+							emitted = true
+							ch <- StreamEvent{
+								Type:  StreamEventServerTool,
+								Block: ContentBlock{Type: cb.Type, Raw: json.RawMessage(cb.RawJSON())},
+							}
 						case "thinking":
 							debug.Log("anthropic", "content_block_start thinking idx=%d sig_len=%d", event.Index, len(cb.Signature))
 							toolCalls[int(event.Index)] = &ToolCallDelta{
@@ -556,7 +581,19 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					case "content_block_stop":
 						idx := int(event.Index)
-						if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
+						if tc, ok := toolCalls[idx]; ok && tc.ServerTool {
+							debug.Log("anthropic", "content_block_stop server_tool_use id=%s name=%s", tc.ID, tc.Name)
+							emitted = true
+							ch <- StreamEvent{
+								Type: StreamEventServerTool,
+								Block: ContentBlock{
+									Type: "server_tool_use",
+									ID:   tc.ID,
+									Raw:  serverToolUseRaw(tc.ID, tc.Name, tc.Arguments),
+								},
+							}
+							delete(toolCalls, idx)
+						} else if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
 							debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 							outputChars += len(tc.Name) + len(tc.Arguments)
 							emitted = true
@@ -871,6 +908,15 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
+			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result":
+				// Verbatim echo-back of the server-tool exchange; silently skip
+				// only on impossible re-parse failures (raw was captured from
+				// the API itself).
+				if pb, err := serverToolBlockParam(b.Raw); err == nil {
+					blocks = append(blocks, *pb)
+				} else {
+					debug.Log("anthropic", "server tool block echo skipped: %v", err)
+				}
 			case "text":
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
 			case "image":
@@ -973,6 +1019,12 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
+			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result":
+				if pb, err := serverToolBlockParam(b.Raw); err == nil {
+					blocks = append(blocks, *pb)
+				} else {
+					debug.Log("anthropic", "server tool block echo skipped: %v", err)
+				}
 			case "text":
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
 			case "image":
@@ -1147,6 +1199,29 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		params.Tools = toolParams
 	}
 
+	// Server-side tools (web_search/web_fetch): declared once, executed inside
+	// Anthropic's infrastructure. Names are defaulted by the SDK ("web_search"
+	// /"web_fetch"). Declarations are static, so a cache breakpoint on the
+	// last one keeps the whole tool block cached.
+	if len(p.serverTools) > 0 {
+		for i, st := range p.serverTools {
+			var u anthropic.ToolUnionParam
+			switch st.Type {
+			case "web_search_20250305":
+				u = anthropic.ToolUnionParam{OfWebSearchTool20250305: &anthropic.WebSearchTool20250305Param{}}
+			case "web_fetch_20250910":
+				u = anthropic.ToolUnionParam{OfWebFetchTool20250910: &anthropic.WebFetchTool20250910Param{}}
+			default:
+				debug.Log("anthropic", "unknown server tool type %q ignored", st.Type)
+				continue
+			}
+			if i == len(p.serverTools)-1 {
+				setToolUnionCacheControl(&u)
+			}
+			params.Tools = append(params.Tools, u)
+		}
+	}
+
 	// Apply tool_choice when set. Only sent when tools are present (API requirement).
 	if len(tools) > 0 {
 		switch p.toolChoice {
@@ -1171,6 +1246,71 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	return params
 }
 
+// serverToolUseRaw rebuilds the verbatim JSON for a completed server_tool_use
+// block from the streamed fields (content_block_stop carries no payload).
+func serverToolUseRaw(id, name string, input json.RawMessage) json.RawMessage {
+	if len(input) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	raw, err := json.Marshal(struct {
+		Type  string          `json:"type"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}{Type: "server_tool_use", ID: id, Name: name, Input: input})
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// serverToolBlockParam converts a stored verbatim server-tool block back into
+// a request-side param union for echo-back. The API requires the full
+// server_tool_use + result pair on subsequent requests; a dropped result makes
+// it treat the call as deferred and re-run the search (wasted tokens).
+func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnion, error) {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, err
+	}
+	switch probe.Type {
+	case "server_tool_use":
+		var b anthropic.ServerToolUseBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		param := b.ToParam()
+		return &anthropic.ContentBlockParamUnion{OfServerToolUse: &param}, nil
+	case "web_search_tool_result":
+		var b anthropic.WebSearchToolResultBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		param := b.ToParam()
+		return &anthropic.ContentBlockParamUnion{OfWebSearchToolResult: &param}, nil
+	case "web_fetch_tool_result":
+		var b anthropic.WebFetchToolResultBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		param := b.ToParam()
+		return &anthropic.ContentBlockParamUnion{OfWebFetchToolResult: &param}, nil
+	}
+	return nil, fmt.Errorf("unknown server tool block type %q", probe.Type)
+}
+
+// setToolUnionCacheControl attaches a cache breakpoint to a server-tool union.
+func setToolUnionCacheControl(u *anthropic.ToolUnionParam) {
+	switch {
+	case u.OfWebSearchTool20250305 != nil:
+		u.OfWebSearchTool20250305.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case u.OfWebFetchTool20250910 != nil:
+		u.OfWebFetchTool20250910.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	}
+}
+
 func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlock {
 	result := make([]ContentBlock, 0, len(blocks))
 	for _, b := range blocks {
@@ -1192,6 +1332,11 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 				Type:         "redacted_thinking",
 				ThinkingData: rb.Data,
 			})
+		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result":
+			// Anthropic server-side tool blocks: executed inside the API, never
+			// surfaced as client tool calls. Keep the raw JSON verbatim so the
+			// full exchange can be echoed back on subsequent requests.
+			result = append(result, ContentBlock{Type: b.Type, Raw: json.RawMessage(b.RawJSON())})
 		}
 	}
 	return result
