@@ -104,6 +104,16 @@ func (s *silentErrorState) recordToolError(toolName, resourceKey, errorContent s
 	if len(s.unresolvedErrors) >= silentErrorMaxTracked {
 		return
 	}
+	// sa-29 FP fix: read-only/environmental git commands (fetch, ls-remote,
+	// clone) fail transiently for reasons no code edit can address - offline,
+	// proxy flap, remote outage. Seeding them as unresolved errors turned
+	// ordinary read-only progress into "unaddressed error" indictments: the
+	// only remedy the guidance could demand was retrying a network call,
+	// which agents correctly ignore. Code-actionable commands (go build,
+	// git pull which can hit merge conflicts) still seed.
+	if isEnvironmentalCommandKey(resourceKey) {
+		return
+	}
 	snippet := errorContent
 	if len(snippet) > 120 {
 		snippet = snippet[:120] + "..."
@@ -243,6 +253,25 @@ func isCommandKey(key string) bool {
 	}
 	switch fields[0] {
 	case "go", "npm", "cargo", "python", "python3", "yarn", "pnpm", "make", "pytest":
+		return true
+	}
+	return false
+}
+
+// isEnvironmentalCommandKey reports whether a (normalized) command-class
+// resource key refers to a read-only/environmental operation whose failure
+// cannot be remediated by editing source code: network-dependent git reads
+// (fetch, ls-remote, clone). These fail transiently on connectivity or
+// remote-side problems; the silent-error detector must not hold the agent
+// accountable for proceeding past them. git pull is deliberately excluded:
+// it can also fail on merge conflicts, which ARE code-actionable.
+func isEnvironmentalCommandKey(key string) bool {
+	fields := strings.Fields(strings.ToLower(key))
+	if len(fields) < 2 || fields[0] != "git" {
+		return false
+	}
+	switch fields[1] {
+	case "fetch", "ls-remote", "clone":
 		return true
 	}
 	return false

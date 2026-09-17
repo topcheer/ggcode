@@ -210,3 +210,42 @@ func TestSilentError_BuildGuidance(t *testing.T) {
 		t.Error("expected fired=true")
 	}
 }
+
+func TestSilentError_EnvironmentalCommandNotSeeded(t *testing.T) {
+	s := newSilentErrorState()
+	// sa-29: read-only/environmental git commands fail transiently on
+	// connectivity; they must not seed unresolved errors that later
+	// indict ordinary read-only progress as "silent error advancement".
+	s.recordToolError("run_command", "git fetch origin main", "could not resolve host", 1)
+	s.recordToolError("run_command", "git ls-remote origin", "connection refused", 2)
+	if len(s.unresolvedErrors) != 0 {
+		t.Errorf("expected 0 unresolved errors for environmental commands, got %d", len(s.unresolvedErrors))
+	}
+	if msg := s.recordToolAction("read_file", "/unrelated.go"); msg != "" {
+		t.Errorf("expected no guidance for read-only progress, got %q", msg)
+	}
+
+	// Code-actionable commands still seed.
+	s.recordToolError("run_command", "go build", "build error", 3)
+	if len(s.unresolvedErrors) != 1 {
+		t.Errorf("expected 1 unresolved error for go build, got %d", len(s.unresolvedErrors))
+	}
+}
+
+func TestSilentError_EnvironmentalCommandHelper(t *testing.T) {
+	cases := map[string]bool{
+		"git fetch origin main": true,
+		"git ls-remote origin":  true,
+		"git clone https://x":   true,
+		"git pull --rebase":     false, // can fail on merge conflicts: code-actionable
+		"go build ./...":        false,
+		"git status":            false,
+		"git":                   false,
+		"":                      false,
+	}
+	for key, want := range cases {
+		if got := isEnvironmentalCommandKey(key); got != want {
+			t.Errorf("isEnvironmentalCommandKey(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
