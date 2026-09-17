@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -156,7 +157,18 @@ func sameDirPath(a, b string) bool {
 		}
 		return clean
 	}
-	return norm(a) == norm(b)
+	na, nb := norm(a), norm(b)
+	if na == nb {
+		return true
+	}
+	// Windows (and macOS) filesystems are case-insensitive: the home may
+	// be spelled c:\users\name in the launch path while UserHomeDir
+	// reports C:\Users\Name. A byte-exact comparison would miss the guard
+	// and re-enable the home-tree walk (the OOM path) on case variants.
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(na, nb)
+	}
+	return false
 }
 
 // computeIndexPath returns ~/.ggcode/cache/codeindex/<hash>.json.

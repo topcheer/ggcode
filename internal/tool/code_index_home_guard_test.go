@@ -11,6 +11,8 @@ package tool
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +73,14 @@ func TestIsHomeDirectory(t *testing.T) {
 	}
 	if isHomeDirectory(filepath.Dir(home)) {
 		t.Fatal("parent of home must not be reported as home")
+	}
+	// Case-variant spelling: on case-insensitive platforms (Windows NTFS,
+	// default macOS APFS) c:\USERS\name / /Users/NAME must still match the
+	// home and disable the index - a byte-exact comparison would re-enable
+	// the home-tree walk (the OOM path) for case variants.
+	if !sameDirPath(strings.ToLower(home), home) || !sameDirPath(strings.ToUpper(home), home) {
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			t.Fatalf("case-variant home spelling must match on %s (Lower/Upper of %s)", runtime.GOOS, home)
+		}
 	}
 }
