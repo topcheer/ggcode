@@ -32,6 +32,13 @@ func TestClassifyDegraded(t *testing.T) {
 		{"no results found", "search_files", "no results found", degradedNoResult},
 		{"no matches", "grep", "0 matches", degradedNoResult},
 		{"no such file", "read_file", "no such file or directory", degradedNoResult},
+		// Designed truncation with a recovery advisory (truncationAdvisory
+		// footers) is a continuation signal, not degradation.
+		{"web_fetch advisory-backed truncation is NOT degraded", "web_fetch", "[... output truncated: 12.9KB total, showing head + tail ...]\n[Truncation advisory: Web page content (12.9KB) was truncated. Use web_search to find specific sections, or use the browser tool for targeted extraction.]", degradedNone},
+		{"grep narrowing advisory is NOT degraded", "grep", "[... output truncated: 50KB total]\nSearch results (50KB) were truncated. Narrow your search: use more specific patterns.", degradedNone},
+		{"code_search refine advisory is NOT degraded", "code_search", "[... output truncated: 20KB total]\nCode search results (20KB) were truncated. Refine your query to be more specific.", degradedNone},
+		// Raw guard marker WITHOUT any advisory still signals lost content.
+		{"guard marker without advisory is degraded", "web_fetch", "some page text\n[... output truncated: 12.9KB total, showing head + tail ...]", degradedTruncated},
 		{"file not found", "read_file", "Error: file not found", degradedNoResult},
 		{"no symbols", "lsp_workspace_symbols", "no symbols found", degradedNoResult},
 		{"#339 glob returning single short filename is NOT degraded", "glob", "a.go", degradedNone},
@@ -53,6 +60,28 @@ func TestClassifyDegraded(t *testing.T) {
 			got := classifyDegraded(tt.tool, tt.content)
 			if got != tt.want {
 				t.Errorf("classifyDegraded(%q, %q) = %v, want %v", tt.tool, tt.content, got, tt.want)
+			}
+			// web_fetch guard truncation WITH the tool's designed recovery advisory
+			// is a continuation signal, not degradation - no chain must be created.
+			e2 := newErrorPropagateState()
+			e2.totalSteps = 1
+			e2.recordGuardedTruncation("web_fetch", "[... output truncated: 12.9KB total, showing head + tail ...]\n[Truncation advisory: Web page content (12.9KB) was truncated. Use web_search to find specific sections, or use the browser tool for targeted extraction.]")
+			if len(e2.chains) != 0 {
+				t.Fatalf("advisory-backed guard truncation must not start a chain, got %d", len(e2.chains))
+			}
+
+			// grep narrowing advisory likewise.
+			e3 := newErrorPropagateState()
+			e3.totalSteps = 1
+			e3.recordGuardedTruncation("grep", "[... output truncated: 50KB total]\nSearch results (50KB) were truncated. Narrow your search: use more specific patterns.")
+			if len(e3.chains) != 0 {
+				t.Fatalf("grep narrowing advisory must not start a chain, got %d", len(e3.chains))
+			}
+
+			// classifyDegraded: the same advisory-backed web_fetch output is NOT
+			// degraded even though its guard-marker line matches a truncation prefix.
+			if got := classifyDegraded("web_fetch", "[... output truncated: 12.9KB total, showing head + tail ...]\n[Truncation advisory: Web page content (12.9KB) was truncated. Use web_search to find specific sections, or use the browser tool for targeted extraction.]"); got != degradedNone {
+				t.Fatalf("advisory-backed web_fetch output should not be degraded, got %v", got)
 			}
 		})
 	}
@@ -289,7 +318,7 @@ func TestErrorPropagateGuardedTruncationBackfill(t *testing.T) {
 		t.Fatalf("unexpected guidance on clean raw output: %s", g)
 	}
 	// Guard truncates afterwards -> back-fill fires.
-	e.recordGuardedTruncation("run_command")
+	e.recordGuardedTruncation("run_command", "[... output truncated: 100KB total, showing head + tail ...]")
 	// Subsequent tool calls build on the (truncated) result; the chain
 	// must now reach the propagation threshold and warn.
 	var got string
@@ -313,7 +342,7 @@ func TestErrorPropagateGuardedTruncationNoDuplicate(t *testing.T) {
 	if g := e.recordResult("read_file", raw, false); g != "" {
 		t.Fatalf("unexpected early guidance: %s", g)
 	}
-	e.recordGuardedTruncation("read_file")
+	e.recordGuardedTruncation("read_file", "[... output truncated: 100KB total, showing head + tail ...]")
 	// Exactly one chain origin for this step: count warnings ceiling - fire
 	// threshold once, then confirm only one warning ever fires for the pair.
 	var warns int

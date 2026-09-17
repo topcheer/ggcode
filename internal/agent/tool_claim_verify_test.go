@@ -205,12 +205,25 @@ func TestIssue1207_IsContentRetrievalCommand(t *testing.T) {
 		"go test ./...",
 		"grep foo && make test",
 		"cat f; rm f",
-		"echo hi",
 		"grep foo | go run x.go",
+		// sa-30: echo moved to yesNeutral below - its output is
+		// agent-authored data, not execution status.
 	}
 	for _, cmd := range no {
 		if isContentRetrievalCommand(cmd) {
 			t.Errorf("isContentRetrievalCommand(%q) = true, want false", cmd)
+		}
+	}
+	yesNeutral := []string{
+		// sa-30: neutral segments (echo/true) carry no execution status;
+		// fail-silencer idioms must not make the chain status-bearing.
+		"echo hi",
+		`grep -rn "build failed" internal/ || echo "no matches"`,
+		"grep -c FAIL x.log || true",
+	}
+	for _, cmd := range yesNeutral {
+		if !isContentRetrievalCommand(cmd) {
+			t.Errorf("isContentRetrievalCommand(%q) = false, want true (neutral fail-silencer segments)", cmd)
 		}
 	}
 }
@@ -256,6 +269,58 @@ func TestClaimVerifyZeroResultPrefixVariants(t *testing.T) {
 	c := newClaimVerifyState()
 	if got := c.check("grep", "the log line said: no matches found somewhere", false, ""); got != "" {
 		t.Errorf("mid-text mention must not trigger: %q", got)
+	}
+}
+
+// TestSA30MixedCompoundCanonicalOnly pins the sa-30 false positive: a
+// successful `go build && go test && grep ... || echo` chain (exit 0, "ok"
+// summary) was condemned as "[Verify] Build failed" purely because the grep
+// segment's retrieved source payload contained the free text "build failed"
+// (echo/true fail-silencer segments made the whole chain status-bearing).
+// In mixed compounds only CANONICAL status formats may fire; in data-only
+// chains (no status segment) nothing fires.
+func TestSA30MixedCompoundCanonicalOnly(t *testing.T) {
+	chain := `go build -tags goolm ./... && go test -tags goolm -p 1 ./internal/agent && grep -c "build failed" internal/agent/tool_claim_verify.go || echo "no matches"`
+	payload := "ok  \tgithub.com/topcheer/ggcode/internal/agent  23.794s\n" +
+		"tool_claim_verify.go:174:{\"build failed\", \"Build failed. Do not claim the build passed.\"}\n" +
+		"docs/releases/v1.3.132.md:9:avoiding redundant run-go-build reminders."
+
+	// The observed false positive: successful mixed chain + payload free
+	// text -> must NOT fire.
+	s := newClaimVerifyState()
+	if g := s.check("run_command", payload, false, chain); g != "" {
+		t.Fatalf("sa-30 regression: successful mixed chain with payload free text must not fire, got %q", g)
+	}
+
+	// Data-only chain (no status segment): payload free text never fires.
+	s2 := newClaimVerifyState()
+	if g := s2.check("run_command", payload, false, `grep -n "build failed" internal/agent/tool_claim_verify.go || echo "no matches"`); g != "" {
+		t.Fatalf("data-only chain must not fire on payload text, got %q", g)
+	}
+
+	// Pure echo: output is agent-authored data, not execution status.
+	s3 := newClaimVerifyState()
+	if g := s3.check("run_command", "build failed", false, `echo "build failed"`); g != "" {
+		t.Fatalf("pure echo output is agent-authored data, must not fire, got %q", g)
+	}
+
+	// Canonical hard signals in the SAME mixed chain still fire (the
+	// true-positive direction is preserved).
+	for _, out := range []string{
+		"ok  \texample.com/pkg  0.123s\nexit status 1",
+		"FAIL\texample.com/pkg [build failed]",
+	} {
+		sn := newClaimVerifyState()
+		if g := sn.check("run_command", out, false, chain); g == "" {
+			t.Errorf("canonical status %q in mixed chain must still fire", out)
+		}
+	}
+
+	// `go test ./... || true` stays a pure status chain (#1780 masking): the
+	// full scan - soft patterns included - still applies there.
+	s4 := newClaimVerifyState()
+	if g := s4.check("run_command", "--- FAIL: TestX (0.00s)", false, "go test ./... || true"); g == "" {
+		t.Fatal("go test || true remains status-bearing: FAIL summary must fire")
 	}
 }
 
