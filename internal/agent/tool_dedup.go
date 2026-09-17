@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -86,9 +87,18 @@ var mutatingToolNames = map[string]bool{
 var fileMutatingTools = map[string]bool{
 	"write_file":       true,
 	"edit_file":        true,
+	"multi_edit_file":  true, // #2486: batch edits duplicate side effects like edit_file
 	"multi_file_write": true,
 	"notebook_edit":    true,
 	"file_ops":         true,
+	// #2486: these git tools rewrite tracked working-tree state directly
+	// (checkout swaps the tree, stash pop/apply restores changes, reset
+	// --hard discards them) - a verify loop that runs tests, checks out a
+	// branch, and re-runs the SAME test command must not have the re-run
+	// suppressed by a pre-checkout fingerprint.
+	"git_checkout": true,
+	"git_stash":    true,
+	"git_reset":    true,
 }
 
 type toolDedupEntry struct {
@@ -174,9 +184,67 @@ func (l *toolDedupLedger) record(name, args string, res tool.Result) {
 	}
 	l.table[fp] = toolDedupEntry{fingerprint: fp, at: now, result: res}
 	l.count++
-	if fileMutatingTools[name] {
+	if fileMutatingTools[name] || commandMayRewriteWorkspace(name, args) {
 		l.epoch++ // invalidate command fingerprints after workspace file changes
 	}
+}
+
+// commandMayRewriteWorkspace reports whether a run_command/start_command
+// payload looks like it rewrites workspace files (#2486). The builtin
+// fileMutatingTools set covers the structured edit tools; shell commands can
+// mutate just as hard (sed -i, output redirection, git checkout, cp/mv/rm),
+// and without this check their success never bumps the epoch - so the
+// classic verify loop "fix with sed -i -> re-run same test command" had its
+// re-run suppressed by the pre-fix fingerprint, replaying stale results.
+//
+// Lexical and deliberately over-inclusive: a false positive only bumps the
+// epoch (one extra real execution, the safe direction), while a false
+// negative suppresses a test run that should have happened (#2486, the
+// dangerous direction). Reads-only commands (cat/grep/ls/go test/go build)
+// match none of the signals and keep full suppression protection.
+func commandMayRewriteWorkspace(name, args string) bool {
+	if name != "run_command" && name != "start_command" {
+		return false
+	}
+	var payload struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(args), &payload); err != nil || payload.Command == "" {
+		return false
+	}
+	cmd := payload.Command
+	// Neutralize known-harmless sinks first (same forms as the irrev-gate
+	// redirect neutralizer) so plain "2>&1" pipelines do not trip the
+	// bare-'>' file-write signal.
+	for _, sink := range []string{"2>&1", "1>&2", "2>>/dev/null", "2>/dev/null", ">>/dev/null", ">/dev/null"} {
+		cmd = strings.ReplaceAll(cmd, sink, " ")
+	}
+	if strings.Contains(cmd, ">") {
+		return true // file-write redirection (incl. >>) survived sink neutralization
+	}
+	lower := strings.ToLower(cmd)
+	for _, frag := range []string{
+		"sed -i", "sed --in-place", "awk -i", "awk --in-place",
+		" tee ", "git checkout", "git switch", "git restore",
+		"git stash pop", "git stash apply", "git stash drop", "git stash push",
+		"git reset", "git clean", "git apply", "git rebase", "git merge",
+		"git cherry-pick", "git revert", "git rm", "git mv",
+		"patch ", "truncate ", "install -m", "go fmt", "gofmt -w",
+		"go generate", "go mod tidy", "go mod edit", "go get ", "pip install",
+		"npm install", "yarn add", "pnpm add", "cargo fix",
+	} {
+		if strings.Contains(lower, frag) {
+			return true
+		}
+	}
+	// Whole-word check for copy/move/remove/dd so "cp" inside a longer token
+	// (e.g. a file named "xcp") does not trip.
+	for _, w := range []string{"cp", "mv", "rm", "dd", "rsync", "ln"} {
+		if strings.Contains(" "+lower+" ", " "+w+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // fingerprint = tool name + args + workspace epoch, hashed. The epoch term
