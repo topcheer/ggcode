@@ -1309,6 +1309,26 @@ func a2aAPIKey(cfg *config.Config) string {
 	return cfg.A2A.EffectiveAPIKey()
 }
 
+// a2aExtensionsFromConfig maps configured A2A extensions onto the wire type.
+func a2aExtensionsFromConfig(exts []config.A2AExtensionConfig) []a2a.AgentExtension {
+	if len(exts) == 0 {
+		return nil
+	}
+	out := make([]a2a.AgentExtension, 0, len(exts))
+	for _, ext := range exts {
+		if ext.URI == "" {
+			continue // URI is the identity of an extension; skip degenerate entries
+		}
+		out = append(out, a2a.AgentExtension{
+			URI:         ext.URI,
+			Description: ext.Description,
+			Required:    ext.Required,
+			Params:      ext.Params,
+		})
+	}
+	return out
+}
+
 // startA2AServer starts the A2A HTTP server, registers this instance in the local
 // registry, discovers other running instances, and registers cross-instance MCP tools.
 func parseA2ATimeout(s string) time.Duration {
@@ -1334,10 +1354,11 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	)
 
 	srv := a2a.NewServer(a2a.ServerConfig{
-		Host:    cfg.A2A.Host,
-		Port:    cfg.A2A.Port,
-		APIKey:  a2aAPIKey(cfg),
-		APIKeys: cfg.A2A.Auth.APIKeys,
+		Host:       cfg.A2A.Host,
+		Port:       cfg.A2A.Port,
+		APIKey:     a2aAPIKey(cfg),
+		APIKeys:    cfg.A2A.Auth.APIKeys,
+		Extensions: a2aExtensionsFromConfig(cfg.A2A.Extensions),
 	}, handler)
 
 	// Wire OAuth2/OIDC token validation if configured
@@ -1452,7 +1473,8 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 	// Register MCP bridge tools for external MCP clients (Claude, Cursor, etc.)
 	// that don't speak A2A natively. These 4 tools let any MCP client discover
 	// and interact with this ggcode instance.
-	bridgeClient := a2a.NewClient(srv.Endpoint(), a2aAPIKey(cfg))
+	bridgeClient := a2a.NewClient(srv.Endpoint(), a2aAPIKey(cfg),
+		a2a.WithActivateExtensions(cfg.A2A.ActivateExtensions))
 	for _, t := range a2a.MCPBridgeTools(bridgeClient) {
 		_ = reg.Register(t)
 	}

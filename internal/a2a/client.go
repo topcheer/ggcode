@@ -41,6 +41,10 @@ type Client struct {
 	tokenProvider TokenProvider // auto-acquire token when needed
 	apiKeyName    string        // #1458-A: card-declared header name
 	apiKeyIn      string        // #1458-A: card-declared location (header/query)
+
+	// activateExtensions holds the URIs sent in the A2A-Extensions header on
+	// every POST to the remote agent (A2A v1.0 extension activation opt-in).
+	activateExtensions atomic.Pointer[[]string]
 }
 
 // ClientOption configures a Client.
@@ -92,6 +96,66 @@ func WithTokenProvider(p TokenProvider) ClientOption {
 	return func(c *Client) {
 		c.tokenProvider = p
 	}
+}
+
+// WithActivateExtensions opts the client into the given A2A protocol
+// extensions: their URIs are sent in the A2A-Extensions request header on
+// every POST (A2A v1.0 "Extension Activation").
+func WithActivateExtensions(uris []string) ClientOption {
+	return func(c *Client) {
+		c.SetActivateExtensions(uris)
+	}
+}
+
+// SetActivateExtensions sets (or replaces) the extension URIs activated on
+// outgoing requests. Safe for concurrent use.
+func (c *Client) SetActivateExtensions(uris []string) {
+	c.activateExtensions.Store(&uris)
+}
+
+// activatedExtensions returns the configured activation list.
+func (c *Client) activatedExtensions() []string {
+	if p := c.activateExtensions.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// MissingRequiredExtensions returns the extension URIs the remote agent card
+// marks as required that this client does NOT activate. Per spec the client
+// must comply with required extensions; callers should refuse to talk to the
+// agent while this is non-empty instead of silently violating its contract.
+func (c *Client) MissingRequiredExtensions() []string {
+	card := c.Card()
+	if card == nil {
+		return nil
+	}
+	have := make(map[string]struct{})
+	for _, uri := range c.activatedExtensions() {
+		have[uri] = struct{}{}
+	}
+	var missing []string
+	for _, ext := range card.DeclaredExtensions() {
+		if ext.Required {
+			if _, ok := have[ext.URI]; !ok {
+				missing = append(missing, ext.URI)
+			}
+		}
+	}
+	return missing
+}
+
+// applyExtensions attaches extension activation to an outgoing request after
+// the required-extension pre-flight check. Returns an error when the remote
+// agent requires extensions this client has not activated.
+func (c *Client) applyExtensions(req *http.Request) error {
+	if missing := c.MissingRequiredExtensions(); len(missing) > 0 {
+		return fmt.Errorf("remote agent requires A2A extension(s) not activated: %s", strings.Join(missing, ", "))
+	}
+	if uris := c.activatedExtensions(); len(uris) > 0 {
+		req.Header.Set(A2AExtensionsHeader, FormatA2AExtensionsHeader(uris))
+	}
+	return nil
 }
 
 // NewClient creates a new A2A client targeting the given server URL.
@@ -437,6 +501,9 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 		return nil, fmt.Errorf("a2a stream: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := c.applyExtensions(req); err != nil {
+		return nil, fmt.Errorf("a2a stream: %w", err)
+	}
 	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
@@ -583,6 +650,9 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 		return nil, fmt.Errorf("a2a resubscribe: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := c.applyExtensions(req); err != nil {
+		return nil, fmt.Errorf("a2a resubscribe: %w", err)
+	}
 	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
@@ -643,6 +713,9 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 		return fmt.Errorf("a2a %s: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := c.applyExtensions(req); err != nil {
+		return fmt.Errorf("a2a %s: %w", method, err)
+	}
 	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)

@@ -42,6 +42,8 @@ type Server struct {
 	pushGuard                *pushGuard
 	allowWildcardPushConfigs bool
 	pushClient               *http.Client
+
+	extensions []AgentExtension // A2A protocol extensions supported by this server
 }
 
 // ServerConfig holds A2A server configuration.
@@ -68,6 +70,13 @@ type ServerConfig struct {
 	// is empty — those match notifications for ALL tasks, so they are
 	// refused unless explicitly opted in.
 	AllowWildcardPushCallbacks bool
+
+	// Extensions declares the A2A protocol extensions this agent supports
+	// (A2A v1.0 "Extension Declaration"). They are advertised in the Agent
+	// Card (both capabilities.extensions and the legacy top-level field) and
+	// negotiated per-request via the A2A-Extensions header. Clients that fail
+	// to activate a required extension are rejected with -32004.
+	Extensions []AgentExtension
 }
 
 // NewServer creates a new A2A server.
@@ -81,6 +90,7 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	s := &Server{
 		handler:                  handler,
 		apiKeys:                  apiKeys,
+		extensions:               cfg.Extensions,
 		done:                     make(chan struct{}),
 		pushConfigs:              make(map[string]PushNotificationConfig),
 		pushGuard:                newPushGuard(cfg.PushCallbackAllowlist),
@@ -108,7 +118,9 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 			// Card declaration must match the (always-implemented) push
 			// CRUD + fire path (#403); defaults to true.
 			PushNotifications: cfg.PushNotifications == nil || *cfg.PushNotifications,
+			Extensions:        cfg.Extensions,
 		},
+		Extensions:         cfg.Extensions, // legacy flat field for older ggcode peers
 		DefaultInputModes:  []string{"text/plain"},
 		DefaultOutputModes: []string{"text/plain"},
 		Skills:             DefaultSkills(),
@@ -121,6 +133,8 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/agent.json", s.a2aMiddleware(s.handleAgentCard))
 	mux.HandleFunc("/.well-known/a2a.json", s.a2aMiddleware(s.handleAgentCard))
+	// A2A v1.0 canonical well-known path.
+	mux.HandleFunc("/.well-known/agent-card.json", s.a2aMiddleware(s.handleAgentCard))
 	mux.HandleFunc("/", s.a2aMiddleware(s.handleRPC))
 	s.mux = mux
 
@@ -232,12 +246,75 @@ func (s *Server) Stop() {
 // A2AProtocolVersion is the implemented A2A protocol version.
 const A2AProtocolVersion = "1.0"
 
-// a2aMiddleware adds A2A protocol headers to all JSON-RPC responses.
+// activatedExtensionsKey carries the extensions activated for the current
+// request in its context (see a2aMiddleware).
+type activatedExtensionsKey struct{}
+
+// ActivatedExtensions returns the A2A extensions the client activated for
+// this request via the A2A-Extensions header (intersection with what this
+// server declared). Handlers implementing extension behavior consult this.
+func ActivatedExtensions(ctx context.Context) []string {
+	if v, ok := ctx.Value(activatedExtensionsKey{}).([]string); ok {
+		return v
+	}
+	return nil
+}
+
+// a2aMiddleware adds A2A protocol headers to all JSON-RPC responses and
+// performs extension negotiation (A2A v1.0 "Extension Activation"): the
+// requested URIs from the A2A-Extensions header are intersected with the
+// extensions this server declared, and the activated set is echoed back in
+// the response header. Unsupported requested URIs are ignored per spec.
 func (s *Server) a2aMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("A2A-Version", A2AProtocolVersion)
-		next(w, r)
+		activated := s.activateExtensions(ParseA2AExtensionsHeader(r.Header.Get(A2AExtensionsHeader)))
+		if len(activated) > 0 {
+			w.Header().Set(A2AExtensionsHeader, FormatA2AExtensionsHeader(activated))
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), activatedExtensionsKey{}, activated)))
 	}
+}
+
+// activateExtensions intersects requested extension URIs with those declared
+// by this server. Exact-URI matching only: a client requesting an unknown
+// version gets no activation (spec: MUST NOT fall back to another version).
+func (s *Server) activateExtensions(requested []string) []string {
+	if len(requested) == 0 || len(s.extensions) == 0 {
+		return nil
+	}
+	declared := make(map[string]struct{}, len(s.extensions))
+	for _, ext := range s.extensions {
+		declared[ext.URI] = struct{}{}
+	}
+	var activated []string
+	for _, uri := range requested {
+		if _, ok := declared[uri]; ok {
+			activated = append(activated, uri)
+		}
+	}
+	return activated
+}
+
+// missingRequired returns the URIs of this server's required extensions that
+// the client did not activate. A non-empty result must reject the request.
+func (s *Server) missingRequired(activated []string) []string {
+	if len(s.extensions) == 0 {
+		return nil
+	}
+	have := make(map[string]struct{}, len(activated))
+	for _, uri := range activated {
+		have[uri] = struct{}{}
+	}
+	var missing []string
+	for _, ext := range s.extensions {
+		if ext.Required {
+			if _, ok := have[ext.URI]; !ok {
+				missing = append(missing, ext.URI)
+			}
+		}
+	}
+	return missing
 }
 
 func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +339,19 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	// Auth check.
 	if !s.authenticate(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Required-extension gate (A2A v1.0 "Required Extensions"): a client
+	// that has not activated every required extension cannot comply with the
+	// agent's request contract, so reject with the UnsupportedOperation
+	// error (-32004) instead of silently misinterpreting traffic.
+	if missing := s.missingRequired(ActivatedExtensions(r.Context())); len(missing) > 0 {
+		writeRPCError(w, nil, &JSONRPCError{
+			Code:    ErrUnsupportedOp.Code,
+			Message: ErrUnsupportedOp.Message,
+			Data:    fmt.Sprintf("required A2A extension(s) not activated: %s", strings.Join(missing, ", ")),
+		})
 		return
 	}
 
