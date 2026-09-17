@@ -160,6 +160,20 @@ func irrevClassifyTool(toolName, args string) int {
 		if irrevIsDestructiveCommand(args) {
 			return irrevTierHigh
 		}
+		// sa-28: read-only / verification shell commands are the shell
+		// equivalents of the Tier-0 dedicated tools (git fetch/log/diff/status
+		// ~ git_log/git_diff/git_status above) and of the verification
+		// commands recordOutcome already treats as grounding. Tiering them
+		// Medium made the FIRST command of a session (zero prior grounding
+		// is structurally unavoidable) fire a "check repository state"
+		// advisory at git fetch / go build - the exact operations that ARE
+		// repository-state checks - and flagged the verification step after
+		// a long edit run. Calibrated abstention (CA-EUC, this file's
+		// research basis) only helps when abstention prompts are precise:
+		// FP advisories burn context tokens and invite rework rounds.
+		if irrevIsReadOnlyCommand(args) {
+			return irrevTierNone
+		}
 		return irrevTierMedium
 
 	// Tier 3: High irreversibility (very hard to undo)
@@ -242,6 +256,155 @@ func irrevIsDestructiveCommand(args string) bool {
 		}
 	}
 	return false
+}
+
+// irrevReadOnlyBinaries are single binaries whose invocations are read-only
+// with respect to user state (they may write caches, TMPDIR, or stdout, but
+// never touch the workspace or repository in a way the gate exists to
+// protect). Deliberately conservative: when in doubt, a binary is absent
+// and its command stays Medium.
+var irrevReadOnlyBinaries = map[string]bool{
+	"ls": true, "cat": true, "head": true, "tail": true, "grep": true,
+	"rg": true, "find": true, "which": true, "whereis": true, "pwd": true,
+	"date": true, "env": true, "printenv": true, "uname": true,
+	"whoami": true, "hostname": true, "wc": true, "sort": true,
+	"uniq": true, "diff": true, "cmp": true, "file": true, "stat": true,
+	"du": true, "df": true, "free": true, "ps": true, "true": true,
+	"cd": true, "shasum": true, "sha256sum": true, "md5sum": true,
+	"cksum": true, "basename": true, "dirname": true, "realpath": true,
+	"readlink": true, "jq": true, "awk": true, "gawk": true,
+	"tr": true, "cut": true, "xxd": true, "od": true, "strings": true,
+}
+
+// irrevReadOnlyGitSubcommands are git subcommands that read repository state
+// (fetch only updates remote-tracking refs). Destructive shapes that embed
+// these names (git branch -d, git tag -d, git remote remove) are caught
+// earlier by irrevIsDestructiveCommand, which is checked first.
+var irrevReadOnlyGitSubcommands = map[string]bool{
+	"fetch": true, "status": true, "log": true, "diff": true,
+	"show": true, "blame": true, "branch": true, "remote": true,
+	"rev-parse": true, "rev-list": true, "ls-files": true,
+	"describe": true, "shortlog": true, "reflog": true, "grep": true,
+	"tag": true, "merge-base": true, "cat-file": true,
+}
+
+// irrevReadOnlyGoSubcommands are go toolchain subcommands that compile,
+// test, or report without modifying tracked files (build/test artifacts go
+// to the build cache or -o targets chosen by the caller). Explicitly NOT
+// included: fmt, generate, install, get, mod, run (rewrite files, write
+// outside the cache, or execute arbitrary programs).
+var irrevReadOnlyGoSubcommands = map[string]bool{
+	"build": true, "test": true, "vet": true, "version": true,
+	"env": true, "list": true, "doc": true,
+}
+
+// irrevIsReadOnlyCommand reports whether a shell command consists only of
+// known read-only / verification steps (sa-28). Conservative by design:
+// unknown binaries, file redirects, command substitution, env-var prefixes
+// beyond simple NAME=value tokens, or any destructive pattern make the
+// whole command fall through to the Medium tier unchanged. Only the
+// advisory layer consumes the tier; grounding tracking
+// (irrevIsGroundingAction) is unaffected.
+func irrevIsReadOnlyCommand(args string) bool {
+	var payload struct {
+		Command string `json:"command"`
+	}
+	cmdStr := args
+	if err := json.Unmarshal([]byte(args), &payload); err == nil && payload.Command != "" {
+		cmdStr = payload.Command
+	}
+	cmdStr = stripLeadingShellComment(cmdStr)
+	cmdStr = irrevNeutralizeSafeRedirects(cmdStr)
+	if strings.TrimSpace(cmdStr) == "" {
+		return false
+	}
+	for _, seg := range irrevSplitShellSegments(cmdStr) {
+		if !irrevSegmentIsReadOnly(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+// irrevNeutralizeSafeRedirects removes redirect forms that are known to be
+// harmless so the generic '>' check afterwards only fires on real file
+// writes. Bare '2>file' / '>file' are NOT neutralized - they still contain
+// '>' and disqualify the command, keeping the classifier conservative.
+func irrevNeutralizeSafeRedirects(cmd string) string {
+	for _, sink := range []string{"2>&1", "1>&2", "2>>/dev/null", "2>/dev/null", ">>/dev/null", ">/dev/null"} {
+		cmd = strings.ReplaceAll(cmd, sink, " ")
+	}
+	return cmd
+}
+
+// irrevSplitShellSegments splits a compound command on shell sequencing
+// operators (&&, ||, ;, |, &, newline). Every segment must independently
+// qualify as read-only for the whole command to classify as read-only.
+func irrevSplitShellSegments(cmd string) []string {
+	return strings.FieldsFunc(cmd, func(r rune) bool {
+		return r == ';' || r == '|' || r == '&' || r == '\n'
+	})
+}
+
+// irrevSegmentIsReadOnly classifies a single (operator-free) command
+// segment.
+func irrevSegmentIsReadOnly(seg string) bool {
+	seg = strings.TrimSpace(seg)
+	if seg == "" {
+		return true // consecutive operators yield empty segments
+	}
+	if strings.Contains(seg, ">") || strings.Contains(seg, "$(") ||
+		strings.Contains(seg, "`") || strings.Contains(seg, "<(") {
+		// File write, command substitution, or process substitution.
+		return false
+	}
+	fields := strings.Fields(seg)
+	// Skip leading environment assignments (GOMEMLIMIT=2GiB go test ...).
+	i := 0
+	for i < len(fields)-1 && i < 4 && isEnvAssignment(fields[i]) {
+		i++
+	}
+	fields = fields[i:]
+	if len(fields) == 0 {
+		return false
+	}
+	bin := fields[0]
+	rest := fields[1:]
+	switch bin {
+	case "git":
+		if len(rest) == 0 {
+			return true // bare `git` prints help
+		}
+		return irrevReadOnlyGitSubcommands[rest[0]]
+	case "go":
+		if len(rest) == 0 {
+			return true
+		}
+		return irrevReadOnlyGoSubcommands[rest[0]]
+	case "sed":
+		// sed without -i edits the stream only.
+		for _, a := range rest {
+			if a == "-i" || strings.HasPrefix(a, "-i") && len(a) > 2 || a == "--in-place" {
+				return false
+			}
+		}
+		return true
+	default:
+		return irrevReadOnlyBinaries[bin]
+	}
+}
+
+func isEnvAssignment(tok string) bool {
+	eq := strings.Index(tok, "=")
+	if eq <= 0 {
+		return false
+	}
+	for j, r := range tok[:eq] {
+		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (j > 0 && r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 // irrevIsGroundingAction returns true for tools that demonstrate

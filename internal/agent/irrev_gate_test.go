@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strconv"
 	"testing"
 )
 
@@ -38,6 +39,18 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"git_reset", `{"mode":"mixed"}`, irrevTierLow},
 		{"git_push", `{"force":true}`, irrevTierHigh},
 
+		// sa-28: read-only / verification shell commands = Tier 0 (parity
+		// with their dedicated-tool counterparts above). The first case is
+		// the exact first-hand FP sequence that fired the gate at session
+		// start.
+		{"run_command", `{"command":"git fetch origin main 2>&1 | tail -2; git log --oneline -25 origin/main"}`, irrevTierNone},
+		{"run_command", `{"command":"git status"}`, irrevTierNone},
+		{"run_command", `{"command":"go build -o /tmp/ggcode ./cmd/ggcode"}`, irrevTierNone},
+		{"run_command", `{"command":"GOMEMLIMIT=2GiB GOGC=50 go test -tags goolm -p 1 ./internal/agent/"}`, irrevTierNone},
+		{"run_command", `{"command":"cd /tmp && go vet ./..."}`, irrevTierNone},
+		{"run_command", `{"command":"cat a.go | grep foo | wc -l"}`, irrevTierNone},
+		{"run_command", "{\"command\":\"# fetch latest\\n cd /tmp && git status\"}", irrevTierNone},
+
 		// Destructive commands via run_command
 		{"run_command", `{"command":"git push --force origin main"}`, irrevTierHigh},
 		{"run_command", `{"command":"git reset --hard HEAD~3"}`, irrevTierHigh},
@@ -72,6 +85,55 @@ func TestIrrevIsDestructiveCommand(t *testing.T) {
 	// Non-destructive
 	if irrevIsDestructiveCommand(`{"command":"echo hello"}`) {
 		t.Error("echo should not be destructive")
+	}
+}
+
+// sa-28 first-hand FP: a session whose very first command is a read-only
+// fetch/log sequence was told to "check repository state" with structurally
+// zero grounding. Read-only commands must never consume an advisory slot.
+func TestIrrevGate_FirstReadOnlyCommandNoAdvisory(t *testing.T) {
+	s := newIrrevGateState()
+	warn := s.recordAction("run_command",
+		`{"command":"git fetch origin main && git log --oneline -5","description":"fetch"}`)
+	if warn != "" {
+		t.Errorf("first read-only command must not trigger advisory, got %q", warn)
+	}
+	if s.warnings != 0 {
+		t.Errorf("warning count must stay 0, got %d", s.warnings)
+	}
+}
+
+// The read-only classifier is conservative: writes, unknown binaries,
+// command substitution, file redirects, and state-mutating subcommands all
+// fall through to the previous (Medium) behavior.
+func TestIrrevReadOnlyCommandConservative(t *testing.T) {
+	stayNonReadOnly := []string{
+		"echo hello",
+		"go test ./... > out.txt",
+		"git status 2>err.txt",
+		"cat $(pwd)/x",
+		"make build",
+		"curl -s https://example.com",
+		"go run ./cmd/x",
+		"go fmt ./...",
+		"npm install",
+		"sed -i '' s/a/b/ f.txt",
+		"git config user.name val",
+	}
+	for _, c := range stayNonReadOnly {
+		if irrevIsReadOnlyCommand(`{"command":` + strconv.Quote(c) + `}`) {
+			t.Errorf("irrevIsReadOnlyCommand(%q) = true, want false", c)
+		}
+	}
+}
+
+// Destructive patterns keep precedence over the read-only fast path.
+func TestIrrevReadOnlyDestructivePrecedence(t *testing.T) {
+	if got := irrevClassifyTool("run_command", `{"command":"git fetch origin main && rm -rf /tmp/x"}`); got != irrevTierHigh {
+		t.Errorf("destructive pattern must win over read-only, got %d", got)
+	}
+	if got := irrevClassifyTool("run_command", `{"command":"git branch -d tmp"}`); got != irrevTierHigh {
+		t.Errorf("git branch -d must stay High, got %d", got)
 	}
 }
 
