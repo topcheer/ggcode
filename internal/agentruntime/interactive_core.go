@@ -53,7 +53,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	lsp.SetServerOverrides(cfg.LSPServers)
 
 	registry := tool.NewRegistry()
-	if err := tool.RegisterBuiltinTools(registry, policy, workingDir, cfg.ProtectedPaths); err != nil {
+	if err := tool.RegisterBuiltinTools(registry, policy, workingDir, cfg.ProtectedPaths, tool.NewSandboxPolicy(cfg.Sandbox.Enabled, cfg.Sandbox.AllowNetwork, cfg.Sandbox.ExtraWritePaths)); err != nil {
 		return nil, err
 	}
 

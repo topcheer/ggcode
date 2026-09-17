@@ -45,7 +45,7 @@ func TestSubAgentBlockedTools(t *testing.T) {
 // explicitly requests them.
 func TestSubAgentBlockedTools_RemovedFromClone(t *testing.T) {
 	reg := NewRegistry()
-	_ = RegisterBuiltinTools(reg, nil, "/tmp/test", nil)
+	_ = RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
 	// Simulate the BuildToolSet logic: unconditional removal
 	cloned := reg.Clone()
@@ -74,7 +74,7 @@ func TestSubAgentBlockedTools_RemovedFromClone(t *testing.T) {
 // tools are already gone from the clone before the allowlist filter runs.
 func TestSubAgentBlockedTools_SurvivesAllowedFilter(t *testing.T) {
 	reg := NewRegistry()
-	_ = RegisterBuiltinTools(reg, nil, "/tmp/test", nil)
+	_ = RegisterBuiltinTools(reg, nil, "/tmp/test", nil, nil)
 
 	// Step 1: unconditional block (runs first in BuildToolSet)
 	cloned := reg.Clone()

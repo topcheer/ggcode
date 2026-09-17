@@ -307,6 +307,7 @@ type Config struct {
 	Fallbacks      []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
 	FilePath       string                     `yaml:"-" json:"-"`
 	ProtectedPaths []string                   `yaml:"protected_paths,omitempty" json:"protected_paths,omitempty"`
+	Sandbox        SandboxConfig              `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
 	FirstRun       bool                       `yaml:"-" json:"-"`
 	instanceDir    string                     `yaml:"-" json:"-"` // ~/.ggcode/instances/{sha256}/
 	instancePath   string                     `yaml:"-" json:"-"` // instanceDir + "/ggcode.yaml"
@@ -510,6 +511,24 @@ type P2PConfig struct {
 // completes (success or failure). Mode "all" fires on every completion,
 // "long" (default) only for runs exceeding MinDuration, "errors" only on
 // failures, and "off" disables all notifications.
+// SandboxConfig configures the OS-level containment layer for agent-driven
+// shell execution (run_command / start_command). When Enabled, command spawns
+// are wrapped in a kernel sandbox (Seatbelt on macOS); on platforms without
+// native sandboxing the layer is a no-op. This complements (does not replace)
+// the existing path-based sandboxing: policy/protected_paths still decide
+// WHAT paths are allowed, the OS sandbox enforces them at the kernel level.
+type SandboxConfig struct {
+	// Enabled turns on OS-level command containment. Default: false.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// AllowNetwork permits outbound network access inside the sandbox.
+	// Nil = platform default (macOS: network allowed). Default: allow
+	// (agents need fetch/git-push; opt out for stricter containment).
+	AllowNetwork *bool `yaml:"allow_network,omitempty" json:"allow_network,omitempty"`
+	// ExtraWritePaths grants additional writable directories (absolute
+	// paths or ~-expanded), e.g. "~/go/pkg/mod" for module builds.
+	ExtraWritePaths []string `yaml:"extra_write_paths,omitempty" json:"extra_write_paths,omitempty"`
+}
+
 type NotificationConfig struct {
 	Mode           string `yaml:"mode,omitempty" json:"mode,omitempty"`                                 // all|long|errors|off (default: long)
 	Bell           *bool  `yaml:"bell,omitempty" json:"bell,omitempty"`                                 // terminal bell (\x07); nil = default on, explicit false disables (#959)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 )
 
 // Elicitation support — MCP protocol 2025-06-18+.
@@ -46,10 +47,100 @@ type ElicitationSchema struct {
 	Required   []string                          `json:"required,omitempty"`
 }
 
+// Elicitation modes (MCP 2025-11-25). Form mode collects structured data
+// in-band; URL mode directs the user to an external URL for out-of-band
+// interactions (auth flows, payments) that must not pass through the client.
+// For backwards compatibility servers MAY omit mode for form requests, so an
+// empty mode is treated as form.
+const (
+	ElicitationModeForm = "form"
+	ElicitationModeURL  = "url"
+)
+
+// ErrCodeURLElicitationRequired is the JSON-RPC error code (-32042) a server
+// returns when a tool call cannot proceed until a URL mode elicitation is
+// completed (MCP 2025-11-25). The error data carries the required
+// elicitations; see URLElicitationRequiredData.
+const ErrCodeURLElicitationRequired = -32042
+
+// URLElicitationRequiredInfo is one required URL mode elicitation entry from
+// a -32042 URLElicitationRequiredError's data payload.
+type URLElicitationRequiredInfo struct {
+	Mode          string `json:"mode"`
+	ElicitationID string `json:"elicitationId"`
+	URL           string `json:"url"`
+	Message       string `json:"message"`
+}
+
+// URLElicitationRequiredData is the data payload of -32042 errors.
+type URLElicitationRequiredData struct {
+	Elicitations []URLElicitationRequiredInfo `json:"elicitations"`
+}
+
 // ElicitationParams is the parameters for an elicitation/create request.
 type ElicitationParams struct {
-	Message string            `json:"message"`         // prompt text shown to the user
-	Schema  ElicitationSchema `json:"requestedSchema"` // schema describing desired fields
+	// Mode selects the elicitation mode: "form" (default) or "url" per
+	// 2025-11-25. Servers MAY omit it for form mode (backwards compat).
+	Mode    string `json:"mode,omitempty"`
+	Message string `json:"message"` // prompt text shown to the user
+	// Schema is the form-mode schema describing desired fields.
+	Schema ElicitationSchema `json:"requestedSchema"`
+	// URL is the URL mode target for the out-of-band interaction.
+	URL string `json:"url,omitempty"`
+	// ElicitationID uniquely identifies a URL mode elicitation; the
+	// notifications/elicitation/complete notification references it.
+	ElicitationID string `json:"elicitationId,omitempty"`
+}
+
+// EffectiveMode normalizes an omitted mode to form (spec: clients MUST treat
+// requests without a mode field as form mode).
+func (p ElicitationParams) EffectiveMode() string {
+	if p.Mode == ElicitationModeURL {
+		return ElicitationModeURL
+	}
+	return ElicitationModeForm
+}
+
+// ValidateElicitationURL checks a URL mode elicitation target (MCP
+// 2025-11-25). The client only displays this URL (it never auto-opens it or
+// reads data back), but we still reject non-http(s) schemes and plain http
+// for non-local hosts, matching the spec's "SHOULD use HTTPS for
+// non-development environments".
+func ValidateElicitationURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("url is not parseable: %w", err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("url is missing a host")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil // local development servers
+		}
+		return fmt.Errorf("url must use https for non-local host %q", host)
+	default:
+		return fmt.Errorf("url scheme must be https, got %q", u.Scheme)
+	}
+}
+
+// validateElicitationParams validates an elicitation/create request per its
+// mode and returns an error suitable for a -32602 JSON-RPC response.
+func validateElicitationParams(params ElicitationParams) error {
+	if params.EffectiveMode() == ElicitationModeURL {
+		if params.ElicitationID == "" {
+			return fmt.Errorf("url elicitation requires elicitationId")
+		}
+		if params.URL == "" {
+			return fmt.Errorf("url elicitation requires url")
+		}
+		return ValidateElicitationURL(params.URL)
+	}
+	return ValidateElicitationSchema(params.Schema)
 }
 
 // ElicitationAction is the user's response action.

@@ -178,7 +178,7 @@ func TestElicitationHandlerRejectsWhenNil(t *testing.T) {
 		}{ListChanged: true},
 	}
 	if c.elicitationHandler != nil {
-		caps.Elicitation = &struct{}{}
+		caps.Elicitation = &ElicitationCapability{Form: &struct{}{}, URL: &struct{}{}}
 	}
 	if caps.Elicitation != nil {
 		t.Fatal("elicitation capability should not be advertised when handler is nil")
@@ -189,7 +189,7 @@ func TestElicitationHandlerRejectsWhenNil(t *testing.T) {
 		return &ElicitationResult{Action: ElicitationActionAccept}, nil
 	})
 	if c.elicitationHandler != nil {
-		caps.Elicitation = &struct{}{}
+		caps.Elicitation = &ElicitationCapability{Form: &struct{}{}, URL: &struct{}{}}
 	}
 	if caps.Elicitation == nil {
 		t.Fatal("elicitation capability should be advertised when handler is set")
