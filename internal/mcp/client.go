@@ -2800,6 +2800,25 @@ type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema"`
+	// Annotations carry the 2025-06-18 tool annotations (risk vocabulary):
+	// readOnlyHint, destructiveHint, idempotentHint, openWorldHint. They are
+	// SELF-DECLARED hints from the server, not security guarantees (spec:
+	// clients should still exercise caution), so we honor them only to
+	// refine - never to weaken by default - the read-only-mode blocking
+	// decision. See annotations.go.
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations mirrors the MCP 2025-06-18 tools annotation object. All
+// hint fields are optional pointers so "absent" is distinguishable from
+// "explicitly false" (spec defaults: readOnlyHint=false,
+// destructiveHint=true, idempotentHint=false, openWorldHint=true).
+type ToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
 }
 
 type CallToolParams struct {
