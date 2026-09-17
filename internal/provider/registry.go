@@ -34,6 +34,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		rp.SetReasoningEffort(resolved.ReasoningEffort)
 		rp.SetToolChoice(resolved.ToolChoice)
+		if len(resolved.ServerTools) > 0 {
+			rp.SetServerTools(resolved.ServerTools)
+		}
 		return rp, nil
 
 	case "openai":
@@ -43,6 +46,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 			rp.SetReasoningEffort(resolved.ReasoningEffort)
 			rp.SetToolChoice(resolved.ToolChoice)
+			if len(resolved.ServerTools) > 0 {
+				rp.SetServerTools(resolved.ServerTools)
+			}
 			return rp, nil
 		}
 		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)

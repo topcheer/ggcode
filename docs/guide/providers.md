@@ -247,6 +247,12 @@ provider's API, never client-side, so they need no approval flow:
   (including PDFs/images). Grounding queries and source URLs are surfaced
   back into the conversation as `[grounding]` text blocks so the agent can
   cite its sources.
+- **OpenAI (Responses API)**: `web_search` (aliases
+  `web_search_2025_08_26`, legacy `web_search_preview`) runs hosted web
+  search inside the Responses API. `web_search_call` items are surfaced as
+  server-tool blocks and, because ggcode runs stateless (`store=false`),
+  replayed verbatim on follow-up requests so the model keeps its search
+  context across turns.
 
 ```yaml
 vendors:
@@ -258,6 +264,13 @@ vendors:
     endpoints:
       default:
         model: gemini-3-pro
+  openai:
+    protocol: openai-responses
+    server_tools:
+      - type: web_search
+    endpoints:
+      default:
+        model: gpt-5.2
 ```
 
 Notes for Gemini:
