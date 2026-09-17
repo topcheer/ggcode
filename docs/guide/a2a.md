@@ -115,3 +115,41 @@ Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 - mTLS provides mutual certificate-based authentication
 
 See [A2A Authentication Guide](../a2a-auth.md) for detailed setup instructions.
+
+## Protocol Extensions (A2A v1.0)
+
+ggcode implements the A2A extension negotiation protocol:
+
+- **Declaration**: an agent lists the extensions it supports in the Agent Card (`capabilities.extensions`, mirrored in the legacy top-level `extensions` field for older peers).
+- **Activation**: a client opts in by sending the `A2A-Extensions` request header (comma-separated extension URIs) on JSON-RPC calls. The agent echoes back the set it actually activated — unknown/unsupported URIs are ignored, never substituted.
+- **Required extensions**: when an extension is declared `required: true`, clients that did not activate it are rejected with JSON-RPC error `-32004` (Unsupported operation), naming the missing URIs.
+
+### Serving extensions (server side)
+
+Declare the extensions this instance supports in the `a2a` config block:
+
+```yaml
+a2a:
+  extensions:
+    - uri: "https://example.com/ext/timestamp/v1"
+      description: "Adds server timestamps to task artifacts"
+      required: false
+      params:
+        timezone: "Asia/Shanghai"
+    - uri: "https://example.com/ext/signed-message/v1"
+      required: true   # clients must activate it or get -32004
+```
+
+### Activating remote extensions (client side)
+
+To opt in to extensions on remote agents this instance calls:
+
+```yaml
+a2a:
+  activate_extensions:
+    - "https://example.com/ext/signed-message/v1"
+```
+
+Outgoing calls automatically attach the `A2A-Extensions` header. Before sending, the client checks the remote agent card: if an extension is marked `required` there but not activated here, the call **fails fast** with a clear error instead of violating the remote agent's contract.
+
+The canonical well-known path `/.well-known/agent-card.json` is served in addition to `/.well-known/agent.json` and `/.well-known/a2a.json`.

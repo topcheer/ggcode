@@ -493,11 +493,34 @@ type A2AConfig struct {
 	Interfaces  []string      `yaml:"interfaces,omitempty"` // mDNS advertise interfaces (default: auto-detect default route)
 	Auth        A2AAuthConfig `yaml:"auth,omitempty"`
 
+	// Extensions declares A2A protocol extensions this instance SUPPORTS
+	// (server side, A2A v1.0 "Extension Declaration"). They appear in the
+	// Agent Card and are negotiated per-request via the A2A-Extensions
+	// header; clients that fail to activate a required extension are
+	// rejected with -32004.
+	Extensions []A2AExtensionConfig `yaml:"extensions,omitempty"`
+
+	// ActivateExtensions opts this instance in (client side) to A2A
+	// extensions on REMOTE agents: the URIs are sent in the A2A-Extensions
+	// header on outgoing tasks. Outgoing calls to an agent whose card marks
+	// an extension required but not activated here fail fast instead of
+	// violating the remote contract.
+	ActivateExtensions []string `yaml:"activate_extensions,omitempty"`
+
 	// disabledExplicit records that the "disabled" key was explicitly present
 	// in the source yaml (#665). Only set by LoadA2AOverride; enables the
 	// bidirectional instance-wins merge in MergeA2AConfig. Unexported so it
 	// never round-trips through yaml or crosses package boundaries.
 	disabledExplicit bool
+}
+
+// A2AExtensionConfig declares one supported A2A protocol extension
+// (AgentExtension in the A2A v1.0 spec).
+type A2AExtensionConfig struct {
+	URI         string                 `yaml:"uri"`                   // unique extension URI, versioned (e.g. .../v1)
+	Description string                 `yaml:"description,omitempty"` // how this agent uses the extension
+	Required    bool                   `yaml:"required,omitempty"`    // client MUST activate it or requests are rejected
+	Params      map[string]interface{} `yaml:"params,omitempty"`      // extension-specific configuration
 }
 
 // P2PConfig controls WebRTC P2P direct connection between host and mobile.

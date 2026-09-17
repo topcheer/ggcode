@@ -3,6 +3,7 @@ package a2a
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -98,6 +99,59 @@ type AgentExtension struct {
 	Params      map[string]interface{} `json:"params,omitempty"`
 }
 
+// DeclaredExtensions returns the extensions this card declares, preferring
+// the spec-compliant capabilities location and falling back to the legacy
+// top-level field for older ggcode peers.
+func (c *AgentCard) DeclaredExtensions() []AgentExtension {
+	if c == nil {
+		return nil
+	}
+	if len(c.Capabilities.Extensions) > 0 {
+		return c.Capabilities.Extensions
+	}
+	return c.Extensions
+}
+
+// A2AExtensionsHeader is the HTTP header used for extension activation
+// (A2A v1.0 "Extension Activation"). The client includes a comma-separated
+// list of extension URIs it intends to activate; the server echoes back the
+// set that was actually activated.
+const A2AExtensionsHeader = "A2A-Extensions"
+
+// ParseA2AExtensionsHeader parses an A2A-Extensions header value into the
+// distinct extension URIs it activates. Accepts comma- or space-separated
+// lists; empty entries are dropped and duplicates removed (order preserved).
+func ParseA2AExtensionsHeader(v string) []string {
+	if v == "" {
+		return nil
+	}
+	fields := strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
+	seen := make(map[string]struct{}, len(fields))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// FormatA2AExtensionsHeader renders extension URIs as a comma-separated
+// A2A-Extensions header value.
+func FormatA2AExtensionsHeader(uris []string) string {
+	cleaned := ParseA2AExtensionsHeader(strings.Join(uris, ","))
+	return strings.Join(cleaned, ", ")
+}
+
 // AgentProvider identifies the organization behind the agent.
 type AgentProvider struct {
 	URL          string `json:"url"`
@@ -147,6 +201,11 @@ type AgentCapabilities struct {
 	Streaming         bool `json:"streaming"`
 	PushNotifications bool `json:"pushNotifications"`
 	ExtendedAgentCard bool `json:"extendedAgentCard,omitempty"`
+	// Extensions lists protocol extensions this agent supports (A2A v1.0
+	// spec places the declaration inside capabilities; the top-level
+	// AgentCard.Extensions field is kept for backwards compatibility with
+	// older ggcode peers that only read the flat field).
+	Extensions []AgentExtension `json:"extensions,omitempty"`
 }
 
 // AgentLifecycleInfo tracks lifecycle state with timestamp and rationale.
