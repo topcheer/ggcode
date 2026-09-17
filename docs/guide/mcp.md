@@ -122,6 +122,11 @@ ggcode handles these requests automatically:
 - The server's requested messages, system prompt, and max tokens are passed to the provider. Max tokens are capped at 4096 to prevent runaway generation.
 - The response (model name, stop reason, and generated text) is returned to the server.
 
+Since protocol revision 2025-11-25 (spec change SEP-1577), ggcode also supports **tool-enabled sampling**:
+- Servers may attach `tools` and `toolChoice` to a sampling request. ggcode declares the `sampling.tools` capability during initialize and forwards the tool definitions to the LLM provider.
+- The server supplies tool definitions and executes the resulting tool calls itself; ggcode only runs the LLM. When the model decides to call a tool, the response relays `tool_use` content blocks with stop reason `toolUse`, and the server continues the loop by sending a follow-up sampling request with `tool_result` blocks in the message history.
+- Malformed tool-enabled requests (a missing/unbalanced `tool_result` turn, tool results mixed with other content, `toolChoice` without `tools`) are rejected with JSON-RPC error -32602 so the server can self-correct.
+
 No configuration is needed — sampling is enabled automatically when a provider is configured. If no provider is available (e.g., during startup before the agent is created), sampling requests are rejected with an error.
 
 ## MCP Elicitation (Server-to-User Input Requests)

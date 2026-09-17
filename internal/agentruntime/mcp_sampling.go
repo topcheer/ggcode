@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -93,6 +94,20 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 			Content: []provider.ContentBlock{provider.TextBlock(params.SystemPrompt)},
 		})
 	}
+	// MCP 2025-11-25 (SEP-1577): tool-enabled sampling - forward the server's
+	// tool definitions to the LLM so it can emit tool_use decisions that the
+	// server executes in follow-up turns.
+	var tools []provider.ToolDefinition
+	if len(params.Tools) > 0 {
+		tools = make([]provider.ToolDefinition, 0, len(params.Tools))
+		for _, t := range params.Tools {
+			tools = append(tools, provider.ToolDefinition{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  t.InputSchema,
+			})
+		}
+	}
 	for _, msg := range params.Messages {
 		role := msg.Role
 		if role != "user" && role != "assistant" {
@@ -103,30 +118,52 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		// server's image sampling request degraded to empty text. All
 		// three providers consume ImageBlock (anthropic base64 / openai
 		// data URI / gemini inline), so the conversion is complete.
-		var block provider.ContentBlock
-		switch {
-		case msg.Content.Type == "image" && msg.Content.Data != "":
-			// #2283: mimeType is OPTIONAL in the MCP schema - a
-			// spec-legal omission used to pass "" straight through and
-			// hard-fail all three providers (anthropic/gemini 400,
-			// openai malformed data URL). Default to PNG, the most
-			// interoperable choice per the spec's own examples.
-			mime := msg.Content.MIMEType
-			if mime == "" {
-				mime = "image/png"
+		// SEP-1577: array-form messages carry tool_use / tool_result blocks
+		// which map onto the providers' native tool calling roles.
+		blocks := msg.Blocks
+		if len(blocks) == 0 {
+			blocks = []mcp.SamplingContent{msg.Content}
+		}
+		var pblocks []provider.ContentBlock
+		for _, b := range blocks {
+			var pblock provider.ContentBlock
+			switch {
+			case b.Type == "tool_use":
+				pblock = provider.ToolUseBlock(b.ID, b.Name, b.Input)
+			case b.Type == "tool_result":
+				var sb strings.Builder
+				for _, rb := range b.ResultContent {
+					if rb.Text != "" {
+						if sb.Len() > 0 {
+							sb.WriteString("\n")
+						}
+						sb.WriteString(rb.Text)
+					}
+				}
+				pblock = provider.ToolResultBlock(b.ToolUseID, sb.String(), b.IsError)
+			case b.Type == "image" && b.Data != "":
+				// #2283: mimeType is OPTIONAL in the MCP schema - a
+				// spec-legal omission used to pass "" straight through and
+				// hard-fail all three providers (anthropic/gemini 400,
+				// openai malformed data URL). Default to PNG, the most
+				// interoperable choice per the spec's own examples.
+				mime := b.MIMEType
+				if mime == "" {
+					mime = "image/png"
+				}
+				pblock = provider.ImageBlock(mime, b.Data)
+			default:
+				// "text" or an unknown/empty type - keep the text contract.
+				pblock = provider.TextBlock(b.Text)
 			}
-			block = provider.ImageBlock(mime, msg.Content.Data)
-		default:
-			// "text" or an unknown/empty type - keep the text contract.
-			block = provider.TextBlock(msg.Content.Text)
+			pblocks = append(pblocks, pblock)
 		}
 		messages = append(messages, provider.Message{
 			Role:    role,
-			Content: []provider.ContentBlock{block},
+			Content: pblocks,
 		})
 	}
 
-	// Sampling is a simple completion — no tools.
 	maxTokens := mcp.EffectiveMaxTokens(params.MaxTokens)
 	debug.Log("mcp-sampling", "handling request: %d messages, maxTokens=%d", len(messages), maxTokens)
 
@@ -154,16 +191,30 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		defer func() { so.SetSamplingOverride(prev) }()
 	}
 
-	resp, err := p.Chat(ctx, messages, nil)
+	// SEP-1577: tools flow into the provider's native tool-calling path.
+	resp, err := p.Chat(ctx, messages, tools)
 	if err != nil {
 		return nil, fmt.Errorf("provider chat: %w", err)
 	}
 
-	// Extract text from response.
+	// Extract text and tool_use decisions (SEP-1577) from the response.
 	var text string
+	var toolUses []mcp.SamplingContent
 	for _, block := range resp.Message.Content {
-		if block.Type == "text" {
+		switch block.Type {
+		case "text":
 			text += block.Text
+		case "tool_use":
+			input := block.Input
+			if input == nil {
+				input = json.RawMessage("{}")
+			}
+			toolUses = append(toolUses, mcp.SamplingContent{
+				Type:  "tool_use",
+				ID:    block.ToolID,
+				Name:  block.ToolName,
+				Input: input,
+			})
 		}
 	}
 
@@ -171,13 +222,17 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 	// ChatResponse since #1484-C) over the length heuristic. The heuristic
 	// false-positived (natural output >= budget with no truncation →
 	// reported max_tokens for a completion that was never cut) and made
-	// the stop_sequence branch unreachable. Map non-MCP values (refusal,
-	// tool_use, ...) to end_turn: MCP spec allows only end_turn /
-	// stop_sequence / max_tokens.
+	// the stop_sequence branch unreachable. "toolUse" (SEP-1577) is legal
+	// since 2025-11-25 when the model actually emitted tool_use blocks;
+	// a stale provider report with no blocks falls back to end_turn.
 	stopReason := "end_turn"
 	switch resp.StopReason {
 	case "max_tokens", "stop_sequence":
 		stopReason = resp.StopReason
+	case "toolUse":
+		if len(toolUses) > 0 {
+			stopReason = "toolUse"
+		}
 	case "":
 		// Provider did not report one — keep the pre-#1484-C heuristic as
 		// the fallback for providers without stop-reason relay.
@@ -190,10 +245,16 @@ func mcpSamplingHandlerWith(ctx context.Context, params mcp.SamplingParams, p pr
 		Model:      p.Name(),
 		Role:       "assistant",
 		StopReason: stopReason,
-		Content: mcp.SamplingContent{
+	}
+	if stopReason == "toolUse" {
+		// Array-form content: tool_use blocks, per the SEP-1577 response
+		// schema (content is a list of ToolUseContent blocks).
+		result.Blocks = toolUses
+	} else {
+		result.Content = mcp.SamplingContent{
 			Type: "text",
 			Text: text,
-		},
+		}
 	}
 
 	debug.Log("mcp-sampling", "sampling complete: model=%s output_tokens=%d",

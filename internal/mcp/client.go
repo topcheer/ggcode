@@ -344,7 +344,10 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 		}{ListChanged: true},
 	}
 	if c.samplingHandlerLocked() != nil {
-		caps.Sampling = &struct{}{}
+		// MCP 2025-11-25 (SEP-1577): ggcode's sampling path accepts tools and
+		// toolChoice, forwards them to the LLM provider, and relays tool_use
+		// results with stopReason "toolUse" - advertise that support.
+		caps.Sampling = &SamplingCapability{Tools: &struct{}{}}
 	}
 	if c.elicitationHandlerLocked() != nil {
 		// MCP 2025-11-25: advertise both elicitation modes. ggcode supports
@@ -2476,6 +2479,13 @@ func (c *Client) handleSampling(req *Request) error {
 		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid sampling params: %v", err))
 	}
 
+	// MCP 2025-11-25 (SEP-1577): structural validation of tool-enabled
+	// sampling. Spec error guidance maps missing/unbalanced tool results and
+	// mixed-content tool_result turns to -32602 so servers can self-correct.
+	if err := ValidateSamplingParams(params); err != nil {
+		return c.writeErrorResponse(req.ID, -32602, fmt.Sprintf("invalid sampling params: %v", err))
+	}
+
 	// Use a bounded timeout to prevent runaway sampling from blocking the
 	// MCP read loop. The handler itself may use a shorter context.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -2841,7 +2851,7 @@ type ClientCaps struct {
 	Roots struct {
 		ListChanged bool `json:"listChanged,omitempty"`
 	} `json:"roots,omitempty"`
-	Sampling    *struct{}              `json:"sampling,omitempty"`
+	Sampling    *SamplingCapability    `json:"sampling,omitempty"`
 	Elicitation *ElicitationCapability `json:"elicitation,omitempty"`
 }
 
@@ -2852,6 +2862,14 @@ type ClientCaps struct {
 type ElicitationCapability struct {
 	Form *struct{} `json:"form,omitempty"`
 	URL  *struct{} `json:"url,omitempty"`
+}
+
+// SamplingCapability is the initialize capability object for sampling.
+// Tools is declared when the client accepts tool-enabled sampling requests
+// (MCP 2025-11-25, SEP-1577): servers may attach tools/toolChoice params and
+// receive tool_use blocks with stopReason "toolUse".
+type SamplingCapability struct {
+	Tools *struct{} `json:"tools,omitempty"`
 }
 
 type Implementation struct {
