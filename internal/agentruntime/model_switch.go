@@ -105,6 +105,12 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
 	agentInst.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
+	// #2511: the agent-side memory executor answers name="memory" calls only
+	// when the provider actually declares the tool (anthropic protocol +
+	// endpoint `memory_tool: true`, mirroring the provider registry's
+	// SetMemoryTool gate). Any other provider keeps the executor disabled so
+	// hallucinated "memory" calls fall through to UnknownToolError.
+	agentInst.SetMemoryToolEnabled(resolved.Protocol == "anthropic" && resolved.MemoryTool)
 
 	// Inject session ID into provider HTTP headers.
 	if ss, ok := prov.(provider.SessionIDSetter); ok {

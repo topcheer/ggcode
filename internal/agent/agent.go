@@ -945,6 +945,19 @@ func (a *Agent) SystemPrompt() string {
 // SetSupportsVision controls whether tool_result images are included in
 // messages sent to the provider. When false, image data is stripped from
 // tool results and only the text placeholder is sent.
+// SetMemoryToolEnabled toggles the client-side executor for the Anthropic
+// Memory Tool (memory_20250818). Only the provider application path sets it:
+// ApplyProviderToAgent enables it iff the endpoint is anthropic-protocol AND
+// configured with `memory_tool: true` (#2511 - declaration and execution must
+// share one gate).
+func (a *Agent) SetMemoryToolEnabled(v bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.memoryTool != nil {
+		a.memoryTool.enabled = v
+	}
+}
+
 func (a *Agent) SetSupportsVision(v bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

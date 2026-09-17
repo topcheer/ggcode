@@ -69,6 +69,7 @@ func TestResolveMemoryPathRejectsSymlinkEscape(t *testing.T) {
 
 func TestMemoryToolCreateViewEditDeleteRoundTrip(t *testing.T) {
 	s := newMemoryToolState()
+	s.enabled = true // #2511: round-trip tests model the declared (enabled) tool
 	dir := t.TempDir()
 
 	call := func(t *testing.T, args map[string]any) toolResultProbe {

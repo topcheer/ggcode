@@ -53,7 +53,18 @@ const (
 // memoryToolState executes memory tool calls. Stateless apart from the lazy
 // root binding: the working directory is read at call time so agents created
 // before SetWorkingDir still resolve the correct store.
-type memoryToolState struct{}
+//
+// #2511: enabled gates the agent-side dispatch. The tool is only declared to
+// the model when the Anthropic provider is configured with
+// `memory_tool: true` (provider registry). The executor must mirror that
+// gate: the intercept in executeToolInner runs before the registry lookup,
+// so without an enabled check here a name="memory" call on any other
+// provider (or a future registry tool named "memory") would be swallowed by
+// this executor instead of failing with UnknownToolError - same enabled-gate
+// shape as toolSearchState.
+type memoryToolState struct {
+	enabled bool
+}
 
 func newMemoryToolState() *memoryToolState {
 	return &memoryToolState{}
@@ -77,6 +88,15 @@ type memoryRawArgs struct {
 // executeResult dispatches a memory tool call. workingDir is the agent's
 // current project directory; empty falls back to the process cwd.
 func (s *memoryToolState) executeResult(args json.RawMessage, workingDir string) tool.Result {
+	// #2511: not declared to the model -> this executor must not answer. A
+	// name="memory" call reaching here without the declaration is either a
+	// hallucination or a different tool the registry should own; failing
+	// loudly (IsError, no side effects, no .ggcode/memories mkdir) lets the
+	// normal unknown-tool correction happen instead of a semantic argument
+	// error that invites further /memories protocol iteration.
+	if s == nil || !s.enabled {
+		return memoryErr("Error: memory tool is not enabled for this endpoint.")
+	}
 	var raw memoryRawArgs
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return memoryErr(fmt.Sprintf("Error: Invalid arguments for the memory tool: %v", err))
