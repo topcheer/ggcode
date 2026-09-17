@@ -2493,3 +2493,54 @@ func TestRunStreamConfidenceNotice(t *testing.T) {
 		})
 	}
 }
+
+// TestRunStreamCarriesPTCCallerIntoNextRequest verifies the agent persists the
+// verbatim Anthropic programmatic-tool-calling caller field on the streamed
+// tool_use block so the FOLLOW-UP request (carrying the client tool_result)
+// echoes it back - required for the code execution container to match the
+// result to its pending programmatic call.
+func TestRunStreamCarriesPTCCallerIntoNextRequest(t *testing.T) {
+	caller := json.RawMessage(`{"type":"code_execution_20260120","tool_id":"srvtoolu_ce1"}`)
+	mp := &mockProvider{
+		streamEvents: [][]provider.StreamEvent{
+			{
+				// Programmatic tool_use for an unregistered tool: execution
+				// fails, the agent replans with a tool_result and must echo
+				// the caller back on the assistant tool_use block.
+				{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{
+					ID: "toolu_ptc1", Name: "read_file",
+					Arguments: json.RawMessage(`{"path":"x.go"}`), Caller: caller,
+				}},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 5, OutputTokens: 3}},
+			},
+			{
+				{Type: provider.StreamEventText, Text: "recovered"},
+				{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 9, OutputTokens: 2}},
+			},
+		},
+	}
+	a := NewAgent(mp, tool.NewRegistry(), "", 4)
+
+	if err := a.RunStream(context.Background(), "hi", func(event provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream failed: %v", err)
+	}
+	mp.mu.Lock()
+	defer mp.mu.Unlock()
+	if len(mp.capturedMsgs) < 2 {
+		t.Fatalf("expected a follow-up request after failed tool call, got %d requests", len(mp.capturedMsgs))
+	}
+	for _, m := range mp.capturedMsgs[1] {
+		if m.Role != "assistant" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.Type == "tool_use" && b.ToolID == "toolu_ptc1" {
+				if string(b.CallerRaw) != string(caller) {
+					t.Fatalf("caller not echoed verbatim: got %s, want %s", b.CallerRaw, caller)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("second request does not carry the programmatic tool_use block")
+}
