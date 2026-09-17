@@ -67,6 +67,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		prov.SetAdaptiveCap(cap)
 		prov.SetReasoningEffort(resolved.ReasoningEffort)
 		prov.SetToolChoice(resolved.ToolChoice)
+		if len(resolved.ServerTools) > 0 {
+			prov.SetServerTools(resolved.ServerTools)
+		}
 		return prov, nil
 
 	default:

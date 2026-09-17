@@ -75,9 +75,12 @@ type ModelLimitConfig struct {
 	MaxTokens     int `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 }
 
-// ServerToolConfig declares one Anthropic server-side tool — executed inside
-// the API, never client-side. Supported Type values: "web_search_20250305",
-// "web_fetch_20250910". Results arrive in-band and are echoed back verbatim.
+// ServerToolConfig declares one server-side tool — executed inside the
+// provider API, never client-side. Supported Type values:
+//   - Anthropic: "web_search_20250305", "web_fetch_20250910" (results arrive
+//     in-band and are echoed back verbatim)
+//   - Gemini:    "google_search" (alias "web_search"), "url_context"
+//     (grounding sources are surfaced as text blocks)
 type ServerToolConfig struct {
 	Type string `yaml:"type" json:"type"`
 }
@@ -93,7 +96,7 @@ type EndpointConfig struct {
 	MaxTokens       int                `yaml:"max_tokens" json:"max_tokens"`
 	ReasoningEffort string             `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
 	ToolChoice      string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`   // "auto", "required", "none" (empty = auto/default)
-	ServerTools     []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"` // Anthropic server-side tools (web_search/web_fetch)
+	ServerTools     []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"` // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
 	SupportsVision  *bool              `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
 	DefaultModel    string             `yaml:"default_model,omitempty" json:"default_model,omitempty"`
 	SelectedModel   string             `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
