@@ -7,15 +7,20 @@ func newGateForTest() *irrevGateState { return newIrrevGateState() }
 
 // Case 2: a lone run_command (grounding itself, Medium tier) must now WARN -
 // the window must not count the current call as its own evidence.
+//
+// sa-28: `go build ./...` was originally the example here, but it now
+// classifies as Tier 0 (read-only verification - no advisory check runs at
+// all). The self-grounding semantics under test are unchanged and still
+// apply to genuinely Medium commands, so the example below uses one.
 func Test1798CurrentCallNotOwnGrounding(t *testing.T) {
 	s := newGateForTest()
-	if w := s.recordAction("run_command", `{"command":"go build ./..."}`); w == "" {
+	if w := s.recordAction("run_command", `{"command":"make build"}`); w == "" {
 		t.Fatal("under-grounded run_command (Medium) must warn - self-grounding made it unreachable")
 	}
 	// With one PRIOR grounding, the window has evidence -> quiet.
 	s2 := newGateForTest()
 	s2.recordAction("read_file", `{}`)
-	if w := s2.recordAction("run_command", `{"command":"go build ./..."}`); w != "" {
+	if w := s2.recordAction("run_command", `{"command":"make build"}`); w != "" {
 		t.Fatalf("grounded run_command must stay quiet, got: %s", w)
 	}
 }
@@ -43,6 +48,8 @@ func Test1798ShellStashDropHigh(t *testing.T) {
 }
 
 // Regression: well-grounded destructive action stays quiet.
+// (sa-28: `go test ./...` is now Tier 0; it still counts as grounding via
+// recordOutcome, which is what this test exercises.)
 func Test1798GroundedHighQuiet(t *testing.T) {
 	s := newGateForTest()
 	s.recordAction("run_command", `{"command":"go test ./..."}`)
