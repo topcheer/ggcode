@@ -95,15 +95,36 @@ func TestDedupStillSuppressesUninterruptedReadRetries(t *testing.T) {
 	}
 }
 
-// git_checkout / git_stash / git_reset tool successes bump the epoch directly
-// (they are now in fileMutatingTools).
+// git_checkout / git_stash / git_reset / git_revert tool successes bump the
+// epoch directly (they are all in fileMutatingTools - git_revert per #2492:
+// the native tool applies the inverse patch to the working tree in both
+// --no-commit and commit modes, exactly like its shell counterpart which the
+// frag list already covered).
 func TestDedupEpochBumpsOnGitTreeTools(t *testing.T) {
 	l := newToolDedupLedger()
-	for _, name := range []string{"git_checkout", "git_stash", "git_reset"} {
+	for _, name := range []string{"git_checkout", "git_stash", "git_reset", "git_revert"} {
 		before := epochOf(l)
 		l.record(name, `{}`, tool.Result{Content: ""})
 		if epochOf(l) <= before {
-			t.Errorf("%s success must bump the epoch (#2486)", name)
+			t.Errorf("%s success must bump the epoch (#2486/#2492)", name)
 		}
+	}
+}
+
+// The #2492 end-to-end path: a verify loop that reverts a bad commit with the
+// NATIVE git_revert tool must not have its identical re-verify suppressed.
+func TestDedupEpochBumpsOnNativeGitRevertReverify(t *testing.T) {
+	l := newToolDedupLedger()
+	l.ttl = 10 * time.Second
+
+	verifyArgs := `{"command":"go test ./internal/agent/"}`
+	l.record("run_command", verifyArgs, tool.Result{Content: "FAIL pre-revert"})
+
+	// Revert the bad commit with the native tool (not the shell).
+	l.record("git_revert", `{"commit":"abc123"}`, tool.Result{Content: ""})
+
+	// The identical re-verify must NOT replay the pre-revert FAIL result.
+	if suppressed := l.suppressDuplicate("run_command", verifyArgs); suppressed != nil {
+		t.Fatalf("post-revert re-verify must not be suppressed (#2492): %q", suppressed.Content)
 	}
 }
