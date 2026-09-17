@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,7 +20,7 @@ import (
 )
 
 // CodeIndexManager maintains a persistent BM25 index of the workspace's
-// source files. The index is built asynchronously in the background —
+// source files. The index is built asynchronously in the background -
 // the code_search tool reads from the index without blocking the agent loop.
 //
 // If the index is not yet ready (still building), Search returns an error
@@ -32,6 +33,7 @@ type CodeIndexManager struct {
 	ready        bool
 	building     bool
 	started      bool             // true after StartBackgroundIndex has been called
+	disabled     bool             // true when indexing is structurally inappropriate for this working dir (e.g. the user's home directory) - all build/scan paths are no-ops
 	lastActivity time.Time        // last time Search() or MarkDirty() was called; used for idle release
 	dirtyFiles   map[string]int64 // path → known mtime at last index
 	indexPath    string           // disk cache path
@@ -112,8 +114,49 @@ func NewCodeIndexManager(workingDir string) *CodeIndexManager {
 		stopCh:     make(chan struct{}),
 		rebuildCh:  make(chan struct{}, 1), // buffered: non-blocking signal
 	}
+	// Home-directory guard: indexing assumes a PROJECT-shaped tree, but the
+	// user's home is a grab-bag of foreign trees (macOS Library/, go/pkg/mod,
+	// model caches, dotfile repos). A home-rooted walk collects tens of
+	// thousands of unrelated code files (the 50k quota fills with noise),
+	// and doBuild's read+tokenize pass over them is the observed OOM when
+	// ggcode is started directly in ~. Structurally disable the index there;
+	// every build trigger (TUI startup, code_search lazy start, Search's
+	// lazyLoad) checks this flag before touching the filesystem.
+	if isHomeDirectory(workingDir) {
+		m.disabled = true
+		debug.Log("codeindex", "indexing disabled: working directory is the user home")
+	}
 	m.indexPath = m.computeIndexPath()
 	return m
+}
+
+// isHomeDirectory reports whether dir is the user's home directory (the
+// exact directory itself, not a subdirectory). Symlinked homes and ~ vs
+// /Users/name spellings are normalized by resolving symlinks on both sides
+// when possible; on failure the cleaned absolute forms are compared.
+func isHomeDirectory(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	return sameDirPath(dir, home)
+}
+
+// sameDirPath compares two directory paths after cleaning and (best-effort)
+// symlink resolution.
+func sameDirPath(a, b string) bool {
+	norm := func(p string) string {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			abs = p
+		}
+		clean := filepath.Clean(abs)
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+			return filepath.Clean(resolved)
+		}
+		return clean
+	}
+	return norm(a) == norm(b)
 }
 
 // computeIndexPath returns ~/.ggcode/cache/codeindex/<hash>.json.
@@ -128,7 +171,7 @@ func (m *CodeIndexManager) computeIndexPath() string {
 }
 
 // StartBackgroundIndex begins asynchronous index construction.
-// This is safe to call multiple times — if already building or started, it's a no-op.
+// This is safe to call multiple times - if already building or started, it's a no-op.
 // The method returns immediately; all work happens in a goroutine.
 //
 // A cross-process file lock ensures only one ggcode instance builds the
@@ -136,6 +179,12 @@ func (m *CodeIndexManager) computeIndexPath() string {
 // lock, this instance skips the build and reads whatever cache exists.
 func (m *CodeIndexManager) StartBackgroundIndex() {
 	m.mu.Lock()
+	if m.disabled {
+		// Home directory: building a corpus over ~ is both useless (foreign
+		// trees crowd out any real project files) and the observed OOM path.
+		m.mu.Unlock()
+		return
+	}
 	if m.building || m.started {
 		m.mu.Unlock()
 		return
@@ -156,7 +205,7 @@ func (m *CodeIndexManager) StartBackgroundIndex() {
 		defer cancel()
 
 		// Try to acquire cross-process lock. If another instance is
-		// already building, we skip — the other instance will write
+		// already building, we skip - the other instance will write
 		// the index, and we'll pick it up on the next dirty-check cycle.
 		if !m.tryLock() {
 			debug.Log("codeindex", "another instance is building the index, skipping")
@@ -289,7 +338,7 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		return
 	}
 
-	// Phase 3: Incremental update — only re-tokenize changed/new files.
+	// Phase 3: Incremental update - only re-tokenize changed/new files.
 	var docs []bm25Doc
 	var totalLength int
 	var totalTerms int
@@ -852,7 +901,7 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 
 	// #1317-A: Search/FilePathFuzzy grab the index pointer under RLock and
 	// then read idx.df without any lock. Mutating the shared index in place
-	// below raced those readers — concurrent map read/write is a fatal,
+	// below raced those readers - concurrent map read/write is a fatal,
 	// unrecoverable process crash. The old comment claimed "we'll mutate a
 	// copy" but no copy existed. Clone the shell (docs slice + df map);
 	// individual doc tf maps are never mutated (replacement assigns whole
@@ -895,7 +944,7 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 				m.removeDocFromIndex(idx, di)
 				delete(docIdx, relPath)
 				// #1317-B: removeDocFromIndex swaps the tail doc into slot
-				// di — the tail doc's docIdx entry is now stale. Without
+				// di - the tail doc's docIdx entry is now stale. Without
 				// this fix a later replaceDocInIndex(idx, staleIdx, ...)
 				// wrote past the truncated slice (panic in this unrecovered
 				// background goroutine = process crash) or replaced the
@@ -1050,7 +1099,7 @@ func (m *CodeIndexManager) MarkDirty(paths []string) {
 	if ready && started {
 		select {
 		case m.rebuildCh <- struct{}{}:
-		default: // already pending — the debounce timer will handle it
+		default: // already pending - the debounce timer will handle it
 		}
 	}
 }
@@ -1174,6 +1223,12 @@ func (m *CodeIndexManager) Search(query string, maxResults int) ([]bm25Result, e
 		if !building {
 			m.lazyLoad()
 		}
+		m.mu.RLock()
+		disabled := m.disabled
+		m.mu.RUnlock()
+		if disabled {
+			return nil, errIndexDisabled
+		}
 		return nil, errIndexNotReady
 	}
 
@@ -1228,7 +1283,7 @@ func (m *CodeIndexManager) Stop() {
 // errIndexNotReady until the reload completes.
 func (m *CodeIndexManager) lazyLoad() {
 	m.mu.Lock()
-	if m.building || m.ready {
+	if m.disabled || m.building || m.ready {
 		m.mu.Unlock()
 		return
 	}
@@ -1265,3 +1320,9 @@ type indexNotReadyError struct{}
 func (e *indexNotReadyError) Error() string {
 	return "code index is being built in the background, please try again in a few seconds"
 }
+
+// errIndexDisabled is returned when Search is used while indexing is
+// structurally disabled for this working directory (user home). The message
+// carries the actionable fallback so the model reaches for grep instead of
+// retrying code_search.
+var errIndexDisabled = errors.New("code index is disabled for this working directory (user home - not a project tree); use grep or search_files with an explicit path under a real project instead")
