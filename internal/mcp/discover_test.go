@@ -20,9 +20,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/config"
 	"os"
 	"strings"
 	"sync"
@@ -467,5 +469,19 @@ func TestUnsupportedVersionSurfacesTypedError(t *testing.T) {
 				t.Errorf("tools/list attempts = %d, want %d", got, tc.wantRetries)
 			}
 		})
+	}
+}
+
+// TestNewClientFromConfigStatelessWiring closes the last uncovered link:
+// the YAML "stateless: true" field must reach Client.EnableStateless, and
+// the default must stay legacy.
+func TestNewClientFromConfigStatelessWiring(t *testing.T) {
+	modern := NewClientFromConfig(config.MCPServerConfig{Name: "modern", Command: "srv", Stateless: true})
+	if !modern.StatelessEnabled() {
+		t.Error("config stateless: true did not enable the stateless opt-in")
+	}
+	legacy := NewClientFromConfig(config.MCPServerConfig{Name: "legacy", Command: "srv"})
+	if legacy.StatelessEnabled() {
+		t.Error("stateless opt-in enabled by default; legacy behavior must be unchanged")
 	}
 }
