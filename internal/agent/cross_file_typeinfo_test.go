@@ -151,3 +151,27 @@ func TestImpact2164NilAndUnresolvedInputsSafe(t *testing.T) {
 		t.Fatal("no files must yield nil infos")
 	}
 }
+
+func TestImpact2164NearMissCap(t *testing.T) {
+	// A sibling with more than maxImpactNearMiss variable-receiver call
+	// sites must record at most maxImpactNearMiss candidates (bounded typed
+	// pass work) and still stay a miss at the syntax level.
+	names := map[string]bool{"run": true}
+	owners := map[string]map[string]bool{"run": {"Server": true}}
+	src := "package p\n\ntype Server struct{}\n\n"
+	for i := 0; i < maxImpactNearMiss+10; i++ {
+		src += "func use" + string(rune('a'+i%26)) + " (s *Server) {\n\ts.run()\n}\n"
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "b.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	found, near := walkImpactRefs(file, names, owners)
+	if found {
+		t.Fatal("variable receivers must not be syntax-level hits")
+	}
+	if len(near) != maxImpactNearMiss {
+		t.Fatalf("near-miss cap: got %d, want %d", len(near), maxImpactNearMiss)
+	}
+}
