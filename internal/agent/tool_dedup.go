@@ -93,12 +93,14 @@ var fileMutatingTools = map[string]bool{
 	"file_ops":         true,
 	// #2486: these git tools rewrite tracked working-tree state directly
 	// (checkout swaps the tree, stash pop/apply restores changes, reset
-	// --hard discards them) - a verify loop that runs tests, checks out a
-	// branch, and re-runs the SAME test command must not have the re-run
-	// suppressed by a pre-checkout fingerprint.
+	// --hard discards them, revert applies the inverse patch in both
+	// --no-commit and commit modes) - a verify loop that runs tests, checks
+	// out a branch, and re-runs the SAME test command must not have the
+	// re-run suppressed by a pre-checkout fingerprint.
 	"git_checkout": true,
 	"git_stash":    true,
 	"git_reset":    true,
+	"git_revert":   true, // #2492: shell "git revert" was covered by the frag list, the native tool was not
 }
 
 type toolDedupEntry struct {
