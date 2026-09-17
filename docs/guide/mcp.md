@@ -129,6 +129,14 @@ ggcode handles these requests by routing them through the same `ask_user` intera
 
 No configuration is needed — elicitation is enabled automatically when an interactive session is active.
 
+## Request Cancellation (Client-to-Server)
+
+When ggcode gives up on an in-flight MCP request — the user interrupts a tool call, or a request exceeds its deadline — it sends the server a `notifications/cancelled` notification referencing the outstanding request id (MCP spec 2025-03-26). Spec-compliant servers stop processing the cancelled request and free associated resources instead of finishing orphaned work (a long-running database query, a partial file upload, etc.).
+
+The `initialize` handshake is never cancelled, as the protocol forbids. Late responses that race the cancellation are handled gracefully: the error the agent already surfaced stands.
+
+No configuration is needed — cancellation propagation is always on for supported servers.
+
 ## Auto-Start
 
 MCP servers start automatically when ggcode launches. If a server fails to start, a warning is shown in the TUI.
