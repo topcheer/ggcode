@@ -186,6 +186,13 @@ func planTextEdits(content string, edits []textEdit) (string, int, string) {
 		if mr.transform != "" {
 			newText = adjustNewText(content, edit.NewText, mr)
 		}
+		// #1676 case 3 (planTextEdits had no CRLF handling at all - only
+		// edit_file did): normalize new_text to the file's line-ending
+		// convention so batch edits cannot introduce mixed endings. The
+		// crlf-converted transform branch above already converts new_text;
+		// normalizeNewTextEOL is a no-op there, but it is the only guard for
+		// byte-exact/anchored matches in CRLF files.
+		newText = normalizeNewTextEOL(content, newText)
 		positions = append(positions, editPos{
 			start: idx,
 			end:   idx + len(oldText),

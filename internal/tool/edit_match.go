@@ -393,6 +393,38 @@ func tryCRLFMatch(content, oldText string) string {
 	return ""
 }
 
+// fileUsesCRLF reports whether content is predominantly CRLF-terminated.
+// "Predominantly" guards against stray CRLF pairs inside an otherwise LF
+// file (e.g. a pasted Windows snippet): in that case the file's convention
+// is still LF and new_text must not be rewritten to CRLF.
+func fileUsesCRLF(content string) bool {
+	crlf := strings.Count(content, "\r\n")
+	if crlf == 0 {
+		return false
+	}
+	bareLF := strings.Count(content, "\n") - crlf
+	return crlf > bareLF
+}
+
+// normalizeNewTextEOL converts lone-LF newlines in newText to CRLF when the
+// target file is predominantly CRLF, so a replacement can never introduce
+// mixed line endings (#1676 case 3). The check is content-based (the file's
+// own convention wins), which also covers the single-line old_text case the
+// previous oldText-based condition missed: a one-line match in a CRLF file
+// contains no \r\n at all, yet a multi-line LF new_text still lands in the
+// file verbatim and stays mixed forever (.md/.yaml/.cs have no formatting
+// hook to rescue them). newText already containing CRLF is left untouched,
+// and LF files are never rewritten.
+func normalizeNewTextEOL(content, newText string) string {
+	if !strings.Contains(newText, "\n") || strings.Contains(newText, "\r\n") {
+		return newText
+	}
+	if !fileUsesCRLF(content) {
+		return newText
+	}
+	return strings.ReplaceAll(newText, "\n", "\r\n")
+}
+
 // leadingWhitespace returns the prefix of s that consists of spaces and tabs.
 func leadingWhitespace(s string) string {
 	i := 0
