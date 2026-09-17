@@ -26,6 +26,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		if len(resolved.ServerTools) > 0 {
 			p.SetServerTools(resolved.ServerTools)
 		}
+		if resolved.MemoryTool {
+			p.SetMemoryTool(true)
+		}
 		return p, nil
 
 	case "openai-responses":

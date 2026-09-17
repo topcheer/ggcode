@@ -172,6 +172,7 @@ type Agent struct {
 	commandCache              *commandCache              // deterministic build/test command result caching
 	effectLedger              *effectLedgerState         // side-effect ledger: duplicate-effect awareness on retries (LangEffect/RAC-inspired)
 	toolSearch                *toolSearchState           // deferred MCP tool schema disclosure (Anthropic Tool Search-inspired)
+	memoryTool                *memoryToolState           // client-side executor for the API-declared Anthropic Memory Tool (memory_20250818)
 	postEditVerify            postEditVerifyState        // tracks source-code edits to inject periodic verification hints
 	planner                   *planState                 // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness             *todoStalenessState        // mid-run stale todo detection (plan abandonment awareness)
@@ -542,6 +543,12 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolTape:               newToolTapeState(),
 		auditLedger:            newAuditLedgerState(),
 	}
+	// Anthropic Memory Tool (memory_20250818): install the client-side
+	// executor unconditionally. The state is an inert empty struct; it is
+	// only reachable when the Anthropic provider declares the tool (endpoint
+	// config `memory_tool: true`), since the model is the sole caller. See
+	// internal/agent/memory_tool.go.
+	a.memoryTool = newMemoryToolState()
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
 	a.syncContextManagerTodoPathLocked()

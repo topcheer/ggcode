@@ -137,7 +137,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Allow, nil
 	}
 	switch toolName {
-	case "ask_user", "save_memory", "delete_memory":
+	// The Anthropic Memory Tool executes against its own confined store
+	// (internal/agent/memory_tool.go: every path is pinned under
+	// <workingDir>/.ggcode/memories, with traversal and symlink escape
+	// checks), making it the memory-tool analogue of save_memory: agent-owned
+	// state, never project source. Fast-path approval also keeps the
+	// protocol usable in plan mode, where the model may legitimately record
+	// research findings.
+	case "ask_user", "save_memory", "delete_memory", "memory":
 		return Allow, nil
 	}
 
