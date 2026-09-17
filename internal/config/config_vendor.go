@@ -130,30 +130,36 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	if ep.SupportsVision != nil {
 		supportsVision = *ep.SupportsVision
 	}
+	strictTools := false
+	if ep.StrictTools != nil {
+		strictTools = *ep.StrictTools
+	}
 	return &ResolvedEndpoint{
-		VendorID:        vendor,
-		VendorName:      localizedVendorDisplay(vendor, util.FirstNonEmpty(vc.DisplayName, vendor), c.Language),
-		EndpointID:      endpoint,
-		EndpointName:    localizedEndpointDisplay(vendor, endpoint, util.FirstNonEmpty(ep.DisplayName, endpoint), c.Language),
-		Protocol:        ep.Protocol,
-		AuthType:        authType,
-		BaseURL:         baseURL,
-		APIKey:          apiKey,
-		EnterpriseURL:   enterpriseURL,
-		Model:           model,
-		ContextWindow:   contextWindow,
-		MaxTokens:       maxTokens,
-		ReasoningEffort: strings.TrimSpace(ep.ReasoningEffort),
-		Logprobs:        ep.Logprobs,
-		TextVerbosity:   strings.TrimSpace(ep.TextVerbosity),
-		ToolChoice:      strings.TrimSpace(ep.ToolChoice),
-		ServerTools:     append([]ServerToolConfig(nil), ep.ServerTools...),
-		MemoryTool:      ep.MemoryTool,
-		ThinkingMode:    strings.TrimSpace(ep.ThinkingMode),
-		ContextEditing:  strings.TrimSpace(ep.ContextEditing),
-		SupportsVision:  supportsVision,
-		Models:          append([]string(nil), ep.Models...),
-		Tags:            append([]string(nil), ep.Tags...),
+		VendorID:         vendor,
+		VendorName:       localizedVendorDisplay(vendor, util.FirstNonEmpty(vc.DisplayName, vendor), c.Language),
+		EndpointID:       endpoint,
+		EndpointName:     localizedEndpointDisplay(vendor, endpoint, util.FirstNonEmpty(ep.DisplayName, endpoint), c.Language),
+		Protocol:         ep.Protocol,
+		AuthType:         authType,
+		BaseURL:          baseURL,
+		APIKey:           apiKey,
+		EnterpriseURL:    enterpriseURL,
+		Model:            model,
+		ContextWindow:    contextWindow,
+		MaxTokens:        maxTokens,
+		ReasoningEffort:  strings.TrimSpace(ep.ReasoningEffort),
+		Logprobs:         ep.Logprobs,
+		TextVerbosity:    strings.TrimSpace(ep.TextVerbosity),
+		ToolChoice:       strings.TrimSpace(ep.ToolChoice),
+		ServerTools:      append([]ServerToolConfig(nil), ep.ServerTools...),
+		MemoryTool:       ep.MemoryTool,
+		ThinkingMode:     strings.TrimSpace(ep.ThinkingMode),
+		ContextEditing:   strings.TrimSpace(ep.ContextEditing),
+		SupportsVision:   supportsVision,
+		Models:           append([]string(nil), ep.Models...),
+		Tags:             append([]string(nil), ep.Tags...),
+		StrictTools:      strictTools,
+		StrictToolsAllow: append([]string(nil), ep.StrictToolsAllow...),
 	}, nil
 }
 

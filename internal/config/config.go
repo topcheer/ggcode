@@ -117,6 +117,10 @@ type EndpointConfig struct {
 	// ContextEditing (anthropic): "tool_results", "thinking", or "all"
 	// (empty = off) — server-side context-management beta.
 	ContextEditing string `yaml:"context_editing,omitempty" json:"context_editing,omitempty"`
+	// StrictTools (sa-60): grammar-constrained tool inputs (structured
+	// outputs); opt-in per endpoint. Allowlist empty = provider default set.
+	StrictTools      *bool    `yaml:"strict_tools,omitempty" json:"strict_tools,omitempty"`
+	StrictToolsAllow []string `yaml:"strict_tools_allow,omitempty" json:"strict_tools_allow,omitempty"`
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -132,29 +136,31 @@ type VendorConfig struct {
 
 // ResolvedEndpoint is the runtime selection after config inheritance is applied.
 type ResolvedEndpoint struct {
-	VendorID        string
-	VendorName      string
-	EndpointID      string
-	EndpointName    string
-	Protocol        string
-	AuthType        string
-	BaseURL         string
-	APIKey          string
-	EnterpriseURL   string
-	Model           string
-	ContextWindow   int
-	MaxTokens       int
-	ReasoningEffort string
-	Logprobs        bool
-	TextVerbosity   string
-	ToolChoice      string
-	ServerTools     []ServerToolConfig
-	MemoryTool      bool
-	ThinkingMode    string
-	ContextEditing  string
-	SupportsVision  bool
-	Models          []string
-	Tags            []string
+	VendorID         string
+	VendorName       string
+	EndpointID       string
+	EndpointName     string
+	Protocol         string
+	AuthType         string
+	BaseURL          string
+	APIKey           string
+	EnterpriseURL    string
+	Model            string
+	ContextWindow    int
+	MaxTokens        int
+	ReasoningEffort  string
+	Logprobs         bool
+	TextVerbosity    string
+	ToolChoice       string
+	ServerTools      []ServerToolConfig
+	MemoryTool       bool
+	ThinkingMode     string
+	ContextEditing   string
+	SupportsVision   bool
+	Models           []string
+	Tags             []string
+	StrictTools      bool
+	StrictToolsAllow []string
 }
 
 // ToolPermission defines per-tool permission level in config.
