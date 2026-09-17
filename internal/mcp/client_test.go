@@ -1172,3 +1172,94 @@ func TestNotifStreamGenerationGuard(t *testing.T) {
 		t.Fatal("stale exit-defer must not clear a newer takeover guard")
 	}
 }
+
+// TestHTTPClientMRTRRoundTrip drives callWithMRTR through a real HTTP
+// transport: tools/call first answers resultType=input_required with a
+// deferred sampling request; the retry must carry inputResponses and echo
+// requestState before the server returns the complete result.
+func TestHTTPClientMRTRRoundTrip(t *testing.T) {
+	var round int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if r.Method == http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ID     int             `json:"id"`
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "test-session")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"` + latestMCPProtocolVersion + `","capabilities":{"tools":{}},"serverInfo":{"name":"mock","version":"1.0.0"}}}`))
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusNoContent)
+		case "tools/call":
+			round++
+			if round == 1 {
+				_, _ = w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"resultType":"input_required","inputRequests":{"ask1":{"method":"sampling/createMessage","params":{"messages":[{"role":"user","content":{"type":"text","text":"hi"}}]}}},"requestState":"st-42"}}`, req.ID)))
+				return
+			}
+			// Retry round: params must carry the resolved inputResponses
+			// and echo the opaque requestState verbatim.
+			var p struct {
+				InputResponses map[string]json.RawMessage `json:"inputResponses"`
+				RequestState   string                     `json:"requestState"`
+			}
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				t.Fatalf("decode retry params: %v", err)
+			}
+			if p.RequestState != "st-42" {
+				t.Fatalf("retry must echo requestState, got %q", p.RequestState)
+			}
+			resp, ok := p.InputResponses["ask1"]
+			if !ok {
+				t.Fatalf("retry missing inputResponses[ask1]: %s", req.Params)
+			}
+			var sr SamplingResult
+			if err := json.Unmarshal(resp, &sr); err != nil || sr.Content.Text != "client-sampled" {
+				t.Fatalf("unexpected resolved sampling response: %s (%v)", resp, err)
+			}
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"mrtr-done"}]}}`, req.ID)))
+		default:
+			t.Fatalf("unexpected method %s", req.Method)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClientFromConfig(config.MCPServerConfig{
+		Name: "remote",
+		Type: "http",
+		URL:  server.URL,
+	})
+	client.SetSamplingHandler(func(ctx context.Context, p SamplingParams) (*SamplingResult, error) {
+		return &SamplingResult{
+			Model:      "m",
+			Role:       "assistant",
+			StopReason: "end_turn",
+			Content:    SamplingContent{Type: "text", Text: "client-sampled"},
+		}, nil
+	})
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.CallTool(context.Background(), "search", map[string]interface{}{"q": "ggcode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if round != 2 {
+		t.Fatalf("expected exactly 2 tools/call rounds, got %d", round)
+	}
+	if len(result.Content) != 1 || result.Content[0].Text != "mrtr-done" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
