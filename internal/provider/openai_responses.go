@@ -175,6 +175,10 @@ type responsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      bool            `json:"strict,omitempty"`
+	// Built-in tool properties (sa-63); omitted for function tools.
+	Container      json.RawMessage `json:"container,omitempty"`        // code_interpreter: {type:"auto",memory_limit?,file_ids?}
+	VectorStoreIDs []string        `json:"vector_store_ids,omitempty"` // file_search
+	MaxNumResults  int             `json:"max_num_results,omitempty"`  // file_search
 }
 
 type responsesRequest struct {
@@ -417,6 +421,17 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 			req.Tools = append(req.Tools, rt)
 		}
 	}
+	// sa-63: built-in tools are separate tool entries (never function
+	// declarations) executed server-side; results arrive in-band as
+	// code_interpreter_call / file_search_call output items.
+	if builtins := responsesBuiltinTools(p.serverTools); len(builtins) > 0 {
+		req.Tools = append(req.Tools, builtins...)
+		for _, bt := range builtins {
+			if bt.Type == "file_search" {
+				req.Include = append(req.Include, responsesIncludeFileSearchResults)
+			}
+		}
+	}
 	switch strings.ToLower(p.toolChoice) {
 	case "required":
 		req.ToolChoice = json.RawMessage(`"required"`)
@@ -515,8 +530,9 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 			Role    string `json:"role"`
 			ID      string `json:"id"`
 			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type        string               `json:"type"`
+				Text        string               `json:"text"`
+				Annotations []responseAnnotation `json:"annotations"`
 			} `json:"content"`
 			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
@@ -528,9 +544,17 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 		switch item.Type {
 		case "message":
 			for _, c := range item.Content {
-				if c.Type == "output_text" && c.Text != "" {
-					texts = append(texts, c.Text)
+				if c.Type == "output_text" && (c.Text != "" || len(c.Annotations) > 0) {
+					// sa-63: keep generated-file / retrieval citations next to
+					// the text that referenced them.
+					texts = append(texts, appendResponsesCitations(c.Text, c.Annotations))
 				}
+			}
+		case "code_interpreter_call", "file_search_call":
+			// sa-63: server-executed tool results; surface the transcript
+			// as text (observability only, nothing is replayed to the API).
+			if block, ok := formatResponsesServerItem(rawItem); ok {
+				texts = append(texts, block)
 			}
 		case "function_call":
 			args := item.Arguments
@@ -702,6 +726,13 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 					// through the server-tool channel so the agent stores the
 					// raw item and the next stateless request echoes it back.
 					ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}
+				}
+				if json.Unmarshal(ev.Item, &item) == nil && (item.Type == "code_interpreter_call" || item.Type == "file_search_call") {
+					// sa-63: server-executed built-in tool completed; surface the
+					// in-band result as a text block (like Gemini grounding).
+					if block, ok := formatResponsesServerItem(ev.Item); ok {
+						ch <- StreamEvent{Type: StreamEventText, Text: block}
+					}
 				}
 			case "response.completed", "response.incomplete":
 				usage, stop := parseResponsesFinal(data)

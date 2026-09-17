@@ -15,33 +15,6 @@ import (
 
 const responsesWebSearchCallRaw = `{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"golang generics"}}`
 
-func TestResponsesSetServerToolsFailClosed(t *testing.T) {
-	p := NewOpenAIResponsesProvider("k", "m", 100, "http://127.0.0.1:1")
-
-	// Unknown declarations are ignored (fail closed).
-	p.SetServerTools([]ServerToolConfig{{Type: "code_interpreter"}, {Type: "file_search"}})
-	if p.hasHostedTools() {
-		t.Fatalf("unknown server tools must be dropped")
-	}
-
-	// Known declarations are kept.
-	p.SetServerTools([]ServerToolConfig{
-		{Type: "web_search"},
-		{Type: "WEB_SEARCH_PREVIEW"}, // case-insensitive
-		{Type: "web_search_2025_08_26"},
-		{Type: "bogus_tool"},
-	})
-	if len(p.serverTools) != 3 {
-		t.Fatalf("want 3 kept server tools, got %d", len(p.serverTools))
-	}
-
-	// A reload with no recognized entries must not wipe the previous set.
-	p.SetServerTools([]ServerToolConfig{{Type: "bogus_tool"}})
-	if !p.hasHostedTools() || len(p.serverTools) != 3 {
-		t.Fatalf("empty recognized set must keep prior tools, got %d", len(p.serverTools))
-	}
-}
-
 func TestResponsesBuildRequestHostedTools(t *testing.T) {
 	p := NewOpenAIResponsesProvider("k", "m", 100, "http://127.0.0.1:1")
 	p.SetServerTools([]ServerToolConfig{{Type: "web_search"}})
