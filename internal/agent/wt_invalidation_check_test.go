@@ -235,3 +235,76 @@ func TestWTInvalidation_RereadCountsAsNewRead(t *testing.T) {
 		t.Errorf("expected suppression after max warnings, got: %s", msg)
 	}
 }
+
+// TestWTInvalidation_TreePreservingCommandsAreExempt pins sa-31: git fetch/
+// push/tag/remote/rev-parse/... never alter working-tree tracked content,
+// so run_command invocations of them must not consume a warning slot or
+// fire the invalidation notice. First-hand FP: the mandated pre-task
+// `git fetch origin main` warned on every run that had already read files.
+func TestWTInvalidation_TreePreservingCommandsAreExempt(t *testing.T) {
+	readOnly := []string{
+		"git fetch origin main",
+		"git push origin HEAD",
+		"git remote -v",
+		"git tag v1.3.199",
+		"git rev-parse HEAD",
+		"git blame internal/agent/agent.go",
+		"git config user.name",
+		"git ls-files | head",
+		"git worktree list",
+		"git reflog -5",
+		"git stash list",
+	}
+	for _, cmd := range readOnly {
+		if runCommandMutatesTree(`{"command":"` + cmd + `"}`) {
+			t.Errorf("%q must not be classified as tree-mutating", cmd)
+		}
+	}
+}
+
+// TestWTInvalidation_CompoundCommandsScanEveryGit pins the sa-31 false
+// negative: the first-match-return classifier accepted a leading tree-
+// preserving git command and never inspected the destructive one that
+// followed on the same line.
+func TestWTInvalidation_CompoundCommandsScanEveryGit(t *testing.T) {
+	mutating := []string{
+		"git fetch && git reset --hard",
+		"git status && git checkout main",
+		"git log -1 && git stash pop",
+		"git rev-parse HEAD; git clean -fd",
+	}
+	for _, cmd := range mutating {
+		if !runCommandMutatesTree(`{"command":"` + cmd + `"}`) {
+			t.Errorf("%q contains a tree-mutating git command and must be classified as mutating", cmd)
+		}
+	}
+
+	// All-git-invocations-read-only lines stay read-only.
+	readOnlyLines := []string{
+		"git status && git fetch origin main",
+		"git rev-parse HEAD; git diff --stat",
+	}
+	for _, cmd := range readOnlyLines {
+		if runCommandMutatesTree(`{"command":"` + cmd + `"}`) {
+			t.Errorf("%q is fully tree-preserving and must not be classified as mutating", cmd)
+		}
+	}
+}
+
+// TestWTInvalidation_ReadOnlyDoesNotConsumeWarningSlot verifies the
+// end-to-end path: a tree-preserving run_command after reads must stay
+// silent AND leave the detector armed for a later real mutation.
+func TestWTInvalidation_ReadOnlyDoesNotConsumeWarningSlot(t *testing.T) {
+	w := newWTInvalidationState()
+	w.recordRead("a.go")
+	w.recordRead("b.go")
+
+	if msg := w.checkMutation("run_command", `{"command":"git fetch origin main"}`); msg != "" {
+		t.Fatalf("git fetch must not fire the invalidation warning, got: %s", msg)
+	}
+
+	// The warning budget is untouched: the next real mutation still warns.
+	if msg := w.checkMutation("run_command", `{"command":"git checkout main"}`); msg == "" {
+		t.Fatal("real mutation after read-only fetch must still warn")
+	}
+}

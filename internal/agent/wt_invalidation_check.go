@@ -139,6 +139,32 @@ var readOnlyStashActions = map[string]bool{
 	"show": true,
 }
 
+// treePreservingGitSubcommands are git subcommands whose MUTATING forms
+// still never alter working-tree tracked content (sa-31). fetch/push and
+// ls-remote only update remote-tracking refs; tag, remote and reflog stay
+// inside .git metadata; rev-parse, blame, ls-files, describe, cat-file and
+// fsck inspect; config writes repo config, not tracked files; worktree
+// add/remove touches other worktrees. None of them can make a cached read
+// stale, so they must not trigger the invalidation warning. First-hand FP:
+// the pre-task `git fetch origin main` fired the warning on every run that
+// had already read two or more files.
+var treePreservingGitSubcommands = map[string]bool{
+	"fetch":     true,
+	"push":      true,
+	"ls-remote": true,
+	"remote":    true,
+	"tag":       true,
+	"rev-parse": true,
+	"blame":     true,
+	"ls-files":  true,
+	"describe":  true,
+	"cat-file":  true,
+	"config":    true,
+	"reflog":    true,
+	"worktree":  true,
+	"fsck":      true,
+}
+
 // wtArgFields unmarshals the tool-arguments JSON object (best-effort;
 // malformed JSON yields nil).
 func wtArgFields(argsJSON string) map[string]any {
@@ -159,8 +185,11 @@ func wtArgFields(argsJSON string) map[string]any {
 //     mutates. The free-text `description` field is never consulted.
 //   - other tools: any string field containing a `git` token — the
 //     subcommand after `git` decides (status/list/diff/log/show are
-//     read-only; `branch` is read-only unless -d/-D/--delete/-m/--move;
-//     `stash` is read-only only as `stash list`/`stash show`).
+//     read-only; fetch/push/tag/remote/rev-parse/... are tree-preserving
+//     (sa-31): they mutate refs or repo metadata at most, never tracked
+//     working-tree content; `branch` is read-only unless
+//     -d/-D/--delete/-m/--move; `stash` is read-only only as
+//     `stash list`/`stash show`).
 //
 // gitBranchMutatingFlags are `git branch` flags that turn a listing command
 // into a mutating one.
@@ -168,11 +197,17 @@ var gitBranchMutatingFlags = map[string]bool{
 	"-d": true, "-D": true, "--delete": true, "-m": true, "--move": true,
 }
 
-// classifyGitCommandLine classifies one candidate command line. Returns
-// (readOnly, true) when a `git` token with a classifiable subcommand is
-// present; (false, false) when the line contains no git command.
+// classifyGitCommandLine classifies one candidate command line. It scans
+// EVERY `git` invocation on the line and reports the line as read-only only
+// when every classified git command preserves the working tree. Compound
+// commands such as `git fetch && git reset --hard` are common; the previous
+// first-match-return classification accepted the leading `fetch` and never
+// inspected `reset --hard`, suppressing a real invalidation warning (sa-31
+// false negative). Returns (readOnly, true) when at least one git command
+// is found; (false, false) when the line contains no git command.
 func classifyGitCommandLine(line string) (readOnly, found bool) {
 	fields := strings.Fields(line)
+	readOnly = true
 	for idx := 0; idx < len(fields); idx++ {
 		if filepath.Base(fields[idx]) != "git" || idx+1 >= len(fields) {
 			continue
@@ -180,25 +215,29 @@ func classifyGitCommandLine(line string) (readOnly, found bool) {
 		sub := strings.ToLower(fields[idx+1])
 		switch {
 		case sub == "stash":
+			found = true
 			if idx+2 >= len(fields) {
 				return false, true // bare `git stash` defaults to push (mutating)
 			}
-			return readOnlyStashActions[strings.ToLower(fields[idx+2])], true
+			if !readOnlyStashActions[strings.ToLower(fields[idx+2])] {
+				readOnly = false
+			}
 		case sub == "branch":
-			// `git branch` lists; -d/-D/--delete/-m/--move mutate.
+			// `git branch` lists; -d/-D/--delete/-m/--move mutate refs
+			// (conservative classification preserved from #544).
+			found = true
 			for _, f := range fields[idx+2:] {
 				if gitBranchMutatingFlags[f] {
-					return false, true
+					readOnly = false
 				}
 			}
-			return true, true
-		case readOnlyGitSubcommands[sub]:
-			return true, true
+		case readOnlyGitSubcommands[sub], treePreservingGitSubcommands[sub]:
+			found = true // cannot make cached reads stale
 		default:
 			return false, true // any other git subcommand: not read-only
 		}
 	}
-	return false, false
+	return readOnly, found
 }
 
 func isReadOnlyGitInvocation(toolName, argsJSON string) bool {
