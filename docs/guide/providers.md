@@ -112,9 +112,35 @@ vendors:
 | Protocol | Description |
 |----------|-------------|
 | `openai` | OpenAI-compatible API (most providers) |
+| `openai-responses` | OpenAI Responses API (`/v1/responses`), required for Codex-family and o-series models |
 | `anthropic` | Anthropic Claude native API |
 | `gemini` | Google Gemini native API |
 | `copilot` | GitHub Copilot (OAuth-based, no API key needed) |
+
+An endpoint with protocol `openai` whose `base_url` ends in `/responses` is
+also routed to the Responses API automatically.
+
+### OpenAI Responses API
+
+Codex models (e.g. `gpt-5-codex`) and o-series reasoning models are served
+through OpenAI's Responses API, which uses a different wire protocol from Chat
+Completions. Use `protocol: openai-responses` to reach them:
+
+```yaml
+vendors:
+  openai:
+    protocol: openai-responses
+    reasoning_effort: high
+    endpoints:
+      default:
+        base_url: https://api.openai.com/v1
+        model: gpt-5-codex
+```
+
+`reasoning_effort` and `tool_choice` (`auto` / `required` / `none`) are both
+supported on this protocol. Tool calls use the Responses API's native
+`function_call` / `function_call_output` items, so no prompt-injection fallback
+is involved.
 
 ## Reasoning Effort
 

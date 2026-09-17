@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -24,7 +25,23 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p.SetToolChoice(resolved.ToolChoice)
 		return p, nil
 
+	case "openai-responses":
+		// sa-40: OpenAI Responses API (/v1/responses) - serves Codex-family
+		// and o-series models that have no Chat Completions surface.
+		rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+		rp.SetReasoningEffort(resolved.ReasoningEffort)
+		rp.SetToolChoice(resolved.ToolChoice)
+		return rp, nil
+
 	case "openai":
+		// URL-sniff fallback: an "openai" protocol endpoint pointed at a
+		// /responses path is a Responses-API endpoint, not a relay.
+		if strings.HasSuffix(strings.TrimRight(resolved.BaseURL, "/"), "/responses") {
+			rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+			rp.SetReasoningEffort(resolved.ReasoningEffort)
+			rp.SetToolChoice(resolved.ToolChoice)
+			return rp, nil
+		}
 		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
 		p.SetReasoningEffort(resolved.ReasoningEffort)
@@ -50,6 +67,6 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		return prov, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported protocol: %s (supported: anthropic, openai, gemini, copilot)", resolved.Protocol)
+		return nil, fmt.Errorf("unsupported protocol: %s (supported: anthropic, openai, openai-responses, gemini, copilot)", resolved.Protocol)
 	}
 }
