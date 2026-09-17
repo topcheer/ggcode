@@ -221,6 +221,14 @@ func (c *Client) resolveMRTSampling(ctx context.Context, raw json.RawMessage) (j
 	if err != nil {
 		return nil, fmt.Errorf("invalid sampling params: %w", err)
 	}
+	// #2514: mirror the interactive handleSampling validation exactly.
+	// ParseSamplingParams covers the parse level; ValidateSamplingParams adds
+	// the SEP-1577 structural checks (tool result balance, mixed-content
+	// tool_result turns) so a malformed deferred sampling request fails with
+	// a self-correctable error instead of reaching the LLM handler.
+	if err := ValidateSamplingParams(params); err != nil {
+		return nil, fmt.Errorf("invalid sampling params: %w", err)
+	}
 	hctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	result, err := handler(hctx, params)
