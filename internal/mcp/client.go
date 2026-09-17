@@ -758,6 +758,20 @@ func (c *Client) sendRequest(ctx context.Context, method string, params interfac
 	// 1) write under c.mu, 2) read without c.mu, using wsMu to serialize reads.
 	resp, err := c.sendRequestUnlocked(req, ctx)
 	if err != nil {
+		// MCP cancellation protocol (2025-03-26 basic/utilities/cancellation):
+		// when the client gives up on an in-flight request (user interrupt,
+		// caller deadline, or the per-request timeout), tell the server so it
+		// can stop processing and free resources instead of orphaning the
+		// work. initialize is exempt — the spec forbids clients from
+		// cancelling it. A late response racing the notification is
+		// spec-permitted: receivers must ignore unknown or already-completed
+		// request IDs.
+		if req.ID != nil && method != "initialize" && ctx.Err() != nil && !c.closed.Load() {
+			cause := ctx.Err()
+			safego.Go("mcp.client.notifyCancelled", func() {
+				c.notifyCancelled(req.ID, cause, method)
+			})
+		}
 		return fmt.Errorf("mcp[%s]: send %s: %w", c.name, method, err)
 	}
 
@@ -812,6 +826,40 @@ func (c *Client) sendRequestUnlocked(req Request, ctx context.Context) (*Respons
 		c.mu.Unlock()
 		return c.readResponseWithWaiter(ctx, req.ID, waiter)
 	}
+}
+
+// CancelledNotificationParams is the params payload of the
+// notifications/cancelled notification (MCP spec 2025-03-26,
+// basic/utilities/cancellation). RequestID echoes the JSON-RPC id of the
+// cancelled request; Reason is optional and meant for logs and UIs.
+type CancelledNotificationParams struct {
+	RequestID *ID    `json:"requestId"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+// notifyCancelled fires the client-side cancellation notification for a
+// request the client is abandoning. It is fire-and-forget and intended to
+// run on a detached goroutine (see sendRequest) so a stalled transport —
+// e.g. a stdio pipe full that no longer drains, the #717 hazard — cannot
+// delay the failing request's error return. The short deadline bounds any
+// HTTP/WS retry path; a stdio writer stuck on a full pipe is unblocked by
+// Close/Abort teardown.
+func (c *Client) notifyCancelled(id *ID, cause error, method string) {
+	params := CancelledNotificationParams{
+		RequestID: id,
+		Reason:    fmt.Sprintf("client cancelled %s: %v", method, cause),
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = c.sendNotification(ctx, Notification{
+		JSONRPC: "2.0",
+		Method:  "notifications/cancelled",
+		Params:  raw,
+	})
 }
 
 func (c *Client) sendNotification(ctx context.Context, notif Notification) error {
