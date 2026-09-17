@@ -139,7 +139,7 @@ func TestAnthropicBuildParams_Basic(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
-	params := p.buildParams(msgs, nil)
+	params := p.buildParams(context.Background(), msgs, nil)
 	if params.Model != "claude-3" {
 		t.Errorf("expected model 'claude-3', got %s", params.Model)
 	}
@@ -157,7 +157,7 @@ func TestAnthropicBuildParams_SystemInUser(t *testing.T) {
 		{Role: "system", Content: []ContentBlock{{Type: "text", Text: "Be helpful"}}},
 		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "Hello"}}},
 	}
-	params := p.buildParams(msgs, nil)
+	params := p.buildParams(context.Background(), msgs, nil)
 	// System should be embedded into first user message, not separate
 	if len(params.Messages) != 1 {
 		t.Fatalf("expected 1 message (system merged into user), got %d", len(params.Messages))
