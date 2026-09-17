@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // logWriter redirects standard library log output to debug.Log so that
@@ -210,6 +211,21 @@ func shouldRedirectStderr(args []string) bool {
 }
 
 func main() {
+	// Linux sandbox launcher re-entry (Landlock + seccomp, see
+	// internal/tool/shell_sandbox_linux.go): run_command rewrites sandboxed
+	// commands to launch ggcode itself with this marker; the launcher applies
+	// the kernel sandbox to the process and execve(2)s the real command.
+	// MUST be intercepted before any cobra/TUI wiring. Never returns on
+	// success; failure exits non-zero (fail closed), never runs unsandboxed.
+	if len(os.Args) > 2 && os.Args[1] == tool.SandboxLaunchMarker {
+		if tool.SandboxLaunchEntry == nil {
+			fmt.Fprintln(os.Stderr, "ggcode sandbox launcher: missing on this platform")
+			os.Exit(126)
+		}
+		tool.SandboxLaunchEntry(os.Args[2], os.Args[3:])
+		os.Exit(126) // unreachable: entry never returns
+	}
+
 	// Top-level panic containment (1a of the v1.3.224 crash follow-up):
 	// every launched goroutine is safego-protected, but this main goroutine
 	// (cobra execution, TUI event loop via tea.Run) was bare - a panic here
