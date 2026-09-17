@@ -154,15 +154,16 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	newText := args.NewText
 	if mr.transform != "" {
 		newText = adjustNewText(content, args.NewText, mr)
-	} else if strings.Contains(oldText, "\r\n") && !strings.Contains(newText, "\r\n") {
-		// #1676 case 3: byte-exact hit on CRLF old_text but LF-only
-		// new_text - the edit landed and silently introduced mixed line
-		// endings. .go files get rescued by formatGoBytes; .md/.yaml/.cs
-		// have no formatting hook and stayed mixed forever. Match the
-		// file's convention on this direction too (tryCRLFMatch covers
-		// the opposite LF-old/CRLF-file case).
-		newText = strings.ReplaceAll(newText, "\n", "\r\n")
 	}
+	// #1676 case 3: normalize new_text to the file's line-ending convention.
+	// The previous condition only fired when old_text itself contained
+	// \r\n, so a single-line match in a CRLF file with a multi-line LF
+	// new_text silently introduced mixed line endings (.go files get
+	// rescued by formatGoBytes; .md/.yaml/.cs have no formatting hook and
+	// stayed mixed forever). The content-based helper covers that case and
+	// the byte-exact CRLF old_text case (tryCRLFMatch covers the opposite
+	// LF-old/CRLF-file matching direction).
+	newText = normalizeNewTextEOL(content, newText)
 
 	var newContent string
 	if args.ReplaceAll {
