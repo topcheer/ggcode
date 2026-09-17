@@ -236,6 +236,39 @@ vendors:
         model: gpt-4o
 ```
 
+## Server-Side Tools (Built-in)
+
+Declare provider-executed tools with `server_tools` — these run inside the
+provider's API, never client-side, so they need no approval flow:
+
+- **Anthropic**: `web_search_20250305`, `web_fetch_20250910`
+- **Gemini**: `google_search` (alias `web_search`) enables Google Search
+  grounding; `url_context` lets the model fetch URLs named in the prompt
+  (including PDFs/images). Grounding queries and source URLs are surfaced
+  back into the conversation as `[grounding]` text blocks so the agent can
+  cite its sources.
+
+```yaml
+vendors:
+  google:
+    protocol: gemini
+    server_tools:
+      - type: google_search
+      - type: url_context
+    endpoints:
+      default:
+        model: gemini-3-pro
+```
+
+Notes for Gemini:
+
+- Built-in tools are sent as separate tool entries, disjoint from regular
+  function declarations (a Gemini API requirement).
+- `tool_choice: required` is automatically downgraded to `auto` when built-in
+  tools are configured — the Gemini API rejects the `ANY` + built-in
+  combination.
+- Unknown `server_tools` types are ignored (fail closed).
+
 ### Adaptive Sampling
 
 When temperature is not explicitly set, ggcode automatically adjusts it per

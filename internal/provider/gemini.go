@@ -25,6 +25,7 @@ type GeminiProvider struct {
 	toolChoice       string                           // "", "auto", "required", "none" — maps to Gemini FunctionCallingConfig
 	temperature      float64                          // 0 = provider default
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248
+	serverTools      []ServerToolConfig               // Gemini built-in tools (google_search/url_context), executed in-API
 	topP             float64                          // 0 = provider default
 	transport        *headerInjectingTransport        // kept for runtime header updates
 }
@@ -47,6 +48,7 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		temperature:     p.temperature,
 		topP:            p.topP,
 		transport:       p.transport,
+		serverTools:     append([]ServerToolConfig(nil), p.serverTools...),
 	}
 }
 
@@ -97,6 +99,50 @@ func (p *GeminiProvider) SetToolChoice(choice string) {
 }
 
 func (p *GeminiProvider) ToolChoice() string { return p.toolChoice }
+
+// SetServerTools implements provider.ServerToolsSetter: declarative Gemini
+// built-in tools executed inside the Gemini API (never client-side). Mapping:
+//   - "google_search" / "web_search" → GoogleSearch grounding (searches the
+//     public web; grounding sources are surfaced back as text blocks)
+//   - "url_context"                  → URLContext (fetches URLs named in
+//     the prompt, including PDFs/images)
+//
+// Unknown declarations are ignored (fail closed), mirroring the Anthropic leg.
+func (p *GeminiProvider) SetServerTools(tools []ServerToolConfig) {
+	kept := make([]ServerToolConfig, 0, len(tools))
+	for _, t := range tools {
+		switch strings.ToLower(strings.TrimSpace(t.Type)) {
+		case "google_search", "web_search", "url_context":
+			kept = append(kept, t)
+		default:
+			debug.Log("gemini", "ignoring unsupported server tool declaration: %q", t.Type)
+		}
+	}
+	if len(kept) > 0 {
+		p.serverTools = kept
+	}
+}
+
+// hasBuiltinTools reports whether any Gemini built-in (server-side) tool is
+// configured. Built-in tools cannot coexist with FunctionCallingConfig ANY -
+// the Gemini API rejects the combination - so applyToolChoice downgrades.
+func (p *GeminiProvider) hasBuiltinTools() bool { return len(p.serverTools) > 0 }
+
+// builtinGeminiTools renders configured built-in tools as separate genai.Tool
+// entries. The Gemini API requires each built-in tool to occupy its own Tool
+// object, disjoint from FunctionDeclarations.
+func (p *GeminiProvider) builtinGeminiTools() []*genai.Tool {
+	var out []*genai.Tool
+	for _, t := range p.serverTools {
+		switch strings.ToLower(strings.TrimSpace(t.Type)) {
+		case "google_search", "web_search":
+			out = append(out, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
+		case "url_context":
+			out = append(out, &genai.Tool{URLContext: &genai.URLContext{}})
+		}
+	}
+	return out
+}
 
 // SetAdaptiveCap installs the adaptive max-output-tokens cap.
 func (p *GeminiProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
@@ -249,7 +295,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
 
-		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		budget := newRetryBudget()             // #722: cap cumulative retry backoff sleep per stream call
+		grounding := newGeminiGroundingAccum() // built-in tool grounding sources, deduped across chunks/attempts
 		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
@@ -290,6 +337,12 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					usage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount) + int(resp.UsageMetadata.ThoughtsTokenCount)
 					usage.CacheRead = int(resp.UsageMetadata.CachedContentTokenCount)
 					usage.PromptTokensTotal = int(resp.UsageMetadata.PromptTokenCount)
+				}
+
+				// Accumulate grounding metadata from this chunk (built-in
+				// google_search/url_context tools surface sources per-chunk).
+				if len(resp.Candidates) > 0 {
+					grounding.add(resp.Candidates[0].GroundingMetadata)
 				}
 
 				// Check finish reason for truncation / policy errors (#232).
@@ -393,6 +446,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					OutputTokens:      estimateTokensFromChars(outputChars),
 					PromptTokensTotal: inputTokens,
 				}
+			}
+			if s := grounding.summary(); s != "" {
+				ch <- StreamEvent{Type: StreamEventSystem, Text: s}
 			}
 			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked}
 			return
@@ -515,6 +571,12 @@ func (p *GeminiProvider) applyToolChoice(config *genai.GenerateContentConfig, to
 		mode = genai.FunctionCallingConfigModeNone
 	default:
 		return
+	}
+	// Gemini API rejects FunctionCallingConfigMode=ANY combined with built-in
+	// tools (google_search/url_context); degrade to AUTO instead of failing
+	// every request when both are configured.
+	if mode == genai.FunctionCallingConfigModeAny && p.hasBuiltinTools() {
+		mode = genai.FunctionCallingConfigModeAuto
 	}
 	config.ToolConfig = &genai.ToolConfig{
 		FunctionCallingConfig: &genai.FunctionCallingConfig{
@@ -678,8 +740,12 @@ func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, 
 }
 
 func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
-	functionDecls := make([]*genai.FunctionDeclaration, len(tools))
-	for i, t := range tools {
+	// Built-in tools first: each must be its own genai.Tool entry, disjoint
+	// from the FunctionDeclarations entry (Gemini API contract).
+	toolList := p.builtinGeminiTools()
+
+	functionDecls := make([]*genai.FunctionDeclaration, 0, len(tools))
+	for _, t := range tools {
 		fd := &genai.FunctionDeclaration{
 			Name:        t.Name,
 			Description: t.Description,
@@ -690,14 +756,15 @@ func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
 				fd.Parameters = schema
 			}
 		}
-		functionDecls[i] = fd
+		functionDecls = append(functionDecls, fd)
 	}
 
-	return []*genai.Tool{
-		{
+	if len(functionDecls) > 0 {
+		toolList = append(toolList, &genai.Tool{
 			FunctionDeclarations: functionDecls,
-		},
+		})
 	}
+	return toolList
 }
 
 func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([]ContentBlock, TokenUsage) {
@@ -730,7 +797,79 @@ func (p *GeminiProvider) convertResponse(resp *genai.GenerateContentResponse) ([
 		}
 	}
 
+	// Built-in google_search/url_context: surface grounding sources so the
+	// agent (and user) can see where server-side tool content came from.
+	// Appended after the response body so citations follow the text.
+	if len(resp.Candidates) > 0 {
+		if s := newGeminiGroundingAccum().add(resp.Candidates[0].GroundingMetadata).summary(); s != "" {
+			blocks = append(blocks, TextBlock(s))
+		}
+	}
+
 	return blocks, usage
+}
+
+// geminiGroundingAccum collects grounding metadata across stream chunks,
+// deduplicating queries and source URIs.
+type geminiGroundingAccum struct {
+	queries []string
+	sources []string
+	seen    map[string]bool
+}
+
+func newGeminiGroundingAccum() *geminiGroundingAccum {
+	return &geminiGroundingAccum{seen: make(map[string]bool)}
+}
+
+// add merges one chunk's grounding metadata. Returns the accumulator for
+// chaining; nil metadata is a no-op.
+func (a *geminiGroundingAccum) add(gm *genai.GroundingMetadata) *geminiGroundingAccum {
+	if gm == nil || a == nil {
+		return a
+	}
+	if a.seen == nil {
+		a.seen = make(map[string]bool)
+	}
+	for _, q := range gm.WebSearchQueries {
+		if q != "" && !a.seen["q:"+q] {
+			a.seen["q:"+q] = true
+			a.queries = append(a.queries, q)
+		}
+	}
+	for _, c := range gm.GroundingChunks {
+		if c == nil || c.Web == nil || c.Web.URI == "" {
+			continue
+		}
+		if a.seen["u:"+c.Web.URI] {
+			continue
+		}
+		a.seen["u:"+c.Web.URI] = true
+		if c.Web.Title != "" {
+			a.sources = append(a.sources, fmt.Sprintf("  - %s (%s)", c.Web.Title, c.Web.URI))
+		} else {
+			a.sources = append(a.sources, "  - "+c.Web.URI)
+		}
+	}
+	return a
+}
+
+// summary renders accumulated grounding metadata as a user-visible text
+// block. Returns "" when nothing was collected.
+func (a *geminiGroundingAccum) summary() string {
+	if a == nil || (len(a.queries) == 0 && len(a.sources) == 0) {
+		return ""
+	}
+	var b strings.Builder
+	if len(a.queries) > 0 {
+		b.WriteString("[grounding] search queries: ")
+		b.WriteString(strings.Join(a.queries, ", "))
+		b.WriteString("\n")
+	}
+	if len(a.sources) > 0 {
+		b.WriteString("[grounding] sources:\n")
+		b.WriteString(strings.Join(a.sources, "\n"))
+	}
+	return b.String()
 }
 
 // geminiFinishReasonError returns an error for finish reasons that indicate
