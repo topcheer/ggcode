@@ -725,6 +725,12 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 	if r := preflightRequiredCheck(t, args); r != nil {
 		return *r, nil
 	}
+	// Deterministic replay (GGCODE_TOOL_TAPE=replay:<path>): serve recorded
+	// results without ever invoking the real tool. See tool_tape.go. A tape
+	// miss returns an explicit error result - never a silent live fallback.
+	if res, err, handled := a.replayToolCall(t.Name(), args); handled {
+		return res, err
+	}
 	// Fill-aware tools (MCP adapter) shrink their own result cap to stay
 	// under the context-pressure guard's limits, keeping head-only
 	// truncation the single cut (#365, wiring fixed in #369).
@@ -756,6 +762,7 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 
 	select {
 	case r := <-ch:
+		a.recordToolCall(ctx, t.Name(), args, r.result, r.err)
 		return r.result, r.err
 	case <-ctx.Done():
 		debug.Log("agent", "tool %s cancelled via context (Execute did not honor cancellation, goroutine leaked)", t.Name())
