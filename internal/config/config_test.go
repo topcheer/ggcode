@@ -879,6 +879,38 @@ vendors:
 	}
 }
 
+func TestLoad_ValidContextEditing(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: anthropic-cn
+model: test
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      anthropic-cn:
+        protocol: anthropic
+        base_url: https://example.com
+        context_editing: all
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error for valid context_editing: %v", err)
+	}
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint: %v", err)
+	}
+	if resolved.ContextEditing != "all" {
+		t.Fatalf("expected context_editing %q, got %q", "all", resolved.ContextEditing)
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg == nil {
