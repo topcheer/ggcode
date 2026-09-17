@@ -18,6 +18,16 @@ package provider
 // Stateless replay keeps ggcode's existing context-manager/failover/compaction
 // machinery working unchanged; the server-side state remains an optimization
 // for a later pass.
+//
+// Encrypted reasoning round-trip (sa-54): because every request runs with
+// store=false, OpenAI reasoning models (o-series, gpt-5.x, codex) lose their
+// chain-of-thought between tool calls unless the client replays the reasoning
+// items back. We request `include: ["reasoning.encrypted_content"]`, capture
+// the opaque reasoning items the API returns, and echo them verbatim at the
+// head of the assistant turn on the next request - exactly what OpenAI's
+// stateless-multi-turn guidance requires. Items without encrypted content are
+// not replayed (nothing useful to reconstruct, and item ids alone cannot be
+// resolved once store=false discards server state).
 
 import (
 	"bufio"
@@ -106,7 +116,7 @@ func normalizeResponsesEffort(effort string) string {
 // ---- request types ----
 
 type responsesInputItem struct {
-	Type    string          `json:"type,omitempty"` // "message", "function_call", "function_call_output"
+	Type    string          `json:"type,omitempty"` // "message", "function_call", "function_call_output", "reasoning"
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"` // string or part array, per role
 	CallID  string          `json:"call_id,omitempty"`
@@ -114,6 +124,11 @@ type responsesInputItem struct {
 	Args    string          `json:"arguments,omitempty"` // function_call arguments (JSON string)
 	Output  string          `json:"output,omitempty"`    // function_call_output payload
 	ID      string          `json:"id,omitempty"`        // item id for assistant output_text messages
+	// Reasoning item replay (sa-54): the summary parts and encrypted
+	// chain-of-thought are echoed back verbatim in stateless multi-turn
+	// tool loops. For non-reasoning items both stay empty and are omitted.
+	Summary          json.RawMessage `json:"summary,omitempty"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
 }
 
 type responsesTool struct {
@@ -133,6 +148,9 @@ type responsesRequest struct {
 	Stream          bool                 `json:"stream,omitempty"`
 	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
 	Store           *bool                `json:"store,omitempty"`
+	// Include asks the API to return encrypted reasoning tokens inside
+	// reasoning items so they can be replayed statelessly (sa-54).
+	Include []string `json:"include,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -213,7 +231,24 @@ func buildResponsesInput(messages []Message) []responsesInputItem {
 					// Text in a tool-role message is decoration; the output is the payload.
 					continue
 				}
+				if b.Text == "" {
+					// Reasoning-only block: streamed reasoning summaries land in
+					// ReasoningContent, and the encrypted reasoning item block
+					// replays them; an empty output_text part would be noise.
+					continue
+				}
 				textParts = append(textParts, responsesTextPart(b.Text))
+			case "thinking":
+				// sa-54: an encrypted Responses reasoning item captured verbatim
+				// in a "thinking" block (Anthropic-style carrier). Replay it
+				// unchanged: with store=false the API cannot reconstruct the
+				// model's reasoning context otherwise. Signatures from other
+				// providers (Anthropic/Gemini) fail the decode and are skipped,
+				// so cross-provider failover never leaks foreign blocks.
+				if it, ok := decodeResponsesReasoningItem(b.ThinkingSignature); ok {
+					flushText()
+					items = append(items, it)
+				}
 			case "image":
 				if isToolRole {
 					continue
@@ -234,12 +269,42 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
+// responsesIncludeEncryptedReasoning asks the API to embed encrypted
+// reasoning tokens in reasoning item outputs (required for stateless
+// multi-turn replay when store=false).
+const responsesIncludeEncryptedReasoning = "reasoning.encrypted_content"
+
+// decodeResponsesReasoningItem parses a raw reasoning item captured from a
+// previous response (stored in a "thinking" block's ThinkingSignature) and
+// reports whether it is replayable. Only items that actually carry encrypted
+// reasoning content are replayed: bare item ids cannot be resolved once
+// store=false has discarded server state, and anything that is not a
+// Responses reasoning item (Anthropic/Gemini signatures from a failed-over
+// session) fails the type probe and is dropped.
+func decodeResponsesReasoningItem(raw string) (responsesInputItem, bool) {
+	if raw == "" {
+		return responsesInputItem{}, false
+	}
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal([]byte(raw), &probe) != nil || probe.Type != "reasoning" {
+		return responsesInputItem{}, false
+	}
+	var item responsesInputItem
+	if json.Unmarshal([]byte(raw), &item) != nil || item.EncryptedContent == "" {
+		return responsesInputItem{}, false
+	}
+	return item, true
+}
+
 func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolDefinition, stream bool) (*responsesRequest, error) {
 	req := &responsesRequest{
-		Model:  p.model,
-		Input:  buildResponsesInput(messages),
-		Stream: stream,
-		Store:  boolPtr(false), // stateless replay; no server-side conversation state
+		Model:   p.model,
+		Input:   buildResponsesInput(messages),
+		Stream:  stream,
+		Store:   boolPtr(false), // stateless replay; no server-side conversation state
+		Include: []string{responsesIncludeEncryptedReasoning},
 	}
 	budget := p.maxTokensOverride
 	if budget <= 0 {
@@ -313,19 +378,8 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 	}
 	defer resp.Body.Close()
 	var payload struct {
-		Output []struct {
-			Type    string `json:"type"`
-			Role    string `json:"role"`
-			ID      string `json:"id"`
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-		} `json:"output"`
-		Usage struct {
+		Output []json.RawMessage `json:"output"`
+		Usage  struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
@@ -337,7 +391,22 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 
 	out := &ChatResponse{Message: Message{Role: "assistant"}}
 	var texts []string
-	for _, item := range payload.Output {
+	for _, rawItem := range payload.Output {
+		var item struct {
+			Type    string `json:"type"`
+			Role    string `json:"role"`
+			ID      string `json:"id"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}
+		if err := json.Unmarshal(rawItem, &item); err != nil {
+			continue
+		}
 		switch item.Type {
 		case "message":
 			for _, c := range item.Content {
@@ -357,6 +426,14 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 			}
 			out.Message.Content = append(out.Message.Content,
 				ToolUseBlock(item.CallID, item.Name, json.RawMessage(args)))
+		case "reasoning":
+			// sa-54: keep the raw reasoning item verbatim (thinking-block
+			// carrier) so the next stateless request replays the model's
+			// encrypted chain-of-thought context.
+			out.Message.Content = append(out.Message.Content, ContentBlock{
+				Type:              "thinking",
+				ThinkingSignature: string(rawItem),
+			})
 		}
 	}
 	if len(texts) > 0 {
@@ -439,6 +516,13 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 					CallID    string `json:"call_id"`
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
+				}
+				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "reasoning" {
+					// sa-54: forward the raw item through the reasoning channel;
+					// the agent's thinking accumulator stores it verbatim in a
+					// "thinking" block for stateless replay. Text stays empty so
+					// UIs render nothing for the opaque payload.
+					ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(ev.Item)}
 				}
 				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "function_call" && item.CallID != "" {
 					args := item.Arguments

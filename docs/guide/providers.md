@@ -142,6 +142,12 @@ supported on this protocol. Tool calls use the Responses API's native
 `function_call` / `function_call_output` items, so no prompt-injection fallback
 is involved.
 
+ggcode runs the protocol statelessly (`store: false`): every request replays
+the full conversation. Reasoning models keep their chain-of-thought across
+tool calls because ggcode requests `include: ["reasoning.encrypted_content"]`
+and echoes the encrypted reasoning items it received back verbatim on the next
+request, per OpenAI's stateless multi-turn guidance.
+
 ## Reasoning Effort
 
 Configure how much "thinking" the model does before responding. Supported by
