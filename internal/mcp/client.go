@@ -1079,6 +1079,11 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	sessionID := c.sessionID
 	headers := c.headers
 	oauthHandler := c.oauthHandler
+	// MCP spec 2025-06-18 (PR #548): every HTTP request AFTER initialize MUST
+	// carry the negotiated protocol version in the MCP-Protocol-Version
+	// header. Snapshot it under c.mu here; empty during initialize itself,
+	// so the handshake request correctly omits the header.
+	protoVersion := c.negotiatedVersion
 	c.mu.Unlock()
 	if httpClient == nil {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -1091,6 +1096,9 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	if protoVersion != "" {
+		req.Header.Set("MCP-Protocol-Version", protoVersion)
 	}
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
@@ -1803,6 +1811,11 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 	headers := c.headers
 	oauthHandler := c.oauthHandler
 	url := c.url
+	// MCP spec 2025-06-18 (PR #548): the standalone GET SSE stream is also a
+	// "subsequent request" and must carry the negotiated protocol version.
+	// Snapshot under c.mu; never call NegotiatedVersion() while holding c.mu
+	// (it locks again — self-deadlock, cf. sa-44).
+	protoVersion := c.negotiatedVersion
 	c.mu.Unlock()
 	if httpClient == nil {
 		return httpNotifClosing
@@ -1814,6 +1827,9 @@ func (c *Client) readHTTPNotifStreamOnce(ctx context.Context) httpNotifResult {
 	req.Header.Set("Accept", "text/event-stream")
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	if protoVersion != "" {
+		req.Header.Set("MCP-Protocol-Version", protoVersion)
 	}
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
