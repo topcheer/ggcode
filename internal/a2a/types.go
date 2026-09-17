@@ -82,6 +82,10 @@ type AgentCard struct {
 	Extensions         []AgentExtension      `json:"extensions,omitempty"`
 	Metadata           interface{}           `json:"metadata,omitempty"`
 	Lifecycle          *AgentLifecycleInfo   `json:"lifecycle,omitempty"` // AgentHub lifecycle transparency
+	// Signatures carries JWS (RFC 7515) signatures over the RFC 8785
+	// canonicalized card JSON with the signatures field excluded
+	// (A2A spec §8.4). See card_signature.go for verification.
+	Signatures []AgentCardSignature `json:"signatures,omitempty"`
 }
 
 // AgentInterface describes a protocol binding (JSON-RPC, gRPC, REST).
