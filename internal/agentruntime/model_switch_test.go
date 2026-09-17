@@ -1,10 +1,13 @@
 package agentruntime
 
 import (
+	"context"
 	"testing"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // Regression for #1487: ActivateCurrentSelection rewrote the active selection
@@ -36,6 +39,53 @@ func TestActivateCurrentSelectionRollsBackOnResolveFailure(t *testing.T) {
 	}
 	if sel := cfg.Vendors["v2"].Endpoints["e2"].SelectedModel; sel != "m2" {
 		t.Fatalf("endpoint SelectedModel must be restored to its pre-switch value: %q, want m2", sel)
+	}
+}
+
+// fakeApplyProvider implements just enough of provider.Provider for
+// ApplyProviderToAgent (embedded nil interface keeps it inert).
+type fakeApplyProvider struct {
+	provider.Provider
+}
+
+func (f *fakeApplyProvider) Name() string { return "fake-apply" }
+func (f *fakeApplyProvider) Chat(_ context.Context, _ []provider.Message, _ []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	return &provider.ChatResponse{Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{provider.TextBlock("ok")}}}, nil
+}
+
+// TestApplyProviderToAgentGatesMemoryTool pins #2511: the agent-side memory
+// executor is enabled iff the resolved endpoint is anthropic-protocol AND
+// configured memory_tool: true - the same gate the provider registry uses to
+// declare the tool. Any other combination (non-anthropic protocol, or the
+// flag unset) must leave the executor disabled so hallucinated name="memory"
+// calls fall through to UnknownToolError.
+func TestApplyProviderToAgentGatesMemoryTool(t *testing.T) {
+	prov := &fakeApplyProvider{}
+	base := config.ResolvedEndpoint{Protocol: "anthropic", Model: "m1"}
+
+	cases := []struct {
+		name     string
+		protocol string
+		memTool  bool
+		wantOn   bool
+	}{
+		{"anthropic + memory_tool", "anthropic", true, true},
+		{"anthropic without memory_tool", "anthropic", false, false},
+		{"openai with memory_tool flag set", "openai", true, false},
+		{"openai without memory_tool", "openai", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := agent.NewAgent(prov, tool.NewRegistry(), "", 10)
+			r := base
+			r.Protocol = tc.protocol
+			r.MemoryTool = tc.memTool
+			ApplyProviderToAgent(a, prov, &r)
+			if got := a.MemoryToolEnabled(); got != tc.wantOn {
+				t.Fatalf("MemoryToolEnabled()=%v, want %v (protocol=%q memory_tool=%v)",
+					got, tc.wantOn, tc.protocol, tc.memTool)
+			}
+		})
 	}
 }
 

@@ -950,6 +950,14 @@ func (a *Agent) SystemPrompt() string {
 // ApplyProviderToAgent enables it iff the endpoint is anthropic-protocol AND
 // configured with `memory_tool: true` (#2511 - declaration and execution must
 // share one gate).
+// MemoryToolEnabled reports whether the client-side Memory Tool executor is
+// active (test/observability counterpart of SetMemoryToolEnabled, #2511).
+func (a *Agent) MemoryToolEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.memoryTool != nil && a.memoryTool.enabled
+}
+
 func (a *Agent) SetMemoryToolEnabled(v bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
