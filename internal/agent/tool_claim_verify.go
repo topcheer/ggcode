@@ -132,9 +132,17 @@ var claimVerifyMetaStatusPrefixes = []string{
 // claimVerifyPatterns are (pattern, message) pairs. Patterns are matched
 // case-insensitively against the tool result content. Each pattern targets
 // a specific misinterpretation risk identified in the AgentRx taxonomy.
+//
+// hard marks CANONICAL structured status formats (exit-code records, Go
+// panic/fatal, go test FAIL records). Soft patterns are free text that
+// collides constantly with retrieved file payload (source lines containing
+// "build failed", "does not exist", ...). In mixed compounds (a status
+// stage plus a content-retrieval stage) only hard patterns are scanned —
+// see the sa-30 note in check().
 type claimVerifyPattern struct {
 	pattern string
 	msg     string
+	hard    bool
 }
 
 // claimVerifyReCache compiles the "re:"-prefixed patterns once.
@@ -162,33 +170,33 @@ func claimVerifyMatch(lower, pattern string) bool {
 }
 
 var claimVerifyPatterns = []claimVerifyPattern{
-	// Exit code failure masked in non-error output
-	{"exit code: 1", "Command exited with code 1 (failure). Do not claim this command succeeded."},
-	{"exit code 1", "Command exited with code 1 (failure). Do not claim this command succeeded."},
-	{"exit status 1", "Command exited with status 1 (failure). Do not claim this command succeeded."},
-	{"exit=1", "Command exited with code 1 (failure). Do not claim this command succeeded."},
-	// Runtime crashes
-	{"panic:", "Output contains a Go panic. This indicates a crash - do not claim success."},
-	{"fatal error:", "Output contains a fatal error. Do not claim this operation succeeded."},
-	// Build/test failures
-	{"build failed", "Build failed. Do not claim the build passed."},
-	{"compilation failed", "Compilation failed. Do not claim compilation succeeded."},
-	// #1780 case 2: 'fail:' bare Contains hit COUNT lines like
-	// 'pass:120 fail:0' - a zero-failure summary was condemned as a
-	// failure (semantic reversal). The "re:" prefix marks regex patterns:
-	// require a non-zero digit after the colon/tab.
-	{"--- fail:", "Test output contains FAIL. Do not claim all tests passed."},
-	{"re:fail:[1-9]", "Test output contains FAIL. Do not claim all tests passed."},
-	{"re:fail\t[1-9]", "Test output contains FAIL. Do not claim all tests passed."},
-	{"fail\t", "Test output contains FAIL. Do not claim all tests passed."},
-	// File not found
-	{"no such file or directory", "File/path does not exist. Do not claim you accessed it."},
-	{"does not exist", "Path does not exist. Do not claim you found it."},
-	{"not found in", "Item not found. Do not claim it exists."},
-	// Empty search results
-	{"0 matches", "Search returned 0 matches. Do not claim results were found."},
-	{"no matches found", "Search returned no matches. Do not claim results were found."},
-	{"no results", "Search returned no results. Do not claim something was found."},
+	// Exit code failure masked in non-error output (canonical records)
+	{"exit code: 1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true},
+	{"exit code 1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true},
+	{"exit status 1", "Command exited with status 1 (failure). Do not claim this command succeeded.", true},
+	{"exit=1", "Command exited with code 1 (failure). Do not claim this command succeeded.", true},
+	// Runtime crashes (canonical Go runtime formats)
+	{"panic:", "Output contains a Go panic. This indicates a crash - do not claim success.", true},
+	{"fatal error:", "Output contains a fatal error. Do not claim this operation succeeded.", true},
+	// Build/test failures. Free text - payload collision-prone, soft-only.
+	{"build failed", "Build failed. Do not claim the build passed.", false},
+	{"compilation failed", "Compilation failed. Do not claim compilation succeeded.", false},
+	// Canonical go test FAIL records (hard).
+	{"--- fail:", "Test output contains FAIL. Do not claim all tests passed.", true},
+	{"re:fail:[1-9]", "Test output contains FAIL. Do not claim all tests passed.", true},
+	{"re:fail\t[1-9]", "Test output contains FAIL. Do not claim all tests passed.", true},
+	{"fail\t", "Test output contains FAIL. Do not claim all tests passed.", true},
+	// Canonical go test compile-failure record, e.g. 'FAIL\tpkg [build failed]'.
+	{"[build failed]", "Test output contains FAIL. Do not claim all tests passed.", true},
+	// Free text, payload collision-prone (soft-only).
+	{"no such file or directory", "File/path does not exist. Do not claim you accessed it.", false},
+	{"does not exist", "Path does not exist. Do not claim you found it.", false},
+	{"not found in", "Item not found. Do not claim it exists.", false},
+	// Empty search results (soft-only; the grep tool's own meta-status line
+	// has a dedicated prefix check on the content-tool path).
+	{"0 matches", "Search returned 0 matches. Do not claim results were found.", false},
+	{"no matches found", "Search returned no matches. Do not claim results were found.", false},
+	{"no results", "Search returned no results. Do not claim something was found.", false},
 }
 
 // claimVerifyContentCmds lists shell commands whose stdout is file/data
@@ -204,15 +212,33 @@ var claimVerifyContentCmds = map[string]bool{
 	"strings": true, "jq": true, "column": true, "fmt": true,
 }
 
-// isContentRetrievalCommand reports whether every stage of the command
-// pipeline is a content-retrieval command. Compound commands with && || ;
-// and pipes are split; if ANY segment runs a non-content command (go test,
-// make, ...), the whole command is treated as status-bearing so genuine
-// failure signals are still caught (conservative in the true-positive
-// direction).
-func isContentRetrievalCommand(cmd string) bool {
+// claimVerifyNeutralCmds are commands whose output is agent-authored data
+// (echo/printf) or a side-effect-free state change (cd/true/test/...): they
+// contribute NEITHER execution status NOR retrieved content. They appear in
+// the "grep ... || echo \"no matches\"" / "|| true" fail-silencer idioms the
+// workspace runbook itself prescribes for chain-safe greps. Before this
+// table, ANY compound containing echo/true made the whole chain
+// status-bearing, so grepped source lines mentioning "build failed"
+// condemned a successful `go build && go test ... && grep ... || echo`
+// chain as "[Verify] Build failed" (first-hand sa-29 observation).
+var claimVerifyNeutralCmds = map[string]bool{
+	"echo": true, "printf": true, "true": true, "false": true,
+	"cd": true, "pwd": true, "sleep": true, "wait": true,
+	"test": true, "[": true, ":": true,
+	"export": true, "set": true, "unset": true,
+}
+
+// classifyCommandSegments splits a compound command (pipeline and sequence
+// operators) into segments and reports which classes are present:
+//
+//   - content segments (grep/cat/rg/...): stdout is retrieved file data
+//   - neutral segments (echo/true/cd/...): stdout is agent-authored data or
+//     a no-op; contributes neither status nor content
+//   - status segments (go test/make/rm/git push/...): stdout reflects
+//     execution status
+func classifyCommandSegments(cmd string) (hasContent, hasNeutral, hasStatus bool) {
 	if strings.TrimSpace(cmd) == "" {
-		return false
+		return false, false, false
 	}
 	// Split on pipeline and sequence operators.
 	r := strings.NewReplacer("|", "\n", "&&", "\n", "||", "\n", ";", "\n")
@@ -248,7 +274,8 @@ func isContentRetrievalCommand(cmd string) bool {
 			if sub < len(fields) {
 				switch fields[sub] {
 				case "grep", "log", "show", "blame":
-					continue // content-bearing git subcommand
+					hasContent = true // content-bearing git subcommand
+					continue
 				}
 			}
 		} else if name == "xargs" || name == "find" {
@@ -261,6 +288,7 @@ func isContentRetrievalCommand(cmd string) bool {
 			// find -exec ... grep), which is the case the wrapper
 			// exemption exists for (#1506).
 			if segHasDownstreamRetriever(seg) {
+				hasContent = true
 				continue
 			}
 		}
@@ -272,11 +300,26 @@ func isContentRetrievalCommand(cmd string) bool {
 		if i := strings.LastIndex(name, "/"); i >= 0 {
 			name = name[i+1:]
 		}
-		if !claimVerifyContentCmds[name] {
-			return false
+		switch {
+		case claimVerifyNeutralCmds[name]:
+			hasNeutral = true
+		case claimVerifyContentCmds[name]:
+			hasContent = true
+		default:
+			hasStatus = true
 		}
 	}
-	return true
+	return hasContent, hasNeutral, hasStatus
+}
+
+// isContentRetrievalCommand reports whether the command's output is DATA
+// with no status-bearing stage: every segment is content-retrieval or
+// neutral, so status patterns inside the output are payload mentions, not
+// failure signals (issue #1207, extended sa-30: neutral echo/true
+// fail-silencer segments no longer flip the whole chain status-bearing).
+func isContentRetrievalCommand(cmd string) bool {
+	hasContent, hasNeutral, hasStatus := classifyCommandSegments(cmd)
+	return !hasStatus && (hasContent || hasNeutral)
 }
 
 // checkClaimVerify scans a tool result for commonly misinterpreted failure
@@ -360,12 +403,23 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 		return ""
 	}
 
-	// Command-execution tools: content-retrieval pipelines (grep/cat/...) print
-	// file data as stdout, so status patterns in the output are payload
-	// mentions, not failure signals (#1207).
-	if isContentRetrievalCommand(cmd) {
+	// Command-execution tools: classify the command line. Chains with no
+	// status-bearing segment (pure content/neutral pipelines) print file data
+	// or agent-authored echo markers, so status patterns in the output are
+	// payload mentions, not failure signals (#1207, sa-30).
+	hasContent, hasNeutral, hasStatus := classifyCommandSegments(cmd)
+	if !hasStatus && (hasContent || hasNeutral) {
 		return ""
 	}
+	// Mixed compounds (status + content segments) interleave real execution
+	// output with retrieved file data. Free-text soft patterns ("build
+	// failed", "does not exist", ...) collide constantly with grepped source
+	// lines: a successful `go build && go test && grep ... || echo` chain was
+	// condemned as "[Verify] Build failed" purely on payload text (sa-30).
+	// For mixed compounds only CANONICAL structured status formats (exit-code
+	// records, panic/fatal, go test FAIL records) are scanned - those cannot
+	// plausibly appear in retrieved source payload at matching density.
+	mixed := hasStatus && hasContent
 
 	// Command-execution tools: scan the command output for status patterns.
 	lower := strings.ToLower(content)
@@ -380,6 +434,11 @@ func (c *claimVerifyState) check(toolName, content string, isError bool, cmd str
 		// #1780 case 2: dispatch plain Contains vs "re:" regex patterns -
 		// 'fail:' bare Contains condemned count lines like 'pass:120
 		// fail:0'; the regex form requires a non-zero digit.
+		// sa-30: in mixed compounds, soft free-text patterns are skipped
+		// (payload collision) - only canonical status formats are scanned.
+		if mixed && !cvp.hard {
+			continue
+		}
 		if claimVerifyMatch(lower, cvp.pattern) {
 			c.injections++
 			debug.Log("claim_verify", "misinterpretation risk detected: tool=%s pattern=%q", toolName, cvp.pattern)
