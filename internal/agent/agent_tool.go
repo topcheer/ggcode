@@ -250,7 +250,22 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 // executeTool runs pre-hooks, executes the tool, then runs post-hooks.
 // File-editing tools (edit_file, write_file) are routed to executeFileTool
 // for diff preview and checkpointing.
+//
+// The thin wrapper at this seam consults the duplicate-suppression ledger
+// (tool_dedup.go) before dispatching mutating tool calls: an exact duplicate
+// of a recently-successful mutating call replays the prior result instead of
+// re-executing the side effect (Agent Mesh S2 seam, arXiv:2608.26225).
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	if suppressed := a.dedupLedger().suppressDuplicate(tc.Name, string(tc.Arguments)); suppressed != nil {
+		return *suppressed
+	}
+	res := a.executeToolInner(ctx, tc)
+	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+	return res
+}
+
+// executeToolInner is the original executeTool body; see executeTool.
+func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
 	if err := ctx.Err(); err != nil {
 		return tool.Result{Content: err.Error(), IsError: true}
 	}

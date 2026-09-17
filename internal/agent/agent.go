@@ -214,6 +214,8 @@ type Agent struct {
 	envDrift                  *envDriftState             // env var drift detection (.env.example vs actual env)
 	transientRetryBudget      int                        // remaining automatic retries for transient tool failures (per run)
 	mutateLedger              *mutatingLedger            // non-atomic failure semantics: ambiguous mutating-call attempts per (tool,args), per run
+	toolDedup                 *toolDedupLedger           // duplicate-suppression ledger for non-idempotent mutating tool calls
+	toolDedupOnce             sync.Once                  // lazy init guard for toolDedup
 	metadata                  map[string]string          // persistent metadata for session persistence
 	compoundingFailure        *compoundingFailureState   // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode               *failureModeState          // meta-level failure mode classification (transient/structural/systemic)
