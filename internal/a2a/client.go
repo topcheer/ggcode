@@ -82,8 +82,9 @@ func WithMTLS(tlsConfig *tls.Config) ClientOption {
 			// #1458-C: strip the custom X-API-Key header on cross-host
 			// redirects - Go only strips built-in sensitive headers
 			// (Authorization/Cookies), a custom key followed a 302 to any
-			// host verbatim.
-			CheckRedirect: stripKeyOnRedirect,
+			// host verbatim. Bound to this client so card-declared header
+			// names negotiated via #1458-A are stripped too.
+			CheckRedirect: c.checkRedirect,
 		}
 		c.authMethod = "mtls"
 	}
@@ -183,12 +184,15 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 		// overall duration now, mirroring the WithMTLS branch.
 		client.Timeout = 0
 	}
-	client.CheckRedirect = stripKeyOnRedirect
 	c := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
 		httpClient: client,
 	}
+	// #1458-C: strip credential headers on cross-host redirects. Bound to
+	// the client (not a free function) so the card-declared apiKeyName that
+	// #1458-A NegotiateAuth may set to ANY header name is stripped too.
+	client.CheckRedirect = c.checkRedirect
 	if apiKey != "" && c.authMethod == "" {
 		c.authMethod = "apiKey"
 	}
@@ -877,13 +881,26 @@ func schemeNames(schemes map[string]Security) []string {
 	return names
 }
 
-// stripKeyOnRedirect removes the custom X-API-Key header when a redirect
-// crosses hosts (#1458-C) - the stdlib only strips built-in sensitive
-// headers (Authorization, Cookies), custom keys followed 302s verbatim.
-func stripKeyOnRedirect(req *http.Request, via []*http.Request) error {
+// checkRedirect removes API key headers when a redirect crosses hosts
+// (#1458-C) - the stdlib only strips built-in sensitive headers
+// (Authorization, Cookies), custom keys followed 302s verbatim.
+//
+// It must be a Client method, not a free function: NegotiateAuth (#1458-A)
+// honors the card-declared securityScheme name, which is remote-controlled
+// and can be ANY header name ("X-Custom-Key", "X-My-Key", ...). A hardcoded
+// name list is trivially bypassed by declaring an out-of-list name, so the
+// negotiated c.apiKeyName is stripped as well. The well-known names remain
+// as fallback for requests made before NegotiateAuth ran (Discover itself
+// carries the default X-API-Key credential).
+func (c *Client) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) > 0 && via[0].Host != req.Host {
+		c.mu.RLock()
+		name := c.apiKeyName
+		c.mu.RUnlock()
+		if name != "" {
+			req.Header.Del(name)
+		}
 		req.Header.Del("X-API-Key")
-		// Card-declared names ride the same header path.
 		for _, h := range []string{"X-Goog-Api-Key", "Api-Key", "X-Api-Key"} {
 			req.Header.Del(h)
 		}
