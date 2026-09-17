@@ -13,9 +13,10 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// redactResult masks secrets in tool result text for safe display in IM.
+// redactResult sanitizes terminal control sequences and masks secrets in
+// tool result text for safe display in IM.
 func redactResult(s string) string {
-	return security.RedactForDisplay(s)
+	return security.RedactForDisplay(security.SanitizeTerminalForDisplay(s))
 }
 
 // imFenceLen returns the number of backticks needed to safely fence content:

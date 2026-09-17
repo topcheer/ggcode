@@ -35,6 +35,32 @@ Terminal normalization works together with post-hoc ANSI stripping
    through (tools that hardcode colors regardless of environment) are stripped
    before the output enters the agent context.
 
+3. **Display-boundary sanitization** (`security.SanitizeTerminalForDisplay`):
+   Layers 1-2 only cover `run_command` output. Tool output from every other
+   source — MCP server responses, `read_file` contents, web fetches — reaches
+   the user's terminal through the TUI render, streaming body, IM push, and
+   desktop bridge with no filtering (sa-41). Since a hostile response can
+   hijack the human review path (set the terminal title via OSC 0/2, overwrite
+   the clipboard via OSC 52, open phishing links via OSC 8, clear/move the
+   screen via CSI 2J/H/f/K to hide text, or switch to the alternate screen
+   buffer — see ATR-2026-00259 "ANSI Escape Code Terminal Injection",
+   OWASP Agentic ASI08:2026 / LLM02:2025, MITRE ATLAS AML.T0057, and the
+   NVIDIA garak `ansiescape` probe), every display surface now neutralizes:
+
+   - raw OSC/DCS/PM/APC string sequences (7-bit and 8-bit C1 encodings)
+   - raw CSI sequences, including benign SGR color (display surfaces apply
+     their own styling; foreign escapes can desynchronize the frame)
+   - C0 control runes except newline/tab (carriage-return overwrite is a
+     hide-from-review primitive)
+   - literal-string escape forms encoding dangerous sequences
+     (`\x1b[H\x1b[2J`, `\u001b]0;...`) become `[ansi-filtered]`; benign
+     literal color codes in code examples (`\x1b[31m`) are preserved
+
+   This layer is a pure transformation: no findings, nothing blocked
+   upstream, session transcripts and agent context untouched. The
+   model-facing context and the human-facing screen now agree on dangerous
+   bytes.
+
 ### Override Semantics
 
 The normalization overrides are appended to `os.Environ()`. In Go's
