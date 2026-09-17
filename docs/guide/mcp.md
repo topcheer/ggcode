@@ -90,6 +90,10 @@ When an MCP server signals that its tool list has changed (via the `notification
 
 Similarly, `notifications/resources/list_changed` triggers a resource list refresh. Server logging notifications (`notifications/message`) and progress notifications are forwarded to the debug log for observability.
 
+### Resource Subscriptions
+
+For servers that advertise the `resources.subscribe` capability (MCP specification 2025-06-18), ggcode lazily subscribes to each resource right after a successful `read_mcp_resource` call. Subscriptions are deduplicated per URI, and any `notifications/resources/updated` pushed by the server is recorded as a per-URI freshness stamp and logged. Subscriptions are cleaned up with `resources/unsubscribe` when the server connection closes. Servers without the capability are untouched — subscription is entirely opt-in on the server side.
+
 ## Server Capability Detection
 
 During the MCP handshake, ggcode detects and caches the server's advertised capabilities:
