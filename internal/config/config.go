@@ -95,9 +95,10 @@ type EndpointConfig struct {
 	ContextWindow   int                `yaml:"context_window,omitempty" json:"context_window,omitempty"`
 	MaxTokens       int                `yaml:"max_tokens" json:"max_tokens"`
 	ReasoningEffort string             `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
-	ToolChoice      string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`   // "auto", "required", "none" (empty = auto/default)
-	ServerTools     []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"` // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
-	MemoryTool      bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`   // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
+	TextVerbosity   string             `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"` // GPT-5 text.verbosity: "low", "medium", "high" (empty = API default)
+	ToolChoice      string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`       // "auto", "required", "none" (empty = auto/default)
+	ServerTools     []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`     // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
+	MemoryTool      bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`       // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
 	SupportsVision  *bool              `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
 	DefaultModel    string             `yaml:"default_model,omitempty" json:"default_model,omitempty"`
 	SelectedModel   string             `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
@@ -131,6 +132,7 @@ type ResolvedEndpoint struct {
 	ContextWindow   int
 	MaxTokens       int
 	ReasoningEffort string
+	TextVerbosity   string
 	ToolChoice      string
 	ServerTools     []ServerToolConfig
 	MemoryTool      bool

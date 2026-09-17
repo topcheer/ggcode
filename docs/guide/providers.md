@@ -148,6 +148,29 @@ tool calls because ggcode requests `include: ["reasoning.encrypted_content"]`
 and echoes the encrypted reasoning items it received back verbatim on the next
 request, per OpenAI's stateless multi-turn guidance.
 
+## Text Verbosity
+
+GPT-5 models accept a `text.verbosity` output-length hint that independently
+controls how verbose responses are (this is about answer length, not reasoning
+depth — use `reasoning_effort` for that). Configure it with `text_verbosity`
+on any `openai-responses` endpoint:
+
+```yaml
+vendors:
+  openai:
+    protocol: openai-responses
+    text_verbosity: low    # low | medium | high (empty = API default)
+    endpoints:
+      default:
+        base_url: https://api.openai.com/v1
+        model: gpt-5-codex
+```
+
+Valid values are `low`, `medium`, and `high`; the field is omitted from the
+request when unset. Endpoints that predate the parameter (some
+OpenAI-compatible relays) reject it as an unknown argument; ggcode detects that
+error class and transparently retries the request without the hint.
+
 ## Reasoning Effort
 
 Configure how much "thinking" the model does before responding. Supported by

@@ -49,6 +49,7 @@ type OpenAIResponsesProvider struct {
 	httpClient *http.Client
 
 	reasoningEffort   string
+	textVerbosity     string // GPT-5 text.verbosity: "", "low", "medium", "high"
 	toolChoice        string
 	maxTokensOverride int
 
@@ -83,6 +84,22 @@ func (p *OpenAIResponsesProvider) SetReasoningEffort(effort string) {
 }
 
 func (p *OpenAIResponsesProvider) ReasoningEffort() string { return p.reasoningEffort }
+
+// SetTextVerbosity stores the GPT-5 output-length hint sent as the request's
+// `text.verbosity` field ("low", "medium", "high"). An empty value clears the
+// hint; any other value is ignored so existing settings survive typo'd input,
+// mirroring the effort setters.
+func (p *OpenAIResponsesProvider) SetTextVerbosity(v string) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "":
+		p.textVerbosity = ""
+	case "low", "medium", "high":
+		p.textVerbosity = strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+// TextVerbosity returns the currently configured verbosity hint.
+func (p *OpenAIResponsesProvider) TextVerbosity() string { return p.textVerbosity }
 
 // SetToolChoice stores tool_choice ("auto", "required", "none" or a JSON
 // object). Empty means the API default ("auto").
@@ -168,6 +185,7 @@ type responsesRequest struct {
 	MaxOutputTokens int                  `json:"max_output_tokens,omitempty"`
 	Stream          bool                 `json:"stream,omitempty"`
 	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
+	Text            *responsesTextConfig `json:"text,omitempty"`
 	Store           *bool                `json:"store,omitempty"`
 	// Include asks the API to return encrypted reasoning tokens inside
 	// reasoning items so they can be replayed statelessly (sa-54).
@@ -176,6 +194,12 @@ type responsesRequest struct {
 
 type responsesReasoning struct {
 	Effort string `json:"effort,omitempty"`
+}
+
+// responsesTextConfig carries GPT-5 output-shaping controls. Only verbosity
+// is used today; the request field itself is named `text` per API spec.
+type responsesTextConfig struct {
+	Verbosity string `json:"verbosity,omitempty"`
 }
 
 // ---- message mapping ----
@@ -347,6 +371,9 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 	if p.reasoningEffort != "" {
 		req.Reasoning = &responsesReasoning{Effort: p.reasoningEffort}
 	}
+	if p.textVerbosity != "" {
+		req.Text = &responsesTextConfig{Verbosity: p.textVerbosity}
+	}
 	for _, t := range tools {
 		params := t.Parameters
 		if len(params) == 0 {
@@ -396,11 +423,35 @@ func (p *OpenAIResponsesProvider) post(ctx context.Context, req *responsesReques
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		defer resp.Body.Close()
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		// Some OpenAI-compatible gateways predate the GPT-5 text.verbosity
+		// control and reject it as an unknown/unsupported parameter. Drop the
+		// hint once and retry so verbosity-aware config degrades to the API
+		// default instead of hard-failing the request.
+		if req.Text != nil && responsesRejectsVerbosity(snippet) {
+			req.Text = nil
+			return p.post(ctx, req)
+		}
 		return nil, fmt.Errorf("responses API error %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	return resp, nil
+}
+
+// responsesRejectsVerbosity reports whether an API error snippet indicates
+// the text.verbosity parameter was rejected (unknown/unsupported parameter
+// classes).
+func responsesRejectsVerbosity(snippet []byte) bool {
+	s := strings.ToLower(string(snippet))
+	if !strings.Contains(s, "verbosity") {
+		return false
+	}
+	for _, marker := range []string{"unknown", "unsupported", "unrecognized", "unexpected"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- non-streaming Chat ----

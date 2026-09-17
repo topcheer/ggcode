@@ -683,6 +683,27 @@ func (f *FallbackProvider) ReasoningEffort() string {
 	return ""
 }
 
+// SetTextVerbosity sets the GPT-5 text.verbosity on all chain providers that
+// support it (Responses-API providers only; others ignore it).
+func (f *FallbackProvider) SetTextVerbosity(v string) {
+	f.forEach(func(p Provider) {
+		if tp, ok := p.(TextVerbosityProvider); ok {
+			tp.SetTextVerbosity(v)
+		}
+	})
+}
+
+// TextVerbosity returns the active provider's verbosity level.
+func (f *FallbackProvider) TextVerbosity() string {
+	f.mu.RLock()
+	active := f.activeLocked()
+	f.mu.RUnlock()
+	if tp, ok := active.(TextVerbosityProvider); ok {
+		return tp.TextVerbosity()
+	}
+	return ""
+}
+
 // SetSessionID sets the session ID on all chain providers that support it.
 func (f *FallbackProvider) SetSessionID(sessionID string) {
 	f.forEach(func(p Provider) {
