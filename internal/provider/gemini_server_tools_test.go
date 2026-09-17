@@ -153,3 +153,27 @@ func TestGeminiConvertResponseGroundingBlock(t *testing.T) {
 		t.Fatalf("expected single text block without grounding metadata, got %d", len(blocks))
 	}
 }
+
+// TestGeminiRegistryInjectsServerTools verifies the registry gemini leg wires
+// resolved.ServerTools into the provider end-to-end, dropping unsupported
+// declarations along the way.
+func TestGeminiRegistryInjectsServerTools(t *testing.T) {
+	prov, err := NewProvider(&config.ResolvedEndpoint{
+		Protocol:    "gemini",
+		APIKey:      "dummy",
+		Model:       "gemini-2.5-flash",
+		MaxTokens:   128,
+		ServerTools: []config.ServerToolConfig{{Type: "google_search"}, {Type: "bogus_tool"}},
+	})
+	if err != nil {
+		t.Fatalf("NewProvider: %v", err)
+	}
+	gp, ok := prov.(*GeminiProvider)
+	if !ok {
+		t.Fatalf("expected *GeminiProvider, got %T", prov)
+	}
+	tools := gp.convertTools(nil)
+	if len(tools) != 1 || tools[0].GoogleSearch == nil {
+		t.Fatalf("expected single GoogleSearch builtin entry (bogus_tool dropped), got %+v", tools)
+	}
+}
