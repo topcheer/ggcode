@@ -18,6 +18,26 @@ List all connected ggcode instances:
 a2a_discover
 ```
 
+### Signed Agent Cards (A2A §8.4)
+
+Publishers may attach JWS (RFC 7515) signatures to their Agent Card. A
+signature covers the RFC 8785 (JCS) canonicalization of the card JSON with the
+`signatures` field itself excluded. The verification key is taken from an
+embedded `jwk` or a `jku` JWKS URL (https only; plain http is accepted for
+loopback in local development).
+
+ggcode's client verifies signatures automatically during discovery:
+
+- a signature that **fails to verify** (ES256/RS256/EdDSA with a resolvable
+  key) proves the card was modified in transit — discovery **refuses** the
+  card;
+- signatures the build cannot validate (e.g. symmetric HS256, or a key that
+  cannot be fetched) are reported but do not block; the card is then used
+  unverified, the same as a client without this capability.
+
+Authenticated extended cards (`agent/getExtendedCard`) are verified the same
+way.
+
 ## Sending Tasks
 
 Delegate work to another ggcode instance by project name:

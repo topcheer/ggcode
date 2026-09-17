@@ -220,9 +220,25 @@ func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 		return nil, fmt.Errorf("a2a discover: HTTP %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(io.LimitReader(resp.Body, cardMaxBodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("a2a discover: read: %w", err)
+	}
+
 	var card AgentCard
-	if err := json.NewDecoder(resp.Body).Decode(&card); err != nil {
+	if err := json.Unmarshal(body, &card); err != nil {
 		return nil, fmt.Errorf("a2a discover: decode: %w", err)
+	}
+
+	// A2A §8.4: refuse a card whose JWS signature fails to verify.
+	if len(card.Signatures) > 0 {
+		results, tampered := verifyAgentCardSignature(ctx, body, fetchJWKS)
+		for _, r := range results {
+			debug.Log("a2a.card", "signature %d (alg=%s kid=%s): %s%v", r.Index, r.Alg, r.KID, r.Status, r.Err)
+		}
+		if tampered {
+			return nil, &CardTamperedError{Index: 0, Alg: results[0].Alg}
+		}
 	}
 
 	c.card.Store(&card)
@@ -590,10 +606,18 @@ func (c *Client) CancelTask(ctx context.Context, taskID string) (*Task, error) {
 }
 
 // GetExtendedAgentCard retrieves the authenticated extended agent card.
+// Like the public card, an extended card carrying signatures (A2A §8.4) is
+// verified before it is handed out; a tampered card is rejected.
 func (c *Client) GetExtendedAgentCard(ctx context.Context) (json.RawMessage, error) {
 	var result json.RawMessage
 	if err := c.rpc(ctx, "agent/getExtendedCard", struct{}{}, &result); err != nil {
 		return nil, err
+	}
+	if hasCardSignatures(result) {
+		_, tampered := verifyAgentCardSignature(ctx, result, fetchJWKS)
+		if tampered {
+			return nil, fmt.Errorf("a2a: extended agent card signature does not verify - card may be tampered")
+		}
 	}
 	return result, nil
 }
