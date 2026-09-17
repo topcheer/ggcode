@@ -67,10 +67,14 @@ var (
 // AgentCard describes an agent's identity, capabilities, and skills.
 // Served at GET /.well-known/agent.json
 type AgentCard struct {
-	Name               string                `json:"name"`
-	Description        string                `json:"description"`
-	URL                string                `json:"url"`
-	Version            string                `json:"version,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	Version     string `json:"version,omitempty"`
+	// ProtocolReversion is the A2A protocol version this card speaks (spec
+	// field "protocolVersion", required since 0.2.5). Clients use it to
+	// select v1.0 media types and encodings.
+	ProtocolReversion  string                `json:"protocolVersion,omitempty"`
 	Provider           *AgentProvider        `json:"provider,omitempty"`
 	Capabilities       AgentCapabilities     `json:"capabilities"`
 	SecuritySchemes    map[string]Security   `json:"securitySchemes,omitempty"` // deprecated, kept for compat
@@ -314,6 +318,94 @@ const (
 	TaskStateRejected      TaskState = "rejected"
 	TaskStateAuthRequired  TaskState = "auth-required"
 )
+
+// A2A v1.0 (2026-03, ADR-001 ProtoJSON) enum value names. JSON-RPC 0.2.x/0.3.x
+// peers serialize states as the legacy lowercase names above; v1.0 transports
+// (gRPC / transcoded HTTP) serialize the proto enum value names instead.
+// See the 1.0.0 changelog entry "Align enum format with ADR-001 ProtoJSON
+// specification" (a2aproject/A2A #1384).
+const (
+	TaskStateV1Submitted     = "TASK_STATE_SUBMITTED"
+	TaskStateV1Working       = "TASK_STATE_WORKING"
+	TaskStateV1InputRequired = "TASK_STATE_INPUT_REQUIRED"
+	TaskStateV1Completed     = "TASK_STATE_COMPLETED"
+	TaskStateV1Canceled      = "TASK_STATE_CANCELED"
+	TaskStateV1Failed        = "TASK_STATE_FAILED"
+	TaskStateV1Rejected      = "TASK_STATE_REJECTED"
+	TaskStateV1AuthRequired  = "TASK_STATE_AUTH_REQUIRED"
+)
+
+// taskStateAliases maps every known wire encoding of a task state - legacy
+// lowercase, v1.0 ProtoJSON names, the pre-#1283 British spelling, and the
+// underscored variants seen from SDK transcoders - to the canonical constant.
+var taskStateAliases = map[string]TaskState{
+	// legacy (JSON-RPC binding, 0.2.x/0.3.x)
+	"submitted":      TaskStateSubmitted,
+	"working":        TaskStateWorking,
+	"input-required": TaskStateInputRequired,
+	"completed":      TaskStateCompleted,
+	"canceled":       TaskStateCanceled,
+	"failed":         TaskStateFailed,
+	"rejected":       TaskStateRejected,
+	"auth-required":  TaskStateAuthRequired,
+	// historical spellings tolerated for interop
+	"cancelled":      TaskStateCanceled,
+	"input_required": TaskStateInputRequired,
+	"auth_required":  TaskStateAuthRequired,
+	// v1.0 ProtoJSON names (ADR-001)
+	TaskStateV1Submitted:     TaskStateSubmitted,
+	TaskStateV1Working:       TaskStateWorking,
+	TaskStateV1InputRequired: TaskStateInputRequired,
+	TaskStateV1Completed:     TaskStateCompleted,
+	TaskStateV1Canceled:      TaskStateCanceled,
+	TaskStateV1Failed:        TaskStateFailed,
+	TaskStateV1Rejected:      TaskStateRejected,
+	TaskStateV1AuthRequired:  TaskStateAuthRequired,
+}
+
+// taskStateV1Names is the canonical → v1.0 ProtoJSON name mapping.
+var taskStateV1Names = map[TaskState]string{
+	TaskStateSubmitted:     TaskStateV1Submitted,
+	TaskStateWorking:       TaskStateV1Working,
+	TaskStateInputRequired: TaskStateV1InputRequired,
+	TaskStateCompleted:     TaskStateV1Completed,
+	TaskStateCanceled:      TaskStateV1Canceled,
+	TaskStateFailed:        TaskStateV1Failed,
+	TaskStateRejected:      TaskStateV1Rejected,
+	TaskStateAuthRequired:  TaskStateV1AuthRequired,
+}
+
+// UnmarshalJSON accepts both the legacy lowercase state names and the A2A
+// v1.0 ProtoJSON enum names (TASK_STATE_*) on the wire, normalizing to the
+// canonical constants. Without this, a v1.0 remote agent reporting
+// "TASK_STATE_COMPLETED" decoded as an unknown state whose IsTerminal() is
+// false - the caller waited forever on a task that had already finished.
+func (s *TaskState) UnmarshalJSON(b []byte) error {
+	var raw string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if mapped, ok := taskStateAliases[raw]; ok {
+		*s = mapped
+		return nil
+	}
+	*s = TaskState(raw) // unknown states preserved verbatim (forward compat)
+	return nil
+}
+
+// MarshalJSON emits the legacy lowercase name so ggcode peers running older
+// builds keep round-tripping unchanged (SDK backwards-compat allowance,
+// 1.0.0 changelog #1401). Use V1Name when speaking to a v1.0 transport.
+func (s TaskState) MarshalJSON() ([]byte, error) { return json.Marshal(string(s)) }
+
+// V1Name returns the A2A v1.0 ProtoJSON enum name for the state
+// ("working" → "TASK_STATE_WORKING"); unknown states pass through.
+func (s TaskState) V1Name() string {
+	if n, ok := taskStateV1Names[s]; ok {
+		return n
+	}
+	return string(s)
+}
 
 // IsTerminal returns true for states that cannot transition further.
 // #1107: TaskStateAuthRequired is NOT terminal per the A2A spec - listing

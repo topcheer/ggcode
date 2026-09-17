@@ -173,3 +173,13 @@ a2a:
 Outgoing calls automatically attach the `A2A-Extensions` header. Before sending, the client checks the remote agent card: if an extension is marked `required` there but not activated here, the call **fails fast** with a clear error instead of violating the remote agent's contract.
 
 The canonical well-known path `/.well-known/agent-card.json` is served in addition to `/.well-known/agent.json` and `/.well-known/a2a.json`.
+
+## A2A v1.0 compatibility
+
+ggcode stays interoperable with both 0.2.x/0.3.x peers and A2A v1.0 (2026-03) agents:
+
+**Task state enums (1.0.0 #1384, ADR-001 ProtoJSON).** The wire accepts both the legacy lowercase names (`working`, `input-required`) and the v1.0 ProtoJSON enum names (`TASK_STATE_WORKING`, `TASK_STATE_INPUT_REQUIRED`), plus historical spellings (`cancelled`, `input_required`). Incoming values normalize to the canonical constants, so terminal-state detection works regardless of the remote encoding. Outgoing states stay lowercase - the SDK's backwards-compat allowance (1.0.0 #1401).
+
+**Well-known URI fallback (0.3.0 rename).** `Discover` probes `/.well-known/agent-card.json` first, falling back to `/.well-known/agent.json` only when the path returns 404/405 or the response is not a usable card. Errors on a real card (bad signature, tampering) surface as-is instead of being masked by a retry.
+
+**`application/a2a+json` (1.0.1 #1753).** Servers advertise `protocolVersion` in the agent card and prefer the v1.0 media type: requests that arrive with (or accept) `a2a+json` get `a2a+json` responses; legacy peers keep `application/json`. On the client side, a discovered card declaring a 1.x version switches request bodies to `a2a+json`; sync-error detection accepts both media types (a plain `application/json` substring check would misclassify an `a2a+json` error response as SSE).
