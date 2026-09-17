@@ -23,6 +23,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p := NewAnthropicProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
 		p.SetToolChoice(resolved.ToolChoice)
+		if len(resolved.ServerTools) > 0 {
+			p.SetServerTools(resolved.ServerTools)
+		}
 		return p, nil
 
 	case "openai-responses":

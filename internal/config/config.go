@@ -75,22 +75,30 @@ type ModelLimitConfig struct {
 	MaxTokens     int `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 }
 
+// ServerToolConfig declares one Anthropic server-side tool — executed inside
+// the API, never client-side. Supported Type values: "web_search_20250305",
+// "web_fetch_20250910". Results arrive in-band and are echoed back verbatim.
+type ServerToolConfig struct {
+	Type string `yaml:"type" json:"type"`
+}
+
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName     string   `yaml:"display_name" json:"display_name"`
-	Protocol        string   `yaml:"protocol" json:"protocol"`
-	BaseURL         string   `yaml:"base_url" json:"base_url"`
-	AuthType        string   `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
-	APIKey          string   `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	ContextWindow   int      `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	MaxTokens       int      `yaml:"max_tokens" json:"max_tokens"`
-	ReasoningEffort string   `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
-	ToolChoice      string   `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"` // "auto", "required", "none" (empty = auto/default)
-	SupportsVision  *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
-	DefaultModel    string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
-	SelectedModel   string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
-	Models          []string `yaml:"models,omitempty" json:"models,omitempty"`
-	Tags            []string `yaml:"tags,omitempty" json:"tags,omitempty"`
+	DisplayName     string             `yaml:"display_name" json:"display_name"`
+	Protocol        string             `yaml:"protocol" json:"protocol"`
+	BaseURL         string             `yaml:"base_url" json:"base_url"`
+	AuthType        string             `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
+	APIKey          string             `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	ContextWindow   int                `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens       int                `yaml:"max_tokens" json:"max_tokens"`
+	ReasoningEffort string             `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	ToolChoice      string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`   // "auto", "required", "none" (empty = auto/default)
+	ServerTools     []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"` // Anthropic server-side tools (web_search/web_fetch)
+	SupportsVision  *bool              `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
+	DefaultModel    string             `yaml:"default_model,omitempty" json:"default_model,omitempty"`
+	SelectedModel   string             `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
+	Models          []string           `yaml:"models,omitempty" json:"models,omitempty"`
+	Tags            []string           `yaml:"tags,omitempty" json:"tags,omitempty"`
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -120,6 +128,7 @@ type ResolvedEndpoint struct {
 	MaxTokens       int
 	ReasoningEffort string
 	ToolChoice      string
+	ServerTools     []ServerToolConfig
 	SupportsVision  bool
 	Models          []string
 	Tags            []string
