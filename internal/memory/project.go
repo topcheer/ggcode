@@ -71,6 +71,63 @@ func ProjectMemoryFilesForPath(targetPath string) ([]string, error) {
 	return append(globalProjectMemoryFiles(), listProjectMemoryFiles(dir)...), nil
 }
 
+// maxNestedDiscoveryDepth bounds the ancestor walk as a defensive guard
+// against pathological directory nesting.
+const maxNestedDiscoveryDepth = 64
+
+// NestedProjectMemoryFilesForPath implements AGENTS.md-style nested memory
+// discovery (https://agents.md): project memory files are collected from the
+// directory containing targetPath up to (and including) the nearest enclosing
+// repository root (a directory containing a .git entry). Files closer to the
+// target are returned LAST so that, when the list is read in order, the most
+// specific (deepest) conventions are applied after — and therefore take
+// precedence over — the repository-level ones. Global (~/.ggcode) files are
+// always prepended. When no repository boundary is found, this falls back to
+// the single-directory behavior of ProjectMemoryFilesForPath, preserving the
+// project-wide rule that memory is never loaded from unrelated ancestor
+// workspaces.
+func NestedProjectMemoryFilesForPath(targetPath string) ([]string, error) {
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		absPath = targetPath
+	}
+	dir := absPath
+	if info, statErr := os.Stat(absPath); statErr != nil || !info.IsDir() {
+		dir = filepath.Dir(absPath)
+	}
+
+	deepestFirst := make([]string, 0, 8)
+	inRepo := false
+	current := filepath.Clean(dir)
+	for depth := 0; depth <= maxNestedDiscoveryDepth; depth++ {
+		deepestFirst = append(deepestFirst, listProjectMemoryFiles(current)...)
+		if isRepositoryRoot(current) {
+			inRepo = true
+			break
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	if !inRepo {
+		return append(globalProjectMemoryFiles(), listProjectMemoryFiles(dir)...), nil
+	}
+	paths := make([]string, 0, len(deepestFirst))
+	for i := len(deepestFirst) - 1; i >= 0; i-- {
+		paths = append(paths, deepestFirst[i])
+	}
+	return append(globalProjectMemoryFiles(), paths...), nil
+}
+
+// isRepositoryRoot reports whether dir is a repository root (contains a .git
+// entry — a directory for normal clones, a file for worktrees/submodules).
+func isRepositoryRoot(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
+}
+
 // ReadProjectMemoryFiles reads project memory files in order and returns their
 // merged content plus the subset that had non-empty readable contents.
 func ReadProjectMemoryFiles(paths []string) (content string, files []string, err error) {
@@ -155,7 +212,19 @@ func BuildProjectMemoryHint(files []string, workingDir string) string {
 		if isOutsideWorkingDir(f, workingDir) {
 			label = f // full path for global files
 		} else {
-			label = filepath.Base(f)
+			// Inside the working dir: show the path relative to the working
+			// directory so nested (monorepo) memory files stay distinguishable
+			// from root-level ones (e.g. "packages/api/AGENTS.md") instead of
+			// collapsing into a single "AGENTS.md" label.
+			wd := workingDir
+			if wd == "" {
+				wd, _ = os.Getwd()
+			}
+			if rel, relErr := filepath.Rel(filepath.Clean(wd), filepath.Clean(f)); relErr == nil {
+				label = rel
+			} else {
+				label = filepath.Base(f)
+			}
 		}
 		if _, ok := seen[label]; ok {
 			continue

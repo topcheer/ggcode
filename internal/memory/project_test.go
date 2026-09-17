@@ -317,6 +317,118 @@ func TestBuildProjectMemoryHint_GlobalFileShowsFullPath(t *testing.T) {
 	}
 }
 
+func TestBuildProjectMemoryHint_NestedFilesNotCollapsed(t *testing.T) {
+	// Nested (monorepo) memory files must keep distinct relative-path labels
+	// instead of collapsing into one "AGENTS.md" entry via base-name dedupe.
+	got := BuildProjectMemoryHint([]string{
+		"/repo/AGENTS.md",
+		"/repo/packages/api/AGENTS.md",
+	}, "/repo")
+	count := 0
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "AGENTS.md") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 distinct AGENTS.md entries, got %d in %q", count, got)
+	}
+	if !strings.Contains(got, "packages/api/AGENTS.md") {
+		t.Fatalf("nested file should be labeled by relative path, got %q", got)
+	}
+}
+
+func TestNestedProjectMemoryFilesForPath_ClosestWins(t *testing.T) {
+	tmpDir := t.TempDir()
+	repo := filepath.Join(tmpDir, "repo")
+	pkg := filepath.Join(repo, "packages", "api")
+	for _, dir := range []string{filepath.Join(pkg, "src"), filepath.Join(repo, ".git")} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	writeMemoryFile(t, filepath.Join(repo, "AGENTS.md"), "repo rules")
+	writeMemoryFile(t, filepath.Join(pkg, "AGENTS.md"), "api rules")
+
+	files, err := NestedProjectMemoryFilesForPath(filepath.Join(pkg, "src", "main.go"))
+	if err != nil {
+		t.Fatalf("NestedProjectMemoryFilesForPath() error = %v", err)
+	}
+	iRoot := sliceIndexOf(files, filepath.Join(repo, "AGENTS.md"))
+	iPkg := sliceIndexOf(files, filepath.Join(pkg, "AGENTS.md"))
+	if iRoot < 0 || iPkg < 0 {
+		t.Fatalf("expected both nested memory files, got %v", files)
+	}
+	if iRoot > iPkg {
+		t.Fatalf("repo-level file must precede the deeper one (closest wins), got %v", files)
+	}
+	// Discovery must stop at the repository root: the AGENTS.md above the
+	// repo (unrelated ancestor workspace) must never be loaded.
+	for _, f := range files {
+		if f == filepath.Join(tmpDir, "AGENTS.md") {
+			t.Fatalf("ancestor workspace memory leaked into discovery: %v", files)
+		}
+	}
+}
+
+func TestNestedProjectMemoryFilesForPath_NoRepoFallsBackToDirOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	parent := filepath.Join(tmpDir, "workspace")
+	child := filepath.Join(parent, "child")
+	if err := os.MkdirAll(child, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeMemoryFile(t, filepath.Join(parent, "AGENTS.md"), "parent rules")
+	writeMemoryFile(t, filepath.Join(child, "GGCODE.md"), "child rules")
+
+	files, err := NestedProjectMemoryFilesForPath(filepath.Join(child, "main.go"))
+	if err != nil {
+		t.Fatalf("NestedProjectMemoryFilesForPath() error = %v", err)
+	}
+	if sliceIndexOf(files, filepath.Join(child, "GGCODE.md")) < 0 {
+		t.Fatalf("expected target-dir memory file, got %v", files)
+	}
+	// Without a repository boundary, ancestor memory must NOT be discovered —
+	// same no-unrelated-ancestor-workspaces rule as LoadProjectMemory.
+	for _, f := range files {
+		if f == filepath.Join(parent, "AGENTS.md") {
+			t.Fatalf("ancestor memory loaded without repo boundary: %v", files)
+		}
+	}
+}
+
+func TestNestedProjectMemoryFilesForPath_TargetIsRepoRootDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	writeMemoryFile(t, filepath.Join(tmpDir, "GGCODE.md"), "root rules")
+
+	files, err := NestedProjectMemoryFilesForPath(tmpDir)
+	if err != nil {
+		t.Fatalf("NestedProjectMemoryFilesForPath() error = %v", err)
+	}
+	if sliceIndexOf(files, filepath.Join(tmpDir, "GGCODE.md")) < 0 {
+		t.Fatalf("expected repo-root memory file, got %v", files)
+	}
+}
+
+func writeMemoryFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func sliceIndexOf(files []string, want string) int {
+	for i, f := range files {
+		if f == want {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestLoadProjectMemory_CrossToolCompatibility(t *testing.T) {
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "project")
