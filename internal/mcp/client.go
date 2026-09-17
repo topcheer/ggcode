@@ -513,7 +513,7 @@ func (c *Client) GetPrompt(ctx context.Context, name string, args map[string]int
 		Arguments: args,
 	}
 	var result GetPromptResult
-	if err := c.sendRequest(ctx, "prompts/get", params, &result); err != nil {
+	if err := c.callWithMRTR(ctx, "prompts/get", &params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: prompts/get: %w", c.name, err)
 	}
 	return &result, nil
@@ -522,7 +522,7 @@ func (c *Client) GetPrompt(ctx context.Context, name string, args map[string]int
 func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceResult, error) {
 	params := ReadResourceParams{URI: uri}
 	var result ReadResourceResult
-	if err := c.sendRequest(ctx, "resources/read", params, &result); err != nil {
+	if err := c.callWithMRTR(ctx, "resources/read", &params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, err)
 	}
 	return &result, nil
@@ -566,7 +566,7 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]inte
 		Arguments: args,
 	}
 	var result CallToolResult
-	if err := c.sendRequest(ctx, "tools/call", params, &result); err != nil {
+	if err := c.callWithMRTR(ctx, "tools/call", &params, &result); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: tools/call %s: %w", c.name, name, err)
 	}
 	return &result, nil
@@ -2939,6 +2939,11 @@ type PromptArgument struct {
 type GetPromptParams struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	// InputResponses/RequestState are MRTR retry fields (SEP-2322,
+	// protocol revision 2026-07-28; see mrtr.go). Empty on the initial
+	// send, populated only when retrying after an input_required result.
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
 }
 
 type GetPromptResult struct {
@@ -2966,6 +2971,9 @@ type ResourceDefinition struct {
 
 type ReadResourceParams struct {
 	URI string `json:"uri"`
+	// MRTR retry fields; see GetPromptParams.
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
 }
 
 type ReadResourceResult struct {
@@ -3007,6 +3015,9 @@ type ToolAnnotations struct {
 type CallToolParams struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	// MRTR retry fields; see GetPromptParams.
+	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
+	RequestState   string                     `json:"requestState,omitempty"`
 }
 
 type CallToolResult struct {
