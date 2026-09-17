@@ -37,6 +37,16 @@ func LoadInteractiveStartupAssets(
 		defer wg.Done()
 		start := time.Now()
 		autoMem.GarbageCollect()
+		// Sleep-time consolidation (arXiv:2504.13171): sweep the memory store
+		// in the idle window between sessions and persist staleness /
+		// contradiction / near-duplicate findings to a sidecar state file.
+		// Non-destructive; findings surface in debug logs (future: UI).
+		if report := autoMem.Consolidate(workingDir); report.HasFindings() {
+			debug.Log("memory", "startup consolidation: %s", report.String())
+			for _, w := range report.Warnings {
+				debug.Log("memory", "startup consolidation: %s", w)
+			}
+		}
 		_, autoFiles, _ = autoMem.LoadIndex()
 		debug.Log("agentruntime", "startup assets autoMem files=%d duration=%s", len(autoFiles), time.Since(start).Round(time.Millisecond))
 	})
