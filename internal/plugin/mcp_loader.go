@@ -285,6 +285,8 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	} else {
 		m.adapter = mcp.NewAdapter(m.cfg.Name, client, tools)
 	}
+	// sa-44: surface the server's initialize instructions on its tools.
+	m.adapter.SetServerInstructions(client.Instructions())
 	m.connected = true
 	m.awaitingOAuth = false
 	m.status = MCPStatusConnected
@@ -383,6 +385,8 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 	} else {
 		newAdapter = mcp.NewAdapter(m.cfg.Name, client, tools)
 	}
+	// sa-44: re-apply server instructions on the refreshed tool set.
+	newAdapter.SetServerInstructions(client.Instructions())
 
 	m.mu.Lock()
 	m.adapter = newAdapter
