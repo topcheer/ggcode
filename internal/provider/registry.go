@@ -32,11 +32,16 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 	// across reconstructions of the same logical endpoint so learned bounds
 	// survive provider swaps.
 	cap := AdaptiveCapFor(resolved.VendorID, resolved.BaseURL, resolved.Model, resolved.MaxTokens)
+	// sa-78: resolved call policy (timeout/retry budget). Applied to the
+	// OpenAI/Anthropic/Gemini providers via callPolicySetter; protocols
+	// without the setter keep the pre-existing defaults.
+	policy := callPolicyFromResolved(resolved)
 
 	switch resolved.Protocol {
 	case "anthropic":
 		p := NewAnthropicProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
+		p.setCallPolicy(policy)
 		p.SetToolChoice(resolved.ToolChoice)
 		p.SetStrictTools(strictToolsAllow(resolved))
 		if len(resolved.ServerTools) > 0 {
@@ -82,6 +87,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		}
 		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
+		p.setCallPolicy(policy)
 		p.SetReasoningEffort(resolved.ReasoningEffort)
 		p.SetServiceTier(resolved.ServiceTier)
 		p.SetToolChoice(resolved.ToolChoice)
@@ -103,6 +109,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			return nil, fmt.Errorf("creating gemini provider: %w", err)
 		}
 		prov.SetAdaptiveCap(cap)
+		prov.setCallPolicy(policy)
 		prov.SetReasoningEffort(resolved.ReasoningEffort)
 		prov.SetToolChoice(resolved.ToolChoice)
 		prov.SetLogprobsRequest(resolved.Logprobs) // sa-74

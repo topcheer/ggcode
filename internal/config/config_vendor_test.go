@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // Regression for #1517: AddEndpoint on an EXISTING endpoint wiped every
 // field the incoming call did not carry (Models, SelectedModel, APIKey
@@ -104,5 +107,67 @@ func TestResolveEndpointSelectionStrictTools(t *testing.T) {
 	}
 	if len(resolved.StrictToolsAllow) != 0 {
 		t.Fatalf("strict_tools_allow must default to empty, got %v", resolved.StrictToolsAllow)
+	}
+}
+
+// sa-78: LLM call policy resolution - per-model override wins over the
+// endpoint-level default; unset values fall back to zero (no deadline /
+// provider-wide retry budget).
+func TestResolveEndpointSelection_CallPolicy(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Vendor = "acme"
+	cfg.Endpoint = "relay"
+	cfg.Model = "gpt-5-nano"
+	cfg.Vendors["acme"] = VendorConfig{
+		APIKey: "sk-test",
+		Endpoints: map[string]EndpointConfig{
+			"relay": {
+				Protocol:       "openai",
+				BaseURL:        "https://relay.example.com/v1",
+				MaxTokens:      1024,
+				RequestTimeout: 2 * time.Minute,
+				MaxRetries:     4,
+				ModelLimits: map[string]ModelLimitConfig{
+					"gpt-5-nano": {RequestTimeout: 30 * time.Second, MaxRetries: 1},
+				},
+			},
+		},
+	}
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() error = %v", err)
+	}
+	if resolved.RequestTimeout != 30*time.Second {
+		t.Errorf("per-model override: RequestTimeout = %v, want 30s", resolved.RequestTimeout)
+	}
+	if resolved.MaxRetries != 1 {
+		t.Errorf("per-model override: MaxRetries = %d, want 1", resolved.MaxRetries)
+	}
+
+	// A model without a model_limits entry falls back to endpoint-level.
+	cfg.Model = "gpt-5-mini"
+	resolved, err = cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() (no model_limits entry) error = %v", err)
+	}
+	if resolved.RequestTimeout != 2*time.Minute {
+		t.Errorf("endpoint fallback: RequestTimeout = %v, want 2m", resolved.RequestTimeout)
+	}
+	if resolved.MaxRetries != 4 {
+		t.Errorf("endpoint fallback: MaxRetries = %d, want 4", resolved.MaxRetries)
+	}
+
+	// No policy configured anywhere: zero values (opt-in default behavior).
+	relay := cfg.Vendors["acme"].Endpoints["relay"]
+	relay.RequestTimeout = 0
+	relay.MaxRetries = 0
+	cfg.Vendors["acme"].Endpoints["relay"] = relay
+	resolved, err = cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatalf("ResolveActiveEndpoint() (unset policy) error = %v", err)
+	}
+	if resolved.RequestTimeout != 0 || resolved.MaxRetries != 0 {
+		t.Errorf("unset policy: got RequestTimeout=%v MaxRetries=%d, want 0/0", resolved.RequestTimeout, resolved.MaxRetries)
 	}
 }

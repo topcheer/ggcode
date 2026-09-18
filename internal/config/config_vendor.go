@@ -110,12 +110,24 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 	// Resolution priority for limits: per-model override -> endpoint-level -> inference.
 	maxTokens := 0
 	contextWindow := 0
+	// LLM call policy (sa-78): per-model override -> endpoint-level -> zero
+	// (no deadline / provider-wide retry default).
+	requestTimeout := time.Duration(0)
+	maxRetries := 0
 	if ml, ok := ep.ModelLimits[model]; ok {
 		maxTokens = ml.MaxTokens
 		contextWindow = ml.ContextWindow
+		requestTimeout = ml.RequestTimeout
+		maxRetries = ml.MaxRetries
 	}
 	if maxTokens == 0 {
 		maxTokens = ep.MaxTokens
+	}
+	if requestTimeout <= 0 {
+		requestTimeout = ep.RequestTimeout
+	}
+	if maxRetries <= 0 {
+		maxRetries = ep.MaxRetries
 	}
 	if maxTokens == 0 {
 		maxTokens = inferMaxOutputTokens(model, ep.Protocol)
@@ -161,6 +173,8 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		StrictTools:      strictTools,
 		StrictToolsAllow: append([]string(nil), ep.StrictToolsAllow...),
 		ServiceTier:      strings.TrimSpace(ep.ServiceTier),
+		RequestTimeout:   requestTimeout,
+		MaxRetries:       maxRetries,
 	}, nil
 }
 
