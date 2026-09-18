@@ -103,20 +103,56 @@ func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, 
 		}
 	}
 	var payload struct {
-		LimitUsed  float64 `json:"limit_used"`
-		LimitTotal float64 `json:"limit_total"`
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Limits []struct {
+				Type         string `json:"type"` // TIME_LIMIT (rolling) | TOKENS_LIMIT (weekly)
+				Unit         int    `json:"unit"`
+				Number       int    `json:"number"`
+				Percentage   int    `json:"percentage"` // 0-100 used
+				NextResetMs  int64  `json:"nextResetTime"`
+				CurrentValue int64  `json:"currentValue"`
+				Remaining    int64  `json:"remaining"`
+			} `json:"limits"`
+		} `json:"data"`
 	}
 	if err := getJSON(ctx, base+"/api/monitor/usage/quota/limit", apiKey, &payload); err != nil {
 		return nil, err
 	}
+	// Ground-truth shape (live capture 2026-09-18, user key): the earlier
+	// limit_used/limit_total struct came from sub2api and matched NOTHING
+	// in the real payload - the probe silently returned zero windows and
+	// the panel rendered an empty (wrong) entry.
 	info := &UsageInfo{Vendor: "zai", Source: "quota/limit"}
-	if payload.LimitTotal > 0 {
-		info.Windows = append(info.Windows, UsageWindow{
-			Label:       "quota",
-			UsedPercent: 100 * payload.LimitUsed / payload.LimitTotal,
-		})
+	for _, l := range payload.Data.Limits {
+		w := UsageWindow{UsedPercent: clampPercent(float64(l.Percentage))}
+		switch l.Type {
+		case "TIME_LIMIT":
+			w.Label = fmt.Sprintf("%d%sw", l.Number, unitShort(l.Unit))
+			if l.Unit == 5 && l.Number == 1 {
+				w.Label = "5h" // the common rolling window
+			}
+		case "TOKENS_LIMIT":
+			w.Label = "weekly"
+		default:
+			w.Label = strings.ToLower(strings.TrimSuffix(l.Type, "_LIMIT"))
+		}
+		if l.NextResetMs > 0 {
+			w.ResetsAt = time.UnixMilli(l.NextResetMs)
+		}
+		info.Windows = append(info.Windows, w)
 	}
 	return info, nil
+}
+
+// unitShort maps zai's opaque unit codes onto display letters. Observed
+// in the wild: unit=5 (hours). Unknown codes degrade to the raw number.
+func unitShort(u int) string {
+	if u == 5 {
+		return "h"
+	}
+	return ""
 }
 
 // DeepSeekProbe reads the multi-currency balance table; USD first, else

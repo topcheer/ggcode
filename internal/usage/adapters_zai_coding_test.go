@@ -17,7 +17,7 @@ func TestZaiProbeCodingPlanBaseNormalization(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"limit_used":25,"limit_total":100}`))
+		_, _ = w.Write([]byte(`{"code":200,"msg":"ok","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":500,"remaining":3500,"percentage":25,"nextResetTime":1789831644997},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":60,"nextResetTime":1789738694871}]},"success":true}`))
 	}))
 	defer srv.Close()
 
@@ -30,7 +30,7 @@ func TestZaiProbeCodingPlanBaseNormalization(t *testing.T) {
 	if gotPath != "/api/monitor/usage/quota/limit" {
 		t.Fatalf("monitor path must be requested at site root, got %q", gotPath)
 	}
-	if len(info.Windows) != 1 || info.Windows[0].UsedPercent != 25 {
+	if len(info.Windows) != 2 || info.Windows[0].UsedPercent != 25 || info.Windows[1].UsedPercent != 60 {
 		t.Fatalf("unexpected windows: %+v", info.Windows)
 	}
 }

@@ -20,15 +20,21 @@ func TestZaiProbeQuotaWindow(t *testing.T) {
 		if r.URL.Path != "/api/monitor/usage/quota/limit" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		w.Write([]byte(`{"limit_used":62,"limit_total":100}`))
+		w.Write([]byte(`{"code":200,"msg":"ok","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":500,"remaining":3500,"percentage":25,"nextResetTime":1789831644997},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":60,"nextResetTime":1789738694871}]},"success":true}`))
 	}))
 	defer srv.Close()
 	info, err := ZaiProbe{}.Fetch(context.Background(), srv.URL+"/api/paas/v4", "k")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(info.Windows) != 1 || info.Windows[0].UsedPercent != 62 {
+	if len(info.Windows) != 2 {
 		t.Fatalf("window = %+v", info.Windows)
+	}
+	if info.Windows[0].Label != "5h" || info.Windows[0].UsedPercent != 25 {
+		t.Fatalf("5h = %+v", info.Windows[0])
+	}
+	if info.Windows[1].Label != "weekly" || info.Windows[1].UsedPercent != 60 {
+		t.Fatalf("weekly = %+v", info.Windows[1])
 	}
 }
 

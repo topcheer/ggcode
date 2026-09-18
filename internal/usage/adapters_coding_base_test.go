@@ -32,7 +32,7 @@ func newPathRecorder(t *testing.T, body string) (*httptest.Server, *string) {
 // base and assert the exact request path.
 
 func TestZaiCodingPlanBase(t *testing.T) {
-	srv, path := newPathRecorder(t, `{"limit_used":25,"limit_total":100}`)
+	srv, path := newPathRecorder(t, `{"code":200,"msg":"ok","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":4000,"currentValue":500,"remaining":3500,"percentage":25,"nextResetTime":1789831644997},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":60,"nextResetTime":1789738694871}]},"success":true}`)
 	for _, base := range []string{
 		srv.URL + "/api/coding/paas/v4",
 		srv.URL + "/api/paas/v4",
@@ -60,7 +60,7 @@ func TestZaiMatchesIntlHost(t *testing.T) {
 }
 
 func TestKimiCodingBaseUsesUsagesWithoutDoubleV1(t *testing.T) {
-	srv, path := newPathRecorder(t, `{"limits":[{"detail":"5h","used_percent":10}],"usage":{"used_percent":20}}`)
+	srv, path := newPathRecorder(t, `{"usage":{"limit":"100","used":"7","remaining":"93","resetTime":"2026-09-22T12:53:21Z"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"1","remaining":"99","resetTime":"2026-09-18T13:53:21Z"}}],"usages":{"limit_5h":{"used_ratio":0.005,"reset_time":"2026-09-18T13:53:19Z"},"limit_7d":{"used_ratio":0.067,"reset_time":"2026-09-22T12:53:20Z"}}}`)
 	kf := KimiProbe{}
 	if _, err := kf.Fetch(context.Background(), srv.URL+"/coding/v1", "sk-kimi-x"); err != nil {
 		t.Fatalf("coding base: %v", err)

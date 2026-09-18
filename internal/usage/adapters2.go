@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -28,14 +29,34 @@ func (KimiProbe) MatchesURL(host string) bool {
 func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
 	var payload struct {
-		Limits []struct {
-			Detail      string  `json:"detail"`
-			UsedPercent float64 `json:"used_percent"`
-			ResetsAt    string  `json:"resets_at"`
-		} `json:"limits"`
 		Usage struct {
-			UsedPercent float64 `json:"used_percent"`
+			Limit     string `json:"limit"`
+			Used      string `json:"used"`
+			Remaining string `json:"remaining"`
+			ResetTime string `json:"resetTime"`
 		} `json:"usage"`
+		Limits []struct {
+			Window struct {
+				Duration int    `json:"duration"`
+				TimeUnit string `json:"timeUnit"`
+			} `json:"window"`
+			Detail struct {
+				Limit     string `json:"limit"`
+				Used      string `json:"used"`
+				Remaining string `json:"remaining"`
+				ResetTime string `json:"resetTime"`
+			} `json:"detail"`
+		} `json:"limits"`
+		Usages struct {
+			Limit5h struct {
+				UsedRatio float64 `json:"used_ratio"` // 0-1
+				ResetTime string  `json:"reset_time"`
+			} `json:"limit_5h"`
+			Limit7d struct {
+				UsedRatio float64 `json:"used_ratio"`
+				ResetTime string  `json:"reset_time"`
+			} `json:"limit_7d"`
+		} `json:"usages"`
 	}
 	// The usage endpoint lives at the fixed path /coding/v1/usages on the
 	// api.kimi.com root. Chat bases come in several shapes
@@ -50,20 +71,38 @@ func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo,
 	if err := getJSON(ctx, base+"/coding/v1/usages", apiKey, &payload); err != nil {
 		return nil, err
 	}
-	info := &UsageInfo{Vendor: "kimi", Source: "v1/usages"}
-	for _, l := range payload.Limits {
-		label := strings.TrimSpace(l.Detail)
-		if label == "" {
-			continue
-		}
-		w := UsageWindow{Label: label, UsedPercent: l.UsedPercent}
-		w.ResetsAt = parseResetTime(l.ResetsAt)
+	// Ground-truth shape (live capture 2026-09-18, user key): limits[].
+	// detail is a nested OBJECT (the old flat string field failed to
+	// unmarshal -> error for every coding-plan user), and the cleanest
+	// data is the usages.{limit_5h,limit_7d}.used_ratio pair (0-1).
+	info := &UsageInfo{Vendor: "kimi", Source: "coding/v1/usages"}
+	if u := payload.Usages.Limit5h; u.UsedRatio > 0 || u.ResetTime != "" {
+		w := UsageWindow{Label: "5h", UsedPercent: clampPercent(u.UsedRatio * 100)}
+		w.ResetsAt = parseResetTime(u.ResetTime)
 		info.Windows = append(info.Windows, w)
 	}
-	if payload.Usage.UsedPercent > 0 {
-		info.Windows = append(info.Windows, UsageWindow{Label: "weekly", UsedPercent: payload.Usage.UsedPercent})
+	if u := payload.Usages.Limit7d; u.UsedRatio > 0 || u.ResetTime != "" {
+		w := UsageWindow{Label: "7d", UsedPercent: clampPercent(u.UsedRatio * 100)}
+		w.ResetsAt = parseResetTime(u.ResetTime)
+		info.Windows = append(info.Windows, w)
+	}
+	if len(info.Windows) == 0 && len(payload.Limits) > 0 {
+		// Fallback: derive from the limits[] window entries (used/limit
+		// are decimal strings).
+		l := payload.Limits[0].Detail
+		if lim := parseFloat(l.Limit); lim > 0 {
+			w := UsageWindow{Label: "5h", UsedPercent: clampPercent(100 * parseFloat(l.Used) / lim)}
+			w.ResetsAt = parseResetTime(l.ResetTime)
+			info.Windows = append(info.Windows, w)
+		}
 	}
 	return info, nil
+}
+
+// parseFloat parses a decimal string field ("100", "7.5") tolerantly.
+func parseFloat(s string) float64 {
+	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	return v
 }
 
 // MinimaxProbe reads the coding-plan remains endpoint:
