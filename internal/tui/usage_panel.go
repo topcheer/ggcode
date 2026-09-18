@@ -190,12 +190,21 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 			}
 			msgs = append(msgs, usageInfoUpdatedMsg{vendor: t.vendor, info: info, err: err})
 		}
-		// bubbletea delivers one msg per Cmd; fan out via a batch.
-		cmds := make([]tea.Cmd, 0, len(msgs))
-		for _, msg := range msgs {
-			cmds = append(cmds, func() tea.Msg { return msg })
+		// A Cmd must RETURN a Msg - returning tea.Batch(cmds...) here
+		// returned a Cmd VALUE (a function) as the Msg, which Update's
+		// dispatch silently dropped: probes ran, results vanished, and the
+		// panel/sidebar stuck on "获取中…/probing" forever (2026-09-18
+		// user report). Deliver the first result as this Cmd's Msg; extra
+		// results (multi-vendor future) go through program.Send.
+		if len(msgs) == 0 {
+			return nil
 		}
-		return tea.Batch(cmds...)
+		for _, extra := range msgs[1:] {
+			if program := m.program; program != nil {
+				program.Send(extra)
+			}
+		}
+		return msgs[0]
 	}
 }
 

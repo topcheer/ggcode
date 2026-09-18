@@ -195,3 +195,45 @@ func TestVendorLevelKeyReachesProbe(t *testing.T) {
 		t.Fatalf("Fetch baseURL = %q, want %q", probe.gotURL, zaiCodingURL)
 	}
 }
+
+// TestFetchCmdReturnsRealMsg guards the 2026-09-18 stuck-fetching bug: the
+// fetch Cmd must RETURN a usageInfoUpdatedMsg, not a tea.Batch Cmd value
+// (a function as Msg - silently dropped by Update dispatch, leaving the
+// panel on 获取中 and the sidebar on probing forever).
+func TestFetchCmdReturnsRealMsg(t *testing.T) {
+	probe := &keyCaptureProbe{}
+	svc := usage.NewService()
+	svc.Register(probe)
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendors["zai"] = config.VendorConfig{
+		APIKey: "vendor-level-key",
+		Endpoints: map[string]config.EndpointConfig{
+			"cn-coding-openai": {BaseURL: zaiCodingURL, DefaultModel: "glm-5"},
+		},
+	}
+	m.SetConfig(cfg)
+	m.activeVendor = "zai"
+	m.activeEndpoint = "cn-coding-openai"
+	m.usageService = svc
+	m.usagePanel = &usagePanelState{
+		infos: map[string]*usage.UsageInfo{}, errs: map[string]string{}, fetching: true,
+	}
+	cmd := m.fetchAllUsageCmd()
+	if cmd == nil {
+		t.Fatal("nil cmd")
+	}
+	msg := cmd()
+	um, ok := msg.(usageInfoUpdatedMsg)
+	if !ok {
+		t.Fatalf("cmd() returned %T, want usageInfoUpdatedMsg (a returned Cmd-as-Msg is dropped by Update)", msg)
+	}
+	if um.vendor != "zai" || um.info == nil {
+		t.Fatalf("msg = %+v, want zai info", um)
+	}
+	// And the returned msg must actually flip the panel out of fetching.
+	out, _ := m.handleUsageInfoUpdated(um)
+	if out.usagePanel.fetching {
+		t.Fatal("panel still fetching after result delivered")
+	}
+}
