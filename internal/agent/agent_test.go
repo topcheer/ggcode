@@ -2447,3 +2447,49 @@ func TestAgentEmptyResponseNudgeDelivered(t *testing.T) {
 		t.Error("nudge message not present in the SECOND request - delivery path regressed (#1672 case 1)")
 	}
 }
+
+// TestRunStreamConfidenceNotice (sa-74): a low-confidence turn (mean token
+// logprob < -2.5) surfaces a [confidence] system notice; a healthy or
+// absent confidence value stays silent.
+func TestRunStreamConfidenceNotice(t *testing.T) {
+	low := -3.2
+	high := -0.5
+	cases := []struct {
+		name       string
+		confidence *float64
+		want       bool
+	}{
+		{"low confidence warns", &low, true},
+		{"high confidence silent", &high, false},
+		{"nil confidence silent", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := &mockProvider{
+				streamEvents: [][]provider.StreamEvent{{
+					{Type: provider.StreamEventText, Text: "answer"},
+					{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 10, OutputTokens: 2}, Confidence: tc.confidence},
+				}},
+			}
+			a := NewAgent(mp, tool.NewRegistry(), "", 5)
+			defer a.Close()
+
+			var systemTexts []string
+			err := a.RunStream(context.Background(), "question", func(event provider.StreamEvent) {
+				if event.Type == provider.StreamEventSystem {
+					systemTexts = append(systemTexts, event.Text)
+				}
+			})
+			if err != nil {
+				t.Fatalf("RunStream() error = %v", err)
+			}
+			joined := strings.Join(systemTexts, "\n")
+			if tc.want && !strings.Contains(joined, "[confidence]") {
+				t.Fatalf("expected [confidence] notice for conf=%v, got %q", *tc.confidence, joined)
+			}
+			if !tc.want && strings.Contains(joined, "[confidence]") {
+				t.Fatalf("unexpected [confidence] notice, got %q", joined)
+			}
+		})
+	}
+}

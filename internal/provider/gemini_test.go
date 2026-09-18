@@ -394,3 +394,86 @@ func TestGeminiChatStream_MaxTokensNotPolicyBlocked(t *testing.T) {
 		t.Error("expected PolicyBlocked=false on MAX_TOKENS Done event")
 	}
 }
+
+// TestGeminiProvider_Logprobs (sa-74): SetLogprobsRequest(true) maps to
+// ResponseLogprobs=true + Logprobs=5 on the request config; disabled leaves
+// the config untouched so request payloads stay byte-identical to before.
+func TestGeminiProvider_Logprobs(t *testing.T) {
+	p := &GeminiProvider{}
+	p.SetLogprobsRequest(true)
+	config := &genai.GenerateContentConfig{}
+	p.applyLogprobs(config)
+	if !config.ResponseLogprobs {
+		t.Fatal("expected ResponseLogprobs=true when logprobs requested")
+	}
+	if config.Logprobs == nil || *config.Logprobs != 5 {
+		t.Fatalf("expected Logprobs=5, got %v", config.Logprobs)
+	}
+	if !p.LogprobsRequested() {
+		t.Fatal("expected LogprobsRequested() to report enabled")
+	}
+
+	// Disabled: no request changes, no relay.
+	p2 := &GeminiProvider{}
+	if p2.LogprobsRequested() {
+		t.Fatal("expected LogprobsRequested() default false")
+	}
+	config2 := &genai.GenerateContentConfig{}
+	p2.applyLogprobs(config2)
+	if config2.ResponseLogprobs {
+		t.Fatal("expected ResponseLogprobs untouched when disabled")
+	}
+	if config2.Logprobs != nil {
+		t.Fatalf("expected Logprobs untouched when disabled, got %v", *config2.Logprobs)
+	}
+}
+
+// TestGeminiChatStream_AvgLogprobsRelay (sa-74): the candidate's avgLogprobs
+// from the stream is relayed as Confidence on the Done event. Last chunk
+// wins (Gemini reports a running aggregate per candidate).
+func TestGeminiChatStream_AvgLogprobsRelay(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}
+
+data: {"candidates":[{"content":{"role":"model","parts":[{"text":" there"}]},"avgLogprobs":-0.75,"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2}}
+
+`))
+	}))
+	defer server.Close()
+
+	prov, err := NewProvider(&config.ResolvedEndpoint{
+		Protocol:  "gemini",
+		BaseURL:   server.URL,
+		APIKey:    "dummy",
+		Model:     "gemini-2.5-flash",
+		MaxTokens: 128,
+		Logprobs:  true,
+	})
+	if err != nil {
+		t.Fatalf("expected Gemini provider, got error: %v", err)
+	}
+
+	ch, err := prov.ChatStream(context.Background(), []Message{
+		{Role: "user", Content: []ContentBlock{TextBlock("hello")}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatStream error: %v", err)
+	}
+	var doneEvent *StreamEvent
+	for ev := range ch {
+		if ev.Type == StreamEventDone {
+			e := ev
+			doneEvent = &e
+		}
+	}
+	if doneEvent == nil {
+		t.Fatal("expected Done event")
+	}
+	if doneEvent.Confidence == nil {
+		t.Fatal("expected Confidence on Done event when logprobs enabled")
+	}
+	if *doneEvent.Confidence != -0.75 {
+		t.Fatalf("expected Confidence -0.75, got %v", *doneEvent.Confidence)
+	}
+}
