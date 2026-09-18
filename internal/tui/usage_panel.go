@@ -32,7 +32,7 @@ type usagePanelState struct {
 }
 
 type usageInfoUpdatedMsg struct {
-	vendor string
+	vendor string // probe id (panel table key)
 	info   *usage.UsageInfo
 	err    error
 }
@@ -62,6 +62,11 @@ func (m *Model) probeableVendors() []string {
 // runtime activeVendor+activeEndpoint first, config Vendor+Endpoint as
 // fallback (daemon/IM attached sessions resolve through config). It
 // deliberately never scans sibling endpoints.
+// currentEndpointForUsage resolves THE endpoint this session is chatting
+// through, via the SAME runtime resolver the chat provider uses
+// (ResolveEndpointSelection: vendor-key fallback + ${VAR} expansion
+// applied). No parallel hand-rolled config walking - the probe must see
+// exactly what the chat sees.
 func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if m.config == nil {
 		return "", "", false
@@ -70,21 +75,18 @@ func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if vendor == "" {
 		vendor = m.config.Vendor
 	}
-	if vendor == "" {
-		return "", "", false
-	}
-	vc, found := m.config.Vendors[vendor]
-	if !found {
-		return "", "", false
-	}
 	epID := m.activeEndpoint
-	if epID == "" && m.config.Vendor == vendor {
+	if epID == "" && vendor == m.config.Vendor {
 		epID = m.config.Endpoint
 	}
-	if ep, found := vc.Endpoints[epID]; found {
-		return ep.BaseURL, ep.APIKey, true
+	if vendor == "" || epID == "" {
+		return "", "", false
 	}
-	return "", "", false
+	ep, err := m.config.ResolveEndpointSelection(vendor, epID, "")
+	if err != nil || ep == nil {
+		return "", "", false
+	}
+	return ep.BaseURL, ep.APIKey, true
 }
 
 // resolveVendorEndpoint returns the baseURL+apiKey the probe should use:
@@ -188,12 +190,21 @@ func (m *Model) fetchAllUsageCmd() tea.Cmd {
 			}
 			msgs = append(msgs, usageInfoUpdatedMsg{vendor: t.vendor, info: info, err: err})
 		}
-		// bubbletea delivers one msg per Cmd; fan out via a batch.
-		cmds := make([]tea.Cmd, 0, len(msgs))
-		for _, msg := range msgs {
-			cmds = append(cmds, func() tea.Msg { return msg })
+		// A Cmd must RETURN a Msg - returning tea.Batch(cmds...) here
+		// returned a Cmd VALUE (a function) as the Msg, which Update's
+		// dispatch silently dropped: probes ran, results vanished, and the
+		// panel/sidebar stuck on "获取中…/probing" forever (2026-09-18
+		// user report). Deliver the first result as this Cmd's Msg; extra
+		// results (multi-vendor future) go through program.Send.
+		if len(msgs) == 0 {
+			return nil
 		}
-		return tea.Batch(cmds...)
+		for _, extra := range msgs[1:] {
+			if program := m.program; program != nil {
+				program.Send(extra)
+			}
+		}
+		return msgs[0]
 	}
 }
 
@@ -293,28 +304,37 @@ func renderUsageBar(pct float64, width int) string {
 }
 
 // renderSidebarVendorUsageSection renders the current vendor's balance /
-// quota window in the sidebar. Anchor: render NOTHING until data arrived
-// (no placeholder, no spinner) - a section without data is noise.
+// quota window in the sidebar. With no probe result yet (or ever), the
+// section shows WHY in one line: the resolved endpoint URL and the exact
+// reason no usage is displayed - the "silent empty sidebar" of 2026-09-18
+// was undiagnosable from the UI because every failure mode rendered the
+// same nothing.
 func (m Model) renderSidebarVendorUsageSection() string {
-	if m.sidebarUsage == nil {
+	if m.sidebarUsage != nil {
+		info := m.sidebarUsage
+		width := max(12, m.sidebarWidth()-4)
+		rows := []string{m.renderSidebarSectionTitle(m.t("panel.usage"))}
+		if info.Balance != nil {
+			rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(m.t("label.balance"), fmt.Sprintf("$%.2f", *info.Balance), width, 11))
+		}
+		for _, w := range info.Windows {
+			pct := w.UsedPercent
+			if pct < 0 {
+				pct = 0
+			}
+			if pct > 100 {
+				pct = 100
+			}
+			value := lipgloss.NewStyle().Foreground(lipgloss.Color(usagePercentColorCode(pct))).Render(fmt.Sprintf("%.0f%%", pct))
+			rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(w.Label, value, width, 11))
+		}
+		return strings.Join(rows, "\n")
+	}
+	if m.usageSidebarStatus == "" {
 		return ""
 	}
-	info := m.sidebarUsage
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.usage"))}
-	if info.Balance != nil {
-		rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(m.t("label.balance"), fmt.Sprintf("$%.2f", *info.Balance), width, 11))
-	}
-	for _, w := range info.Windows {
-		pct := w.UsedPercent
-		if pct < 0 {
-			pct = 0
-		}
-		if pct > 100 {
-			pct = 100
-		}
-		value := lipgloss.NewStyle().Foreground(lipgloss.Color(usagePercentColorCode(pct))).Render(fmt.Sprintf("%.0f%%", pct))
-		rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(w.Label, value, width, 11))
-	}
+	rows = append(rows, util.Truncate(m.usageSidebarStatus, width))
 	return strings.Join(rows, "\n")
 }

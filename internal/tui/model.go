@@ -217,6 +217,7 @@ type Model struct {
 	usagePanel            *usagePanelState // #2150 batch 2: /usage panel
 	usageService          *usage.Service   // lazy; shared by panel + sidebar
 	sidebarUsage          *usage.UsageInfo // last probe result for the active vendor (nil = render nothing)
+	usageSidebarStatus    string           // human-readable WHY the sidebar has no usage (rendered when sidebarUsage==nil)
 	hooksPanel            *hooksPanelState
 	inspectorPanel        *inspectorPanelState
 	swarmMgr              *swarm.Manager

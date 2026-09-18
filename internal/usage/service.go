@@ -3,7 +3,6 @@ package usage
 import (
 	"context"
 	"errors"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -64,19 +63,18 @@ func (s *Service) Has(vendor string) bool {
 
 // Resolve returns the vendor id of the probe that OWNS the given base
 // URL (owner ruling 2026-09-15: adapter selection is BY URL, never by
-// config vendor name - a custom vendor pointed at open.bigmodel.cn gets
-// the zai probe; a zhipu-named vendor pointed elsewhere gets nothing).
-// Empty string when no probe claims the host.
+// config vendor name). Probes receive the FULL URL - hosts are shared
+// between metered and coding-plan APIs, so path decides plan windows.
+// Empty string when no probe claims it.
 func (s *Service) Resolve(baseURL string) string {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || u.Host == "" {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
 		return ""
 	}
-	host := strings.ToLower(u.Hostname())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, p := range s.probes {
-		if m, ok := p.(URLMatcher); ok && m.MatchesURL(host) {
+		if m, ok := p.(URLMatcher); ok && m.MatchesURL(baseURL) {
 			return id
 		}
 	}

@@ -51,11 +51,17 @@ func TestZaiCodingPlanBase(t *testing.T) {
 
 func TestZaiMatchesIntlHost(t *testing.T) {
 	zai := ZaiProbe{}
-	if !zai.MatchesURL("api.z.ai") {
-		t.Fatalf("api.z.ai must resolve to the zai probe")
+	// Coding-plan entrances claim; the shared metered base does NOT
+	// (open.bigmodel.cn hosts both /api/paas/v4 and /api/coding/paas/v4,
+	// and only the plan carries window quotas).
+	if !zai.MatchesURL("https://api.z.ai/api/coding/paas/v4") {
+		t.Fatalf("api.z.ai coding path must resolve to the zai probe")
 	}
-	if !zai.MatchesURL("open.bigmodel.cn") {
-		t.Fatalf("open.bigmodel.cn must resolve to the zai probe")
+	if !zai.MatchesURL("https://open.bigmodel.cn/api/coding/paas/v4") {
+		t.Fatalf("open.bigmodel.cn coding path must resolve to the zai probe")
+	}
+	if zai.MatchesURL("https://open.bigmodel.cn/api/paas/v4") {
+		t.Fatalf("metered /api/paas/v4 must NOT claim the coding-plan probe")
 	}
 }
 
@@ -79,7 +85,7 @@ func TestKimiCodingBaseUsesUsagesWithoutDoubleV1(t *testing.T) {
 
 func TestKimiMatchesCodingHost(t *testing.T) {
 	kp := KimiProbe{}
-	if !kp.MatchesURL("api.kimi.com") {
+	if !kp.MatchesURL("https://api.kimi.com/coding/v1") {
 		t.Fatalf("api.kimi.com must resolve to the kimi probe (coding plan host)")
 	}
 	if kp.MatchesURL("api.moonshot.cn") {

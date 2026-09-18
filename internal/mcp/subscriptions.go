@@ -238,6 +238,15 @@ const (
 	subStateUnsupported
 )
 
+// subscriptionsAckTimeout bounds the subscriptions/listen ack wait on the
+// synchronous connect path. A compliant server acks immediately; a legacy
+// one answers -32601. The bound exists for the third kind - servers that
+// ignore unknown methods entirely - which would otherwise stall the connect
+// goroutine for the full deadline (10s before this constant existed; live
+// freeze capture 2026-09-18). 2s is generous for an ack roundtrip on either
+// transport while keeping worst-case connect-path cost at 2s per server.
+const SubscriptionsAckTimeout = 2 * time.Second
+
 // EnableModernSubscriptions attempts to open the default list-change
 // subscription stream and records whether the server speaks the protocol at
 // all. A -32601 (method not found) response downgrades permanently for this
@@ -270,6 +279,17 @@ func (c *Client) EnableModernSubscriptions(ctx context.Context) bool {
 		if errors.As(err, &rpcErr) && rpcErr.Code == errCodeMethodNotFound {
 			c.subListenState.Store(subStateUnsupported)
 			debug.Log("mcp-subs", "server=%s subscriptions/listen unsupported, using legacy push", c.name)
+			return false
+		}
+		// Deadline-exceeded also downgrades permanently for this client:
+		// servers that silently IGNORE unknown methods (Pen.app stdio,
+		// 2026-09-18 live capture) never answer -32601, so the deadline is
+		// the only signal. Without this the downgrade never sticks and
+		// every reconnect re-pays the full ack wait on the synchronous
+		// connect path (startup freeze, two Pen servers = 2x10s).
+		if errors.Is(err, context.DeadlineExceeded) {
+			c.subListenState.Store(subStateUnsupported)
+			debug.Log("mcp-subs", "server=%s subscriptions/listen ack deadline exceeded (silent server), downgrading to legacy push", c.name)
 			return false
 		}
 		debug.Log("mcp-subs", "server=%s subscriptions/listen failed: %v", c.name, err)

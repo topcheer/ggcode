@@ -26,9 +26,12 @@ type UsageInfo struct {
 }
 
 // URLMatcher is the optional second face of a Probe: probes claim the
-// hosts they can actually query (owner ruling: URL-based matching).
+// FULL endpoint URL (scheme://host/path) - hosts are SHARED between
+// metered APIs and coding plans (open.bigmodel.cn serves both
+// /api/paas/v4 and /api/coding/paas/v4), so a bare-host match cannot
+// distinguish a plan window from a pay-as-you-go account. Path decides.
 type URLMatcher interface {
-	MatchesURL(host string) bool
+	MatchesURL(baseURL string) bool
 }
 
 // Probe fetches usage for one vendor. Implementations must be safe for

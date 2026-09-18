@@ -37,7 +37,7 @@ func TestUsagePanelRendersAnchors(t *testing.T) {
 		Endpoint: "e1",
 		Vendors: map[string]config.VendorConfig{
 			"zai": {Endpoints: map[string]config.EndpointConfig{
-				"e1": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "probe-key"},
+				"e1": {BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", APIKey: "probe-key", DefaultModel: "glm-5"},
 			}},
 		},
 	}

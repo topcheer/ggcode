@@ -16,7 +16,7 @@ func TestUsageFetchDenominatorPinnedToSnapshot(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k"},
+		"e": {BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", APIKey: "k", DefaultModel: "glm-5"},
 	}}
 	m.SetConfig(cfg)
 	m.usagePanel = &usagePanelState{
@@ -54,7 +54,7 @@ func TestUsageFetchSnapshotExcludesKeyless(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k"},
+		"e": {BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", APIKey: "k", DefaultModel: "glm-5"},
 	}}
 	// Keyed config entry but the session only probes the ACTIVE vendor's
 	// CURRENT endpoint: orphan is another vendor - never probed.

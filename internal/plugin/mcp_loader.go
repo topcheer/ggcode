@@ -296,15 +296,30 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.resources = resources
 	m.setupNotificationHandler(client)
 	// MCP 2026-07-28: self-detecting upgrade to the correlated subscription
-	// stream (subscriptions/listen). Legacy servers answer -32601 and are
-	// downgraded permanently for this client; modern servers ack the filter
-	// and subsequent list-change notifications arrive correlated (see
-	// internal/mcp/subscriptions.go). The legacy dispatch above is unchanged
-	// either way.
-	m.setupModernSubscriptions(client)
+	// stream (subscriptions/listen) is deferred to postConnect — it runs on
+	// the CONNECT CALLER's goroutine, OUTSIDE m.mu. The old inline call held
+	// the plugin write lock across the full ack wait (10s before #2542),
+	// and the TUI's refreshCommands → SnapshotMCP → Info() path takes this
+	// same lock's read side — every UI command refresh stalled behind
+	// silent-server ack deadlines (live freeze capture 2026-09-18).
 	m.startReconnectWatcher(client)
 	m.startWSHealthProbe(client)
 	return m.adapter, nil
+}
+
+// postConnect runs the subscriptions/listen upgrade outside m.mu. Call
+// once from the connect path after Connect returns successfully. Safe when
+// the plugin was concurrently closed or reconnected: it re-checks the
+// client under the lock and bails if the connection moved on.
+func (m *MCPPlugin) postConnect() {
+	m.mu.RLock()
+	client := m.client
+	live := m.client != nil && !m.closed
+	m.mu.RUnlock()
+	if !live {
+		return
+	}
+	m.setupModernSubscriptions(client)
 }
 
 // setupModernSubscriptions attempts the MCP 2026-07-28 subscriptions/listen
@@ -313,8 +328,19 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 // server's method-not-found response downgrades silently, and any other
 // failure only costs a debug log. Called from the shared connect path so
 // auto-reconnect re-opens the stream automatically.
+//
+// The ack wait runs on a SHORT deadline (2s, not the old 10s): this call
+// sits on the synchronous connect path, and servers that silently ignore
+// unknown methods (observed live: Pen.app's stdio servers, 2026-09-18)
+// neither answer -32601 nor ack — the old 10s timeout stalled each such
+// server's connect goroutine 10s and the 'connected' state it gates
+// arrived 10s late, which froze the TUI startup (two Pen servers = two
+// serialized 10s stalls, user-visible freeze of ~20s). A server that
+// cannot ack within 2s is treated as unsupported for this client
+// instance; EnableModernSubscriptions also persists the downgrade on
+// deadline so reconnects do not pay again.
 func (m *MCPPlugin) setupModernSubscriptions(client *mcp.Client) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), mcp.SubscriptionsAckTimeout)
 	defer cancel()
 	if client.EnableModernSubscriptions(ctx) {
 		debug.Log("mcp-notif", "server=%s modern subscription stream active", m.cfg.Name)
@@ -552,6 +578,7 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	// Attempt reconnection
 	adapter, err := m.Connect(ctx)
 	if err == nil && adapter != nil {
+		m.postConnect()
 		// #1285: Close may have run while Connect was dialing (TOCTOU). If
 		// so, the freshly connected client + its watcher must NOT survive:
 		// unregister and drop it, never re-register tools (ghost tools).
@@ -636,7 +663,13 @@ func (m *MCPPlugin) RegisterTools(ctx context.Context, registry *tool.Registry) 
 	if err != nil {
 		return err
 	}
-	return adapter.RegisterTools(registry)
+	if err := adapter.RegisterTools(registry); err != nil {
+		return err
+	}
+	// subscriptions/listen upgrade runs here (outside m.mu) — Connect no
+	// longer holds the plugin lock across the ack wait (see postConnect).
+	m.postConnect()
+	return nil
 }
 
 // Adapter returns the MCP adapter (nil if not connected).
