@@ -19,7 +19,9 @@ package tui
 // sequence of the original inline case.
 
 import (
+	"fmt"
 	"reflect"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -323,11 +325,28 @@ func regLanChatFamily() {
 // dispatchUpdate looks up the exact dynamic type of msg in the table.
 // Second return is false when no exact-type handler exists (the caller
 // then runs the interface-typed residual switch / fall-through tail).
+//
+// Slow-handler instrumentation: the Bubble Tea loop is single-threaded, so
+// any handler (or the View frame it triggers) blocking for seconds freezes
+// input and the cursor — the user-reported startup freeze (2026-09-18)
+// showed a 250ms input-drain tick landing 17s late with no attribution.
+// Handlers over slowUpdateLogThreshold are logged with their message type
+// so the next reproduction identifies the culprit directly from the debug
+// log instead of requiring a profiler attach.
 func (m Model) dispatchUpdate(msg tea.Msg, spinnerCmd tea.Cmd) (tea.Model, bool, tea.Cmd) {
 	h, ok := updateHandlers[reflect.TypeOf(msg)]
 	if !ok {
 		return nil, false, nil
 	}
+	start := time.Now()
 	model, cmd := h(m, msg, spinnerCmd)
+	if d := time.Since(start); d > slowUpdateLogThreshold {
+		debug.Log("tui", fmt.Sprintf("slow update handler: type=%T duration=%s", msg, d.Round(time.Millisecond)))
+	}
 	return model, true, cmd
 }
+
+// slowUpdateLogThreshold bounds normal handler cost with generous headroom:
+// regular handlers run in microseconds; anything past 100ms is a startup
+// stall worth attributing.
+const slowUpdateLogThreshold = 100 * time.Millisecond
