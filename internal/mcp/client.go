@@ -65,6 +65,9 @@ type Client struct {
 	modernVersion    string
 	modernServerInfo *Implementation
 	legacyServerInfo Implementation
+	// taskPollOverride replaces the SEP-1686 poll sleep in tests only;
+	// always zero in production.
+	taskPollOverride time.Duration
 	mu               sync.Mutex
 	stderrMu         sync.RWMutex
 	stderrBuf        strings.Builder
@@ -2999,6 +3002,9 @@ type ClientCaps struct {
 	} `json:"roots,omitempty"`
 	Sampling    *SamplingCapability    `json:"sampling,omitempty"`
 	Elicitation *ElicitationCapability `json:"elicitation,omitempty"`
+	// Tasks declares SEP-1686 task protocol support: the client implements
+	// tasks/get, tasks/list, tasks/cancel and tasks/result handling.
+	Tasks *struct{} `json:"tasks,omitempty"`
 }
 
 // ElicitationCapability is the initialize capability object for elicitation
@@ -3039,7 +3045,10 @@ type ServerCaps struct {
 	Tools     *ToolsCapability     `json:"tools,omitempty"`
 	Resources *ResourcesCapability `json:"resources,omitempty"`
 	Prompts   *PromptsCapability   `json:"prompts,omitempty"`
-	Logging   *struct{}            `json:"logging,omitempty"`
+	// Tasks is the SEP-1686 server capability; presence gates task-augmented
+	// tool calls and the task management methods.
+	Tasks   *TasksCapability `json:"tasks,omitempty"`
+	Logging *struct{}        `json:"logging,omitempty"`
 	// Completions mirrors the MCP completion capability key. Per spec
 	// (2025-06-18, "Completion": Capabilities) servers that support argument
 	// autocompletion declare `{"capabilities": {"completions": {}}}` — the
@@ -3198,6 +3207,10 @@ type CallToolParams struct {
 	// MRTR retry fields; see GetPromptParams.
 	InputResponses map[string]json.RawMessage `json:"inputResponses,omitempty"`
 	RequestState   string                     `json:"requestState,omitempty"`
+	// Task is the SEP-1686 task request option: when set, the server may
+	// answer with a task descriptor (resultType "task") instead of the
+	// tool result; see CallToolAsTask.
+	Task TaskRequestOptions `json:"task,omitempty"`
 }
 
 type CallToolResult struct {

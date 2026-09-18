@@ -113,6 +113,13 @@ func (c *Client) mrtrLoop(ctx context.Context, method string, params mrtrRetryPa
 		switch env.ResultType {
 		case "", ResultTypeComplete:
 			return json.Unmarshal(raw, out)
+		case ResultTypeTask:
+			// SEP-1686 task descriptor: pass the raw envelope through so the
+			// caller (CallToolAsTask) can run the poll/result protocol. Only
+			// task-augmented requests can legitimately receive this shape;
+			// non-task callers decode it into their result type and surface
+			// the mismatch themselves.
+			return json.Unmarshal(raw, out)
 		case ResultTypeInputRequired:
 			if round >= maxMRTRRoundTrips {
 				return fmt.Errorf("mcp[%s]: %s exceeded %d input_required round trips (MRTR loop guard)", c.name, method, maxMRTRRoundTrips)
