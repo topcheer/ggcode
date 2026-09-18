@@ -185,6 +185,7 @@ type StreamEvent struct {
 	Result            string        // for ToolResult
 	IsError           bool          // for ToolResult
 	Usage             *TokenUsage   // for Done (nil if not final)
+	Confidence        *float64      // for Done: mean token logprob of the turn (sa-74; nil = unavailable)
 	Error             error         // for Error
 	Truncated         bool          // for Done: true if output was cut off by length/max_tokens limit
 	PolicyBlocked     bool          // for Done: true if the stream was cut by a provider policy filter (safety/recitation/blocklist/etc.) — not recoverable by continuation (#266)
@@ -355,7 +356,16 @@ type ChatResponse struct {
 	// gemini SAFETY), or a provider-specific lowercase string. Empty means
 	// the provider did not report one — callers fall back to their own
 	// heuristics. Previously the field did not exist, so the MCP sampling
-	// handler guessed "max_tokens" from Usage.OutputTokens >= maxTokens,	// which both false-positived (natural length >= budget with no
+	// handler guessed "max_tokens" from Usage.OutputTokens >= maxTokens,
+	// which both false-positived (natural length >= budget with no
 	// truncation) and made the stop_sequence branch unreachable.
 	StopReason string
+	// Confidence (sa-74) is the mean token logprob of the response when the
+	// provider was asked for logprobs (openai logprobs / gemini
+	// responseLogprobs). Research basis: logprobs quantify model confidence
+	// per token and enable selective-escalation patterns in agents — flag
+	// low-confidence turns for human review instead of silently proceeding
+	// ("Logprobs Know Uncertainty", ACM KDD 2025; arXiv:2505.23854).
+	// Anthropic does not expose logprobs, so Confidence stays nil there.
+	Confidence *float64
 }

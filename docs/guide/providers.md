@@ -231,6 +231,32 @@ vendors:
 | `required` | Force the model to call at least one tool |
 | `none` | Disable all tool calls |
 
+## Confidence (Logprobs)
+
+Opt-in confidence telemetry for the `openai` and `gemini` protocols
+(Anthropic does not expose token logprobs):
+
+```yaml
+vendors:
+  openai:
+    protocol: openai
+    logprobs: true
+    endpoints:
+      default:
+        model: gpt-4o
+```
+
+When enabled, ggcode requests token logprobs (`logprobs` + `top_logprobs: 1`
+on OpenAI, `responseLogprobs` on Gemini) and reports the turn's mean token
+logprob as a confidence signal (research: "Logprobs Know Uncertainty", ACM
+KDD 2025 — token logprobs quantify model confidence and enable selective
+escalation). The value is always written to the verbose debug log; turns with
+mean logprob < -2.5 (~8% average token probability) additionally surface a
+low-confidence notice in the UI so you can review potentially unreliable
+output. Note that logprobs are not a calibrated probability and measured
+accuracy degrades on out-of-distribution or paraphrased prompts — treat the
+signal as advisory, not as truth.
+
 Setting `tool_choice: required` is useful when you want to force the model into
 agentic action (e.g., in autopilot mode). `none` is useful for pure
 conversational responses without tool use.

@@ -60,6 +60,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p.SetAdaptiveCap(cap)
 		p.SetReasoningEffort(resolved.ReasoningEffort)
 		p.SetToolChoice(resolved.ToolChoice)
+		p.SetLogprobsRequest(resolved.Logprobs) // sa-74
 		return p, nil
 
 	case "copilot":
@@ -78,6 +79,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		prov.SetAdaptiveCap(cap)
 		prov.SetReasoningEffort(resolved.ReasoningEffort)
 		prov.SetToolChoice(resolved.ToolChoice)
+		prov.SetLogprobsRequest(resolved.Logprobs) // sa-74
 		if len(resolved.ServerTools) > 0 {
 			prov.SetServerTools(resolved.ServerTools)
 		}

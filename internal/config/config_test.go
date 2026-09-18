@@ -1850,3 +1850,36 @@ sandbox:
 		t.Fatalf("absent sandbox section must be zero value, got %+v", def.Sandbox)
 	}
 }
+
+// TestResolveEndpointLogprobsPassThrough (sa-74): endpoint-level logprobs
+// flag reaches the provider via ResolvedEndpoint.
+func TestResolveEndpointLogprobsPassThrough(t *testing.T) {
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.Endpoints["lp-ep"] = EndpointConfig{
+		Protocol: "openai",
+		BaseURL:  "https://example.com",
+		Logprobs: true,
+	}
+	cfg.Vendors["zai"] = vc
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "lp-ep"
+
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.Logprobs {
+		t.Fatal("expected resolved endpoint Logprobs=true")
+	}
+
+	// Default endpoint stays off.
+	cfg.Endpoint = "cn-coding-openai"
+	resolved2, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved2.Logprobs {
+		t.Fatal("expected Logprobs=false by default")
+	}
+}

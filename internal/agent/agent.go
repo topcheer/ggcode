@@ -4906,6 +4906,22 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			}
 			truncated = event.Truncated
 			policyBlocked = event.PolicyBlocked
+			// sa-74: confidence telemetry — log the turn's mean token logprob
+			// and surface a low-confidence notice for human review (selective
+			// escalation; "Logprobs Know Uncertainty", ACM KDD 2025). Threshold:
+			// mean logprob < -2.5 ~= e^-2.5 ~= 8% average token probability.
+			// Only fires when the endpoint has logprobs enabled (Confidence nil
+			// otherwise; Anthropic never reports it).
+			if event.Confidence != nil {
+				conf := *event.Confidence
+				debug.Log("agent", "turn confidence: avg token logprob %.3f", conf)
+				if conf < -2.5 {
+					onEvent(provider.StreamEvent{
+						Type: provider.StreamEventSystem,
+						Text: fmt.Sprintf("[confidence] low model confidence this turn (avg token logprob %.2f) — consider reviewing the output.", conf),
+					})
+				}
+			}
 			// Fire LLM metric
 			a.emitMetric(turnMetrics.emit(usage))
 			onEvent(event)
