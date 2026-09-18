@@ -4945,6 +4945,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			toolCalls = append(toolCalls, event.Tool)
 			blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
 			blk.ThinkingSignature = string(event.Tool.ThoughtSignature) // #1610-A
+			blk.CallerRaw = event.Tool.Caller                           // PTC: verbatim echo-back
 			content = append(content, blk)
 		case provider.StreamEventServerTool:
 			// Anthropic server-side tool blocks (web_search/web_fetch): executed

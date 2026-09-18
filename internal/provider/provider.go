@@ -39,6 +39,13 @@ type ContentBlock struct {
 	Raw json.RawMessage `json:"raw,omitempty"`
 	ID  string          `json:"id,omitempty"` // server_tool_use block id
 
+	// CallerRaw keeps the verbatim "caller" field of a tool_use block
+	// (programmatic tool calling), e.g.
+	// {"type":"code_execution_20260120","tool_id":...}. It must be echoed
+	// back on the next request or the API cannot match the client
+	// tool_result to the pending programmatic call in the container.
+	CallerRaw json.RawMessage `json:"caller_raw,omitempty"`
+
 	// Anthropic server-side tool blocks (server_tool_use / web_search_tool_result
 	// / web_fetch_tool_result). These execute INSIDE Anthropic's infrastructure:
 	// ggcode never receives a client-side tool_use for them. The blocks are stored
@@ -217,6 +224,9 @@ type ToolCallDelta struct {
 	// function call part (#1610-A); it must ride the SAME tool_use block so
 	// the functionResponse can echo it back.
 	ThoughtSignature []byte
+	// Caller carries the verbatim Anthropic programmatic-tool-calling caller
+	// field of a tool_use block; it must ride the SAME block for echo-back.
+	Caller json.RawMessage
 }
 
 // ToolDefinition describes a tool to the LLM provider.
@@ -224,6 +234,11 @@ type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON Schema
+	// AllowedCallers (Anthropic programmatic tool calling): who may invoke
+	// this tool. Empty applies the provider default ("direct" +
+	// "code_execution_20260120") when the code execution server tool is
+	// enabled; ["direct"] pins a tool to direct invocation only.
+	AllowedCallers []string `json:"allowed_callers,omitempty"`
 	// Strict enables provider-side grammar-constrained decoding for this
 	// tool (OpenAI/Anthropic `strict: true`). Guarantees required fields are
 	// present and types match the schema. See strict_tools.go.

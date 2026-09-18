@@ -15,7 +15,9 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"net/http"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // AnthropicProvider implements Provider using the Anthropic SDK.
@@ -38,6 +40,14 @@ type AnthropicProvider struct {
 	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
 	strictTools      map[string]bool                      // strict tool use allowlist (empty = disabled)
 	toolSearchBeta   bool                                 // a tool_search_tool_* declaration is configured (beta header + defer_loading)
+
+	// Programmatic tool calling (code execution) container reuse. Every
+	// response of a PTC exchange carries {container: {id, expires_at}}; the
+	// continuation request (client tool_results answering programmatic
+	// tool_use blocks) must send the same container ID or it is rejected.
+	ptcMu               sync.Mutex
+	ptcContainerID      string
+	ptcContainerExpires time.Time
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -283,6 +293,53 @@ func (p *AnthropicProvider) SetMemoryTool(enabled bool) { p.memoryTool = enabled
 // MemoryToolEnabled reports whether requests carry the memory tool
 // declaration; the agent probes this to install its client-side handler.
 func (p *AnthropicProvider) MemoryToolEnabled() bool { return p.memoryTool }
+
+// ptcCodeExecutionEnabled reports whether the code execution server tool
+// (programmatic tool calling) is declared for this provider.
+func (p *AnthropicProvider) ptcCodeExecutionEnabled() bool {
+	for _, st := range p.serverTools {
+		if st.Type == "code_execution_20260120" {
+			return true
+		}
+	}
+	return false
+}
+
+// storePTCContainer remembers the container issued by the most recent
+// response so a continuation request can reuse it.
+func (p *AnthropicProvider) storePTCContainer(id string, expires time.Time) {
+	p.ptcMu.Lock()
+	defer p.ptcMu.Unlock()
+	p.ptcContainerID = id
+	p.ptcContainerExpires = expires
+}
+
+// freshPTCContainer returns the remembered container ID while it is still
+// live (with a 30s safety margin). An expired ID must NOT be sent: the API
+// rejects unknown/expired containers instead of provisioning a new one, so
+// the caller omits the field and lets the API start a fresh container.
+func (p *AnthropicProvider) freshPTCContainer() (string, bool) {
+	p.ptcMu.Lock()
+	defer p.ptcMu.Unlock()
+	if p.ptcContainerID == "" {
+		return "", false
+	}
+	if !p.ptcContainerExpires.IsZero() && time.Now().After(p.ptcContainerExpires.Add(-30*time.Second)) {
+		debug.Log("anthropic", "PTC container %s expired, requesting a fresh one", p.ptcContainerID)
+		return "", false
+	}
+	return p.ptcContainerID, true
+}
+
+// ptcRequestOptions returns the request options required for programmatic
+// tool calling (the beta-gated code execution server tool), or nil when PTC
+// is not configured.
+func (p *AnthropicProvider) ptcRequestOptions() []option.RequestOption {
+	if !p.ptcCodeExecutionEnabled() {
+		return nil
+	}
+	return []option.RequestOption{option.WithHeader("anthropic-beta", "programmatic-tool-calling-2026-01-20")}
+}
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
@@ -556,12 +613,12 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
-	callOpts := p.betaHeaderOpts(len(tools) > 0)
+	callOpts := append(p.betaHeaderOpts(len(tools) > 0), p.ptcRequestOptions()...)
 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
-		resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
+		resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.ptcRequestOptions()...)...)
 		return callErr
 	}, p.policy.attempts())
 	// Retry once without extended thinking if the model rejects it.
@@ -596,6 +653,11 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	}
 	if string(resp.StopReason) == "max_tokens" {
 		p.cap.OnTruncated()
+	}
+	// PTC: capture the container issued for this response so a continuation
+	// request reuses it.
+	if resp.Container.ID != "" {
+		p.storePTCContainer(resp.Container.ID, resp.Container.ExpiresAt)
 	}
 
 	// Surface server-side context edits so long-session token savings are
@@ -660,7 +722,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			truncated = false
 
 			func() {
-				stream := p.client.Messages.NewStreaming(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
+				stream := p.client.Messages.NewStreaming(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.ptcRequestOptions()...)...)
 				defer func() {
 					_ = stream.Close()
 				}()
@@ -675,6 +737,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						case "tool_use":
 							idx := int(event.Index)
 							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
+							if tu := cb.AsToolUse(); tu.JSON.Caller.Valid() {
+								tc.Caller = callerRawOf(tu.Caller) // PTC echo-back
+							}
 							toolCalls[idx] = tc
 							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
 						case "server_tool_use":
@@ -689,6 +754,15 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 							// JSON verbatim for echo-back on the next request. For the
 							// Tool Search Tool this preserves the tool_reference
 							// expansions so the API does not treat them as deferred.
+							emitted = true
+							ch <- StreamEvent{
+								Type:  StreamEventServerTool,
+								Block: ContentBlock{Type: cb.Type, Raw: json.RawMessage(cb.RawJSON())},
+							}
+						case "code_execution_tool_result":
+							// PTC: code execution result, executed in-API inside the
+							// container. Arrives complete; echo verbatim like the web
+							// server-tool results above.
 							emitted = true
 							ch <- StreamEvent{
 								Type:  StreamEventServerTool,
@@ -743,13 +817,30 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						if tc, ok := toolCalls[idx]; ok && tc.ServerTool {
 							debug.Log("anthropic", "content_block_stop server_tool_use id=%s name=%s", tc.ID, tc.Name)
 							emitted = true
-							ch <- StreamEvent{
-								Type: StreamEventServerTool,
-								Block: ContentBlock{
-									Type: "server_tool_use",
-									ID:   tc.ID,
-									Raw:  serverToolUseRaw(tc.ID, tc.Name, tc.Arguments),
-								},
+							if tc.Name == "code_execution" {
+								// PTC: the code execution call streams as a regular
+								// tool_use block executed in-API. Store the FULL tool_use
+								// block fields so the next request echoes back a valid
+								// tool_use (type+caller), not a bare server_tool_use.
+								ch <- StreamEvent{
+									Type: StreamEventServerTool,
+									Block: ContentBlock{
+										Type:      "tool_use",
+										ToolID:    tc.ID,
+										ToolName:  tc.Name,
+										Input:     tc.Arguments,
+										CallerRaw: tc.Caller,
+									},
+								}
+							} else {
+								ch <- StreamEvent{
+									Type: StreamEventServerTool,
+									Block: ContentBlock{
+										Type: "server_tool_use",
+										ID:   tc.ID,
+										Raw:  serverToolUseRaw(tc.ID, tc.Name, tc.Arguments),
+									},
+								}
 							}
 							delete(toolCalls, idx)
 						} else if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
@@ -829,6 +920,14 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 						if event.Message.Usage.CacheReadInputTokens > 0 {
 							cacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
+						}
+						// PTC: capture the code execution container issued for this
+						// response so the continuation request reuses it (a
+						// continuation with pending programmatic calls and no
+						// container ID is rejected).
+						if event.Message.Container.ID != "" {
+							p.storePTCContainer(event.Message.Container.ID, event.Message.Container.ExpiresAt)
+							debug.Log("anthropic", "PTC container issued: %s", event.Message.Container.ID)
 						}
 					}
 				}
@@ -1074,7 +1173,7 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
-			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
+			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result", "code_execution_tool_result":
 				// Verbatim echo-back of the server-tool exchange; silently skip
 				// only on impossible re-parse failures (raw was captured from
 				// the API itself).
@@ -1088,7 +1187,7 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 			case "image":
 				blocks = append(blocks, anthropic.NewImageBlockBase64(b.ImageMIME, b.ImageData))
 			case "tool_use":
-				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
+				blocks = append(blocks, toolUseBlockParam(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName, b.CallerRaw))
 			case "tool_result":
 				if len(b.Images) > 0 && !b.IsError {
 					var content []anthropic.ToolResultBlockParamContentUnion
@@ -1173,6 +1272,10 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		cache bool
 	}
 	var systemBlocks []sysBlock
+	// PTC bookkeeping: remember tool IDs whose invocation was programmatic
+	// (code execution caller) so the answering user message can be checked
+	// against the tool_result-only formatting rule.
+	programmaticTools := map[string]bool{}
 	for _, m := range messages {
 		if m.Role == "system" {
 			for _, b := range m.Content {
@@ -1182,10 +1285,17 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			}
 			continue
 		}
+		if m.Role == "assistant" {
+			for _, b := range m.Content {
+				if b.Type == "tool_use" && isProgrammaticCaller(b.CallerRaw) {
+					programmaticTools[b.ToolID] = true
+				}
+			}
+		}
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
-			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
+			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result", "code_execution_tool_result":
 				if pb, err := serverToolBlockParam(b.Raw); err == nil {
 					blocks = append(blocks, *pb)
 				} else {
@@ -1242,10 +1352,33 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				}
 			}
 		}
+		// PTC formatting rule: a user message answering programmatic tool
+		// calls must contain ONLY tool_result blocks; the API rejects the
+		// request otherwise. Strip accidental text/system noise instead of
+		// failing (leftover system blocks flush into params.System below).
+		toolResultOnly := false
+		if m.Role == "user" {
+			for _, b := range m.Content {
+				if b.Type == "tool_result" && programmaticTools[b.ToolID] {
+					toolResultOnly = true
+					break
+				}
+			}
+		}
+		if toolResultOnly && len(blocks) != countToolResultBlocks(blocks) {
+			filtered := make([]anthropic.ContentBlockParamUnion, 0, len(blocks))
+			for _, blk := range blocks {
+				if blk.OfToolResult != nil {
+					filtered = append(filtered, blk)
+				}
+			}
+			debug.Log("anthropic", "PTC: stripped %d non-tool_result block(s) from programmatic tool_result message", len(blocks)-len(filtered))
+			blocks = filtered
+		}
 		param := anthropic.MessageParam{Role: anthropic.MessageParamRole(m.Role), Content: blocks}
 		// Prepend system blocks into first user message, emitting each as a
 		// separate Anthropic text block with selective cache_control.
-		if m.Role == "user" && len(systemBlocks) > 0 {
+		if !toolResultOnly && m.Role == "user" && len(systemBlocks) > 0 {
 			newBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(blocks)+len(systemBlocks))
 			for i, sb := range systemBlocks {
 				var text string
@@ -1285,6 +1418,21 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				block.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			}
 			params.System = append(params.System, block)
+		}
+	}
+
+	// PTC continuation: when this request answers pending programmatic (code
+	// execution) tool calls, it must reuse the container issued by the paused
+	// response or the API rejects it. An expired ID is omitted and the API
+	// provisions a fresh container.
+	if hasPendingProgrammaticToolCalls(messages) {
+		if id, ok := p.freshPTCContainer(); ok {
+			debug.Log("anthropic", "PTC: reusing container %s for continuation", id)
+			params.Container = anthropic.MessageCreateParamsContainerUnion{
+				OfContainers: &anthropic.ContainerParams{ID: param.NewOpt(id)},
+			}
+		} else {
+			debug.Log("anthropic", "PTC: pending programmatic tool calls but no live container; letting the API provision one")
 		}
 	}
 
@@ -1409,6 +1557,20 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				} else {
 					lastCacheable = i
 				}
+				// PTC: allowed_callers governs whether the model may invoke a
+				// tool directly, programmatically from code execution, or both.
+				// With the code execution server tool enabled, tools default to
+				// both (the PTC-recommended setup); an explicit non-empty
+				// AllowedCallers always wins.
+				if p.ptcCodeExecutionEnabled() {
+					if len(t.AllowedCallers) > 0 {
+						toolParams[i].OfTool.AllowedCallers = t.AllowedCallers
+					} else {
+						toolParams[i].OfTool.AllowedCallers = []string{"direct", "code_execution_20260120"}
+					}
+				} else if len(t.AllowedCallers) > 0 {
+					toolParams[i].OfTool.AllowedCallers = t.AllowedCallers
+				}
 			}
 		}
 		// Cache control breakpoint on the last NON-deferred tool definition
@@ -1444,6 +1606,11 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				u = anthropic.ToolUnionParam{OfToolSearchToolBm25_20251119: &anthropic.ToolSearchToolBm25_20251119Param{
 					Type: anthropic.ToolSearchToolBm25_20251119TypeToolSearchToolBm25_20251119,
 				}}
+			case "code_execution_20260120":
+				// Programmatic tool calling (beta): Claude writes bash/python
+				// code executed in an Anthropic-managed container and may call
+				// allowed_callers tools from within it.
+				u = anthropic.ToolUnionParam{OfCodeExecutionTool20260120: &anthropic.CodeExecutionTool20260120Param{}}
 			default:
 				debug.Log("anthropic", "unknown server tool type %q ignored", st.Type)
 				continue
@@ -1545,6 +1712,22 @@ func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnio
 			return nil, err
 		}
 		return &anthropic.ContentBlockParamUnion{OfToolSearchToolResult: &ts}, nil
+	case "web_fetch_tool_result":
+		var b anthropic.WebFetchToolResultBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		param := b.ToParam()
+		return &anthropic.ContentBlockParamUnion{OfWebFetchToolResult: &param}, nil
+	case "code_execution_tool_result":
+		// PTC: code execution result blocks round-trip exactly like the web
+		// server-tool results (output lives inside the container exchange).
+		var b anthropic.CodeExecutionToolResultBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		param := b.ToParam()
+		return &anthropic.ContentBlockParamUnion{OfCodeExecutionToolResult: &param}, nil
 	}
 	return nil, fmt.Errorf("unknown server tool block type %q", probe.Type)
 }
@@ -1562,6 +1745,8 @@ func setToolUnionCacheControl(u *anthropic.ToolUnionParam) {
 		u.OfToolSearchToolRegex20251119.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	case u.OfToolSearchToolBm25_20251119 != nil:
 		u.OfToolSearchToolBm25_20251119.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case u.OfCodeExecutionTool20260120 != nil:
+		u.OfCodeExecutionTool20260120.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 }
 
@@ -1572,7 +1757,12 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 		case "text":
 			result = append(result, TextBlock(b.Text))
 		case "tool_use":
-			result = append(result, ToolUseBlock(b.ID, b.Name, b.Input))
+			tub := ToolUseBlock(b.ID, b.Name, b.Input)
+			tu := b.AsToolUse()
+			if tu.JSON.Caller.Valid() {
+				tub.CallerRaw = callerRawOf(tu.Caller) // PTC echo-back
+			}
+			result = append(result, tub)
 		case "thinking":
 			tb := b.AsThinking()
 			result = append(result, ContentBlock{
@@ -1586,7 +1776,7 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 				Type:         "redacted_thinking",
 				ThinkingData: rb.Data,
 			})
-		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
+		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result", "code_execution_tool_result":
 			// Anthropic server-side tool blocks: executed inside the API, never
 			// surfaced as client tool calls. Keep the raw JSON verbatim so the
 			// full exchange can be echoed back on subsequent requests.
@@ -1656,4 +1846,95 @@ func (p *AnthropicProvider) contextEditingOptions() []option.RequestOption {
 		return nil
 	}
 	return []option.RequestOption{option.WithJSONSet("context_management", payload)}
+}
+
+// callerRawOf extracts the verbatim caller JSON from a tool_use block's
+// caller union, or nil when absent (plain tool_use has no caller field).
+func callerRawOf(caller anthropic.ToolUseBlockCallerUnion) json.RawMessage {
+	raw := caller.RawJSON()
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	return json.RawMessage(raw)
+}
+
+// isProgrammaticCaller reports whether a verbatim caller field denotes a
+// programmatic (code execution) invocation rather than a direct model call.
+func isProgrammaticCaller(callerRaw json.RawMessage) bool {
+	if len(callerRaw) == 0 {
+		return false
+	}
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(callerRaw, &probe); err != nil {
+		return false
+	}
+	return strings.HasPrefix(probe.Type, "code_execution")
+}
+
+// toolUseBlockParam builds a tool_use request block, restoring the verbatim
+// caller field when present (programmatic tool calling). A dropped caller
+// prevents the API from matching the client tool_result to the pending
+// programmatic call inside the code execution container.
+func toolUseBlockParam(id string, input any, name string, callerRaw json.RawMessage) anthropic.ContentBlockParamUnion {
+	if len(callerRaw) == 0 {
+		return anthropic.NewToolUseBlock(id, input, name)
+	}
+	p := anthropic.ToolUseBlockParam{ID: id, Input: input, Name: name}
+	var c struct {
+		Type   string `json:"type"`
+		ToolID string `json:"tool_id"`
+	}
+	if err := json.Unmarshal(callerRaw, &c); err == nil {
+		switch c.Type {
+		case "direct":
+			p.Caller = anthropic.ToolUseBlockParamCallerUnion{OfDirect: &anthropic.DirectCallerParam{}}
+		case "code_execution_20250825":
+			if c.ToolID != "" {
+				p.Caller = anthropic.ToolUseBlockParamCallerUnion{OfCodeExecution20250825: &anthropic.ServerToolCallerParam{ToolID: c.ToolID}}
+			}
+		case "code_execution_20260120":
+			if c.ToolID != "" {
+				p.Caller = anthropic.ToolUseBlockParamCallerUnion{OfCodeExecution20260120: &anthropic.ServerToolCaller20260120Param{ToolID: c.ToolID}}
+			}
+		}
+	}
+	return anthropic.ContentBlockParamUnion{OfToolUse: &p}
+}
+
+// hasPendingProgrammaticToolCalls reports whether the conversation tail ends
+// with unanswered programmatic (code execution) tool_use blocks — i.e. this
+// request is the container continuation.
+func hasPendingProgrammaticToolCalls(messages []Message) bool {
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		switch m.Role {
+		case "assistant":
+			for _, b := range m.Content {
+				if b.Type == "tool_use" && isProgrammaticCaller(b.CallerRaw) {
+					return true
+				}
+			}
+			return false
+		case "user":
+			for _, b := range m.Content {
+				if b.Type == "tool_result" {
+					return false
+				}
+			}
+		}
+	}
+	return false
+}
+
+// countToolResultBlocks counts request-side tool_result blocks in a message.
+func countToolResultBlocks(blocks []anthropic.ContentBlockParamUnion) int {
+	n := 0
+	for _, blk := range blocks {
+		if blk.OfToolResult != nil {
+			n++
+		}
+	}
+	return n
 }
