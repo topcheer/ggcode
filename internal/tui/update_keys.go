@@ -53,6 +53,20 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	if m.tmuxMenuOpen {
 		return m.handleTmuxMenuKey(msg.String())
 	}
+	// Alt+R reverse input history search (Claude Code v2.0-style; Ctrl+R is
+	// the sidebar toggle here). While the search mode is active it owns the
+	// composer: printable keys refine the query, Enter falls through to the
+	// normal submission path, Esc cancels.
+	if m.historySearch.active {
+		handled, m2, cmd := m.handleHistorySearchKey(msg)
+		if handled {
+			return m2, cmd
+		}
+		m = m2 // search mode exited keeping the match; key flows through below
+	} else if msg.String() == "alt+r" {
+		m.beginHistorySearch()
+		return m, nil
+	}
 	if msg.String() == "ctrl+x" {
 		m.openTmuxMenu()
 		return m, nil
