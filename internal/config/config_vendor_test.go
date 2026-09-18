@@ -56,3 +56,53 @@ func TestMCPTombstoneRollback(t *testing.T) {
 		t.Fatalf("clear of absent name must be a no-op, got %v", c.DeletedMCPServers)
 	}
 }
+
+// sa-60: strict_tools endpoint options must survive endpoint resolution and
+// land on ResolvedEndpoint, which is what provider/registry consumes to call
+// SetStrictTools. YAML shape alone (strict_tools_test.go) does not cover this
+// wiring.
+func TestResolveEndpointSelectionStrictTools(t *testing.T) {
+	cfg := testConfigWithVendor()
+	vc := cfg.Vendors["zai"]
+	vc.Endpoints["strict-ep"] = EndpointConfig{
+		Protocol:         "openai",
+		BaseURL:          "https://example.com",
+		APIKey:           "sk-test",
+		MaxTokens:        1024,
+		StrictTools:      boolPtr(true),
+		StrictToolsAllow: []string{"grep"},
+	}
+	vc.Endpoints["plain-ep"] = EndpointConfig{
+		Protocol:  "openai",
+		BaseURL:   "https://example.com",
+		APIKey:    "sk-test",
+		MaxTokens: 1024,
+	}
+	cfg.Vendors["zai"] = vc
+
+	cfg.Vendor = "zai"
+	cfg.Endpoint = "strict-ep"
+	resolved, err := cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.StrictTools {
+		t.Fatalf("resolved.StrictTools = false, want true")
+	}
+	if len(resolved.StrictToolsAllow) != 1 || resolved.StrictToolsAllow[0] != "grep" {
+		t.Fatalf("resolved.StrictToolsAllow = %v, want [grep]", resolved.StrictToolsAllow)
+	}
+
+	// Endpoint without the knob stays disabled (nil => false, no allowlist).
+	cfg.Endpoint = "plain-ep"
+	resolved, err = cfg.ResolveActiveEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.StrictTools {
+		t.Fatalf("strict_tools must default to false")
+	}
+	if len(resolved.StrictToolsAllow) != 0 {
+		t.Fatalf("strict_tools_allow must default to empty, got %v", resolved.StrictToolsAllow)
+	}
+}

@@ -31,7 +31,8 @@ type OpenAIProvider struct {
 	maxTokens        int
 	cap              *adaptiveCap // optional; when non-nil, takes precedence over maxTokens
 	reasoningEffort  string
-	toolChoice       string // "", "auto", "required", "none"
+	toolChoice       string          // "", "auto", "required", "none"
+	strictTools      map[string]bool // strict tool use allowlist (empty = disabled)
 	temperature      float64
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
 	topP             float64
@@ -57,6 +58,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
+		strictTools:     p.strictTools,
 		temperature:     p.temperature,
 		topP:            p.topP,
 		name:            p.name,
@@ -94,6 +96,13 @@ func (p *OpenAIProvider) SetToolChoice(choice string) {
 }
 
 func (p *OpenAIProvider) ToolChoice() string { return p.toolChoice }
+
+// SetStrictTools implements StrictToolsSetter: tools in the allowlist are sent
+// with OpenAI's grammar-constrained `strict: true` (structured outputs).
+// Non-allowlisted tools are serialized exactly as before.
+func (p *OpenAIProvider) SetStrictTools(allow map[string]bool) {
+	p.strictTools = allow
+}
 
 // probeChat sends a single chat request without retry, adaptive cap
 // tracking, or token counting. Used by context window probing.
@@ -1365,11 +1374,25 @@ func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
 			debug.Log("openai", "WARNING: tool %q has invalid JSON schema (%d bytes), using empty object fallback", t.Name, len(params))
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		// Strict tool use (structured outputs): only allowlisted tools get
+		// `strict: true`, and only when their schema is strict-compatible.
+		// go-openai serializes Strict with omitempty, so a plain false never
+		// reaches the wire - unchanged payloads for every other tool.
+		strict := t.Strict || p.strictTools[t.Name]
+		if strict {
+			prepared, ok := PrepareStrictToolSchema(t.Name, params)
+			if ok {
+				params = prepared
+			} else {
+				strict = false
+			}
+		}
 		result = append(result, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        t.Name,
 				Description: t.Description,
+				Strict:      strict,
 				Parameters:  params,
 			},
 		})

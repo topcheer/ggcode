@@ -36,6 +36,7 @@ type AnthropicProvider struct {
 	memoryTool       bool                                 // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
 	thinkingMode     string                               // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
 	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
+	strictTools      map[string]bool                      // strict tool use allowlist (empty = disabled)
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -64,6 +65,7 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		calibrator:      p.calibrator,
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
+		strictTools:     p.strictTools,
 		temperature:     p.temperature,
 		topP:            p.topP,
 		serverTools:     p.serverTools,
@@ -220,6 +222,14 @@ func (p *AnthropicProvider) beginEffortTracking() bool {
 // "required" (force tool use), "none" (disable tools), or "" (API default).
 func (p *AnthropicProvider) SetToolChoice(choice string) {
 	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
+}
+
+// SetStrictTools implements StrictToolsSetter: allowlisted tools are sent with
+// Anthropic's structured-outputs `strict: true` (grammar-constrained tool
+// input). Non-allowlisted tools keep today's serialization (ToolParam.Strict
+// is omitzero, so nothing changes on the wire).
+func (p *AnthropicProvider) SetStrictTools(allow map[string]bool) {
+	p.strictTools = allow
 }
 
 func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
@@ -1334,6 +1344,25 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			toolParams[i] = anthropic.ToolUnionParamOfTool(inputSchema, t.Name)
 			if toolParams[i].OfTool != nil {
 				toolParams[i].OfTool.Description = desc
+				// Strict tool use (structured outputs): allowlisted tools get
+				// grammar-constrained input decoding. Validation runs against
+				// the raw schema (all top-level fields must be required);
+				// the root "additionalProperties": false that Anthropic
+				// requires goes through ExtraFields because
+				// ToolInputSchemaParam's typed fields cannot carry it.
+				// (Recursive schema injection is applied on the OpenAI path,
+				// which serializes schemas as raw JSON.)
+				if p.strictTools[t.Name] {
+					if _, ok := PrepareStrictToolSchema(t.Name, t.Parameters); ok {
+						toolParams[i].OfTool.Strict = param.NewOpt(true)
+						extra := toolParams[i].OfTool.InputSchema.ExtraFields
+						if extra == nil {
+							extra = make(map[string]any, 1)
+						}
+						extra["additionalProperties"] = false
+						toolParams[i].OfTool.InputSchema.ExtraFields = extra
+					}
+				}
 				// Add cache control breakpoint on the last tool definition so
 				// Anthropic caches all tool schemas (which are large and static
 				// across turns). Only the last item needs the breakpoint —

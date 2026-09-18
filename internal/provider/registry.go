@@ -7,6 +7,21 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 )
 
+// strictToolsAllow resolves the strict-tool allowlist for an endpoint:
+// disabled unless strict_tools is set; an empty allow list falls back to
+// DefaultStrictTools (Anthropic caps strict tools at 20/request, so this is
+// a curated set, never all ~191 registered tools).
+func strictToolsAllow(resolved *config.ResolvedEndpoint) map[string]bool {
+	if !resolved.StrictTools {
+		return nil
+	}
+	allow := resolved.StrictToolsAllow
+	if len(allow) == 0 {
+		allow = DefaultStrictTools
+	}
+	return StrictToolsAllowlist(allow)
+}
+
 // NewProvider creates a protocol adapter from a resolved endpoint.
 func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 	if resolved == nil {
@@ -23,6 +38,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p := NewAnthropicProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
 		p.SetToolChoice(resolved.ToolChoice)
+		p.SetStrictTools(strictToolsAllow(resolved))
 		if len(resolved.ServerTools) > 0 {
 			p.SetServerTools(resolved.ServerTools)
 		}
@@ -65,6 +81,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p.SetReasoningEffort(resolved.ReasoningEffort)
 		p.SetToolChoice(resolved.ToolChoice)
 		p.SetLogprobsRequest(resolved.Logprobs) // sa-74
+		p.SetStrictTools(strictToolsAllow(resolved))
 		return p, nil
 
 	case "copilot":

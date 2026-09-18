@@ -319,6 +319,40 @@ Setting `tool_choice: required` is useful when you want to force the model into
 agentic action (e.g., in autopilot mode). `none` is useful for pure
 conversational responses without tool use.
 
+## Strict Tool Use
+
+Grammar-constrained tool inputs (structured outputs): the provider compiles a
+tool's JSON Schema into a generation grammar, so `required` fields are always
+present with correct types instead of being a semantic hint only. Supported by
+`openai` and `anthropic` protocols; other protocols ignore the setting.
+
+```yaml
+vendors:
+  anthropic:
+    protocol: anthropic
+    strict_tools: true                      # opt-in; off by default
+    strict_tools_allow:                     # optional; default below
+      - read_file
+      - edit_file
+      - write_file
+      - run_command
+    endpoints:
+      default:
+        model: claude-sonnet-4-5
+```
+
+| Field | Behavior |
+|-------|----------|
+| `strict_tools` (default off) | Send allowlisted tools with `strict: true` |
+| `strict_tools_allow` (optional) | Tool allowlist; defaults to the four file/command tools above |
+
+Tools whose schema has optional top-level fields are automatically skipped
+(strict mode requires every top-level property to be required), and
+`additionalProperties: false` is injected for you. Keep the allowlist short:
+Anthropic compiles at most 20 strict tools per request, and schemas with deeply
+optional fields cost more grammar complexity. Only enable this on first-party
+endpoints — some OpenAI-compatible APIs reject `strict: true` with HTTP 400.
+
 ## Test Connectivity
 
 Use `llm-probe` to verify your setup and list available models:

@@ -1,6 +1,9 @@
-# Tool Schema Strict Mode Analysis
+# Tool Schema Strict Mode
 
-> Status: **Deferred** — documented for future implementation.
+> Status: **Implemented** (sa-60) — opt-in per endpoint via `strict_tools: true`.
+> Default allowlist: `read_file`, `edit_file`, `write_file`, `run_command`;
+> override with `strict_tools_allow`. Gemini and OpenAI-Responses protocols
+> are unaffected; non-allowlisted tools serialize exactly as before.
 
 ## Background
 
@@ -38,29 +41,30 @@ When `strict: true` is set, the JSON Schema **must** include `"additionalPropert
 
 Current tool schemas do **not** include `"additionalProperties": false`.
 
-## Implementation Plan (When Ready)
+## Implementation (shipped)
 
-### Files to Modify
+### Files Changed
 
-1. **`internal/provider/provider.go`** — Add `Strict bool` to `ToolDefinition`
-2. **`internal/provider/openai.go`** — Set `Strict: t.Strict` in `convertTools()`
-3. **`internal/provider/anthropic.go`** — Set `Strict` + inject `additionalProperties: false` into schema
-4. **`internal/provider/gemini.go`** — No change (Gemini doesn't support strict)
-5. **All tool `Parameters()` JSON schemas** — Add `"additionalProperties": false`
+1. **`internal/provider/strict_tools.go`** — schema validation (`PrepareStrictToolSchema`),
+   recursive `additionalProperties: false` injection, `DefaultStrictTools` allowlist
+2. **`internal/provider/provider.go`** — `Strict bool` on `ToolDefinition`
+3. **`internal/provider/openai.go`** — `convertTools()` sets `Strict` + prepared schema (raw JSON round-trip injects nested levels)
+4. **`internal/provider/anthropic.go`** — `ToolParam.Strict = true` + root
+   `additionalProperties: false` via `ExtraFields` (typed `ToolInputSchemaParam`
+   fields cannot carry it); structured outputs are GA — no beta header needed
+5. **`internal/provider/registry.go`** — `strict_tools`/`strict_tools_allow`
+   resolution (`strictToolsAllow`), empty allowlist falls back to `DefaultStrictTools`
+6. **`internal/config/config.go` + `config_vendor.go`** — `strict_tools`, `strict_tools_allow` endpoint options
+
+Not required: editing every tool schema (injection is automatic at request
+build time); gemini.go is untouched (no strict concept).
 
 ### Safety Analysis
 
 - **OpenAI SDK**: `Strict bool` with `json:"strict,omitempty"` — `false` (zero value) is not serialized. Safe by default.
 - **Anthropic SDK**: `Strict param.Opt[bool]` with `json:"strict,omitzero"` — zero value not serialized. Safe by default.
 - **Gemini**: No strict field in SDK or API. Completely unaffected.
-- **Third-party OpenAI-compatible APIs**: **RISK** — some may return HTTP 400 when receiving `strict: true`. Needs per-provider testing.
-
-### Recommended Approach
-
-1. Add a `StrictMode` config option (per-vendor or global) so it can be toggled per-endpoint
-2. Default to `false` — only enable when the endpoint is known to support it
-3. For Anthropic, also need to set the beta header on the request
-4. For third-party OpenAI-compatible endpoints, add a `supports_strict` vendor flag to avoid 400 errors
+- **Third-party OpenAI-compatible APIs**: **RISK** — some may return HTTP 400 when receiving `strict: true`. Mitigated by the opt-in `strict_tools` knob: enable only on endpoints known to support it (first-party OpenAI/Anthropic).
 
 ## Current Soft Enforcement Strategy
 

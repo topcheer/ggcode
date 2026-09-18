@@ -224,6 +224,10 @@ type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON Schema
+	// Strict enables provider-side grammar-constrained decoding for this
+	// tool (OpenAI/Anthropic `strict: true`). Guarantees required fields are
+	// present and types match the schema. See strict_tools.go.
+	Strict bool `json:"strict,omitempty"`
 }
 
 // Provider is the interface every LLM backend must implement.
