@@ -268,6 +268,8 @@ func zhCatalog(key string) string {
 		return "推理强度: %s"
 	case "reasoning.effort.set":
 		return "本次会话推理强度已设为 %s"
+	case "history.search.hint":
+		return "（反向搜索）`%s'  Enter 采纳 / Esc 取消 / Alt+R 更早匹配"
 	case "reasoning.effort.unsupported.status":
 		return "当前提供商不支持推理强度"
 	case "reasoning.effort.unsupported":

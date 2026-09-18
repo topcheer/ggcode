@@ -260,6 +260,8 @@ func enCatalog(key string) string {
 		return "Reasoning effort: %s"
 	case "reasoning.effort.set":
 		return "Reasoning effort set to %s for this session"
+	case "history.search.hint":
+		return "(reverse-i-search) `%s'  Enter accept / Esc cancel / Alt+R older match"
 	case "reasoning.effort.unsupported.status":
 		return "Reasoning effort not supported by current provider"
 	case "reasoning.effort.unsupported":

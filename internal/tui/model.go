@@ -287,8 +287,9 @@ type Model struct {
 
 	exitConfirmPending   bool
 	cancelConfirmPending bool
-	lastEscPress         time.Time // for Esc+Esc double-press rewind detection
-	compactMode          bool      // Iteration 1: compact mode toggle
+	lastEscPress         time.Time          // for Esc+Esc double-press rewind detection
+	historySearch        historySearchState // Alt+R reverse input history search (Claude Code v2.0-style)
+	compactMode          bool               // Iteration 1: compact mode toggle
 	pending              *pendingQueue
 	sessionMu            *sync.Mutex
 	// persistedMsgCount tracks how many messages from ses.Messages have been
