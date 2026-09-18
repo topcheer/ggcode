@@ -19,6 +19,7 @@ import (
 	"github.com/topcheer/ggcode/internal/metrics"
 
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/runeval"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/util"
@@ -737,6 +738,30 @@ func (m *Model) handleTagsCommand() tea.Cmd {
 // handleCostCommand displays the session token usage and estimated cost,
 // grouped by model. A session may use multiple models if the user switches
 // mid-session; each model's contribution is shown separately.
+// handleRunReportCommand evaluates the current session trajectory offline
+// (no LLM calls) and prints the efficiency scorecard produced by the runeval
+// package.
+func (m *Model) handleRunReportCommand() tea.Cmd {
+	msgs := m.currentSessionMessages()
+	if len(msgs) == 0 {
+		m.chatWriteSystem(nextSystemID(), "No messages to evaluate yet.")
+		return nil
+	}
+	var usage []runeval.UsageSample
+	if m.session != nil {
+		mu := m.sessionMutex()
+		mu.Lock()
+		history := append([]session.UsageEntry(nil), m.session.UsageHistory...)
+		mu.Unlock()
+		usage = make([]runeval.UsageSample, 0, len(history))
+		for _, e := range history {
+			usage = append(usage, runeval.UsageSample{Source: e.Source, Usage: e.Usage})
+		}
+	}
+	m.chatWriteSystem(nextSystemID(), runeval.Render(runeval.Evaluate(msgs, usage)))
+	return nil
+}
+
 func (m *Model) handleCostCommand(args []string) tea.Cmd {
 	// /cost all — cross-session cost summary
 	if len(args) > 0 && (args[0] == "all" || args[0] == "-a" || args[0] == "--all") {

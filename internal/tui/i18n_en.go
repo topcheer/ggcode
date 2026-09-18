@@ -1015,6 +1015,8 @@ func enCatalog(key string) string {
 		return "Copy last assistant response to clipboard"
 	case "slash.context":
 		return "Show context window usage breakdown (tokens, messages, capacity)"
+	case "slash.runreport":
+		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
