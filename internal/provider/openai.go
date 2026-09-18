@@ -33,6 +33,7 @@ type OpenAIProvider struct {
 	reasoningEffort  string
 	toolChoice       string          // "", "auto", "required", "none"
 	strictTools      map[string]bool // strict tool use allowlist (empty = disabled)
+	serviceTier      string          // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
 	temperature      float64
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
 	topP             float64
@@ -59,6 +60,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
 		strictTools:     p.strictTools,
+		serviceTier:     p.serviceTier,
 		temperature:     p.temperature,
 		topP:            p.topP,
 		name:            p.name,
@@ -88,6 +90,32 @@ func (p *OpenAIProvider) SetReasoningEffort(effort string) {
 }
 
 func (p *OpenAIProvider) ReasoningEffort() string { return p.reasoningEffort }
+
+// SetServiceTier stores the processing-tier hint sent as the request's
+// `service_tier` field (sa-81). Allowed: "auto", "default", "flex",
+// "priority", "fast" (Fast mode, alias of priority since 2026-07), "scale".
+// Empty clears the hint; unknown values are ignored so a typo cannot silently
+// flip an expensive production tier, mirroring the effort/verbosity setters.
+func (p *OpenAIProvider) SetServiceTier(tier string) {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "":
+		p.serviceTier = ""
+	case "auto", "default", "flex", "priority", "fast", "scale":
+		p.serviceTier = strings.ToLower(strings.TrimSpace(tier))
+	}
+}
+
+func (p *OpenAIProvider) ServiceTier() string { return p.serviceTier }
+
+// applyServiceTier sets the service_tier field on the request. Returns true
+// when applied, so retry paths know a tierless retry is possible.
+func (p *OpenAIProvider) applyServiceTier(req *openai.ChatCompletionRequest) bool {
+	if p.serviceTier == "" {
+		return false
+	}
+	req.ServiceTier = openai.ServiceTier(p.serviceTier)
+	return true
+}
 
 // SetToolChoice sets the tool_choice parameter: "auto" (model decides),
 // "required" (force tool use), "none" (disable tools), or "" (API default).
@@ -222,10 +250,30 @@ func retryWithoutReasoningEffort(err error) bool {
 	return strings.Contains(msg, "reasoning_effort") || strings.Contains(msg, "reasoning effort")
 }
 
+// retryWithoutServiceTier reports whether an API error indicates the
+// service_tier parameter was rejected (unknown/unsupported parameter classes
+// on OpenAI-compatible relays), so the request can be retried without it.
+func retryWithoutServiceTier(err error) bool {
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Param != nil && strings.EqualFold(*apiErr.Param, "service_tier") {
+			return true
+		}
+		msg := strings.ToLower(apiErr.Message)
+		return strings.Contains(msg, "service_tier") || strings.Contains(msg, "service tier")
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "service_tier") || strings.Contains(msg, "service tier")
+}
+
 func (p *OpenAIProvider) createChatCompletion(ctx context.Context, req openai.ChatCompletionRequest, hasReasoningEffort bool) (openai.ChatCompletionResponse, error) {
 	resp, err := p.client.CreateChatCompletion(ctx, req)
 	if err != nil && hasReasoningEffort && retryWithoutReasoningEffort(err) {
 		req.ReasoningEffort = ""
+		resp, err = p.client.CreateChatCompletion(ctx, req)
+	}
+	if err != nil && req.ServiceTier != "" && retryWithoutServiceTier(err) {
+		req.ServiceTier = ""
 		resp, err = p.client.CreateChatCompletion(ctx, req)
 	}
 	return resp, err
@@ -235,6 +283,10 @@ func (p *OpenAIProvider) createChatCompletionStream(ctx context.Context, req ope
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
 	if err != nil && hasReasoningEffort && retryWithoutReasoningEffort(err) {
 		req.ReasoningEffort = ""
+		stream, err = p.client.CreateChatCompletionStream(ctx, req)
+	}
+	if err != nil && req.ServiceTier != "" && retryWithoutServiceTier(err) {
+		req.ServiceTier = ""
 		stream, err = p.client.CreateChatCompletionStream(ctx, req)
 	}
 	return stream, err
@@ -444,6 +496,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		Messages: chatMsgs,
 	}
 	hasReasoningEffort := p.applyReasoningEffort(&req)
+	p.applyServiceTier(&req)
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
@@ -528,6 +581,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		},
 	}
 	hasReasoningEffort := p.applyReasoningEffort(&req)
+	p.applyServiceTier(&req)
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}

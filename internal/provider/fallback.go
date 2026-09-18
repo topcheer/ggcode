@@ -704,6 +704,27 @@ func (f *FallbackProvider) TextVerbosity() string {
 	return ""
 }
 
+// SetServiceTier sets the service_tier processing tier (sa-81) on all chain
+// providers that support it (openai/openai-responses only; others ignore it).
+func (f *FallbackProvider) SetServiceTier(v string) {
+	f.forEach(func(p Provider) {
+		if tp, ok := p.(ServiceTierProvider); ok {
+			tp.SetServiceTier(v)
+		}
+	})
+}
+
+// ServiceTier returns the active provider's processing tier.
+func (f *FallbackProvider) ServiceTier() string {
+	f.mu.RLock()
+	active := f.activeLocked()
+	f.mu.RUnlock()
+	if tp, ok := active.(ServiceTierProvider); ok {
+		return tp.ServiceTier()
+	}
+	return ""
+}
+
 // SetSessionID sets the session ID on all chain providers that support it.
 func (f *FallbackProvider) SetSessionID(sessionID string) {
 	f.forEach(func(p Provider) {

@@ -50,6 +50,7 @@ type OpenAIResponsesProvider struct {
 
 	reasoningEffort   string
 	textVerbosity     string // GPT-5 text.verbosity: "", "low", "medium", "high"
+	serviceTier       string // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
 	toolChoice        string
 	maxTokensOverride int
 
@@ -100,6 +101,23 @@ func (p *OpenAIResponsesProvider) SetTextVerbosity(v string) {
 
 // TextVerbosity returns the currently configured verbosity hint.
 func (p *OpenAIResponsesProvider) TextVerbosity() string { return p.textVerbosity }
+
+// SetServiceTier stores the processing-tier hint sent as the request's
+// `service_tier` field (sa-81). Allowed: "auto", "default", "flex",
+// "priority", "fast", "scale". Empty clears the hint; unknown values are
+// ignored so existing settings survive typo'd input, mirroring the other
+// hint setters.
+func (p *OpenAIResponsesProvider) SetServiceTier(tier string) {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "":
+		p.serviceTier = ""
+	case "auto", "default", "flex", "priority", "fast", "scale":
+		p.serviceTier = strings.ToLower(strings.TrimSpace(tier))
+	}
+}
+
+// ServiceTier returns the currently configured processing-tier hint.
+func (p *OpenAIResponsesProvider) ServiceTier() string { return p.serviceTier }
 
 // SetToolChoice stores tool_choice ("auto", "required", "none" or a JSON
 // object). Empty means the API default ("auto").
@@ -190,6 +208,7 @@ type responsesRequest struct {
 	Stream          bool                 `json:"stream,omitempty"`
 	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
 	Text            *responsesTextConfig `json:"text,omitempty"`
+	ServiceTier     string               `json:"service_tier,omitempty"`
 	Store           *bool                `json:"store,omitempty"`
 	// Include asks the API to return encrypted reasoning tokens inside
 	// reasoning items so they can be replayed statelessly (sa-54).
@@ -407,6 +426,8 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 	if p.textVerbosity != "" {
 		req.Text = &responsesTextConfig{Verbosity: p.textVerbosity}
 	}
+	// sa-81: processing-tier hint; omitempty drops it when unset.
+	req.ServiceTier = p.serviceTier
 	for _, t := range tools {
 		params := t.Parameters
 		if len(params) == 0 {
@@ -477,6 +498,13 @@ func (p *OpenAIResponsesProvider) post(ctx context.Context, req *responsesReques
 			req.Text = nil
 			return p.post(ctx, req)
 		}
+		// sa-81: same graceful degrade for service_tier - older gateways and
+		// backends that merely proxy other vendors reject the tier hint as an
+		// unknown parameter. Drop it once and retry against the API default.
+		if req.ServiceTier != "" && responsesRejectsServiceTier(snippet) {
+			req.ServiceTier = ""
+			return p.post(ctx, req)
+		}
 		return nil, fmt.Errorf("responses API error %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	return resp, nil
@@ -491,6 +519,22 @@ func responsesRejectsVerbosity(snippet []byte) bool {
 		return false
 	}
 	for _, marker := range []string{"unknown", "unsupported", "unrecognized", "unexpected"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// responsesRejectsServiceTier reports whether an API error snippet indicates
+// the service_tier parameter was rejected (unknown/unsupported parameter
+// classes).
+func responsesRejectsServiceTier(snippet []byte) bool {
+	s := strings.ToLower(string(snippet))
+	if !strings.Contains(s, "service_tier") && !strings.Contains(s, "service tier") {
+		return false
+	}
+	for _, marker := range []string{"unknown", "unsupported", "unrecognized", "unexpected", "invalid"} {
 		if strings.Contains(s, marker) {
 			return true
 		}
