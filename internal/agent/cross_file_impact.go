@@ -183,6 +183,20 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		}
 
 		affectedSet := make(map[string]bool)
+		names, methodOwners := impactNameTables(removed)
+		if len(names) == 0 {
+			continue
+		}
+		// Shared file set: sibling ASTs feed both the cheap visitor pass and
+		// the optional #2164 typed pass below.
+		dirFset := token.NewFileSet()
+		type impactPending struct {
+			relPath string
+			file    *ast.File
+			near    []impactNearMiss
+		}
+		var pendings []impactPending
+		var pkgFiles []*ast.File
 		for _, sibling := range siblings {
 			if time.Now().After(deadline) {
 				break
@@ -194,12 +208,54 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 			if err != nil {
 				continue
 			}
-			if referencesAnyImpactSymbol(string(content), removed) {
-				relPath, _ := filepath.Rel(workingDir, sibling)
-				if relPath == "" {
-					relPath = sibling
+			relPath, _ := filepath.Rel(workingDir, sibling)
+			if relPath == "" {
+				relPath = sibling
+			}
+			file, perr := parser.ParseFile(dirFset, sibling, content, 0)
+			if perr != nil {
+				// Unparsable siblings fall back to the conservative text scan
+				// (unchanged pre-#2164 behavior, #1773 case 5 fallback).
+				for name := range names {
+					if containsGoIdent(string(content), name) {
+						affectedSet[relPath] = true
+						break
+					}
 				}
+				continue
+			}
+			pkgFiles = append(pkgFiles, file)
+			found, near := walkImpactRefs(file, names, methodOwners)
+			if found {
 				affectedSet[relPath] = true
+				continue
+			}
+			if len(near) > 0 {
+				pendings = append(pendings, impactPending{relPath: relPath, file: file, near: near})
+			}
+		}
+		// #2164: variable-receiver method calls (s.run()) are conservative
+		// misses for the syntax-only visitor. Resolve them with in-process
+		// stdlib go/types over the post-edit package sources - ONLY when a
+		// near-miss candidate exists, so the cost stays at zero for the
+		// common no-candidate path. No subprocess, no new dependency
+		// (governance constraints on #2164: no x/tools, no LSP coupling).
+		// Any unresolved receiver stays a miss: the compiler remains the
+		// ground truth and the zero-false-positive property of #2100/#2163
+		// is preserved (exact owner-type match required to upgrade).
+		if len(pendings) > 0 && len(methodOwners) > 0 && time.Now().Before(deadline) {
+			if ef, perr := parser.ParseFile(dirFset, absPath, newContent, 0); perr == nil {
+				pkgFiles = append(pkgFiles, ef) // decl sites may live in the edited file
+			}
+			infos := impactTypeCheckGroups(dirFset, pkgFiles)
+			for _, p := range pendings {
+				info := infos[p.file.Name.Name]
+				for _, m := range p.near {
+					if impactResolveNearMiss(info, m, methodOwners) {
+						affectedSet[p.relPath] = true
+						break
+					}
+				}
 			}
 		}
 
@@ -413,19 +469,10 @@ func findSiblingGoFiles(dir, editedFile string, max int) []string {
 	return siblings
 }
 
-// referencesAnyImpactSymbol checks whether the given Go source references any
-// of the removed symbols.
-func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
-	if len(removed) == 0 {
-		return false
-	}
+// impactNameTables splits removed symbols into the bare-name set and the
+// method-name → owner-type set used for selector qualification (#2100).
+func impactNameTables(removed []impactRemovedSymbol) (map[string]bool, map[string]map[string]bool) {
 	names := make(map[string]bool, len(removed))
-	// #2100: method names carry their owner type so a selector hit can be
-	// qualified. go/parser never sets Obj on SelectorExpr.Sel or composite
-	// literal keys, so the old Obj==nil-only rule fired on ANY same-named
-	// method of ANY type, package-qualified calls (impossible for
-	// unexported symbols), and field keys - "these files may fail to
-	// compile" advisories pointing at unrelated files.
 	methodOwners := make(map[string]map[string]bool)
 	for _, s := range removed {
 		var name string
@@ -454,6 +501,13 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 			names[name] = true
 		}
 	}
+	return names, methodOwners
+}
+
+// referencesAnyImpactSymbol checks whether the given Go source references any
+// of the removed symbols.
+func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
+	names, methodOwners := impactNameTables(removed)
 	if len(names) == 0 {
 		return false
 	}
@@ -478,7 +532,29 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 	}
 	v := &impactRefVisitor{names: names, methodOwners: methodOwners}
 	ast.Walk(v, file)
-	return v.found
+	found, _ := walkImpactRefs(file, names, methodOwners)
+	return found
+}
+
+// walkImpactRefs walks one parsed sibling AST, reporting definite references
+// plus #2164 near-miss candidates (variable-receiver selectors whose method
+// name matches a removed method but whose owner only type info can qualify).
+func walkImpactRefs(file *ast.File, names map[string]bool, methodOwners map[string]map[string]bool) (bool, []impactNearMiss) {
+	v := &impactRefVisitor{names: names, methodOwners: methodOwners}
+	ast.Walk(v, file)
+	return v.found, v.nearMiss
+}
+
+// maxImpactNearMiss caps recorded near-miss candidates per sibling to bound
+// the typed pass work.
+const maxImpactNearMiss = 32
+
+// impactNearMiss is a selector whose method name matches a removed method
+// but whose receiver is a variable (not a type-name chain): x.sel. Only
+// type info can decide whether x's static type owns sel (#2164).
+type impactNearMiss struct {
+	recv ast.Expr // the receiver expression x
+	sel  string   // the selector name sel
 }
 
 // impactRefVisitor walks a sibling AST counting only genuine references
@@ -486,6 +562,7 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 type impactRefVisitor struct {
 	names        map[string]bool
 	methodOwners map[string]map[string]bool
+	nearMiss     []impactNearMiss
 	found        bool
 }
 
@@ -504,6 +581,11 @@ func (v *impactRefVisitor) Visit(n ast.Node) ast.Visitor {
 			if base := selectorBaseTypeName(node.X); base != "" && owners[base] {
 				v.found = true
 				return nil
+			}
+			// #2164: variable-receiver candidate - only type info can qualify
+			// it. Recorded as a near miss, never a hit (zero-FP invariant).
+			if len(v.nearMiss) < maxImpactNearMiss {
+				v.nearMiss = append(v.nearMiss, impactNearMiss{recv: node.X, sel: node.Sel.Name})
 			}
 		}
 		// Walk ONLY the receiver manually - returning a visitor here would
