@@ -27,14 +27,8 @@ func TestZaiProbeQuotaWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(info.Windows) != 2 {
-		t.Fatalf("window = %+v", info.Windows)
-	}
-	if info.Windows[0].Label != "5h" || info.Windows[0].UsedPercent != 25 {
-		t.Fatalf("5h = %+v", info.Windows[0])
-	}
-	if info.Windows[1].Label != "weekly" || info.Windows[1].UsedPercent != 60 {
-		t.Fatalf("weekly = %+v", info.Windows[1])
+	if len(info.Windows) != 1 || info.Windows[0].Label != "5h" || info.Windows[0].UsedPercent != 60 {
+		t.Fatalf("only the TOKENS_LIMIT(unit=3) entry may show as 5h; TIME_LIMIT is a different meter: %+v", info.Windows)
 	}
 }
 

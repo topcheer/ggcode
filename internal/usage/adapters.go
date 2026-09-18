@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sort"
 	"strings"
 	"time"
 )
@@ -120,39 +121,85 @@ func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, 
 	if err := getJSON(ctx, base+"/api/monitor/usage/quota/limit", apiKey, &payload); err != nil {
 		return nil, err
 	}
-	// Ground-truth shape (live capture 2026-09-18, user key): the earlier
-	// limit_used/limit_total struct came from sub2api and matched NOTHING
-	// in the real payload - the probe silently returned zero windows and
-	// the panel rendered an empty (wrong) entry.
-	info := &UsageInfo{Vendor: "zai", Source: "quota/limit"}
+	// Classification aligned with sub2api's parseZhipuTokenTiers (itself
+	// aligned with cc-switch, issue #3036):
+	//  1. Only TOKENS_LIMIT entries compete for the 5h/weekly slots.
+	//     TIME_LIMIT is a different meter (tool/search quota) and would
+	//     pollute the display; CREDIT_LIMIT only shows when no
+	//     TOKENS_LIMIT exists at all.
+	//  2. Explicit unit wins: 3=5h, 6=weekly. Reset-time ordering CANNOT
+	//     substitute - near a period boundary the weekly window resets
+	//     EARLIER than the 5h one, so sorting by reset flips the labels.
+	//  3. Unknown units: entries without nextResetTime claim 5h first
+	//     (a 0%-used 5h bucket may carry no reset), the rest fill empty
+	//     slots in ascending reset order.
+	type zaiEntry struct {
+		resetMs  int64
+		hasReset bool
+		percent  float64
+	}
+	var fiveHour, weekly *zaiEntry
+	var unclassified []zaiEntry
+	var creditFallback []zaiEntry
+	hasTokensLimit := false
 	for _, l := range payload.Data.Limits {
-		w := UsageWindow{UsedPercent: clampPercent(float64(l.Percentage))}
-		switch l.Type {
-		case "TIME_LIMIT":
-			w.Label = fmt.Sprintf("%d%sw", l.Number, unitShort(l.Unit))
-			if l.Unit == 5 && l.Number == 1 {
-				w.Label = "5h" // the common rolling window
-			}
-		case "TOKENS_LIMIT":
-			w.Label = "weekly"
-		default:
-			w.Label = strings.ToLower(strings.TrimSuffix(l.Type, "_LIMIT"))
+		t := strings.ToUpper(strings.TrimSpace(l.Type))
+		if t != "TOKENS_LIMIT" && t != "CREDIT_LIMIT" {
+			continue // TIME_LIMIT and friends: different meter, skip
 		}
-		if l.NextResetMs > 0 {
-			w.ResetsAt = time.UnixMilli(l.NextResetMs)
+		e := zaiEntry{percent: clampPercent(float64(l.Percentage)), resetMs: l.NextResetMs, hasReset: l.NextResetMs > 0}
+		if t == "CREDIT_LIMIT" {
+			creditFallback = append(creditFallback, e)
+			continue
+		}
+		hasTokensLimit = true
+		var slot **zaiEntry
+		switch l.Unit {
+		case 3:
+			slot = &fiveHour
+		case 6:
+			slot = &weekly
+		}
+		if slot != nil && *slot == nil {
+			*slot = &e
+		} else {
+			unclassified = append(unclassified, e)
+		}
+	}
+	if !hasTokensLimit {
+		unclassified = append(unclassified, creditFallback...)
+	}
+	sort.SliceStable(unclassified, func(i, j int) bool {
+		if unclassified[i].hasReset != unclassified[j].hasReset {
+			return !unclassified[i].hasReset
+		}
+		return unclassified[i].resetMs < unclassified[j].resetMs
+	})
+	for _, e := range unclassified {
+		ee := e
+		switch {
+		case fiveHour == nil:
+			fiveHour = &ee
+		case weekly == nil:
+			weekly = &ee
+		}
+	}
+	info := &UsageInfo{Vendor: "zai", Source: "quota/limit"}
+	if fiveHour != nil {
+		w := UsageWindow{Label: "5h", UsedPercent: fiveHour.percent}
+		if fiveHour.hasReset {
+			w.ResetsAt = time.UnixMilli(fiveHour.resetMs)
+		}
+		info.Windows = append(info.Windows, w)
+	}
+	if weekly != nil {
+		w := UsageWindow{Label: "weekly", UsedPercent: weekly.percent}
+		if weekly.hasReset {
+			w.ResetsAt = time.UnixMilli(weekly.resetMs)
 		}
 		info.Windows = append(info.Windows, w)
 	}
 	return info, nil
-}
-
-// unitShort maps zai's opaque unit codes onto display letters. Observed
-// in the wild: unit=5 (hours). Unknown codes degrade to the raw number.
-func unitShort(u int) string {
-	if u == 5 {
-		return "h"
-	}
-	return ""
 }
 
 // DeepSeekProbe reads the multi-currency balance table; USD first, else

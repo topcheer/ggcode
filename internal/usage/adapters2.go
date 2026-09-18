@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // KimiProbe reads /v1/usages: the limits array carries rolling windows
@@ -73,28 +74,26 @@ func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo,
 	}
 	// Ground-truth shape (live capture 2026-09-18, user key): limits[].
 	// detail is a nested OBJECT (the old flat string field failed to
-	// unmarshal -> error for every coding-plan user), and the cleanest
-	// data is the usages.{limit_5h,limit_7d}.used_ratio pair (0-1).
+	// unmarshal -> error for every coding-plan user).
+	//
+	// Windows follow sub2api's parseKimiUsageTiers (cc-switch-aligned)
+	// rather than the usages.*.used_ratio extras: utilization derives
+	// from (limit-remaining)/limit*100 on the DECIMAL STRINGS -
+	// limits[0].detail is the 5h window, the top-level usage object is
+	// the weekly one.
 	info := &UsageInfo{Vendor: "kimi", Source: "coding/v1/usages"}
-	if u := payload.Usages.Limit5h; u.UsedRatio > 0 || u.ResetTime != "" {
-		w := UsageWindow{Label: "5h", UsedPercent: clampPercent(u.UsedRatio * 100)}
-		w.ResetsAt = parseResetTime(u.ResetTime)
-		info.Windows = append(info.Windows, w)
-	}
-	if u := payload.Usages.Limit7d; u.UsedRatio > 0 || u.ResetTime != "" {
-		w := UsageWindow{Label: "7d", UsedPercent: clampPercent(u.UsedRatio * 100)}
-		w.ResetsAt = parseResetTime(u.ResetTime)
-		info.Windows = append(info.Windows, w)
-	}
-	if len(info.Windows) == 0 && len(payload.Limits) > 0 {
-		// Fallback: derive from the limits[] window entries (used/limit
-		// are decimal strings).
-		l := payload.Limits[0].Detail
-		if lim := parseFloat(l.Limit); lim > 0 {
-			w := UsageWindow{Label: "5h", UsedPercent: clampPercent(100 * parseFloat(l.Used) / lim)}
-			w.ResetsAt = parseResetTime(l.ResetTime)
+	if len(payload.Limits) > 0 {
+		d := payload.Limits[0].Detail
+		if lim := parseFloat(d.Limit); lim > 0 {
+			w := UsageWindow{Label: "5h", UsedPercent: clampPercent(100 * (lim - parseFloat(d.Remaining)) / lim)}
+			w.ResetsAt = parseResetTime(d.ResetTime)
 			info.Windows = append(info.Windows, w)
 		}
+	}
+	if lim := parseFloat(payload.Usage.Limit); lim > 0 {
+		w := UsageWindow{Label: "weekly", UsedPercent: clampPercent(100 * (lim - parseFloat(payload.Usage.Remaining)) / lim)}
+		w.ResetsAt = parseResetTime(payload.Usage.ResetTime)
+		info.Windows = append(info.Windows, w)
 	}
 	return info, nil
 }
@@ -126,24 +125,43 @@ func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageIn
 	}
 	var payload struct {
 		ModelRemains []struct {
-			General struct {
-				FiveHourRemainPercent float64 `json:"five_hour_remain_percent"`
-				WeeklyRemainPercent   float64 `json:"weekly_remain_percent"`
-			} `json:"general"`
+			ModelName string `json:"model_name"`
+			// Fields per sub2api parseMiniMaxUsageTiers (cc-switch-aligned):
+			// remaining percentages (used = 100 - remain), ms-epoch ends.
+			// Only the "general" entry (coding plan) counts - video etc.
+			// are different meters.
+			CurrentIntervalRemainingPercent float64 `json:"current_interval_remaining_percent"`
+			EndTimeMs                       int64   `json:"end_time"`
+			CurrentWeeklyStatus             int     `json:"current_weekly_status"`
+			CurrentWeeklyRemainingPercent   float64 `json:"current_weekly_remaining_percent"`
+			WeeklyEndTimeMs                 int64   `json:"weekly_end_time"`
 		} `json:"model_remains"`
 	}
 	if err := getJSON(ctx, base+"/v1/api/openplatform/coding_plan/remains", apiKey, &payload); err != nil {
 		return nil, err
 	}
 	info := &UsageInfo{Vendor: "minimax", Source: "coding_plan/remains"}
-	if len(payload.ModelRemains) > 0 {
-		g := payload.ModelRemains[0].General
-		if g.FiveHourRemainPercent > 0 {
-			info.Windows = append(info.Windows, UsageWindow{Label: "5h", UsedPercent: clampPercent(100 - g.FiveHourRemainPercent)})
+	for _, mr := range payload.ModelRemains {
+		if !strings.EqualFold(strings.TrimSpace(mr.ModelName), "general") {
+			continue
 		}
-		if g.WeeklyRemainPercent > 0 {
-			info.Windows = append(info.Windows, UsageWindow{Label: "weekly", UsedPercent: clampPercent(100 - g.WeeklyRemainPercent)})
+		if mr.CurrentIntervalRemainingPercent > 0 {
+			w := UsageWindow{Label: "5h", UsedPercent: clampPercent(100 - mr.CurrentIntervalRemainingPercent)}
+			if mr.EndTimeMs > 0 {
+				w.ResetsAt = time.UnixMilli(mr.EndTimeMs)
+			}
+			info.Windows = append(info.Windows, w)
 		}
+		// Weekly only exists while the plan's weekly tier is active
+		// (status==1); showing it otherwise displays a stale/zero bucket.
+		if mr.CurrentWeeklyStatus == 1 && mr.CurrentWeeklyRemainingPercent > 0 {
+			w := UsageWindow{Label: "weekly", UsedPercent: clampPercent(100 - mr.CurrentWeeklyRemainingPercent)}
+			if mr.WeeklyEndTimeMs > 0 {
+				w.ResetsAt = time.UnixMilli(mr.WeeklyEndTimeMs)
+			}
+			info.Windows = append(info.Windows, w)
+		}
+		break
 	}
 	return info, nil
 }

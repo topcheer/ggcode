@@ -30,7 +30,7 @@ func TestZaiProbeCodingPlanBaseNormalization(t *testing.T) {
 	if gotPath != "/api/monitor/usage/quota/limit" {
 		t.Fatalf("monitor path must be requested at site root, got %q", gotPath)
 	}
-	if len(info.Windows) != 2 || info.Windows[0].UsedPercent != 25 || info.Windows[1].UsedPercent != 60 {
-		t.Fatalf("unexpected windows: %+v", info.Windows)
+	if len(info.Windows) != 1 || info.Windows[0].Label != "5h" || info.Windows[0].UsedPercent != 60 {
+		t.Fatalf("only the TOKENS_LIMIT(unit=3) entry may show as 5h; TIME_LIMIT is a different meter: %+v", info.Windows)
 	}
 }
