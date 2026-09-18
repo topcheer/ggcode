@@ -1637,8 +1637,17 @@ func (r *REPL) Run() error {
 		if r.agent != nil {
 			if cim := r.agent.CodeIndexManager(); cim != nil {
 				if !cim.IsReady() {
-					r.program.Send(systemMsg{msg: "Building code index for @ fuzzy search..."})
+					r.program.Send(systemNotifyMsg{ItemID: "codeindex-progress", Replace: true, Text: "Building code index for @ fuzzy search..."})
 				}
+				// Throttled progress on the same status line: a long walk
+				// over a large/slow tree stays visibly alive instead of
+				// reading as a hung UI (screenshot report 2026-09-18).
+				cim.SetOnProgress(func(done, total int) {
+					if r.program != nil {
+						r.program.Send(systemNotifyMsg{ItemID: "codeindex-progress", Replace: true,
+							Text: fmt.Sprintf("Building code index... %d/%d files", done, total)})
+					}
+				})
 				cim.SetOnReady(func(stats tool.CodeIndexStats) {
 					if stats.IndexedFiles > 0 && r.program != nil {
 						r.program.Send(systemMsg{msg: fmt.Sprintf("Code index ready: %d files indexed - @ fuzzy search enabled", stats.IndexedFiles)})

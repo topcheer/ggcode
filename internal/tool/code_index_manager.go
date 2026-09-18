@@ -43,6 +43,7 @@ type CodeIndexManager struct {
 	rebuildCh    chan struct{}              // signaled by MarkDirty to trigger immediate debounced rebuild
 	lockFile     *os.File                   // cross-process flock handle
 	onReady      func(stats CodeIndexStats) // optional callback when index build completes
+	onProgress   func(done, total int)      // optional throttled build progress (doBuild goroutine)
 
 	// indexStats tracks basic stats for debugging/logging.
 	stats CodeIndexStats
@@ -358,6 +359,17 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 	skipped, indexed := 0, 0
 	maxTerms := codeIndexMaxTotalTermsOverride()
 
+	// Progress throttle: report at most every 400ms so a long walk over a
+	// large or slow tree updates the "Building code index..." status line
+	// instead of sitting silent (which reads as a hung UI). The callback
+	// fires on THIS goroutine and must stay cheap (the REPL just Sends a
+	// message); snapshot it once - SetOnProgress during a build is not a
+	// scenario worth locking for.
+	m.mu.RLock()
+	progressFn := m.onProgress
+	m.mu.RUnlock()
+	lastProgress := time.Now()
+
 	for _, absPath := range files {
 		if maxTerms > 0 && totalTerms >= maxTerms {
 			truncated = true
@@ -427,6 +439,10 @@ func (m *CodeIndexManager) doBuild(ctx context.Context) {
 		totalTerms += len(tf)
 		totalLength += len(terms)
 		indexed++
+		if progressFn != nil && time.Since(lastProgress) >= 400*time.Millisecond {
+			lastProgress = time.Now()
+			progressFn(indexed, len(files))
+		}
 	}
 	if truncated {
 		debug.Log("codeindex", "term budget reached (%d terms over %d docs) - index truncated at %d of %d files; "+
@@ -491,6 +507,16 @@ func (m *CodeIndexManager) SetOnReady(fn func(stats CodeIndexStats)) {
 		return
 	}
 	m.mu.Unlock()
+}
+
+// SetOnProgress registers a throttled callback reporting build progress
+// (fired on the doBuild goroutine, at most ~every 400ms). The REPL uses
+// it to update the "Building code index..." status line so a long walk
+// over a large or slow tree does not read as a hung UI.
+func (m *CodeIndexManager) SetOnProgress(fn func(done, total int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onProgress = fn
 }
 
 // collectFiles walks the working directory and returns a list of
