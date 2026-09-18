@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -11,60 +10,54 @@ import (
 
 // Blind-spot error handling: when a provider/agent error matches none of the
 // known categories in provider.UserFacingErrorLang, the user would otherwise
-// see only "请求失败，请稍后重试" — undiagnosable and unactionable. Three
+// see only "请求失败，请稍后重试" — undiagnosable and unactionable. Two
 // things happen instead:
 //
 //  1. provider.IsBlindSpotError detects the fallback branch and the raw
 //     error is embedded in the user-facing message (user_error.go).
 //  2. File logging is force-enabled on first occurrence so the full
 //     context survives for diagnosis (debug.EnsureFileLogging).
-//  3. The failed submission is auto-retried up to blindSpotMaxRetries
-//     times, blindSpotRetryDelay apart — unknown shapes are most often
-//     transient (proxy hiccups, malformed gateway responses).
-
-const (
-	blindSpotMaxRetries = 5
-	blindSpotRetryDelay = 5 * time.Second
-)
+//
+// There is deliberately NO automatic resubmission: an earlier version
+// auto-retried by re-injecting the user's last submission as a new run,
+// and that design had three compounding failure modes (screenshot-reported):
+//
+//   - Retry budget never burned: the counter was written inside a
+//     value-receiver model copy, so the parent never saw it — every retry
+//     displayed (1/5) and the loop was literally unbounded (a permanent
+//     gateway failure auto-looped forever).
+//   - Duplicate user turns: the retry path called submitText which
+//     persisted the same user message again, so an agent-side failure
+//     polluted the session with N identical user turns.
+//   - Dropped attachments: retries replayed only the text; images attached
+//     to the original submission were silently lost.
+//
+// Add on top: errors that slip past the typed HTTP-status extraction
+// (e.g. gateway-wrapped 429s) land here UNCLASSIFIED — zhipu-style
+// double-meaning 429s (transient limit vs quota exhaustion) were then
+// auto-looped pointlessly against a permanently exhausted quota.
+//
+// The user can still resend manually with /retry (which replays the exact
+// same submission through the normal path, attachments included by the
+// normal flow).
 
 // maybeBlindSpotRetry is invoked from the agent error handlers after the
-// standard failure cleanup, with the original error. When the error is a
-// blind spot it enables file logging (idempotent) and schedules an
-// auto-retry of the same submission. The returned bool reports whether a
-// retry was scheduled; callers merge the returned cmd into theirs.
+// standard failure cleanup, with the original error. For blind-spot errors
+// it force-enables file logging (idempotent) and surfaces a /retry hint.
+// It never schedules an automatic resubmission (see package comment above).
 func (m *Model) maybeBlindSpotRetry(err error) tea.Cmd {
 	if !provider.IsBlindSpotError(err) {
 		return nil
 	}
 
 	wasEnabled, logPath := debug.EnsureFileLogging()
-
-	// Queued submissions took over the input on the error path — retrying
-	// here would race the queue drain; let the user drive instead.
-	if m.lastUserSubmission == "" || m.pendingSubmissionCount() > 0 {
-		m.chatWriteSystem(nextSystemID(), m.blindSpotLogNotice(wasEnabled, logPath))
-		m.chatListScrollToBottom()
-		return nil
+	notice := m.blindSpotLogNotice(wasEnabled, logPath)
+	if m.lastUserSubmission != "" {
+		notice += " " + m.t("error.blindspot_retry_hint")
 	}
-
-	if m.blindSpotRetries >= blindSpotMaxRetries {
-		m.chatWriteSystem(nextSystemID(), fmt.Sprintf(
-			m.t("error.blindspot_retry_exhausted"),
-			m.blindSpotRetries, blindSpotMaxRetries, logPath))
-		m.chatListScrollToBottom()
-		return nil
-	}
-
-	m.blindSpotRetries++
-	m.chatWriteSystem(nextSystemID(), fmt.Sprintf(
-		m.t("error.blindspot_retry"),
-		int(blindSpotRetryDelay.Seconds()), m.blindSpotRetries, blindSpotMaxRetries, logPath))
+	m.chatWriteSystem(nextSystemID(), notice)
 	m.chatListScrollToBottom()
-
-	text := m.lastUserSubmission
-	return tea.Tick(blindSpotRetryDelay, func(time.Time) tea.Msg {
-		return blindSpotRetryMsg{Text: text}
-	})
+	return nil
 }
 
 // blindSpotLogNotice builds the no-retry notice (no submission to retry).
@@ -78,25 +71,11 @@ func (m *Model) blindSpotLogNotice(wasEnabled bool, logPath string) string {
 	return fmt.Sprintf(m.t("error.blindspot_log_enabled"), logPath)
 }
 
-// handleBlindSpotRetryMsg executes a scheduled auto-retry. If the user
-// submitted something else while the timer ran (loading), the retry is
-// dropped rather than racing the new run.
-func (m *Model) handleBlindSpotRetryMsg(msg blindSpotRetryMsg) tea.Cmd {
-	if m.loading {
-		return nil
-	}
-	// #1713 case 2: the timer only checked loading - an Esc cancel or a
-	// DIFFERENT submission B finishing inside the window made the stale
-	// text auto-resend against the user's intent. Only the still-current
-	// submission may retry (handleRetryCommand's identity check pattern).
-	if msg.Text == "" || msg.Text != m.lastUserSubmission {
-		return nil
-	}
-	return m.submitText(msg.Text, true)
-}
-
-// resetBlindSpotRetry clears the retry budget on a successful run so the
-// next failure gets a full set of attempts again.
+// handleBlindSpotRetryMsg is retained as a compile-time no-op anchor: no
+// code path produces blindSpotRetryMsg anymore (auto-resubmit removed);
+// the dispatch registration below is gone too. Kept function removed.
+//
+// resetBlindSpotRetry clears the (now inert) counter on a successful run.
 func (m *Model) resetBlindSpotRetry() {
 	m.blindSpotRetries = 0
 }

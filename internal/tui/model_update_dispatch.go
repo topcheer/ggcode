@@ -143,7 +143,6 @@ func init() {
 	regUpdatePlain(func(m Model, msg restorePendingImagesMsg) (tea.Model, tea.Cmd) {
 		return m.handleRestorePendingImagesMsg(msg)
 	})
-	regUpdatePlain(func(m Model, msg blindSpotRetryMsg) (tea.Model, tea.Cmd) { return m, m.handleBlindSpotRetryMsg(msg) })
 	regUpdatePlain(func(m Model, msg knightTaskResultMsg) (tea.Model, tea.Cmd) { return m.handleKnightTaskResultMsg(msg) })
 	regUpdatePlain(func(m Model, msg knightProjectProposalResultMsg) (tea.Model, tea.Cmd) {
 		return m.handleKnightProjectProposalResultMsg(msg)
