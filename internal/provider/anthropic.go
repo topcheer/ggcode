@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -33,6 +34,7 @@ type AnthropicProvider struct {
 	topP             float64                   // 0 = provider default
 	serverTools      []ServerToolConfig        // Anthropic server-side tools (web_search/web_fetch), executed in-API
 	memoryTool       bool                      // Anthropic Memory Tool (memory_20250818): declared here, executed agent-side
+	thinkingMode     string                    // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -64,6 +66,7 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		temperature:     p.temperature,
 		topP:            p.topP,
 		serverTools:     p.serverTools,
+		thinkingMode:    p.thinkingMode,
 	}
 	// Inherit the endpoint capability latch (an endpoint that rejected
 	// output_config stays off), but reset the per-conversation stability
@@ -87,6 +90,88 @@ func (p *AnthropicProvider) SetReasoningEffort(effort string) {
 }
 
 func (p *AnthropicProvider) ReasoningEffort() string { return p.reasoningEffort }
+
+// SetThinkingMode overrides the extended-thinking carrier: "manual" forces
+// budget_tokens, "adaptive" forces thinking:{type:"adaptive"} (Claude 4.6+/
+// 5.x only — older models reject it with 400), "" (default) auto-detects
+// per model. Opt in per endpoint via config (`thinking_mode: adaptive`).
+func (p *AnthropicProvider) SetThinkingMode(mode string) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "manual":
+		p.thinkingMode = "manual"
+	case "adaptive":
+		p.thinkingMode = "adaptive"
+	default:
+		p.thinkingMode = ""
+	}
+}
+
+// ThinkingMode returns the configured thinking-mode override ("" = auto).
+func (p *AnthropicProvider) ThinkingMode() string { return p.thinkingMode }
+
+// adaptiveThinkingModels matches Claude generations that support adaptive
+// thinking (thinking:{type:"adaptive"}): 4.6+ and the 5.x families. The
+// extended-thinking-only generation (Sonnet/Opus/Haiku 4.5 and earlier)
+// rejects it with 400. Unknown future families fall back to manual mode;
+// users can override per endpoint with thinking_mode: adaptive.
+// https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+var adaptiveThinkingModels = regexp.MustCompile(`(?i)claude-(?:opus|sonnet|haiku)-4-[6-9]|claude-(?:opus|sonnet|haiku|fable|mythos)-[5-9]|claude-[5-9]`)
+
+// adaptiveThinkingForModel reports whether the model natively supports
+// adaptive thinking.
+func adaptiveThinkingForModel(model string) bool {
+	return adaptiveThinkingModels.MatchString(strings.ToLower(strings.TrimSpace(model)))
+}
+
+// useAdaptiveThinking selects the thinking carrier for this provider:
+// explicit override wins, otherwise auto-detect from the model name.
+func (p *AnthropicProvider) useAdaptiveThinking() bool {
+	switch p.thinkingMode {
+	case "manual":
+		return false
+	case "adaptive":
+		return true
+	default:
+		return adaptiveThinkingForModel(p.model)
+	}
+}
+
+// adaptiveEffort maps a reasoning effort level to the output_config.effort
+// value used by adaptive-thinking models (their only depth control —
+// budget_tokens is forbidden there). Returns "" for empty/unknown levels.
+func adaptiveEffort(effort string) string {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+		return effort
+	default:
+		return ""
+	}
+}
+
+// anthropicBetaHeader returns the anthropic-beta header value to attach to
+// tool-using manual-mode requests. budget_tokens thinking does not interleave
+// with tool use unless this beta is set; the API ignores the header on models
+// where it does not apply. Adaptive models interleave natively (no header).
+// https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking
+func (p *AnthropicProvider) anthropicBetaHeader(hasTools bool) string {
+	if !hasTools || p.useAdaptiveThinking() {
+		return ""
+	}
+	if p.thinkingBudgetForEffort(p.reasoningEffort) > 0 {
+		return "interleaved-thinking-2025-05-14"
+	}
+	return ""
+}
+
+// betaHeaderOpts wraps the beta header into SDK request options for the
+// per-call sites (Messages.New / Messages.NewStreaming).
+func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
+	if h := p.anthropicBetaHeader(hasTools); h != "" {
+		return []option.RequestOption{option.WithHeader("anthropic-beta", h)}
+	}
+	return nil
+}
 
 // SetMaxTokens implements provider.MaxTokensSetter (#1592-A).
 func (p *AnthropicProvider) SetMaxTokens(n int) {
@@ -426,20 +511,23 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
+	callOpts := p.betaHeaderOpts(len(tools) > 0)
 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
-		resp, callErr = p.client.Messages.New(ctx, params)
+		resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
 		return callErr
 	}, providerRetryAttempts)
-	// Retry once without extended thinking if the model rejects it.
-	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
+	// Retry once without extended thinking if the model rejects it
+	// (manual budget_tokens and adaptive alike).
+	if err != nil && (params.Thinking.OfEnabled != nil || params.Thinking.OfAdaptive != nil) && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
+		callOpts = nil
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params)
+			resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
 			return callErr
 		}, providerRetryAttempts)
 	}
@@ -451,7 +539,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		params.OutputConfig = anthropic.OutputConfigParam{}
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params)
+			resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
 			return callErr
 		}, providerRetryAttempts)
 	}
@@ -487,6 +575,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
+	callOpts := p.betaHeaderOpts(len(tools) > 0)
 
 	ch := make(chan StreamEvent, 64)
 
@@ -515,7 +604,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			truncated = false
 
 			func() {
-				stream := p.client.Messages.NewStreaming(ctx, params)
+				stream := p.client.Messages.NewStreaming(ctx, params, callOpts...)
 				defer func() {
 					_ = stream.Close()
 				}()
@@ -684,8 +773,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
 					}
-					// Retry without extended thinking if the model rejects it.
-					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < providerRetryAttempts-1 {
+					// Retry without extended thinking if the model rejects it
+					// (manual budget_tokens and adaptive alike).
+					if !emitted && (params.Thinking.OfEnabled != nil || params.Thinking.OfAdaptive != nil) && isThinkingError(err) && attempt < providerRetryAttempts-1 {
 						debug.Log("anthropic", "Stream: retrying without extended thinking (model rejected thinking parameters)")
 						// #2115: the downgrade must be VISIBLE - the user set a
 						// reasoning effort and silently losing it for the rest of
@@ -1165,8 +1255,24 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		params.TopP = param.NewOpt(p.topP)
 	}
 
-	// Enable extended thinking when reasoning effort is set.
-	if budget := p.thinkingBudgetForEffort(p.reasoningEffort); budget > 0 {
+	// Extended thinking carrier (Anthropic 2026):
+	//   - adaptive: thinking:{type:"adaptive"} + output_config.effort — the
+	//     only mode that interleaves thinking between tool calls on Claude
+	//     4.6+/5.x models (manual budget_tokens is deprecated on 4.6 and
+	//     rejected on 4.7+). No budget_tokens: the API forbids combining
+	//     them. Effort, not budget, is the depth control.
+	//   - manual: budget_tokens from the effort level, required for the
+	//     extended-thinking-only generation (Sonnet/Opus/Haiku 4.5 and
+	//     earlier), composed with the effort carrier below.
+	effort := adaptiveEffort(p.reasoningEffort)
+	budget := p.thinkingBudgetForEffort(p.reasoningEffort)
+	useAdaptive := p.useAdaptiveThinking()
+	switch {
+	case useAdaptive && (budget > 0 || effort != ""):
+		params.Thinking = anthropic.ThinkingConfigParamUnion{
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
+		}
+	case !useAdaptive && budget > 0:
 		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
 	}
 
@@ -1182,6 +1288,17 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	if p.effortCarrier.Load() && p.conversationEffort != "" && p.lastCallEffort == p.conversationEffort {
 		params.OutputConfig = anthropic.OutputConfigParam{
 			Effort: anthropic.OutputConfigEffort(p.conversationEffort),
+		}
+	}
+	// Adaptive models have no budget_tokens: effort is their only depth
+	// control, so it rides every request from the first call (subject to
+	// the endpoint latch — an endpoint that rejected output_config keeps
+	// running on the default level, mirroring the manual-mode degradation).
+	if useAdaptive && params.OutputConfig.Effort == "" && p.effortCarrier.Load() {
+		if effort != "" {
+			params.OutputConfig = anthropic.OutputConfigParam{
+				Effort: anthropic.OutputConfigEffort(effort),
+			}
 		}
 	}
 
