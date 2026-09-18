@@ -23,8 +23,8 @@ func (KimiProbe) Vendor() string { return "kimi" }
 // (sk-kimi-* vs sk-*), so the coding-plan host must resolve HERE or its
 // users get "unsupported" (user-reported 2026-09-18). Single-owner rule
 // (#2394) holds: kimi.com vs moonshot.* are disjoint hosts.
-func (KimiProbe) MatchesURL(host string) bool {
-	return hostMatch(host, "api.kimi.com", "kimi.com")
+func (KimiProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "api.kimi.com", "kimi.com")
 }
 
 func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
@@ -111,8 +111,8 @@ type MinimaxProbe struct{}
 
 func (MinimaxProbe) Vendor() string { return "minimax" }
 
-func (MinimaxProbe) MatchesURL(host string) bool {
-	return hostMatch(host, "api.minimax.io", "api.minimaxi.com")
+func (MinimaxProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "api.minimax.io", "api.minimaxi.com")
 }
 
 func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
@@ -172,7 +172,9 @@ type AnthropicOAuthProbe struct{}
 
 func (AnthropicOAuthProbe) Vendor() string { return "anthropic-oauth" }
 
-func (AnthropicOAuthProbe) MatchesURL(host string) bool { return hostMatch(host, "api.anthropic.com") }
+func (AnthropicOAuthProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "api.anthropic.com")
+}
 
 func (AnthropicOAuthProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
@@ -231,7 +233,9 @@ type OpenrouterProbe struct{}
 
 func (OpenrouterProbe) Vendor() string { return "openrouter" }
 
-func (OpenrouterProbe) MatchesURL(host string) bool { return hostMatch(host, "openrouter.ai") }
+func (OpenrouterProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "openrouter.ai")
+}
 
 func (OpenrouterProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
@@ -285,8 +289,8 @@ type SiliconflowProbe struct{}
 
 func (SiliconflowProbe) Vendor() string { return "siliconflow" }
 
-func (SiliconflowProbe) MatchesURL(host string) bool {
-	return hostMatch(host, "api.siliconflow.cn", "api.siliconflow.com")
+func (SiliconflowProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "api.siliconflow.cn", "api.siliconflow.com")
 }
 
 func (SiliconflowProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {

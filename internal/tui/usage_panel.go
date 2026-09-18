@@ -32,7 +32,7 @@ type usagePanelState struct {
 }
 
 type usageInfoUpdatedMsg struct {
-	vendor string
+	vendor string // probe id (panel table key)
 	info   *usage.UsageInfo
 	err    error
 }
@@ -62,6 +62,11 @@ func (m *Model) probeableVendors() []string {
 // runtime activeVendor+activeEndpoint first, config Vendor+Endpoint as
 // fallback (daemon/IM attached sessions resolve through config). It
 // deliberately never scans sibling endpoints.
+// currentEndpointForUsage resolves THE endpoint this session is chatting
+// through, via the SAME runtime resolver the chat provider uses
+// (ResolveEndpointSelection: vendor-key fallback + ${VAR} expansion
+// applied). No parallel hand-rolled config walking - the probe must see
+// exactly what the chat sees.
 func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if m.config == nil {
 		return "", "", false
@@ -70,21 +75,18 @@ func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if vendor == "" {
 		vendor = m.config.Vendor
 	}
-	if vendor == "" {
-		return "", "", false
-	}
-	vc, found := m.config.Vendors[vendor]
-	if !found {
-		return "", "", false
-	}
 	epID := m.activeEndpoint
-	if epID == "" && m.config.Vendor == vendor {
+	if epID == "" && vendor == m.config.Vendor {
 		epID = m.config.Endpoint
 	}
-	if ep, found := vc.Endpoints[epID]; found {
-		return ep.BaseURL, ep.APIKey, true
+	if vendor == "" || epID == "" {
+		return "", "", false
 	}
-	return "", "", false
+	ep, err := m.config.ResolveEndpointSelection(vendor, epID, "")
+	if err != nil || ep == nil {
+		return "", "", false
+	}
+	return ep.BaseURL, ep.APIKey, true
 }
 
 // resolveVendorEndpoint returns the baseURL+apiKey the probe should use:

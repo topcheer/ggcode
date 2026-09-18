@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -83,8 +84,19 @@ func (ZaiProbe) Vendor() string { return "zai" }
 
 // MatchesURL: zai accounts span two hosts - open.bigmodel.cn (mainland)
 // and api.z.ai (international). Both share the same monitor endpoint.
-func (ZaiProbe) MatchesURL(host string) bool {
-	return hostMatch(host, "open.bigmodel.cn", "api.z.ai", "z.ai")
+func (ZaiProbe) MatchesURL(baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if !hostMatch(strings.ToLower(u.Hostname()), "open.bigmodel.cn", "api.z.ai", "z.ai") {
+		return false
+	}
+	// Host is SHARED with metered pay-as-you-go APIs (/api/paas/v4): only
+	// coding-plan entrances carry plan windows. The anthropic-compatible
+	// entrance (/api/anthropic) is coding-plan-only on this platform.
+	p := strings.ToLower(u.Path)
+	return strings.Contains(p, "/coding") || strings.Contains(p, "/api/anthropic")
 }
 
 func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
@@ -208,7 +220,9 @@ type DeepSeekProbe struct{}
 
 func (DeepSeekProbe) Vendor() string { return "deepseek" }
 
-func (DeepSeekProbe) MatchesURL(host string) bool { return hostMatch(host, "api.deepseek.com") }
+func (DeepSeekProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "api.deepseek.com")
+}
 
 func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
@@ -238,8 +252,8 @@ type MoonshotProbe struct{}
 
 func (MoonshotProbe) Vendor() string { return "moonshot" }
 
-func (MoonshotProbe) MatchesURL(host string) bool {
-	return hostMatch(host, "api.moonshot.cn", "api.moonshot.ai")
+func (MoonshotProbe) MatchesURL(baseURL string) bool {
+	return hostMatch(urlHostOf(baseURL), "api.moonshot.cn", "api.moonshot.ai")
 }
 
 func (MoonshotProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
@@ -271,6 +285,16 @@ func DefaultService() *Service {
 	s.Register(OpenrouterProbe{})
 	s.Register(SiliconflowProbe{})
 	return s
+}
+
+// urlHostOf extracts the lowercase hostname of a base URL ("" if
+// unparseable). Shared by host-level MatchesURL implementations.
+func urlHostOf(baseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
 }
 
 func hostMatch(host string, known ...string) bool {

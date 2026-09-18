@@ -53,30 +53,15 @@ func (m *Model) handleUsageInfoUpdated(msg usageInfoUpdatedMsg) (Model, tea.Cmd)
 			m.usagePanel.fetching = false
 		}
 	}
-	// Sidebar attribution must compare in the RESOLVED probe-id domain,
-	// not the config vendor-name domain: msg.vendor comes from
-	// svc.Resolve(baseURL) ("openrouter", "zai", "kimi"...), while
-	// activeVendor is whatever the user NAMED the vendor in ggcode.yaml
-	// ("ai-gateway", ...). Name-mismatched configs never matched and the
-	// sidebar silently never updated (2026-09-18 user report).
-	active := ""
-	if baseURL, _, ok := m.currentEndpointForUsage(); ok {
-		active = m.ensureUsageService().Resolve(baseURL)
-	}
-	if active == "" {
-		active = m.activeVendor
-		if active == "" {
-			active = m.startupVendor
-		}
-	}
-	if msg.vendor == active {
-		if msg.err != nil {
-			m.sidebarUsage = nil // keep stale data off the sidebar on error
-			m.usageSidebarStatus = "probe failed: " + msg.err.Error()
-		} else {
-			m.sidebarUsage = msg.info
-			m.usageSidebarStatus = ""
-		}
+	// No attribution layer at all: probes fire ONLY for the session's
+	// current endpoint (probeableVendors yields that single target), so any
+	// result that arrives IS the current endpoint's data. Render it.
+	if msg.err != nil {
+		m.sidebarUsage = nil // keep stale data off the sidebar on error
+		m.usageSidebarStatus = "probe failed: " + msg.err.Error()
+	} else {
+		m.sidebarUsage = msg.info
+		m.usageSidebarStatus = ""
 	}
 	// Auto-refresh chain: re-arm the next sidebar probe. The Service cache
 	// de-duplicates upstream HTTP (success TTL / negative TTL / 429
@@ -115,6 +100,10 @@ func (m Model) handleUsageSidebarRefreshMsg() (Model, tea.Cmd) {
 
 // explainUsageSidebar re-derives the exact reason no usage probe can run for
 // THIS session right now. Empty string = probeable, go ahead.
+// explainUsageSidebar re-derives why no usage probe can run for THIS
+// session right now. Empty string = probeable, go ahead. Resolution errors
+// are passed through verbatim - they are already human-readable
+// ("vendor \"x\" is not configured" ...).
 func (m *Model) explainUsageSidebar() string {
 	if m.config == nil {
 		return "no config loaded"
@@ -123,31 +112,21 @@ func (m *Model) explainUsageSidebar() string {
 	if vendor == "" {
 		vendor = m.config.Vendor
 	}
-	if vendor == "" {
-		return "no active vendor"
-	}
-	vc, found := m.config.Vendors[vendor]
-	if !found {
-		return fmt.Sprintf("vendor %q not in config", vendor)
-	}
 	epID := m.activeEndpoint
-	if epID == "" && m.config.Vendor == vendor {
+	if epID == "" && vendor == m.config.Vendor {
 		epID = m.config.Endpoint
 	}
-	if epID == "" {
-		return fmt.Sprintf("vendor %q has no endpoint selected", vendor)
+	if vendor == "" || epID == "" {
+		return "no active endpoint"
 	}
-	ep, found := vc.Endpoints[epID]
-	if !found {
-		return fmt.Sprintf("endpoint %q not found in vendor %q", epID, vendor)
-	}
-	if strings.TrimSpace(ep.BaseURL) == "" {
-		return fmt.Sprintf("endpoint %s/%s has no base_url", vendor, epID)
+	ep, err := m.config.ResolveEndpointSelection(vendor, epID, "")
+	if err != nil {
+		return err.Error()
 	}
 	if strings.TrimSpace(ep.APIKey) == "" {
 		return fmt.Sprintf("endpoint %s/%s has no api key", vendor, epID)
 	}
-	if id := m.ensureUsageService().Resolve(ep.BaseURL); id == "" {
+	if m.ensureUsageService().Resolve(ep.BaseURL) == "" {
 		return fmt.Sprintf("no usage probe for %s", hostOf(ep.BaseURL))
 	}
 	return ""

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,8 +21,8 @@ type countingProbe struct {
 
 // MatchesURL lets the counting fake participate in URL-based probe
 // resolution (owner ruling: adapters are chosen by endpoint URL).
-func (c *countingProbe) MatchesURL(host string) bool {
-	return host == "open.bigmodel.cn"
+func (c *countingProbe) MatchesURL(baseURL string) bool {
+	return strings.Contains(baseURL, "open.bigmodel.cn")
 }
 
 func (p *countingProbe) Vendor() string { return p.vendor }
@@ -47,7 +48,7 @@ func TestRefreshUsagePanelKeepsNegativeCache(t *testing.T) {
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
-		"e": {BaseURL: "https://open.bigmodel.cn/api/paas/v4", APIKey: "k"},
+		"e": {BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", APIKey: "k", DefaultModel: "glm-5"},
 	}}
 	m.startupVendor = "zai"
 	m.activeEndpoint = "e"
