@@ -101,6 +101,10 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
 | `/branch` / `/fork` | Branch/fork current session |
+| `/pin-session` / `/unpin-session` | Pin/unpin session (pinned sessions are never removed by cleanup and list first in `/sessions`; distinct from `/pin`, which pins context items) |
+| `/tag <tag>...` | Add tags to the session (deduplicated case-insensitively) |
+| `/untag <tag>...` | Remove tags from the session |
+| `/tags` | Show the current session's tags |
 
 ## IM-Specific Commands
 

@@ -77,6 +77,13 @@ type Session struct {
 	// It is never written to the config file — only persisted with the session.
 	// Uses *bool to distinguish "never set" (nil) from "explicitly hidden" (false).
 	SidebarVisible *bool `json:"sidebar_visible,omitempty"`
+	// Pinned marks the session as user-bookmarked. Pinned sessions are
+	// skipped by CleanupOlderThan (never aged out) and listed first by
+	// List(). Persisted via meta records; the latest meta record wins.
+	Pinned bool `json:"pinned,omitempty"`
+	// Tags are user-assigned labels (e.g. via /tag rust perf) for organizing
+	// long-lived sessions. Deduplicated case-insensitively by SetTags.
+	Tags []string `json:"tags,omitempty"`
 	// ContextWindow stores the session-scoped context window size.
 	// When > 0, this overrides the endpoint/per-model config on session resume.
 	ContextWindow int `json:"context_window,omitempty"`
@@ -158,6 +165,15 @@ type Store interface {
 	// without rewriting the entire file. Use this for lightweight metadata updates
 	// (e.g., permission_mode, sidebar_visible) instead of Save.
 	AppendMetaToDisk(s *Session) error
+
+	// SetPinned pins or unpins a session and persists the change. Pinned
+	// sessions are skipped by CleanupOlderThan and listed first by List.
+	SetPinned(s *Session, pinned bool) error
+
+	// SetTags replaces the session's user tags and persists the change.
+	// Tags are trimmed, deduplicated case-insensitively, and capped (16 tags,
+	// 32 chars each) by the implementation.
+	SetTags(s *Session, tags []string) error
 }
 
 // indexEntry is a lightweight record for fast session listing.
@@ -172,6 +188,8 @@ type indexEntry struct {
 	Vendor    string    `json:"vendor,omitempty"`
 	Endpoint  string    `json:"endpoint,omitempty"`
 	Model     string    `json:"model,omitempty"`
+	Pinned    bool      `json:"pinned,omitempty"`
+	Tags      []string  `json:"tags,omitempty"`
 }
 
 // JSONLStore implements Store using JSONL files.
@@ -779,6 +797,8 @@ func sessionToIndexEntry(s *Session) indexEntry {
 		Vendor:    s.Vendor,
 		Endpoint:  s.Endpoint,
 		Model:     s.Model,
+		Pinned:    s.Pinned,
+		Tags:      s.Tags,
 	}
 }
 
@@ -807,10 +827,12 @@ type jsonlRecord struct {
 	// MetricEvent: performance metric record (type == "metric").
 	MetricEvent *metrics.MetricEvent `json:"metric_event,omitempty"`
 	// Session-scoped preferences.
-	PermissionMode string `json:"permission_mode,omitempty"`
-	SidebarVisible *bool  `json:"sidebar_visible,omitempty"`
-	ContextWindow  int    `json:"context_window,omitempty"`
-	MaxTokens      int    `json:"max_tokens,omitempty"`
+	PermissionMode string   `json:"permission_mode,omitempty"`
+	SidebarVisible *bool    `json:"sidebar_visible,omitempty"`
+	Pinned         bool     `json:"pinned,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	ContextWindow  int      `json:"context_window,omitempty"`
+	MaxTokens      int      `json:"max_tokens,omitempty"`
 	// Session task board snapshot (opaque task.Manager JSON; see Session.TasksJSON).
 	TasksJSON []byte `json:"tasks,omitempty"`
 	// Workspace fingerprint captured alongside TasksJSON (see Session.TasksEnvJSON).
@@ -1212,6 +1234,10 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		if rec.PermissionMode != "" {
 			ses.PermissionMode = rec.PermissionMode
 		}
+		// Pin state and tags are snapshots like Title: the latest meta
+		// record wins, so unpin/untag records correctly clear the fields.
+		ses.Pinned = rec.Pinned
+		ses.Tags = rec.Tags
 		if rec.SidebarVisible != nil {
 			ses.SidebarVisible = rec.SidebarVisible
 		}
@@ -1523,8 +1549,11 @@ func (s *JSONLStore) List() ([]*Session, error) {
 		}
 	}
 
-	// Sort by UpdatedAt descending
+	// Pinned sessions first (user bookmarks), then by UpdatedAt descending.
 	sort.Slice(idx, func(i, j int) bool {
+		if idx[i].Pinned != idx[j].Pinned {
+			return idx[i].Pinned
+		}
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
 	})
 	s.scheduleMaintenanceLocked()
@@ -1541,6 +1570,8 @@ func (s *JSONLStore) List() ([]*Session, error) {
 			Vendor:    e.Vendor,
 			Endpoint:  e.Endpoint,
 			Model:     e.Model,
+			Pinned:    e.Pinned,
+			Tags:      e.Tags,
 		})
 	}
 	return result, nil
@@ -2013,6 +2044,8 @@ func (s *JSONLStore) ListForWorkspace(workspace string) ([]*Session, error) {
 				Vendor:    e.Vendor,
 				Endpoint:  e.Endpoint,
 				Model:     e.Model,
+				Pinned:    e.Pinned,
+				Tags:      e.Tags,
 			})
 		}
 	}
@@ -2103,6 +2136,10 @@ func (s *JSONLStore) CleanupOlderThan(before time.Time) (int, error) {
 	}
 	removed := 0
 	for _, ses := range sessions {
+		if ses.Pinned {
+			// User pinned this session — never age it out.
+			continue
+		}
 		if ses.UpdatedAt.Before(before) {
 			if err := s.Delete(ses.ID); err != nil {
 				return removed, fmt.Errorf("deleting session %s: %w", ses.ID, err)
@@ -2228,6 +2265,11 @@ func (s *JSONLStore) AppendTunnelEventToDisk(ses *Session, ev TunnelEvent) error
 func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.appendMetaLocked(ses)
+}
+
+// appendMetaLocked is AppendMetaToDisk without locking; callers hold s.mu.
+func (s *JSONLStore) appendMetaLocked(ses *Session) error {
 	if !ses.HasUserInteraction() {
 		return nil
 	}
@@ -2252,6 +2294,8 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		TunnelEventsComplete: ses.TunnelEventsComplete,
 		PermissionMode:       ses.PermissionMode,
 		SidebarVisible:       ses.SidebarVisible,
+		Pinned:               ses.Pinned,
+		Tags:                 ses.Tags,
 		ContextWindow:        ses.ContextWindow,
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,
@@ -2261,6 +2305,61 @@ func (s *JSONLStore) AppendMetaToDisk(ses *Session) error {
 		return err
 	}
 	return s.updateIndex(ses)
+}
+
+// SetPinned pins or unpins a session and persists the change via an
+// incremental meta record. Pinned sessions are skipped by CleanupOlderThan
+// and listed first by List. Sessions with no user interaction keep the
+// change in memory only (consistent with AppendMetaToDisk).
+func (s *JSONLStore) SetPinned(ses *Session, pinned bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ses.Pinned = pinned
+	return s.appendMetaLocked(ses)
+}
+
+// SetTags replaces the session's tags and persists the change. Tags are
+// trimmed, deduplicated case-insensitively, and capped (16 tags, 32 runes
+// each). An empty result clears the tags.
+func (s *JSONLStore) SetTags(ses *Session, tags []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ses.Tags = normalizeTags(tags)
+	return s.appendMetaLocked(ses)
+}
+
+// Tag bounds enforced by SetTags/normalizeTags.
+const (
+	maxTagRunes       = 32
+	maxTagsPerSession = 16
+)
+
+// normalizeTags trims, deduplicates (case-insensitively) and bounds tags.
+func normalizeTags(tags []string) []string {
+	seen := make(map[string]bool, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if r := []rune(t); len(r) > maxTagRunes {
+			t = string(r[:maxTagRunes])
+		}
+		key := strings.ToLower(t)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, t)
+		if len(out) >= maxTagsPerSession {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // AppendUsageEntry persists a per-turn usage record to the session's JSONL file.
@@ -2341,6 +2440,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		TunnelEventsComplete: ses.TunnelEventsComplete,
 		PermissionMode:       ses.PermissionMode,
 		SidebarVisible:       ses.SidebarVisible,
+		Pinned:               ses.Pinned,
+		Tags:                 ses.Tags,
 		ContextWindow:        ses.ContextWindow,
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,

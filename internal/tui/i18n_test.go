@@ -42,3 +42,19 @@ func TestNonZhCatalogsContainNoCJK1725(t *testing.T) {
 		t.Log("no CJK literals found in non-zh catalogs")
 	}
 }
+
+// TestLocalizeSlashDescriptionSessionPinTags guards the session pin/tag
+// commands added for long-lived session management: every supported language
+// must have a real translation (localizeSlashDescription falls back to the
+// raw command when a case or catalog entry is missing).
+func TestLocalizeSlashDescriptionSessionPinTags(t *testing.T) {
+	cmds := []string{"/pin-session", "/unpin-session", "/tag", "/untag", "/tags"}
+	langs := []Language{"en", "zh", "de"}
+	for _, lang := range langs {
+		for _, cmd := range cmds {
+			if got := localizeSlashDescription(lang, cmd); got == cmd {
+				t.Errorf("%s: %s has no translation (fell back to raw command)", lang, cmd)
+			}
+		}
+	}
+}

@@ -395,6 +395,16 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.cron")
 	case "/goal":
 		return tr(lang, "slash.goal")
+	case "/pin-session":
+		return tr(lang, "slash.pin_session")
+	case "/unpin-session":
+		return tr(lang, "slash.unpin_session")
+	case "/tag":
+		return tr(lang, "slash.tag")
+	case "/untag":
+		return tr(lang, "slash.untag")
+	case "/tags":
+		return tr(lang, "slash.tags")
 	default:
 		return cmd
 	}
