@@ -30,12 +30,34 @@ Data is persisted at `<project>/.ggcode/knowledge-graph.json`. The file is loade
 | Action | Description |
 |--------|-------------|
 | `add` | Create or update a knowledge node |
-| `link` | Create a typed edge between two nodes |
+| `link` | Create a typed edge between two nodes (optional `valid_from` RFC3339 backdating) |
+| `invalidate` | Mark matching edges as no-longer-true (soft invalidation; history preserved) |
 | `query` | Search nodes by text (title/content/tags) or filter by type |
 | `list` | Show all nodes grouped by type |
 | `delete` | Remove a node and its connected edges |
-| `trace` | BFS traversal of outgoing relationships from a node |
-| `stats` | Summary of nodes/edges by type and status |
+| `trace` | BFS traversal of outgoing relationships from a node (optional `as_of` RFC3339 point-in-time view) |
+| `stats` | Summary of nodes/edges by type, status, and validity (current vs invalidated) |
+
+## Temporal Validity (bi-temporal model)
+
+Edges follow the bi-temporal knowledge graph model used by Zep/Graphiti (arXiv:2501.13956). Each edge carries:
+
+- `recorded_at`: system time when the agent recorded the fact
+- `valid_from` / `valid_until`: the fact's real-world validity interval
+
+Invalidating an edge never deletes it: the historical interval stays queryable via `trace` with `as_of`. A fact whose prior interval was invalidated may be re-asserted by linking again (a fresh validity interval is appended). Legacy graph files without temporal fields load unchanged - their edges are treated as always-valid.
+
+### Point-in-time trace
+
+```json
+{
+  "action": "trace",
+  "id": "auth-module",
+  "as_of": "2026-01-15T09:00:00Z"
+}
+```
+
+Only edges whose validity interval covers `as_of` are traversed; edges outside the window are reported as hidden so you know history exists.
 
 ## Usage Examples
 

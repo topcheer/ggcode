@@ -59,10 +59,18 @@ type kgNode struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// kgEdge carries bi-temporal validity (Zep/Graphiti model, arXiv:2501.13956):
+// RecordedAt is system time (when the agent recorded the fact), while
+// ValidFrom/ValidUntil span the fact's real-world validity interval. Edges
+// are never hard-deleted on invalidation - they are soft-invalidated so
+// historical point-in-time views (trace as_of) remain queryable.
 type kgEdge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	Type string `json:"type"`
+	From       string     `json:"from"`
+	To         string     `json:"to"`
+	Type       string     `json:"type"`
+	RecordedAt time.Time  `json:"recorded_at,omitempty"`
+	ValidFrom  *time.Time `json:"valid_from,omitempty"`
+	ValidUntil *time.Time `json:"valid_until,omitempty"`
 }
 
 type kgStore struct {
@@ -80,6 +88,9 @@ type kgParams struct {
 	Status  string   `json:"status"`
 	To      string   `json:"to"`
 	Query   string   `json:"query"`
+	// Bi-temporal params (Zep/Graphiti model):
+	ValidFrom string `json:"valid_from"`
+	AsOf      string `json:"as_of"`
 }
 
 // KnowledgeGraphTool implements the knowledge_graph tool.
@@ -95,14 +106,14 @@ type KnowledgeGraphTool struct {
 func (t *KnowledgeGraphTool) Name() string { return "knowledge_graph" }
 
 func (t *KnowledgeGraphTool) Description() string {
-	return `Manage a persistent knowledge graph for the codebase. Records structured facts (decisions, patterns, entities, issues) and their relationships (depends-on, supersedes, relates-to) that accumulate across sessions. Different from save_memory: this is structured domain knowledge about the codebase, not behavioral rules for the agent. Actions: add, link, query, list, delete, trace, stats.`
+	return `Manage a persistent knowledge graph for the codebase. Records structured facts (decisions, patterns, entities, issues) and their relationships (depends-on, supersedes, relates-to) that accumulate across sessions. Different from save_memory: this is structured domain knowledge about the codebase, not behavioral rules for the agent. Edges carry bi-temporal validity: invalidate marks a fact as no-longer-true while history stays queryable via trace as_of=<RFC3339>. Actions: add, link, invalidate, query, list, delete, trace, stats.`
 }
 
 func (t *KnowledgeGraphTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"action": {"type": "string", "enum": ["add", "link", "query", "list", "delete", "trace", "stats"], "description": "Action to perform"},
+			"action": {"type": "string", "enum": ["add", "link", "invalidate", "query", "list", "delete", "trace", "stats"], "description": "Action to perform"},
 			"id": {"type": "string", "description": "Node ID (for delete, trace, link). Auto-generated from title if omitted on add."},
 			"type": {"type": "string", "description": "Node type (add) or edge type (link). Nodes: decision, pattern, entity, issue, note. Edges: depends-on, supersedes, relates-to, implements, contradicts, evolves-from"},
 			"title": {"type": "string", "description": "Node title (add, query)"},
@@ -110,7 +121,9 @@ func (t *KnowledgeGraphTool) Parameters() json.RawMessage {
 			"tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization (add, query filter)"},
 			"status": {"type": "string", "description": "Lifecycle status for decisions: proposed, accepted, superseded, rejected (add)"},
 			"to": {"type": "string", "description": "Target node ID (link)"},
-			"query": {"type": "string", "description": "Search text matching title/content/tags (query)"}
+			"query": {"type": "string", "description": "Search text matching title/content/tags (query)"},
+			"valid_from": {"type": "string", "description": "RFC3339 fact-validity start (link, optional; defaults to now). A fact whose prior interval was invalidated may be re-asserted."},
+			"as_of": {"type": "string", "description": "RFC3339 point-in-time view (trace): only edges whose validity interval covers as_of are traversed"}
 		},
 		"required": ["action"]
 	}`)
@@ -135,6 +148,8 @@ func (t *KnowledgeGraphTool) Execute(ctx context.Context, input json.RawMessage)
 		return t.doAdd(store, &p)
 	case "link":
 		return t.doLink(store, &p)
+	case "invalidate":
+		return t.doInvalidate(store, &p)
 	case "query":
 		return t.doQuery(store, &p)
 	case "list":
@@ -259,19 +274,76 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 	if _, ok := s.Nodes[p.To]; !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("target %q not found", p.To)}, nil
 	}
+	now := time.Now()
+	var vf *time.Time
+	if p.ValidFrom != "" && !strings.EqualFold(strings.TrimSpace(p.ValidFrom), "now") {
+		tm, err := kgParseTime(p.ValidFrom)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid valid_from: %v", err)}, nil
+		}
+		vf = &tm
+	}
+	// Temporal dedup: a currently-valid duplicate is rejected, but a fact
+	// whose prior interval was invalidated may become true again (Zep-style
+	// re-assertion) - append a fresh validity interval instead of refusing.
+	relink := false
 	for _, e := range s.Edges {
 		if e.From == p.ID && e.To == p.To && e.Type == p.Type {
-			return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists.", p.ID, p.Type, p.To)}, nil
+			if kgEdgeValidAt(&e, now) {
+				return Result{Content: fmt.Sprintf("Edge %s --[%s]--> %s already exists.", p.ID, p.Type, p.To)}, nil
+			}
+			relink = true
 		}
 	}
 	if len(s.Edges) >= kgMaxEdges {
 		return Result{IsError: true, Content: fmt.Sprintf("edge limit (%d)", kgMaxEdges)}, nil
 	}
-	s.Edges = append(s.Edges, kgEdge{From: p.ID, To: p.To, Type: p.Type})
+	s.Edges = append(s.Edges, kgEdge{From: p.ID, To: p.To, Type: p.Type, RecordedAt: now, ValidFrom: vf})
 	if err := t.save(s); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
 	}
-	return Result{Content: fmt.Sprintf("Linked: %s --[%s]--> %s. Total edges: %d.", p.ID, p.Type, p.To, len(s.Edges))}, nil
+	prefix := ""
+	if relink {
+		prefix = "Re-validated (prior interval invalidated). "
+	}
+	return Result{Content: fmt.Sprintf("Linked: %s --[%s]--> %s. %sTotal edges: %d.", p.ID, p.Type, p.To, prefix, len(s.Edges))}, nil
+}
+
+// doInvalidate soft-invalidates currently-valid edges matching (id, to,
+// optional type): the fact stops being true at now, but the historical
+// interval stays queryable via trace as_of (Zep-style - edges are never
+// deleted, history is preserved).
+func (t *KnowledgeGraphTool) doInvalidate(s *kgStore, p *kgParams) (Result, error) {
+	if p.ID == "" || p.To == "" {
+		return Result{IsError: true, Content: "both id (source) and to (target) required"}, nil
+	}
+	if p.Type != "" && !kgEdgeTypes[p.Type] {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid edge type %q", p.Type)}, nil
+	}
+	now := time.Now()
+	n := 0
+	for i := range s.Edges {
+		e := &s.Edges[i]
+		if e.From != p.ID || e.To != p.To {
+			continue
+		}
+		if p.Type != "" && e.Type != p.Type {
+			continue
+		}
+		if !kgEdgeValidAt(e, now) {
+			continue
+		}
+		until := now
+		e.ValidUntil = &until
+		n++
+	}
+	if n == 0 {
+		return Result{Content: fmt.Sprintf("No currently-valid edge %s --> %s found.", p.ID, p.To)}, nil
+	}
+	if err := t.save(s); err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
+	}
+	return Result{Content: fmt.Sprintf("Invalidated %d edge(s) %s --> %s (valid until %s). Historical view: trace with as_of. Total edges: %d.", n, p.ID, p.To, now.Format(time.RFC3339), len(s.Edges))}, nil
 }
 
 func (t *KnowledgeGraphTool) doQuery(s *kgStore, p *kgParams) (Result, error) {
@@ -385,6 +457,18 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 	if _, ok := s.Nodes[p.ID]; !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("node %q not found", p.ID)}, nil
 	}
+	var asOf time.Time
+	asOfSet := false
+	if p.AsOf != "" {
+		tm, err := kgParseTime(p.AsOf)
+		if err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid as_of: %v", err)}, nil
+		}
+		asOf = tm
+		asOfSet = true
+	}
+	now := time.Now()
+	hidden := 0
 	visited := map[string]bool{p.ID: true}
 	type fi struct {
 		id    string
@@ -406,8 +490,16 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 		if item.depth >= kgTraceMaxDepth {
 			continue
 		}
+		at := now
+		if asOfSet {
+			at = asOf
+		}
 		for _, e := range s.Edges {
 			if e.From != item.id || visited[e.To] {
+				continue
+			}
+			if !kgEdgeValidAt(&e, at) {
+				hidden++
 				continue
 			}
 			visited[e.To] = true
@@ -422,7 +514,14 @@ func (t *KnowledgeGraphTool) doTrace(s *kgStore, p *kgParams) (Result, error) {
 		}
 	}
 	if len(lines) <= 1 {
-		return Result{Content: fmt.Sprintf("Node '%s' has no outgoing relationships.", p.ID)}, nil
+		msg := fmt.Sprintf("Node '%s' has no outgoing relationships.", p.ID)
+		if hidden > 0 {
+			msg = fmt.Sprintf("Node '%s' has no outgoing relationships within the validity window (%d edge(s) hidden; pass as_of=<RFC3339> for a historical view).", p.ID, hidden)
+		}
+		return Result{Content: msg}, nil
+	}
+	if hidden > 0 {
+		lines = append(lines, fmt.Sprintf("(%d edge(s) outside the validity window hidden; pass as_of=<RFC3339> for a historical view)", hidden))
 	}
 	return Result{Content: fmt.Sprintf("Trace from '%s':\n%s", p.ID, strings.Join(lines, "\n"))}, nil
 }
@@ -437,8 +536,15 @@ func (t *KnowledgeGraphTool) doStats(s *kgStore) (Result, error) {
 		}
 	}
 	be := map[string]int{}
+	now := time.Now()
+	current, invalidated := 0, 0
 	for _, e := range s.Edges {
 		be[e.Type]++
+		if kgEdgeValidAt(&e, now) {
+			current++
+		} else {
+			invalidated++
+		}
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Knowledge Graph: %d/%d nodes, %d/%d edges\n", len(s.Nodes), kgMaxNodes, len(s.Edges), kgMaxEdges))
@@ -462,6 +568,7 @@ func (t *KnowledgeGraphTool) doStats(s *kgStore) (Result, error) {
 				sb.WriteString(fmt.Sprintf("  %s: %d\n", et, be[et]))
 			}
 		}
+		sb.WriteString(fmt.Sprintf("  edge validity: %d current, %d invalidated\n", current, invalidated))
 	}
 	return Result{Content: sb.String()}, nil
 }
@@ -522,6 +629,31 @@ func (t *KnowledgeGraphTool) save(s *kgStore) error {
 }
 
 // --- Helpers ---
+
+// kgParseTime parses an RFC3339 timestamp (or "now") for temporal params.
+func kgParseTime(s string) (time.Time, error) {
+	if strings.EqualFold(strings.TrimSpace(s), "now") {
+		return time.Now(), nil
+	}
+	tm, err := time.Parse(time.RFC3339, strings.TrimSpace(s))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("want RFC3339 (e.g. 2026-01-02T15:04:05Z), got %q", s)
+	}
+	return tm, nil
+}
+
+// kgEdgeValidAt reports whether the edge's fact is true at instant at.
+// Legacy edges without temporal fields are treated as always-valid, so
+// pre-temporal graph files keep their existing trace/list behavior.
+func kgEdgeValidAt(e *kgEdge, at time.Time) bool {
+	if e.ValidFrom != nil && at.Before(*e.ValidFrom) {
+		return false
+	}
+	if e.ValidUntil != nil && !at.Before(*e.ValidUntil) {
+		return false
+	}
+	return true
+}
 
 func slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
