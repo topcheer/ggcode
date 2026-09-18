@@ -76,3 +76,10 @@ func (c callPolicy) withTimeout(ctx context.Context) (context.Context, context.C
 	}
 	return context.WithTimeout(ctx, c.requestTimeout)
 }
+
+// setCallPolicy installs the resolved sa-78 call policy. Implemented per
+// provider type here (one method per struct) so NewProvider can apply the
+// policy uniformly via the callPolicySetter interface.
+func (p *OpenAIProvider) setCallPolicy(cp callPolicy)    { p.policy = cp }
+func (p *AnthropicProvider) setCallPolicy(cp callPolicy) { p.policy = cp }
+func (p *GeminiProvider) setCallPolicy(cp callPolicy)    { p.policy = cp }

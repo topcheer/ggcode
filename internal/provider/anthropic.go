@@ -47,6 +47,7 @@ type AnthropicProvider struct {
 	effortCarrier      atomic.Bool // true until the endpoint rejects output_config
 	lastCallEffort     string      // effort level observed on the previous request
 	conversationEffort string      // effort level established for the cached prefix
+	policy             callPolicy  // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name used by this provider.
@@ -71,6 +72,7 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		topP:            p.topP,
 		serverTools:     p.serverTools,
 		thinkingMode:    p.thinkingMode,
+		policy:          p.policy,
 	}
 	// Inherit the endpoint capability latch (an endpoint that rejected
 	// output_config stays off), but reset the per-conversation stability
@@ -548,6 +550,9 @@ func (p *AnthropicProvider) SetSessionID(sessionID string) {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	// sa-78: honor the configured per-call deadline for non-streaming calls.
+	ctx, cancel := p.policy.withTimeout(ctx)
+	defer cancel()
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
@@ -558,10 +563,9 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		var callErr error
 		resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 		return callErr
-	}, providerRetryAttempts)
-	// Retry once without extended thinking if the model rejects it
-	// (manual budget_tokens and adaptive alike).
-	if err != nil && (params.Thinking.OfEnabled != nil || params.Thinking.OfAdaptive != nil) && isThinkingError(err) {
+	}, p.policy.attempts())
+	// Retry once without extended thinking if the model rejects it.
+	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
 		callOpts = nil
@@ -569,7 +573,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 			return callErr
-		}, providerRetryAttempts)
+		}, p.policy.attempts())
 	}
 	// Retry once without the effort carrier if the endpoint rejects
 	// output_config (Anthropic-compatible gateways predating the parameter).
@@ -581,7 +585,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 			var callErr error
 			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 			return callErr
-		}, providerRetryAttempts)
+		}, p.policy.attempts())
 	}
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected {
@@ -629,6 +633,10 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 	safego.Go("provider.anthropic.streamRead", func() {
 		defer close(ch)
+		// sa-78: per-call deadline applied inside the goroutine so it covers
+		// the full stream lifetime (ChatStream returns immediately).
+		ctx, cancel := p.policy.withTimeout(ctx)
+		defer cancel()
 
 		var usage *TokenUsage
 		var outputChars int
@@ -636,7 +644,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 		streamError := false       // set when a non-retryable error was sent to ch
 		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
-		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			if attempt > 0 {
 				debug.Log("anthropic", "Stream retry attempt %d", attempt)
 			}
@@ -830,9 +838,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
 					}
-					// Retry without extended thinking if the model rejects it
-					// (manual budget_tokens and adaptive alike).
-					if !emitted && (params.Thinking.OfEnabled != nil || params.Thinking.OfAdaptive != nil) && isThinkingError(err) && attempt < providerRetryAttempts-1 {
+					// Retry without extended thinking if the model rejects it.
+					if !emitted && params.Thinking.OfEnabled != nil && isThinkingError(err) && attempt < p.policy.attempts()-1 {
 						debug.Log("anthropic", "Stream: retrying without extended thinking (model rejected thinking parameters)")
 						// #2115: the downgrade must be VISIBLE - the user set a
 						// reasoning effort and silently losing it for the rest of
@@ -851,10 +858,10 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						return
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
-					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
+					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
 						// Notify user about retry
 						delay := retryDelay(err, attempt)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
 						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 							// #722: budget exhausted — stop retrying now; wrap with the
 							// sentinel so the failover layer switches immediately.

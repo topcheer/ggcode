@@ -41,6 +41,7 @@ type OpenAIProvider struct {
 	baseURL          string                    // endpoint URL, for logging
 	transport        *headerInjectingTransport // kept for runtime header updates
 	logprobs         bool                      // sa-74: request token logprobs for confidence telemetry
+	policy           callPolicy                // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name, implementing ModelNameProvider.
@@ -57,6 +58,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		// parent's learned cap pointer mixed per-model state across the
 		// registry's carefully-partitioned keys.
 		cap:             AdaptiveCapForModelSwap(p.cap, model, p.maxTokens),
+		policy:          p.policy,
 		reasoningEffort: p.reasoningEffort,
 		toolChoice:      p.toolChoice,
 		strictTools:     p.strictTools,
@@ -490,6 +492,9 @@ func meanLogprob(ps []float64) *float64 {
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	// sa-78: honor the configured per-call deadline for non-streaming calls.
+	ctx, cancel := p.policy.withTimeout(ctx)
+	defer cancel()
 	chatMsgs := p.convertMessages(messages)
 	req := openai.ChatCompletionRequest{
 		Model:    p.model,
@@ -510,7 +515,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		var callErr error
 		resp, callErr = p.createChatCompletion(ctx, req, hasReasoningEffort)
 		return callErr
-	}, providerRetryAttempts)
+	}, p.policy.attempts())
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected && p.cap != nil {
 			p.cap.OnRejected(parsed)
@@ -596,6 +601,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	safego.Go("provider.openai.streamRead", func() {
 		defer close(ch)
+		// sa-78: per-call deadline applied inside the goroutine so it covers
+		// the full stream lifetime (ChatStream returns immediately).
+		ctx, cancel := p.policy.withTimeout(ctx)
+		defer cancel()
 
 		var usage *TokenUsage
 		var outputChars int
@@ -606,9 +615,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		streamError := false       // set when a non-retryable error was sent to ch
 		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
-		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			if attempt > 0 {
-				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, providerRetryAttempts, p.model, p.baseURL)
+				debug.Log("openai", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
 			}
 
 			// Reset per-attempt state to avoid leaking failed-attempt usage
@@ -629,11 +638,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 				if rejected, parsed := maxTokensRejection(err); rejected && p.cap != nil {
 					p.cap.OnRejected(parsed)
 				}
-				if isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
+				if isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
 					delay := retryDelay(err, attempt)
-					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, delay, err, err)
+					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
 					// Notify user about retry
-					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
 					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 						// #722: budget exhausted — stop retrying now; wrap with the
 						// sentinel so the failover layer switches immediately.
@@ -651,7 +660,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// and every transient 502/503/504/429 kills the run.
 					continue
 				}
-				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, err, err)
+				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
 				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}
 				return
 			}
@@ -722,11 +731,11 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							normalEnd = true
 							return
 						}
-						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, providerRetryAttempts, emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
+						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
-						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < providerRetryAttempts-1 {
+						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < p.policy.attempts()-1 {
 							delay := retryDelay(recvErr, attempt)
-							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
 							if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 								// #722: budget exhausted — stop retrying now; wrap with
 								// the sentinel so the failover layer switches immediately.
@@ -902,7 +911,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			return
 		}
 		// All retry attempts exhausted without success.
-		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", providerRetryAttempts)}
+		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", p.policy.attempts())}
 	})
 
 	return ch, nil

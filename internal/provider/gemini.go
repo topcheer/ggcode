@@ -29,6 +29,7 @@ type GeminiProvider struct {
 	topP             float64                          // 0 = provider default
 	transport        *headerInjectingTransport        // kept for runtime header updates
 	logprobs         bool                             // sa-74: request token logprobs for confidence telemetry
+	policy           callPolicy                       // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name used by this provider.
@@ -50,6 +51,7 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		topP:            p.topP,
 		transport:       p.transport,
 		serverTools:     append([]ServerToolConfig(nil), p.serverTools...),
+		policy:          p.policy,
 		logprobs:        p.logprobs,
 	}
 }
@@ -246,6 +248,9 @@ func normalizeGeminiFinishReason(r genai.FinishReason) string {
 }
 
 func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	// sa-78: honor the configured per-call deadline for non-streaming calls.
+	ctx, cancel := p.policy.withTimeout(ctx)
+	defer cancel()
 	contents, systemInstruction := p.convertMessages(messages)
 
 	config := &genai.GenerateContentConfig{
@@ -264,7 +269,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 		var callErr error
 		resp, callErr = p.client.Models.GenerateContent(ctx, p.model, contents, config)
 		return callErr
-	}, providerRetryAttempts)
+	}, p.policy.attempts())
 	if err != nil {
 		if rejected, parsed := maxTokensRejection(err); rejected {
 			p.cap.OnRejected(parsed)
@@ -325,10 +330,14 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 
 	safego.Go("provider.gemini.streamRead", func() {
 		defer close(ch)
+		// sa-78: per-call deadline applied inside the goroutine so it covers
+		// the full stream lifetime (ChatStream returns immediately).
+		ctx, cancel := p.policy.withTimeout(ctx)
+		defer cancel()
 
 		budget := newRetryBudget()             // #722: cap cumulative retry backoff sleep per stream call
 		grounding := newGeminiGroundingAccum() // built-in tool grounding sources, deduped across chunks/attempts
-		for attempt := 0; attempt < providerRetryAttempts; attempt++ {
+		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
 			var policyBlocked bool
@@ -342,10 +351,10 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					if rejected, parsed := maxTokensRejection(err); rejected {
 						p.cap.OnRejected(parsed)
 					}
-					if !emitted && isRetryableForContext(ctx, err) && attempt < providerRetryAttempts-1 {
+					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
 						// Notify user about retry
 						delay := retryDelay(err, attempt)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, providerRetryAttempts, delay)}
+						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
 						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 							// #722: budget exhausted — stop retrying now; wrap with the
 							// sentinel so failover switches immediately.
@@ -493,7 +502,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			return
 		}
 		// All retry attempts exhausted without success.
-		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %d retry attempts exhausted", providerRetryAttempts)}
+		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %d retry attempts exhausted", p.policy.attempts())}
 	})
 
 	return ch, nil
