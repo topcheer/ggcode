@@ -67,12 +67,20 @@ func lockConfigFile(path string) func() {
 	return mu.Unlock
 }
 
-// ModelLimitConfig holds per-model context window and max output token overrides.
-// When present for a given model, these values take priority over the endpoint-level
-// ContextWindow/MaxTokens fields.
+// ModelLimitConfig holds per-model context window, max output token, and LLM
+// call policy (request timeout / retry budget) overrides. When present for a
+// given model, these values take priority over the endpoint-level
+// ContextWindow/MaxTokens/RequestTimeout/MaxRetries fields.
 type ModelLimitConfig struct {
 	ContextWindow int `yaml:"context_window,omitempty" json:"context_window,omitempty"`
 	MaxTokens     int `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	// RequestTimeout caps a single LLM call (connect + full stream) for this
+	// model, e.g. "45s". 0 = no deadline (pre-existing behavior).
+	RequestTimeout time.Duration `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
+	// MaxRetries overrides the provider-wide retry budget (default 20) for
+	// this model. Useful for fast/cheap models where retrying 20 times with
+	// exponential backoff just delays the inevitable fallback.
+	MaxRetries int `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 }
 
 // ServerToolConfig declares one server-side tool — executed inside the
@@ -96,13 +104,19 @@ type ServerToolConfig struct {
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName     string `yaml:"display_name" json:"display_name"`
-	Protocol        string `yaml:"protocol" json:"protocol"`
-	BaseURL         string `yaml:"base_url" json:"base_url"`
-	AuthType        string `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
-	APIKey          string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	ContextWindow   int    `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	MaxTokens       int    `yaml:"max_tokens" json:"max_tokens"`
+	DisplayName   string `yaml:"display_name" json:"display_name"`
+	Protocol      string `yaml:"protocol" json:"protocol"`
+	BaseURL       string `yaml:"base_url" json:"base_url"`
+	AuthType      string `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
+	APIKey        string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	ContextWindow int    `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens     int    `yaml:"max_tokens" json:"max_tokens"`
+	// RequestTimeout caps every LLM call against this endpoint ("45s" style).
+	// Endpoint-level default; a model_limits entry takes priority. 0 = none.
+	RequestTimeout time.Duration `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
+	// MaxRetries overrides the provider-wide retry budget for this endpoint.
+	// Endpoint-level default; a model_limits entry takes priority. 0 = default.
+	MaxRetries      int    `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
 	// Logprobs (sa-74) requests token logprobs from the provider for
 	// confidence telemetry. OpenAI: logprobs+top_logprobs; Gemini:
