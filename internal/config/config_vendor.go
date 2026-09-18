@@ -173,6 +173,8 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		StrictTools:      strictTools,
 		StrictToolsAllow: append([]string(nil), ep.StrictToolsAllow...),
 		ServiceTier:      strings.TrimSpace(ep.ServiceTier),
+		RequestTimeout:   requestTimeout,
+		MaxRetries:       maxRetries,
 	}, nil
 }
 

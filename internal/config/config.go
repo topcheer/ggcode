@@ -187,6 +187,8 @@ type ResolvedEndpoint struct {
 	StrictTools      bool
 	StrictToolsAllow []string
 	ServiceTier      string
+	RequestTimeout   time.Duration
+	MaxRetries       int
 }
 
 // ToolPermission defines per-tool permission level in config.
