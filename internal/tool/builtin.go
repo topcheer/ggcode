@@ -53,6 +53,10 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		MultiFileRead{SandboxCheck: readSandboxFor("multi_file_read")},
 		WriteFile{SandboxCheck: sandboxFor("write_file"), WorkingDir: workingDir},
 		MultiFileWrite{SandboxCheck: sandboxFor("multi_file_write"), WorkingDir: workingDir},
+		// sa-67: Responses apply_patch harness. Registered but hidden
+		// (Available()==false): the model reaches it via the in-API
+		// apply_patch tool; the provider routes its calls here for execution.
+		ApplyPatch{SandboxCheck: sandboxFor("apply_patch"), WorkingDir: workingDir},
 		ListDir{SandboxCheck: readSandboxFor("list_directory")},
 		EditFile{SandboxCheck: sandboxFor("edit_file"), WorkingDir: workingDir},
 		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit"), WorkingDir: workingDir},

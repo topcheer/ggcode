@@ -26,17 +26,19 @@ package provider
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// SetServerTools implements provider.ServerToolsSetter: declarative hosted
-// tools executed inside the OpenAI Responses API (never client-side).
-// Mapping:
-//   - "web_search"            → GA hosted web search ({type:"web_search"})
-//   - "web_search_2025_08_26" → dated GA snapshot of the same tool
-//   - "web_search_preview"    → legacy preview alias (kept for older relays)
+// SetServerTools implements provider.ServerToolsSetter: tools declared with
+// config `server_tools: [{type: ...}]`. Two families exist:
+//   - hosted, executed in-API: "web_search" (aliases
+//     "web_search_2025_08_26", "web_search_preview")
+//   - declared in-API, executed CLIENT-side: "apply_patch" (sa-67) - the
+//     model emits apply_patch_call V4A diffs that ggcode applies locally via
+//     internal/tool.ApplyPatch and answers with apply_patch_call_output
 //
 // Unknown declarations are ignored (fail closed), mirroring the Anthropic and
 // Gemini legs; a declaration set with no recognized entry leaves the
@@ -62,6 +64,10 @@ func (p *OpenAIResponsesProvider) hasHostedTools() bool { return len(p.serverToo
 func responsesHostedTool(t ServerToolConfig) (responsesTool, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(t.Type))
 	switch normalized {
+	// sa-67: apply_patch is declared in-API (the model addresses it purely by
+	// type) but executed CLIENT-side - see applyPatchInternalToolName.
+	case "apply_patch":
+		return responsesTool{Type: normalized}, true
 	case "web_search", "web_search_2025_08_26", "web_search_preview":
 		return responsesTool{Type: normalized}, true
 	default:
@@ -105,9 +111,78 @@ func decodeResponsesServerToolItem(raw json.RawMessage) (responsesInputItem, boo
 	}
 	// "web_search_call" today; the suffix match tolerates variant/legacy
 	// naming (e.g. preview relays) without opening the door to message or
-	// reasoning items.
+	// reasoning items. apply_patch_call is NOT a hosted tool (sa-67): it is
+	// handled by the dedicated apply_patch path, never as a server_tool.
 	if strings.HasPrefix(probe.Type, "web_search") && strings.HasSuffix(probe.Type, "_call") {
 		return responsesInputItem{RawReplay: raw}, true
 	}
 	return responsesInputItem{}, false
+}
+
+// applyPatchInternalToolName is the hidden internal tool that executes V4A
+// patches client-side (internal/tool.ApplyPatch). The Responses provider
+// surfaces each apply_patch_call output item as a call to this name, and maps
+// the executor's Result back into apply_patch_call_output. It must match the
+// tool's Name() exactly; the const lives here because provider cannot import
+// internal/tool (tool imports provider for its definitions).
+const applyPatchInternalToolName = "apply_patch"
+
+// decodeResponsesApplyPatchCall probes a raw output item (non-stream output
+// array entry or response.output_item.* event payload) for an apply_patch_call
+// item and extracts the call id plus the operation object. Returns ok=false
+// for anything else - foreign providers, function_call, web_search_call,
+// malformed JSON.
+func decodeResponsesApplyPatchCall(raw json.RawMessage) (callID string, operation json.RawMessage, ok bool) {
+	if len(raw) == 0 {
+		return "", nil, false
+	}
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || probe.Type != "apply_patch_call" {
+		return "", nil, false
+	}
+	var op struct {
+		ID        string          `json:"id"`
+		CallID    string          `json:"call_id"`
+		Operation json.RawMessage `json:"operation"`
+	}
+	if json.Unmarshal(raw, &op) != nil {
+		return "", nil, false
+	}
+	callID = op.CallID
+	if callID == "" {
+		callID = op.ID
+	}
+	if callID == "" {
+		return "", nil, false
+	}
+	return callID, op.Operation, true
+}
+
+// responsesApplyPatchCallReplay rebuilds the model's apply_patch_call item for
+// stateless replay (store=false discards server state, so the next request
+// must echo the call back). The operation rides through verbatim when it is
+// valid JSON; corrupt inputs replay without an operation so the item still
+// pairs with its output and the model sees its call was attempted.
+func responsesApplyPatchCallReplay(callID string, operation json.RawMessage) json.RawMessage {
+	id, _ := json.Marshal(callID)
+	op := "null"
+	if len(operation) > 0 && json.Valid(operation) {
+		op = string(operation)
+	}
+	return json.RawMessage(fmt.Sprintf(`{"type":"apply_patch_call","call_id":%s,"status":"completed","operation":%s}`, id, op))
+}
+
+// responsesApplyPatchOutputReplay builds the apply_patch_call_output item
+// reporting the local executor's outcome. status mirrors the Result error
+// flag exactly like anthropic.NewToolResultBlock does for tool_result.
+func responsesApplyPatchOutputReplay(callID, output string, failed bool) json.RawMessage {
+	id, _ := json.Marshal(callID)
+	out, _ := json.Marshal(output)
+	status := "completed"
+	if failed {
+		status = "failed"
+	}
+	return json.RawMessage(fmt.Sprintf(`{"type":"apply_patch_call_output","call_id":%s,"status":%q,"output":%s}`, id, status, out))
 }
