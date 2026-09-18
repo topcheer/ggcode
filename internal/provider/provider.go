@@ -256,6 +256,13 @@ type ReasoningEffortProvider interface {
 	ReasoningEffort() string
 }
 
+// TextVerbosityProvider is implemented by providers that support the GPT-5
+// text.verbosity output-length control (Responses API only).
+type TextVerbosityProvider interface {
+	SetTextVerbosity(verbosity string)
+	TextVerbosity() string
+}
+
 // ServerToolsSetter is implemented by providers that support Anthropic
 // server-side tools (web_search / web_fetch): tools declared once and
 // executed inside the provider's infrastructure, with results returned

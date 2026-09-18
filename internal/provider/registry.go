@@ -36,6 +36,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		// and o-series models that have no Chat Completions surface.
 		rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		rp.SetReasoningEffort(resolved.ReasoningEffort)
+		rp.SetTextVerbosity(resolved.TextVerbosity)
 		rp.SetToolChoice(resolved.ToolChoice)
 		if len(resolved.ServerTools) > 0 {
 			rp.SetServerTools(resolved.ServerTools)
@@ -48,6 +49,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		if strings.HasSuffix(strings.TrimRight(resolved.BaseURL, "/"), "/responses") {
 			rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 			rp.SetReasoningEffort(resolved.ReasoningEffort)
+			rp.SetTextVerbosity(resolved.TextVerbosity)
 			rp.SetToolChoice(resolved.ToolChoice)
 			if len(resolved.ServerTools) > 0 {
 				rp.SetServerTools(resolved.ServerTools)
