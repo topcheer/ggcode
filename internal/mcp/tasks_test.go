@@ -141,3 +141,33 @@ func TestClientCapsDeclareTasks(t *testing.T) {
 		t.Fatalf("modern envelope caps missing tasks: %s", raw)
 	}
 }
+
+// TestMRTRTaskEnvelopePassthrough guards the mrtr.go contract that
+// CallToolAsTask depends on: a resultType "task" envelope must flow through
+// the MRTR loop to the caller instead of being rejected as an unrecognized
+// result, and it must not trigger an input_required retry.
+func TestMRTRTaskEnvelopePassthrough(t *testing.T) {
+	params := &CallToolParams{Name: "t"}
+	var sent []string
+	send := func() (json.RawMessage, error) {
+		sent = append(sent, "call")
+		return json.RawMessage(`{"resultType":"task","taskId":"t1","status":"working","pollInterval":500}`), nil
+	}
+	var raw json.RawMessage
+	if err := NewClient("test", "echo", nil).mrtrLoop(context.Background(), "tools/call", params, send, &raw); err != nil {
+		t.Fatalf("mrtrLoop: %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("task envelope must not trigger MRTR retry, got %d sends", len(sent))
+	}
+	if !isTaskEnvelope(raw) {
+		t.Fatalf("task envelope must pass through untouched: %s", raw)
+	}
+	var created CreateTaskResult
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if created.TaskID != "t1" || created.Status != TaskStatusWorking || created.PollInterval != 500 {
+		t.Fatalf("task fields lost in passthrough: %+v", created.Task)
+	}
+}
