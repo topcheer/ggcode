@@ -258,13 +258,28 @@ func commandFailed(runStats *RunStats, cmd string) bool {
 	if base == "" {
 		return false
 	}
-	// Use the first token (the binary) as the anchor - error lines usually
-	// quote the command or its failure output, not the full arg list.
+	// Use the first two tokens (binary + subcommand, e.g. "go test",
+	// "cargo build") as the anchor - error lines usually quote the command
+	// or its failure output. #2500: the old single-token bare Contains
+	// matched "go" inside "cargo" and inside ".go" file paths (word
+	// boundaries do not help there - '.' is a legal boundary byte before
+	// "go"), so a single unrelated tool error (edit_file failure quoting a
+	// *.go path, a failed cargo build) invalidated the exemption for a
+	// SUCCESSFUL "go test" run and made the detector fire on verified
+	// claims. A two-token anchor misses only error lines that quote the
+	// bare binary without its subcommand - the safe direction (exemption
+	// kept, no false reminder).
 	fields := strings.Fields(base)
-	anchor := fields[0]
+	if len(fields) == 0 {
+		return false
+	}
+	anchor := strings.ToLower(fields[0])
+	if len(fields) > 1 {
+		anchor = strings.ToLower(fields[0] + " " + fields[1])
+	}
 	for _, e := range runStats.Errors {
 		el := strings.ToLower(e)
-		if strings.Contains(el, strings.ToLower(anchor)) && (strings.Contains(el, "fail") || strings.Contains(el, "exit status") || strings.Contains(el, "non-zero") || strings.Contains(el, "error")) {
+		if strings.Contains(el, anchor) && (strings.Contains(el, "fail") || strings.Contains(el, "exit status") || strings.Contains(el, "non-zero") || strings.Contains(el, "error")) {
 			return true
 		}
 	}
