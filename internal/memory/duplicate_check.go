@@ -65,8 +65,13 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 			}
 		}
 
-		// Also check if keys are identical (exact match).
-		if m.Key == sanitizeKey(key) {
+		// Also check if keys are identical (exact match). m.Key is the DISK
+		// filename (disambiguateKey output), so compare against the same
+		// derivation - the old sanitizeKey(key) never matched keys that got
+		// a hash suffix (CJK/spaces/dots), so saving such a key twice never
+		// reported the 1.0 duplicate it was (#2520, same fix shape as the
+		// contradiction_check self-update comparison #1280).
+		if m.Key == disambiguateKey(key, sanitizeKey(key)) {
 			return DuplicateCheck{
 				SimilarTo:       m.Key,
 				Similarity:      1.0,
