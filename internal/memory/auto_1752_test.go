@@ -37,10 +37,12 @@ func Test1752SaveMemoryAtomicConcurrent(t *testing.T) {
 		t.Fatalf("torn write: got %d bytes", len(data))
 	}
 
-	// No temp residue: the directory holds only the final file.
+	// No temp residue: the directory holds only the final file plus the
+	// sa-85 provenance sidecar (.usage.json is legitimate persistent
+	// state, not a leftover temp file).
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.Name() != "race-key.md" {
+		if e.Name() != "race-key.md" && e.Name() != usageFileName {
 			t.Fatalf("temp residue left behind: %s", e.Name())
 		}
 	}

@@ -34,6 +34,11 @@ type MemoryMeta struct {
 	Category  MemoryCategory // auto-classified category
 	CreatedAt time.Time      // file ModTime
 	DedupKey  string         // prefix used for dedup (date/version stripped)
+
+	// sa-85 provenance/usage (populated from the .usage.json sidecar).
+	Uses       int       // prompt-injection count (debounced)
+	LastUsedAt time.Time // last injection time
+	Source     string    // origin label: save_memory:<scope>, run-reflection, ...
 }
 
 // transientExpiry is how long transient memories stay active.

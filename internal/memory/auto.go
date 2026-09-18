@@ -23,6 +23,10 @@ type AutoMemory struct {
 	// see a torn file. A package-level per-path mutex serializes writers,
 	// and writes go through temp+rename so readers never see partial files.
 	mu sync.Mutex
+	// useOnce debounces RecordUse per key per process (sa-85): prompt
+	// refresh storms rebuild the index on every save; without the debounce
+	// one burst would multiply usage counters.
+	useOnce sync.Map
 }
 
 // writeMu serializes writes to the same memory FILE path across separate
@@ -54,6 +58,15 @@ func NewProjectAutoMemory(workingDir string) *AutoMemory {
 
 // SaveMemory saves a memory entry to ~/.ggcode/memory/{key}.md.
 func (am *AutoMemory) SaveMemory(key, content string) error {
+	return am.SaveMemoryWithSource(key, content, "save_memory")
+}
+
+// SaveMemoryWithSource saves a memory entry and records its PROVENANCE
+// (sa-85): which subsystem created it. The source label lands in the
+// .usage.json sidecar on first write of the key and survives later
+// overwrites, so every prompt-injected memory can be traced to its origin
+// (arXiv:2608.29606 provenance-aware memory).
+func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 	// #775: sanitizeKey is not injective ("a/b"/"a.b"/"a b" all -> "a-b";
 	// pure-CJK keys -> "" -> untitled.md, so ALL Chinese memories shared one
 	// file and silently overwrote each other). disambiguateKey appends a short
@@ -91,6 +104,7 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 		os.Remove(tmpName)
 		return err
 	}
+	am.RecordProvenance(safe, source)
 	return nil
 }
 
@@ -131,10 +145,20 @@ func (am *AutoMemory) LoadIndex() (string, []string, error) {
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 
+	// sa-85 provenance display + usage feedback: inject the compact
+	// provenance marker for entries with recorded usage so the model can
+	// weigh each memory's track record, and count this injection as one
+	// use per key (debounced).
 	var builder strings.Builder
 	for _, key := range keys {
-		builder.WriteString(fmt.Sprintf("- %s\n", key))
+		line := fmt.Sprintf("- %s", key)
+		if info, ok := am.UsageOf(key); ok {
+			line += provenanceSuffix(info)
+		}
+		builder.WriteString(line)
+		builder.WriteString("\n")
 	}
+	am.RecordUse(keys, "index")
 	return strings.TrimSpace(builder.String()), files, nil
 }
 
@@ -186,6 +210,8 @@ func (am *AutoMemory) List() ([]string, error) {
 }
 
 // collectMetas reads the memory directory and returns MemoryMeta for each .md file.
+// sa-85: each meta carries its recorded provenance/usage from the sidecar
+// so consumers (HealthReport) can surface usage signals without re-reading.
 func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 	entries, err := os.ReadDir(am.dir)
 	if err != nil {
@@ -194,6 +220,7 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 		}
 		return nil, err
 	}
+	usage := am.loadUsage()
 	var metas []MemoryMeta
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
@@ -204,7 +231,13 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 			continue
 		}
 		key := strings.TrimSuffix(e.Name(), ".md")
-		metas = append(metas, buildMemoryMeta(key, info.ModTime()))
+		meta := buildMemoryMeta(key, info.ModTime())
+		if rec, ok := usage.Entries[key]; ok && rec != nil {
+			meta.Uses = rec.Uses
+			meta.LastUsedAt = rec.LastUsed
+			meta.Source = rec.Source
+		}
+		metas = append(metas, meta)
 	}
 	return metas, nil
 }
@@ -260,7 +293,16 @@ type MemoryEntry struct {
 // This implements relevance-free auto-injection: persistent knowledge from
 // previous sessions is immediately available in context without requiring the
 // LLM to manually read_file each memory entry.
+//
+// sa-85: each call records one prompt-injection "use" per injected key
+// (inline entries count more strongly - their content was actually served).
+// Diagnostics-only callers (HealthReport) use loadForPrompt(false) so a
+// health check does not inflate the usage telemetry it reports.
 func (am *AutoMemory) LoadForPrompt() (inline []MemoryEntry, indexOnly []string, err error) {
+	return am.loadForPrompt(true)
+}
+
+func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnly []string, err error) {
 	metas, err := am.collectMetas()
 	if err != nil {
 		return nil, nil, err
@@ -302,6 +344,14 @@ func (am *AutoMemory) LoadForPrompt() (inline []MemoryEntry, indexOnly []string,
 		}
 	}
 
+	if record {
+		inlineKeys := make([]string, 0, len(inline))
+		for _, e := range inline {
+			inlineKeys = append(inlineKeys, e.Key)
+		}
+		am.RecordUse(inlineKeys, "inline")
+		am.RecordUse(indexOnly, "index")
+	}
 	return inline, indexOnly, nil
 }
 

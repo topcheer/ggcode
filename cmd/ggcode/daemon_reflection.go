@@ -36,7 +36,7 @@ func setupDaemonReflection(ag *agent.Agent, workingDir string) {
 			insights = agent.MergeInsights(existing, insights)
 		}
 
-		if err := autoMem.SaveMemory(key, insights); err != nil {
+		if err := autoMem.SaveMemoryWithSource(key, insights, "run-reflection"); err != nil {
 			debug.Log("daemon", "reflection: failed to save insights: %v", err)
 		} else {
 			debug.Log("daemon", "reflection: saved insights (%d chars)", len(insights))
