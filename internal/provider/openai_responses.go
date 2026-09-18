@@ -38,6 +38,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // OpenAIResponsesProvider speaks the /v1/responses protocol.
@@ -53,6 +56,14 @@ type OpenAIResponsesProvider struct {
 	serviceTier       string // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
 	toolChoice        string
 	maxTokensOverride int
+
+	// background (sa-73) enables Responses background mode: the create call
+	// returns immediately with status "queued" and ggcode polls
+	// GET /responses/{id} until a terminal state instead of holding the HTTP
+	// connection open. pollDelay is the initial poll interval (doubled up to
+	// responsesPollMaxDelay).
+	background bool
+	pollDelay  time.Duration
 
 	// Hosted (server-side) tools configured via server_tools (sa-62), e.g.
 	// web_search. Declared once in config and executed inside the API.
@@ -73,6 +84,7 @@ func NewOpenAIResponsesProvider(apiKey, model string, maxTokens int, baseURL str
 		baseURL:    baseURL,
 		maxTokens:  maxTokens,
 		httpClient: &http.Client{Timeout: 0}, // streams are long-lived; ctx governs lifetime
+		pollDelay:  time.Second,
 	}
 }
 
@@ -129,6 +141,15 @@ func (p *OpenAIResponsesProvider) ToolChoice() string { return p.toolChoice }
 
 // SetMaxTokens honors the MaxTokensSetter contract (MCP sampling #1592-A).
 func (p *OpenAIResponsesProvider) SetMaxTokens(n int) { p.maxTokensOverride = n }
+
+// SetBackgroundMode turns on Responses background mode (sa-73): the create
+// call POSTs with background=true and returns immediately with status
+// "queued"; ggcode then polls GET /responses/{id} until a terminal state
+// (completed/failed/incomplete/cancelled). This decouples multi-minute
+// reasoning turns (GPT-5.x Pro, codex-max) from HTTP idle timeouts and
+// dropped connections: if the client dies the server keeps executing, and a
+// context cancellation explicitly cancels the server-side run.
+func (p *OpenAIResponsesProvider) SetBackgroundMode(on bool) { p.background = on }
 
 func (p *OpenAIResponsesProvider) CountTokens(ctx context.Context, messages []Message) (int, error) {
 	return estimateTokensForMessages(messages), nil
@@ -210,6 +231,8 @@ type responsesRequest struct {
 	Text            *responsesTextConfig `json:"text,omitempty"`
 	ServiceTier     string               `json:"service_tier,omitempty"`
 	Store           *bool                `json:"store,omitempty"`
+	// Background (sa-73) asks the API to execute the response asynchronously;
+	Background *bool `json:"background,omitempty"`
 	// Include asks the API to return encrypted reasoning tokens inside
 	// reasoning items so they can be replayed statelessly (sa-54).
 	Include []string `json:"include,omitempty"`
@@ -413,6 +436,9 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 		Store:   boolPtr(false), // stateless replay; no server-side conversation state
 		Include: []string{responsesIncludeEncryptedReasoning},
 	}
+	if p.background {
+		req.Background = boolPtr(true)
+	}
 	budget := p.maxTokensOverride
 	if budget <= 0 {
 		budget = p.maxTokens
@@ -468,6 +494,230 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// ---- background mode (sa-73) ----
+
+// Responses background-mode lifecycle states. Per OpenAI's background mode
+// guide: queued/in_progress are pending; completed/failed/incomplete/
+// cancelled are terminal.
+const (
+	responsesStatusQueued     = "queued"
+	responsesStatusInProgress = "in_progress"
+	responsesStatusCompleted  = "completed"
+	responsesStatusFailed     = "failed"
+	responsesStatusIncomplete = "incomplete"
+	responsesStatusCancelled  = "cancelled"
+
+	// Consecutive polling errors tolerated before giving up: background mode
+	// exists precisely to survive transient connectivity blips, but a
+	// persistent endpoint failure must surface instead of polling forever.
+	responsesPollMaxErrors = 5
+	// Poll backoff ceiling.
+	responsesPollMaxDelay = 10 * time.Second
+)
+
+func isBackgroundPending(status string) bool {
+	return status == responsesStatusQueued || status == responsesStatusInProgress
+}
+
+func backgroundTerminalError(p *responsesPayload) error {
+	msg := "background response " + p.Status
+	if p.Error != nil && p.Error.Message != "" {
+		msg += ": " + p.Error.Message
+	}
+	return fmt.Errorf("responses: %s", msg)
+}
+
+// pollBackground polls GET /responses/{id} until the response reaches a
+// terminal state. onPoll, when non-nil, is invoked with each intermediate
+// payload (used to stream incremental text deltas while polling). On context
+// cancellation the server-side run is best-effort cancelled first so a
+// dropped turn does not keep burning tokens.
+func (p *OpenAIResponsesProvider) pollBackground(ctx context.Context, payload *responsesPayload, onPoll func(*responsesPayload)) (*responsesPayload, error) {
+	if payload.ID == "" {
+		return nil, fmt.Errorf("responses: background request returned no id")
+	}
+	delay := p.pollDelay
+	if delay <= 0 {
+		delay = time.Second
+	}
+	var errStreak int
+	for isBackgroundPending(payload.Status) {
+		select {
+		case <-ctx.Done():
+			p.cancelResponse(payload.ID)
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		next, err := p.get(ctx, payload.ID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			errStreak++
+			debug.Log("provider", "responses background poll error (%d/%d): %v", errStreak, responsesPollMaxErrors, err)
+			if errStreak >= responsesPollMaxErrors {
+				return nil, fmt.Errorf("responses background polling failed after %d attempts: %w", errStreak, err)
+			}
+			continue
+		}
+		errStreak = 0
+		delay *= 2
+		if delay > responsesPollMaxDelay {
+			delay = responsesPollMaxDelay
+		}
+		payload = next
+		if onPoll != nil {
+			onPoll(payload)
+		}
+	}
+	return payload, nil
+}
+
+// get retrieves a Response object by id (GET /responses/{id}).
+func (p *OpenAIResponsesProvider) get(ctx context.Context, id string) (*responsesPayload, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/"+id, nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("responses API error %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
+	return decodeResponsesPayload(resp.Body)
+}
+
+// cancelResponse best-effort cancels a background response (POST
+// /responses/{id}/cancel). The operation is idempotent per the API guide, so
+// racing terminal states are harmless; failures are logged and swallowed
+// because the run would be orphaned server-side at worst.
+func (p *OpenAIResponsesProvider) cancelResponse(id string) {
+	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(cancelCtx, http.MethodPost, p.baseURL+"/"+id+"/cancel", nil)
+	if err != nil {
+		return
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		debug.Log("provider", "responses background cancel %s failed: %v", id, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		debug.Log("provider", "responses background cancel %s returned %d", id, resp.StatusCode)
+	}
+}
+
+// responsesOutputText concatenates output_text parts across message items of
+// a payload, for incremental streaming during background polling.
+func responsesOutputText(payload *responsesPayload) string {
+	var b strings.Builder
+	for _, rawItem := range payload.Output {
+		var item struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(rawItem, &item) != nil || item.Type != "message" {
+			continue
+		}
+		for _, c := range item.Content {
+			if c.Type == "output_text" {
+				b.WriteString(c.Text)
+			}
+		}
+	}
+	return b.String()
+}
+
+// chatStreamBackground implements ChatStream on top of background mode: the
+// create call is issued with background=true (stream=false - polling, not
+// SSE), text deltas are diffed across poll snapshots, and opaque blocks
+// (reasoning items, function calls, hosted tools) are forwarded from the
+// terminal payload so stateless replay (sa-54/sa-62) keeps working.
+func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req *responsesRequest) (<-chan StreamEvent, error) {
+	req.Stream = false
+	resp, err := p.post(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	payload, err := decodeResponsesPayload(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan StreamEvent, 64)
+	go func() {
+		defer close(ch)
+		var emitted int
+		onPoll := func(cur *responsesPayload) {
+			full := responsesOutputText(cur)
+			if len(full) > emitted {
+				ch <- StreamEvent{Type: StreamEventText, Text: full[emitted:]}
+				emitted = len(full)
+			}
+		}
+		final, err := p.pollBackground(ctx, payload, onPoll)
+		if err != nil {
+			ch <- StreamEvent{Type: StreamEventError, Error: err}
+			return
+		}
+		if final.Status == responsesStatusFailed || final.Status == responsesStatusCancelled {
+			ch <- StreamEvent{Type: StreamEventError, Error: backgroundTerminalError(final)}
+			return
+		}
+		for _, rawItem := range final.Output {
+			var item struct {
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			if json.Unmarshal(rawItem, &item) != nil {
+				continue
+			}
+			switch item.Type {
+			case "reasoning":
+				// sa-54: forward the raw reasoning item through the reasoning
+				// channel; the thinking accumulator stores it verbatim for
+				// stateless replay.
+				ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(rawItem)}
+			case "web_search_call":
+				// sa-62: keep the hosted tool exchange replayable.
+				ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(rawItem)}
+			case "function_call":
+				args := item.Arguments
+				if args == "" {
+					args = "{}"
+				}
+				if !json.Valid([]byte(args)) {
+					if repaired, ok := RepairJSON([]byte(args)); ok {
+						args = string(repaired)
+					}
+				}
+				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
+				}}
+			}
+		}
+		usage := &TokenUsage{InputTokens: final.Usage.InputTokens, OutputTokens: final.Usage.OutputTokens}
+		ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete}
+	}()
+	return ch, nil
+}
 
 // ---- HTTP plumbing ----
 
@@ -553,19 +803,66 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	var payload struct {
-		Output []json.RawMessage `json:"output"`
-		Usage  struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
-		Status string `json:"status"`
+	if p.background {
+		defer resp.Body.Close()
+		payload, err := decodeResponsesPayload(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		return p.chatBackground(ctx, payload)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	defer resp.Body.Close()
+	payload, err := decodeResponsesPayload(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return chatResponseFromPayload(payload), nil
+}
+
+// responsesPayload is the Response object returned by both the create and
+// retrieve (GET) endpoints of the Responses API.
+type responsesPayload struct {
+	ID     string             `json:"id"`
+	Status string             `json:"status"`
+	Error  *responsesAPIError `json:"error"`
+	Output []json.RawMessage  `json:"output"`
+	Usage  struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	IncompleteDetails struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+}
+
+type responsesAPIError struct {
+	Message string `json:"message"`
+	Code    string `json:"code"`
+}
+
+func decodeResponsesPayload(r io.Reader) (*responsesPayload, error) {
+	var p responsesPayload
+	if err := json.NewDecoder(r).Decode(&p); err != nil {
 		return nil, fmt.Errorf("responses: decoding response: %w", err)
 	}
+	return &p, nil
+}
 
+// chatBackground drives an already-created background response (status
+// "queued" or terminal) to completion via GET polling, then converts the
+// terminal payload into a ChatResponse.
+func (p *OpenAIResponsesProvider) chatBackground(ctx context.Context, payload *responsesPayload) (*ChatResponse, error) {
+	final, err := p.pollBackground(ctx, payload, nil)
+	if err != nil {
+		return nil, err
+	}
+	if final.Status == responsesStatusFailed || final.Status == responsesStatusCancelled {
+		return nil, backgroundTerminalError(final)
+	}
+	return chatResponseFromPayload(final), nil
+}
+
+func chatResponseFromPayload(payload *responsesPayload) *ChatResponse {
 	out := &ChatResponse{Message: Message{Role: "assistant"}}
 	var texts []string
 	for _, rawItem := range payload.Output {
@@ -644,10 +941,10 @@ func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, 
 		out.Message.Content = append(out.Message.Content, TextBlock(strings.Join(texts, "")))
 	}
 	out.Usage = TokenUsage{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens}
-	if payload.Status == "incomplete" {
+	if payload.Status == responsesStatusIncomplete {
 		out.StopReason = "max_tokens"
 	}
-	return out, nil
+	return out
 }
 
 // ---- streaming ----
@@ -656,6 +953,9 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 	req, err := p.buildRequest(messages, tools, true)
 	if err != nil {
 		return nil, err
+	}
+	if p.background {
+		return p.chatStreamBackground(ctx, req)
 	}
 	httpResp, err := p.post(ctx, req)
 	if err != nil {

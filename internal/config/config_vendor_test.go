@@ -1,6 +1,7 @@
 package config
 
 import (
+	"gopkg.in/yaml.v3"
 	"testing"
 	"time"
 )
@@ -169,5 +170,44 @@ func TestResolveEndpointSelection_CallPolicy(t *testing.T) {
 	}
 	if resolved.RequestTimeout != 0 || resolved.MaxRetries != 0 {
 		t.Errorf("unset policy: got RequestTimeout=%v MaxRetries=%d, want 0/0", resolved.RequestTimeout, resolved.MaxRetries)
+	}
+}
+
+// sa-73: responses_background must survive yaml parsing and endpoint
+// resolution so the registry can turn background mode on for OpenAI
+// Responses endpoints.
+func TestResponsesBackgroundWiring(t *testing.T) {
+	yamlSrc := `
+vendors:
+  openai:
+    display_name: OpenAI
+    endpoints:
+      default:
+        protocol: openai-responses
+        base_url: https://api.openai.com/v1
+        default_model: gpt-5.2-pro
+        responses_background: true
+      sync:
+        protocol: openai-responses
+        base_url: https://api.openai.com/v1
+        default_model: gpt-5-codex
+`
+	c := &Config{}
+	if err := yaml.Unmarshal([]byte(yamlSrc), c); err != nil {
+		t.Fatal(err)
+	}
+	on, err := c.ResolveEndpoint("openai", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !on.ResponsesBackground {
+		t.Fatal("responses_background: true must resolve into the endpoint")
+	}
+	off, err := c.ResolveEndpoint("openai", "sync")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.ResponsesBackground {
+		t.Fatal("endpoints without the flag must default to synchronous mode")
 	}
 }
