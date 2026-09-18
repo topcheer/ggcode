@@ -197,6 +197,26 @@ it as an unknown argument; ggcode detects that error class and transparently
 retries the request without the hint. Anthropic and Gemini endpoints ignore
 the setting - they have no equivalent tier surface.
 
+### Background mode
+
+Long reasoning turns (GPT-5.x Pro, codex-max) can run for many minutes and are
+fragile over a held-open HTTP connection. With `responses_background: true`,
+ggcode creates the response with `background: true`: the API returns
+immediately with status `queued` and ggcode polls `GET /responses/{id}` (with
+exponential backoff) until a terminal state. If the CLI is interrupted, the
+run is explicitly cancelled server-side (`POST /responses/{id}/cancel`) so it
+stops burning tokens. Text is streamed incrementally from poll snapshots;
+reasoning items, function calls, and hosted tools are replayed from the
+terminal payload so stateless multi-turn keeps working.
+
+```yaml
+    endpoints:
+      default:
+        base_url: https://api.openai.com/v1
+        model: gpt-5.2-pro
+        responses_background: true
+```
+
 ## Reasoning Effort
 
 Configure how much "thinking" the model does before responding. Supported by

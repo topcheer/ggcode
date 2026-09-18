@@ -68,6 +68,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			rp.SetServerTools(resolved.ServerTools)
 			rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
 		}
+		if resolved.ResponsesBackground {
+			rp.SetBackgroundMode(true)
+		}
 		return rp, nil
 
 	case "openai":
@@ -82,6 +85,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			if len(resolved.ServerTools) > 0 {
 				rp.SetServerTools(resolved.ServerTools)
 				rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
+			}
+			if resolved.ResponsesBackground {
+				rp.SetBackgroundMode(true)
 			}
 			return rp, nil
 		}

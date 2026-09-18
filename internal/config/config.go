@@ -145,7 +145,8 @@ type EndpointConfig struct {
 	StrictTools      *bool    `yaml:"strict_tools,omitempty" json:"strict_tools,omitempty"`
 	StrictToolsAllow []string `yaml:"strict_tools_allow,omitempty" json:"strict_tools_allow,omitempty"`
 	// ServiceTier (sa-81) selects the processing tier on OpenAI-compatible
-	ServiceTier string `yaml:"service_tier,omitempty" json:"service_tier,omitempty"`
+	ServiceTier         string `yaml:"service_tier,omitempty" json:"service_tier,omitempty"`
+	ResponsesBackground bool   `yaml:"responses_background,omitempty" json:"responses_background,omitempty"` // OpenAI Responses background mode: create returns "queued", ggcode polls until terminal
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -161,34 +162,35 @@ type VendorConfig struct {
 
 // ResolvedEndpoint is the runtime selection after config inheritance is applied.
 type ResolvedEndpoint struct {
-	VendorID         string
-	VendorName       string
-	EndpointID       string
-	EndpointName     string
-	Protocol         string
-	AuthType         string
-	BaseURL          string
-	APIKey           string
-	EnterpriseURL    string
-	Model            string
-	ContextWindow    int
-	MaxTokens        int
-	ReasoningEffort  string
-	Logprobs         bool
-	TextVerbosity    string
-	ToolChoice       string
-	ServerTools      []ServerToolConfig
-	MemoryTool       bool
-	ThinkingMode     string
-	ContextEditing   string
-	SupportsVision   bool
-	Models           []string
-	Tags             []string
-	StrictTools      bool
-	StrictToolsAllow []string
-	ServiceTier      string
-	RequestTimeout   time.Duration
-	MaxRetries       int
+	VendorID            string
+	VendorName          string
+	EndpointID          string
+	EndpointName        string
+	Protocol            string
+	AuthType            string
+	BaseURL             string
+	APIKey              string
+	EnterpriseURL       string
+	Model               string
+	ContextWindow       int
+	MaxTokens           int
+	ReasoningEffort     string
+	Logprobs            bool
+	TextVerbosity       string
+	ToolChoice          string
+	ServerTools         []ServerToolConfig
+	MemoryTool          bool
+	ThinkingMode        string
+	ContextEditing      string
+	SupportsVision      bool
+	Models              []string
+	Tags                []string
+	StrictTools         bool
+	StrictToolsAllow    []string
+	ServiceTier         string
+	RequestTimeout      time.Duration
+	MaxRetries          int
+	ResponsesBackground bool
 }
 
 // ToolPermission defines per-tool permission level in config.
