@@ -65,7 +65,12 @@ type newEndpointFormData struct {
 	apiKey       string
 }
 
-var newVendorProtocols = []string{"openai", "anthropic", "gemini", "copilot"}
+// newVendorProtocols drives the protocol cycler in BOTH the new-vendor and
+// new-endpoint flows. It must stay in sync with provider registry's supported
+// set (registry.go): "openai-responses" was missing here, so the entire
+// Responses stack (sa-40 adapter, server tools, verbosity, encrypted
+// reasoning round-trip) was unreachable from the UI - yaml-only entry.
+var newVendorProtocols = []string{"openai", "openai-responses", "anthropic", "gemini", "copilot"}
 
 type providerModelsRefreshResultMsg struct {
 	vendor      string
