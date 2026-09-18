@@ -1068,6 +1068,16 @@ func deCatalog(key string) string {
 		return "Geplante Cron-Jobs verwalten (list, pause, resume, create)"
 	case "slash.branch":
 		return "Aktuelle Sitzung abzweigen (Unterhaltung forken)"
+	case "slash.pin_session":
+		return "Sitzung anheften (geschützt vor Aufräumen)"
+	case "slash.unpin_session":
+		return "Sitzung loslösen"
+	case "slash.tag":
+		return "Tags zur Sitzung hinzufügen"
+	case "slash.untag":
+		return "Tags aus der Sitzung entfernen"
+	case "slash.tags":
+		return "Sitzungs-Tags anzeigen"
 	case "slash.chat":
 		return "LAN-Chat-Panel öffnen"
 	case "slash.edit":

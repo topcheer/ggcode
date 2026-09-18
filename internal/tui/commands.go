@@ -425,6 +425,16 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return nil
 		case "/title":
 			return m.handleTitleCommand(strings.TrimSpace(strings.Join(parts[1:], " ")))
+		case "/pin-session":
+			return m.handleSessionPinCommand()
+		case "/unpin-session":
+			return m.handleSessionUnpinCommand()
+		case "/tag":
+			return m.handleTagCommand(parts[1:])
+		case "/untag":
+			return m.handleUntagCommand(parts[1:])
+		case "/tags":
+			return m.handleTagsCommand()
 		case "/resume":
 			if len(parts) > 1 {
 				return m.resumeSession(parts[1])

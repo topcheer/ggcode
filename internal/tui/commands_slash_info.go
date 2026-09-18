@@ -613,6 +613,127 @@ func (m *Model) handleTitleCommand(title string) tea.Cmd {
 	return func() tea.Msg { return streamMsg(msg) }
 }
 
+// sessionLabel returns a short display label for a session in messages.
+func sessionLabel(ses *session.Session) string {
+	if t := strings.TrimSpace(ses.Title); t != "" {
+		return t
+	}
+	return ses.ID
+}
+
+// handleSessionPinCommand pins the current session. Pinned sessions are protected
+// from age-based cleanup (CleanupOlderThan) and listed first in /sessions.
+// Named distinctly from /pin (context pinning) to avoid collision.
+func (m *Model) handleSessionPinCommand() tea.Cmd {
+	return m.handleSessionPinStateCommand(true)
+}
+
+// handleSessionUnpinCommand unpins the current session.
+func (m *Model) handleSessionUnpinCommand() tea.Cmd {
+	return m.handleSessionPinStateCommand(false)
+}
+
+func (m *Model) handleSessionPinStateCommand(pinned bool) tea.Cmd {
+	if m.session == nil {
+		return func() tea.Msg { return streamMsg("No active session.") }
+	}
+	store := m.sessionStore
+	if store == nil {
+		return func() tea.Msg { return streamMsg("No session store available.") }
+	}
+	ses := m.session
+	verb := "pinned"
+	if !pinned {
+		verb = "unpinned"
+	}
+	return func() tea.Msg {
+		if err := store.SetPinned(ses, pinned); err != nil {
+			return streamMsg(fmt.Sprintf("Failed to save pin state: %v\n", err))
+		}
+		hint := ""
+		if pinned {
+			hint = "\nPinned sessions are never removed by cleanup and appear first in /sessions.\n"
+		}
+		return streamMsg(fmt.Sprintf("Session %s: %s%s\n", verb, sessionLabel(ses), hint))
+	}
+}
+
+// handleTagCommand adds tags to the current session (e.g. /tag rust perf).
+// With no arguments it shows the current tags.
+func (m *Model) handleTagCommand(args []string) tea.Cmd {
+	if m.session == nil {
+		return func() tea.Msg { return streamMsg("No active session.") }
+	}
+	if len(args) == 0 {
+		return m.handleTagsCommand()
+	}
+	store := m.sessionStore
+	if store == nil {
+		return func() tea.Msg { return streamMsg("No session store available.") }
+	}
+	ses := m.session
+	merged := make([]string, 0, len(ses.Tags)+len(args))
+	merged = append(merged, ses.Tags...)
+	merged = append(merged, args...)
+	return func() tea.Msg {
+		if err := store.SetTags(ses, merged); err != nil {
+			return streamMsg(fmt.Sprintf("Failed to save tags: %v\n", err))
+		}
+		if len(ses.Tags) == 0 {
+			return streamMsg("No tags to add.\n")
+		}
+		return streamMsg(fmt.Sprintf("Session tags: %s\n", strings.Join(ses.Tags, ", ")))
+	}
+}
+
+// handleUntagCommand removes tags from the current session (e.g. /untag rust).
+// Matching is case-insensitive; removing the last tag clears the list.
+func (m *Model) handleUntagCommand(args []string) tea.Cmd {
+	if m.session == nil {
+		return func() tea.Msg { return streamMsg("No active session.") }
+	}
+	if len(args) == 0 {
+		return func() tea.Msg { return streamMsg("Usage: /untag <tag>...\n") }
+	}
+	store := m.sessionStore
+	if store == nil {
+		return func() tea.Msg { return streamMsg("No session store available.") }
+	}
+	ses := m.session
+	remove := make(map[string]bool, len(args))
+	for _, a := range args {
+		remove[strings.ToLower(strings.TrimSpace(a))] = true
+	}
+	kept := make([]string, 0, len(ses.Tags))
+	for _, t := range ses.Tags {
+		if !remove[strings.ToLower(t)] {
+			kept = append(kept, t)
+		}
+	}
+	return func() tea.Msg {
+		if err := store.SetTags(ses, kept); err != nil {
+			return streamMsg(fmt.Sprintf("Failed to save tags: %v\n", err))
+		}
+		if len(ses.Tags) == 0 {
+			return streamMsg("Session tags cleared.\n")
+		}
+		return streamMsg(fmt.Sprintf("Session tags: %s\n", strings.Join(ses.Tags, ", ")))
+	}
+}
+
+// handleTagsCommand shows the current session's tags.
+func (m *Model) handleTagsCommand() tea.Cmd {
+	if m.session == nil {
+		return func() tea.Msg { return streamMsg("No active session.") }
+	}
+	if len(m.session.Tags) == 0 {
+		return func() tea.Msg { return streamMsg("No tags. Add some with /tag <tag>...\n") }
+	}
+	return func() tea.Msg {
+		return streamMsg(fmt.Sprintf("Session tags: %s\n", strings.Join(m.session.Tags, ", ")))
+	}
+}
+
 // handleCostCommand displays the session token usage and estimated cost,
 // grouped by model. A session may use multiple models if the user switches
 // mid-session; each model's contribution is shown separately.

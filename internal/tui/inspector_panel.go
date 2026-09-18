@@ -638,6 +638,15 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 			}
 			return 1
 		}
+		// Pinned sessions float to the top within each workspace group.
+		aPinned := a != nil && a.Pinned
+		bPinned := b != nil && b.Pinned
+		if aPinned != bPinned {
+			if aPinned {
+				return -1
+			}
+			return 1
+		}
 		switch {
 		case a == nil && b == nil:
 			return 0
@@ -661,6 +670,9 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 		title := strings.TrimSpace(ses.Title)
 		if title == "" {
 			title = inspectorText(lang, "untitled_session")
+		}
+		if ses.Pinned {
+			title = "\U0001F4CC " + title
 		}
 		workspace := compactWorkspaceLabelForTUI(ses.Workspace)
 		summaryParts := []string{ses.ID}
@@ -689,6 +701,9 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 		}
 		if preview := strings.TrimSpace(ses.Preview); preview != "" {
 			detail = append(detail, fmt.Sprintf("Last: %s", preview))
+		}
+		if len(ses.Tags) > 0 {
+			detail = append(detail, fmt.Sprintf("Tags: %s", strings.Join(ses.Tags, ", ")))
 		}
 		if workspace != "" {
 			detail = append(detail, fmt.Sprintf("%s: %s", inspectorText(lang, "workspace"), workspace))
