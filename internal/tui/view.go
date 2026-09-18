@@ -22,6 +22,20 @@ var (
 )
 
 func (m Model) View() tea.View {
+	start := time.Now()
+	v := m.renderView()
+	if d := time.Since(start); d > slowUpdateLogThreshold {
+		// Same threshold/rationale as dispatchUpdate's handler meter
+		// (#2538): the startup freeze reproduction showed a 10s event-loop
+		// gap with only 291ms attributed to handlers - the rest was View
+		// rendering, which had NO meter. This line makes the next
+		// reproduction self-attributing.
+		debug.Log("tui", fmt.Sprintf("slow view render: %s", d.Round(time.Millisecond)))
+	}
+	return v
+}
+
+func (m Model) renderView() tea.View {
 	m.syncAsyncStateCaches()
 	if m.quitting {
 		return tea.NewView("")

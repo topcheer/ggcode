@@ -16,7 +16,7 @@ func TestKimiProbeWindows(t *testing.T) {
 		if r.URL.Path != "/coding/v1/usages" {
 			t.Errorf("path %s", r.URL.Path)
 		}
-		w.Write([]byte(`{"limits":[{"detail":"5h","used_percent":62.5,"resets_at":"2026-09-15T10:00:00Z"}],"usage":{"used_percent":30}}`))
+		w.Write([]byte(`{"usage":{"limit":"100","used":"7","remaining":"93","resetTime":"2026-09-22T12:53:21Z"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"1","remaining":"99","resetTime":"2026-09-18T13:53:21Z"}}],"usages":{"limit_5h":{"used_ratio":0.005,"reset_time":"2026-09-18T13:53:19Z"},"limit_7d":{"used_ratio":0.067,"reset_time":"2026-09-22T12:53:20Z"}}}`))
 	}))
 	defer srv.Close()
 	info, err := KimiProbe{}.Fetch(context.Background(), srv.URL, "k")
@@ -26,17 +26,17 @@ func TestKimiProbeWindows(t *testing.T) {
 	if len(info.Windows) != 2 {
 		t.Fatalf("windows = %+v", info.Windows)
 	}
-	if info.Windows[0].Label != "5h" || info.Windows[0].UsedPercent != 62.5 {
-		t.Fatalf("5h window = %+v", info.Windows[0])
+	if info.Windows[0].Label != "5h" || info.Windows[0].UsedPercent != 1 {
+		t.Fatalf("5h window (sub2api: (limit-remaining)/limit) = %+v", info.Windows[0])
 	}
-	if info.Windows[1].Label != "weekly" || info.Windows[1].UsedPercent != 30 {
-		t.Fatalf("weekly = %+v", info.Windows[1])
+	if info.Windows[1].Label != "weekly" || info.Windows[1].UsedPercent != 7 {
+		t.Fatalf("weekly window = %+v", info.Windows[1])
 	}
 }
 
 func TestMinimaxProbeRemainToUsed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"model_remains":[{"general":{"five_hour_remain_percent":25,"weekly_remain_percent":80}}]}`))
+		w.Write([]byte(`{"model_remains":[{"model_name":"video","current_interval_remaining_percent":10},{"model_name":"general","current_interval_remaining_percent":25,"end_time":1789831644997,"current_weekly_status":1,"current_weekly_remaining_percent":80,"weekly_end_time":1789738694871}]}`))
 	}))
 	defer srv.Close()
 	info, err := MinimaxProbe{}.Fetch(context.Background(), srv.URL, "k")
