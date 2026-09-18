@@ -80,14 +80,24 @@ type ZaiProbe struct{}
 
 func (ZaiProbe) Vendor() string { return "zai" }
 
-// MatchesURL: open.bigmodel.cn is the only zai balance host.
-func (ZaiProbe) MatchesURL(host string) bool { return hostMatch(host, "open.bigmodel.cn") }
+// MatchesURL: zai accounts span two hosts - open.bigmodel.cn (mainland)
+// and api.z.ai (international). Both share the same monitor endpoint.
+func (ZaiProbe) MatchesURL(host string) bool {
+	return hostMatch(host, "open.bigmodel.cn", "api.z.ai", "z.ai")
+}
 
 func (ZaiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
-	// The chat base is .../api/paas/v4; the monitor endpoint sits at the
-	// site root. Normalize both known hosts.
-	for _, suffix := range []string{"/api/paas/v4", "/v4"} {
+	// Chat bases come in four shapes (see ggcode.example.yaml):
+	//   https://open.bigmodel.cn/api/paas/v4          (standard, mainland)
+	//   https://open.bigmodel.cn/api/coding/paas/v4   (coding plan)
+	//   https://api.z.ai/api/paas/v4                  (intl standard)
+	//   https://api.z.ai/api/coding/paas/v4           (intl coding plan)
+	// plus Anthropic-compatible entries (.../api/anthropic). The monitor
+	// endpoint sits at the SITE ROOT for all of them - normalize every
+	// known suffix away or the request 404s (coding-plan users saw a
+	// misleading "unsupported" panel before the coding suffix was added).
+	for _, suffix := range []string{"/api/coding/paas/v4", "/api/paas/v4", "/api/anthropic", "/v4"} {
 		if strings.HasSuffix(base, suffix) {
 			base = strings.TrimSuffix(base, suffix)
 		}
@@ -119,6 +129,10 @@ func (DeepSeekProbe) MatchesURL(host string) bool { return hostMatch(host, "api.
 
 func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
+	// Chat bases carry /v1 (https://api.deepseek.com/v1); the balance
+	// endpoint lives at the SITE ROOT (/user/balance, no v1). Strip it or
+	// the request becomes /v1/user/balance (404) -> "unsupported".
+	base = strings.TrimSuffix(base, "/v1")
 	var payload struct {
 		BalanceInfos []struct {
 			Currency     string  `json:"currency"`
@@ -147,6 +161,10 @@ func (MoonshotProbe) MatchesURL(host string) bool {
 
 func (MoonshotProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
+	// Chat bases carry /v1 (https://api.moonshot.cn/v1); the balance
+	// endpoint is /v1/users/me/balance - appended to the ROOT, not to the
+	// /v1 base (that would double it: /v1/v1/users/... 404).
+	base = strings.TrimSuffix(base, "/v1")
 	var payload struct {
 		Data struct {
 			AvailableBalance float64 `json:"available_balance"`

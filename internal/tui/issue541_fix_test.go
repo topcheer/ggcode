@@ -219,3 +219,12 @@ func TestMouseWheelFallsBackToChatListWithoutPanel(t *testing.T) {
 		t.Fatalf("Update did not return a Model")
 	}
 }
+
+// /usage opens a pure-UI panel backed by async vendor probes; it has no
+// dependency on agent state, so it must execute immediately while a run
+// is active instead of queuing behind it (user-reported 2026-09-18).
+func TestUsageAllowedWhileBusy(t *testing.T) {
+	if !shouldExecuteWhileBusy("/usage") {
+		t.Fatalf("/usage must execute while busy (pure UI panel, no agent dependency)")
+	}
+}
