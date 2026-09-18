@@ -302,6 +302,17 @@ func (am *AutoMemory) LoadForPrompt() (inline []MemoryEntry, indexOnly []string,
 		}
 	}
 
+	// Recall-time conflict arbitration ("ghost context" guard, sa-84):
+	// write-time CheckContradiction cannot catch pairs that drifted apart
+	// offline, so conflicting entries would otherwise be injected together
+	// with no warning. Arbitrate among the inline set and annotate the
+	// lower-trust side; winners stay clean. Annotation happens after
+	// budget accounting and is capped by maxRecallConflicts.
+	if arb := ArbitrateInline(inline, now); arb.HasConflicts() {
+		arb.Annotate(inline)
+		debug.Log("memory", "recall arbitration: %d conflict(s) among %d inline entries", len(arb.Conflicts), len(inline))
+	}
+
 	return inline, indexOnly, nil
 }
 

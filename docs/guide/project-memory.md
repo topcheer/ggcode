@@ -158,3 +158,30 @@ are automatically expired.
 If a persistent entry exceeds the per-entry limit, it falls back to the
 title-only index. This keeps the system prompt small while ensuring the most
 valuable knowledge is always in context.
+
+## Recall-Time Conflict Arbitration
+
+Write-time contradiction checking (`SaveMemory`) cannot catch every
+conflict: two memories written in sessions that never saw each other can
+drift apart offline, and conflicts predating the guard stay on disk. When
+such entries are injected together into the prompt, the model reads two
+incompatible facts with no warning and arbitrarily trusts one (the "ghost
+context" failure mode).
+
+Every auto-injection run therefore arbitrates among the inline entries
+before they reach the prompt:
+
+1. Structured claims are extracted from each entry with the same
+   deterministic heuristics used at write time (no model calls).
+2. Entries stating conflicting values for the same subject are paired and
+   scored by a transparent trust score computed from metadata already on
+   disk: persistent entries get a small bonus, evolving entries a penalty,
+   ancient entries (>180 days) a penalty, entries touched within the last
+   week a bonus. Ties break to the newer modtime.
+3. Only the **lower-trust** entry's injected content is annotated with a
+   `[memory-conflict]` block naming the preferred entry and both values.
+   Winners stay clean. Nothing is deleted or hidden - both entries remain
+   on disk and in the index.
+
+At most 5 conflicts are annotated per injection to keep the prompt budget
+stable.
