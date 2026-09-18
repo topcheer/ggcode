@@ -87,23 +87,28 @@ type ServerToolConfig struct {
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.
 type EndpointConfig struct {
-	DisplayName     string             `yaml:"display_name" json:"display_name"`
-	Protocol        string             `yaml:"protocol" json:"protocol"`
-	BaseURL         string             `yaml:"base_url" json:"base_url"`
-	AuthType        string             `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
-	APIKey          string             `yaml:"api_key,omitempty" json:"api_key,omitempty"`
-	ContextWindow   int                `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	MaxTokens       int                `yaml:"max_tokens" json:"max_tokens"`
-	ReasoningEffort string             `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
-	TextVerbosity   string             `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"` // GPT-5 text.verbosity: "low", "medium", "high" (empty = API default)
-	ToolChoice      string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`       // "auto", "required", "none" (empty = auto/default)
-	ServerTools     []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`     // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
-	MemoryTool      bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`       // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
-	SupportsVision  *bool              `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
-	DefaultModel    string             `yaml:"default_model,omitempty" json:"default_model,omitempty"`
-	SelectedModel   string             `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
-	Models          []string           `yaml:"models,omitempty" json:"models,omitempty"`
-	Tags            []string           `yaml:"tags,omitempty" json:"tags,omitempty"`
+	DisplayName     string `yaml:"display_name" json:"display_name"`
+	Protocol        string `yaml:"protocol" json:"protocol"`
+	BaseURL         string `yaml:"base_url" json:"base_url"`
+	AuthType        string `yaml:"auth_type,omitempty" json:"auth_type,omitempty"`
+	APIKey          string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	ContextWindow   int    `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxTokens       int    `yaml:"max_tokens" json:"max_tokens"`
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	// Logprobs (sa-74) requests token logprobs from the provider for
+	// confidence telemetry. OpenAI: logprobs+top_logprobs; Gemini:
+	// responseLogprobs. Anthropic does not support logprobs. Opt-in: adds
+	// response payload and is not needed for normal operation.
+	Logprobs       bool               `yaml:"logprobs,omitempty" json:"logprobs,omitempty"`
+	TextVerbosity  string             `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"` // GPT-5 text.verbosity: "low", "medium", "high" (empty = API default)
+	ToolChoice     string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`       // "auto", "required", "none" (empty = auto/default)
+	ServerTools    []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`     // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
+	MemoryTool     bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`       // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
+	SupportsVision *bool              `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
+	DefaultModel   string             `yaml:"default_model,omitempty" json:"default_model,omitempty"`
+	SelectedModel  string             `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
+	Models         []string           `yaml:"models,omitempty" json:"models,omitempty"`
+	Tags           []string           `yaml:"tags,omitempty" json:"tags,omitempty"`
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -132,6 +137,7 @@ type ResolvedEndpoint struct {
 	ContextWindow   int
 	MaxTokens       int
 	ReasoningEffort string
+	Logprobs        bool
 	TextVerbosity   string
 	ToolChoice      string
 	ServerTools     []ServerToolConfig

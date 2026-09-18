@@ -28,6 +28,7 @@ type GeminiProvider struct {
 	serverTools      []ServerToolConfig               // Gemini built-in tools (google_search/url_context), executed in-API
 	topP             float64                          // 0 = provider default
 	transport        *headerInjectingTransport        // kept for runtime header updates
+	logprobs         bool                             // sa-74: request token logprobs for confidence telemetry
 }
 
 // ModelName returns the current model name used by this provider.
@@ -49,6 +50,7 @@ func (p *GeminiProvider) CloneWithModel(model string) Provider {
 		topP:            p.topP,
 		transport:       p.transport,
 		serverTools:     append([]ServerToolConfig(nil), p.serverTools...),
+		logprobs:        p.logprobs,
 	}
 }
 
@@ -96,6 +98,26 @@ func (p *GeminiProvider) TopP() float64        { return p.topP }
 // AUTO, ANY, and NONE respectively.
 func (p *GeminiProvider) SetToolChoice(choice string) {
 	p.toolChoice = strings.ToLower(strings.TrimSpace(choice))
+}
+
+// SetLogprobsRequest toggles token logprobs in requests (sa-74 confidence
+// telemetry). Gemini exposes responseLogprobs + logprobs (top-k candidates
+// per token) on GenerateContentConfig; the response carries the turn-average
+// in candidate.avgLogprobs, which we relay as StreamEvent.Confidence.
+func (p *GeminiProvider) SetLogprobsRequest(on bool) { p.logprobs = on }
+
+// LogprobsRequested reports whether logprobs were requested.
+func (p *GeminiProvider) LogprobsRequested() bool { return p.logprobs }
+
+// applyLogprobs requests token logprobs when confidence telemetry is enabled
+// (sa-74). logprobs=5 matches the API default cap on top-k candidates.
+func (p *GeminiProvider) applyLogprobs(config *genai.GenerateContentConfig) {
+	if !p.logprobs {
+		return
+	}
+	config.ResponseLogprobs = true
+	n := int32(5)
+	config.Logprobs = &n
 }
 
 func (p *GeminiProvider) ToolChoice() string { return p.toolChoice }
@@ -235,6 +257,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	p.applyReasoningEffort(config)
 	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
+	p.applyLogprobs(config)
 
 	var resp *genai.GenerateContentResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -270,10 +293,17 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(resp.Candidates) > 0 {
 		finishReason = normalizeGeminiFinishReason(resp.Candidates[0].FinishReason)
 	}
+	// sa-74: relay the turn-average token logprob as the confidence signal.
+	var confidence *float64
+	if p.logprobs && len(resp.Candidates) > 0 {
+		avg := resp.Candidates[0].AvgLogprobs
+		confidence = &avg
+	}
 	return &ChatResponse{
 		Message:    Message{Role: "assistant", Content: content},
 		Usage:      usage,
 		StopReason: finishReason,
+		Confidence: confidence,
 	}, nil
 }
 
@@ -289,6 +319,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	p.applyReasoningEffort(config)
 	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
+	p.applyLogprobs(config)
 
 	ch := make(chan StreamEvent, 64)
 
@@ -301,7 +332,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			var usage TokenUsage // reset per attempt to avoid leaking failed-attempt usage
 			var truncated bool
 			var policyBlocked bool
-			var outputChars int // #561(C): for usage fallback when UsageMetadata is missing
+			var avgConf *float64 // sa-74: turn-average logprob, reset per attempt
+			var outputChars int  // #561(C): for usage fallback when UsageMetadata is missing
 			iter := p.client.Models.GenerateContentStream(ctx, p.model, contents, config)
 			emitted := false
 			retry := false
@@ -343,6 +375,13 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				// google_search/url_context tools surface sources per-chunk).
 				if len(resp.Candidates) > 0 {
 					grounding.add(resp.Candidates[0].GroundingMetadata)
+				}
+
+				// sa-74: each chunk carries the running avgLogprobs; the last
+				// chunk before finish wins.
+				if p.logprobs && len(resp.Candidates) > 0 {
+					avg := resp.Candidates[0].AvgLogprobs
+					avgConf = &avg
 				}
 
 				// Check finish reason for truncation / policy errors (#232).
@@ -450,7 +489,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 			if s := grounding.summary(); s != "" {
 				ch <- StreamEvent{Type: StreamEventSystem, Text: s}
 			}
-			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked}
+			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked, Confidence: avgConf}
 			return
 		}
 		// All retry attempts exhausted without success.

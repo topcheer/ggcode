@@ -38,6 +38,7 @@ type OpenAIProvider struct {
 	name             string
 	baseURL          string                    // endpoint URL, for logging
 	transport        *headerInjectingTransport // kept for runtime header updates
+	logprobs         bool                      // sa-74: request token logprobs for confidence telemetry
 }
 
 // ModelName returns the current model name, implementing ModelNameProvider.
@@ -61,6 +62,7 @@ func (p *OpenAIProvider) CloneWithModel(model string) Provider {
 		name:            p.name,
 		baseURL:         p.baseURL,
 		transport:       p.transport,
+		logprobs:        p.logprobs,
 	}
 }
 
@@ -127,6 +129,13 @@ func (p *OpenAIProvider) applyToolChoice(req *openai.ChatCompletionRequest) {
 // SetTemperature sets the sampling temperature. A value of 0 means "use provider
 // default" (which is typically 1.0). Values between 0 and 2 are valid.
 func (p *OpenAIProvider) SetTemperature(temp float64) { p.temperature = temp }
+
+// SetLogprobsRequest toggles token logprobs in requests (sa-74 confidence
+// telemetry). Applies to chat completions; reasoning models may ignore it.
+func (p *OpenAIProvider) SetLogprobsRequest(on bool) { p.logprobs = on }
+
+// LogprobsRequested reports whether logprobs were requested.
+func (p *OpenAIProvider) LogprobsRequested() bool { return p.logprobs }
 
 // #2271 follow-up: StopSequenceSetter (Set/Get) removed - per-call stop
 // sequences ride the sampling override exclusively; no production caller.
@@ -392,6 +401,33 @@ func normalizeOpenAIFinishReason(reason string) string {
 	}
 }
 
+// applyLogprobs requests token logprobs when confidence telemetry is enabled
+// (sa-74). top_logprobs=1 is sufficient for the mean-token-logprob confidence
+// signal; larger values only inflate the response payload.
+func (p *OpenAIProvider) applyLogprobs(req *openai.ChatCompletionRequest) {
+	if !p.logprobs {
+		return
+	}
+	req.LogProbs = true
+	req.TopLogProbs = 1
+}
+
+// meanLogprob computes the mean logprob over returned content tokens
+// (sa-74). Returns nil when the provider returned no content logprobs.
+// Takes []float64 so both the non-streaming (openai.LogProb.LogProb) and
+// streaming (ChatCompletionTokenLogprob.Logprob) shapes can feed it.
+func meanLogprob(ps []float64) *float64 {
+	if len(ps) == 0 {
+		return nil
+	}
+	var sum float64
+	for _, v := range ps {
+		sum += v
+	}
+	avg := sum / float64(len(ps))
+	return &avg
+}
+
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
 	chatMsgs := p.convertMessages(messages)
 	req := openai.ChatCompletionRequest{
@@ -405,6 +441,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	p.applyToolChoice(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
+	p.applyLogprobs(&req)
 
 	var resp openai.ChatCompletionResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -456,10 +493,19 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 	// #1484-C: normalize finish_reason into the anthropic value family so
 	// downstream consumers (MCP sampling) see one vocabulary.
+	var confidence *float64
+	if p.logprobs && choice.LogProbs != nil {
+		lps := make([]float64, 0, len(choice.LogProbs.Content))
+		for _, t := range choice.LogProbs.Content {
+			lps = append(lps, t.LogProb)
+		}
+		confidence = meanLogprob(lps)
+	}
 	return &ChatResponse{
 		Message:    Message{Role: "assistant", Content: content},
 		Usage:      usage,
 		StopReason: normalizeOpenAIFinishReason(string(choice.FinishReason)),
+		Confidence: confidence,
 	}, nil
 }
 
@@ -479,6 +525,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	p.applyToolChoice(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
+	p.applyLogprobs(&req)
 
 	debug.Log("openai", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(chatMsgs), len(req.Tools))
 
@@ -491,6 +538,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		var outputChars int
 		var err error
 		var truncated bool
+		var logprobSum float64 // sa-74: confidence telemetry accumulators
+		var logprobN int
 		streamError := false       // set when a non-retryable error was sent to ch
 		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
 
@@ -502,6 +551,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 			// Reset per-attempt state to avoid leaking failed-attempt usage
 			// into the next (successful) attempt. Same fix as gemini.go.
 			usage = nil
+			logprobSum, logprobN = 0, 0 // sa-74: reset per attempt with usage
 			// #577(B): truncated must reset per attempt too. Attempt 1 could hit
 			// finish_reason=length and then die to a retryable transport error
 			// (emitted=false → retry); a fully-complete attempt 2 then shipped
@@ -679,6 +729,17 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
 					}
 
+					// Confidence telemetry (sa-74): accumulate per-token logprobs
+					// from the stream chunk. Relay chunks often repeat the full
+					// logprobs array; here Content is per-token delta (openai
+					// protocol), so plain accumulation is correct.
+					if p.logprobs && choice.Logprobs != nil {
+						for _, t := range choice.Logprobs.Content {
+							logprobSum += t.Logprob
+							logprobN++
+						}
+					}
+
 					// Tool call deltas
 					for _, tc := range delta.ToolCalls {
 						idx := -1
@@ -768,7 +829,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						PromptTokensTotal: inputTokens,
 					}
 				}
-				ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated}
+				var confidence *float64 // sa-74
+				if logprobN > 0 {
+					avg := logprobSum / float64(logprobN)
+					confidence = &avg
+				}
+				ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated, Confidence: confidence}
 			}
 			return
 		}
