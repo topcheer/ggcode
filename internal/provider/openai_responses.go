@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/topcheer/ggcode/internal/safego"
 	"io"
 	"net/http"
 	"strings"
@@ -660,7 +661,7 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 	}
 
 	ch := make(chan StreamEvent, 64)
-	go func() {
+	safego.Go("provider.openaiResponses.pollLoop", func() {
 		defer close(ch)
 		var emitted int
 		onPoll := func(cur *responsesPayload) {
@@ -715,7 +716,7 @@ func (p *OpenAIResponsesProvider) chatStreamBackground(ctx context.Context, req 
 		}
 		usage := &TokenUsage{InputTokens: final.Usage.InputTokens, OutputTokens: final.Usage.OutputTokens}
 		ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: final.Status == responsesStatusIncomplete}
-	}()
+	})
 	return ch, nil
 }
 
@@ -963,7 +964,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 	}
 
 	ch := make(chan StreamEvent, 64)
-	go func() {
+	safego.Go("provider.openaiResponses.streamRead", func() {
 		defer close(ch)
 		defer httpResp.Body.Close()
 
@@ -1126,7 +1127,7 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 			// agent loop finalizes the turn instead of hanging.
 			ch <- StreamEvent{Type: StreamEventDone}
 		}
-	}()
+	})
 	return ch, nil
 }
 
