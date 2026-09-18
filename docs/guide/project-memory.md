@@ -158,3 +158,40 @@ are automatically expired.
 If a persistent entry exceeds the per-entry limit, it falls back to the
 title-only index. This keeps the system prompt small while ensuring the most
 valuable knowledge is always in context.
+
+## Experience Case Bank (Case-Based Memory)
+
+Beyond the rolling run-insights blob, ggcode keeps a **case-based experience
+store** (Memento-style, arXiv:2508.16153): each reflective run is distilled
+into a per-task *case* — the task, what the agent actually did (turns, tools,
+files, commands), and the outcome — stored under
+`.ggcode/memory/experience/` as one markdown file per case.
+
+At the start of every run, the agent retrieves the up-to-3 most relevant
+cases for the new task (lexical IDF scoring, no embeddings) and injects them
+once as a `## Relevant Experience` system block:
+
+```
+Past experience with similar tasks in this project (case-based memory):
+- [outcome: success] Task: fix flaky login test in auth package
+  Files touched: internal/auth/session.go, internal/auth/session_test.go
+  Approach: 4 LLM turns, 12 tool calls (top: edit_file(5), run_command(4)). Edited: internal/auth/session.go. ...
+Treat these as hints about what worked before — verify against current code, not blind recipe.
+```
+
+Key properties:
+
+- **Reconsolidation**: re-running the same logical task (normalized text
+  match) updates the existing case instead of duplicating it — fresh outcome
+  and approach, original creation date preserved.
+- **Decay with a cap**: the store holds at most 50 cases; recording beyond
+  the cap evicts the oldest, so guidance tracks the codebase's current
+  reality rather than stale history.
+- **Zero cold-start cost**: when the store is empty or nothing lexically
+  matches, nothing is injected — no prompt noise.
+- **Isolation**: the `experience/` subdirectory is invisible to the regular
+  memory index and `/reflect` output; it is a separate retrieval channel.
+
+Failures are recorded too (`outcome: failed` / `partial`), which lets the
+agent avoid repeating approaches that previously did not work on similar
+tasks.

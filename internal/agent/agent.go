@@ -1326,6 +1326,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
+	// Experience recall (Memento-style case-based reasoning): before the
+	// loop starts, retrieve past cases relevant to this task and inject
+	// them once as a system message. Injection happens here — before the
+	// first LLM request — so it never splits a tool_call/tool_result pair,
+	// and the cases ride the prompt cache established at run start.
+	if a.contextManager != nil {
+		if idx := a.recallExperience(userPromptForStats); idx != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "system",
+				Content: []provider.ContentBlock{{Type: "text", Text: "## Relevant Experience\n" + idx}},
+			})
+			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
+		}
+	}
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
 	// syncVerifyRetries tracks how many auto-repair cycles have been consumed

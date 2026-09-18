@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -25,6 +26,13 @@ func setupReflection(a *agent.Agent) {
 		if !agent.ShouldReflect(stats) {
 			return
 		}
+
+		// Experience Case Bank capture (Memento-style case-based memory,
+		// arXiv:2508.16153): distill this run into a per-task case
+		// (task/approach/outcome) in the project experience store. Runs
+		// independently of the rolling run-insights blob below so a case is
+		// recorded even when insight generation yields nothing.
+		recordExperienceCase(a, stats)
 
 		insights := agent.GenerateInsights(stats)
 		if insights == "" {
@@ -66,6 +74,80 @@ func setupReflection(a *agent.Agent) {
 				len(insights), len(stats.ToolCalls), len(stats.FilesEdited), len(stats.CommandsRun))
 		}
 	})
+}
+
+// recordExperienceCase distills a completed run into the project experience
+// store as a per-task case: task (the user prompt), approach (what the agent
+// actually did — turns, tools, files, commands), and outcome. Failures are
+// debug-logged only; experience capture must never disturb the session.
+func recordExperienceCase(a *agent.Agent, stats agent.RunStats) {
+	workingDir := a.WorkingDir()
+	if workingDir == "" {
+		return
+	}
+	store := memory.NewProjectExperienceStore(workingDir)
+	if store == nil {
+		return
+	}
+
+	outcome := "partial"
+	switch {
+	case stats.Success && stats.ErrorCount == 0:
+		outcome = "success"
+	case !stats.Success:
+		outcome = "failed"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d LLM turns, %d tool calls", stats.Iterations, len(stats.ToolCalls))
+	if top := topToolCalls(stats.ToolCalls, 3); top != "" {
+		fmt.Fprintf(&b, " (top: %s)", top)
+	}
+	b.WriteString(".")
+	if len(stats.FilesEdited) > 0 {
+		fmt.Fprintf(&b, " Edited: %s.", strings.Join(stats.FilesEdited, ", "))
+	}
+	if len(stats.CommandsRun) > 0 {
+		fmt.Fprintf(&b, " Commands: %s.", strings.Join(stats.CommandsRun, "; "))
+	}
+	if stats.ErrorCount > 0 && len(stats.Errors) > 0 {
+		fmt.Fprintf(&b, " First error: %s.", strings.Join(strings.Fields(stats.Errors[0]), " "))
+	}
+
+	if _, _, err := store.Record(stats.UserPrompt, b.String(), outcome, stats.FilesEdited); err != nil {
+		debug.Log("tui", "experience: record failed: %v", err)
+	}
+}
+
+// topToolCalls renders the n most-used tools as "name(count)" pairs.
+func topToolCalls(calls map[string]int, n int) string {
+	type tc struct {
+		name  string
+		count int
+	}
+	var list []tc
+	for name, count := range calls {
+		if count > 0 {
+			list = append(list, tc{name, count})
+		}
+	}
+	if len(list) == 0 {
+		return ""
+	}
+	slices.SortFunc(list, func(x, y tc) int {
+		if x.count != y.count {
+			return y.count - x.count
+		}
+		return strings.Compare(x.name, y.name)
+	})
+	if len(list) > n {
+		list = list[:n]
+	}
+	parts := make([]string, len(list))
+	for i, c := range list {
+		parts[i] = fmt.Sprintf("%s(%d)", c.name, c.count)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // handleReflectCommand displays accumulated run insights.
