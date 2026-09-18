@@ -243,6 +243,11 @@ func (c *Client) clientCapsLocked() ClientCaps {
 		// consent-gated out-of-band handoff (it never auto-opens URLs).
 		caps.Elicitation = &ElicitationCapability{Form: &struct{}{}, URL: &struct{}{}}
 	}
+	// SEP-1686: the client always implements the task management methods
+	// (tasks/get, tasks/list, tasks/cancel, tasks/result), so declare the
+	// tasks capability unconditionally - it flows through both the legacy
+	// initialize params and the modern per-request _meta envelope.
+	caps.Tasks = &struct{}{}
 	return caps
 }
 

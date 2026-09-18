@@ -160,6 +160,17 @@ ggcode handles these requests by routing them through the same `ask_user` intera
 
 No configuration is needed — elicitation is enabled automatically when an interactive session is active.
 
+## MCP Tasks (Asynchronous Tool Execution, SEP-1686)
+
+Since protocol revision 2025-11-25, MCP servers may execute tool calls asynchronously. When ggcode sends a `tools/call` with the `task` request option, a compliant server can answer immediately with a *task descriptor* (`resultType: "task"`) instead of blocking until the tool finishes.
+
+ggcode's client implements the full task protocol:
+- `CallToolAsTask` sends the task-augmented call, then polls `tasks/get` until the task reaches a terminal state, and fetches the final tool result via `tasks/result`. The server's `pollInterval` hint is honored, clamped to [200ms, 10s], and the total polling budget is capped at 10 minutes so a stuck server cannot hang a call forever.
+- `ListTasks`, `GetTask`, `CancelTask`, and `HasTasks` expose task management; listing is gated on the server's advertised `tasks` capability (uncapable servers get an empty list, never an error).
+- During initialize, ggcode declares client `tasks` support in both the legacy handshake and the modern per-request `_meta` envelope.
+
+A task that ends `failed` or `cancelled` surfaces as an error carrying the server's `statusMessage`. Tasks that pause in `input_required` are reported to the caller rather than auto-resolved, since the interactive flow requires user-driven input.
+
 ## Subscription Streams (MCP 2026-07-28)
 
 Protocol revision 2026-07-28 added correlated notification streams: a client may open a subscription with the `subscriptions/listen` request, and every notification the server sends on that stream carries a `_meta` field binding it to the subscription. This closes a long-standing ambiguity — when an agent talks to several MCP servers concurrently, a bare `notifications/tools/list_changed` cannot be attributed to a specific connection with certainty.
