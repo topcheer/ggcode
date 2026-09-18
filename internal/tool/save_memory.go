@@ -128,7 +128,7 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		contraWarning = cc.FormatContradictionWarning(params.Key)
 	}
 
-	if err := target.SaveMemory(params.Key, params.Content); err != nil {
+	if err := target.SaveMemoryWithSource(params.Key, params.Content, "save_memory:"+scopeLabel); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
 	}
 	if t.afterSave != nil {

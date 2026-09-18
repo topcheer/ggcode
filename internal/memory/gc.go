@@ -96,7 +96,13 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("memory %q not found", key)
 	}
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	// sa-85: drop the provenance/usage record so deleted keys do not
+	// linger as ghost sidecar entries.
+	am.ForgetUsage(safe)
+	return nil
 }
 
 // GCFormatSummary returns a human-readable summary of GC results.

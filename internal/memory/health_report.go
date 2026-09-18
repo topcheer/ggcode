@@ -39,6 +39,11 @@ type HealthReport struct {
 
 	// Potential duplicates (entries with same dedup key)
 	DuplicateGroups int
+
+	// sa-85 usage feedback: how many active entries have actually been
+	// injected into a prompt at least once vs. never used since creation.
+	UsedAtLeastOnce int
+	NeverUsed       int
 }
 
 // HealthReport returns a diagnostic summary of the memory store's health.
@@ -63,8 +68,10 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	// Category distribution.
 	report.Transient, report.Evolving, report.Persistent, report.Default = countCategories(active)
 
-	// Budget usage (what LoadForPrompt would inject).
-	inline, indexOnly, _ := am.LoadForPrompt()
+	// Budget usage (what LoadForPrompt would inject). Uses the
+	// non-tracking variant so a health check does not inflate the
+	// very usage counters it reports (sa-85).
+	inline, indexOnly, _ := am.loadForPrompt(false)
 	report.InlineEntries = len(inline)
 	report.IndexEntries = len(indexOnly)
 	for _, e := range inline {
@@ -76,6 +83,16 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 
 	// Age range.
 	report.OldestDays, report.NewestDays = computeAgeRange(active, now)
+
+	// Usage feedback (sa-85): entries never injected since creation are
+	// the prime retention-curation candidates.
+	for _, m := range active {
+		if m.Uses > 0 {
+			report.UsedAtLeastOnce++
+		} else {
+			report.NeverUsed++
+		}
+	}
 
 	// Staleness scan.
 	stale := am.ScanStaleness(workingDir)
@@ -112,6 +129,11 @@ func (r HealthReport) FormatHealthReport() string {
 		sb.WriteString(fmt.Sprintf("  Age range: %d-%d days (oldest-newest)\n", r.NewestDays, r.OldestDays))
 	}
 
+	// Usage feedback (sa-85 provenance-aware memory)
+	if r.Active > 0 {
+		sb.WriteString(fmt.Sprintf("  Usage: %d/%d entries injected at least once\n", r.UsedAtLeastOnce, r.Active))
+	}
+
 	// Staleness signals
 	warnings := 0
 	if r.StaleBrokenPaths > 0 {
@@ -128,6 +150,10 @@ func (r HealthReport) FormatHealthReport() string {
 	}
 	if r.DuplicateGroups > 0 {
 		sb.WriteString(fmt.Sprintf("  [DUPLICATES] %d potential duplicate groups detected\n", r.DuplicateGroups))
+		warnings++
+	}
+	if r.NeverUsed > 0 && r.Active >= 5 && r.NeverUsed*2 >= r.Active {
+		sb.WriteString(fmt.Sprintf("  [UNUSED] %d/%d entries never injected into a prompt (curation candidates)\n", r.NeverUsed, r.Active))
 		warnings++
 	}
 
