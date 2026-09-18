@@ -119,8 +119,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 				m.autoCompleteItems = nil
 				m.autoCompleteIndex = 0
 				m.inputHint = ""
-				m.history = append(m.history, selected)
-				m.historyIdx = len(m.history)
+				m.pushHistory(selected)
 				return m.handleCommand(selected)
 			}
 			m.input.SetValue(selected)
@@ -147,8 +146,7 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 		m.autoCompleteItems = nil
 		m.autoCompleteIndex = 0
 		m.inputHint = ""
-		m.history = append(m.history, selected)
-		m.historyIdx = len(m.history)
+		m.pushHistory(selected)
 		return m.handleCommand(selected)
 	}
 
@@ -222,8 +220,7 @@ func (m *Model) submitTextWithDisplay(text string, addToHistory bool, displayInC
 
 	if addToHistory {
 		if text != "" {
-			m.history = append(m.history, text)
-			m.historyIdx = len(m.history)
+			m.pushHistory(text)
 		}
 	}
 	debug.Log("tui", "handleCommand: %s", text)

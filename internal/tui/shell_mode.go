@@ -95,8 +95,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		return nil
 	}
 	if addToHistory {
-		m.history = append(m.history, "$ "+command)
-		m.historyIdx = len(m.history)
+		m.pushHistory("$ " + command)
 	}
 	item := chat.NewUserItem(nextChatID(), command, m.chatStyles)
 	item.SetPrefix("$ ")

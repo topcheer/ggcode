@@ -655,8 +655,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			if shouldExecuteWhileBusy(text) {
 				return m, m.submitText(text, true)
 			}
-			m.history = append(m.history, text)
-			m.historyIdx = len(m.history)
+			m.pushHistory(text)
 			m.queuePendingSubmission(text)
 			return m, nil
 		}

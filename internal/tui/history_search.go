@@ -156,3 +156,20 @@ func (m Model) handleHistorySearchKey(msg tea.KeyPressMsg) (handled bool, out Mo
 	exitHistorySearch(&m, false)
 	return false, m, nil
 }
+
+// pushHistory records a submitted input in the input history with
+// promote-to-front dedup (#2527): when the text exactly matches an existing
+// entry, that entry is moved to the most-recent slot instead of appending a
+// duplicate. This keeps Alt+R reverse search and arrow-up paging free of
+// repeat entries when the same input is resubmitted (e.g. accepting a
+// reverse-search match with Enter, or resending a queued command).
+func (m *Model) pushHistory(text string) {
+	for i := len(m.history) - 1; i >= 0; i-- {
+		if m.history[i] == text {
+			m.history = append(m.history[:i], m.history[i+1:]...)
+			break
+		}
+	}
+	m.history = append(m.history, text)
+	m.historyIdx = len(m.history)
+}
