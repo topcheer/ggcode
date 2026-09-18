@@ -2336,17 +2336,22 @@ func TestAgentErrMsgFormatsGenericChatFailureWithoutDoublePrefix(t *testing.T) {
 	if strings.Contains(norm, "Error: Error:") {
 		t.Fatalf("expected no double error prefix, got %q", output)
 	}
-	// Debug file logging was force-enabled with a visible path notice
-	// (either the retry countdown's "Debug logs:" or the standalone notice).
+	// Debug file logging was force-enabled with a visible path notice.
 	if !strings.Contains(norm, "Debug log") {
 		t.Fatalf("expected debug logging notice, got %q", output)
 	}
-	// A retry was scheduled (cmd non-nil) and the counter advanced.
-	if cmd == nil {
-		t.Fatalf("expected auto-retry cmd to be scheduled")
+	// Blind-spot errors must NEVER auto-resubmit: the value-receiver counter
+	// trap made the old auto-retry loop unbounded (every retry displayed
+	// 1/5), submitText duplicated the user turn, and attachments were
+	// dropped. The replacement is diagnosis-only with a manual /retry hint.
+	if cmd != nil {
+		t.Fatalf("no auto-retry cmd may be scheduled")
 	}
-	if m.blindSpotRetries != 1 {
-		t.Fatalf("expected blindSpotRetries=1, got %d", m.blindSpotRetries)
+	if m.blindSpotRetries != 0 {
+		t.Fatalf("counter must stay 0 (inert), got %d", m.blindSpotRetries)
+	}
+	if !strings.Contains(norm, "/retry") {
+		t.Fatalf("expected manual /retry hint, got %q", output)
 	}
 }
 

@@ -21,77 +21,83 @@ func blindSpotSetup(t *testing.T) *Model {
 	return &m
 }
 
-// TestBlindSpotRetryBudgetStopsAtMax pins the 5-attempt cap: the sixth
-// blind-spot failure must not schedule another retry.
-func TestBlindSpotRetryBudgetStopsAtMax(t *testing.T) {
+// Blind-spot errors must NOT auto-resubmit. The earlier auto-retry design
+// had three compounding failure modes: the counter was written into a
+// value-receiver model copy so the parent never saw it (every retry showed
+// 1/5 and the loop was unbounded); submitText re-persisted the user turn
+// (duplicate session entries on agent-side failures); and image
+// attachments were dropped (retry replayed text only). The replacement is
+// diagnosis-only: enable file logging and point the user at /retry.
+
+// TestBlindSpotRetryNeverSchedulesAutoResubmit pins the removal: no tick
+// command is ever scheduled, regardless of counter state.
+func TestBlindSpotRetryNeverSchedulesAutoResubmit(t *testing.T) {
 	m := blindSpotSetup(t)
-	m.blindSpotRetries = blindSpotMaxRetries
+	m.blindSpotRetries = 0
 
 	cmd := m.maybeBlindSpotRetry(errors.New("totally unknown failure mode"))
-
 	if cmd != nil {
-		t.Fatalf("retry must not be scheduled once the budget is spent")
+		t.Fatalf("no auto-retry may be scheduled (first failure)")
 	}
-	out := renderedOutput(m)
-	if !strings.Contains(out, "Auto-retry limit reached") {
-		t.Fatalf("expected exhaustion notice, got %q", out)
+	if m.blindSpotRetries != 0 {
+		t.Fatalf("counter must not advance, got %d", m.blindSpotRetries)
 	}
-	if m.blindSpotRetries != blindSpotMaxRetries {
-		t.Fatalf("counter must not exceed max, got %d", m.blindSpotRetries)
+
+	// Even with a burnt budget, behavior is identical (no special branch).
+	m.blindSpotRetries = 99
+	cmd = m.maybeBlindSpotRetry(errors.New("gateway said 200 but body was html"))
+	if cmd != nil {
+		t.Fatalf("no auto-retry may be scheduled (burnt budget)")
+	}
+	if m.blindSpotRetries != 99 {
+		t.Fatalf("counter must not be touched, got %d", m.blindSpotRetries)
 	}
 }
 
-// TestBlindSpotRetryCountdownAndSchedule pins the happy path: counter
-// advances, notice rendered, tick cmd scheduled.
-func TestBlindSpotRetryCountdownAndSchedule(t *testing.T) {
+// TestBlindSpotNoticePointsAtManualRetry pins the user-facing path: the
+// notice enables debug logging and offers /retry instead of auto-resending.
+func TestBlindSpotNoticePointsAtManualRetry(t *testing.T) {
 	m := blindSpotSetup(t)
 
-	cmd := m.maybeBlindSpotRetry(errors.New("gateway said 200 but body was html"))
+	m.maybeBlindSpotRetry(errors.New("totally unknown failure mode"))
 
-	if cmd == nil {
-		t.Fatalf("expected retry cmd")
-	}
-	if m.blindSpotRetries != 1 {
-		t.Fatalf("expected counter=1, got %d", m.blindSpotRetries)
-	}
 	out := renderedOutput(m)
-	if !strings.Contains(out, "Auto-retrying in 5 seconds (1/5)") {
-		t.Fatalf("expected countdown notice, got %q", out)
+	if !strings.Contains(out, "Unrecognized error detected") {
+		t.Fatalf("expected blind-spot notice, got %q", out)
 	}
-	if !strings.Contains(out, "ggcode-debug") {
-		t.Fatalf("expected log path in notice, got %q", out)
+	if !strings.Contains(out, "/retry") {
+		t.Fatalf("expected manual /retry hint, got %q", out)
+	}
+	if strings.Contains(out, "Auto-retrying") || strings.Contains(out, "Auto-retry limit") {
+		t.Fatalf("no auto-retry wording may remain, got %q", out)
 	}
 }
 
-// TestBlindSpotNoRetryWithQueue pins the conservative rule: when queued
-// submissions took over, no auto-retry: races the queue.
-func TestBlindSpotNoRetryWithQueue(t *testing.T) {
+// TestBlindSpotNoRetryHintWithoutSubmission pins the edge case: with no
+// previous submission there is nothing /retry could resend, so the hint
+// is omitted.
+func TestBlindSpotNoRetryHintWithoutSubmission(t *testing.T) {
 	m := blindSpotSetup(t)
 	m.lastUserSubmission = ""
-	cmd := m.maybeBlindSpotRetry(errors.New("unknown"))
-	if cmd != nil {
-		t.Fatalf("no retry without a submission to repeat")
+
+	m.maybeBlindSpotRetry(errors.New("unknown"))
+
+	out := renderedOutput(m)
+	if !strings.Contains(out, "Unrecognized error detected") {
+		t.Fatalf("expected blind-spot notice, got %q", out)
+	}
+	if strings.Contains(out, "/retry") {
+		t.Fatalf("no /retry hint without a submission, got %q", out)
 	}
 }
 
-// TestBlindSpotRetryDroppedWhenLoading pins the timer handler: if the user
-// started a new run during the 5s window, the retry is discarded.
-func TestBlindSpotRetryDroppedWhenLoading(t *testing.T) {
-	m := blindSpotSetup(t)
-	m.loading = true
-	cmd := m.handleBlindSpotRetryMsg(blindSpotRetryMsg{Text: "hello"})
-	if cmd != nil {
-		t.Fatalf("retry must be dropped while a run is active")
-	}
-}
-
-// TestBlindSpotResetOnSuccess pins budget restoration: a successful run
-// gives the next failure a full 5 attempts again.
+// TestBlindSpotResetOnSuccess stays intact: clearing the (now inert)
+// counter on success keeps the field consistent for future features.
 func TestBlindSpotResetOnSuccess(t *testing.T) {
 	m := blindSpotSetup(t)
-	m.blindSpotRetries = 4
+	m.blindSpotRetries = 3
 	m.resetBlindSpotRetry()
 	if m.blindSpotRetries != 0 {
-		t.Fatalf("expected reset to 0, got %d", m.blindSpotRetries)
+		t.Fatalf("counter must reset, got %d", m.blindSpotRetries)
 	}
 }

@@ -204,14 +204,6 @@ type restorePendingImagesMsg struct {
 	Images []imageAttachedMsg
 }
 
-// blindSpotRetryMsg fires after the auto-retry delay when a run failed
-// with an unrecognized (blind-spot) error. The TUI resubmits the same text
-// up to blindSpotMaxRetries times so transient unknown failures recover
-// without user intervention.
-type blindSpotRetryMsg struct {
-	Text string
-}
-
 type agentToolStatusMsg struct {
 	RunID int
 	ToolStatusMsg

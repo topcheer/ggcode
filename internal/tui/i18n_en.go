@@ -547,10 +547,8 @@ func enCatalog(key string) string {
 		return "Unknown command: %s\n"
 	case "command.retry_empty":
 		return "No previous submission to retry."
-	case "error.blindspot_retry":
-		return "Unrecognized error detected. Auto-retrying in %d seconds (%d/%d). Debug logs: %s"
-	case "error.blindspot_retry_exhausted":
-		return "Auto-retry limit reached (%d/%d), giving up. Debug logs: %s"
+	case "error.blindspot_retry_hint":
+		return "Type /retry to resend your last submission."
 	case "error.blindspot_log_enabled":
 		return "Unrecognized error detected. Debug logging has been enabled: %s"
 	case "error.blindspot_log_only":
