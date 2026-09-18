@@ -132,3 +132,139 @@ func TestServerToolBlockParamRejectsUnknown(t *testing.T) {
 		t.Fatal("expected error for invalid JSON")
 	}
 }
+
+// TestToolSearchDeclarationAndBetaOpts verifies the server-side Tool Search
+// Tool declarations (tool_search_tool_regex/bm25, advanced-tool-use beta):
+// native union types, cache breakpoints, active-flag, and beta request opts.
+func TestToolSearchDeclarationAndBetaOpts(t *testing.T) {
+	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
+	if p.ServerToolSearchActive() {
+		t.Fatal("tool search must be inactive before SetServerTools")
+	}
+	p.SetServerTools([]ServerToolConfig{
+		{Type: "tool_search_tool_regex"},
+		{Type: "tool_search_tool_bm25"},
+	})
+	if !p.ServerToolSearchActive() {
+		t.Fatal("ServerToolSearchActive must be true with tool_search_tool_* configured")
+	}
+	opts := p.serverToolOpts()
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 beta request opt, got %d", len(opts))
+	}
+	// Inactive providers must not send the header (proxy compatibility).
+	q := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
+	q.SetServerTools([]ServerToolConfig{{Type: "web_search_20250305"}})
+	if len(q.serverToolOpts()) != 0 {
+		t.Fatal("beta header must be omitted without tool search")
+	}
+
+	params := p.buildParams(context.Background(), []Message{}, nil)
+	if len(params.Tools) != 2 {
+		t.Fatalf("expected 2 tool unions, got %d", len(params.Tools))
+	}
+	if params.Tools[0].OfToolSearchToolRegex20251119 == nil {
+		t.Fatalf("first union is not tool_search_tool_regex: %+v", params.Tools[0])
+	}
+	if params.Tools[1].OfToolSearchToolBm25_20251119 == nil {
+		t.Fatalf("second union is not tool_search_tool_bm25: %+v", params.Tools[1])
+	}
+	raw, err := json.Marshal(params.Tools)
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+	for _, want := range []string{"tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("serialized tools missing %q: %s", want, raw)
+		}
+	}
+}
+
+// TestToolSearchResultEchoRoundTrip verifies tool_search_tool_result blocks
+// survive capture → conversion → param echo-back so tool_reference expansions
+// the API produced are not treated as deferred on the next turn.
+func TestToolSearchResultEchoRoundTrip(t *testing.T) {
+	rawJSON := `{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_01TS","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"mcp__srv__tool_01"}]}}`
+	var block anthropic.ContentBlockUnion
+	if err := json.Unmarshal([]byte(rawJSON), &block); err != nil {
+		t.Fatalf("unmarshal tool_search_tool_result: %v", err)
+	}
+	converted := convertAnthropicResponse([]anthropic.ContentBlockUnion{block})
+	if len(converted) != 1 || converted[0].Type != "tool_search_tool_result" {
+		t.Fatalf("conversion lost tool_search_tool_result: %+v", converted)
+	}
+	if !strings.Contains(string(converted[0].Raw), `"tool_name":"mcp__srv__tool_01"`) {
+		t.Fatalf("raw payload not verbatim: %s", converted[0].Raw)
+	}
+	param, err := serverToolBlockParam(converted[0].Raw)
+	if err != nil {
+		t.Fatalf("serverToolBlockParam: %v", err)
+	}
+	if param.OfToolSearchToolResult == nil {
+		t.Fatalf("param is not OfToolSearchToolResult: %+v", param)
+	}
+	if param.OfToolSearchToolResult.ToolUseID != "srvtoolu_01TS" {
+		t.Fatalf("tool_use_id mismatch: %q", param.OfToolSearchToolResult.ToolUseID)
+	}
+	back, err := json.Marshal(param)
+	if err != nil {
+		t.Fatalf("marshal param: %v", err)
+	}
+	if !strings.Contains(string(back), `"tool_search_tool_result"`) || !strings.Contains(string(back), `srvtoolu_01TS`) {
+		t.Fatalf("echo param does not round-trip: %s", back)
+	}
+}
+
+// TestDeferLoadingToolParams verifies defer_loading serialization and the
+// cache-breakpoint guard: the API rejects defer_loading combined with a
+// cache_control breakpoint on the same definition, so the breakpoint moves
+// to the last non-deferred tool.
+func TestDeferLoadingToolParams(t *testing.T) {
+	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
+	tools := []ToolDefinition{
+		{Name: "mcp__srv__a", Description: "a", Parameters: json.RawMessage(`{"type":"object"}`), DeferLoading: true},
+		{Name: "mcp__srv__b", Description: "b", Parameters: json.RawMessage(`{"type":"object"}`), DeferLoading: true},
+		{Name: "builtin_read", Description: "r", Parameters: json.RawMessage(`{"type":"object"}`)},
+	}
+	params := p.buildParams(context.Background(), []Message{}, tools)
+	if len(params.Tools) != 3 {
+		t.Fatalf("expected 3 tool unions, got %d", len(params.Tools))
+	}
+	raw, err := json.Marshal(params.Tools)
+	if err != nil {
+		t.Fatalf("marshal tools: %v", err)
+	}
+	if got := strings.Count(string(raw), `"defer_loading":true`); got != 2 {
+		t.Fatalf("expected exactly 2 defer_loading flags, got %d: %s", got, raw)
+	}
+	// cache_control must sit on the last NON-deferred tool only.
+	var wire []struct {
+		Name         string           `json:"name"`
+		DeferLoading bool             `json:"defer_loading"`
+		CacheControl *json.RawMessage `json:"cache_control"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("unmarshal tools wire: %v", err)
+	}
+	for i, wt := range wire {
+		isDeferred := wt.DeferLoading
+		hasCache := wt.CacheControl != nil
+		if isDeferred && hasCache {
+			t.Fatalf("deferred tool %q must not carry a cache breakpoint", wt.Name)
+		}
+		if i == len(wire)-1 && !isDeferred && !hasCache {
+			t.Fatalf("last non-deferred tool %q must carry the cache breakpoint", wt.Name)
+		}
+		if i < len(wire)-1 && hasCache {
+			t.Fatalf("non-last tool %q must not carry the cache breakpoint", wt.Name)
+		}
+	}
+	// All-deferred edge: no breakpoint anywhere, request still valid.
+	all := p.buildParams(context.Background(), []Message{}, []ToolDefinition{
+		{Name: "mcp__srv__c", Description: "c", Parameters: json.RawMessage(`{"type":"object"}`), DeferLoading: true},
+	})
+	allRaw, _ := json.Marshal(all.Tools)
+	if strings.Contains(string(allRaw), "cache_control") {
+		t.Fatalf("all-deferred tools must carry no breakpoint: %s", allRaw)
+	}
+}

@@ -284,3 +284,39 @@ func TestToolSearchRequiresQuery(t *testing.T) {
 		t.Fatal("empty arguments must produce an error result")
 	}
 }
+
+// TestServerToolSearchHandoff verifies the server-side Tool Search Tool
+// handoff (Anthropic advanced-tool-use beta): disable() yields the client
+// meta-tool so activeDefs returns the full registry, and markServerDeferred
+// flags exactly the MCP schemas for defer_loading while built-ins stay
+// non-deferred (the API requires >=1 non-deferred tool).
+func TestServerToolSearchHandoff(t *testing.T) {
+	a, reg := newToolSearchTestAgent(t, toolSearchThreshold)
+	if !a.toolSearch.enabled {
+		t.Fatal("expected client tool search enabled at threshold")
+	}
+	a.toolSearch.disable()
+	a.serverToolSearch = true
+	if a.toolSearch.enabled {
+		t.Fatal("disable() must turn off the client meta-tool")
+	}
+	got := a.toolSearch.activeDefs(reg.ToDefinitions())
+	if len(got) != toolSearchThreshold {
+		t.Fatalf("disabled client search must return all defs, got %d/%d", len(got), toolSearchThreshold)
+	}
+	markServerDeferred(got)
+	nDeferred := 0
+	for _, d := range got {
+		if strings.HasPrefix(d.Name, mcpToolPrefix) {
+			if !d.DeferLoading {
+				t.Fatalf("MCP tool %q must be deferred", d.Name)
+			}
+			nDeferred++
+		} else if d.DeferLoading {
+			t.Fatalf("built-in tool %q must never be deferred", d.Name)
+		}
+	}
+	if nDeferred != toolSearchThreshold {
+		t.Fatalf("expected %d deferred MCP schemas, got %d", toolSearchThreshold, nDeferred)
+	}
+}

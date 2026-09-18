@@ -173,6 +173,7 @@ type Agent struct {
 	effectLedger              *effectLedgerState         // side-effect ledger: duplicate-effect awareness on retries (LangEffect/RAC-inspired)
 	toolSearch                *toolSearchState           // deferred MCP tool schema disclosure (Anthropic Tool Search-inspired)
 	memoryTool                *memoryToolState           // client-side executor for the API-declared Anthropic Memory Tool (memory_20250818)
+	serverToolSearch          bool                       // provider-side Tool Search Tool owns discovery (Anthropic beta); client meta-tool disabled
 	postEditVerify            postEditVerifyState        // tracks source-code edits to inject periodic verification hints
 	planner                   *planState                 // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness             *todoStalenessState        // mid-run stale todo detection (plan abandonment awareness)
@@ -1611,6 +1612,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
 	a.toolSearch.init(toolDefs)
+	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
+	// beta): when the provider declares tool_search_tool_regex/bm25, schema
+	// discovery is owned by the API via defer_loading + tool_reference. The
+	// client-side meta-tool must yield — it strips deferred schemas from the
+	// request, which the server-side search requires to rank against.
+	if enabler, ok := a.provider.(interface{ ServerToolSearchActive() bool }); ok && enabler.ServerToolSearchActive() {
+		a.toolSearch.disable()
+		a.serverToolSearch = true
+		debug.Log("agent", "server-side tool search active: MCP schemas deferred via defer_loading")
+	}
 	if a.toolSearch.enabled {
 		debug.Log("agent", "tool search: %d MCP tool schemas deferred behind %s", len(a.toolSearch.deferred), ToolSearchToolName)
 	}
@@ -2164,6 +2175,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// guessing tool behavior from names. All registered tools are sent
 		// with their full, unmodified descriptions.
 		activeToolDefs := a.toolSearch.activeDefs(toolDefs)
+		if a.serverToolSearch {
+			// Provider-side Tool Search Tool: MCP schemas ride every request
+			// flagged defer_loading so the API keeps them out of context until
+			// server-side search expands them. Built-ins stay non-deferred,
+			// satisfying the API's ≥1 non-deferred tool requirement.
+			markServerDeferred(activeToolDefs)
+		}
 		if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
 			cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(activeToolDefs))
 		}

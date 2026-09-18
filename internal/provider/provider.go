@@ -228,6 +228,12 @@ type ToolDefinition struct {
 	// tool (OpenAI/Anthropic `strict: true`). Guarantees required fields are
 	// present and types match the schema. See strict_tools.go.
 	Strict bool `json:"strict,omitempty"`
+	// DeferLoading marks the definition for Anthropic's server-side Tool
+	// Search Tool (advanced-tool-use-2025-11-20): the schema stays out of
+	// the model's context until the server search expands it via
+	// tool_reference. Ignored by the OpenAI/Gemini adapters. Never set on
+	// server tools themselves (the API rejects deferring the search tool).
+	DeferLoading bool `json:"defer_loading,omitempty"`
 }
 
 // Provider is the interface every LLM backend must implement.

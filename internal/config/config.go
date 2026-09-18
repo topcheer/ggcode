@@ -78,7 +78,10 @@ type ModelLimitConfig struct {
 // ServerToolConfig declares one server-side tool — executed inside the
 // provider API, never client-side. Supported Type values:
 //   - Anthropic: "web_search_20250305", "web_fetch_20250910" (results arrive
-//     in-band and are echoed back verbatim)
+//     in-band and are echoed back verbatim); "tool_search_tool_regex" or
+//     "tool_search_tool_bm25" (server-side Tool Search Tool, beta — MCP
+//     tool schemas are sent with defer_loading and expanded server-side;
+//     disables the client-side tool_search meta-tool)
 //   - Gemini:    "google_search" (alias "web_search"), "url_context"
 //     (grounding sources are surfaced as text blocks)
 type ServerToolConfig struct {

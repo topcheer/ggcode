@@ -91,6 +91,28 @@ func (s *toolSearchState) init(defs []provider.ToolDefinition) {
 	s.enabled = len(deferred) >= toolSearchThreshold && !toolSearchEnvDisabled()
 }
 
+// disable turns off the client-side meta-tool. Used when the provider's
+// server-side Tool Search Tool (Anthropic advanced-tool-use beta) owns
+// schema discovery instead: the two mechanisms are mutually exclusive.
+func (s *toolSearchState) disable() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.enabled = false
+}
+
+// markServerDeferred flags MCP tool definitions for the provider's
+// server-side Tool Search Tool (defer_loading): the API keeps their schemas
+// out of the model's context until server-side search expands them via
+// tool_reference. Built-in tools stay non-deferred, which satisfies the
+// API's requirement of at least one non-deferred tool.
+func markServerDeferred(defs []provider.ToolDefinition) {
+	for i := range defs {
+		if strings.HasPrefix(defs[i].Name, mcpToolPrefix) {
+			defs[i].DeferLoading = true
+		}
+	}
+}
+
 func toolSearchEnvDisabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("GGCODE_TOOL_SEARCH"))) {
 	case "0", "off", "false", "no":

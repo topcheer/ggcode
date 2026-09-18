@@ -37,6 +37,7 @@ type AnthropicProvider struct {
 	thinkingMode     string                               // "", "manual", "adaptive" — thinking carrier override ("" = auto-detect from model)
 	contextEditing   atomic.Pointer[ContextEditingConfig] // server-side context editing (beta)
 	strictTools      map[string]bool                      // strict tool use allowlist (empty = disabled)
+	toolSearchBeta   bool                                 // a tool_search_tool_* declaration is configured (beta header + defer_loading)
 
 	// Top-level effort carrier (output_config.effort, GA effort parameter).
 	// Cache-aware per Anthropic's 2026 effort guidance: a top-level effort
@@ -240,6 +241,34 @@ func (p *AnthropicProvider) ToolChoice() string { return p.toolChoice }
 // echoed back verbatim on subsequent requests.
 func (p *AnthropicProvider) SetServerTools(tools []ServerToolConfig) {
 	p.serverTools = tools
+	p.toolSearchBeta = false
+	for _, t := range tools {
+		if t.Type == "tool_search_tool_regex" || t.Type == "tool_search_tool_bm25" {
+			p.toolSearchBeta = true
+		}
+	}
+}
+
+// ServerToolSearchActive reports whether the Anthropic server-side Tool
+// Search Tool (tool_search_tool_regex/bm25, advanced-tool-use-2025-11-20)
+// is configured. The agent layer checks this to hand MCP schema discovery
+// to the provider (defer_loading) instead of its client-side meta-tool —
+// the two mechanisms are mutually exclusive: the client meta-tool strips
+// deferred schemas from the request, which the server-side search needs.
+func (p *AnthropicProvider) ServerToolSearchActive() bool { return p.toolSearchBeta }
+
+// advancedToolUseBeta is the beta header the API requires for the server
+// Tool Search Tool declarations.
+const advancedToolUseBeta = "advanced-tool-use-2025-11-20"
+
+// serverToolOpts returns the per-request options needed when a Tool Search
+// Tool is configured (nil otherwise, so unaffected deployments never send
+// the beta header).
+func (p *AnthropicProvider) serverToolOpts() []option.RequestOption {
+	if !p.toolSearchBeta {
+		return nil
+	}
+	return []option.RequestOption{option.WithHeader("anthropic-beta", advancedToolUseBeta)}
 }
 
 // SetMemoryTool enables the Anthropic Memory Tool declaration
@@ -278,7 +307,7 @@ func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 // cap tracking. Used by context window probing.
 func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
 	params := p.buildParams(ctx, messages, nil)
-	_, err := p.client.Messages.New(ctx, params)
+	_, err := p.client.Messages.New(ctx, params, p.serverToolOpts()...)
 	return err
 }
 
@@ -527,8 +556,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
-		resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
-		resp, callErr = p.client.Messages.New(ctx, params, p.contextEditingOptions()...)
+		resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 		return callErr
 	}, providerRetryAttempts)
 	// Retry once without extended thinking if the model rejects it
@@ -539,8 +567,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		callOpts = nil
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
-			resp, callErr = p.client.Messages.New(ctx, params, p.contextEditingOptions()...)
+			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 			return callErr
 		}, providerRetryAttempts)
 	}
@@ -552,8 +579,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		params.OutputConfig = anthropic.OutputConfigParam{}
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params, callOpts...)
-			resp, callErr = p.client.Messages.New(ctx, params, p.contextEditingOptions()...)
+			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 			return callErr
 		}, providerRetryAttempts)
 	}
@@ -626,7 +652,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			truncated = false
 
 			func() {
-				stream := p.client.Messages.NewStreaming(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
+				stream := p.client.Messages.NewStreaming(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
 				defer func() {
 					_ = stream.Close()
 				}()
@@ -650,9 +676,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 							// it is emitted verbatim at content_block_stop.
 							idx := int(event.Index)
 							toolCalls[idx] = &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name, ServerTool: true}
-						case "web_search_tool_result", "web_fetch_tool_result":
+						case "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
 							// Result blocks arrive complete (no deltas). Keep the raw
-							// JSON verbatim for echo-back on the next request.
+							// JSON verbatim for echo-back on the next request. For the
+							// Tool Search Tool this preserves the tool_reference
+							// expansions so the API does not treat them as deferred.
 							emitted = true
 							ch <- StreamEvent{
 								Type:  StreamEventServerTool,
@@ -1039,7 +1067,7 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
-			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result":
+			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
 				// Verbatim echo-back of the server-tool exchange; silently skip
 				// only on impossible re-parse failures (raw was captured from
 				// the API itself).
@@ -1150,7 +1178,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch b.Type {
-			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result":
+			case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
 				if pb, err := serverToolBlockParam(b.Raw); err == nil {
 					blocks = append(blocks, *pb)
 				} else {
@@ -1333,6 +1361,7 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 
 	if len(tools) > 0 {
 		toolParams := make([]anthropic.ToolUnionParam, len(tools))
+		lastCacheable := -1
 		for i, t := range tools {
 			inputSchema := anthropic.ToolInputSchemaParam{
 				Type: "object",
@@ -1363,15 +1392,24 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 						toolParams[i].OfTool.InputSchema.ExtraFields = extra
 					}
 				}
-				// Add cache control breakpoint on the last tool definition so
-				// Anthropic caches all tool schemas (which are large and static
-				// across turns). Only the last item needs the breakpoint —
-				// Anthropic caches everything from the start up to each
-				// breakpoint.
-				if i == len(tools)-1 {
-					toolParams[i].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				// Server-side Tool Search Tool (advanced-tool-use beta):
+				// defer_loading keeps the schema out of the model's context
+				// until the server search expands it via tool_reference. The
+				// API rejects defer_loading combined with a cache breakpoint
+				// on the same definition, so deferred tools never get one.
+				if t.DeferLoading {
+					toolParams[i].OfTool.DeferLoading = param.NewOpt(true)
+				} else {
+					lastCacheable = i
 				}
 			}
+		}
+		// Cache control breakpoint on the last NON-deferred tool definition
+		// so Anthropic caches all tool schemas (which are large and static
+		// across turns). Only the last item needs the breakpoint — Anthropic
+		// caches everything from the start up to each breakpoint.
+		if lastCacheable >= 0 && toolParams[lastCacheable].OfTool != nil {
+			toolParams[lastCacheable].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 		}
 		params.Tools = toolParams
 	}
@@ -1388,6 +1426,17 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				u = anthropic.ToolUnionParam{OfWebSearchTool20250305: &anthropic.WebSearchTool20250305Param{}}
 			case "web_fetch_20250910":
 				u = anthropic.ToolUnionParam{OfWebFetchTool20250910: &anthropic.WebFetchTool20250910Param{}}
+			case "tool_search_tool_regex":
+				// Server-side Tool Search Tool (regex variant, advanced-tool-use
+				// beta). Type is api-required with no SDK default; Name elides to
+				// "tool_search_tool_regex".
+				u = anthropic.ToolUnionParam{OfToolSearchToolRegex20251119: &anthropic.ToolSearchToolRegex20251119Param{
+					Type: anthropic.ToolSearchToolRegex20251119TypeToolSearchToolRegex20251119,
+				}}
+			case "tool_search_tool_bm25":
+				u = anthropic.ToolUnionParam{OfToolSearchToolBm25_20251119: &anthropic.ToolSearchToolBm25_20251119Param{
+					Type: anthropic.ToolSearchToolBm25_20251119TypeToolSearchToolBm25_20251119,
+				}}
 			default:
 				debug.Log("anthropic", "unknown server tool type %q ignored", st.Type)
 				continue
@@ -1480,13 +1529,15 @@ func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnio
 		}
 		param := b.ToParam()
 		return &anthropic.ContentBlockParamUnion{OfWebSearchToolResult: &param}, nil
-	case "web_fetch_tool_result":
-		var b anthropic.WebFetchToolResultBlock
-		if err := json.Unmarshal(raw, &b); err != nil {
+	case "tool_search_tool_result":
+		// No response-block ToParam for this shape in SDK v1.68; the param
+		// struct is JSON-identical and apijson registers its discriminator
+		// for decoding.
+		var ts anthropic.ToolSearchToolResultBlockParam
+		if err := json.Unmarshal(raw, &ts); err != nil {
 			return nil, err
 		}
-		param := b.ToParam()
-		return &anthropic.ContentBlockParamUnion{OfWebFetchToolResult: &param}, nil
+		return &anthropic.ContentBlockParamUnion{OfToolSearchToolResult: &ts}, nil
 	}
 	return nil, fmt.Errorf("unknown server tool block type %q", probe.Type)
 }
@@ -1500,6 +1551,10 @@ func setToolUnionCacheControl(u *anthropic.ToolUnionParam) {
 		u.OfWebFetchTool20250910.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	case u.OfMemoryTool20250818 != nil:
 		u.OfMemoryTool20250818.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case u.OfToolSearchToolRegex20251119 != nil:
+		u.OfToolSearchToolRegex20251119.CacheControl = anthropic.NewCacheControlEphemeralParam()
+	case u.OfToolSearchToolBm25_20251119 != nil:
+		u.OfToolSearchToolBm25_20251119.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	}
 }
 
@@ -1524,7 +1579,7 @@ func convertAnthropicResponse(blocks []anthropic.ContentBlockUnion) []ContentBlo
 				Type:         "redacted_thinking",
 				ThinkingData: rb.Data,
 			})
-		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result":
+		case "server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
 			// Anthropic server-side tool blocks: executed inside the API, never
 			// surfaced as client tool calls. Keep the raw JSON verbatim so the
 			// full exchange can be echoed back on subsequent requests.
