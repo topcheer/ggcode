@@ -39,9 +39,21 @@ func (m *Model) handleUsageInfoUpdated(msg usageInfoUpdatedMsg) (Model, tea.Cmd)
 			m.usagePanel.fetching = false
 		}
 	}
-	active := m.activeVendor
+	// Sidebar attribution must compare in the RESOLVED probe-id domain,
+	// not the config vendor-name domain: msg.vendor comes from
+	// svc.Resolve(baseURL) ("openrouter", "zai", "kimi"...), while
+	// activeVendor is whatever the user NAMED the vendor in ggcode.yaml
+	// ("ai-gateway", ...). Name-mismatched configs never matched and the
+	// sidebar silently never updated (2026-09-18 user report).
+	active := ""
+	if baseURL, _, ok := m.currentEndpointForUsage(); ok {
+		active = m.ensureUsageService().Resolve(baseURL)
+	}
 	if active == "" {
-		active = m.startupVendor
+		active = m.activeVendor
+		if active == "" {
+			active = m.startupVendor
+		}
 	}
 	if msg.vendor == active {
 		if msg.err != nil {

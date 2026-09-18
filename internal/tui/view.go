@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,35 +24,63 @@ var (
 
 func (m Model) View() tea.View {
 	start := time.Now()
-	v := m.renderView()
+	segs := segmentTimers{}
+	v := m.renderView(&segs)
 	if d := time.Since(start); d > slowUpdateLogThreshold {
 		// Same threshold/rationale as dispatchUpdate's handler meter
-		// (#2538): the startup freeze reproduction showed a 10s event-loop
-		// gap with only 291ms attributed to handlers - the rest was View
-		// rendering, which had NO meter. This line makes the next
-		// reproduction self-attributing.
-		debug.Log("tui", fmt.Sprintf("slow view render: %s", d.Round(time.Millisecond)))
+		// (#2538): the 2026-09-18 reproductions showed a 10.008s first
+		// frame with handler meters attributing only 1.4s - the segment
+		// breakdown names the offending section directly from the debug
+		// log on the NEXT reproduction (bench at chat.List level with
+		// 1946 items + 1.4MB summary pinned 0ms, so the stall is not the
+		// chat viewport itself).
+		debug.Log("tui", fmt.Sprintf("slow view render: %s %s", d.Round(time.Millisecond), segsSummary(segs)))
 	}
 	return v
 }
 
-func (m Model) renderView() tea.View {
+// segmentTimers accumulates per-section render costs for the slow-view
+// meter. Sections under slowUpdateLogThreshold are omitted from the log.
+type segmentTimers map[string]time.Duration
+
+func (s segmentTimers) run(name string, f func()) {
+	t0 := time.Now()
+	f()
+	s[name] += time.Since(t0)
+}
+
+func segsSummary(segs segmentTimers) string {
+	var parts []string
+	for name, d := range segs {
+		if d > slowUpdateLogThreshold {
+			parts = append(parts, fmt.Sprintf("%s=%s", name, d.Round(time.Millisecond)))
+		}
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i] > parts[j] })
+	if len(parts) == 0 {
+		return ""
+	}
+	return "sections[" + strings.Join(parts, " ") + "]"
+}
+
+func (m Model) renderView(segs *segmentTimers) tea.View {
 	m.syncAsyncStateCaches()
 	if m.quitting {
 		return tea.NewView("")
 	}
 	header := ""
 	if m.topHeaderEnabled() {
-		header = m.renderHeader()
+		segs.run("header", func() { header = m.renderHeader() })
 	}
 
 	// Pre-calculate the full panel height so that renderContextBox can use
 	// it without recursively calling render functions (which causes stack
 	// overflow). We compute it from the same elements View() uses.
-	statusBar := m.renderStatusBar()
-	deviceBanner := m.renderDeviceCodeBanner()
-	composer := m.renderComposerPanel()
-	lanChatBar := m.renderLanChatNotice()
+	var statusBar, deviceBanner, composer, lanChatBar string
+	segs.run("statusBar", func() { statusBar = m.renderStatusBar() })
+	segs.run("deviceBanner", func() { deviceBanner = m.renderDeviceCodeBanner() })
+	segs.run("composer", func() { composer = m.renderComposerPanel() })
+	segs.run("lanChatBar", func() { lanChatBar = m.renderLanChatNotice() })
 
 	panelH := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
 	if statusBar != "" {
@@ -68,7 +97,8 @@ func (m Model) renderView() tea.View {
 	}
 	m.cachedPanelHeight = panelH
 
-	actionPanel := m.renderContextPanel()
+	actionPanel := ""
+	segs.run("contextPanel", func() { actionPanel = m.renderContextPanel() })
 
 	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
 	if actionPanel != "" {
@@ -106,7 +136,7 @@ func (m Model) renderView() tea.View {
 	if actionPanel != "" {
 		conversation = ""
 	} else {
-		conversation = m.renderConversationPanel(availableHeight)
+		segs.run("conversation", func() { conversation = m.renderConversationPanel(availableHeight) })
 	}
 
 	sections := make([]string, 0, 8)

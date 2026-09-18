@@ -6,12 +6,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/mcp"
 )
 
 // handleMcpServersMsg handles the corresponding message case.
 func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
+	t0 := time.Now()
 	m.mcpServers = toMCPInfos(msg.Servers)
+	t1 := time.Now()
 	// #1396-A: the replace above used to land with NO clamp - uninstall
 	// the last (cursor-on-it) server and every subsequent key handler
 	// indexing m.mcpServers[panel.selected] panicked (stable repro:
@@ -24,14 +27,23 @@ func (m Model) handleMcpServersMsg(msg mcpServersMsg) (Model, tea.Cmd) {
 		}
 	}
 	m.refreshCommands()
+	t2 := time.Now()
 	if m.mcpManager != nil {
 		if pending := m.mcpManager.PendingOAuth(); pending != nil {
 			m.mcpManager.ClearPendingOAuth(pending.ServerName)
 			if m.mcpPanel != nil && pending.Handler != nil && pending.Handler.SupportsDCR() {
 				m.mcpPanel.message = fmt.Sprintf("Connecting to %s (verifying OAuth client)...", pending.ServerName)
 			}
+			if d := time.Since(t0); d > slowUpdateLogThreshold {
+				debug.Log("tui", fmt.Sprintf("mcpServersMsg segments: toMCPInfos=%s refreshCommands=%s pendingOAuth=%s total=%s",
+					t1.Sub(t0).Round(time.Millisecond), t2.Sub(t1).Round(time.Millisecond), time.Since(t2).Round(time.Millisecond), d.Round(time.Millisecond)))
+			}
 			return m, tea.Batch(m.startMCPOAuth(pending), m.pollMCPHealthCheck(pending.Handler, pending.ServerName))
 		}
+	}
+	if d := time.Since(t0); d > slowUpdateLogThreshold {
+		debug.Log("tui", fmt.Sprintf("mcpServersMsg segments: toMCPInfos=%s refreshCommands=%s pendingOAuth=%s total=%s",
+			t1.Sub(t0).Round(time.Millisecond), t2.Sub(t1).Round(time.Millisecond), time.Since(t2).Round(time.Millisecond), d.Round(time.Millisecond)))
 	}
 	return m, nil
 }
