@@ -39,7 +39,13 @@ const (
 	// readdir/stat network round-trip per entry and can take minutes there.
 	// Past the budget the TUI starts with empty sections; the background
 	// refresh loop fills the cache shortly after.
-	firstRefreshBudget = 5 * time.Second
+	//
+	// 800ms (was 5s): this wait sits on the interactive startup path BEFORE
+	// the Bubble Tea loop starts, so users perceive it as a dead black screen.
+	// Warm-cache machines finish the first refresh well under 300ms; cold or
+	// slow ones now fall through to the background loop instead of paying a
+	// multi-second startup stall (user-reported freeze window, 2026-09-18).
+	firstRefreshBudget = 800 * time.Millisecond
 )
 
 // SectionCollector holds cached prompt sections refreshed by a background goroutine.
