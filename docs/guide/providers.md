@@ -171,6 +171,32 @@ request when unset. Endpoints that predate the parameter (some
 OpenAI-compatible relays) reject it as an unknown argument; ggcode detects that
 error class and transparently retries the request without the hint.
 
+## Service Tier
+
+`openai` and `openai-responses` endpoints accept a `service_tier` processing
+tier that trades cost against latency: `flex` runs at a discount with higher
+latency and occasionally unavailable capacity, while `priority` / `fast`
+(Fast mode, the 2026-07 rename of Priority processing) serves requests faster
+at a per-token premium. `auto`, `default`, and `scale` select project-default
+behaviors. Configure it with `service_tier`:
+
+```yaml
+vendors:
+  openai:
+    protocol: openai
+    service_tier: flex    # auto | default | flex | priority | fast | scale
+    endpoints:
+      default:
+        base_url: https://api.openai.com/v1
+        model: gpt-5
+```
+
+The field is omitted from the request when unset. Endpoints that do not know
+the parameter (some relays, or backends that only proxy other vendors) reject
+it as an unknown argument; ggcode detects that error class and transparently
+retries the request without the hint. Anthropic and Gemini endpoints ignore
+the setting - they have no equivalent tier surface.
+
 ## Reasoning Effort
 
 Configure how much "thinking" the model does before responding. Supported by

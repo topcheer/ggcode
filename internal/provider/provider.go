@@ -274,6 +274,13 @@ type TextVerbosityProvider interface {
 	TextVerbosity() string
 }
 
+// ServiceTierProvider is implemented by providers that support the OpenAI
+// service_tier processing-tier control (Chat Completions + Responses API).
+type ServiceTierProvider interface {
+	SetServiceTier(tier string)
+	ServiceTier() string
+}
+
 // ServerToolsSetter is implemented by providers that support Anthropic
 // server-side tools (web_search / web_fetch): tools declared once and
 // executed inside the provider's infrastructure, with results returned

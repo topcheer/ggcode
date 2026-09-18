@@ -160,6 +160,7 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 		Tags:             append([]string(nil), ep.Tags...),
 		StrictTools:      strictTools,
 		StrictToolsAllow: append([]string(nil), ep.StrictToolsAllow...),
+		ServiceTier:      strings.TrimSpace(ep.ServiceTier),
 	}, nil
 }
 

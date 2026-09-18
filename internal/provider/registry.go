@@ -57,6 +57,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		rp.SetReasoningEffort(resolved.ReasoningEffort)
 		rp.SetTextVerbosity(resolved.TextVerbosity)
+		rp.SetServiceTier(resolved.ServiceTier)
 		rp.SetToolChoice(resolved.ToolChoice)
 		if len(resolved.ServerTools) > 0 {
 			rp.SetServerTools(resolved.ServerTools)
@@ -71,6 +72,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 			rp.SetReasoningEffort(resolved.ReasoningEffort)
 			rp.SetTextVerbosity(resolved.TextVerbosity)
+			rp.SetServiceTier(resolved.ServiceTier)
 			rp.SetToolChoice(resolved.ToolChoice)
 			if len(resolved.ServerTools) > 0 {
 				rp.SetServerTools(resolved.ServerTools)
@@ -81,6 +83,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		p := NewOpenAIProviderWithBaseURL(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
 		p.SetReasoningEffort(resolved.ReasoningEffort)
+		p.SetServiceTier(resolved.ServiceTier)
 		p.SetToolChoice(resolved.ToolChoice)
 		p.SetLogprobsRequest(resolved.Logprobs) // sa-74
 		p.SetStrictTools(strictToolsAllow(resolved))

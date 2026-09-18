@@ -130,6 +130,8 @@ type EndpointConfig struct {
 	// outputs); opt-in per endpoint. Allowlist empty = provider default set.
 	StrictTools      *bool    `yaml:"strict_tools,omitempty" json:"strict_tools,omitempty"`
 	StrictToolsAllow []string `yaml:"strict_tools_allow,omitempty" json:"strict_tools_allow,omitempty"`
+	// ServiceTier (sa-81) selects the processing tier on OpenAI-compatible
+	ServiceTier string `yaml:"service_tier,omitempty" json:"service_tier,omitempty"`
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -170,6 +172,7 @@ type ResolvedEndpoint struct {
 	Tags             []string
 	StrictTools      bool
 	StrictToolsAllow []string
+	ServiceTier      string
 }
 
 // ToolPermission defines per-tool permission level in config.
