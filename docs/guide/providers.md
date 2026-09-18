@@ -400,6 +400,13 @@ provider's API, never client-side, so they need no approval flow:
   matching), and answers with `apply_patch_call_output` so the exchange
   replays losslessly in stateless history. Subject to the normal sandbox
   (`sandbox.paths` / approval) like any file-write tool.
+  context across turns.
+- **OpenAI Responses** (`protocol: openai-responses`): `code_interpreter`
+  runs sandboxed Python inside an auto-provisioned container (`memory_limit`
+  tier and seed `file_ids` optional) and `file_search` queries OpenAI vector
+  stores (requires `vector_store_ids`). Interpreter transcripts, search hits,
+  and generated-file citations are surfaced back as text blocks / `[file: …]`
+  citation lines.
 
 ```yaml
 vendors:

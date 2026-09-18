@@ -83,6 +83,12 @@ type ModelLimitConfig struct {
 //     (grounding sources are surfaced as text blocks)
 type ServerToolConfig struct {
 	Type string `yaml:"type" json:"type"`
+	// Parameters for the OpenAI Responses built-in tools (sa-63). Other
+	// protocols ignore these fields.
+	VectorStoreIDs []string `yaml:"vector_store_ids,omitempty" json:"vector_store_ids,omitempty"` // file_search: vector stores to query
+	MaxNumResults  int      `yaml:"max_num_results,omitempty" json:"max_num_results,omitempty"`   // file_search: cap retrieved chunks
+	MemoryLimit    string   `yaml:"memory_limit,omitempty" json:"memory_limit,omitempty"`         // code_interpreter: container RAM tier (1g/4g/16g/64g)
+	FileIDs        []string `yaml:"file_ids,omitempty" json:"file_ids,omitempty"`                 // code_interpreter: files seeded into the auto container
 }
 
 // EndpointConfig describes a concrete vendor endpoint that maps to one protocol.

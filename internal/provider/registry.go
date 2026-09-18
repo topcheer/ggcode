@@ -60,6 +60,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		rp.SetToolChoice(resolved.ToolChoice)
 		if len(resolved.ServerTools) > 0 {
 			rp.SetServerTools(resolved.ServerTools)
+			rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
 		}
 		return rp, nil
 
@@ -73,6 +74,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			rp.SetToolChoice(resolved.ToolChoice)
 			if len(resolved.ServerTools) > 0 {
 				rp.SetServerTools(resolved.ServerTools)
+				rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
 			}
 			return rp, nil
 		}
