@@ -86,3 +86,50 @@ func TestSidebarUsageFallbackToNameDomain(t *testing.T) {
 }
 
 func errUsageProbeForTest() error { return &usage.RateLimitedError{} }
+
+// TestExplainUsageSidebarBranches: every no-probe branch must produce a
+// distinct human-readable reason - the sidebar now renders exactly this
+// string, making silent-empty sidebars diagnosable from the UI alone.
+func TestExplainUsageSidebarBranches(t *testing.T) {
+	m := newTestModel()
+	m.SetConfig(config.DefaultConfig())
+	m.activeVendor = "ghost"
+	m.activeEndpoint = "e"
+	if got := m.explainUsageSidebar(); got != `vendor "ghost" not in config` {
+		t.Fatalf("branch vendor-missing: got %q", got)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Vendors["v"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
+		"e": {BaseURL: "https://coding.dashscope.aliyuncs.com/v1", APIKey: "k"},
+	}}
+	m2 := newTestModel()
+	m2.SetConfig(cfg)
+	m2.activeVendor = "v"
+	m2.activeEndpoint = "e"
+	if got := m2.explainUsageSidebar(); got != "no usage probe for https://coding.dashscope.aliyuncs.com" {
+		t.Fatalf("branch unclaimed-host: got %q", got)
+	}
+
+	cfg2 := config.DefaultConfig()
+	cfg2.Vendors["v"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
+		"e": {BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4"}, // no key
+	}}
+	m3 := newTestModel()
+	m3.SetConfig(cfg2)
+	m3.activeVendor = "v"
+	m3.activeEndpoint = "e"
+	if got := m3.explainUsageSidebar(); got != "endpoint v/e has no api key" {
+		t.Fatalf("branch keyless: got %q", got)
+	}
+
+	m4 := newTestModel()
+	m4.SetConfig(cfg)
+	m4.activeVendor = "v"
+	m4.activeEndpoint = "e"
+	cfg.Vendors["v"].Endpoints["e"] = config.EndpointConfig{BaseURL: "https://open.bigmodel.cn/api/coding/paas/v4", APIKey: "k"}
+	m4.SetConfig(cfg)
+	if got := m4.explainUsageSidebar(); got != "" {
+		t.Fatalf("branch probeable: expected empty, got %q", got)
+	}
+}

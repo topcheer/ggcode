@@ -293,28 +293,37 @@ func renderUsageBar(pct float64, width int) string {
 }
 
 // renderSidebarVendorUsageSection renders the current vendor's balance /
-// quota window in the sidebar. Anchor: render NOTHING until data arrived
-// (no placeholder, no spinner) - a section without data is noise.
+// quota window in the sidebar. With no probe result yet (or ever), the
+// section shows WHY in one line: the resolved endpoint URL and the exact
+// reason no usage is displayed - the "silent empty sidebar" of 2026-09-18
+// was undiagnosable from the UI because every failure mode rendered the
+// same nothing.
 func (m Model) renderSidebarVendorUsageSection() string {
-	if m.sidebarUsage == nil {
+	if m.sidebarUsage != nil {
+		info := m.sidebarUsage
+		width := max(12, m.sidebarWidth()-4)
+		rows := []string{m.renderSidebarSectionTitle(m.t("panel.usage"))}
+		if info.Balance != nil {
+			rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(m.t("label.balance"), fmt.Sprintf("$%.2f", *info.Balance), width, 11))
+		}
+		for _, w := range info.Windows {
+			pct := w.UsedPercent
+			if pct < 0 {
+				pct = 0
+			}
+			if pct > 100 {
+				pct = 100
+			}
+			value := lipgloss.NewStyle().Foreground(lipgloss.Color(usagePercentColorCode(pct))).Render(fmt.Sprintf("%.0f%%", pct))
+			rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(w.Label, value, width, 11))
+		}
+		return strings.Join(rows, "\n")
+	}
+	if m.usageSidebarStatus == "" {
 		return ""
 	}
-	info := m.sidebarUsage
 	width := max(12, m.sidebarWidth()-4)
 	rows := []string{m.renderSidebarSectionTitle(m.t("panel.usage"))}
-	if info.Balance != nil {
-		rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(m.t("label.balance"), fmt.Sprintf("$%.2f", *info.Balance), width, 11))
-	}
-	for _, w := range info.Windows {
-		pct := w.UsedPercent
-		if pct < 0 {
-			pct = 0
-		}
-		if pct > 100 {
-			pct = 100
-		}
-		value := lipgloss.NewStyle().Foreground(lipgloss.Color(usagePercentColorCode(pct))).Render(fmt.Sprintf("%.0f%%", pct))
-		rows = append(rows, m.renderSidebarDetailRowWithLabelWidth(w.Label, value, width, 11))
-	}
+	rows = append(rows, util.Truncate(m.usageSidebarStatus, width))
 	return strings.Join(rows, "\n")
 }

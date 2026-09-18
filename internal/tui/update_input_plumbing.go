@@ -48,7 +48,11 @@ func (m *Model) handleInputDrainEndMsg(msg inputDrainEndMsg) (Model, tea.Cmd) {
 	m.inputDrainUntil = time.Time{} // zero = drain ended
 	m.inputReady = true
 	debug.Log("tui", "input drain ended, input ready")
-	return *m, nil
+	// First usage probe fires the moment the UI is interactive - the user
+	// must see usage immediately after a restart, not after opening the
+	// panel manually (the old only-trigger). Later rounds chain from
+	// handleUsageInfoUpdated every usageSidebarRefreshInterval.
+	return *m, tea.Cmd(func() tea.Msg { return usageSidebarRefreshMsg{} })
 }
 
 // handleImageAttachedMsg queues a user-attached image (#2422 slice 1:

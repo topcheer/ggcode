@@ -69,6 +69,9 @@ func init() {
 		return m, nil
 	})
 	regUpdatePlain(func(m Model, msg usageInfoUpdatedMsg) (tea.Model, tea.Cmd) { return m.handleUsageInfoUpdated(msg) })
+	regUpdatePlain(func(m Model, msg usageSidebarRefreshMsg) (tea.Model, tea.Cmd) {
+		return m.handleUsageSidebarRefreshMsg()
+	})
 	regUpdatePlain(func(m Model, msg systemMsg) (tea.Model, tea.Cmd) {
 		m.chatWriteSystem(nextSystemID(), msg.msg)
 		return m, nil
