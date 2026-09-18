@@ -106,9 +106,10 @@ func NewServer(cfg ServerConfig, handler *TaskHandler) *Server {
 	// Build Agent Card.
 	meta := handler.WorkspaceMetadata()
 	s.card = AgentCard{
-		Name:        "ggcode",
-		Description: fmt.Sprintf("AI coding agent for %s", meta.ProjName),
-		Version:     "1.0.0",
+		Name:              "ggcode",
+		Description:       fmt.Sprintf("AI coding agent for %s", meta.ProjName),
+		Version:           "1.0.0",
+		ProtocolReversion: A2AProtocolVersion,
 		Provider: &AgentProvider{
 			URL:          "https://github.com/topcheer/ggcode",
 			Organization: "topcheer",
@@ -322,7 +323,7 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", jsonRPCContentType(w))
 	// #565 C: copy under read lock — setters can run concurrently (hot config).
 	s.cardMu.RLock()
 	cardCopy := s.card
@@ -340,6 +341,14 @@ func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	if !s.authenticate(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	}
+
+	// Response media-type negotiation (A2A 1.0.1 "prefer application/a2a+json"
+	// in the HTTP binding): remember what the caller speaks so every
+	// writeRPCResult/writeRPCError below emits the matching type. Requests
+	// that don't signal a2a+json keep the legacy application/json responses.
+	if prefersA2AJSON(r) {
+		w = &rpcWriter{ResponseWriter: w, respCT: "application/a2a+json"}
 	}
 
 	// Required-extension gate (A2A v1.0 "Required Extensions"): a client
@@ -1211,8 +1220,45 @@ func writeTaskResultOrNotFound(w http.ResponseWriter, id json.RawMessage, h *Tas
 	writeRPCError(w, id, ErrTaskNotFound)
 }
 
+// rpcWriter carries the negotiated JSON response media type alongside the
+// underlying writer (set once per request in handleRPC).
+type rpcWriter struct {
+	http.ResponseWriter
+	respCT string
+}
+
+// Flush forwards to the underlying writer so message/stream handlers that
+// type-assert http.Flusher keep working through the wrapper (without this,
+// SSE degrades to a synchronous JSON response).
+func (rw *rpcWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// jsonRPCContentType resolves the response media type for w. Non-rpcWriter
+// writers (direct callers, tests, wrapped SSE paths) default to the legacy
+// application/json.
+func jsonRPCContentType(w http.ResponseWriter) string {
+	if rw, ok := w.(*rpcWriter); ok && rw.respCT != "" {
+		return rw.respCT
+	}
+	return "application/json"
+}
+
+// prefersA2AJSON reports whether the request signals the v1.0 a2a+json media
+// type in its Content-Type or Accept header.
+func prefersA2AJSON(r *http.Request) bool {
+	for _, h := range []string{"Content-Type", "Accept"} {
+		if v := strings.ToLower(r.Header.Get(h)); strings.Contains(v, "a2a+json") {
+			return true
+		}
+	}
+	return false
+}
+
 func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", jsonRPCContentType(w))
 	json.NewEncoder(w).Encode(JSONRPCResponse{
 		JSONRPC: "2.0",
 		ID:      normalizeResponseID(id),
@@ -1221,7 +1267,7 @@ func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result interface{
 }
 
 func writeRPCError(w http.ResponseWriter, id json.RawMessage, rpcErr *JSONRPCError) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", jsonRPCContentType(w))
 	json.NewEncoder(w).Encode(JSONRPCResponse{
 		JSONRPC: "2.0",
 		// #565 E: JSON-RPC 2.0 requires the id member to be present (null

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -203,18 +204,51 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 }
 
 // Discover fetches and caches the remote agent's Agent Card.
+//
+// A2A 0.3.0 renamed the well-known URI from agent.json to agent-card.json
+// and 0.3.x/v1.0 servers may serve only the new path, while legacy ggcode
+// peers serve only the old one. Fallback is limited to 404/405 (path
+// absent) - a card that exists but fails signature verification, decoding,
+// or transport must surface its real error instead of masking it with a
+// second request.
 func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.baseURL+"/.well-known/agent.json", nil)
+	card, err := c.fetchCard(ctx, "/.well-known/agent-card.json")
+	if err != nil {
+		if !errors.Is(err, errCardWellKnownNotFound) && !errors.Is(err, errCardInvalid) {
+			return nil, err
+		}
+		card, err = c.fetchCard(ctx, "/.well-known/agent.json")
+	}
+	return card, err
+}
+
+// errCardWellKnownNotFound marks a well-known card URI that the server does
+// not serve (404/405), the only condition that triggers path fallback.
+var errCardWellKnownNotFound = errors.New("a2a discover: well-known card path not served")
+
+// errCardInvalid marks a 200 response that is not a usable agent card. The
+// spec requires name and url; without this check a redirect landing on an
+// unrelated JSON endpoint would silently produce an empty card.
+var errCardInvalid = errors.New("a2a discover: response is not a valid agent card")
+
+// fetchCard fetches the card from one well-known path.
+func (c *Client) fetchCard(ctx context.Context, path string) (*AgentCard, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("a2a discover: %w", err)
 	}
+	// Advertise both A2A JSON media types (1.0.1 prefers a2a+json).
+	req.Header.Set("Accept", acceptHeader)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("a2a discover: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return nil, errCardWellKnownNotFound
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("a2a discover: HTTP %d", resp.StatusCode)
@@ -228,6 +262,9 @@ func (c *Client) Discover(ctx context.Context) (*AgentCard, error) {
 	var card AgentCard
 	if err := json.Unmarshal(body, &card); err != nil {
 		return nil, fmt.Errorf("a2a discover: decode: %w", err)
+	}
+	if card.Name == "" && card.URL == "" {
+		return nil, errCardInvalid
 	}
 
 	// A2A §8.4: refuse a card whose JWS signature fails to verify.
@@ -520,7 +557,8 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 	if err != nil {
 		return nil, fmt.Errorf("a2a stream: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", c.requestContentType())
+	req.Header.Set("Accept", acceptHeader)
 	if err := c.applyExtensions(req); err != nil {
 		return nil, fmt.Errorf("a2a stream: %w", err)
 	}
@@ -535,7 +573,7 @@ func (c *Client) SendMessageStream(ctx context.Context, skill, text string) (<-c
 	// server writes errors as HTTP 200 + application/json before SSE
 	// headers are set) — parse that instead of feeding the JSON body to
 	// the SSE decoder (which would yield a silent empty stream + nil error).
-	if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "application/json") {
+	if ct := resp.Header.Get("Content-Type"); isJSONMedia(ct) {
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		resp.Body.Close()
 		var rpcResp JSONRPCResponse
@@ -677,7 +715,8 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 	if err != nil {
 		return nil, fmt.Errorf("a2a resubscribe: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", c.requestContentType())
+	req.Header.Set("Accept", acceptHeader)
 	if err := c.applyExtensions(req); err != nil {
 		return nil, fmt.Errorf("a2a resubscribe: %w", err)
 	}
@@ -690,7 +729,7 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 
 	// Check Content-Type: if JSON (not SSE), this is a sync error response.
 	ct := resp.Header.Get("Content-Type")
-	if strings.Contains(ct, "application/json") {
+	if isJSONMedia(ct) {
 		defer resp.Body.Close()
 		respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
 		var rpcResp JSONRPCResponse
@@ -720,6 +759,30 @@ func (c *Client) Resubscribe(ctx context.Context, taskID string) (<-chan JSONRPC
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+// acceptHeader advertises both A2A JSON media types. 1.0.1 prefers
+// application/a2a+json in the HTTP binding; servers may still answer with
+// plain application/json (0.2.x/0.3.x peers always do).
+const acceptHeader = "application/a2a+json, application/json"
+
+// requestContentType returns the media type for JSON-RPC POST bodies. Peers
+// whose card declares a 1.x protocolVersion receive the v1.0 preferred type;
+// legacy peers keep application/json so older strict servers are unaffected.
+func (c *Client) requestContentType() string {
+	if card := c.Card(); card != nil && strings.HasPrefix(card.ProtocolReversion, "1") {
+		return "application/a2a+json"
+	}
+	return "application/json"
+}
+
+// isJSONMedia reports whether a Content-Type is one of the A2A JSON media
+// types. "application/a2a+json" does NOT contain the substring
+// "application/json", so a plain Contains check misclassified a v1.0
+// server's sync error response as SSE and fed JSON into the SSE decoder.
+func isJSONMedia(ct string) bool {
+	ct = strings.ToLower(ct)
+	return strings.Contains(ct, "application/json") || strings.Contains(ct, "a2a+json")
+}
+
 func (c *Client) rpc(ctx context.Context, method string, params interface{}, result interface{}) error {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
@@ -740,7 +803,8 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	if err != nil {
 		return fmt.Errorf("a2a %s: %w", method, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", c.requestContentType())
+	req.Header.Set("Accept", acceptHeader)
 	if err := c.applyExtensions(req); err != nil {
 		return fmt.Errorf("a2a %s: %w", method, err)
 	}
@@ -756,7 +820,6 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	if err != nil {
 		return fmt.Errorf("a2a %s: read: %w", method, err)
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		var rpcResp JSONRPCResponse
 		if err := json.Unmarshal(respBody, &rpcResp); err == nil && rpcResp.Error != nil {
@@ -773,7 +836,6 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
 		return fmt.Errorf("a2a %s: decode: %w", method, err)
 	}
-
 	if rpcResp.Error != nil {
 		return rpcResp.Error
 	}
