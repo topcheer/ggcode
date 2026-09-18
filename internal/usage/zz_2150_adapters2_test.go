@@ -12,7 +12,8 @@ import (
 
 func TestKimiProbeWindows(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/usages" {
+		// Constant endpoint path regardless of the configured base shape.
+		if r.URL.Path != "/coding/v1/usages" {
 			t.Errorf("path %s", r.URL.Path)
 		}
 		w.Write([]byte(`{"limits":[{"detail":"5h","used_percent":62.5,"resets_at":"2026-09-15T10:00:00Z"}],"usage":{"used_percent":30}}`))

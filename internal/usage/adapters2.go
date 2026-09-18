@@ -15,14 +15,15 @@ type KimiProbe struct{}
 
 func (KimiProbe) Vendor() string { return "kimi" }
 
-// MatchesURL (#2394): Kimi claims NO host. Kimi's API lives on
-// api.moonshot.cn - the same host the Moonshot probe already owns - and
-// with both declared, Service.Resolve's random map order handed
-// moonshot.cn users to the Kimi probe on ~1/8 of runs (flaky CI +
-// randomly mislabeled panel). URL matching must be single-owner, so the
-// Moonshot probe keeps both moonshot hosts; Kimi remains reachable via
-// direct vendor Get (probe registry), just not via Resolve.
-func (KimiProbe) MatchesURL(host string) bool { return false }
+// MatchesURL: Kimi Code platform (coding plan) lives on api.kimi.com -
+// a DIFFERENT host from the open platform (api.moonshot.cn/.ai, owned by
+// MoonshotProbe). Keys are not interchangeable between the two platforms
+// (sk-kimi-* vs sk-*), so the coding-plan host must resolve HERE or its
+// users get "unsupported" (user-reported 2026-09-18). Single-owner rule
+// (#2394) holds: kimi.com vs moonshot.* are disjoint hosts.
+func (KimiProbe) MatchesURL(host string) bool {
+	return hostMatch(host, "api.kimi.com", "kimi.com")
+}
 
 func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
@@ -36,7 +37,17 @@ func (KimiProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo,
 			UsedPercent float64 `json:"used_percent"`
 		} `json:"usage"`
 	}
-	if err := getJSON(ctx, base+"/v1/usages", apiKey, &payload); err != nil {
+	// The usage endpoint lives at the fixed path /coding/v1/usages on the
+	// api.kimi.com root. Chat bases come in several shapes
+	// (.../coding/v1, .../coding/, bare host) - normalize them to the
+	// root and append the constant path. The old code appended
+	// /v1/usages to the configured base, producing
+	// .../coding/v1/v1/usages (404) -> "unsupported" for every
+	// coding-plan user (user-reported 2026-09-18).
+	for _, suffix := range []string{"/coding/v1", "/coding", "/v1"} {
+		base = strings.TrimSuffix(base, suffix)
+	}
+	if err := getJSON(ctx, base+"/coding/v1/usages", apiKey, &payload); err != nil {
 		return nil, err
 	}
 	info := &UsageInfo{Vendor: "kimi", Source: "v1/usages"}
@@ -68,6 +79,12 @@ func (MinimaxProbe) MatchesURL(host string) bool {
 
 func (MinimaxProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
+	// Chat bases carry /v1 or /anthropic (ggcode.example.yaml); the remains
+	// endpoint appends its own /v1/api/openplatform/... to the ROOT.
+	// Appending to a /v1 base doubles it (/v1/v1/api/... 404).
+	for _, suffix := range []string{"/anthropic", "/v1"} {
+		base = strings.TrimSuffix(base, suffix)
+	}
 	var payload struct {
 		ModelRemains []struct {
 			General struct {
@@ -161,6 +178,10 @@ func (OpenrouterProbe) MatchesURL(host string) bool { return hostMatch(host, "op
 
 func (OpenrouterProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageInfo, error) {
 	base := strings.TrimRight(baseURL, "/")
+	// Chat bases carry /api/v1 (https://openrouter.ai/api/v1); the credits
+	// endpoint is /api/v1/credits on the ROOT - strip the suffix or it
+	// doubles (/api/v1/api/v1/credits 404).
+	base = strings.TrimSuffix(base, "/api/v1")
 	if !strings.Contains(base, "openrouter.ai") && !strings.HasPrefix(base, "http") {
 		base = "https://openrouter.ai"
 	}
