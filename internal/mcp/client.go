@@ -28,24 +28,28 @@ import (
 
 // Client connects to an MCP server via stdio transport.
 type Client struct {
-	name       string
-	transport  string
-	command    string
-	args       []string
-	env        map[string]string
-	url        string
-	headers    map[string]string
-	cmd        *exec.Cmd
-	procCancel context.CancelFunc
-	stdin      io.WriteCloser
-	stdout     io.Reader
-	reader     *bufio.Reader // reused stdout reader
-	httpClient *http.Client
-	wsMu       sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
-	readMu     sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
-	waiters    map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
-	wsConn     *websocket.Conn
-	sessionID  string
+	name      string
+	transport string
+	command   string
+	args      []string
+	env       map[string]string
+	url       string
+	headers   map[string]string
+	// toolSchemas caches the most recently listed inputSchema per tool name
+	// (HTTP transport only) so tools/call can resolve x-mcp-header
+	// annotations into Mcp-Param-* headers (SEP-2243). Read/written under c.mu.
+	toolSchemas map[string]json.RawMessage
+	cmd         *exec.Cmd
+	procCancel  context.CancelFunc
+	stdin       io.WriteCloser
+	stdout      io.Reader
+	reader      *bufio.Reader // reused stdout reader
+	httpClient  *http.Client
+	wsMu        sync.Mutex                // serializes ReadMessage on wsConn (fix #138)
+	readMu      sync.Mutex                // serializes reads on the shared stdio bufio.Reader and response matching (fix #156)
+	waiters     map[string]chan *Response // stdio response waiters keyed by request ID JSON (guarded by mu)
+	wsConn      *websocket.Conn
+	sessionID   string
 	// httpNotifLastEventID is the SSE redelivery cursor (MCP Streamable HTTP
 	// "Resumability and Redelivery", spec 2025-03-26..2025-11-25): the id of
 	// the last SSE event seen on any stream. On reconnect of the standalone
@@ -520,12 +524,44 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDefinition, error) {
 		pages = append(pages, result.CacheableResult)
 		if result.NextCursor == "" {
 			c.storeListingsCache(cacheTools, "", all, pages)
-			return all, nil
+			return c.finalizeListedTools(all), nil
 		}
 		cursor = result.NextCursor
 	}
 	debug.Log("mcp-client", "server=%s tools/list exceeded %d pages; stopping pagination", c.name, maxPaginationPages)
-	return all, nil
+	return c.finalizeListedTools(all), nil
+}
+
+// finalizeListedTools applies the SEP-2243 (HTTP header standardization)
+// post-processing on the freshly fetched tool list: for the Streamable
+// HTTP transport, tool definitions whose x-mcp-header annotations violate
+// the spec constraints are EXCLUDED from the tool list (a single
+// malformed tool must not prevent the other valid tools from being used)
+// and the retained schemas are cached so tools/call requests can mirror
+// annotated parameters into Mcp-Param-* headers using the most recently
+// obtained inputSchema. On stdio/WS transports the list is unchanged, but
+// the schema cache is still refreshed so a transport switch (reconnect)
+// starts from a fresh, consistent snapshot.
+func (c *Client) finalizeListedTools(all []ToolDefinition) []ToolDefinition {
+	if c.transport == "http" {
+		kept := make([]ToolDefinition, 0, len(all))
+		for _, td := range all {
+			if v := headerAnnotationViolations(td.InputSchema); len(v) > 0 {
+				debug.Log("mcp-http", "server=%s excluded tool %q from tools/list: %s", c.name, td.Name, strings.Join(v, "; "))
+				continue
+			}
+			kept = append(kept, td)
+		}
+		all = kept
+	}
+	schemas := make(map[string]json.RawMessage, len(all))
+	for _, td := range all {
+		schemas[td.Name] = td.InputSchema
+	}
+	c.mu.Lock()
+	c.toolSchemas = schemas
+	c.mu.Unlock()
+	return all
 }
 
 func (c *Client) ListPrompts(ctx context.Context) ([]PromptDefinition, error) {
@@ -1276,6 +1312,20 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	if err != nil {
 		return nil, fmt.Errorf("mcp[%s]: marshal http message: %w", c.name, err)
 	}
+	// SEP-2243 (HTTP header standardization): probe the marshaled body for
+	// the JSON-RPC method and routing fields (params.name / params.uri)
+	// that must be mirrored into standard HTTP headers below. Probing the
+	// wire format rather than type-switching on msg keeps the header logic
+	// decoupled from the params struct shapes, including notifications.
+	var hdrProbe struct {
+		Method string `json:"method"`
+		Params struct {
+			Name      string          `json:"name"`
+			URI       string          `json:"uri"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"params"`
+	}
+	_ = json.Unmarshal(data, &hdrProbe)
 	// Snapshot shared state under c.mu, then run the whole network roundtrip
 	// WITHOUT the lock (Bug B, #523). Previously the caller held c.mu across
 	// httpClient.Do + Handle401 (interactive OAuth can take minutes) + the 401
@@ -1292,6 +1342,13 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	// header. Snapshot it under c.mu here; empty during initialize itself,
 	// so the handshake request correctly omits the header.
 	protoVersion := c.negotiatedVersion
+	// SEP-2243: for tools/call, snapshot the cached inputSchema of the
+	// target tool so x-mcp-header annotations can be resolved into
+	// Mcp-Param-* headers below.
+	var toolSchema json.RawMessage
+	if hdrProbe.Method == "tools/call" {
+		toolSchema = c.toolSchemas[hdrProbe.Params.Name]
+	}
 	c.mu.Unlock()
 	if httpClient == nil {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
@@ -1310,6 +1367,28 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 	}
 	if sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	// SEP-2243 (HTTP header standardization): mirror the JSON-RPC routing
+	// fields into standard headers so intermediaries can route MCP traffic
+	// without deep packet inspection. hdrProbe was decoded from the
+	// marshaled body above, decoupling this from the params struct shapes.
+	if hdrProbe.Method != "" {
+		req.Header.Set("Mcp-Method", hdrProbe.Method)
+	}
+	if hdrProbe.Params.Name != "" {
+		req.Header.Set("Mcp-Name", hdrProbe.Params.Name)
+	} else if hdrProbe.Params.URI != "" {
+		req.Header.Set("Mcp-Name", hdrProbe.Params.URI)
+	}
+	if hdrProbe.Method == "tools/call" && len(toolSchema) > 0 && len(hdrProbe.Params.Arguments) > 0 {
+		var args map[string]interface{}
+		if err := json.Unmarshal(hdrProbe.Params.Arguments, &args); err == nil {
+			for _, kv := range buildMCPParamHeaders(toolSchema, args) {
+				req.Header.Set(kv[0], kv[1])
+			}
+		} else {
+			debug.Log("mcp-http", "server=%s skip Mcp-Param headers: unmarshal arguments: %v", c.name, err)
+		}
 	}
 	authHeader := ""
 	if oauthHandler != nil {
@@ -1381,6 +1460,18 @@ func (c *Client) sendHTTPWithRetry(ctx context.Context, msg interface{}, allowRe
 		c.mu.Unlock()
 		if _, err := c.Initialize(ctx); err != nil {
 			return nil, fmt.Errorf("mcp[%s]: re-init after 404: %w", c.name, err)
+		}
+		return c.sendHTTPWithRetry(ctx, msg, false)
+	}
+	if resp.StatusCode == http.StatusBadRequest && allowRetry && hdrProbe.Method == "tools/call" &&
+		bytes.Contains(body, []byte("-32001")) {
+		// SEP-2243 (-32001 HeaderMismatch): the server rejected the call
+		// because required Mcp-Param-* headers were missing or mismatched
+		// (e.g. the cached schema is stale). Per spec, clients SHOULD
+		// refresh their tool cache (tools/list) before retrying.
+		debug.Log("mcp-http", "server=%s tools/call rejected with HeaderMismatch (-32001); refreshing tool schemas and retrying", c.name)
+		if _, err := c.ListTools(ctx); err != nil {
+			debug.Log("mcp-http", "server=%s schema refresh after -32001 failed: %v", c.name, err)
 		}
 		return c.sendHTTPWithRetry(ctx, msg, false)
 	}
