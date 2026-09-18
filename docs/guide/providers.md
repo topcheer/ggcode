@@ -210,6 +210,37 @@ When the effort level is empty (default), no reasoning parameters are sent and
 the model uses its default behavior. If a model does not support reasoning, the
 provider automatically retries without the parameter (no manual intervention needed).
 
+### Thinking Mode (Anthropic)
+
+Anthropic has two extended-thinking carriers, and the right one depends on the
+model generation:
+
+- **Adaptive thinking** (`thinking: {type: "adaptive"}` + top-level
+  `output_config.effort`) — used automatically on Claude 4.6+ and 5.x models.
+  This is the only mode that interleaves thinking between tool calls on these
+  models, and effort (not `budget_tokens`) is its depth control.
+- **Manual thinking** (`budget_tokens`) — used on the extended-thinking-only
+  generation (Sonnet/Opus/Haiku 4.5 and earlier). With tools, ggcode attaches
+  the `interleaved-thinking-2025-05-14` beta header so thinking can interleave
+  between tool calls.
+
+`thinking_mode` overrides the auto-detection per endpoint (`auto` is the
+default; unknown models always fall back to the manual carrier):
+
+```yaml
+vendors:
+  anthropic:
+    protocol: anthropic
+    reasoning_effort: high
+    endpoints:
+      default:
+        model: my-claude-gateway-model
+        thinking_mode: adaptive    # auto (default) | manual | adaptive
+```
+
+Use `adaptive` when your endpoint fronts a Claude 4.6+/5.x model under a
+renamed model ID, or `manual` to force `budget_tokens` on newer models.
+
 ## Tool Choice
 
 Control whether the model is allowed to call tools. Supported by `openai`,

@@ -29,6 +29,9 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		if resolved.MemoryTool {
 			p.SetMemoryTool(true)
 		}
+		if resolved.ThinkingMode != "" {
+			p.SetThinkingMode(resolved.ThinkingMode)
+		}
 		return p, nil
 
 	case "openai-responses":

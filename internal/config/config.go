@@ -99,16 +99,21 @@ type EndpointConfig struct {
 	// confidence telemetry. OpenAI: logprobs+top_logprobs; Gemini:
 	// responseLogprobs. Anthropic does not support logprobs. Opt-in: adds
 	// response payload and is not needed for normal operation.
-	Logprobs       bool               `yaml:"logprobs,omitempty" json:"logprobs,omitempty"`
-	TextVerbosity  string             `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"` // GPT-5 text.verbosity: "low", "medium", "high" (empty = API default)
-	ToolChoice     string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`       // "auto", "required", "none" (empty = auto/default)
-	ServerTools    []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`     // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
-	MemoryTool     bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`       // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
-	SupportsVision *bool              `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
-	DefaultModel   string             `yaml:"default_model,omitempty" json:"default_model,omitempty"`
-	SelectedModel  string             `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
-	Models         []string           `yaml:"models,omitempty" json:"models,omitempty"`
-	Tags           []string           `yaml:"tags,omitempty" json:"tags,omitempty"`
+	Logprobs      bool               `yaml:"logprobs,omitempty" json:"logprobs,omitempty"`
+	TextVerbosity string             `yaml:"text_verbosity,omitempty" json:"text_verbosity,omitempty"` // GPT-5 text.verbosity: "low", "medium", "high" (empty = API default)
+	ToolChoice    string             `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`       // "auto", "required", "none" (empty = auto/default)
+	ServerTools   []ServerToolConfig `yaml:"server_tools,omitempty" json:"server_tools,omitempty"`     // server-side tools: Anthropic web_search/web_fetch; Gemini google_search/url_context
+	MemoryTool    bool               `yaml:"memory_tool,omitempty" json:"memory_tool,omitempty"`       // Anthropic Memory Tool (memory_20250818): declared by provider, executed client-side
+	// ThinkingMode (Anthropic) selects the extended-thinking carrier:
+	// "auto" (default; adaptive thinking for Claude 4.6+/5.x, budget_tokens
+	// otherwise), "manual" (budget_tokens), "adaptive"
+	// (thinking:{type:"adaptive"} + output_config.effort).
+	ThinkingMode   string   `yaml:"thinking_mode,omitempty" json:"thinking_mode,omitempty"`
+	SupportsVision *bool    `yaml:"supports_vision,omitempty" json:"supports_vision,omitempty"`
+	DefaultModel   string   `yaml:"default_model,omitempty" json:"default_model,omitempty"`
+	SelectedModel  string   `yaml:"selected_model,omitempty" json:"selected_model,omitempty"`
+	Models         []string `yaml:"models,omitempty" json:"models,omitempty"`
+	Tags           []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 	// ModelLimits provides per-model overrides for ContextWindow and MaxTokens.
 	// When a model is resolved, per-model limits are checked first; if absent,
 	// the endpoint-level ContextWindow/MaxTokens fields are used as fallback.
@@ -142,6 +147,7 @@ type ResolvedEndpoint struct {
 	ToolChoice      string
 	ServerTools     []ServerToolConfig
 	MemoryTool      bool
+	ThinkingMode    string
 	SupportsVision  bool
 	Models          []string
 	Tags            []string

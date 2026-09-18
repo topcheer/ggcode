@@ -172,7 +172,9 @@ func TestAnthropicSetReasoningEffort(t *testing.T) {
 }
 
 func TestAnthropicBuildParamsWithThinking(t *testing.T) {
-	p := &AnthropicProvider{model: "claude-sonnet-4-6", maxTokens: 64000}
+	// Extended-thinking-only generation: medium effort maps to budget_tokens.
+	// (4.6+ models auto-select adaptive thinking; see thinking_mode_test.go.)
+	p := &AnthropicProvider{model: "claude-sonnet-4-5-20250929", maxTokens: 64000}
 	p.SetReasoningEffort("medium")
 
 	params := p.buildParams(context.Background(), nil, nil)
