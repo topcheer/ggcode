@@ -32,6 +32,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		if resolved.ThinkingMode != "" {
 			p.SetThinkingMode(resolved.ThinkingMode)
 		}
+		p.SetContextEditing(ParseContextEditing(resolved.ContextEditing))
 		return p, nil
 
 	case "openai-responses":
