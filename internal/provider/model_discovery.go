@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -143,7 +144,14 @@ func discoverModelsFromURL(ctx context.Context, client *http.Client, endpointURL
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", endpointURL, err)
 	}
-	defer resp.Body.Close()
+	// #2574: closure defer - Go evaluates a plain defer's receiver at
+	// REGISTRATION time, binding the FIRST page's body; the pagination
+	// loop below swaps resp = pageResp, so every exit after page 1 leaked
+	// the latest body (last page on break/token-empty/cap, error returns
+	// mid-loop). Capturing the resp VARIABLE closes whatever is current
+	// at exit; the loop's own early Close of consumed pages stays (the
+	// deferred call is a no-op on an already-closed body).
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -289,14 +297,28 @@ func isLocalBaseURL(baseURL string) bool {
 	u := strings.TrimSpace(baseURL)
 	u = strings.TrimPrefix(u, "http://")
 	u = strings.TrimPrefix(u, "https://")
+	// #2572: port of the tui copy's #906 fix. The old IndexByte(u, ':')
+	// host extraction hit index 0 for '::1' and index 1 for '[::1]' -
+	// both IPv6 branches below were dead code, and every IPv6 loopback
+	// form misjudged as remote (model discovery refused keyless local
+	// endpoints while the provider panel, using the fixed tui copy,
+	// called them local in the same user action).
 	host := u
-	if i := strings.IndexByte(u, ':'); i >= 0 {
-		host = u[:i]
-	}
-	if i := strings.IndexByte(host, '/'); i >= 0 {
+	if i := strings.IndexByte(u, '/'); i >= 0 {
 		host = host[:i]
 	}
-	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h // strip :port (SplitHostPort also unbrackets [::1])
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1] // bracketed host without port
+	} else if strings.Count(host, ":") > 1 {
+		// bare IPv6 with port ('::1:11434') - SplitHostPort rejects it
+		// (too many colons); strip the last colon-group as the port.
+		if i := strings.LastIndexByte(host, ':'); i >= 0 {
+			host = host[:i]
+		}
+	}
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func modelDiscoveryCacheKey(resolved *config.ResolvedEndpoint) string {
