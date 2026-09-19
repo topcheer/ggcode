@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -113,5 +114,66 @@ func TestServerToolBlockParamCodeExecutionResult(t *testing.T) {
 	}
 	if u.OfCodeExecutionToolResult.ToolUseID != "srvtoolu_ce1" {
 		t.Fatalf("tool_use_id mismatch: %q", u.OfCodeExecutionToolResult.ToolUseID)
+	}
+}
+
+// TestBuildParamsEchoesPTCCaller pins #2566: buildParams (the Chat/
+// ChatStream request path) must echo the caller field on assistant
+// tool_use blocks - a programmatic call in the code-execution container
+// cannot be matched to its pending client tool_result without it.
+func TestBuildParamsEchoesPTCCaller(t *testing.T) {
+	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
+	blocks := convertAnthropicResponse([]anthropic.ContentBlockUnion{ptcBlockUnion(t, ptcToolUseJSON)})
+	msgs := []Message{
+		{Role: "assistant", Content: blocks},
+		{Role: "user", Content: []ContentBlock{{Type: "tool_result", ToolID: "toolu_ptc1", Text: "ok"}}},
+	}
+	params := p.buildParams(context.Background(), msgs, nil)
+	if len(params.Messages) != 2 {
+		t.Fatalf("want 2 messages, got %d", len(params.Messages))
+	}
+	asst := params.Messages[0].Content
+	if len(asst) != 1 {
+		t.Fatalf("assistant content: %d blocks", len(asst))
+	}
+	tu := asst[0].OfToolUse
+	if tu == nil {
+		t.Fatalf("first assistant block is not tool_use: %+v", asst[0])
+	}
+	if tu.Caller.OfCodeExecution20260120 == nil && tu.Caller.OfDirect == nil {
+		t.Fatalf("#2566 regression: caller field dropped in buildParams: %+v", tu.Caller)
+	}
+}
+
+// TestCloneWithModelInheritsCapabilityConfig pins #2567: the clone a
+// named subagent (model override) runs on must inherit the registry-time
+// capability config - toolSearchBeta, memoryTool, files uploader and the
+// context-editing latch. Nothing re-applies SetServerTools/SetMemoryTool
+// after the clone.
+func TestCloneWithModelInheritsCapabilityConfig(t *testing.T) {
+	p := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
+	p.SetServerTools([]ServerToolConfig{{Type: "tool_search_tool_regex"}})
+	p.SetMemoryTool(true)
+	p.SetContextEditing(&ContextEditingConfig{Mode: "clear_tool_inputs"})
+	if p.files == nil {
+		t.Fatal("fixture: files uploader not initialized by constructor")
+	}
+
+	clone := p.CloneWithModel("claude-haiku-4-5").(*AnthropicProvider)
+	if !clone.toolSearchBeta {
+		t.Fatal("#2567: clone lost toolSearchBeta - subagent requests would 400 without the beta header")
+	}
+	if !clone.memoryTool {
+		t.Fatal("#2567: clone lost memoryTool")
+	}
+	if clone.files == nil {
+		t.Fatal("#2567: clone lost the files uploader - >5MB images would hard-fail inline")
+	}
+	if ce := clone.contextEditing.Load(); ce == nil || ce.Mode == "" {
+		t.Fatal("#2567: clone lost the context-editing latch")
+	}
+	// Sanity: ServerToolSearchActive drives agent-side meta-tool gating.
+	if !clone.ServerToolSearchActive() {
+		t.Fatal("#2567: clone reports server tool search inactive while the declaration is configured")
 	}
 }

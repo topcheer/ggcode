@@ -81,8 +81,22 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 		temperature:     p.temperature,
 		topP:            p.topP,
 		serverTools:     p.serverTools,
+		memoryTool:      p.memoryTool,
+		toolSearchBeta:  p.toolSearchBeta,
 		thinkingMode:    p.thinkingMode,
 		policy:          p.policy,
+	}
+	// #2567: capability config set at registry time must survive the
+	// clone - named subagents (model override) re-derive everything from
+	// these fields and nothing re-applies SetServerTools/SetMemoryTool on
+	// the clone. files is the shared per-endpoint uploader (no
+	// per-conversation state).
+	clone.files = p.files
+	// #2567: contextEditing is an atomic.Pointer - copy through
+	// Load()/Store(), not by struct literal (copying the struct copies the
+	// atomic's zero state, silently dropping the endpoint config).
+	if ce := p.contextEditing.Load(); ce != nil {
+		clone.contextEditing.Store(ce)
 	}
 	// Inherit the endpoint capability latch (an endpoint that rejected
 	// output_config stays off), but reset the per-conversation stability
@@ -1306,7 +1320,10 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			case "image":
 				blocks = append(blocks, p.imageContentBlock(ctx, b.ImageMIME, b.ImageData))
 			case "tool_use":
-				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName))
+				// #2566: echo the caller field back on PTC continuations -
+				// programmatic tool_use blocks cannot be matched to their pending
+				// container call without it (count-tokens already did this).
+				blocks = append(blocks, toolUseBlockParam(b.ToolID, normalizeToolInputValue(b.Input), b.ToolName, b.CallerRaw))
 			case "tool_result":
 				if len(b.Images) > 0 && !b.IsError {
 					content := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(b.Images)+1)
