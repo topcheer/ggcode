@@ -32,6 +32,17 @@ func TestEncodeMCPHeaderValue(t *testing.T) {
 		{float64(42), "42", true},
 		{float64(0), "0", true},
 		{float64(-3), "-3", true},
+		// Boundary values: MinInt64 and the largest integral float64 below
+		// 2^63 are representable and must encode exactly.
+		{float64(-(1 << 63)), "-9223372036854775808", true},
+		{float64(1<<63) - 1024, "9223372036854774784", true},
+		// Integral float64 values beyond int64 range must be dropped (not
+		// silently converted to an implementation-dependent garbage value;
+		// amd64 gives MinInt64, arm64 saturates to MaxInt64).
+		{float64(1 << 63), "", false},
+		{1e300, "", false},
+		{-1e300, "", false},
+		{1e23, "", false},
 		{json.Number("7"), "7", true},
 		{7, "7", true},
 		{int64(9), "9", true},

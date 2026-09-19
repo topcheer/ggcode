@@ -205,7 +205,15 @@ func encodeMCPHeaderValue(v interface{}) (string, bool) {
 	case bool:
 		s = strconv.FormatBool(t)
 	case float64:
-		if math.IsNaN(t) || math.IsInf(t, 0) || t != math.Trunc(t) {
+		// Range check BEFORE the conversion: Go leaves out-of-range
+		// float->int conversions implementation-dependent (amd64 yields
+		// MinInt64, arm64 saturates to MaxInt64), so a large integral
+		// float64 (e.g. 1e300) would silently encode as a garbage header
+		// value instead of being dropped. Valid int64 range is
+		// [-2^63, 2^63-1]; both bounds are exactly representable as
+		// float64 powers of two, so the comparison itself cannot round.
+		if math.IsNaN(t) || math.IsInf(t, 0) || t != math.Trunc(t) ||
+			t < -(1<<63) || t >= 1<<63 {
 			return "", false
 		}
 		s = strconv.FormatInt(int64(t), 10)
