@@ -435,16 +435,3 @@ func hasCallPattern(content string) bool {
 func isIdentCharCCC(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
-
-// extractBlockCommentCode checks if a single-line or multi-line block comment
-// contains code-like content. For simplicity, we check if a /* ... */ on one
-// line contains code indicators. Multi-line block comments are handled by
-// the line-scanner indirectly (lines within /* */ that also match line comments
-// are rare and would be caught by the line comment path in languages that
-// support both).
-// extractBlockCommentCode retained for compatibility; multi-line block
-// comments are now handled by the span tracker in findCommentedCodeBlocks
-// (#152 — this function previously could never return non-empty).
-func extractBlockCommentCode(line string, cs *commentSyntaxInfo) string {
-	return ""
-}

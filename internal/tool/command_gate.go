@@ -600,15 +600,6 @@ func checkInteractivePartPart(cmd string, pipeFed bool) string {
 	return checkInteractivePart(cmd)
 }
 
-// splitCompoundCommand splits on shell separators (|, ;, &&, ||).
-// Each returned part is a pipeline segment. #337: the caller needs to know
-// which segments are pipe-fed (right side of a single '|'), so the splitter
-// records separator kinds alongside parts.
-func splitCompoundCommand(cmd string) []string {
-	segs, _ := splitCompoundCommandWithPipes(cmd)
-	return segs
-}
-
 // splitCompoundCommandWithPipes additionally returns pipeFed, parallel to
 // segs: pipeFed[i] is true when segment i receives stdin from a pipe (the
 // separator before it was a single '|'). The first segment is never pipe-fed.
