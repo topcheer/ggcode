@@ -169,25 +169,27 @@ func SetMCPDisabledIn(scope, name string, disabled bool) error {
 	ws := mcpDisabledWS
 	if !mcpDisabledCacheOK {
 		// Cold cache: hydrate from disk under THIS lock (mirror the load
-		// path's decode without re-locking). #1782 case 1: only a missing
-		// file hydrates as legitimately empty; read/decode failures leave
-		// the cache cold so the next reader retries instead of caching an
-		// empty truth.
+		// path's decode without re-locking). #1782 case 1 / #2564: only a
+		// missing file or a successfully decoded store hydrates as truth;
+		// read/decode failures (corrupt-but-readable JSON) leave the cache
+		// cold so the next reader retries instead of caching an empty
+		// truth. #2564: cacheOK must bind to `cacheable`, NOT to the
+		// readability of a second bare os.ReadFile - the #2390 rewrite
+		// bound it to readability, cached the empty map as authoritative
+		// for corrupt files, and one toggle then persisted that empty
+		// truth over the on-disk store (and clobbered later external
+		// repairs from the warm branch) - a regression of #1782.
 		global = map[string]bool{}
 		ws = map[string]map[string]bool{}
 		if path, err := mcpDisabledPath(); err == nil {
 			g, w, cacheable := decodeDisabledStore(path)
 			if cacheable {
 				global, ws = g, w
+				mcpDisabledCacheOK = true
 			}
 		}
 		mcpDisabledGlobal = global
 		mcpDisabledWS = ws
-		if path, err := mcpDisabledPath(); err == nil {
-			if _, rerr := os.ReadFile(path); rerr == nil || os.IsNotExist(rerr) {
-				mcpDisabledCacheOK = true
-			}
-		}
 	} else {
 		// Warm cache: copy before mutating - readers index the cached maps
 		// outside their RLock (MCPDisabledIn), so in-place mutation under
