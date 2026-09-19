@@ -964,15 +964,6 @@ func (a *tgAdapter) resolveReplyTo(binding ChannelBinding) string {
 	return strings.TrimSpace(binding.LastInboundMessageID)
 }
 
-func (a *tgAdapter) recordPassiveReply(binding ChannelBinding, replyTo string) {
-	if a.manager == nil || strings.TrimSpace(binding.Workspace) == "" || strings.TrimSpace(replyTo) == "" {
-		return
-	}
-	if err := a.manager.RecordPassiveReply(binding.Workspace, replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
-		debug.Log("tg", "adapter=%s record passive reply failed: %v", a.name, err)
-	}
-}
-
 // handleCallbackQuery processes Telegram inline keyboard button callbacks.
 func (a *tgAdapter) handleCallbackQuery(ctx context.Context, cb map[string]any) {
 	cbID, _ := cb["id"].(string)

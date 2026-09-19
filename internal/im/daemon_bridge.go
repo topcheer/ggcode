@@ -1473,25 +1473,6 @@ func (b *DaemonBridge) resolveEffectiveOutputMode() string {
 	return globalMode
 }
 
-func (b *DaemonBridge) handleConfigCommand() error {
-	b.mu.Lock()
-	fn := b.onProviderSwitch
-	b.mu.Unlock()
-	if fn == nil {
-		_ = b.emitter.EmitText("❌ Config display not available in this mode.")
-		return nil
-	}
-
-	// Call with all empty → returns current config summary
-	summary, err := fn("", "", "")
-	if err != nil {
-		_ = b.emitter.EmitText(fmt.Sprintf("❌ %s", err))
-		return nil
-	}
-	_ = b.emitter.EmitText(summary)
-	return nil
-}
-
 // --- ChatBridge implementation (for webui WebChat) ---
 
 // extractText returns the concatenated text from content blocks.
