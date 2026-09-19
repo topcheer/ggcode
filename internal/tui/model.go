@@ -1467,6 +1467,23 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 			}
 		}
 	}
+	// Same defense for the endpoint label: resolve it WITHIN the (remapped)
+	// vendor's endpoint map so activeEndpoint is always a config key.
+	if m.config != nil && endpoint != "" {
+		if vc, ok := m.config.Vendors[vendor]; ok {
+			if _, ok := vc.Endpoints[endpoint]; !ok && vc.Endpoints != nil {
+				ematches := []string{}
+				for id, ec := range vc.Endpoints {
+					if strings.TrimSpace(ec.DisplayName) == endpoint || id == endpoint {
+						ematches = append(ematches, id)
+					}
+				}
+				if len(ematches) == 1 {
+					endpoint = ematches[0]
+				}
+			}
+		}
+	}
 	m.activeVendor = vendor
 	m.activeEndpoint = strings.TrimSpace(endpoint)
 	m.activeModel = strings.TrimSpace(model)

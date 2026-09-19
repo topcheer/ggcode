@@ -174,9 +174,11 @@ func TestCurrentSelectionUsesActiveRuntimeSelection(t *testing.T) {
 	m.SetConfig(cfg)
 	m.setActiveRuntimeSelection("Google Gemini", "Gemini API", "gemini-3-flash")
 
+	// 2026-09-19: labels are remapped to config IDs (defense-in-depth in
+	// setActiveRuntimeSelection) - currentSelection must expose IDs.
 	vendor, endpoint, model := m.currentSelection()
-	if vendor != "Google Gemini" || endpoint != "Gemini API" || model != "gemini-3-flash" {
-		t.Fatalf("expected active runtime selection, got %q / %q / %q", vendor, endpoint, model)
+	if vendor != "google" || endpoint != "api" || model != "gemini-3-flash" {
+		t.Fatalf("expected active runtime selection remapped to IDs, got %q / %q / %q", vendor, endpoint, model)
 	}
 }
 
@@ -219,8 +221,8 @@ func TestProviderPanelFailedActivationKeepsSessionOnActiveRuntime(t *testing.T) 
 		t.Fatalf("expected session to stay on active runtime after failed activation, got %#v", m.session)
 	}
 	vendor, endpoint, model := m.currentSelection()
-	if vendor != "Google Gemini" || endpoint != "Gemini API" || model != "gemini-2.5-flash" {
-		t.Fatalf("expected sidebar selection to stay on active runtime, got %q / %q / %q", vendor, endpoint, model)
+	if vendor != "google" || endpoint != "api" || model != "gemini-2.5-flash" {
+		t.Fatalf("expected sidebar selection to stay on active runtime (as IDs), got %q / %q / %q", vendor, endpoint, model)
 	}
 	if !strings.Contains(m.providerPanel.message, "runtime is still inactive") {
 		t.Fatalf("expected runtime inactive message, got %#v", m.providerPanel)
