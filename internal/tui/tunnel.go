@@ -525,31 +525,6 @@ func (m *Model) bindTunnelProjectionSession() {
 	}
 }
 
-func (m *Model) ensureProjectionBootstrap(broker *tunnel.Broker, replay []tunnel.GatewayMessage) {
-	if broker == nil || len(replay) == 0 {
-		return
-	}
-	snapshot := m.tunnelSnapshot()
-	if !projectionReplayHasType(replay, tunnel.EventSessionInfo) && snapshot.SessionInfo != (tunnel.SessionInfoData{}) {
-		broker.SendSessionInfo(snapshot.SessionInfo)
-	}
-	if !projectionReplayHasType(replay, tunnel.EventStatus) && snapshot.Status.Status != "" {
-		broker.PushStatus(snapshot.Status.Status, snapshot.Status.Message)
-	}
-	if !projectionReplayHasType(replay, tunnel.EventActivity) && snapshot.Activity.Activity != "" {
-		broker.PushActivity(snapshot.Activity.Activity)
-	}
-}
-
-func projectionReplayHasType(events []tunnel.GatewayMessage, eventType string) bool {
-	for _, ev := range events {
-		if ev.Type == eventType {
-			return true
-		}
-	}
-	return false
-}
-
 func (m *Model) currentSessionTunnelAuthorityEpoch() uint64 {
 	if m.tunnelHost != nil {
 		return m.tunnelHost.AuthorityEpoch()
@@ -1576,24 +1551,6 @@ func (m *Model) announceTunnelActiveSession() {
 
 func (m *Model) publishTunnelSnapshotForCurrentSession(reset bool) {
 	_, _ = m.publishTunnelSnapshotForCurrentSessionWithReport(reset)
-}
-
-func (m *Model) bootstrapTunnelShare(generation uint64) tea.Cmd {
-	return func() tea.Msg {
-		if !m.isCurrentTunnelGeneration(generation) {
-			return tunnelShareBootstrapMsg{generation: generation}
-		}
-		m.prepareCurrentSessionTunnelLedger()
-		if broker := m.tunnelEventBroker(); broker != nil {
-			events := m.currentSessionTunnelReplayEvents()
-			if len(events) == 0 {
-				broker.SendSnapshot(m.tunnelSnapshot())
-			} else {
-				m.ensureProjectionBootstrap(broker, events)
-			}
-		}
-		return tunnelShareBootstrapMsg{generation: generation}
-	}
 }
 
 func (m *Model) handleTunnelShareBootstrapMsg(msg tunnelShareBootstrapMsg) (tea.Model, tea.Cmd) {
