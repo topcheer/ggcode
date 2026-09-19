@@ -462,10 +462,6 @@ func (m *Model) currentTunnelMsgID() string {
 	return state.msgID
 }
 
-func (m *Model) tunnelReasoningMsgID() string {
-	return tunnelReasoningMsgIDFor(m.currentTunnelMsgID())
-}
-
 func (m *Model) resetTunnelMainStream() {
 	state := m.ensureTunnelMainStreamState()
 	state.mu.Lock()
@@ -523,26 +519,6 @@ func (m *Model) bindTunnelProjectionSession() {
 	if m.tunnelHost != nil {
 		m.tunnelHost.BindSession(m.session, m.sessionStore)
 	}
-}
-
-func (m *Model) currentSessionTunnelAuthorityEpoch() uint64 {
-	if m.tunnelHost != nil {
-		return m.tunnelHost.AuthorityEpoch()
-	}
-	return 1
-}
-
-func (m *Model) hydrateProjectionReplayFromSessionLedger(store *tunnel.ProjectionStore, replay []tunnel.GatewayMessage) []tunnel.GatewayMessage {
-	updated, err := agentruntime.HydrateProjectionReplayFromSessionLedger(store, m.session, replay)
-	if err != nil {
-		sessionID := ""
-		if m.session != nil {
-			sessionID = m.session.ID
-		}
-		debug.Log("tunnel", "projection: hydrate from session ledger failed for %s: %v", sessionID, err)
-		return replay
-	}
-	return updated
 }
 
 func (m *Model) tunnelHostProjectionStore() *tunnel.ProjectionStore {
@@ -1618,21 +1594,6 @@ func tunnelSnapshotEventMatches(a, b []tunnel.SnapshotEvent) bool {
 		}
 	}
 	return true
-}
-
-func (m *Model) reseedTunnelSnapshotAfterStart(seeded tunnel.BrokerSnapshot) {
-	if m.tunnelBroker == nil {
-		return
-	}
-	latest := m.tunnelSnapshot()
-	if tunnelSnapshotMatches(seeded, latest) {
-		return
-	}
-	sessionID := ""
-	if m.session != nil {
-		sessionID = m.session.ID
-	}
-	agentruntime.PublishShareState(m.tunnelBroker, sessionID, latest, nil, true)
 }
 
 func (m *Model) currentSessionTunnelReplayEvents() []tunnel.GatewayMessage {
