@@ -106,6 +106,7 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 			return nil, err
 		}
 		p := NewCopilotProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+		p.setCallPolicy(policy) // #2576: honor request_timeout / max_retries (same family as #2573)
 		p.SetAdaptiveCap(cap)
 		return p, nil
 
