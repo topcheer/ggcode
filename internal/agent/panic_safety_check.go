@@ -121,11 +121,6 @@ func checkPanicSafety(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// countBarePanics returns the number of bare panic() calls in Go source.
-func countBarePanics(src string) int {
-	return len(findBarePanics(src))
-}
-
 // findBarePanics parses Go source and returns all bare panic() calls found in
 // non-main/init functions that lack recover() in the same function scope.
 func findBarePanics(src string) []panicInstance {

@@ -122,19 +122,6 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 	return b.String()
 }
 
-// countConcurrentMapIssues counts concurrent map patterns in source text.
-func countConcurrentMapIssues(src string) int {
-	if strings.TrimSpace(src) == "" {
-		return 0
-	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
-	if err != nil || file == nil {
-		return 0
-	}
-	return len(findConcurrentMapAccess(fset, file))
-}
-
 // findConcurrentMapAccess performs heuristic detection of potential concurrent
 // map access within each function. A function is flagged if:
 //  1. It contains at least one `go` statement (goroutine spawn)

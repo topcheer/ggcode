@@ -334,13 +334,6 @@ func parseRequireLine(line, modulePath string, result map[string]string) {
 	}
 }
 
-// checkGoImports analyzes Go source for unused and missing imports.
-// Returns warning strings. Returns nil if the file has syntax errors
-// (those are already caught by checkGoSyntax) or no import issues.
-func checkGoImportsAST(filePath string, f *ast.File) []string {
-	return checkGoImportsASTWithDir(filePath, f, "")
-}
-
 // checkGoImportsASTWithDir is like checkGoImportsAST but also uses the working
 // directory's go.mod to detect missing third-party imports (e.g. lipgloss.New()
 // without importing the lipgloss package). When workingDir is empty or no go.mod

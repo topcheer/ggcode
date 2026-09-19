@@ -120,11 +120,6 @@ func checkLockWithoutUnlock(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-// countLocksWithoutUnlock returns the number of lock-without-unlock patterns.
-func countLocksWithoutUnlock(src string) int {
-	return len(findLocksWithoutUnlock(src))
-}
-
 // findLocksWithoutUnlock parses Go source and returns all lock-without-unlock
 // instances found, ordered by position.
 //
@@ -452,48 +447,6 @@ func findLockCalls(fn *ast.FuncDecl) []lockCall {
 	})
 
 	return locks
-}
-
-// findUnlockCalls walks a function body and returns a set of receiver
-// expressions that have Unlock/RUnlock called on them (either directly or
-// via defer).
-func findUnlockCalls(fn *ast.FuncDecl) map[string]bool {
-	unlocked := make(map[string]bool)
-
-	ast.Inspect(fn.Body, func(node ast.Node) bool {
-		var call *ast.CallExpr
-
-		// Direct call: mu.Unlock()
-		if c, ok := node.(*ast.CallExpr); ok {
-			call = c
-		}
-		// Defer: defer mu.Unlock()
-		if d, ok := node.(*ast.DeferStmt); ok {
-			call = d.Call
-		}
-
-		if call == nil {
-			return true
-		}
-
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-
-		if sel.Sel.Name != "Unlock" && sel.Sel.Name != "RUnlock" {
-			return true
-		}
-
-		receiver := exprToString(sel.X)
-		if receiver != "" {
-			unlocked[receiver] = true
-		}
-
-		return true
-	})
-
-	return unlocked
 }
 
 // exprToString converts an AST expression to a string representation for
