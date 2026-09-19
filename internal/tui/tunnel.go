@@ -211,15 +211,6 @@ func (m *Model) ensureTunnelShareBootstrapState() *tunnelShareBootstrapState {
 	return m.tunnelShareBootstrap
 }
 
-func (m *Model) beginTunnelShareBootstrapCapture(generation uint64) {
-	state := m.ensureTunnelShareBootstrapState()
-	state.mu.Lock()
-	state.generation = generation
-	state.active = true
-	state.pending = nil
-	state.mu.Unlock()
-}
-
 func (m *Model) finishTunnelShareBootstrapCapture(generation uint64) []tunnel.GatewayMessage {
 	state := m.ensureTunnelShareBootstrapState()
 	state.mu.Lock()
@@ -486,15 +477,6 @@ func (m *Model) tunnelReasoningMsgID() string {
 	return tunnelReasoningMsgIDFor(m.currentTunnelMsgID())
 }
 
-func (m *Model) setTunnelMainStream(msgID string, needsFinalize bool) {
-	state := m.ensureTunnelMainStreamState()
-	state.mu.Lock()
-	state.msgID = msgID
-	state.needsFinalize = needsFinalize
-	m.syncTunnelMainStreamCache(state.msgID, state.needsFinalize)
-	state.mu.Unlock()
-}
-
 func (m *Model) resetTunnelMainStream() {
 	state := m.ensureTunnelMainStreamState()
 	state.mu.Lock()
@@ -543,10 +525,6 @@ func (m *Model) tunnelEventBroker() *tunnel.Broker {
 		return m.tunnelHost.ProjectionBroker()
 	}
 	return nil
-}
-
-func (m *Model) ensureTunnelProjectionBroker() *tunnel.Broker {
-	return m.tunnelEventBroker()
 }
 
 func (m *Model) bindTunnelProjectionSession() {
@@ -608,12 +586,6 @@ func (m *Model) tunnelHostProjectionStore() *tunnel.ProjectionStore {
 		return m.tunnelHost.ProjectionStore()
 	}
 	return nil
-}
-
-func (m *Model) recordProjectionEvent(ev tunnel.GatewayMessage) {
-	// TunnelHost handles projection store + session recording + online forwarding.
-	// Keep only TUI-specific bootstrap capture.
-	m.captureTunnelShareBootstrapEvent(ev)
 }
 
 // pushTunnelEvent pushes a provider stream event to the mobile client.
