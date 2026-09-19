@@ -234,12 +234,6 @@ func (t *CmdSnippetTool) loadForMutationLocked() (*cmdSnippetStore, error) {
 	return t.cache, nil
 }
 
-func (t *CmdSnippetTool) persist(store *cmdSnippetStore) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.persistLocked(store)
-}
-
 // persistLocked is persist without locking - callers must hold t.mu.
 func (t *CmdSnippetTool) persistLocked(store *cmdSnippetStore) error {
 	path := t.storePath()

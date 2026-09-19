@@ -5,7 +5,6 @@ package config
 
 import (
 	"net/url"
-	"sort"
 	"strings"
 )
 
@@ -3121,22 +3120,6 @@ func matchProviderByBaseURL(baseURL string) string {
 		return ""
 	}
 	return vendorAPIEndpointHosts[strings.ToLower(u.Hostname())]
-}
-
-// firstNonEmptyBaseURL returns the first endpoint BaseURL of a vendor,
-// endpoints visited in sorted name order for determinism.
-func firstNonEmptyBaseURL(vc VendorConfig) string {
-	names := make([]string, 0, len(vc.Endpoints))
-	for n := range vc.Endpoints {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		if vc.Endpoints[n].BaseURL != "" {
-			return vc.Endpoints[n].BaseURL
-		}
-	}
-	return ""
 }
 
 // populateDefaultModels fills endpoint Models lists from the models.dev data.
