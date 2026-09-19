@@ -9,6 +9,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
@@ -22,6 +24,26 @@ func (m Model) Update(msg tea.Msg) (model tea.Model, cmd tea.Cmd) {
 
 	m.syncAsyncStateCaches()
 	model = m
+
+	// #FREEZE 2026-09-19: consume the usage-probe dirty flag here instead
+	// of setActiveRuntimeSelection calling program.Send directly - Send
+	// before p.Run deadlocks on the nil-ctx select (first-frame freeze
+	// when an old session restored a vendor). Update running at all
+	// proves the program loop is live; the probe result is delivered via
+	// a goroutine Send which is safe at this point.
+	if m.usageProbeDirty {
+		m.usageProbeDirty = false
+		m2, probeCmd := m.handleUsageSidebarRefreshMsg()
+		m = m2
+		if probeCmd != nil {
+			prog := m.program
+			go safego.Run("usage.dirtyProbe", func() {
+				if msg := probeCmd(); msg != nil && prog != nil {
+					prog.Send(msg)
+				}
+			})
+		}
+	}
 	// Handle spinner ticks first
 	var spinnerCmd tea.Cmd
 	if m.spinner.IsActive() {

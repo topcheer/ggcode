@@ -217,6 +217,7 @@ type Model struct {
 	usagePanel            *usagePanelState // #2150 batch 2: /usage panel
 	usageService          *usage.Service   // lazy; shared by panel + sidebar
 	sidebarUsage          *usage.UsageInfo // last probe result for the active vendor (nil = render nothing)
+	usageProbeDirty       bool             // setActiveRuntimeSelection set this; Update consumes it (Send is unsafe before p.Run, #FREEZE 2026-09-19)
 	usageSidebarStatus    string           // human-readable WHY the sidebar has no usage (rendered when sidebarUsage==nil)
 	hooksPanel            *hooksPanelState
 	inspectorPanel        *inspectorPanelState
@@ -721,6 +722,9 @@ func (m Model) Init() tea.Cmd {
 		func() tea.Msg { return textarea.Blink() },
 		func() tea.Msg { return tea.RequestWindowSize() },
 		func() tea.Msg { return gitBranchTickMsg{} },
+		// Usage sidebar first probe (runs inside p.Run - the ONLY safe
+		// place for the chain to start; explain-side checks gate it).
+		func() tea.Msg { return usageSidebarRefreshMsg{} },
 	}
 	// Check whether the project has a GGCODE.md (or AGENTS.md, CLAUDE.md,
 	// COPILOT.md). If none exist AND the directory has real project files
@@ -1458,6 +1462,14 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	// 60s tick left the sidebar dark for up to a minute after every
 	// switch. usagePanel rows are keyed by probe vendor id - reset so
 	// the open panel refetches against the new endpoint too.
+	//
+	// FREEZE FIX (same day): do NOT program.Send here. SetConfig runs
+	// BEFORE p.Run (root.go), so at startup the program's ctx is nil and
+	// v2's Send select-blocks on ctx.Done() forever -> first-frame
+	// deadlock when an old session restores a non-empty activeVendor.
+	// Instead set a dirty flag; the Update loop consumes it on its next
+	// message (WindowSizeMsg always arrives at startup) and fires the
+	// probe through the normal Cmd pipeline.
 	if m.activeVendor != "" && m.activeEndpoint != "" {
 		m.usageSidebarStatus = ""
 		if m.usagePanel != nil {
@@ -1466,9 +1478,7 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 			m.usagePanel.expected = 0
 			m.usagePanel.fetching = false
 		}
-		if m.program != nil {
-			m.program.Send(usageSidebarRefreshMsg{})
-		}
+		m.usageProbeDirty = true
 	}
 	// Keep LAN peers informed of the current model. Switching models also
 	// clears any degraded health status (different quota pool / credential).
