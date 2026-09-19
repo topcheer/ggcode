@@ -232,8 +232,8 @@ func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 	base = strings.TrimSuffix(base, "/v1")
 	var payload struct {
 		BalanceInfos []struct {
-			Currency     string  `json:"currency"`
-			TotalBalance float64 `json:"total_balance"`
+			Currency     string    `json:"currency"`
+			TotalBalance flexFloat `json:"total_balance"`
 		} `json:"balance_infos"`
 	}
 	if err := getJSON(ctx, base+"/user/balance", apiKey, &payload); err != nil {
@@ -241,7 +241,7 @@ func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 	}
 	for _, b := range payload.BalanceInfos {
 		if b.Currency == "USD" || len(payload.BalanceInfos) == 1 {
-			return &UsageInfo{Vendor: "deepseek", Balance: f64(b.TotalBalance), Source: "user/balance"}, nil
+			return &UsageInfo{Vendor: "deepseek", Balance: f64(float64(b.TotalBalance)), Source: "user/balance"}, nil
 		}
 	}
 	return &UsageInfo{Vendor: "deepseek", Source: "user/balance"}, nil
@@ -264,13 +264,13 @@ func (MoonshotProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 	base = strings.TrimSuffix(base, "/v1")
 	var payload struct {
 		Data struct {
-			AvailableBalance float64 `json:"available_balance"`
+			AvailableBalance flexFloat `json:"available_balance"`
 		} `json:"data"`
 	}
 	if err := getJSON(ctx, base+"/v1/users/me/balance", apiKey, &payload); err != nil {
 		return nil, err
 	}
-	return &UsageInfo{Vendor: "moonshot", Balance: f64(payload.Data.AvailableBalance), Source: "users/me/balance"}, nil
+	return &UsageInfo{Vendor: "moonshot", Balance: f64(float64(payload.Data.AvailableBalance)), Source: "users/me/balance"}, nil
 }
 
 // DefaultService returns a Service with every P1 probe registered.

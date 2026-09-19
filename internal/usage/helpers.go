@@ -2,8 +2,11 @@ package usage
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,6 +20,35 @@ func clampPercent(p float64) float64 {
 		return 100
 	}
 	return p
+}
+
+// flexFloat accepts both JSON numbers and strings for the same field.
+// DeepSeek's /user/balance returns total_balance as a QUOTED string
+// ("110.00") while other vendors send bare numbers - a plain float64
+// field made the whole probe fail with "json: cannot unmarshal string
+// into Go struct" (user report 2026-09-19). 2026-09-20: also applied to
+// Moonshot's available_balance which shares the string form.
+type flexFloat float64
+
+func (f *flexFloat) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*f = 0
+		return nil
+	}
+	if s[0] == '"' {
+		s = strings.Trim(s, "\"")
+		if s == "" {
+			*f = 0
+			return nil
+		}
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("flexFloat: %w", err)
+	}
+	*f = flexFloat(v)
+	return nil
 }
 
 // parseResetTime tolerates empty and RFC3339 strings.
