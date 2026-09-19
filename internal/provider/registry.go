@@ -107,6 +107,13 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		}
 		p := NewCopilotProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
 		p.SetAdaptiveCap(cap)
+		// #2576: copilot embeds *OpenAIProvider whose Chat/ChatStream
+		// consume p.policy.withTimeout/attempts - without this line the
+		// endpoint's request_timeout/max_retries resolved at the top of
+		// NewProvider were silently dropped (zero-value policy: no
+		// deadline, 20-attempt default), the same failure mode #2573
+		// fixed for openai-responses.
+		p.setCallPolicy(policy)
 		return p, nil
 
 	case "gemini":
