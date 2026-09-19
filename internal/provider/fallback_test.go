@@ -5,6 +5,9 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // mockProvider is a minimal Provider for testing failover.
@@ -297,5 +300,59 @@ func TestFallback_FallbackQuotaFailsBackToPrimary(t *testing.T) {
 	}
 	if fp.HasFailedOver() {
 		t.Fatal("failover state must be back on the primary after the switch")
+	}
+}
+
+// streamProducerProvider is a mock whose ChatStream returns a
+// controllable producer channel - pins the #2570 cancel-drain contract.
+type streamProducerProvider struct {
+	mockProvider
+	streamFn func(ctx context.Context) (<-chan StreamEvent, error)
+}
+
+func (m *streamProducerProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
+	return m.streamFn(ctx)
+}
+
+// TestIssue2570_CancelDrainsProviderStream pins #2570: when the fallback
+// watcher abandons the provider stream on ctx cancel, it must drain the
+// provider channel to close - otherwise the provider's streamRead
+// goroutine (bare `ch <-` sends, 64-slot buffer) parks forever once the
+// backlog fills. The producer here would block forever without a drainer.
+func TestIssue2570_CancelDrainsProviderStream(t *testing.T) {
+	ready := make(chan struct{})
+	produced := make(chan int, 1)
+	primary := &streamProducerProvider{streamFn: func(ctx context.Context) (<-chan StreamEvent, error) {
+		ch := make(chan StreamEvent, 64)
+		go safego.Run("test.2570.producer", func() {
+			n := 0
+			defer func() { produced <- n }()
+			close(ready)
+			for i := 0; i < 200; i++ { // >64 backlog: parks without a drainer
+				ch <- StreamEvent{Type: StreamEventText, Text: "x"}
+				n++
+			}
+			close(ch)
+		})
+		return ch, nil
+	}}
+	fp := NewFallbackProvider(primary, &mockProvider{name: "fallback"}, "primary -> fallback")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := fp.ChatStream(ctx, []Message{{Role: "user", Content: []ContentBlock{TextBlock("hi")}}}, nil)
+	if err != nil {
+		t.Fatalf("ChatStream start: %v", err)
+	}
+	<-ready
+	cancel()
+	select {
+	case n := <-produced:
+		if n != 200 {
+			t.Fatalf("producer stopped early: %d/200 events", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("#2570: producer goroutine stranded - cancel path did not drain the provider stream")
+	}
+	for range stream { // let the watcher goroutine exit
 	}
 }

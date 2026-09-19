@@ -513,8 +513,25 @@ func (f *FallbackProvider) watchStreamForFailoverHops(ctx context.Context, faile
 		// unbuffered and consumers stop reading the moment they cancel;
 		// before this, a cancelled turn parked this goroutine on `out <-`,
 		// which parked the drain goroutine, which let the provider's own
-		// buffered channel fill - three stuck layers leaked per cancelled
-		// turn in long sessions/daemons.
+		// #2570: ABANDONING the provider stream on cancel strands its
+		// producer goroutine: the provider's streamRead loop sends with a
+		// bare `ch <- StreamEvent` (36 sites across gemini/anthropic/
+		// openai/openai_responses) - with a 64-slot backlog and no
+		// receiver, it parks FOREVER (#602 fixed the middle layers only;
+		// the async-failover branch drained, every other exit did not).
+		// Deferred so ALL abandon paths drain - the plain ctx.Done return
+		// AND the four send-false returns (send() only fails on cancel).
+		// Context-independent on purpose, bounded by the stream's own
+		// end-of-stream close; on the normal close path the channel is
+		// already drained and this is a no-op.
+		drainOnAbandon := func() {
+			go safego.Run("provider.fallback.drainOnAbandon", func() {
+				for range stream {
+				}
+			})
+		}
+		_ = drainOnAbandon // via defer below
+		defer drainOnAbandon()
 		send := func(ev StreamEvent) bool {
 			select {
 			case out <- ev:
