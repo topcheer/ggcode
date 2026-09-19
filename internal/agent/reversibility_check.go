@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"unicode"
@@ -105,6 +106,12 @@ func (r *reversibilityState) recordSafetySignal(toolName, args string) {
 // Splitting happens on whitespace AND on JSON-wrapper punctuation
 // ({}[]":,;) so that when the raw args are a JSON envelope like
 // `{"command":"make verify-ci"}` the embedded words are still visible.
+// #2563: the ':' cut is gated on actually seeing a JSON envelope - git
+// global-flag VALUES legally contain colons (`git -c http.proxy=http://p:8080
+// clean -fd`, `--git-dir=/a:b/.git`), and splitting them left value debris
+// that stripGitGlobalFlagTokens anchored the subcommand on, silencing the
+// destructive check. Outside an envelope, colon values stay whole tokens
+// (aligned with the sibling layer's strings.Fields).
 // Path/flag punctuation (- . / _) is deliberately NOT a separator so
 // "releases/latest", "Makefile" and "latest-build.txt" stay single tokens
 // and cannot trigger false positives (#1194). A bare "test" token already
@@ -119,10 +126,26 @@ func commandTokens(args string) []string {
 			cmd = ""
 		}
 	}
+	trimmed := strings.TrimSpace(cmd)
+	isEnvelope := strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
+	if isEnvelope {
+		// Parse the envelope and tokenize the command VALUE instead of
+		// cutting through JSON punctuation: a colon-bearing value inside
+		// the envelope ({"command":"git -c http.proxy=http://p:8080 ..."})
+		// must stay whole too.
+		var env struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &env); err == nil && env.Command != "" {
+			return commandTokens(env.Command)
+		}
+	}
 	cut := func(r rune) bool {
 		switch r {
-		case '{', '}', '[', ']', '"', ':', ',', ';':
+		case '{', '}', '[', ']', '"', ',', ';':
 			return true
+		case ':':
+			return isEnvelope
 		}
 		return unicode.IsSpace(r)
 	}

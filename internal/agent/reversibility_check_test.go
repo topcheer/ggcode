@@ -229,3 +229,27 @@ func TestReversibilityMultiGitGlobalFlagStripping(t *testing.T) {
 		})
 	}
 }
+
+// TestReversibilityColonValuesInGitFlags pins #2563: git global-flag values
+// legally contain colons (http.proxy=http://p:8080, --git-dir=/a:b/.git);
+// cutting on ':' left value debris that the subcommand anchored on and
+// destructive git went undetected in the reversibility layer.
+func TestReversibilityColonValuesInGitFlags(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"git -c http.proxy=http://proxy.example:8080 clean -fd", true},
+		{"git -c http.proxy=socks5://127.0.0.1:1080 reset --hard", true},
+		{"git -c url.http://example.com.proxy=instead clean -fdx", true},
+		{"git --git-dir=/a:b/.git clean -fd", true},
+		{"git -c color.ui=true clean -fd", true}, // colon-free control
+		{`{"command":"git -c http.proxy=http://proxy.example:8080 clean -fd"}`, true},
+		{"git -c color.ui=true log", false}, // benign control
+	}
+	for _, tc := range cases {
+		if got := isDestructiveGit(tc.cmd); got != tc.want {
+			t.Errorf("isDestructiveGit(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}
