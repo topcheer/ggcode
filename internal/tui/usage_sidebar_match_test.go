@@ -322,3 +322,56 @@ func TestUsageProbeSurvivesVendorSwitch(t *testing.T) {
 		t.Fatalf("zai re-probeable = %v, want [zai]", got)
 	}
 }
+
+// TestUsageProbeSurvivesDisplayNameSwitch pins the display-name bug
+// (2026-09-19 user report: switching kimi -> zai showed
+// `vendor "智谱 Z.AI" is not configured` in the sidebar): the switch
+// callers historically passed resolved.VendorName/EndpointName (display
+// labels) into setActiveRuntimeSelection, and every downstream resolver
+// call then failed on the unresolvable label. Both layers are pinned:
+// the defense-in-depth name->ID remap in setActiveRuntimeSelection, and
+// a DisplayName-bearing config resolving through explainUsageSidebar.
+func TestUsageProbeSurvivesDisplayNameSwitch(t *testing.T) {
+	probe := &keyCaptureProbe{}
+	svc := usage.NewService()
+	svc.Register(probe)
+
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendors["zai"] = config.VendorConfig{
+		DisplayName: "智谱 Z.AI",
+		Endpoints: map[string]config.EndpointConfig{
+			"cn-coding-openai": {BaseURL: zaiCodingURL, APIKey: "zai-key", DefaultModel: "glm-5"},
+		},
+	}
+	m.SetConfig(cfg)
+	m.usageService = svc
+
+	// Simulate the historical buggy switch: display-name label arrives.
+	m.setActiveRuntimeSelection("智谱 Z.AI", "cn-coding-openai", "glm-5")
+	if m.activeVendor != "zai" {
+		t.Fatalf("display name not remapped to ID: activeVendor=%q", m.activeVendor)
+	}
+	if reason := m.explainUsageSidebar(); reason != "" {
+		t.Fatalf("probe blocked after display-name switch: %s", reason)
+	}
+	got := m.probeableVendors()
+	if len(got) != 1 || got[0] != "zai" {
+		t.Fatalf("probeable = %v, want [zai]", got)
+	}
+	cmd := m.fetchAllUsageCmd()
+	if cmd == nil {
+		t.Fatal("no probe fired")
+	}
+	_ = cmd()
+	if probe.gotKey != "zai-key" {
+		t.Fatalf("probe key=%q, want zai-key", probe.gotKey)
+	}
+
+	// A garbage name with no unique match must NOT be silently kept as an
+	// ID-shaped value: probeable stays empty (explain carries the reason).
+	m.setActiveRuntimeSelection("no-such-vendor", "cn-coding-openai", "glm-5")
+	if got := m.probeableVendors(); len(got) != 0 {
+		t.Fatalf("bogus vendor probed: %v", got)
+	}
+}

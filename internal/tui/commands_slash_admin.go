@@ -591,7 +591,12 @@ func (m *Model) tryActivateCurrentSelection() error {
 		// Silently probe actual context window in background
 		m.startContextProbe()
 	}
-	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+	// 2026-09-19 display-name bug: pass VendorID/EndpointID (the config map
+	// keys), NOT VendorName/EndpointName (display labels like "智谱 Z.AI").
+	// Name-shaped values made every downstream resolver call
+	// (explainUsageSidebar, currentEndpointForUsage) fail with `vendor "智谱
+	// Z.AI" is not configured` after any mid-session switch.
+	m.setActiveRuntimeSelection(resolved.VendorID, resolved.EndpointID, resolved.Model)
 	return nil
 }
 
@@ -632,7 +637,7 @@ func (m *Model) ensureProviderSync() {
 		sessionMT = m.session.MaxTokens
 	}
 	agentruntime.StartAsyncRelayModelLimitRefreshWithSession(m.config, resolved, m.agent, sessionCW, sessionMT, nil)
-	m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+	m.setActiveRuntimeSelection(resolved.VendorID, resolved.EndpointID, resolved.Model)
 	m.syncSessionSelection()
 	// Silently probe actual context window in background
 	m.startContextProbe()

@@ -16,7 +16,9 @@ func (m Model) handleProviderChangedMsg(msg providerChangedMsg) (tea.Model, tea.
 	// Config tool changed provider — refresh model state from config.
 	if m.config != nil {
 		if resolved, err := m.config.ResolveActiveEndpoint(); err == nil && resolved != nil {
-			m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+			// VendorID/EndpointID, not the display-name fields (see the
+			// 2026-09-19 note in commands_slash_admin.go).
+			m.setActiveRuntimeSelection(resolved.VendorID, resolved.EndpointID, resolved.Model)
 		}
 		m.syncSessionSelection()
 	}

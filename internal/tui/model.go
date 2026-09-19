@@ -1422,7 +1422,7 @@ func (m *Model) SetConfig(cfg *config.Config) {
 		// was set before config (SetIMManager is called before SetConfig).
 		m.refreshIMRuntimeHooks()
 		if resolved, err := cfg.ResolveActiveEndpoint(); err == nil && m.activeVendor == "" && m.activeEndpoint == "" && m.activeModel == "" {
-			m.setActiveRuntimeSelection(resolved.VendorName, resolved.EndpointName, resolved.Model)
+			m.setActiveRuntimeSelection(resolved.VendorID, resolved.EndpointID, resolved.Model)
 		}
 		if cfg.FirstRun {
 			m.openLanguageSelector(true)
@@ -1447,7 +1447,27 @@ func (m *Model) rebuildSystemPrompt() {
 }
 
 func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
-	m.activeVendor = strings.TrimSpace(vendor)
+	vendor = strings.TrimSpace(vendor)
+	endpoint = strings.TrimSpace(endpoint)
+	// Defense-in-depth (2026-09-19 display-name bug): every caller is
+	// supposed to pass VendorID/EndpointID (config map keys), but a
+	// display name ("智谱 Z.AI") turning up here silently broke every
+	// downstream resolver call. Map an exact unique Name-label match back
+	// to its ID instead of caching the unresolvable label.
+	if m.config != nil && vendor != "" {
+		if _, ok := m.config.Vendors[vendor]; !ok && m.config.Vendors != nil {
+			matches := []string{}
+			for id, vc := range m.config.Vendors {
+				if strings.TrimSpace(vc.DisplayName) == vendor || id == vendor {
+					matches = append(matches, id)
+				}
+			}
+			if len(matches) == 1 {
+				vendor = matches[0]
+			}
+		}
+	}
+	m.activeVendor = vendor
 	m.activeEndpoint = strings.TrimSpace(endpoint)
 	m.activeModel = strings.TrimSpace(model)
 	// #2365-②: the sidebar usage snapshot belongs to the PREVIOUS vendor -
