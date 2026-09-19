@@ -82,7 +82,7 @@ func TestIssue1194_RealTestBuildCommandsSetSignals(t *testing.T) {
 	}{
 		{name: "go test", args: "go test ./...", wantTests: true},
 		{name: "go test with tags", args: "# Run tests\ngo test -tags goolm ./internal/agent/", wantTests: true},
-		{name: "make test", args: "make test", wantTests: true, wantBld: true}, // "make" word still signals build (legacy semantic preserved)
+		{name: "make test", args: "make test", wantTests: true}, // #2552: test target no longer flips buildRan (legacy semantic retired)
 		{name: "npm test", args: "npm test", wantTests: true},
 		{name: "pytest", args: "pytest -q scripts/", wantTests: true},
 		{name: "make build", args: "make build", wantBld: true},
