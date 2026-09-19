@@ -202,20 +202,6 @@ func pathDepth(p string) int {
 	return strings.Count(dir, "/") + 1
 }
 
-// recordFix marks a category as fixed in the given file (because the agent
-// edited that file after the error was observed).
-func (d *fixAmnesiaState) recordFix(category, file string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	files := d.fixedPatterns[category]
-	for _, f := range files {
-		if f == file {
-			return // already tracked
-		}
-	}
-	d.fixedPatterns[category] = append(d.fixedPatterns[category], file)
-}
-
 // checkNewContent examines newly written/edited file content for patterns
 // that match previously-fixed error categories. Returns guidance text if
 // fix amnesia is detected, empty string otherwise.

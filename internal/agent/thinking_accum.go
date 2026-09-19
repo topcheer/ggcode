@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"strings"
-
 	"github.com/topcheer/ggcode/internal/provider"
 )
 
@@ -65,14 +63,4 @@ func (a *thinkingAccumulator) accumulated() []provider.ContentBlock {
 // hasContent reports whether any reasoning text or signature was seen.
 func (a *thinkingAccumulator) hasContent() bool {
 	return a.sawAny
-}
-
-// plainText returns all reasoning text concatenated (for callers that need
-// a single blob, e.g. display).
-func (a *thinkingAccumulator) plainText() string {
-	var b strings.Builder
-	for i := range a.blocks {
-		b.WriteString(a.blocks[i].ReasoningContent)
-	}
-	return b.String()
 }
