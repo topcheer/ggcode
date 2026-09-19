@@ -186,16 +186,6 @@ func stripTestSuffix(path string) string {
 	return path
 }
 
-// sourceFileEdited checks whether a non-test source file was edited.
-func sourceFileEdited(filesEdited []string) bool {
-	for _, f := range filesEdited {
-		if !specGamingIsTestFile(f) && !isConfigOrLockFile(f) {
-			return true
-		}
-	}
-	return false
-}
-
 // isConfigOrLockFile returns true for non-source config/lock files.
 func isConfigOrLockFile(path string) bool {
 	base := path

@@ -132,23 +132,6 @@ func hasCommandToken(tokens []string, words ...string) bool {
 	return false
 }
 
-// hasCommandBigram reports whether a and b appear as ADJACENT tokens -
-// the ownership anchor for subcommand matching (#1490-D): `git` must
-// immediately precede `push`/`reset`/`clean` so a grep or quoted
-// mention of the pattern cannot fire the gate.
-func hasCommandBigram(tokens []string, a, b string) bool {
-	for i := 0; i+1 < len(tokens); i++ {
-		// #2268: mirror #1600-C quote stripping - `sh -c 'git reset'`
-		// tokenizes 'git with the quote glued and a bare == never saw
-		// it, blinding this layer's bigrams while the sibling layer's
-		// token helpers all strip quotes.
-		if strings.Trim(tokens[i], "\"'") == a && strings.Trim(tokens[i+1], "\"'") == b {
-			return true
-		}
-	}
-	return false
-}
-
 // checkPreAction evaluates whether a high-stakes tool call should trigger
 // a reversibility warning. Returns non-empty guidance if the action is
 // potentially irreversible AND the agent hasn't demonstrated safety verification.

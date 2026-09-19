@@ -356,15 +356,6 @@ func collectSuspiciousCmps(filePath, oldContent string) map[string]bool {
 	return result
 }
 
-// isFloatLiteral returns true if the expression is a floating-point literal.
-func isFloatLiteral(expr ast.Expr) bool {
-	lit, ok := expr.(*ast.BasicLit)
-	if !ok || lit.Kind != token.FLOAT {
-		return false
-	}
-	return true
-}
-
 // isNonZeroFloatLiteral reports whether expr is a float literal with a
 // nonzero value. Zero is exactly representable, so `x == 0.0` is reliable
 // and not advisory-worthy (staticcheck SA4003 agrees). Fix #564 FP.

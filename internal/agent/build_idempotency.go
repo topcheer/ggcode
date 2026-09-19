@@ -381,24 +381,3 @@ func itoaIdempot(n int) string {
 	}
 	return string(buf[i:])
 }
-
-// extractStringField extracts a string field from JSON args. Returns "" if not found.
-func extractBuildCmdField(args json.RawMessage, field string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(args, &m); err != nil {
-		return ""
-	}
-	v, ok := m[field]
-	if !ok {
-		return ""
-	}
-	switch val := v.(type) {
-	case string:
-		return val
-	default:
-		return ""
-	}
-}

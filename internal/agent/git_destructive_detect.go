@@ -558,36 +558,6 @@ func isGitGlobalFlag(tok string) bool {
 		strings.HasPrefix(tok, "--work-tree") || strings.HasPrefix(tok, "--namespace")
 }
 
-// gitSubcommandIndex finds the index of the subcommand token after 'git'
-// plus any global flags; -1 if not a git invocation. The token after a
-// valued global flag is its value and is skipped.
-func gitSubcommandIndex(toks []string) int {
-	for i, t := range toks {
-		st := strings.Trim(t, "\"'")
-		if st != "git" || i == 0 && false {
-			continue
-		}
-		j := i + 1
-		for j < len(toks) {
-			if isGitGlobalFlag(strings.Trim(toks[j], "\"'")) {
-				j++
-				// flags of form --key=value carry the value inline.
-				if j <= len(toks) && strings.Contains(toks[j-1], "=") {
-					continue
-				}
-				// bare -C/--git-dir style: skip the value token.
-				if j < len(toks) {
-					j++
-				}
-				continue
-			}
-			return j
-		}
-		return -1
-	}
-	return -1
-}
-
 func cleanForceSingleLine(cmd string) bool {
 	toks := strings.Fields(cmd)
 	for i, t := range toks {
