@@ -143,6 +143,12 @@ func findBarePanics(src string) []panicInstance {
 			if d.Name != nil && (d.Name.Name == "main" || d.Name.Name == "init") {
 				continue
 			}
+			// Skip MustXxx helpers (regexp.MustCompile, template.Must idiom):
+			// their documented contract is panic-on-failure, so advising
+			// "return an error instead" would break caller API contracts (#2555).
+			if d.Name != nil && strings.HasPrefix(d.Name.Name, "Must") {
+				continue
+			}
 			instances = append(instances, findPanicsInBody(d.Body, fset)...)
 
 		case *ast.GenDecl:
