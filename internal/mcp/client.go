@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -398,10 +399,21 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 			c.startHTTPNotificationStream()
 			return result, nil
 		}
+		// #2557: a typed UnsupportedProtocolVersionError from probeModern
+		// means a MODERN server with no mutually supported version —
+		// surfacing the actionable error beats a misleading legacy
+		// handshake (which 2026-07-28 servers reject) or a silent
+		// legacy downgrade on dual-era servers.
+		var uerr *UnsupportedProtocolVersionError
+		if errors.As(probeErr, &uerr) {
+			return nil, probeErr
+		}
 		// Dual-era fallback: a recognized modern error (-32022) identifies a
-		// modern server and never reaches here (probeModern's mutual-version
-		// selection handles it); anything else — method-not-found, transport
-		// failure, timeout — identifies a legacy (handshake-era) server.
+		// modern server and never reaches here (probeModern retries with a
+		// mutually supported version from the -32022 payload and otherwise
+		// returns the typed UnsupportedProtocolVersionError, #2557);
+		// anything else — method-not-found, transport failure, timeout —
+		// identifies a legacy (handshake-era) server.
 		debug.Log("mcp-client", "server=%s stateless probe failed, falling back to initialize handshake: %v", c.name, probeErr)
 	}
 	caps := c.clientCaps()

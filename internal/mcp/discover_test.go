@@ -485,3 +485,87 @@ func TestNewClientFromConfigStatelessWiring(t *testing.T) {
 		t.Error("stateless opt-in enabled by default; legacy behavior must be unchanged")
 	}
 }
+
+// TestInitializeStatelessDiscover32022 pins #2557: a -32022 on the
+// server/discover PROBE identifies a modern server - the dual-era contract
+// forbids falling back to the legacy handshake. Without a mutually
+// supported version the typed error surfaces; with one, the probe retries
+// on the new version instead of downgrading.
+func TestInitializeStatelessDiscover32022(t *testing.T) {
+	t.Run("no mutual version surfaces typed error", func(t *testing.T) {
+		srv := &scriptedServer{t: t, handler: func(method string, _ json.RawMessage) (any, *scriptError) {
+			if method == "server/discover" {
+				return nil, &scriptError{code: ErrorCodeUnsupportedProtocolVersion, msg: "unsupported",
+					data: map[string]any{"requested": "2026-07-28", "supported": []string{"2099-01-01"}}}
+			}
+			return nil, &scriptError{code: ErrorCodeMethodNotFound, msg: "unexpected method: " + method}
+		}}
+		client, cleanup := srv.start()
+		client.EnableStateless()
+		defer cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, err := client.Initialize(ctx)
+		var uerr *UnsupportedProtocolVersionError
+		if !errors.As(err, &uerr) {
+			t.Fatalf("Initialize err = %v, want typed UnsupportedProtocolVersionError", err)
+		}
+		if uerr.Requested != "2026-07-28" || len(uerr.Supported) != 1 || uerr.Supported[0] != "2099-01-01" {
+			t.Errorf("typed error payload = %+v", uerr)
+		}
+		// The core #2557 assertion: a modern server NEVER falls back to
+		// the legacy handshake.
+		if n := srv.callsOf("initialize"); n != 0 {
+			t.Fatalf("legacy initialize sent %d times, want 0 (modern server must not fall back)", n)
+		}
+	})
+
+	t.Run("mutual version retries discover not legacy", func(t *testing.T) {
+		// The retry path needs a server-supported version the client also
+		// knows; today the client speaks only 2026-07-28, so widen the
+		// list for this test (the multi-version future activates this
+		// branch natively).
+		orig := modernMCPProtocolVersions
+		modernMCPProtocolVersions = []string{"2026-10-01", ProtocolVersion20260728}
+		defer func() { modernMCPProtocolVersions = orig }()
+
+		probes := 0
+		srv := &scriptedServer{t: t, handler: func(method string, _ json.RawMessage) (any, *scriptError) {
+			switch method {
+			case "server/discover":
+				probes++
+				if probes == 1 {
+					// First probe: server only supports a newer version.
+					return nil, &scriptError{code: ErrorCodeUnsupportedProtocolVersion, msg: "unsupported",
+						data: map[string]any{"requested": "2026-07-28", "supported": []string{"2026-10-01"}}}
+				}
+				// Retry with the mutually supported version succeeds.
+				return map[string]any{
+					"supportedVersions": []string{"2026-10-01"},
+					"serverInfo":        map[string]any{"name": "modern", "version": "2.0"},
+				}, nil
+			default:
+				return nil, &scriptError{code: ErrorCodeMethodNotFound, msg: "unexpected method: " + method}
+			}
+		}}
+		client, cleanup := srv.start()
+		client.EnableStateless()
+		defer cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if _, err := client.Initialize(ctx); err != nil {
+			t.Fatalf("Initialize: %v", err)
+		}
+		if n := srv.callsOf("initialize"); n != 0 {
+			t.Fatalf("legacy initialize sent %d times, want 0 (retry must stay modern)", n)
+		}
+		if n := srv.callsOf("server/discover"); n != 2 {
+			t.Fatalf("server/discover sent %d times, want 2 (original + version retry)", n)
+		}
+		if got := client.ModernVersion(); got != "2026-10-01" {
+			t.Errorf("ModernVersion = %q, want 2026-10-01", got)
+		}
+	})
+}

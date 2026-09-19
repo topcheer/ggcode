@@ -319,7 +319,15 @@ func (c *Client) Discover(ctx context.Context) (*DiscoverResult, error) {
 	if c.closed.Load() {
 		return nil, fmt.Errorf("mcp[%s]: connection closed", c.name)
 	}
-	paramsJSON := injectMeta([]byte("{}"), c.modernRequestMeta(ProtocolVersion20260728))
+	// #2557: carry the NEGOTIATED modern version once one exists — the
+	// -32022 retry path (probeModern) sets modernVersion from the error
+	// payload before re-probing, so the retry must not repeat the version
+	// the server just rejected.
+	version := c.ModernVersion() // locked read, matches the setter
+	if version == "" {
+		version = ProtocolVersion20260728
+	}
+	paramsJSON := injectMeta([]byte("{}"), c.modernRequestMeta(version))
 	var params json.RawMessage = paramsJSON
 	var result DiscoverResult
 	if err := c.sendRequest(ctx, "server/discover", params, &result); err != nil {
@@ -337,9 +345,53 @@ func (c *Client) Discover(ctx context.Context) (*DiscoverResult, error) {
 func (c *Client) probeModern(ctx context.Context) (*InitializeResult, error) {
 	res, err := c.Discover(ctx)
 	if err != nil {
-		return nil, err
+		// #2557: -32022 identifies a MODERN server (dual-era contract in
+		// the file header, EnableStateless docs and the guide): it must
+		// NEVER fall back to the legacy handshake. Retry once with a
+		// mutually supported version from the error payload; when none
+		// exists, surface the typed error so users get "server does not
+		// support 2026-07-28 (supported: ...)" instead of a misleading
+		// legacy initialize failure / silent legacy downgrade.
+		u, unsupported := asUnsupportedProtocolVersion(err)
+		if !unsupported {
+			return nil, err // not a recognized modern error: legacy-era signal, caller falls back
+		}
+		// Mutual (client-known) version first; with no intersection, follow
+		// the server's declared preference — the -32022 payload is the
+		// server explicitly telling us what it speaks (server-driven
+		// negotiation, #2557).
+		v := selectModernVersion(u.Supported)
+		if v == "" && len(u.Supported) > 0 {
+			v = u.Supported[0]
+		}
+		// setModernVersionIfChanged's unchanged gate also stops a pointless
+		// retry with the version the server just rejected.
+		if v == "" || !c.setModernVersionIfChanged(v) {
+			return nil, u
+		}
+		retry, rerr := c.Discover(ctx)
+		if rerr != nil {
+			return nil, u
+		}
+		res = retry
 	}
 	version := selectModernVersion(res.SupportedVersions)
+	if version == "" {
+		// Server-driven negotiation (#2557): the version set during a -32022
+		// retry may be newer than this client's known list; honor it when the
+		// server's discover response still declares it.
+		c.mu.Lock()
+		set := c.modernVersion
+		c.mu.Unlock()
+		if set != "" {
+			for _, s := range res.SupportedVersions {
+				if s == set {
+					version = set
+					break
+				}
+			}
+		}
+	}
 	if version == "" {
 		return nil, fmt.Errorf("mcp[%s]: no mutually supported modern protocol version (server supports %s)",
 			c.name, strings.Join(res.SupportedVersions, ", "))
