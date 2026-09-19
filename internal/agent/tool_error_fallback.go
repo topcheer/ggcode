@@ -36,7 +36,6 @@ package agent
 //   - Non-blocking: suggestion appended to error result, agent proceeds
 
 import (
-	"encoding/json"
 	"strings"
 	"sync"
 
@@ -300,21 +299,6 @@ func (t *toolFallbackState) maybeFallbackSuggestion(toolName, errorContent strin
 	}
 
 	// Should not reach here since _default always matches, but be safe.
-	return ""
-}
-
-// extractToolNameFromJSON safely extracts the tool name from tool call arguments.
-func extractToolNameFromJSON(args []byte) string {
-	if len(args) == 0 {
-		return ""
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(args, &m); err != nil {
-		return ""
-	}
-	if name, ok := m["name"].(string); ok {
-		return name
-	}
 	return ""
 }
 

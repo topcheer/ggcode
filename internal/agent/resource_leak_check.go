@@ -403,24 +403,6 @@ func ownershipTransferred(fn *ast.FuncDecl, varName string) bool {
 	return transferred
 }
 
-// exprReferencesIdent reports whether e contains an identifier with the given
-// name (used to detect the resource variable escaping via return or call
-// argument, #1191).
-func exprReferencesIdent(e ast.Expr, name string) bool {
-	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if id, ok := n.(*ast.Ident); ok && id.Name == name {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
 // exprIsResourceHandoff reports whether e HANDS OFF the resource itself:
 // `l`, `&l`, or a direct field of it (`l.Body` - a transferable handle),
 // NOT an expression that merely READS from it (#1680 case 1:

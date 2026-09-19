@@ -119,10 +119,6 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 	return warnings
 }
 
-func countExcessiveReturns(src string, isTestFile bool) int {
-	return len(findExcessiveReturns(src, isTestFile))
-}
-
 func findExcessiveReturns(src string, isTestFile bool) []returnCountInstance {
 	if strings.TrimSpace(src) == "" {
 		return nil
