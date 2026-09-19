@@ -52,6 +52,11 @@ type OpenAIResponsesProvider struct {
 	maxTokens  int
 	httpClient *http.Client
 
+	// policy (#2573): per-call deadline + retry budget resolved from the
+	// endpoint config; zero values keep pre-existing behavior (no deadline,
+	// providerRetryAttempts) so the feature is fully opt-in.
+	policy callPolicy
+
 	reasoningEffort   string
 	textVerbosity     string // GPT-5 text.verbosity: "", "low", "medium", "high"
 	serviceTier       string // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
@@ -796,12 +801,22 @@ func responsesRejectsServiceTier(snippet []byte) bool {
 // ---- non-streaming Chat ----
 
 func (p *OpenAIResponsesProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (*ChatResponse, error) {
+	// #2573: honor the configured per-call deadline; the wrapped ctx also
+	// governs background polling (chatBackground -> pollBackground).
+	ctx, cancel := p.policy.withTimeout(ctx)
+	defer cancel()
 	req, err := p.buildRequest(messages, tools, false)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := p.post(ctx, req)
-	if err != nil {
+	var resp *http.Response
+	// #2573: retry transient failures (429/5xx) per the resolved policy
+	// instead of a single throwaway post.
+	if err := retryWithBackoffCtx(ctx, func() error {
+		var callErr error
+		resp, callErr = p.post(ctx, req)
+		return callErr
+	}, p.policy.attempts()); err != nil {
 		return nil, err
 	}
 	if p.background {
@@ -958,177 +973,250 @@ func (p *OpenAIResponsesProvider) ChatStream(ctx context.Context, messages []Mes
 	if p.background {
 		return p.chatStreamBackground(ctx, req)
 	}
-	httpResp, err := p.post(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
 	ch := make(chan StreamEvent, 64)
 	safego.Go("provider.openaiResponses.streamRead", func() {
 		defer close(ch)
-		defer httpResp.Body.Close()
-
-		scanner := bufio.NewScanner(httpResp.Body)
-		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-
-		var doneSent bool
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "data:") {
-				continue
+		// #2573: per-call deadline applied inside the goroutine so it covers
+		// the full stream lifetime (ChatStream returns immediately).
+		ctx, cancel := p.policy.withTimeout(ctx)
+		defer cancel()
+		budget := newRetryBudget() // #722: cap cumulative retry backoff sleep per stream call
+		for attempt := 0; attempt < p.policy.attempts(); attempt++ {
+			if attempt > 0 {
+				debug.Log("openai-responses", "Stream retry attempt %d/%d model=%s baseURL=%s", attempt+1, p.policy.attempts(), p.model, p.baseURL)
 			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data == "" || data == "[DONE]" {
-				continue
-			}
-			var ev struct {
-				Type  string          `json:"type"`
-				Delta string          `json:"delta"`
-				Item  json.RawMessage `json:"item"`
-				Resp  json.RawMessage `json:"response"`
-			}
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
-				continue
-			}
-			switch ev.Type {
-			case "response.output_text.delta":
-				if ev.Delta != "" {
-					ch <- StreamEvent{Type: StreamEventText, Text: ev.Delta}
-				}
-			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-				if ev.Delta != "" {
-					ch <- StreamEvent{Type: StreamEventReasoning, Text: ev.Delta}
-				}
-			case "response.output_item.added":
-				var item struct {
-					Type      string `json:"type"`
-					CallID    string `json:"call_id"`
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				}
-				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "function_call" && item.CallID != "" {
-					args := item.Arguments
-					if args == "" {
-						args = "{}"
-					}
-					ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
-						ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
-					}}
-				}
-				// sa-67: apply_patch_call is a client-executed tool call; surface
-				// it through the same channel as function_call so the agent loop
-				// runs the V4A executor and pairs the result back.
-				if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
-					args := op
-					if len(args) == 0 {
-						args = json.RawMessage("{}")
-					}
-					ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
-						ID: id, Name: applyPatchInternalToolName, Arguments: args,
-					}}
-				}
-			case "response.output_item.done":
-				var item struct {
-					Type      string `json:"type"`
-					CallID    string `json:"call_id"`
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				}
-				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "reasoning" {
-					// sa-54: forward the raw item through the reasoning channel;
-					// the agent's thinking accumulator stores it verbatim in a
-					// "thinking" block for stateless replay. Text stays empty so
-					// UIs render nothing for the opaque payload.
-					ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(ev.Item)}
-				}
-				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "function_call" && item.CallID != "" {
-					args := item.Arguments
-					if args == "" {
-						args = "{}"
-					}
-					if !json.Valid([]byte(args)) {
-						if repaired, ok := RepairJSON([]byte(args)); ok {
-							args = string(repaired)
+			httpResp, err := p.post(ctx, req)
+			if err != nil {
+				if isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
+					delay := retryDelay(err, attempt)
+					debug.Log("openai-responses", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
+					// Notify user about retry
+					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
+						// #722: budget exhausted — stop retrying now; wrap with the
+						// sentinel so the failover layer switches immediately.
+						if sleepErr == errRetryBudgetExhausted {
+							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 						}
+						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+						return
 					}
-					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
-						ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
-					}}
+					continue
 				}
-				// sa-67: final apply_patch_call item; emit the authoritative done
-				// event so the call is executed exactly once per patch.
-				if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
-					args := op
-					if len(args) == 0 {
-						args = json.RawMessage("{}")
-					}
-					ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
-						ID: id, Name: applyPatchInternalToolName, Arguments: args,
-					}}
-				}
-				if json.Unmarshal(ev.Item, &item) == nil && item.Type == "web_search_call" {
-					// sa-62: hosted web_search item finished; forward it once
-					// through the server-tool channel so the agent stores the
-					// raw item and the next stateless request echoes it back.
-					ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}
-				}
-				if json.Unmarshal(ev.Item, &item) == nil && (item.Type == "code_interpreter_call" || item.Type == "file_search_call") {
-					// sa-63: server-executed built-in tool completed; surface the
-					// in-band result as a text block (like Gemini grounding).
-					if block, ok := formatResponsesServerItem(ev.Item); ok {
-						ch <- StreamEvent{Type: StreamEventText, Text: block}
-					}
-				}
-			case "response.completed", "response.incomplete":
-				usage, stop := parseResponsesFinal(data)
-				ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: stop == "max_tokens" || ev.Type == "response.incomplete"}
-				doneSent = true
-			case "response.failed":
-				var respErr struct {
-					Response struct {
-						Error struct {
-							Message string `json:"message"`
-						} `json:"error"`
-					} `json:"response"`
-				}
-				_ = json.Unmarshal([]byte(data), &respErr)
-				msg := respErr.Response.Error.Message
-				if msg == "" {
-					msg = "responses stream failed"
-				}
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)}
-				doneSent = true
-			case "error":
-				var errPayload struct {
-					Message string `json:"message"`
-				}
-				_ = json.Unmarshal([]byte(data), &errPayload)
-				msg := errPayload.Message
-				if msg == "" {
-					msg = "responses stream error"
-				}
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)}
-				doneSent = true
+				debug.Log("openai-responses", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
+				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)}
+				return
 			}
-			if doneSent {
+			retry, scanErr := p.readResponsesStream(ctx, httpResp, ch)
+			if !retry {
+				return
+			}
+			// Mid-stream transport failure with nothing emitted yet; every
+			// request replays the full stateless input, so re-establishing is
+			// lossless. Content already delivered can never be unsent, which is
+			// exactly why readResponsesStream only retries pre-emission.
+			delay := retryDelay(scanErr, attempt)
+			ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+			if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
+				if sleepErr == errRetryBudgetExhausted {
+					sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, scanErr)
+				}
+				ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
 				return
 			}
 		}
-		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)}
-			return
-		}
-		if !doneSent {
-			if ctx.Err() != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: ctx.Err()}
-				return
-			}
-			// Stream closed without a terminal event: still emit Done so the
-			// agent loop finalizes the turn instead of hanging.
-			ch <- StreamEvent{Type: StreamEventDone}
-		}
+		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %d retry attempts exhausted", p.policy.attempts())}
 	})
 	return ch, nil
+}
+
+// readResponsesStream pumps SSE events from one established /responses
+// stream into ch until a terminal event (Done/Error) or transport failure.
+// It returns retry=true only when the stream died to a retryable transport
+// error BEFORE any content event reached ch — every request replays the full
+// stateless input so a retry duplicates nothing, but content already
+// delivered can never be unsent and must not be replayed.
+func (p *OpenAIResponsesProvider) readResponsesStream(ctx context.Context, httpResp *http.Response, ch chan<- StreamEvent) (retryable bool, lastErr error) {
+	defer httpResp.Body.Close()
+	scanner := bufio.NewScanner(httpResp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+
+	var doneSent bool
+	emitted := false // a content event already reached ch; guards mid-stream retry
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var ev struct {
+			Type  string          `json:"type"`
+			Delta string          `json:"delta"`
+			Item  json.RawMessage `json:"item"`
+			Resp  json.RawMessage `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "response.output_text.delta":
+			if ev.Delta != "" {
+				ch <- StreamEvent{Type: StreamEventText, Text: ev.Delta}
+				emitted = true
+			}
+		case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+			if ev.Delta != "" {
+				ch <- StreamEvent{Type: StreamEventReasoning, Text: ev.Delta}
+				emitted = true
+			}
+		case "response.output_item.added":
+			var item struct {
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "function_call" && item.CallID != "" {
+				args := item.Arguments
+				if args == "" {
+					args = "{}"
+				}
+				ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
+					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
+				}}
+				emitted = true
+			}
+			// sa-67: apply_patch_call is a client-executed tool call; surface
+			// it through the same channel as function_call so the agent loop
+			// runs the V4A executor and pairs the result back.
+			if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
+				args := op
+				if len(args) == 0 {
+					args = json.RawMessage("{}")
+				}
+				ch <- StreamEvent{Type: StreamEventToolCallChunk, Tool: ToolCallDelta{
+					ID: id, Name: applyPatchInternalToolName, Arguments: args,
+				}}
+				emitted = true
+			}
+		case "response.output_item.done":
+			var item struct {
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}
+			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "reasoning" {
+				// sa-54: forward the raw item through the reasoning channel;
+				// the agent's thinking accumulator stores it verbatim in a
+				// "thinking" block for stateless replay. Text stays empty so
+				// UIs render nothing for the opaque payload.
+				ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: string(ev.Item)}
+				emitted = true
+			}
+			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "function_call" && item.CallID != "" {
+				args := item.Arguments
+				if args == "" {
+					args = "{}"
+				}
+				if !json.Valid([]byte(args)) {
+					if repaired, ok := RepairJSON([]byte(args)); ok {
+						args = string(repaired)
+					}
+				}
+				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+					ID: item.CallID, Name: item.Name, Arguments: json.RawMessage(args),
+				}}
+				emitted = true
+			}
+			// sa-67: final apply_patch_call item; emit the authoritative done
+			// event so the call is executed exactly once per patch.
+			if id, op, ok := decodeResponsesApplyPatchCall(ev.Item); ok {
+				args := op
+				if len(args) == 0 {
+					args = json.RawMessage("{}")
+				}
+				ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: ToolCallDelta{
+					ID: id, Name: applyPatchInternalToolName, Arguments: args,
+				}}
+				emitted = true
+			}
+			if json.Unmarshal(ev.Item, &item) == nil && item.Type == "web_search_call" {
+				// sa-62: hosted web_search item finished; forward it once
+				// through the server-tool channel so the agent stores the
+				// raw item and the next stateless request echoes it back.
+				ch <- StreamEvent{Type: StreamEventServerTool, Block: responsesServerToolBlock(ev.Item)}
+				emitted = true
+			}
+			if json.Unmarshal(ev.Item, &item) == nil && (item.Type == "code_interpreter_call" || item.Type == "file_search_call") {
+				// sa-63: server-executed built-in tool completed; surface the
+				// in-band result as a text block (like Gemini grounding).
+				if block, ok := formatResponsesServerItem(ev.Item); ok {
+					ch <- StreamEvent{Type: StreamEventText, Text: block}
+					emitted = true
+				}
+			}
+		case "response.completed", "response.incomplete":
+			usage, stop := parseResponsesFinal(data)
+			ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: stop == "max_tokens" || ev.Type == "response.incomplete"}
+			doneSent = true
+		case "response.failed":
+			var respErr struct {
+				Response struct {
+					Error struct {
+						Message string `json:"message"`
+					} `json:"error"`
+				} `json:"response"`
+			}
+			_ = json.Unmarshal([]byte(data), &respErr)
+			msg := respErr.Response.Error.Message
+			if msg == "" {
+				msg = "responses stream failed"
+			}
+			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)}
+			doneSent = true
+		case "error":
+			var errPayload struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal([]byte(data), &errPayload)
+			msg := errPayload.Message
+			if msg == "" {
+				msg = "responses stream error"
+			}
+			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses: %s", msg)}
+			doneSent = true
+		}
+		if doneSent {
+			return
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		// #2573: transport failure. Retryable only when nothing was emitted
+		// yet — the retry is a lossless idempotent replay of the same input.
+		if !emitted && isRetryableForContext(ctx, err) {
+			return true, err
+		}
+		if ctx.Err() == nil {
+			ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("responses stream: %w", err)}
+		} else {
+			ch <- StreamEvent{Type: StreamEventError, Error: ctx.Err()}
+		}
+		return false, err
+	}
+	if !doneSent {
+		if ctx.Err() != nil {
+			ch <- StreamEvent{Type: StreamEventError, Error: ctx.Err()}
+			return false, ctx.Err()
+		}
+		// Stream closed without a terminal event: still emit Done so the
+		// agent loop finalizes the turn instead of hanging.
+		ch <- StreamEvent{Type: StreamEventDone}
+	}
+	return false, nil
 }
 
 // parseResponsesFinal extracts usage and incomplete_details from a

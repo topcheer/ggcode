@@ -60,12 +60,12 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		// sa-40: OpenAI Responses API (/v1/responses) - serves Codex-family
 		// and o-series models that have no Chat Completions surface.
 		rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+		rp.setCallPolicy(policy) // #2573: honor request_timeout / max_retries
 		rp.SetReasoningEffort(resolved.ReasoningEffort)
 		rp.SetTextVerbosity(resolved.TextVerbosity)
 		rp.SetServiceTier(resolved.ServiceTier)
 		rp.SetToolChoice(resolved.ToolChoice)
 		if len(resolved.ServerTools) > 0 {
-			rp.SetServerTools(resolved.ServerTools)
 			rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
 		}
 		if resolved.ResponsesBackground {
@@ -78,12 +78,12 @@ func NewProvider(resolved *config.ResolvedEndpoint) (Provider, error) {
 		// /responses path is a Responses-API endpoint, not a relay.
 		if strings.HasSuffix(strings.TrimRight(resolved.BaseURL, "/"), "/responses") {
 			rp := NewOpenAIResponsesProvider(resolved.APIKey, resolved.Model, resolved.MaxTokens, resolved.BaseURL)
+			rp.setCallPolicy(policy) // #2573: honor request_timeout / max_retries
 			rp.SetReasoningEffort(resolved.ReasoningEffort)
 			rp.SetTextVerbosity(resolved.TextVerbosity)
 			rp.SetServiceTier(resolved.ServiceTier)
 			rp.SetToolChoice(resolved.ToolChoice)
 			if len(resolved.ServerTools) > 0 {
-				rp.SetServerTools(resolved.ServerTools)
 				rp.SetServerTools(resolved.ServerTools) // sa-63: code_interpreter / file_search
 			}
 			if resolved.ResponsesBackground {
