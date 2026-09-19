@@ -161,8 +161,10 @@ func (p *keyCaptureProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*u
 // Fetch receives the VENDOR key (runtime resolver fallback), not "".
 func TestVendorLevelKeyReachesProbe(t *testing.T) {
 	probe := &keyCaptureProbe{}
+	kimiProbe := &kimiCaptureProbe{}
 	svc := usage.NewService()
 	svc.Register(probe)
+	svc.Register(kimiProbe)
 
 	m := newTestModel()
 	cfg := config.DefaultConfig()
@@ -202,8 +204,10 @@ func TestVendorLevelKeyReachesProbe(t *testing.T) {
 // panel on 获取中 and the sidebar on probing forever).
 func TestFetchCmdReturnsRealMsg(t *testing.T) {
 	probe := &keyCaptureProbe{}
+	kimiProbe := &kimiCaptureProbe{}
 	svc := usage.NewService()
 	svc.Register(probe)
+	svc.Register(kimiProbe)
 	m := newTestModel()
 	cfg := config.DefaultConfig()
 	cfg.Vendors["zai"] = config.VendorConfig{
@@ -235,5 +239,86 @@ func TestFetchCmdReturnsRealMsg(t *testing.T) {
 	out, _ := m.handleUsageInfoUpdated(um)
 	if out.usagePanel.fetching {
 		t.Fatal("panel still fetching after result delivered")
+	}
+}
+
+// kimiCaptureProbe records what the kimi probe Fetch received.
+type kimiCaptureProbe struct {
+	called int
+	gotKey string
+	gotURL string
+}
+
+func (p *kimiCaptureProbe) Vendor() string { return "kimi" }
+func (p *kimiCaptureProbe) MatchesURL(baseURL string) bool {
+	return strings.Contains(baseURL, "api.kimi.com")
+}
+func (p *kimiCaptureProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*usage.UsageInfo, error) {
+	p.called++
+	p.gotKey = apiKey
+	p.gotURL = baseURL
+	return &usage.UsageInfo{Vendor: "kimi"}, nil
+}
+
+// TestUsageProbeSurvivesVendorSwitch pins the 2026-09-19 switch bug: after
+// switching to another coding-plan provider mid-session, the usage probe
+// kept failing. Two compounding causes: (1) currentEndpointForUsage and
+// explainUsageSidebar resolved with a hardcoded model "" - endpoints
+// without a configured SelectedModel/DefaultModel (the model is a
+// per-session choice in m.activeModel) failed "has no active model" even
+// though chat worked; (2) explain!=empty killed the 60s refresh chain, so
+// the failure was permanent until a manual panel open.
+func TestUsageProbeSurvivesVendorSwitch(t *testing.T) {
+	probe := &keyCaptureProbe{}
+	kimiProbe := &kimiCaptureProbe{}
+	svc := usage.NewService()
+	svc.Register(probe)
+	svc.Register(kimiProbe)
+
+	m := newTestModel()
+	cfg := config.DefaultConfig()
+	cfg.Vendors["zai"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
+		"cn-coding-openai": {BaseURL: zaiCodingURL, APIKey: "zai-key", DefaultModel: "glm-5"},
+	}}
+	// kimi endpoint WITHOUT any configured model - the session picks one.
+	cfg.Vendors["kimi"] = config.VendorConfig{Endpoints: map[string]config.EndpointConfig{
+		"coding": {BaseURL: "https://api.kimi.com/coding/v1", APIKey: "kimi-key"},
+	}}
+	m.SetConfig(cfg)
+	m.usageService = svc
+
+	// Session starts on zai (loaded from an old session).
+	m.setActiveRuntimeSelection("zai", "cn-coding-openai", "glm-5")
+	if got := m.probeableVendors(); len(got) != 1 || got[0] != "zai" {
+		t.Fatalf("zai probeable = %v, want [zai]", got)
+	}
+
+	// Mid-session switch to kimi, whose endpoint carries NO configured
+	// model - activeModel is the only model source.
+	m.setActiveRuntimeSelection("kimi", "coding", "kimi-k2")
+	if reason := m.explainUsageSidebar(); reason != "" {
+		t.Fatalf("after switch probe blocked: %s", reason)
+	}
+	got := m.probeableVendors()
+	if len(got) != 1 || got[0] != "kimi" {
+		t.Fatalf("kimi probeable = %v, want [kimi]", got)
+	}
+	cmd := m.fetchAllUsageCmd()
+	if cmd == nil {
+		t.Fatal("no probe fired after switch")
+	}
+	_ = cmd()
+	if kimiProbe.called != 1 || kimiProbe.gotKey != "kimi-key" || !strings.Contains(kimiProbe.gotURL, "api.kimi.com") {
+		t.Fatalf("kimi probe: calls=%d key=%q url=%q, want 1 call with kimi-key on api.kimi.com", kimiProbe.called, kimiProbe.gotKey, kimiProbe.gotURL)
+	}
+
+	// Switch back: zai still probeable (and the stale sidebar snapshot
+	// must not have survived as zai data - setActiveRuntimeSelection nils it).
+	m.setActiveRuntimeSelection("zai", "cn-coding-openai", "glm-5")
+	if m.sidebarUsage != nil {
+		t.Fatal("stale kimi sidebarUsage survived the switch back")
+	}
+	if got := m.probeableVendors(); len(got) != 1 || got[0] != "zai" {
+		t.Fatalf("zai re-probeable = %v, want [zai]", got)
 	}
 }

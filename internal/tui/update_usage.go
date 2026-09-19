@@ -91,7 +91,14 @@ func (m Model) handleUsageSidebarRefreshMsg() (Model, tea.Cmd) {
 	if reason != "" {
 		m.usageSidebarStatus = reason
 		debug.Log("usage", "auto-probe skipped: %s", reason)
-		return m, nil
+		// Keep the chain alive: a skipped round (mid-switch, key removed,
+		// ...) must not kill the 60s loop - once the reason is gone the
+		// probe resumes on its own. Returning nil here used to end polling
+		// until a manual panel open (2026-09-19 switch bug: after a vendor
+		// switch the sidebar went permanently dark).
+		return m, tea.Tick(usageSidebarRefreshInterval, func(time.Time) tea.Msg {
+			return usageSidebarRefreshMsg{}
+		})
 	}
 	m.usageSidebarStatus = "probing..."
 	debug.Log("usage", "auto-probe firing for active endpoint")
@@ -119,7 +126,7 @@ func (m *Model) explainUsageSidebar() string {
 	if vendor == "" || epID == "" {
 		return "no active endpoint"
 	}
-	ep, err := m.config.ResolveEndpointSelection(vendor, epID, "")
+	ep, err := m.config.ResolveEndpointSelection(vendor, epID, m.activeModel)
 	if err != nil {
 		return err.Error()
 	}

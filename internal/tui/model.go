@@ -1452,6 +1452,24 @@ func (m *Model) setActiveRuntimeSelection(vendor, endpoint, model string) {
 	// writers fire on probe replies). Drop it; the sidebar returns to the
 	// no-data state until the new vendor's probe lands.
 	m.sidebarUsage = nil
+	// 2026-09-19 switch bug: also drop the status line and re-probe
+	// IMMEDIATELY. The old vendor's status ("probe failed ..." / a stale
+	// reason) must not linger as the new vendor's, and waiting for the
+	// 60s tick left the sidebar dark for up to a minute after every
+	// switch. usagePanel rows are keyed by probe vendor id - reset so
+	// the open panel refetches against the new endpoint too.
+	if m.activeVendor != "" && m.activeEndpoint != "" {
+		m.usageSidebarStatus = ""
+		if m.usagePanel != nil {
+			m.usagePanel.infos = map[string]*usage.UsageInfo{}
+			m.usagePanel.errs = map[string]string{}
+			m.usagePanel.expected = 0
+			m.usagePanel.fetching = false
+		}
+		if m.program != nil {
+			m.program.Send(usageSidebarRefreshMsg{})
+		}
+	}
 	// Keep LAN peers informed of the current model. Switching models also
 	// clears any degraded health status (different quota pool / credential).
 	if m.lanChatHub != nil {

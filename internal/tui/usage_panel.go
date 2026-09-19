@@ -82,7 +82,14 @@ func (m *Model) currentEndpointForUsage() (baseURL, apiKey string, ok bool) {
 	if vendor == "" || epID == "" {
 		return "", "", false
 	}
-	ep, err := m.config.ResolveEndpointSelection(vendor, epID, "")
+	// 2026-09-19 switch bug: the session's CURRENT model lives in
+	// activeModel (setActiveRuntimeSelection keeps it fresh on every
+	// /provider switch) - pass it instead of "". Hardcoding "" made the
+	// resolver fall to SelectedModel/DefaultModel and endpoints WITHOUT a
+	// configured default (user picks the model per-session) failed with
+	// "has no active model", killing the usage probe after a vendor
+	// switch even though chat worked fine.
+	ep, err := m.config.ResolveEndpointSelection(vendor, epID, m.activeModel)
 	if err != nil || ep == nil {
 		return "", "", false
 	}
