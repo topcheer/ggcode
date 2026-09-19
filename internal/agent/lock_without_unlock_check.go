@@ -302,6 +302,13 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 			case *ast.ExprStmt:
 				if call, ok := s.X.(*ast.CallExpr); ok {
 					applyCall(call)
+					// #2554: immediately-invoked function literal
+					// `(func(){ mu.Lock() })()` - recurse on its own frame
+					// (simBranch is declared above walkStmts, unlike inside
+					// applyCall where it would be a forward reference).
+					if fl, ok := call.Fun.(*ast.FuncLit); ok && fl.Body != nil {
+						simBranch(func() { walkStmts(fl.Body.List) })
+					}
 				}
 			case *ast.DeferStmt:
 				applyDefer(s.Call)
@@ -314,6 +321,13 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 				for _, rhs := range s.Rhs {
 					if call, ok := rhs.(*ast.CallExpr); ok {
 						applyCall(call)
+					}
+					// #2554: `f := func(){ mu.Lock() }` - the FuncLit body runs
+					// on its own frame (closure lifetime is independent of
+					// the outer one; a leak inside the literal is reported at
+					// the literal's frame end, not mixed into outer held).
+					if fl, ok := rhs.(*ast.FuncLit); ok && fl.Body != nil {
+						simBranch(func() { walkStmts(fl.Body.List) })
 					}
 				}
 			case *ast.BlockStmt:
@@ -364,7 +378,25 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 					simBranch(func() { walkStmts(body.List) })
 				}
 			default:
-				// Labeled statements, decls, inc/dec, send, go, etc: not
+				// #2554: `go func(){ mu.Lock() }()` is a PERMANENT deadlock
+				// (the goroutine holds the lock until the process ends) -
+				// exactly the class this checker's header says it exists for.
+				// The old pre-#2433 implementation (ast.Inspect) saw closure
+				// bodies; the sequential rewrite lost them. Walk the FuncLit
+				// body on its own frame (branch-copy restores outer held, so
+				// the closure's acquires never contaminate the outer frame
+				// and vice versa).
+				if s, ok := st.(*ast.GoStmt); ok {
+					if fl, ok := s.Call.Fun.(*ast.FuncLit); ok {
+						if fl.Body != nil {
+							simBranch(func() { walkStmts(fl.Body.List) })
+						}
+					} else {
+						applyCall(s.Call)
+					}
+					continue
+				}
+				// Labeled statements, decls, inc/dec, send, etc: not
 				// lock-relevant in their statement form; nested blocks inside
 				// them are rare and the conservative branch-copy pattern
 				// above covers the common shapes.

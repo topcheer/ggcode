@@ -362,3 +362,34 @@ func workerV2(mu *sync.Mutex) {
 		t.Fatalf("Issue #1099: expected 1 warning (funcName changed), got %d: %v", len(warnings), warnings)
 	}
 }
+
+// TestCheckLockWithoutUnlock_ClosureBodies pins #2554: the #2433 sequential
+// rewrite dropped closure-body lock detection (walkStmts had no GoStmt/
+// FuncLit handling). `go func(){ mu.Lock() }()` is a PERMANENT deadlock -
+// the exact class this checker exists for.
+func TestCheckLockWithoutUnlock_ClosureBodies(t *testing.T) {
+	body := func(fn string) string {
+		return "package main\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\n" + fn + "\n"
+	}
+	cases := []struct {
+		name string
+		fn   string
+		want int
+	}{
+		{"go closure leak", `func w() { go func() { mu.Lock(); process() }() }`, 1},
+		{"go closure correct", `func w() { go func() { mu.Lock(); defer mu.Unlock(); process() }() }`, 0},
+		{"assigned funclit leak", `func w() { f := func() { mu.Lock(); process() }; f() }`, 1},
+		{"assigned funclit correct", `func w() { f := func() { mu.Lock(); defer mu.Unlock() }; f() }`, 0},
+		{"immediately invoked funclit leak", `func w() { func() { mu.Lock() }() }`, 1},
+		{"direct leak still detected", `func w() { mu.Lock(); process() }`, 1},
+		{"outer return not polluted by closure frame", `func w() { f := func() { mu.Lock() }; _ = f; return }`, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings := checkLockWithoutUnlock("test.go", "", body(tc.fn))
+			if got := len(warnings); got != tc.want {
+				t.Errorf("%s: warnings=%d want %d (got %v)", tc.name, got, tc.want, warnings)
+			}
+		})
+	}
+}
