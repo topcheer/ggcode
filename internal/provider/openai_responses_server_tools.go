@@ -32,9 +32,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-// hasHostedTools reports whether any hosted (server-side) tool is configured.
-func (p *OpenAIResponsesProvider) hasHostedTools() bool { return len(p.serverTools) > 0 }
-
 // responsesHostedTool renders one configured server tool as a Responses API
 // hosted-tool entry. Hosted tools carry no name/parameters - they are
 // addressed purely by type. Unknown types are rejected (fail closed).
