@@ -204,3 +204,28 @@ func TestReversibilityMakeTargetSensitivity(t *testing.T) {
 		}
 	}
 }
+
+// TestReversibilityMultiGitGlobalFlagStripping pins #2560: the range
+// snapshot in stripGitGlobalFlagTokens left later git segments unstripped
+// after the first rebuild - the subcommand anchored on "-C" and the
+// destructive bigram was silently missed.
+func TestReversibilityMultiGitGlobalFlagStripping(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		want bool
+	}{
+		{"second git clean -fd missed pre-fix", "git -C a status && git -C b clean -fd", true},
+		{"second git reset --hard missed pre-fix", "git -C a log && git -C b reset --hard", true},
+		{"single command with -C still detected", "git -C b clean -fd", true},
+		{"first git flagless second with -C detected", "git status && git -C b clean -fd", true},
+		{"benign multi-git no false positive", "git -C a status && git -C b log", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isDestructiveGit(tc.cmd); got != tc.want {
+				t.Errorf("isDestructiveGit(%q) = %v, want %v", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}

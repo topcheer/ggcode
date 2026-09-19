@@ -283,8 +283,15 @@ func isDestructiveGitSub(s string) bool {
 // stripGitGlobalFlagTokens removes the global-flag segment (plus consumed
 // values) sitting between `git` and its subcommand. #2255 H1, reversibility layer.
 func stripGitGlobalFlagTokens(tokens []string) []string {
-	for i, t := range tokens {
-		if strings.Trim(t, "\"'") != "git" {
+	// #2560: explicit index loop, NOT range - the range expression is
+	// snapshotted once, so rebuilding `tokens` below left i/t reading the
+	// OLD slice while tokens[j]/len(tokens) read the new one. The second
+	// git segment's global flags then never stripped (sub anchored on
+	// "-C" -> destructive bigram silently missed). The sibling layer
+	// (normalizeGitGlobalFlags) uses this exact pattern with a comment
+	// calling out the same trap.
+	for i := 0; i < len(tokens); i++ {
+		if strings.Trim(tokens[i], "\"'") != "git" {
 			continue
 		}
 		j := i + 1
@@ -301,6 +308,8 @@ func stripGitGlobalFlagTokens(tokens []string) []string {
 		if j > i+1 && j <= len(tokens) {
 			// rewrite in place and KEEP SCANNING (#2255 F4): later git
 			// occurrences in the same token stream need stripping too.
+			// i stays put: git remains at i in the rewritten slice and the
+			// loop's i++ advances to the first tail element (old tokens[j]).
 			tokens = append(append([]string{}, tokens[:i+1]...), tokens[j:]...)
 		}
 	}
