@@ -83,3 +83,30 @@ func TestIssue2205RemoteDangerousAllowedSemantics(t *testing.T) {
 		t.Fatalf("garbage mode name must error with validation message, got %v", err)
 	}
 }
+
+// R82 acceptance of #2185 flagged the missing direct cases: SwitchMode
+// escalation to bypass refused (gate closed) and passed (opt-in), not
+// just the garbage-name validation path above. The refusal happens
+// before the agent lookup, so no live agent is needed.
+func TestIssue2185DaemonSwitchModeEscalationGate(t *testing.T) {
+	// Gate closed (no override, no instance config): valid escalation
+	// target must be refused by the opt-in gate, not by "no agent".
+	err := (&DaemonBridge{}).SwitchMode("bypass")
+	if err == nil || !strings.Contains(err.Error(), "remote_dangerous_commands") {
+		t.Fatalf("escalation without opt-in must hit the gate, got %v", err)
+	}
+	// Gate open (override true): the gate must pass - the call then fails
+	// at the agent lookup with a DIFFERENT error, proving the gate let it
+	// through.
+	allow := true
+	err = (&DaemonBridge{remoteDangerousOverride: &allow}).SwitchMode("bypass")
+	if err == nil || !strings.Contains(err.Error(), "no agent attached") {
+		t.Fatalf("opt-in must open the gate and reach the agent lookup, got %v", err)
+	}
+	// Ungated level switch: even with the gate closed, a non-escalation
+	// mode must NOT be refused by the gate (same downstream error).
+	err = (&DaemonBridge{}).SwitchMode("auto")
+	if err == nil || !strings.Contains(err.Error(), "no agent attached") {
+		t.Fatalf("non-escalation switch must not be gated, got %v", err)
+	}
+}

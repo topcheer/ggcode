@@ -412,6 +412,10 @@ func listTarFromReader(r io.Reader, limited *countingReader) ([]archiveFile, int
 		}
 		d, err := io.ReadAll(io.LimitReader(tr, maxArchiveEntrySize+1))
 		if err != nil {
+			// #1539: mirror the zip-side fix - a mid-entry read failure
+			// (truncated stream, CRC error) must keep the entry in the
+			// inventory with a marker instead of vanishing it silently.
+			files = append(files, archiveFile{name: hdr.Name, data: []byte(fmt.Sprintf("[unreadable: %v]", err))})
 			continue
 		}
 		files = append(files, archiveFile{name: hdr.Name, data: d})
