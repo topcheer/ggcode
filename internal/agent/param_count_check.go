@@ -239,9 +239,14 @@ func inspectFuncLit(lit *ast.FuncLit, fset *token.FileSet) *paramCountInstance {
 	}
 }
 
-// isTestOrBenchFunction returns true for Test/Benchmark function names.
+// isTestOrBenchFunction returns true for Test/Benchmark/Fuzz function names.
+// Fuzz targets (Go 1.18+, FuzzXxx(f *testing.F)) are the third standard test
+// entry point compiled and executed by `go test`; the many-returns and
+// many-params exemption rationale for Test/Benchmark applies to them
+// identically (#2558).
 func isTestOrBenchFunction(name string) bool {
-	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark")
+	return strings.HasPrefix(name, "Test") || strings.HasPrefix(name, "Benchmark") ||
+		strings.HasPrefix(name, "Fuzz")
 }
 
 // countParams counts the total number of named parameters in a FieldList.

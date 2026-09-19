@@ -301,6 +301,12 @@ func registerAllChecks() {
 		{Name: "param-count", Langs: []Language{LangGo}, Run: func(ctx CheckContext) []string {
 			return checkExcessiveParams(ctx.FilePath, ctx.OldContent, ctx.NewContent)
 		}},
+		// #2558: return-count - SonarQube S114 excessive return statements
+		// (6+). Fully implemented + unit tested through #142/#157/#1193, but
+		// never registered: a zero-wiring dead detector (#499 class). Delta-
+		// aware via receiver-type+name fingerprint multiset, position-
+		// independent - the same guarantees the unit tests already pin.
+		{Name: "return-count", Langs: []Language{LangGo}, Run: sliceCheck(checkExcessiveReturns)},
 		// #503: there is deliberately NO "assertion-weakening" entry here.
 		// checkAssertionWeakening (born 3129668f, unregistered by the
 		// fc5c4aad critical-only refactor) was DELETED, not resurrected:

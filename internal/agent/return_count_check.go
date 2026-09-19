@@ -17,7 +17,7 @@ package agent
 //   - Zero-LLM-cost: deterministic AST analysis (go/ast)
 //   - Delta-aware: only flags NEW instances introduced by this edit
 //   - Threshold: 6+ return statements (SonarQube default)
-//   - Skips test functions (TestXxx) which legitimately use table-driven returns
+//   - Skips test functions (Test/Benchmark/Fuzz) which legitimately use many returns
 //   - Skips anonymous closures (common for early-exit patterns)
 //   - Capped at 3 warnings per file
 
@@ -61,7 +61,7 @@ func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// #1193: the Test*/Benchmark* name exemption applies only to _test.go
+	// #1193: the Test*/Benchmark*/Fuzz* name exemption applies only to _test.go
 	// files - go test only ever compiles such functions from _test.go, so a
 	// Test-prefixed business function in production code (TestConnection, ...)
 	// must still be checked. Mirrors the param_count_check #1187 fix.
