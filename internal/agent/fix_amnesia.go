@@ -397,20 +397,3 @@ func appendIfMissing(slice []string, s string) []string {
 	}
 	return append(slice, s)
 }
-
-// classifyBuildError classifies errors from build/test output.
-// Returns the category and the file mentioned.
-func classifyBuildError(output string) (category, file string) {
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		cat, f := classifyToolError("build", line)
-		if cat != "" {
-			return cat, f
-		}
-	}
-	return "", ""
-}
