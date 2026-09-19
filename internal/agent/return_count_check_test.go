@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -188,5 +189,28 @@ func complex(x int) int {
 	warnings := checkExcessiveReturns("test.go", old, shifted)
 	if len(warnings) != 0 {
 		t.Errorf("#157 regression: line shift re-flagged pre-existing issue: %v", warnings)
+	}
+}
+
+// TestExcessiveReturnsGrowthNotMasked pins #2562: the delta fingerprint
+// includes the return count - editing an existing over-threshold function
+// so it grows (8 -> 12) is the detector's core target and must warn;
+// same-content line moves (comment insert) stay suppressed (#157).
+func TestExcessiveReturnsGrowthNotMasked(t *testing.T) {
+	mk := func(rets int, extra string) string {
+		body := "package p\n\nfunc classify(x int) int {\n" + extra
+		for i := 0; i < rets; i++ {
+			body += fmt.Sprintf("\tif x == %d { return %d }\n", i, i)
+		}
+		return body + "\n\treturn -1\n}\n"
+	}
+	old8 := mk(8, "")
+	new12 := mk(12, "")
+	if w := checkExcessiveReturns("a.go", old8, new12); len(w) != 1 {
+		t.Errorf("growth 8->12: warnings=%d, want 1 (got %v)", len(w), w)
+	}
+	old8c := mk(8, "// moved down\n")
+	if w := checkExcessiveReturns("b.go", old8c, old8); len(w) != 0 {
+		t.Errorf("comment-only move: warnings=%d, want 0 (#157 contract, got %v)", len(w), w)
 	}
 }

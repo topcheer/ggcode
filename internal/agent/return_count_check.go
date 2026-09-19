@@ -49,8 +49,14 @@ type returnCountInstance struct {
 // handle are different functions whose identical bare names must not collide,
 // silently absorbing a NEW same-named method as pre-existing (#1193, same
 // family as the param_count_check #1149 fix).
+// #2562: the COUNT is part of the key too - a same-named function whose
+// return count grows while being edited (8 -> 12) is the detector's core
+// target, and the #508 tombstone explicitly condemns funcName-level deltas
+// that mask same-function growth. Sibling-consistent with pcFingerprint
+// (param count is a key part there as well). Line-move suppression (#157)
+// is unaffected: moving lines does not change the count.
 func (i returnCountInstance) rcFingerprint() string {
-	return i.recvType + "|" + i.funcName
+	return fmt.Sprintf("%s|%s|%d", i.recvType, i.funcName, i.count)
 }
 
 func checkExcessiveReturns(filePath, oldContent, newContent string) []string {
