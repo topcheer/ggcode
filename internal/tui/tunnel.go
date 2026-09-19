@@ -232,17 +232,6 @@ func (m *Model) cancelTunnelShareBootstrapCapture() {
 	state.mu.Unlock()
 }
 
-func (m *Model) captureTunnelShareBootstrapEvent(ev tunnel.GatewayMessage) bool {
-	state := m.ensureTunnelShareBootstrapState()
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if !state.active {
-		return false
-	}
-	state.pending = append(state.pending, ev)
-	return true
-}
-
 func stopDetachedTunnelGracefully(sess *tunnel.Session, broker *tunnel.Broker, timeout time.Duration) {
 	agentruntime.StopSharedTunnelGracefully(sess, broker, timeout)
 }
