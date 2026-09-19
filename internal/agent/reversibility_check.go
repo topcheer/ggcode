@@ -76,7 +76,17 @@ func (r *reversibilityState) recordSafetySignal(toolName, args string) {
 				r.buildRan = true
 			}
 		case "make", "build":
-			r.buildRan = true
+			// #2552: only real build targets count as build verification.
+			// `make clean/fmt/tidy/install-*` used to flip buildRan
+			// unconditionally, silently disarming the commit/push gate the
+			// same way #2255's "build: bump" commit message did. A bare
+			// `make` (default target is conventionally all/build) stays
+			// conservative-build; the JSON envelope form is
+			// {"command":"make"} -> tokens [command make].
+			bareMake := len(tokens) <= 1 || (tokens[0] == "command" && len(tokens) == 2)
+			if cmd0 == "build" || bareMake || hasCommandToken(tokens[1:], "build", "all", "verify", "verify-ci") {
+				r.buildRan = true
+			}
 			if hasCommandToken(tokens[1:], "test", "check") {
 				r.testsRan = true
 			}

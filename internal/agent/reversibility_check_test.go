@@ -172,3 +172,35 @@ func TestReversibilityCommitAfterStagingNoWarn(t *testing.T) {
 		t.Fatalf("expected no warning after staging, got: %s", guidance)
 	}
 }
+
+// TestReversibilityMakeTargetSensitivity pins #2552: non-build make targets
+// (clean/fmt/tidy/install-*) must NOT flip buildRan - they used to disarm the
+// commit/push "verify first" guidance without any real compilation.
+func TestReversibilityMakeTargetSensitivity(t *testing.T) {
+	for _, tc := range []struct {
+		cmd   string
+		build bool
+		tests bool
+	}{
+		{`make clean`, false, false},
+		{`make fmt`, false, false},
+		{`make tidy`, false, false},
+		{`make install-git-hooks`, false, false},
+		{`make`, true, false},               // bare make: default target is conventionally all/build
+		{`{"command":"make"}`, true, false}, // bare make via JSON envelope
+		{`make build`, true, false},
+		{`make all`, true, false},
+		{`make verify-ci`, true, false},
+		{`make test`, false, true},
+		{`make check`, false, true},
+	} {
+		r := newReversibilityState()
+		r.recordSafetySignal("run_command", tc.cmd)
+		if r.buildRan != tc.build {
+			t.Errorf("%s: buildRan=%v, want %v", tc.cmd, r.buildRan, tc.build)
+		}
+		if r.testsRan != tc.tests {
+			t.Errorf("%s: testsRan=%v, want %v", tc.cmd, r.testsRan, tc.tests)
+		}
+	}
+}
