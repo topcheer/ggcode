@@ -313,39 +313,3 @@ func stripGitGlobalFlagTokens(tokens []string) []string {
 	}
 	return tokens
 }
-
-// segmentHasToken reports whether tok appears in the same command segment as
-// the `git` token - the scan stops at command separators.
-// #2255 M1: `git checkout main && git log -- file` must not fire the
-// checkout branch via the second command's `--`.
-func segmentHasToken(tokens []string, owner, tok string) bool {
-	return segmentHasTokenFunc(tokens, owner, func(t string) bool { return t == tok })
-}
-
-func segmentHasTokenFunc(tokens []string, owner string, match func(string) bool) bool {
-	// every owner segment is checked: a destructive flag on the SECOND
-	// git in `git status && git reset --hard` must still be seen
-	// (#2255 F3 review residual).
-	for i, t := range tokens {
-		if strings.Trim(t, "\"'") != owner {
-			continue
-		}
-		segmentDone := false
-		for _, u := range tokens[i+1:] {
-			switch u {
-			case "&&", "||", "|", "&":
-				segmentDone = true
-			}
-			if segmentDone {
-				break
-			}
-			if u == ";" || strings.HasPrefix(u, ";") {
-				break
-			}
-			if match(u) {
-				return true
-			}
-		}
-	}
-	return false
-}

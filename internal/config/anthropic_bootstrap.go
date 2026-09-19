@@ -21,10 +21,6 @@ type claudeSettingsFile struct {
 	Env map[string]string `json:"env"`
 }
 
-func applyFirstLaunchAnthropicBootstrap(cfg *Config) bool {
-	return applyFirstLaunchAnthropicBootstrapWith(cfg, nil)
-}
-
 // applyFirstLaunchAnthropicBootstrapWith bootstraps from env credentials.
 // lookup is the runtime env map (process env + keys.env, #2284-A): after the
 // wholesale Setenv loop was removed, keys.env values no longer live in the
@@ -89,10 +85,6 @@ func isBootstrapKnownHost(rawURL string) bool {
 		}
 	}
 	return false
-}
-
-func preferredAnthropicCredential() (string, string) {
-	return preferredAnthropicCredentialWith(os.Getenv)
 }
 
 func preferredAnthropicCredentialWith(envOr func(string) string) (string, string) {
