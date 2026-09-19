@@ -237,11 +237,3 @@ func (a *Agent) recordEffectAttempt(name string, args []byte, res tool.Result) s
 	}
 	return hint
 }
-
-// resetEffectLedgerForTests clears ledger state between tests.
-func (e *effectLedgerState) resetForTests() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.records = nil
-	e.warned = 0
-}
