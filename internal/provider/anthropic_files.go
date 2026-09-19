@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/topcheer/ggcode/internal/debug"
@@ -46,18 +47,25 @@ type fileUploader struct {
 	enabled bool
 
 	mu             sync.Mutex
-	cache          map[string]string // sha256 hex -> file_id
-	failed         map[string]bool   // sha256 hex -> transient failure, may retry later
-	endpointBroken bool              // endpoint answered non-retryably: stop trying entirely
+	cache          map[string]string    // sha256 hex -> file_id
+	failed         map[string]time.Time // sha256 hex -> transient failure time; retried after filesRetryTTL
+	endpointBroken bool                 // endpoint answered non-retryably: stop trying entirely
 	uploads        int
 }
+
+// filesRetryTTL is how long a transient upload failure (429/5xx/network)
+// suppresses further upload attempts for that one content hash (#2568).
+// After it elapses the next turn retries with a fresh attempt, matching the
+// documented "may retry later" contract. Package-level var so tests can
+// shorten it.
+var filesRetryTTL = 2 * time.Minute
 
 func newFileUploader(client *anthropic.Client, baseURL string) *fileUploader {
 	return &fileUploader{
 		client:  client,
 		enabled: filesAPIAllowed(baseURL),
 		cache:   map[string]string{},
-		failed:  map[string]bool{},
+		failed:  map[string]time.Time{},
 	}
 }
 
@@ -98,9 +106,14 @@ func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (f
 		u.mu.Unlock()
 		return id, true
 	}
-	if u.failed[key] {
-		u.mu.Unlock()
-		return "", false
+	if t, hit := u.failed[key]; hit {
+		if time.Since(t) < filesRetryTTL {
+			u.mu.Unlock()
+			return "", false
+		}
+		// Expired transient failure (#2568): retry with a fresh attempt
+		// instead of poisoning this hash for the provider lifetime.
+		delete(u.failed, key)
 	}
 	u.mu.Unlock()
 
@@ -112,6 +125,7 @@ func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (f
 
 	u.mu.Lock()
 	u.cache[key] = id
+	delete(u.failed, key) // stale transient marker, if any, must not survive a success
 	u.uploads++
 	u.mu.Unlock()
 	debug.Log("anthropic-files", "uploaded image to Files API: %d bytes %s -> %s (dedupe #%d)", len(data), mime, id, u.uploads)
@@ -134,8 +148,9 @@ func (u *fileUploader) upload(ctx context.Context, mime string, data []byte, key
 // noteFailure classifies an upload error. Non-retryable 4xx (except 429)
 // means the endpoint does not implement the Files API — disable the uploader
 // for the provider lifetime instead of re-attempting every turn. Transient
-// failures (network, 429, 5xx) poison only this content hash; the next turn
-// may retry with a fresh attempt.
+// failures (network, 429, 5xx) poison only this content hash for
+// filesRetryTTL; once the TTL elapses, resolve retries with a fresh attempt
+// (#2568 — the old never-expiring marker made "may retry later" unreachable).
 func (u *fileUploader) noteFailure(key string, err error) {
 	permanent := false
 	var apiErr *anthropic.Error
@@ -156,8 +171,8 @@ func (u *fileUploader) noteFailure(key string, err error) {
 		debug.Log("anthropic-files", "Files API unavailable on this endpoint (%v); disabling for provider lifetime", err)
 		return
 	}
-	u.failed[key] = true
-	debug.Log("anthropic-files", "Files upload failed (transient): %v; falling back to base64 for this image", err)
+	u.failed[key] = time.Now()
+	debug.Log("anthropic-files", "Files upload failed (transient): %v; falling back to base64 for this image (retry in %s)", err, filesRetryTTL)
 }
 
 // filesExtForMIME maps the image MIME types Anthropic accepts to file
