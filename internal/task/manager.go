@@ -156,6 +156,22 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 	if opts.Status != nil && !IsValidStatus(string(*opts.Status)) {
 		return Task{}, fmt.Errorf("invalid status %q", *opts.Status)
 	}
+	// #2581: virtual-graph edges this call will introduce. The
+	// pre-validation loops below used to judge each edge against the
+	// ORIGINAL graph; edges from the OTHER array of the same call were
+	// only re-checked mid-apply (after Status and earlier edges had been
+	// written), so a transitive cross-array cycle left a half-applied,
+	// sticky-poisoned board (no remove-edge op exists; retry hit the
+	// pre-validation wall). Simulate the full edge set up front so every
+	// cycle check sees the post-apply graph.
+	virtualBlockedBy := make(map[string][]string, len(opts.AddBlocks)+1)
+	if len(opts.AddBlockedBy) > 0 {
+		virtualBlockedBy[taskID] = opts.AddBlockedBy // apply writes taskID.BlockedBy += depID
+	}
+	for _, blockID := range opts.AddBlocks {
+		virtualBlockedBy[blockID] = append(virtualBlockedBy[blockID], taskID) // apply writes blockID.BlockedBy += taskID
+	}
+
 	for _, blockID := range opts.AddBlocks {
 		if blockID == taskID {
 			return Task{}, fmt.Errorf("task %q cannot block itself (self-dependency)", taskID)
@@ -167,7 +183,7 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		// whether target is reachable from start's BlockedBy chain; adding
 		// "taskID blocks blockID" creates a cycle iff taskID is already
 		// transitively blocked by blockID, i.e. wouldCreateCycle(taskID, blockID).
-		if m.wouldCreateCycle(taskID, blockID) {
+		if m.wouldCreateCycleVirtual(virtualBlockedBy, taskID, blockID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q is (transitively) blocked by task %q — cannot add block %q → %q", taskID, blockID, taskID, blockID)
 		}
 	}
@@ -180,15 +196,12 @@ func (m *Manager) Update(taskID string, opts UpdateOptions) (Task, error) {
 		}
 		// #1297: adding "depID blocks taskID" - cycle iff depID is already
 		// transitively blocked by taskID.
-		if m.wouldCreateCycle(depID, taskID) {
-			return Task{}, fmt.Errorf("circular dependency detected adding blocked-by %q", depID)
+		if m.wouldCreateCycleVirtual(virtualBlockedBy, depID, taskID) {
+			return Task{}, fmt.Errorf("circular dependency detected adding blocked-by %q (including edges from this call's addBlocks)", depID)
 		}
-		// #1345: cross-array cycle. If depID is also in AddBlocks, the
-		// apply phase writes "taskID blocks depID" first (depID.BlockedBy
-		// gains taskID) and only then detects that this blockedBy edge
-		// closes a 2-cycle - after partial mutation, violating the
-		// "error = not modified" contract. "X blocks B" and "B blocks X"
-		// is always a cycle, so reject up front.
+		// #1345: direct cross-array cycle kept as a fast path with its
+		// clearer message - the virtual-graph check above already covers
+		// the transitive generalization (#2581).
 		if contains(opts.AddBlocks, depID) {
 			return Task{}, fmt.Errorf("circular dependency detected: task %q cannot both block and be blocked by task %q", taskID, depID)
 		}
@@ -310,6 +323,14 @@ func (m *Manager) hasTask(id string) bool {
 // wouldCreateCycle(C, A) traverses C.BlockedBy → [B], B.BlockedBy → [A]
 // finds A → returns true (cycle detected).
 func (m *Manager) wouldCreateCycle(start, target string) bool {
+	return m.wouldCreateCycleVirtual(nil, start, target)
+}
+
+// wouldCreateCycleVirtual is wouldCreateCycle over the task graph plus a
+// set of prospective BlockedBy edges (keyed by task ID) - #2581: lets
+// pre-validation see the graph AS IT WILL BE after this call's addBlocks /
+// addBlockedBy both apply, so every cycle is rejected before any mutation.
+func (m *Manager) wouldCreateCycleVirtual(extraBlockedBy map[string][]string, start, target string) bool {
 	visited := make(map[string]bool)
 	var check func(taskID string) bool
 	check = func(taskID string) bool {
@@ -325,6 +346,11 @@ func (m *Manager) wouldCreateCycle(start, target string) bool {
 			return false
 		}
 		for _, blockerID := range t.BlockedBy {
+			if check(blockerID) {
+				return true
+			}
+		}
+		for _, blockerID := range extraBlockedBy[taskID] {
 			if check(blockerID) {
 				return true
 			}

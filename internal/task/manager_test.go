@@ -224,3 +224,54 @@ func TestUpdateCrossArrayCycleNotModified(t *testing.T) {
 		t.Errorf("task-2 must be unmodified on error, got blockedBy=%v", b.BlockedBy)
 	}
 }
+
+// TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically pins #2581:
+// Update(T, {Status: completed, AddBlocks: [B], AddBlockedBy: [C]}) with
+// C already blocked-by B closes a TRANSITIVE cross-array cycle
+// (C -> B -> [new T edge]). The old pre-validation judged each edge on
+// the original graph and only caught this mid-apply - after Status and
+// the Blocks edges had been written, violating "error = not modified"
+// and sticky-poisoning the board (retry then failed pre-validation).
+func TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically(t *testing.T) {
+	m := NewManager()
+	b := m.Create("B", "", "", nil)
+	c := m.Create("C", "", "", nil)
+	tt := m.Create("T", "", "", nil)
+	// C blocked-by B
+	if _, err := m.Update(c.ID, UpdateOptions{AddBlockedBy: []string{b.ID}}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	done := StatusCompleted
+	_, err := m.Update(tt.ID, UpdateOptions{
+		Status:       &done,
+		AddBlocks:    []string{b.ID},
+		AddBlockedBy: []string{c.ID},
+	})
+	if err == nil {
+		t.Fatal("transitive cross-array cycle must be rejected")
+	}
+
+	// Contract: error = NOT modified. Nothing may have been written.
+	got, _ := m.Get(tt.ID)
+	if got.Status != StatusPending {
+		t.Fatalf("#2581: status half-applied: %q", got.Status)
+	}
+	if len(got.Blocks) != 0 {
+		t.Fatalf("#2581: blocks half-applied: %v", got.Blocks)
+	}
+	gotB, _ := m.Get(b.ID)
+	// Setup gave B the reverse link Blocks=[C]; the rejected call must
+	// not have added the T edges (Blocks grows [C,T], BlockedBy=[T]).
+	if len(gotB.BlockedBy) != 0 || len(gotB.Blocks) != 1 || gotB.Blocks[0] != c.ID {
+		t.Fatalf("#2581: B edges half-applied: blocks=%v blockedBy=%v", gotB.Blocks, gotB.BlockedBy)
+	}
+	gotC, _ := m.Get(c.ID)
+	if len(gotC.BlockedBy) != 1 || gotC.BlockedBy[0] != b.ID {
+		t.Fatalf("#2581: C edges mutated: %v", gotC.BlockedBy)
+	}
+	// Retry must fail the SAME way (pre-validation), not differently.
+	if _, err2 := m.Update(tt.ID, UpdateOptions{Status: &done, AddBlocks: []string{b.ID}, AddBlockedBy: []string{c.ID}}); err2 == nil {
+		t.Fatal("retry after rejection must also fail")
+	}
+}
