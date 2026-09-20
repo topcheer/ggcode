@@ -298,7 +298,7 @@ func (t *KnowledgeGraphTool) doLink(s *kgStore, p *kgParams) (Result, error) {
 	if len(s.Edges) >= kgMaxEdges {
 		return Result{IsError: true, Content: fmt.Sprintf("edge limit (%d)", kgMaxEdges)}, nil
 	}
-	s.Edges = append(s.Edges, kgEdge{From: p.ID, To: p.To, Type: p.Type, RecordedAt: now, ValidFrom: vf})
+	s.Edges = append(s.Edges, kgEdge{From: p.ID, To: p.To, Type: p.Type, RecordedAt: now, ValidFrom: defaultValidFrom(vf, now)})
 	if err := t.save(s); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save: %v", err)}, nil
 	}
@@ -574,6 +574,28 @@ func (t *KnowledgeGraphTool) doStats(s *kgStore) (Result, error) {
 }
 
 // --- Persistence ---
+
+// defaultValidFrom pins #2595: an omitted (or explicit "now") valid_from
+// means the edge starts at the link moment, NOT at negative infinity. The
+// parameter schema documents "defaults to now"; a nil ValidFrom made the
+// edge visible at ANY as_of point, even well before the fact was asserted
+// (trace as_of=2000-01-01 showed edges linked in 2026).
+func defaultValidFrom(vf *time.Time, now time.Time) *time.Time {
+	if vf != nil {
+		return vf
+	}
+	return &now
+}
+
+// Clone implements the Cloner contract (tool.go): this tool holds mutable
+// state (WorkingDir) plus a resolution cache pinned to that directory, so
+// every agent/worktree must get its own instance. #2596: without this, the
+// first agent to touch the graph pinned filePath/cache/loaded forever; every
+// later syncToolWorkingDir override landed the data in the wrong workspace
+// with a silent fake success.
+func (t *KnowledgeGraphTool) Clone() Tool {
+	return &KnowledgeGraphTool{WorkingDir: t.WorkingDir}
+}
 
 func (t *KnowledgeGraphTool) kgPath() string {
 	if t.filePath != "" {

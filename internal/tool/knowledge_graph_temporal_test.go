@@ -56,8 +56,10 @@ func TestKGLinkSetsTemporalDefaults(t *testing.T) {
 	if e.RecordedAt.IsZero() {
 		t.Error("recorded_at not set on link")
 	}
-	if e.ValidFrom != nil {
-		t.Errorf("valid_from should default to nil (recorded_at acts as start), got %v", *e.ValidFrom)
+	if e.ValidFrom == nil {
+		t.Error("#2595: valid_from must default to the link moment (schema: defaults to now), got nil")
+	} else if !e.ValidFrom.Equal(e.RecordedAt) {
+		t.Errorf("default valid_from should equal recorded_at (link moment), got %v vs %v", *e.ValidFrom, e.RecordedAt)
 	}
 	if e.ValidUntil != nil {
 		t.Errorf("fresh edge must not be invalidated, got %v", *e.ValidUntil)
@@ -157,6 +159,11 @@ func TestKGTraceFiltersInvalidatedAndAsOf(t *testing.T) {
 	}
 	past := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	store.Edges[0].ValidUntil = &past
+	// #2595: default ValidFrom is now (the link moment). For a deterministic
+	// historical-window test, model a fact that held in 2025: backdate its
+	// ValidFrom to 2024 so the [ValidFrom, ValidUntil] interval is real.
+	started := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	store.Edges[0].ValidFrom = &started
 	if err := tool.save(store); err != nil {
 		t.Fatal(err)
 	}
