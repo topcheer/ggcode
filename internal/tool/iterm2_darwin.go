@@ -63,6 +63,10 @@ func iterm2SessionLookup(ctx context.Context, sessionID string) string {
 // iterm2WriteText writes text to a session using iTerm2's native AppleScript.
 // Unlike Warp/Ghostty, iTerm2 has a native "write text" command that types
 // directly into the target session without needing System Events.
+// #2594: `newline NO` is REQUIRED - iTerm2.sdef defaults write's newline
+// parameter to yes, which turned the pure-input action into "type text AND
+// press Return". kitty (send-text) and ghostty (input text) are pure input;
+// send_key exists separately when the caller wants execution.
 func iterm2WriteText(ctx context.Context, sessionID, text string) error {
 	spec := iterm2SessionSpecifier(sessionID)
 	lookup := iterm2SessionLookup(ctx, sessionID)
@@ -70,7 +74,7 @@ func iterm2WriteText(ctx context.Context, sessionID, text string) error {
 tell application "iTerm"
 	activate%s
 	tell %s
-		write text "%s"
+		write text "%s" newline NO
 	end tell
 end tell`, lookup, spec, escapeAS(text))
 	_, err := runAppleScript(ctx, script)

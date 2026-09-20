@@ -693,7 +693,13 @@ func (k *KittyTool) executeAction(ctx context.Context, windowID int, actionStr s
 	// Focus the target window first if a specific ID is given.
 	m := matchID(windowID)
 	if m != "" {
-		_, _ = kittyAtCtx(ctx, "focus-window", "--match="+m)
+		// action doesn't support --match, so focus the window first.
+		// #2597: the #1692 case-6 fix covered zoom but missed this twin
+		// site - a discarded focus error meant the action ran on the
+		// WRONG window and reported success.
+		if _, ferr := kittyAtCtx(ctx, "focus-window", "--match="+m); ferr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("kitty action: focusing window %d failed: %v", windowID, ferr)}
+		}
 	}
 
 	args := []string{"action"}
