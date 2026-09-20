@@ -64,9 +64,10 @@ func (t GitBlame) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	}
 	// #1687 case 4: the revision is argv'd BEFORE the "--" separator, so
 	// an agent-passed "-L10,20" or "--reverse" would be consumed by git as
-	// an OPTION, silently changing blame semantics. git_checkout guards
-	// its refs with validateRefName; blame was the loose sibling.
-	if err := validateRefName(revision); err != nil {
+	// an OPTION, silently changing blame semantics. #2590: validate as a
+	// revspec (leading '-'/'..' blocked, HEAD~N/^/@{...} legal), not a ref
+	// name - validateRefName's check-ref-format rules wrongly refused them.
+	if err := validateRevspec(revision); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid revision %q: %v", revision, err)}, nil
 	}
 
