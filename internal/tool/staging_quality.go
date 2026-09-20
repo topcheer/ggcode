@@ -234,8 +234,23 @@ func checkStagingFile(path string) []StagingIssue {
 	}
 
 	// 5. Generated code files.
+	// #1704 case 4 follow-up: the ide branch was fixed to anchored
+	// segment matching, but this branch kept bare Contains, so ".min.js"
+	// still matched config.min.json and "Wire.swift" matched
+	// Underwire.swift. Extension-like patterns (leading '.' or '_') must
+	// anchor to the END of the file name; bare names require an exact
+	// file-name match (same semantics as stagingPatternMatch's non-glob
+	// path).
+	nameLower := filepath.Base(lower)
 	for _, p := range generatedFilePatterns {
-		if strings.Contains(lower, strings.ToLower(p.pattern)) {
+		pl := strings.ToLower(p.pattern)
+		var matched bool
+		if strings.HasPrefix(pl, ".") || strings.HasPrefix(pl, "_") {
+			matched = strings.HasSuffix(nameLower, pl)
+		} else {
+			matched = nameLower == pl
+		}
+		if matched {
 			issues = append(issues, StagingIssue{
 				Path: path, Category: "generated", Reason: p.reason,
 			})
