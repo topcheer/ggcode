@@ -20,7 +20,7 @@ import (
 type lspPathTool struct {
 	name         string
 	description  string
-	workingDir   string
+	WorkingDir   string
 	sandboxCheck AllowedPathChecker
 	exec         func(context.Context, string, string) (string, error)
 }
@@ -28,7 +28,7 @@ type lspPathTool struct {
 type lspPositionTool struct {
 	name         string
 	description  string
-	workingDir   string
+	WorkingDir   string
 	sandboxCheck AllowedPathChecker
 	exec         func(context.Context, string, string, lsp.Position) (string, error)
 }
@@ -36,7 +36,7 @@ type lspPositionTool struct {
 type lspRangeTool struct {
 	name         string
 	description  string
-	workingDir   string
+	WorkingDir   string
 	sandboxCheck AllowedPathChecker
 	exec         func(context.Context, string, string, lsp.Range) (string, error)
 }
@@ -44,14 +44,14 @@ type lspRangeTool struct {
 type lspWorkspaceQueryTool struct {
 	name        string
 	description string
-	workingDir  string
+	WorkingDir  string
 	exec        func(context.Context, string, string) (string, error)
 }
 
 type lspRenameTool struct {
 	name         string
 	description  string
-	workingDir   string
+	WorkingDir   string
 	readSandbox  AllowedPathChecker
 	writeSandbox AllowedPathChecker
 	applyEdits   func(context.Context, string, string, lsp.Position, string) (string, error)
@@ -60,10 +60,24 @@ type lspRenameTool struct {
 type lspCallHierarchyTool struct {
 	name         string
 	description  string
-	workingDir   string
+	WorkingDir   string
 	sandboxCheck AllowedPathChecker
 	exec         func(context.Context, string, string) (string, error)
 }
+
+// Clone implements the Cloner contract (#2603): these tools hold a
+// per-agent WorkingDir (and the name/description/exec wiring is set at
+// registration), so every agent/worktree must get its own instance.
+// Without Clone the registry shared one instance whose WorkingDir was
+// frozen at registration - syncToolWorkingDir could not even see the old
+// unexported field, so LSP queries silently ran against the wrong
+// workspace after enter_worktree / spawn_agent.
+func (t lspPathTool) Clone() Tool           { return t }
+func (t lspPositionTool) Clone() Tool       { return t }
+func (t lspRangeTool) Clone() Tool          { return t }
+func (t lspWorkspaceQueryTool) Clone() Tool { return t }
+func (t lspRenameTool) Clone() Tool         { return t }
+func (t lspCallHierarchyTool) Clone() Tool  { return t }
 
 const lspToolTimeout = 30 * time.Second
 
@@ -258,7 +272,7 @@ func (t lspPathTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	}
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
-	out, err := t.exec(ctx, t.workingDir, path)
+	out, err := t.exec(ctx, t.WorkingDir, path)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -280,7 +294,7 @@ func (t lspPositionTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
-	out, err := t.exec(ctx, t.workingDir, path, lsp.Position{Line: args.Line, Character: args.Character})
+	out, err := t.exec(ctx, t.WorkingDir, path, lsp.Position{Line: args.Line, Character: args.Character})
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -304,7 +318,7 @@ func (t lspRangeTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
-	out, err := t.exec(ctx, t.workingDir, path, lsp.Range{
+	out, err := t.exec(ctx, t.WorkingDir, path, lsp.Range{
 		Start: lsp.Position{Line: args.StartLine, Character: args.StartCharacter},
 		End:   lsp.Position{Line: args.EndLine, Character: args.EndCharacter},
 	})
@@ -323,7 +337,7 @@ func (t lspWorkspaceQueryTool) Execute(ctx context.Context, input json.RawMessag
 	}
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
-	out, err := t.exec(ctx, t.workingDir, args.Query)
+	out, err := t.exec(ctx, t.WorkingDir, args.Query)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -340,13 +354,13 @@ func (t lspRenameTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
-	path, err := resolveLSPToolPath(args.Path, t.workingDir, t.readSandbox)
+	path, err := resolveLSPToolPath(args.Path, t.WorkingDir, t.readSandbox)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
-	out, err := t.applyEdits(ctx, t.workingDir, path, lsp.Position{Line: args.Line, Character: args.Character}, args.NewName)
+	out, err := t.applyEdits(ctx, t.WorkingDir, path, lsp.Position{Line: args.Line, Character: args.Character}, args.NewName)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -365,7 +379,7 @@ func (t lspCallHierarchyTool) Execute(ctx context.Context, input json.RawMessage
 	}
 	ctx, cancel := context.WithTimeout(ctx, lspToolTimeout)
 	defer cancel()
-	out, err := t.exec(ctx, t.workingDir, args.Item)
+	out, err := t.exec(ctx, t.WorkingDir, args.Item)
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
@@ -373,15 +387,15 @@ func (t lspCallHierarchyTool) Execute(ctx context.Context, input json.RawMessage
 }
 
 func (t lspPathTool) resolvePath(path string) (string, error) {
-	return resolveLSPToolPath(path, t.workingDir, t.sandboxCheck)
+	return resolveLSPToolPath(path, t.WorkingDir, t.sandboxCheck)
 }
 
 func (t lspPositionTool) resolvePath(path string) (string, error) {
-	return resolveLSPToolPath(path, t.workingDir, t.sandboxCheck)
+	return resolveLSPToolPath(path, t.WorkingDir, t.sandboxCheck)
 }
 
 func (t lspRangeTool) resolvePath(path string) (string, error) {
-	return resolveLSPToolPath(path, t.workingDir, t.sandboxCheck)
+	return resolveLSPToolPath(path, t.WorkingDir, t.sandboxCheck)
 }
 
 // maxLSPOutputBytes caps LSP tool results to protect the context window.
@@ -402,13 +416,13 @@ func capLSPOutput(s string) string {
 	return s[:cut] + "\n... [LSP output truncated]"
 }
 
-func resolveLSPToolPath(path, workingDir string, sandboxCheck AllowedPathChecker) (string, error) {
+func resolveLSPToolPath(path, WorkingDir string, sandboxCheck AllowedPathChecker) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
 	if !filepath.IsAbs(path) {
-		path = filepath.Join(workingDir, path)
+		path = filepath.Join(WorkingDir, path)
 	}
 	if sandboxCheck != nil && !sandboxCheck(path) {
 		return "", fmt.Errorf("error: path not allowed by sandbox policy")
@@ -513,12 +527,12 @@ func isIdentifierRune(r rune) bool {
 	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
-func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker) []Tool {
+func NewLSPTools(WorkingDir string, readSandbox, writeSandbox AllowedPathChecker) []Tool {
 	return []Tool{
 		lspPositionTool{
 			name:         "lsp_hover",
 			description:  "Get hover/type information for the symbol at a specific file position. Prefer this over text search for semantic questions.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
 				text, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) (string, error) {
@@ -538,7 +552,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPositionTool{
 			name:         "lsp_definition",
 			description:  "Go to definition for the symbol at a specific file position. Prefer this over text search for supported languages.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
 				locations, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.Location, error) {
@@ -562,7 +576,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPositionTool{
 			name:         "lsp_references",
 			description:  "Find references for the symbol at a specific file position.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
 				locations, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.Location, error) {
@@ -586,7 +600,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPositionTool{
 			name:         "lsp_document_highlights",
 			description:  "Find all occurrences of the symbol at a specific position within the CURRENT file, classified as read/write/text. Faster and more precise than lsp_references or grep for local edits - use this when you need to understand how a variable/function is used within one file.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
 				highlights, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.DocumentHighlight, error) {
@@ -619,7 +633,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPathTool{
 			name:         "lsp_symbols",
 			description:  "List document symbols for a source file.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string) (string, error) {
 				symbols, err := lsp.DocumentSymbols(ctx, workspace, path)
@@ -639,7 +653,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspWorkspaceQueryTool{
 			name:        "lsp_workspace_symbols",
 			description: "Search workspace symbols instead of broad text search when semantic symbol lookup is available.",
-			workingDir:  workingDir,
+			WorkingDir:  WorkingDir,
 			exec: func(ctx context.Context, workspace, query string) (string, error) {
 				symbols, err := lsp.WorkspaceSymbols(ctx, workspace, query)
 				if err != nil {
@@ -658,7 +672,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPathTool{
 			name:         "lsp_diagnostics",
 			description:  "Get diagnostics for a source file, including publishDiagnostics when the server pushes them.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string) (string, error) {
 				diagnostics, err := lsp.Diagnostics(ctx, workspace, path)
@@ -687,7 +701,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspRangeTool{
 			name:         "lsp_code_actions",
 			description:  "List available code actions for a source range.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, rng lsp.Range) (string, error) {
 				actions, err := lsp.CodeActions(ctx, workspace, path, rng)
@@ -717,7 +731,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspRenameTool{
 			name:         "lsp_rename",
 			description:  "Rename a symbol and apply the returned workspace edits to allowed files. When the rename touches 3+ files (high blast-radius), the result includes a prominent warning with the total file and edit count.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			readSandbox:  readSandbox,
 			writeSandbox: writeSandbox,
 			applyEdits: func(ctx context.Context, workspace, path string, pos lsp.Position, newName string) (string, error) {
@@ -741,7 +755,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPositionTool{
 			name:         "lsp_implementation",
 			description:  "Find implementations of an interface or abstract method at a specific file position.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
 				locations, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.Location, error) {
@@ -765,7 +779,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspPositionTool{
 			name:         "lsp_prepare_call_hierarchy",
 			description:  "Prepare call hierarchy items for the symbol at a specific file position. Returns items that can be used with lsp_incoming_calls and lsp_outgoing_calls.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, path string, pos lsp.Position) (string, error) {
 				items, err := runLSPPositionFallback(path, pos, func(candidate lsp.Position) ([]lsp.CallHierarchyItem, error) {
@@ -794,7 +808,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspCallHierarchyTool{
 			name:         "lsp_incoming_calls",
 			description:  "Get incoming calls (callers) for a call hierarchy item. The item JSON must come from a previous lsp_prepare_call_hierarchy result.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, itemJSON string) (string, error) {
 				var item lsp.CallHierarchyItem
@@ -822,7 +836,7 @@ func NewLSPTools(workingDir string, readSandbox, writeSandbox AllowedPathChecker
 		lspCallHierarchyTool{
 			name:         "lsp_outgoing_calls",
 			description:  "Get outgoing calls (callees) for a call hierarchy item. The item JSON must come from a previous lsp_prepare_call_hierarchy result.",
-			workingDir:   workingDir,
+			WorkingDir:   WorkingDir,
 			sandboxCheck: readSandbox,
 			exec: func(ctx context.Context, workspace, itemJSON string) (string, error) {
 				var item lsp.CallHierarchyItem
