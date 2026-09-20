@@ -258,15 +258,7 @@ func (g *GhosttyTool) executeSplit(ctx context.Context, terminalID, direction st
 	perform action "resize_split:%s,%d" on term`, resizeDir, pixAmt)
 	}
 
-	var cmdPart string
-	if strings.TrimSpace(command) != "" {
-		// #832: working_dir went through AppleScript escaping only — no
-		// shell-level quoting. 'cd /Volumes/new ggai' broke ('too many
-		// arguments') and a crafted working_dir executed as-is. Match the
-		// iTerm2 implementation: single-quote with shell escaping.
-		cmdPart = fmt.Sprintf(`
-	input text "cd '%s' && %s" to newTerm`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
-	}
+	cmdPart := buildSplitCmdPart(command, wd)
 
 	script := fmt.Sprintf(`
 tell application "Ghostty"
@@ -284,6 +276,23 @@ end tell`, spec, dir, resizePart, cmdPart)
 		return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, size=%d%%, terminal_id=%s", dir, size, out)}
 	}
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s, terminal_id=%s", dir, out)}
+}
+
+// buildSplitCmdPart builds the "input text" fragment for a new split pane.
+// #832: working_dir went through AppleScript escaping only -- no shell-level
+// quoting. 'cd /Volumes/new ggai' broke ('too many arguments') and a crafted
+// working_dir executed as-is. Match the iTerm2 implementation: single-quote
+// with shell escaping.
+// #2589: command empty + working_dir set still cd's -- matches the iTerm2
+// split cd-only branch and the schema contract (working_dir is an
+// independent parameter, not a modifier of command). Without this,
+// split(working_dir=X) silently created the pane in the OLD cwd and later
+// input commands ran in the wrong directory.
+func buildSplitCmdPart(command, wd string) string {
+	if strings.TrimSpace(command) != "" {
+		return fmt.Sprintf("\n\tinput text \"cd '%s' && %s\" to newTerm", escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
+	}
+	return fmt.Sprintf("\n\tinput text \"cd '%s'\" to newTerm", escapeAS(escapeShellSingleQuote(wd)))
 }
 
 func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir string) Result {
