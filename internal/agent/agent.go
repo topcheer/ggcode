@@ -137,6 +137,8 @@ type Agent struct {
 	adversarialReviewRounds   int
 	adversarialReviewLastRun  string // task prompt of the last review; resets rounds per task
 	hookConfig                hooks.HookConfig
+	sessionStartFired         bool // on_session_start fired once per Agent lifetime
+	sessionEndFired           bool // on_session_end fired once (idempotent Close)
 	workingDir                string
 	sessionID                 string // current session ID; determines todo file path
 	checkpoints               *checkpoint.Manager
@@ -759,6 +761,28 @@ func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
 // Close releases resources held by the agent, including cancelling any
 // in-flight pre-compact operations. Should be called on shutdown.
 func (a *Agent) Close() {
+	// Session-end lifecycle hook (Claude Code SessionEnd parity): runs
+	// synchronously BEFORE teardown so state-flush hooks complete; bounded by
+	// each hook's configured timeout. Idempotent via sessionEndFired.
+	a.mu.Lock()
+	alreadyEnded := a.sessionEndFired
+	a.sessionEndFired = true
+	endHookCfg := a.hookConfig
+	endWorkDir := a.workingDir
+	endSessionID := a.sessionID
+	a.mu.Unlock()
+	if !alreadyEnded && len(endHookCfg.OnSessionEnd) > 0 {
+		res := hooks.RunSessionEndHooks(endHookCfg, hooks.HookEnv{
+			Event:            hooks.EventOnSessionEnd,
+			SessionID:        endSessionID,
+			Workspace:        endWorkDir,
+			WorkingDir:       endWorkDir,
+			SessionEndReason: "exit",
+		})
+		if res.Err != nil {
+			debug.Log("agent", "on_session_end hook error: %v", res.Err)
+		}
+	}
 	a.CancelPreCompact()
 	if a.shutdownCancel != nil {
 		a.shutdownCancel()
@@ -1305,6 +1329,51 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// were added by the agent and need to be appended to the JSONL file.
 	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
 		cm.StartRunTracking()
+	}
+	// Session lifecycle hook (Claude Code SessionStart/SessionEnd parity,
+	// https://code.claude.com/docs/en/hooks): fires once per Agent on the
+	// first user turn, BEFORE any per-run machinery (experience recall, goal
+	// drift capture). source distinguishes a fresh startup from a resumed
+	// session (restored context already holds messages). Blocking semantics
+	// mirror on_user_message (exit 2 / HTTP 403); non-blocking stdout is
+	// injected as a system context message so hooks can preload project
+	// context deterministically at session start.
+	a.mu.RLock()
+	startHookCfg := a.hookConfig
+	startWorkDir := a.workingDir
+	a.mu.RUnlock()
+	if len(startHookCfg.OnSessionStart) > 0 {
+		a.mu.Lock()
+		firstTurn := !a.sessionStartFired
+		a.sessionStartFired = true
+		a.mu.Unlock()
+		if firstTurn {
+			source := "startup"
+			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok && len(cm.Messages()) > 0 {
+				source = "resume"
+			}
+			ssRes := hooks.RunSessionStartHooks(startHookCfg, hooks.HookEnv{
+				Event:         hooks.EventOnSessionStart,
+				SessionID:     sid,
+				Workspace:     startWorkDir,
+				WorkingDir:    startWorkDir,
+				SessionSource: source,
+			})
+			if !ssRes.Allowed {
+				onEvent(provider.StreamEvent{
+					Type:  provider.StreamEventError,
+					Error: fmt.Errorf("%s", ssRes.Output),
+				})
+				return fmt.Errorf("session start blocked by hook: %s", ssRes.Output)
+			}
+			if out := strings.TrimSpace(ssRes.Output); out != "" && a.contextManager != nil {
+				a.contextManager.Add(provider.Message{
+					Role:    "system",
+					Content: []provider.ContentBlock{{Type: "text", Text: "[Session start hooks]\n" + out}},
+				})
+				debug.Log("agent", "injected session-start hook output (%d chars)", len(out))
+			}
+		}
 	}
 	// Extract user prompt text for stats tracking
 	userPromptForStats := ""
