@@ -80,7 +80,16 @@ func pollOpenCodeToken(ctx context.Context, consoleURL string, dev *auth.OpenCod
 		if err == nil {
 			return token, nil
 		}
-		if !errors.Is(err, auth.ErrOpenCodePending) && !errors.Is(err, auth.ErrOpenCodeSlowDown) {
+		if errors.Is(err, auth.ErrOpenCodeSlowDown) {
+			// RFC 8628 section 3.5 (MUST): "The client MUST increase the
+			// polling interval by 5 seconds" on slow_down. Without this a
+			// strict RFC server kept getting polled at the original rate,
+			// amplifying requests until ExpiresIn ran out with a misleading
+			// "device code expired" error. (#2602 defect 2)
+			interval += 5 * time.Second
+			continue
+		}
+		if !errors.Is(err, auth.ErrOpenCodePending) {
 			return nil, err
 		}
 	}
