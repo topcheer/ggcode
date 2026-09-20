@@ -235,6 +235,14 @@ func parseReviewDiff(diff string) []*reviewDiffFile {
 			current.path = strings.TrimPrefix(line, "+++ b/")
 		} else if strings.HasPrefix(line, "+++ /dev/null") {
 			current.path = "(deleted)"
+		} else if strings.HasPrefix(line, "--- a/") || strings.HasPrefix(line, "--- /dev/null") {
+			// #2606: consume the '-' side of the file header symmetrically
+			// with '+++' above. Without this branch every "--- a/<path>"
+			// fell into the '-' content branch below (removedCount++), so
+			// the review header over-counted removals by exactly the number
+			// of files, and new files ("--- /dev/null") reported phantom
+			// removals they cannot have.
+			continue
 		} else if strings.HasPrefix(line, "@@") {
 			newLineNum = parseReviewHunkStart(line)
 		} else if strings.HasPrefix(line, "+") {
