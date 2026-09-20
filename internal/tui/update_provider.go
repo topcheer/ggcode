@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"os"
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/auth"
-	"strings"
 )
 
 // handleProviderModelsRefreshResultMsg handles the corresponding message case.
@@ -105,6 +107,31 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 			return m, m.pollCopilotLogin(msg.flow)
 		}
 	}
+	if m.providerPanel != nil && msg.vendor == auth.ProviderOpenCode {
+		if msg.err != nil {
+			m.providerPanel.authBusy = false
+			m.providerPanel.message = msg.err.Error()
+			return m, nil
+		}
+		if msg.openCodeFlow != nil {
+			consoleURL := os.Getenv("OPENCODE_CONSOLE_URL")
+			notes := []string{m.t("panel.provider.login.instructions", msg.openCodeFlow.VerificationURL(consoleURL), msg.openCodeFlow.UserCode)}
+			switch {
+			case msg.copyErr == nil:
+				notes = append(notes, m.t("panel.provider.login.copied"))
+			default:
+				notes = append(notes, m.t("panel.provider.login.copy_failed", msg.copyErr.Error()))
+			}
+			switch {
+			case msg.openErr == nil:
+				notes = append(notes, m.t("panel.provider.login.browser_opened"))
+			default:
+				notes = append(notes, m.t("panel.provider.login.browser_failed", msg.openErr.Error()))
+			}
+			m.providerPanel.message = strings.Join(notes, "\n")
+			return m, m.pollOpenCodeLogin(consoleURL, msg.openCodeFlow)
+		}
+	}
 	return m, nil
 
 }
@@ -131,6 +158,15 @@ func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, te
 		}
 		m.providerPanel.message = m.t("panel.provider.login.success")
 		return m, m.refreshProviderModelsForVendor(auth.ProviderGitHubCopilot)
+	}
+	if m.providerPanel != nil && msg.vendor == auth.ProviderOpenCode {
+		m.providerPanel.authBusy = false
+		if msg.err != nil {
+			m.providerPanel.message = m.t("panel.provider.login.opencode_failed", msg.err.Error())
+			return m, nil
+		}
+		m.providerPanel.message = m.t("panel.provider.login.opencode_success")
+		return m, m.refreshProviderModelsForVendor(auth.ProviderOpenCode)
 	}
 	return m, nil
 

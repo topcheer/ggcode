@@ -427,6 +427,8 @@ func zhCatalog(key string) string {
 		return "Tab/Shift+Tab 切换焦点 • j/k 移动 • / 聚焦筛选 • Enter 或 s 应用 • a 供应商 key • u 端点 key • b Base URL • m 自定义模型 • e 新增端点 • n 新增供应商 • Esc 关闭"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot：l 登录 • x 登出 • b 编辑企业域名"
+	case "panel.provider.hint.opencode":
+		return "OpenCode Zen：l 登录 (OAuth) • x 登出 • 或配置 OPENCODE_API_KEY"
 	case "panel.provider.hint.protocol_select":
 		return "j/k 选择 • Enter 确认"
 	case "panel.provider.new_vendor.title":
@@ -469,6 +471,14 @@ func zhCatalog(key string) string {
 		return "已保存并激活。"
 	case "panel.provider.login.starting":
 		return "正在启动 GitHub Copilot 登录..."
+	case "panel.provider.login.opencode_starting":
+		return "正在启动 OpenCode 登录..."
+	case "panel.provider.login.opencode_success":
+		return "OpenCode 已连接。"
+	case "panel.provider.login.opencode_failed":
+		return "OpenCode 登录失败：%s"
+	case "panel.provider.logout.opencode_success":
+		return "OpenCode 已断开。"
 	case "panel.provider.login.instructions":
 		return "打开 %s 并输入代码 %s，正在等待授权..."
 	case "panel.provider.login.copied":

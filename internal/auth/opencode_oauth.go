@@ -208,3 +208,67 @@ func RefreshOpenCodeToken(ctx context.Context, consoleURL, refreshToken string) 
 	}
 	return &tok, nil
 }
+
+// PollOpenCodeDeviceFlow polls the OpenCode console device token endpoint
+// until the user authorizes (or the flow expires / the context is cancelled),
+// returning a provider store Info ready to persist - the OpenCode equivalent
+// of PollCopilotDeviceFlow, used by both `ggcode login opencode` and the TUI
+// provider panel.
+func PollOpenCodeDeviceFlow(ctx context.Context, consoleURL string, dev *OpenCodeDeviceAuth) (*Info, error) {
+	if dev == nil {
+		return nil, fmt.Errorf("opencode auth: device flow is nil")
+	}
+	if consoleURL == "" {
+		consoleURL = OpenCodeConsoleURL
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Minute)
+		defer cancel()
+	}
+	tokenURL := strings.TrimRight(consoleURL, "/") + "/auth/device/token"
+	interval := time.Duration(dev.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	deadline := time.Now().Add(time.Duration(dev.ExpiresIn) * time.Second)
+	if dev.ExpiresIn <= 0 {
+		deadline = time.Now().Add(15 * time.Minute)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var tok OpenCodeToken
+		if err := openCodePost(ctx, client, tokenURL, map[string]string{
+			"grant_type":  openCodeDeviceGrant,
+			"device_code": dev.DeviceCode,
+			"client_id":   openCodeClientID,
+		}, &tok); err == nil {
+			info := &Info{
+				ProviderID:   ProviderOpenCode,
+				Type:         "oauth",
+				AccessToken:  tok.AccessToken,
+				RefreshToken: tok.RefreshToken,
+				UpdatedAt:    time.Now(),
+			}
+			if tok.ExpiresIn > 0 {
+				info.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+			}
+			return info, nil
+		} else if errors.Is(err, ErrOpenCodePending) || errors.Is(err, ErrOpenCodeSlowDown) {
+			if time.Now().Add(interval).After(deadline) {
+				return nil, ErrOpenCodeExpired
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(interval):
+			}
+			continue
+		} else {
+			return nil, err
+		}
+	}
+}

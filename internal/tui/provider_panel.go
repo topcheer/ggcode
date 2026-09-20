@@ -87,12 +87,13 @@ type providerModelsRefreshResultMsg struct {
 }
 
 type providerAuthStartMsg struct {
-	vendor     string
-	flow       *auth.CopilotDeviceFlow
-	claudeFlow *auth.ClaudeOAuthFlow
-	copyErr    error
-	openErr    error
-	err        error
+	vendor       string
+	flow         *auth.CopilotDeviceFlow
+	claudeFlow   *auth.ClaudeOAuthFlow
+	openCodeFlow *auth.OpenCodeDeviceAuth
+	copyErr      error
+	openErr      error
+	err          error
 }
 
 type providerAuthResultMsg struct {
@@ -508,6 +509,9 @@ func (m *Model) renderProviderPanel() string {
 		footer = append(footer, m.renderNewEndpointWizard()...)
 	} else {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")))
+	}
+	if panel.selectedVendor() == auth.ProviderOpenCode {
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.opencode")))
 	}
 	if panel.selectedVendor() == auth.ProviderGitHubCopilot {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.copilot")))
@@ -972,6 +976,11 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			panel.message = m.t("panel.provider.login.claude_starting")
 			return *m, m.startClaudeLogin()
 		}
+		if panel.selectedVendor() == auth.ProviderOpenCode {
+			panel.authBusy = true
+			panel.message = m.t("panel.provider.login.opencode_starting")
+			return *m, m.startOpenCodeLogin()
+		}
 		if panel.selectedVendor() == auth.ProviderGitHubCopilot {
 			panel.authBusy = true
 			panel.message = m.t("panel.provider.login.starting")
@@ -988,6 +997,14 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				return *m, nil
 			}
 			panel.message = m.t("panel.provider.logout.claude_success")
+			return *m, nil
+		}
+		if panel.selectedVendor() == auth.ProviderOpenCode {
+			if err := auth.DefaultStore().Delete(auth.ProviderOpenCode); err != nil {
+				panel.message = err.Error()
+				return *m, nil
+			}
+			panel.message = m.t("panel.provider.logout.opencode_success")
 			return *m, nil
 		}
 		if panel.selectedVendor() == auth.ProviderGitHubCopilot {
@@ -1339,6 +1356,37 @@ func (m *Model) pollCopilotLogin(flow *auth.CopilotDeviceFlow) tea.Cmd {
 	}
 }
 
+func (m *Model) startOpenCodeLogin() tea.Cmd {
+	consoleURL := os.Getenv("OPENCODE_CONSOLE_URL")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		dev, err := auth.StartOpenCodeDeviceFlow(ctx, consoleURL)
+		msg := providerAuthStartMsg{vendor: auth.ProviderOpenCode, openCodeFlow: dev, err: err}
+		if err == nil {
+			if m.clipboardWriter != nil {
+				msg.copyErr = m.clipboardWriter(dev.UserCode)
+			}
+			if m.urlOpener != nil {
+				msg.openErr = m.urlOpener(dev.VerificationURL(consoleURL))
+			}
+		}
+		return msg
+	}
+}
+
+func (m *Model) pollOpenCodeLogin(consoleURL string, dev *auth.OpenCodeDeviceAuth) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		info, err := auth.PollOpenCodeDeviceFlow(ctx, consoleURL, dev)
+		if err == nil && info != nil {
+			err = auth.DefaultStore().Save(info)
+		}
+		return providerAuthResultMsg{vendor: auth.ProviderOpenCode, info: info, err: err}
+	}
+}
+
 func (m *Model) startClaudeLogin() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1443,6 +1491,14 @@ func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConf
 		}
 		return true
 	}
+	if vendor == auth.ProviderOpenCode {
+		// OAuth (provider_auth.json) takes precedence; a plain API key
+		// (${OPENCODE_API_KEY}) also counts as usable.
+		if info, err := auth.DefaultStore().Load(auth.ProviderOpenCode); err == nil && info != nil && strings.TrimSpace(info.AccessToken) != "" {
+			return true
+		}
+		return providerHasUsableAPIKey(resolveAPIKey(ep.APIKey, vc.APIKey))
+	}
 	return providerHasUsableAPIKey(resolveAPIKey(ep.APIKey, vc.APIKey))
 }
 
@@ -1457,6 +1513,12 @@ func resolveAPIKey(epKey, vcKey string) string {
 }
 
 func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) string {
+	if vendor == auth.ProviderOpenCode {
+		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
+			return m.t("panel.provider.auth.connected")
+		}
+		return m.t("panel.provider.auth.not_connected")
+	}
 	if vendor == auth.ProviderAnthropic && endpoint == "oauth" {
 		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
 			return m.t("panel.provider.auth.connected")

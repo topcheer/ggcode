@@ -16,6 +16,7 @@ import (
 const (
 	ProviderGitHubCopilot = "github-copilot"
 	ProviderAnthropic     = "anthropic"
+	ProviderOpenCode      = "opencode"
 )
 
 type Info struct {
