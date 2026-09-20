@@ -32,8 +32,10 @@ package tool
 
 import (
 	"fmt"
+	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // exitCodeInfo describes a non-standard exit code with an explanation and
@@ -78,6 +80,30 @@ var exitCodeIntelMap = map[int]exitCodeInfo{
 		description: "floating point exception (SIGFPE) -- arithmetic error",
 		hint:        "Check for division by zero or integer overflow in the code",
 	},
+}
+
+// exitCodeFromErr normalizes a cmd.Wait error to a POSIX-style exit code.
+// #2588: exec.ExitError.ExitCode() returns -1 when the process was killed
+// by a signal (NOT the shell-semantic 128+N), so interpretExitCode's early
+// `exitCode <= 1` return fired and every 128+N signal diagnostic (137 OOM /
+// 139 segfault / ...) was dead code exactly on the kills it exists for --
+// util.NewShellCommandContext's `sh -c` exec-optimizes single commands, so
+// the waited-on process IS the worker and a SIGKILL yields -1. The signal
+// number IS available via WaitStatus: convert to 128+N there. On Windows
+// Signaled() is always false and the original -1 flows through -- consistent
+// with the #1683 Windows 128+N shielding in interpretExitCode.
+func exitCodeFromErr(err error) int {
+	ee, ok := err.(*exec.ExitError)
+	if !ok {
+		return -1
+	}
+	if code := ee.ExitCode(); code >= 0 {
+		return code
+	}
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return -1
 }
 
 // interpretExitCode returns a human-readable diagnostic string for non-trivial

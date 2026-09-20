@@ -426,10 +426,9 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	}
 
 	if runErr != nil {
-		exitCode := -1
-		if ee, ok := runErr.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
-		}
+		// #2588: normalize signal kills (-1) to 128+N so OnPostExec and
+		// buildFailureMessage see 137/139, not an uninterpretable -1.
+		exitCode := exitCodeFromErr(runErr)
 		if t.OnPostExec != nil {
 			t.OnPostExec(exitCode, runErr)
 		}

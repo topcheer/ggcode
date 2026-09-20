@@ -369,7 +369,9 @@ func (m *CommandJobManager) waitForJob(ctx context.Context, cmd *exec.Cmd, job *
 			errMsg += "\n" + compatHint
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
-			if exitIntel := interpretExitCode(ee.ExitCode()); exitIntel != "" {
+			// #2588: ee.ExitCode() is -1 on signal kills; normalize to
+			// 128+N so the signal diagnostics (137 OOM etc.) fire.
+			if exitIntel := interpretExitCode(exitCodeFromErr(ee)); exitIntel != "" {
 				errMsg += "\n" + exitIntel
 			}
 		}
