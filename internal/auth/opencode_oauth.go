@@ -29,6 +29,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // OpenCodeConsoleURL is the default OpenCode console base URL.
@@ -217,6 +219,55 @@ func RefreshOpenCodeToken(ctx context.Context, consoleURL, refreshToken string) 
 	return &tok, nil
 }
 
+// FetchOpenCodeOrgID resolves the account's default org/workspace ID via
+// GET /api/orgs (first entry, mirroring the CLI's firstOrgID default).
+// Returns "" when the account has no orgs.
+func FetchOpenCodeOrgID(ctx context.Context, consoleURL, accessToken string) (string, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return "", fmt.Errorf("opencode auth: no access token for org lookup")
+	}
+	if consoleURL == "" {
+		consoleURL = OpenCodeConsoleURL
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+	}
+	orgsURL := strings.TrimRight(consoleURL, "/") + "/api/orgs"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, orgsURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("opencode auth: %s: HTTP %d: %s", orgsURL, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	var orgs []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &orgs); err != nil {
+		return "", fmt.Errorf("opencode auth: decode orgs: %w", err)
+	}
+	if len(orgs) == 0 {
+		debug.Log("auth", "opencode login: account has no orgs")
+		return "", nil
+	}
+	return strings.TrimSpace(orgs[0].ID), nil
+}
+
 // PollOpenCodeDeviceFlow polls the OpenCode console device token endpoint
 // until the user authorizes (or the flow expires / the context is cancelled),
 // returning a provider store Info ready to persist - the OpenCode equivalent
@@ -263,6 +314,15 @@ func PollOpenCodeDeviceFlow(ctx context.Context, consoleURL string, dev *OpenCod
 			}
 			if tok.ExpiresIn > 0 {
 				info.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+			}
+			// The console API requires the org/workspace ID on inference
+			// requests (x-opencode-org-id); the CLI resolves it right after
+			// login and so do we. Best-effort: an empty OrgID degrades to the
+			// legacy zen gateway behavior instead of failing the login.
+			if orgID, orgErr := FetchOpenCodeOrgID(ctx, consoleURL, tok.AccessToken); orgErr != nil {
+				debug.Log("auth", "opencode login: org lookup failed (continuing without org id): %v", orgErr)
+			} else {
+				info.OrgID = orgID
 			}
 			return info, nil
 		} else if errors.Is(err, ErrOpenCodePending) || errors.Is(err, ErrOpenCodeSlowDown) {

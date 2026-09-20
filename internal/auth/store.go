@@ -20,11 +20,16 @@ const (
 )
 
 type Info struct {
-	ProviderID    string    `json:"provider_id"`
-	Type          string    `json:"type"`
-	AccessToken   string    `json:"access_token,omitempty"`
-	RefreshToken  string    `json:"refresh_token,omitempty"`
-	EnterpriseURL string    `json:"enterprise_url,omitempty"`
+	ProviderID    string `json:"provider_id"`
+	Type          string `json:"type"`
+	AccessToken   string `json:"access_token,omitempty"`
+	RefreshToken  string `json:"refresh_token,omitempty"`
+	EnterpriseURL string `json:"enterprise_url,omitempty"`
+	// OrgID carries the OpenCode console org/workspace ID required as the
+	// x-opencode-org-id header on inference requests (resolved from
+	// GET /api/orgs, first org = default workspace). Empty for providers
+	// without an org concept.
+	OrgID         string    `json:"org_id,omitempty"`
 	OAuthIssuer   string    `json:"oauth_issuer,omitempty"`
 	OAuthResource string    `json:"oauth_resource,omitempty"`
 	OAuthClientID string    `json:"oauth_client_id,omitempty"`

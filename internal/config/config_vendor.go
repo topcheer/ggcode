@@ -12,6 +12,7 @@ import (
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
+	"net/url"
 )
 
 // ResolveActiveEndpoint resolves the selected vendor + endpoint into runtime settings.
@@ -104,7 +105,11 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 			}
 		}
 	}
-	if authType == "oauth" && vendor == "opencode" {
+	// OpenCode: OAuth store token is the credential whenever no API key is
+	// configured. Unset env refs expand to their literal "${VAR}" form (see
+	// probe: key stays "${OPENCODE_API_KEY}" when the env is unset), so both
+	// empty and unresolved-ref count as "not configured".
+	if vendor == "opencode" && (authType == "oauth" || apiKey == "" || strings.HasPrefix(strings.TrimSpace(apiKey), "${")) {
 		info, err := auth.DefaultStore().Load("opencode")
 		if err != nil {
 			return nil, err
@@ -124,6 +129,25 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 					return nil, fmt.Errorf("opencode oauth: stored token has no access token; run `ggcode login opencode` to re-authenticate")
 				}
 			}
+			// Backfill the org ID for stores saved before it existed (the
+			// console API rejects OAuth tokens on the zen gateway without
+			// x-opencode-org-id on the inference gateway). Best-effort.
+			if strings.TrimSpace(info.OrgID) == "" && strings.TrimSpace(apiKey) != "" {
+				orgCtx, orgCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if orgID, orgErr := auth.FetchOpenCodeOrgID(orgCtx, "", apiKey); orgErr == nil && orgID != "" {
+					info.OrgID = orgID
+					if saveErr := auth.DefaultStore().Save(info); saveErr != nil {
+						debug.Log("config", "opencode oauth: org backfill save failed: %v", saveErr)
+					}
+				}
+				orgCancel()
+			}
+			// OAuth tokens are only accepted on the inference gateway
+			// (/inference/<protocol>/v1); the legacy /zen/v1 gateway is for
+			// console-issued API keys and 401s OAuth bearers. Rewrite zen
+			// endpoints when authenticating with the OAuth token (custom
+			// non-zen base URLs pass through untouched).
+			baseURL = openCodeInferenceBaseURL(baseURL, ep.Protocol)
 		}
 	}
 	if baseURL == "" {
@@ -801,6 +825,35 @@ var openCodeRefreshMu sync.Mutex
 // refreshOpenCodeOAuthToken refreshes an expired OpenCode console token via
 // its refresh_token grant and persists the rotated pair. Mirrors
 // refreshClaudeOAuthToken's bounded-refresh + loud-failure shape.
+// openCodeInferenceBaseURL rewrites legacy zen gateway URLs to the inference
+// gateway the console API serves OAuth tokens on (verified against the
+// official client's /api/config provider block: api=/inference/openai/v1,
+// headers.x-opencode-org-id). Non-zen URLs pass through unchanged.
+func openCodeInferenceBaseURL(baseURL, protocol string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return baseURL
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	host := strings.ToLower(u.Host)
+	if host != "opencode.ai" && !strings.HasSuffix(host, ".opencode.ai") {
+		return baseURL
+	}
+	if !strings.HasPrefix(u.Path, "/zen/") {
+		return baseURL
+	}
+	// Preserve scheme/host/port, swap the gateway path per protocol.
+	if strings.HasPrefix(strings.ToLower(protocol), "anthropic") {
+		u.Path = "/inference/anthropic/v1"
+	} else {
+		u.Path = "/inference/openai/v1"
+	}
+	return u.String()
+}
+
 func refreshOpenCodeOAuthToken(store *auth.Store) (string, error) {
 	openCodeRefreshMu.Lock()
 	defer openCodeRefreshMu.Unlock()
@@ -828,6 +881,7 @@ func refreshOpenCodeOAuthToken(store *auth.Store) (string, error) {
 			Type:         "oauth",
 			AccessToken:  tok.AccessToken,
 			RefreshToken: tok.RefreshToken,
+			OrgID:        info.OrgID,
 			UpdatedAt:    time.Now(),
 		}
 		if tok.ExpiresIn > 0 {
