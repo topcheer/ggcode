@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -22,9 +23,13 @@ func TestIssue2607_SortVPatternRemoved(t *testing.T) {
 		}
 	}
 	// Sibling patterns still work through the same entry (removal did not
-	// break the loop): GNU readlink on a mac-style error, proactive timeout.
-	if got := diagnoseShellCompat("timeout 5 sleep 1", "", ""); !strings.Contains(got, "timeout") {
-		t.Errorf("sibling proactive pattern (timeout) stopped firing: %q", got)
+	// break the loop) - but ONLY off Linux: diagnoseShellCompat short-
+	// circuits to "" on linux (GNU commands are native there), so the
+	// positive-fire assertion is meaningless on the linux CI matrix.
+	if runtime.GOOS != "linux" {
+		if got := diagnoseShellCompat("timeout 5 sleep 1", "", ""); !strings.Contains(got, "timeout") {
+			t.Errorf("sibling proactive pattern (timeout) stopped firing: %q", got)
+		}
 	}
 	// The lowercase-command convention holds: mixed-case real-world spelling
 	// also stays silent.
