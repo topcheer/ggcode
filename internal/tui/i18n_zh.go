@@ -471,6 +471,8 @@ func zhCatalog(key string) string {
 		return "已保存并激活。"
 	case "panel.provider.login.starting":
 		return "正在启动 GitHub Copilot 登录..."
+	case "panel.provider.login.busy":
+		return "登录已在进行中——请查看上方验证码并在浏览器完成授权。"
 	case "panel.provider.login.opencode_starting":
 		return "正在启动 OpenCode 登录..."
 	case "panel.provider.login.opencode_success":

@@ -463,6 +463,8 @@ func enCatalog(key string) string {
 		return "Saved and activated."
 	case "panel.provider.login.starting":
 		return "Starting GitHub Copilot login..."
+	case "panel.provider.login.busy":
+		return "Login already in progress - check the code above and authorize in the browser."
 	case "panel.provider.login.opencode_starting":
 		return "Starting OpenCode login..."
 	case "panel.provider.login.opencode_success":

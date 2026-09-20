@@ -969,8 +969,12 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	case "l":
 		if panel.authBusy {
+			// Login already in flight (e.g. device-flow poll can run 10min).
+			// Silent no-ops here read as "the key is dead" - surface state.
+			panel.message = m.t("panel.provider.login.busy")
 			return *m, nil
 		}
+		debug.Log("tui", "provider panel: login key pressed, vendor=%q endpoint=%q", panel.selectedVendor(), panel.selectedEndpoint())
 		if panel.selectedVendor() == auth.ProviderAnthropic && panel.selectedEndpoint() == "oauth" {
 			panel.authBusy = true
 			panel.message = m.t("panel.provider.login.claude_starting")
