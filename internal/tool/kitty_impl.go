@@ -340,12 +340,7 @@ func (k *KittyTool) executeInput(ctx context.Context, windowID int, text string)
 		return Result{IsError: true, Content: "text is required for input action"}
 	}
 
-	args := []string{"send-text"}
-	m := matchID(windowID)
-	if m != "" {
-		args = append(args, "--match="+m)
-	}
-	args = append(args, text)
+	args := kittySendTextArgs(windowID, text)
 
 	_, err := kittyAtCtx(ctx, args...)
 	if err != nil {
@@ -421,12 +416,7 @@ func (k *KittyTool) executeSendKey(ctx context.Context, windowID int, key, modif
 		}
 	} else {
 		// Regular character — send via send-text
-		args := []string{"send-text"}
-		m := matchID(windowID)
-		if m != "" {
-			args = append(args, "--match="+m)
-		}
-		args = append(args, key)
+		args := kittySendTextArgs(windowID, key)
 
 		_, err := kittyAtCtx(ctx, args...)
 		if err != nil {
@@ -545,6 +535,22 @@ func (k *KittyTool) sendKeyViaAction(ctx context.Context, windowID int, key, mod
 
 // kittyKeyEscapeSeq returns the escape sequence for a special key name,
 // and true if the key is a special key. Returns ("", false) for regular characters.
+// kittySendTextArgs builds the kitten @ send-text argv for a positional text
+// payload. #2598: kitty's argument parser (master tools/cli/parse-args.go)
+// treats any "-"-prefixed positional as an option unless it comes after "--"
+// ("--help" printed usage, "--stdin" got swallowed as the documented option,
+// "-la" errored as unknown option) - all three reported fake success or a
+// confusing failure while sending nothing. executeSplit already used "--";
+// this helper gives input and send_key's regular-character branch the same
+// guard.
+func kittySendTextArgs(windowID int, text string) []string {
+	args := []string{"send-text"}
+	if m := matchID(windowID); m != "" {
+		args = append(args, "--match="+m)
+	}
+	return append(args, "--", text)
+}
+
 func kittyKeyEscapeSeq(key string) (string, bool) {
 	switch key {
 	case "enter", "return":
@@ -575,6 +581,34 @@ func kittyKeyEscapeSeq(key string) (string, bool) {
 		return "\x1b[3~", true
 	case "space":
 		return " ", true
+	// #2598: F-keys are keyboard events, not typed text. Without these
+	// cases, send_key("f5") fell to the regular-character branch and sent
+	// the LITERAL characters "f5" via send-text while reporting success.
+	// Sequences mirror iterm2_darwin.go (SS3 for F1-F4, CSI for F5-F12).
+	case "f1":
+		return "\x1bOP", true
+	case "f2":
+		return "\x1bOQ", true
+	case "f3":
+		return "\x1bOR", true
+	case "f4":
+		return "\x1bOS", true
+	case "f5":
+		return "\x1b[15~", true
+	case "f6":
+		return "\x1b[17~", true
+	case "f7":
+		return "\x1b[18~", true
+	case "f8":
+		return "\x1b[19~", true
+	case "f9":
+		return "\x1b[20~", true
+	case "f10":
+		return "\x1b[21~", true
+	case "f11":
+		return "\x1b[23~", true
+	case "f12":
+		return "\x1b[24~", true
 	default:
 		return "", false
 	}
@@ -674,7 +708,7 @@ func (k *KittyTool) executeSetTabTitle(ctx context.Context, text string) Result 
 		return Result{IsError: true, Content: "text (tab title) is required for set_tab_title action"}
 	}
 
-	_, err := kittyAtCtx(ctx, "set-tab-title", text)
+	_, err := kittyAtCtx(ctx, "set-tab-title", "--", text)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("kitty set_tab_title failed: %v", err)}
 	}

@@ -703,28 +703,8 @@ func (t *Iterm2Tool) executeBroadcast(ctx context.Context, subAction string) Res
 		sub = "toggle"
 	}
 
-	var script string
-	switch sub {
-	case "toggle":
-		// Toggle "Toggle Input Broadcasting" menu item
-		script = `
-tell application "iTerm" to activate
-tell application "System Events"
-	click menu item "Toggle Broadcasting to Current Split Pane" of menu "Shell" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
-end tell`
-	case "on":
-		script = `
-tell application "iTerm" to activate
-tell application "System Events"
-	click menu item "Broadcast Input" of menu "Shell" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
-end tell`
-	case "off":
-		script = `
-tell application "iTerm" to activate
-tell application "System Events"
-	click menu item "Stop Broadcasting Input" of menu "Shell" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
-end tell`
-	default:
+	script, ok := buildBroadcastScript(sub)
+	if !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid broadcast sub-action %q (use toggle/on/off)", subAction)}
 	}
 
@@ -734,6 +714,43 @@ end tell`
 	}
 
 	return Result{Content: fmt.Sprintf("iterm2 broadcast: %s", sub)}
+}
+
+// buildBroadcastScript returns the AppleScript for a broadcast sub-action
+// and whether the sub-action is valid. #2593: the real menu tree (iTerm2
+// 3.7.x MainMenu.nib) nests all broadcast items under the "Broadcast Input"
+// SUBMENU of Shell, with different titles than the old code guessed: toggle
+// maps to toggleBroadcastingToCurrentSession:, on to the enable actions, off
+// to "Send Input to Current Session Only" (disableBroadcasting:). The old
+// titles ("Toggle Broadcasting to Current Split Pane" / "Stop Broadcasting
+// Input") appear 0 times in the nib, and bare "Broadcast Input" is the
+// submenu PARENT - clicking it only hovered the submenu, producing a silent
+// fake success.
+func buildBroadcastScript(sub string) (string, bool) {
+	var script string
+	switch sub {
+	case "toggle":
+		script = `
+tell application "iTerm" to activate
+tell application "System Events"
+	click menu item "Toggle Broadcast Input to Current Session" of menu "Broadcast Input" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
+end tell`
+	case "on":
+		script = `
+tell application "iTerm" to activate
+tell application "System Events"
+	click menu item "Broadcast Input to All Panes in Current Tab" of menu "Broadcast Input" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
+end tell`
+	case "off":
+		script = `
+tell application "iTerm" to activate
+tell application "System Events"
+	click menu item "Send Input to Current Session Only" of menu "Broadcast Input" of menu bar item "Shell" of menu bar 1 of process "iTerm2"
+end tell`
+	default:
+		return "", false
+	}
+	return script, true
 }
 
 func (t *Iterm2Tool) executeMark(ctx context.Context, subAction string) Result {
