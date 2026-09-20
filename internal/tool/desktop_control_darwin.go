@@ -5,6 +5,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -528,14 +529,35 @@ end tell`, p.X, p.Y, p.ToX, p.ToY))
 // Uses System Events UI scripting; works even when the app does not
 // expose standard AppleScript menus.
 func menuSelect(ctx context.Context, p desktopParams) (Result, error) {
-	parts, err := parseMenuPath(p.Text)
+	script, err := buildMenuSelectScript(p)
 	if err != nil {
 		return Result{}, err
+	}
+	return appleScriptResult(ctx, script)
+}
+
+// buildMenuSelectScript constructs the System Events menu-walk script.
+// #2587: the schema promises `app` addresses the target menu bar
+// ("or the app whose menu bar to use (for 'menu_select', default
+// frontmost)"). The old script hardcoded `first process whose frontmost
+// is true` and silently ignored p.App - with Chrome frontmost, a
+// menu_select(app: "Safari") clicked CHROME's menus and the tool still
+// reported OK. When p.App is set, address the process by name instead;
+// a wrong name surfaces as an osascript -1728 error (not a silent
+// misclick).
+func buildMenuSelectScript(p desktopParams) (string, error) {
+	parts, err := parseMenuPath(p.Text)
+	if err != nil {
+		return "", err
+	}
+	target := "(first process whose frontmost is true)"
+	if name := strings.TrimSpace(p.App); name != "" {
+		target = fmt.Sprintf("(first application process whose name is %s)", applescriptQuote(name))
 	}
 	var sb strings.Builder
 	sb.WriteString(`
 tell application "System Events"
-  tell (first process whose frontmost is true)
+  tell ` + target + `
     tell menu bar 1
 `)
 	// Click the top-level menu bar item to open its menu.
@@ -558,7 +580,7 @@ tell application "System Events"
 		sb.WriteString(fmt.Sprintf("      click %s\n", chain.String()))
 	}
 	sb.WriteString("    end tell\n  end tell\nend tell")
-	return appleScriptResult(ctx, sb.String())
+	return sb.String(), nil
 }
 
 // snapshotUI returns the accessibility tree of the frontmost application
@@ -917,6 +939,13 @@ func appleScriptResult(ctx context.Context, script string) (Result, error) {
 	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
 	out, err := cmd.Output()
 	if err != nil {
+		// #2587: surface the osascript stderr (e.g. the -1728 "Can't get
+		// application process" text for a wrong `app` name) - a bare
+		// "exit status 1" left the failure cause invisible to the model.
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return Result{}, fmt.Errorf("osascript failed: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
 		return Result{}, fmt.Errorf("osascript failed: %w", err)
 	}
 	result := strings.TrimSpace(string(out))
