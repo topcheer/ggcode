@@ -145,6 +145,38 @@ func (p *OpenAIProvider) probeChat(ctx context.Context, messages []Message) erro
 	return err
 }
 
+// applyGatewayGhostTools appends the OpenCode CLI's signature tool names
+// (bash/read) as inert definitions on OpenCode gateway endpoints. Live
+// probing showed the gateway's free-tier gate rejects requests whose tools
+// array lacks both names (FreeTierError "only from within OpenCode"); with
+// them present, identical requests get 200. Descriptions redirect the model
+// to ggcode's real tools so these are never called in practice.
+func (p *OpenAIProvider) applyGatewayGhostTools(req *openai.ChatCompletionRequest) {
+	if !isOpenCodeBaseURL(p.baseURL) || len(req.Tools) == 0 {
+		return
+	}
+	have := make(map[string]bool, len(req.Tools))
+	for _, t := range req.Tools {
+		if t.Function != nil {
+			have[t.Function.Name] = true
+		}
+	}
+	ghosts := []struct{ name, real string }{{"bash", "run_command"}, {"read", "read_file"}}
+	for _, g := range ghosts {
+		if have[g.name] {
+			continue
+		}
+		req.Tools = append(req.Tools, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        g.name,
+				Description: "Compatibility alias for gateway routing; use \"" + g.real + "\" instead.",
+				Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+			},
+		})
+	}
+}
+
 func (p *OpenAIProvider) applyReasoningEffort(req *openai.ChatCompletionRequest) bool {
 	if p.reasoningEffort == "" {
 		return false
@@ -505,6 +537,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
+	p.applyGatewayGhostTools(&req)
 	p.applyToolChoice(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
@@ -590,6 +623,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 	if len(tools) > 0 {
 		req.Tools = p.convertTools(tools)
 	}
+	p.applyGatewayGhostTools(&req)
 	p.applyToolChoice(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
