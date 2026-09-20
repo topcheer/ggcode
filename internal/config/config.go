@@ -901,6 +901,55 @@ func DefaultConfig() *Config {
 					"api", "global",
 				),
 			}),
+			"opencode": defaultVendor("OpenCode Zen", "${OPENCODE_API_KEY}", map[string]EndpointConfig{
+				// Static model snapshot from the public https://opencode.ai/zen/v1/models
+				// listing (2026-09-18, 74 models); curated subset per protocol:
+				// /messages models on zen-anthropic, /chat/completions+responses
+				// models on zen-openai. Dynamic discovery (/models) supplements
+				// this once a credential is configured.
+				"zen-anthropic": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"Zen (Anthropic)",
+						"anthropic",
+						"https://opencode.ai/zen/v1",
+						"claude-haiku-4-5",
+						"zen", "anthropic",
+					)
+					ep.Models = []string{
+						"claude-haiku-4-5",
+						"claude-sonnet-4-6",
+						"claude-sonnet-5",
+						"claude-opus-4-8",
+						"claude-opus-5",
+						"qwen3.8-flash",
+						"qwen3.7-max",
+					}
+					return ep
+				}(),
+				"zen-openai": func() EndpointConfig {
+					ep := defaultEndpoint(
+						"Zen (OpenAI)",
+						"openai",
+						"https://opencode.ai/zen/v1",
+						"mimo-v2.5-free",
+						"zen", "openai", "free",
+					)
+					ep.Models = []string{
+						// Free tier.
+						"mimo-v2.5-free",
+						"deepseek-v4-flash-free",
+						"jev-1.13-free",
+						"ling-3.0-flash-fin-free",
+						"nemotron-3-ultra-free",
+						"nemotron-3.5-lightning-free",
+						"muse-spark-1.3-contributor-free",
+						// Paid mainstays (/responses endpoint).
+						"gpt-5.3-codex",
+						"gpt-5-nano",
+					}
+					return ep
+				}(),
+			}),
 			"anthropic": defaultVendor("Anthropic", "${ANTHROPIC_API_KEY}", map[string]EndpointConfig{
 				"api": defaultEndpoint(
 					"Anthropic API",

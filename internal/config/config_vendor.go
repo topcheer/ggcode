@@ -104,6 +104,28 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 			}
 		}
 	}
+	if authType == "oauth" && vendor == "opencode" {
+		info, err := auth.DefaultStore().Load("opencode")
+		if err != nil {
+			return nil, err
+		}
+		if info != nil {
+			if info.IsExpired() && strings.TrimSpace(info.RefreshToken) != "" {
+				// Same single-flight shape as the Claude OAuth refresh: the
+				// refresh helper re-reads under the store lock.
+				apiKey, err = refreshOpenCodeOAuthToken(auth.DefaultStore())
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				apiKey = strings.TrimSpace(info.AccessToken)
+				if apiKey == "" {
+					debug.Log("config", "opencode oauth: stored token has no access token (re-login required)")
+					return nil, fmt.Errorf("opencode oauth: stored token has no access token; run `ggcode login opencode` to re-authenticate")
+				}
+			}
+		}
+	}
 	if baseURL == "" {
 		return nil, fmt.Errorf("endpoint %q for vendor %q has no base_url configured", endpoint, vendor)
 	}
@@ -770,4 +792,51 @@ func refreshClaudeOAuthToken(store *auth.Store) (string, error) {
 	}
 	debug.Log("config", "claude oauth: token refresh failed (re-authentication required): %v", refreshErr)
 	return "", fmt.Errorf("claude oauth token refresh failed (run /login to re-authenticate): %w", refreshErr)
+}
+
+// openCodeRefreshMu serializes opencode token refreshes (same single-flight
+// rationale as claudeRefreshMu: overlapping refreshes race on store writes).
+var openCodeRefreshMu sync.Mutex
+
+// refreshOpenCodeOAuthToken refreshes an expired OpenCode console token via
+// its refresh_token grant and persists the rotated pair. Mirrors
+// refreshClaudeOAuthToken's bounded-refresh + loud-failure shape.
+func refreshOpenCodeOAuthToken(store *auth.Store) (string, error) {
+	openCodeRefreshMu.Lock()
+	defer openCodeRefreshMu.Unlock()
+	info, err := store.Load("opencode")
+	if err != nil {
+		return "", err
+	}
+	if info == nil {
+		return "", fmt.Errorf("opencode oauth: credentials missing; run `ggcode login opencode`")
+	}
+	if !info.IsExpired() {
+		if at := strings.TrimSpace(info.AccessToken); at != "" {
+			return at, nil
+		}
+	}
+	if strings.TrimSpace(info.RefreshToken) == "" {
+		return "", fmt.Errorf("opencode oauth: token expired and no refresh token available; run `ggcode login opencode`")
+	}
+	refreshCtx, cancelRefresh := context.WithTimeout(context.Background(), 30*time.Second)
+	tok, refreshErr := auth.RefreshOpenCodeToken(refreshCtx, "", info.RefreshToken)
+	cancelRefresh()
+	if refreshErr == nil && tok != nil {
+		next := &auth.Info{
+			ProviderID:   "opencode",
+			Type:         "oauth",
+			AccessToken:  tok.AccessToken,
+			RefreshToken: tok.RefreshToken,
+			UpdatedAt:    time.Now(),
+		}
+		if tok.ExpiresIn > 0 {
+			next.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+		}
+		if saveErr := store.Save(next); saveErr != nil {
+			return "", fmt.Errorf("opencode oauth: refreshed token could not be persisted; re-run `ggcode login opencode` before restarting: %w", saveErr)
+		}
+		return strings.TrimSpace(tok.AccessToken), nil
+	}
+	return "", fmt.Errorf("opencode oauth token refresh failed (run `ggcode login opencode`): %w", refreshErr)
 }
