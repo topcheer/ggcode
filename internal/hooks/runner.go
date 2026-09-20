@@ -48,6 +48,10 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 		hooks = cfg.OnStreamStop
 	case EventOnCompaction:
 		hooks = cfg.OnCompaction
+	case EventOnSessionStart:
+		hooks = cfg.OnSessionStart
+	case EventOnSessionEnd:
+		hooks = cfg.OnSessionEnd
 	default:
 		return HookResult{Allowed: true}
 	}
@@ -122,6 +126,15 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 				injectedOutput.WriteString("\n")
 			}
 		}
+		// on_session_start: stdout is always collected — the agent injects it
+		// as a system context message (Claude Code parity: SessionStart stdout
+		// is added to context, so hooks can preload project state).
+		if env.Event == EventOnSessionStart && result.Output != "" {
+			injectedOutput.WriteString(result.Output)
+			if !strings.HasSuffix(result.Output, "\n") {
+				injectedOutput.WriteString("\n")
+			}
+		}
 	}
 
 	res := HookResult{Allowed: true, Output: injectedOutput.String()}
@@ -133,12 +146,13 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 
 // isBlockingEvent reports whether block semantics (command exit 2 /
 // HTTP 403 → Allowed=false) apply to this event. Defined for
-// pre_tool_use and on_user_message only (#679): post_tool_use hooks run
-// after the tool has already executed — an exit 2 there cannot un-run
+// pre_tool_use, on_user_message and on_session_start (#679): post_tool_use
+// hooks run after the tool has already executed — an exit 2 there cannot un-run
 // it, so honoring it just dropped collected inject_output and skipped
-// the remaining hooks.
+// the remaining hooks. on_session_start can block the first turn (Claude Code
+// SessionStart parity: a policy hook can refuse to start the session).
 func isBlockingEvent(event string) bool {
-	return event == EventPreToolUse || event == EventOnUserMessage
+	return event == EventPreToolUse || event == EventOnUserMessage || event == EventOnSessionStart
 }
 
 // executeHook dispatches to command or http execution based on hook type.
@@ -412,6 +426,23 @@ func RunStreamStopHooks(cfg HookConfig, env HookEnv) {
 func RunCompactionHooks(cfg HookConfig, env HookEnv) {
 	env.Event = EventOnCompaction
 	Dispatch(cfg, env)
+}
+
+// RunSessionStartHooks runs on_session_start hooks synchronously. Blocking
+// like on_user_message (exit 2 / HTTP 403); stdout is always collected so the
+// agent can inject it as a system context message.
+func RunSessionStartHooks(cfg HookConfig, env HookEnv) HookResult {
+	env.Event = EventOnSessionStart
+	return Dispatch(cfg, env)
+}
+
+// RunSessionEndHooks runs on_session_end hooks synchronously — the process is
+// tearing down, so fire-and-forget goroutines would be killed before the hook
+// completes. Non-blocking: a block verdict cannot stop the exit and is
+// treated as a plain per-hook error.
+func RunSessionEndHooks(cfg HookConfig, env HookEnv) HookResult {
+	env.Event = EventOnSessionEnd
+	return Dispatch(cfg, env)
 }
 
 // --- Matching ---
@@ -739,6 +770,8 @@ func buildHookEnv(env HookEnv, payloadJSON string) []string {
 		"GGCODE_TOOL_ERROR=" + env.ToolError,
 		"GGCODE_TOOL_RESULT=" + env.ToolResult,
 		"GGCODE_TOOL_DURATION=" + env.ToolDuration,
+		"GGCODE_SESSION_SOURCE=" + env.SessionSource,
+		"GGCODE_SESSION_END_REASON=" + env.SessionEndReason,
 	}
 	if rawTrunc {
 		extra = append(extra, "GGCODE_RAW_INPUT_TRUNCATED=1")
@@ -748,6 +781,7 @@ func buildHookEnv(env HookEnv, payloadJSON string) []string {
 		"GGCODE_RAW_INPUT_TRUNCATED",
 		"GGCODE_TOOL_NAME", "GGCODE_TOOL_SUCCESS", "GGCODE_TOOL_ERROR",
 		"GGCODE_TOOL_RESULT", "GGCODE_TOOL_DURATION",
+		"GGCODE_SESSION_SOURCE", "GGCODE_SESSION_END_REASON",
 	), extra...)
 }
 

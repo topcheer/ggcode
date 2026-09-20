@@ -45,16 +45,24 @@ const (
 	EventOnAgentStop   = "on_agent_stop"
 	EventOnStreamStop  = "on_stream_stop"
 	EventOnCompaction  = "on_compaction"
+
+	// Session lifecycle events (Claude Code hooks parity, 2025/2026 frontier:
+	// external code observes session boundaries — preload context at start,
+	// flush state at end — https://code.claude.com/docs/en/hooks).
+	EventOnSessionStart = "on_session_start"
+	EventOnSessionEnd   = "on_session_end"
 )
 
 // HookConfig holds all hooks from configuration, keyed by event.
 type HookConfig struct {
-	OnUserMessage []Hook `yaml:"on_user_message" json:"on_user_message"`
-	PreToolUse    []Hook `yaml:"pre_tool_use" json:"pre_tool_use"`
-	PostToolUse   []Hook `yaml:"post_tool_use" json:"post_tool_use"`
-	OnAgentStop   []Hook `yaml:"on_agent_stop" json:"on_agent_stop"`
-	OnStreamStop  []Hook `yaml:"on_stream_stop" json:"on_stream_stop"`
-	OnCompaction  []Hook `yaml:"on_compaction" json:"on_compaction"`
+	OnUserMessage  []Hook `yaml:"on_user_message" json:"on_user_message"`
+	PreToolUse     []Hook `yaml:"pre_tool_use" json:"pre_tool_use"`
+	PostToolUse    []Hook `yaml:"post_tool_use" json:"post_tool_use"`
+	OnAgentStop    []Hook `yaml:"on_agent_stop" json:"on_agent_stop"`
+	OnStreamStop   []Hook `yaml:"on_stream_stop" json:"on_stream_stop"`
+	OnCompaction   []Hook `yaml:"on_compaction" json:"on_compaction"`
+	OnSessionStart []Hook `yaml:"on_session_start" json:"on_session_start"`
+	OnSessionEnd   []Hook `yaml:"on_session_end" json:"on_session_end"`
 }
 
 // HookResult is the result of running one or more hooks.
@@ -97,6 +105,10 @@ type HookEnv struct {
 	// Stop context (on_agent_stop, on_stream_stop only)
 	StopReason string // "completed", "cancelled", "error"
 	StopError  string
+
+	// Session lifecycle (on_session_start / on_session_end only)
+	SessionSource    string // on_session_start: "startup" or "resume"
+	SessionEndReason string // on_session_end: "exit"
 
 	// Compaction context (on_compaction only)
 	TokenBefore int // token count before compaction
@@ -158,6 +170,8 @@ func ValidateHooks(cfg HookConfig) []string {
 	validate("on_agent_stop", cfg.OnAgentStop)
 	validate("on_stream_stop", cfg.OnStreamStop)
 	validate("on_compaction", cfg.OnCompaction)
+	validate("on_session_start", cfg.OnSessionStart)
+	validate("on_session_end", cfg.OnSessionEnd)
 
 	return errs
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -106,5 +107,62 @@ func TestRefreshOpenCodeTokenGrant(t *testing.T) {
 	}
 	if gotRefresh != "rt-old" {
 		t.Fatalf("refresh_token = %q, want rt-old", gotRefresh)
+	}
+}
+
+func TestPollOpenCodeDeviceFlowPendingThenSuccess(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			w.Write([]byte(`{"error":"authorization_pending","error_description":"wait"}`))
+			return
+		}
+		w.Write([]byte(`{"access_token":"at","refresh_token":"rt","token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	dev := &OpenCodeDeviceAuth{DeviceCode: "dc", UserCode: "UC", ExpiresIn: 60, Interval: 0} // interval<1s default
+	info, err := PollOpenCodeDeviceFlow(context.Background(), srv.URL, dev)
+	if err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if info.ProviderID != ProviderOpenCode || info.AccessToken != "at" || info.RefreshToken != "rt" {
+		t.Fatalf("info = %+v", info)
+	}
+	if info.ExpiresAt.IsZero() {
+		t.Fatal("ExpiresAt not set from expires_in")
+	}
+}
+
+func TestPollOpenCodeDeviceFlowDenied(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"error":"access_denied","error_description":"no"}`))
+	}))
+	defer srv.Close()
+
+	dev := &OpenCodeDeviceAuth{DeviceCode: "dc", UserCode: "UC", ExpiresIn: 60, Interval: 0}
+	_, err := PollOpenCodeDeviceFlow(context.Background(), srv.URL, dev)
+	if err != ErrOpenCodeDenied {
+		t.Fatalf("err = %v, want ErrOpenCodeDenied", err)
+	}
+}
+
+func TestPollOpenCodeDeviceFlowNilDev(t *testing.T) {
+	if _, err := PollOpenCodeDeviceFlow(context.Background(), "", nil); err == nil {
+		t.Fatal("expected error for nil device flow")
+	}
+}
+
+func TestOpenCodeDeviceAuthVerificationURLEmptyConsole(t *testing.T) {
+	// Unset OPENCODE_CONSOLE_URL: the resolved URL must still be absolute
+	// (openers reject relative paths as non-http(s)) - the "browser never
+	// opens" regression.
+	d := &OpenCodeDeviceAuth{VerificationURIComplete: "/console/device?user_code=X"}
+	got := d.VerificationURL("")
+	if !strings.HasPrefix(got, "https://opencode.ai/") {
+		t.Fatalf("VerificationURL(\"\") = %q, want absolute https://opencode.ai/... URL", got)
 	}
 }

@@ -11,10 +11,15 @@ Hooks let you run shell commands or HTTP webhooks automatically on agent lifecyc
 | `post_tool_use` | After tool executes, before result returns to LLM | Sync | No |
 | `on_agent_stop` | Agent loop ends (completed/cancelled/error) | Async | No |
 | `on_stream_stop` | Single LLM stream response completes | Async | No |
+| `on_session_start` | First user turn of a session (startup or resume) | Sync | Yes |
+| `on_session_end` | Agent close/shutdown | Sync | No |
 
 ### Execution Order
 
 ```
+session start (first user turn)
+  → on_session_start (sync, can block; stdout injected as context)
+
 user message
   → on_user_message (sync, can block)
   → LLM stream
@@ -25,7 +30,22 @@ user message
     → post_tool_use (sync, can inject output)
   → ... (loop until no more tool calls)
   → on_agent_stop (async)
+
+agent close
+  → on_session_end (sync, cannot block)
 ```
+
+### Session Lifecycle
+
+`on_session_start` fires once per agent, before the first LLM call of the
+first user turn. The payload carries `session.source`: `startup` for a fresh
+session or `resume` when restored context already holds messages. stdout from
+non-blocking hooks is injected as a system context message, so hooks can
+deterministically preload project context (git status, TODO lists, environment
+notes). `on_session_end` fires synchronously in `Close()` (before process
+teardown, bounded by each hook's timeout) with `session.reason: exit`, for
+state flushing and cleanup. (Concept parity: Claude Code session lifecycle
+hooks, https://code.claude.com/docs/en/hooks.)
 
 ## Hook Types
 
@@ -61,7 +81,7 @@ Sends an HTTP POST with the standardized JSON payload.
 | command | exit code 2 (stderr → block reason) | Other non-zero: allow, log warning |
 | http | HTTP 403 (response body → block reason) | Connection error/timeout/non-2xx: allow, log warning |
 
-Only `on_user_message` and `pre_tool_use` can block. `post_tool_use`, `on_agent_stop`, and `on_stream_stop` always allow — block responses are ignored.
+Only `on_user_message`, `pre_tool_use`, and `on_session_start` can block. `post_tool_use`, `on_agent_stop`, `on_stream_stop`, and `on_session_end` always allow — block responses are ignored (a verdict cannot un-run a tool or stop an exit).
 
 ## Standard Payload
 
@@ -102,6 +122,8 @@ Fields populated per event:
 | `post_tool_use` | `tool` + `result` |
 | `on_agent_stop` | `stop_reason` + `stop_error` |
 | `on_stream_stop` | `stop_reason` |
+| `on_session_start` | `session` (`session.source`: `startup` / `resume`) |
+| `on_session_end` | `session` (`session.reason`: `exit`) |
 
 ## Data Access
 
@@ -119,6 +141,8 @@ Fields populated per event:
 | `GGCODE_TOOL_ERROR` | Error message (post_tool_use) |
 | `GGCODE_TOOL_RESULT` | Tool output, 4KB max (post_tool_use) |
 | `GGCODE_TOOL_DURATION` | Duration string (post_tool_use) |
+| `GGCODE_SESSION_SOURCE` | `startup` / `resume` (on_session_start) |
+| `GGCODE_SESSION_END_REASON` | `exit` (on_session_end) |
 | `${TOOL_NAME}`, `${FILE_PATH}`, etc. | Template expansion in command string |
 | Unknown `$VAR` | Preserved for shell expansion |
 
@@ -133,7 +157,7 @@ Fields populated per event:
 
 ## Match Patterns
 
-Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `on_agent_stop`, `on_stream_stop`), use `*` to match all.
+Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `on_agent_stop`, `on_stream_stop`, `on_session_start`, `on_session_end`), use `*` to match all.
 
 ### Match Modes
 
@@ -201,6 +225,17 @@ hooks:
   on_stream_stop:
     - match: "*"
       command: "notify-send 'done'"
+
+  on_session_start:
+    - match: "*"
+      command: "git status --short --branch"
+    - match: "*"
+      command: "cat .ggcode/session-context.txt 2>/dev/null || true"
+
+  on_session_end:
+    - match: "*"
+      type: http
+      url: "https://audit.example.com/session-end"
 ```
 
 ### Fields

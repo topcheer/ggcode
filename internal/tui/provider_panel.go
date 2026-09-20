@@ -36,6 +36,9 @@ type providerPanelState struct {
 	refreshing    bool
 	refreshVendor string
 	authBusy      bool
+	// pendingLogin is non-nil while a device-flow login awaits browser
+	// authorization; the provider panel renders it as a top banner.
+	pendingLogin  *pendingProviderLogin
 	enterpriseURL string
 
 	// New vendor creation wizard
@@ -87,12 +90,25 @@ type providerModelsRefreshResultMsg struct {
 }
 
 type providerAuthStartMsg struct {
-	vendor     string
-	flow       *auth.CopilotDeviceFlow
-	claudeFlow *auth.ClaudeOAuthFlow
-	copyErr    error
-	openErr    error
-	err        error
+	vendor       string
+	flow         *auth.CopilotDeviceFlow
+	claudeFlow   *auth.ClaudeOAuthFlow
+	openCodeFlow *auth.OpenCodeDeviceAuth
+	copyErr      error
+	openErr      error
+	err          error
+}
+
+// pendingProviderLogin carries the device-flow verification info while an
+// OAuth login is in flight. Rendered as a persistent banner (not the
+// one-line footer message) so the code stays visible and copyable for the
+// whole poll window - same rationale as MCP's renderDeviceCodeBanner
+// (#1790): time-sensitive auth info must survive regardless of panel focus.
+type pendingProviderLogin struct {
+	Vendor  string
+	URL     string
+	Code    string
+	OpenErr error
 }
 
 type providerAuthResultMsg struct {
@@ -381,6 +397,7 @@ func (m *Model) renderProviderPanel() string {
 	if panel == nil || m.config == nil {
 		return ""
 	}
+	loginBanner := m.renderProviderLoginBanner()
 
 	vc := m.config.Vendors[panel.selectedVendor()]
 	ep := vc.Endpoints[panel.selectedEndpoint()]
@@ -509,6 +526,9 @@ func (m *Model) renderProviderPanel() string {
 	} else {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.main")))
 	}
+	if panel.selectedVendor() == auth.ProviderOpenCode {
+		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.opencode")))
+	}
 	if panel.selectedVendor() == auth.ProviderGitHubCopilot {
 		footer = append(footer, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(" "+m.t("panel.provider.hint.copilot")))
 	}
@@ -528,7 +548,32 @@ func (m *Model) renderProviderPanel() string {
 		MaxHeight(footerHeight).
 		Render(strings.Join(footer, "\n"))
 
-	return m.renderContextBox("/provider", lipgloss.JoinVertical(lipgloss.Left, columns, "", footerBox), lipgloss.Color("14"))
+	return m.renderContextBox("/provider", lipgloss.JoinVertical(lipgloss.Left, loginBanner, columns, "", footerBox), lipgloss.Color("14"))
+}
+
+// renderProviderLoginBanner renders the in-flight device-flow login as a
+// high-contrast banner above the provider columns: the verification code in
+// large type (copyable), the URL, and the wait state. Returns "" when no
+// login is pending.
+func (m *Model) renderProviderLoginBanner() string {
+	panel := m.providerPanel
+	if panel == nil || panel.pendingLogin == nil {
+		return ""
+	}
+	pl := panel.pendingLogin
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	lines := []string{accent.Render(fmt.Sprintf(" %s OAuth 登录进行中 / login in progress", pl.Vendor))}
+	if pl.Code != "" {
+		lines = append(lines, accent.Render(fmt.Sprintf(" 验证码 / code:  %s   (已复制到剪贴板 / copied)", pl.Code)))
+	}
+	lines = append(lines, dim.Render(fmt.Sprintf(" 打开 / open:  %s", pl.URL)))
+	if pl.OpenErr == nil {
+		lines = append(lines, dim.Render(" 已自动打开浏览器 / browser opened - 授权完成后自动连接"))
+	} else {
+		lines = append(lines, accent.Render(fmt.Sprintf(" 浏览器打开失败，请手动访问上方 URL / open failed: %v", pl.OpenErr)))
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("11")).Padding(0, 1).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func renderProviderPanelSection(title, body string, width, height int) string {
@@ -965,12 +1010,21 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, nil
 	case "l":
 		if panel.authBusy {
+			// Login already in flight (e.g. device-flow poll can run 10min).
+			// Silent no-ops here read as "the key is dead" - surface state.
+			panel.message = m.t("panel.provider.login.busy")
 			return *m, nil
 		}
+		debug.Log("tui", "provider panel: login key pressed, vendor=%q endpoint=%q", panel.selectedVendor(), panel.selectedEndpoint())
 		if panel.selectedVendor() == auth.ProviderAnthropic && panel.selectedEndpoint() == "oauth" {
 			panel.authBusy = true
 			panel.message = m.t("panel.provider.login.claude_starting")
 			return *m, m.startClaudeLogin()
+		}
+		if panel.selectedVendor() == auth.ProviderOpenCode {
+			panel.authBusy = true
+			panel.message = m.t("panel.provider.login.opencode_starting")
+			return *m, m.startOpenCodeLogin()
 		}
 		if panel.selectedVendor() == auth.ProviderGitHubCopilot {
 			panel.authBusy = true
@@ -987,7 +1041,17 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
+			panel.pendingLogin = nil
 			panel.message = m.t("panel.provider.logout.claude_success")
+			return *m, nil
+		}
+		if panel.selectedVendor() == auth.ProviderOpenCode {
+			if err := auth.DefaultStore().Delete(auth.ProviderOpenCode); err != nil {
+				panel.message = err.Error()
+				return *m, nil
+			}
+			panel.pendingLogin = nil
+			panel.message = m.t("panel.provider.logout.opencode_success")
 			return *m, nil
 		}
 		if panel.selectedVendor() == auth.ProviderGitHubCopilot {
@@ -995,6 +1059,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
+			panel.pendingLogin = nil
 			panel.message = m.t("panel.provider.logout.success")
 			return *m, nil
 		}
@@ -1339,6 +1404,37 @@ func (m *Model) pollCopilotLogin(flow *auth.CopilotDeviceFlow) tea.Cmd {
 	}
 }
 
+func (m *Model) startOpenCodeLogin() tea.Cmd {
+	consoleURL := os.Getenv("OPENCODE_CONSOLE_URL")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		dev, err := auth.StartOpenCodeDeviceFlow(ctx, consoleURL)
+		msg := providerAuthStartMsg{vendor: auth.ProviderOpenCode, openCodeFlow: dev, err: err}
+		if err == nil {
+			if m.clipboardWriter != nil {
+				msg.copyErr = m.clipboardWriter(dev.UserCode)
+			}
+			if m.urlOpener != nil {
+				msg.openErr = m.urlOpener(dev.VerificationURL(consoleURL))
+			}
+		}
+		return msg
+	}
+}
+
+func (m *Model) pollOpenCodeLogin(consoleURL string, dev *auth.OpenCodeDeviceAuth) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		info, err := auth.PollOpenCodeDeviceFlow(ctx, consoleURL, dev)
+		if err == nil && info != nil {
+			err = auth.DefaultStore().Save(info)
+		}
+		return providerAuthResultMsg{vendor: auth.ProviderOpenCode, info: info, err: err}
+	}
+}
+
 func (m *Model) startClaudeLogin() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1443,6 +1539,14 @@ func providerHasUsableCredential(vendor, endpoint string, ep config.EndpointConf
 		}
 		return true
 	}
+	if vendor == auth.ProviderOpenCode {
+		// OAuth (provider_auth.json) takes precedence; a plain API key
+		// (${OPENCODE_API_KEY}) also counts as usable.
+		if info, err := auth.DefaultStore().Load(auth.ProviderOpenCode); err == nil && info != nil && strings.TrimSpace(info.AccessToken) != "" {
+			return true
+		}
+		return providerHasUsableAPIKey(resolveAPIKey(ep.APIKey, vc.APIKey))
+	}
 	return providerHasUsableAPIKey(resolveAPIKey(ep.APIKey, vc.APIKey))
 }
 
@@ -1457,6 +1561,12 @@ func resolveAPIKey(epKey, vcKey string) string {
 }
 
 func providerCredentialStatus(m *Model, vendor, endpoint string, ep config.EndpointConfig, vc config.VendorConfig, panel *providerPanelState) string {
+	if vendor == auth.ProviderOpenCode {
+		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
+			return m.t("panel.provider.auth.connected")
+		}
+		return m.t("panel.provider.auth.not_connected")
+	}
 	if vendor == auth.ProviderAnthropic && endpoint == "oauth" {
 		if providerHasUsableCredential(vendor, endpoint, ep, vc, panel) {
 			return m.t("panel.provider.auth.connected")
