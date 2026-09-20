@@ -70,6 +70,7 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 			return m, nil
 		}
 		if msg.claudeFlow != nil {
+			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderAnthropic, URL: msg.claudeFlow.AutoURL}
 			notes := []string{m.t("panel.provider.login.claude_instructions")}
 			switch {
 			case msg.openErr == nil:
@@ -90,6 +91,7 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 		}
 		if msg.flow != nil {
 			m.providerPanel.enterpriseURL = msg.flow.EnterpriseURL
+			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderGitHubCopilot, URL: msg.flow.VerificationURI, Code: msg.flow.UserCode}
 			notes := []string{m.t("panel.provider.login.instructions", msg.flow.VerificationURI, msg.flow.UserCode)}
 			switch {
 			case msg.copyErr == nil:
@@ -110,11 +112,13 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 	if m.providerPanel != nil && msg.vendor == auth.ProviderOpenCode {
 		if msg.err != nil {
 			m.providerPanel.authBusy = false
+			m.providerPanel.pendingLogin = nil
 			m.providerPanel.message = msg.err.Error()
 			return m, nil
 		}
 		if msg.openCodeFlow != nil {
 			consoleURL := os.Getenv("OPENCODE_CONSOLE_URL")
+			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderOpenCode, URL: msg.openCodeFlow.VerificationURL(consoleURL), Code: msg.openCodeFlow.UserCode}
 			notes := []string{m.t("panel.provider.login.instructions", msg.openCodeFlow.VerificationURL(consoleURL), msg.openCodeFlow.UserCode)}
 			switch {
 			case msg.copyErr == nil:
@@ -140,6 +144,7 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, tea.Cmd) {
 	if m.providerPanel != nil && msg.vendor == auth.ProviderAnthropic {
 		m.providerPanel.authBusy = false
+		m.providerPanel.pendingLogin = nil
 		if msg.err != nil {
 			m.providerPanel.message = m.t("panel.provider.login.claude_failed", msg.err.Error())
 			return m, nil
@@ -149,6 +154,7 @@ func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, te
 	}
 	if m.providerPanel != nil && msg.vendor == auth.ProviderGitHubCopilot {
 		m.providerPanel.authBusy = false
+		m.providerPanel.pendingLogin = nil
 		if msg.err != nil {
 			m.providerPanel.message = m.t("panel.provider.login.failed", msg.err.Error())
 			return m, nil
@@ -161,6 +167,7 @@ func (m Model) handleProviderAuthResultMsg(msg providerAuthResultMsg) (Model, te
 	}
 	if m.providerPanel != nil && msg.vendor == auth.ProviderOpenCode {
 		m.providerPanel.authBusy = false
+		m.providerPanel.pendingLogin = nil
 		if msg.err != nil {
 			m.providerPanel.message = m.t("panel.provider.login.opencode_failed", msg.err.Error())
 			return m, nil

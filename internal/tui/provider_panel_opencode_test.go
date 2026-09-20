@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -69,5 +70,40 @@ func TestProviderPanelOpenCodeLoginKey(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("no login command returned: device flow never starts")
+	}
+}
+
+func TestProviderLoginBannerLifecycle(t *testing.T) {
+	m := newOpenCodePanelTestModel(t)
+
+	// Start msg wires the banner (device code + URL), regardless of footer focus.
+	m.providerPanel.pendingLogin = nil
+	startMsg := providerAuthStartMsg{vendor: auth.ProviderOpenCode, openCodeFlow: &auth.OpenCodeDeviceAuth{
+		UserCode: "ABCD-EFGH", VerificationURIComplete: "/console/device?user_code=ABCD-EFGH",
+	}}
+	next, _ := m.handleProviderAuthStartMsg(startMsg)
+	if next.providerPanel.pendingLogin == nil {
+		t.Fatal("banner not wired by start msg")
+	}
+	if next.providerPanel.pendingLogin.Code != "ABCD-EFGH" {
+		t.Fatalf("banner code = %q", next.providerPanel.pendingLogin.Code)
+	}
+
+	// Banner persists until the result arrives...
+	next2, _ := next.handleProviderAuthResultMsg(providerAuthResultMsg{vendor: auth.ProviderOpenCode})
+	if next2.providerPanel.pendingLogin != nil {
+		t.Fatal("banner must clear once authorization state is fetched")
+	}
+	if next2.providerPanel.authBusy {
+		t.Fatal("authBusy must clear on result")
+	}
+
+	// Copilot path gets the same banner (regression: code must be copyable).
+	next3, _ := next2.handleProviderAuthStartMsg(providerAuthStartMsg{
+		vendor: auth.ProviderGitHubCopilot,
+		flow:   &auth.CopilotDeviceFlow{VerificationURI: "https://github.com/login/device", UserCode: "XY9Z-1234"},
+	})
+	if next3.providerPanel.pendingLogin == nil || next3.providerPanel.pendingLogin.Code != "XY9Z-1234" {
+		t.Fatalf("copilot banner missing: %+v", next3.providerPanel.pendingLogin)
 	}
 }

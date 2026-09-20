@@ -36,6 +36,9 @@ type providerPanelState struct {
 	refreshing    bool
 	refreshVendor string
 	authBusy      bool
+	// pendingLogin is non-nil while a device-flow login awaits browser
+	// authorization; the provider panel renders it as a top banner.
+	pendingLogin  *pendingProviderLogin
 	enterpriseURL string
 
 	// New vendor creation wizard
@@ -94,6 +97,17 @@ type providerAuthStartMsg struct {
 	copyErr      error
 	openErr      error
 	err          error
+}
+
+// pendingProviderLogin carries the device-flow verification info while an
+// OAuth login is in flight. Rendered as a persistent banner (not the
+// one-line footer message) so the code stays visible and copyable for the
+// whole poll window - same rationale as MCP's renderDeviceCodeBanner
+// (#1790): time-sensitive auth info must survive regardless of panel focus.
+type pendingProviderLogin struct {
+	Vendor string
+	URL    string
+	Code   string
 }
 
 type providerAuthResultMsg struct {
@@ -382,6 +396,7 @@ func (m *Model) renderProviderPanel() string {
 	if panel == nil || m.config == nil {
 		return ""
 	}
+	loginBanner := m.renderProviderLoginBanner()
 
 	vc := m.config.Vendors[panel.selectedVendor()]
 	ep := vc.Endpoints[panel.selectedEndpoint()]
@@ -532,7 +547,28 @@ func (m *Model) renderProviderPanel() string {
 		MaxHeight(footerHeight).
 		Render(strings.Join(footer, "\n"))
 
-	return m.renderContextBox("/provider", lipgloss.JoinVertical(lipgloss.Left, columns, "", footerBox), lipgloss.Color("14"))
+	return m.renderContextBox("/provider", lipgloss.JoinVertical(lipgloss.Left, loginBanner, columns, "", footerBox), lipgloss.Color("14"))
+}
+
+// renderProviderLoginBanner renders the in-flight device-flow login as a
+// high-contrast banner above the provider columns: the verification code in
+// large type (copyable), the URL, and the wait state. Returns "" when no
+// login is pending.
+func (m *Model) renderProviderLoginBanner() string {
+	panel := m.providerPanel
+	if panel == nil || panel.pendingLogin == nil {
+		return ""
+	}
+	pl := panel.pendingLogin
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	lines := []string{accent.Render(fmt.Sprintf(" %s OAuth 登录进行中 / login in progress", pl.Vendor))}
+	if pl.Code != "" {
+		lines = append(lines, accent.Render(fmt.Sprintf(" 验证码 / code:  %s   (已复制到剪贴板 / copied)", pl.Code)))
+	}
+	lines = append(lines, dim.Render(fmt.Sprintf(" 打开 / open:  %s", pl.URL)))
+	lines = append(lines, dim.Render(" 等待浏览器授权... 授权完成后自动连接 / waiting for authorization..."))
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("11")).Padding(0, 1).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func renderProviderPanelSection(title, body string, width, height int) string {
@@ -1000,6 +1036,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
+			panel.pendingLogin = nil
 			panel.message = m.t("panel.provider.logout.claude_success")
 			return *m, nil
 		}
@@ -1008,6 +1045,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
+			panel.pendingLogin = nil
 			panel.message = m.t("panel.provider.logout.opencode_success")
 			return *m, nil
 		}
@@ -1016,6 +1054,7 @@ func (m *Model) handleProviderPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 				panel.message = err.Error()
 				return *m, nil
 			}
+			panel.pendingLogin = nil
 			panel.message = m.t("panel.provider.logout.success")
 			return *m, nil
 		}
