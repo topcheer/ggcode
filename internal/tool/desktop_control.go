@@ -48,7 +48,7 @@ mouse_down/mouse_up split a click into separate press and release calls — for
   long-press interactions and cross-call timing (e.g. press, drag via move, release).
 hold_key presses a key/combo, holds it for duration_ms, then releases — e.g.
   hold_key "w" 1500ms in a game, or holding arrows for continuous scroll.
-set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height.
+set_window_bounds positions and sizes a window: x,y = top-left; to_x,to_y = width,height. Target selection: macOS always the frontmost window; Linux/Windows target by 'text' (window title substring; Linux falls back to the active window when omitted, Windows requires a title match). The 'app' param is not yet honored for this action.
 open launches a URL or file path with the default handler app (use "app" to force a specific app).
 
 Platform support: all actions on macOS; on Linux both X11 (xdotool/wmctrl; UI-tree actions via AT-SPI python3-gi) and Wayland (ydotool + ydotoold for input; UI-tree actions via AT-SPI — display-server independent; scroll has no ydotool equivalent and window management has no Wayland protocol for external clients); on Windows mouse/keyboard/app plus window management (Win32: list/focus/close/minimize/maximize/set_window_bounds, display_info) via SendInput and EnumWindows — UI-tree and menu actions pending UI Automation.`
@@ -70,8 +70,8 @@ func (DesktopControlTool) Parameters() json.RawMessage {
     },
     "x": {"type": "integer", "description": "X coordinate (logical pixels from left). Required for mouse position actions."},
     "y": {"type": "integer", "description": "Y coordinate (logical pixels from top). Required for mouse position actions."},
-    "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open')."},
-    "app": {"type": "string", "description": "Application name: to open the target with (for 'open'), or the app whose menu bar to use (for 'menu_select', default frontmost), or whose window to resize (for 'set_window_bounds', default frontmost)."},
+    "text": {"type": "string", "description": "Text to type (for 'type') or key combo string (for 'key_combo'/'key_press') or app name (for 'launch_app'/'quit_app'/'focus_window') or menu path like 'File > Save' (for 'menu_select') or modifiers like 'cmd+shift' (for 'modifier_click') or URL/file path (for 'open') or window title substring (for 'set_window_bounds' on Linux/Windows)."},
+    "app": {"type": "string", "description": "Application name: to open the target with (for 'open'), or the app whose menu bar to use (for 'menu_select', default frontmost). Not yet honored for 'set_window_bounds': target that action's window via 'text' (title substring) on Linux/Windows, or the frontmost window on macOS."},
     "button": {"type": "string", "enum": ["left", "right"], "default": "left", "description": "Mouse button for click actions."},
     "direction": {"type": "string", "enum": ["up", "down"], "default": "down", "description": "Scroll direction."},
     "amount": {"type": "integer", "default": 1, "minimum": 1, "description": "Scroll amount (number of steps)."},
