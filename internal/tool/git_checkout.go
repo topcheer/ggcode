@@ -97,9 +97,11 @@ func (t GitCheckout) Execute(ctx context.Context, input json.RawMessage) (Result
 	// Track the branch we're leaving for context in the result.
 	prevBranch, _ := vcsImpl.CurrentBranch(ctx, dir)
 
-	// Validate start point if provided.
+	// Validate start point if provided. #2590: start_point is a revspec
+	// (HEAD~2, main^ ...) - validate with revspec semantics, not ref-name
+	// rules.
 	if args.Create && args.StartPoint != "" {
-		if err := validateRefName(args.StartPoint); err != nil {
+		if err := validateRevspec(args.StartPoint); err != nil {
 			return Result{IsError: true, Content: err.Error()}, nil
 		}
 		// Same #1687 case 2 trim-copy mismatch as Branch above.
@@ -179,6 +181,36 @@ func validateBranchName(name string) error {
 	}
 	if strings.HasSuffix(name, ".lock") {
 		return fmt.Errorf("branch name %q ends with '.lock' (reserved by git)", name)
+	}
+	return nil
+}
+
+// validateRevspec validates a git revspec (HEAD~2, HEAD^, main@{1},
+// tag~3 ...) for command-line safety. The parameter is a revspec, NOT a
+// ref name: '~', '^' and '@{...}' are legal revision syntax, so the
+// check-ref-format character rules of validateRefName must NOT apply here
+// (#2590 - git_blame/git_checkout wrongly refused HEAD~N and the family).
+// The actual injection vector (#1687 case 4) is a LEADING '-' (git would
+// consume the argv as an option); '..' stays blocked to keep the argument
+// a single commit, not a range. exec argv passes the rest inertly.
+func validateRevspec(rev string) error {
+	rev = strings.TrimSpace(rev)
+	if rev == "" {
+		return fmt.Errorf("revision cannot be empty")
+	}
+	if len(rev) > 200 {
+		return fmt.Errorf("revision too long")
+	}
+	if strings.Contains(rev, "..") {
+		return fmt.Errorf("revision %q must not contain '..' (single commit, not a range)", rev)
+	}
+	if strings.HasPrefix(rev, "-") {
+		return fmt.Errorf("revision %q starts with '-' (refusing option injection)", rev)
+	}
+	for _, ch := range rev {
+		if ch < 0x20 || ch == 0x7f {
+			return fmt.Errorf("revision %q contains control character", rev)
+		}
 	}
 	return nil
 }
