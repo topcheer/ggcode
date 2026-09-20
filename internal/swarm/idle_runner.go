@@ -354,6 +354,12 @@ func tryClaimPendingTask(
 		}
 		tm.setStatus(TeammateIdle)
 		tm.setCurrentTask("")
+		// #2579: clear CurrentTaskID once the task is terminal (success,
+		// park, or error) — a stale ID lets a later panic rollback flip an
+		// already-completed task back to pending for re-execution.
+		tm.mu.Lock()
+		tm.CurrentTaskID = ""
+		tm.mu.Unlock()
 
 		if onEvent != nil {
 			onEvent(Event{
@@ -423,6 +429,11 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 		debug.Log("swarm", "panic rollback: task=%s vanished from board", taskID)
 		return
 	}
+	// #2579: guard both updates with ExpectedStatus=in_progress — the
+	// rollback must only ever act on a task THIS teammate is still running.
+	// A completed (or otherwise terminal) task fails the guard and the
+	// rollback is a no-op, mirroring the claim's guard semantics.
+	inProgress := task.StatusInProgress
 	attempts := 0
 	if v, ok := current.Metadata["retry_attempts"]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -433,7 +444,8 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	if attempts >= maxTransientTaskRetries {
 		completed := task.StatusCompleted
 		if _, uerr := board.Update(taskID, task.UpdateOptions{
-			Status: &completed,
+			ExpectedStatus: &inProgress,
+			Status:         &completed,
 			Metadata: map[string]string{
 				"permanent_error": "max_retries_exceeded",
 				"error":           "teammate panicked repeatedly",
@@ -447,7 +459,7 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	}
 	pending := task.StatusPending
 	owner := ""
-	if _, uerr := board.Update(taskID, task.UpdateOptions{Status: &pending, Owner: &owner, Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)}}); uerr != nil {
+	if _, uerr := board.Update(taskID, task.UpdateOptions{ExpectedStatus: &inProgress, Status: &pending, Owner: &owner, Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)}}); uerr != nil {
 		debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
 	}
 }

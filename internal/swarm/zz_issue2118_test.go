@@ -29,6 +29,13 @@ func TestIssue2118_PanicRollbackCountsRetries(t *testing.T) {
 	mgr.mu.Unlock()
 
 	tk := team.Tasks.Create("poison-panic", "panics", "", nil)
+	// #2579: the rollback now guards on ExpectedStatus=in_progress, so the
+	// fixture must reflect the real timeline (claim flips pending ->
+	// in_progress before the teammate panics).
+	inProgress := task.StatusInProgress
+	if _, err := team.Tasks.Update(tk.ID, task.UpdateOptions{Status: &inProgress}); err != nil {
+		t.Fatal(err)
+	}
 	tm := &Teammate{ID: "tm-1", Name: "worker", ctx: context.Background()}
 	tm.mu.Lock()
 	tm.CurrentTaskID = tk.ID
@@ -48,8 +55,14 @@ func TestIssue2118_PanicRollbackCountsRetries(t *testing.T) {
 	}
 
 	// Seed attempts to the cap and roll back again: must PARK, not requeue.
+	// #2579: re-claim first (pending -> in_progress) - the rollback guard
+	// requires the task to be in_progress, matching the real timeline of a
+	// surviving teammate claiming, panicking and rolling back again.
+	pending := task.StatusPending
 	if _, err := team.Tasks.Update(tk.ID, task.UpdateOptions{
-		Metadata: map[string]string{"retry_attempts": "2"},
+		ExpectedStatus: &pending,
+		Status:         &inProgress,
+		Metadata:       map[string]string{"retry_attempts": "2"},
 	}); err != nil {
 		t.Fatal(err)
 	}
