@@ -105,9 +105,10 @@ type providerAuthStartMsg struct {
 // whole poll window - same rationale as MCP's renderDeviceCodeBanner
 // (#1790): time-sensitive auth info must survive regardless of panel focus.
 type pendingProviderLogin struct {
-	Vendor string
-	URL    string
-	Code   string
+	Vendor  string
+	URL     string
+	Code    string
+	OpenErr error
 }
 
 type providerAuthResultMsg struct {
@@ -567,7 +568,11 @@ func (m *Model) renderProviderLoginBanner() string {
 		lines = append(lines, accent.Render(fmt.Sprintf(" 验证码 / code:  %s   (已复制到剪贴板 / copied)", pl.Code)))
 	}
 	lines = append(lines, dim.Render(fmt.Sprintf(" 打开 / open:  %s", pl.URL)))
-	lines = append(lines, dim.Render(" 等待浏览器授权... 授权完成后自动连接 / waiting for authorization..."))
+	if pl.OpenErr == nil {
+		lines = append(lines, dim.Render(" 已自动打开浏览器 / browser opened - 授权完成后自动连接"))
+	} else {
+		lines = append(lines, accent.Render(fmt.Sprintf(" 浏览器打开失败，请手动访问上方 URL / open failed: %v", pl.OpenErr)))
+	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("11")).Padding(0, 1).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 

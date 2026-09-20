@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -152,5 +153,16 @@ func TestPollOpenCodeDeviceFlowDenied(t *testing.T) {
 func TestPollOpenCodeDeviceFlowNilDev(t *testing.T) {
 	if _, err := PollOpenCodeDeviceFlow(context.Background(), "", nil); err == nil {
 		t.Fatal("expected error for nil device flow")
+	}
+}
+
+func TestOpenCodeDeviceAuthVerificationURLEmptyConsole(t *testing.T) {
+	// Unset OPENCODE_CONSOLE_URL: the resolved URL must still be absolute
+	// (openers reject relative paths as non-http(s)) - the "browser never
+	// opens" regression.
+	d := &OpenCodeDeviceAuth{VerificationURIComplete: "/console/device?user_code=X"}
+	got := d.VerificationURL("")
+	if !strings.HasPrefix(got, "https://opencode.ai/") {
+		t.Fatalf("VerificationURL(\"\") = %q, want absolute https://opencode.ai/... URL", got)
 	}
 }

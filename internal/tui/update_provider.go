@@ -70,7 +70,7 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 			return m, nil
 		}
 		if msg.claudeFlow != nil {
-			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderAnthropic, URL: msg.claudeFlow.AutoURL}
+			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderAnthropic, URL: msg.claudeFlow.AutoURL, OpenErr: msg.openErr}
 			notes := []string{m.t("panel.provider.login.claude_instructions")}
 			switch {
 			case msg.openErr == nil:
@@ -91,7 +91,7 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 		}
 		if msg.flow != nil {
 			m.providerPanel.enterpriseURL = msg.flow.EnterpriseURL
-			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderGitHubCopilot, URL: msg.flow.VerificationURI, Code: msg.flow.UserCode}
+			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderGitHubCopilot, URL: msg.flow.VerificationURI, Code: msg.flow.UserCode, OpenErr: msg.openErr}
 			notes := []string{m.t("panel.provider.login.instructions", msg.flow.VerificationURI, msg.flow.UserCode)}
 			switch {
 			case msg.copyErr == nil:
@@ -118,7 +118,7 @@ func (m Model) handleProviderAuthStartMsg(msg providerAuthStartMsg) (Model, tea.
 		}
 		if msg.openCodeFlow != nil {
 			consoleURL := os.Getenv("OPENCODE_CONSOLE_URL")
-			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderOpenCode, URL: msg.openCodeFlow.VerificationURL(consoleURL), Code: msg.openCodeFlow.UserCode}
+			m.providerPanel.pendingLogin = &pendingProviderLogin{Vendor: auth.ProviderOpenCode, URL: msg.openCodeFlow.VerificationURL(consoleURL), Code: msg.openCodeFlow.UserCode, OpenErr: msg.openErr}
 			notes := []string{m.t("panel.provider.login.instructions", msg.openCodeFlow.VerificationURL(consoleURL), msg.openCodeFlow.UserCode)}
 			switch {
 			case msg.copyErr == nil:

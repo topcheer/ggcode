@@ -63,6 +63,14 @@ func (d *OpenCodeDeviceAuth) VerificationURL(consoleURL string) string {
 	if strings.HasPrefix(d.VerificationURIComplete, "http://") || strings.HasPrefix(d.VerificationURIComplete, "https://") {
 		return d.VerificationURIComplete
 	}
+	// An EMPTY consoleURL (unset OPENCODE_CONSOLE_URL) must still resolve to
+	// the default console host: url.Parse("") yields no Host and the old code
+	// returned a RELATIVE path like "/console/device?...", which downstream
+	// openers (openSystemURL) reject as non-http(s) - the browser never
+	// opened even though the flow itself was running fine.
+	if strings.TrimSpace(consoleURL) == "" {
+		consoleURL = OpenCodeConsoleURL
+	}
 	root := consoleURL
 	if u, err := url.Parse(consoleURL); err == nil && u.Host != "" {
 		u.Path = ""
