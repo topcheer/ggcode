@@ -419,8 +419,6 @@ func enCatalog(key string) string {
 		return "Tab/Shift+Tab change focus • j/k move • / focus filter • Enter or s apply • a vendor key • u endpoint key • b base URL • m custom model • e add endpoint • n new vendor • Esc close"
 	case "panel.provider.hint.copilot":
 		return "GitHub Copilot: l login • x logout • b edit enterprise domain"
-	case "panel.provider.hint.opencode":
-		return "OpenCode Zen: l login (OAuth) - x logout - or set OPENCODE_API_KEY"
 	case "panel.provider.hint.protocol_select":
 		return "j/k select • Enter confirm"
 	case "panel.provider.new_vendor.title":
@@ -463,16 +461,6 @@ func enCatalog(key string) string {
 		return "Saved and activated."
 	case "panel.provider.login.starting":
 		return "Starting GitHub Copilot login..."
-	case "panel.provider.login.busy":
-		return "Login already in progress - check the code above and authorize in the browser."
-	case "panel.provider.login.opencode_starting":
-		return "Starting OpenCode login..."
-	case "panel.provider.login.opencode_success":
-		return "OpenCode connected."
-	case "panel.provider.login.opencode_failed":
-		return "OpenCode login failed: %s"
-	case "panel.provider.logout.opencode_success":
-		return "OpenCode disconnected."
 	case "panel.provider.login.instructions":
 		return "Open %s and enter code %s. Waiting for authorization..."
 	case "panel.provider.login.copied":

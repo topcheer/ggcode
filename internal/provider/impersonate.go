@@ -66,13 +66,6 @@ func DefaultImpersonationPresets() []ImpersonationPreset {
 			DisplayName:    "OpenCode",
 			UATemplate:     "opencode/{version}",
 			DefaultVersion: "1.17.20",
-			ExtraHeaders: map[string]string{
-				// OpenCode Zen gateway branding headers (mirrors the zenmux
-				// plugin in opencode: HTTP-Referer + X-Title identify the
-				// client to the gateway the same way the official CLI does).
-				"HTTP-Referer": "https://opencode.ai/",
-				"X-Title":      "opencode",
-			},
 		},
 		{
 			ID:             "copilot",
