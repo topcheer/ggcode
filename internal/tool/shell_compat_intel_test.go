@@ -74,13 +74,6 @@ func TestDiagnoseShellCompat(t *testing.T) {
 			want:    "timeout is GNU coreutils",
 		},
 		{
-			name:    "sort -V version sort GNU only",
-			command: "git tag | sort -V",
-			stdout:  "",
-			stderr:  "sort: unrecognized option `V'",
-			want:    "sort -V (version sort) is GNU-only",
-		},
-		{
 			name:    "du --max-depth GNU only",
 			command: "du --max-depth=1 -h .",
 			stdout:  "",

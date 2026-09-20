@@ -20,7 +20,6 @@ Common incompatibilities:
 | Find format | `find . -printf '%p\n'` | `find . -exec echo {} \;` |
 | Drop last N | `head -n -N f` | `sed '$d' f` |
 | Timeout | `timeout 5 cmd` | `gtimeout` or perl alarm |
-| Version sort | `sort -V` | `sort -t. -k1,1n` |
 | Dir depth | `du --max-depth=1` | `du -d 1` |
 | No empty xargs | `xargs -r` | guard with `[ -s ]` |
 

@@ -55,8 +55,11 @@ func Test1703PrefixAnchoring(t *testing.T) {
 		}
 	}
 	// Real invocations still detected.
+	// #2607: "sort -V file.txt" removed with the sort -V pattern (dead on
+	// both arms + current macOS natively supports -V; see
+	// shell_compat_intel.go).
 	for _, cmd := range []string{
-		"sort -V file.txt", "readlink -f p", "stat -c %s f",
+		"readlink -f p", "stat -c %s f",
 	} {
 		hit := false
 		for _, r := range shellCompatPatterns {
@@ -69,6 +72,9 @@ func Test1703PrefixAnchoring(t *testing.T) {
 		}
 	}
 	// sort with a later -v token (grep -v in a pipe) must not fire.
+	// #2607: kept as a regression guard even though the sort -V pattern
+	// itself is gone - it pins the "no bare -v prefix matching" rule for
+	// whatever future pattern touches sort.
 	for _, r := range shellCompatPatterns {
 		if r.match("sort -k2 file | grep -v x", "") {
 			t.Fatal("sort | grep -v misfired the version-sort rule")

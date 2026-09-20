@@ -126,29 +126,16 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "timeout is GNU coreutils, not on macOS by default. Install with: brew install coreutils (provides gtimeout), or use: perl -e 'alarm shift; exec @ARGV' 5 cmd",
 	},
-	// --- sort -V (GNU version sort) ---
-	{
-		match: func(cmd, out string) bool {
-			// #1703 case 5: bare Contains(cmd, "-v") matched any -v flag of any
-			// later token ("sort -k2 file | grep -v x") and the diagnostic arm's
-			// single-letter Contains(out, "v") is pure noise; require the -V
-			// flag as a token of the sort invocation itself (version-sort is
-			// spelled -V).
-			if strings.HasPrefix(strings.TrimSpace(cmd), "sort ") {
-				for _, tok := range strings.Fields(cmd) {
-					if tok == "-V" || tok == "--version-sort" {
-						return true
-					}
-				}
-			}
-			// NOTE: out arrives lowercased (diagnoseShellCompat lowercases the
-			// combined stream), so the diagnostic arm matches the LOWERCASE
-			// option spelling.
-			return strings.Contains(out, "sort: unrecognized option") &&
-				(strings.Contains(out, "option `v'") || strings.Contains(out, "option 'v'"))
-		},
-		fix: "sort -V (version sort) is GNU-only. On macOS/BSD use: sort -t. -k1,1n  or install coreutils: brew install coreutils (provides gsort -V)",
-	},
+	// --- (sort -V pattern removed, #2607) ---
+	// #1703 case 5 added a sort -V version-sort pattern, but it was dead
+	// on both arms: diagnoseShellCompat lowercases the command, so the
+	// `tok == "-V"` (capital V) proactive arm never matched, and the
+	// reactive arm expected GNU-style 'unrecognized option' text while
+	// real macOS/BSD sort emits 'invalid option -- V'. Worse, current
+	// macOS (verified on 27.0) natively supports sort -V, so the advice
+	// itself is wrong on the supported platforms. Removed along with its
+	// skewed tests (direct r.match bypassing ToLower; fabricated GNU
+	// stderr) and the docs/guide table row.
 	// --- du --max-depth (GNU) ---
 	{
 		match: func(cmd, out string) bool {
