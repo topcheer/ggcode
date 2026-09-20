@@ -486,6 +486,14 @@ func (g *CommandGate) preChecks(cmd string) GateResult {
 
 	// Multiple commands via semicolons with suspicious patterns
 	if strings.Contains(cmd, ";") {
+		// #2582: the per-part match must apply the SAME transformations as
+		// the main-flow Layer 1, or the compound branch diverges from the
+		// single-command verdicts:
+		//   - quotedInert rules match the blankQuotedAndHeredocs view
+		//     (text inside quotes is inert - `grep 'rm -rf /etc' README.md`
+		//     must stay Allow/Ask, not Block)
+		//   - benignPrefixes rewrite (`rm -rf /var/folders/...` = Ask via
+		//     the main flow, not Block here)
 		parts := splitSemicolons(cmd)
 		for _, part := range parts {
 			part = strings.TrimSpace(part)
@@ -494,7 +502,17 @@ func (g *CommandGate) preChecks(cmd string) GateResult {
 			}
 			// Check if any sub-command is catastrophic
 			for _, rule := range g.blockRules {
-				if rule.pattern.MatchString(part) {
+				target := part
+				if rule.quotedInert {
+					// Re-derive the inert view per part: quoted text is
+					// blanked, so a destructive phrase inside quotes no
+					// longer matches (#814 semantics for compounds).
+					target = blankQuotedAndHeredocs(part)
+				}
+				for _, bp := range rule.benignPrefixes {
+					target = strings.ReplaceAll(target, bp, "/benign/")
+				}
+				if rule.pattern.MatchString(target) {
 					return GateResult{
 						Behavior:   Block,
 						CleanedCmd: cmd,

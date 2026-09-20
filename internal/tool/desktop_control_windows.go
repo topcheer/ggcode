@@ -316,6 +316,13 @@ func executeDesktopControl(ctx context.Context, p desktopParams) (Result, error)
 		// given app name (the old code found the FIRST match only - a
 		// multi-window app stayed alive behind one closed window, and the
 		// comment falsely claimed "close all windows whose class matches").
+		// #2584/#349: an empty target must NEVER match - strings.Contains
+		// (s, "") is always true, which would WM_CLOSE every visible window
+		// (unsaved data lost). Align with findWindowByTitle /
+		// windowTitleMatches / the Linux quit_app guard.
+		if strings.TrimSpace(p.Text) == "" {
+			return Result{}, fmt.Errorf("quit_app requires a window title text; refusing to match all windows")
+		}
 		windows, err := enumVisibleWindows()
 		if err != nil {
 			return Result{}, err
