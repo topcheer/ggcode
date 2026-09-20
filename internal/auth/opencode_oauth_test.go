@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,5 +165,50 @@ func TestOpenCodeDeviceAuthVerificationURLEmptyConsole(t *testing.T) {
 	got := d.VerificationURL("")
 	if !strings.HasPrefix(got, "https://opencode.ai/") {
 		t.Fatalf("VerificationURL(\"\") = %q, want absolute https://opencode.ai/... URL", got)
+	}
+}
+
+func TestFetchOpenCodeOrgID(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/orgs" {
+			http.NotFound(w, r)
+			return
+		}
+		gotAuth = r.Header.Get("Authorization")
+		fmt.Fprint(w, `[{"id":"wrk_123","name":"Default"},{"id":"wrk_456","name":"Other"}]`)
+	}))
+	defer srv.Close()
+
+	orgID, err := FetchOpenCodeOrgID(context.Background(), srv.URL, "tok-abc")
+	if err != nil {
+		t.Fatalf("FetchOpenCodeOrgID: %v", err)
+	}
+	if orgID != "wrk_123" {
+		t.Fatalf("orgID = %q, want first org wrk_123", orgID)
+	}
+	if gotAuth != "Bearer tok-abc" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+}
+
+func TestFetchOpenCodeOrgIDEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[]`)
+	}))
+	defer srv.Close()
+	orgID, err := FetchOpenCodeOrgID(context.Background(), srv.URL, "tok")
+	if err != nil || orgID != "" {
+		t.Fatalf("empty orgs: orgID=%q err=%v, want \"\" nil", orgID, err)
+	}
+}
+
+func TestFetchOpenCodeOrgIDHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	if _, err := FetchOpenCodeOrgID(context.Background(), srv.URL, "tok"); err == nil {
+		t.Fatal("want error on HTTP 500")
 	}
 }

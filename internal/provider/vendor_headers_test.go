@@ -54,3 +54,28 @@ func TestIsXiaomiMiMoBaseURL(t *testing.T) {
 		}
 	}
 }
+
+func TestIsOpenCodeBaseURL(t *testing.T) {
+	yes := []string{"https://opencode.ai/zen/v1", "https://opencode.ai/inference/openai/v1"}
+	no := []string{"https://example.com/zen/v1", "", "https://githubcopilot.com"}
+	for _, u := range yes {
+		if !isOpenCodeBaseURL(u) {
+			t.Errorf("isOpenCodeBaseURL(%q) = false, want true", u)
+		}
+	}
+	for _, u := range no {
+		if isOpenCodeBaseURL(u) {
+			t.Errorf("isOpenCodeBaseURL(%q) = true, want false", u)
+		}
+	}
+}
+
+// A key that is NOT the stored OAuth token must never gain the org header,
+// even on opencode hosts (plain API keys keep legacy zen behavior). Uses a
+// sentinel key that no real store can hold.
+func TestVendorSpecificAuthHeaders_OpenCodeWrongKeyNoOrgHeader(t *testing.T) {
+	h := vendorSpecificAuthHeaders("https://opencode.ai/inference/openai/v1", "definitely-not-the-stored-token-xyz")
+	if got := h.Get("x-opencode-org-id"); got != "" {
+		t.Fatalf("x-opencode-org-id = %q for non-OAuth key, want empty", got)
+	}
+}

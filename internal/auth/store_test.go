@@ -127,3 +127,18 @@ func TestStoreSaveNoTmpResidue(t *testing.T) {
 		t.Fatalf("temp file residue after Save: %v", leftover)
 	}
 }
+
+func TestStoreOrgIDRoundTrip(t *testing.T) {
+	store := NewStore(t.TempDir() + "/auth.json")
+	in := &Info{ProviderID: ProviderOpenCode, Type: "oauth", AccessToken: "at", RefreshToken: "rt", OrgID: "wrk_9"}
+	if err := store.Save(in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(ProviderOpenCode)
+	if err != nil || got == nil {
+		t.Fatalf("load: %v %v", got, err)
+	}
+	if got.OrgID != "wrk_9" {
+		t.Fatalf("OrgID round-trip = %q, want wrk_9", got.OrgID)
+	}
+}
