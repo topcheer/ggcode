@@ -329,9 +329,12 @@ func (b *iosBackend) typeText(ctx context.Context, device, ref, text string, x, 
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	// Use AppleScript to type into the Simulator
-	// Escape double quotes in text
-	escapedText := strings.ReplaceAll(text, "\"", "\\\"")
+	// Use AppleScript to type into the Simulator.
+	// #2605: escape BACKSLASHES first, then double quotes (order matters):
+	// in AppleScript strings a backslash is the escape introducer, so a lone
+	// \U (Windows paths) was a compile-time syntax error and \n/\t/\r were
+	// silently interpreted as newline/tab/return instead of literal text.
+	escapedText := escapeAppleScriptString(text)
 	script := fmt.Sprintf(`
 tell application "Simulator" to activate
 delay 0.2
@@ -392,9 +395,11 @@ tell application "System Events" to keystroke return`
 delay 0.1
 tell application "System Events" to key code 53`
 	default:
+		// #2605: same escaping as typeText - the raw key went into
+		// keystroke "%s" unescaped, so a quote or backslash broke/injected.
 		script = fmt.Sprintf(`tell application "Simulator" to activate
 delay 0.1
-tell application "System Events" to keystroke "%s"`, key)
+tell application "System Events" to keystroke "%s"`, escapeAppleScriptString(key))
 	}
 	_, stderr, err := runCommand(ctx, 10*time.Second, "osascript", "-e", script)
 	if err != nil {
@@ -420,26 +425,40 @@ func (b *iosBackend) logs(ctx context.Context, device, pkg string, lines int) (R
 	return Result{Content: strings.Join(allLines, "\n")}, nil
 }
 
+// escapeAppleScriptString escapes a literal for embedding inside an
+// AppleScript double-quoted string: backslashes first (they are the escape
+// introducer), then double quotes. Order matters - flipping it would
+// double-escape the quotes' own backslash. #2605.
+func escapeAppleScriptString(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
 func (b *iosBackend) listApps(ctx context.Context, device string) (Result, error) {
 	out, stderr, err := runCommand(ctx, 15*time.Second, b.xcrunPath, "simctl", "listapps", device)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("listapps failed: %v\n%s", err, stderr)}, nil
 	}
 	// simctl listapps outputs a plist; extract bundle identifiers
+	// #2604: values come in OpenStep plist form - `"com.apple.Bridge";` -
+	// with surrounding quotes and a trailing semicolon. The old TrimSpace
+	// left them attached, so HasPrefix("com.apple.") NEVER matched (39
+	// system apps leaked as "third-party") and every reported ID was
+	// malformed for launch/uninstall.
 	var sb strings.Builder
 	sb.WriteString("Installed apps:\n")
 	count := 0
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "CFBundleIdentifier") {
-			// Next line or same line has the value
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
-				bundleID := strings.TrimSpace(parts[1])
-				if !strings.HasPrefix(bundleID, "com.apple.") {
-					sb.WriteString(fmt.Sprintf("  %s\n", bundleID))
-					count++
+				bundleID := strings.Trim(strings.TrimSpace(parts[1]), "\"; ")
+				if bundleID == "" || strings.HasPrefix(bundleID, "com.apple.") {
+					continue
 				}
+				sb.WriteString(fmt.Sprintf("  %s\n", bundleID))
+				count++
 			}
 		}
 	}
