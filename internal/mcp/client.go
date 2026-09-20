@@ -310,7 +310,16 @@ func (c *Client) Start(ctx context.Context) error {
 		cancelProc()
 		return fmt.Errorf("mcp[%s]: stderr pipe: %w", c.name, err)
 	}
-	safego.Go("mcp.captureStderr", func() { c.captureStderr(stderr) })
+	// #2578: exec.Cmd contract - Wait must not run before stderr reads
+	// complete (the piped os.File gets no copy goroutine; Wait closes the
+	// read fd right after Process.Wait, racing captureStderr and losing
+	// crash diagnostics buffered in the kernel pipe). procWatch waits on
+	// this before calling cmd.Wait().
+	stderrDone := make(chan struct{})
+	safego.Go("mcp.captureStderr", func() {
+		defer close(stderrDone)
+		c.captureStderr(stderr)
+	})
 
 	if err := cmd.Start(); err != nil {
 		cancelProc()
@@ -330,6 +339,7 @@ func (c *Client) Start(ctx context.Context) error {
 	// Monitor process exit. When the process dies on its own (not via
 	// Close/Abort), close the processExit channel so watchers can react.
 	safego.Go("mcp.procWatch", func() {
+		<-stderrDone // #2578: drain stderr before reaping (Wait closes the pipe)
 		_ = cmd.Wait()
 		// Always signal that the single legal Wait() has returned so Close can
 		// observe process teardown without calling Wait() again (concurrent

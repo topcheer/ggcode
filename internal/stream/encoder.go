@@ -101,7 +101,13 @@ func (e *Encoder) Start() error {
 	cmd := e.cmd
 	exitCh := make(chan struct{})
 	e.exitCh = exitCh
+	// #2578: exec.Cmd contract - Wait must not run before stderr reads
+	// complete (os.File-type pipes get no copy goroutine, Wait closes the
+	// read fd immediately after Process.Wait). Signal drain completion so
+	// the monitor can wait for it BEFORE calling cmd.Wait().
+	stderrDone := make(chan struct{})
 	safego.Go("stream.encoderMonitor", func() {
+		<-stderrDone // #2578: drain stderr first, then reap
 		err := cmd.Wait()
 		debug.Log("stream", "ffmpeg exited: %v", err)
 		e.mu.Lock()
@@ -118,9 +124,14 @@ func (e *Encoder) Start() error {
 
 	// Monitor stderr in background — log any errors
 	safego.Go("stream.encoderStderr", func() {
+		defer close(stderrDone)
 		scanner := bufio.NewScanner(stderrPipe)
+		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024) // #2578: ffmpeg error lines can exceed the 64KB default
 		for scanner.Scan() {
 			debug.Log("stream", "ffmpeg stderr: %s", scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			debug.Log("stream", "ffmpeg stderr read: %v", err)
 		}
 	})
 

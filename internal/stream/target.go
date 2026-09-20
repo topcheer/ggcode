@@ -155,14 +155,26 @@ func (t *Target) Connect() (io.Writer, error) {
 	}
 
 	// Monitor target stderr in background
+	// stderrDone (#2578): exec.Cmd contract - Wait closes the piped
+	// stderr fd without waiting for our reader; the monitor below waits
+	// for full drain BEFORE calling Wait so error-path diagnostics
+	// ("Unknown encoder", stream-key rejection, OOM) are never truncated.
+	stderrDone := make(chan struct{})
 	if targetStderr != nil {
 		targetName := t.name
 		safego.Go("stream.targetStderr", func() {
+			defer close(stderrDone)
 			scanner := bufio.NewScanner(targetStderr)
+			scanner.Buffer(make([]byte, 0, 64*1024), 256*1024) // #2578: raise the 64KB default line cap
 			for scanner.Scan() {
 				debug.Log("stream", "target %s stderr: %s", targetName, scanner.Text())
 			}
+			if err := scanner.Err(); err != nil {
+				debug.Log("stream", "target %s stderr read: %v", targetName, err)
+			}
 		})
+	} else {
+		close(stderrDone)
 	}
 
 	// #1304 R1: reap the target ffmpeg when it exits on its own (network
@@ -174,6 +186,7 @@ func (t *Target) Connect() (io.Writer, error) {
 	monCmd := t.cmd
 	monName := t.name
 	safego.Go("stream.targetMonitor", func() {
+		<-stderrDone // #2578: drain stderr before reaping (Wait closes the pipe)
 		werr := monCmd.Wait()
 		t.mu.Lock()
 		// #1339: guard with a cmd identity check, not just state. After
