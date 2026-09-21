@@ -134,3 +134,18 @@ func TestTrackActivityDoesNotEmit(t *testing.T) {
 		t.Errorf("TrackActivity emitted %d events, want 0", len(got))
 	}
 }
+
+// Streamed assistant text is real progress: it must clear the pending
+// activity so the watchdog stops heartbeating for the finished tool.
+func TestHeartbeatStopsAfterText(t *testing.T) {
+	e, _, _ := newHeartbeatTestEmitter(t, 20*time.Millisecond)
+
+	e.TrackActivity("run_command", `{"command":"make test"}`)
+	_ = e.EmitText("partial result...")
+	e.mu.Lock()
+	pending := e.activity != nil
+	e.mu.Unlock()
+	if pending {
+		t.Error("activity still pending after streamed text event")
+	}
+}
