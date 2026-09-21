@@ -481,5 +481,15 @@ func parseIntPositive(s string) (int, error) {
 	if val < 0 {
 		return 0, fmt.Errorf("must be >= 0")
 	}
-	return val * mult, nil
+	// #2615: the round-trip check above only covers the digits BEFORE the
+	// suffix multiplier; val*mult itself could overflow into a wrong
+	// positive or even negative number that then sailed through the
+	// checks above and silently persisted (e.g. 999999999999G -> 3.8e18
+	// crippled auto-compaction permanently). Verify the multiplication
+	// survives a round-trip before returning.
+	result := val * mult
+	if result/mult != val {
+		return 0, fmt.Errorf("value %d%s overflows the integer range", val, map[int]string{1024 * 1024 * 1024: "G", 1024 * 1024: "M", 1024: "K"}[mult])
+	}
+	return result, nil
 }
