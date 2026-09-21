@@ -1167,8 +1167,10 @@ func TestDefaultConfigIncludesKimiCodingPlanCapabilities(t *testing.T) {
 	if ep.DefaultModel != "kimi-for-coding" {
 		t.Fatalf("expected kimi default model kimi-for-coding, got %q", ep.DefaultModel)
 	}
-	if ep.ContextWindow != 262144 {
-		t.Fatalf("expected kimi context window 262144, got %d", ep.ContextWindow)
+	if ep.ContextWindow != 1048576 {
+		// 2026-09-20 models.dev: kimi-for-coding context upgraded 256k -> 1M
+		// (k3 generation). Pinned to upstream data via sync-model-caps.
+		t.Fatalf("expected kimi context window 1048576, got %d", ep.ContextWindow)
 	}
 	if ep.MaxTokens != 32768 {
 		t.Fatalf("expected kimi max output 32768, got %d", ep.MaxTokens)
