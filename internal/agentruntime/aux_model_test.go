@@ -128,6 +128,19 @@ func (f *fakeAuxProvider) SetSamplingOverride(o *provider.SamplingOverride) {
 }
 func (f *fakeAuxProvider) SamplingOverride() *provider.SamplingOverride { return f.override }
 
+func TestAuxProviderErrorPaths(t *testing.T) {
+	// aux routing off -> deterministic error, no network
+	_, err := AuxProvider(&config.Config{Vendor: "anthropic"})
+	if err == nil || !strings.Contains(err.Error(), "no auxiliary model") {
+		t.Fatalf("want no-aux-model error, got %v", err)
+	}
+	// aux model set but vendor/endpoint unconfigured -> resolve error, no network
+	_, err = AuxProvider(&config.Config{Vendor: "ghost", AuxModel: "m"})
+	if err == nil || !strings.Contains(err.Error(), "resolving aux endpoint") {
+		t.Fatalf("want resolve error, got %v", err)
+	}
+}
+
 func TestGenerateLLMTitleSuccess(t *testing.T) {
 	p := &fakeAuxProvider{text: "\"Fix login timeout\"\nextra line"}
 	got, err := GenerateLLMTitle(context.Background(), p, "help me fix the login timeout")
