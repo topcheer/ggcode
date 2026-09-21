@@ -195,9 +195,12 @@ func (p *AnthropicProvider) anthropicBetaHeader(hasTools bool) string {
 }
 
 // betaHeaderOpts wraps the beta header into SDK request options for the
-// per-call sites (Messages.New / Messages.NewStreaming).
-func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
-	if h := p.anthropicBetaHeader(hasTools); h != "" {
+// per-call sites (Messages.New / Messages.NewStreaming). Tool Use Examples
+// require the advanced-tool-use beta; toolBetaHeaderValues comma-joins it
+// with the interleaved-thinking beta so both ride one request (a second
+// WithHeader on the same key would silently drop the first).
+func (p *AnthropicProvider) betaHeaderOpts(tools []ToolDefinition) []option.RequestOption {
+	if h := toolBetaHeaderValues(p.anthropicBetaHeader(len(tools) > 0), tools, p.toolSearchBeta); h != "" {
 		return []option.RequestOption{option.WithHeader("anthropic-beta", h)}
 	}
 	return nil
@@ -627,7 +630,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
-	callOpts := append(p.betaHeaderOpts(len(tools) > 0), p.ptcRequestOptions()...)
+	callOpts := append(p.betaHeaderOpts(tools), p.ptcRequestOptions()...)
 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -703,7 +706,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 	debug.Log("anthropic", "ChatStream START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
-	callOpts := p.betaHeaderOpts(len(tools) > 0)
+	callOpts := p.betaHeaderOpts(tools)
 
 	ch := make(chan StreamEvent, 64)
 
@@ -1587,6 +1590,13 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 					}
 				} else if len(t.AllowedCallers) > 0 {
 					toolParams[i].OfTool.AllowedCallers = t.AllowedCallers
+				}
+				// Tool Use Examples (advanced-tool-use beta): native
+				// input_examples serialization. The matching beta header is
+				// attached by betaHeaderOpts (skipped when the Tool Search Tool
+				// already sends it).
+				if len(t.Examples) > 0 {
+					toolParams[i].OfTool.InputExamples = t.Examples
 				}
 			}
 		}

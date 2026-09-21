@@ -399,6 +399,36 @@ Anthropic compiles at most 20 strict tools per request, and schemas with deeply
 optional fields cost more grammar complexity. Only enable this on first-party
 endpoints — some OpenAI-compatible APIs reject `strict: true` with HTTP 400.
 
+## Tool Use Examples
+
+Sample invocations that demonstrate usage patterns a JSON Schema cannot
+express: date/ID formats, optional-parameter correlations, which combinations
+make sense. Anthropic research reported tool-call accuracy improving from 72%
+to 90% on complex parameter handling with examples. Configure per exact tool
+name (built-in, MCP, and plugin tools all work — MCP names look like
+`mcp__server__tool`):
+
+```yaml
+tool_examples:
+  mcp__tickets__create_ticket:
+    - title: "Login page returns 500 error"
+      priority: critical
+      due_date: "2026-01-15"        # dates are YYYY-MM-DD
+      reporter:
+        id: "USR-12345"             # IDs are USR-XXXXX
+    - title: "Add dark mode support"
+      labels: ["feature-request", "ui"]
+```
+
+On the `anthropic` protocol the examples are sent natively as `input_examples`
+(advanced-tool-use beta header attached automatically; skipped when the Tool
+Search Tool already sends it). Other protocols have no native field, so ggcode
+renders a compact `Example usage:` suffix into the tool description instead —
+capped at 2 examples / 600 bytes so a misconfigured example cannot bloat every
+request. Tools without configured examples keep byte-identical definitions
+(prompt-cache prefixes stay stable).
+
+
 ## Test Connectivity
 
 Use `llm-probe` to verify your setup and list available models:

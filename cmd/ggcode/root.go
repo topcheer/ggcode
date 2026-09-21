@@ -665,6 +665,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	})
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
 	agentruntime.ApplyVerifyConfigToAgent(ag, cfg)
+	agentruntime.ApplyToolExamplesConfigToAgent(ag, cfg)
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)

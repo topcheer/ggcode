@@ -342,8 +342,14 @@ type Config struct {
 	SessionTokenBudget int64                     `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
 	ToolCallBudget     int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
 	ToolPerms          map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins            []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers         []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	// ToolExamples (Anthropic Tool Use Examples, advanced-tool-use beta):
+	// exact tool name -> sample invocations demonstrating usage patterns a
+	// JSON Schema cannot express (format conventions, ID formats,
+	// optional-parameter correlations). Applies to built-in, MCP, and plugin
+	// tools alike. See internal/agent/tool_examples.go.
+	ToolExamples map[string][]map[string]any `yaml:"tool_examples,omitempty" json:"tool_examples,omitempty"`
+	Plugins      []PluginConfigEntry         `yaml:"plugins" json:"plugins"`
+	MCPServers   []MCPServerConfig           `yaml:"mcp_servers" json:"mcp_servers"`
 	// MCPSamplingDisabled (#1484-D) turns the MCP sampling handler off
 	// entirely - sampling is the only LLM-consumption path with no gate:
 	// a buggy/malicious server could loop sampling requests and burn the

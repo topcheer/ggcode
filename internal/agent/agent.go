@@ -94,11 +94,15 @@ func isAgentRetryableLLMError(err error) bool {
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
-	provider                   provider.Provider
-	tools                      *tool.Registry
-	contextManager             ctxpkg.ContextManager
-	maxIter                    int
-	policy                     permission.PermissionPolicy
+	provider       provider.Provider
+	tools          *tool.Registry
+	contextManager ctxpkg.ContextManager
+	maxIter        int
+	policy         permission.PermissionPolicy
+	// toolExamples (config tool_examples): sample invocations attached to
+	// outbound tool definitions for the advanced-tool-use Tool Use Examples
+	// feature. See tool_examples.go.
+	toolExamples               map[string][]map[string]any
 	onApproval                 ApprovalFunc
 	onUsage                    func(usage provider.TokenUsage)
 	usageSource                string // tracks the source of the current LLM call for usage persistence
@@ -1610,7 +1614,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectDynamicSystemPrompt()
 	a.maybeInjectRatchetRules()
 	transientCompactWarned := false
-	toolDefs := a.tools.ToDefinitions()
+	toolDefs := ApplyToolExamples(a.tools.ToDefinitions(), a.toolExamples)
 	a.toolSearch.init(toolDefs)
 	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
 	// beta): when the provider declares tool_search_tool_regex/bm25, schema

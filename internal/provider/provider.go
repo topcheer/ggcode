@@ -249,6 +249,15 @@ type ToolDefinition struct {
 	// tool_reference. Ignored by the OpenAI/Gemini adapters. Never set on
 	// server tools themselves (the API rejects deferring the search tool).
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Examples (Anthropic Tool Use Examples, advanced-tool-use beta):
+	// sample invocations demonstrating usage patterns a JSON Schema cannot
+	// express - format conventions, ID formats, optional-parameter
+	// correlations. The Anthropic adapter serializes them natively as
+	// `input_examples`; adapters without native support (OpenAI, Gemini)
+	// render a compact suffix into the tool description instead. See
+	// tool_examples.go. Populated from config `tool_examples` by the agent
+	// layer (internal/agent/tool_examples.go).
+	Examples []map[string]any `json:"examples,omitempty"`
 }
 
 // Provider is the interface every LLM backend must implement.

@@ -51,6 +51,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"reflectionFunc":       "optional reflection callback, injected via setter",
 		"diffConfirm":          "optional diff confirm callback, injected via setter",
 		"policy":               "permission policy interface, injected via SetPermissionPolicy",
+		"toolExamples":         "optional tool use examples (config tool_examples), injected via SetToolExamples / ApplyToolExamplesConfigToAgent",
 		"lastRunStats":         "populated only after a run completes",
 		"perfBaseline":         "loaded lazily from disk on first access (guarded)",
 		"guidancePromoter":     "loaded lazily from rule store (guarded)",

@@ -465,7 +465,7 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 		if len(params) == 0 {
 			params = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
-		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: params})
+		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: t.Name, Description: t.Description + ExamplesDescriptionSuffix(t.Examples), Parameters: params})
 	}
 	// Hosted (server-side) tools (sa-62): appended after the declared
 	// function tools. OpenAI addresses them purely by type.

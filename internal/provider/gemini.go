@@ -795,8 +795,10 @@ func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
 	functionDecls := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for _, t := range tools {
 		fd := &genai.FunctionDeclaration{
-			Name:        t.Name,
-			Description: t.Description,
+			Name: t.Name,
+			// No native input_examples on Gemini; render a compact suffix
+			// so the usage patterns survive cross-provider.
+			Description: t.Description + ExamplesDescriptionSuffix(t.Examples),
 		}
 		if len(t.Parameters) > 0 {
 			schema := &genai.Schema{}

@@ -130,6 +130,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetProjectMemoryFiles(projectMemFiles)
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
 	agentruntime.ApplyVerifyConfigToAgent(ag, cfg)
+	agentruntime.ApplyToolExamplesConfigToAgent(ag, cfg)
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)

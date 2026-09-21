@@ -1453,8 +1453,11 @@ func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
 		result = append(result, openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
+				Name: t.Name,
+				// No native input_examples on OpenAI-compatible tools;
+				// render a compact suffix so the usage patterns survive
+				// cross-provider. Byte-identical when no examples set.
+				Description: t.Description + ExamplesDescriptionSuffix(t.Examples),
 				Strict:      strict,
 				Parameters:  params,
 			},
