@@ -50,6 +50,7 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 	// languages. Derive from the model's current language instead.
 	m.approvalOptions = defaultApprovalOptionsFor(m.currentLanguage())
 	m.approvalCursor = 0
+	m.approvalFeedbackBuf = nil
 	m.inputBellFired = false
 	// Push to IM if available so user can approve remotely
 	m.approvalNotifiedIM = false

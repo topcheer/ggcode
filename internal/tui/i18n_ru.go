@@ -332,6 +332,8 @@ func ruCatalog(key string) string {
 		return "Всегда разрешать"
 	case "approval.deny":
 		return "Отклонить"
+	case "approval.reject_feedback":
+		return "Отклонить с отзывом"
 	case "approval.accept":
 		return "Принять"
 	case "approval.reject":

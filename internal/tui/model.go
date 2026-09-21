@@ -235,8 +235,10 @@ type Model struct {
 	tunnelGeneration       uint64
 
 	// Approval selection list
-	approvalOptions []approvalOption
-	approvalCursor  int
+	approvalOptions     []approvalOption
+	approvalCursor      int
+	approvalFeedbackBuf []rune               // corrective text typed on the "reject with feedback" row
+	approvalFeedbackBox *approvalFeedbackBox // handoff to the agent's feedback hook (nil-safe)
 
 	// Diff confirm selection list
 	diffOptions            []approvalOption

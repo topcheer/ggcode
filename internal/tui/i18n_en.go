@@ -318,6 +318,8 @@ func enCatalog(key string) string {
 		return "Allow Always"
 	case "approval.deny":
 		return "Deny"
+	case "approval.reject_feedback":
+		return "Reject with feedback"
 	case "approval.accept":
 		return "Accept"
 	case "approval.reject":

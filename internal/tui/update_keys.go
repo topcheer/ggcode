@@ -347,7 +347,38 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	// Handle approval mode (selection list)
-	if m.pendingApproval != nil {
+	if m.pendingApproval != nil && len(m.approvalOptions) > 0 {
+		// "Reject with feedback" row (shortcut e): keystrokes become the
+		// corrective text delivered to the agent inside the rejection tool
+		// result (Claude Code-style reject-with-explanation). Letters typed
+		// here are content, not shortcuts — navigate away to use y/n/a.
+		if m.approvalOptions[m.approvalCursor].shortcut == "e" {
+			switch msg.String() {
+			case "enter", "right":
+				return m, m.handleApprovalRejectWithFeedback()
+			case "backspace":
+				if n := len(m.approvalFeedbackBuf); n > 0 {
+					m.approvalFeedbackBuf = m.approvalFeedbackBuf[:n-1]
+				}
+				return m, nil
+			case "up", "k", "down", "j", "tab", "shift+tab", "esc", "ctrl+c":
+				// fall through to the shared handling below
+			default:
+				if t := msg.Text; t != "" {
+					m.approvalFeedbackBuf = append(m.approvalFeedbackBuf, []rune(t)...)
+				}
+				return m, nil
+			}
+		} else if s := msg.String(); s == "e" || s == "E" {
+			// Jump to the feedback row to start typing a rejection note.
+			for i, opt := range m.approvalOptions {
+				if opt.shortcut == "e" {
+					m.approvalCursor = i
+					break
+				}
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "up", "k":
 			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)

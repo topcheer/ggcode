@@ -601,8 +601,8 @@ func TestScenario_UserNavigatesApprovalOptions(t *testing.T) {
 
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "k"})
 	m = updated.(Model)
-	if m.approvalCursor != 2 {
-		t.Errorf("step5: expected cursor=2 (wrap), got %d", m.approvalCursor)
+	if m.approvalCursor != 3 {
+		t.Errorf("step5: expected cursor=3 (wrap over %d options), got %d", len(m.approvalOptions), m.approvalCursor)
 	}
 
 	updated, _ = m.Update(tea.KeyPressMsg{Text: "j"})

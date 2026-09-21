@@ -161,6 +161,10 @@ func init() {
 		return m.handleProjectMemoryLoadedMsg(msg)
 	})
 	regUpdatePlain(func(m Model, msg ApprovalMsg) (tea.Model, tea.Cmd) { return m.handleApprovalMsg(msg) })
+	regUpdatePlain(func(m Model, msg approvalFeedbackWireMsg) (tea.Model, tea.Cmd) {
+		m.approvalFeedbackBox = msg.box
+		return m, nil
+	})
 	regUpdatePlain(func(m Model, msg DiffConfirmMsg) (tea.Model, tea.Cmd) { return m.handleDiffConfirmMsg(msg) })
 	regUpdatePlain(func(m Model, msg AskUserMsg) (tea.Model, tea.Cmd) { return m.handleAskUserMsg(msg) })
 	regUpdatePlain(func(m Model, msg inputBellMsg) (tea.Model, tea.Cmd) { return m.handleInputBellMsg(msg) })

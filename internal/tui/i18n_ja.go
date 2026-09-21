@@ -305,6 +305,8 @@ func jaCatalog(key string) string {
 		return "常に許可"
 	case "approval.deny":
 		return "拒否"
+	case "approval.reject_feedback":
+		return "フィードバック付きで拒否"
 	case "approval.accept":
 		return "承認"
 	case "approval.reject":

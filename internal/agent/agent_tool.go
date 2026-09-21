@@ -48,6 +48,20 @@ func (a *Agent) permissionDeniedMessage(toolName string) string {
 	return b.String()
 }
 
+// userRejectedMessage renders the interactive-rejection result for the model.
+// When the user typed corrective feedback while rejecting (the "reject with
+// feedback" approval option), the text is delivered verbatim with an explicit
+// adapt-don't-retry instruction: a bare "User rejected" gives the model no
+// signal to change course, which is the main driver of approve-deny retry
+// loops. Without feedback the message is unchanged from the historical form.
+func userRejectedMessage(toolName, feedback string) string {
+	if fb := strings.TrimSpace(feedback); fb != "" {
+		return fmt.Sprintf("Permission denied for tool %q. User rejected the request and asked you to adjust:\n%s\n\nTreat the instruction above as the reason for rejection — adapt your approach accordingly. Do NOT retry the identical call.",
+			toolName, fb)
+	}
+	return fmt.Sprintf("Permission denied for tool %q. User rejected the request.", toolName)
+}
+
 // executeToolWithPermission checks the permission policy before executing a tool.
 // If the policy returns Ask, the approval handler is consulted interactively.
 func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
@@ -59,6 +73,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	a.mu.RLock()
 	policy := a.policy
 	onApproval := a.onApproval
+	approvalFeedbackFn := a.approvalFeedback
 	a.mu.RUnlock()
 	if policy != nil {
 		decision, err := policy.Check(tc.Name, tc.Arguments)
@@ -97,8 +112,12 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 					if a.approvalMemory != nil {
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
 					}
+					var feedback string
+					if approvalFeedbackFn != nil {
+						feedback = approvalFeedbackFn(ctx, tc.Name, string(tc.Arguments))
+					}
 					return tool.Result{
-						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
+						Content: userRejectedMessage(tc.Name, feedback),
 						IsError: true,
 					}
 				}

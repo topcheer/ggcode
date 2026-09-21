@@ -306,6 +306,8 @@ func frCatalog(key string) string {
 		return "Toujours autorisér"
 	case "approval.deny":
 		return "Refusér"
+	case "approval.reject_feedback":
+		return "Rejeter avec commentaires"
 	case "approval.accept":
 		return "Acceptér"
 	case "approval.reject":

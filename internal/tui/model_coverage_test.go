@@ -179,21 +179,21 @@ func TestPolicyMode(t *testing.T) {
 
 func TestDefaultApprovalOptionsFor(t *testing.T) {
 	en := defaultApprovalOptionsFor(LangEnglish)
-	if len(en) != 3 {
-		t.Fatalf("expected 3 English approval options, got %d", len(en))
+	if len(en) != 4 {
+		t.Fatalf("expected 4 English approval options, got %d", len(en))
 	}
 	// Verify structure: first option should be Allow
 	if en[0].decision != permission.Allow {
 		t.Errorf("expected first option Allow, got %v", en[0].decision)
 	}
 	// Verify shortcuts exist
-	if en[0].shortcut != "y" || en[2].shortcut != "n" {
-		t.Errorf("expected shortcuts y/a/n, got %s/%s/%s", en[0].shortcut, en[1].shortcut, en[2].shortcut)
+	if en[0].shortcut != "y" || en[2].shortcut != "n" || en[3].shortcut != "e" {
+		t.Errorf("expected shortcuts y/a/n/e, got %s/%s/%s/%s", en[0].shortcut, en[1].shortcut, en[2].shortcut, en[3].shortcut)
 	}
 
 	zh := defaultApprovalOptionsFor(LangZhCN)
-	if len(zh) != 3 {
-		t.Fatalf("expected 3 Chinese approval options, got %d", len(zh))
+	if len(zh) != 4 {
+		t.Fatalf("expected 4 Chinese approval options, got %d", len(zh))
 	}
 	// Chinese labels should differ from English
 	if zh[0].label == en[0].label {

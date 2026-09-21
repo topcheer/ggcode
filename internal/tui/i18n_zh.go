@@ -326,6 +326,8 @@ func zhCatalog(key string) string {
 		return "总是允许"
 	case "approval.deny":
 		return "拒绝"
+	case "approval.reject_feedback":
+		return "附带反馈拒绝"
 	case "approval.accept":
 		return "接受"
 	case "approval.reject":

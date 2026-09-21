@@ -310,6 +310,8 @@ func koCatalog(key string) string {
 		return "항상 허용"
 	case "approval.deny":
 		return "거부"
+	case "approval.reject_feedback":
+		return "피드백과 함께 거부"
 	case "approval.accept":
 		return "승인"
 	case "approval.reject":

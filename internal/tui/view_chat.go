@@ -97,6 +97,10 @@ func (m Model) renderApprovalOptions(options []approvalOption, cursor int) strin
 	var rows []string
 	for i, opt := range options {
 		label := fmt.Sprintf("%s (%s)", opt.label, opt.shortcut)
+		// Live-echo the corrective text being typed on the feedback row.
+		if opt.shortcut == "e" && len(m.approvalFeedbackBuf) > 0 {
+			label = fmt.Sprintf("%s: %s (%s)", opt.label, string(m.approvalFeedbackBuf), opt.shortcut)
+		}
 		if i == cursor {
 			rows = append(rows, m.styles.approvalCursor.Render(" ❯ "+label))
 			continue

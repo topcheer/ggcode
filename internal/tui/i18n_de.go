@@ -332,6 +332,8 @@ func deCatalog(key string) string {
 		return "Immer erlauben"
 	case "approval.deny":
 		return "Ablehnen"
+	case "approval.reject_feedback":
+		return "Mit Rückmeldung ablehnen"
 	case "approval.accept":
 		return "Akzeptieren"
 	case "approval.reject":

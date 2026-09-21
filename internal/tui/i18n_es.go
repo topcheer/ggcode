@@ -306,6 +306,8 @@ func esCatalog(key string) string {
 		return "Permitir siempre"
 	case "approval.deny":
 		return "Denegar"
+	case "approval.reject_feedback":
+		return "Rechazar con comentarios"
 	case "approval.accept":
 		return "Aceptar"
 	case "approval.reject":

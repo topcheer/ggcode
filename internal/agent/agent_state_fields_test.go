@@ -42,6 +42,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"onVerifyResult":       "optional callback, injected via setter",
 		"onToolProgress":       "optional callback, injected via setter",
 		"onApproval":           "optional approval callback, injected via SetApprovalFunc",
+		"approvalFeedback":     "optional rejection-feedback hook, injected via SetApprovalFeedbackFunc",
 		"onCheckpoint":         "optional callback, injected via setter",
 		"onInterrupt":          "optional interruption handler, injected via setter",
 		"onMetric":             "optional metrics callback, injected via setter",

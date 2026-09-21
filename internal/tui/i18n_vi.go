@@ -306,6 +306,8 @@ func viCatalog(key string) string {
 		return "Luôn cho phép"
 	case "approval.deny":
 		return "Từ chối"
+	case "approval.reject_feedback":
+		return "Từ chối kèm phản hồi"
 	case "approval.accept":
 		return "Chấp nhận"
 	case "approval.reject":

@@ -387,6 +387,8 @@ func ptCatalog(key string) string {
 		return "Permitir Sempre"
 	case "approval.deny":
 		return "Negar"
+	case "approval.reject_feedback":
+		return "Rejeitar com feedback"
 	case "approval.reject":
 		return "Rejeitar"
 	case "approval.rejected":

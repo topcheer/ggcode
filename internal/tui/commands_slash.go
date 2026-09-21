@@ -323,6 +323,7 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 	requestID := m.tunnelPendingApprovalID
 	m.pendingApproval = nil
 	m.tunnelPendingApprovalID = ""
+	m.approvalFeedbackBuf = nil
 	if pa == nil || pa.Response == nil {
 		return nil
 	}
@@ -335,6 +336,20 @@ func (m *Model) handleApproval(d permission.Decision) tea.Cmd {
 		}
 	})
 	return nil
+}
+
+// handleApprovalRejectWithFeedback resolves the pending approval as Deny and
+// hands the corrective text typed on the "reject with feedback" row to the
+// agent via the feedback box. Empty text degrades to a plain deny. The stash
+// happens before the deny decision is sent and the agent takes it only after
+// the decision arrives, so no extra synchronization is needed.
+func (m *Model) handleApprovalRejectWithFeedback() tea.Cmd {
+	feedback := strings.TrimSpace(string(m.approvalFeedbackBuf))
+	m.approvalFeedbackBuf = nil
+	if feedback != "" && m.approvalFeedbackBox != nil {
+		m.approvalFeedbackBox.stash(feedback)
+	}
+	return m.handleApproval(permission.Deny)
 }
 
 func (m *Model) handleApprovalAllowAlways() tea.Cmd {

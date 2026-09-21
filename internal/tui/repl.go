@@ -1536,6 +1536,17 @@ func (r *REPL) Run() error {
 			return permission.Deny
 		}
 	})
+	// Rejection-feedback box: the TUI stashes the corrective text typed on
+	// the "reject with feedback" approval row; the agent-side hook takes it
+	// after the deny decision arrives. Stash happens-before send and take
+	// happens-after receive, so channel ordering makes this race-free. The
+	// box reaches the live model via approvalFeedbackWireMsg because r.model
+	// is only a value snapshot.
+	feedbackBox := &approvalFeedbackBox{}
+	r.program.Send(approvalFeedbackWireMsg{box: feedbackBox})
+	r.agent.SetApprovalFeedbackFunc(func(ctx context.Context, toolName string, input string) string {
+		return feedbackBox.take()
+	})
 	traceMark("wire approval handler")
 
 	// Wire checkpoint handler — persist compacted state after summarize.

@@ -100,6 +100,7 @@ type Agent struct {
 	maxIter                    int
 	policy                     permission.PermissionPolicy
 	onApproval                 ApprovalFunc
+	approvalFeedback           ApprovalFeedbackFunc // consulted on interactive rejection only; returns user-typed corrective text
 	onUsage                    func(usage provider.TokenUsage)
 	usageSource                string // tracks the source of the current LLM call for usage persistence
 	onMetric                   func(metrics.MetricEvent)
@@ -737,6 +738,25 @@ func (a *Agent) ApprovalHandler() ApprovalFunc {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.onApproval
+}
+
+// ApprovalFeedbackFunc, if installed, is consulted ONLY after an interactive
+// rejection. It returns the corrective feedback the user typed while
+// rejecting ("" if none). The text is delivered to the model verbatim inside
+// the rejection tool result so it can adapt within the same turn instead of
+// seeing a bare rejection and blindly retrying.
+//
+// Deliberately separate from ApprovalFunc (whose signature is shared with the
+// parallel tool-execution path): adding a return field there would ripple
+// through every caller for an optional, interactive-only concern.
+type ApprovalFeedbackFunc func(ctx context.Context, toolName string, input string) string
+
+// SetApprovalFeedbackFunc installs the rejection-feedback hook. Optional:
+// when nil, rejections carry no feedback (bare "User rejected" result).
+func (a *Agent) SetApprovalFeedbackFunc(fn ApprovalFeedbackFunc) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.approvalFeedback = fn
 }
 
 // SetInterruptionHandler sets a callback that drains user guidance arriving

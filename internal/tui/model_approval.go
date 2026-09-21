@@ -11,6 +11,7 @@ func defaultApprovalOptionsFor(lang Language) []approvalOption {
 		{label: tr(lang, "approval.allow"), shortcut: "y", decision: permission.Allow},
 		{label: tr(lang, "approval.allow_always"), shortcut: "a", decision: permission.Allow},
 		{label: tr(lang, "approval.deny"), shortcut: "n", decision: permission.Deny},
+		{label: tr(lang, "approval.reject_feedback"), shortcut: "e", decision: permission.Deny},
 	}
 }
 
