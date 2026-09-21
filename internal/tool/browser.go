@@ -195,27 +195,149 @@ func (b *Browser) Parameters() json.RawMessage {
 }`)
 }
 
+// browserActionArgs is the Execute input schema (#2612: extracted from
+// the inline anonymous struct so the action handler table below can be
+// unit-tested per action).
+type browserActionArgs struct {
+	Action      string `json:"action"`
+	URL         string `json:"url"`
+	Profile     string `json:"profile"`
+	Session     string `json:"session"`
+	Selector    string `json:"selector"`
+	Text        string `json:"text"`
+	Value       string `json:"value"`
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Frame       string `json:"frame"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	Expression  string `json:"expression"`
+	WaitFor     string `json:"wait_for"`
+	WaitTimeout int    `json:"wait_timeout"`
+	Headless    *bool  `json:"headless"`
+	OutputPath  string `json:"output_path"` // screenshot: also save the PNG to this local file
+}
+
+// browserActions dispatches tool actions to per-action handlers (#2612:
+// replaces the 20-case switch that pushed Execute to cyclomatic complexity
+// 41 / 144 lines). Each handler validates its own required arguments and
+// delegates to the do* method unchanged; error copy is pinned byte-for-byte
+// by TestBrowserExecuteValidationCharacterization.
+var browserActions = map[string]func(*Browser, context.Context, *browserActionArgs) (Result, error){
+	"navigate": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.URL == "" {
+			return errResult("url is required for navigate action")
+		}
+		return b.doNavigate(ctx, a.Profile, a.Session, a.URL, a.WaitFor, a.WaitTimeout, a.Headless)
+	},
+	"click": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Selector == "" {
+			return errResult("selector is required for click action")
+		}
+		return b.doClick(ctx, a.Profile, a.Session, a.Selector, a.WaitFor, a.WaitTimeout, a.Headless)
+	},
+	"type": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Selector == "" {
+			return errResult("selector is required for type action")
+		}
+		return b.doType(ctx, a.Profile, a.Session, a.Selector, a.Text, a.WaitFor, a.WaitTimeout, a.Headless)
+	},
+	"extract": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doExtract(ctx, a.Profile, a.Session, a.Selector, a.Headless)
+	},
+	"screenshot": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doScreenshot(ctx, a.Profile, a.Session, a.Selector, a.Headless, a.OutputPath)
+	},
+	"evaluate": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Expression == "" {
+			return errResult("expression is required for evaluate action")
+		}
+		return b.doEvaluate(ctx, a.Profile, a.Session, a.Expression, a.Frame, a.Headless)
+	},
+	"wait": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.WaitFor == "" {
+			return errResult("wait_for selector is required for wait action")
+		}
+		return b.doWait(ctx, a.Profile, a.Session, a.WaitFor, a.WaitTimeout, a.Headless)
+	},
+	"links": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doLinks(ctx, a.Profile, a.Session, a.Headless)
+	},
+	"select": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Selector == "" {
+			return errResult("selector is required for select action")
+		}
+		return b.doSelect(ctx, a.Profile, a.Session, a.Selector, a.Value, a.WaitFor, a.WaitTimeout, a.Headless)
+	},
+	"hover": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Selector == "" {
+			return errResult("selector is required for hover action")
+		}
+		return b.doHover(ctx, a.Profile, a.Session, a.Selector, a.Headless)
+	},
+	"press": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Key == "" {
+			return errResult("key is required for press action")
+		}
+		return b.doPress(ctx, a.Profile, a.Session, a.Key, a.Headless)
+	},
+	"scroll": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doScroll(ctx, a.Profile, a.Session, a.Selector, a.Headless)
+	},
+	"back": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doBack(ctx, a.Profile, a.Session, a.Headless)
+	},
+	"content": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doContent(ctx, a.Profile, a.Session, a.Headless)
+	},
+	"close": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doCloseSession(a.Profile, a.Session)
+	},
+	"status": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doStatus()
+	},
+	"upload": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Selector == "" {
+			return errResult("selector is required for upload action (the input[type=file] element)")
+		}
+		if a.Path == "" {
+			return errResult("path is required for upload action")
+		}
+		return b.doUpload(ctx, a.Profile, a.Session, a.Selector, a.Path, a.Headless)
+	},
+	"cookies": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		return b.doCookies(ctx, a.Profile, a.Session, a.Value, a.Name, a.URL, a.Headless)
+	},
+	"resize": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Width == 0 || a.Height == 0 {
+			return errResult("width and height are required for resize action")
+		}
+		return b.doResize(ctx, a.Profile, a.Session, a.Width, a.Height, a.Headless)
+	},
+	"wait_not": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.WaitFor == "" {
+			return errResult("wait_for selector is required for wait_not action")
+		}
+		return b.doWaitNot(ctx, a.Profile, a.Session, a.WaitFor, a.WaitTimeout, a.Headless)
+	},
+	"drag": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
+		if a.Selector == "" {
+			return errResult("selector (source element) is required for drag action")
+		}
+		if a.Value == "" {
+			return errResult("value (target CSS selector) is required for drag action")
+		}
+		return b.doDrag(ctx, a.Profile, a.Session, a.Selector, a.Value, a.Headless)
+	},
+}
+
+func errResult(msg string) (Result, error) {
+	return Result{IsError: true, Content: msg}, nil
+}
+
 func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
-	var args struct {
-		Action      string `json:"action"`
-		URL         string `json:"url"`
-		Profile     string `json:"profile"`
-		Session     string `json:"session"`
-		Selector    string `json:"selector"`
-		Text        string `json:"text"`
-		Value       string `json:"value"`
-		Key         string `json:"key"`
-		Name        string `json:"name"`
-		Path        string `json:"path"`
-		Frame       string `json:"frame"`
-		Width       int    `json:"width"`
-		Height      int    `json:"height"`
-		Expression  string `json:"expression"`
-		WaitFor     string `json:"wait_for"`
-		WaitTimeout int    `json:"wait_timeout"`
-		Headless    *bool  `json:"headless"`
-		OutputPath  string `json:"output_path"` // screenshot: also save the PNG to this local file
-	}
+	var args browserActionArgs
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
 	}
@@ -230,115 +352,11 @@ func (b *Browser) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		args.WaitTimeout = 10
 	}
 
-	switch args.Action {
-	case "navigate":
-		if args.URL == "" {
-			return Result{IsError: true, Content: "url is required for navigate action"}, nil
-		}
-		return b.doNavigate(ctx, args.Profile, args.Session, args.URL, args.WaitFor, args.WaitTimeout, args.Headless)
-
-	case "click":
-		if args.Selector == "" {
-			return Result{IsError: true, Content: "selector is required for click action"}, nil
-		}
-		return b.doClick(ctx, args.Profile, args.Session, args.Selector, args.WaitFor, args.WaitTimeout, args.Headless)
-
-	case "type":
-		if args.Selector == "" {
-			return Result{IsError: true, Content: "selector is required for type action"}, nil
-		}
-		return b.doType(ctx, args.Profile, args.Session, args.Selector, args.Text, args.WaitFor, args.WaitTimeout, args.Headless)
-
-	case "extract":
-		return b.doExtract(ctx, args.Profile, args.Session, args.Selector, args.Headless)
-
-	case "screenshot":
-		return b.doScreenshot(ctx, args.Profile, args.Session, args.Selector, args.Headless, args.OutputPath)
-
-	case "evaluate":
-		if args.Expression == "" {
-			return Result{IsError: true, Content: "expression is required for evaluate action"}, nil
-		}
-		return b.doEvaluate(ctx, args.Profile, args.Session, args.Expression, args.Frame, args.Headless)
-
-	case "wait":
-		if args.WaitFor == "" {
-			return Result{IsError: true, Content: "wait_for selector is required for wait action"}, nil
-		}
-		return b.doWait(ctx, args.Profile, args.Session, args.WaitFor, args.WaitTimeout, args.Headless)
-
-	case "links":
-		return b.doLinks(ctx, args.Profile, args.Session, args.Headless)
-
-	case "select":
-		if args.Selector == "" {
-			return Result{IsError: true, Content: "selector is required for select action"}, nil
-		}
-		return b.doSelect(ctx, args.Profile, args.Session, args.Selector, args.Value, args.WaitFor, args.WaitTimeout, args.Headless)
-
-	case "hover":
-		if args.Selector == "" {
-			return Result{IsError: true, Content: "selector is required for hover action"}, nil
-		}
-		return b.doHover(ctx, args.Profile, args.Session, args.Selector, args.Headless)
-
-	case "press":
-		if args.Key == "" {
-			return Result{IsError: true, Content: "key is required for press action"}, nil
-		}
-		return b.doPress(ctx, args.Profile, args.Session, args.Key, args.Headless)
-
-	case "scroll":
-		return b.doScroll(ctx, args.Profile, args.Session, args.Selector, args.Headless)
-
-	case "back":
-		return b.doBack(ctx, args.Profile, args.Session, args.Headless)
-
-	case "content":
-		return b.doContent(ctx, args.Profile, args.Session, args.Headless)
-
-	case "close":
-		return b.doCloseSession(args.Profile, args.Session)
-
-	case "status":
-		return b.doStatus()
-
-	case "upload":
-		if args.Selector == "" {
-			return Result{IsError: true, Content: "selector is required for upload action (the input[type=file] element)"}, nil
-		}
-		if args.Path == "" {
-			return Result{IsError: true, Content: "path is required for upload action"}, nil
-		}
-		return b.doUpload(ctx, args.Profile, args.Session, args.Selector, args.Path, args.Headless)
-
-	case "cookies":
-		return b.doCookies(ctx, args.Profile, args.Session, args.Value, args.Name, args.URL, args.Headless)
-
-	case "resize":
-		if args.Width == 0 || args.Height == 0 {
-			return Result{IsError: true, Content: "width and height are required for resize action"}, nil
-		}
-		return b.doResize(ctx, args.Profile, args.Session, args.Width, args.Height, args.Headless)
-
-	case "wait_not":
-		if args.WaitFor == "" {
-			return Result{IsError: true, Content: "wait_for selector is required for wait_not action"}, nil
-		}
-		return b.doWaitNot(ctx, args.Profile, args.Session, args.WaitFor, args.WaitTimeout, args.Headless)
-
-	case "drag":
-		if args.Selector == "" {
-			return Result{IsError: true, Content: "selector (source element) is required for drag action"}, nil
-		}
-		if args.Value == "" {
-			return Result{IsError: true, Content: "value (target CSS selector) is required for drag action"}, nil
-		}
-		return b.doDrag(ctx, args.Profile, args.Session, args.Selector, args.Value, args.Headless)
-
-	default:
+	handler, ok := browserActions[args.Action]
+	if !ok {
 		return Result{IsError: true, Content: fmt.Sprintf("unknown action: %s", args.Action)}, nil
 	}
+	return handler(b, ctx, &args)
 }
 
 // minChromeMajorVersion is the minimum Chrome version required for reliable
