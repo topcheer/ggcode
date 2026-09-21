@@ -395,9 +395,13 @@ func (m *Model) applyIMEditResult(s *imAdapterEditState, msg imEditResultMsg) {
 	s.editMessage = m.t("panel.im.edit.saved", msg.field)
 	// Refresh the field list from config
 	refreshed := m.enterIMEditSelect(s.adapterName)
-	// Preserve the mode and selected index
+	// Preserve the mode and selected index (#2610: the comment always
+	// promised this but the copy was missing, so every successful save
+	// snapped the cursor back to the first field; render clamps a stale
+	// index if the refreshed list is shorter).
 	refreshed.mode = imEditSelect
 	refreshed.editMessage = s.editMessage
+	refreshed.editSelected = s.editSelected
 	*s = refreshed
 }
 
