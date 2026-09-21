@@ -85,3 +85,21 @@ func TestHealthReportStaleness(t *testing.T) {
 		t.Errorf("expected [STALE] in output, got: %s", output)
 	}
 }
+
+func TestHealthReportBrokenSymbols(t *testing.T) {
+	dir := t.TempDir()
+	workingDir := t.TempDir()
+
+	// Workspace lacks the referenced symbol entirely.
+	am := &AutoMemory{dir: dir}
+	am.SaveMemory("probe-stale", "Call `VanishedHelperFunc` before saving.")
+
+	report := am.HealthReport(workingDir)
+	if report.StaleBrokenSymbols != 1 {
+		t.Fatalf("expected 1 stale broken symbol, got %d", report.StaleBrokenSymbols)
+	}
+	output := report.FormatHealthReport()
+	if !strings.Contains(output, "code symbols absent from the workspace") {
+		t.Errorf("expected stale symbol warning in formatted report, got: %s", output)
+	}
+}
