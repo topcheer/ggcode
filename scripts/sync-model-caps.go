@@ -87,6 +87,66 @@ type modelEntry struct {
 // models.dev carries 200+ providers; this list keeps the vendors ggcode
 // ships plus the major ones users point custom endpoints at (including
 // the gateway family folded into the "ai-gateway" vendor in config.go).
+// providerMerges folds upstream provider IDs that models.dev renamed or
+// split into the stable ggcode provider ID on the right. Generated tables,
+// vendorAPIEndpointHosts, and user configs key on the stable ID; following
+// upstream renames blindly would silently delete the vendor from the
+// tables. 2026-09-20: "kimi-for-coding" was split into
+// kimi-code-plan-global/cn (same models, api.kimi.ai vs api.kimi.com) -
+// both are folded back into one provider carrying both hosts.
+var providerMerges = map[string]string{
+	"kimi-code-plan-global": "kimi-for-coding",
+	"kimi-code-plan-cn":     "kimi-for-coding",
+}
+
+// providerMergeNames overrides the section display name for folded
+// providers so the merged provider does not carry a "(CN)"/"(Global)"
+// suffix belonging to only one of its sources.
+var providerMergeNames = map[string]string{
+	"kimi-for-coding": "Kimi for Coding",
+}
+
+// mergeProviderInto unions src's endpoints and models into dst (first
+// sighting wins for defaults and duplicate model IDs; the current split
+// carries identical models, so in practice this unions API endpoints).
+func mergeProviderInto(dst, src *catwalkProvider) {
+	for _, e := range append([]string{src.APIEndpoint}, src.ExtraEndpoints...) {
+		if e == "" || e == dst.APIEndpoint || containsString(dst.ExtraEndpoints, e) {
+			continue
+		}
+		dst.ExtraEndpoints = append(dst.ExtraEndpoints, e)
+	}
+	for _, m := range src.Models {
+		dup := false
+		for _, d := range dst.Models {
+			if d.ID == m.ID {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			dst.Models = append(dst.Models, m)
+		}
+	}
+	if dst.DefaultLargeModelID == "" {
+		dst.DefaultLargeModelID = src.DefaultLargeModelID
+	}
+	if dst.DefaultSmallModelID == "" {
+		dst.DefaultSmallModelID = src.DefaultSmallModelID
+	}
+}
+
+// localModelExtras carries capability entries for models that are still
+// deployed and resolvable at their providers but no longer listed by
+// models.dev (dropped in an upstream refresh). The runtime vision/context
+// inference is table-only (keyword heuristics were removed), so losing the
+// table entry would silently strip real capabilities from live models.
+// 2026-09-20: glm-4v-plus vanished from every upstream provider while zai
+// endpoints still serve it.
+var localModelExtras = []modelEntry{
+	{ID: "glm-4v-plus", ContextWindow: 128000, MaxOutputTokens: 128000, SupportsVision: true, SourceProvider: "zhipuai"},
+}
+
 var desiredProviders = map[string]string{
 	"302ai":                    "302.AI",
 	"aihubmix":                 "AIHubMix",
@@ -109,45 +169,50 @@ var desiredProviders = map[string]string{
 	"groq":                     "Groq",
 	"huggingface":              "HuggingFace",
 	"iflowcn":                  "iFlow",
-	"kimi-for-coding":          "Kimi for Coding",
-	"longcat":                  "LongCat",
-	"minimax":                  "MiniMax",
-	"minimax-cn":               "MiniMax China",
-	"mistral":                  "Mistral",
-	"moonshotai":               "Moonshot",
-	"moonshotai-cn":            "Moonshot (CN)",
-	"nebius":                   "Nebius",
-	"novita-ai":                "Novita",
-	"nvidia":                   "NVIDIA",
-	"ollama-cloud":             "Ollama Cloud",
-	"openai":                   "OpenAI",
-	"opencode":                 "OpenCode Zen",
-	"openrouter":               "OpenRouter",
-	"perplexity":               "Perplexity",
-	"poe":                      "Poe",
-	"requesty":                 "Requesty",
-	"sensenova":                "SenseNova",
-	"siliconflow":              "SiliconFlow",
-	"siliconflow-cn":           "SiliconFlow (CN)",
-	"snowflake-cortex":         "Snowflake Cortex",
-	"stepfun":                  "StepFun",
-	"thinkingmachines":         "Thinking Machines",
-	"togetherai":               "Together AI",
-	"upstage":                  "Upstage",
-	"venice":                   "Venice",
-	"vercel":                   "Vercel AI Gateway",
-	"volcengine":               "Volcengine Ark",
-	"wandb":                    "W&B",
-	"watsonx":                  "IBM watsonx",
-	"xai":                      "xAI Grok",
-	"xiaomi":                   "Xiaomi MiMo",
-	"xiaomi-token-plan-ams":    "Xiaomi MiMo (AMS)",
-	"xiaomi-token-plan-cn":     "Xiaomi MiMo (CN)",
-	"xiaomi-token-plan-sgp":    "Xiaomi MiMo (SGP)",
-	"zai":                      "Z.ai",
-	"zai-coding-plan":          "Z.ai (Coding Plan)",
-	"zhipuai":                  "Zhipu GLM",
-	"zhipuai-coding-plan":      "Zhipu GLM (Coding Plan)",
+	// 2026-09-20: models.dev renamed the single "kimi-for-coding" provider
+	// into split global/cn providers (same models, api.kimi.ai vs
+	// api.kimi.com). Both are consumed and folded back into the stable
+	// ggcode provider ID "kimi-for-coding" by providerMerges below.
+	"kimi-code-plan-cn":     "Kimi for Coding (CN)",
+	"kimi-code-plan-global": "Kimi for Coding (Global)",
+	"longcat":               "LongCat",
+	"minimax":               "MiniMax",
+	"minimax-cn":            "MiniMax China",
+	"mistral":               "Mistral",
+	"moonshotai":            "Moonshot",
+	"moonshotai-cn":         "Moonshot (CN)",
+	"nebius":                "Nebius",
+	"novita-ai":             "Novita",
+	"nvidia":                "NVIDIA",
+	"ollama-cloud":          "Ollama Cloud",
+	"openai":                "OpenAI",
+	"opencode":              "OpenCode Zen",
+	"openrouter":            "OpenRouter",
+	"perplexity":            "Perplexity",
+	"poe":                   "Poe",
+	"requesty":              "Requesty",
+	"sensenova":             "SenseNova",
+	"siliconflow":           "SiliconFlow",
+	"siliconflow-cn":        "SiliconFlow (CN)",
+	"snowflake-cortex":      "Snowflake Cortex",
+	"stepfun":               "StepFun",
+	"thinkingmachines":      "Thinking Machines",
+	"togetherai":            "Together AI",
+	"upstage":               "Upstage",
+	"venice":                "Venice",
+	"vercel":                "Vercel AI Gateway",
+	"volcengine":            "Volcengine Ark",
+	"wandb":                 "W&B",
+	"watsonx":               "IBM watsonx",
+	"xai":                   "xAI Grok",
+	"xiaomi":                "Xiaomi MiMo",
+	"xiaomi-token-plan-ams": "Xiaomi MiMo (AMS)",
+	"xiaomi-token-plan-cn":  "Xiaomi MiMo (CN)",
+	"xiaomi-token-plan-sgp": "Xiaomi MiMo (SGP)",
+	"zai":                   "Z.ai",
+	"zai-coding-plan":       "Z.ai (Coding Plan)",
+	"zhipuai":               "Zhipu GLM",
+	"zhipuai-coding-plan":   "Zhipu GLM (Coding Plan)",
 }
 
 // models.dev api.json wire types.
@@ -259,6 +324,16 @@ func main() {
 			continue
 		}
 		provider := adaptModelsDevProvider(pid, desiredProviders[pid], &mdp)
+		// Fold renamed/split upstream providers into their stable ggcode ID
+		// (see providerMerges) so generated tables and host mappings keep a
+		// single stable provider entry instead of churning with upstream
+		// renames. Entries built below then carry the folded SourceProvider.
+		if target, ok := providerMerges[pid]; ok {
+			provider.ID = target
+			if name, ok2 := providerMergeNames[target]; ok2 {
+				provider.Name = name
+			}
+		}
 
 		var sectionEntries []modelEntry
 		for _, m := range provider.Models {
@@ -291,7 +366,20 @@ func main() {
 			os.Exit(1)
 		}
 		allEntries = append(allEntries, sectionEntries...)
-		providers = append(providers, provider)
+		// Same-ID providers (created by providerMerges folds) merge into the
+		// first sighting: union endpoints and any models it lacked. Duplicate
+		// table entries from the later split are same-value last-wins.
+		merged := false
+		for i := range providers {
+			if providers[i].ID == provider.ID {
+				mergeProviderInto(providers[i], provider)
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			providers = append(providers, provider)
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "\nTotal models: %d\n\n", len(allEntries))
@@ -326,6 +414,10 @@ func main() {
 	}
 
 	fmt.Fprintf(os.Stderr, "\nFinal total models: %d\n\n", len(allEntries))
+
+	// 1c. Local model extras: preserve still-deployed models that an
+	// upstream refresh dropped (see localModelExtras doc comment).
+	allEntries = append(allEntries, localModelExtras...)
 
 	// 2. Generate Go source code.
 	code := generateGoCode(allEntries, sections)
@@ -661,36 +753,8 @@ func inferMaxOutputTokens(model, protocol string) int {
 }
 
 func inferVisionSupport(model, protocol string) bool {
-	if cap, ok := lookupModelCapability(model); ok && cap.SupportsVision {
-		return true
-	}
-
-	m := strings.ToLower(strings.TrimSpace(model))
-	switch {
-	case strings.Contains(m, "claude"),
-		strings.Contains(m, "gpt"),
-		strings.Contains(m, "gemini"),
-		strings.Contains(m, "gemma"),
-		strings.Contains(m, "grok"),
-		strings.Contains(m, "seed-2"),
-		strings.Contains(m, "qwen3.5"),
-		strings.Contains(m, "qwen-3.5"),
-		strings.Contains(m, "qwen3.6"),
-		strings.Contains(m, "qwen-3.6"),
-		(strings.Contains(m, "glm-") && strings.Contains(m, "v")),
-		strings.Contains(m, "kimi-2.5"),
-		strings.Contains(m, "kimi-k2"),
-		strings.Contains(m, "kimi-vl"):
-		return true
-	case strings.Contains(m, "glm-"),
-		strings.Contains(m, "kimi"),
-		strings.Contains(m, "deepseek"),
-		strings.Contains(m, "mistral"),
-		strings.Contains(m, "qwen"),
-		strings.Contains(m, "moonshot"),
-		strings.Contains(m, "minimax"),
-		strings.Contains(m, "llama"):
-		return false
+	if cap, ok := lookupModelCapability(model); ok {
+		return cap.SupportsVision
 	}
 
 	return strings.EqualFold(strings.TrimSpace(protocol), "gemini")
@@ -916,7 +980,12 @@ func populateDefaultModels(cfg *Config) {
 				}
 				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
 					if m := lookupVendorModels(pid); len(m) > 0 {
-						ep.Models = m
+							// #2157: copy out of the package-level registry - direct
+							// assignment shares the backing array across Configs, so
+							// concurrent Loads racing expandEnvWithLookup's in-place
+							// ep.Models[i] writes corrupt the shared table (and each
+							// other) - deterministic darwin -race DATA RACE.
+							ep.Models = append([]string(nil), m...)
 						vc.Endpoints[epName] = ep
 					}
 				}
@@ -940,7 +1009,8 @@ func populateDefaultModels(cfg *Config) {
 				}
 				if pid := matchProviderByBaseURL(ep.BaseURL); pid != "" {
 					if m := lookupVendorModels(pid); len(m) > 0 {
-						ep.Models = m
+							// #2157: same shared-registry copy as the ai-gateway branch.
+							ep.Models = append([]string(nil), m...)
 						vc.Endpoints[epName] = ep
 					}
 				}
