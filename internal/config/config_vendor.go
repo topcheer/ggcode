@@ -93,6 +93,17 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 					return nil, err
 				}
 			} else {
+				// #2622: expired + no refresh token + non-empty access token
+				// used to fall through here and silently return the known-
+				// expired token (bare 401 downstream, no recovery hint) - the
+				// exact state refreshClaudeOAuthToken's internal guard rejects
+				// with a run-/login error, but the caller's RefreshToken != ""
+				// condition made that branch unreachable. Fail loudly here,
+				// same message shape as the #1695 empty-token guard below.
+				if info.IsExpired() {
+					debug.Log("config", "claude oauth: expired token with no refresh token (re-authentication required)")
+					return nil, fmt.Errorf("claude oauth: token expired and no refresh token available; run /login to re-authenticate")
+				}
 				apiKey = strings.TrimSpace(info.AccessToken)
 				// #1695 case 5: an unexpired token with an EMPTY access
 				// token used to resolve successfully and surface as a bare
@@ -118,6 +129,13 @@ func (c *Config) ResolveEndpointSelection(vendor, endpoint, model string) (*Reso
 					return nil, err
 				}
 			} else {
+				// #2622: symmetric with the Claude branch above - expired with
+				// no refresh token must not silently resolve to the expired
+				// access token; fail loudly with the re-login command.
+				if info.IsExpired() {
+					debug.Log("config", "opencode oauth: expired token with no refresh token (re-login required)")
+					return nil, fmt.Errorf("opencode oauth: token expired and no refresh token available; run `ggcode login opencode` to re-authenticate")
+				}
 				apiKey = strings.TrimSpace(info.AccessToken)
 				if apiKey == "" {
 					debug.Log("config", "opencode oauth: stored token has no access token (re-login required)")
