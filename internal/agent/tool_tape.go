@@ -60,6 +60,20 @@ type toolTapeState struct {
 	tape *toolreplay.Tape
 	mode toolTapeMode
 	path string
+
+	// Replay fidelity tracking (deterministic-replay divergence metrics).
+	// replays counts tool calls served during REPLAY; misses records the
+	// calls that had no recorded entry — i.e. the points where the replayed
+	// trajectory diverged from the recorded one. fidelity = hits/replays.
+	replays int
+	hits    int
+	misses  []toolTapeMiss
+}
+
+// toolTapeMiss records one replay divergence point.
+type toolTapeMiss struct {
+	Tool  string `json:"tool"`
+	Input string `json:"input"`
 }
 
 // parseToolTapeEnv parses the GGCODE_TOOL_TAPE value. Accepted forms:
@@ -134,8 +148,14 @@ func (a *Agent) replayToolCall(name string, args json.RawMessage) (tool.Result, 
 	if st == nil || st.mode != toolTapeReplay {
 		return tool.Result{}, nil, false
 	}
+	st.mu.Lock()
+	st.replays++
+	st.mu.Unlock()
 	entry, ok := st.tape.Lookup(name, args, true)
 	if !ok {
+		st.mu.Lock()
+		st.misses = append(st.misses, toolTapeMiss{Tool: name, Input: truncateToolTapeInput(string(args))})
+		st.mu.Unlock()
 		debug.Log("agent", "[tool-tape] replay MISS for %s", name)
 		return tool.Result{
 			Content: fmt.Sprintf("[tool-replay] tape miss: no recorded entry for %s with this input in %s. The real tool was NOT executed. Adjust the input to match a recorded call, or re-record with %s=record:<path>.",
@@ -145,8 +165,56 @@ func (a *Agent) replayToolCall(name string, args json.RawMessage) (tool.Result, 
 	}
 	remaining := st.tape.Len()
 	debug.Log("agent", "[tool-tape] replay hit for %s (%d entries remaining)", name, remaining)
+	st.mu.Lock()
+	st.hits++
+	st.mu.Unlock()
 	res, rerr := toolResultFromEntry(entry)
 	return res, rerr, true
+}
+
+// truncateToolTapeInput caps a divergent call's input for the report.
+func truncateToolTapeInput(s string) string {
+	if len(s) <= 200 {
+		return s
+	}
+	return s[:200] + "..."
+}
+
+// finishToolTapeReplay emits the replay fidelity report when a REPLAY-mode
+// session ends. It writes <tape>.divergence.json next to the tape and logs
+// a summary. Fidelity 1.0 means every replayed tool call matched a recorded
+// entry; each miss is one point where the new trajectory diverged from the
+// recording (counterfactual divergence), which is exactly what a developer
+// replays a failing session to isolate.
+func (a *Agent) finishToolTapeReplay() {
+	st := a.toolTape
+	if st == nil || st.mode != toolTapeReplay || st.path == "" {
+		return
+	}
+	st.mu.Lock()
+	replays, hits, misses := st.replays, st.hits, len(st.misses)
+	report := struct {
+		TapeFile       string         `json:"tape_file"`
+		Recorded       int            `json:"recorded_entries"`
+		ReplayedCalls  int            `json:"replayed_calls"`
+		Hits           int            `json:"hits"`
+		Misses         int            `json:"misses"`
+		Fidelity       float64        `json:"fidelity"`
+		DivergenceList []toolTapeMiss `json:"divergences,omitempty"`
+	}{TapeFile: st.path, Recorded: st.tape.Len(), ReplayedCalls: replays, Hits: hits, Misses: misses, DivergenceList: st.misses}
+	st.mu.Unlock()
+	if replays > 0 {
+		report.Fidelity = float64(hits) / float64(replays)
+	}
+	debug.Log("agent", "[tool-tape] replay fidelity %.2f (%d/%d hits, %d misses)", report.Fidelity, hits, replays, misses)
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		debug.Log("agent", "[tool-tape] divergence report marshal failed: %v", err)
+		return
+	}
+	if werr := os.WriteFile(st.path+".divergence.json", data, 0o644); werr != nil {
+		debug.Log("agent", "[tool-tape] divergence report write failed: %v", werr)
+	}
 }
 
 // toolResultFromEntry converts a recorded entry back into a tool result.

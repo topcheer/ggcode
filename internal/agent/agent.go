@@ -759,6 +759,7 @@ func (a *Agent) PermissionPolicy() permission.PermissionPolicy {
 // Close releases resources held by the agent, including cancelling any
 // in-flight pre-compact operations. Should be called on shutdown.
 func (a *Agent) Close() {
+	a.finishToolTapeReplay()
 	a.CancelPreCompact()
 	if a.shutdownCancel != nil {
 		a.shutdownCancel()
