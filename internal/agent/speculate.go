@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +70,25 @@ var argLinkedPatterns = map[string]bool{
 	"write_file→multi_file_read":      true,
 }
 
+// outputFlowSourceTools are read-only tools whose OUTPUT (not input args)
+// carries file paths the model will likely read next: the top match of a
+// grep, the first hit of a code_search, a glob result, a directory listing
+// entry, an LSP reference target. This is the parameter-dependency half of
+// AutoTool's Tool Inertia Graph (AAAI 2026, arXiv:2511.14650): the bigram
+// model captures SEQUENCE inertia (grep → read_file), while data-flow edges
+// capture WHERE the read target comes from (the previous tool's output).
+// Without them, search→read (the most frequent agent sequence) can never
+// be speculated, because predictArgs can only inherit paths from the
+// previous tool's INPUT arguments (edit_file→read_file style).
+var outputFlowSourceTools = map[string]bool{
+	"grep":           true,
+	"code_search":    true,
+	"search_files":   true,
+	"glob":           true,
+	"list_directory": true,
+	"lsp_references": true,
+}
+
 // speculator implements pattern-aware speculative tool execution.
 // It learns bigram patterns (tool A → tool B) from observed sequences,
 // predicts likely next read-only calls, and pre-executes them in background
@@ -81,6 +102,11 @@ type speculator struct {
 
 	// Last tool name observed (for building bigram transitions).
 	lastTool string
+
+	// Redacted output of the last successful outputFlowSourceTools call,
+	// from which data-flow read_file targets are extracted. Empty for
+	// non-source tools and failed calls. Truncated to specOutputFlowOutputCap.
+	lastOutput string
 
 	// Cache of speculative results keyed by cacheKey(toolName, argsHash).
 	cache map[string]*speculativeResult
@@ -198,12 +224,32 @@ func (s *speculator) recordObservation(toolName string) {
 	s.lastTool = toolName
 }
 
+// recordOutput captures the (already secret-redacted) output of the last
+// tool call so data-flow speculation can derive read_file targets from it
+// when the next prediction pass runs. Call it immediately after
+// recordObservation for the same tool call. Non-source tools and failed
+// calls clear the stored output: data-flow edges only originate from
+// successful search-shaped outputs.
+func (s *speculator) recordOutput(toolName, output string, isError bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if isError || !outputFlowSourceTools[toolName] {
+		s.lastOutput = ""
+		return
+	}
+	if len(output) > specOutputFlowOutputCap {
+		output = output[:specOutputFlowOutputCap]
+	}
+	s.lastOutput = output
+}
+
 // resetSequence clears the bigram tracking for a new agent run.
 // Called at the start of each RunStreamWithContent to avoid cross-run noise.
 func (s *speculator) resetSequence() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastTool = ""
+	s.lastOutput = ""
 }
 
 // predictNext returns likely next read-only tool names based on the last tool.
@@ -445,16 +491,6 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 	}
 
 	for _, predicted := range predictions {
-		// Check concurrency limit.
-		s.mu.Lock()
-		if s.activeSpeculations >= specMaxConcurrent {
-			s.mu.Unlock()
-			debug.Log("speculate", "max concurrent speculations (%d) reached, skipping %s", specMaxConcurrent, predicted)
-			continue
-		}
-		// Predict arguments for this tool.
-		s.mu.Unlock()
-
 		predArgs := predictArgs(predicted, lastTool, lastArgs)
 		if predArgs == nil {
 			debug.Log("speculate", "no arg prediction for %s after %s, skipping", predicted, lastTool)
@@ -466,49 +502,269 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 			continue
 		}
 
-		s.mu.Lock()
-		s.speculations++
-		s.activeSpeculations++
-		s.mu.Unlock()
-
-		// Launch background goroutine for speculative execution.
-		go func(toolName string, toolArgs json.RawMessage) {
-			defer safego.Recover("agent.speculate.exec")
-			defer func() {
-				s.mu.Lock()
-				s.activeSpeculations--
-				s.mu.Unlock()
-			}()
-
-			specCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-
-			t, ok := tools.Get(toolName)
-			if !ok {
-				debug.Log("speculate", "predicted tool %s not found in registry", toolName)
-				return
-			}
-
-			start := time.Now()
-			result, err := t.Execute(specCtx, toolArgs)
-			dur := time.Since(start)
-
-			if err != nil {
-				debug.Log("speculate", "speculative %s failed: %v (after %v)", toolName, err, dur)
-				return
-			}
-			if result.IsError {
-				debug.Log("speculate", "speculative %s returned error result, not caching", toolName)
-				return
-			}
-
-			s.store(toolName, toolArgs, result)
-			s.mu.Lock()
-			s.savedMicros += dur.Microseconds()
-			s.mu.Unlock()
-			debug.Log("speculate", "speculatively executed %s in %v (cached for future use)", toolName, dur)
-		}(predicted, predArgs)
+		s.launchSpeculation(ctx, tools, predicted, predArgs, "bigram")
 	}
+
+	// Data-flow speculation: derive read_file targets from the last search
+	// tool's OUTPUT (AutoTool parameter-dependency edges, AAAI 2026).
+	s.maybeSpeculateFromOutput(ctx, tools, lastTool)
+}
+
+// launchSpeculation starts one background speculative execution, enforcing
+// the global concurrency cap. source labels the predictor that produced the
+// call ("bigram" or "output-flow") for debug attribution. Returns false if
+// the cap was reached and nothing was launched.
+func (s *speculator) launchSpeculation(ctx context.Context, tools *tool.Registry, toolName string, toolArgs json.RawMessage, source string) bool {
+	s.mu.Lock()
+	if s.activeSpeculations >= specMaxConcurrent {
+		s.mu.Unlock()
+		debug.Log("speculate", "max concurrent speculations (%d) reached, skipping %s", specMaxConcurrent, toolName)
+		return false
+	}
+	s.speculations++
+	s.activeSpeculations++
+	s.mu.Unlock()
+
+	// Launch background goroutine for speculative execution.
+	go func() {
+		defer safego.Recover("agent.speculate.exec")
+		defer func() {
+			s.mu.Lock()
+			s.activeSpeculations--
+			s.mu.Unlock()
+		}()
+
+		specCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		t, ok := tools.Get(toolName)
+		if !ok {
+			debug.Log("speculate", "predicted tool %s not found in registry", toolName)
+			return
+		}
+
+		start := time.Now()
+		result, err := t.Execute(specCtx, toolArgs)
+		dur := time.Since(start)
+
+		if err != nil {
+			debug.Log("speculate", "speculative %s failed: %v (after %v)", toolName, err, dur)
+			return
+		}
+		if result.IsError {
+			debug.Log("speculate", "speculative %s returned error result, not caching", toolName)
+			return
+		}
+
+		s.store(toolName, toolArgs, result)
+		s.mu.Lock()
+		s.savedMicros += dur.Microseconds()
+		s.mu.Unlock()
+		debug.Log("speculate", "speculatively executed %s in %v via %s (cached for future use)", toolName, dur, source)
+	}()
+	return true
+}
+
+// Output-flow speculation tunables.
+const (
+	// specOutputFlowMaxCandidates caps how many distinct files one search
+	// output may cause to be pre-read. The model most often reads the file
+	// with the densest matches; two covers the common head of that curve.
+	specOutputFlowMaxCandidates = 2
+
+	// specOutputFlowMaxFileSize skips pre-reading huge files on a hunch; a
+	// wrong guess must cost bounded I/O, not a 10MB speculative read.
+	specOutputFlowMaxFileSize = 512 << 10
+
+	// specOutputFlowOutputCap bounds the remembered search output.
+	specOutputFlowOutputCap = 32 << 10
+
+	// specOutputFlowMinBigramEvidence: how many bigram observations of
+	// searchTool→read_file are required before data-flow speculation
+	// activates for that search tool. One demonstration is enough: the
+	// statistical prior says this model reads search results; the data-flow
+	// edge then supplies WHERE.
+	specOutputFlowMinBigramEvidence = 1
+
+	// specOutputFlowMaxDistinct caps extraction work on pathological outputs.
+	specOutputFlowMaxDistinct = 64
+)
+
+// maybeSpeculateFromOutput implements the data-flow half of speculation:
+// when the last call was a search-shaped tool (grep, code_search, glob, ...),
+// its output names the files the model will plausibly read next. Pre-read
+// the top-ranked candidates so the model's actual read_file hits the
+// speculative cache. A wrong guess is harmless: the cache entry expires via
+// TTL, and a model call with different args (offset/limit, other file) is a
+// plain miss served by the normal gated execution path.
+func (s *speculator) maybeSpeculateFromOutput(ctx context.Context, tools *tool.Registry, lastTool string) {
+	if tools == nil || !outputFlowSourceTools[lastTool] {
+		return
+	}
+	s.mu.Lock()
+	output := s.lastOutput
+	var observedReads int
+	if nexts, ok := s.patterns[lastTool]; ok {
+		observedReads = nexts["read_file"]
+	}
+	s.mu.Unlock()
+	if output == "" || observedReads < specOutputFlowMinBigramEvidence {
+		return
+	}
+
+	launched := 0
+	for _, c := range extractOutputFlowPaths(output) {
+		if launched >= specOutputFlowMaxCandidates {
+			break
+		}
+		// Validate before spending I/O: the path must exist on disk and fit
+		// the size cap. Extraction is heuristic, so an invalid candidate is
+		// simply skipped.
+		if st, err := os.Stat(c.rawPath); err != nil || !st.Mode().IsRegular() || st.Size() > specOutputFlowMaxFileSize {
+			continue
+		}
+		args, err := json.Marshal(map[string]string{"path": c.rawPath})
+		if err != nil {
+			continue
+		}
+		if s.hasCached("read_file", args) {
+			continue
+		}
+		if s.launchSpeculation(ctx, tools, "read_file", args, "output-flow") {
+			launched++
+		}
+	}
+}
+
+// outputFlowCandidate is one file path extracted from a search tool's output.
+type outputFlowCandidate struct {
+	rawPath string // exact token as it appeared in the output
+	count   int    // occurrences (denser matches → likelier read target)
+	order   int    // first-seen position (stable tiebreaker)
+}
+
+// outputFlowExts is the extension allowlist for data-flow candidates. A
+// dotted source extension is a strong path signal in free-form tool output;
+// extension-less names (Makefile, Dockerfile) are intentionally excluded
+// because any word could match.
+var outputFlowExts = map[string]bool{
+	"astro": true, "bash": true, "c": true, "cc": true, "cfg": true,
+	"conf": true, "cpp": true, "cs": true, "css": true, "cxx": true,
+	"dart": true, "env": true, "erl": true, "ex": true, "go": true,
+	"gradle": true, "h": true, "hh": true, "hpp": true, "hs": true,
+	"htm": true, "html": true, "ini": true, "java": true, "jl": true,
+	"js": true, "json": true, "jsonc": true, "jsx": true, "kt": true,
+	"kts": true, "less": true, "lua": true, "m": true, "md": true,
+	"mjs": true, "mm": true, "mod": true, "nim": true, "php": true,
+	"pl": true, "proto": true, "py": true, "pyi": true, "r": true,
+	"rb": true, "rs": true, "sass": true, "scala": true, "scss": true,
+	"sh": true, "sol": true, "sql": true, "sum": true, "svelte": true,
+	"svg": true, "swift": true, "tf": true, "toml": true, "ts": true,
+	"tsx": true, "txt": true, "v": true, "vue": true, "work": true,
+	"xml": true, "yaml": true, "yml": true, "zig": true, "zsh": true,
+}
+
+// extractOutputFlowPaths pulls file-path candidates out of a search tool's
+// output. It understands the common output shapes:
+//   - content mode:  "/abs/path/file.go:12:\tline of text"
+//   - position mode: "/abs/path/file.go:12:5\tcontext" (lsp_references)
+//   - bare mode:     "/abs/path/file.go" (files_with_matches, glob,
+//     list_directory)
+//
+// Ranking: a path appearing more often in the output (denser matches) is the
+// likelier read target; ties break by first appearance. Deterministic, zero
+// LLM cost, bounded work.
+func extractOutputFlowPaths(output string) []outputFlowCandidate {
+	if output == "" {
+		return nil
+	}
+	counts := make(map[string]int, 16)
+	order := make(map[string]int, 16)
+	distinct := 0
+	for _, line := range strings.Split(output, "\n") {
+		for _, tok := range outputFlowLineTokens(line) {
+			path := outputFlowPathLike(tok)
+			if path == "" {
+				continue
+			}
+			if _, seen := counts[path]; !seen {
+				if distinct >= specOutputFlowMaxDistinct {
+					continue
+				}
+				order[path] = distinct
+				distinct++
+			}
+			counts[path]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	cands := make([]outputFlowCandidate, 0, len(counts))
+	for path, n := range counts {
+		cands = append(cands, outputFlowCandidate{rawPath: path, count: n, order: order[path]})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].count != cands[j].count {
+			return cands[i].count > cands[j].count
+		}
+		return cands[i].order < cands[j].order
+	})
+	return cands
+}
+
+// outputFlowLineTokens yields the path-shaped substrings worth validating on
+// one output line: the grep/lsp "path:line" prefix and the leading
+// whitespace-delimited field (bare path listings).
+func outputFlowLineTokens(line string) []string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return nil
+	}
+	toks := make([]string, 0, 2)
+	if idx := strings.IndexByte(trimmed, ':'); idx > 0 {
+		toks = append(toks, trimmed[:idx])
+	}
+	if end := strings.IndexAny(trimmed, " \t"); end > 0 {
+		toks = append(toks, trimmed[:end])
+	} else {
+		toks = append(toks, trimmed)
+	}
+	return toks
+}
+
+// outputFlowPathLike applies cheap lexical filters and returns the cleaned
+// token, or "" when it cannot be a speculated read target.
+func outputFlowPathLike(tok string) string {
+	tok = strings.Trim(tok, "\"'`[](){}<>,;")
+	for len(tok) > 0 {
+		switch tok[len(tok)-1] {
+		case ',', ';', ':', '.':
+			tok = tok[:len(tok)-1]
+			continue
+		}
+		break
+	}
+	if len(tok) < 3 || len(tok) > 512 {
+		return ""
+	}
+	if strings.ContainsAny(tok, ":*?\\") {
+		return ""
+	}
+	if strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "$") || strings.HasPrefix(tok, "#") {
+		return ""
+	}
+	if strings.Contains(tok, "..") {
+		return ""
+	}
+	dot := strings.LastIndexByte(tok, '.')
+	if dot < 0 || dot == len(tok)-1 {
+		return ""
+	}
+	if !outputFlowExts[tok[dot+1:]] {
+		return ""
+	}
+	return tok
 }
 
 // Close stops all background goroutines and clears the cache.

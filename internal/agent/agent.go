@@ -3369,6 +3369,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			result.Content = redactSecrets(tc.Name, result.Content)
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
+			// Feed the (secret-redacted) output to the speculator so
+			// data-flow speculation (AutoTool parameter-dependency edges)
+			// can pre-read the files this search output names. Must run
+			// AFTER redactSecrets so stored snippets never contain secrets.
+			a.speculator.recordOutput(tc.Name, result.Content, result.IsError)
 			// Track todo_write usage for the agent-side planner: once the
 			// agent creates a todo list, plan suggestions and reminders stop.
 			if tc.Name == "todo_write" && !result.IsError {
