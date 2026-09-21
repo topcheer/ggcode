@@ -196,7 +196,3 @@ func (a *Agent) withTemporalContext(base string) string {
 	}
 	return a.temporalContextLine() + "\n\n" + base
 }
-
-// maybeInjectRatchetRules is a no-op retained for backward compatibility.
-// Ratchet rule injection is now handled by maybeInjectDynamicSystemPrompt.
-func (a *Agent) maybeInjectRatchetRules() {}

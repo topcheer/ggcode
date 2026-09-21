@@ -1608,7 +1608,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	a.maybeInjectPerfRegression()
 	a.maybeInjectDynamicSystemPrompt()
-	a.maybeInjectRatchetRules()
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
 	a.toolSearch.init(toolDefs)
@@ -4287,9 +4286,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Error compounding risk: track all error signals across the run.
 			// Computes geometric compounding probability to detect systemic risk.
-			if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
-				a.errorCompound.recordStep(hadError)
-			}
+			hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1)
+			a.errorCompound.recordStep(hadError)
 			// Fix amnesia: track errors observed and check new content for recurrence.
 			if result.IsError {
 				if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
