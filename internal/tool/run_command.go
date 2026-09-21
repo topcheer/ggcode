@@ -43,6 +43,10 @@ type RunCommand struct {
 	// in an OS-level containment sandbox (Seatbelt on macOS). See
 	// shell_sandbox.go for the policy model.
 	Sandbox *SandboxPolicy
+	// Distiller, if non-nil, observes every successful command execution
+	// and auto-distills recurring patterns into the cmd_snippet library
+	// (usage-driven Self-Tooling, see cmd_snippet_auto.go).
+	Distiller *SnippetDistiller
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -439,10 +443,20 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 		t.OnPostExec(0, nil)
 	}
 
+	// Usage-driven distillation: this command succeeded - feed it to the
+	// snippet library. Promotion (pattern hit its threshold) is annotated
+	// on the result so the agent learns the retrieval name in-band.
+	snippetNote := ""
+	if t.Distiller != nil {
+		if name := t.Distiller.Observe(command); name != "" {
+			snippetNote = fmt.Sprintf("\n[snippet-library] recurring pattern auto-saved as snippet %q (retrievable via cmd_snippet get).", name)
+		}
+	}
+
 	fileChanges := detectChangedFilesFromCommand(mtimeSnapshot)
 
 	if sb.Len() == 0 {
-		return Result{Content: preWarning + "Command completed with no output." + fileChanges}
+		return Result{Content: preWarning + "Command completed with no output." + fileChanges + snippetNote}
 	}
 
 	// Build/test output intelligence: prepend structured summary when available
@@ -450,10 +464,10 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	// for large test/build outputs.
 	summary := summarizeCommandOutput(command, sb.String())
 	if summary != "" {
-		return Result{Content: preWarning + summary + sb.String() + fileChanges}
+		return Result{Content: preWarning + summary + sb.String() + fileChanges + snippetNote}
 	}
 
-	return Result{Content: preWarning + sb.String() + fileChanges}
+	return Result{Content: preWarning + sb.String() + fileChanges + snippetNote}
 }
 
 // truncateMiddle keeps the first 40% and last 50% of output, inserting a
@@ -588,6 +602,7 @@ func (t RunCommand) Clone() Tool {
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
 		Sandbox:    t.Sandbox,
+		Distiller:  t.Distiller,
 	}
 }
 

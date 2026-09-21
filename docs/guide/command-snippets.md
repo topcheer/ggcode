@@ -48,6 +48,17 @@ cmd_snippet(action="search", query="build")
 cmd_snippet(action="delete", name="old-deploy-cmd")
 ```
 
+## Auto-Distillation (Self-Tooling)
+
+Beyond manual saves, the library grows from **actual usage**: every successful `run_command` execution is observed (deterministically, with no LLM cost). When the same command *pattern* — commands that differ only in paths, numbers, or quoted values — succeeds **3 times** (within a session or across sessions), it is automatically promoted into the library as an `auto/` snippet, tagged `auto` and marked `[auto-distilled]` in listings. The `run_command` result announces the promotion so the agent can recall it with `cmd_snippet(action="get")` in later work.
+
+Guardrails:
+
+- Trivial commands (`ls`, `cat`, `cd`, ...), destructive commands (`rm -rf`, `git reset --hard`, force-push, ...), and secret-bearing commands are never observed.
+- A pattern similar to an existing **manual** snippet is never duplicated — manual curation wins.
+- Pending (not yet promoted) patterns are stored under the `observations` key in the same JSON file and are capped at 40 (least-recently-seen evicted).
+- Delete auto entries like any other: `cmd_snippet(action="delete", name="auto/go-test-tags-goolm")`.
+
 ## How It Differs from Skills
 
 | Feature | Skills | Command Snippets |

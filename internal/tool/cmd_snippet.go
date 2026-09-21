@@ -43,10 +43,17 @@ type cmdSnippetEntry struct {
 	UseCount    int       `json:"use_count"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// Source distinguishes manual saves ("") from usage-driven auto
+	// distillation ("auto", see cmd_snippet_auto.go).
+	Source string `json:"source,omitempty"`
 }
 
 type cmdSnippetStore struct {
 	Entries []cmdSnippetEntry `json:"entries"`
+	// Observations are pending command patterns not yet promoted into the
+	// library (see cmd_snippet_auto.go). Additive key: pre-existing files
+	// without it load unchanged.
+	Observations []cmdObservation `json:"observations,omitempty"`
 }
 
 type CmdSnippetTool struct {
@@ -61,7 +68,7 @@ type CmdSnippetTool struct {
 func (t *CmdSnippetTool) Name() string { return "cmd_snippet" }
 
 func (t *CmdSnippetTool) Description() string {
-	return "Manage a persistent library of reusable shell commands (build, test, deploy, debug). Saves commands per-project so future sessions can recall them without re-discovery. Actions: save, list, get, delete, search."
+	return "Manage a persistent library of reusable shell commands (build, test, deploy, debug). Saves commands per-project so future sessions can recall them without re-discovery. Commands that succeed repeatedly are also auto-distilled into 'auto/' snippets. Actions: save, list, get, delete, search."
 }
 
 func (t *CmdSnippetTool) Parameters() json.RawMessage {
@@ -187,6 +194,10 @@ func (t *CmdSnippetTool) cloneLocked() *cmdSnippetStore {
 	}
 	clone := &cmdSnippetStore{Entries: make([]cmdSnippetEntry, len(t.cache.Entries))}
 	copy(clone.Entries, t.cache.Entries)
+	if len(t.cache.Observations) > 0 {
+		clone.Observations = make([]cmdObservation, len(t.cache.Observations))
+		copy(clone.Observations, t.cache.Observations)
+	}
 	return clone
 }
 
@@ -343,6 +354,9 @@ func (t *CmdSnippetTool) doList() (Result, error) {
 	sb.WriteString(fmt.Sprintf("Command snippets (%d):\n", len(store.Entries)))
 	for _, entry := range store.Entries {
 		sb.WriteString(fmt.Sprintf("\n## %s", entry.Name))
+		if entry.Source == autoSnippetSource {
+			sb.WriteString(" [auto-distilled]")
+		}
 		if entry.UseCount > 1 {
 			sb.WriteString(fmt.Sprintf(" (used %dx)", entry.UseCount))
 		}

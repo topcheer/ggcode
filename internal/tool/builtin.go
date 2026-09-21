@@ -46,6 +46,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	jobManager.SetSandboxPolicy(sandbox)
 	codeIndex := NewCodeIndexManager(workingDir)
 	registry.codeIndex = codeIndex
+	// Single snippet store shared by the cmd_snippet tool and the run_command
+	// distiller, so usage-driven auto-entries land in the same library.
+	snippetTool := &CmdSnippetTool{WorkingDir: workingDir}
 	tools := []Tool{
 		// File operations — read tools use readSandboxFor (#443: FileGuard
 		// is write-only; it must never gate reads).
@@ -88,7 +91,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
-		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox},
+		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, Distiller: &SnippetDistiller{Store: snippetTool}},
 		StartCommandTool{Manager: jobManager, Policy: policy},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
@@ -165,7 +168,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ReviewChanges{WorkingDir: workingDir},
 
 		// Command snippet library (persistent, project-scoped reusable shell commands)
-		&CmdSnippetTool{WorkingDir: workingDir},
+		snippetTool,
 
 		// Package-level dependency graph analysis (import graph, cycles, hotspots)
 		DepGraphTool{WorkingDir: workingDir},
