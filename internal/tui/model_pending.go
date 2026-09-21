@@ -67,18 +67,18 @@ func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok b
 	if !ok {
 		return "", nil, false
 	}
-	// Remove the chat bubble for this queued message.
-	if m.lastQueuedChatID != "" {
-		m.chatList.RemoveByID(m.lastQueuedChatID)
-		// Keep queuedChatIDs in sync so a later restorePendingInput does not
-		// call RemoveByID on an already-removed bubble (harmless, but noisy).
-		for i := len(m.queuedChatIDs) - 1; i >= 0; i-- {
-			if m.queuedChatIDs[i] == m.lastQueuedChatID {
-				m.queuedChatIDs = append(m.queuedChatIDs[:i], m.queuedChatIDs[i+1:]...)
-				break
-			}
+	// Remove the chat bubble for this queued message. #2618: the LIFO tail
+	// of queuedChatIDs mirrors popLastVisible exactly, so every successive
+	// dequeue (not just the first) removes the right bubble; the old single
+	// lastQueuedChatID scalar was cleared by the first dequeue and left all
+	// later bubbles stale.
+	if n := len(m.queuedChatIDs); n > 0 {
+		id := m.queuedChatIDs[n-1]
+		m.chatList.RemoveByID(id)
+		m.queuedChatIDs = m.queuedChatIDs[:n-1]
+		if id == m.lastQueuedChatID {
+			m.lastQueuedChatID = ""
 		}
-		m.lastQueuedChatID = ""
 	}
 	debug.Log("tui", "dequeueLastVisible: dequeued text=%s", util.Truncate(text, 100))
 	return text, imgs, ok
@@ -197,8 +197,10 @@ func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
-	// Restore images so startAgentWithExpand picks them up.
-	m.pendingImages = imgs
+	// Restore images so startAgentWithExpand picks them up. #2617: merge,
+	// don't overwrite — images pasted while the run was busy live in
+	// pendingImages and must survive the queued message's restore.
+	m.pendingImages = append(m.pendingImages, imgs...)
 	if hidden {
 		return m.submitHiddenText(text)
 	}
@@ -252,9 +254,10 @@ type knightCancelSet struct {
 // handle (pointer identity - funcs are not comparable) the task uses to
 // deregister itself when it finishes.
 func (m *Model) registerKnightTask() (context.Context, *knightTaskHandle) {
-	if m.knightTasks == nil {
-		m.knightTasks = &knightCancelSet{}
-	}
+	// #2616: NewModel always initializes knightTasks, so the Cmd-goroutine
+	// never lazily writes m.knightTasks — a value-receiver Update copy made
+	// such writes invisible to the authoritative model (lost update), and
+	// cancelKnightTasks silently cancelled nothing.
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &knightTaskHandle{cancel: cancel}
 	m.knightTasks.mu.Lock()
@@ -353,8 +356,11 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
+	// #2617: merge, don't overwrite — images pasted while the run was busy
+	// live in pendingImages and must survive the queued message's restore
+	// (same fix family as #1411/#1744).
 	if len(imgs) > 0 {
-		m.pendingImages = imgs
+		m.pendingImages = append(m.pendingImages, imgs...)
 	}
 	_ = hidden
 	// Don't send agentInterruptMsg — the user already saw their input rendered

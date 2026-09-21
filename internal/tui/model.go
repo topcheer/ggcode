@@ -582,6 +582,7 @@ func NewModel(a *agent.Agent, policy permission.PermissionPolicy) Model {
 		urlOpener:              openSystemURL,
 		pending:                &pendingQueue{},
 		sessionMu:              &sync.Mutex{},
+		knightTasks:            &knightCancelSet{},
 		imRuntimeState:         &imRuntimeState{},
 		a2aEventState:          &a2aEventBufferState{},
 		tunnelMainStream:       &tunnelMainStreamState{},

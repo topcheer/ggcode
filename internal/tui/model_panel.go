@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -455,6 +456,7 @@ func parseIntPositive(s string) (int, error) {
 	if s == "" {
 		return 0, nil
 	}
+	orig := s
 	upper := strings.ToUpper(s)
 	mult := 1
 	switch {
@@ -480,6 +482,12 @@ func parseIntPositive(s string) (int, error) {
 	}
 	if val < 0 {
 		return 0, fmt.Errorf("must be >= 0")
+	}
+	// #2615: the round-trip check above validated only the pre-multiplier
+	// digits; val*mult itself can silently overflow into a wrong (possibly
+	// negative) value that gets persisted and disables auto-compaction.
+	if mult > 1 && val > math.MaxInt/mult {
+		return 0, fmt.Errorf("value %q overflows the integer range", orig)
 	}
 	return val * mult, nil
 }
