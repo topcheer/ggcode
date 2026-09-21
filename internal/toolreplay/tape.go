@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 )
@@ -217,8 +218,13 @@ func (t *Tape) Len() int {
 
 // Save writes the tape to a JSON file. The file is written atomically.
 func (t *Tape) Save(path string) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	// Lock, not RLock: marshalling + write + rename must be exclusive even
+	// within one Tape instance. #2619: concurrent Save calls used to share a
+	// fixed `path+".tmp"` under RLock; two savers interleaved writes into the
+	// same tmp file and the rename pair could ship a truncated tape (or
+	// ENOENT on the second rename) with no visible error.
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	entries := make([]Entry, 0, len(t.order))
 	for _, s := range t.order {
@@ -230,9 +236,24 @@ func (t *Tape) Save(path string) error {
 		return fmt.Errorf("marshal tape: %w", err)
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("write tape file: %w", err)
+	// Unique temp file per Save (#2619): cross-instance concurrent saves to
+	// the same path (main agent + in-process sub-agents share
+	// GGCODE_TOOL_TAPE) can no longer corrupt each other's tmp file; each
+	// rename is independently atomic and last-writer-wins whole-file.
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".tape-save-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create tape temp file: %w", err)
+	}
+	tmp := f.Name()
+	if _, werr := f.Write(data); werr != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write tape file: %w", werr)
+	}
+	if cerr := f.Close(); cerr != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close tape temp file: %w", cerr)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
