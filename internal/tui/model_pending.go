@@ -67,19 +67,20 @@ func (m *Model) dequeueLastVisible() (text string, imgs []imageAttachedMsg, ok b
 	if !ok {
 		return "", nil, false
 	}
-	// Remove the chat bubble for this queued message.
-	if m.lastQueuedChatID != "" {
-		m.chatList.RemoveByID(m.lastQueuedChatID)
+	// Remove the chat bubble for this queued message (#2618). popLastVisible
+	// removes the LAST visible queue entry; queuedChatIDs was appended in the
+	// same order, so its last ID is exactly the bubble to remove. The old
+	// single lastQueuedChatID guard was cleared after the first dequeue, so a
+	// second Up-arrow dequeue (after Ctrl+U cleared the input) skipped the
+	// removal block entirely and left the bubble permanently rendered.
+	if n := len(m.queuedChatIDs); n > 0 {
+		id := m.queuedChatIDs[n-1]
+		m.chatList.RemoveByID(id)
 		// Keep queuedChatIDs in sync so a later restorePendingInput does not
 		// call RemoveByID on an already-removed bubble (harmless, but noisy).
-		for i := len(m.queuedChatIDs) - 1; i >= 0; i-- {
-			if m.queuedChatIDs[i] == m.lastQueuedChatID {
-				m.queuedChatIDs = append(m.queuedChatIDs[:i], m.queuedChatIDs[i+1:]...)
-				break
-			}
-		}
-		m.lastQueuedChatID = ""
+		m.queuedChatIDs = m.queuedChatIDs[:n-1]
 	}
+	m.lastQueuedChatID = ""
 	debug.Log("tui", "dequeueLastVisible: dequeued text=%s", util.Truncate(text, 100))
 	return text, imgs, ok
 }
