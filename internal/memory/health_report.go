@@ -29,9 +29,10 @@ type HealthReport struct {
 	BudgetPercent int // percentage of maxTotalInlineBytes used
 
 	// Staleness signals
-	StaleBrokenPaths int
-	StaleOversized   int
-	StaleAncient     int
+	StaleBrokenPaths   int
+	StaleBrokenSymbols int
+	StaleOversized     int
+	StaleAncient       int
 
 	// Newest and oldest entry ages
 	OldestDays int
@@ -97,6 +98,7 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	// Staleness scan.
 	stale := am.ScanStaleness(workingDir)
 	report.StaleBrokenPaths = stale.BrokenPaths
+	report.StaleBrokenSymbols = stale.BrokenSymbols
 	report.StaleOversized = stale.Oversized
 	report.StaleAncient = stale.Ancient
 
@@ -138,6 +140,10 @@ func (r HealthReport) FormatHealthReport() string {
 	warnings := 0
 	if r.StaleBrokenPaths > 0 {
 		sb.WriteString(fmt.Sprintf("  [STALE] %d entries reference broken file paths\n", r.StaleBrokenPaths))
+		warnings++
+	}
+	if r.StaleBrokenSymbols > 0 {
+		sb.WriteString(fmt.Sprintf("  [STALE] %d entries reference code symbols absent from the workspace\n", r.StaleBrokenSymbols))
 		warnings++
 	}
 	if r.StaleOversized > 0 {

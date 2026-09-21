@@ -13,18 +13,20 @@ import (
 // StaleFinding represents a single staleness signal in a memory entry.
 type StaleFinding struct {
 	Key    string
-	Reason string // "broken-path", "oversized", "ancient"
+	Reason string // "broken-path", "broken-symbol", "oversized", "ancient"
 	Detail string // specific detail (e.g., which path is broken)
 	Age    time.Duration
 }
 
 // StaleReport holds the results of a staleness scan.
 type StaleReport struct {
-	Scanned     int
-	BrokenPaths int
-	Oversized   int
-	Ancient     int
-	Findings    []StaleFinding
+	Scanned       int
+	BrokenPaths   int
+	BrokenSymbols int
+	ProbedFiles   int // workspace files scanned for symbol verification
+	Oversized     int
+	Ancient       int
+	Findings      []StaleFinding
 }
 
 // HasFindings reports whether any staleness signals were detected.
@@ -46,11 +48,13 @@ var dirPathPattern = regexp.MustCompile(`(?:^|[\s'"(+])((?:\.{0,2}/)?(?:[a-zA-Z0
 
 // ScanStaleness checks memory entries for potential staleness signals:
 //   - Broken file/dir path references (paths that no longer exist)
+//   - Broken symbol references (backticked code identifiers absent from the
+//     workspace, i.e. renamed or deleted since the memory was written)
 //   - Oversized entries (exceeding inline budget)
 //   - Ancient persistent entries (older than 180 days)
 //
 // workingDir is the project root used to resolve relative paths.
-// If workingDir is empty, path checks are skipped.
+// If workingDir is empty, path and symbol checks are skipped.
 func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 	metas, err := am.collectMetas()
 	if err != nil {
@@ -61,6 +65,8 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 	active, _, _, _ := curateEntries(metas, now)
 
 	report := StaleReport{Scanned: len(active)}
+
+	var probeItems []probeCandidate
 
 	for _, m := range active {
 		path := filepath.Join(am.dir, m.Key+".md")
@@ -90,6 +96,14 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 			}
 		}
 
+		// Collect backticked code identifiers for workspace probing
+		// (environment-probing curation, arXiv:2609.11060).
+		if workingDir != "" {
+			if ids := extractSymbolCandidates(content); len(ids) > 0 {
+				probeItems = append(probeItems, probeCandidate{key: m.Key, age: age, idents: ids})
+			}
+		}
+
 		// Check for oversized entries.
 		if len(content) > maxInlineBytes {
 			report.Findings = append(report.Findings, StaleFinding{
@@ -110,6 +124,42 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 				Age:    age,
 			})
 			report.Ancient++
+		}
+	}
+
+	// Environment-probing symbol verification: one bounded read-only
+	// workspace scan validates every collected identifier against the
+	// codebase's current reality.
+	if workingDir != "" && len(probeItems) > 0 {
+		wanted := make(map[string]struct{})
+		for _, it := range probeItems {
+			for _, id := range it.idents {
+				wanted[id] = struct{}{}
+			}
+		}
+		found, scanned := probeWorkspaceIdents(workingDir, wanted)
+		report.ProbedFiles = scanned
+		for _, it := range probeItems {
+			var missing []string
+			for _, id := range it.idents {
+				if !found[id] {
+					missing = append(missing, id)
+				}
+			}
+			if len(missing) == 0 {
+				continue
+			}
+			detail := strings.Join(missing, ", ")
+			if len(detail) > 120 {
+				detail = detail[:120] + "..."
+			}
+			report.Findings = append(report.Findings, StaleFinding{
+				Key:    it.key,
+				Reason: "broken-symbol",
+				Detail: detail,
+				Age:    it.age,
+			})
+			report.BrokenSymbols++
 		}
 	}
 
