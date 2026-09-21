@@ -44,7 +44,9 @@ non-blocking hooks is injected as a system context message, so hooks can
 deterministically preload project context (git status, TODO lists, environment
 notes). `on_session_end` fires synchronously in `Close()` (before process
 teardown, bounded by each hook's timeout) with `session.reason: exit`, for
-state flushing and cleanup. (Concept parity: Claude Code session lifecycle
+state flushing and cleanup. Hook processes also receive
+`GGCODE_SESSION_SOURCE` (`startup`/`resume`) and `GGCODE_SESSION_END_REASON`
+environment variables for scripting. (Concept parity: Claude Code session lifecycle
 hooks, https://code.claude.com/docs/en/hooks.)
 
 ## Hook Types
