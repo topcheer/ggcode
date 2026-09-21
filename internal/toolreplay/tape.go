@@ -215,6 +215,19 @@ func (t *Tape) Len() int {
 	return len(t.order)
 }
 
+// Entries returns a copy of the recorded entries in insertion order. Unlike
+// Lookup it consumes nothing: offline graders (internal/tapeeval) use this
+// to analyze a recorded trajectory without disturbing replay semantics.
+func (t *Tape) Entries() []Entry {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	entries := make([]Entry, 0, len(t.order))
+	for _, s := range t.order {
+		entries = append(entries, s.Entry)
+	}
+	return entries
+}
+
 // Save writes the tape to a JSON file. The file is written atomically.
 func (t *Tape) Save(path string) error {
 	t.mu.RLock()
