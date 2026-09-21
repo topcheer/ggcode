@@ -74,6 +74,20 @@ func (m *Model) updateAutoComplete() {
 		}
 	}
 
+	// Check for slash SUBCOMMAND completion: "/memory li|" or "/memory |".
+	// DetectSlashCommand only matches while the cursor is inside the command
+	// word itself; once the trailing space is typed it returns false and this
+	// branch takes over, offering the command's enumerated subcommands.
+	if cmd, argPrefix, ok := matchSubcommandContext(m.input.Value(), inputCursor(&m.input)); ok {
+		if items := filterSubcommands(cmd, argPrefix); len(items) > 0 {
+			m.autoCompleteActive = true
+			m.autoCompleteKind = "subslash"
+			m.autoCompleteItems = items
+			m.autoCompleteIndex = 0
+			return
+		}
+	}
+
 	// Check for @mention
 	if active, prefix := DetectMention(m.input.Value(), inputCursor(&m.input)); active {
 		workDir, _ := os.Getwd()
@@ -111,6 +125,25 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 	cursor := inputCursor(&m.input)
 
 	var replacement string
+	if m.autoCompleteKind == "subslash" {
+		// Confirming a SUBCOMMAND: rewrite the input as "/cmd sub " and leave
+		// the cursor at the end. Flag subcommands (--cached ...) may be
+		// followed by a value, non-flag ones are terminal - a trailing space
+		// works for both. The panel closes; typing further characters in
+		// later argument positions does not re-trigger completion.
+		value := m.input.Value()
+		cmd := ""
+		if space := strings.IndexByte(value, ' '); space > 0 {
+			cmd = value[:space]
+		}
+		m.input.SetValue(cmd + " " + selected + " ")
+		m.input.CursorEnd()
+		m.autoCompleteActive = false
+		m.autoCompleteItems = nil
+		m.autoCompleteIndex = 0
+		m.inputHint = ""
+		return nil
+	}
 	if m.autoCompleteKind == "slash" {
 		if m.loading {
 			if shouldExecuteWhileBusy(selected) {
@@ -128,6 +161,19 @@ func (m *Model) applyAutoComplete() tea.Cmd {
 			m.autoCompleteItems = nil
 			m.autoCompleteIndex = 0
 			m.inputHint = ""
+			return nil
+		}
+		// Subcommand-bearing commands: fill "/cmd " and immediately open the
+		// SUBCOMMAND panel (Tab/Enter on the command now reveals subcommands
+		// instead of leaving a bare textual "<subcommand>" hint).
+		if subs := SlashCommandSubcommands[selected]; len(subs) > 0 {
+			m.input.SetValue(selected + " ")
+			m.input.CursorEnd()
+			m.inputHint = ""
+			m.autoCompleteActive = true
+			m.autoCompleteKind = "subslash"
+			m.autoCompleteItems = subs
+			m.autoCompleteIndex = 0
 			return nil
 		}
 		// Fillable commands: put command in input with placeholder hint.

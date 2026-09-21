@@ -570,6 +570,94 @@ var SlashCommandPlaceholders = map[string]string{
 	"/fork":          "",
 }
 
+// SlashCommandSubcommands enumerates the subcommands of non-panel commands.
+// Behavior contract (2026-09-20 slash-completion review):
+//   - When one of these commands is confirmed via Enter/Tab completion, the
+//     input is filled with "/cmd " and a subcommand completion panel opens
+//     instead of executing the bare main command.
+//   - Panel commands (/provider, /mcp, /usage ...) are deliberately NOT
+//     listed here: Enter keeps executing them directly (opens the panel).
+//   - Only commands whose subcommands are verifiable from placeholders or
+//     handler sources are listed; "<subcommand>" placeholders without a
+//     known enumeration (e.g. /im, /mcp) are intentionally excluded.
+var SlashCommandSubcommands = map[string][]string{
+	"/memory":      {"list", "clear"},
+	"/lang":        {"en", "zh-CN"},
+	"/inspector":   {"sessions", "checkpoints", "memory", "plugins", "config", "status"},
+	"/knight":      {"on", "off", "status", "run", "skills", "budget"},
+	"/stream":      {"start", "stop", "status", "config"},
+	"/share":       {"start", "stop", "status"},
+	"/tunnel":      {"start", "stop", "status"},
+	"/cron":        {"list", "get", "pause", "resume", "pauseall", "resumeall"},
+	"/update":      {"check", "force"},
+	"/checkpoints": {"list", "restore"},
+	"/notify":      {"mode", "bell", "desktop"},
+	"/cost":        {"all"},
+	"/diff":        {"--cached", "--stat"},
+	"/review":      {"--cached", "--staged"},
+	"/tmux":        {"enter", "status", "split", "test", "build", "verify", "popup", "list", "logs", "layouts", "layout", "setup", "save-layout", "delete-layout", "rename-layout", "refresh", "restore", "rerun", "prune", "capture", "stop", "close", "focus"},
+}
+
+// matchSubcommandContext reports whether the input is positioned to complete
+// the FIRST argument of a subcommand-bearing slash command. It returns the
+// command ("/memory") and the argument prefix typed so far. The cursor must
+// be past the command word (on the trailing space or inside the first arg);
+// DetectSlashCommand stays authoritative for completion of the command word
+// itself, so the two detectors never compete for the same position.
+func matchSubcommandContext(value string, cursor int) (cmd string, argPrefix string, ok bool) {
+	if cursor < 0 || cursor > len(value) {
+		return "", "", false
+	}
+	// The command word is the first token starting with '/'.
+	space := strings.IndexByte(value, ' ')
+	if space < 0 {
+		return "", "", false
+	}
+	word := value[:space]
+	if _, listed := SlashCommandSubcommands[word]; !listed {
+		return "", "", false
+	}
+	// Cursor must be past the command word (i.e. in the argument zone).
+	if cursor <= space {
+		return "", "", false
+	}
+	// Argument zone: everything after the first space up to the cursor.
+	// Only complete while the cursor is within the FIRST argument token.
+	argZone := value[space+1:]
+	if argZone == "" {
+		return word, "", true
+	}
+	upToCursor := value[space+1:]
+	if cursor < len(value) {
+		upToCursor = value[space+1 : cursor]
+	}
+	// A space inside the typed prefix means the user is past the first
+	// argument (e.g. "/notify mode be|") - no subcommand completion there.
+	if strings.ContainsRune(upToCursor, ' ') {
+		return "", "", false
+	}
+	return word, upToCursor, true
+}
+
+// filterSubcommands returns the subcommands of cmd matching prefix (all when
+// prefix is empty).
+func filterSubcommands(cmd, prefix string) []string {
+	subs := SlashCommandSubcommands[cmd]
+	if subs == nil {
+		return nil
+	}
+	if prefix == "" {
+		return subs
+	}
+	var out []string
+	for _, s := range subs {
+		if strings.HasPrefix(s, prefix) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // CompleteSlashCommand returns matching slash commands for a given prefix.
 func CompleteSlashCommand(prefix string, customCmds map[string]*commands.Command) []string {
 	var matches []string

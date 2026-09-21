@@ -641,6 +641,21 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			m.chatListScrollToBottom()
 			return m, nil
 		}
+		// Subcommand-bearing command typed WITHOUT arguments: do not execute
+		// the bare main command. Fill "/cmd " and open the subcommand panel
+		// instead (same behavior as confirming it via Tab completion). Panel
+		// commands are not in SlashCommandSubcommands and fall through to
+		// normal execution (opening their panel) unchanged.
+		if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") && len(SlashCommandSubcommands[text]) > 0 {
+			m.input.SetValue(text + " ")
+			m.input.CursorEnd()
+			m.autoCompleteActive = true
+			m.autoCompleteKind = "subslash"
+			m.autoCompleteItems = SlashCommandSubcommands[text]
+			m.autoCompleteIndex = 0
+			m.inputHint = ""
+			return m, nil
+		}
 		if m.shellMode {
 			m.emitIMLocalUserText("$ " + text)
 			return m, m.submitShellCommand(text, true)
