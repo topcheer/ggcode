@@ -657,7 +657,7 @@ func zhCatalog(key string) string {
 	case "trace.no_metrics":
 		return "此会话尚未记录任何指标。\n\n"
 	case "trace.exported":
-		return "已导出会话 %s 的 trace 到 %s\n%d 轮，%d 次 LLM 调用，%d 次工具调用\nToken：%d 输入 / %d 输出\n\n"
+		return "已导出会话 %s 的 trace 到 %s\n%d 轮，%d 次 LLM 调用，%d 次工具调用\nToken：%d 输入 / %d 输出\nOpenTelemetry（OTLP/GenAI）：%s\n\n"
 	case "checkpoint.disabled":
 		return "未启用检查点。\n\n"
 	case "rewind.activated":

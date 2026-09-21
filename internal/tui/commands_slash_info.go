@@ -286,11 +286,24 @@ func (m *Model) exportTraceSession(id string) tea.Cmd {
 			return streamMsg(tr("trace.write_failed", err))
 		}
 
+		// Also emit an OpenTelemetry GenAI (OTLP/JSON) trace so the session
+		// can be imported into standard observability backends (Jaeger,
+		// Tempo, Langfuse, ...) without a custom converter. Failure to write
+		// this secondary artifact must not fail the primary export.
+		otelFilename := fmt.Sprintf("trace-%s.otel.json", sessionID)
+		otelData, err := metrics.ExportOTLPTrace(sessionID, vendor, endpoint, model, createdAt, events)
+		if err != nil {
+			debug.Log("tui", "build OTLP trace: %v", err)
+		} else if err := os.WriteFile(otelFilename, otelData, 0644); err != nil {
+			debug.Log("tui", "write OTLP trace: %v", err)
+		}
+
 		summary := metrics.Summarize(events)
 		return streamMsg(tr("trace.exported",
 			sessionID, filename,
 			summary.TurnCount, summary.LLMCallCount, summary.ToolCallCount,
-			summary.TotalInputTokens, summary.TotalOutputTokens))
+			summary.TotalInputTokens, summary.TotalOutputTokens,
+			otelFilename))
 	}
 }
 

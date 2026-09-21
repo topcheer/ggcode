@@ -646,7 +646,7 @@ func enCatalog(key string) string {
 	case "trace.no_metrics":
 		return "No metrics recorded for this session yet.\n\n"
 	case "trace.exported":
-		return "Exported trace for session %s to %s\n%d turns, %d LLM calls, %d tool calls\nTokens: %d in / %d out\n\n"
+		return "Exported trace for session %s to %s\n%d turns, %d LLM calls, %d tool calls\nTokens: %d in / %d out\nOpenTelemetry (OTLP/GenAI): %s\n\n"
 	case "checkpoint.disabled":
 		return "Checkpointing not enabled.\n\n"
 	case "rewind.activated":

@@ -98,7 +98,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/tmux` | Manage tmux session |
 | `/bug` | Report a bug |
 | `/reflect` | Trigger agent self-reflection on recent runs |
-| `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage) |
+| `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage); also writes an OpenTelemetry GenAI (OTLP/JSON) trace `trace-<session-id>.otel.json` importable by Jaeger/Tempo/Langfuse and other OTLP backends |
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
 | `/branch` / `/fork` | Branch/fork current session |
