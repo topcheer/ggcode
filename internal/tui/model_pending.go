@@ -252,9 +252,11 @@ type knightCancelSet struct {
 // handle (pointer identity - funcs are not comparable) the task uses to
 // deregister itself when it finishes.
 func (m *Model) registerKnightTask() (context.Context, *knightTaskHandle) {
-	if m.knightTasks == nil {
-		m.knightTasks = &knightCancelSet{}
-	}
+	// #2616: knightTasks is pre-built by NewModel (same pattern as
+	// imEnsureGuard, #1737). The former lazy nil-init here wrote the
+	// Update-local Model copy (Update is a value receiver; the tea.Cmd
+	// closure captured that copy), so registrations landed in a dead
+	// copy and cancelKnightTasks' nil check skipped cancelling anything.
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &knightTaskHandle{cancel: cancel}
 	m.knightTasks.mu.Lock()
