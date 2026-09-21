@@ -48,6 +48,9 @@ func newToolSearchTestAgent(t *testing.T, nMCP int) (*Agent, *tool.Registry) {
 // the meta-tool is handled agent-side without a registry lookup, and a
 // successful search feeds activation state seen by the next request.
 func TestAgentExecuteToolDispatchesToolSearch(t *testing.T) {
+	// Deferred disclosure is opt-in only (default-off ruling); enable it
+	// for the mechanism tests so they exercise the feature, not the default.
+	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold)
 	if !a.toolSearch.enabled {
 		t.Fatal("expected tool search enabled with threshold MCP tools")
@@ -149,6 +152,9 @@ func TestToolSearchBelowThresholdKeepsFullList(t *testing.T) {
 }
 
 func TestToolSearchDefersAndActivates(t *testing.T) {
+	// Deferred disclosure is opt-in only (default-off ruling); enable it
+	// for the mechanism tests so they exercise the feature, not the default.
+	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	s := newToolSearchState()
 	defs := toolSearchTestDefs(toolSearchThreshold+5, 3)
 	s.init(defs)
@@ -202,6 +208,9 @@ func TestToolSearchDefersAndActivates(t *testing.T) {
 }
 
 func TestToolSearchAutoActivateByName(t *testing.T) {
+	// Deferred disclosure is opt-in only (default-off ruling); enable it
+	// for the mechanism tests so they exercise the feature, not the default.
+	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	s := newToolSearchState()
 	defs := toolSearchTestDefs(toolSearchThreshold, 0)
 	s.init(defs)
@@ -291,6 +300,10 @@ func TestToolSearchRequiresQuery(t *testing.T) {
 // flags exactly the MCP schemas for defer_loading while built-ins stay
 // non-deferred (the API requires >=1 non-deferred tool).
 func TestServerToolSearchHandoff(t *testing.T) {
+	// Client-side deferred disclosure is opt-in only (default-off ruling
+	// 2026-09-21); this handoff test still exercises the client->server
+	// transition mechanics, so enable the client side explicitly.
+	t.Setenv("GGCODE_TOOL_SEARCH", "on")
 	a, reg := newToolSearchTestAgent(t, toolSearchThreshold)
 	if !a.toolSearch.enabled {
 		t.Fatal("expected client tool search enabled at threshold")
@@ -318,5 +331,21 @@ func TestServerToolSearchHandoff(t *testing.T) {
 	}
 	if nDeferred != toolSearchThreshold {
 		t.Fatalf("expected %d deferred MCP schemas, got %d", toolSearchThreshold, nDeferred)
+	}
+}
+
+// TestToolSearchDefaultOff pins the 2026-09-21 ruling: deferred MCP schema
+// disclosure must NOT ship by default - each tool_search lookup is a full
+// LLM round-trip, which costs far more than the upfront schemas it saves.
+// A registry above the threshold with no env opt-in must send the full list.
+func TestToolSearchDefaultOff(t *testing.T) {
+	a, reg := newToolSearchTestAgent(t, toolSearchThreshold+5)
+	if a.toolSearch.enabled {
+		t.Fatal("deferred disclosure must be off by default (ruling 2026-09-21)")
+	}
+	all := reg.ToDefinitions()
+	got := a.toolSearch.activeDefs(all)
+	if len(got) != len(all) {
+		t.Fatalf("default path must send the full list: got %d defs, want %d", len(got), len(all))
 	}
 }

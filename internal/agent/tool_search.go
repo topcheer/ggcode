@@ -28,10 +28,13 @@ import (
 //
 // Built-in tools are never deferred: file edit/read/search/run stay fully
 // available from the first turn, so the extra discovery round-trip only ever
-// applies to optional MCP integrations. The feature activates automatically
-// when the registry carries >= toolSearchThreshold MCP tools (smaller setups
-// keep the zero-round-trip behavior) and can be disabled with
-// GGCODE_TOOL_SEARCH=off.
+// applies to optional MCP integrations. OFF BY DEFAULT (user ruling,
+// 2026-09-21): the scheme saved a few tens of KB of schema tokens per turn
+// but each tool_search lookup is a FULL LLM round-trip (input = the whole
+// context re-billed), so 2-3 misses cost hundreds of KB - far more than
+// the schemas ever cost. Deferred disclosure now requires explicit opt-in
+// via GGCODE_TOOL_SEARCH=on, intended for registries so large the schemas
+// genuinely cannot fit.
 
 const (
 	// mcpToolPrefix is the registry naming convention for MCP-provided tools.
@@ -42,9 +45,16 @@ const (
 	// Registry.ToDefinitions and activation state stays per-agent.
 	ToolSearchToolName = "tool_search"
 
+	// toolSearchEnabledDefault controls whether deferred MCP schema
+	// disclosure ships by default. It does not - see the package ruling
+	// above. Keep false unless that ruling is revisited with round-trip
+	// cost data.
+	toolSearchEnabledDefault = false
+
 	// toolSearchThreshold is the minimum number of MCP tools before schemas
-	// are deferred. Below this the full list is sent (fewer round-trips beats
-	// token savings on small registries).
+	// may be deferred when the feature is explicitly enabled. Below this
+	// the full list is sent even opted in (fewer round-trips beats token
+	// savings on small registries).
 	toolSearchThreshold = 20
 
 	// toolSearchMaxResults caps schemas returned per search to bound the
@@ -88,7 +98,10 @@ func (s *toolSearchState) init(defs []provider.ToolDefinition) {
 			delete(s.activated, name)
 		}
 	}
-	s.enabled = len(deferred) >= toolSearchThreshold && !toolSearchEnvDisabled()
+	// Off by default (ruling above); GGCODE_TOOL_SEARCH=on can still opt a
+	// very large registry in, and =off force-disables either way.
+	s.enabled = (toolSearchEnabledDefault || toolSearchEnvEnabled()) &&
+		len(deferred) >= toolSearchThreshold && !toolSearchEnvDisabled()
 }
 
 // disable turns off the client-side meta-tool. Used when the provider's
@@ -111,6 +124,17 @@ func markServerDeferred(defs []provider.ToolDefinition) {
 			defs[i].DeferLoading = true
 		}
 	}
+}
+
+// toolSearchEnvEnabled reports the explicit opt-in: deferred disclosure
+// only runs when the user sets GGCODE_TOOL_SEARCH=on (see the package
+// header for the ruling).
+func toolSearchEnvEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GGCODE_TOOL_SEARCH"))) {
+	case "1", "on", "true", "yes":
+		return true
+	}
+	return false
 }
 
 func toolSearchEnvDisabled() bool {
