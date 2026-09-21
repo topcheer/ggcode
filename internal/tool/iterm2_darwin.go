@@ -468,6 +468,14 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 			ch := strings.ToUpper(key)
 			if ch[0] >= 'A' && ch[0] <= 'Z' {
 				data = string(rune(ch[0] - 'A' + 1))
+			} else {
+				// #2625: ctrl with a non-letter (digit, symbol) has no
+				// terminal representation; silently sending the bare key
+				// injected an unexpected character while the Result still
+				// claimed "ctrl+<key> sent" - a false success the agent
+				// builds on. Fail explicitly, aligned with kitty's
+				// sendKeyViaAction unsupported-combo error.
+				return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (ctrl is only supported with letters a-z)", modifiers, key)}
 			}
 		}
 		if strings.Contains(mods, "option") || strings.Contains(mods, "alt") {
