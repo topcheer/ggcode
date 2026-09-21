@@ -52,6 +52,11 @@ type ConfigHotReload struct {
 
 	baselines map[string]fileBaseline
 
+	// driftFn, when set, receives a user-facing notice whenever a watched
+	// file changes and the reload is applied (or skipped as invalid YAML).
+	// Called from the poll goroutine; must not block.
+	driftFn func(ConfigDriftNotice)
+
 	// polling (guarded by mu) is true while pollOnce runs. It lets tests
 	// observe that the poll loop has quiesced after ctx cancel, so temp-dir
 	// cleanup does not race an in-flight config.Load rewriting the file.
@@ -62,6 +67,7 @@ type ConfigHotReload struct {
 type fileBaseline struct {
 	exists bool
 	hash   string
+	keys   map[string]any // parsed top-level YAML keys, for drift diffing
 }
 
 // NewConfigHotReload creates the watcher. configPath is the ggcode.yaml the
@@ -73,6 +79,18 @@ func NewConfigHotReload(configPath string, access *configAccess) *ConfigHotReloa
 		access:      access,
 		interval:    2 * time.Second,
 		baselines:   make(map[string]fileBaseline),
+	}
+}
+
+// SetDriftNotifier registers the callback that receives user-facing drift
+// notices. Pass nil to disable. Call before Start.
+func (w *ConfigHotReload) SetDriftNotifier(fn func(ConfigDriftNotice)) {
+	w.driftFn = fn
+}
+
+func (w *ConfigHotReload) emitDrift(n ConfigDriftNotice) {
+	if w.driftFn != nil {
+		w.driftFn(n)
 	}
 }
 
@@ -118,6 +136,8 @@ func (w *ConfigHotReload) pollOnce() {
 		w.mu.Unlock()
 	}()
 
+	changedFile := ""
+	var driftOld, driftCur fileBaseline
 	changed := false
 	for _, p := range w.watchedFiles() {
 		cur := snapshotFile(p)
@@ -126,6 +146,12 @@ func (w *ConfigHotReload) pollOnce() {
 			w.baselines[p] = cur
 			if cur.exists {
 				changed = true
+				if changedFile == "" {
+					// When several watched files change in one poll, the
+					// notice reports the first; the reload itself is global.
+					changedFile = p
+					driftOld, driftCur = base, cur
+				}
 			}
 		}
 	}
@@ -138,10 +164,29 @@ func (w *ConfigHotReload) pollOnce() {
 		// Broken edit: keep the last good snapshot. The user's editor will
 		// show the YAML error on their side; we log it once per change.
 		debug.Log("config-hotreload", "reload skipped (invalid yaml): %v", err)
+		// Surface it too: until now a broken edit was invisible unless the
+		// user ran with debug logging enabled.
+		w.emitDrift(ConfigDriftNotice{At: time.Now(), File: changedFile, InvalidYAML: err.Error()})
 		return
 	}
 
 	w.applyFreshConfig(fresh)
+
+	// User-facing drift notice: name which keys went live and which keep
+	// the startup snapshot until restart. Comment-only rewrites (hash
+	// change, empty key diff) stay silent.
+	if changedFile != "" {
+		if changedKeys := diffTopLevelKeys(driftOld.keys, driftCur.keys); len(changedKeys) > 0 {
+			applied, restart := classifyDriftKeys(changedFile, changedKeys)
+			w.emitDrift(ConfigDriftNotice{
+				At:          time.Now(),
+				File:        changedFile,
+				ChangedKeys: changedKeys,
+				AppliedKeys: applied,
+				RestartKeys: restart,
+			})
+		}
+	}
 }
 
 // applyFreshConfig merges freshly-loaded config into the live session.
@@ -203,5 +248,11 @@ func snapshotFile(path string) fileBaseline {
 		return fileBaseline{exists: false}
 	}
 	sum := sha256.Sum256(data)
-	return fileBaseline{exists: true, hash: hex.EncodeToString(sum[:])}
+	b := fileBaseline{exists: true, hash: hex.EncodeToString(sum[:])}
+	// Keys are kept for drift diffing; a parse failure just leaves keys
+	// nil, which yields an empty diff (the notice stays silent).
+	if keys, kerr := yamlTopLevelMap(data); kerr == nil {
+		b.keys = keys
+	}
+	return b
 }

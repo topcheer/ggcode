@@ -1668,6 +1668,15 @@ func (r *REPL) Run() error {
 			})
 		}
 		if r.mcpMgr != nil {
+			// Surface ggcode.yaml drift to the user: ConfigHotReload applies
+			// only a conservative field set and was otherwise silent, so a
+			// mid-session edit looked like a no-op. The notice names which
+			// keys went live and which need a session restart.
+			if r.program != nil {
+				r.core.SetConfigDriftNotifier(func(n agentruntime.ConfigDriftNotice) {
+					r.program.Send(systemNotifyMsg{ItemID: "config-drift", Text: n.Message()})
+				})
+			}
 			start := time.Now()
 			r.core.StartBackgroundServices()
 			debug.Log("repl", "startup timing repl.mcp StartBackground duration=%s", time.Since(start).Round(time.Millisecond))

@@ -42,6 +42,7 @@ type InteractiveRuntimeCore struct {
 	mcpHotReload    *MCPHotReload
 	configHotReload *ConfigHotReload
 	skillHotReload  *SkillHotReload
+	configDriftFn   func(ConfigDriftNotice) // drift notices forwarded to the UI
 
 	// samplingProvider is THIS runtime's sampling provider (#1592-B) -
 	// bound via closure, never a package global.
@@ -154,6 +155,13 @@ func (c *InteractiveRuntimeCore) SetConfigUINotify(fn func()) {
 	}
 }
 
+// SetConfigDriftNotifier sets an optional callback that receives user-facing
+// notices when a watched config file changes mid-session (which keys were
+// applied live vs. need a restart). Safe to call before StartBackgroundServices.
+func (c *InteractiveRuntimeCore) SetConfigDriftNotifier(fn func(ConfigDriftNotice)) {
+	c.configDriftFn = fn
+}
+
 // StartBackgroundServices launches all background services: MCP connections, etc.
 // Must be called after UI callbacks are set (SetConfigUINotify, MCP OnUpdate, etc.)
 // so that status changes are forwarded to the UI layer.
@@ -179,6 +187,9 @@ func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 	// Start ggcode.yaml/vendors.yaml config hot-reload (#763).
 	if c.configAccess != nil && c.configPath != "" {
 		c.configHotReload = NewConfigHotReload(c.configPath, c.configAccess)
+		if c.configDriftFn != nil {
+			c.configHotReload.SetDriftNotifier(c.configDriftFn)
+		}
 		c.configHotReload.Start(c.mcpCtx)
 	}
 }
