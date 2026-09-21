@@ -63,24 +63,20 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 		return nil
 	}
 
-	// Context-fill-aware throttling: reduce or skip parallel pre-execution
-	// when the context window is under pressure. At 75%+ fill, a batch of
-	// 3 large results landing simultaneously could trigger compaction.
-	maxConcurrent := parallelMaxConcurrent
+	// Adaptive width (parallel_adaptive.go): combines context-fill pressure,
+	// heap-vs-GOMEMLIMIT pressure, a CPU-count cap and the EWMA of recent
+	// pre-exec failures into one width decision (0 = skip pre-exec; the
+	// sequential loop still runs every call, so skipping is always safe).
+	ctxFill := -1.0
 	if a.contextManager != nil {
 		if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
-			fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
-			switch {
-			case fillRatio >= contextFillCritical:
-				// Context critically full — skip pre-execution entirely.
-				debug.Log("parallel", "skipping pre-execution: context fill %.0f%%", fillRatio*100)
-				return nil
-			case fillRatio >= contextFillHigh:
-				// High fill — reduce to single tool at a time.
-				maxConcurrent = 1
-				debug.Log("parallel", "reduced pre-execution to 1: context fill %.0f%%", fillRatio*100)
-			}
+			ctxFill = float64(a.contextManager.TokenCount()) / float64(threshold)
 		}
+	}
+	maxConcurrent := preExecWidthCtl.width(ctxFill)
+	if maxConcurrent <= 0 {
+		debug.Log("parallel", "skipping pre-execution (adaptive width=0: ctxFill=%.2f errEMA=%.2f)", ctxFill, preExecWidthCtl.ema())
+		return nil
 	}
 
 	batch, ok := a.buildPreExecBatch(toolCalls)
@@ -95,6 +91,7 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 	results := make(map[int]preExecutedResult)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	var executed, failed int
 
 	for _, p := range batch {
 		wg.Add(1)
@@ -102,18 +99,24 @@ func (a *Agent) preExecuteReadOnlyTools(ctx context.Context, toolCalls []provide
 			defer wg.Done()
 			defer safego.Recover("agent.parallel.preExec")
 
-			result, dur, ok := a.preExecOne(ctx, p)
-			if !ok {
-				return
-			}
+			result, dur, outcome := a.preExecOne(ctx, p)
 			mu.Lock()
-			results[p.index] = preExecutedResult{result, dur}
+			switch outcome {
+			case preExecOK:
+				results[p.index] = preExecutedResult{result, dur}
+				executed++
+			case preExecFailed:
+				failed++
+			}
 			mu.Unlock()
-			debug.Log("parallel", "pre-executed %s in %v (index=%d)", p.name, dur, p.index)
+			if outcome == preExecOK {
+				debug.Log("parallel", "pre-executed %s in %v (index=%d)", p.name, dur, p.index)
+			}
 		}(p)
 	}
 
 	wg.Wait()
+	preExecWidthCtl.recordBatch(executed, failed)
 
 	if len(results) == 0 {
 		return nil
@@ -174,13 +177,13 @@ func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending
 // preExecOne speculatively executes a single read-only call with a short
 // timeout; failures are logged and dropped - the sequential loop re-executes
 // them, so a dropped speculative result is never visible to the model.
-func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Duration, bool) {
+func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Duration, preExecOutcome) {
 	if ctx.Err() != nil {
-		return tool.Result{}, 0, false
+		return tool.Result{}, 0, preExecCtxCanceled
 	}
 	t, ok := a.tools.Get(p.name)
 	if !ok {
-		return tool.Result{}, 0, false
+		return tool.Result{}, 0, preExecToolMissing
 	}
 	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -189,10 +192,22 @@ func (a *Agent) preExecOne(ctx context.Context, p pending) (tool.Result, time.Du
 	dur := time.Since(start)
 	if err != nil {
 		debug.Log("parallel", "parallel pre-exec %s failed: %v (after %v)", p.name, err, dur)
-		return tool.Result{}, dur, false
+		return tool.Result{}, dur, preExecFailed
 	}
-	return result, dur, true
+	return result, dur, preExecOK
 }
+
+// preExecOutcome classifies a pre-execution attempt. Only preExecFailed
+// feeds the adaptive failure EWMA: cancellation and missing-tool lookups
+// are harness state, not environment degradation.
+type preExecOutcome int
+
+const (
+	preExecOK preExecOutcome = iota
+	preExecCtxCanceled
+	preExecToolMissing
+	preExecFailed
+)
 
 // usePreExecutedWithPermission runs the permission check for a tool and,
 // if allowed, returns the pre-executed result. If permission is denied,
