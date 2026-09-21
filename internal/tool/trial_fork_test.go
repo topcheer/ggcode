@@ -301,3 +301,177 @@ func TestTrimSummary(t *testing.T) {
 		t.Fatalf("trimSummary produced %q (len %d)", got, len(got))
 	}
 }
+
+// judgeProvider wraps the no-op trial stub with a scripted reply for the
+// rollout-summary selection judge, counting how often it was consulted.
+type judgeProvider struct {
+	trialStubProvider
+	resp  string
+	err   error
+	calls int
+}
+
+func (p *judgeProvider) Chat(_ context.Context, _ []provider.Message, _ []provider.ToolDefinition) (*provider.ChatResponse, error) {
+	p.calls++
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &provider.ChatResponse{
+		Message: provider.Message{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: p.resp}}},
+		Usage:   provider.TokenUsage{InputTokens: 100, OutputTokens: 10},
+	}, nil
+}
+
+// TestTrialForkSummaryJudgeBreaksTie: with no verify command the mechanical
+// signals tie, so the rollout-summary judge must decide, and it may pick
+// trial 2 even though the mechanical heuristic would keep the earlier trial.
+func TestTrialForkSummaryJudgeBreaksTie(t *testing.T) {
+	root := initTrialRepo(t)
+	jp := &judgeProvider{resp: `{"winner": 2, "reason": "cleaner decomposition"}`}
+	tl := newTrialTool(root, nil)
+	tl.Provider = jp
+
+	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
+		Goal:           "add a marker file",
+		Strategies:     []string{"alpha way", "beta way"},
+		TimeoutSeconds: 120,
+	}))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success result, got error: %s", res.Content)
+	}
+	if jp.calls != 1 {
+		t.Fatalf("judge should be consulted exactly once, got %d calls", jp.calls)
+	}
+	if !strings.Contains(res.Content, "WINNER: trial 2") {
+		t.Fatalf("summary judge should pick trial 2:\n%s", res.Content)
+	}
+	if !strings.Contains(res.Content, "selection: rollout-summary judge") ||
+		!strings.Contains(res.Content, "cleaner decomposition") {
+		t.Fatalf("expected judge selection label and rationale:\n%s", res.Content)
+	}
+}
+
+// TestTrialForkSummaryJudgeFallback: an unparseable judge reply must fall
+// back to the mechanical winner (the earlier trial) without failing the run.
+func TestTrialForkSummaryJudgeFallback(t *testing.T) {
+	root := initTrialRepo(t)
+	jp := &judgeProvider{resp: "I would pick trial two, it feels more robust"}
+	tl := newTrialTool(root, nil)
+	tl.Provider = jp
+
+	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
+		Goal:           "add a marker file",
+		Strategies:     []string{"alpha way", "beta way"},
+		TimeoutSeconds: 120,
+	}))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success result, got error: %s", res.Content)
+	}
+	if jp.calls != 1 {
+		t.Fatalf("judge should be consulted exactly once, got %d calls", jp.calls)
+	}
+	if !strings.Contains(res.Content, "WINNER: trial 1") {
+		t.Fatalf("mechanical fallback should keep trial 1:\n%s", res.Content)
+	}
+	if !strings.Contains(res.Content, "selection: mechanical heuristic (summary judge unavailable)") {
+		t.Fatalf("expected fallback selection label:\n%s", res.Content)
+	}
+}
+
+// TestTrialForkJudgeSkippedOnDecisiveVerify: when the verify command yields a
+// unique passing trial, the judge must not be consulted at all (no extra
+// inference cost on the cheap path).
+func TestTrialForkJudgeSkippedOnDecisiveVerify(t *testing.T) {
+	root := initTrialRepo(t)
+	jp := &judgeProvider{resp: `{"winner": 2, "reason": "should not matter"}`}
+	tl := newTrialTool(root, nil)
+	tl.Provider = jp
+
+	// Only trial 1's branch name contains "-t1"; verify therefore passes
+	// there and fails in trial 2's worktree.
+	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
+		Goal:           "add a marker file",
+		Strategies:     []string{"alpha way", "beta way"},
+		VerifyCmd:      "git rev-parse --abbrev-ref HEAD | grep -q -- -t1",
+		TimeoutSeconds: 120,
+	}))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected success result, got error: %s", res.Content)
+	}
+	if jp.calls != 0 {
+		t.Fatalf("judge must be skipped when verification is decisive, got %d calls", jp.calls)
+	}
+	if !strings.Contains(res.Content, "WINNER: trial 1") ||
+		!strings.Contains(res.Content, "verification decisive") {
+		t.Fatalf("verified trial 1 should win mechanically:\n%s", res.Content)
+	}
+}
+
+// TestTrialForkAllFailedNoWinner: when every trial fails the report must not
+// crown a winner.
+func TestTrialForkAllFailedNoWinner(t *testing.T) {
+	root := initTrialRepo(t)
+	tl := newTrialTool(root, nil)
+	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
+		Goal:           "impossible goal",
+		Strategies:     []string{"fail-now-1", "fail-now-2"},
+		TimeoutSeconds: 120,
+	}))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("all-failed trials should be an error result:\n%s", res.Content)
+	}
+	if strings.Contains(res.Content, "WINNER") {
+		t.Fatalf("no winner must be reported when all trials failed:\n%s", res.Content)
+	}
+}
+
+// TestParseJudgeVerdict covers prose-wrapped, out-of-range, and malformed
+// judge verdicts.
+func TestParseJudgeVerdict(t *testing.T) {
+	idx, reason, err := parseJudgeVerdict("Sure! {\"winner\": 2, \"reason\": \"ok then\"} thanks", 3)
+	if err != nil || idx != 1 || reason != "ok then" {
+		t.Fatalf("idx=%d reason=%q err=%v", idx, reason, err)
+	}
+	if _, _, err := parseJudgeVerdict(`{"winner": 4}`, 3); err == nil {
+		t.Fatal("out-of-range winner must error")
+	}
+	if _, _, err := parseJudgeVerdict("no json at all", 3); err == nil {
+		t.Fatal("missing JSON must error")
+	}
+	if _, _, err := parseJudgeVerdict(`{"winner": "two"}`, 3); err == nil {
+		t.Fatal("non-integer winner must error")
+	}
+}
+
+// TestSummarySelectionNeeded pins the cheap-path rules.
+func TestSummarySelectionNeeded(t *testing.T) {
+	if !summarySelectionNeeded([]trialResult{{Status: "completed", Commits: 1}}) {
+		t.Fatal("no verification ran: summary selection needed")
+	}
+	tie := []trialResult{
+		{Status: "completed", Commits: 1, VerifyRun: true, VerifyPass: true},
+		{Status: "completed", Commits: 1, VerifyRun: true, VerifyPass: true},
+	}
+	if !summarySelectionNeeded(tie) {
+		t.Fatal("tied top score: summary selection needed")
+	}
+	decisive := []trialResult{
+		{Status: "completed", Commits: 1, VerifyRun: true, VerifyPass: false},
+		{Status: "completed", Commits: 1, VerifyRun: true, VerifyPass: true},
+	}
+	if summarySelectionNeeded(decisive) {
+		t.Fatal("decisive verification: mechanical path suffices")
+	}
+}

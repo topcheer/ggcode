@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -39,6 +40,10 @@ const (
 	trialForkDefaultTimout = 10 * time.Minute
 	trialForkVerifyCap     = 5 * time.Minute
 	trialForkSummaryMax    = 600
+	// summaryJudgeTimeout bounds the single extra LLM call used for
+	// rollout-summary selection. Short on purpose: selection must never
+	// dominate the wall-clock cost of the trials it ranks.
+	summaryJudgeTimeout = 60 * time.Second
 )
 
 // trialForkBlockedTools are session-level tools a trial sub-agent must never
@@ -229,11 +234,11 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		t.progress(ctx, fmt.Sprintf("trial %d/%d: %s (verify %s)", res.Index, len(results), res.Status, trialVerifyLabel(*res)))
 	}
 
-	winner := pickWinner(results)
+	verdict := t.selectWinner(ctx, results, in.Goal)
 	keep := -1
-	if winner >= 0 && results[winner].Commits > 0 {
-		keep = winner
-		results[winner].Kept = true
+	if verdict.winner >= 0 && results[verdict.winner].Commits > 0 {
+		keep = verdict.winner
+		results[verdict.winner].Kept = true
 	}
 	t.cleanupWorktrees(root, dirs, keep)
 
@@ -243,7 +248,7 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			anyUsable = true
 		}
 	}
-	report := formatTrialReport(base, in.VerifyCmd, results, winner)
+	report := formatTrialReport(base, in.VerifyCmd, results, verdict)
 	return Result{IsError: !anyUsable, Content: report}, nil
 }
 
@@ -408,6 +413,151 @@ func pickWinner(results []trialResult) int {
 	return best
 }
 
+// selectWinner combines the mechanical ranking with rollout-summary selection
+// (arXiv 2604.16529, "Scaling Test-Time Compute for Agentic Coding":
+// long-horizon agent trajectories are best compared through compact rollout
+// summaries rather than raw signals). The judge is consulted only when the
+// mechanical signals cannot discriminate: no verification command ran at all,
+// or the top score is shared by multiple trials. Every judge failure falls
+// back to the mechanical winner, so selection never blocks on the extra call.
+// Returns the winner index (or -1 when no trial produced usable work), a
+// human-readable selection label for the report, and the judge rationale.
+type trialVerdict struct {
+	winner    int    // 0-based index into results; -1 = no usable trial
+	selection string // human-readable label of the selection method
+	reason    string // judge rationale when a summary judge decided
+}
+
+func (t *TrialForkTool) selectWinner(ctx context.Context, results []trialResult, goal string) trialVerdict {
+	mech := pickWinner(results)
+	completed := 0
+	for _, r := range results {
+		if r.Status == "completed" {
+			completed++
+		}
+	}
+	if mech < 0 || completed == 0 {
+		// Nothing usable was produced: report no winner instead of
+		// crowning the first failure.
+		return trialVerdict{winner: -1}
+	}
+	if !summarySelectionNeeded(results) {
+		return trialVerdict{winner: mech, selection: "mechanical heuristic (verification decisive)"}
+	}
+	idx, reason, err := t.judgeBySummary(ctx, goal, results)
+	if err != nil {
+		debug.Log("tool", "trial_fork: rollout-summary judge unavailable, using mechanical winner: %v", err)
+		return trialVerdict{winner: mech, selection: "mechanical heuristic (summary judge unavailable)"}
+	}
+	if idx < 0 || idx >= len(results) || results[idx].Status != "completed" ||
+		(results[idx].Commits == 0 && !results[idx].VerifyPass) {
+		return trialVerdict{winner: mech, selection: "mechanical heuristic (judge picked unusable trial)"}
+	}
+	if idx == mech {
+		return trialVerdict{winner: mech, selection: "mechanical heuristic (summary judge concurs)"}
+	}
+	return trialVerdict{winner: idx, selection: "rollout-summary judge", reason: reason}
+}
+
+// summarySelectionNeeded reports whether the mechanical signals alone cannot
+// pick a winner: either verification never ran (the remaining signals,
+// commit count / file count / tree cleanliness, are weak proxies for goal
+// completion), or several trials share the top score.
+func summarySelectionNeeded(results []trialResult) bool {
+	verified := false
+	for _, r := range results {
+		if r.VerifyRun {
+			verified = true
+			break
+		}
+	}
+	if !verified {
+		return true
+	}
+	top, count := -1, 0
+	for i := range results {
+		if s := scoreTrial(results[i]); s > top {
+			top, count = s, 1
+		} else if s == top {
+			count++
+		}
+	}
+	return count > 1
+}
+
+// judgeBySummary makes the single extra LLM call that compares the trials'
+// rollout summaries against the goal and returns the 0-based winning index.
+func (t *TrialForkTool) judgeBySummary(ctx context.Context, goal string, results []trialResult) (int, string, error) {
+	if t.Provider == nil {
+		return -1, "", errors.New("no provider available for summary judge")
+	}
+	jctx, cancel := context.WithTimeout(ctx, summaryJudgeTimeout)
+	defer cancel()
+	msgs := []provider.Message{
+		{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: trialJudgeSystemPrompt}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: trialJudgeUserPrompt(goal, results)}}},
+	}
+	resp, err := t.Provider.Chat(jctx, msgs, nil)
+	if err != nil {
+		return -1, "", err
+	}
+	if resp == nil {
+		return -1, "", errors.New("empty judge response")
+	}
+	if u := resp.Usage; u.Total() > 0 && t.OnUsage != nil {
+		t.OnUsage(u)
+	}
+	var sb strings.Builder
+	for _, b := range resp.Message.Content {
+		if b.Type == "text" {
+			sb.WriteString(b.Text)
+		}
+	}
+	return parseJudgeVerdict(sb.String(), len(results))
+}
+
+// trialJudgeSystemPrompt pins the judge to a strict JSON verdict over the
+// compact rollout summaries; no tools, no prose.
+const trialJudgeSystemPrompt = `You are the selection judge for parallel implementation trials of one coding goal. Each trial was executed by an autonomous coding agent in its own git worktree; you receive its compact rollout summary. Compare the trials on goal completeness, technical soundness, and risk of hidden breakage. Do not reward verbosity or scope creep. Answer with ONLY a JSON object, no prose around it, in the exact form {"winner": <trial number>, "reason": "<at most 2 sentences>"}. The trial number must be the 1-based index of one of the listed trials.`
+
+// trialJudgeUserPrompt renders the goal plus one compact block per trial.
+func trialJudgeUserPrompt(goal string, results []trialResult) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "GOAL:\n%s\n\nTRIALS:\n", goal)
+	for _, r := range results {
+		fmt.Fprintf(&sb, "\nTrial %d: %q\n", r.Index, r.Strategy)
+		fmt.Fprintf(&sb, "status: %s | commits: %d | files changed: %d | verify: %s\n",
+			r.Status, r.Commits, r.Files, trialVerifyLabel(r))
+		if r.ErrMsg != "" {
+			fmt.Fprintf(&sb, "error: %s\n", trimSummary(r.ErrMsg, 160))
+		}
+		fmt.Fprintf(&sb, "rollout summary: %s\n", r.Summary)
+	}
+	sb.WriteString("\nSelect the winning trial. Answer ONLY the JSON object.\n")
+	return sb.String()
+}
+
+// parseJudgeVerdict extracts {"winner": n, "reason": "..."} from a judge
+// response that may be wrapped in prose or code fences. Winner is 1-based.
+func parseJudgeVerdict(text string, n int) (int, string, error) {
+	start := strings.IndexByte(text, '{')
+	end := strings.LastIndexByte(text, '}')
+	if start < 0 || end <= start {
+		return -1, "", errors.New("no JSON object in judge response")
+	}
+	var v struct {
+		Winner int    `json:"winner"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+		return -1, "", fmt.Errorf("judge response is not valid JSON: %w", err)
+	}
+	if v.Winner < 1 || v.Winner > n {
+		return -1, "", fmt.Errorf("judge winner %d out of range 1..%d", v.Winner, n)
+	}
+	return v.Winner - 1, strings.TrimSpace(v.Reason), nil
+}
+
 // progress pushes an intermediate update to the TUI when one is attached.
 func (t *TrialForkTool) progress(ctx context.Context, msg string) {
 	if fn, ok := ctx.Value(ToolProgressKey{}).(ToolProgressFunc); ok && fn != nil {
@@ -438,7 +588,8 @@ func trimSummary(s string, max int) string {
 	return cut + "…"
 }
 
-func formatTrialReport(base, verifyCmd string, results []trialResult, winner int) string {
+func formatTrialReport(base, verifyCmd string, results []trialResult, verdict trialVerdict) string {
+	winner, selection, selReason := verdict.winner, verdict.selection, verdict.reason
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Trial fork complete: %d trials forked from %s\n", len(results), abbrevSHA(base))
 	if verifyCmd != "" {
@@ -474,6 +625,12 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 	} else {
 		w := results[winner]
 		fmt.Fprintf(&sb, "\nWINNER: trial %d (branch %s)\n", w.Index, w.Branch)
+		if selection != "" {
+			fmt.Fprintf(&sb, "selection: %s\n", selection)
+		}
+		if selReason != "" {
+			fmt.Fprintf(&sb, "rationale: %s\n", trimSummary(selReason, 200))
+		}
 		if w.Kept {
 			fmt.Fprintf(&sb, "winner worktree kept for inspection: %s\n", w.Worktree)
 		}
