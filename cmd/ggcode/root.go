@@ -748,11 +748,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if err != nil {
 			debug.Log("root", "ListForWorkspace error: %v", err)
 		}
+		lockFailures := 0
 		if len(sessions) > 0 {
 			storeDir, _ := session.DefaultDir()
 			for _, ses := range sessions {
 				lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
-				if lockErr == nil && lock != nil && lock.Acquired() {
+				if lockErr != nil {
+					// #2623: auto-load counterpart of the #1487-D explicit-resume
+					// fix - an IO/permission failure acquiring a lock is NOT a
+					// competing instance. Log the real cause so the summary
+					// message below can distinguish it.
+					debug.Log("root", "auto-load lock check failed for session %s: %v", ses.ID, lockErr)
+					lockFailures++
+					continue
+				}
+				if lock != nil && lock.Acquired() {
 					replPendingSessionLock = lock
 					resumeID = ses.ID
 					trace.Mark("auto-load session")
@@ -760,7 +770,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 				}
 			}
 			if resumeID == "" {
-				fmt.Fprintf(os.Stderr, "\n  All %d workspace session(s) are in use by other instances. Starting a new session.\n", len(sessions))
+				// #2623: mirror the #1487-D three-way distinction - when any lock
+				// check failed for IO reasons, saying "in use by other instances"
+				// sends the user hunting for processes that do not exist.
+				fmt.Fprintf(os.Stderr, "%s\n", autoLoadLockSummaryMessage(lockFailures, len(sessions)))
 			}
 		}
 	}
@@ -951,7 +964,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			CommandMgr:       commandMgr,
 			GlobalAutoMem:    autoMem,
 			ProjectAutoMem:   projectAutoMem,
-			GitStatus:        func() string { return gitStatus },
+			GitStatus:        func() string { return detectGitStatus(workingDir) }, // #2624: fresh per spawn - a startup snapshot never sees branch switches
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
 	})
@@ -1535,6 +1548,18 @@ func writerIsTerminal(w io.Writer) bool {
 		return false
 	}
 	return term.IsTerminal(int(fder.Fd()))
+}
+
+// autoLoadLockSummaryMessage renders the auto-load failure summary (#2623).
+// lockFailures counts sessions whose lock check failed with an IO/permission
+// error (NOT a competing instance); total is the number of candidate
+// sessions examined. The message must not claim other instances exist when
+// the real cause was an IO failure (the #1487-D sister-path mistake).
+func autoLoadLockSummaryMessage(lockFailures, total int) string {
+	if lockFailures > 0 {
+		return fmt.Sprintf("\n  Could not check %d of %d workspace session(s) (lock I/O error; see debug log). Starting a new session.", lockFailures, total)
+	}
+	return fmt.Sprintf("\n  All %d workspace session(s) are in use by other instances. Starting a new session.", total)
 }
 
 // parseA2AMaxTasks guards the A2A task cap. #1422-A: on a first-run
