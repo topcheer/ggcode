@@ -29,10 +29,11 @@ type HealthReport struct {
 	BudgetPercent int // percentage of maxTotalInlineBytes used
 
 	// Staleness signals
-	StaleBrokenPaths   int
-	StaleBrokenSymbols int
-	StaleOversized     int
-	StaleAncient       int
+	StaleBrokenPaths    int
+	StaleBrokenSymbols  int
+	StaleOversized      int
+	StaleAncient        int
+	StaleProbeTruncated bool // symbol probe hit a scan cap; broken-symbol check was skipped (#2621)
 
 	// Newest and oldest entry ages
 	OldestDays int
@@ -101,6 +102,7 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	report.StaleBrokenSymbols = stale.BrokenSymbols
 	report.StaleOversized = stale.Oversized
 	report.StaleAncient = stale.Ancient
+	report.StaleProbeTruncated = stale.ProbeTruncated
 
 	// Duplicate group detection (same dedup key among active entries).
 	report.DuplicateGroups = countDuplicateGroups(active)
@@ -145,6 +147,11 @@ func (r HealthReport) FormatHealthReport() string {
 	if r.StaleBrokenSymbols > 0 {
 		sb.WriteString(fmt.Sprintf("  [STALE] %d entries reference code symbols absent from the workspace\n", r.StaleBrokenSymbols))
 		warnings++
+	}
+	if r.StaleProbeTruncated {
+		// Downgrade note, not a warning (#2621): nothing was verified as
+		// broken, the scan just could not cover the whole workspace.
+		sb.WriteString("  [NOTE] symbol probe truncated (workspace exceeded scan caps); broken-symbol check skipped this run\n")
 	}
 	if r.StaleOversized > 0 {
 		sb.WriteString(fmt.Sprintf("  [OVERSIZED] %d entries exceed inline size limit\n", r.StaleOversized))

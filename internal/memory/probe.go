@@ -32,12 +32,17 @@ const (
 	// maxProbeIdentsPerEntry caps identifier extraction per memory entry
 	// so one verbose entry cannot dominate a scan.
 	maxProbeIdentsPerEntry = 12
-	// maxProbeFiles bounds the workspace walk per scan.
-	maxProbeFiles = 20000
 	// maxProbeFileBytes caps the size of a single file read.
 	maxProbeFileBytes = 1 << 20 // 1MB
+)
+
+// Workspace-scan caps are vars so tests can inject tiny values and force
+// the truncation paths (#2621). Production code must not mutate them.
+var (
+	// maxProbeFiles bounds the workspace walk per scan.
+	maxProbeFiles = 20000
 	// maxProbeTotalBytes bounds the total bytes read per scan.
-	maxProbeTotalBytes = 48 << 20 // 48MB
+	maxProbeTotalBytes int64 = 48 << 20 // 48MB
 )
 
 // probeCodeExts lists file extensions eligible for identifier probing.
@@ -150,11 +155,13 @@ func isIdentByte(c byte) bool {
 // probeWorkspaceIdents scans the workspace under workingDir (read-only,
 // bounded) and reports which of the wanted identifiers were found. The
 // scan stops early once every identifier is found or a cap is hit.
-// filesScanned is returned for diagnostics.
-func probeWorkspaceIdents(workingDir string, wanted map[string]struct{}) (found map[string]bool, filesScanned int) {
+// filesScanned is returned for diagnostics. truncated reports whether a
+// cap stopped the walk before the whole workspace was examined; when it
+// is true, a missing identifier means "unverified", not "absent" (#2621).
+func probeWorkspaceIdents(workingDir string, wanted map[string]struct{}) (found map[string]bool, filesScanned int, truncated bool) {
 	found = make(map[string]bool, len(wanted))
 	if len(wanted) == 0 || workingDir == "" {
-		return found, 0
+		return found, 0, false
 	}
 
 	var walked int
@@ -170,6 +177,8 @@ func probeWorkspaceIdents(workingDir string, wanted map[string]struct{}) (found 
 			return nil
 		}
 		if walked >= maxProbeFiles {
+			debug.Log("memory", "symbol probe: file cap hit (%d files)", walked)
+			truncated = true
 			return fs.SkipAll
 		}
 		if !probeCodeExts[strings.ToLower(filepath.Ext(path))] {
@@ -185,6 +194,7 @@ func probeWorkspaceIdents(workingDir string, wanted map[string]struct{}) (found 
 		totalBytes += info.Size()
 		if totalBytes > maxProbeTotalBytes {
 			debug.Log("memory", "symbol probe: total byte cap hit at %s (%d files)", path, walked)
+			truncated = true
 			return fs.SkipAll
 		}
 		data, err := os.ReadFile(path)
@@ -204,7 +214,7 @@ func probeWorkspaceIdents(workingDir string, wanted map[string]struct{}) (found 
 		return nil
 	})
 
-	debug.Log("memory", "symbol probe: %d/%d identifiers found in %d files under %s",
-		len(found), len(wanted), walked, workingDir)
-	return found, walked
+	debug.Log("memory", "symbol probe: %d/%d identifiers found in %d files under %s (truncated=%v)",
+		len(found), len(wanted), walked, workingDir, truncated)
+	return found, walked, truncated
 }

@@ -20,13 +20,14 @@ type StaleFinding struct {
 
 // StaleReport holds the results of a staleness scan.
 type StaleReport struct {
-	Scanned       int
-	BrokenPaths   int
-	BrokenSymbols int
-	ProbedFiles   int // workspace files scanned for symbol verification
-	Oversized     int
-	Ancient       int
-	Findings      []StaleFinding
+	Scanned        int
+	BrokenPaths    int
+	BrokenSymbols  int
+	ProbedFiles    int  // workspace files scanned for symbol verification
+	ProbeTruncated bool // symbol probe hit a scan cap; broken-symbol findings were skipped as unverified (#2621)
+	Oversized      int
+	Ancient        int
+	Findings       []StaleFinding
 }
 
 // HasFindings reports whether any staleness signals were detected.
@@ -137,8 +138,17 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 				wanted[id] = struct{}{}
 			}
 		}
-		found, scanned := probeWorkspaceIdents(workingDir, wanted)
+		found, scanned, truncated := probeWorkspaceIdents(workingDir, wanted)
 		report.ProbedFiles = scanned
+		report.ProbeTruncated = truncated
+		if truncated {
+			// #2621: a cap-truncated scan proves nothing about symbols in
+			// the unscanned remainder. Not-found here means "unverified",
+			// not "absent"; emitting broken-symbol findings would persist
+			// false positives into consolidation.
+			debug.Log("memory", "symbol probe truncated after %d files; skipping broken-symbol findings", scanned)
+			return report
+		}
 		for _, it := range probeItems {
 			var missing []string
 			for _, id := range it.idents {

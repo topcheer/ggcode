@@ -137,4 +137,89 @@ func TestScanStalenessAllSymbolsFound(t *testing.T) {
 	if report.BrokenSymbols != 0 {
 		t.Errorf("expected 0 broken-symbol findings, got %d", report.BrokenSymbols)
 	}
+	if report.ProbeTruncated {
+		t.Error("complete scan must not report truncation")
+	}
+}
+
+func TestProbeWorkspaceIdentsTruncationSignal(t *testing.T) {
+	// #2621: every cap-driven SkipAll must surface a truncated signal so
+	// callers can tell "confirmed absent" from "never scanned".
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc alphaOne() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "b.go"), []byte("package b\nfunc betaTwo() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// File cap fires before any file is read.
+	oldFiles := maxProbeFiles
+	oldBytes := maxProbeTotalBytes
+	defer func() {
+		maxProbeFiles = oldFiles
+		maxProbeTotalBytes = oldBytes
+	}()
+	maxProbeFiles = 0
+	found, scanned, truncated := probeWorkspaceIdents(dir, map[string]struct{}{"alphaOne": {}})
+	maxProbeFiles = oldFiles
+	if !truncated || scanned != 0 || found["alphaOne"] {
+		t.Fatalf("file cap: truncated=%v scanned=%d found=%v", truncated, scanned, found)
+	}
+
+	// Byte cap fires on the first file, so sub/b.go is never scanned.
+	maxProbeTotalBytes = 1
+	found, _, truncated = probeWorkspaceIdents(dir, map[string]struct{}{"betaTwo": {}})
+	maxProbeTotalBytes = oldBytes
+	if !truncated || found["betaTwo"] {
+		t.Fatalf("byte cap: truncated=%v found=%v", truncated, found)
+	}
+
+	// Early exit once every identifier is found is success, not truncation.
+	found, _, truncated = probeWorkspaceIdents(dir, map[string]struct{}{"alphaOne": {}})
+	if truncated || !found["alphaOne"] {
+		t.Fatalf("complete scan: truncated=%v found=%v", truncated, found)
+	}
+}
+
+func TestScanStalenessTruncatedProbeSkipsBrokenSymbol(t *testing.T) {
+	// #2621 regression: a cap-truncated probe must not record
+	// broken-symbol findings for identifiers that were simply never
+	// scanned (the symbol lives in a lexically later directory).
+	workingDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workingDir, "a"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workingDir, "z"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDir, "a", "filler.go"), []byte("package a\nfunc fillerThing() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDir, "z", "real.go"), []byte("package z\nfunc realSymbolName() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	am := &AutoMemory{dir: t.TempDir()}
+	am.SaveMemory("probe-cap", "Always call `realSymbolName` before exit.")
+
+	oldBytes := maxProbeTotalBytes
+	maxProbeTotalBytes = 1 // a/filler.go alone blows the cap; z/ is never reached
+	defer func() { maxProbeTotalBytes = oldBytes }()
+
+	report := am.ScanStaleness(workingDir)
+	if !report.ProbeTruncated {
+		t.Fatal("expected ProbeTruncated=true when the byte cap stops the walk")
+	}
+	if report.BrokenSymbols != 0 {
+		t.Fatalf("truncated scan must not emit broken-symbol findings, got %d", report.BrokenSymbols)
+	}
+	for _, f := range report.Findings {
+		if f.Reason == "broken-symbol" {
+			t.Fatalf("truncated scan emitted a broken-symbol finding for %s", f.Key)
+		}
+	}
 }

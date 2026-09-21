@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -101,5 +103,36 @@ func TestHealthReportBrokenSymbols(t *testing.T) {
 	output := report.FormatHealthReport()
 	if !strings.Contains(output, "code symbols absent from the workspace") {
 		t.Errorf("expected stale symbol warning in formatted report, got: %s", output)
+	}
+}
+
+func TestHealthReportProbeTruncated(t *testing.T) {
+	// #2621: truncation must surface in the report as a downgrade note,
+	// never as broken-symbol warnings.
+	workingDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workingDir, "a"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDir, "a", "filler.go"), []byte("package a\nfunc fillerThing() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	am := &AutoMemory{dir: t.TempDir()}
+	am.SaveMemory("probe-cap", "Always call `realSymbolName` before exit.")
+
+	oldBytes := maxProbeTotalBytes
+	maxProbeTotalBytes = 1
+	defer func() { maxProbeTotalBytes = oldBytes }()
+
+	report := am.HealthReport(workingDir)
+	if !report.StaleProbeTruncated {
+		t.Fatal("expected StaleProbeTruncated wired from the staleness scan")
+	}
+	output := report.FormatHealthReport()
+	if !strings.Contains(output, "truncated") {
+		t.Fatalf("expected truncation note in report, got: %s", output)
+	}
+	if strings.Contains(output, "code symbols absent") {
+		t.Fatalf("truncated scan must not report broken symbols, got: %s", output)
 	}
 }
