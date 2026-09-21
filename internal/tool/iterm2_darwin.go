@@ -464,10 +464,16 @@ func (t *Iterm2Tool) executeSendKey(ctx context.Context, sessionID, key, modifie
 		data = key
 		mods := strings.ToLower(modifiers)
 		if strings.Contains(mods, "control") || strings.Contains(mods, "ctrl") {
-			// Ctrl+letter → control code
+			// Ctrl+letter → control code. #2625: ctrl only composes with
+			// letters - a non-letter key used to silently drop the modifier
+			// and write the bare character to the TTY while reporting
+			// "ctrl+1" as sent (fake success, the #1692/#2598 family).
+			// Fail loudly like the kitty side (sendKeyViaAction) does.
 			ch := strings.ToUpper(key)
 			if ch[0] >= 'A' && ch[0] <= 'Z' {
 				data = string(rune(ch[0] - 'A' + 1))
+			} else {
+				return Result{IsError: true, Content: fmt.Sprintf("iterm2 send_key: unsupported key combo: %s+%s (ctrl is only supported with letters a-z)", modifiers, key)}
 			}
 		}
 		if strings.Contains(mods, "option") || strings.Contains(mods, "alt") {
