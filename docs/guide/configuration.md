@@ -24,6 +24,7 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `vendor` | string | Provider vendor name (e.g. `openai`, `anthropic`, `google`, `deepseek`) |
 | `endpoint` | string | Named endpoint key within the vendor (e.g. `default`, NOT a URL) |
 | `model` | string | Model override (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
+| `aux_model` | string | Small model for auxiliary one-shot tasks (session title generation today). Falls back to the vendor's built-in small-model default when set; both unset = aux routing off. See [Auxiliary Model Routing](#auxiliary-model-routing). |
 | `api_key` | string | API key (use `${ENV_VAR}` syntax; stored in `keys.env`) |
 | `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
 | `language` | string | Interface language: `en` or `zh-CN` |
@@ -32,6 +33,22 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `tool_call_budget` | int | Max total tool calls per agent run. Warnings at 80%/95%, hard stop at 100%. When unset, auto-derived from `max_iterations` (x8), or 500 for unlimited. |
 | `output_style` | string | Response verbosity: `default`, `concise` (terse), `detailed` (reasoning + context), `socratic` (guided learning). Default: `default`. Cycle at runtime with `Ctrl+O` or `/style`. |
 | `allowed_dirs` | []string | Directories the agent may access |
+
+## Auxiliary Model Routing
+
+Auxiliary one-shot tasks (session title generation today) can run on a cheap "small" model instead of your main coding model — the same account-level pattern Claude Code uses for Haiku side-calls. This saves main-model tokens and latency without touching the agent loop.
+
+```yaml
+aux_model: claude-haiku-4-5        # explicit small model id
+```
+
+Resolution order:
+
+1. `aux_model` config key (highest priority)
+2. The vendor's built-in small-model default (generated from models.dev; currently only `xiaomi-mimo` ships one: `MiMo-V2.5`)
+3. Neither set → aux routing is off, deterministic heuristics stay in charge
+
+The aux call reuses your configured vendor/endpoint and API key — only the model changes. Failures are silent: the session keeps its existing title, and titles you set with `/title` are never overwritten.
 
 ## Vendors & Endpoints
 

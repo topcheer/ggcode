@@ -80,6 +80,9 @@ type REPL struct {
 	cronScheduler       *cron.Scheduler
 	currentSessionMu    sync.RWMutex
 	currentSession      *session.Session // thread-safe, updated by setCurrentSession
+	// auxTitleTried remembers sessions that already attempted the
+	// aux-model title upgrade (at most one background call per session).
+	auxTitleTried sync.Map
 	// Port file management (issue #1189)
 	initialSessionID string // session ID used for initial port file write (empty for new sessions)
 	portFileMode     string // startup permission mode from config
@@ -1599,6 +1602,10 @@ func (r *REPL) Run() error {
 			if err := jsonlStore.AppendMessageToDisk(ses, msg); err != nil {
 				debug.Log("tui", "persist handler: AppendMessageToDisk failed: %v", err)
 			}
+		}
+		// Aux-model session title upgrade (once per session, background).
+		if msg.Role == "user" {
+			r.maybeScheduleAuxTitle(msg)
 		}
 	})
 

@@ -351,6 +351,12 @@ type Config struct {
 	// keeps sampling ON (backward compat); a per-minute rate cap applies
 	// regardless (see mcp_sampling.go).
 	MCPSamplingDisabled bool `yaml:"mcp_sampling_disabled,omitempty" json:"mcp_sampling_disabled,omitempty"`
+	// AuxModel routes cheap auxiliary one-shot LLM tasks (session title
+	// generation today) to a small model instead of the main coding model.
+	// Empty falls back to the vendor's models.dev small-model default
+	// (xiaomi-mimo ships one); both empty keeps aux routing off and the
+	// deterministic heuristics in charge. See agentruntime/aux_model.go.
+	AuxModel string `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
 	// DeletedMCPServers records user-deleted MCP server names (tombstones).
 	// External apps (e.g. Pen.app) rewrite their Claude registration files
 	// (~/.claude.json) behind our back; without a tombstone the startup/panel
