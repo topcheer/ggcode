@@ -228,6 +228,10 @@ var builtinEndpointFallback = map[string][]string{
 	"anthropic": {"https://api.anthropic.com"},
 }
 
+// main orchestrates the sync phases (#2614: was a 176-line monolith at
+// cyclomatic complexity 32; each phase now lives in its own function -
+// collectProviders / mergeLocalProviders / generate+guard / writeOutputs -
+// with the fail-stop and shrink-guard semantics moved verbatim).
 func main() {
 	dryRun := flag.Bool("dry-run", false, "Print to stdout instead of writing file")
 	forceShrink := flag.Bool("force", false, "Allow >20%% entry-count shrinkage (checked against the existing output file)")
@@ -235,16 +239,32 @@ func main() {
 	flag.Parse()
 
 	// 1. Fetch models.dev api.json (single source of truth).
-	var allEntries []modelEntry
-	var sections []string            // ordered section names for output
-	var providers []*catwalkProvider // save for vendor_defaults.go
-
 	doc, err := fetchModelsDev()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: fetch models.dev: %v\n", err)
 		os.Exit(1)
 	}
 
+	providers, sections, allEntries := collectProviders(doc)
+	fmt.Fprintf(os.Stderr, "\nTotal models: %d\n\n", len(allEntries))
+
+	// 1b. Merge local-only providers (see localProviders doc comment).
+	providers, sections, allEntries = mergeLocalProviders(providers, sections, allEntries)
+	fmt.Fprintf(os.Stderr, "\nFinal total models: %d\n\n", len(allEntries))
+
+	// 2. Generate Go source code.
+	code := generateGoCode(allEntries, sections)
+	vdCode := generateVendorDefaults(providers)
+
+	// 3+4. Shrink guard, then write both outputs.
+	writeOutputs(code, vdCode, *output, allEntries, *dryRun, *forceShrink)
+}
+
+// collectProviders adapts every desired upstream provider from the
+// models.dev doc (#2614: phase 1 of the old monolithic main). Preserves
+// the #1668 case-2 fail-stop: a desired provider yielding zero usable
+// entries aborts the whole run to protect the existing tables.
+func collectProviders(doc *modelsDevDoc) (providers []*catwalkProvider, sections []string, allEntries []modelEntry) {
 	// Deterministic output order: sort provider IDs alphabetically.
 	pids := make([]string, 0, len(desiredProviders))
 	for pid := range desiredProviders {
@@ -293,10 +313,12 @@ func main() {
 		allEntries = append(allEntries, sectionEntries...)
 		providers = append(providers, provider)
 	}
+	return providers, sections, allEntries
+}
 
-	fmt.Fprintf(os.Stderr, "\nTotal models: %d\n\n", len(allEntries))
-
-	// 1b. Merge local-only providers (see localProviders doc comment).
+// mergeLocalProviders appends local-only providers absent from upstream
+// (#2614: phase 1b). Upstream data wins when both carry the provider.
+func mergeLocalProviders(providers []*catwalkProvider, sections []string, allEntries []modelEntry) ([]*catwalkProvider, []string, []modelEntry) {
 	for _, lp := range localProviders {
 		upstream := false
 		for _, p := range providers {
@@ -324,12 +346,13 @@ func main() {
 		}
 		fmt.Fprintf(os.Stderr, "  %s: %d models (local override)\n", lp.ID, len(lp.Models))
 	}
+	return providers, sections, allEntries
+}
 
-	fmt.Fprintf(os.Stderr, "\nFinal total models: %d\n\n", len(allEntries))
-
-	// 2. Generate Go source code.
-	code := generateGoCode(allEntries, sections)
-
+// writeOutputs judges the #2193/#1668 aggregate shrink guard against the
+// OLD table, then writes both generated files (or prints to stdout on
+// dry-run) (#2614: phases 3+4 of the old monolithic main; moved verbatim).
+func writeOutputs(code, vdCode string, output string, allEntries []modelEntry, dryRun, forceShrink bool) {
 	// #1668 case 2: aggregate drop guard - even with every provider
 	// non-empty, a mass schema change (renamed IDs, dropped context data)
 	// could shrink the table >20%. Compare against the file we are about
@@ -338,37 +361,35 @@ func main() {
 	// written output (oldCount == newCount, the check was mathematically
 	// false, -force was unreachable dead code, and the abort happened
 	// post-overwrite anyway). Read the OLD table first, judge, THEN write.
-	var prevTable []byte
-	if !*dryRun {
-		prevTable, _ = os.ReadFile(*output)
+	if !dryRun {
+		prevTable, _ := os.ReadFile(output)
 		oldCount := strings.Count(string(prevTable), ": {ContextWindow")
 		newCount := len(dedupEntries(append([]modelEntry(nil), allEntries...)))
 		if oldCount > 0 && newCount < oldCount*8/10 {
 			fmt.Fprintf(os.Stderr, "FATAL: entry count %d is >20%% below existing %d - aborting (pass -force to override)\n", newCount, oldCount)
-			if !*forceShrink {
+			if !forceShrink {
 				os.Exit(1) // before any write - the old table survives
 			}
 		}
 	}
 
 	// 3. Write output.
-	if *dryRun {
+	if dryRun {
 		fmt.Print(code)
 	} else {
-		if err := os.WriteFile(*output, []byte(code), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", *output, err)
+		if err := os.WriteFile(output, []byte(code), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", output, err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "Written to %s\n", *output)
+		fmt.Fprintf(os.Stderr, "Written to %s\n", output)
 	}
 
-	// 4. Generate vendor_defaults.go
+	// 4. Generate vendor_defaults.go path next to the output file.
 	vendorDefaultsPath := "internal/config/vendor_defaults.go"
-	if idx := strings.LastIndex(*output, "/"); idx >= 0 {
-		vendorDefaultsPath = (*output)[:idx+1] + "vendor_defaults.go"
+	if idx := strings.LastIndex(output, "/"); idx >= 0 {
+		vendorDefaultsPath = output[:idx+1] + "vendor_defaults.go"
 	}
-	vdCode := generateVendorDefaults(providers)
-	if *dryRun {
+	if dryRun {
 		fmt.Print(vdCode)
 	} else {
 		if err := os.WriteFile(vendorDefaultsPath, []byte(vdCode), 0644); err != nil {
