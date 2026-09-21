@@ -466,6 +466,12 @@ func (m *Model) runAgentWithContent(ctx context.Context, runID int, content []pr
 			// Flush any pending text before tool results.
 			flushBatch()
 			writingStatusSent = false
+			if m.imEmitter != nil {
+				// The tool finished; in quiet/summary modes the result is
+				// buffered without an EmitEvent, so clear the heartbeat
+				// activity explicitly (no-op if verbose already cleared it).
+				m.imEmitter.FinishActivity()
+			}
 			present := describeTool(m.currentLanguage(), event.Tool.Name, string(event.Tool.Arguments))
 			if isSubAgentLifecycleTool(event.Tool.Name) {
 				// Sub-agent lifecycle tools are low-frequency; send directly.

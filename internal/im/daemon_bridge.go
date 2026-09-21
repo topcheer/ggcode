@@ -1053,6 +1053,10 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 					},
 				})
 			}
+			// Register the tool with the heartbeat watchdog: daemon mode
+			// stays silent until the result, so slow commands would leave
+			// the IM channel dark. TrackActivity sends nothing by itself.
+			b.emitter.TrackActivity(toolName, string(event.Tool.Arguments))
 			// Do NOT emit intermediate status to IM — only final results
 			// via OutboundEventToolResult (mirrors terminal follow behavior).
 			b.emitter.TriggerTyping()
@@ -1061,6 +1065,10 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 		case provider.StreamEventToolResult:
 			round.NoteToolResult(event.IsError)
+			// Quiet/summary modes buffer the result without an EmitEvent;
+			// clear the heartbeat activity so it cannot report a finished
+			// tool as still running.
+			b.emitter.FinishActivity()
 			toolInfo := ToolResultInfo{
 				ToolName: event.Tool.Name,
 				Args:     string(event.Tool.Arguments),

@@ -25,15 +25,22 @@ type IMEmitter struct {
 	language string // "zh-CN" or "en"
 	workDir  string // project working directory for path relativization
 
-	// mu protects lastStatus, outputMode, state, and typing from concurrent
-	// access. These fields are read from the agent stream callback goroutine and
-	// written from the TUI event loop or IM slash-command handler goroutine.
-	// state and typing are lazily initialized; without the lock, two concurrent
-	// emit paths could each install their own state (leaking a dispatcher
-	// goroutine) and TriggerTyping raced on typing.lastTrigger (#954).
+	// mu protects lastStatus, outputMode, state, typing, and the heartbeat
+	// fields (heartbeatInterval/activity/lastEventAt/hbStop, see heartbeat.go)
+	// from concurrent access. These fields are read from the agent stream
+	// callback goroutine and written from the TUI event loop or IM
+	// slash-command handler goroutine. state and typing are lazily
+	// initialized; without the lock, two concurrent emit paths could each
+	// install their own state (leaking a dispatcher goroutine) and
+	// TriggerTyping raced on typing.lastTrigger (#954).
 	mu         sync.Mutex
 	lastStatus string // dedup status messages
 	outputMode string // verbose, quiet, summary (default: verbose)
+
+	heartbeatInterval time.Duration
+	activity          *imActivity   // in-flight long-running tool, nil if none
+	lastEventAt       time.Time     // last outbound event of any kind
+	hbStop            chan struct{} // non-nil while the heartbeat watchdog runs
 }
 
 // imEmitterState manages a goroutine-based async event emission pipeline.
@@ -126,9 +133,10 @@ func NewIMEmitter(mgr *Manager, lang, workDir string) *IMEmitter {
 		mgr.SetLanguage(lang)
 	}
 	return &IMEmitter{
-		manager:  mgr,
-		language: lang,
-		workDir:  workDir,
+		manager:           mgr,
+		language:          lang,
+		workDir:           workDir,
+		heartbeatInterval: imHeartbeatInterval,
 	}
 }
 
@@ -194,6 +202,13 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 		e.state = newIMEmitterState()
 	}
 	st := e.state
+	e.lastEventAt = time.Now()
+	switch event.Kind {
+	case OutboundEventText, OutboundEventToolResult:
+		// Real progress happened; a heartbeat for the pending long-running
+		// tool is no longer needed.
+		e.clearActivityLocked()
+	}
 	e.mu.Unlock()
 	st.enqueue(e.manager, event, "")
 	e.TriggerTyping()
@@ -415,6 +430,9 @@ func (e *IMEmitter) EmitToolStatus(toolName, rawArgs string) {
 	}
 	status := LocalizeIMProgress(lang, summary)
 	e.EmitStatus(status)
+	// Keep the activity registered so the heartbeat watchdog can post
+	// periodic "still working" updates if the tool runs long and silent.
+	e.trackActivity(summary)
 }
 
 // EmitRoundSummary sends the final round text to IM.
@@ -470,6 +488,7 @@ func (e *IMEmitter) Close() {
 	e.mu.Lock()
 	st := e.state
 	e.state = nil
+	e.clearActivityLocked()
 	e.mu.Unlock()
 	if st != nil {
 		st.close()
