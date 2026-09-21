@@ -300,11 +300,8 @@ func toolSearchDefinition() provider.ToolDefinition {
   "required": ["query"]
 }`
 	return provider.ToolDefinition{
-		Name: ToolSearchToolName,
-		Description: fmt.Sprintf(
-			"Search and activate deferred MCP tool schemas. MCP server tools beyond the first %d are not loaded into context upfront to save tokens; this tool discovers them by keyword and returns their full schemas. After a match, call the tool directly by its name (e.g. mcp__github__create_issue) — no re-search needed. If you call an MCP tool you already know by name, that works too: it is activated automatically.",
-			toolSearchThreshold,
-		),
-		Parameters: json.RawMessage(params),
+		Name:        ToolSearchToolName,
+		Description: "Search and activate deferred MCP tool schemas. This mode is opt-in (large registries whose schemas do not fit upfront); keyword search returns full schemas, then call the tool directly by name (e.g. mcp__github__create_issue) with no re-search. Calling an MCP tool you already know by name also works: it is activated automatically.",
+		Parameters:  json.RawMessage(params),
 	}
 }
