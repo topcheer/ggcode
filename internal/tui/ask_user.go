@@ -26,6 +26,13 @@ type questionnaireState struct {
 type questionnaireAnswerState struct {
 	selected map[string]struct{}
 	freeform string
+	// freeformRemote marks a freeform written by a REMOTE answer
+	// (applyParsedAnswers). loadActiveQuestion clears it once the value
+	// is loaded into the input; saveActiveQuestionInput then always
+	// writes the input value (including empty) so the local user can
+	// clear a note they typed (#2609) while an untouched remote write is
+	// still never clobbered by a stale empty input.
+	freeformRemote bool
 }
 
 func newQuestionnaireState(req toolpkg.AskUserRequest, response chan toolpkg.AskUserResponse, lang Language) *questionnaireState {
@@ -374,6 +381,9 @@ func (qs *questionnaireState) loadActiveQuestion(lang Language) {
 	qs.choiceCursor = 0
 	qs.input.Placeholder = placeholderWithPasteShortcutHint(util.FirstNonEmpty(strings.TrimSpace(question.Placeholder), questionnaireFreeformPlaceholder(lang)), lang)
 	qs.input.SetValue(qs.answers[idx].freeform)
+	// #2609: the remote value now lives in the input; from here local
+	// edits (including clearing) must win over the stored copy.
+	qs.answers[idx].freeformRemote = false
 	if question.AllowFreeform {
 		qs.input.Focus()
 	} else {
@@ -386,12 +396,19 @@ func (qs *questionnaireState) saveActiveQuestionInput() {
 	if idx < 0 {
 		return
 	}
-	// Only save TUI input value if the user actually typed something locally.
-	// Do not overwrite a value set by a remote answer (IM/tunnel).
-	inputVal := strings.TrimSpace(qs.input.Value())
-	if inputVal != "" {
-		qs.answers[idx].freeform = inputVal
+	// #2609: the old `if inputVal != ""` guard could not tell "input empty
+	// because the remote answer is not loaded yet" from "input empty because
+	// the local user just cleared their note" - so a typed note was
+	// impossible to clear (deleting then submitting still sent the old
+	// text, and a tab round-trip resurrected it). Keep the remote
+	// protection (2fdb3f87) via the explicit source flag instead: while
+	// freeformRemote is set and the value has not been loaded into the
+	// input, skip; once loaded (flag cleared), always write the input -
+	// including empty.
+	if qs.answers[idx].freeformRemote {
+		return
 	}
+	qs.answers[idx].freeform = strings.TrimSpace(qs.input.Value())
 }
 
 func (qs *questionnaireState) buildResponse(status string) toolpkg.AskUserResponse {
@@ -436,6 +453,9 @@ func (qs *questionnaireState) applyRemoteAnswer(raw string, lang Language) (bool
 		qs.tabIndex = nextIdx
 		qs.loadActiveQuestion(lang)
 		if nextIdx < len(parsed) && nextIdx == qs.activeQuestionIndex() {
+			// #2609: loadActiveQuestion above already cleared the remote
+			// flag for this tab; setting the input here would re-arm nothing
+			// (input now mirrors the remote value, local edits win).
 			qs.input.SetValue(parsed[nextIdx].Freeform)
 		}
 	}
@@ -472,6 +492,10 @@ func (qs *questionnaireState) applyParsedAnswers(parsed []im.ParsedQuestionAnswe
 		}
 		qs.answers[i].selected = selected
 		qs.answers[i].freeform = parsed[i].Freeform
+		// #2609: mark remote writes so saveActiveQuestionInput does not
+		// clobber them with a stale (possibly empty) local input until the
+		// value is loaded into the input via loadActiveQuestion.
+		qs.answers[i].freeformRemote = true
 	}
 }
 
