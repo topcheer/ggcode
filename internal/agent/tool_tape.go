@@ -45,6 +45,11 @@ const (
 	toolTapeOff toolTapeMode = iota
 	toolTapeRecord
 	toolTapeReplay
+	// toolTapeReplayFailed marks a replay whose tape failed to load
+	// (#2620). The session still starts, but every tool call returns an
+	// explicit error result - the real tool is never executed, honoring
+	// the header promise even when the tape itself is unusable.
+	toolTapeReplayFailed
 )
 
 // toolTapeEnv is the environment variable that enables tape mode.
@@ -56,10 +61,11 @@ const toolTapeEnv = "GGCODE_TOOL_TAPE"
 // so concurrent saves from parallel tool calls could interleave corrupt
 // output; the mutex serializes them.
 type toolTapeState struct {
-	mu   sync.Mutex
-	tape *toolreplay.Tape
-	mode toolTapeMode
-	path string
+	mu      sync.Mutex
+	tape    *toolreplay.Tape
+	mode    toolTapeMode
+	path    string
+	loadErr string // #2620: replay-mode tape load failure reason (fail-closed)
 }
 
 // parseToolTapeEnv parses the GGCODE_TOOL_TAPE value. Accepted forms:
@@ -95,9 +101,16 @@ func parseToolTapeEnv(raw string) (toolTapeMode, string, error) {
 // newToolTapeState resolves the tape mode from the environment. It always
 // returns a non-nil state with mode off by default, so NewAgent fully
 // initializes the field (TestNewAgentInitializesAllStateFields guards
-// against nil state fields) and an unset env var stays inert. Any failure
-// (bad value, unreadable tape) degrades to "off" with a debug log line -
-// tape support must never prevent a session from starting.
+// against nil state fields) and an unset env var stays inert. Failures
+// degrade with a debug log line - tape support must never prevent a
+// session from starting - but the degradation target differs by mode
+// (#2620): a bad env value or a RECORD init problem degrades to "off"
+// (harmless: fewer recordings), while a REPLAY whose tape cannot load
+// degrades to toolTapeReplayFailed, which fails CLOSED: replay is an
+// explicit operator intent to serve every result from the tape, so
+// falling back to real execution would silently invert the header's
+// safety promise. Every tool call under replayFailed returns an explicit
+// error result instead.
 func newToolTapeState() *toolTapeState {
 	mode, path, err := parseToolTapeEnv(os.Getenv(toolTapeEnv))
 	if err != nil {
@@ -115,8 +128,9 @@ func newToolTapeState() *toolTapeState {
 	case toolTapeReplay:
 		tape, loadErr := toolreplay.LoadTape(path)
 		if loadErr != nil {
-			debug.Log("agent", "[tool-tape] REPLAY mode disabled, load failed: %v", loadErr)
-			return &toolTapeState{mode: toolTapeOff}
+			// #2620: fail closed, never degrade to real execution.
+			debug.Log("agent", "[tool-tape] REPLAY mode load FAILED, failing closed (real tools blocked): %v", loadErr)
+			return &toolTapeState{mode: toolTapeReplayFailed, path: path, loadErr: loadErr.Error()}
 		}
 		st.tape = tape
 		debug.Log("agent", "[tool-tape] REPLAY mode, %d recorded entries from %s", tape.Len(), path)
@@ -128,10 +142,22 @@ func newToolTapeState() *toolTapeState {
 // the real tool. handled=true means the caller must return immediately.
 // A tape miss is an explicit error result, never a silent fallback to the
 // real tool: divergence from the recorded run must be visible, or the
-// replay is not a replay.
+// replay is not a replay. A replay whose tape failed to load (#2620)
+// blocks EVERY tool the same way - fail-closed, mirroring miss semantics.
 func (a *Agent) replayToolCall(name string, args json.RawMessage) (tool.Result, error, bool) {
 	st := a.toolTape
-	if st == nil || st.mode != toolTapeReplay {
+	if st == nil {
+		return tool.Result{}, nil, false
+	}
+	if st.mode == toolTapeReplayFailed {
+		debug.Log("agent", "[tool-tape] blocked real execution of %s: replay tape failed to load", name)
+		return tool.Result{
+			Content: fmt.Sprintf("[tool-replay] tape failed to load: %s. The real tool was NOT executed (replay mode fails closed, #2620). Fix the %s path or re-record with %s=record:<path>.",
+				st.loadErr, st.path, toolTapeEnv),
+			IsError: true,
+		}, nil, true
+	}
+	if st.mode != toolTapeReplay {
 		return tool.Result{}, nil, false
 	}
 	entry, ok := st.tape.Lookup(name, args, true)
