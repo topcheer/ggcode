@@ -47,6 +47,19 @@ ggcode daemon --new-session  # Skip auto-loading most recent session
 
 The daemon automatically loads the most recent unlocked session on startup. Use `--new-session` to always start fresh. The daemon also initializes a lanchat Hub for LAN discovery and messaging.
 
+### Session transfer (跨设备会话迁移)
+
+```bash
+ggcode daemon session export <session-id>    # Export a session to a portable .ggsession bundle
+ggcode daemon session export <id> -o file    # Custom output path
+ggcode daemon session import file.ggsession  # Import into the local store (workspace remapped to cwd)
+ggcode daemon session import f --workspace d # Import into a specific workspace
+ggcode daemon session import f --keep-workspace  # Preserve the original workspace path
+```
+
+Bundles carry the full message history and metadata so a conversation can be resumed on another machine. See [session-transfer.md](session-transfer.md).
+
+
 ## Subcommands
 
 

@@ -106,6 +106,7 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 	cmd.MarkFlagsMutuallyExclusive("follow", "background")
 	cmd.MarkFlagsMutuallyExclusive("resume", "resume-picker", "new-session")
 	cmd.MarkFlagsMutuallyExclusive("resume", "resume-picker")
+	cmd.AddCommand(newDaemonSessionCmd())
 	return cmd
 }
 
