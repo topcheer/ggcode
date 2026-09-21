@@ -1341,6 +1341,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
 		}
+		// Trajectory efficiency-learnings recall (arXiv:2603.10600 component
+		// 4): traj_intel.go persists post-run efficiency insights, but
+		// nothing read them back. Same run-start system-message pattern as
+		// experience recall: no tool_call/tool_result split, shared prompt
+		// cache prefix.
+		if idx := a.recallTrajectoryInsights(userPromptForStats); idx != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "system",
+				Content: []provider.ContentBlock{{Type: "text", Text: "## Efficiency Learnings\n" + idx}},
+			})
+			debug.Log("agent", "injected trajectory efficiency learnings (%d chars)", len(idx))
+		}
 	}
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
