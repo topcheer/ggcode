@@ -56,6 +56,14 @@ type detectorLedgerRow struct {
 	SuppressedCritical int // rejected: critical byte pool exhausted
 	FirstTurn          int // 1-based iteration of first activity; 0 = pre-loop
 	LastTurn           int
+
+	// sa-38 delivery-effectiveness feedback (outcome side of the loop):
+	// did the agent's behavior change AFTER guidance for this tag reached
+	// the model? A firing (delivered or suppressed) at a later turn than
+	// the first delivery means the same problem recurred post-guidance.
+	FirstDeliveryTurn  int // 1-based iteration of first DELIVERED hint; 0 = never delivered (or pre-loop delivery)
+	Recurrences        int // firings strictly after the first delivery turn
+	LastRecurrenceTurn int // iteration of the most recent recurrence; 0 = none
 }
 
 // TotalSuppressed returns the row's total rejections across all reasons.
@@ -124,6 +132,17 @@ func (l *detectorLedger) noteDelivered(tag string, nBytes int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := l.rowFor(tag, l.turn)
+	if r.Delivered == 0 {
+		r.FirstDeliveryTurn = l.turn
+	}
+	// sa-38: a delivery at a LATER turn than the first delivery means the
+	// same tag fired again after its guidance was already injected - the
+	// behavioral-recurrence signal ("performative compliance": guidance
+	// acknowledged but the pattern repeated, cf. arXiv:2509.25370).
+	if l.turn > r.FirstDeliveryTurn {
+		r.Recurrences++
+		r.LastRecurrenceTurn = l.turn
+	}
 	r.Delivered++
 	r.Bytes += nBytes
 }
@@ -139,6 +158,14 @@ func (l *detectorLedger) noteSuppressed(tag string, reason guidanceReject) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := l.rowFor(tag, l.turn)
+	// sa-38: a suppression AFTER guidance was delivered means the tag fired
+	// again post-guidance (behavioral recurrence seen by the budget gate).
+	// Same-turn rejections (dedup / multi-hint byte cap) do not count: they
+	// are budget artifacts within one turn, not agent behavior across turns.
+	if r.Delivered > 0 && l.turn > r.FirstDeliveryTurn {
+		r.Recurrences++
+		r.LastRecurrenceTurn = l.turn
+	}
 	switch reason {
 	case rejectBudgetBytes:
 		r.SuppressedBytes++
@@ -279,6 +306,44 @@ func (l *detectorLedger) starvationReportLocked() string {
 	return b.String()
 }
 
+// effectivenessReportLocked renders the delivery-effectiveness digest: of
+// the tags that actually DELIVERED guidance this run, how many saw the same
+// tag fire again at a later turn (post-guidance recurrence). This answers
+// the outcome-side calibration question the delivered/suppressed counters
+// cannot: did the injected guidance change the trajectory? (arXiv:2604.22273
+// frames iterative self-correction as a control problem - without measuring
+// the post-intervention state, the loop cannot be evaluated.)
+// Returns "" when no guidance was delivered - nothing to measure.
+func (l *detectorLedger) effectivenessReportLocked() string {
+	delivered, recurred := 0, 0
+	var details []string
+	for _, r := range l.snapshotLocked() {
+		if r.Delivered == 0 {
+			continue
+		}
+		delivered++
+		if r.Recurrences > 0 {
+			recurred++
+			details = append(details, fmt.Sprintf("  [%s] recurred x%d (delivered turn %d, last turn %d)",
+				r.Tag, r.Recurrences, r.FirstDeliveryTurn, r.LastRecurrenceTurn))
+		}
+	}
+	if delivered == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if recurred == 0 {
+		fmt.Fprintf(&b, "delivery effectiveness: 0/%d delivered tag(s) recurred post-guidance (all heeded)", delivered)
+		return b.String()
+	}
+	fmt.Fprintf(&b, "delivery effectiveness: %d/%d delivered tag(s) recurred post-guidance:", recurred, delivered)
+	for _, d := range details {
+		b.WriteString("\n")
+		b.WriteString(d)
+	}
+	return b.String()
+}
+
 // logRunSummary logs the run-end ledger aggregate. Safe to defer: uses
 // TryLock so a panic unwinding while a record call holds the mutex cannot
 // deadlock the unwind (same-goroutine Go mutexes are non-reentrant).
@@ -298,6 +363,12 @@ func (l *detectorLedger) logRunSummary() {
 	// answers the calibration question directly instead of burying it in
 	// per-row suppressed counters.
 	if s := l.starvationReportLocked(); s != "" {
+		debug.Log("detector-ledger", "%s", s)
+	}
+	// sa-38 consumption loop, outcome half: post-delivery recurrence gets
+	// its own line so the run log answers "did the guidance WORK" instead
+	// of only "did it get through".
+	if s := l.effectivenessReportLocked(); s != "" {
 		debug.Log("detector-ledger", "%s", s)
 	}
 }
@@ -324,4 +395,16 @@ func (a *Agent) GuidanceStarvationReport() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.starvationReportLocked()
+}
+
+// GuidanceEffectivenessReport renders the current run's delivery-effectiveness
+// digest: delivered tags that recurred post-guidance ("" if no budgeted
+// guidance was delivered this run). This is the outcome-side half of the
+// sa-37/sa-38 consumption loop - /runreport appends it so operators see not
+// just which guidance got through, but whether it changed behavior.
+func (a *Agent) GuidanceEffectivenessReport() string {
+	l := &a.detectorLedger
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.effectivenessReportLocked()
 }

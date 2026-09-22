@@ -83,6 +83,41 @@ silent starvation: 2 tag(s) fired but never delivered: [late-detector]x7 [rare-t
 - `/runreport`：scorecard 后自动追加账本报告与饥饿报告——算子第一次
   无需开 debug 就能看到"哪些检测器在白付采样成本"
 
+## 投递有效性（sa-38，结果侧闭环）
+
+> 对标概念：self-correction effectiveness measurement（arXiv:2604.22273 把
+> 迭代自我纠正建模为控制问题——不测量干预后的状态，闭环就无法评估；
+> arXiv:2509.25370 "performative self-correction"；NeurIPS 2025 self-correction
+> benchmark）。
+
+sa-36/37 回答"guidance 有没有送达、有没有被饿死"（投递侧）；sa-38 补上
+结果侧：**送达之后同类问题是否复发**。
+
+账本行新增三个字段（`detector_ledger.go`）：
+
+- `FirstDeliveryTurn`：该 tag 首次**投递**的迭代号
+- `Recurrences`：首次投递之后（更晚 turn）该 tag 再次触发的次数——
+  投递或被抑制的触发都算（检测器又开火了 = 行为复现；被抑制只是预算
+  拒收，不改变"又犯了一次"的事实）
+- `LastRecurrenceTurn`：最近一次复现的迭代号
+
+同 turn 内的拒绝（dedup / 多 hint 字节帽）**不计**入复现：那是单 turn
+内的预算工件，不是跨 turn 的行为信号。
+
+输出（run 结束 debug log 与 `/runreport` 追加行）：
+
+```
+delivery effectiveness: 1/2 delivered tag(s) recurred post-guidance:
+  [edit-oscillation] recurred x2 (delivered turn 3, last turn 8)
+```
+
+零复现时输出 `delivery effectiveness: 0/N delivered tag(s) recurred
+post-guidance (all heeded)`——正面确认同样是有价值的校准信号。
+复现率高的 tag 是预算自适应（sa-37 弹性池）与阈值调校的第一优先对象。
+
+对外 API：`GuidanceEffectivenessReport()`。
+单元测试：`internal/agent/detector_ledger_effectiveness_test.go`。
+
 ## 边界
 
 - 弹性池只调**容量**上限；计数帽与去重语义不变，单 turn 内的防洪界

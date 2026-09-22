@@ -770,6 +770,10 @@ func (m *Model) handleRunReportCommand() tea.Cmd {
 		if starved := m.agent.GuidanceStarvationReport(); starved != "" {
 			report += "\n" + starved
 		}
+		// sa-38: outcome-side half - post-delivery recurrence per tag.
+		if eff := m.agent.GuidanceEffectivenessReport(); eff != "" {
+			report += "\n" + eff
+		}
 	}
 	m.chatWriteSystem(nextSystemID(), report)
 	return nil
