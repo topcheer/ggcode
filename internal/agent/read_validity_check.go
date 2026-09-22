@@ -73,6 +73,17 @@ type readHashTracker struct {
 
 	// warned tracks files already warned about (once per run).
 	warned map[string]bool
+
+	// hashFn optionally overrides hashFilePrefix with the Agent's event-scoped
+	// hash snapshot (sa-35): within one tool-call result event, several
+	// detectors fingerprint the SAME on-disk content (readHash.recordReadHash
+	// + redundantRead.checkRedundantRead at a read; validateContentAtEdit at
+	// an edit). Re-hashing identical content is pure guardrail overhead —
+	// "Limitations of AI Guardrails" (FutureAGI, 2026) lists latency overhead
+	// as a first-class guardrail cost, and DreamGuard (arXiv:2608.05695)
+	// argues guardrail efficiency comes from compact shared state rather
+	// than repeated full reprocessing. nil falls back to hashFilePrefix.
+	hashFn func(string) uint64
 }
 
 func newReadHashTracker() *readHashTracker {
@@ -80,6 +91,15 @@ func newReadHashTracker() *readHashTracker {
 		hashes: make(map[string]uint64),
 		warned: make(map[string]bool),
 	}
+}
+
+// hashOf resolves path's content fingerprint via the injected event-scoped
+// snapshot when installed, else directly via hashFilePrefix.
+func (t *readHashTracker) hashOf(path string) uint64 {
+	if t.hashFn != nil {
+		return t.hashFn(path)
+	}
+	return hashFilePrefix(path)
 }
 
 func (t *readHashTracker) reset() {
@@ -144,7 +164,7 @@ func (t *readHashTracker) recordReadHash(path string) {
 	if path == "" {
 		return
 	}
-	h := hashFilePrefix(path)
+	h := t.hashOf(path)
 	if h == 0 {
 		return // Couldn't read or empty file; skip silently.
 	}
@@ -228,7 +248,7 @@ func (t *readHashTracker) validateContentAtEdit(path string, oldTextLen int) str
 		return "" // Already warned for this file.
 	}
 
-	currentHash := hashFilePrefix(path)
+	currentHash := t.hashOf(path)
 	if currentHash == 0 {
 		return "" // File unreadable; let the tool itself report the error.
 	}
@@ -285,6 +305,35 @@ func hashFilePrefix(path string) uint64 {
 		return 0 // Should never fail for FNV, but satisfy error checking.
 	}
 	return h.Sum64()
+}
+
+// fileHashSnapshot returns the FNV-1a content fingerprint for path, serving
+// repeat lookups within the current tool-call event from the Agent's
+// event-scoped snapshot (sa-35). a.hashSnapshot is reset at every read/edit
+// guard event boundary, so each event hashes each file at most once no
+// matter how many detectors fingerprint it, while hashes NEVER survive
+// across events — preserving the sub-second race detection semantics that
+// readHashTracker and redundantReadState exist to provide.
+func (a *Agent) fileHashSnapshot(path string) uint64 {
+	if path == "" {
+		return 0
+	}
+	if h, ok := a.hashSnapshot[path]; ok {
+		return h
+	}
+	h := hashFilePrefix(path)
+	if a.hashSnapshot == nil {
+		a.hashSnapshot = make(map[string]uint64, 8)
+	}
+	a.hashSnapshot[path] = h
+	return h
+}
+
+// resetHashSnapshot drops the event-scoped hash snapshot. Called at the top
+// of each read/edit guard event in the tool-result processing loop, and on
+// run reset.
+func (a *Agent) resetHashSnapshot() {
+	a.hashSnapshot = nil
 }
 
 // extractOldTextLen returns the length of the old_text argument for edit

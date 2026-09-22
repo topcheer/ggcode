@@ -225,6 +225,7 @@ type Agent struct {
 	argSizeGuardFires         int                        // count of argument size guard injections this run
 	fileFreshness             *fileFreshnessSentinel     // proactive cross-iteration external file change detection
 	readHash                  *readHashTracker           // content-fingerprint read validity (sub-second mtime race detection, false-positive suppression)
+	hashSnapshot              map[string]uint64          // sa-35: event-scoped content-hash snapshot shared by freshness guardrails (reset per tool-call event; see fileHashSnapshot)
 	toolThermal               *thermalState              // cross-tool usage balance monitor (explore/modify/verify distribution)
 	latencyTracker            *LatencyTracker            // per-tool latency baseline & slow-tool outlier detection
 	toolSequence              *toolSequenceValidator     // cross-iteration tool call anti-pattern detection
@@ -448,6 +449,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
 		readHash:               newReadHashTracker(),
+		hashSnapshot:           make(map[string]uint64, 8),
 		toolThermal:            newThermalState(),
 		userSentiment:          newUserSentimentState(),
 		transientRetryBudget:   maxTransientRetryBudgetPerRun,
@@ -559,6 +561,10 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 			Content: []provider.ContentBlock{{Type: "text", Text: systemPrompt}},
 		})
 	}
+	// sa-35: route both fingerprint consumers through the event-scoped hash
+	// snapshot so one read/edit event hashes each file at most once.
+	a.readHash.hashFn = a.fileHashSnapshot
+	a.redundantRead.hashFn = a.fileHashSnapshot
 	return a
 }
 
@@ -1758,6 +1764,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.errorPropagate.reset()
 	a.fileFreshness.reset()
 	a.readHash.reset()
+	a.hashSnapshot = nil // sa-35: drop event-scoped hashes across runs
 	a.toolThermal.reset()
 	a.cacheEffMonitor.reset()
 	// Capture the git working tree state BEFORE the agent makes any changes.
@@ -3461,6 +3468,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Track files read during this run so the unread-edit guard
 			// knows which files the agent has seen.
 			if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
+				a.resetHashSnapshot() // sa-35: new event → fresh fingerprints
 				// #1476-B: patch-exhaustion counts CALLS, not paths - the
 				// IFT give-up rule models successive probes (diminishing
 				// returns per RE-visit), and #500's per-path accounting turned
@@ -3468,7 +3476,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// documented coordinated-edit prep workflow) into an instant
 				// false 'over-mining' hit. The hint fires once per call on
 				// the LAST path only.
-				readPathsLen := len(extractReadFilePaths(tc.Name, tc.Arguments))
+				readPaths := extractReadFilePaths(tc.Name, tc.Arguments)
+				readPathsLen := len(readPaths)
 				// #1782 case 3: a windowed read (read_file with offset/limit)
 				// must not mark the file FULLY read. recordRead had no window
 				// notion, so `read_file {offset:2000, limit:50}` set
@@ -3479,7 +3488,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// hash the file itself, not the returned slice), so a windowed
 				// read is equivalent to a full read for them - unchanged.
 				hasWindow := readArgsHaveWindow(tc.Arguments)
-				for pi, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
+				for pi, p := range readPaths {
 					a.unreadEdit.recordReadWindow(p, hasWindow)
 					a.tunnelVision.recordFile(p)
 					a.editFailRecovery.recordRead(p)
@@ -3509,6 +3518,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// this run. Fires before the tool executes so the hint is in the
 			// result alongside any error from the edit attempt.
 			if !result.IsError && fileEditingTools[tc.Name] {
+				a.resetHashSnapshot() // sa-35: new event → fresh fingerprints
 				// #1454-C: was a hand-rolled 3-tool list; write_file/batch_replace/
 				// lsp_rename/file_ops/notebook_edit successes never reset the
 				// failure counter (recordEditSuccess below), violating

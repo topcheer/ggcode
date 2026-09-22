@@ -67,6 +67,20 @@ type redundantReadState struct {
 	// (XKB in context)" on genuinely changed content. When mtime matches,
 	// the content hash disambiguates: same hash = redundant, drift = fresh.
 	lastReadHash map[string]uint64
+
+	// hashFn mirrors readHashTracker.hashFn (sa-35): event-scoped snapshot so
+	// the redundant-read fingerprint reuses the hash another detector already
+	// computed for the same file within the same tool-call event.
+	hashFn func(string) uint64
+}
+
+// hashOf resolves the content fingerprint via the injected event-scoped
+// snapshot when installed, else directly via hashFilePrefix.
+func (r *redundantReadState) hashOf(path string) uint64 {
+	if r.hashFn != nil {
+		return r.hashFn(path)
+	}
+	return hashFilePrefix(path)
 }
 
 func newRedundantReadState() *redundantReadState {
@@ -135,7 +149,9 @@ func (r *redundantReadState) checkRedundantRead(path string, partial bool) strin
 	// externally (or by the agent via a different path). The re-read is
 	// legitimate - the agent needs the updated content.
 	if info.ModTime().UnixNano() != prevMtime {
-		r.recordReadMtime(path)
+		// sa-35: recordReadMtimeStat reuses the fresh stat instead of a
+		// second os.Stat on the same path within this event.
+		r.recordReadMtimeStat(path, info)
 		return ""
 	}
 
@@ -146,10 +162,13 @@ func (r *redundantReadState) checkRedundantRead(path string, partial bool) strin
 	// re-read is legitimate. Missing prior hash (empty/unreadable at record
 	// time) keeps the old mtime-only verdict.
 	if prevHash, ok := r.lastReadHash[n]; ok {
-		if cur := hashFilePrefix(path); cur != 0 && cur != prevHash {
+		if cur := r.hashOf(path); cur != 0 && cur != prevHash {
 			// Content drifted under an identical mtime: refresh the
 			// baseline so the NEXT read is judged against this content.
-			r.recordReadMtime(path)
+			// sa-35: reuse the already-statted info and the event-scoped
+			// fingerprint (recordReadMtime used to re-stat AND re-hash).
+			r.lastReadMtime[n] = info.ModTime().UnixNano()
+			r.lastReadHash[n] = cur
 			return ""
 		}
 	}
@@ -178,7 +197,24 @@ func (r *redundantReadState) recordReadMtime(path string) {
 	r.lastReadMtime[n] = info.ModTime().UnixNano()
 	// #1824 case 2: pair the mtime with a content fingerprint so an
 	// mtime-preserving external write cannot masquerade as "unchanged".
-	if h := hashFilePrefix(path); h != 0 {
+	if h := r.hashOf(path); h != 0 {
+		r.lastReadHash[n] = h
+	} else {
+		delete(r.lastReadHash, n)
+	}
+}
+
+// recordReadMtimeStat is recordReadMtime for callers that already hold a
+// fresh os.FileInfo for path (sa-35): skips the redundant second os.Stat on
+// the same path within one event. info == nil falls back to recordReadMtime.
+func (r *redundantReadState) recordReadMtimeStat(path string, info os.FileInfo) {
+	if info == nil {
+		r.recordReadMtime(path)
+		return
+	}
+	n := normalizePath(path)
+	r.lastReadMtime[n] = info.ModTime().UnixNano()
+	if h := r.hashOf(path); h != 0 {
 		r.lastReadHash[n] = h
 	} else {
 		delete(r.lastReadHash, n)
