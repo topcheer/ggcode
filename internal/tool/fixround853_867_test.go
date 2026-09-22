@@ -127,11 +127,11 @@ func TestDetectCommentBlocksFileAdjacency(t *testing.T) {
 	file := &reviewDiffFile{
 		path: "main.go",
 		addedLines: []reviewDiffLine{
-			{1, "//	if err != nil {"},
-			{2, "//		return fmt.Errorf(\"bad\")"},
+			{lineNum: 1, content: "//	if err != nil {", kind: '+'},
+			{lineNum: 2, content: "//		return fmt.Errorf(\"bad\")", kind: '+'},
 			// gap: line 3 is a context line (not added)
-			{4, "//	for i := 0; i < 10; i++ {"},
-			{5, "//		_ = i"},
+			{lineNum: 4, content: "//	for i := 0; i < 10; i++ {", kind: '+'},
+			{lineNum: 5, content: "//		_ = i", kind: '+'},
 		},
 	}
 	findings := detectCommentBlocks(file)

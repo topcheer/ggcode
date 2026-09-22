@@ -30,7 +30,7 @@ type ReviewChanges struct{ WorkingDir string }
 func (t ReviewChanges) Name() string { return "review_changes" }
 
 func (t ReviewChanges) Description() string {
-	return "Review current working tree changes and produce a structured code review report with categorized findings (critical, warning, info). Analyzes git diff for debug artifacts, hardcoded secrets, new TODOs, commented-out code, and large changes. Can review staged, unstaged, or all changes."
+	return "Review current working tree changes and produce a structured code review report with categorized findings (critical, warning, info). Analyzes git diff for debug artifacts, hardcoded secrets, new TODOs, commented-out code, and large changes. Also summarizes dependency manifest changes (go.mod, package.json, requirements.txt, Cargo.toml, etc.): added, removed, changed packages and major-version jumps. Can review staged, unstaged, or all changes."
 }
 
 func (t ReviewChanges) Parameters() json.RawMessage {
@@ -131,8 +131,16 @@ func (t ReviewChanges) Execute(ctx context.Context, input json.RawMessage) (Resu
 		}
 	}
 
+	// Dependency manifest transparency: summarize added/removed/changed
+	// packages when the diff touches ecosystem manifests (go.mod, package.json,
+	// ...). Report-only: never blocks commit.
+	depSummary := buildDependencySummary(files)
+
 	// Build the report
 	report := formatReviewReport(issues, len(files), totalAdd, totalDel)
+	if depSummary != "" {
+		report = strings.TrimRight(report, "\n") + "\n\n" + depSummary + "\n"
+	}
 
 	debug.Log("review-changes", "reviewed %d files, %d findings",
 		len(files), len(issues))
@@ -205,11 +213,17 @@ func getUntrackedFiles(ctx context.Context, dir string) []string {
 type reviewDiffLine struct {
 	lineNum int
 	content string
+	// kind is the diff marker: '+', '-', or ' ' (context). Dependency
+	// extraction needs it to track section state across context lines while
+	// only extracting tuples from changed lines.
+	kind byte
 }
 
 type reviewDiffFile struct {
 	path         string
 	addedLines   []reviewDiffLine
+	removedLines []reviewDiffLine
+	allLines     []reviewDiffLine // ordered +/-/context stream for state tracking
 	addedCount   int
 	removedCount int
 }
@@ -256,15 +270,32 @@ func parseReviewDiff(diff string) []*reviewDiffFile {
 			current.addedLines = append(current.addedLines, reviewDiffLine{
 				lineNum: newLineNum,
 				content: line[1:],
+				kind:    '+',
 			})
+			current.allLines = append(current.allLines, current.addedLines[len(current.addedLines)-1])
 			current.addedCount++
 			newLineNum++
 		} else if strings.HasPrefix(line, "-") {
 			// Same for removals: "--- a/" was consumed above; a remaining
 			// "--x" decrement line is content.
+			current.removedLines = append(current.removedLines, reviewDiffLine{
+				content: line[1:],
+				kind:    '-',
+			})
+			current.allLines = append(current.allLines, current.removedLines[len(current.removedLines)-1])
 			current.removedCount++
 		} else if strings.HasPrefix(line, " ") || line == "" {
 			newLineNum++
+			// Context lines carry no content for the existing checks, but the
+			// dependency summary needs them: section headers like "require ("
+			// or "[dependencies]" are usually unchanged, so the ordered stream
+			// must include them for section-state tracking.
+			if line != "" {
+				current.allLines = append(current.allLines, reviewDiffLine{
+					content: line[1:],
+					kind:    ' ',
+				})
+			}
 		}
 	}
 	if current != nil {

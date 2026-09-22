@@ -88,14 +88,14 @@ func TestDetectCommentBlocks_Detects(t *testing.T) {
 	file := &reviewDiffFile{
 		path: "main.go",
 		addedLines: []reviewDiffLine{
-			{1, "//	if err != nil {"},
+			{lineNum: 1, content: "//	if err != nil {", kind: '+'},
 			// #860: a gap in FILE line numbers (context line in between) must
 			// split the block; lines must be file-adjacent to count as one.
-			{2, "//		return fmt.Errorf(\"bad\")"},
-			{3, "//	for i := 0; i < 10; i++ {"},
-			{4, "//		_ = i"},
-			{5, "//	}"},
-			{6, "//}"},
+			{lineNum: 2, content: "//		return fmt.Errorf(\"bad\")", kind: '+'},
+			{lineNum: 3, content: "//	for i := 0; i < 10; i++ {", kind: '+'},
+			{lineNum: 4, content: "//		_ = i", kind: '+'},
+			{lineNum: 5, content: "//	}", kind: '+'},
+			{lineNum: 6, content: "//}", kind: '+'},
 		},
 	}
 	findings := detectCommentBlocks(file)
@@ -111,8 +111,8 @@ func TestDetectCommentBlocks_NoFalsePositive(t *testing.T) {
 	file := &reviewDiffFile{
 		path: "main.go",
 		addedLines: []reviewDiffLine{
-			{1, "// This is a regular comment"},
-			{2, "// So is this"},
+			{lineNum: 1, content: "// This is a regular comment", kind: '+'},
+			{lineNum: 2, content: "// So is this", kind: '+'},
 		},
 	}
 	findings := detectCommentBlocks(file)
