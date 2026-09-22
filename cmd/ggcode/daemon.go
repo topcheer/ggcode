@@ -420,11 +420,8 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 			return fmt.Errorf("loading session %s: %w", resumeID, err)
 		}
 		ses = existing
-		// Restore messages to agent (includes reconcile + microcompact).
-		compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(ag, ses)
-		if compacted {
-			fmt.Fprintf(os.Stderr, "Restored session was oversized (%d tokens), truncated to %d tokens to fit context window\n", beforeTokens, afterTokens)
-		}
+		// Restore messages to agent (includes tool-call reconciliation).
+		agentruntime.RestoreSessionIntoAgent(ag, ses)
 		// Restore session-scoped permission mode (if set).
 		if ses.PermissionMode != "" {
 			sessionMode := permission.ParsePermissionMode(ses.PermissionMode)

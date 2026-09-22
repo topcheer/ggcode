@@ -65,8 +65,7 @@ User presses Enter (TUI Update goroutine)
   │     ├─ 8b. ⚠️ maybeAutoCompact(ctx, onEvent)
   │     │   ├─ Check if tokenCount >= autoCompactThreshold
   │     │   ├─ If triggered: CheckAndSummarize()
-  │     │   │   ├─ Microcompact() — in-memory truncation of old tool results
-  │     │   │   └─ If still over threshold: Summarize()
+  │     │   │   └─ Summarize()
   │     │   │       └─ ⚠️⚠️ summarizeMessages()             ← FULL LLM CALL
   │     │   │           └─ prov.Chat(ctx, summaryMsgs, nil) — non-streaming!
   │     │   └─ If compacted significantly: maybeSaveCheckpoint()

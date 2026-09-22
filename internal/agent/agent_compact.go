@@ -76,13 +76,8 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	fn(fallbackID, "", tokenCount)
 }
 
-// MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
 // Microcompact was removed — precompact at 97.5% + reactive compact on PTL
 // now handle all compaction needs without corrupting tool_result data.
-func (a *Agent) MicrocompactIfOverThreshold() (compacted bool, beforeTokens int, afterTokens int) {
-	tokens := a.contextManager.TokenCount()
-	return false, tokens, tokens
-}
 
 type promptBudgeter interface {
 	PromptBudget() int

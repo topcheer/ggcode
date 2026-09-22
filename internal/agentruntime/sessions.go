@@ -173,11 +173,13 @@ func DeleteSessionIfEmpty(store session.Store, ses *session.Session) error {
 }
 
 // RestoreSessionIntoAgent loads session messages into the agent's context
-// manager and runs reconciliation + microcompaction. Returns whether
-// microcompaction occurred and the before/after token counts.
-func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (compacted bool, beforeTokens int, afterTokens int) {
+// manager and runs tool-call reconciliation. Sizing is handled elsewhere:
+// the session store truncates oversized restores at load time, and the
+// precompact (97.5% threshold) + reactive compact on prompt-too-long paths
+// handle any remaining pressure mid-run.
+func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) {
 	if agentInst == nil || ses == nil {
-		return false, 0, 0
+		return
 	}
 	msgs := ses.ContextMessages
 	if len(msgs) == 0 {
@@ -252,15 +254,12 @@ func RestoreSessionIntoAgent(agentInst *agent.Agent, ses *session.Session) (comp
 	}
 
 	agentInst.ReconcileToolCalls()
-	compacted, beforeTokens, afterTokens = agentInst.MicrocompactIfOverThreshold()
 
 	// Clear runAdded: AddMessage() during restore populated it, but these
 	// messages already exist in the JSONL file. Without this, the next
 	// persistFullSessionMessages() would re-write all of them back to disk,
 	// doubling the session file on every restart.
 	agentInst.StartRunTracking()
-
-	return compacted, beforeTokens, afterTokens
 }
 
 // CheckCrashRecovery detects whether the session's previous run was interrupted

@@ -141,8 +141,8 @@ func TestRestoreSessionWithCheckpoint(t *testing.T) {
 // TestRestoreNilAgent verifies no panic on nil inputs.
 func TestRestoreNilAgent(t *testing.T) {
 	// Should not panic.
-	_, _, _ = RestoreSessionIntoAgent(nil, &session.Session{ID: "test"})
-	_, _, _ = RestoreSessionIntoAgent(&agent.Agent{}, nil)
+	RestoreSessionIntoAgent(nil, &session.Session{ID: "test"})
+	RestoreSessionIntoAgent(&agent.Agent{}, nil)
 }
 
 // TestRestoreSessionStaleUsageBaselineClamped pins the under-direction

@@ -1947,12 +1947,8 @@ func (r *REPL) loadSession(id string) {
 		debug.Log("repl", "loadSession: keeping previous lock (new session lock unavailable)")
 	}
 
-	compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(r.agent, ses)
+	agentruntime.RestoreSessionIntoAgent(r.agent, ses)
 	r.model.SetSession(ses, r.store)
-
-	if compacted {
-		r.model.chatWriteSystem(nextSystemID(), fmt.Sprintf("Restored session was oversized (%d tokens), truncated to %d tokens to fit context window", beforeTokens, afterTokens))
-	}
 
 	// Switch CWD if the session belongs to a different workspace.
 	if ses.Workspace != "" && ses.Workspace != r.workingDir {
