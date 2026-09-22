@@ -59,8 +59,34 @@ const (
 	// priority only existed WITHIN a single result. The dedicated pool
 	// keeps #1197's flood bound (a critical-tag stream is still capped,
 	// just separately) while making critical priority real cross-result.
+	// This is the BASE value; the runtime cap is elastic (see below).
 	guidanceBudgetCriticalBytesPerTurn = 1024
+	//
+	// Elastic calibration bounds (sa-37 consumption loop). The two pools are
+	// no longer fixed constants at runtime: each turn boundary, reset()
+	// calibrates the EFFECTIVE caps from the just-measured starvation
+	// (suppress-bytes counts recorded by the detector ledger's choke point).
+	// This is arXiv:2602.15391's adaptive-calibration loop applied to our own
+	// budget: static caps yielded measured starvation (sa-36's ledger exists
+	// precisely because silent starvation was invisible); growth is bounded
+	// at 2x base so the #1197 flood guarantee keeps a hard ceiling, and decay
+	// returns to base when starvation stops. The COUNT cap stays fixed on
+	// purpose: it guards attention bandwidth (ACE context-collision), not
+	// capacity, and adaptive attention limits would reintroduce alert fatigue.
+	guidanceByteCapGrowthDen     = 4 // +25% per starved turn
+	guidanceByteCapDecayDen      = 5 // -20% per clean turn
+	guidanceByteCapMaxMultiplier = 2
 )
+
+// guidanceBudgetBytesPerTurnMax is the hard ceiling for the elastic advisory
+// pool; guidanceBudgetCriticalBytesPerTurnMax the critical one.
+func guidanceBudgetBytesPerTurnMax() int {
+	return guidanceBudgetBytesPerTurn * guidanceByteCapMaxMultiplier
+}
+
+func guidanceBudgetCriticalBytesPerTurnMax() int {
+	return guidanceBudgetCriticalBytesPerTurn * guidanceByteCapMaxMultiplier
+}
 
 // guidanceReject classifies WHY a budget gate rejected a guidance message.
 // The detector effectiveness ledger (detector_ledger.go) aggregates these
@@ -113,20 +139,103 @@ type guidanceBudget struct {
 	// the coalesced tool-result hints - is measured at exactly one choke
 	// point (see detector_ledger.go).
 	ledger *detectorLedger
+	// byteCap / criticalCap are the EFFECTIVE per-turn pools. Zero means
+	// "not yet calibrated" (bare struct): allowTagged falls back to the base
+	// constants and the next reset() seeds them. reset() adapts them within
+	// [base, 2x base] from the previous turn's measured byte-starvation.
+	byteCap     int
+	criticalCap int
+	// suppressedBytesTurn / suppressedCriticalTurn count the current turn's
+	// pool rejections (the starvation signal adaptCaps consumes; g.suppressed
+	// mixes all reasons so it cannot drive calibration by itself).
+	suppressedBytesTurn    int
+	suppressedCriticalTurn int
 }
 
-// reset clears the budget at the start of a new iteration.
+// reset clears the budget at the start of a new iteration. The adaptation
+// step runs FIRST, against the just-finished turn's counters - clearing them
+// before calibrating would make the loop read zeros forever.
 func (g *guidanceBudget) reset() {
 	if g.suppressed > 0 {
 		debug.Log("guidance-budget", "previous turn: %d guidance messages suppressed (budget=%d)",
 			g.suppressed, guidanceBudgetPerTurn)
 	}
+	g.adaptCaps()
 	g.injected = 0
 	g.suppressed = 0
 	g.seenHintTags = nil
 	g.appendedBytes = 0
 	g.criticalBytes = 0
 	g.delivered = nil
+	g.suppressedBytesTurn = 0
+	g.suppressedCriticalTurn = 0
+}
+
+// adaptCaps is the consumption half of the sa-37 feedback loop: the detector
+// ledger measures per-tag starvation at the budget choke point; here that
+// measurement adjusts the elastic pools. A turn with byte rejections grows
+// the corresponding pool by 25% (bounded at 2x base); a clean turn decays it
+// 20% toward base. Single-direction hysteresis (grow only on measured
+// starvation, decay only when clean) keeps the pool stable around the run's
+// real demand instead of oscillating.
+func (g *guidanceBudget) adaptCaps() {
+	if g.byteCap <= 0 {
+		g.byteCap = guidanceBudgetBytesPerTurn
+	}
+	if g.criticalCap <= 0 {
+		g.criticalCap = guidanceBudgetCriticalBytesPerTurn
+	}
+	if g.suppressedBytesTurn > 0 {
+		grown := g.byteCap + g.byteCap/guidanceByteCapGrowthDen
+		if max := guidanceBudgetBytesPerTurnMax(); grown > max {
+			grown = max
+		}
+		if grown != g.byteCap {
+			debug.Log("guidance-budget", "advisory pool starved (%d byte rejections last turn): cap %d -> %d (max %d)",
+				g.suppressedBytesTurn, g.byteCap, grown, guidanceBudgetBytesPerTurnMax())
+		}
+		g.byteCap = grown
+	} else {
+		shrunk := g.byteCap - g.byteCap/guidanceByteCapDecayDen
+		if shrunk < guidanceBudgetBytesPerTurn {
+			shrunk = guidanceBudgetBytesPerTurn
+		}
+		g.byteCap = shrunk
+	}
+	if g.suppressedCriticalTurn > 0 {
+		grown := g.criticalCap + g.criticalCap/guidanceByteCapGrowthDen
+		if max := guidanceBudgetCriticalBytesPerTurnMax(); grown > max {
+			grown = max
+		}
+		if grown != g.criticalCap {
+			debug.Log("guidance-budget", "critical pool starved (%d byte rejections last turn): cap %d -> %d (max %d)",
+				g.suppressedCriticalTurn, g.criticalCap, grown, guidanceBudgetCriticalBytesPerTurnMax())
+		}
+		g.criticalCap = grown
+	} else {
+		shrunk := g.criticalCap - g.criticalCap/guidanceByteCapDecayDen
+		if shrunk < guidanceBudgetCriticalBytesPerTurn {
+			shrunk = guidanceBudgetCriticalBytesPerTurn
+		}
+		g.criticalCap = shrunk
+	}
+}
+
+// effectiveByteCap returns this turn's advisory pool (base for bare structs
+// that were never reset).
+func (g *guidanceBudget) effectiveByteCap() int {
+	if g.byteCap <= 0 {
+		return guidanceBudgetBytesPerTurn
+	}
+	return g.byteCap
+}
+
+// effectiveCriticalCap is effectiveByteCap for the critical pool.
+func (g *guidanceBudget) effectiveCriticalCap() int {
+	if g.criticalCap <= 0 {
+		return guidanceBudgetCriticalBytesPerTurn
+	}
+	return g.criticalCap
 }
 
 // allow checks whether a guidance message with the given text should be
@@ -143,8 +252,9 @@ func (g *guidanceBudget) allow(text string) bool {
 func (g *guidanceBudget) allowTagged(text string, tag string) (bool, guidanceReject) {
 	// Critical messages first, against their dedicated pool (#1840 case 2).
 	if isCriticalGuidance(text) {
-		if g.criticalBytes+len(text) > guidanceBudgetCriticalBytesPerTurn {
+		if g.criticalBytes+len(text) > g.effectiveCriticalCap() {
 			g.suppressed++
+			g.suppressedCriticalTurn++
 			g.ledger.noteSuppressed(tag, rejectCriticalBytes)
 			return false, rejectCriticalBytes
 		}
@@ -153,8 +263,9 @@ func (g *guidanceBudget) allowTagged(text string, tag string) (bool, guidanceRej
 	}
 	// Byte-level flood cap for advisory (#1197: a stream of tagged notices
 	// can otherwise drown a result just as effectively as noise).
-	if g.appendedBytes+len(text) > guidanceBudgetBytesPerTurn {
+	if g.appendedBytes+len(text) > g.effectiveByteCap() {
 		g.suppressed++
+		g.suppressedBytesTurn++
 		g.ledger.noteSuppressed(tag, rejectBudgetBytes)
 		return false, rejectBudgetBytes
 	}

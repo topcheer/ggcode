@@ -758,7 +758,20 @@ func (m *Model) handleRunReportCommand() tea.Cmd {
 			usage = append(usage, runeval.UsageSample{Source: e.Source, Usage: e.Usage})
 		}
 	}
-	m.chatWriteSystem(nextSystemID(), runeval.Render(runeval.Evaluate(msgs, usage)))
+	// sa-37 consumption loop: the live agent's detector-effectiveness ledger
+	// (sa-36) is appended so /runreport shows which guidance detectors earned
+	// their keep and which starved silently this run - empirical outcome data
+	// next to the trajectory scorecard.
+	report := runeval.Render(runeval.Evaluate(msgs, usage))
+	if m.agent != nil {
+		if led := m.agent.GuidanceLedgerReport(); led != "" {
+			report += "\n\n" + led
+		}
+		if starved := m.agent.GuidanceStarvationReport(); starved != "" {
+			report += "\n" + starved
+		}
+	}
+	m.chatWriteSystem(nextSystemID(), report)
 	return nil
 }
 

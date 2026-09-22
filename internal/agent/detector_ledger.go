@@ -240,6 +240,45 @@ func (l *detectorLedger) renderRows(rows []detectorLedgerRow) string {
 	return b.String()
 }
 
+// starvedRowsLocked returns rows whose hints FIRED at least once this run
+// but were never delivered - the "silent starvation" population: the
+// detector paid its detection cost and produced context the budget silently
+// discarded every single time (arXiv:2606.08162's feedback-correction layer:
+// starvation that is measured but never surfaced is still entropy). Sorted
+// by suppression volume desc, then tag asc.
+func (l *detectorLedger) starvedRowsLocked() []detectorLedgerRow {
+	rows := make([]detectorLedgerRow, 0)
+	for _, r := range l.stats {
+		if r.Delivered == 0 && r.TotalSuppressed() > 0 {
+			rows = append(rows, *r)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if ta, tb := rows[i].TotalSuppressed(), rows[j].TotalSuppressed(); ta != tb {
+			return ta > tb
+		}
+		return rows[i].Tag < rows[j].Tag
+	})
+	return rows
+}
+
+// starvationReportLocked renders the one-line starvation digest ("" if no
+// tag starved this run). Names each starved tag with its rejection count so
+// the remediation (raise caps vs fix a repeat-firing detector) is directly
+// readable from the line.
+func (l *detectorLedger) starvationReportLocked() string {
+	rows := l.starvedRowsLocked()
+	if len(rows) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "silent starvation: %d tag(s) fired but never delivered:", len(rows))
+	for _, r := range rows {
+		fmt.Fprintf(&b, " [%s]x%d", r.Tag, r.TotalSuppressed())
+	}
+	return b.String()
+}
+
 // logRunSummary logs the run-end ledger aggregate. Safe to defer: uses
 // TryLock so a panic unwinding while a record call holds the mutex cannot
 // deadlock the unwind (same-goroutine Go mutexes are non-reentrant).
@@ -255,6 +294,12 @@ func (l *detectorLedger) logRunSummary() {
 		return
 	}
 	debug.Log("detector-ledger", "%s", l.reportLocked())
+	// sa-37 consumption loop: starvation gets its own line so the run log
+	// answers the calibration question directly instead of burying it in
+	// per-row suppressed counters.
+	if s := l.starvationReportLocked(); s != "" {
+		debug.Log("detector-ledger", "%s", s)
+	}
 }
 
 // GuidanceLedgerSnapshot returns the current run's per-tag guidance
@@ -267,4 +312,16 @@ func (a *Agent) GuidanceLedgerSnapshot() []detectorLedgerRow {
 // budgeted guidance fired this run).
 func (a *Agent) GuidanceLedgerReport() string {
 	return a.detectorLedger.report()
+}
+
+// GuidanceStarvationReport renders the current run's silent-starvation
+// digest: tags that fired but were never delivered ("" if none). This is
+// the user-visible half of the consumption loop - /runreport appends it so
+// starvation measured by the budget gates reaches the operator instead of
+// dying in debug.Log.
+func (a *Agent) GuidanceStarvationReport() string {
+	l := &a.detectorLedger
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.starvationReportLocked()
 }
