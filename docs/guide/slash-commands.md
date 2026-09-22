@@ -40,6 +40,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/mode [supervised\|plan\|auto\|bypass\|autopilot]` | Switch permission mode |
 | `/config` | Configuration management |
 | `/allow [tool]` | Permanently allow a tool (override permission policy) |
+| `/add-dir <path>` | Add an additional working directory to the file sandbox (cross-repo access, session-scoped) |
 | `/init` | Create `GGCODE.md` project memory file |
 | `/memory` | Manage project memory |
 | `/rules` | Manage ratchet rules (learned error patterns) |

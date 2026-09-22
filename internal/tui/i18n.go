@@ -281,6 +281,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.checkpoints")
 	case "/allow":
 		return tr(lang, "slash.allow")
+	case "/add-dir":
+		return tr(lang, "slash.adddir")
 	case "/plugins":
 		return tr(lang, "slash.plugins")
 	case "/image":

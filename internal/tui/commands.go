@@ -15,6 +15,36 @@ import (
 	"time"
 )
 
+func (m *Model) handleAddDirCommand(parts []string) tea.Cmd {
+	if len(parts) < 2 {
+		m.chatWriteSystem(nextSystemID(), m.t("command.usage.adddir"))
+		return nil
+	}
+	dir := strings.TrimSpace(strings.Join(parts[1:], " "))
+	if dir == "" {
+		m.chatWriteSystem(nextSystemID(), m.t("command.usage.adddir"))
+		return nil
+	}
+	// m.policy is the PermissionPolicy interface; only ConfigPolicy carries
+	// the extendable path sandbox.
+	cp, ok := m.policy.(*permission.ConfigPolicy)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), m.t("command.adddir.failed"))
+		return nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		m.chatWriteSystem(nextSystemID(), m.t("command.adddir.invalid", dir))
+		return nil
+	}
+	if !cp.AddAllowedDir(dir) {
+		m.chatWriteSystem(nextSystemID(), m.t("command.adddir.duplicate", dir))
+		return nil
+	}
+	m.chatWriteSystem(nextSystemID(), m.t("command.adddir.added", dir))
+	return nil
+}
+
 func (m *Model) updateAutoComplete() {
 	// In chat mode, @ triggers LAN Chat user list (not file mentions).
 	// IMPORTANT: The user list only shows while the user is actively typing
@@ -411,6 +441,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 				m.chatWriteSystem(nextSystemID(), m.t("command.usage.allow"))
 			}
 			return nil
+		case "/add-dir":
+			return m.handleAddDirCommand(parts)
 		case "/sessions":
 			m.openInspectorPanelWithFilter(inspectorPanelSessions, strings.TrimSpace(strings.Join(parts[1:], " ")))
 			return nil

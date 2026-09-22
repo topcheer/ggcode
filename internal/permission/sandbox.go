@@ -154,3 +154,26 @@ func (s *PathSandbox) Allowed(path string) bool {
 func (s *PathSandbox) AllowedDirs() []string {
 	return s.allowedDirs
 }
+
+// AddAllowedDir extends the sandbox with an additional allowed directory at
+// runtime (the /add-dir slash command). Directories are symlink-resolved and
+// de-duplicated, mirroring NewPathSandbox normalization. Returns true when
+// the directory was added; false if the sandbox is unavailable (fail-closed
+// state), the path could not be resolved, or it was already allowed.
+func (s *PathSandbox) AddAllowedDir(dir string) bool {
+	if s.getwdFailed || strings.TrimSpace(dir) == "" {
+		return false
+	}
+	resolved := resolvePath(dir)
+	if resolved == "" {
+		return false
+	}
+	for _, existing := range s.allowedDirs {
+		if pathEqualFold(resolved, existing) {
+			return false
+		}
+	}
+	s.allowedDirs = append(s.allowedDirs, resolved)
+	debug.Log("permission", "PathSandbox: added allowed dir %q", resolved)
+	return true
+}

@@ -371,7 +371,7 @@ var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
 	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/undo-run", "/files", "/tools", "/checkpoints", "/plugins",
-	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
+	"/inspector", "/image", "/mode", "/allow", "/add-dir", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/exit", "/quit",
 	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug",
@@ -423,6 +423,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/whatsapp":      "Manage WhatsApp channel binding",
 	"/wa":            "Alias for /whatsapp",
 	"/mcp":           "Show MCP servers",
+	"/add-dir":       "Add an additional working directory to the file sandbox (cross-repo access)",
 	"/memory":        "Manage memory",
 	"/undo":          "Undo last file edit",
 	"/undo-run":      "Revert ALL file changes from the last agent run",
@@ -490,6 +491,7 @@ var SlashCommandDescriptions = map[string]string{
 // Commands NOT in this map are executed immediately on Tab completion.
 var SlashCommandPlaceholders = map[string]string{
 	"/model":         "<model-name>",
+	"/add-dir":       "<path>",
 	"/provider":      "<vendor> [endpoint]",
 	"/impersonate":   "<cli-tool>",
 	"/inspector":     "<sessions|checkpoints|memory|plugins|config|status>",

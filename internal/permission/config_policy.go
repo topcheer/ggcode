@@ -505,6 +505,34 @@ func (p *ConfigPolicy) Mode() PermissionMode {
 	return p.mode
 }
 
+// AddAllowedDir extends the path sandbox with an additional allowed
+// directory at runtime (the /add-dir slash command). Thread-safe: the
+// sandbox is only mutated under the policy write lock, the same lock that
+// guards every Check/AllowedPathForTool verdict. Returns true when the
+// directory was added.
+func (p *ConfigPolicy) AddAllowedDir(dir string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sandbox == nil {
+		return false
+	}
+	return p.sandbox.AddAllowedDir(dir)
+}
+
+// AllowedDirs returns a snapshot of the sandbox's allowed directories
+// (for /add-dir feedback and tests).
+func (p *ConfigPolicy) AllowedDirs() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.sandbox == nil {
+		return nil
+	}
+	dirs := p.sandbox.AllowedDirs()
+	out := make([]string, len(dirs))
+	copy(out, dirs)
+	return out
+}
+
 // SetMode changes the permission mode at runtime.
 func (p *ConfigPolicy) SetMode(mode PermissionMode) {
 	p.mu.Lock()
