@@ -37,6 +37,19 @@ package agent
 //   - Uses median (not mean) for robustness against outliers
 //   - Requires at least 5 historical runs before comparing
 //   - Persists to .ggcode/ directory (same as playbook, knight-memory, etc.)
+//   - Harness-version gating (sa-27): each entry records the harness
+//     fingerprint sum (system prompt + integrity checks + tool set, see
+//     harness_fingerprint.go). Baseline medians and recent-run consensus are
+//     computed ONLY from runs recorded under the CURRENT harness. Without
+//     this, a harness change (new detectors, prompt edits, tool registration)
+//     makes the rolling window compare apples to oranges: e.g. iterations
+//     baseline=6 measured under a 40-detector harness vs recent=16 under a
+//     190-detector harness reads as a 2.6x regression when it is really a
+//     different harness. The Self-Harness literature (arXiv 2606.xxxxx,
+//     "agents improving their own operating framework") makes this explicit:
+//     harness version is part of any valid performance comparison. Old
+//     entries recorded before this field existed (empty HarnessSum) never
+//     match and silently age out of the 50-run window.
 
 import (
 	"encoding/json"
@@ -102,6 +115,14 @@ type perfBaselineEntry struct {
 	// AgentDiet (FSE 2026) triages trajectories segment-by-segment for the
 	// same reason. nil for baselines recorded before this field existed.
 	TopTools []string `json:"top_tools,omitempty"`
+
+	// HarnessSum is the harness fingerprint digest (ComputeHarnessFingerprint().Sum())
+	// captured when this run was recorded. Regression comparisons are gated to
+	// entries whose sum equals the current harness: metrics from a different
+	// system prompt, integrity-check set, or tool registry are not comparable
+	// (see header comment). Empty for entries recorded before this field existed;
+	// they are excluded from matching and age out of the rolling window.
+	HarnessSum string `json:"hs,omitempty"`
 }
 
 // perfBaselineData is the on-disk JSON structure.
@@ -279,8 +300,10 @@ func medianInt(vals []int) int {
 }
 
 // recordPerfBaseline saves a run summary to the historical data file.
-// Called from maybeReflect (async, non-blocking).
-func recordPerfBaseline(workingDir string, stats *RunStats) {
+// Called from RunStreamWithContent post-run bookkeeping (async, non-blocking).
+// harnessSum must be the harness fingerprint of the agent that produced the
+// run (a.ComputeHarnessFingerprint().Sum()); it keys harness-version gating.
+func recordPerfBaseline(workingDir string, stats *RunStats, harnessSum string) {
 	if stats == nil {
 		return
 	}
@@ -309,6 +332,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		Success:     stats.Success,
 		Timestamp:   time.Now().Unix(),
 		TopTools:    topToolMix(stats.ToolCalls, perfTopToolsCount),
+		HarnessSum:  harnessSum,
 	}
 
 	runs := loadPerfBaseline(workingDir)
@@ -336,11 +360,25 @@ func (a *Agent) maybeInjectPerfRegression() {
 	// Load historical data if not yet loaded this session.
 	if !a.perfBaseline.hasBaseline {
 		runs := loadPerfBaseline(a.WorkingDir())
-		if len(runs) < perfBaselineMinRuns {
+		// Harness-version gating: only runs recorded under the CURRENT harness
+		// fingerprint are comparable. Cross-harness medians produce false
+		// regressions after any harness change (new detector, prompt edit,
+		// tool registration) and mask real ones in the other direction.
+		curSum := a.ComputeHarnessFingerprint().Sum()
+		var same []perfBaselineEntry
+		for _, r := range runs {
+			if r.HarnessSum == curSum {
+				same = append(same, r)
+			}
+		}
+		if len(same) < perfBaselineMinRuns {
+			debug.Log("perf-baseline",
+				"harness-version gating: %d total runs, %d under current harness (<%d); skipping comparison",
+				len(runs), len(same), perfBaselineMinRuns)
 			return
 		}
-		a.perfBaseline.historical = runs
-		a.perfBaseline.baselineMid = computeMedianBaseline(runs)
+		a.perfBaseline.historical = same
+		a.perfBaseline.baselineMid = computeMedianBaseline(same)
 		a.perfBaseline.hasBaseline = true
 	}
 

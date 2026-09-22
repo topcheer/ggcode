@@ -1474,7 +1474,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
 		}
 		// Record run metrics for cross-session regression detection.
-		recordPerfBaseline(a.WorkingDir(), runStats)
+		// The harness fingerprint keys version gating: metrics recorded under
+		// a different harness (prompt/registries) are never compared against.
+		recordPerfBaseline(a.WorkingDir(), runStats, a.ComputeHarnessFingerprint().Sum())
 		a.mu.RLock()
 		fn := a.onRunResult
 		a.mu.RUnlock()

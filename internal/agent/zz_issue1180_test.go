@@ -89,12 +89,15 @@ func TestPerfBaselineReloadUsesFreshDiskDataAfterReset_Issue1180(t *testing.T) {
 		t.Fatalf("mkdir .ggcode: %v", err)
 	}
 	a := &Agent{workingDir: dir, contextManager: &fakePerfCM{}, perfBaseline: newPerfBaselineState()}
+	// sa-27: entries are gated to the current harness fingerprint; the
+	// fixture must record runs under the agent's own sum to stay comparable.
+	curSum := a.ComputeHarnessFingerprint().Sum()
 
 	writeRuns := func(t *testing.T, iters ...int) {
 		t.Helper()
 		runs := make([]string, len(iters))
 		for i, it := range iters {
-			runs[i] = fmt.Sprintf(`{"iter":%d,"tc":20,"dur":60,"ok":true}`, it)
+			runs[i] = fmt.Sprintf(`{"iter":%d,"tc":20,"dur":60,"ok":true,"hs":%q}`, it, curSum)
 		}
 		body := `{"runs":[` + strings.Join(runs, ",") + "]}"
 		if err := os.WriteFile(perfBaselinePath(dir), []byte(body), 0o644); err != nil {

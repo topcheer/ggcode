@@ -152,7 +152,7 @@ func TestRecordPerfBaseline(t *testing.T) {
 	}
 	stats.Success = true
 
-	recordPerfBaseline(tmp, stats)
+	recordPerfBaseline(tmp, stats, "sp=test/0 checks=/0 tools=/0")
 	loaded := loadPerfBaseline(tmp)
 	if len(loaded) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(loaded))
@@ -176,7 +176,7 @@ func TestRecordPerfBaselineSkipsTrivial(t *testing.T) {
 		Iterations: 1,
 	}
 	stats.finalize(nil)
-	recordPerfBaseline(tmp, stats)
+	recordPerfBaseline(tmp, stats, "sp=test/0 checks=/0 tools=/0")
 
 	loaded := loadPerfBaseline(tmp)
 	if len(loaded) != 0 {
@@ -318,7 +318,7 @@ func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
 		Duration:   30 * time.Second,
 	}
 	stats.Success = true
-	recordPerfBaseline(tmp, stats)
+	recordPerfBaseline(tmp, stats, "sp=test/0 checks=/0 tools=/0")
 	loaded := loadPerfBaseline(tmp)
 	if len(loaded) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(loaded))
