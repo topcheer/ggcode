@@ -420,61 +420,86 @@ func (a *Agent) maybeInjectPerfRegression() {
 }
 
 // checkSingleRunRegression checks if a single run regressed against baseline.
-// Returns (true, metricName) if any key metric regressed.
-//
-// Scale-sensitive metrics (iterations, duration, context peak) are compared
-// per tool call whenever both runs carry enough workload: raw totals cannot
-// tell a 30-iteration run spread over 200 tool calls (efficient batching)
-// apart from the same 30 iterations crammed into 35 calls (churn), so the
-// absolute thresholds misread every long task as regression. Below
-// perfMinNormToolCalls on either side, the legacy absolute comparison
-// applies.
+// Returns (true, metricName) if any key metric regressed, evaluating
+// perfMetricChecks in priority order (first hit wins, mirrors perfMetricOrder
+// for #1143 determinism).
 func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
-	norm := perfNormComparable(run, baseline)
-	// Iterations regression: 1.5x baseline
-	if norm {
-		if perfPerCall(run, "iterations") > perfRegressionFactor*perfPerCall(baseline, "iterations") {
-			return true, "iterations"
+	for _, mc := range perfMetricChecks {
+		if mc.check(run, baseline) {
+			return true, mc.name
 		}
-	} else if baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor) {
-		return true, "iterations"
-	}
-	// Duration regression: 1.5x baseline per tool call (skip if baseline is very short)
-	if norm {
-		if baseline.DurationSec > 10 && perfPerCall(run, "duration") > perfRegressionFactor*perfPerCall(baseline, "duration") {
-			return true, "duration"
-		}
-	} else if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
-		return true, "duration"
-	}
-	// Error rate regression: 2x baseline error count.
-	// #1143: removed the always-true "baseline.Errors >= 0" guard.
-	if baseline.ToolCalls > 0 && run.Errors > 0 && run.ToolCalls > 0 {
-		baseRate := float64(baseline.Errors) / float64(baseline.ToolCalls)
-		runRate := float64(run.Errors) / float64(run.ToolCalls)
-		if baseRate == 0 && runRate > 0.05 {
-			// Baseline had 0 errors, current run has >5% error rate
-			return true, "error_rate"
-		}
-		if baseRate > 0 && runRate > baseRate*perfErrorRateFactor {
-			return true, "error_rate"
-		}
-	}
-	// Context peak regression: 1.5x baseline tokens per tool call — peak
-	// context scales with task length, so the absolute check misread long
-	// runs as context bloat.
-	if norm {
-		if perfPerCall(run, "context_usage") > perfRegressionFactor*perfPerCall(baseline, "context_usage") {
-			return true, "context_usage"
-		}
-	} else if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
-		return true, "context_usage"
-	}
-	// Compaction regression: significantly more compactions than baseline
-	if baseline.Compactions == 0 && run.Compactions >= 3 {
-		return true, "compaction"
 	}
 	return false, ""
+}
+
+// perfMetricChecks lists per-metric regression predicates in the evaluation
+// priority used by checkSingleRunRegression, keeping worst-metric selection
+// deterministic when multiple metrics reach consensus (#1143).
+var perfMetricChecks = []struct {
+	name  string
+	check func(run, baseline perfBaselineEntry) bool
+}{
+	{"iterations", perfIterationsRegressed},
+	{"duration", perfDurationRegressed},
+	{"error_rate", perfErrorRateRegressed},
+	{"context_usage", perfContextRegressed},
+	{"compaction", perfCompactionRegressed},
+}
+
+// perfIterationsRegressed: iterations 1.5x baseline. Workload-normalized
+// when both runs carry enough tool calls: raw totals cannot tell a
+// 30-iteration run spread over 200 tool calls (efficient batching) apart
+// from the same 30 iterations crammed into 35 calls (churn). Below
+// perfMinNormToolCalls on either side, the legacy absolute comparison
+// applies.
+func perfIterationsRegressed(run, baseline perfBaselineEntry) bool {
+	if perfNormComparable(run, baseline) {
+		return perfPerCall(run, "iterations") > perfRegressionFactor*perfPerCall(baseline, "iterations")
+	}
+	return baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor)
+}
+
+// perfDurationRegressed: 1.5x baseline seconds per tool call, skipped when
+// the baseline is very short (<=10s, too noisy to compare).
+func perfDurationRegressed(run, baseline perfBaselineEntry) bool {
+	if baseline.DurationSec <= 10 {
+		return false
+	}
+	if perfNormComparable(run, baseline) {
+		return perfPerCall(run, "duration") > perfRegressionFactor*perfPerCall(baseline, "duration")
+	}
+	return run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor)
+}
+
+// perfErrorRateRegressed: 2x baseline error rate; from a zero-error baseline,
+// a >5% rate counts. #1143: removed the always-true "baseline.Errors >= 0"
+// guard.
+func perfErrorRateRegressed(run, baseline perfBaselineEntry) bool {
+	if baseline.ToolCalls <= 0 || run.Errors <= 0 || run.ToolCalls <= 0 {
+		return false
+	}
+	baseRate := float64(baseline.Errors) / float64(baseline.ToolCalls)
+	runRate := float64(run.Errors) / float64(run.ToolCalls)
+	if baseRate == 0 {
+		// Baseline had 0 errors, current run has >5% error rate
+		return runRate > 0.05
+	}
+	return runRate > baseRate*perfErrorRateFactor
+}
+
+// perfContextRegressed: 1.5x baseline tokens per tool call — peak context
+// scales with task length, so the absolute check misread long runs as
+// context bloat.
+func perfContextRegressed(run, baseline perfBaselineEntry) bool {
+	if perfNormComparable(run, baseline) {
+		return perfPerCall(run, "context_usage") > perfRegressionFactor*perfPerCall(baseline, "context_usage")
+	}
+	return baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor)
+}
+
+// perfCompactionRegressed: significantly more compactions than baseline.
+func perfCompactionRegressed(run, baseline perfBaselineEntry) bool {
+	return baseline.Compactions == 0 && run.Compactions >= 3
 }
 
 // perfRegressionConsensusRuns is how many of the recent runs must regress on

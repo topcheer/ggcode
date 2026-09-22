@@ -336,6 +336,20 @@ func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
 
 // ---------- Workload normalization for scale-sensitive metrics ----------
 
+func TestPerfMetricChecksTableMatchesConsensusOrder(t *testing.T) {
+	// perfMetricChecks drives first-hit-wins evaluation; perfMetricOrder
+	// drives #1143 consensus tie-breaks. They must stay in lockstep or the
+	// reported metric can diverge from the consensus ranking.
+	if len(perfMetricChecks) != len(perfMetricOrder) {
+		t.Fatalf("table length %d != perfMetricOrder length %d", len(perfMetricChecks), len(perfMetricOrder))
+	}
+	for i, mc := range perfMetricChecks {
+		if mc.name != perfMetricOrder[i] {
+			t.Errorf("position %d: table metric %q != perfMetricOrder %q", i, mc.name, perfMetricOrder[i])
+		}
+	}
+}
+
 func TestScaleSensitiveMetricsNormalizeByWorkload(t *testing.T) {
 	// Baseline median blends quick-fix runs; the run under test is a
 	// legitimate deep-research session (~2x raw totals across the board).
