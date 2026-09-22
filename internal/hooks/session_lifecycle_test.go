@@ -100,3 +100,29 @@ func TestDispatchSessionLifecycleUnconfigured(t *testing.T) {
 		t.Error("unconfigured dispatch should return Allowed=true")
 	}
 }
+
+// TestRunSessionStartEndHookWrappers verifies the wrapper entry points set
+// the correct event and route the configured hooks through async dispatch.
+func TestRunSessionStartEndHookWrappers(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "wrapper.txt")
+	cmd := "echo wrapper >> " + shellQuote(marker)
+	cfg := HookConfig{
+		SessionStart: []Hook{{Match: "*", Type: HookTypeCommand, Command: cmd}},
+		SessionEnd:   []Hook{{Match: "*", Type: HookTypeCommand, Command: cmd}},
+	}
+
+	// Wrappers must set env.Event themselves — callers pass bare envs.
+	RunSessionStartHooks(cfg, HookEnv{SessionID: "s1", SessionSource: "new"})
+	RunSessionEndHooks(cfg, HookEnv{SessionID: "s1", SessionEndReason: "exit"})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(marker)
+		if err == nil && strings.Count(string(data), "wrapper") == 2 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for session lifecycle wrapper hooks to run")
+}
