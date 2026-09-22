@@ -1290,6 +1290,48 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	// (code execution caller) so the answering user message can be checked
 	// against the tool_result-only formatting rule.
 	programmaticTools := map[string]bool{}
+
+	// Cache breakpoint budget allocator. Anthropic allows at most 4
+	// cache_control breakpoints per request, and breakpoints are positional
+	// (each one caches the request prefix up to and including its block).
+	// Plan all spendable breakpoints up front instead of emitting them
+	// opportunistically, so the highest-value entries always fit
+	// ("Don't Break the Cache", arXiv:2601.06007):
+	//
+	//  1. static system prefix  - stable across the entire session
+	//  2. conversation tail     - caches system+tools+the whole history for
+	//     the next turn; in long agent loops the history dwarfs the system
+	//     prompt, so this is where most of the cache savings come from
+	//  3. tool schemas          - static; skipped when server-side tools
+	//     follow, because they are appended AFTER the regular tools and
+	//     their own breakpoint prefix-covers the same span
+	//  4. server tools / memory - static declarations
+	const maxCacheBreakpoints = 4
+	serverBP := 0
+	if hasCacheableServerTool(p.serverTools) {
+		serverBP = 1
+	}
+	memoryBP := 0
+	if p.memoryTool && len(p.serverTools) == 0 {
+		memoryBP = 1
+	}
+	toolsBP := 0
+	if len(tools) > 0 && serverBP == 0 {
+		toolsBP = 1
+	}
+	tailBP := 1
+	sysBPBudget := maxCacheBreakpoints - toolsBP - serverBP - memoryBP - tailBP
+	if sysBPBudget < 0 {
+		// Defensive: never exceed the API cap. Sacrifice the tail first,
+		// then the (redundant) tool-schema breakpoint; system blocks keep
+		// priority.
+		tailBP = 0
+		sysBPBudget = maxCacheBreakpoints - toolsBP - serverBP - memoryBP
+		if sysBPBudget < 0 {
+			sysBPBudget = 0
+		}
+	}
+	sysBPApplied := 0
 	for _, m := range messages {
 		if m.Role == "system" {
 			for _, b := range m.Content {
@@ -1408,8 +1450,9 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 					text += "\n[End System]"
 				}
 				block := anthropic.NewTextBlock(text)
-				if block.OfText != nil && sb.cache {
+				if block.OfText != nil && sb.cache && sysBPApplied < sysBPBudget {
 					block.OfText.CacheControl = anthropic.NewCacheControlEphemeralParam()
+					sysBPApplied++
 				}
 				newBlocks = append(newBlocks, block)
 			}
@@ -1431,8 +1474,9 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	if len(systemBlocks) > 0 {
 		for _, sb := range systemBlocks {
 			block := anthropic.TextBlockParam{Text: sb.text}
-			if sb.cache {
+			if sb.cache && sysBPApplied < sysBPBudget {
 				block.CacheControl = anthropic.NewCacheControlEphemeralParam()
+				sysBPApplied++
 			}
 			params.System = append(params.System, block)
 		}
@@ -1594,7 +1638,11 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		// so Anthropic caches all tool schemas (which are large and static
 		// across turns). Only the last item needs the breakpoint — Anthropic
 		// caches everything from the start up to each breakpoint.
-		if lastCacheable >= 0 && toolParams[lastCacheable].OfTool != nil {
+		// Skipped when server-side tools follow (toolsBP == 0): they are
+		// appended after the regular tools and their own breakpoint
+		// prefix-covers the same span, so a second breakpoint here would
+		// only waste budget.
+		if toolsBP > 0 && lastCacheable >= 0 && toolParams[lastCacheable].OfTool != nil {
 			toolParams[lastCacheable].OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
 		}
 		params.Tools = toolParams
@@ -1650,6 +1698,30 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 			setToolUnionCacheControl(&u)
 		}
 		params.Tools = append(params.Tools, u)
+	}
+
+	// Conversation-tail breakpoint (incremental caching): place the final
+	// breakpoint on the last cacheable content block of the last user
+	// message so the NEXT request prefix-caches everything up to it —
+	// system, tools, and the entire conversation history. This is the
+	// standard agentic pattern from Anthropic's caching guidance and
+	// "Don't Break the Cache" (arXiv:2601.06007): without it only the
+	// system prompt and tool schemas are cached and every turn re-processes
+	// the whole message history at full input price.
+	//
+	// Assistant-prefill tails are skipped (prefill+cache interplay with
+	// extended thinking is subtle), and unsupported block shapes (thinking
+	// echoes, server tool result payloads) are walked over to the previous
+	// block in the same message.
+	if tailBP > 0 && len(msgParams) > 0 {
+		last := &msgParams[len(msgParams)-1]
+		if last.Role == anthropic.MessageParamRoleUser {
+			for i := len(last.Content) - 1; i >= 0; i-- {
+				if setMsgBlockCacheControl(&last.Content[i]) != 0 {
+					break
+				}
+			}
+		}
 	}
 
 	// Apply tool_choice when set. Only sent when tools are present (API requirement).
@@ -1747,6 +1819,44 @@ func serverToolBlockParam(raw json.RawMessage) (*anthropic.ContentBlockParamUnio
 		return &anthropic.ContentBlockParamUnion{OfCodeExecutionToolResult: &param}, nil
 	}
 	return nil, fmt.Errorf("unknown server tool block type %q", probe.Type)
+}
+
+// setMsgBlockCacheControl attaches an ephemeral cache breakpoint to a
+// message content block. Returns 1 when the block already carries one,
+// 2 when it was just applied, and 0 when the block shape cannot take one
+// (the caller walks to the previous block in the same message).
+func setMsgBlockCacheControl(b *anthropic.ContentBlockParamUnion) int {
+	var cc *anthropic.CacheControlEphemeralParam
+	switch {
+	case b.OfText != nil:
+		cc = &b.OfText.CacheControl
+	case b.OfToolResult != nil:
+		cc = &b.OfToolResult.CacheControl
+	case b.OfImage != nil:
+		cc = &b.OfImage.CacheControl
+	default:
+		return 0
+	}
+	if cc.Type != "" {
+		return 1
+	}
+	*cc = anthropic.NewCacheControlEphemeralParam()
+	return 2
+}
+
+// hasCacheableServerTool reports whether any declared server-side tool
+// would actually be appended to params.Tools by buildParams (unknown types
+// are skipped there) and therefore receive the trailing server-tool
+// breakpoint.
+func hasCacheableServerTool(tools []ServerToolConfig) bool {
+	for _, st := range tools {
+		switch st.Type {
+		case "web_search_20250305", "web_fetch_20250910", "tool_search_tool_regex",
+			"tool_search_tool_bm25", "code_execution_20260120":
+			return true
+		}
+	}
+	return false
 }
 
 // setToolUnionCacheControl attaches a cache breakpoint to a server-tool union.
