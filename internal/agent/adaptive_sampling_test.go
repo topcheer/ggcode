@@ -35,13 +35,26 @@ func TestAdaptiveSampling_PhaseClassification(t *testing.T) {
 			wantPhase: phaseCodeEdit,
 		},
 		{
-			name: "errors → errorRecovery",
+			name: "command failure is not a recovery signal (filtered)",
 			entries: []effortEntry{
 				{toolName: "edit_file", isError: true},
 				{toolName: "run_command", isError: true},
 				{toolName: "read_file", isError: false},
 			},
-			wantPhase: phaseErrorRecovery,
+			// Unified-monitor filter (#1436-A parity): run_command failures
+			// are not recovery signals, so only 1 filtered error remains and
+			// the read streak classifies as exploration instead.
+			wantPhase: phaseExploration,
+		},
+		{
+			name: "read-only misses never trigger recovery",
+			entries: []effortEntry{
+				{toolName: "grep", isError: true},
+				{toolName: "read_file", isError: true},
+				{toolName: "read_file", isError: false},
+				{toolName: "grep", isError: false},
+			},
+			wantPhase: phaseExploration,
 		},
 		{
 			name: "creative → creative",
@@ -54,11 +67,11 @@ func TestAdaptiveSampling_PhaseClassification(t *testing.T) {
 			wantPhase: phaseCreative,
 		},
 		{
-			name: "errors dominate edits",
+			name: "errors → errorRecovery (2 filtered edit failures)",
 			entries: []effortEntry{
 				{toolName: "edit_file", isError: true},
 				{toolName: "edit_file", isError: true},
-				{toolName: "edit_file", isError: false},
+				{toolName: "read_file", isError: false},
 			},
 			wantPhase: phaseErrorRecovery,
 		},
@@ -66,8 +79,10 @@ func TestAdaptiveSampling_PhaseClassification(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newAdaptiveSamplingState()
-			s.entries = tt.entries
+			s := newAdaptiveSamplingState(newTaskPhaseWindow())
+			for _, e := range tt.entries {
+				s.recordToolResultErr(e.toolName, e.isError, e.errText)
+			}
 			got := s.classifyPhase()
 			if got != tt.wantPhase {
 				t.Errorf("classifyPhase() = %v, want %v", got, tt.wantPhase)
@@ -94,10 +109,14 @@ func TestAdaptiveSampling_RecommendedTemperature(t *testing.T) {
 			{toolName: "edit_file", isError: false},
 			{toolName: "edit_file", isError: false},
 		}, tempCodeEdit},
-		{"error recovery", []effortEntry{
+		{"two edit failures → recovery temp", []effortEntry{
+			{toolName: "edit_file", isError: true},
+			{toolName: "edit_file", isError: true},
+		}, tempErrorRecover},
+		{"harmless misses → no adjustment (filtered)", []effortEntry{
 			{toolName: "edit_file", isError: true},
 			{toolName: "run_command", isError: true},
-		}, tempErrorRecover},
+		}, -1},
 		{"creative", []effortEntry{
 			{toolName: "git_commit", isError: false},
 			{toolName: "git_commit", isError: false},
@@ -108,8 +127,10 @@ func TestAdaptiveSampling_RecommendedTemperature(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := newAdaptiveSamplingState()
-			s.entries = tt.entries
+			s := newAdaptiveSamplingState(newTaskPhaseWindow())
+			for _, e := range tt.entries {
+				s.recordToolResultErr(e.toolName, e.isError, e.errText)
+			}
 			got := s.recommendedTemperature()
 			if got != tt.wantTemp {
 				t.Errorf("recommendedTemperature() = %.2f, want %.2f", got, tt.wantTemp)
@@ -119,12 +140,9 @@ func TestAdaptiveSampling_RecommendedTemperature(t *testing.T) {
 }
 
 func TestAdaptiveSampling_UserOverride(t *testing.T) {
-	s := newAdaptiveSamplingState()
-	s.entries = []effortEntry{
-		{toolName: "read_file", isError: false},
-		{toolName: "read_file", isError: false},
-		{toolName: "read_file", isError: false},
-		{toolName: "read_file", isError: false},
+	s := newAdaptiveSamplingState(newTaskPhaseWindow())
+	for i := 0; i < 4; i++ {
+		s.recordToolResult("read_file", false)
 	}
 
 	// Without override, should recommend exploration temperature.
@@ -146,26 +164,26 @@ func TestAdaptiveSampling_UserOverride(t *testing.T) {
 }
 
 func TestAdaptiveSampling_SlidingWindow(t *testing.T) {
-	s := newAdaptiveSamplingState()
+	s := newAdaptiveSamplingState(newTaskPhaseWindow())
 
 	// Fill beyond window size.
-	for i := 0; i < adaptiveSamplingWindow+5; i++ {
+	for i := 0; i < taskPhaseWindowSize+5; i++ {
 		s.recordToolResult("read_file", false)
 	}
 
-	if len(s.entries) != adaptiveSamplingWindow {
-		t.Errorf("expected window size %d, got %d", adaptiveSamplingWindow, len(s.entries))
+	if len(s.window.entries) != taskPhaseWindowSize {
+		t.Errorf("expected window size %d, got %d", taskPhaseWindowSize, len(s.window.entries))
 	}
 }
 
 func TestAdaptiveSampling_Reset(t *testing.T) {
-	s := newAdaptiveSamplingState()
+	s := newAdaptiveSamplingState(newTaskPhaseWindow())
 	s.recordToolResult("edit_file", false)
 	s.recordToolResult("read_file", false)
 
 	s.reset()
-	if len(s.entries) != 0 {
-		t.Errorf("expected empty entries after reset, got %d", len(s.entries))
+	if len(s.window.entries) != 0 {
+		t.Errorf("expected empty entries after reset, got %d", len(s.window.entries))
 	}
 }
 

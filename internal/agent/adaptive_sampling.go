@@ -30,17 +30,18 @@ import (
 //
 // Key design decisions:
 //  1. Only activates when the user has NOT explicitly set temperature.
-//  2. Uses the same tool trajectory classification as adaptive effort,
-//     but maps phases to temperature values rather than reasoning budgets.
+//  2. Reads the SHARED unified task-phase monitor (task_phase.go) — the
+//     same window and signals as adaptive effort — and maps phases to
+//     temperature values rather than reasoning budgets.
 //  3. Applies temperature for exactly one LLM turn, then restores the
 //     previous value — same ephemeral pattern as adaptive effort.
 //  4. Uses conservative temperature values to avoid degrading code quality.
 
-const (
-	// adaptiveSamplingWindow controls how many recent tool interactions to
-	// consider when classifying the current sampling context.
-	adaptiveSamplingWindow = 6
+// Window sizing lives in the unified task-phase monitor (task_phase.go:
+// taskPhaseWindowSize) — effort and sampling share one window so their
+// phase views cannot diverge.
 
+const (
 	// Temperature presets by task phase. These are conservative values that
 	// improve output quality without introducing randomness in code edits.
 	tempExploration  = 0.4 // diverse exploration, brainstorming
@@ -67,27 +68,33 @@ var creativeTools = map[string]bool{
 	"cron_create": true,
 }
 
-// adaptiveSamplingState tracks recent tool interactions and recommends a
-// temperature for the next LLM turn.
+// adaptiveSamplingState recommends a temperature for the next LLM turn from
+// the shared unified task-phase monitor (task_phase.go).
 type adaptiveSamplingState struct {
-	mu              sync.Mutex
-	entries         []effortEntry // reuse effortEntry from adaptive_effort.go
-	userOverrideSet bool          // true when user explicitly set temperature
+	mu              sync.Mutex       // guards userOverrideSet
+	window          *taskPhaseWindow // unified monitor, shared with adaptive effort
+	userOverrideSet bool             // true when user explicitly set temperature
 }
 
-func newAdaptiveSamplingState() *adaptiveSamplingState {
-	return &adaptiveSamplingState{}
-}
-
-// recordToolResult appends a tool interaction to the sliding window.
-// Reuses the same entry type as adaptive effort for consistency.
-func (s *adaptiveSamplingState) recordToolResult(toolName string, isError bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = append(s.entries, effortEntry{toolName: toolName, isError: isError})
-	if len(s.entries) > adaptiveSamplingWindow {
-		s.entries = s.entries[len(s.entries)-adaptiveSamplingWindow:]
+func newAdaptiveSamplingState(w *taskPhaseWindow) *adaptiveSamplingState {
+	if w == nil {
+		w = newTaskPhaseWindow()
 	}
+	return &adaptiveSamplingState{window: w}
+}
+
+// recordToolResult appends a tool interaction to the unified monitor.
+func (s *adaptiveSamplingState) recordToolResult(toolName string, isError bool) {
+	s.window.record(toolName, isError, "")
+}
+
+// recordToolResultErr passes the failed call's error text so the unified
+// monitor's param-format retry filter applies to temperature classification
+// too (#1436-A/#1836 parity: the sampling-side classifier predated those
+// fixes and counted innocuous read-only/param failures as recovery signals,
+// forcing max-determinism temperature after harmless misses).
+func (s *adaptiveSamplingState) recordToolResultErr(toolName string, isError bool, errText string) {
+	s.window.record(toolName, isError, errText)
 }
 
 // setUserOverride marks that the user has explicitly set temperature — the
@@ -105,52 +112,33 @@ func (s *adaptiveSamplingState) hasUserOverride() bool {
 	return s.userOverrideSet
 }
 
-// reset clears the window for a new user turn.
+// reset clears the unified monitor for a new user turn.
 func (s *adaptiveSamplingState) reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = s.entries[:0]
+	s.window.reset()
 }
 
-// classifyPhase analyzes recent tool interactions and returns the current
-// task phase for temperature selection.
+// classifyPhase analyzes the unified monitor's canonical signals and returns
+// the current task phase for temperature selection.
 func (s *adaptiveSamplingState) classifyPhase() samplingPhase {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(s.entries) == 0 {
+	if s.window == nil {
+		return phaseNone
+	}
+	sig := s.window.signals()
+	if sig.Total == 0 {
 		return phaseNone
 	}
 
-	recentErrors := 0
-	editCount := 0
-	readOnlyCount := 0
-	creativeCount := 0
-
-	for _, e := range s.entries {
-		if e.isError {
-			recentErrors++
-			continue
-		}
-		if editTools[e.toolName] {
-			editCount++
-		} else if creativeTools[e.toolName] {
-			creativeCount++
-		} else if effortReadOnlyTools[e.toolName] {
-			readOnlyCount++
-		}
-	}
-
-	// Priority: error recovery > code editing > creative > exploration
-	total := len(s.entries)
+	// Priority: error recovery > code editing > creative > exploration.
+	// Thresholds are deliberately more conservative than the effort
+	// policy's (2+ filtered errors; ratio-based phase dominance).
 	switch {
-	case recentErrors >= 2:
+	case sig.RecentErrors >= 2:
 		return phaseErrorRecovery
-	case editCount > 0 && editCount >= total/3:
+	case sig.EditCount > 0 && sig.EditCount >= sig.Total/3:
 		return phaseCodeEdit
-	case creativeCount > 0 && creativeCount >= total/2:
+	case sig.CreativeCount > 0 && sig.CreativeCount >= sig.Total/2:
 		return phaseCreative
-	case readOnlyCount > 0 && readOnlyCount >= total/2:
+	case sig.ReadOnlyCount > 0 && sig.ReadOnlyCount >= sig.Total/2:
 		return phaseExploration
 	default:
 		return phaseNone

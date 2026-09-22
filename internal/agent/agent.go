@@ -234,6 +234,7 @@ type Agent struct {
 	userSentiment             *userSentimentState        // negative user feedback detection (frustration/rejection course correction)
 	adaptiveSampling          *adaptiveSamplingState     // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter             *adaptiveEffortState       // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
+	phaseWindow               *taskPhaseWindow           // unified task-phase monitor feeding effort + sampling adapters
 	branchGuard               *branchGuardState          // protected branch edit warning (main/master/develop awareness)
 	destructiveGuard          *gitDestructiveState       // destructive git operation detection (reset --hard, force push, etc.)
 	shellNativeHint           *shellNativeHintState      // suggests native tools when agent uses shell for equivalent operations
@@ -372,6 +373,9 @@ type modeAwarePolicy interface {
 // NewAgent creates a new agent with optional permission policy.
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
+	// One unified task-phase monitor feeds both compute-allocation adapters
+	// (effort + sampling): single record site, no divergent private windows.
+	phaseWindow := newTaskPhaseWindow()
 	a := &Agent{
 		provider:               p,
 		tools:                  tools,
@@ -443,8 +447,9 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		latencyTracker:         NewLatencyTracker(),
 		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
-		adaptiveSampling:       newAdaptiveSamplingState(),
-		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
+		phaseWindow:            phaseWindow,
+		adaptiveSampling:       newAdaptiveSamplingState(phaseWindow),
+		effortAdapter:          newAdaptiveEffortStateDetectOverride(p, phaseWindow),
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
 		readHash:               newReadHashTracker(),
@@ -3948,13 +3953,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 				}
 			}
-			// Record tool result for adaptive effort classification.
+			// Record tool result on the unified task-phase monitor: adaptive
+			// effort and adaptive sampling both classify from this one window.
 			if a.effortAdapter != nil {
 				a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
-			// Record tool result for adaptive sampling classification.
+			// Sampling keeps its own override flag but reads the same window.
 			if a.adaptiveSampling != nil {
-				a.adaptiveSampling.recordToolResult(tc.Name, result.IsError)
+				a.adaptiveSampling.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
 			// Strategy stagnation detector: tracks same-tool+target retries
 			// after failure. When 2+ consecutive failures with identical

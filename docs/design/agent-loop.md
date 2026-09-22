@@ -38,6 +38,7 @@ All optimization layers are deterministic and run in-process without extra LLM c
 | Reasoning block compaction | `internal/context/manager.go` | Clear old thinking/reasoning_content blocks |
 | Adaptive effort | `adaptive_effort.go` | Per-turn reasoning effort adaptation based on tool complexity (Opus 5 effort toggle pattern) |
 | Adaptive sampling | `adaptive_sampling.go` | Per-turn temperature adaptation based on task phase: low for edits/errors, higher for exploration/creative |
+| Task-phase monitor | `task_phase.go` | Unified sliding window + canonical phase signals feeding both adaptive adapters (single record site, no divergent private windows) |
 | Command caching | `command_cache.go` | Deterministic build/test command result caching |
 | Prompt cache keepalive | `cache_keepalive.go` | Anthropic prompt-cache warming pings during idle (saves ~83K tokens on resume) |
 

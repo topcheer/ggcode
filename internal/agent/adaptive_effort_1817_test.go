@@ -10,7 +10,7 @@ import (
 // DURING the streaming call (apply checked the flag before; the window is
 // tens of seconds wide).
 func Test1817RestoreSkipsUserOverride(t *testing.T) {
-	a := &Agent{effortAdapter: &adaptiveEffortState{}}
+	a := &Agent{effortAdapter: newAdaptiveEffortState()}
 	a.effortAdapter.setUserOverride(true)
 	if !a.effortAdapter.hasUserOverride() {
 		t.Fatal("setup: override flag must be set")

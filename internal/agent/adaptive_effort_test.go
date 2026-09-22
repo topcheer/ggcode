@@ -93,7 +93,7 @@ func TestAdaptiveEffortWindowSlide(t *testing.T) {
 	s := newAdaptiveEffortState()
 
 	// Fill with read-only tools (would recommend "low")
-	for i := 0; i < adaptiveEffortWindow; i++ {
+	for i := 0; i < taskPhaseWindowSize; i++ {
 		s.recordToolResult("read_file", false)
 	}
 	if got := s.recommendedEffort(); got != "low" {
@@ -101,7 +101,7 @@ func TestAdaptiveEffortWindowSlide(t *testing.T) {
 	}
 
 	// Add an error — window slides, old read-only entries drop off
-	for i := 0; i < adaptiveEffortWindow; i++ {
+	for i := 0; i < taskPhaseWindowSize; i++ {
 		s.recordToolResult("edit_file", true)
 	}
 	if got := s.recommendedEffort(); got != "high" {

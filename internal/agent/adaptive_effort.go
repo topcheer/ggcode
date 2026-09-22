@@ -25,13 +25,9 @@ import (
 //   - Exploration: only reads/searches → low effort
 //   - Default: no data yet → empty (provider default)
 
-const (
-	// adaptiveEffortWindow controls how many recent tool interactions to
-	// consider when classifying the current effort context. A small window
-	// keeps the adapter responsive to context shifts (e.g. from exploration
-	// to editing) without over-weighting stale history.
-	adaptiveEffortWindow = 6
-)
+// Window sizing now lives in the unified task-phase monitor
+// (task_phase.go: taskPhaseWindowSize). effort and sampling share one
+// window so their phase views cannot diverge.
 
 // toolComplexity classifies how much reasoning a tool typically needs.
 type toolComplexity int
@@ -149,16 +145,16 @@ type effortEntry struct {
 	errText string
 }
 
-// adaptiveEffortState tracks recent tool interactions and recommends a
-// reasoning effort level for the next LLM turn.
+// adaptiveEffortState recommends a reasoning effort level for the next LLM
+// turn from the shared unified task-phase monitor (task_phase.go).
 type adaptiveEffortState struct {
-	mu              sync.Mutex
-	entries         []effortEntry // ring of recent tool results
-	userOverrideSet bool          // true when user explicitly set effort via slash/config
+	mu              sync.Mutex       // guards userOverrideSet
+	window          *taskPhaseWindow // unified monitor, shared with adaptive sampling
+	userOverrideSet bool             // true when user explicitly set effort via slash/config
 }
 
 func newAdaptiveEffortState() *adaptiveEffortState {
-	return &adaptiveEffortState{}
+	return &adaptiveEffortState{window: newTaskPhaseWindow()}
 }
 
 // recordToolResult appends a tool interaction to the sliding window.
@@ -167,21 +163,10 @@ func (s *adaptiveEffortState) recordToolResult(toolName string, isError bool) {
 }
 
 // recordToolResultErr is recordToolResult with the error text for
-// param-format classification (#1836 case 2).
+// param-format classification (#1836 case 2). The unified monitor lowercases
+// and truncates errText for the canonical recovery filter.
 func (s *adaptiveEffortState) recordToolResultErr(toolName string, isError bool, errText string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	et := ""
-	if isError {
-		et = strings.ToLower(errText)
-		if len(et) > 160 {
-			et = et[:160]
-		}
-	}
-	s.entries = append(s.entries, effortEntry{toolName: toolName, isError: isError, errText: et})
-	if len(s.entries) > adaptiveEffortWindow {
-		s.entries = s.entries[len(s.entries)-adaptiveEffortWindow:]
-	}
+	s.window.record(toolName, isError, errText)
 }
 
 // newAdaptiveEffortStateDetectOverride builds the adapter and honors a
@@ -193,9 +178,14 @@ func (s *adaptiveEffortState) recordToolResultErr(toolName string, isError bool,
 // explicitly configured to high, violating the module's own contract
 // ("user sets effort via /effort or config, that setting always wins and
 // the adapter stays dormant"). Probing the provider's already-set effort
-// restores the contract for the config path.
-func newAdaptiveEffortStateDetectOverride(p provider.Provider) *adaptiveEffortState {
+// restores the contract for the config path. The window is supplied by the
+// caller (NewAgent) so effort and sampling observe one shared task-phase
+// stream instead of divergent private copies.
+func newAdaptiveEffortStateDetectOverride(p provider.Provider, w *taskPhaseWindow) *adaptiveEffortState {
 	s := newAdaptiveEffortState()
+	if w != nil {
+		s.window = w
+	}
 	if p == nil {
 		return s
 	}
@@ -222,11 +212,9 @@ func (s *adaptiveEffortState) hasUserOverride() bool {
 	return s.userOverrideSet
 }
 
-// reset clears the window for a new user turn.
+// reset clears the unified monitor for a new user turn.
 func (s *adaptiveEffortState) reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = s.entries[:0]
+	s.window.reset()
 }
 
 // recommendedEffort analyzes recent tool interactions and returns the
@@ -241,37 +229,15 @@ func (s *adaptiveEffortState) recommendedEffort() string {
 	if s.userOverrideSet {
 		return ""
 	}
-	if len(s.entries) == 0 {
+	if s.window == nil {
+		return ""
+	}
+	sig := s.window.signals()
+	if sig.Total == 0 {
 		return ""
 	}
 
-	// Count patterns in the window.
-	recentErrors := 0
-	editCount := 0
-	readOnlyCount := 0
-
-	for _, e := range s.entries {
-		if e.isError {
-			// #1436-A: any error used to bump effort to high - one read-only
-			// grep/LSP miss during exploration poisoned the next 6 turns into
-			// high-effort (cost/latency), directly contradicting the module's
-			// 'reduce cost and latency' charter. Only errors from tools the
-			// errorRecoverySignals set declares (edit-family retries - the
-			// module comment's 'recent EDIT failures -> high' intent that
-			// was never wired) count as recovery signals.
-			if errorRecoverySignals[e.toolName] && !isParamFormatEditFailure(e.toolName, e.errText) {
-				recentErrors++
-			}
-			continue
-		}
-		if editTools[e.toolName] {
-			editCount++
-		} else if effortReadOnlyTools[e.toolName] {
-			readOnlyCount++
-		}
-	}
-
-	// Decision priority:
+	// Decision priority (unchanged from the pre-unification policy):
 	// 1. Error recovery → high effort (the agent needs to think carefully
 	//    about what went wrong and how to fix it).
 	// 2. Active editing → medium effort (edits benefit from more reasoning
@@ -280,14 +246,14 @@ func (s *adaptiveEffortState) recommendedEffort() string {
 	//    tokens and latency).
 	// 4. Mixed/unknown → empty (let the provider use its default).
 
-	if recentErrors > 0 {
+	if sig.RecentErrors > 0 {
 		return "high"
 	}
-	if editCount > 0 {
+	if sig.EditCount > 0 {
 		return "medium"
 	}
 	// If all recent tools were read-only, use low effort.
-	if readOnlyCount == len(s.entries) {
+	if sig.ReadOnlyCount == sig.Total {
 		return "low"
 	}
 	return ""

@@ -30,11 +30,11 @@ func Test1836ParamFormatEditFailure(t *testing.T) {
 
 // #1836 case 1 pin: an override constructor honors provider-set effort.
 func Test1836ConfigOverrideDetected(t *testing.T) {
-	s := newAdaptiveEffortStateDetectOverride(fakeEffortProvider{effort: "high"})
+	s := newAdaptiveEffortStateDetectOverride(fakeEffortProvider{effort: "high"}, newTaskPhaseWindow())
 	if !s.hasUserOverride() {
 		t.Fatal("provider-level effort (config path) must mark the override")
 	}
-	s2 := newAdaptiveEffortStateDetectOverride(fakeEffortProvider{effort: ""})
+	s2 := newAdaptiveEffortStateDetectOverride(fakeEffortProvider{effort: ""}, newTaskPhaseWindow())
 	if s2.hasUserOverride() {
 		t.Fatal("empty provider effort must leave the adapter active")
 	}
