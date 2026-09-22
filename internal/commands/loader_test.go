@@ -215,3 +215,37 @@ func TestNewLoaderDedupesHomeProjectTargets(t *testing.T) {
 		t.Fatalf("home skill source = %s, want %s", cmd.Source, SourceUser)
 	}
 }
+
+func TestLoaderParsesPortableSpecFields(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(tmpDir, "home"))
+	skillDir := filepath.Join(tmpDir, ".ggcode", "skills", "spec-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\n" +
+		"name: spec-skill\n" +
+		"description: A skill using every portable field.\n" +
+		"license: MIT\n" +
+		"compatibility: Requires git and make.\n" +
+		"metadata:\n  owner: platform\n  tier: ga\n" +
+		"---\n\n# Body\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader(tmpDir)
+	cmd, ok := loader.Load()["spec-skill"]
+	if !ok {
+		t.Fatal("missing spec-skill")
+	}
+	if cmd.License != "MIT" {
+		t.Errorf("License = %q, want MIT", cmd.License)
+	}
+	if cmd.Compatibility != "Requires git and make." {
+		t.Errorf("Compatibility = %q", cmd.Compatibility)
+	}
+	if cmd.Metadata["owner"] != "platform" || cmd.Metadata["tier"] != "ga" {
+		t.Errorf("Metadata = %v, want owner=platform tier=ga", cmd.Metadata)
+	}
+}
