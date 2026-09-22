@@ -32,5 +32,6 @@ func (a *Agent) appendGuidance(result *tool.Result, hint string) bool {
 	} else {
 		result.Content = hint
 	}
+	a.recordGuidanceFire(hint)
 	return true
 }

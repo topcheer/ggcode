@@ -246,6 +246,7 @@ type Agent struct {
 	orphanFile                *orphanFileState           // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                     *cfDepState                // counterfactual dependency detection (dependent tool calls in same batch)
 	guidanceBudget            guidanceBudget             // per-turn guidance injection limiter (caps context pollution from detector alerts)
+	guidanceStats             *guidanceStats             // detector guidance effectiveness telemetry (per-tag fires/repeats/negative attribution)
 	reasoningRedund           *reasoningRedundancyState  // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge             *queryConvergeState        // query convergence failure detection (repeated similar searches without action)
 	serialRead                *serialReadState           // sequential read serialization detection (cross-turn single-read batching opportunity)
@@ -390,6 +391,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
 		toolCallBudget:         newToolCallBudget(),
+		guidanceStats:          newGuidanceStats(),
 		commandCache:           newCommandCache(),
 		effectLedger:           newEffectLedger(),
 		toolSearch:             newToolSearchState(),
@@ -1475,6 +1477,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// Record run metrics for cross-session regression detection.
 		recordPerfBaseline(a.WorkingDir(), runStats)
+		// Persist detector guidance effectiveness telemetry (best-effort,
+		// once per run, local JSONL under .ggcode/).
+		a.guidanceStats.persist(a.WorkingDir())
 		a.mu.RLock()
 		fn := a.onRunResult
 		a.mu.RUnlock()

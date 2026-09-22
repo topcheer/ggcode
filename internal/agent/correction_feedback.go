@@ -63,6 +63,9 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 		return
 	}
 	corrections = filtered
+	// User reverts are rejection signals: attribute to recently fired
+	// guidance tags (guidance-stats feedback loop).
+	a.recordGuidanceNegative()
 
 	// Build a concise summary of what was undone.
 	fileSet := make(map[string]bool)
@@ -130,6 +133,9 @@ func (a *Agent) maybeInjectSentimentFeedback(userPrompt string) {
 	if fb.Level == 0 {
 		return
 	}
+	// Negative user signal: join with recently fired guidance tags
+	// (guidance-stats feedback loop).
+	a.recordGuidanceNegative()
 
 	guidance := buildSentimentGuidance(fb)
 	if guidance == "" {

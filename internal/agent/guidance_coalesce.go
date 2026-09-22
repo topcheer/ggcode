@@ -333,6 +333,9 @@ func (a *Agent) applyToolResultGuidance(
 	for _, h := range hints {
 		if a.guidanceBudget.allowDeduped(h) {
 			injected = append(injected, h)
+			// Effectiveness telemetry: record DELIVERED hints only, after
+			// budget/dedup gating, so counts reflect what the model saw.
+			a.recordGuidanceFire(h)
 		}
 	}
 

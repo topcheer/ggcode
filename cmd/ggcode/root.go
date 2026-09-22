@@ -208,6 +208,10 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(versionCmd)
 
+	// guidance-stats subcommand - offline detector guidance effectiveness
+	// report (Wilson 95% intervals) from ./.ggcode/guidance-stats.jsonl.
+	cmd.AddCommand(newGuidanceStatsCmd())
+
 	// Shell completion commands
 	completionCmd := &cobra.Command{
 		Use:       "completion [shell]",

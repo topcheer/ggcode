@@ -243,5 +243,6 @@ func (a *Agent) injectGuidance(text string) bool {
 			Text: text,
 		}},
 	})
+	a.recordGuidanceFire(text)
 	return true
 }

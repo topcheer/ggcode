@@ -212,6 +212,22 @@ Multiple instances in the same workspace each appear as separate entries.
 
 Stale port files (from crashed or killed processes) are automatically cleaned up on read.
 
+### guidance-stats
+
+Show detector guidance effectiveness statistics collected at the end of each
+agent run in this project (from `./.ggcode/guidance-stats.jsonl`):
+
+```bash
+ggcode guidance-stats
+```
+
+Per detector tag: fires, repeat-fire rate (same tag re-firing within 10 min —
+guidance that did not stick) and negative-attribution rate (user negative
+feedback or file revert within 6 min after firing), each with Wilson 95%
+confidence intervals. Small-sample tags are marked "insufficient evidence"
+instead of judged. Report-only — nothing is auto-suppressed. See
+[guidance-stats.md](guidance-stats.md) for methodology and limitations.
+
 ### report
 
 Generate a self-contained HTML analytics report from all session JSONL files:
