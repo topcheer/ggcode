@@ -198,7 +198,10 @@ func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
 	// Restore images so startAgentWithExpand picks them up.
-	m.pendingImages = imgs
+	// #2617: MERGE, not overwrite - screenshots pasted while the queued
+	// message waited (busy-run pastes are ungated) live in pendingImages and
+	// were silently discarded by the plain assignment.
+	m.pendingImages = append(m.pendingImages, imgs...)
 	if hidden {
 		return m.submitHiddenText(text)
 	}
@@ -356,7 +359,9 @@ func (m *Model) drainPendingInterrupt(runID int) []provider.ContentBlock {
 		m.setNextTunnelUserMessageOverride(*override)
 	}
 	if len(imgs) > 0 {
-		m.pendingImages = imgs
+		// #2617: merge, not overwrite - same overwrite-loss as the submit
+		// path; images pasted mid-run would be silently dropped.
+		m.pendingImages = append(m.pendingImages, imgs...)
 	}
 	_ = hidden
 	// Don't send agentInterruptMsg — the user already saw their input rendered
