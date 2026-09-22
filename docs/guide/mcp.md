@@ -2,6 +2,25 @@
 
 MCP (Model Context Protocol) connects external tools and data sources to ggcode, extending what the agent can do.
 
+## Expose ggcode as an MCP Server
+
+ggcode can also run on the other side of the protocol: `ggcode mcp serve` turns the CLI itself into an MCP server over stdio, so any MCP-capable client (Claude Code, Cursor, VS Code, ...) can drive ggcode as a coding sub-agent — the same "agent as a tool" pattern as `claude mcp serve` / `codex mcp-server`.
+
+```bash
+# Register ggcode as a tool provider in Claude Code
+claude mcp add ggcode -- ggcode mcp serve
+```
+
+Exposed tools:
+
+| Tool | Purpose |
+|------|---------|
+| `ggcode_run` | Run one headless agent turn (like `ggcode -p`) and return the final answer. Accepts `prompt`, `working_dir`, `timeout_seconds` (default 600, hard cap 1800). |
+| `ggcode_session_list` | List recent local sessions (read-only). |
+| `ggcode_session_read` | Read one session transcript (read-only). |
+
+Each `ggcode_run` spawns an isolated headless process that reuses your local ggcode configuration (model, vendor, permission policy) and working directory. Diagnostics go to stderr; only JSON-RPC frames are written to stdout. Protocol versions negotiated: 2024-11-05 through 2025-11-25 (mirrors ggcode's own MCP client).
+
 ## What MCP Does
 
 MCP servers act as bridges — they expose tools, resources, and prompts that ggcode can invoke. Examples: web search, browser automation, database queries, GitHub access.
