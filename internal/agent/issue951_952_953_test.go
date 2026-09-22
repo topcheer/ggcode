@@ -58,7 +58,7 @@ func TestEnsureMessagesSendableReordersInBatchGuidance(t *testing.T) {
 		t.Fatalf("expected 4 messages after repair, got %d: %#v", len(out), out)
 	}
 	// The assistant(tool_use) message must be IMMEDIATELY followed by a user
-	// message containing the matching tool_result — no pure-text user message
+	// message containing the matching tool_result - no pure-text user message
 	// in between (strict providers reject that with a non-retryable 400).
 	if out[1].Role != "assistant" || len(out[1].Content) != 1 || out[1].Content[0].Type != "tool_use" {
 		t.Fatalf("out[1] should be the assistant tool_use message, got %#v", out[1])
@@ -165,7 +165,7 @@ func TestConsensusLiveDetectorsBelowAndAtThreshold(t *testing.T) {
 	s.recordFiring("Error Rush", 1)
 	s.recordFiring("Tunnel Vision", 1)
 	if got := s.checkOnly(); got != "" {
-		// Two detectors is below the threshold of 3 — no alert expected.
+		// Two detectors is below the threshold of 3 - no alert expected.
 		t.Fatalf("two live tags are below threshold, expected no alert, got: %s", got)
 	}
 	// Third firing crosses the threshold of 3 distinct detectors within the
@@ -216,15 +216,29 @@ func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
 	}
 	captureIdx := strings.Index(string(src), "measuredLen := len(result.Content)")
 	applyIdx := strings.Index(string(src), "a.applyToolResultGuidance(")
+	// sa-41 slice 3: the detector chain (including the last guardToolOutput
+	// shrink site) lives inside postExecutionDetectorPass. The execution-order
+	// contract is unchanged - shrink runs inside the pass, then the caller
+	// captures measuredLen, then applies the coalesced pre-execution hints -
+	// so we pin: pass-call < capture < apply, and the shrink site sits inside
+	// the pass definition (which is textually after the call site).
+	passCallIdx := strings.Index(string(src), "a.postExecutionDetectorPass(tc, &result")
+	passDefIdx := strings.Index(string(src), "func (a *Agent) postExecutionDetectorPass(")
 	shrinkIdx := strings.LastIndex(string(src), "guardToolOutput(result.Content")
 	if captureIdx < 0 {
 		t.Fatal("measuredLen capture not found in agent.go")
 	}
+	if passCallIdx < 0 || captureIdx < passCallIdx {
+		t.Fatalf("measuredLen capture (%d) must follow the postExecutionDetectorPass call (%d) - the shrink runs inside the pass", captureIdx, passCallIdx)
+	}
 	if applyIdx < 0 || captureIdx > applyIdx {
 		t.Fatalf("measuredLen capture (%d) must precede applyToolResultGuidance (%d)", captureIdx, applyIdx)
 	}
-	if shrinkIdx < 0 || captureIdx < shrinkIdx {
-		t.Fatalf("measuredLen capture (%d) must follow the last shrink site (%d) - #1819 case 2", captureIdx, shrinkIdx)
+	if passDefIdx < 0 || passDefIdx < passCallIdx {
+		t.Fatalf("postExecutionDetectorPass definition (%d) must follow its call site (%d)", passDefIdx, passCallIdx)
+	}
+	if shrinkIdx < 0 || shrinkIdx < passDefIdx {
+		t.Fatalf("last shrink site (%d) must live inside postExecutionDetectorPass (defined at %d) - #1819 case 2", shrinkIdx, passDefIdx)
 	}
 }
 
