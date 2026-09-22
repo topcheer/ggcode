@@ -16,11 +16,37 @@ const (
 	skillUsageDebounce   = time.Minute
 	skillUsageHalfLife   = 7 * 24 * time.Hour
 	skillUsageMinRecency = 0.1
+
+	// Outcome-based health (procedural-memory lifecycle: retain/revise/prune).
+	// A skill needs at least skillOutcomeMinSamples recorded outcomes before
+	// its success rate is trusted, and a fully failing skill never drops
+	// below skillOutcomeMinFactor so it can still recover by being used again.
+	skillOutcomeMinSamples = 3
+	skillOutcomeMinFactor  = 0.15
 )
 
 type skillUsageEntry struct {
-	UsageCount int   `json:"usage_count"`
-	LastUsedAt int64 `json:"last_used_at"`
+	UsageCount    int   `json:"usage_count"`
+	LastUsedAt    int64 `json:"last_used_at"`
+	SuccessCount  int   `json:"success_count,omitempty"`
+	FailureCount  int   `json:"failure_count,omitempty"`
+	LastOutcomeAt int64 `json:"last_outcome_at,omitempty"`
+}
+
+// OutcomeStat summarizes persisted execution outcomes for one skill.
+type OutcomeStat struct {
+	Runs      int `json:"runs"`
+	Successes int `json:"successes"`
+	Failures  int `json:"failures"`
+}
+
+// Failing reports whether a skill has enough recorded outcomes and a success
+// rate low enough to be considered unhealthy. Unsampled skills are healthy.
+func (s OutcomeStat) Failing() bool {
+	if s.Runs < skillOutcomeMinSamples {
+		return false
+	}
+	return float64(s.Successes)/float64(s.Runs) < 0.5
 }
 
 var (
@@ -58,6 +84,57 @@ func RecordUsage(name string) error {
 	return nil
 }
 
+// RecordOutcome persists a skill execution outcome (success or failure).
+// Unlike RecordUsage there is no debounce: outcomes are low-frequency and
+// each one feeds the health score that ranks skills in the system prompt.
+func RecordOutcome(name string, success bool) error {
+	trimmed := normalizeSkillName(name)
+	if trimmed == "" {
+		return nil
+	}
+
+	now := time.Now()
+	skillUsageMu.Lock()
+	defer skillUsageMu.Unlock()
+
+	usage, err := loadUsageLocked()
+	if err != nil {
+		return err
+	}
+	entry := usage[trimmed]
+	if success {
+		entry.SuccessCount++
+	} else {
+		entry.FailureCount++
+	}
+	entry.LastUsedAt = now.UnixMilli()
+	entry.LastOutcomeAt = now.UnixMilli()
+	usage[trimmed] = entry
+
+	return saveUsageLocked(usage)
+}
+
+// OutcomeSnapshot returns persisted execution outcomes for all skills.
+// Callers use it to demote or annotate chronically failing skills.
+func OutcomeSnapshot() map[string]OutcomeStat {
+	skillUsageMu.Lock()
+	defer skillUsageMu.Unlock()
+
+	usage, err := loadUsageLocked()
+	if err != nil {
+		return map[string]OutcomeStat{}
+	}
+	out := make(map[string]OutcomeStat, len(usage))
+	for name, entry := range usage {
+		runs := entry.SuccessCount + entry.FailureCount
+		if runs <= 0 {
+			continue
+		}
+		out[name] = OutcomeStat{Runs: runs, Successes: entry.SuccessCount, Failures: entry.FailureCount}
+	}
+	return out
+}
+
 func UsageScore(name string) float64 {
 	trimmed := normalizeSkillName(name)
 	if trimmed == "" {
@@ -90,7 +167,19 @@ func usageScore(entry skillUsageEntry, now time.Time) float64 {
 			factor = skillUsageMinRecency
 		}
 	}
-	return float64(entry.UsageCount) * factor
+	return float64(entry.UsageCount) * factor * reliabilityFactor(entry)
+}
+
+// reliabilityFactor scales the usage score by the skill's recorded execution
+// success rate once enough outcomes exist. Skills that mostly fail rank lower
+// in prompt/menu ordering; healthy or unsampled skills are unaffected.
+func reliabilityFactor(entry skillUsageEntry) float64 {
+	runs := entry.SuccessCount + entry.FailureCount
+	if runs < skillOutcomeMinSamples {
+		return 1
+	}
+	rate := float64(entry.SuccessCount) / float64(runs)
+	return skillOutcomeMinFactor + (1-skillOutcomeMinFactor)*rate
 }
 
 func powHalf(exponent float64) float64 {

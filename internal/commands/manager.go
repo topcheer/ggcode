@@ -84,6 +84,13 @@ func (m *Manager) RecordUsage(name string) {
 	_ = RecordUsage(name)
 }
 
+// RecordOutcome records a skill execution outcome (success or failure).
+// Used by the skill tool via type assertion; persisted with the usage file
+// so health signals survive across sessions.
+func (m *Manager) RecordOutcome(name string, success bool) {
+	_ = RecordOutcome(name, success)
+}
+
 // SkillNames returns the names of all enabled, model-invocable skills.
 // Used by the skill tool for fuzzy name matching.
 func (m *Manager) SkillNames() []string {

@@ -193,3 +193,28 @@ become immediately available (no restart needed thanks to hot-reload).
 - Bundle size is capped at 16 MB to prevent abuse
 - Path traversal entries (e.g., `../../etc/passwd`) are rejected during extraction
 - Only simple filenames are allowed inside bundles -- no subdirectories
+
+## Execution Outcome Tracking (Skill Health)
+
+ggcode treats skills as procedural memory: a skill that repeatedly fails should
+not keep competing for the model's attention. Every skill execution through the
+`skill` tool records an outcome (success or failure) to `~/.ggcode/skill_usage.json`,
+alongside the existing usage counts.
+
+How the signal is used:
+
+- **Prompt ordering**: skills with at least 3 recorded outcomes and a success
+  rate below 50% are demoted below healthy skills in the same tier of the
+  system-prompt skill listing, so reliable skills are surfaced first when the
+  listing is truncated.
+- **Health marker**: chronically failing skills get an explicit
+  `[health: failed X/Y recent runs]` annotation in the prompt, telling the
+  model to verify the skill still works before relying on it.
+- **Menu ranking**: the usage score (used for TUI ordering and `?`-search
+  prioritization) is scaled by the recorded success rate. A fully failing
+  skill never drops to zero, so it can recover once its failures are fixed.
+
+The tracking is universal: it works whether or not the Knight quality agent is
+enabled, and the health data persists across sessions. Fix or update a failing
+skill (bump its version, repair its template) and simply use it again — new
+successes restore its ranking automatically.

@@ -98,7 +98,8 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 	mcpSkillCount := 0
 	mcpServers := make(map[string]struct{})
 	var promptSkillRefs []string
-	for _, skill := range prioritizedSkillsForPrompt(skills) {
+	outcomeStats := commands.OutcomeSnapshot()
+	for _, skill := range prioritizedSkillsForPrompt(skills, outcomeStats) {
 		name := strings.TrimSpace(skill.Name)
 		if name == "" {
 			continue
@@ -127,6 +128,9 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 			desc = truncateRunes(desc, maxDescChars, "...")
 		}
 		line := fmt.Sprintf("- %s: %s", name, desc)
+		if stat, ok := outcomeStats[strings.ToLower(name)]; ok && stat.Failing() {
+			line += fmt.Sprintf(" [health: failed %d/%d recent runs; verify it still works before relying on it]", stat.Failures, stat.Runs)
+		}
 		if total+len(line)+1 > maxChars {
 			break
 		}
@@ -194,13 +198,17 @@ func skillPromptExposureRef(skill *commands.Command) string {
 	}
 }
 
-func prioritizedSkillsForPrompt(skills []*commands.Command) []*commands.Command {
+func prioritizedSkillsForPrompt(skills []*commands.Command, stats map[string]commands.OutcomeStat) []*commands.Command {
 	out := make([]*commands.Command, 0, len(skills))
 	for _, skill := range skills {
 		if skill == nil || skill.DisableModelInvocation || !skill.Enabled || strings.TrimSpace(skill.Name) == "" {
 			continue
 		}
 		out = append(out, skill)
+	}
+	failing := func(c *commands.Command) bool {
+		stat, ok := stats[strings.ToLower(strings.TrimSpace(c.Name))]
+		return ok && stat.Failing()
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		iBundled := out[i].LoadedFrom == commands.LoadedFromBundled || out[i].Source == commands.SourceBundled
@@ -212,6 +220,14 @@ func prioritizedSkillsForPrompt(skills []*commands.Command) []*commands.Command 
 		jMCP := out[j].LoadedFrom == commands.LoadedFromMCP || out[j].Source == commands.SourceMCP
 		if iMCP != jMCP {
 			return !iMCP
+		}
+		// Health-aware ordering (procedural-memory lifecycle): chronically
+		// failing skills drop below healthy ones within the same tier so the
+		// model sees reliable skills first when the listing is truncated.
+		iFailing := failing(out[i])
+		jFailing := failing(out[j])
+		if iFailing != jFailing {
+			return !iFailing
 		}
 		return out[i].Name < out[j].Name
 	})

@@ -32,6 +32,12 @@ type skillUsageRecorder interface {
 	RecordUsage(name string)
 }
 
+// skillOutcomeRecorder is implemented by the commands.Manager to persist
+// skill execution outcomes (success/failure) for health-aware ranking.
+type skillOutcomeRecorder interface {
+	RecordOutcome(name string, success bool)
+}
+
 type SkillExecutionMode string
 
 const (
@@ -340,9 +346,6 @@ func parseMCPPromptArgs(raw string) (map[string]interface{}, error) {
 }
 
 func (t SkillTool) notifySkillCompleted(cmd *commands.Command, mode SkillExecutionMode, result Result, err error) {
-	if t.OnSkillCompleted == nil {
-		return
-	}
 	name := ""
 	scope := ""
 	ref := ""
@@ -350,6 +353,15 @@ func (t SkillTool) notifySkillCompleted(cmd *commands.Command, mode SkillExecuti
 		name = cmd.Name
 		scope = skillScopeForCommand(cmd)
 		ref = skillRefForCommand(cmd)
+	}
+	// Persist the execution outcome (procedural-memory health signal).
+	// Recorded independently of OnSkillCompleted so health tracking works
+	// even when no knight agent is attached.
+	if recorder, ok := t.Skills.(skillOutcomeRecorder); ok && name != "" {
+		recorder.RecordOutcome(name, err == nil && !result.IsError)
+	}
+	if t.OnSkillCompleted == nil {
+		return
 	}
 	t.OnSkillCompleted(SkillExecutionEvent{
 		Name:   name,
