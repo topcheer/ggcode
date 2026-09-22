@@ -47,6 +47,18 @@ ggcode daemon --new-session  # Skip auto-loading most recent session
 
 The daemon automatically loads the most recent unlocked session on startup. Use `--new-session` to always start fresh. The daemon also initializes a lanchat Hub for LAN discovery and messaging.
 
+### Watch Mode
+
+```bash
+ggcode watch               # Poll project files for @ggcode annotations
+ggcode watch --interval 1s # Faster polling
+ggcode watch --bypass      # Forward --bypass to act-mode runs
+```
+
+Leave `// @ggcode! <task>` (act) or `// @ggcode? <question>` (ask) in any file
+while watch is running; each new annotation triggers a non-interactive pipe
+run. See [Watch Mode](watch-mode.md) for details.
+
 ## Subcommands
 
 

@@ -104,6 +104,7 @@ individual A2A auth configuration.
 - **WebUI** — built-in web interface accessible from any browser
 - **IM integration** — control from QQ, Telegram, Discord, Slack, Feishu, DingTalk
 - **Scheduled tasks** — cron jobs, reminders, and background automation
+- **[Watch mode](docs/guide/watch-mode.md)** — trigger agent runs by leaving `@ggcode` annotations in any file from your editor (act/ask modes, Aider-style watch files)
 - **Resumable sessions** — pause and resume any conversation
 - **Cross-session search** — `/search <query>` finds messages by content across all saved sessions, with snippet preview and quick-resume
 - **Desktop + Mobile** — native apps for macOS, Windows, Linux, iOS, Android
@@ -123,6 +124,7 @@ individual A2A auth configuration.
 | [Getting Started](docs/guide/getting-started.md) | First steps, API key setup, basic usage |
 | [Installation](docs/guide/install.md) | All install methods for every platform |
 | [CLI Reference](docs/guide/cli-reference.md) | Commands, flags, pipe mode |
+| [Watch Mode](docs/guide/watch-mode.md) | Event-triggered runs from in-file `@ggcode` annotations |
 | [Providers](docs/guide/providers.md) | LLM vendor and endpoint configuration |
 | [Slash Commands](docs/guide/slash-commands.md) | In-TUI command reference |
 | [Permission Modes](docs/guide/modes.md) | Supervised, plan, auto, bypass, autopilot |
