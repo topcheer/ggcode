@@ -27,6 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/restart"
@@ -520,6 +521,19 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	}
 	bridge := im.NewDaemonBridge(imMgr, ag, emitter, store, ses)
 	defer bridge.Close()
+
+	// Wire live OTLP trace export when observability.otlp is configured
+	// (or standard OTEL_* env vars are set). Opt-in; never on by default.
+	if otlpEp := metrics.ResolveOTLPEndpoint(cfg.Observability.OTLP.Endpoint); otlpEp != "" {
+		bridge.SetOTLPExporter(metrics.NewOTLPExporter(metrics.OTLPConfig{
+			Endpoint:      otlpEp,
+			Headers:       cfg.Observability.OTLP.Headers,
+			FlushInterval: time.Duration(cfg.Observability.OTLP.FlushIntervalSeconds) * time.Second,
+			SessionID:     ses.ID,
+			DefaultModel:  cfg.Model,
+			DefaultVendor: cfg.Vendor,
+		}))
+	}
 
 	// Bind tunnel host to session for projection recording
 	core.Tunnel.BindSession(ses, store)

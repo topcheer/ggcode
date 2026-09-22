@@ -73,6 +73,7 @@ type REPL struct {
 	knightStartupHint   string                              // one-time hint shown at startup (e.g. lock conflict)
 	metricCollector     *metrics.Collector
 	metricCancel        context.CancelFunc
+	otlpExporter        atomic.Pointer[metrics.OTLPExporter] // live OTel GenAI-semconv trace export (nil when not configured)
 	workingDir          string
 	cfg                 *config.Config
 	agentBusy           atomic.Bool
@@ -104,6 +105,9 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 		r.metricCancel = collectorCancel
 		r.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
 			r.recordMetric(ev)
+			if e := r.otlpExporter.Load(); e != nil {
+				e.Emit(ev)
+			}
 		})
 		a.SetMetricHandler(r.metricCollector.Emit)
 		r.model.metricCollectorFlush = r.metricCollector.Flush
@@ -409,6 +413,34 @@ func (r *REPL) SetPreExecCleanup(fn func()) {
 func (r *REPL) SetConfig(cfg *config.Config) {
 	r.cfg = cfg
 	r.model.SetConfig(cfg)
+	r.startOTLPExporter(cfg)
+}
+
+// startOTLPExporter wires live OTLP trace export when observability.otlp is
+// configured (or standard OTEL_* env vars are set). Replaces any prior
+// exporter so config reloads don't leak export goroutines.
+func (r *REPL) startOTLPExporter(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	ep := metrics.ResolveOTLPEndpoint(cfg.Observability.OTLP.Endpoint)
+	if ep == "" {
+		return
+	}
+	old := r.otlpExporter.Swap(metrics.NewOTLPExporter(metrics.OTLPConfig{
+		Endpoint:      ep,
+		Headers:       cfg.Observability.OTLP.Headers,
+		FlushInterval: time.Duration(cfg.Observability.OTLP.FlushIntervalSeconds) * time.Second,
+		SessionID:     r.initialSessionID,
+		DefaultModel:  cfg.Model,
+		DefaultVendor: cfg.Vendor,
+		OnError: func(err error) {
+			debug.Log("metrics", "OTLP exporter: %v", err)
+		},
+	}))
+	if old != nil {
+		old.Stop()
+	}
 }
 
 // SetWorkingDir stores the workspace path for RuntimeStatus reporting.
@@ -1711,6 +1743,10 @@ func (r *REPL) Run() error {
 			r.metricCancel()
 		}
 		r.metricCollector.Stop()
+	}
+	// Flush pending OTLP spans so the tail of the session isn't lost.
+	if e := r.otlpExporter.Load(); e != nil {
+		e.Stop()
 	}
 	if r.imManager != nil {
 		r.imManager.UnbindSession()

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -67,6 +68,7 @@ type DaemonBridge struct {
 	usageTurnIndex  int
 	metricCollector *metrics.Collector
 	metricCancel    context.CancelFunc
+	otlpExporter    atomic.Pointer[metrics.OTLPExporter]
 
 	mu              sync.Mutex
 	cancelFunc      context.CancelFunc
@@ -132,6 +134,9 @@ func NewDaemonBridge(mgr *Manager, ag *agent.Agent, emitter *IMEmitter, store se
 			b.metricCancel = collectorCancel
 			b.metricCollector = metrics.NewCollector(collectorCtx, 256, func(ev metrics.MetricEvent) {
 				b.recordMetric(ev)
+				if e := b.otlpExporter.Load(); e != nil {
+					e.Emit(ev)
+				}
 			})
 			ag.SetMetricHandler(b.metricCollector.Emit)
 		}
@@ -1209,6 +1214,13 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 	}
 }
 
+// SetOTLPExporter attaches a live OTLP trace exporter (from daemon.go when
+// observability.otlp / OTEL_* env is configured). Metric events emitted
+// after this call are mirrored to the exporter.
+func (b *DaemonBridge) SetOTLPExporter(e *metrics.OTLPExporter) {
+	b.otlpExporter.Store(e)
+}
+
 func (b *DaemonBridge) Close() {
 	b.mu.Lock()
 	collector := b.metricCollector
@@ -1226,6 +1238,10 @@ func (b *DaemonBridge) Close() {
 	}
 	if collector != nil {
 		collector.Stop()
+	}
+	// Flush pending OTLP spans so the tail of the session isn't lost.
+	if e := b.otlpExporter.Load(); e != nil {
+		e.Stop()
 	}
 }
 

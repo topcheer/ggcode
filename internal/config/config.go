@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -377,6 +378,7 @@ type Config struct {
 	P2P            P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
 	OutputStyle    string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
 	Notifications  NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
+	Observability  ObservabilityConfig        `yaml:"observability,omitempty" json:"observability,omitempty"`
 	Fallback       FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
 	Fallbacks      []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`
 	FilePath       string                     `yaml:"-" json:"-"`
@@ -1747,6 +1749,26 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid hooks config: %s", strings.Join(hookErrs, "; "))
 	}
 
+	// Validate observability OTLP export configuration.
+	if err := ValidateOTLPConfig(c.Observability.OTLP); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ValidateOTLPConfig checks the observability.otlp section in isolation
+// (extracted from Validate so it is directly unit-testable regardless of
+// vendor/endpoint validation ordering).
+func ValidateOTLPConfig(otlp OTLPConfig) error {
+	if ep := strings.TrimSpace(otlp.Endpoint); ep != "" {
+		if _, err := url.Parse(ep); err != nil {
+			return fmt.Errorf("invalid observability.otlp.endpoint %q: %w", ep, err)
+		}
+	}
+	if otlp.FlushIntervalSeconds < 0 {
+		return fmt.Errorf("observability.otlp.flush_interval_seconds must be >= 0")
+	}
 	return nil
 }
 

@@ -100,6 +100,7 @@ individual A2A auth configuration.
 - **Multi-provider** — OpenAI, Anthropic, Gemini, DeepSeek, Kimi, Copilot, and more; configurable reasoning effort and tool choice across all protocols
 - **Adaptive sampling** — per-turn temperature adjustment based on task phase: low temperature for precise code edits and error recovery, higher for exploration and creative writing
 - **[LAN Chat](docs/guide/lan-chat.md)** — zero-config P2P real-time messaging between instances on your LAN
+- **OTel trace export** — stream LLM/tool execution spans live to Jaeger, Grafana Tempo, or Langfuse via OTLP with GenAI semantic conventions ([docs/guide/otel-tracing.md](docs/guide/otel-tracing.md))
 - **Editor integration** — JetBrains, Zed, and ACP-compatible editors via ACP
 - **WebUI** — built-in web interface accessible from any browser
 - **IM integration** — control from QQ, Telegram, Discord, Slack, Feishu, DingTalk
@@ -130,6 +131,7 @@ individual A2A auth configuration.
 | [gRPC Plugins](docs/guide/grpc-plugins.md) | Build and install custom tool plugins (Go, Python, Node.js) |
 | [IM Integration](docs/guide/im-integration.md) | QQ, Telegram, Discord, Slack, Feishu, DingTalk |
 | [A2A Protocol](docs/guide/a2a.md) | Cross-instance agent delegation |
+| [OTel Tracing](docs/guide/otel-tracing.md) | Live OTLP trace export to observability backends |
 | [ACP / Editor](docs/guide/acp.md) | JetBrains, Zed, and ACP-compatible editors |
 | [Delegation](docs/guide/delegation.md) | Delegate tasks to Copilot, Claude, Cursor, and other agents |
 | [Multi-Agent](docs/guide/multi-agent-modes.md) | Sub-agents, teammates, and team coordination |
