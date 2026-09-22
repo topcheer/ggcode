@@ -357,9 +357,22 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 						return nostrBindResultMsg{err: err}
 					}
 
-					// Derive public key for QR code
-					pubKey, _ := nostr.GetPublicKey(privateKey)
-					npub, _ := nip19.EncodePublicKey(pubKey)
+					// Derive public key for QR code. #2626: privateKey may be
+					// nsec1... (bech32) - validation accepts it, but go-nostr's
+					// helpers are hex-only, so feeding the raw string made every
+					// encode error get swallowed by `_` and the panel showed an
+					// empty npub / invalid `nostr:` QR while claiming success.
+					// Normalize first (same helper the adapter runtime uses),
+					// and surface encode errors instead of discarding them.
+					privateKey = im.NormalizeNostrPrivateKey(privateKey)
+					pubKey, err := nostr.GetPublicKey(privateKey)
+					if err != nil {
+						return nostrBindResultMsg{err: fmt.Errorf("derive nostr public key: %w", err)}
+					}
+					npub, err := nip19.EncodePublicKey(pubKey)
+					if err != nil {
+						return nostrBindResultMsg{err: fmt.Errorf("encode npub: %w", err)}
+					}
 					var qrText string
 					qrText, _ = renderCompactTerminalQRCode("nostr:" + npub)
 

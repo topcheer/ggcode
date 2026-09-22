@@ -507,6 +507,15 @@ func (a *nostrAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 // Key helpers
 // ---------------------------------------------------------------------------
 
+// NormalizeNostrPrivateKey canonicalizes a private key to 64-char hex,
+// accepting both hex and nsec1... (bech32) input. Exported for the TUI
+// panel: validation accepts nsec, so the display path (GetPublicKey /
+// nip19 encode) must feed the same normalized hex - go-nostr's helpers
+// are hex-only and error on the raw nsec string (#2626).
+func NormalizeNostrPrivateKey(key string) string {
+	return normalizeNostrKey(key)
+}
+
 func normalizeNostrKey(key string) string {
 	key = strings.TrimSpace(key)
 	if strings.HasPrefix(key, "nsec1") {
