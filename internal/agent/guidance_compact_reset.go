@@ -789,6 +789,13 @@ var guidanceCounterResets = []func(*Agent){
 			a.patchExhaust.fires = 0
 		}
 	},
+	// guidance repeat gate ledger (guidance_demote.go): delivered-tag
+	// counts are quota-like run-scoped state. After compaction the earlier
+	// delivered copies are gone from context, so the "the earlier hint
+	// still stands" premise fails and the per-tag delivery cap restarts.
+	func(a *Agent) {
+		a.guidanceBudget.demote.reset()
+	},
 }
 
 // resetGuidanceCounters clears ONLY the injected-warning counters of the

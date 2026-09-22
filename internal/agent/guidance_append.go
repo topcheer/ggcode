@@ -22,6 +22,16 @@ func (a *Agent) appendGuidance(result *tool.Result, hint string) bool {
 	if hint == "" || result == nil {
 		return false
 	}
+	// Repeat gate (guidance_demote.go): demoted tags never reach the budget
+	// - the first blocked repeat becomes the one-time [guidance-paused]
+	// notice, later ones return "" and are dropped here.
+	if filtered := a.guidanceBudget.filterDemoted(hint); filtered != hint {
+		hint = filtered
+		if hint == "" {
+			debug.Log("guidance-demote", "suppressing tool-result hint (tag demoted after repeated delivery)")
+			return false
+		}
+	}
 	if !a.guidanceBudget.allowDeduped(hint) {
 		debug.Log("guidance-budget", "suppressing tool-result hint (budget exceeded or duplicate tag, %d suppressed this turn)",
 			a.guidanceBudget.suppressed)

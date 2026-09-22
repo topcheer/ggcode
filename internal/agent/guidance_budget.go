@@ -91,6 +91,14 @@ type guidanceBudget struct {
 	// turn (#607 B3: cross-result dedup - the same meta-hint must not be
 	// re-injected into every subsequent tool result).
 	seenHintTags map[string]bool
+	// demote is the run-scoped repeat-delivery ledger (guidance_demote.go):
+	// a non-critical tag that has been delivered guidanceTagMaxDeliveries
+	// times in one run is demoted - further hints with that tag are dropped
+	// before budget accounting. It is deliberately NOT cleared by reset():
+	// the demotion premise ("the model has already seen this hint") holds
+	// across turns but not across compaction, so only the compaction reset
+	// (guidanceCounterResets) clears it.
+	demote *guidanceDemoteLedger
 }
 
 // reset clears the budget at the start of a new iteration.
@@ -167,6 +175,12 @@ func (g *guidanceBudget) allowDeduped(text string) bool {
 		}
 		g.chargeBytes(len(text), isCriticalGuidance(text))
 		g.delivered = append(g.delivered, text)
+		// Repeat gate: only REAL deliveries consume the tag's run-scoped cap
+		// (guidance_demote.go) - a hint rejected here by the budget never
+		// reached the model, so it must not count against the cap.
+		if tag != "" {
+			g.demote.noteDelivery(tag)
+		}
 	}
 	return ok
 }
@@ -211,6 +225,16 @@ func isCriticalGuidance(text string) bool {
 // a saturated detector turn burns the quota with ZERO guidance delivered
 // (the detector goes permanently dark - "returned != delivered").
 func (a *Agent) injectGuidance(text string) bool {
+	// Repeat gate (guidance_demote.go): demoted tags never reach the budget
+	// - the first blocked repeat becomes the one-time [guidance-paused]
+	// notice, later ones return "" and are dropped here.
+	if filtered := a.guidanceBudget.filterDemoted(text); filtered != text {
+		if filtered == "" {
+			debug.Log("guidance-demote", "suppressing iteration guidance (tag demoted after repeated delivery)")
+			return false
+		}
+		text = filtered
+	}
 	if !a.guidanceBudget.allow(text) {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
 			a.guidanceBudget.suppressed)
