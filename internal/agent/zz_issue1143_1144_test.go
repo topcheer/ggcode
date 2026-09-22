@@ -87,7 +87,7 @@ func TestIssue1143_WarningValuesComeFromHitRunNotLatestRun(t *testing.T) {
 	if hitRun.Iterations != 25 {
 		t.Errorf("expected most severe hit run iterations=25, got %d", hitRun.Iterations)
 	}
-	msg := formatPerfRegressionWarning(worstMetric, baseline, hitRun)
+	msg := formatPerfRegressionWarning(worstMetric, baseline, hitRun, nil)
 	if !strings.Contains(msg, "recent=25") {
 		t.Errorf("warning should quote the hitting run's value 25, got: %s", msg)
 	}

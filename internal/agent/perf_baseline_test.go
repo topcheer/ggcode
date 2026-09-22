@@ -188,7 +188,7 @@ func TestFormatPerfRegressionWarning(t *testing.T) {
 	baseline := perfBaselineEntry{Iterations: 10, DurationSec: 30}
 	latest := perfBaselineEntry{Iterations: 20, DurationSec: 60}
 
-	msg := formatPerfRegressionWarning("iterations", baseline, latest)
+	msg := formatPerfRegressionWarning("iterations", baseline, latest, nil)
 	if msg == "" {
 		t.Error("expected non-empty warning for iterations regression")
 	}
@@ -289,13 +289,13 @@ func TestFormatPerfRegressionWarningIncludesRunShape(t *testing.T) {
 		Iterations: 45, ToolCalls: 120, DurationSec: 982,
 		TopTools: []string{"run_command:48", "read_file:30"},
 	}
-	msg := formatPerfRegressionWarning("duration", baseline, hit)
+	msg := formatPerfRegressionWarning("duration", baseline, hit, nil)
 	for _, want := range []string{"iterations=45", "tool_calls=120", "sec/iter≈21.8", "run_command:48", "read_file:30"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("duration advisory missing %q: %s", want, msg)
 		}
 	}
-	msg = formatPerfRegressionWarning("iterations", baseline, hit)
+	msg = formatPerfRegressionWarning("iterations", baseline, hit, nil)
 	if !strings.Contains(msg, "run_command:48") {
 		t.Errorf("iterations advisory should carry run-shape diagnostics: %s", msg)
 	}
@@ -304,7 +304,7 @@ func TestFormatPerfRegressionWarningIncludesRunShape(t *testing.T) {
 	// fabricate a top-tools segment.
 	legacyMsg := formatPerfRegressionWarning("duration",
 		perfBaselineEntry{DurationSec: 100},
-		perfBaselineEntry{DurationSec: 200, Iterations: 5})
+		perfBaselineEntry{DurationSec: 200, Iterations: 5}, nil)
 	if strings.Contains(legacyMsg, "top tools") {
 		t.Errorf("legacy entry should not claim top tools: %s", legacyMsg)
 	}
@@ -331,5 +331,125 @@ func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
 		if loaded[0].TopTools[i] != want[i] {
 			t.Errorf("top tool %d: got %q, want %q", i, loaded[0].TopTools[i], want[i])
 		}
+	}
+}
+
+func TestParseTopToolEntry(t *testing.T) {
+	if name, n, ok := parseTopToolEntry("run_command:12"); !ok || name != "run_command" || n != 12 {
+		t.Errorf("parseTopToolEntry simple = (%q,%d,%v), want (run_command,12,true)", name, n, ok)
+	}
+	if name, n, ok := parseTopToolEntry("mcp__srv.tool:3"); !ok || name != "mcp__srv.tool" || n != 3 {
+		t.Errorf("parseTopToolEntry dotted name = (%q,%d,%v)", name, n, ok)
+	}
+	if _, _, ok := parseTopToolEntry("broken"); ok {
+		t.Error("entry without colon should not parse")
+	}
+	if _, _, ok := parseTopToolEntry("neg:-1"); ok {
+		t.Error("negative count should not parse")
+	}
+}
+
+func TestSuccessfulPerfWindow(t *testing.T) {
+	runs := []perfBaselineEntry{{Success: true}, {Success: false}, {Success: true}}
+	if got := len(successfulPerfWindow(runs)); got != 2 {
+		t.Errorf("expected 2 successful entries, got %d", got)
+	}
+}
+
+func TestRegressionAttributionCompactionBurst(t *testing.T) {
+	hit := perfBaselineEntry{Iterations: 40, ToolCalls: 60, Compactions: 3,
+		TopTools: []string{"read_file:30"}}
+	mid := perfBaselineEntry{Iterations: 8, ToolCalls: 20, Compactions: 0}
+	got := formatRegressionAttribution(hit, mid, nil)
+	if !strings.Contains(got, "compaction burst") {
+		t.Errorf("expected compaction burst attribution, got: %s", got)
+	}
+	if !strings.Contains(got, "3 vs baseline median 0") {
+		t.Errorf("attribution should quote both counts, got: %s", got)
+	}
+}
+
+func TestRegressionAttributionRetryStorm(t *testing.T) {
+	hit := perfBaselineEntry{Iterations: 40, ToolCalls: 60, Errors: 6,
+		TopTools: []string{"read_file:30"}}
+	mid := perfBaselineEntry{Errors: 1}
+	got := formatRegressionAttribution(hit, mid, nil)
+	if !strings.Contains(got, "retry storm") {
+		t.Errorf("expected retry storm attribution, got: %s", got)
+	}
+}
+
+func TestRegressionAttributionToolMixShift(t *testing.T) {
+	// hit: run_command 21/30 = 70%; baseline: run_command 6/30 = 20%.
+	hit := perfBaselineEntry{Iterations: 40, ToolCalls: 30,
+		TopTools: []string{"run_command:21", "read_file:8"}}
+	window := make([]perfBaselineEntry, 0, 5)
+	for i := 0; i < 5; i++ {
+		window = append(window, perfBaselineEntry{Success: true, Iterations: 8,
+			ToolCalls: 30, TopTools: []string{"read_file:24", "run_command:6"}})
+	}
+	mid := perfBaselineEntry{Iterations: 8, ToolCalls: 30}
+	got := formatRegressionAttribution(hit, mid, window)
+	if !strings.Contains(got, "tool-mix shift") {
+		t.Errorf("expected tool-mix shift attribution, got: %s", got)
+	}
+	if !strings.Contains(got, "70% of calls") || !strings.Contains(got, "median 20%") {
+		t.Errorf("attribution should quote both shares, got: %s", got)
+	}
+}
+
+func TestRegressionAttributionNewDominantPattern(t *testing.T) {
+	hit := perfBaselineEntry{Iterations: 40, ToolCalls: 30,
+		TopTools: []string{"browser_navigate:25", "read_file:3"}}
+	window := make([]perfBaselineEntry, 0, 5)
+	for i := 0; i < 5; i++ {
+		window = append(window, perfBaselineEntry{Success: true, Iterations: 8,
+			ToolCalls: 30, TopTools: []string{"read_file:25", "grep:5"}})
+	}
+	got := formatRegressionAttribution(hit, perfBaselineEntry{Iterations: 8}, window)
+	if !strings.Contains(got, "new dominant tool pattern") {
+		t.Errorf("expected new-pattern attribution, got: %s", got)
+	}
+}
+
+func TestRegressionAttributionFallbackNoShift(t *testing.T) {
+	// hit read_file 15/30 = 50% vs baseline 14/30 = 46.6%: below 2x threshold.
+	hit := perfBaselineEntry{Iterations: 20, ToolCalls: 30,
+		TopTools: []string{"read_file:15", "grep:2"}}
+	window := make([]perfBaselineEntry, 0, 5)
+	for i := 0; i < 5; i++ {
+		window = append(window, perfBaselineEntry{Success: true, Iterations: 8,
+			ToolCalls: 30, TopTools: []string{"read_file:14", "grep:1"}})
+	}
+	got := formatRegressionAttribution(hit, perfBaselineEntry{Iterations: 8}, window)
+	if !strings.Contains(got, "none found") {
+		t.Errorf("expected explicit no-shift fallback, got: %s", got)
+	}
+}
+
+func TestFormatPerfRegressionWarningIncludesAttribution(t *testing.T) {
+	baseline := perfBaselineEntry{Iterations: 10, ToolCalls: 30}
+	hit := perfBaselineEntry{Iterations: 40, ToolCalls: 30, Compactions: 3,
+		TopTools: []string{"read_file:15"}}
+	msg := formatPerfRegressionWarning("iterations", baseline, hit, nil)
+	if !strings.Contains(msg, "Likely driver") {
+		t.Errorf("iterations advisory should carry driver attribution: %s", msg)
+	}
+
+	// error_rate IS its own driver; attribution would be redundant.
+	msg = formatPerfRegressionWarning("error_rate", baseline, hit, nil)
+	if strings.Contains(msg, "Likely driver") {
+		t.Errorf("error_rate advisory should not duplicate attribution: %s", msg)
+	}
+
+	// Window without any TopTools data: attribution must still terminate
+	// with the explicit fallback rather than fabricating shares. No compaction
+	// burst or retry storm in the fixture, so the tool-mix branch is reached.
+	legacyWindow := []perfBaselineEntry{{Success: true, Iterations: 8}}
+	clean := perfBaselineEntry{Iterations: 40, ToolCalls: 30,
+		TopTools: []string{"read_file:15"}}
+	msg = formatPerfRegressionWarning("iterations", baseline, clean, legacyWindow)
+	if !strings.Contains(msg, "none found") {
+		t.Errorf("legacy window should yield fallback attribution: %s", msg)
 	}
 }

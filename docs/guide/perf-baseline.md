@@ -26,6 +26,25 @@ ggcode tracks agent performance metrics across sessions and warns when efficienc
 - **Successful runs only**: Baseline computed from successful runs to avoid skewing by failures
 - **Advisory, not blocking**: The warning helps the agent adjust strategy; it doesn't prevent work
 
+## Driver attribution
+
+For iteration-count and duration regressions, the advisory also names the
+most plausible **why** by contrasting the regressed run with the same
+baseline window that produced the median (checked in priority order):
+
+| Driver | Condition | Meaning |
+|--------|-----------|---------|
+| Compaction burst | 2+ compactions vs lower baseline median | Context churn, not per-step strategy |
+| Retry storm | 3+ errors vs lower baseline median | Error fixation — fix the first failure |
+| Tool-mix shift | Dominant tool ≥15% of calls and ≥2x its baseline median share | Behavior drift toward one tool |
+| New dominant pattern | Dominant tool ≥15% of calls, absent from baseline top-tools | A new behavior, not task size |
+| None found | All structural signals match baseline | Treat as task complexity |
+
+Attribution is deterministic (computed from data the baseline window
+already persists) and appends an explicit "none found" fallback rather
+than staying silent, so the agent never has to guess whether a cause was
+checked.
+
 ## Competitor comparison
 
 | Product | Cross-session regression detection |

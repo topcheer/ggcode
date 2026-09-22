@@ -43,6 +43,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -391,7 +392,8 @@ func (a *Agent) maybeInjectPerfRegression() {
 
 	a.perfBaseline.warnCount++
 	a.perfBaseline.warnedThisSession = true // #1180: once per session, across resets
-	msg := formatPerfRegressionWarning(worstMetric, mid, hitRun)
+	msg := formatPerfRegressionWarning(worstMetric, mid, hitRun,
+		successfulPerfWindow(a.perfBaseline.historical))
 	debug.Log("perf-baseline", "regression detected: %d/3 recent runs regressed on %s", metricCounts[worstMetric], worstMetric)
 
 	a.contextManager.Add(provider.Message{
@@ -498,19 +500,25 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 	}
 }
 
-// formatPerfRegressionWarning builds a concise advisory message.
-func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, latest perfBaselineEntry) string {
+// formatPerfRegressionWarning builds a concise advisory message. window holds
+// the successful historical runs that produced the baseline median; for the
+// iterations/duration metrics it feeds cross-run driver attribution so the
+// advisory names the most plausible WHY (compaction burst, retry storm,
+// tool-mix shift), not only the regressed total.
+func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, latest perfBaselineEntry, window []perfBaselineEntry) string {
 	switch metric {
 	case "iterations":
 		return formatPerfRegressionLine("iteration count",
 			baseline.Iterations, latest.Iterations,
 			"Be more direct: avoid redundant reads and searches. Plan before acting.") +
-			formatRunShapeDiagnostics(latest, 0)
+			formatRunShapeDiagnostics(latest, 0) +
+			formatRegressionAttribution(latest, baseline, window)
 	case "duration":
 		return formatPerfRegressionLine("run duration (seconds)",
 			baseline.DurationSec, latest.DurationSec,
 			"Longer runs may indicate unnecessary rework. Verify changes incrementally.") +
-			formatRunShapeDiagnostics(latest, latest.DurationSec)
+			formatRunShapeDiagnostics(latest, latest.DurationSec) +
+			formatRegressionAttribution(latest, baseline, window)
 	case "error_rate":
 		return formatPerfRegressionLine("error rate",
 			baseline.Errors, latest.Errors,
@@ -585,6 +593,123 @@ func formatRunShapeDiagnostics(hit perfBaselineEntry, durSec int) string {
 		out += ". Target the dominant tool pattern first (batch shell commands, narrow reads) and stop once the change verifies."
 	}
 	return out
+}
+
+// formatRegressionAttribution names the most plausible driver of an
+// iterations/duration regression by contrasting the regressed run with the
+// baseline window. Attribution here moves the advisory from "what happened"
+// (the regressed total) to "why it happened", following the intention-behavior
+// consistency failure-attribution line of work (Expert Systems with
+// Applications, 2026) and AgentTether's graph-guided RCA (arXiv:2607.06273):
+// behavior-scoped feedback must carry its cause, or the agent guesses. All
+// drivers are deterministic comparisons over data the baseline window already
+// persists - zero LLM cost, no new telemetry. Priority: compaction burst
+// (context churn, not strategy) > retry storm (error fixation) > tool-mix
+// shift (behavior drift) > explicit no-shift fallback, so silence never
+// implies "unexplained".
+func formatRegressionAttribution(hit, mid perfBaselineEntry, window []perfBaselineEntry) string {
+	if hit.Compactions >= 2 && hit.Compactions > 2*mid.Compactions {
+		return " Likely driver: compaction burst (" + intToStr(hit.Compactions) +
+			" vs baseline median " + intToStr(mid.Compactions) +
+			") - context churn, not per-step strategy; keep reads narrow to shrink context."
+	}
+	if hit.Errors >= 3 && (mid.Errors == 0 || hit.Errors > 2*mid.Errors) {
+		return " Likely driver: retry storm (" + intToStr(hit.Errors) +
+			" errors vs baseline median " + intToStr(mid.Errors) +
+			") - diagnose the first failure instead of retrying variants."
+	}
+	if name, count, ok := dominantTopTool(hit); ok {
+		if hitPm := count * 1000 / hit.ToolCalls; hitPm >= perfAttributionMinDominantPermille {
+			if base, haveBase := medianToolSharePermille(window, name); haveBase {
+				if base == 0 {
+					return " Likely driver: new dominant tool pattern (" + name + " at " +
+						permilleToStr(hitPm) + "% of calls; absent from baseline top-tools) - the regression tracks a behavior change, not task size."
+				}
+				if hitPm >= 2*base {
+					return " Likely driver: tool-mix shift (" + name + " " + permilleToStr(hitPm) +
+						"% of calls vs baseline median " + permilleToStr(base) +
+						"%) - same tool, disproportionate share; batch or reduce " + name + " calls."
+				}
+			}
+		}
+	}
+	return " Likely driver: none found - tool mix, errors and compaction match baseline; treat as task complexity and keep scope tight."
+}
+
+// perfAttributionMinDominantPermille is the minimum share (per-mille) of total
+// tool calls the regressed run's dominant tool must hold before tool-mix
+// attribution applies. TopTools records only the top 3 tools, so a computed
+// share is only trustworthy for tools that reliably rank top-3; at 15% a tool
+// is mathematically guaranteed top-3 (7 tools at 15% each would exceed 100%).
+const perfAttributionMinDominantPermille = 150
+
+// successfulPerfWindow filters a run window to successful entries, matching
+// the population computeMedianBaseline uses so attribution contrasts stay
+// within-population (#1148 rationale: failed runs skew every metric high).
+func successfulPerfWindow(runs []perfBaselineEntry) []perfBaselineEntry {
+	out := make([]perfBaselineEntry, 0, len(runs))
+	for _, r := range runs {
+		if r.Success {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// parseTopToolEntry splits a "name:count" TopTools element. Tool names may
+// contain colons (MCP servers), so the split uses the last colon.
+func parseTopToolEntry(entry string) (string, int, bool) {
+	idx := strings.LastIndex(entry, ":")
+	if idx <= 0 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(entry[idx+1:])
+	if err != nil || n < 0 {
+		return "", 0, false
+	}
+	return entry[:idx], n, true
+}
+
+// dominantTopTool returns the regressed run's most-invoked tool. TopTools is
+// ordered count-desc then name-asc, so the first entry is the dominant one.
+func dominantTopTool(hit perfBaselineEntry) (string, int, bool) {
+	if len(hit.TopTools) == 0 || hit.ToolCalls <= 0 {
+		return "", 0, false
+	}
+	return parseTopToolEntry(hit.TopTools[0])
+}
+
+// medianToolSharePermille returns the median per-mille share of the given
+// tool across a window of successful runs. Runs without TopTools data are
+// legacy entries and are skipped (no coverage either way); runs where the
+// tool does not appear in top-3 count as share 0 - absence is evidence, not
+// missing data, but only meaningful because callers require the hit-run
+// share to clear perfAttributionMinDominantPermille (guaranteed top-3).
+// ok=false when no window entry carries TopTools data at all.
+func medianToolSharePermille(window []perfBaselineEntry, tool string) (int, bool) {
+	samples := make([]int, 0, len(window))
+	for _, r := range window {
+		if len(r.TopTools) == 0 || r.ToolCalls <= 0 {
+			continue
+		}
+		share := 0
+		for _, entry := range r.TopTools {
+			if name, n, ok := parseTopToolEntry(entry); ok && name == tool {
+				share = n * 1000 / r.ToolCalls
+				break
+			}
+		}
+		samples = append(samples, share)
+	}
+	if len(samples) == 0 {
+		return 0, false
+	}
+	return medianInt(samples), true
+}
+
+// permilleToStr renders a per-mille value as a percentage string (666 -> "66.6").
+func permilleToStr(pm int) string {
+	return trimZeros(floatToString(float64(pm) / 10))
 }
 
 func intToStr(n int) string {
