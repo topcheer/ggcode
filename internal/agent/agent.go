@@ -2649,19 +2649,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 // truncationContinues and syncVerifyRetries are in-out counters owned by
 // RunStreamWithContent and mutated through pointers.
 
-// postExecutionDetectorPass runs the post-execution detector and
-// guidance-injection storm for one executed tool call - sa-41 slice 3,
-// extracted verbatim from RunStreamWithContent's inner tool loop
-// (~1.2k lines). Behavior-preserving:
-//   - per-site `msgs = contextManager.Messages()` refreshes inside this
-//     pass were dead stores (#1672 protocol: the request site re-snapshots
-//     the manager right before sending, and this pass never reads the
-//     snapshot), so they are dropped;
-//   - appendGuidance(&result, ...) call sites drop the & because the pass
-//     receives the result by pointer.
-//
-// speculativeSafeTools is a package-level map and needs no parameter.
-func (a *Agent) postExecutionDetectorPass(tc provider.ToolCallDelta, result *tool.Result, i, idx int, memoHit bool, runStats *RunStats, batchConflictWarnings map[int]string) (followUps []provider.Message) {
+// recordPostExecutionMutations performs the provenance + cache-coherence
+// bookkeeping for one executed tool call - sa-42 slice 4a, extracted
+// verbatim from postExecutionDetectorPass (secret redaction, planner/todo
+// tracking, speculative/memo/command-cache invalidation on source
+// mutations, memoization put). Runs first; the helpers below depend on
+// the redacted content.
+func (a *Agent) recordPostExecutionMutations(tc provider.ToolCallDelta, result *tool.Result, i int, memoHit bool) {
 	// Secret redaction (#1195): mask secret values in external-content
 	// tool results BEFORE any recorder, cache annotation, context append,
 	// or session-history persistence sees them. Applies uniformly to all
@@ -2758,6 +2752,17 @@ func (a *Agent) postExecutionDetectorPass(tc provider.ToolCallDelta, result *too
 	if speculativeSafeTools[tc.Name] && !result.IsError && !memoHit {
 		a.toolMemo.put(tc.Name, tc.Arguments, *result)
 	}
+}
+
+// recordPostExecutionFileObservations records file-level observations for
+// one executed tool call - sa-42 slice 4a, extracted verbatim from
+// postExecutionDetectorPass (read-window tracking, search breadth, the
+// unread-edit/edit-guard chain, edit-failure recovery, and the
+// pristine-content recorders). Ordering contract preserved from the
+// original pass: the pristine-content recorders (overcorrection /
+// falsePremise / integration) MUST run before injectRulesIntoResult below,
+// so injected learned-rule text is never misrecorded (#1141/#1165).
+func (a *Agent) recordPostExecutionFileObservations(tc provider.ToolCallDelta, result *tool.Result, idx int, batchConflictWarnings map[int]string) {
 	// Track files read during this run so the unread-edit guard
 	// knows which files the agent has seen.
 	if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
@@ -2948,6 +2953,15 @@ func (a *Agent) postExecutionDetectorPass(tc provider.ToolCallDelta, result *too
 	if warn, ok := batchConflictWarnings[idx]; ok {
 		a.appendGuidance(result, warn)
 	}
+}
+
+// runPostExecutionGuidanceStorm runs the cross-cutting detector battery for
+// one executed tool call - sa-42 slice 4a, extracted verbatim from
+// postExecutionDetectorPass (sequence/annihilation/fragmentation/orphan/
+// taint/coverage/storm detectors and their kin). Hints land either on the
+// tool result (appendGuidance) or as user-role context messages
+// (contextManager.Add), exactly as in the original pass.
+func (a *Agent) runPostExecutionGuidanceStorm(tc provider.ToolCallDelta, result *tool.Result, i int) {
 	if result.IsError {
 		debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
 	}
@@ -3140,6 +3154,31 @@ func (a *Agent) postExecutionDetectorPass(tc provider.ToolCallDelta, result *too
 			}},
 		})
 	}
+}
+
+// postExecutionDetectorPass runs the post-execution detector and
+// guidance-injection storm for one executed tool call - sa-41 slice 3,
+// extracted verbatim from RunStreamWithContent's inner tool loop
+// (~1.2k lines). Behavior-preserving:
+//   - per-site `msgs = contextManager.Messages()` refreshes inside this
+//     pass were dead stores (#1672 protocol: the request site re-snapshots
+//     the manager right before sending, and this pass never reads the
+//     snapshot), so they are dropped;
+//   - appendGuidance(&result, ...) call sites drop the & because the pass
+//     receives the result by pointer.
+//   - sa-42 slice 4a: the front half of the body is sharded into
+//     recordPostExecutionMutations -> recordPostExecutionFileObservations
+//     -> runPostExecutionGuidanceStorm, invoked below in the original
+//     execution order; the helpers' bodies are verbatim moves.
+//
+// speculativeSafeTools is a package-level map and needs no parameter.
+func (a *Agent) postExecutionDetectorPass(tc provider.ToolCallDelta, result *tool.Result, i, idx int, memoHit bool, runStats *RunStats, batchConflictWarnings map[int]string) (followUps []provider.Message) {
+	// sa-42 slice 4a: provenance + cache-coherence bookkeeping (verbatim move).
+	a.recordPostExecutionMutations(tc, result, i, memoHit)
+	// sa-42 slice 4a: file-level observation + edit-guard chain (verbatim move).
+	a.recordPostExecutionFileObservations(tc, result, idx, batchConflictWarnings)
+	// sa-42 slice 4a: cross-cutting detector guidance storm (verbatim move).
+	a.runPostExecutionGuidanceStorm(tc, result, i)
 	// Solution fixation: track failed edit attempts per file to
 	// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
 	// #639: every tool call advances the sliding window (the unit is
