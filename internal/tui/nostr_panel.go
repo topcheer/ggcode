@@ -357,16 +357,31 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 						return nostrBindResultMsg{err: err}
 					}
 
-					// Derive public key for QR code
-					pubKey, _ := nostr.GetPublicKey(privateKey)
-					npub, _ := nip19.EncodePublicKey(pubKey)
+					// #2626: display path must use the normalized
+					// (hex) key - go-nostr's GetPublicKey and nip19
+					// encoders accept hex only, so an nsec1-format
+					// user key used to produce an empty npub and a
+					// QR code of just "nostr:" while still reporting
+					// success.
+					privHex := im.NormalizeNostrKey(privateKey)
+					pubKey, err := nostr.GetPublicKey(privHex)
+					if err != nil {
+						return nostrBindResultMsg{err: fmt.Errorf("derive pubkey for %s: %w", name, err)}
+					}
+					npub, err := nip19.EncodePublicKey(pubKey)
+					if err != nil {
+						return nostrBindResultMsg{err: fmt.Errorf("encode npub for %s: %w", name, err)}
+					}
 					var qrText string
 					qrText, _ = renderCompactTerminalQRCode("nostr:" + npub)
 
 					var msg string
 					if len(fields) == 1 {
 						// Show nsec for auto-generated key so user can back it up
-						nsec, _ := nip19.EncodePrivateKey(privateKey)
+						nsec, err := nip19.EncodePrivateKey(privHex)
+						if err != nil {
+							return nostrBindResultMsg{err: fmt.Errorf("encode nsec for %s: %w", name, err)}
+						}
 						msg = m.t("panel.nostr.message.added_bot_key", name, nsec)
 					} else {
 						msg = m.t("panel.nostr.message.added_bot", name)

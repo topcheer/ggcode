@@ -507,6 +507,14 @@ func (a *nostrAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding
 // Key helpers
 // ---------------------------------------------------------------------------
 
+// NormalizeNostrKey returns the hex form of a nostr private key,
+// accepting both 64-char hex and nsec1... bech32 input. Callers that
+// feed the key to go-nostr helpers (GetPublicKey, nip19.Encode*) must
+// normalize first - those helpers accept hex only. (#2626)
+func NormalizeNostrKey(key string) string {
+	return normalizeNostrKey(key)
+}
+
 func normalizeNostrKey(key string) string {
 	key = strings.TrimSpace(key)
 	if strings.HasPrefix(key, "nsec1") {
