@@ -233,6 +233,24 @@ The report includes:
 Charts use embedded Chart.js — fully offline, no CDN dependencies. The generated HTML
 file is self-contained and shareable.
 
+### skills
+
+Validate skills against the Agent Skills open standard (agentskills.io, December 2025):
+
+```bash
+ggcode skills validate            # Validate all skills visible to the current project
+ggcode skills validate <path>     # Validate one skill folder, a SKILL.md, or a skills root
+ggcode skills validate --json     # Machine-readable report
+```
+
+Checks include the six portable frontmatter fields (`name`, `description`,
+`license`, `compatibility`, `metadata`, `allowed-tools`), name/description
+length limits, unknown-field portability warnings (strict consumers such as
+claude.ai skill upload reject them), cross-scope shadowing, dependency
+resolution, and `requires-tools` PATH availability. Exit code is `1` when any
+error-severity issue is found, so CI can gate skill releases on spec
+compliance.
+
 ### completion
 
 Generate shell completion scripts:

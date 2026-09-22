@@ -54,6 +54,36 @@ trigger: "error message | test failure | stack trace"
 6. Verify with the original failing case
 ```
 
+## Validating Skills
+
+ggcode validates skills against the [Agent Skills open standard](https://agentskills.io/specification)
+(December 2025). The standard defines six portable frontmatter fields — `name`,
+`description`, `license`, `compatibility`, `metadata`, `allowed-tools` — and
+strict consumers (claude.ai skill upload, Skills API packaging) reject any
+other field, while ggcode tolerantly accepts extensions. `ggcode skills
+validate` makes the difference visible:
+
+```bash
+ggcode skills validate            # All skills visible to the current project
+ggcode skills validate <path>     # One skill folder / SKILL.md / skills root
+ggcode skills validate --json     # Machine-readable report
+```
+
+It reports:
+
+- **errors**: missing/closed-frontmatter problems, invalid `name` (must be
+  lowercase letters, digits, and hyphens, max 64 chars), `description` over
+  1024 chars, `compatibility` over 500 chars, non-string `metadata` values
+- **warnings**: unknown fields outside the portable set, empty descriptions,
+  missing `dependencies`, `requires-tools` entries not found on PATH,
+  non-semantic `version`
+- **info**: known ggcode extension fields (`when_to_use`, `argument-hint`,
+  `user-invocable`, ...) and cross-scope shadowing (later scopes override
+  earlier ones: `~/.agents/skills` -> `~/.ggcode/skills` -> project
+  `.ggcode/skills`)
+
+Exit code is `1` when any error is found, so CI can gate skill releases.
+
 ## Skill Locations
 
 | Location | Scope |

@@ -18,18 +18,21 @@ type loadTarget struct {
 }
 
 type frontmatter struct {
-	Name                   string   `yaml:"name"`
-	Description            string   `yaml:"description"`
-	AllowedTools           []string `yaml:"allowed-tools"`
-	ArgumentHint           string   `yaml:"argument-hint"`
-	Arguments              []string `yaml:"arguments"`
-	WhenToUse              string   `yaml:"when_to_use"`
-	RequiresTools          []string `yaml:"requires-tools"`
-	Dependencies           []string `yaml:"dependencies"`
-	Version                string   `yaml:"version"`
-	UserInvocable          *bool    `yaml:"user-invocable"`
-	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
-	Context                string   `yaml:"context"`
+	Name                   string            `yaml:"name"`
+	Description            string            `yaml:"description"`
+	AllowedTools           []string          `yaml:"allowed-tools"`
+	ArgumentHint           string            `yaml:"argument-hint"`
+	Arguments              []string          `yaml:"arguments"`
+	WhenToUse              string            `yaml:"when_to_use"`
+	RequiresTools          []string          `yaml:"requires-tools"`
+	Dependencies           []string          `yaml:"dependencies"`
+	Version                string            `yaml:"version"`
+	UserInvocable          *bool             `yaml:"user-invocable"`
+	DisableModelInvocation bool              `yaml:"disable-model-invocation"`
+	Context                string            `yaml:"context"`
+	License                string            `yaml:"license"`
+	Compatibility          string            `yaml:"compatibility"`
+	Metadata               map[string]string `yaml:"metadata"`
 }
 
 // Loader finds and loads reusable skills and legacy custom slash commands.
@@ -174,6 +177,9 @@ func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
 		Version:                strings.TrimSpace(meta.Version),
 		DisableModelInvocation: meta.DisableModelInvocation,
 		Context:                strings.TrimSpace(meta.Context),
+		License:                strings.TrimSpace(meta.License),
+		Compatibility:          strings.TrimSpace(meta.Compatibility),
+		Metadata:               meta.Metadata,
 		UserInvocable:          true,
 		Enabled:                true,
 	}

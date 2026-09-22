@@ -42,6 +42,13 @@ type Command struct {
 	DisableModelInvocation bool
 	Context                string
 	Enabled                bool // false = skill is disabled and won't be invoked by the agent
+
+	// Agent Skills open-standard portable fields (agentskills.io, 2025-12):
+	// license, compatibility, metadata. Parsed so they are no longer
+	// silently dropped; surfaced by `ggcode skills validate`.
+	License       string
+	Compatibility string
+	Metadata      map[string]string
 }
 
 // Expand replaces template variables in the command template.
