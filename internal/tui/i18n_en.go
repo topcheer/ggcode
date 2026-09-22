@@ -1015,6 +1015,8 @@ func enCatalog(key string) string {
 		return "Copy last assistant response to clipboard"
 	case "slash.context":
 		return "Show context window usage breakdown (tokens, messages, capacity)"
+	case "slash.prompt":
+		return "Inspect the assembled system prompt sent to the model (full, save, copy)"
 	case "slash.runreport":
 		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
 	case "slash.im":

@@ -856,6 +856,8 @@ func esCatalog(key string) string {
 		return "Copiar última respuesta del asistente al portapapeles"
 	case "slash.context":
 		return "Mostrar desglose de uso de ventana de contexto (tokens, mensajes, capacidad)"
+	case "slash.prompt":
+		return "Inspeccionar el prompt del sistema ensamblado enviado al modelo (full, save, copy)"
 	case "slash.im":
 		return "Abrir panel unificado de canales IM"
 	case "panel.qq.directory":

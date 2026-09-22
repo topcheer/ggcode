@@ -165,6 +165,8 @@ func ptCatalog(key string) string {
 		return "Mostrar uso de tokens da sessão e custo estimado"
 	case "slash.context":
 		return "Mostrar detalhamento de uso da janela de contexto"
+	case "slash.prompt":
+		return "Inspecionar o prompt de sistema montado enviado ao modelo (full, save, copy)"
 	case "slash.init":
 		return "Gerar GGCODE.md a partir do projeto atual"
 	case "slash.im":

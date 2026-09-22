@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -1124,6 +1125,106 @@ func (m *Model) handleCopyCommand() tea.Cmd {
 		preview := util.Truncate(strings.TrimSpace(text), 60)
 		return streamMsg(fmt.Sprintf("Copied %d chars to clipboard: %s", len(text), preview))
 	}
+}
+
+// promptPreviewLines limits the default /prompt preview printed into chat.
+const promptPreviewLines = 40
+
+// handlePromptCommand inspects the fully assembled system prompt that is
+// actually sent to the model (base prompt + project memory + skills + tool
+// catalog + mode-specific overrides). /context shows token counts only;// promptOps practice treats the effective prompt as a first-class artifact
+// users must be able to inspect, export and diff.
+//
+// Usage:
+//
+//	/prompt            summary + head preview of the assembled prompt
+//	/prompt full       print the entire prompt into chat
+//	/prompt save [dir|file]  write the full prompt to a file (default: temp dir)
+//	/prompt copy       copy the full prompt to the clipboard
+func (m *Model) handlePromptCommand(parts []string) tea.Cmd {
+	sub := ""
+	if len(parts) > 1 {
+		sub = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	arg := ""
+	if len(parts) > 2 {
+		arg = strings.TrimSpace(strings.Join(parts[2:], " "))
+	}
+	prompt := ""
+	if m.agent != nil {
+		prompt = m.agent.SystemPrompt()
+	}
+	if prompt == "" {
+		m.chatWriteSystem(nextSystemID(), "System prompt unavailable (agent not initialized).")
+		return nil
+	}
+
+	switch sub {
+	case "copy":
+		if err := clipboard.WriteAll(prompt); err != nil {
+			return func() tea.Msg { return streamMsg(fmt.Sprintf("Clipboard error: %v", err)) }
+		}
+		return func() tea.Msg {
+			return streamMsg(fmt.Sprintf("Copied system prompt (%d chars) to clipboard.", len(prompt)))
+		}
+	case "save":
+		path, err := writeSystemPromptFile(prompt, arg)
+		if err != nil {
+			return func() tea.Msg { return streamMsg(fmt.Sprintf("/prompt save failed: %v", err)) }
+		}
+		return func() tea.Msg {
+			return streamMsg(fmt.Sprintf("System prompt (%d chars, ~%d tokens) written to %s", len(prompt), context.EstimateTokens(prompt), path))
+		}
+	case "full":
+		m.chatWriteSystem(nextSystemID(), formatSystemPromptSummary(prompt, 0))
+		return nil
+	default:
+		m.chatWriteSystem(nextSystemID(), formatSystemPromptSummary(prompt, promptPreviewLines))
+		return nil
+	}
+}
+
+// formatSystemPromptSummary renders a summary of the assembled system prompt.
+// previewLines <= 0 means print the full prompt.
+func formatSystemPromptSummary(prompt string, previewLines int) string {
+	var sb strings.Builder
+	sb.WriteString("Assembled System Prompt (sent to the model)\n\n")
+	sb.WriteString(fmt.Sprintf("  %d chars, ~%d tokens\n", len(prompt), context.EstimateTokens(prompt)))
+	trimmed := strings.TrimRight(prompt, "\n")
+	lines := strings.Split(trimmed, "\n")
+	if previewLines <= 0 {
+		sb.WriteString(fmt.Sprintf("  %d lines\n\n", len(lines)))
+		sb.WriteString(trimmed)
+		return sb.String()
+	}
+	if len(lines) > previewLines {
+		sb.WriteString(fmt.Sprintf("\n(first %d of %d lines — use /prompt full, /prompt save [path] or /prompt copy for everything)\n\n", previewLines, len(lines)))
+		sb.WriteString(strings.Join(lines[:previewLines], "\n"))
+		return sb.String()
+	}
+	sb.WriteString(fmt.Sprintf("\n(%d lines — /prompt full, /prompt save [path], /prompt copy for export options)\n\n", len(lines)))
+	sb.WriteString(trimmed)
+	return sb.String()
+}
+
+// writeSystemPromptFile writes the full system prompt to path. Empty path
+// defaults to a timestamped file in the OS temp dir. A directory argument
+// gets the default file name inside it.
+func writeSystemPromptFile(prompt, path string) (string, error) {
+	name := fmt.Sprintf("ggcode-system-prompt-%s.txt", time.Now().Format("20060102-150405"))
+	if strings.TrimSpace(path) == "" {
+		path = filepath.Join(os.TempDir(), name)
+	} else if info, err := os.Stat(path); err == nil && info.IsDir() {
+		path = filepath.Join(path, name)
+	}
+	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path, nil
+	}
+	return abs, nil
 }
 
 // handleContextCommand shows a detailed breakdown of the context window usage,

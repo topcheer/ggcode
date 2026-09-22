@@ -862,6 +862,8 @@ func koCatalog(key string) string {
 		return "대화 복사"
 	case "slash.context":
 		return "컨텍스트 정보 표시"
+	case "slash.prompt":
+		return "모델에 전송되는 시스템 프롬프트 표시 (full/save/copy)"
 	case "slash.im":
 		return "IM 어댑터 관리"
 	case "panel.qq.directory":

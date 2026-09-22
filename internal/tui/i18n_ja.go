@@ -901,6 +901,8 @@ func jaCatalog(key string) string {
 		return "会話をコピー"
 	case "slash.context":
 		return "コンテキスト情報を表示"
+	case "slash.prompt":
+		return "モデルに送信されるシステムプロンプトを表示（full/save/copy）"
 	case "slash.im":
 		return "IMアダプタを管理"
 	case "panel.qq.directory":

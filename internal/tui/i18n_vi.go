@@ -856,6 +856,8 @@ func viCatalog(key string) string {
 		return "Sao chép phản hồi assistant cuối vào clipboard"
 	case "slash.context":
 		return "Hiện phân tích sử dụng cửa sổ ngữ cảnh (token, tin nhắn, dung lượng)"
+	case "slash.prompt":
+		return "Xem prompt hệ thống đã ghép được gửi cho mô hình (full, save, copy)"
 	case "slash.im":
 		return "Mở bảng kênh IM thống nhất"
 	case "panel.qq.directory":

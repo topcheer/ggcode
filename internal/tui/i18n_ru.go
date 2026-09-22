@@ -930,6 +930,8 @@ func ruCatalog(key string) string {
 		return "Скопировать последний ответ ассистента в буфер обмена"
 	case "slash.context":
 		return "Показать разбивку контекстного окна (токены, сообщения, ёмкость)"
+	case "slash.prompt":
+		return "Показать собранную системную подсказку, отправляемую модели (full, save, copy)"
 	case "slash.im":
 		return "Открыть единую панель IM-каналов"
 

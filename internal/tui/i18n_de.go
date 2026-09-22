@@ -938,6 +938,8 @@ func deCatalog(key string) string {
 		return "Letzte Assistenten-Antwort in Zwischenablage kopieren"
 	case "slash.context":
 		return "Kontextfenster-Nutzung aufschlüsseln (Tokens, Nachrichten, Kapazität)"
+	case "slash.prompt":
+		return "Zusammengesetzten Systemprompt anzeigen, der an das Modell gesendet wird (full, save, copy)"
 	case "slash.im":
 		return "Einheitliches IM-Kanal-Panel öffnen"
 

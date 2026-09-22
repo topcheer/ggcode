@@ -856,6 +856,8 @@ func frCatalog(key string) string {
 		return "Copier la dernière réponse de l'assistant dans le presse-papiers"
 	case "slash.context":
 		return "Afficher le détail d'utilisation de la fenêtre de contexte (tokens, messâges, capacité)"
+	case "slash.prompt":
+		return "Afficher le prompt système assemblé envoyé au modèle (full, save, copy)"
 	case "slash.im":
 		return "Ouvrir le panneau unifie des canaux IM"
 	case "panel.qq.directory":

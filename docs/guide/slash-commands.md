@@ -13,6 +13,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/compact` | Compact conversation to save context |
 | `/clear` | Clear conversation |
 | `/context` | Show context window usage and details |
+| `/prompt [full\|save [path]\|copy]` | Inspect the assembled system prompt actually sent to the model (preview, full text, export to file, or clipboard) |
 | `/copy` | Copy conversation to clipboard |
 | `/export [path]` | Export session to file |
 | `/stats` | Open session statistics panel |
