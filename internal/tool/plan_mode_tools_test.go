@@ -3,6 +3,9 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/permission"
@@ -99,7 +102,7 @@ func TestExitPlanMode_RestoresPreviousMode(t *testing.T) {
 		currentMode:  permission.PlanMode,
 		previousMode: permission.BypassMode, // simulated: was bypass before plan
 	}
-	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
+	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode, PlansDir: t.TempDir()}
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"plan":"do something"}`))
 	if err != nil {
@@ -119,7 +122,7 @@ func TestExitPlanMode_NoPreviousModeUsesDefault(t *testing.T) {
 		currentMode:  permission.PlanMode,
 		previousMode: 0, // no previous mode remembered
 	}
-	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
+	tool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode, PlansDir: t.TempDir()}
 
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"plan":"do something"}`))
 	if err != nil {
@@ -161,7 +164,7 @@ func TestPlanModeRoundTrip_Bypass(t *testing.T) {
 	switcher := &mockModeSwitcher{currentMode: permission.BypassMode}
 
 	enterTool := EnterPlanModeTool{Switcher: switcher}
-	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
+	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode, PlansDir: t.TempDir()}
 
 	// 1. Enter plan mode
 	result, _ := enterTool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -182,7 +185,7 @@ func TestPlanModeRoundTrip_Autopilot(t *testing.T) {
 	switcher := &mockModeSwitcher{currentMode: permission.AutopilotMode}
 
 	enterTool := EnterPlanModeTool{Switcher: switcher}
-	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
+	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode, PlansDir: t.TempDir()}
 
 	// Enter
 	enterTool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -201,7 +204,7 @@ func TestPlanModeRoundTrip_Supervised(t *testing.T) {
 	switcher := &mockModeSwitcher{currentMode: permission.SupervisedMode}
 
 	enterTool := EnterPlanModeTool{Switcher: switcher}
-	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode}
+	exitTool := ExitPlanModeTool{Switcher: switcher, DefaultMode: permission.SupervisedMode, PlansDir: t.TempDir()}
 
 	enterTool.Execute(context.Background(), json.RawMessage(`{}`))
 	exitTool.Execute(context.Background(), json.RawMessage(`{"plan":"plan content"}`))
@@ -209,6 +212,67 @@ func TestPlanModeRoundTrip_Supervised(t *testing.T) {
 	// Supervised → Plan → exit (no explicit mode) → should use default (supervised)
 	if switcher.currentMode != permission.SupervisedMode {
 		t.Errorf("mode = %v, want SupervisedMode", switcher.currentMode)
+	}
+}
+
+// ---- Plan Persistence Tests ----
+
+func TestExitPlanMode_PersistsPlan(t *testing.T) {
+	switcher := &mockModeSwitcher{currentMode: permission.PlanMode}
+	dir := t.TempDir()
+	tool := ExitPlanModeTool{Switcher: switcher, PlansDir: dir}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"plan":"1. update foo\n2. run tests"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %s", result.Content)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 plan file in %s, got %d", dir, len(entries))
+	}
+	if filepath.Ext(entries[0].Name()) != ".md" {
+		t.Errorf("plan file name = %q, want .md extension", entries[0].Name())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "1. update foo") {
+		t.Errorf("plan file missing plan content: %q", string(data))
+	}
+	if !strings.Contains(result.Content, entries[0].Name()) {
+		t.Errorf("result should reference saved plan file %q, got: %s", entries[0].Name(), result.Content)
+	}
+}
+
+func TestExitPlanMode_PersistFailureNonFatal(t *testing.T) {
+	switcher := &mockModeSwitcher{currentMode: permission.PlanMode}
+	// PlansDir points at a regular file, so MkdirAll must fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := ExitPlanModeTool{Switcher: switcher, PlansDir: blocker}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"plan":"still works"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("persist failure must be non-fatal, got error: %s", result.Content)
+	}
+	if strings.Contains(result.Content, "Plan saved to") {
+		t.Errorf("result must not claim the plan was saved: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "still works") {
+		t.Errorf("plan content must still be returned: %s", result.Content)
 	}
 }
 

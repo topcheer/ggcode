@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -79,11 +83,15 @@ func (t EnterPlanModeTool) Execute(_ context.Context, _ json.RawMessage) (Result
 type ExitPlanModeTool struct {
 	Switcher    ModeSwitcher
 	DefaultMode permission.PermissionMode
+	// PlansDir overrides where plans are persisted. Empty means the
+	// default: .ggcode/plans under the current working directory.
+	PlansDir string
 }
 
 func (t ExitPlanModeTool) Name() string { return "exit_plan_mode" }
 func (t ExitPlanModeTool) Description() string {
 	return "Exit plan mode and return to normal coding mode. Provide the plan content generated during exploration. " +
+		"The plan is persisted to .ggcode/plans/ so it survives compaction and session restarts and can be referenced in later sessions. " +
 		"After exiting, break the plan into structured tasks using task_create with dependencies (addBlocks/addBlockedBy) " +
 		"to track progress, then execute each task step by step."
 }
@@ -133,5 +141,33 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 
 	t.Switcher.SetMode(mode)
 
-	return Result{Content: fmt.Sprintf("Exited plan mode. Resumed in %s mode.\n\nPlan:\n%s\n\nUse task_create to break this plan into structured tasks with dependencies, then execute step by step.\n", mode, args.Plan)}, nil
+	result := fmt.Sprintf("Exited plan mode. Resumed in %s mode.\n\nPlan:\n%s\n\nUse task_create to break this plan into structured tasks with dependencies, then execute step by step.\n", mode, args.Plan)
+	if savedPath := t.persistPlan(args.Plan); savedPath != "" {
+		result += fmt.Sprintf("\nPlan saved to %s — it survives compaction and session restarts; reference it in later sessions if work is interrupted.\n", savedPath)
+	}
+	return Result{Content: result}, nil
+}
+
+// persistPlan writes the approved plan to a markdown file so it becomes a
+// durable, resumable artifact instead of living only in the conversation.
+// ESEM 2026 (arXiv:2608.04661) found 91.8% of agent plan files are ephemeral
+// single-commit artifacts; persisting on approval closes that gap. Failure is
+// non-fatal: the plan is still returned in the tool result.
+func (t ExitPlanModeTool) persistPlan(plan string) string {
+	dir := t.PlansDir
+	if dir == "" {
+		dir = filepath.Join(".ggcode", "plans")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		debug.Log("tool", "exit_plan_mode: create plans dir %s: %v", dir, err)
+		return ""
+	}
+	name := fmt.Sprintf("plan-%s.md", time.Now().Format("20060102-150405"))
+	path := filepath.Join(dir, name)
+	content := fmt.Sprintf("# Plan — %s\n\n%s\n", time.Now().Format("2006-01-02 15:04:05"), plan)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		debug.Log("tool", "exit_plan_mode: write plan %s: %v", path, err)
+		return ""
+	}
+	return path
 }
