@@ -358,6 +358,22 @@ func TestDescribeTool(t *testing.T) {
 			wantDisplay: "Stash push",
 		},
 
+		// RecallMemory
+		{
+			name: "recall_memory with query", toolName: "recall_memory",
+			rawArgs:     `{"query":"flaky e2e test"}`,
+			wantName:    "Recall",
+			wantDetail:  "flaky e2e test",
+			wantDisplay: "Recall flaky e2e test",
+		},
+		{
+			name: "recall_memory empty", toolName: "recall_memory",
+			rawArgs:     `{}`,
+			wantName:    "Recall",
+			wantDetail:  "",
+			wantDisplay: "Recall",
+		},
+
 		// Sleep
 		{
 			name: "sleep seconds", toolName: "sleep",
