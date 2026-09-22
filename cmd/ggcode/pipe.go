@@ -29,8 +29,14 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
+// outputFormat is one of text (default), json, or stream-json (see pipe_output.go).
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputFormat string) int {
 	prov, resolved, err := ResolveProvider(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 1
+	}
+	format, err := normalizePipeOutputFormat(outputFormat)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
@@ -203,18 +209,49 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 			fmt.Fprintf(os.Stderr, "warning: writing output failed: %v\n", err)
 		}
 	}
+	// Structured output (--output-format json/stream-json): route stream
+	// events through an emitter instead of the raw text passthrough. text
+	// mode leaves the legacy path untouched.
+	var em *pipeEmitter
+	if format != pipeFormatText {
+		em = newPipeEmitter(w, format, pipeEmitterMeta{
+			SessionID:      ag.SessionID(),
+			Model:          resolved.Model,
+			Cwd:            workingDir,
+			Tools:          pipeToolNames(registry),
+			PermissionMode: mode.String(),
+		})
+		if err := em.Init(); err != nil && writeErr == nil {
+			writeErr = err
+			fmt.Fprintf(os.Stderr, "warning: writing output failed: %v\n", err)
+		}
+	}
 	if imageBlocks != nil {
 		agentErr = ag.RunStreamWithContent(ctx, imageBlocks, func(event provider.StreamEvent) {
 			switch event.Type {
 			case provider.StreamEventText:
-				writeText(event.Text)
+				if em != nil {
+					em.TextDelta(event.Text)
+				} else {
+					writeText(event.Text)
+				}
+			case provider.StreamEventDone:
+				if em != nil {
+					em.TurnDone(event.Usage, event.Truncated)
+				}
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
 				}
+				if em != nil {
+					em.ToolCallDone(event.Tool.Name, event.Tool.Arguments)
+				}
 			case provider.StreamEventToolResult:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
+				}
+				if em != nil {
+					em.ToolResult(event.Result, event.IsError)
 				}
 			case provider.StreamEventError:
 				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
@@ -225,20 +262,47 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		agentErr = ag.RunStream(ctx, fullPrompt, func(event provider.StreamEvent) {
 			switch event.Type {
 			case provider.StreamEventText:
-				writeText(event.Text)
+				if em != nil {
+					em.TextDelta(event.Text)
+				} else {
+					writeText(event.Text)
+				}
+			case provider.StreamEventDone:
+				if em != nil {
+					em.TurnDone(event.Usage, event.Truncated)
+				}
 			case provider.StreamEventToolCallDone:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
 				}
+				if em != nil {
+					em.ToolCallDone(event.Tool.Name, event.Tool.Arguments)
+				}
 			case provider.StreamEventToolResult:
 				if line := formatPipeProgressEvent(event); line != "" {
 					fmt.Fprintln(os.Stderr, line)
+				}
+				if em != nil {
+					em.ToolResult(event.Result, event.IsError)
 				}
 			case provider.StreamEventError:
 				fmt.Fprintf(os.Stderr, "error: %v\n", event.Error)
 				hasError = true
 			}
 		})
+	}
+
+	// Structured formats must emit a result payload even when the run
+	// failed, so machine consumers always get a parseable final line.
+	if em != nil {
+		resultErr := agentErr
+		if resultErr == nil && hasError {
+			resultErr = fmt.Errorf("stream reported errors")
+		}
+		if err := em.Finish(resultErr); err != nil && writeErr == nil {
+			writeErr = err
+			fmt.Fprintf(os.Stderr, "warning: writing output failed: %v\n", err)
+		}
 	}
 
 	if agentErr != nil {

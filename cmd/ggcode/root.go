@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
+	var outputFormat string
 	var helperManifest string
 
 	cmd := &cobra.Command{
@@ -83,6 +84,15 @@ func NewRootCmd() *cobra.Command {
 				cfgFile = resolved
 			}
 			if pipePrompt == "" {
+				// --output-format is a pipe-mode contract (Claude Code-style
+				// headless structured output); in TUI mode it is always a
+				// user mistake, not a silently ignored flag.
+				if _, err := normalizePipeOutputFormat(outputFormat); err != nil {
+					return err
+				}
+				if strings.ToLower(strings.TrimSpace(outputFormat)) != pipeFormatText {
+					return fmt.Errorf("--output-format requires -p/--prompt (pipe mode)")
+				}
 				interactive := writerIsTerminal(os.Stdout) && writerIsTerminal(os.Stdin)
 				proceed, err := confirmPlaintextAPIKeysBeforeTUI(cfgFile, os.Stdin, os.Stdout, interactive)
 				if err != nil {
@@ -106,7 +116,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, outputFormat)
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -182,6 +192,7 @@ func NewRootCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
+	cmd.Flags().StringVar(&outputFormat, "output-format", pipeFormatText, "pipe mode output format: text, json, or stream-json")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",

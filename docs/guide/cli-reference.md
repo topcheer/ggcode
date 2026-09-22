@@ -22,6 +22,52 @@ echo "fix typo" | ggcode  # Read from stdin
 Additional pipe-mode flags:
 - `--allowedTools <name>` — restrict tools (repeatable)
 - `--output <path>` — write output to file (default: stdout)
+- `--output-format <text|json|stream-json>` — structured output (see below)
+
+### Pipe Output Formats
+
+`--output-format` (pipe mode only, default `text`) gives scripts and CI pipelines
+a machine-readable contract instead of raw assistant text:
+
+- `text` — legacy behavior: the assistant text streams to stdout.
+- `json` — a single JSON object is written after the run ends.
+- `stream-json` — newline-delimited JSON events (`system` → `assistant` →
+  `tool_use`/`tool_result` → … → `result`), one object per line, for
+  incremental consumers.
+
+```bash
+# Parse the final answer with jq
+ggcode -p "summarize this repo" --output-format json | jq -r '.result'
+
+# Stream tool activity for progress dashboards
+ggcode -p "fix the failing tests" --output-format stream-json | \
+  jq -r 'select(.type=="tool_use") | .name'
+```
+
+The final `result` object:
+
+```json
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 12345,
+  "result": "final assistant text",
+  "session_id": "pipe-4242",
+  "model": "glm-5",
+  "num_turns": 3,
+  "tool_uses": 7,
+  "usage": {"input_tokens": 12000, "output_tokens": 2400, "cache_read_tokens": 0, "cache_write_tokens": 0},
+  "permission_mode": "auto"
+}
+```
+
+`subtype` is `success`, `error_during_execution` (agent/stream error), or
+`error_max_output_tokens` (output truncated by the model limit); error results
+carry an `error` message and the exit code is `1`. `tool_use` events carry the
+full `input` arguments; `tool_result` events carry a bounded first-line
+`summary` (authoritative result content always flows to the model). Progress
+lines stay on stderr in all formats, so stdout is clean machine output.
 
 ### Resume Session
 
@@ -261,6 +307,7 @@ ggcode version                         # Print version, commit, and build date
 | `-p, --prompt <prompt>` | Non-interactive pipe mode |
 | `--allowedTools <name>` | Restrict tools in pipe mode (repeatable) |
 | `--output <path>` | Output file path (default: stdout) |
+| `--output-format <fmt>` | Pipe output format: text, json, stream-json (default: text) |
 | `--resume [id]` | Resume a session |
 | `--resume-picker` | Open session picker |
 | `--new-session` | Skip auto-resume, always start a new session |
