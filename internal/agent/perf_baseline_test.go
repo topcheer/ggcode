@@ -333,3 +333,68 @@ func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
 		}
 	}
 }
+
+// ---------- Workload normalization for scale-sensitive metrics ----------
+
+func TestScaleSensitiveMetricsNormalizeByWorkload(t *testing.T) {
+	// Baseline median blends quick-fix runs; the run under test is a
+	// legitimate deep-research session (~2x raw totals across the board).
+	// Absolute comparison flags 2.1x "context bloat"; per-call rates
+	// (3335 vs 2904 tokens/call, 16.4 vs 15.0 sec/call, 0.71 vs 0.67
+	// iters/call) are all well under the 1.5x threshold.
+	baseline := perfBaselineEntry{Iterations: 40, ToolCalls: 60, DurationSec: 900, ContextPeak: 174249}
+	run := perfBaselineEntry{Iterations: 78, ToolCalls: 110, DurationSec: 1800, ContextPeak: 366866}
+	if hit, metric := checkSingleRunRegression(run, baseline); hit {
+		t.Fatalf("large-but-efficient run must not be flagged, got metric=%q", metric)
+	}
+
+	// Same workload, genuinely bloated context: 2x tokens per call fires.
+	bloated := run
+	bloated.ContextPeak = 700000
+	if hit, metric := checkSingleRunRegression(bloated, baseline); !hit || metric != "context_usage" {
+		t.Errorf("expected context_usage regression for bloat at equal workload, got hit=%v metric=%q", hit, metric)
+	}
+
+	// Chatty run at baseline-scale workload: 2x iterations per call fires.
+	chatty := baseline
+	chatty.Iterations = 80
+	if hit, metric := checkSingleRunRegression(chatty, baseline); !hit || metric != "iterations" {
+		t.Errorf("expected iterations regression for chatty run, got hit=%v metric=%q", hit, metric)
+	}
+}
+
+func TestLegacyAbsoluteFallbackBelowToolCallFloor(t *testing.T) {
+	// Below the per-call floor on either side, legacy absolute semantics
+	// apply (also covers synthetic tc=0 entries used by older tests).
+	baseline := perfBaselineEntry{Iterations: 10, ToolCalls: 4, DurationSec: 30, ContextPeak: 5000}
+	run := perfBaselineEntry{Iterations: 20, ToolCalls: 4, DurationSec: 35, ContextPeak: 6000}
+	hit, metric := checkSingleRunRegression(run, baseline)
+	if !hit || metric != "iterations" {
+		t.Errorf("expected legacy absolute iterations regression below floor, got hit=%v metric=%q", hit, metric)
+	}
+}
+
+func TestFormatScaleMetricWarningShowsPerCallRateAndTotals(t *testing.T) {
+	baseline := perfBaselineEntry{Iterations: 40, ToolCalls: 60, ContextPeak: 174249}
+	latest := perfBaselineEntry{Iterations: 90, ToolCalls: 60, ContextPeak: 349000}
+	msg := formatPerfRegressionWarning("context_usage", baseline, latest)
+	if !strings.Contains(msg, "peak context tokens per tool call") {
+		t.Errorf("normalized advisory should lead with per-call rate, got: %s", msg)
+	}
+	if !strings.Contains(msg, "baseline=2904.15") {
+		t.Errorf("normalized advisory should show the per-call baseline, got: %s", msg)
+	}
+	if !strings.Contains(msg, "recent=349000 tokens") {
+		t.Errorf("normalized advisory should keep run totals, got: %s", msg)
+	}
+
+	// tc=0 entries degrade to the legacy absolute-only line.
+	legacyMsg := formatPerfRegressionWarning("context_usage",
+		perfBaselineEntry{ContextPeak: 5000}, perfBaselineEntry{ContextPeak: 12000})
+	if strings.Contains(legacyMsg, "per tool call") {
+		t.Errorf("legacy fallback should not mention per-call rates, got: %s", legacyMsg)
+	}
+	if !strings.Contains(legacyMsg, "baseline=5000") || !strings.Contains(legacyMsg, "recent=12000") {
+		t.Errorf("legacy fallback should show absolute totals, got: %s", legacyMsg)
+	}
+}

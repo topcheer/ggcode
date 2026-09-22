@@ -12,11 +12,26 @@ ggcode tracks agent performance metrics across sessions and warns when efficienc
 
 | Metric | Regression Factor | Notes |
 |--------|------------------|-------|
-| Iterations | 1.5x baseline median | Too many iterations = unfocused work |
-| Duration | 1.5x baseline median | Longer runs = unnecessary rework |
+| Iterations | 1.5x per tool call | Too many turns per unit of work = chatty, unfocused work |
+| Duration | 1.5x per tool call | High seconds-per-call = unnecessary rework or slow tools |
 | Error rate | 2x baseline or >5% from 0% | High errors = misjudging tool args |
-| Context peak | 1.5x baseline median | Context bloat reduces quality |
+| Context peak | 1.5x per tool call | Context bloat reduces quality |
 | Compaction | 3+ events from 0 baseline | Context too large for the task |
+
+## Workload normalization
+
+Iterations, duration, and context peak scale with task size: a deep-research
+session legitimately peaks far above a median blended from quick-fix runs.
+Comparing raw totals would flag every large task as a regression — a false
+positive that itself pollutes the context it warns about.
+
+When both the baseline and the compared run carry at least 5 tool calls,
+these three metrics are compared **per tool call** instead (tokens/call,
+seconds/call, iterations/call). This measures efficiency at any task size: a
+367k-token peak across 110 tool calls stays silent next to a 174k-token /
+60-call median, while genuine bloat (2x tokens for the same workload) still
+fires. Advisories quote the per-call rate plus the run totals for context.
+Below the 5-call floor, the legacy absolute comparison applies.
 
 ## Design principles
 

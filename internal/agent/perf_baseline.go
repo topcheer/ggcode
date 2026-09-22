@@ -36,10 +36,14 @@ package agent
 //   - Only fires on REGRESSION (improvements are silent)
 //   - Uses median (not mean) for robustness against outliers
 //   - Requires at least 5 historical runs before comparing
+//   - Scale-sensitive metrics (iterations, duration, context peak) compare
+//     per-tool-call rates, not raw totals, so large-but-efficient runs do
+//     not false-positive against a median blended from smaller tasks
 //   - Persists to .ggcode/ directory (same as playbook, knight-memory, etc.)
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -77,6 +81,18 @@ const (
 	// perfTopToolsCount is how many dominant tools the run-shape
 	// diagnostics line reports per regressed run.
 	perfTopToolsCount = 3
+
+	// perfMinNormToolCalls is the minimum tool-call count required on BOTH
+	// sides of a comparison before scale-sensitive metrics (iterations,
+	// duration, context peak) are compared workload-normalized (per tool
+	// call) instead of by absolute totals. Raw totals conflate "bigger
+	// task" with "less efficient run": a legitimate deep-research session
+	// peaks far above a median blended from quick-fix runs and trips the
+	// absolute thresholds on every large run. Per-call rates measure
+	// efficiency at any task size; below the floor the ratios are too
+	// noisy, so the legacy absolute comparison applies (this also covers
+	// synthetic tc=0 entries).
+	perfMinNormToolCalls = 5
 )
 
 // perfBaselineEntry is a compact summary of a single run for trend analysis.
@@ -405,13 +421,30 @@ func (a *Agent) maybeInjectPerfRegression() {
 
 // checkSingleRunRegression checks if a single run regressed against baseline.
 // Returns (true, metricName) if any key metric regressed.
+//
+// Scale-sensitive metrics (iterations, duration, context peak) are compared
+// per tool call whenever both runs carry enough workload: raw totals cannot
+// tell a 30-iteration run spread over 200 tool calls (efficient batching)
+// apart from the same 30 iterations crammed into 35 calls (churn), so the
+// absolute thresholds misread every long task as regression. Below
+// perfMinNormToolCalls on either side, the legacy absolute comparison
+// applies.
 func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
+	norm := perfNormComparable(run, baseline)
 	// Iterations regression: 1.5x baseline
-	if baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor) {
+	if norm {
+		if perfPerCall(run, "iterations") > perfRegressionFactor*perfPerCall(baseline, "iterations") {
+			return true, "iterations"
+		}
+	} else if baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor) {
 		return true, "iterations"
 	}
-	// Duration regression: 1.5x baseline (skip if baseline is very short)
-	if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
+	// Duration regression: 1.5x baseline per tool call (skip if baseline is very short)
+	if norm {
+		if baseline.DurationSec > 10 && perfPerCall(run, "duration") > perfRegressionFactor*perfPerCall(baseline, "duration") {
+			return true, "duration"
+		}
+	} else if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
 		return true, "duration"
 	}
 	// Error rate regression: 2x baseline error count.
@@ -427,8 +460,14 @@ func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 			return true, "error_rate"
 		}
 	}
-	// Context peak regression: context is growing 1.5x baseline
-	if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
+	// Context peak regression: 1.5x baseline tokens per tool call — peak
+	// context scales with task length, so the absolute check misread long
+	// runs as context bloat.
+	if norm {
+		if perfPerCall(run, "context_usage") > perfRegressionFactor*perfPerCall(baseline, "context_usage") {
+			return true, "context_usage"
+		}
+	} else if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
 		return true, "context_usage"
 	}
 	// Compaction regression: significantly more compactions than baseline
@@ -466,12 +505,12 @@ func pickConsensusPerfMetric(hitCounts map[string]int) string {
 // same-metric consensus first, so at least one hit always exists (#1143).
 func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, metric string) perfBaselineEntry {
 	worst := runs[len(runs)-1]
-	bestVal := -1
+	bestVal := -1.0
 	for _, r := range runs {
 		if _, m := checkSingleRunRegression(r, baseline); m != metric {
 			continue
 		}
-		if v := perfMetricValue(r, metric); v > bestVal {
+		if v := perfMetricRatio(r, baseline, metric); v > bestVal {
 			bestVal = v
 			worst = r
 		}
@@ -498,17 +537,53 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 	}
 }
 
+// perfNormComparable reports whether workload normalization applies to a
+// run/baseline pair: both sides must carry enough tool calls for per-call
+// rates to be statistically meaningful.
+func perfNormComparable(run, baseline perfBaselineEntry) bool {
+	return run.ToolCalls >= perfMinNormToolCalls && baseline.ToolCalls >= perfMinNormToolCalls
+}
+
+// perfPerCall returns the workload-normalized (per tool call) value of a
+// scale-sensitive metric. Callers must gate on perfNormComparable; for
+// non-scale metrics it returns 0.
+func perfPerCall(entry perfBaselineEntry, metric string) float64 {
+	tc := float64(entry.ToolCalls)
+	switch metric {
+	case "iterations":
+		return float64(entry.Iterations) / tc
+	case "duration":
+		return float64(entry.DurationSec) / tc
+	case "context_usage":
+		return float64(entry.ContextPeak) / tc
+	default:
+		return 0
+	}
+}
+
+// perfMetricRatio returns the severity used to rank regressed runs during
+// worst-hit selection: per-tool-call rate for scale-sensitive metrics (so a
+// large-but-efficient run never outranks a genuinely wasteful one), raw
+// totals for the rest. Falls back to raw totals whenever workload
+// normalization does not apply.
+func perfMetricRatio(entry perfBaselineEntry, baseline perfBaselineEntry, metric string) float64 {
+	if perfNormComparable(entry, baseline) {
+		if v := perfPerCall(entry, metric); v > 0 {
+			return v
+		}
+	}
+	return float64(perfMetricValue(entry, metric))
+}
+
 // formatPerfRegressionWarning builds a concise advisory message.
 func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, latest perfBaselineEntry) string {
 	switch metric {
 	case "iterations":
-		return formatPerfRegressionLine("iteration count",
-			baseline.Iterations, latest.Iterations,
+		return formatScaleMetricWarning(baseline, latest, metric,
 			"Be more direct: avoid redundant reads and searches. Plan before acting.") +
 			formatRunShapeDiagnostics(latest, 0)
 	case "duration":
-		return formatPerfRegressionLine("run duration (seconds)",
-			baseline.DurationSec, latest.DurationSec,
+		return formatScaleMetricWarning(baseline, latest, metric,
 			"Longer runs may indicate unnecessary rework. Verify changes incrementally.") +
 			formatRunShapeDiagnostics(latest, latest.DurationSec)
 	case "error_rate":
@@ -516,15 +591,56 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 			baseline.Errors, latest.Errors,
 			"High error rates suggest misjudging tool arguments. Double-check parameters before calling tools.")
 	case "context_usage":
-		return formatPerfRegressionLine("peak context tokens",
-			baseline.ContextPeak, latest.ContextPeak,
-			"Context bloat reduces quality. Use targeted reads (offset/limit) instead of full-file reads.")
+		return formatScaleMetricWarning(baseline, latest, metric,
+			"Context bloat reduces quality. Use targeted reads (offset/limit) instead of full-file reads.") +
+			formatRunShapeDiagnostics(latest, 0)
 	case "compaction":
 		return formatPerfRegressionLine("compaction events",
 			baseline.Compactions, latest.Compactions,
 			"Frequent compaction means context is too large. Prefer narrow, targeted searches over broad exploration.")
 	default:
 		return ""
+	}
+}
+
+// formatScaleMetricWarning renders the advisory for a scale-sensitive metric
+// (iterations, duration, context peak). When both runs carry enough workload,
+// the compared quantity is the per-tool-call rate, so the message leads with
+// that rate and keeps run totals as parenthesized context; tc-poor or legacy
+// entries degrade to the absolute-only line.
+func formatScaleMetricWarning(baseline, latest perfBaselineEntry, metric, advice string) string {
+	name, unit := scaleMetricLabel(metric)
+	if !perfNormComparable(latest, baseline) {
+		return formatPerfRegressionLine(name,
+			perfMetricValue(baseline, metric), perfMetricValue(latest, metric), advice)
+	}
+	baseRate := perfPerCall(baseline, metric)
+	runRate := perfPerCall(latest, metric)
+	factor := 0.0
+	if baseRate > 0 {
+		factor = runRate / baseRate
+	}
+	out := "[Performance regression] " + name + " per tool call has regressed: "
+	out += "baseline=" + fmt.Sprintf("%.2f", baseRate) + ", recent=" + fmt.Sprintf("%.2f", runRate)
+	if factor > 0 {
+		out += " (" + trimZeros(floatToString(factor)) + "x baseline"
+		out += "; run totals: baseline=" + intToStr(perfMetricValue(baseline, metric)) + " " + unit
+		out += ", recent=" + intToStr(perfMetricValue(latest, metric)) + " " + unit + ")"
+	}
+	out += ". " + advice
+	return out
+}
+
+// scaleMetricLabel maps a scale-sensitive regression metric to its advisory
+// display name and per-call unit.
+func scaleMetricLabel(metric string) (name, unit string) {
+	switch metric {
+	case "iterations":
+		return "iteration count", "iterations"
+	case "duration":
+		return "run duration", "seconds"
+	default:
+		return "peak context tokens", "tokens"
 	}
 }
 
