@@ -32,6 +32,14 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		t.Fatal("NewAgent returned nil")
 	}
 
+	// sa-35: freshness guardrails must be wired to the event-scoped hash
+	// snapshot. Dropping the wiring is a silent perf regression (2x
+	// full-content hashing per read event), not a correctness bug, so
+	// guard it here alongside the field-initialization contract.
+	if a.readHash.hashFn == nil || a.redundantRead.hashFn == nil {
+		t.Fatal("NewAgent must wire readHash/redundantRead hashFn to the event-scoped hash snapshot")
+	}
+
 	// nilFieldsAllowed lists fields that are legitimately nil right after
 	// NewAgent, with the reason. Every entry must be justified — do not add
 	// fields here just to make the test pass for a detector state.
