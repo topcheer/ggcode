@@ -132,7 +132,7 @@
 | - Context overflow protection | Auto-compaction, session reset on repeated empty responses |
 | - Tool argument validation | Schema-based validation with JSON parameters |
 | - Interactive command detection | Warnings for interactive commands (vim, nano, etc.) |
-| **Prompt Injection Defense** | ✅ Basic protection through permission system |
+| **Prompt Injection Defense** | ✅ Permission system + agent-config write guard: writes to the agent's own config/instruction files (GGCODE.md, AGENTS.md, .mcp.json, .ggcode/*.yaml, skills) require a fresh confirmation in every mode and are never auto-approved from learned approvals (sa-43) |
 | **Sandboxing** | No OS-level sandbox; relies on user permission controls |
 | **VM Isolation** | ❌ Not implemented (agent runs on host system) |
 

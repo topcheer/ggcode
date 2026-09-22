@@ -208,8 +208,10 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				// the classic prompt-injection persistence path.
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
-					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
-						debug.Log("permission", "redirect to out-of-sandbox/sensitive path blocked in bypass mode")
+					// sa-43: redirecting into an agent config file (e.g. `> .mcp.json`)
+					// is the same persistence vector as a write tool — gate it too.
+					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) || isAgentConfigPath(resolved) {
+						debug.Log("permission", "redirect to out-of-sandbox/sensitive/agent-config path blocked in bypass mode")
 						return Ask, nil
 					}
 				}
@@ -224,7 +226,20 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// call. See locks.md S5.
 		if isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path == "" {
+					continue
+				}
+				if !p.sandbox.Allowed(path) {
+					return Ask, nil
+				}
+				// sa-43 (agent config guard): writes to the agent's own
+				// configuration / instruction files (GGCODE.md, .mcp.json,
+				// .ggcode/*.yaml, skills, ...) are the classic prompt-injection
+				// persistence vector and survive sandbox resets. They require a
+				// fresh human confirmation in EVERY mode — bypass/autopilot
+				// included — mirroring the network-egress gate above.
+				if isAgentConfigPath(path) {
+					debug.Log("permission", "agent config write requires confirmation in bypass/autopilot (sa-43): %s", filepath.Base(path))
 					return Ask, nil
 				}
 			}
@@ -293,9 +308,19 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				// so the decision is Deny rather than Ask.
 				for _, tgt := range extractRedirectTargets(cmd) {
 					resolved := expandTilde(tgt)
+					// #711: out-of-sandbox / sensitive-path redirects stay
+					// Deny in auto mode — it has no human loop for those.
 					if !p.sandbox.Allowed(resolved) || isSensitivePath(resolved) {
 						debug.Log("permission", "redirect to out-of-sandbox/sensitive path denied in auto mode (#711)")
 						return Deny, nil
+					}
+					// sa-43: agent-config redirects are in-sandbox (so #711
+					// never fired) but are the same persistence vector as a
+					// write tool — gate with Ask, consistent with the
+					// network-egress Ask above and the file-tool branch below.
+					if isAgentConfigPath(resolved) {
+						debug.Log("permission", "agent config redirect requires confirmation in auto mode (sa-43)")
+						return Ask, nil
 					}
 				}
 			}
@@ -304,8 +329,19 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		// file_ops and batch_replace that mutate disk but aren't in isFileTool).
 		if isFileTool(toolName) || isWriteFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
-				if path != "" && !p.sandbox.Allowed(path) {
+				if path == "" {
+					continue
+				}
+				if !p.sandbox.Allowed(path) {
 					return Deny, nil
+				}
+				// sa-43 (agent config guard): auto has no ambient human loop, but
+				// Ask is an established decision in this mode (network egress
+				// above), and a silent Allow of a .mcp.json / GGCODE.md write
+				// would outlive the session as a persistence foothold.
+				if isWriteFileTool(toolName) && isAgentConfigPath(path) {
+					debug.Log("permission", "agent config write requires confirmation in auto mode (sa-43): %s", filepath.Base(path))
+					return Ask, nil
 				}
 			}
 		}
@@ -366,6 +402,17 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 					if d == Deny {
 						return Deny, nil
 					}
+					return Ask, nil
+				}
+			}
+		}
+		// sa-43 (agent config guard): an explicit user-configured allow rule
+		// for a write tool must not blanket-approve agent-config writes —
+		// #525 Bug D precedent: explicit Allow downgrades to Ask, Deny stays.
+		if isWriteFileTool(toolName) && d == Allow {
+			for _, path := range extractFilePaths(input) {
+				if path != "" && isAgentConfigPath(path) {
+					debug.Log("permission", "agent config write downgrades explicit allow rule to Ask (sa-43): %s", filepath.Base(path))
 					return Ask, nil
 				}
 			}
@@ -444,6 +491,17 @@ func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage)
 	if isCommandTool(toolName) {
 		for _, cmd := range extractCommandsForTool(toolName, input) {
 			if p.detector.IsDangerous(cmd) || IsNetworkExfiltrate(cmd) {
+				return true
+			}
+		}
+	}
+	// sa-43 (agent config guard): a learned approval must never auto-approve a
+	// write to the agent's own configuration — the NVIDIA red-team guidance is
+	// explicit that approvals for these files must be fresh every time, never
+	// cached or persisted.
+	if isWriteFileTool(toolName) {
+		for _, path := range extractFilePaths(input) {
+			if path != "" && isAgentConfigPath(path) {
 				return true
 			}
 		}
