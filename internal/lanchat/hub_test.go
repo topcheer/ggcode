@@ -623,9 +623,10 @@ func TestSetNickRoleTeam(t *testing.T) {
 	store := NewStore(tmp)
 	hub := NewHub("node-A", "tui", "http://localhost:11111", "", store, WorkspaceMeta{Workspace: "/tmp"})
 
-	// Initial state: default team
-	if hub.Team() != DefaultTeam {
-		t.Fatalf("initial team should be %q, got %q", DefaultTeam, hub.Team())
+	// Initial state: team defaults to the normalized workspace name
+	// ("/tmp" -> "tmp") since the 2026-09 workspace-team change.
+	if hub.Team() != "tmp" {
+		t.Fatalf("initial team should be %q (normalized workspace), got %q", "tmp", hub.Team())
 	}
 
 	// Set nick with team

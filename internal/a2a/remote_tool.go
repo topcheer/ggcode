@@ -273,7 +273,9 @@ func FormatRemoteAgents(instances []InstanceInfo, meta map[string]RemoteAgentMet
 		line := fmt.Sprintf("- %s (%s) — %s", name, inst.Workspace, inst.Status)
 		if m, ok := meta[inst.ID]; ok {
 			var extras []string
-			if m.Team != "" && m.Team != "dev-team" {
+			if m.Team != "" {
+				// Team now defaults to the normalized workspace name, so it
+				// always carries signal - show it unconditionally.
 				extras = append(extras, "team="+m.Team)
 			}
 			if m.Role != "" && m.Role != "developer" {

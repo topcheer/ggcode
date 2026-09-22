@@ -200,6 +200,12 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 	baseNick := RandomNick()
 	nick := baseNick + "_" + DefaultRole
 
+	// New sessions default their team to the normalized workspace name so
+	// sessions on the same project discover each other on one team (broadcast
+	// is team-scoped). Falls back to DefaultTeam when the workspace yields
+	// nothing usable.
+	team := NormalizeTeamName(ws.Workspace)
+
 	// Load persisted approval policies (keyed by peer nick). A missing file
 	// is an empty-but-valid state; a corrupt file keeps the hub running with
 	// no policies and blocks write-back so the file is not wiped (#990).
@@ -215,7 +221,7 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		humanNick:              nick,
 		agentNick:              AgentNick(nick),
 		role:                   DefaultRole,
-		team:                   DefaultTeam,
+		team:                   team,
 		mode:                   mode,
 		endpoint:               endpoint,
 		apiKey:                 apiKey,
