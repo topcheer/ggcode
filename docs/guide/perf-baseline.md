@@ -24,6 +24,7 @@ ggcode tracks agent performance metrics across sessions and warns when efficienc
 - **Sustained regression only**: Requires 2/3 recent runs to be worse (avoids outlier false positives)
 - **Median over mean**: Robust against outliers from unusually long/short tasks
 - **Successful runs only**: Baseline computed from successful runs to avoid skewing by failures
+- **Model-scoped (sa-33)**: Each run is stamped with its model identity (`vendor/endpoint/model`, injected on every provider build and mid-session `/model` switch). Baseline medians and the 2/3 consensus vote only compare runs produced by the same model — iterations, duration, and context peak differ systematically across models, so without this a model switch would report expected cross-model variance as a regression. Until the new model accumulates 5+ of its own runs, regression detection stays silent. Baselines recorded before this change carry no model identity and remain comparable to everything (backward compatible).
 - **Advisory, not blocking**: The warning helps the agent adjust strategy; it doesn't prevent work
 
 ## Competitor comparison

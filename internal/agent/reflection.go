@@ -52,6 +52,15 @@ type RunStats struct {
 	// UserPrompt is the first 200 chars of the user's input, for context.
 	UserPrompt string
 
+	// Model is the resolved model identity ("vendor/endpoint/model") that
+	// executed this run, captured from Agent.ModelID() at run start. Empty
+	// for embedders that never call Agent.SetModelID. Consumed by the perf
+	// baseline to keep regression comparisons model-scoped (sa-33):
+	// iterations/duration/context peak differ systematically across models,
+	// so a rolling window that mixes models reports expected cross-model
+	// variance as a regression right after a mid-session /model switch.
+	Model string
+
 	// ContextPeakTokens is the highest token count observed during the run.
 	// Tracked per-iteration from contextManager.TokenCount().
 	ContextPeakTokens int

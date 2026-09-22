@@ -108,6 +108,12 @@ type Agent struct {
 	onRunResult                runResultHandler
 	onRunHealth                func(error) // run-level health signal (success/failure) for node health reporting
 
+	// modelID is the resolved model identity ("vendor/endpoint/model") of
+	// the active provider, injected by agentruntime.ApplyProviderToAgent on
+	// every provider build and mid-session model switch. It stamps
+	// RunStats.Model so perf-baseline comparisons stay model-scoped (sa-33).
+	modelID string
+
 	// autoVerify enables the post-loop build/test verification pass.
 	// Default false: the system prompt already mandates in-loop verification
 	// of changes ("run the narrowest existing validation that proves the change
@@ -585,6 +591,25 @@ func (a *Agent) SetProbeKey(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.probeKey = key
+}
+
+// SetModelID records the resolved model identity ("vendor/endpoint/model")
+// of the active provider. Called by agentruntime.ApplyProviderToAgent on
+// every provider build or mid-session model switch, so per-run stats and
+// the perf baseline can group runs by the model that actually produced
+// them. Empty id clears the identity (embedders that manage providers
+// directly and cannot resolve one).
+func (a *Agent) SetModelID(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.modelID = id
+}
+
+// ModelID returns the current model identity ("" if never injected).
+func (a *Agent) ModelID() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.modelID
 }
 
 // SetPermissionPolicy sets the permission policy for tool checks.
@@ -1327,6 +1352,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
+	// sa-33: capture the model identity at run start. Mid-session /model
+	// switches land between runs (user turns), so the start identity is the
+	// model that executes the bulk of this run; end-of-run capture would
+	// misattribute a run to a provider swapped in by ensureProviderSync.
+	runStats.Model = a.ModelID()
 	// Experience recall (Memento-style case-based reasoning): before the
 	// loop starts, retrieve past cases relevant to this task and inject
 	// them once as a system message. Injection happens here — before the

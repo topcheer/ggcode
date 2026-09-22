@@ -105,6 +105,14 @@ func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolv
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
 	agentInst.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
+	// sa-33: stamp the agent with the resolved model identity so per-run
+	// stats (RunStats.Model) and the perf baseline can scope comparisons to
+	// the model that produced them. Without this, a mid-session /model
+	// switch leaves the rolling baseline mixing runs from different models,
+	// and iterations/duration deltas that are expected cross-model variance
+	// get reported as performance regressions. Same triple format as the
+	// fallback chain descriptions above.
+	agentInst.SetModelID(resolved.VendorID + "/" + resolved.EndpointID + "/" + resolved.Model)
 	// #2511: the agent-side memory executor answers name="memory" calls only
 	// when the provider actually declares the tool (anthropic protocol +
 	// endpoint `memory_tool: true`, mirroring the provider registry's

@@ -92,6 +92,12 @@ type perfBaselineEntry struct {
 	Success     bool   `json:"ok"`
 	Timestamp   int64  `json:"ts"`
 
+	// Model is the resolved identity ("vendor/endpoint/model") of the
+	// provider that produced this run (sa-33). Empty for baselines recorded
+	// before model stamping existed; empty identities stay comparable to
+	// everything (see perfModelMatches) so legacy windows keep working.
+	Model string `json:"model,omitempty"`
+
 	// TopTools holds this run's most-invoked tools as "name:count" entries
 	// (top 3, count desc then name asc). It feeds the regression advisory a
 	// where-did-the-time-go breakdown: an advisory stating only "duration
@@ -124,6 +130,18 @@ type perfBaselineState struct {
 
 func newPerfBaselineState() *perfBaselineState {
 	return &perfBaselineState{}
+}
+
+// perfModelMatches reports whether a historical entry is comparable to a run
+// produced under model identity `current` (sa-33). Entries predating model
+// stamping (empty Model) and agents without an injected identity
+// (current == "") stay compatible so legacy baselines and embedders keep
+// today's behavior; once both sides are known, only exact matches compare.
+func perfModelMatches(entryModel, current string) bool {
+	if entryModel == "" || current == "" {
+		return true
+	}
+	return entryModel == current
 }
 
 // reset() re-arms per-user-turn bookkeeping. #1180: it must NOT re-enable
@@ -309,6 +327,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		Success:     stats.Success,
 		Timestamp:   time.Now().Unix(),
 		TopTools:    topToolMix(stats.ToolCalls, perfTopToolsCount),
+		Model:       stats.Model,
 	}
 
 	runs := loadPerfBaseline(workingDir)
@@ -318,8 +337,8 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		runs = runs[len(runs)-perfBaselineMaxRuns:]
 	}
 	savePerfBaseline(workingDir, runs)
-	debug.Log("perf-baseline", "recorded run %s: iter=%d tc=%d err=%d dur=%ds",
-		entry.RunID, entry.Iterations, entry.ToolCalls, entry.Errors, entry.DurationSec)
+	debug.Log("perf-baseline", "recorded run %s: iter=%d tc=%d err=%d dur=%ds model=%q",
+		entry.RunID, entry.Iterations, entry.ToolCalls, entry.Errors, entry.DurationSec, entry.Model)
 }
 
 // maybeInjectPerfRegression checks whether the agent's recent performance has
@@ -336,6 +355,22 @@ func (a *Agent) maybeInjectPerfRegression() {
 	// Load historical data if not yet loaded this session.
 	if !a.perfBaseline.hasBaseline {
 		runs := loadPerfBaseline(a.WorkingDir())
+		// sa-33: scope the window to runs produced by the same model.
+		// Iterations, duration and context peak differ systematically across
+		// models, so a mid-session /model switch makes cross-model deltas
+		// expected variance, not regressions; comparing against a mixed-model
+		// median turned every switch into a false alert. Entries without a
+		// model identity (legacy baselines, embedders that never inject one)
+		// stay comparable to everything. Too few same-model samples -> stay
+		// silent until the new model accumulates its own baseline.
+		curModel := a.ModelID()
+		scoped := make([]perfBaselineEntry, 0, len(runs))
+		for _, r := range runs {
+			if perfModelMatches(r.Model, curModel) {
+				scoped = append(scoped, r)
+			}
+		}
+		runs = scoped
 		if len(runs) < perfBaselineMinRuns {
 			return
 		}
@@ -358,9 +393,15 @@ func (a *Agent) maybeInjectPerfRegression() {
 	// invalid cross-population contrast that systematically crossed every
 	// regression threshold after any two consecutive failures.
 	recent := a.perfBaseline.historical
+	// sa-33: the same-model predicate also gates the consensus vote so the
+	// frozen-snapshot path (hasBaseline already true, e.g. state reused
+	// within a session across a mid-session /model switch) is protected
+	// even though the load path already filtered. Cross-model runs never
+	// vote on a same-model baseline.
+	curModel := a.ModelID()
 	var recent3 []perfBaselineEntry
 	for i := len(recent) - 1; i >= 0 && len(recent3) < 3; i-- {
-		if recent[i].Success {
+		if recent[i].Success && perfModelMatches(recent[i].Model, curModel) {
 			recent3 = append(recent3, recent[i])
 		}
 	}
