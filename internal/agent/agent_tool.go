@@ -24,6 +24,32 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
+// userRejectedMessage builds the model-facing result for a tool call the
+// user rejected in the approval prompt. Beyond the bare refusal it carries
+// two steering signals: the generalized pattern key the rejection was
+// remembered under, and an explicit anti-retry instruction. Frontier HITL
+// practice (2025-2026: Claude Code's "tell Claude what to do differently",
+// approval-evidence patterns in agent-governance write-ups) treats a
+// rejection as an actionable steering signal rather than a dead end —
+// without it the model tends to burn turns retrying the identical call and
+// re-prompting the user. The "Permission denied for tool" prefix is kept
+// verbatim: post-hoc classifiers (effect ledger, mutating ledger) match on
+// it.
+func userRejectedMessage(toolName string, args json.RawMessage) string {
+	key, _ := permission.MakeKey(toolName, args)
+	return fmt.Sprintf("Permission denied for tool %q. User rejected the request (remembered pattern: %s). Do not retry the identical call — it will prompt the user again; change the approach (different command, narrower scope) or ask the user how to proceed.", toolName, key)
+}
+
+// LearnedApprovalRules exposes the session's learned approval patterns for
+// display surfaces (e.g. the TUI /permissions command), so users can see
+// what the agent now auto-approves without asking.
+func (a *Agent) LearnedApprovalRules() []permission.LearnedRule {
+	if a.approvalMemory == nil {
+		return nil
+	}
+	return a.approvalMemory.LearnedRules()
+}
+
 // permissionDeniedMessage renders the policy-deny result for the model
 // (#1209). The current permission mode is included so the model can
 // attribute the denial correctly: in plan mode every non-readonly tool is
@@ -98,7 +124,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
 					}
 					return tool.Result{
-						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
+						Content: userRejectedMessage(tc.Name, tc.Arguments),
 						IsError: true,
 					}
 				}

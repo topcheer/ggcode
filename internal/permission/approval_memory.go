@@ -344,6 +344,41 @@ func (am *ApprovalMemory) AutoApprovedKeys() []string {
 	return keys
 }
 
+// LearnedRule is a display-ready snapshot of one tracked (tool, input-signature)
+// approval pattern.
+type LearnedRule struct {
+	Key          string // tool name + generalized input signature
+	Consecutive  int    // current consecutive-approval streak
+	AutoApproved bool   // true once auto-approval has kicked in for this key
+}
+
+// LearnedRules returns a sorted snapshot of ALL tracked approval patterns,
+// including in-progress streaks — not just auto-approved keys. It exists for
+// governance transparency: users should be able to see what the agent now
+// executes without asking, and which patterns are close to being learned.
+// Auto-approved keys sort first, then by streak length, then by key.
+func (am *ApprovalMemory) LearnedRules() []LearnedRule {
+	if am == nil {
+		return nil
+	}
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	rules := make([]LearnedRule, 0, len(am.store))
+	for k, e := range am.store {
+		rules = append(rules, LearnedRule{Key: k, Consecutive: e.consecutive, AutoApproved: e.autoApproved})
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].AutoApproved != rules[j].AutoApproved {
+			return rules[i].AutoApproved
+		}
+		if rules[i].Consecutive != rules[j].Consecutive {
+			return rules[i].Consecutive > rules[j].Consecutive
+		}
+		return rules[i].Key < rules[j].Key
+	})
+	return rules
+}
+
 // evictOldest removes the entry with the lowest consecutive count.
 // Caller must hold am.mu.
 func (am *ApprovalMemory) evictOldest() {

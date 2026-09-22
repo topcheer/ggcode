@@ -235,7 +235,7 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
 					}
 					return tool.Result{
-						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
+						Content: userRejectedMessage(tc.Name, tc.Arguments),
 						IsError: true,
 					}
 				}
