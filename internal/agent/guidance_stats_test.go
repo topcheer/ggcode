@@ -232,6 +232,39 @@ func TestGuidanceStatsNilSafety(t *testing.T) {
 	a.recordGuidanceNegative() // must not panic
 }
 
+// TestGuidanceNegativeHookViaSentiment verifies the negative-signal hook
+// end-to-end: a short rejecting user message attributes to recently fired
+// tags (via maybeInjectSentimentFeedback) but not to fires outside the
+// attribution window.
+func TestGuidanceNegativeHookViaSentiment(t *testing.T) {
+	t.Parallel()
+	a := &Agent{
+		contextManager: ctxpkg.NewManager(100000),
+		userSentiment:  newUserSentimentState(),
+		guidanceStats:  newGuidanceStats(),
+	}
+	a.guidanceStats.recordFire("RECENT-TAG", time.Now())
+	a.guidanceStats.recordFire("OLD-TAG", time.Now().Add(-(guidanceNegWindow + time.Minute)))
+
+	a.maybeInjectSentimentFeedback("no")
+
+	if a.guidanceStats.negatives != 1 {
+		t.Fatalf("negatives = %d, want 1", a.guidanceStats.negatives)
+	}
+	if got := a.guidanceStats.tags["RECENT-TAG"].NegativeHits; got != 1 {
+		t.Fatalf("RECENT-TAG negative hits = %d, want 1", got)
+	}
+	if got := a.guidanceStats.tags["OLD-TAG"].NegativeHits; got != 0 {
+		t.Fatalf("OLD-TAG negative hits = %d, want 0 (outside window)", got)
+	}
+
+	// A neutral message must not record a negative signal.
+	a.maybeInjectSentimentFeedback("please continue with the refactor plan")
+	if a.guidanceStats.negatives != 1 {
+		t.Fatalf("neutral message recorded as negative: %d", a.guidanceStats.negatives)
+	}
+}
+
 // TestGuidanceHookIntegration verifies the two delivery paths actually
 // record fires after budget gating.
 func TestGuidanceHookIntegration(t *testing.T) {
