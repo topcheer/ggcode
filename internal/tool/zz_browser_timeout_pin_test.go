@@ -31,14 +31,23 @@ func TestBrowserWindowsTimeoutPins(t *testing.T) {
 		t.Fatal("getChromeVersion must run under a deadline (Windows chrome.exe hang guard)")
 	}
 
-	// Pin 2: the first tab Run must be wrapped in a bounded window - an
-	// unbounded handshake hangs the whole action when Chrome is half-alive.
+	// Pin 2: the first tab Run must be bounded by a timer race, NOT by a
+	// WithTimeout wrapper around the Run context. chromedp binds the tab
+	// session to the first-Run context; cancelling that wrapper killed the
+	// just-booted session and every later action failed with "context
+	// canceled" (the 2026-09 regression this pin guards against).
 	j := strings.Index(src, "taskCtx, cancel := chromedp.NewContext")
 	if j < 0 {
 		t.Fatal("tab creation site not found")
 	}
-	span := src[j : j+2000]
-	if !strings.Contains(span, "startRunCtx, startCancel := context.WithTimeout(taskCtx") {
-		t.Fatal("tab-start chromedp.Run must run under a startup timeout window")
+	span := src[j : j+3000]
+	if !strings.Contains(span, "go func() { startDone <- chromedp.Run(taskCtx) }()") {
+		t.Fatal("tab-start chromedp.Run must race a timer goroutine for its bound")
+	}
+	if !strings.Contains(span, "time.After(60 * time.Second)") {
+		t.Fatal("tab-start bound must remain 60s")
+	}
+	if strings.Contains(span, "WithTimeout(taskCtx") {
+		t.Fatal("forbidden: a WithTimeout wrapper on the first Run context kills the session (chromedp docs)")
 	}
 }

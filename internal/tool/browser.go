@@ -608,15 +608,32 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	// stretched past usefulness on heavily instrumented Windows machines
 	// (AV/EDR hooking every chrome.exe child), leaving a half-alive
 	// process that neither starts nor errors - taskCtx has no deadline of
-	// its own, so the Run would hang the whole action. A bounded window
-	// here fails THIS tab attempt cleanly; the profile stays usable and
-	// the next action retries rather than stacking zombie Chrome processes.
-	startRunCtx, startCancel := context.WithTimeout(taskCtx, 60*time.Second)
-	runErr := chromedp.Run(startRunCtx)
-	startCancel()
-	if runErr != nil {
+	// its own, so the Run would hang the whole action.
+	//
+	// The bound must NOT be a WithTimeout wrapper passed to Run: chromedp
+	// binds the tab session's run loop to the context handed to the first
+	// Run (attachTarget -> go c.Target.run(ctx)), and its docs warn "it's
+	// generally a bad idea to use a context timeout on the first Run call,
+	// as it will stop the entire browser". The previous implementation
+	// called startCancel() right after Run returned, killing the session
+	// at birth while the browser process lived on - every browser action
+	// then failed with "context canceled" (reported on Windows 2026-09,
+	// reproduced on all platforms). Instead, race Run against a timer in a
+	// goroutine: on success nothing is cancelled and the tab lives; on
+	// timeout we cancel taskCtx itself, which tears down the half-alive
+	// bootstrap cleanly, and the next action retries rather than stacking
+	// zombie Chrome processes.
+	startDone := make(chan error, 1)
+	go func() { startDone <- chromedp.Run(taskCtx) }()
+	select {
+	case runErr := <-startDone:
+		if runErr != nil {
+			cancel()
+			return nil, fmt.Errorf("failed to create browser tab (startup handshake failed): %w", runErr)
+		}
+	case <-time.After(60 * time.Second):
 		cancel()
-		return nil, fmt.Errorf("failed to create browser tab (startup handshake timed out or failed): %w", runErr)
+		return nil, fmt.Errorf("failed to create browser tab: startup handshake timed out after 60s (Chrome/Edge boot is too slow or blocked by AV/EDR on this machine)")
 	}
 
 	// Auto-dismiss JS dialogs (alert/confirm/prompt/beforeunload) to prevent
