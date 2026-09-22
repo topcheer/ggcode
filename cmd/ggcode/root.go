@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
+	var saveSession bool
 	var helperManifest string
 
 	cmd := &cobra.Command{
@@ -106,7 +107,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, saveSession || os.Getenv("GGCODE_SAVE_SESSION") == "1")
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -182,6 +183,7 @@ func NewRootCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
+	cmd.Flags().BoolVar(&saveSession, "save-session", false, "pipe mode: persist the run as a resumable session (env: GGCODE_SAVE_SESSION=1)")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",

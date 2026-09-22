@@ -99,3 +99,28 @@ func TestEffectivePipeAllowedDirsPrefersExplicitOverride(t *testing.T) {
 		t.Fatalf("effectivePipeAllowedDirs() = %#v, want %#v", got, want)
 	}
 }
+
+func TestPipeSessionTitle(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{"empty", "", "Pipe session"},
+		{"whitespace only", "  \n\t  ", "Pipe session"},
+		{"collapses whitespace", "fix\n\tthe   bug ", "fix the bug"},
+		{"short preserved", "add tests", "add tests"},
+	}
+	for _, tc := range tests {
+		if got := pipeSessionTitle(tc.prompt); got != tc.want {
+			t.Errorf("%s: pipeSessionTitle(%q) = %q, want %q", tc.name, tc.prompt, got, tc.want)
+		}
+	}
+	// Multibyte-safe truncation: no panic on a CJK prompt, capped at 60 runes.
+	long := strings.Repeat("修", 100)
+	got := pipeSessionTitle(long)
+	want := strings.Repeat("修", 60) + "…"
+	if got != want {
+		t.Errorf("truncation: got %d runes, want %d runes", len([]rune(got)), len([]rune(want)))
+	}
+}

@@ -22,6 +22,7 @@ echo "fix typo" | ggcode  # Read from stdin
 Additional pipe-mode flags:
 - `--allowedTools <name>` — restrict tools (repeatable)
 - `--output <path>` — write output to file (default: stdout)
+- `--save-session` — persist the run as a resumable session; the session ID is printed to stderr, so a failed headless/CI run can be replayed or continued with `ggcode --resume <id>` (env: `GGCODE_SAVE_SESSION=1`)
 
 ### Resume Session
 
@@ -261,6 +262,7 @@ ggcode version                         # Print version, commit, and build date
 | `-p, --prompt <prompt>` | Non-interactive pipe mode |
 | `--allowedTools <name>` | Restrict tools in pipe mode (repeatable) |
 | `--output <path>` | Output file path (default: stdout) |
+| `--save-session` | Persist the pipe run as a resumable session (env: `GGCODE_SAVE_SESSION=1`) |
 | `--resume [id]` | Resume a session |
 | `--resume-picker` | Open session picker |
 | `--new-session` | Skip auto-resume, always start a new session |

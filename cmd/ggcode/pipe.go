@@ -18,10 +18,12 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
@@ -29,7 +31,7 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, saveSession bool) int {
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -135,10 +137,40 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
-	// Pipe mode has no session JSONL, but todo_write needs a session ID.
-	// Use a PID-based pseudo ID so todos work during pipe execution and are
-	// cleaned up automatically when the run ends (agent defer ClearTodos).
-	ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
+	// #sa-45: pipe runs are the primary headless/CI entrypoint, but they never
+	// produced a session JSONL, so a failed trajectory could not be replayed or
+	// continued. With --save-session, capture the full trajectory per-message
+	// (same AppendMessageToDisk path as the TUI) so `ggcode --resume <id>`
+	// can time-travel the run in the interactive TUI afterwards.
+	var pipeSession *session.Session
+	var pipeStore *session.JSONLStore
+	if saveSession {
+		if st, stErr := session.NewDefaultStore(); stErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: session persistence disabled (opening store: %v)\n", stErr)
+		} else {
+			ses := session.NewSession(cfg.Vendor, cfg.Endpoint, cfg.Model)
+			ses.Title = pipeSessionTitle(prompt)
+			ses.Preview = ses.Title
+			if svErr := st.Save(ses); svErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: session persistence disabled (creating session: %v)\n", svErr)
+			} else {
+				pipeStore = st
+				pipeSession = ses
+				ag.SetSessionID(ses.ID)
+				ag.SetPersistHandler(func(msg provider.Message) {
+					if err := st.AppendMessageToDisk(ses, msg); err != nil {
+						debug.Log("pipe", "persist handler: AppendMessageToDisk failed: %v", err)
+					}
+				})
+			}
+		}
+	}
+	if pipeSession == nil {
+		// Pipe mode has no session JSONL, but todo_write needs a session ID.
+		// Use a PID-based pseudo ID so todos work during pipe execution and are
+		// cleaned up automatically when the run ends (agent defer ClearTodos).
+		ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
+	}
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
@@ -241,6 +273,18 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		})
 	}
 
+	// Flush session metadata and print the replay receipt after the run,
+	// covering success, agent errors, and signal-cancellation alike: the
+	// per-message appends above already captured the trajectory, so a failed
+	// CI run still lands as a resumable session.
+	if pipeSession != nil {
+		pipeSession.UpdatedAt = time.Now()
+		if err := pipeStore.AppendMetaToDisk(pipeSession); err != nil {
+			debug.Log("pipe", "session meta flush failed: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "session: %s (replay/continue with: ggcode --resume %s)\n", pipeSession.ID, pipeSession.ID)
+	}
+
 	if agentErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", agentErr)
 		return 1
@@ -269,6 +313,18 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		return 1
 	}
 	return 0
+}
+
+func pipeSessionTitle(prompt string) string {
+	s := strings.Join(strings.Fields(prompt), " ")
+	if s == "" {
+		return "Pipe session"
+	}
+	r := []rune(s)
+	if len(r) > 60 {
+		return string(r[:60]) + "…"
+	}
+	return s
 }
 
 func pipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string) []string {
