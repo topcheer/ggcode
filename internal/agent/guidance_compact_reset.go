@@ -153,14 +153,6 @@ var guidanceCounterResets = []func(*Agent){
 	//   #2440)
 	//   overseer hard-escalation sequence (progression must survive)
 
-	// verify_debt
-	func(a *Agent) {
-		if a.verifyDebt != nil {
-			a.verifyDebt.mu.Lock()
-			a.verifyDebt.warningsIssued = 0
-			a.verifyDebt.mu.Unlock()
-		}
-	},
 	// info_scent
 	func(a *Agent) {
 		if a.infoScent != nil {
@@ -334,9 +326,9 @@ var guidanceCounterResets = []func(*Agent){
 	// debt. Quota ONLY (warningsIssued); the debt/maxDebt/green-build
 	// ledger is behavioral state and wiping it would repeat #1572-A's
 	// over-reset (see reset()'s nine fields).
-	// #1646-1: the #1605-A block operated a.verifyDebt (max=1, already
-	// reset above - byte-identical duplicate, a NO-OP for the issue's own
-	// scenario). The commit message named verifDebt (maxWarn=2, the SAUP
+	// #1646-1: the #1605-A block operated the retired verifyDebt tracker
+	// (max=1; removed in the sa-34 consolidation into verifDebt - it was
+	// a byte-identical duplicate, a NO-OP for the issue's own scenario). The commit message named verifDebt (maxWarn=2, the SAUP
 	// debt model) - after mid-run compaction that detector stayed muted
 	// for the rest of the run. Its struct has no mutex (single-goroutine
 	// access, same pattern as correctionSpiral). #1646-2:

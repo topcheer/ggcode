@@ -32,6 +32,13 @@ package agent
 // changes on unverified premises.
 //
 // Zero LLM cost -- pure counter-based, O(1) per call.
+//
+// Consolidation note (sa-34): this tracker absorbed the retired verifyDebt
+// accumulator (edits-since-last-green-build + geometric compounding-risk
+// wording, arXiv:2602.16666). A FAILED build/test now repays no debt (a
+// failed verification proves nothing), and a single warning path replaces
+// the two near-identical "[Verification Debt]" messages both trackers used
+// to emit per run (up to 3 duplicated warnings -> max 2 distinct ones).
 
 import (
 	"fmt"
@@ -51,6 +58,14 @@ const (
 
 	// verificationDebtMaxWarn: max warnings per run (advisory, not blocking).
 	verificationDebtMaxWarn = 2
+
+	// verificationDebtHighDebt: debt at which the warning switches to the
+	// compounding-probability wording (geometric risk illustration).
+	verificationDebtHighDebt = 10
+
+	// verificationDebtCompoundAcc: assumed per-edit correctness used for the
+	// compounding-probability illustration (0.95^20 ~= 36%, arXiv:2602.16666).
+	verificationDebtCompoundAcc = 0.95
 )
 
 // debtAction classifies a tool call's relationship to verification.
@@ -192,7 +207,11 @@ type verificationDebtState struct {
 	maxDebt        int // peak debt this run
 	warningsIssued int
 	lastAction     debtAction
-	editedPkgs     map[string]bool // packages of files modified since last full verification (#1784)
+	// lastVerifyFailed: the most recent verification command errored. A
+	// failed build proves nothing, so it must not repay debt (consolidated
+	// green-build semantics from the retired verifyDebt tracker).
+	lastVerifyFailed bool
+	editedPkgs       map[string]bool // packages of files modified since last full verification (#1784)
 }
 
 func newVerificationDebtState() *verificationDebtState {
@@ -208,11 +227,14 @@ func (v *verificationDebtState) reset() {
 	v.maxDebt = 0
 	v.warningsIssued = 0
 	v.lastAction = debtNeutral
+	v.lastVerifyFailed = false
 	v.editedPkgs = make(map[string]bool)
 }
 
 // recordToolCall updates the debt state based on the tool call.
-func (v *verificationDebtState) recordToolCall(toolName, args string) {
+// verifyFailed reports whether the tool result errored (result.IsError);
+// it is only consumed for verification actions.
+func (v *verificationDebtState) recordToolCall(toolName, args string, verifyFailed bool) {
 	action := classifyDebtAction(toolName, args)
 	v.totalCalls++
 	v.lastAction = action
@@ -239,6 +261,14 @@ func (v *verificationDebtState) recordToolCall(toolName, args string) {
 		}
 	case debtVerifying:
 		v.verifyCount++
+		// Green-build semantics (consolidated from the retired verifyDebt
+		// tracker): a FAILED build/test verifies nothing, so it must not
+		// repay any debt. Record the failure so the next warning can cite it.
+		if verifyFailed {
+			v.lastVerifyFailed = true
+			break
+		}
+		v.lastVerifyFailed = false
 		// #1784 case 1: verification used to reset the debt ENTIRELY even when
 		// it covered a fraction of the edited packages - edit 5 packages, run
 		// 1 package's tests, and the debt read zero. Partial repayment: scale
@@ -273,15 +303,38 @@ func (v *verificationDebtState) maybeWarn() string {
 
 	v.warningsIssued++
 
+	// Compounding-risk wording (consolidated from the retired verifyDebt
+	// tracker, arXiv:2602.16666): at high debt the probability that ALL
+	// accumulated edits are simultaneously correct collapses geometrically.
+	extra := ""
+	if v.debt >= verificationDebtHighDebt {
+		prob := compoundSuccessProb(verificationDebtCompoundAcc, v.debt)
+		extra = fmt.Sprintf(" Probability that all %d accumulated edits are correct is ~%.0f%%.", v.debt, prob*100)
+	}
+	if v.lastVerifyFailed {
+		extra += " NOTE: your last build/test command FAILED - a failed verification proves nothing and does not repay this debt; fix the failure first."
+	}
+
 	return fmt.Sprintf(
 		"[Verification Debt] You have made %d file modifications since the last "+
-			"build/test/diagnostic check. Each unverified edit compounds the risk "+
+			"successful build/test/diagnostic check. Each unverified edit compounds the risk "+
 			"of building on stale or incorrect premises (SAUP: uncertainty propagation, "+
 			"ACL 2025). Before making more changes, run a build or test to verify your "+
 			"edits are correct so far. This prevents error cascades where a single wrong "+
-			"assumption propagates through all subsequent edits.",
-		v.debt,
+			"assumption propagates through all subsequent edits.%s",
+		v.debt, extra,
 	)
+}
+
+// compoundSuccessProb computes the probability that all n steps succeed,
+// given per-step success probability p. Implements the geometric compounding
+// model from "Towards a Science of AI Agent Reliability" (arXiv:2602.16666).
+func compoundSuccessProb(p float64, n int) float64 {
+	result := 1.0
+	for i := 0; i < n; i++ {
+		result *= p
+	}
+	return result
 }
 
 // verificationCoverage estimates what fraction of the edited surface a

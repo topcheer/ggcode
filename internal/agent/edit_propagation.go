@@ -16,7 +16,7 @@ package agent
 //     drops non-linearly with step count" because cross-file dependencies
 //     create error propagation paths.
 //
-// Problem: verifyDebt counts TOTAL edits since the last green build, but
+// Problem: verificationDebt counts unverified modifications, but
 // it does not distinguish between:
 //   - 7 edits to the SAME file (low propagation risk -- you'll catch
 //     issues when you test that one file)
@@ -35,7 +35,8 @@ package agent
 //     successful (green) build/test.
 //   - Fires at 4+ distinct files: moderate risk, remind to verify.
 //   - Escalates at 7+ distinct files: high risk, emphasize propagation.
-//   - Resets on green build (same as verifyDebt).
+//   - Resets on green build (same as verificationDebt: a failed
+//     verification repays nothing).
 //   - Zero LLM cost -- pure set membership tracking.
 //   - Non-blocking advisory, max 2 warnings per run.
 
@@ -63,7 +64,7 @@ const (
 )
 
 // editPropagationState tracks distinct source files edited since the last
-// green build. Complements verifyDebt (total edit count) with the
+// green build. Complements verificationDebt (total edit count) with the
 // file-diversity dimension (cross-file propagation risk).
 type editPropagationState struct {
 	mu             sync.Mutex
@@ -107,7 +108,9 @@ func (s *editPropagationState) recordEdit(toolName, args string) bool {
 }
 
 // recordGreenBuild resets the distinct file set after a successful
-// verification command. Called alongside verifyDebt.recordVerifyCommand.
+// verification command. Gated on command CONTENT, same ruling as the
+// consolidated verificationDebt tracker (unconditional resets silenced
+// both detectors - #487/#1549 family).
 func (s *editPropagationState) recordGreenBuild() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

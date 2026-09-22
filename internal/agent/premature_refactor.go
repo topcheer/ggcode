@@ -25,7 +25,7 @@ package agent
 // need to be torn apart, wasting all the restructuring effort.
 //
 // How it differs from existing detectors:
-//   - verify_debt: fires at 7+ ALL edits since green build (quantity-based).
+//   - verification_debt: fires at 5+ unverified modifications (quantity-based).
 //     This fires at 2+ REFACTORING edits (type-based, earlier threshold).
 //   - postEditVerify: fires every 3 edits regardless of edit type. This
 //     fires only for restructuring edits with type-specific guidance.

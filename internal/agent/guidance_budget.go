@@ -195,7 +195,7 @@ func isCriticalGuidance(text string) bool {
 //
 // #677: ALL iteration-level detector injections in agent.go's run loop
 // (errorRush, solutionFixation, errorCompound, correctionSpiral,
-// momentumLoss, targetScatter, redundantReverify, verifyDebt, ...) route
+// momentumLoss, targetScatter, redundantReverify, verificationDebt, ...) route
 // through this method, so the "hard per-turn limit across ALL detectors"
 // promise holds for the iteration-level cluster too - not just the
 // tool-result hint path (#441/#607). Loop-recovery protocol nudges

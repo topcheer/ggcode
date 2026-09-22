@@ -19,7 +19,7 @@ package agent
 //   - bareEditStreak: counts consecutive mutations without ANY verification (tool-agnostic)
 //   - editOscillation: detects semantic back-and-forth (adding then removing same code)
 //   - correctionSpiral: tracks error severity escalation across fixes
-//   - verifyDebt: accumulates edits since last green build (no file-scoping)
+//   - verificationDebt: accumulates unverified modifications (no file-scoping)
 //   - This detector: file-scoped strategy fixation -- same file edited N times
 //     with intervening FAILED verifications (not absent verification, but active
 //     failure), proving the approach to that file isn't working.

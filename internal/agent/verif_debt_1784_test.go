@@ -7,19 +7,19 @@ func Test1784PartialVerificationRepayment(t *testing.T) {
 	v := newVerificationDebtState()
 	// Edit two packages (2 debt each via multiple files or count).
 	for i := 0; i < 4; i++ {
-		v.recordToolCall("edit_file", `{"file_path":"/w/internal/agent/a`+string(rune('0'+i))+`.go","old_text":"a","new_text":"b"}`)
-		v.recordToolCall("edit_file", `{"file_path":"/w/internal/config/c`+string(rune('0'+i))+`.go","old_text":"a","new_text":"b"}`)
+		v.recordToolCall("edit_file", `{"file_path":"/w/internal/agent/a`+string(rune('0'+i))+`.go","old_text":"a","new_text":"b"}`, false)
+		v.recordToolCall("edit_file", `{"file_path":"/w/internal/config/c`+string(rune('0'+i))+`.go","old_text":"a","new_text":"b"}`, false)
 	}
 	if v.debt != 8 {
 		t.Fatalf("debt after 8 edits = %d, want 8", v.debt)
 	}
 	// Verify ONLY internal/config: half the packages covered -> debt halves.
-	v.recordToolCall("run_command", `{"command":"# verify config only\ngo test ./internal/config/"}`)
+	v.recordToolCall("run_command", `{"command":"# verify config only\ngo test ./internal/config/"}`, false)
 	if v.debt != 4 {
 		t.Fatalf("debt after half-scope verification = %d, want 4 (partial repayment)", v.debt)
 	}
 	// Whole-tree verification clears everything.
-	v.recordToolCall("run_command", `{"command":"# verify all\ngo test ./..."}`)
+	v.recordToolCall("run_command", `{"command":"# verify all\ngo test ./..."}`, false)
 	if v.debt != 0 {
 		t.Fatalf("debt after whole-tree verification = %d, want 0", v.debt)
 	}
@@ -30,9 +30,9 @@ func Test1784PartialVerificationRepayment(t *testing.T) {
 func Test1784CodeActionsIsGrounding(t *testing.T) {
 	v := newVerificationDebtState()
 	// Two edits: a full verification reset would give 0; grounding gives 1.
-	v.recordToolCall("edit_file", `{"file_path":"/w/x/y.go","old_text":"a","new_text":"b"}`)
-	v.recordToolCall("edit_file", `{"file_path":"/w/x/z.go","old_text":"a","new_text":"b"}`)
-	v.recordToolCall("lsp_code_actions", `{"path":"/w/x/y.go","start_line":1,"start_character":0,"end_line":1,"end_character":1}`)
+	v.recordToolCall("edit_file", `{"file_path":"/w/x/y.go","old_text":"a","new_text":"b"}`, false)
+	v.recordToolCall("edit_file", `{"file_path":"/w/x/z.go","old_text":"a","new_text":"b"}`, false)
+	v.recordToolCall("lsp_code_actions", `{"path":"/w/x/y.go","start_line":1,"start_character":0,"end_line":1,"end_character":1}`, false)
 	if v.debt != 1 {
 		t.Fatalf("lsp_code_actions debt = %d, want 1 (grounding reduces by 1, not reset)", v.debt)
 	}

@@ -15,10 +15,9 @@ import (
 func TestGuidanceCountersResetAfterCompaction(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 
-	// Burn the once-per-run quota of verify_debt.
-	a.verifyDebt.mu.Lock()
-	a.verifyDebt.warningsIssued = 1
-	a.verifyDebt.mu.Unlock()
+	// Burn the once-per-run quota of verification_debt (verifyDebt was
+	// consolidated into verifDebt in sa-34; no mutex - single-goroutine).
+	a.verifDebt.warningsIssued = 1
 	a.errorRush.warnCount = 1
 	a.queryConverge.mu.Lock()
 	a.queryConverge.warnCount = 1
@@ -27,11 +26,9 @@ func TestGuidanceCountersResetAfterCompaction(t *testing.T) {
 
 	a.resetGuidanceCounters()
 
-	a.verifyDebt.mu.Lock()
-	got := a.verifyDebt.warningsIssued
-	a.verifyDebt.mu.Unlock()
+	got := a.verifDebt.warningsIssued
 	if got != 0 {
-		t.Errorf("verifyDebt.warningsIssued = %d after reset, want 0", got)
+		t.Errorf("verifDebt.warningsIssued = %d after reset, want 0", got)
 	}
 	if a.errorRush.warnCount != 0 {
 		t.Errorf("errorRush.warnCount = %d after reset, want 0", a.errorRush.warnCount)
@@ -48,17 +45,13 @@ func TestGuidanceCountersResetKeepsBehavioralWindows(t *testing.T) {
 	a := NewAgent(nil, tool.NewRegistry(), "", 5)
 
 	// Behavioral state that must survive the counter reset.
-	a.verifyDebt.mu.Lock()
-	a.verifyDebt.editsSinceGreen = 7
-	a.verifyDebt.mu.Unlock()
+	a.verifDebt.debt = 7
 
 	a.resetGuidanceCounters()
 
-	a.verifyDebt.mu.Lock()
-	debt, warns := a.verifyDebt.editsSinceGreen, a.verifyDebt.warningsIssued
-	a.verifyDebt.mu.Unlock()
+	debt, warns := a.verifDebt.debt, a.verifDebt.warningsIssued
 	if debt != 7 {
-		t.Errorf("editsSinceGreen = %d after reset, want 7 (behavioral window must survive)", debt)
+		t.Errorf("debt = %d after reset, want 7 (behavioral window must survive)", debt)
 	}
 	if warns != 0 {
 		t.Errorf("warningsIssued = %d after reset, want 0", warns)
@@ -66,19 +59,19 @@ func TestGuidanceCountersResetKeepsBehavioralWindows(t *testing.T) {
 }
 
 func TestBClassDetectorsOncePerRun(t *testing.T) {
-	// verify_debt: first warning fires, second is suppressed.
-	s := newVerifyDebtState()
-	for i := 0; i < verifyDebtWarn1; i++ {
-		s.recordSourceEdit()
+	// verification_debt (sa-34 consolidation): warnings cap at 2/run.
+	s := newVerificationDebtState()
+	for i := 0; i < 10; i++ {
+		s.recordToolCall("edit_file", `{"path":"f.go"}`, false)
 	}
-	if msg := s.maybeWarn(1); msg == "" {
-		t.Fatal("expected first verify_debt warning")
+	if msg := s.maybeWarn(); msg == "" {
+		t.Fatal("expected first verification_debt warning")
 	}
-	for i := 0; i < 5; i++ {
-		s.recordSourceEdit()
+	if msg := s.maybeWarn(); msg == "" {
+		t.Fatal("expected second verification_debt warning")
 	}
-	if msg := s.maybeWarn(2); msg != "" {
-		t.Fatalf("expected second verify_debt warning to be suppressed (1/run), got: %s", msg)
+	if msg := s.maybeWarn(); msg != "" {
+		t.Fatalf("expected third verification_debt warning to be suppressed (2/run), got: %s", msg)
 	}
 
 	// attention_fragment: same contract via analyze().

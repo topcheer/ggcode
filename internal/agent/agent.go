@@ -265,7 +265,6 @@ type Agent struct {
 	prematureSuccess          *prematureSuccessState     // premature success claim detection (edits without verification followed by success declaration)
 	recklessExec              *recklessExecState         // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                 *irrevGateState            // irreversibility-weighted calibration gate (caution scales with action reversibility)
-	verifyDebt                *verifyDebtState           // verification debt accumulator (edits since last green build)
 	editPropagation           *editPropagationState      // cross-file edit propagation risk (distinct files since green build)
 	errorCascade              *errorCascadeState         // cascading failure detection (common-root-cause error clustering)
 	errorPropagate            *errorPropagateState       // error propagation chain detection (degraded-output contamination tracking)
@@ -490,7 +489,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		attentionFragment:      newAttentionFragmentState(),
 		recklessExec:           newRecklessExecState(),
 		irrevGate:              newIrrevGateState(),
-		verifyDebt:             newVerifyDebtState(),
 		editPropagation:        newEditPropagationState(),
 		fileChurn:              newChurnState(),
 		editOscillation:        newOscillationState(),
@@ -1431,7 +1429,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.subgoalTrack.reset()
 	a.futileCycle.reset()
 	a.toolResultRedundancy.reset()
-	a.verifyDebt.reset()
 	a.editPropagation.reset()
 	a.successDeclare.reset()
 	a.criteriaDrift.reset()
@@ -1952,13 +1949,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Warns when each correction introduces a worse error (feedback control instability).
 		if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
 			a.injectGuidance(csMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Verification debt: warn when source edits accumulate without a
-		// successful build. Prevents last-mile failure from compounding
-		// unverified changes (arXiv:2602.16666).
-		if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
-			a.injectGuidance(vdMsg)
 			msgs = a.contextManager.Messages()
 		}
 		// Cross-file edit propagation risk: warn when many DISTINCT files
@@ -4153,7 +4143,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Verification debt: track unverified modifications (SAUP-inspired).
 			// Detects when the agent stacks edits without building/testing.
-			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
+			a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
 			// Undo-blind moved to pre-execution (#1799 case 1) - see the
 			// loop above; the hint rides the tool result there.
 			// Premature commitment: record exploratory actions to track
@@ -4227,16 +4217,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Smart verify hint reset: if the agent ran a build/test/verify command,
 			// reset the edit counter and track the result.
 			a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
-			// #1549: gate by command CONTENT like every sibling (#1455-A's
-			// maybeResetVerifyOnCommand above, #487's propagation counter).
-			// The unconditional call made ANY successful tool - read_file,
-			// grep, even the successful edit itself (clearing right before
-			// recordSourceEdit adds 1 back) - zero the debt, so debt never
-			// exceeded 1 and the warn thresholds (7/12) were unreachable:
-			// the detector was permanently silent.
-			if tc.Name == "run_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
-				a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
-			}
 			// #487: gate on command CONTENT — the unconditional raw setter made
 			// the first read_file count as a build/test and silenced the
 			// detector for the whole run.
@@ -4479,7 +4459,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				}
 			}
 			if fileEditingTools[tc.Name] && !result.IsError {
-				a.verifyDebt.recordSourceEdit()
 				a.stalledConvergence.recordEdit()
 				// Search-result invalidation: if edited file appeared in prior
 				// search/lsp results, warn that those results are now stale.

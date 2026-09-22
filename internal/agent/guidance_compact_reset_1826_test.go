@@ -16,7 +16,7 @@ import (
 // #1465-A/#1572-C/#1605-A/#1646/#1651/#1843 before this registry).
 var quotaRegistry = []string{
 	// pre-#1826 entries (behavior pinned by earlier issues)
-	"verifyDebt", "infoScent", "futileCycle", "editPropagation",
+	"verifDebt", "infoScent", "futileCycle", "editPropagation",
 	"constraintAmnesia", "correctionSpiral", "errorRush", "bareEditStreak",
 	"attentionFragment", "toolThermal", "strategyFixation", "queryConverge",
 	"errorCompound", "successDeclare", "undoBlind", "cfDep", "editCoverage",
