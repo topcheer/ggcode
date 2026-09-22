@@ -57,8 +57,10 @@ func TestIssue681_CheckpointExemptFromBudget(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("checkpoint block not found in agent.go")
 	}
-	// The block extends to the msgs refresh that follows it.
-	end := strings.Index(text[idx:], "refresh after adding checkpoint")
+	// sa-39: the battery (including this block) lives in runGuidanceBattery;
+	// the checkpoint is its final block, so the body between the marker and
+	// the battery's return is exactly the checkpoint if-block.
+	end := strings.Index(text[idx:], "return progressCheckInjected")
 	if end < 0 {
 		t.Fatal("checkpoint block terminator not found in agent.go")
 	}
