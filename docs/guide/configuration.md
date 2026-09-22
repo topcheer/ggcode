@@ -330,6 +330,21 @@ im:
 
 IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configured at runtime via the TUI or daemon. See [IM Integration](./im-integration.md) for details.
 
+## Shell Working Directory Persistence
+
+`run_command` persists the shell working directory across calls within a
+session, matching how a real terminal behaves: a `cd` in one command carries
+into the next, so the agent no longer has to repeat `cd <dir> &&` on every
+call (fewer tokens, fewer wrong-directory mistakes).
+
+- The persisted directory is validated before reuse: it must still exist and
+  stay inside the workspace root (the OS sandbox scope never widens).
+- Commands that exit before their final statement runs (explicit `exit`,
+  `set -e` aborts, timeout kill) leave the previous directory untouched.
+- Sub-agent clones start with a fresh working directory (the session root).
+- Opt out with `GGCODE_SHELL_CWD_PERSIST=0` - every command then starts in
+  the fixed agent working directory, as before.
+
 ## Environment Variables
 
 | Variable | Description |
@@ -339,6 +354,7 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `GGCODE_DEBUG` | Enable debug logging (`1` to enable) |
+| `GGCODE_SHELL_CWD_PERSIST` | Set to `0` to disable `run_command` working-directory persistence (see below) |
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
 > API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML — they are never stored directly in `ggcode.yaml`.

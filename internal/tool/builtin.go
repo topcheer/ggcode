@@ -88,7 +88,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
-		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox},
+		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, cwdState: newShellCwdState()},
 		StartCommandTool{Manager: jobManager, Policy: policy},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},

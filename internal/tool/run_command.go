@@ -43,6 +43,11 @@ type RunCommand struct {
 	// in an OS-level containment sandbox (Seatbelt on macOS). See
 	// shell_sandbox.go for the policy model.
 	Sandbox *SandboxPolicy
+	// cwdState persists the shell working directory across run_command calls
+	// so a `cd` in one command carries into the next (terminal-session
+	// semantics). Nil (zero value) disables persistence; Clone() gives each
+	// agent clone a fresh session. See shell_cwd.go.
+	cwdState *shellCwdState
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -260,14 +265,17 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		defer cancel()
 	}
 
-	cmd, _, err := util.NewShellCommandContext(cmdCtx, args.Command)
+	cmd, shellSpec, err := util.NewShellCommandContext(cmdCtx, args.Command)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", err)}, nil
 	}
 	configureCommandCancellation(cmd)
-	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir
-	if t.WorkingDir != "" {
-		cmd.Dir = t.WorkingDir
+	// Start in the persisted shell cwd from earlier calls when still valid,
+	// else the fixed agent WorkingDir. LLM-provided working_dir stays
+	// ignored to prevent sandbox escape.
+	dirFor := t.workingDirForCommand()
+	if dirFor != "" {
+		cmd.Dir = dirFor
 	}
 
 	// Normalize the terminal environment for all commands so that CLI tools
@@ -288,16 +296,28 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		cmd.Env = append(cmd.Env, "GIT_PAGER=cat")
 	}
 	// Inject Co-Authored-By trailer for git commit commands
+	commandMutated := false
 	if isGitCommitCommand(args.Command) {
 		args.Command = injectCoAuthorTrailer(args.Command)
+		commandMutated = true
+	}
+	// Shell cwd persistence: append a trailing sentinel statement that
+	// reports the shell's final working directory; after the run it is
+	// parsed, validated and adopted for the next call. Skipped for GUI
+	// launches (fire-and-forget, no output to parse).
+	if !isGUI && t.cwdState != nil && cwdPersistenceEnabled() {
+		args.Command = appendCwdSentinel(args.Command, shellSpec.Name)
+		commandMutated = true
+	}
+	if commandMutated {
 		newCmd, _, cmdErr := util.NewShellCommandContext(cmdCtx, args.Command)
 		if cmdErr != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", cmdErr)}, nil
 		}
 		cmd = newCmd
 		configureCommandCancellation(cmd)
-		if t.WorkingDir != "" {
-			cmd.Dir = t.WorkingDir
+		if dirFor != "" {
+			cmd.Dir = dirFor
 		}
 		cmd.Env = normalizedCommandEnv()
 		if isGitCommand(args.Command) {
@@ -392,6 +412,15 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	output := util.StripANSI(stdout.String())
 	errOutput := util.StripANSI(stderr.String())
+
+	// Adopt the persisted shell cwd from the sentinel output and strip the
+	// marker so the model never sees it.
+	if t.cwdState != nil {
+		if cleaned, cwd, ok := extractCwdMarker(output); ok {
+			output = cleaned
+			t.cwdState.set(cwd)
+		}
+	}
 
 	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
 	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
@@ -536,6 +565,14 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 		)}, nil
 	}
 
+	// Adopt the persisted shell cwd recorded by the sentinel in the job
+	// ring buffer, then build the content (commandSnapshotOutput strips the
+	// sentinel lines so the model never sees them).
+	if t.cwdState != nil {
+		if cwd := lastCwdMarkerLine(snapshot.Lines); cwd != "" {
+			t.cwdState.set(cwd)
+		}
+	}
 	content := util.StripANSI(commandSnapshotOutput(*snapshot))
 	if snapshot.Status == CommandJobFailed || snapshot.Status == CommandJobCancelled || snapshot.Status == CommandJobTimedOut {
 		t.JobManager.forget(snapshot.ID)
@@ -557,7 +594,7 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 
 func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
 	var sb strings.Builder
-	for _, line := range snapshot.Lines {
+	for _, line := range stripCwdMarkerLines(snapshot.Lines) {
 		if sb.Len() > 0 {
 			sb.WriteString("\n")
 		}
@@ -588,6 +625,7 @@ func (t RunCommand) Clone() Tool {
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
 		Sandbox:    t.Sandbox,
+		cwdState:   newShellCwdState(),
 	}
 }
 
@@ -716,6 +754,7 @@ func snapshotJobLines(job *CommandJob, n int) string {
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
+	lines = stripCwdMarkerLines(lines)
 	if len(lines) == 0 {
 		return ""
 	}
