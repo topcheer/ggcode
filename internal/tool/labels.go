@@ -168,6 +168,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 		return toolPres("Scaffold", argStr(args, "language"))
 	case "delete_memory":
 		return toolPres("Delete Memory", argStr(args, "key"))
+	case "recall_memory":
+		return toolPres("Recall", argStr(args, "query"))
 	case "git_status":
 		return toolPres("Inspect", displayFileTarget(argStr(args, "path")))
 	case "git_diff":

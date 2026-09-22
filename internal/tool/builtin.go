@@ -173,6 +173,9 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// Cross-session knowledge graph (typed entities + relationships)
 		&KnowledgeGraphTool{WorkingDir: workingDir},
 
+		// Episodic memory recall (ranked cross-session transcript search)
+		&RecallMemoryTool{},
+
 		// Project scaffolding (multi-language templates: Go, TS, Python, Rust)
 		ScaffoldProject{SandboxCheck: sandboxFor("scaffold_project"), WorkingDir: workingDir},
 	)

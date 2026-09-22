@@ -131,6 +131,33 @@ physically removes files that the curation logic has already filtered out:
 GC is best-effort and never blocks session startup. It prevents the memory
 directory from growing unbounded across hundreds of sessions.
 
+## Recalling Past Sessions (recall_memory)
+
+`save_memory` stores distilled knowledge; `recall_memory` gives the agent
+access to the raw *episodic* memory: the transcripts of your past ggcode
+sessions. When you say "上次我们怎么解决的" or "what did we decide about X
+last week", the agent can search its own conversation history instead of
+re-deriving the answer.
+
+The tool ranks hits with a multi-signal relevance score (per 2026 agentic
+memory research - AgeMem, Mem0 State of Agent Memory 2026):
+
+- **Keyword coverage x term frequency**: multi-keyword queries must match at
+  least half the terms; denser matches score higher
+- **Exact phrase bonus**: a verbatim phrase match outranks scattered terms
+- **Session title match**: sessions whose titles match all terms get boosted
+- **Recency**: recent hits get a mild boost (~14-day decay)
+- **Role boost**: user-stated facts outrank identical assistant text
+
+Parameters: `query` (required), `max_results` (default 15, max 50), `role`
+(`user`/`assistant`), `since_days` (time window), and `all_workspaces`
+(default false - only the current project's sessions are searched; legacy
+sessions without a workspace marker stay recallable).
+
+It is a read-only tool (usable in plan mode) and is distinct from the
+`/search` TUI panel: the panel is for humans to browse sessions; the tool
+lets the *agent* decide when to recall.
+
 ## Auto-Injection: How Memory Reaches the Agent
 
 ggcode automatically injects saved memory into the system prompt at session
