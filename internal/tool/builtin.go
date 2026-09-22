@@ -114,6 +114,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&GitRevert{},
 		&GitReset{},
 		&GitTag{},
+		&GitBisect{},
 
 		// Web
 		WebFetch{},

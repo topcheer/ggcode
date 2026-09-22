@@ -29,6 +29,7 @@ common version control operations directly, without falling back to raw shell co
 | `git_revert` | Revert a commit by creating a new undo commit (safe for shared branches) |
 | `git_reset` | Reset staging area and/or working tree (soft, mixed, hard modes) |
 | `git_tag` | Create, list, or delete tags for release versioning |
+| `git_bisect` | Find the commit that introduced a bug via bisection (stepwise or scripted) |
 
 ## git_revert
 
@@ -81,3 +82,34 @@ git_tag(action="create", name="v1.0.0", message="First release", commit="HEAD")
 - Always use annotated tags (`message` field) for release tags
 - Use `git_log` to identify the target commit before tagging
 - List existing tags before creating to avoid duplicates
+
+## git_bisect
+
+Finds the commit that introduced a bug by binary search over history. Bisection
+is stateful — git checks out a candidate commit on every step and stays detached
+until reset — so this tool wraps the full state machine and reports the current
+checkout after every step.
+
+```
+git_bisect(action="start", bad="HEAD", good="v1.2.0")
+# ... verify the checked-out commit (build / tests) ...
+git_bisect(action="good")   # or action="bad" / action="skip" (does not build)
+# ... repeat until git reports the first bad commit ...
+git_bisect(action="reset")  # restore original HEAD
+```
+
+- **actions**: `start`, `good`, `bad`, `skip`, `status`, `run`, `reset`
+- **start**: requires `good` (a ref known to predate the bug, e.g. a tag or
+  `HEAD~10`); `bad` defaults to HEAD
+- **run** (scripted): `git_bisect(action="run", command="go test ./...", timeout_seconds=600)`
+  — git drives the whole bisection automatically; the command must exit 0
+  (good), 1–124 (bad) or 125 (skip)
+
+**Guidance built in:** after `start`, `good`, `bad` and `skip`, the result shows
+the current checkout (`git log -1 --oneline`) and the next action to take. When
+the verdict ("<hash> is the first 'bad' commit") is reached, the result reminds
+you to `reset`. Refs with a leading dash are refused (option-injection guard).
+
+**When to use:** a regression appeared after a long run of commits and neither
+`git_log` nor `git_blame` points at an obvious culprit — bisection localizes it
+in O(log n) verifications instead of manual archaeology.
