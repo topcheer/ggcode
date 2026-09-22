@@ -62,6 +62,21 @@ const (
 	guidanceBudgetCriticalBytesPerTurn = 1024
 )
 
+// guidanceReject classifies WHY a budget gate rejected a guidance message.
+// The detector effectiveness ledger (detector_ledger.go) aggregates these
+// per tag so calibration can distinguish "detector starved by byte cap"
+// from "superseded by dedup" - different remediation (raise cap vs fix
+// repeat-firing detector).
+type guidanceReject int
+
+const (
+	rejectNone          guidanceReject = iota
+	rejectBudgetBytes                  // advisory byte pool exhausted
+	rejectBudgetCount                  // per-turn count cap reached
+	rejectCriticalBytes                // critical byte pool exhausted
+	rejectDedup                        // same head tag already delivered this turn
+)
+
 // #441: critical classification uses ONLY the head tag (extractHintTag)
 // matched exactly against criticalHintTags - the single keyword source
 // shared with the coalescer. The old full-text substring scan let any
@@ -91,6 +106,13 @@ type guidanceBudget struct {
 	// turn (#607 B3: cross-result dedup - the same meta-hint must not be
 	// re-injected into every subsequent tool result).
 	seenHintTags map[string]bool
+	// ledger is the run-scoped detector effectiveness ledger (nil-safe: all
+	// ledger methods tolerate nil receivers, and this pointer stays nil for
+	// bare guidanceBudget constructions). Recorded inside allow/allowDeduped
+	// so EVERY budgeted delivery path - injectGuidance, appendGuidance, and
+	// the coalesced tool-result hints - is measured at exactly one choke
+	// point (see detector_ledger.go).
+	ledger *detectorLedger
 }
 
 // reset clears the budget at the start of a new iteration.
@@ -111,26 +133,39 @@ func (g *guidanceBudget) reset() {
 // injected. Returns true if the message should proceed (either within
 // budget or critical), false if it should be suppressed.
 func (g *guidanceBudget) allow(text string) bool {
+	ok, _ := g.allowTagged(text, extractHintTag(text))
+	return ok
+}
+
+// allowTagged is allow with a pre-extracted head tag (allowDeduped already
+// has it) that records the outcome - delivered vs suppressed-by-reason -
+// into the run-scoped detector ledger.
+func (g *guidanceBudget) allowTagged(text string, tag string) (bool, guidanceReject) {
 	// Critical messages first, against their dedicated pool (#1840 case 2).
 	if isCriticalGuidance(text) {
 		if g.criticalBytes+len(text) > guidanceBudgetCriticalBytesPerTurn {
 			g.suppressed++
-			return false
+			g.ledger.noteSuppressed(tag, rejectCriticalBytes)
+			return false, rejectCriticalBytes
 		}
-		return true
+		g.ledger.noteDelivered(tag, len(text))
+		return true, rejectNone
 	}
 	// Byte-level flood cap for advisory (#1197: a stream of tagged notices
 	// can otherwise drown a result just as effectively as noise).
 	if g.appendedBytes+len(text) > guidanceBudgetBytesPerTurn {
 		g.suppressed++
-		return false
+		g.ledger.noteSuppressed(tag, rejectBudgetBytes)
+		return false, rejectBudgetBytes
 	}
 	if g.injected < guidanceBudgetPerTurn {
 		g.injected++
-		return true
+		g.ledger.noteDelivered(tag, len(text))
+		return true, rejectNone
 	}
 	g.suppressed++
-	return false
+	g.ledger.noteSuppressed(tag, rejectBudgetCount)
+	return false, rejectBudgetCount
 }
 
 // allowDeduped is the tool-result-hint variant of allow (#607 B2/B3).
@@ -141,13 +176,15 @@ func (g *guidanceBudget) allow(text string) bool {
 func (g *guidanceBudget) allowDeduped(text string) bool {
 	// Critical messages always pass through, but still record their tag so
 	// later duplicate copies of the same critical hint are deduplicated.
-	tag := strings.ToLower(extractHintTag(text))
+	rawTag := extractHintTag(text)
+	tag := strings.ToLower(rawTag)
 	if tag != "" {
 		if g.seenHintTags == nil {
 			g.seenHintTags = make(map[string]bool)
 		}
 		if g.seenHintTags[tag] {
 			g.suppressed++
+			g.ledger.noteSuppressed(rawTag, rejectDedup)
 			return false
 		}
 		// #1840 case 1: mark the dedup slot ONLY on delivery. Marking
@@ -157,7 +194,7 @@ func (g *guidanceBudget) allowDeduped(text string) bool {
 		// blocked for the rest of the turn while the hint was never
 		// delivered: the #681 "returned != delivered" residue.
 	}
-	ok := g.allow(text)
+	ok, _ := g.allowTagged(text, rawTag)
 	if ok {
 		if tag != "" {
 			if g.seenHintTags == nil {

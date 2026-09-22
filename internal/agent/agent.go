@@ -246,6 +246,7 @@ type Agent struct {
 	orphanFile                *orphanFileState           // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                     *cfDepState                // counterfactual dependency detection (dependent tool calls in same batch)
 	guidanceBudget            guidanceBudget             // per-turn guidance injection limiter (caps context pollution from detector alerts)
+	detectorLedger            detectorLedger             // run-scoped per-tag guidance outcome ledger (detector effectiveness feedback, see detector_ledger.go)
 	reasoningRedund           *reasoningRedundancyState  // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge             *queryConvergeState        // query convergence failure detection (repeated similar searches without action)
 	serialRead                *serialReadState           // sequential read serialization detection (cross-turn single-read batching opportunity)
@@ -550,6 +551,10 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 	// config `memory_tool: true`), since the model is the sole caller. See
 	// internal/agent/memory_tool.go.
 	a.memoryTool = newMemoryToolState()
+	// Detector effectiveness ledger: the budget gates record delivered vs
+	// suppressed outcomes into the run-scoped ledger through this pointer
+	// (detector_ledger.go).
+	a.guidanceBudget.ledger = &a.detectorLedger
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
 	a.syncContextManagerTodoPathLocked()
@@ -1291,6 +1296,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 	}()
+	// Detector effectiveness ledger: log the run's per-tag guidance outcome
+	// aggregate on every exit path (error, cancel, completion). TryLock makes
+	// this safe during panic unwinding (non-reentrant same-goroutine mutex).
+	defer a.detectorLedger.logRunSummary()
 	// Stop any background cache-keepalive pings — the user is sending a new
 	// message, so the cache will be refreshed naturally by this request.
 	// Write run-start journal entry for crash detection. If the process dies
@@ -1642,6 +1651,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// loop. These systems accumulate state across iterations within a run.
 	a.resetOverseer()
 	a.resetPlanner()
+	// Run-scoped detector effectiveness ledger: fresh stats per run so the
+	// end-of-run aggregate reflects THIS run's guidance economics.
+	a.detectorLedger.reset()
 	// Agent-side planning: analyze the user's first message for complexity.
 	// If complex (multi-file, multi-goal, multi-step), suggest a structured
 	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
@@ -1845,7 +1857,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		a.guidanceBudget.reset() // reset per-turn guidance injection budget
+		a.guidanceBudget.reset()        // reset per-turn guidance injection budget
+		a.detectorLedger.setTurn(i + 1) // stamp iteration for ledger turn spans
 		// Check session wall-clock timeout: emit user-visible notifications or stop.
 		// #1492-C: the 80%/95% warnings must ALSO reach the LLM context -
 		// #611's commit message promised exactly that, but the only consumer
