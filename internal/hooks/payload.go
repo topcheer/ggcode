@@ -19,6 +19,7 @@ type HookPayload struct {
 	Msg        *PayloadMsg        `json:"message,omitempty"`    // on_user_message only
 	Stop       *PayloadStop       `json:"stop,omitempty"`       // on_agent_stop / on_stream_stop
 	Compaction *PayloadCompaction `json:"compaction,omitempty"` // on_compaction only
+	Session    *PayloadSession    `json:"session,omitempty"`    // on_session_start / on_session_end
 }
 
 type PayloadTool struct {
@@ -49,6 +50,14 @@ type PayloadCompaction struct {
 	TokenBefore int `json:"token_before"` // token count before compaction
 	TokenAfter  int `json:"token_after"`  // token count after compaction
 	Reclaimed   int `json:"reclaimed"`    // tokens reclaimed (before - after)
+}
+
+// PayloadSession carries session lifecycle context for on_session_start and
+// on_session_end hooks. Source is set on start ("startup", "resume", "new",
+// "branch"); Reason is set on end ("exit", "cleared", "branched", "restart").
+type PayloadSession struct {
+	Source string `json:"source,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // BuildPayload constructs the standardized payload from HookEnv.
@@ -95,6 +104,12 @@ func BuildPayload(env HookEnv) HookPayload {
 			TokenBefore: env.TokenBefore,
 			TokenAfter:  env.TokenAfter,
 			Reclaimed:   env.TokenBefore - env.TokenAfter,
+		}
+
+	case EventSessionStart, EventSessionEnd:
+		p.Session = &PayloadSession{
+			Source: env.SessionSource,
+			Reason: env.SessionEndReason,
 		}
 	}
 

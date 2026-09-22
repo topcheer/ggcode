@@ -151,6 +151,7 @@ type Model struct {
 	a2aEventBuf             []a2a.TaskEventMessage // cached recent events for display
 	a2aEventState           *a2aEventBufferState   // built at NewModel; ensureA2AEventState nil-check is a legacy fallback only
 	config                  *config.Config
+	nextSessionSource       string // pending on_session_start source for the next SetSession
 	language                Language
 	startupVendor           string
 	cachedPanelHeight       int // set in View() for renderContextBox
@@ -911,6 +912,10 @@ func (m *Model) SetSessionCreatedCallback(cb func(sessionID string)) {
 func (m *Model) SetSession(ses *session.Session, store session.Store) {
 	m.session = ses
 	m.sessionStore = store
+	// Fire on_session_start hooks (fire-and-forget). SetSession is the single
+	// choke point every session transition goes through (startup, resume,
+	// /clear, /branch, session picker), so lifecycle hooks cannot miss one.
+	m.fireSessionStartHooks()
 	// Notify REPL so its thread-safe currentSession pointer stays in sync.
 	// This ensures persistHandler/checkpointHandler write to the correct
 	// JSONL file even after /clear switches to a new session.

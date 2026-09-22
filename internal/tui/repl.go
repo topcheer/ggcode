@@ -1794,6 +1794,13 @@ func (r *REPL) Run() error {
 		return r.execRestart()
 	}
 
+	// Fire on_session_end hooks for the session that is closing. The restart
+	// and tmux-exec paths return above and intentionally skip this: the session
+	// persists across the process replacement.
+	if exitSes != nil {
+		r.model.fireSessionEndHooks(exitSes, "exit")
+	}
+
 	return err
 }
 
@@ -1873,6 +1880,7 @@ func (r *REPL) createSession() {
 	saveStart := time.Now()
 	if err := r.store.Save(ses); err == nil {
 		debug.Log("repl", "startup timing repl.createSession store.Save duration=%s", time.Since(saveStart).Round(time.Millisecond))
+		r.model.SetNextSessionSource("startup")
 		r.model.SetSession(ses, r.store)
 		r.model.chatWriteSystem(nextSystemID(), r.model.t("session.new", ses.ID))
 
@@ -1948,6 +1956,7 @@ func (r *REPL) loadSession(id string) {
 	}
 
 	compacted, beforeTokens, afterTokens := agentruntime.RestoreSessionIntoAgent(r.agent, ses)
+	r.model.SetNextSessionSource("resume")
 	r.model.SetSession(ses, r.store)
 
 	if compacted {

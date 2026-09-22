@@ -48,12 +48,21 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 		hooks = cfg.OnStreamStop
 	case EventOnCompaction:
 		hooks = cfg.OnCompaction
+	case EventSessionStart:
+		hooks = cfg.SessionStart
+	case EventSessionEnd:
+		hooks = cfg.SessionEnd
 	default:
 		return HookResult{Allowed: true}
 	}
 
-	// Async fire-and-forget for stop events.
-	if env.Event == EventOnAgentStop || env.Event == EventOnStreamStop || env.Event == EventOnCompaction {
+	// Async fire-and-forget for stop and session lifecycle events.
+	// Session lifecycle hooks must not block startup/teardown paths: they fire
+	// while the session is being created or torn down, so inheriting the
+	// caller's cancellable context would kill them mid-flight (#547 rationale
+	// applies equally here).
+	if env.Event == EventOnAgentStop || env.Event == EventOnStreamStop || env.Event == EventOnCompaction ||
+		env.Event == EventSessionStart || env.Event == EventSessionEnd {
 		payload := BuildPayload(env)
 		for _, h := range hooks {
 			if !matchAny(h.MatchMode, h.Match, env.ToolName, env.RawInput) {
@@ -411,6 +420,23 @@ func RunStreamStopHooks(cfg HookConfig, env HookEnv) {
 // context was reclaimed.
 func RunCompactionHooks(cfg HookConfig, env HookEnv) {
 	env.Event = EventOnCompaction
+	Dispatch(cfg, env)
+}
+
+// RunSessionStartHooks runs on_session_start hooks asynchronously
+// (fire-and-forget). env should include SessionSource describing why the
+// session began ("startup", "resume", "new", "branch").
+func RunSessionStartHooks(cfg HookConfig, env HookEnv) {
+	env.Event = EventSessionStart
+	Dispatch(cfg, env)
+}
+
+// RunSessionEndHooks runs on_session_end hooks asynchronously
+// (fire-and-forget). env should include SessionEndReason describing why the
+// session ended ("exit", "cleared", "branched", "restart"). Hooks run
+// detached from the caller's context so process teardown cannot kill them.
+func RunSessionEndHooks(cfg HookConfig, env HookEnv) {
+	env.Event = EventSessionEnd
 	Dispatch(cfg, env)
 }
 

@@ -45,6 +45,9 @@ const (
 	EventOnAgentStop   = "on_agent_stop"
 	EventOnStreamStop  = "on_stream_stop"
 	EventOnCompaction  = "on_compaction"
+
+	EventSessionStart = "on_session_start"
+	EventSessionEnd   = "on_session_end"
 )
 
 // HookConfig holds all hooks from configuration, keyed by event.
@@ -55,6 +58,8 @@ type HookConfig struct {
 	OnAgentStop   []Hook `yaml:"on_agent_stop" json:"on_agent_stop"`
 	OnStreamStop  []Hook `yaml:"on_stream_stop" json:"on_stream_stop"`
 	OnCompaction  []Hook `yaml:"on_compaction" json:"on_compaction"`
+	SessionStart  []Hook `yaml:"on_session_start" json:"on_session_start"`
+	SessionEnd    []Hook `yaml:"on_session_end" json:"on_session_end"`
 }
 
 // HookResult is the result of running one or more hooks.
@@ -101,6 +106,10 @@ type HookEnv struct {
 	// Compaction context (on_compaction only)
 	TokenBefore int // token count before compaction
 	TokenAfter  int // token count after compaction
+
+	// Session lifecycle context (on_session_start / on_session_end only)
+	SessionSource    string // on_session_start: "startup", "resume", "new", "branch"
+	SessionEndReason string // on_session_end: "exit", "cleared", "branched", "restart"
 
 	// Ctx allows callers to propagate cancellation (e.g., session cancellation)
 	// to hook execution. If nil, context.Background() is used.
@@ -158,6 +167,8 @@ func ValidateHooks(cfg HookConfig) []string {
 	validate("on_agent_stop", cfg.OnAgentStop)
 	validate("on_stream_stop", cfg.OnStreamStop)
 	validate("on_compaction", cfg.OnCompaction)
+	validate("on_session_start", cfg.SessionStart)
+	validate("on_session_end", cfg.SessionEnd)
 
 	return errs
 }

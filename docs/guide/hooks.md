@@ -11,6 +11,28 @@ Hooks let you run shell commands or HTTP webhooks automatically on agent lifecyc
 | `post_tool_use` | After tool executes, before result returns to LLM | Sync | No |
 | `on_agent_stop` | Agent loop ends (completed/cancelled/error) | Async | No |
 | `on_stream_stop` | Single LLM stream response completes | Async | No |
+| `on_session_start` | A session becomes active (startup/resume/new/branch) | Async | No |
+| `on_session_end` | A session is closed or switched away from | Async | No |
+
+### Session Lifecycle
+
+`on_session_start` fires whenever a session is bound to the running app — app startup
+(`source: startup`), resuming a saved session (`source: resume`), `/clear` to a fresh
+session (`source: new`), or `/branch` (`source: branch`). `on_session_end` fires when a
+session is closed or switched away from (`reason: exit` on app quit, `cleared` on /clear,
+`branched` on /branch). The restart (`/update`) and tmux-exec paths skip `on_session_end`
+because the session persists across the process replacement.
+
+```yaml
+hooks:
+  on_session_start:
+    - match: "*"
+      command: "echo session $GGCODE_HOOK_SESSION_ID started" >> ~/.ggcode/sessions.log
+  on_session_end:
+    - match: "*"
+      type: http
+      url: "https://hooks.example.com/session-finished"
+```
 
 ### Execution Order
 
@@ -61,7 +83,7 @@ Sends an HTTP POST with the standardized JSON payload.
 | command | exit code 2 (stderr → block reason) | Other non-zero: allow, log warning |
 | http | HTTP 403 (response body → block reason) | Connection error/timeout/non-2xx: allow, log warning |
 
-Only `on_user_message` and `pre_tool_use` can block. `post_tool_use`, `on_agent_stop`, and `on_stream_stop` always allow — block responses are ignored.
+Only `on_user_message` and `pre_tool_use` can block. `post_tool_use`, `on_agent_stop`, `on_stream_stop`, `on_session_start`, and `on_session_end` always allow — block responses are ignored.
 
 ## Standard Payload
 
@@ -72,8 +94,7 @@ All hooks (both command and http) receive a unified JSON payload:
   "event": "pre_tool_use",
   "session_id": "abc123",
   "workspace": "/Users/me/project",
-  "timestamp": "2026-06-30T16:00:00Z",
-  "tool": {
+  "timestamp": "2026-06-30T16:00:00Z",  "tool": {
     "name": "write_file",
     "input": {"file_path": "/path/file.go", "content": "..."},
     "file_path": "/path/file.go"
@@ -102,6 +123,8 @@ Fields populated per event:
 | `post_tool_use` | `tool` + `result` |
 | `on_agent_stop` | `stop_reason` + `stop_error` |
 | `on_stream_stop` | `stop_reason` |
+| `on_session_start` | `session.source` |
+| `on_session_end` | `session.reason` |
 
 ## Data Access
 
@@ -133,7 +156,7 @@ Fields populated per event:
 
 ## Match Patterns
 
-Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `on_agent_stop`, `on_stream_stop`), use `*` to match all.
+Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `on_agent_stop`, `on_stream_stop`, `on_session_start`, `on_session_end`), use `*` to match all.
 
 ### Match Modes
 

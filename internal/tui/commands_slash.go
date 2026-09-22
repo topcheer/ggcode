@@ -67,6 +67,11 @@ func (m *Model) handleClearChat() {
 		})
 	}
 
+	// Fire on_session_end hooks for the session being cleared away, then
+	// tag the upcoming transition as a brand-new session.
+	m.fireSessionEndHooks(m.session, "cleared")
+	m.SetNextSessionSource("new")
+
 	// Create new session.
 	vendor, endpoint, model := "", "", ""
 	if m.config != nil {
@@ -763,6 +768,11 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 			return nil
 		}
 	}
+
+	// Fire on_session_end hooks for the source session, then tag the upcoming
+	// transition as a branch of it.
+	m.fireSessionEndHooks(oldSes, "branched")
+	m.SetNextSessionSource("branch")
 
 	// Switch to the branched session.
 	m.applyResumedSession(branched)
