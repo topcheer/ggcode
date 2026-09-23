@@ -151,18 +151,6 @@ func hasBuildTestPrefix(s string) bool {
 	return false
 }
 
-// stripEnvVars removes leading FOO=bar assignments from a command line.
-func stripEnvVars(s string) string {
-	for strings.Contains(s, "=") && !hasBuildTestPrefix(s) {
-		idx := strings.Index(s, " ")
-		if idx == -1 {
-			return s
-		}
-		s = strings.TrimSpace(s[idx:])
-	}
-	return s
-}
-
 // buildAffectingEnv: assignments that change build/test outputs. #2640:
 // stripping them entirely made `GOOS=linux go build ./...` and
 // `go build ./...` compare equal, so cross-compile vs native builds were
