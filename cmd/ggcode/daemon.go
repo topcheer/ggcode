@@ -477,6 +477,20 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// it is stored in autoLock and we skip the second TryAcquireSessionLock.
 	if sessionLock == nil && ses.ID != "" {
 		lock, lockErr := session.TryAcquireSessionLock(storeDir, ses.ID)
+		// #2631: detach-fork race — the forked child (--resume=<sid>) can
+		// reach this acquire before the parent's exit-tail sessionLock
+		// Release(). The exec-restart path hands the lock over explicitly
+		// (release before exec below); the fork-detach path has no such
+		// handoff, so the child used to exit "locked by another instance
+		// (PID <parent>)" while the parent was also exiting — leaving no
+		// daemon running. Retry the contention case (acquired=false)
+		// briefly; the parent's cleanup (bridge.Close + meta flush) is
+		// typically well under a second. Fail-closed lockErr is NOT
+		// retried (#1429-A).
+		for attempts := 0; lockErr == nil && lock != nil && !lock.Acquired() && attempts < 25; attempts++ {
+			time.Sleep(200 * time.Millisecond)
+			lock, lockErr = session.TryAcquireSessionLock(storeDir, ses.ID)
+		}
 		if lockErr == nil && lock != nil && lock.Acquired() {
 			sessionLock = lock
 		} else if lockErr != nil {
