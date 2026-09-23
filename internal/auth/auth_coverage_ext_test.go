@@ -1,4 +1,8 @@
-//go:build integration_local
+// This file was previously gated behind `go:build integration_local`, which hid
+// ~60 pure unit tests (httptest servers + t.TempDir only, zero network and zero
+// API-key dependencies) from the default `go test` and CI runs. That gate let
+// one assertion rot silently against evolved production behavior. All tests
+// here are self-contained, so they now run in the default build (sa-113).
 
 package auth
 
@@ -678,11 +682,19 @@ func TestRefreshJWKS_DirectJWKSURL(t *testing.T) {
 
 func TestValidateOpaqueToken_IntrospectionFromTokenURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" {
-			t.Errorf("expected POST, got %s", r.Method)
+		switch r.Method {
+		case http.MethodGet:
+			// #1503: the discovery document is consulted before introspecting.
+			// Serve a 404 so discoverIntrospectionEndpoint returns "" and the
+			// validator falls back to the legacy guessed URL (/token → /introspect).
+			http.NotFound(w, r)
+		default:
+			if r.URL.Path != "/introspect" {
+				t.Errorf("expected POST /introspect, got %s %s", r.Method, r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "introspected-user"})
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"active": true, "sub": "introspected-user"})
 	}))
 	defer srv.Close()
 
@@ -1170,7 +1182,9 @@ func TestClaudeCallback_OAuthError(t *testing.T) {
 	}
 	defer flow.Close()
 
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?error=access_denied&error_description=User+cancelled", flow.Port))
+	// #599: error callbacks are only honored when the state parameter matches
+	// the expected value - an unsigned error must NOT abort the in-flight flow.
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/callback?error=access_denied&error_description=User+cancelled&state=test-state", flow.Port))
 	if err != nil {
 		t.Fatalf("callback: %v", err)
 	}
@@ -1380,8 +1394,11 @@ func TestNormalizeDomain(t *testing.T) {
 
 func TestResolveA2AAuth_UnknownProvider(t *testing.T) {
 	authURL, _, _, _, err := ResolveA2AAuth("unknown", "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+	if !strings.Contains(err.Error(), "unknown provider") {
+		t.Errorf("error should mention unknown provider: %v", err)
 	}
 	if authURL != "" {
 		t.Errorf("expected empty auth URL for unknown, got %s", authURL)
