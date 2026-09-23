@@ -3,6 +3,9 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
+	"github.com/topcheer/ggcode/internal/provider"
 )
 
 func TestWithTemporalContext(t *testing.T) {
@@ -61,5 +64,92 @@ func TestMaybeInjectDynamicSystemPromptIncludesTemporal(t *testing.T) {
 	}
 	if !strings.Contains(a.lastInjectedSystemPrompt, "You are a coding assistant.") {
 		t.Fatalf("base prompt missing from injected prompt: %q", a.lastInjectedSystemPrompt)
+	}
+}
+
+// The temporal header is session-scoped (changes every session), so it must
+// live OUTSIDE the cacheable base block - otherwise every session start (and
+// every sub-agent) invalidates the cross-run cache breakpoint on the static
+// system prompt prefix (arXiv:2601.06007).
+func TestMaybeInjectDynamicSystemPromptTemporalOutsideCacheableBase(t *testing.T) {
+	a := NewAgent(nil, nil, "You are a coding assistant.", 1)
+	a.maybeInjectDynamicSystemPrompt()
+	cm, ok := a.contextManager.(*ctxpkg.Manager)
+	if !ok {
+		t.Fatalf("context manager is not *ctxpkg.Manager")
+	}
+	var sys *provider.Message
+	for _, m := range cm.Messages() {
+		if m.Role == "system" {
+			sys = &m
+			break
+		}
+	}
+	if sys == nil {
+		t.Fatalf("no system message found after injection")
+	}
+	if len(sys.Content) < 2 {
+		t.Fatalf("expected >=2 system blocks (cached base + temporal), got %d: %+v", len(sys.Content), sys.Content)
+	}
+	if sys.Content[0].Text != "You are a coding assistant." {
+		t.Fatalf("cacheable block must be the bare base prompt (no temporal bytes), got: %q", sys.Content[0].Text)
+	}
+	if !sys.Content[0].Cache {
+		t.Fatalf("base block must be marked cacheable")
+	}
+	if strings.Contains(sys.Content[0].Text, "Current date/time:") {
+		t.Fatalf("temporal header leaked into cacheable base block: %q", sys.Content[0].Text)
+	}
+	if !strings.Contains(sys.Content[1].Text, "Current date/time:") {
+		t.Fatalf("second block must carry the temporal header, got: %q", sys.Content[1].Text)
+	}
+	if sys.Content[1].Cache {
+		t.Fatalf("temporal block must NOT be cacheable")
+	}
+
+	// Within one run the header is session-anchored: a second injection must
+	// produce byte-identical blocks (KV-cache stability across iterations).
+	a.maybeInjectDynamicSystemPrompt()
+	for _, m := range cm.Messages() {
+		if m.Role == "system" {
+			for i := range m.Content {
+				if m.Content[i].Text != sys.Content[i].Text {
+					t.Fatalf("block %d changed across iterations: %q vs %q", i, sys.Content[i].Text, m.Content[i].Text)
+				}
+			}
+			break
+		}
+	}
+}
+
+// A blank base with dynamic layers must not emit an empty cacheable block.
+func TestMaybeInjectDynamicSystemPromptBlankBaseNoEmptyCachedBlock(t *testing.T) {
+	a := NewAgent(nil, nil, "", 1)
+	a.SetSystemPromptInjector(func() string { return "dynamic layer text" })
+	a.maybeInjectDynamicSystemPrompt()
+	cm, ok := a.contextManager.(*ctxpkg.Manager)
+	if !ok {
+		t.Fatalf("context manager is not *ctxpkg.Manager")
+	}
+	var sys *provider.Message
+	for _, m := range cm.Messages() {
+		if m.Role == "system" {
+			sys = &m
+			break
+		}
+	}
+	if sys == nil {
+		t.Fatalf("no system message found after injection")
+	}
+	for i, b := range sys.Content {
+		if strings.TrimSpace(b.Text) == "" {
+			t.Fatalf("block %d is empty/blank: %+v", i, b)
+		}
+		if b.Cache {
+			t.Fatalf("block %d is cacheable but no stable base exists: %+v", i, b)
+		}
+	}
+	if !strings.Contains(sys.Content[len(sys.Content)-1].Text, "dynamic layer text") {
+		t.Fatalf("dynamic layer missing from system message: %+v", sys.Content)
 	}
 }

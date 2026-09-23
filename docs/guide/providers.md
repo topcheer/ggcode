@@ -314,6 +314,17 @@ non-streaming calls). Because edits are server-side, prompt cache prefixes
 rewrite accordingly and no conversation history is removed from ggcode's local
 session files.
 
+### System Prompt Cache Stability
+
+The system prompt is assembled as ordered blocks: the stable base prompt
+first (marked `cache_control` under the Anthropic protocol), then
+session-scoped content - the temporal header and dynamic layers (ratchet
+rules, playbook hints, external injectors) - as uncached blocks. Dynamic
+content never precedes the stable prefix, so provider-side prompt caches
+remain valid across sessions and sub-agents ("Don't Break the Cache",
+arXiv:2601.06007). Within a session the temporal header is anchored to
+session start, so its bytes are stable across iterations.
+
 ## Tool Choice
 
 Control whether the model is allowed to call tools. Supported by `openai`,

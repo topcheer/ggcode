@@ -104,21 +104,40 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	// Skip entirely when there is no system prompt and no dynamic content.
 	// This preserves backward compatibility: tests and setups that rely on
 	// the absence of a system message are not disturbed.
-	// Anchor temporal context to session start and fold it into the cacheable
-	// base layer (Temporal Context Injection baseline practice).
-	base = a.withTemporalContext(base)
-	if base == "" && len(dynamicParts) == 0 {
+	// The temporal header is session-scoped dynamic content (HH:MM
+	// granularity), so it must NOT be folded into the cacheable base block:
+	// every new session (and every sub-agent) would change the cached prefix
+	// bytes and invalidate the cross-run cache breakpoint on the much larger
+	// static system prompt. Per "Don't Break the Cache" (arXiv:2601.06007),
+	// dynamic content belongs after the stable prefix; the header is emitted
+	// as its own uncached block below. Within a run it stays session-anchored
+	// (temporalAnchor), so rendered bytes remain stable across iterations
+	// (#2445).
+	hasBase := strings.TrimSpace(base) != ""
+	if !hasBase && len(dynamicParts) == 0 {
 		return
+	}
+	var temporalLine string
+	if hasBase {
+		temporalLine = a.temporalContextLine()
 	}
 
 	// Build the full prompt text to check if it changed since last injection.
 	// This avoids redundant countTokens + UpdateFirstSystemMessage calls on
 	// every agent iteration when the prompt content is identical.
-	var fullText string
-	if len(dynamicParts) == 0 {
-		fullText = base
-	} else {
-		fullText = base + "\n\n" + strings.Join(dynamicParts, "\n\n")
+	// fullText mirrors the emitted block texts (base + temporal header +
+	// dynamic layers); withTemporalContext keeps the legacy joined form.
+	fullText := ""
+	if hasBase {
+		fullText = a.withTemporalContext(base)
+	}
+	if len(dynamicParts) > 0 {
+		dynamicText := strings.Join(dynamicParts, "\n\n")
+		if fullText != "" {
+			fullText += "\n\n" + dynamicText
+		} else {
+			fullText = dynamicText
+		}
 	}
 	if fullText == a.lastInjectedSystemPrompt {
 		return
@@ -142,23 +161,24 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		return
 	}
 
-	// Build content blocks: static base (cacheable) + dynamic (not cached).
-	// When there is no dynamic content, emit a single cached block.
-	if len(dynamicParts) == 0 {
-		cm.UpdateFirstSystemMessage(provider.Message{
-			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: base, Cache: true}},
-		})
-		return
+	// Build content blocks: static base (cacheable) first, then the uncached
+	// tail (temporal header + dynamic layers) so providers can hit the
+	// cross-run cache breakpoint on the stable prefix while session-scoped
+	// content changes freely. A blank base emits no base block at all (an
+	// empty cacheable text block would be rejected or wasted).
+	blocks := make([]provider.ContentBlock, 0, len(dynamicParts)+2)
+	if hasBase {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: base, Cache: true})
 	}
-
-	dynamicText := strings.Join(dynamicParts, "\n\n")
+	if temporalLine != "" {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: temporalLine})
+	}
+	for _, part := range dynamicParts {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: part})
+	}
 	cm.UpdateFirstSystemMessage(provider.Message{
-		Role: "system",
-		Content: []provider.ContentBlock{
-			{Type: "text", Text: base, Cache: true},
-			{Type: "text", Text: dynamicText},
-		},
+		Role:    "system",
+		Content: blocks,
 	})
 }
 
