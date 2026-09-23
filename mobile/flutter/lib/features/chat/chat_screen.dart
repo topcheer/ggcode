@@ -1584,7 +1584,7 @@ class _ConnectionStatusIcon extends StatelessWidget {
 String _displayNameFromKeyForSession(String key, String fallback) {
   if (fallback.isNotEmpty) return fallback;
   try {
-    final padded = key + '=' * (4 - key.length % 4);
+    final padded = key + '=' * ((4 - key.length % 4) % 4);
     final decoded = utf8.decode(base64Url.decode(padded));
     final parts = decoded.split('/').where((s) => s.isNotEmpty).toList();
     return parts.isNotEmpty ? parts.last : fallback;
