@@ -49,26 +49,18 @@ The daemon automatically loads the most recent unlocked session on startup. Use 
 
 ## Subcommands
 
+### login
 
-
-
-```bash
-```
-
-**Review & Promote:**
+Interactive vendor OAuth login (device flow):
 
 ```bash
+ggcode login opencode   # OpenCode console device flow
 ```
 
-**Release (progressive delivery):**
-
-```bash
-```
-
-**Monitor:**
-
-```bash
-```
+Prints a verification URL and a user code, waits for you to authorize in
+the browser, then stores the credential so the `opencode` vendor works
+without a manual API key. Unsupported vendor names fail with a message
+listing the supported set.
 
 ### mcp
 

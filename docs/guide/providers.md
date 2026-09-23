@@ -23,6 +23,7 @@ ggcode ships with presets for common providers. Each preset includes a default e
 | Volcengine Ark | `ark` | `https://ark.cn-beijing.volces.com/api/v3` |
 | GitHub Copilot | `github-copilot` | (uses GitHub OAuth) |
 | AI Gateway | `ai-gateway` | `https://aihubmix.com/v1` |
+| OpenCode Zen | `opencode` | `https://opencode.ai/zen/v1` (OAuth device flow) |
 
 ## Configuration
 
@@ -61,6 +62,18 @@ API keys can also be set via environment variables using `${...}` syntax in the 
 vendor: anthropic
 api_key: ${ANTHROPIC_API_KEY}
 ```
+
+### OAuth Login (OpenCode Zen)
+
+Instead of a manual API key, `opencode` supports OAuth device-flow login:
+
+```bash
+ggcode login opencode
+```
+
+This prints a verification URL and user code, waits for browser
+authorization, then stores the credential in `~/.ggcode/keys.env`. The
+vendor also supports dynamic model discovery once a credential exists.
 
 ## Multiple Endpoints
 

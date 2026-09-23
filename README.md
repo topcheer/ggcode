@@ -33,9 +33,7 @@ irm https://ggcode.dev/install.ps1 | iex
 cd your-project
 ggcode
 
-# 2. On first launch, configure your API key (interactive prompt)
-#    Or set it directly:
-#    Or set up via the interactive wizard on first launch
+# 2. On first launch, the interactive wizard configures your provider and API key
 
 # 3. Start coding — just type your request
 ```
