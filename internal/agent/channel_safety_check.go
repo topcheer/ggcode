@@ -396,11 +396,11 @@ func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp, col 
 		}
 		// #2648: a send on a path mutually exclusive with the earlier
 		// close (error-branch close + return, sibling branches) can
-		// never be send-after-close - clear the marker instead of
-		// claiming a guaranteed panic.
+		// never be send-after-close - skip this send only. The close
+		// marker must survive so a later NON-exclusive send is still
+		// checked against the same close (it can execute after it).
 		if haveClose && op.op == "send" {
 			if col.mutuallyExclusive(closeOp, op) {
-				haveClose = false
 				continue
 			}
 			return []channelSafetyInstance{{
