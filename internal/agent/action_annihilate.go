@@ -272,12 +272,20 @@ func (s *actionAnnihilateState) checkUndoEditAnnihilation(currentArgs json.RawMe
 // cancellation. Only a path consisting solely of git_checkout hops back to
 // the same branch is flagged (A → B → A, or A → B → C → A).
 //
+// #2675: the matching same-branch prior additionally requires at least one
+// different-branch hop (the B leg) in between. Without it, an idempotent
+// re-checkout (A → A) -- and the failed-retry variant, since failed calls
+// are no longer recorded at the wiring level -- fired "branch thrashing"
+// with a factually false net-zero claim; a checkout back to where you
+// already are undoes nothing.
+//
 // Caller must hold s.mu.
 func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs json.RawMessage, iteration int) string {
 	currentBranch := extractStringField(currentArgs, "branch")
 	if currentBranch == "" {
 		return ""
 	}
+	sawDifferentHop := false
 	for i := len(s.actions) - 1; i >= 0; i-- {
 		prior := s.actions[i]
 		if prior.tool != "git_checkout" {
@@ -286,7 +294,14 @@ func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs j
 			return ""
 		}
 		if extractStringField(prior.args, "branch") != currentBranch {
-			continue // a different branch hop; keep scanning checkouts only
+			sawDifferentHop = true // the B leg of a true roundtrip
+			continue               // a different branch hop; keep scanning checkouts only
+		}
+		if !sawDifferentHop {
+			// Same-branch prior with no different-branch hop in between:
+			// idempotent re-checkout, not a roundtrip (#2675). Keep scanning
+			// for an earlier A that DOES have a B leg between it and now.
+			continue
 		}
 		s.cancelCount++
 		if s.warnsIssued >= s.maxWarns {
