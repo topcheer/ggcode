@@ -2084,6 +2084,16 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     service = svc;
     _sessionId = sessionId;
     _liveUrl = url;
+    // #2627: refresh the pending URL so the resume_ack/session_info events
+    // triggered by sendResumeHello below register THIS connection's URL.
+    // Without it, a stale _pendingWorkspaceUrl left by the previous
+    // foreground connection wins the pending-first precedence in
+    // registerLiveSession (workspace_cache.dart url override) and pollutes
+    // the session record + SQLite with a URL whose token belongs to a
+    // different connection.
+    if (url.isNotEmpty) {
+      ref.read(workspaceCacheProvider.notifier).setPendingUrl(url);
+    }
 
     // Restore last known event ID from workspace cache for this session
     final cache = ref.read(workspaceCacheProvider);
