@@ -231,8 +231,13 @@ func cvPathMatchesPattern(path, pattern string) bool {
 	pat := strings.TrimPrefix(pattern, "/")
 	pat = strings.TrimSuffix(pat, "/")
 
-	// Direct prefix match.
-	if strings.HasPrefix(p, pat) {
+	// Prefix match at segment boundary only (#2671): the bare
+	// strings.HasPrefix here matched same-stem siblings at the path head
+	// ("auth" hit "authentication/config.go"), violating the segment-boundary
+	// contract the component loop below documents. A head match is valid only
+	// when the pattern IS the full first segment (equal, or followed by '/').
+	if len(p) >= len(pat) && strings.HasPrefix(p, pat) &&
+		(len(p) == len(pat) || p[len(pat)] == '/') {
 		return true
 	}
 	// Path component match: pattern is a directory/module name.
