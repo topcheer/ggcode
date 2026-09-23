@@ -25,6 +25,7 @@ const (
 	cachePrompts
 	cacheResources
 	cacheResourceRead
+	cacheResourceTemplates
 )
 
 type listingCacheEntry struct {
@@ -146,6 +147,7 @@ func (c *Client) cacheInvalidateForNotification(method string, params json.RawMe
 		return true
 	case "notifications/resources/list_changed":
 		c.listingCache.invalidateKind(cacheResources)
+		c.listingCache.invalidateKind(cacheResourceTemplates)
 		return true
 	case "notifications/resources/updated":
 		var p struct {

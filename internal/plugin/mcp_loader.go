@@ -29,17 +29,18 @@ const (
 )
 
 type MCPServerInfo struct {
-	Name          string
-	Transport     string
-	Source        string
-	ToolNames     []string
-	PromptNames   []string
-	ResourceNames []string
-	Status        MCPStatus
-	Error         string
-	Migrated      bool
-	Disabled      bool
-	OAuthRequired bool
+	Name                  string
+	Transport             string
+	Source                string
+	ToolNames             []string
+	PromptNames           []string
+	ResourceNames         []string
+	ResourceTemplateNames []string
+	Status                MCPStatus
+	Error                 string
+	Migrated              bool
+	Disabled              bool
+	OAuthRequired         bool
 }
 
 // MCPOAuthRequiredError signals that OAuth is needed for an MCP server.
@@ -62,11 +63,12 @@ type MCPPlugin struct {
 	awaitingOAuth bool
 	// closed is set once Close() has run (#1285): watchers must not start
 	// and reconnect cycles must not resurrect the plugin afterwards.
-	closed    bool
-	status    MCPStatus
-	lastError string
-	prompts   []string
-	resources []string
+	closed            bool
+	status            MCPStatus
+	lastError         string
+	prompts           []string
+	resources         []string
+	resourceTemplates []string
 
 	// Resource subscription state (MCP 2025-06-18). subscribed tracks URIs
 	// with an in-flight or confirmed resources/subscribe request so repeated
@@ -249,7 +251,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	tools, prompts, resources, err := discoverCapabilities(ctx, client)
+	tools, prompts, resources, templates, err := discoverCapabilities(ctx, client)
 	if err != nil {
 		var oauthErr *mcp.OAuthRequiredError
 		if errors.As(err, &oauthErr) {
@@ -294,6 +296,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.toolsHash = computeToolsHash(tools)
 	m.prompts = prompts
 	m.resources = resources
+	m.resourceTemplates = templates
 	m.setupNotificationHandler(client)
 	// MCP 2026-07-28: self-detecting upgrade to the correlated subscription
 	// stream (subscriptions/listen) is deferred to postConnect — it runs on
@@ -475,12 +478,14 @@ func (m *MCPPlugin) refreshResources(client *mcp.Client) {
 	defer cancel()
 
 	resources := listResourceNames(client.ListResources(ctx))
+	templates := listResourceTemplateNames(client.ListResourceTemplates(ctx))
 
 	m.mu.Lock()
 	m.resources = resources
+	m.resourceTemplates = templates
 	m.mu.Unlock()
 
-	debug.Log("mcp-notif", "server=%s resources refreshed: %d items", m.cfg.Name, len(resources))
+	debug.Log("mcp-notif", "server=%s resources refreshed: %d items, %d templates", m.cfg.Name, len(resources), len(templates))
 }
 
 // startReconnectWatcher launches a goroutine that monitors the stdio MCP
@@ -619,11 +624,12 @@ func (m *MCPPlugin) attemptReconnect(ctx context.Context) bool {
 	return false
 }
 
-func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinition, []string, []string, error) {
+func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDefinition, []string, []string, []string, error) {
 	type result struct {
 		tools     []mcp.ToolDefinition
 		prompts   []string
 		resources []string
+		templates []string
 		err       error
 	}
 	done := make(chan result, 1)
@@ -646,14 +652,15 @@ func discoverCapabilities(ctx context.Context, client *mcp.Client) ([]mcp.ToolDe
 			tools:     tools,
 			prompts:   listPromptNames(client.ListPrompts(ctx)),
 			resources: listResourceNames(client.ListResources(ctx)),
+			templates: listResourceTemplateNames(client.ListResourceTemplates(ctx)),
 		}
 	})
 	select {
 	case <-ctx.Done():
 		client.Abort()
-		return nil, nil, nil, ctx.Err()
+		return nil, nil, nil, nil, ctx.Err()
 	case res := <-done:
-		return res.tools, res.prompts, res.resources, res.err
+		return res.tools, res.prompts, res.resources, res.templates, res.err
 	}
 }
 
@@ -702,14 +709,15 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	info := MCPServerInfo{
-		Name:          m.cfg.Name,
-		Transport:     firstNonEmpty(strings.ToLower(strings.TrimSpace(m.cfg.Type)), "stdio"),
-		Source:        firstNonEmpty(m.cfg.Source, "ggcode"),
-		Status:        m.status,
-		Error:         m.lastError,
-		Migrated:      m.cfg.Migrated,
-		PromptNames:   append([]string(nil), m.prompts...),
-		ResourceNames: append([]string(nil), m.resources...),
+		Name:                  m.cfg.Name,
+		Transport:             firstNonEmpty(strings.ToLower(strings.TrimSpace(m.cfg.Type)), "stdio"),
+		Source:                firstNonEmpty(m.cfg.Source, "ggcode"),
+		Status:                m.status,
+		Error:                 m.lastError,
+		Migrated:              m.cfg.Migrated,
+		PromptNames:           append([]string(nil), m.prompts...),
+		ResourceNames:         append([]string(nil), m.resources...),
+		ResourceTemplateNames: append([]string(nil), m.resourceTemplates...),
 	}
 	if m.adapter != nil {
 		info.ToolNames = m.adapter.ToolNames()
@@ -1030,13 +1038,14 @@ func (m *MCPManager) SnapshotMCP() []tool.MCPServerSnapshot {
 	out := make([]tool.MCPServerSnapshot, 0, len(infos))
 	for _, info := range infos {
 		out = append(out, tool.MCPServerSnapshot{
-			Name:          info.Name,
-			Connected:     info.Status == MCPStatusConnected,
-			Pending:       info.Status == MCPStatusPending,
-			Error:         info.Error,
-			ToolNames:     append([]string(nil), info.ToolNames...),
-			PromptNames:   append([]string(nil), info.PromptNames...),
-			ResourceNames: append([]string(nil), info.ResourceNames...),
+			Name:                  info.Name,
+			Connected:             info.Status == MCPStatusConnected,
+			Pending:               info.Status == MCPStatusPending,
+			Error:                 info.Error,
+			ToolNames:             append([]string(nil), info.ToolNames...),
+			PromptNames:           append([]string(nil), info.PromptNames...),
+			ResourceNames:         append([]string(nil), info.ResourceNames...),
+			ResourceTemplateNames: append([]string(nil), info.ResourceTemplateNames...),
 		})
 	}
 	return out
@@ -1809,6 +1818,31 @@ func listResourceNames(resources []mcp.ResourceDefinition, err error) []string {
 		}
 		if name != "" {
 			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// listResourceTemplateNames extracts sorted display names for resource
+// templates: "name (uriTemplate)" when named, else the raw uriTemplate.
+// Resource templates are an older-server-optional method, so any error
+// (including -32601 method-not-found) degrades to "no templates".
+func listResourceTemplateNames(templates []mcp.ResourceTemplate, err error) []string {
+	if isOptionalCapabilityUnavailable(err) || err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(templates))
+	for _, tmpl := range templates {
+		uri := strings.TrimSpace(tmpl.URITemplate)
+		if uri == "" {
+			continue
+		}
+		name := strings.TrimSpace(tmpl.Name)
+		if name == "" {
+			names = append(names, uri)
+		} else {
+			names = append(names, fmt.Sprintf("%s (%s)", name, uri))
 		}
 	}
 	sort.Strings(names)
