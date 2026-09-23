@@ -889,6 +889,14 @@ func (h *OAuthHandler) StartAuthFlow(ctx context.Context) (string, error) {
 	h.mu.Lock()
 	h.state.codeVerifier = verifier
 	state := h.state.state
+	if h.state.authorizationServerMeta == nil {
+		// Hydrated state without AS metadata (e.g. credentials restored from
+		// the store, or a caller racing ahead of discovery): the deref below
+		// would panic. Mirror the NeedsDiscovery contract and fail with a
+		// self-correctable error instead.
+		h.mu.Unlock()
+		return "", fmt.Errorf("oauth state not initialized (discovery incomplete)")
+	}
 	authEndpoint := h.state.authorizationServerMeta.AuthorizationEndpoint
 	clientID := ""
 	if h.state.clientRegistration != nil {
