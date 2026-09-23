@@ -477,7 +477,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/mode":          "Set permission mode (supervised|plan|auto|bypass|autopilot)",
 	"/allow":         "Always allow a specific tool",
 	"/export":        "Export session to markdown file",
-	"/export-trace":  "Export session execution trace as JSON",
+	"/export-trace":  "Export session execution trace as JSON (--otel for OTLP/GenAI format)",
 	"/bug":           "Report a bug with diagnostics",
 	"/config":        "View/modify configuration",
 	"/reflect":       "Show recent run reflections",

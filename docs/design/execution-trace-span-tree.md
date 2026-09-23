@@ -141,3 +141,29 @@ The output JSON can be:
 - Parsed with `jq` for quick analysis
 - Imported into Langfuse/LangSmith-compatible tools
 - Diffed across sessions to detect latency regressions
+
+## OTLP/GenAI Export (`otel_export.go`)
+
+**Added sa-153**: `/export-trace --otel [id]` renders the same metric events as an
+OTLP/HTTP (protobuf-JSON) trace document following the OpenTelemetry GenAI
+semantic conventions, so the output can be POSTed directly to an OTLP endpoint
+(OpenTelemetry Collector `:4318`, Jaeger, Grafana Tempo/Cloud, Langfuse) with no
+conversion step. Output file: `trace-<session-id>.otel.json`.
+
+Mapping (from the existing span tree):
+
+| Span kind | Span name | GenAI attributes |
+|-----------|-----------|------------------|
+| session root | `agent.run` | `gen_ai.agent.name=ggcode`, `session.id` |
+| turn | `turn N` | `session.id` |
+| llm | `chat <model>` | `gen_ai.operation.name=chat`, `gen_ai.system`, `gen_ai.request.model`/`gen_ai.response.model`, `gen_ai.usage.input_tokens`/`output_tokens`, `gen_ai.conversation.id`; ggcode extras (`ggcode.ttft_ms`, `ggcode.think_time_ms`, `ggcode.cache.*`) keep a `ggcode.` namespace prefix |
+| tool | `execute_tool <tool>` | `gen_ai.operation.name=execute_tool`, `gen_ai.tool.name`; failures carry `error.type=tool_failure` and a `STATUS_CODE_ERROR` span status |
+
+Notes:
+- The trace ID is deterministic (SHA-1 of the session ID, 16 bytes) so
+  re-exports stay diff-able; span IDs reuse the existing deterministic span IDs.
+- Vendor mapping: `google` -> `gemini`; unknown vendors pass through lowercased
+  per the semconv guidance for custom systems.
+- Integer attributes are encoded as decimal strings per the protobuf-JSON
+  mapping for 64-bit integers.
+- The default export format is unchanged; `--otel` / `--otlp` is opt-in.
