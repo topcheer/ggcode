@@ -326,6 +326,7 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 		"scp host:/tmp/gen.go ./internal/gen/gen.go",
 		"tar -xzf vendor.tar.gz",
 		"unzip assets.zip",
+		"go generate ./...",
 	}
 	for _, cmd := range mutating {
 		if !shellMutatesSources(cmd) {

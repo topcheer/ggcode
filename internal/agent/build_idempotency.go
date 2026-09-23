@@ -379,6 +379,9 @@ func shellMutatesSources(cmd string) bool {
 		"curl -o", "curl --output", "wget -o", "wget --output-document",
 		"rsync ", "scp ",
 		"tar -x", "unzip ",
+		// #2655: the one enumerable generator entry point -- `go generate`
+		// runs arbitrary generator scripts whose output lands on sources.
+		"go generate",
 	} {
 		if strings.Contains(lower, pat) {
 			return true
