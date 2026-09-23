@@ -204,3 +204,30 @@ func TestCountLines(t *testing.T) {
 		}
 	}
 }
+
+// TestManagerSavePersistsToDisk verifies the Manager→Persist write-through:
+// a Manager with SetPersist mirrors every Save to the session's on-disk
+// record; a Manager without one keeps working unchanged (persist is nil).
+func TestManagerSavePersistsToDisk(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(10)
+	m.SetPersist(NewPersist(dir, "s-mgr"))
+	m.StartRun("run-1")
+	cp := m.SaveWithExistence("/p/x.go", "old body", "new body", "edit_file", true)
+
+	got, err := LoadSessionRecords(dir, "s-mgr")
+	if err != nil {
+		t.Fatalf("LoadSessionRecords: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != cp.ID || got[0].OldContent != "old body" || got[0].RunID != "run-1" {
+		t.Fatalf("persisted record mismatch: %+v (cp %+v)", got, cp)
+	}
+
+	// A manager without persistence must not touch the store.
+	m2 := NewManager(10)
+	m2.Save("/p/y.go", "a", "b", "edit_file")
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("persist-less manager wrote %d store files, want 1", len(entries))
+	}
+}
