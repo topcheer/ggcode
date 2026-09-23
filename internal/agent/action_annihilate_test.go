@@ -163,6 +163,58 @@ func TestActionAnnihilate_GitCheckoutDifferentBranches(t *testing.T) {
 	}
 }
 
+// TestActionAnnihilate_GitCheckoutRoundtrip_ReferenceWorkflow (#2634):
+// checkout feature → edit → checkout release-ref → read (reference lookup,
+// substantive work) → checkout feature must NOT warn. The whole flow has
+// real output; only the barrier-free generic matcher flagged it before.
+func TestActionAnnihilate_GitCheckoutRoundtrip_ReferenceWorkflow(t *testing.T) {
+	s := newActionAnnihilateState()
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "feature"}), 1)
+	s.recordToolCall("edit_file", rawJSON(t, map[string]interface{}{"file_path": "/tmp/a.go"}), 2)
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "release-1.0"}), 3)
+	s.recordToolCall("read_file", rawJSON(t, map[string]interface{}{"path": "/tmp/ref.go"}), 4)
+	s.recordToolCall("grep", rawJSON(t, map[string]interface{}{"pattern": "foo"}), 5)
+	warn := s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "feature"}), 6)
+
+	if warn != "" {
+		t.Fatal("expected no warning: substantive work between checkouts is legitimate branch navigation")
+	}
+	if s.cancelCount != 0 {
+		t.Errorf("expected cancelCount=0, got %d", s.cancelCount)
+	}
+}
+
+// TestActionAnnihilate_GitCheckoutRoundtrip_EditBetweenBarriers (#2634):
+// even a single non-checkout action (edit on the detour branch) breaks the
+// roundtrip pairing.
+func TestActionAnnihilate_GitCheckoutRoundtrip_EditBetweenBarriers(t *testing.T) {
+	s := newActionAnnihilateState()
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 1)
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "feature"}), 2)
+	s.recordToolCall("edit_file", rawJSON(t, map[string]interface{}{"file_path": "/tmp/b.go"}), 3)
+	warn := s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 4)
+
+	if warn != "" {
+		t.Fatal("expected no warning: edit between checkouts is a barrier")
+	}
+}
+
+// TestActionAnnihilate_GitCheckoutRoundtrip_MultiHopThrash (#2634):
+// A → B → C → A with only checkout hops in between is still pure thrashing
+// and must fire.
+func TestActionAnnihilate_GitCheckoutRoundtrip_MultiHopThrash(t *testing.T) {
+	s := newActionAnnihilateState()
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 1)
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "feature"}), 2)
+	s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "hotfix"}), 3)
+	warn := s.recordToolCall("git_checkout", rawJSON(t, map[string]interface{}{"branch": "main"}), 4)
+
+	if warn == "" {
+		t.Fatal("expected warning for all-checkout multi-hop roundtrip")
+	}
+	assertContains(t, warn, "branch thrashing")
+}
+
 func TestActionAnnihilate_NoAnnihilation(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("read_file", rawJSON(t, map[string]interface{}{"path": "/tmp/a.go"}), 1)
