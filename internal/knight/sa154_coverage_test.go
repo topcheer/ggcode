@@ -400,14 +400,15 @@ func TestSa154RejectFeedbackLoad(t *testing.T) {
 		}
 	}
 
-	// Corrupt line: decode stops there, so trailing entries are not loaded and
-	// the end-of-load trim is skipped (early return). Assert current behavior.
+	// Corrupt line: skipped, trailing entries still load and the end-of-load
+	// trim still runs (sa-161 fix; previously the early return dropped the
+	// trailing entry and kept the stale one).
 	corruptPath := filepath.Join(dir, "corrupt.jsonl")
 	writeLines(corruptPath, stale, "this is not json", fresh)
 	s := newRejectFeedbackStore(corruptPath)
 	s.load()
-	if len(s.entries) != 1 || s.entries[0].Name != "old-skill" {
-		t.Fatalf("corrupt-file load = %+v, want decode to stop at [old-skill]", s.entries)
+	if len(s.entries) != 1 || s.entries[0].Name != "fresh-skill" {
+		t.Fatalf("corrupt-file load = %+v, want corrupt line skipped + stale trimmed, only [fresh-skill]", s.entries)
 	}
 	before := len(s.entries)
 	s.load() // idempotent
