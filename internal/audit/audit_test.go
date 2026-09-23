@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -334,5 +335,232 @@ func TestHashCoversErrorText(t *testing.T) {
 	e2.Err = "boom"
 	if hashEntry(e1) == hashEntry(e2) {
 		t.Fatal("hashes must differ when only Err differs")
+	}
+}
+
+// Path returns exactly the path the ledger was opened with.
+func TestLedgerPath(t *testing.T) {
+	l, path := mkLedger(t)
+	if l.Path() != path {
+		t.Errorf("Path() = %q, want %q", l.Path(), path)
+	}
+}
+
+// Opening a ledger whose parent directory does not exist fails with a
+// wrapped error instead of panicking.
+func TestOpenMissingDirErrors(t *testing.T) {
+	_, err := Open(filepath.Join(t.TempDir(), "missing", "audit.jsonl"), "s")
+	if err == nil {
+		t.Fatal("expected error opening a ledger in a missing directory")
+	}
+	if !strings.Contains(err.Error(), "open ledger") {
+		t.Errorf("err = %v, want wrapped 'open ledger' error", err)
+	}
+}
+
+// A write failure (here: the underlying fd closed behind the ledger's back,
+// simulating an I/O error such as a yanked disk) is returned to the caller,
+// yields a zero Entry, and must not advance the chain head.
+func TestAppendWriteError(t *testing.T) {
+	l, _ := mkLedger(t)
+	first, err := l.Append(ev("a", StatusOK))
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	// Close the raw file handle without going through Ledger.Close so the
+	// next Append hits the write-error path with l.f still non-nil.
+	if err := l.f.Close(); err != nil {
+		t.Fatalf("raw close: %v", err)
+	}
+	e, err := l.Append(ev("b", StatusOK))
+	if err == nil {
+		t.Fatal("expected write error on a closed fd")
+	}
+	if !strings.Contains(err.Error(), "write entry") {
+		t.Errorf("err = %v, want wrapped 'write entry' error", err)
+	}
+	if e != (Entry{}) {
+		t.Errorf("failed Append returned %+v, want zero Entry", e)
+	}
+	// The chain head must be unchanged: the in-memory seq/prev still point
+	// at the last successfully persisted entry.
+	if l.seq != first.Seq || l.prev != first.Hash {
+		t.Errorf("chain head advanced past failed write: seq=%d prev=%s", l.seq, l.prev)
+	}
+}
+
+// The per-event Session override wins over the ledger's session; an empty
+// Event.Session falls back to the ledger's. Both persist correctly.
+func TestSessionOverride(t *testing.T) {
+	l, path := mkLedger(t) // ledger session "sess-1"
+	overridden, err := l.Append(Event{Tool: "a", Status: StatusOK, Session: "sess-2"})
+	if err != nil {
+		t.Fatalf("Append override: %v", err)
+	}
+	fallback, err := l.Append(ev("b", StatusOK))
+	if err != nil {
+		t.Fatalf("Append fallback: %v", err)
+	}
+	if overridden.Session != "sess-2" {
+		t.Errorf("overridden session = %q, want sess-2", overridden.Session)
+	}
+	if fallback.Session != "sess-1" {
+		t.Errorf("fallback session = %q, want sess-1", fallback.Session)
+	}
+	entries, err := scanEntries(path)
+	if err != nil {
+		t.Fatalf("scanEntries: %v", err)
+	}
+	if entries[0].Session != "sess-2" || entries[1].Session != "sess-1" {
+		t.Errorf("persisted sessions = %q, %q; want sess-2, sess-1", entries[0].Session, entries[1].Session)
+	}
+	if rep, err := Verify(path); err != nil || !rep.OK() {
+		t.Errorf("Verify = %+v, %v; want clean", rep, err)
+	}
+}
+
+// writeHeadFile surfaces tmp-write failures (missing parent directory).
+func TestWriteHeadFileMissingDir(t *testing.T) {
+	err := writeHeadFile(filepath.Join(t.TempDir(), "missing", "audit.jsonl.head"), headFile{Version: headVersion})
+	if err == nil {
+		t.Fatal("expected error writing head file into a missing directory")
+	}
+	if !strings.Contains(err.Error(), "write head") {
+		t.Errorf("err = %v, want wrapped 'write head' error", err)
+	}
+}
+
+// Verify fails hard (returns an error) only when the ledger file itself is
+// unreadable — e.g. a directory — not for content-level problems.
+func TestVerifyUnreadablePath(t *testing.T) {
+	_, err := Verify(t.TempDir()) // a directory: os.ReadFile errors, not IsNotExist
+	if err == nil {
+		t.Fatal("expected an error verifying a directory path")
+	}
+	if !strings.Contains(err.Error(), "read ledger") {
+		t.Errorf("err = %v, want wrapped 'read ledger' error", err)
+	}
+}
+
+// A .head sidecar with an unknown schema version is recognized as an anchor
+// (HeadAnchored=true) but its seq is ignored for truncation verdicts.
+func TestHeadFileUnknownVersionIgnoredForTruncation(t *testing.T) {
+	l, path := mkLedger(t)
+	if _, err := l.Append(ev("a", StatusOK)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	l.Close()
+	// Hand-craft a v999 anchor claiming seq 100 — far beyond the file.
+	data, err := json.Marshal(headFile{Version: 999, Seq: 100, Hash: "deadbeef", Time: "t"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path+".head", data, 0o600); err != nil {
+		t.Fatalf("write head: %v", err)
+	}
+	rep, err := Verify(path)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.HeadAnchored {
+		t.Error("HeadAnchored should be true: the sidecar exists")
+	}
+	if rep.Truncated != nil {
+		t.Errorf("Truncated = %+v, want nil (unknown anchor version ignored)", rep.Truncated)
+	}
+	if !rep.OK() {
+		t.Errorf("OK() = false, want true: %+v", rep)
+	}
+}
+
+// A corrupt (unparseable) .head sidecar does not fail Verify and does not
+// claim anchoring.
+func TestHeadFileCorruptJSON(t *testing.T) {
+	l, path := mkLedger(t)
+	if _, err := l.Append(ev("a", StatusOK)); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	l.Close()
+	if err := os.WriteFile(path+".head", []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write head: %v", err)
+	}
+	rep, err := Verify(path)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.HeadAnchored {
+		t.Error("HeadAnchored should be false for an unparseable sidecar")
+	}
+	if rep.Truncated != nil {
+		t.Errorf("Truncated = %+v, want nil", rep.Truncated)
+	}
+	if !rep.OK() {
+		t.Errorf("OK() = false, want true: %+v", rep)
+	}
+}
+
+// LastHash stays at the last VERIFIED entry: after an in-place edit at seq 2
+// of 4, the report still counts 4 scanned entries but carries entry 1's hash.
+func TestLastHashStopsAtBreak(t *testing.T) {
+	l, path := mkLedger(t)
+	var hash1 string
+	for i := 0; i < 4; i++ {
+		e, err := l.Append(ev(fmt.Sprintf("tool_%d", i), StatusOK))
+		if err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		if i == 0 {
+			hash1 = e.Hash
+		}
+	}
+	l.Close()
+	data, _ := os.ReadFile(path)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	lines[1] = strings.Replace(lines[1], `"tool_1"`, `"evil"`, 1)
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+
+	rep, err := Verify(path)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.FirstBreak == nil || rep.FirstBreak.Seq != 2 {
+		t.Fatalf("FirstBreak = %+v, want break at seq 2", rep.FirstBreak)
+	}
+	if rep.Entries != 4 {
+		t.Errorf("Entries = %d, want 4 (file scanned fully)", rep.Entries)
+	}
+	if rep.LastHash != hash1 {
+		t.Errorf("LastHash = %s, want entry 1's hash %s", rep.LastHash, hash1)
+	}
+}
+
+// Periodic anchoring mid-session: entries appended AFTER the anchor make the
+// file longer than the anchor — the opposite of truncation — and must stay
+// clean.
+func TestAnchorThenMoreAppendsStaysClean(t *testing.T) {
+	l, path := mkLedger(t)
+	for i := 0; i < 2; i++ {
+		if _, err := l.Append(ev("tool", StatusOK)); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	if err := l.Anchor(); err != nil {
+		t.Fatalf("Anchor: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := l.Append(ev("tool", StatusOK)); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	l.Close()
+	rep, err := Verify(path)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK() {
+		t.Errorf("report = %+v, want clean", rep)
+	}
+	if !rep.HeadAnchored {
+		t.Error("expected HeadAnchored = true")
 	}
 }
