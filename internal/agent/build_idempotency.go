@@ -336,8 +336,34 @@ func shellMutatesSources(cmd string) bool {
 			if i+1 < len(toks) {
 				redirect = toks[i+1]
 			}
+		// #2664: fd-prefixed forms (`2> err.log`, `1> out.txt`, `2>> log`)
+		// and the bash aggregation forms (`&> log`, `>& log`, `2>&1`) write
+		// files exactly like the bare `>` the old scan handled. Without this
+		// branch a `go build ./... 2> build.err` run returned false, so all
+		// three #1486 consumers (commandCache invalidation, edit counter,
+		// reverify) mis-trusted a session that HAD written to the tree - a
+		// stale [cached] replay with a literally false "no source files have
+		// changed" note, same shape as #1678 case 1. These cases must preced
+		// the bare HasPrefix ">" arm: `>&` starts with `>` and would be
+		// mis-parsed as target "&".
+		case tok == "&>" || tok == ">&":
+			// Aggregation forms swallow BOTH streams; only a following
+			// file-shaped token mutates (`&> /dev/null` is noise suppression).
+			if i+1 < len(toks) {
+				redirect = toks[i+1]
+			}
+		case (tok == "2>" || tok == "1>") && i+1 < len(toks):
+			redirect = toks[i+1]
+		case tok == "2>>" && i+1 < len(toks):
+			redirect = toks[i+1]
 		case strings.HasPrefix(tok, ">"):
 			redirect = tok[1:]
+		case strings.HasPrefix(tok, "2>") && len(tok) > 2:
+			redirect = tok[2:] // `2>file` attached form
+		case strings.HasPrefix(tok, "1>") && len(tok) > 2:
+			redirect = tok[2:] // `1>file` attached form
+		case strings.HasPrefix(tok, "&>") && len(tok) > 2:
+			redirect = tok[2:] // `&>file` attached form
 		}
 		if redirect == "" {
 			continue
