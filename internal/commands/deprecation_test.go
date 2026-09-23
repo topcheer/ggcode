@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -68,5 +70,24 @@ func TestDeprecationAdvisory(t *testing.T) {
 	}
 	if got := (*Command)(nil).DeprecationAdvisory(); got != "" {
 		t.Fatalf("nil receiver advisory = %q, want empty", got)
+	}
+}
+
+func TestLoadCommandFileDeprecatedMapping(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old-flow.md")
+	content := "---\nname: old-flow\ndescription: Old workflow\ndeprecated: true\nreplaced_by: new-flow\n---\n\nBody instructions.\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd, ok := loadCommandFile(path, "old-flow", loadTarget{Dir: dir, Source: SourceProject, LoadedFrom: LoadedFromSkills})
+	if !ok || cmd == nil {
+		t.Fatal("expected command to load")
+	}
+	if !cmd.Deprecated {
+		t.Fatal("expected Command.Deprecated to be mapped from frontmatter")
+	}
+	if cmd.ReplacedBy != "new-flow" {
+		t.Fatalf("Command.ReplacedBy = %q, want %q", cmd.ReplacedBy, "new-flow")
 	}
 }
