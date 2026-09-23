@@ -1,6 +1,7 @@
 package knight
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -58,15 +60,27 @@ func (s *rejectFeedbackStore) load() {
 		return
 	}
 	defer f.Close()
-	dec := json.NewDecoder(f)
-	for dec.More() {
+	// Scan line by line so a single corrupt line (e.g. a torn write from a
+	// crash mid-append) neither discards the remaining entries nor, via an
+	// early return, skips the end-of-load trim (sa-161 fix).
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 512*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
 		var entry rejectFeedbackEntry
-		if err := dec.Decode(&entry); err != nil {
-			return
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			debug.Log("knight", "reject feedback %s: skipping corrupt line: %v", filepath.Base(s.path), err)
+			continue
 		}
 		s.entries = append(s.entries, entry)
 	}
-	s.trimOld(time.Time{}) // trim stale entries on load
+	if err := sc.Err(); err != nil {
+		debug.Log("knight", "reject feedback %s: scan error: %v", filepath.Base(s.path), err)
+	}
+	s.trimOld(time.Time{}) // always trim stale entries on load
 }
 
 // Append persists a new feedback entry and returns the stored copy.
