@@ -116,6 +116,55 @@ loop:
 	}
 }
 
+// ---- Session header survives impersonation (#sa-142 regression) ------------
+
+func TestSA142_SessionHeaderSurvivesImpersonation(t *testing.T) {
+	// Production order: agent startup sets GGCode-SessionID, then the
+	// impersonation panel replaces the whole header set with one that has
+	// no session ID. All three header-mutable providers must carry the
+	// session header over instead of silently dropping it.
+	makeHeaders := func() http.Header {
+		h := http.Header{}
+		h.Set("User-Agent", "imp/1.0")
+		return h
+	}
+
+	ap := newSA142AnthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":"msg_s","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	})
+	ap.SetSessionID("sess-a")
+	ap.UpdateRuntimeHeaders(makeHeaders())
+	if snap := ap.transport.snapshotHeaders(); snap.Get("GGCode-SessionID") != "sess-a" || snap.Get("User-Agent") != "imp/1.0" {
+		t.Fatalf("anthropic headers = %v", snap)
+	}
+
+	gp, err := NewGeminiProviderWithBaseURL("k", "m", 10, "http://127.0.0.1:9")
+	if err != nil {
+		t.Fatalf("gemini: %v", err)
+	}
+	gp.SetSessionID("sess-g")
+	gp.UpdateRuntimeHeaders(makeHeaders())
+	if snap := gp.transport.snapshotHeaders(); snap.Get("GGCode-SessionID") != "sess-g" || snap.Get("User-Agent") != "imp/1.0" {
+		t.Fatalf("gemini headers = %v", snap)
+	}
+
+	op := NewOpenAIProviderWithBaseURL("k", "m", 10, "http://127.0.0.1:9/v1")
+	op.SetSessionID("sess-o")
+	op.UpdateRuntimeHeaders(makeHeaders())
+	if snap := op.transport.snapshotHeaders(); snap.Get("GGCode-SessionID") != "sess-o" || snap.Get("User-Agent") != "imp/1.0" {
+		t.Fatalf("openai headers = %v", snap)
+	}
+
+	// An explicit session ID in the new set wins over the carried-over one.
+	h := makeHeaders()
+	h.Set("GGCode-SessionID", "sess-explicit")
+	ap.UpdateRuntimeHeaders(h)
+	if snap := ap.transport.snapshotHeaders(); snap.Get("GGCode-SessionID") != "sess-explicit" {
+		t.Fatalf("explicit session id = %v", snap)
+	}
+}
+
 // ---- Remaining zero-coverage leaves ------------------------------------------
 
 func TestSA142_ZeroCoverageLeaves(t *testing.T) {

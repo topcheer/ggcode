@@ -145,13 +145,14 @@ func TestSA142_GeminiChatTextAndToolCall(t *testing.T) {
 	}
 	p.SetReasoningEffort("")
 
-	// Session ID + runtime headers. UpdateRuntimeHeaders REPLACES the
-	// injected header set, so it must run BEFORE SetSessionID or the
-	// session header is clobbered.
+	// Session ID + runtime headers. SetSessionID runs first (production
+	// order: agent startup, then a later impersonation switch); the
+	// impersonation header set has no session ID, and UpdateRuntimeHeaders
+	// must carry the existing one over instead of dropping it.
+	p.SetSessionID("sess-g")
 	h := http.Header{}
 	h.Set("X-G", "1")
 	p.UpdateRuntimeHeaders(h)
-	p.SetSessionID("sess-g")
 	snap := p.transport.snapshotHeaders()
 	if snap.Get("X-G") != "1" || snap.Get("GGCode-SessionID") != "sess-g" {
 		t.Fatalf("gemini headers = %v", snap)
