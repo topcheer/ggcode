@@ -35,13 +35,37 @@ func TestAdaptiveSampling_PhaseClassification(t *testing.T) {
 			wantPhase: phaseCodeEdit,
 		},
 		{
-			name: "errors → errorRecovery",
+			name: "edit-family errors → errorRecovery",
 			entries: []effortEntry{
 				{toolName: "edit_file", isError: true},
-				{toolName: "run_command", isError: true},
+				{toolName: "write_file", isError: true},
 				{toolName: "read_file", isError: false},
 			},
 			wantPhase: phaseErrorRecovery,
+		},
+		{
+			// #2636: read-only exploration misses (grep no-match, file not
+			// found, LSP not ready) are routine exploration results, not
+			// recovery puzzles - they must NOT pin temperature at 0.0.
+			name: "read-only errors → exploration, not errorRecovery",
+			entries: []effortEntry{
+				{toolName: "grep", isError: true},
+				{toolName: "grep", isError: true},
+				{toolName: "read_file", isError: false},
+				{toolName: "read_file", isError: false},
+			},
+			wantPhase: phaseExploration,
+		},
+		{
+			// #2636: build/test failures via run_command are excluded from
+			// error-recovery here too, mirroring effort-side #1436-A.
+			name: "run_command errors alone → not errorRecovery",
+			entries: []effortEntry{
+				{toolName: "run_command", isError: true},
+				{toolName: "run_command", isError: true},
+				{toolName: "run_command", isError: false},
+			},
+			wantPhase: phaseNone,
 		},
 		{
 			name: "creative → creative",
@@ -96,7 +120,7 @@ func TestAdaptiveSampling_RecommendedTemperature(t *testing.T) {
 		}, tempCodeEdit},
 		{"error recovery", []effortEntry{
 			{toolName: "edit_file", isError: true},
-			{toolName: "run_command", isError: true},
+			{toolName: "write_file", isError: true},
 		}, tempErrorRecover},
 		{"creative", []effortEntry{
 			{toolName: "git_commit", isError: false},
@@ -150,7 +174,7 @@ func TestAdaptiveSampling_SlidingWindow(t *testing.T) {
 
 	// Fill beyond window size.
 	for i := 0; i < adaptiveSamplingWindow+5; i++ {
-		s.recordToolResult("read_file", false)
+		s.recordToolResultErr("read_file", false, "")
 	}
 
 	if len(s.entries) != adaptiveSamplingWindow {
@@ -160,8 +184,8 @@ func TestAdaptiveSampling_SlidingWindow(t *testing.T) {
 
 func TestAdaptiveSampling_Reset(t *testing.T) {
 	s := newAdaptiveSamplingState()
-	s.recordToolResult("edit_file", false)
-	s.recordToolResult("read_file", false)
+	s.recordToolResultErr("edit_file", false, "")
+	s.recordToolResultErr("read_file", false, "")
 
 	s.reset()
 	if len(s.entries) != 0 {
