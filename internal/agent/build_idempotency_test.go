@@ -310,6 +310,22 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 		"dd if=img of=loader.go",
 		"install -m 644 gen.go dest.go",
 		"patch < fix.diff",
+		// #2655: branch switching and history-advancing rewrites -- the
+		// old narrow "git checkout --"/"." patterns let a stale commandCache
+		// replay `go test` results across branch switches.
+		"git checkout feature-x",
+		"git checkout -b hotfix",
+		"git switch main",
+		"git pull origin main",
+		"git merge --ff-only origin/main",
+		// #2655: download targets and archive extractors landing on sources.
+		"curl -o schema.go https://example.com/schema.json",
+		"curl --output config.yaml https://example.com/cfg",
+		"wget -O list.txt https://example.com/list",
+		"rsync -av dist/ ./src/",
+		"scp host:/tmp/gen.go ./internal/gen/gen.go",
+		"tar -xzf vendor.tar.gz",
+		"unzip assets.zip",
 	}
 	for _, cmd := range mutating {
 		if !shellMutatesSources(cmd) {
@@ -322,6 +338,11 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 		`grep 'foo > bar' file.go`,
 		"go build ./...",
 		"ls -la",
+		// #2655: read-only git plumbing must stay non-mutating -- git fetch
+		// touches .git internals only, never the working tree.
+		"git fetch origin",
+		"git status",
+		"git log --oneline",
 		// #1875: the canonical noise-suppression idiom - redirecting into
 		// a /dev/* device mutates nothing and must not count.
 		"go build ./... > /dev/null",

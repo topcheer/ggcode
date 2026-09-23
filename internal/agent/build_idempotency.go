@@ -355,13 +355,30 @@ func shellMutatesSources(cmd string) bool {
 	for _, pat := range []string{
 		"tee ",       // tee file.go (no redirection form)
 		"cp ", "mv ", // overwrite/replace targets
-		"git restore",                       // discard local edits
-		"git checkout --", "git checkout .", // revert working tree
+		"git restore", // discard local edits
+		// #2655: `git checkout <branch>` and `git switch` rewrite the
+		// working tree exactly like the file-revert forms they replaced;
+		// missing them made commandCache replay a stale `go test` result
+		// across branch switches. The bare "git checkout " prefix subsumes
+		// the old "--"/"." patterns (and -b).
+		"git checkout ", "git switch ",
 		"git stash", // drop/apply cycles mutate sources
 		"clang-format -i", "perl -pi", "perl -i",
 		" of=", // dd of=file (any position)
 		"install ",
 		"patch <", // patch without -p (stdin form)
+		// #2655: history-advancing rewrites, download targets and archive
+		// extractors. A fast-forward pull/merge rewrites many tracked files
+		// at once; curl -o / wget -O overwrite local files (lowered to -o,
+		// which also covers wget's log-file form -- FP cost is one lost
+		// cache warning); rsync/scp can land files in the tree; tar -x*/
+		// unzip extract archives over existing sources. git fetch is
+		// deliberately absent: it only touches .git internals, never the
+		// working tree.
+		"git pull", "git merge",
+		"curl -o", "curl --output", "wget -o", "wget --output-document",
+		"rsync ", "scp ",
+		"tar -x", "unzip ",
 	} {
 		if strings.Contains(lower, pat) {
 			return true
