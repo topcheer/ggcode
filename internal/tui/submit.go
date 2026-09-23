@@ -127,6 +127,7 @@ func (m *Model) startAgentWithExpand(text string) tea.Cmd {
 		m.lanChatHub.SetAgentBusy(true)
 	}
 	m.rebuildSystemPrompt()
+	m.refreshStatusline() // external statusline refresh at run start (sa-160)
 	imgs := m.pendingImages
 	m.pendingImages = nil
 	ctx, cancel := context.WithCancel(context.Background())

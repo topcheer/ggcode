@@ -376,6 +376,7 @@ type Config struct {
 	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`
 	P2P            P2PConfig                  `yaml:"p2p,omitempty" json:"p2p,omitempty"`
 	OutputStyle    string                     `yaml:"output_style,omitempty" json:"output_style,omitempty"`
+	StatusLine     StatusLineConfig           `yaml:"statusline,omitempty" json:"statusline,omitempty"`
 	Notifications  NotificationConfig         `yaml:"notifications,omitempty" json:"notifications,omitempty"`
 	Fallback       FallbackConfig             `yaml:"fallback,omitempty" json:"fallback,omitempty"`
 	Fallbacks      []FallbackConfig           `yaml:"fallbacks,omitempty" json:"fallbacks,omitempty"`

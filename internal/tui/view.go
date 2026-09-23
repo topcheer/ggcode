@@ -80,6 +80,9 @@ func (m Model) renderView(segs *segmentTimers) tea.View {
 	segs.run("statusBar", func() { statusBar = m.renderStatusBar() })
 	segs.run("deviceBanner", func() { deviceBanner = m.renderDeviceCodeBanner() })
 	segs.run("composer", func() { composer = m.renderComposerPanel() })
+	if sl := m.statuslineBar(); sl != "" {
+		composer += "\n" + sl
+	}
 	segs.run("lanChatBar", func() { lanChatBar = m.renderLanChatNotice() })
 
 	panelH := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
@@ -210,6 +213,9 @@ func (m Model) conversationPanelHeight() int {
 	statusBar := m.renderStatusBar()
 	deviceBanner := m.renderDeviceCodeBanner()
 	composer := m.renderComposerPanel()
+	if sl := m.statuslineBar(); sl != "" {
+		composer += "\n" + sl
+	}
 
 	availableHeight := m.viewHeight() - lipgloss.Height(header) - lipgloss.Height(composer)
 	if actionPanel != "" {

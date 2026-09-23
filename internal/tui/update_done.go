@@ -108,6 +108,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 		m.projMemFiles = m.agent.ProjectMemoryFiles()
 	}
 	m.setLoading(false)
+	(&m).refreshStatusline()    // external statusline refresh at turn end (sa-160)
 	m.remoteInboundAdapter = "" // reset per-channel suppression
 	// Notify LAN Chat peers that our agent is now idle
 	if m.lanChatHub != nil {
