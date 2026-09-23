@@ -82,6 +82,7 @@ type SubAgent struct {
 	Task             string
 	DisplayTask      string
 	Model            string
+	Worktree         string // isolation worktree path (spawn_agent isolation=worktree); "" when not isolated
 	Tools            []string
 	ToolCallCount    int
 	Status           Status
@@ -111,6 +112,7 @@ type Snapshot struct {
 	Task            string
 	DisplayTask     string
 	Model           string
+	Worktree        string
 	Tools           []string
 	ToolCallCount   int
 	Status          Status
@@ -343,6 +345,7 @@ func (s *SubAgent) snapshot() Snapshot {
 		Task:            s.Task,
 		DisplayTask:     s.DisplayTask,
 		Model:           s.Model,
+		Worktree:        s.Worktree,
 		Tools:           append([]string(nil), s.Tools...),
 		ToolCallCount:   s.ToolCallCount,
 		Status:          s.Status,
@@ -656,6 +659,22 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	m.mu.Unlock()
 
 	return id
+}
+
+// SetWorktree records the isolation worktree path for a sub-agent.
+// Called by spawn_agent after the worktree has been created; the path is
+// surfaced through Snapshot so the parent can inspect or merge the
+// sub-agent's edits after the run completes.
+func (m *Manager) SetWorktree(id, path string) {
+	m.mu.Lock()
+	sa, ok := m.agents[id]
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+	sa.mu.Lock()
+	sa.Worktree = path
+	sa.mu.Unlock()
 }
 
 // Get retrieves a sub-agent by ID.

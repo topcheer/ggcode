@@ -48,6 +48,17 @@ RunnerConfig.WorkingDir → agent.SetWorkingDir() after creation
 
 The subagent inherits the main agent's cwd, so file operations work relative to the project root without exploration.
 
+### Filesystem Isolation (`isolation: "worktree"`)
+
+By default the sub-agent edits files directly in the parent's working tree, which conflicts with concurrent edits (parent, other sub-agents, or humans) in the same tree. Pass `isolation: "worktree"` to `spawn_agent` to cut a fresh git worktree from HEAD:
+
+- The worktree is created under `<repo>/.ggcode/worktrees/agent-<id>-<timestamp>-<rand>` on a dedicated branch of the same name.
+- The sub-agent runs with its working directory set to the worktree, so its file edits never touch the parent's working tree.
+- The spawn result and `wait_agent` snapshots both report the worktree path, so the parent can inspect, test, or merge the sub-agent's edits after the run.
+- Worktrees and branches are **kept after the run** (never auto-removed) — clean them up with `git worktree remove` once merged.
+- If worktree creation fails (not a git repo, git errors), the spawn is rejected and the sub-agent cancelled rather than silently downgraded to non-isolated.
+- Note: the worktree starts from the last commit (`HEAD`); uncommitted changes in the parent tree are not visible to the sub-agent.
+
 ### Model Selection
 
 The `spawn_agent` tool accepts an optional `model` parameter:
