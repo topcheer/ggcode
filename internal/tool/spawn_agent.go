@@ -201,19 +201,10 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	}
 
 	// isolation="worktree": run the sub-agent in a fresh git worktree cut
-	// from HEAD so its edits stay off the parent's working tree. Synthetic
-	// IDs (sa-limit-*/sa-shutdown-*) are pre-failed registrations that never
-	// run, so skip worktree creation for them. On creation failure the
-	// sub-agent is cancelled rather than silently downgraded to non-isolated.
-	worktreePath := ""
-	if isolation == "worktree" && !strings.HasPrefix(id, "sa-limit-") && !strings.HasPrefix(id, "sa-shutdown-") {
-		wtPath, _, wtErr := createAgentWorktree(ctx, t.WorkingDir, id)
-		if wtErr != nil {
-			t.Manager.Cancel(id)
-			return Result{IsError: true, Content: fmt.Sprintf("isolation worktree creation failed for sub-agent %s: %v. The sub-agent was cancelled; fix the git state or retry with isolation=none.", id, wtErr)}, nil
-		}
-		worktreePath = wtPath
-		t.Manager.SetWorktree(id, wtPath)
+	// from HEAD so its edits stay off the parent's working tree.
+	worktreePath, wtErr := t.setupIsolationWorktree(ctx, isolation, id)
+	if wtErr != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("isolation worktree creation failed: %v. Fix the git state or retry with isolation=none.", wtErr)}, nil
 	}
 
 	// Build tool info list for sub-agent
@@ -291,6 +282,27 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
 	}
 	return Result{Content: content}, nil
+}
+
+// setupIsolationWorktree creates the isolation worktree for a spawned
+// sub-agent when isolation="worktree". Synthetic IDs (sa-limit-*/sa-shutdown-*)
+// are pre-failed registrations that never run, so no worktree is created for
+// them. On creation failure the sub-agent is cancelled rather than silently
+// downgraded to non-isolated, and the wrapped error is returned.
+func (t SpawnAgentTool) setupIsolationWorktree(ctx context.Context, isolation, id string) (string, error) {
+	if isolation != "worktree" {
+		return "", nil
+	}
+	if strings.HasPrefix(id, "sa-limit-") || strings.HasPrefix(id, "sa-shutdown-") {
+		return "", nil
+	}
+	wtPath, _, err := createAgentWorktree(ctx, t.WorkingDir, id)
+	if err != nil {
+		t.Manager.Cancel(id)
+		return "", fmt.Errorf("sub-agent %s cancelled: %w", id, err)
+	}
+	t.Manager.SetWorktree(id, wtPath)
+	return wtPath, nil
 }
 
 // Clone returns an independent copy of SpawnAgentTool for use by a different agent.
