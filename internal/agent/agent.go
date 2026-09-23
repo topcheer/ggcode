@@ -3677,13 +3677,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
 			// Action annihilation detection: check if this tool call cancels
 			// a prior tool call's side effects (git_add→git_reset, edit→undo, etc.).
-			if annihilWarn := a.actionAnnihil.recordToolCall(tc.Name, tc.Arguments, i+1); annihilWarn != "" {
-				debug.Log("agent", "Iteration %d: action annihilation detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
-				})
-				msgs = a.contextManager.Messages()
+			// #2675: failed calls have no side effects to cancel, yet were
+			// recorded and matched - a failed checkout followed by error
+			// recovery and a successful retry to the SAME branch fired a bogus
+			// "branch thrashing" warning at the most critical moment (error
+			// recovery). Mirrors the #1459-A lesson applied to fragmentation.
+			if !result.IsError {
+				if annihilWarn := a.actionAnnihil.recordToolCall(tc.Name, tc.Arguments, i+1); annihilWarn != "" {
+					debug.Log("agent", "Iteration %d: action annihilation detected", i+1)
+					a.contextManager.Add(provider.Message{
+						Role:    "user",
+						Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
+					})
+					msgs = a.contextManager.Messages()
+				}
 			}
 			// Exploration fragmentation detection: check if the agent is
 			// issuing many scattered exploration calls without converging.
