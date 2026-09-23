@@ -102,6 +102,51 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}, nil
 }
 
+// createAgentWorktree creates an isolated git worktree for a spawned
+// sub-agent under <gitRoot>/.ggcode/worktrees/, cut from HEAD on a dedicated
+// branch. The sub-agent runs with its working directory set to the worktree
+// so its file edits cannot collide with the parent's working tree.
+// Worktrees are left in place after the run (never auto-removed); the parent
+// finds the path via the spawn result and Snapshot.Worktree.
+func createAgentWorktree(ctx context.Context, workingDir, agentID string) (string, string, error) {
+	gitRoot, err := findGitRoot(ctx, workingDir)
+	if err != nil {
+		return "", "", fmt.Errorf("not a git repository: %w", err)
+	}
+
+	worktreesDir := filepath.Join(gitRoot, ".ggcode", "worktrees")
+	if err := os.MkdirAll(worktreesDir, 0755); err != nil {
+		return "", "", fmt.Errorf("error creating worktrees dir: %w", err)
+	}
+
+	// Sub-agent IDs restart at sa-1 in every process, so embed a timestamp
+	// and random suffix to avoid colliding with worktrees left behind by
+	// earlier sessions.
+	name := fmt.Sprintf("agent-%s-%s-%04d", agentID, time.Now().Format("0102-150405"), rand.Intn(10000))
+	for _, c := range name {
+		if !isWorktreeNameChar(c) {
+			return "", "", fmt.Errorf("invalid worktree name %q", name)
+		}
+	}
+	// #1710 case 5: "."/".." pass the character check but are path components.
+	if !isSafeWorktreeName(name) {
+		return "", "", fmt.Errorf("invalid worktree name %q", name)
+	}
+
+	worktreePath := filepath.Join(worktreesDir, name)
+	branchName := name
+
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "-b", branchName, worktreePath, "HEAD")
+	cmd.Dir = gitRoot
+	cmd.Env = append(os.Environ(), "GIT_PAGER=cat")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("git worktree add: %s", strings.TrimSpace(string(out)))
+	}
+	debug.Log("tool", "created isolation worktree %s (branch %s) for %s", worktreePath, branchName, agentID)
+	return worktreePath, branchName, nil
+}
+
 // ExitWorktree exits and optionally removes a git worktree.
 type ExitWorktree struct {
 	WorkingDir string

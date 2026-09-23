@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -94,6 +95,11 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "Optional type of specialized agent (e.g., 'Explore', 'Plan')"
 		},
+		"isolation": {
+			"type": "string",
+			"enum": ["none", "worktree"],
+			"description": "Optional filesystem isolation for the run. 'worktree' creates a fresh git worktree from HEAD under .ggcode/worktrees/ and runs the sub-agent there, so its file edits never collide with the parent's working tree. The worktree path is returned in the spawn result and on wait_agent snapshots; the worktree and its branch are kept after the run for inspection or merging. Default: none (inherit the parent's working directory)."
+		},
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
@@ -116,6 +122,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		Context      string   `json:"context"`
 		Model        string   `json:"model"`
 		SubagentType string   `json:"subagent_type"`
+		Isolation    string   `json:"isolation"`
 		Description  string   `json:"description"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
@@ -124,6 +131,11 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	if args.Task == "" {
 		return Result{IsError: true, Content: "task is required"}, nil
+	}
+
+	isolation := strings.TrimSpace(args.Isolation)
+	if isolation != "" && isolation != "none" && isolation != "worktree" {
+		return Result{IsError: true, Content: fmt.Sprintf("invalid isolation %q: supported values are \"none\" (inherit the parent working directory) and \"worktree\" (run in a fresh git worktree from HEAD)", isolation)}, nil
 	}
 
 	// Validate requested tool names against the registry. Warn (don't block)
@@ -188,6 +200,13 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
+	// isolation="worktree": run the sub-agent in a fresh git worktree cut
+	// from HEAD so its edits stay off the parent's working tree.
+	worktreePath, wtErr := t.setupIsolationWorktree(ctx, isolation, id)
+	if wtErr != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("isolation worktree creation failed: %v. Fix the git state or retry with isolation=none.", wtErr)}, nil
+	}
+
 	// Build tool info list for sub-agent
 	var allToolInfo []subagent.ToolInfo
 	if t.Tools != nil {
@@ -212,6 +231,11 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	model := strings.TrimSpace(args.Model)
 	subagentType := args.SubagentType
 
+	runWorkDir := t.WorkingDir
+	if worktreePath != "" {
+		runWorkDir = worktreePath
+	}
+
 	// Launch the sub-agent in a goroutine
 	prov := t.currentProvider()
 	safego.Go("tool.spawnAgent.subagent", func() {
@@ -225,7 +249,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			AgentFactory:        t.AgentFactory,
 			Model:               model,
 			AgentType:           subagentType,
-			WorkingDir:          t.WorkingDir,
+			WorkingDir:          runWorkDir,
 			OnUsage:             t.OnUsage,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
@@ -253,7 +277,32 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		})
 	})
 
-	return Result{Content: fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)}, nil
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)
+	if worktreePath != "" {
+		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
+	}
+	return Result{Content: content}, nil
+}
+
+// setupIsolationWorktree creates the isolation worktree for a spawned
+// sub-agent when isolation="worktree". Synthetic IDs (sa-limit-*/sa-shutdown-*)
+// are pre-failed registrations that never run, so no worktree is created for
+// them. On creation failure the sub-agent is cancelled rather than silently
+// downgraded to non-isolated, and the wrapped error is returned.
+func (t SpawnAgentTool) setupIsolationWorktree(ctx context.Context, isolation, id string) (string, error) {
+	if isolation != "worktree" {
+		return "", nil
+	}
+	if strings.HasPrefix(id, "sa-limit-") || strings.HasPrefix(id, "sa-shutdown-") {
+		return "", nil
+	}
+	wtPath, _, err := createAgentWorktree(ctx, t.WorkingDir, id)
+	if err != nil {
+		t.Manager.Cancel(id)
+		return "", fmt.Errorf("sub-agent %s cancelled: %w", id, err)
+	}
+	t.Manager.SetWorktree(id, wtPath)
+	return wtPath, nil
 }
 
 // Clone returns an independent copy of SpawnAgentTool for use by a different agent.
