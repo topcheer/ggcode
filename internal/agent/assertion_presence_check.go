@@ -76,6 +76,17 @@ var goTestSkips = map[string]bool{
 	"SkipNow": true,
 }
 
+// goGomegaGlobalCalls are package-level gomega assertion entry points.
+// Unlike the selector-based entries in goAssertionCalls, these are called as
+// bare identifiers (RegisterFailHandler style): Expect(x).To(...),
+// Eventually(...).Should(...), Consistently(...). Their Fun is *ast.Ident,
+// so they never enter the SelectorExpr branches in countAssertionCalls (#2638).
+var goGomegaGlobalCalls = map[string]bool{
+	"Expect":       true,
+	"Eventually":   true,
+	"Consistently": true,
+}
+
 // goAssertionPkgs are package qualifiers whose calls are always assertions.
 var goAssertionPkgs = map[string]bool{
 	"require": true, // testify require
@@ -221,46 +232,64 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 			for _, name := range testingTParamNames(node.Type) {
 				names[name] = true
 			}
-			return true
 		case *ast.CallExpr:
-			// Delegation: passing a testing.T identifier as an argument means
-			// assertions may live in the callee — count as non-hollow.
-			for _, arg := range node.Args {
-				if id, ok := arg.(*ast.Ident); ok && names[id.Name] {
-					count++
-					return true
-				}
-			}
-			// Check for t.Error, t.Fatal, etc. (selector expression: t.Errorf)
-			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
-				method := sel.Sel.Name
-				// Skip guard (#572): t.Skip/t.Skipf/t.SkipNow on the testing.T
-				//// receiver marks the test as intentionally conditional — not hollow.
-				if goTestSkips[method] {
-					if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
-						count++
-						return true
-					}
-				}
-				if goAssertionCalls[method] {
-					// Verify receiver looks like testing.T (any active name).
-					if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
-						count++
-						return true
-					}
-				}
-				// Check for require.X, assert.X, etc.
-				if pkgIdent, ok := sel.X.(*ast.Ident); ok {
-					if goAssertionPkgs[pkgIdent.Name] {
-						count++
-						return true
-					}
-				}
+			if isAssertionCall(node, names) {
+				count++
 			}
 		}
 		return true
 	})
 	return count
+}
+
+// isAssertionCall reports whether the call expression looks like a test
+// assertion (or an assertion-delegating call). names is the active set of
+// valid *testing.T receiver identifiers (closure rebinding, #320).
+func isAssertionCall(node *ast.CallExpr, names map[string]bool) bool {
+	// Delegation: passing a testing.T identifier as an argument means
+	// assertions may live in the callee - count as non-hollow.
+	for _, arg := range node.Args {
+		if id, ok := arg.(*ast.Ident); ok && names[id.Name] {
+			return true
+		}
+	}
+	// Check for t.Error, t.Fatal, etc. (selector expression: t.Errorf)
+	if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+		method := sel.Sel.Name
+		// Skip guard (#572): t.Skip/t.Skipf/t.SkipNow on the testing.T
+		//// receiver marks the test as intentionally conditional - not hollow.
+		if goTestSkips[method] {
+			if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
+				return true
+			}
+		}
+		if goAssertionCalls[method] {
+			// Verify receiver looks like testing.T (any active name).
+			if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
+				return true
+			}
+		}
+		// Check for require.X, assert.X, etc.
+		if pkgIdent, ok := sel.X.(*ast.Ident); ok {
+			if goAssertionPkgs[pkgIdent.Name] {
+				return true
+			}
+			// #2638: qualified gomega assertions (gomega.Expect(x).To(...)).
+			// Not added wholesale to goAssertionPkgs so that setup calls
+			// (gomega.RegisterFailHandler, gomega.NewWithT) do not count.
+			if pkgIdent.Name == "gomega" && goGomegaGlobalCalls[method] {
+				return true
+			}
+		}
+	}
+	// #2638: package-level gomega assertions (RegisterFailHandler style):
+	// bare Expect(x).To(...) has Fun as *ast.Ident, so the SelectorExpr
+	// branches above never matched and pure gomega tests counted as zero
+	// assertions - the #572 D8 intent was unreachable.
+	if id, ok := node.Fun.(*ast.Ident); ok && goGomegaGlobalCalls[id.Name] {
+		return true
+	}
+	return false
 }
 
 // testingTParamNames returns the parameter names of type *testing.T declared by
