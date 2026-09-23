@@ -624,7 +624,7 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 	// bootstrap cleanly, and the next action retries rather than stacking
 	// zombie Chrome processes.
 	startDone := make(chan error, 1)
-	go func() { startDone <- chromedp.Run(taskCtx) }()
+	safego.Go("browser.tabStart", func() { startDone <- chromedp.Run(taskCtx) })
 	select {
 	case runErr := <-startDone:
 		if runErr != nil {
