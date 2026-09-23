@@ -187,6 +187,11 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 	if currentTool == "undo_edit" {
 		return s.checkUndoEditAnnihilation(currentArgs, iteration)
 	}
+	// #2634: git_checkout roundtrip needs a barrier the generic loop cannot
+	// express -- see checkCheckoutRoundtripAnnihilation.
+	if currentTool == "git_checkout" {
+		return s.checkCheckoutRoundtripAnnihilation(currentArgs, iteration)
+	}
 
 	for _, pair := range annihilationPairs {
 		if currentTool != pair.cancelTool {
@@ -256,6 +261,56 @@ func (s *actionAnnihilateState) checkUndoEditAnnihilation(currentArgs json.RawMe
 		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount)
 	}
 	return ""
+}
+
+// checkCheckoutRoundtripAnnihilation detects checkout A → checkout B →
+// checkout A thrashing with a #2634 barrier the generic pair loop could not
+// express: a substantive action (any non-git_checkout tool call) between the
+// two same-branch checkouts means the agent did real work while away --
+// e.g. checking out a reference branch to read its implementation, then
+// switching back. That is legitimate multi-branch navigation, not net-zero
+// cancellation. Only a path consisting solely of git_checkout hops back to
+// the same branch is flagged (A → B → A, or A → B → C → A).
+//
+// Caller must hold s.mu.
+func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs json.RawMessage, iteration int) string {
+	currentBranch := extractStringField(currentArgs, "branch")
+	if currentBranch == "" {
+		return ""
+	}
+	for i := len(s.actions) - 1; i >= 0; i-- {
+		prior := s.actions[i]
+		if prior.tool != "git_checkout" {
+			// Barrier (#2634): substantive work happened between the
+			// checkouts -- the roundtrip produced value, not net-zero.
+			return ""
+		}
+		if extractStringField(prior.args, "branch") != currentBranch {
+			continue // a different branch hop; keep scanning checkouts only
+		}
+		s.cancelCount++
+		if s.warnsIssued >= s.maxWarns {
+			return ""
+		}
+		s.warnsIssued++
+		desc, _ := checkoutRoundtripDescription()
+		debug.Log("agent", "Iteration %d: action annihilation detected: %s (pair #%d)",
+			iteration, desc, s.cancelCount)
+		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount)
+	}
+	return ""
+}
+
+// checkoutRoundtripDescription sources the git_checkout pair description from
+// annihilationPairs so descriptions stay in one place. ok is false if the
+// pair entry is ever removed.
+func checkoutRoundtripDescription() (string, bool) {
+	for _, p := range annihilationPairs {
+		if p.priorTool == "git_checkout" && p.cancelTool == "git_checkout" {
+			return p.description, true
+		}
+	}
+	return "git_checkout switch then switch back (branch thrashing)", false
 }
 
 // undoEditAction extracts the action argument of an undo_edit call. Missing
@@ -338,12 +393,13 @@ func matchMkdirDelete(priorArgs, cancelArgs json.RawMessage) bool {
 	return false
 }
 
-// matchCheckoutRoundtrip detects git_checkout A → git_checkout B → git_checkout A.
+// matchCheckoutRoundtrip is retained for documentation of the pair's arg
+// semantics: the prior and current checkouts must target the same branch.
+// Matching itself moved to checkCheckoutRoundtripAnnihilation (#2634), which
+// adds the substantive-action barrier the pure arg matcher cannot express.
 func matchCheckoutRoundtrip(priorArgs, cancelArgs json.RawMessage) bool {
 	priorBranch := extractStringField(priorArgs, "branch")
 	cancelBranch := extractStringField(cancelArgs, "branch")
-	// Only flags a roundtrip if we're going back to a previously-checked-out branch.
-	// The prior and current calls must have the same target branch.
 	return priorBranch != "" && priorBranch == cancelBranch
 }
 
