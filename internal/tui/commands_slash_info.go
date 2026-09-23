@@ -223,8 +223,11 @@ func (m *Model) exportSession(id string) tea.Cmd {
 //
 // The output file (trace-<session-id>.json) is written to the current working
 // directory and is suitable for offline analysis, sharing, or piping into
-// observability platforms.
-func (m *Model) exportTraceSession(id string) tea.Cmd {
+// observability platforms. With otelFormat, the trace is rendered as an
+// OTLP/HTTP (protobuf-JSON) document using OpenTelemetry GenAI semantic
+// conventions (trace-<session-id>.otel.json), ingestible by Jaeger, Grafana,
+// Langfuse or any OTLP endpoint without conversion.
+func (m *Model) exportTraceSession(id string, otelFormat bool) tea.Cmd {
 	// #2347: snapshot the LIVE session's fields and the Metrics slice
 	// header here, under the Update loop - the metrics recorder appends
 	// from Update-serialized handlers, so copying now is race-free, while
@@ -276,18 +279,27 @@ func (m *Model) exportTraceSession(id string) tea.Cmd {
 			return streamMsg(tr("trace.no_metrics"))
 		}
 
-		data, err := metrics.ExportTrace(sessionID, vendor, endpoint, model, createdAt, events)
+		var data []byte
+		var err error
+		filename := fmt.Sprintf("trace-%s.json", sessionID)
+		msgKey := "trace.exported"
+		if otelFormat {
+			data, err = metrics.ExportTraceOTLP(sessionID, vendor, endpoint, model, createdAt, events)
+			filename = fmt.Sprintf("trace-%s.otel.json", sessionID)
+			msgKey = "trace.exported_otel"
+		} else {
+			data, err = metrics.ExportTrace(sessionID, vendor, endpoint, model, createdAt, events)
+		}
 		if err != nil {
 			return streamMsg(tr("trace.export_failed", err))
 		}
 
-		filename := fmt.Sprintf("trace-%s.json", sessionID)
 		if err := os.WriteFile(filename, data, 0644); err != nil {
 			return streamMsg(tr("trace.write_failed", err))
 		}
 
 		summary := metrics.Summarize(events)
-		return streamMsg(tr("trace.exported",
+		return streamMsg(tr(msgKey,
 			sessionID, filename,
 			summary.TurnCount, summary.LLMCallCount, summary.ToolCallCount,
 			summary.TotalInputTokens, summary.TotalOutputTokens))

@@ -448,10 +448,17 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			m.openInspectorPanel(inspectorPanelSessions)
 			return nil
 		case "/export-trace":
-			if len(parts) > 1 {
-				return m.exportTraceSession(parts[1])
+			// sa-153: optional --otel / --otlp flag selects OTLP/GenAI export.
+			otelFormat := false
+			args := parts[1:]
+			if len(args) > 0 && (args[0] == "--otel" || args[0] == "--otlp") {
+				otelFormat = true
+				args = args[1:]
 			}
-			return m.exportTraceSession("")
+			if len(args) > 0 {
+				return m.exportTraceSession(args[0], otelFormat)
+			}
+			return m.exportTraceSession("", otelFormat)
 		case "/plugins":
 			return m.handlePluginsCommand()
 		case "/inspector":

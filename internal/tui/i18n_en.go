@@ -647,6 +647,8 @@ func enCatalog(key string) string {
 		return "No metrics recorded for this session yet.\n\n"
 	case "trace.exported":
 		return "Exported trace for session %s to %s\n%d turns, %d LLM calls, %d tool calls\nTokens: %d in / %d out\n\n"
+	case "trace.exported_otel":
+		return "Exported OTLP/GenAI trace for session %s to %s\n%d turns, %d LLM calls, %d tool calls\nTokens: %d in / %d out\n\n"
 	case "checkpoint.disabled":
 		return "Checkpointing not enabled.\n\n"
 	case "rewind.activated":
@@ -1207,7 +1209,7 @@ Session & History:
   /sessions          List all saved sessions
   /resume <id>       Resume a previous session
   /export <id>       Export session to markdown file
-  /export-trace [id] Export session execution trace as JSON
+  /export-trace [--otel] [id] Export execution trace (JSON, or OTLP/GenAI)
   /clear             Clear conversation history
   /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)
