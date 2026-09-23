@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/task"
@@ -226,6 +227,17 @@ func (t TaskListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 
 type TaskUpdateTool struct {
 	Manager *task.Manager
+	// EvidenceFn, when set, reports whether the session carries independent
+	// verification evidence (successful build/test/lint command or a
+	// verification-class tool call). On a pending/in_progress -> completed
+	// flip, the flip is stamped with metadata
+	// "verification": "verified" | "unverified" and a bounded advisory is
+	// appended when evidence is missing.
+	// Research basis: LongHorizon-Harness (arXiv:2608.01964) MEA loop — task
+	// state must be updated only with facts independently verified from the
+	// environment; self-assessed completion must not silently propagate.
+	// nil disables the gate (back-compat for hosts without run stats).
+	EvidenceFn func() bool
 }
 
 func (t TaskUpdateTool) Name() string { return "task_update" }
@@ -321,9 +333,31 @@ func (t TaskUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		AddBlockedBy: args.AddBlockedBy,
 		Metadata:     args.Metadata,
 	}
+	// Completion evidence gate (sa-183): stamp the pending/in_progress ->
+	// completed flip with verification evidence. Only the flip is gated;
+	// re-completing an already-completed task is not.
+	completing := false
 	if args.Status != nil {
 		s := task.TaskStatus(*args.Status)
 		opts.Status = &s
+		if s == task.StatusCompleted {
+			if prev, ok := t.Manager.Get(args.TaskID); ok && prev.Status != task.StatusCompleted {
+				completing = true
+			}
+		}
+	}
+
+	var advisory string
+	if completing && t.EvidenceFn != nil {
+		if opts.Metadata == nil {
+			opts.Metadata = map[string]string{}
+		}
+		if t.EvidenceFn() {
+			opts.Metadata["verification"] = "verified"
+		} else {
+			opts.Metadata["verification"] = "unverified"
+			advisory = taskCompletionAdvisory(args.TaskID)
+		}
 	}
 
 	updated, err := t.Manager.Update(args.TaskID, opts)
@@ -331,7 +365,48 @@ func (t TaskUpdateTool) Execute(_ context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
 	out, _ := json.Marshal(updated)
-	return Result{Content: string(out) + "\n"}, nil
+	content := string(out) + "\n"
+	if advisory != "" {
+		content += advisory
+	}
+	return Result{Content: content}, nil
+}
+
+// Bounded advisory state for the completion evidence gate. TaskUpdateTool is
+// registered as a value type (and cloned into teammate/swarm registries), so
+// per-instance fields would be silently copied; the gate state is
+// intentionally process-wide.
+var (
+	taskGateMu     sync.Mutex
+	taskGateWarned = map[string]bool{} // taskID -> advisory already emitted
+	taskGateCount  int
+)
+
+const taskGateMaxWarns = 3
+
+// taskCompletionAdvisory returns a one-shot advisory for an unverified
+// completion flip. Empty once the per-process cap is hit or the task was
+// already advised (bounded noise, matching detector conventions).
+func taskCompletionAdvisory(taskID string) string {
+	taskGateMu.Lock()
+	defer taskGateMu.Unlock()
+	if taskGateCount >= taskGateMaxWarns || taskGateWarned[taskID] {
+		return ""
+	}
+	taskGateWarned[taskID] = true
+	taskGateCount++
+	return "[task-verification] Task marked completed without verification evidence: no build/test/lint command " +
+		"or verification tool (lsp_diagnostics/code_health/review_changes/scan_todos) has run this session. " +
+		"If completion depends on compilation or tests passing, run them and re-confirm; if the task requires " +
+		"no execution (docs-only, analysis), disregard this notice."
+}
+
+// resetTaskCompletionGate clears the bounded advisory state (test hook).
+func resetTaskCompletionGate() {
+	taskGateMu.Lock()
+	defer taskGateMu.Unlock()
+	taskGateWarned = map[string]bool{}
+	taskGateCount = 0
 }
 
 // ————————————————————————————————————————

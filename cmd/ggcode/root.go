@@ -971,7 +971,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	// Register task, cron, plan mode, config, and send_message tools
 	taskMgr := task.NewManager()
-	repl.SetTaskManager(taskMgr, registry)
+	repl.SetTaskManager(taskMgr, registry, agent.TaskVerificationEvidence(ag))
 
 	cronSessionID := resumeID
 	if cronSessionID == "__new__" {

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
@@ -341,6 +342,7 @@ type Agent struct {
 	perfBaseline             *perfBaselineState                    // cross-session performance regression detection
 	heterogeneousModel       *heterogeneousModelState              // FinOps: heterogeneous model selection guidance (sa-131)
 	lastRunStats             *RunStats                             // stats from the most recent run (for post-run summary display)
+	liveRunStats             atomic.Pointer[RunStats]              // run-scoped stats for concurrent readers (task completion evidence gate, sa-183)
 	qualityScorer            *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector     func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
 	systemPromptLayers       []systemPromptLayer                   // named extra layers (e.g. resume reconciliation); replaced by name, applied after systemPromptInjector
@@ -1327,6 +1329,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	}
 	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
 	runStats := newRunStats(userPromptForStats)
+	// Publish run-scoped stats for concurrent readers: task_update's completion
+	// evidence gate reads them from the tool-execution path (sa-183).
+	a.setLiveRunStats(runStats)
 	// Experience recall (Memento-style case-based reasoning): before the
 	// loop starts, retrieve past cases relevant to this task and inject
 	// them once as a system message. Injection happens here — before the
@@ -1451,6 +1456,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// hang here, MarkCompleted must move off the agent mutex.
 		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
 		runStats.finalize(err)
+		// Run-scoped evidence ends with the run: later completion flips fall
+		// back to lastRunStats (task_evidence.go, sa-183).
+		a.setLiveRunStats(nil)
 		a.mu.Lock()
 		a.lastRunStats = runStats
 		a.mu.Unlock()
