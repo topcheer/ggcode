@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 func commandToolPresentation(lang Language, rawCommand string) (toolPresentation, bool) {
@@ -102,4 +104,30 @@ func leadingCommentTitle(lines []string) (int, string) {
 		}
 	}
 	return -1, ""
+}
+
+// describeCommandFamilyTool renders foreground command execution tools.
+func describeCommandFamilyTool(lang Language, toolName string, args map[string]any, fileTarget string) toolPresentation {
+	switch toolName {
+	case "run_command", "bash", "powershell":
+		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
+			return present
+		}
+		target := displayToolTarget(util.FirstNonEmpty(
+			argString(args, "command"),
+			argString(args, "cmd"),
+		))
+		return toolPresentationFor(lang, "run", target)
+	case "start_command":
+		if present, ok := commandToolPresentation(lang, rawCommandArg(args)); ok {
+			return present
+		}
+		target := displayToolTarget(util.FirstNonEmpty(
+			argString(args, "command"),
+			argString(args, "cmd"),
+		))
+		return toolPresentationFor(lang, "run_in_background", target)
+	default:
+		return describeUnknownFamilyTool(lang, toolName, args, fileTarget)
+	}
 }

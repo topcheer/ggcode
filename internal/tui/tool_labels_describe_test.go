@@ -789,3 +789,34 @@ func TestDescribeToolUnknownFallbackDetailChain(t *testing.T) {
 		})
 	}
 }
+
+// TestDescribeToolFamilyFallbacks pins the per-family total-function
+// contract: every family renderer delegates unmatched tool names to
+// describeUnknownFamilyTool, so a name added to describeTool's dispatch
+// switch without a matching family case degrades to the generic unknown
+// presentation (never a zero value).
+func TestDescribeToolFamilyFallbacks(t *testing.T) {
+	families := map[string]func(Language, string, map[string]any, string) toolPresentation{
+		"file":    describeFileFamilyTool,
+		"command": describeCommandFamilyTool,
+		"jobs":    describeJobsFamilyTool,
+		"web":     describeWebFamilyTool,
+		"git":     describeGitFamilyTool,
+		"cron":    describeCronFamilyTool,
+		"session": describeSessionFamilyTool,
+		"task":    describeTaskFamilyTool,
+		"agent":   describeAgentFamilyTool,
+		"team":    describeTeamFamilyTool,
+		"mcp":     describeMCPFamilyTool,
+		"a2a":     describeA2AFamilyTool,
+	}
+	for _, lang := range describeToolLangs {
+		for name, family := range families {
+			got := family(lang, "totally_bogus_tool", map[string]any{}, "")
+			want := describeTool(lang, "totally_bogus_tool", `{}`)
+			if got != want {
+				t.Fatalf("%s family fallback [%s]: got %+v, want %+v", name, lang, got, want)
+			}
+		}
+	}
+}
