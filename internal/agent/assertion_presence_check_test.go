@@ -5,6 +5,102 @@ import (
 	"testing"
 )
 
+// #2638: pure gomega tests (RegisterFailHandler style) use bare package-level
+// Expect/Eventually/Consistently whose Fun is *ast.Ident. These previously
+// counted as zero assertions and triggered a bogus hollow-test warning.
+func TestCheckAssertionPresence_PureGomegaBareExpect(t *testing.T) {
+	newContent := `package agent
+
+import (
+	"testing"
+
+	. "github.com/onsi/gomega"
+)
+
+func TestPureGomega(t *testing.T) {
+	RegisterFailHandler(Fail)
+	r := add(1, 2)
+	Expect(r).To(Equal(3))
+	Eventually(func() int { return r }).Should(Equal(3))
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if result != "" {
+		t.Errorf("expected no warning for pure gomega test with bare Expect, got: %s", result)
+	}
+}
+
+// #2638: qualified gomega.Expect(x) form must also count, while gomega setup
+// calls (RegisterFailHandler) alone must NOT make a hollow test pass.
+func TestCheckAssertionPresence_QualifiedGomegaExpect(t *testing.T) {
+	newContent := `package agent
+
+import (
+	"testing"
+
+	"github.com/onsi/gomega"
+)
+
+func TestQualifiedGomega(t *testing.T) {
+	gomega.RegisterFailHandler(gomega.Fail)
+	r := add(1, 2)
+	gomega.Expect(r).To(gomega.Equal(3))
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if result != "" {
+		t.Errorf("expected no warning for qualified gomega.Expect test, got: %s", result)
+	}
+}
+
+// #2638: gomega setup without any assertion entry point is still hollow.
+func TestCheckAssertionPresence_GomegaSetupOnlyStillHollow(t *testing.T) {
+	newContent := `package agent
+
+import (
+	"testing"
+
+	"github.com/onsi/gomega"
+)
+
+func TestSetupOnly(t *testing.T) {
+	gomega.RegisterFailHandler(gomega.Fail)
+	r := add(1, 2)
+	_ = r
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if result == "" {
+		t.Fatal("expected warning for gomega setup-only hollow test")
+	}
+	if !contains(result, "TestSetupOnly") {
+		t.Errorf("expected warning to mention TestSetupOnly, got: %s", result)
+	}
+}
+
+// #2638 guard: a bare identifier call that merely shares a name with a
+// testing.T method (e.g. Error(...)) must not count as an assertion.
+func TestCheckAssertionPresence_BareErrorIdentNotAssertion(t *testing.T) {
+	newContent := `package agent
+
+import "testing"
+
+func helper() {}
+
+func TestBareErrorIdent(t *testing.T) {
+	Error("not a t.Error call")
+	helper()
+}
+`
+	result := checkAssertionPresence("foo_test.go", "", newContent)
+	if result == "" {
+		t.Fatal("expected warning for test whose only call is a bare Error(...) ident")
+	}
+	if !contains(result, "TestBareErrorIdent") {
+		t.Errorf("expected warning to mention TestBareErrorIdent, got: %s", result)
+	}
+}
+
 func TestCheckAssertionPresence_NotTestFile(t *testing.T) {
 	result := checkAssertionPresence("internal/agent/main.go", "", "package main\nfunc main() {}\n")
 	if result != "" {

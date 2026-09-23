@@ -76,6 +76,17 @@ var goTestSkips = map[string]bool{
 	"SkipNow": true,
 }
 
+// goGomegaGlobalCalls are package-level gomega assertion entry points.
+// Unlike the selector-based entries in goAssertionCalls, these are called as
+// bare identifiers (RegisterFailHandler style): Expect(x).To(...),
+// Eventually(...).Should(...), Consistently(...). Their Fun is *ast.Ident,
+// so they never enter the SelectorExpr branches in countAssertionCalls (#2638).
+var goGomegaGlobalCalls = map[string]bool{
+	"Expect":       true,
+	"Eventually":   true,
+	"Consistently": true,
+}
+
 // goAssertionPkgs are package qualifiers whose calls are always assertions.
 var goAssertionPkgs = map[string]bool{
 	"require": true, // testify require
@@ -235,7 +246,7 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 			if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
 				method := sel.Sel.Name
 				// Skip guard (#572): t.Skip/t.Skipf/t.SkipNow on the testing.T
-				//// receiver marks the test as intentionally conditional — not hollow.
+				//// receiver marks the test as intentionally conditional - not hollow.
 				if goTestSkips[method] {
 					if ident, ok := sel.X.(*ast.Ident); ok && names[ident.Name] {
 						count++
@@ -255,7 +266,22 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 						count++
 						return true
 					}
+					// #2638: qualified gomega assertions (gomega.Expect(x).To(...)).
+					// Not added wholesale to goAssertionPkgs so that setup calls
+					// (gomega.RegisterFailHandler, gomega.NewWithT) do not count.
+					if pkgIdent.Name == "gomega" && goGomegaGlobalCalls[method] {
+						count++
+						return true
+					}
 				}
+			}
+			// #2638: package-level gomega assertions (RegisterFailHandler style):
+			// bare Expect(x).To(...) has Fun as *ast.Ident, so the SelectorExpr
+			// branches above never matched and pure gomega tests counted as zero
+			// assertions — the #572 D8 intent was unreachable.
+			if id, ok := node.Fun.(*ast.Ident); ok && goGomegaGlobalCalls[id.Name] {
+				count++
+				return true
 			}
 		}
 		return true
