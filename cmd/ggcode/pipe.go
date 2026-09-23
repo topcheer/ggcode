@@ -141,6 +141,11 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
+	// Persist file-edit checkpoints so pipe-mode edits remain recoverable
+	// after the process exits (`ggcode undo`).
+	editPersist := checkpoint.NewPersist(checkpoint.DefaultPersistDir(workingDir), ag.SessionID())
+	ag.CheckpointManager().SetPersist(editPersist)
+	defer func() { _ = editPersist.Close() }()
 	ag.SetSupportsVision(resolved.SupportsVision)
 	saveMemoryTool.SetAfterSave(func() {
 		systemPrompt = buildCurrentSystemPrompt()

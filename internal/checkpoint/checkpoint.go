@@ -75,6 +75,10 @@ type Manager struct {
 	// corrections records user-initiated undos so the agent can be told its
 	// previous approach was rejected. Cleared at the start of each new run.
 	corrections []Correction
+
+	// persist, when non-nil, mirrors every Save to an on-disk JSONL record
+	// so rollback survives process exit (post-mortem `ggcode undo`).
+	persist *Persist
 }
 
 // NewManager creates a new checkpoint manager with the given max limit.
@@ -83,6 +87,16 @@ func NewManager(maxCheckpoints int) *Manager {
 		maxCheckpoints = 50
 	}
 	return &Manager{maxCheckpoints: maxCheckpoints}
+}
+
+// SetPersist attaches an on-disk persistence layer (see persist.go). When
+// set, every Save is mirrored to disk so a session's file edits remain
+// rollback-able after the process exits. Persistence is best-effort and
+// never blocks or fails the edit that produced the checkpoint.
+func (m *Manager) SetPersist(p *Persist) {
+	m.mu.Lock()
+	m.persist = p
+	m.mu.Unlock()
 }
 
 // StartRun marks the beginning of a new agent run. All subsequent Save()
@@ -160,6 +174,11 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 
 	// New edit invalidates redo history
 	m.redoStack = nil
+
+	// Mirror to disk (best-effort) for post-mortem rollback via `ggcode undo`.
+	if m.persist != nil {
+		m.persist.Append(cp)
+	}
 
 	return cp
 }

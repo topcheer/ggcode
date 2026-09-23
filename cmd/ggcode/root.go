@@ -239,6 +239,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newUndoCmd())
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
 	configureHelpRendering(cmd)
@@ -1238,6 +1239,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		// Register callback to rewrite port file when first real session ID is created
 		// (for new sessions where actualSessionID was empty above)
 		repl.SetSessionCreatedCallback(repl.HandleSessionCreated)
+
+		// Persist file-edit checkpoints to disk so rollback survives process
+		// exit (post-mortem `ggcode undo`). The REPL rebinds the persist
+		// session on switches (/sessions, /clear) via setCurrentSession.
+		editPersist := checkpoint.NewPersist(checkpoint.DefaultPersistDir(workingDir), "")
+		repl.SetCheckpointPersist(editPersist)
+		ag.CheckpointManager().SetPersist(editPersist)
+		defer func() { _ = editPersist.Close() }()
 
 		// Defer removal using the tracked session ID (updates when real ID is set)
 		defer func() {

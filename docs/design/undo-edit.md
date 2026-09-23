@@ -68,3 +68,30 @@ The user-facing Esc+Esc rewind and the agent-facing `undo_edit` tool share the s
 - If the agent undoes an edit, the user's Esc+Esc history is also updated
 - If the user rewinds via Esc+Esc, the agent's undo stack reflects the new state
 - No synchronization issues — both paths use the same mutex-protected data structure
+
+## Post-Session Rollback (`ggcode undo`)
+
+The in-memory Manager has two blind spots: it dies with the process, and it
+evicts entries beyond `maxCheckpoints` (50). A session that exits — or a crash
+mid-refactor — leaves no way to roll its file edits back without resuming it.
+This is the gap external tools like AgentUndo (local-first provenance and
+rollback, https://agent-undo.com) were built for in 2026.
+
+ggcode now closes it natively:
+
+- **`internal/checkpoint/persist.go`** — `checkpoint.Persist` mirrors every
+  `Save` to `<project>/.ggcode/undo/ggundo-<sessionID>.jsonl` (best-effort:
+  write failures are logged via `debug.Log`, never block the edit). Enabled
+  from `cmd/ggcode/root.go` (TUI, session rebound on `/sessions` / `/clear`
+  via `REPL.SetCheckpointPersist`) and `cmd/ggcode/pipe.go` (pipe runs).
+  The store self-prunes to the 10 newest sessions on first write.
+- **`ggcode undo`** (`cmd/ggcode/undo_cmd.go`) — post-mortem rollback CLI:
+  shows a per-file preview (created/modified + line counts), asks for
+  confirmation, then restores every touched file to its pre-session state
+  (first checkpoint per file wins; session-created files are removed).
+  Flags: `--list`, `--session <id>`, `--yes`, `--dry-run`.
+
+Limitations (inherent to checkpoint-based tracking): only edits made through
+ggcode's file tools are recorded; shell-command side effects (`rm`, `git
+checkout`, `sed -i`, ...) are invisible to both the preview and the rollback.
+Restored files get mode 0644 (the original mode is not recorded).

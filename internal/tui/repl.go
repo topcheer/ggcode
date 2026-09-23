@@ -83,6 +83,9 @@ type REPL struct {
 	// Port file management (issue #1189)
 	initialSessionID string // session ID used for initial port file write (empty for new sessions)
 	portFileMode     string // startup permission mode from config
+	// checkpointPersist mirrors file-edit checkpoints to the on-disk undo
+	// store; rebound on every session switch so records stay per-session.
+	checkpointPersist *checkpoint.Persist
 }
 
 // NewREPL creates a new REPL with optional permission policy.
@@ -371,6 +374,9 @@ func (r *REPL) setCurrentSession(ses *session.Session) {
 	r.currentSessionMu.Lock()
 	r.currentSession = ses
 	r.currentSessionMu.Unlock()
+	if r.checkpointPersist != nil && ses != nil && ses.ID != "" {
+		r.checkpointPersist.SetSession(ses.ID)
+	}
 }
 
 // getCurrentSession returns the thread-safe current session pointer.
@@ -767,6 +773,14 @@ func (r *REPL) SetProjectMemoryLoader(loader func() (string, []string, error)) {
 
 func (r *REPL) SetAutoMemoryFiles(files []string) {
 	r.model.SetAutoMemoryFiles(files)
+}
+
+// SetCheckpointPersist wires the disk checkpoint persist layer (ggcode undo
+// support). The REPL rebinds its session inside setCurrentSession so the
+// store always records under the live session ID, including switches via
+// /sessions and /clear.
+func (r *REPL) SetCheckpointPersist(p *checkpoint.Persist) {
+	r.checkpointPersist = p
 }
 
 // SetCheckpointManager wires the checkpoint manager into the agent and REPL.
