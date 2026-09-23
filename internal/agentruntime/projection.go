@@ -47,10 +47,6 @@ func PrepareProjectionReplay(store *tunnel.ProjectionStore, ses *session.Session
 	if err != nil {
 		return epoch, nil, err
 	}
-	replay, err = HydrateProjectionReplayFromSessionLedger(store, ses, replay)
-	if err != nil {
-		return epoch, replay, err
-	}
 	return epoch, replay, nil
 }
 
@@ -84,13 +80,6 @@ func PrepareProjectionBroker(broker *tunnel.Broker, store *tunnel.ProjectionStor
 	broker.SetAuthorityEpoch(state.AuthorityEpoch)
 	broker.SetEventRecorder(recorder)
 	return state, nil
-}
-
-// HydrateProjectionReplayFromSessionLedger is deprecated.
-// Tunnel events are no longer stored in session JSONL — the projection store
-// is the sole source. This function is now a no-op, retained for API compatibility.
-func HydrateProjectionReplayFromSessionLedger(store *tunnel.ProjectionStore, ses *session.Session, replay []tunnel.GatewayMessage) ([]tunnel.GatewayMessage, error) {
-	return replay, nil
 }
 
 func AppendProjectionEvent(store *tunnel.ProjectionStore, msg tunnel.GatewayMessage) error {

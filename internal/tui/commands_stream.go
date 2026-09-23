@@ -17,7 +17,6 @@ func (m *Model) appendStreamChunk(chunk string) {
 	if strings.TrimSpace(chunk) == "" && !m.streamPrefixWritten {
 		return
 	}
-	chunk = relativizeResult(chunk)
 	if localized, ok := m.localizedStreamStatus(chunk); ok {
 		m.appendStreamStatusLine(localized)
 		return

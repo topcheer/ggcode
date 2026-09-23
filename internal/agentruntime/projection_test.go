@@ -8,7 +8,10 @@ import (
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
-func TestHydrateProjectionReplayFromSessionLedgerRequiresCompleteLedger(t *testing.T) {
+// PrepareProjectionReplay is the sole replay path: the session JSONL ledger
+// (even an incomplete one) must never leak into the replay — the projection
+// store is the only source of truth.
+func TestPrepareProjectionReplayIgnoresIncompleteSessionLedger(t *testing.T) {
 	store, err := tunnel.NewProjectionStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("new projection store: %v", err)
@@ -23,9 +26,12 @@ func TestHydrateProjectionReplayFromSessionLedgerRequiresCompleteLedger(t *testi
 		}},
 	}
 
-	replay, err := HydrateProjectionReplayFromSessionLedger(store, ses, nil)
+	epoch, replay, err := PrepareProjectionReplay(store, ses)
 	if err != nil {
-		t.Fatalf("hydrate: %v", err)
+		t.Fatalf("prepare: %v", err)
+	}
+	if epoch != 1 {
+		t.Fatalf("expected default epoch 1 for empty store, got %d", epoch)
 	}
 	if len(replay) != 0 {
 		t.Fatalf("expected no replay changes, got %d events", len(replay))
@@ -39,7 +45,9 @@ func TestHydrateProjectionReplayFromSessionLedgerRequiresCompleteLedger(t *testi
 	}
 }
 
-func TestHydrateProjectionReplayFromSessionLedgerDedupesAndReloads(t *testing.T) {
+// A populated projection store must be replayed verbatim; the session ledger
+// is ignored (no dedupe/reload against JSONL anymore).
+func TestPrepareProjectionReplayReplayUnchangedBySessionLedger(t *testing.T) {
 	store, err := tunnel.NewProjectionStore(filepath.Join(t.TempDir(), "projection"))
 	if err != nil {
 		t.Fatalf("new projection store: %v", err)
@@ -74,12 +82,10 @@ func TestHydrateProjectionReplayFromSessionLedgerDedupesAndReloads(t *testing.T)
 		},
 	}
 
-	replay, err := HydrateProjectionReplayFromSessionLedger(store, ses, initial)
+	_, replay, err := PrepareProjectionReplay(store, ses)
 	if err != nil {
-		t.Fatalf("hydrate: %v", err)
+		t.Fatalf("prepare: %v", err)
 	}
-	// HydrateProjectionReplayFromSessionLedger is now a no-op — tunnel events
-	// are no longer stored in session JSONL. The replay should be unchanged.
 	if len(replay) != len(initial) {
 		t.Fatalf("expected %d replay events (unchanged), got %d", len(initial), len(replay))
 	}

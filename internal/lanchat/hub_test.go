@@ -610,14 +610,6 @@ func TestParseNickRoleTeam(t *testing.T) {
 	}
 }
 
-func TestParseNickRoleBackwardCompat(t *testing.T) {
-	// ParseNickRole should still work as a 2-value return
-	nick, role := ParseNickRole("alice@frontend")
-	if nick != "alice" || role != "frontend" {
-		t.Errorf("ParseNickRole backward compat failed: got (%q, %q)", nick, role)
-	}
-}
-
 func TestSetNickRoleTeam(t *testing.T) {
 	tmp := t.TempDir()
 	store := NewStore(tmp)

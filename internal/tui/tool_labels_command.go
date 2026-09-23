@@ -6,7 +6,6 @@ import (
 )
 
 func commandToolPresentation(lang Language, rawCommand string) (toolPresentation, bool) {
-	rawCommand = relativizeResult(rawCommand)
 	preview := buildCommandPreview(rawCommand)
 	if preview.Title == "" {
 		return toolPresentation{}, false

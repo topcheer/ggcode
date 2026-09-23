@@ -122,7 +122,7 @@ func (m *Model) submitShellCommand(command string, addToHistory bool) tea.Cmd {
 		m.setLoading(true)
 		m.statusActivity = shellStatusActivity(m.currentLanguage())
 		m.statusToolName = ""
-		m.statusToolArg = relativizeResult(command)
+		m.statusToolArg = command
 		m.statusToolCount = 0
 	}
 	m.streamBuffer = nil
@@ -136,7 +136,6 @@ func (m *Model) appendShellChunk(chunk string) {
 	if chunk == "" {
 		return
 	}
-	chunk = relativizeResult(chunk)
 	if m.shellBuffer == nil {
 		m.shellBuffer = &bytes.Buffer{}
 	}

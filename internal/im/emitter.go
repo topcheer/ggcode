@@ -13,7 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // IMEmitter handles asynchronous outbound IM event emission with typing keepalive.
@@ -23,7 +22,7 @@ type IMEmitter struct {
 	typing   *imTypingKeeper
 	manager  *Manager
 	language string // "zh-CN" or "en"
-	workDir  string // project working directory for path relativization
+	workDir  string // project working directory
 
 	// mu protects lastStatus, outputMode, state, and typing from concurrent
 	// access. These fields are read from the agent stream callback goroutine and
@@ -154,9 +153,6 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 		}
 	}
 
-	// Relativize absolute paths in all output text
-	event.Text = e.relativizePaths(event.Text)
-	event.Status = e.relativizePaths(event.Status)
 	// #1299: agent final replies carried secrets in cleartext to IM -
 	// tool results were redacted (redactResult) but OutboundEventText
 	// went straight to adapters, and IM is an outbound boundary (leaves
@@ -165,8 +161,6 @@ func (e *IMEmitter) EmitEvent(event OutboundEvent) {
 	event.Text = redactResult(event.Text)
 	event.Status = redactResult(event.Status)
 	if event.ToolRes != nil {
-		event.ToolRes.Args = e.relativizePaths(event.ToolRes.Args)
-		event.ToolRes.Result = e.relativizePaths(event.ToolRes.Result)
 		// #1333 defense-in-depth: format helpers already redact, but make the
 		// choke point self-sufficient (idempotent) for any future path.
 		event.ToolRes.Args = redactResult(event.ToolRes.Args)
@@ -206,7 +200,7 @@ func (e *IMEmitter) redactOutbound(text string) string {
 	if e == nil || text == "" {
 		return text
 	}
-	return redactResult(e.relativizePaths(text))
+	return redactResult(text)
 }
 
 // HasTargets returns true if at least one IM channel is bound.
@@ -560,11 +554,6 @@ func extractAskUserTarget(rawArgs string) string {
 		return title
 	}
 	return ""
-}
-
-// relativizePaths replaces absolute paths under workDir with relative paths (./).
-func (e *IMEmitter) relativizePaths(text string) string {
-	return util.RelativizePaths(text, e.workDir)
 }
 
 // EmitKnightReport sends a Knight status report to IM.

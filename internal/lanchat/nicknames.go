@@ -52,14 +52,6 @@ func AgentNick(humanNick string) string {
 	return humanNick + "_agent"
 }
 
-// ParseNickRole splits "alice@frontend" into ("alice", "frontend").
-// "alice" → ("alice", "developer").
-// Deprecated: Use ParseNickRoleTeam for full 3-part parsing.
-func ParseNickRole(input string) (nick, role string) {
-	nick, role, _ = ParseNickRoleTeam(input)
-	return
-}
-
 // ParseNickRoleTeam splits "alice@frontend@platform" into ("alice", "frontend", "platform").
 // Missing parts get defaults: role="developer", team="dev-team".
 //

@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // ToolLanguage represents the language for tool status formatting.
@@ -503,8 +501,7 @@ func firstNonEmptyStr(values ...string) string {
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = compactSingleLine(value)
-	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(value, cwd)
+	return value
 }
 
 func displayToolFileTarget(value string) string {
@@ -525,8 +522,7 @@ func displayToolFileTarget(value string) string {
 			return filepath.ToSlash(rel)
 		}
 	}
-	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(filepath.ToSlash(value), cwd)
+	return filepath.ToSlash(value)
 }
 
 func normalizeDisplayPath(value string) string {

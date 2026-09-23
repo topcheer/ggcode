@@ -2859,16 +2859,6 @@ func (b *ChatBridge) CurrentTunnelActivity() string {
 // TunnelHost handles all message stream state internally.
 // These methods are kept as no-op stubs for any remaining callers.
 
-func (b *ChatBridge) ensureTunnelMsgID(broker *tunnel.Broker) string {
-	return ""
-}
-
-func (b *ChatBridge) tunnelReasoningMsgID(broker *tunnel.Broker) string {
-	return ""
-}
-
-func (b *ChatBridge) markTunnelMainStreamActive() {}
-
 func (b *ChatBridge) flushTunnelTextStream(broker *tunnel.Broker, force bool) {}
 
 func (b *ChatBridge) resetTunnelRoundState() {}

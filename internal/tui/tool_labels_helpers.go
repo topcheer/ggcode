@@ -925,8 +925,7 @@ func lspToolPresentation(lang Language, toolName string, args map[string]any, fi
 func displayToolTarget(value string) string {
 	value = strings.TrimSpace(value)
 	value = compactSingleLine(value)
-	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(value, cwd)
+	return value
 }
 
 func displayToolFileTarget(value string) string {
@@ -948,8 +947,7 @@ func displayToolFileTarget(value string) string {
 			value = filepath.ToSlash(rel)
 		}
 	}
-	cwd, _ := os.Getwd()
-	return util.FormatToolDetail(value, cwd)
+	return value
 }
 
 func normalizeDisplayPath(value string) string {
@@ -999,13 +997,4 @@ func prettifyToolName(name string) string {
 		parts[i] = string(runes)
 	}
 	return strings.Join(parts, " ")
-}
-
-// relativizeResult replaces absolute paths in tool result text with relative paths.
-func relativizeResult(text string) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return text
-	}
-	return util.RelativizePaths(text, cwd)
 }

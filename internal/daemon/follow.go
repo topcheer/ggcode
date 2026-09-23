@@ -10,7 +10,6 @@ import (
 
 	charm "charm.land/glamour/v2"
 	"github.com/topcheer/ggcode/internal/chat"
-	"github.com/topcheer/ggcode/internal/util"
 )
 
 // FollowSink receives agent events for terminal follow-mode display.
@@ -211,7 +210,7 @@ func NewTerminalFollowDisplay(out *os.File, lang Lang, workDir string, presenter
 func (d *TerminalFollowDisplay) OnUserMessage(text string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	text = truncateForTerminal(d.relativizePaths(text), 200)
+	text = truncateForTerminal(text, 200)
 	fmt.Fprintf(d.out, "%s%s%s"+nl, d.styles.UserPrefix, text, ansiReset)
 }
 
@@ -224,10 +223,6 @@ func (d *TerminalFollowDisplay) OnToolStatus(toolName, rawArgs string) {
 func (d *TerminalFollowDisplay) OnToolResult(toolName, rawArgs, result string, isError bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	// Relativize paths in args and result
-	rawArgs = d.relativizePaths(rawArgs)
-	result = d.relativizePaths(result)
 
 	status := chat.StatusSuccess
 	if isError {
@@ -351,7 +346,7 @@ func (d *TerminalFollowDisplay) OnRoundDone() {
 	d.roundBuf.Reset()
 
 	if text != "" {
-		displayText := renderMarkdown(d.relativizePaths(text))
+		displayText := renderMarkdown(text)
 		// Strip glamour's leading/trailing newlines so prefix and text
 		// start on the same line
 		displayText = strings.TrimRight(strings.TrimLeft(displayText, " \t\n"+string(rune(13))), " \t\n"+string(rune(13)))
@@ -398,11 +393,6 @@ func (d *TerminalFollowDisplay) OnPairingResolved() {
 // Close cleans up.
 func (d *TerminalFollowDisplay) Close() {
 	// no-op for now
-}
-
-// relativizePaths replaces absolute paths under workDir with relative paths.
-func (d *TerminalFollowDisplay) relativizePaths(text string) string {
-	return util.RelativizePaths(text, d.workDir)
 }
 
 // --- Special tool result formatting ---

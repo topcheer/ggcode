@@ -86,12 +86,6 @@ func (s *toolEquivDetectState) reset() {
 	s.warnings = 0
 }
 
-// markExactMatch is retained as a no-op shim: raw-vs-normalized
-// cross-referencing now happens per-call inside recordCall (#494).
-func (s *toolEquivDetectState) markExactMatch(rawFp string) {
-	_ = rawFp
-}
-
 // normalizeArgs parses JSON arguments, strips volatile fields, sorts keys,
 // and returns a canonical string representation. If args is not valid JSON,
 // returns the raw string (fallback — don't crash on malformed input).
