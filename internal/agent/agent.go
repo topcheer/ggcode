@@ -3691,6 +3691,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 					msgs = a.contextManager.Messages()
 				}
+				// #2684: record the hash a successful git_commit produced so
+				// a later git_revert is only treated as an annihilation when
+				// it targets that commit -- reverting an unrelated historical
+				// commit is a normal bug-fix workflow, not net-zero waste.
+				if tc.Name == "git_commit" {
+					if h := extractNewCommitHash(result.Content); h != "" {
+						a.actionAnnihil.recordCommitHash(i+1, h)
+					}
+				}
 			}
 			// Exploration fragmentation detection: check if the agent is
 			// issuing many scattered exploration calls without converging.
