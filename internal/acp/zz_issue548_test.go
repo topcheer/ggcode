@@ -391,14 +391,36 @@ func TestIssue548PromptAllowedAfterSuccessfulAuth(t *testing.T) {
 		t.Fatalf("expected SessionPromptResult, got %T", res)
 	}
 	// Clean up the spawned agent loop goroutine.
+	// #2663: signal Stop() but do NOT manually delete the agentLoops entry -
+	// the goroutine's own defer chain (handler.go L405-412, LIFO: delete →
+	// EndRun → cancel) is the exit signal the wait below polls, and a manual
+	// delete would falsify it while the goroutine is still writing session
+	// files. The old manual delete is exactly why this test raced: it returned
+	// with the goroutine alive, and testing.TempDir's RemoveAll then hit
+	// `unlinkat .ggcode: directory not empty` against its concurrent writes.
 	h.sessionsMu.RLock()
 	loop := h.agentLoops[sessionID]
 	h.sessionsMu.RUnlock()
 	if loop != nil {
 		loop.Stop()
-		h.sessionsMu.Lock()
-		delete(h.agentLoops, sessionID)
-		h.sessionsMu.Unlock()
+	}
+	// #2663: wait for the goroutine to actually exit (its first defer deletes
+	// the agentLoops key) before returning, so t.TempDir() cleanup never
+	// races the loop's session-dir writes. 2s cap keeps a wedged loop from
+	// hanging the suite; failing here is the honest verdict (the race window
+	// would persist).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.sessionsMu.RLock()
+		_, running := h.agentLoops[sessionID]
+		h.sessionsMu.RUnlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("agentLoop goroutine for session %s did not exit within 2s; t.TempDir cleanup would race its session-dir writes (#2663)", sessionID)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
