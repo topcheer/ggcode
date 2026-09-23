@@ -38,6 +38,8 @@ type Command struct {
 	RequiresTools          []string // external CLI tools that must be on PATH (e.g. docker, kubectl)
 	Dependencies           []string // prerequisite skill names that should be loaded first
 	Version                string   // semantic version declared in frontmatter (e.g. "1.0.0")
+	Deprecated             bool     // author-declared lifecycle state: frontmatter `deprecated: true`
+	ReplacedBy             string   // optional successor skill suggested in deprecation notices
 	UserInvocable          bool
 	DisableModelInvocation bool
 	Context                string

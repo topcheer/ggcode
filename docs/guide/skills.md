@@ -90,6 +90,21 @@ description: Deploy the project to Vercel
 ```
 
 The version is displayed when the skill is loaded (`Skill "deploy-to-vercel" (v1.2.0) loaded.`)
+
+### Deprecation
+
+Skills can be explicitly marked as deprecated in frontmatter:
+
+```yaml
+---
+name: old-flow
+description: Old workflow
+deprecated: true
+replaced_by: new-flow
+---
+```
+
+Deprecated skills stay invocable so existing workflows don't break, but ggcode annotates them in three places so the model prefers the successor: the prompt skill list, `?` search results, and a one-line advisory prepended to the skill content when loaded. Use `deprecated` when a workflow has been superseded — this is author-declared lifecycle state, distinct from automatic staleness detection.
 and in search results.
 
 ### Version-Constrained Dependencies

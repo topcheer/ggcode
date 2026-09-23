@@ -126,6 +126,12 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 		if utf8.RuneCountInString(desc) > maxDescChars {
 			desc = truncateRunes(desc, maxDescChars, "...")
 		}
+		if tag := skill.DeprecationTag(); tag != "" {
+			if desc != "" {
+				desc += " "
+			}
+			desc += tag
+		}
 		line := fmt.Sprintf("- %s: %s", name, desc)
 		if total+len(line)+1 > maxChars {
 			break

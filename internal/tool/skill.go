@@ -159,6 +159,12 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		content = depHint + "\n\n" + content
 	}
 
+	// Surface author-declared deprecation before the skill content so the
+	// model can prefer the successor skill for follow-up work.
+	if advisory := cmd.DeprecationAdvisory(); advisory != "" {
+		content = advisory + "\n\n" + content
+	}
+
 	// Return a brief confirmation + inject skill content as follow-up user message.
 	// This forces the model to process and act on the skill instructions,
 	// matching Claude Code's inline skill behavior.
@@ -225,6 +231,9 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 	}))
 	if task == "" {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q has no executable content", cmd.Name)}, nil
+	}
+	if advisory := cmd.DeprecationAdvisory(); advisory != "" {
+		task = advisory + "\n\n" + task
 	}
 
 	mgr := subagent.NewManager(config.SubAgentConfig{MaxConcurrent: 1, Timeout: 5 * time.Minute})
@@ -452,10 +461,11 @@ func (t SkillTool) searchSkills(query string) Result {
 }
 
 type skillSearchMatch struct {
-	name    string
-	desc    string
-	version string
-	score   int
+	name          string
+	desc          string
+	version       string
+	deprecatedTag string
+	score         int
 }
 
 // collectSkillMatches iterates all skills, scoring each against the query.
@@ -468,7 +478,7 @@ func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skil
 		}
 		score, desc := scoreSkill(name, cmd, queryLower)
 		if score > 0 {
-			matches = append(matches, skillSearchMatch{name: name, desc: desc, version: cmd.Version, score: score})
+			matches = append(matches, skillSearchMatch{name: name, desc: desc, version: cmd.Version, deprecatedTag: cmd.DeprecationTag(), score: score})
 		}
 	}
 	return matches
@@ -519,6 +529,9 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 		sb.WriteString("- " + m.name)
 		if m.version != "" {
 			sb.WriteString(" (v" + m.version + ")")
+		}
+		if m.deprecatedTag != "" {
+			sb.WriteString(" " + m.deprecatedTag)
 		}
 		if m.desc != "" {
 			const maxDesc = 120

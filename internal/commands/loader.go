@@ -27,6 +27,8 @@ type frontmatter struct {
 	RequiresTools          []string `yaml:"requires-tools"`
 	Dependencies           []string `yaml:"dependencies"`
 	Version                string   `yaml:"version"`
+	Deprecated             bool     `yaml:"deprecated"`
+	ReplacedBy             string   `yaml:"replaced_by"`
 	UserInvocable          *bool    `yaml:"user-invocable"`
 	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
 	Context                string   `yaml:"context"`
@@ -172,6 +174,8 @@ func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
 		RequiresTools:          append([]string(nil), meta.RequiresTools...),
 		Dependencies:           append([]string(nil), meta.Dependencies...),
 		Version:                strings.TrimSpace(meta.Version),
+		Deprecated:             meta.Deprecated,
+		ReplacedBy:             strings.TrimSpace(meta.ReplacedBy),
 		DisableModelInvocation: meta.DisableModelInvocation,
 		Context:                strings.TrimSpace(meta.Context),
 		UserInvocable:          true,
