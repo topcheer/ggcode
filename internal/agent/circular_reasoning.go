@@ -120,7 +120,7 @@ var circularPatterns = []circularPattern{
 	// and verify in code via scanCircularReasoning.
 	{
 		id:      "restate_solution",
-		pattern: regexp.MustCompile(`(?i)\b(?:to|in order to)\s+` + solveVerbRe + `\s+([^,.;\n]{3,60}?),\s*(?:we\s+)?(?:should|need to|must|will|can)\s+` + solveVerbRe + `\s+\b`),
+		pattern: regexp.MustCompile(`(?i)\b(?:to|in order to)\s+` + solveVerbRe + `\s+([^,.;\n]{3,60}?),\s*(?:we\s+)?(?:should|need to|must|will|can)\s+` + solveVerbRe + `\s+([^,.;\n]{3,60}?)(?:[.,;\n]|$)`),
 		desc:    "problem restated as solution (fix X to fix X)",
 	},
 
@@ -143,7 +143,7 @@ var circularPatterns = []circularPattern{
 	// Detected structurally: need...because...need/require in same sentence.
 	{
 		id:      "needs_circular",
-		pattern: regexp.MustCompile(`(?i)\b(?:we\s+)?need\s+([^,.;\n]{3,50}?)\s+because\s+(?:we\s+)?` + needVerbRe + `\s+`),
+		pattern: regexp.MustCompile(`(?i)\b(?:we\s+)?need\s+([^,.;\n]{3,50}?)\s+because\s+(?:we\s+)?` + needVerbRe + `\s+([^,.;\n]{3,60}?)(?:[.,;\n]|$)`),
 		desc:    "circular needs justification (need X because we need X)",
 	},
 
@@ -151,7 +151,7 @@ var circularPatterns = []circularPattern{
 	// Detected structurally: since...is required,...must be implemented.
 	{
 		id:      "vacuous_implication",
-		pattern: regexp.MustCompile(`(?i)\bsince\s+([^,.;\n]{3,50}?)\s+is\s+(?:required|needed|necessary),?\s+[^,.;\n]{0,30}?(?:must be|should be|needs? to be|has to be)\s+(?:implemented|added|created|done)\b`),
+		pattern: regexp.MustCompile(`(?i)\bsince\s+([^,.;\n]{3,50}?)\s+is\s+(?:required|needed|necessary),?\s+([^,.;\n]{0,30}?)\s*(?:must be|should be|needs? to be|has to be)\s+(?:implemented|added|created|done)\b`),
 		desc:    "vacuous implication (requirement restated as implementation)",
 	},
 
@@ -159,7 +159,7 @@ var circularPatterns = []circularPattern{
 	// Detected structurally: reason for...is to...with same phrase.
 	{
 		id:      "purpose_equals_action",
-		pattern: regexp.MustCompile(`(?i)\b(?:the\s+)?reason\s+(?:for|to)\s+([^,.;\n]{3,50}?)\s+is\s+to\s+`),
+		pattern: regexp.MustCompile(`(?i)\b(?:the\s+)?reason\s+(?:for|to)\s+([^,.;\n]{3,50}?)\s+is\s+to\s+([^,.;\n]{3,60}?)(?:[.,;\n]|$)`),
 		desc:    "purpose equals action tautology (reason for X is to X)",
 	},
 }
@@ -204,6 +204,63 @@ func extractCircularExcerpt(text string, matchStart, matchEnd int) string {
 	return excerpt
 }
 
+// identityCheckPatterns are the structural patterns whose comments promise a
+// same-phrase verification that scanCircularReasoning must actually perform
+// (#2647: the promised check never existed, so these patterns degraded to pure
+// structural matches and flagged ordinary reasoning like "to fix X, we should
+// handle Y" with X != Y as circular).
+var identityCheckPatterns = map[string]bool{
+	"restate_solution":      true,
+	"needs_circular":        true,
+	"vacuous_implication":   true,
+	"purpose_equals_action": true,
+}
+
+// normalizePhrase lowercases, strips articles and punctuation, and collapses
+// whitespace so phrase token sets can be compared.
+func normalizePhrase(s string) []string {
+	s = strings.ToLower(s)
+	s = strings.NewReplacer(",", "", ".", "", ";", "", ":", "", "!", "", "?", "", "\"", "", "'", "").Replace(s)
+	fields := strings.Fields(s)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f == "a" || f == "an" || f == "the" {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// samePhrase reports whether two captured phrases refer to the same thing:
+// exact normalized equality, or token overlap of at least 0.8 relative to the
+// smaller token set (handles trailing adverbs like "carefully" padding one
+// side of a genuine restatement).
+func samePhrase(a, b string) bool {
+	ta, tb := normalizePhrase(a), normalizePhrase(b)
+	if len(ta) == 0 || len(tb) == 0 {
+		return false
+	}
+	if strings.Join(ta, " ") == strings.Join(tb, " ") {
+		return true
+	}
+	setA := make(map[string]bool, len(ta))
+	for _, t := range ta {
+		setA[t] = true
+	}
+	inter := 0
+	for _, t := range tb {
+		if setA[t] {
+			inter++
+		}
+	}
+	minLen := len(ta)
+	if len(tb) < minLen {
+		minLen = len(tb)
+	}
+	return float64(inter)/float64(minLen) >= 0.8
+}
+
 // scanCircularReasoning analyzes text for tautological patterns.
 func scanCircularReasoning(text string) []circularInstance {
 	if len(text) < 20 {
@@ -218,6 +275,21 @@ func scanCircularReasoning(text string) []circularInstance {
 		for _, loc := range locs {
 			matchStart := loc[0]
 			matchEnd := loc[1]
+
+			// #2647: for structural patterns, the captured phrases must
+			// actually be the same content — Go regexp cannot do
+			// backreferences, so the same-phrase check the pattern
+			// comments promise happens HERE.
+			if identityCheckPatterns[cp.id] {
+				if len(loc) < 6 {
+					continue
+				}
+				g1 := text[loc[2]:loc[3]]
+				g2 := text[loc[4]:loc[5]]
+				if !samePhrase(g1, g2) {
+					continue
+				}
+			}
 
 			excerpt := extractCircularExcerpt(text, matchStart, matchEnd)
 

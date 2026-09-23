@@ -1489,9 +1489,12 @@ loop:
 			case 'x': // exit
 				break loop
 			case 'd': // detach to background
-				detachToBackground(lang, cfgFile, workingDir, ses.ID)
-				detachedToBackground = true
-				break loop
+				// #2633: on fork failure stay in the foreground - the session
+				// must keep running in this process, not die with a break.
+				if detachToBackground(lang, cfgFile, workingDir, ses.ID) {
+					detachedToBackground = true
+					break loop
+				}
 			case 'f': // toggle follow mode
 				followActive = !followActive
 				if followActive {
