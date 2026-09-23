@@ -215,6 +215,12 @@ func TestGrep_NoMatches(t *testing.T) {
 	if !containsAny(result.Content, "No matches") && !containsAny(result.Content, "0 file") {
 		t.Errorf("expected no matches message; got:\n%s", result.Content)
 	}
+	// Cross-modal escalation: zero-match output must point at the semantic
+	// backend and name-based lookup (arxiv 2605.15184: harness result framing
+	// reshapes agentic retrieval).
+	if !containsAny(result.Content, "code_search") {
+		t.Errorf("expected zero-match escalation hint suggesting code_search; got:\n%s", result.Content)
+	}
 }
 
 func TestGrep_InvalidRegex(t *testing.T) {

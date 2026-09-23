@@ -222,6 +222,38 @@ func TestCodeSearchNoFiles(t *testing.T) {
 	}
 }
 
+// TestCodeSearchZeroMatchEscalation verifies that a query with no lexical
+// overlap against indexed files produces the cross-modal hint pointing back
+// at grep for exact identifiers.
+func TestCodeSearchZeroMatchEscalation(t *testing.T) {
+	dir := t.TempDir()
+	writeFile := func(name, content string) {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("a.go", "package a\n\nfunc helloWorld() { println(\"greeting\") }\n")
+	tool := CodeSearch{}
+	input := []byte(`{"query": "quantumchromodynamics xylophone", "path": "` + dir + `"}`)
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %s", result.Content)
+	}
+	if !containsAny(result.Content, "No files matched") {
+		t.Errorf("expected zero-match message; got:\n%s", result.Content)
+	}
+	if !containsAny(result.Content, "grep") {
+		t.Errorf("expected escalation hint suggesting grep; got:\n%s", result.Content)
+	}
+}
+
 func TestCodeSearchTypeFilter(t *testing.T) {
 	dir := t.TempDir()
 

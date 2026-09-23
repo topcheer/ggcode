@@ -41,6 +41,16 @@ func TestSearchFilesBasic(t *testing.T) {
 	}
 }
 
+func TestSearchFilesZeroMatchHint(t *testing.T) {
+	hint := searchFilesZeroMatchHint("foobarbaz", "/tmp", "")
+	if !strings.Contains(hint, "No matches found") {
+		t.Errorf("expected zero-match header; got:\n%s", hint)
+	}
+	if !strings.Contains(hint, "code_search") {
+		t.Errorf("expected cross-modal escalation hint suggesting code_search; got:\n%s", hint)
+	}
+}
+
 func TestSearchFilesNoMatch(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("nothing here\n"), 0o644)
