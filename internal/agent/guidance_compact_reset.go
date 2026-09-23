@@ -662,6 +662,16 @@ var guidanceCounterResets = []func(*Agent){
 			a.serialRead.mu.Unlock()
 		}
 	},
+	// redundant_read (sa-182): the guard's mtime/hash/warned baselines are
+	// run-scoped *context* state, not behavioral facts. After a compaction
+	// the earlier read results they refer to may no longer be in context, so
+	// a re-read is legitimate re-grounding, not context waste. serialRead was
+	// already reset here; redundantRead was missed.
+	func(a *Agent) {
+		if a.redundantRead != nil {
+			a.redundantRead.reset()
+		}
+	},
 	func(a *Agent) {
 		if a.diffSummary != nil {
 			a.diffSummary.fired = false
