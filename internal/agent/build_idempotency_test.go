@@ -3,6 +3,8 @@ package agent
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func mustJSONIdempot(t *testing.T, v map[string]interface{}) json.RawMessage {
@@ -386,5 +388,46 @@ func TestBuildIdempotency_GOOSChangesIdentity(t *testing.T) {
 	}), 2)
 	if w != "" {
 		t.Fatalf("native build after cross-compile must not warn, got: %s", w)
+	}
+}
+
+// TestShellMutatesSources_GoGenerateCrossCommand (#2655 follow-up): `go
+// generate` rewrites sources via generator scripts. command_cache.go already
+// refuses to cache it (excludePrefixes), but the cross-command case rides on
+// THIS predicate: a cached `go test` must be invalidated when a later `go
+// generate` rewrites the tree, or the next `go test` replays the
+// pre-generation result for the full TTL.
+func TestShellMutatesSources_GoGenerateCrossCommand(t *testing.T) {
+	for _, cmd := range []string{
+		"go generate ./...",
+		"go generate ./internal/gen/",
+		"curl --output config.yaml https://example.com/cfg", // long-option form
+	} {
+		if !shellMutatesSources(cmd) {
+			t.Errorf("shellMutatesSources(%q) = false, want true (#2655 follow-up)", cmd)
+		}
+	}
+	// Read-only git plumbing must stay non-mutating: git fetch touches .git
+	// internals only, never the working tree.
+	for _, cmd := range []string{
+		"git fetch origin",
+		"git status",
+		"git log --oneline",
+	} {
+		if shellMutatesSources(cmd) {
+			t.Errorf("shellMutatesSources(%q) = true, want false (read-only FP guard)", cmd)
+		}
+	}
+	// The #2655 trigger composed with go generate, mirroring agent.go's
+	// post-execution invalidation gate.
+	cc := newCommandCache()
+	res := tool.Result{Content: "PASS pre-generation"}
+	cmd := "# verify\ngo test ./..."
+	cc.put(cmd, "/repo", res)
+	if shellMutatesSources("go generate ./...") {
+		cc.invalidate()
+	}
+	if _, hit := cc.get(cmd, "/repo"); hit {
+		t.Fatal("cache serves pre-generation `go test` result after `go generate` rewrote sources: stale replay (#2655 follow-up)")
 	}
 }

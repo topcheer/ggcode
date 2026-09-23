@@ -374,6 +374,14 @@ func shellMutatesSources(cmd string) bool {
 		// by the "cp " substring; listed explicitly for self-documentation.
 		"curl ", "wget ", "rsync ", "scp ",
 		"tar ", "unzip ",
+		// #2655 follow-up: `go generate` runs generator scripts whose output
+		// lands on sources. It is already in command_cache.go's exclude list
+		// (its own result is never cached), but the cross-command case needs
+		// THIS predicate: `go test ./...` (cached) -> `go generate ./...`
+		// (rewrites sources) -> `go test ./...` must NOT replay the
+		// pre-generation result. invalidate() fires only when this
+		// predicate recognizes the mutator.
+		"go generate",
 		"clang-format -i", "perl -pi", "perl -i",
 		" of=", // dd of=file (any position)
 		"install ",
