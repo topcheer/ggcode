@@ -8,13 +8,14 @@ import (
 )
 
 type MCPServerSnapshot struct {
-	Name          string
-	Connected     bool
-	Pending       bool
-	Error         string
-	ToolNames     []string
-	PromptNames   []string
-	ResourceNames []string
+	Name                  string
+	Connected             bool
+	Pending               bool
+	Error                 string
+	ToolNames             []string
+	PromptNames           []string
+	ResourceNames         []string
+	ResourceTemplateNames []string
 }
 
 type MCPPromptMessage struct {
@@ -103,6 +104,9 @@ func (t ListMCPCapabilitiesTool) Execute(ctx context.Context, input json.RawMess
 		sb.WriteString(fmt.Sprintf("  tools: %s\n", joinOrNone(snap.ToolNames)))
 		sb.WriteString(fmt.Sprintf("  prompts: %s\n", joinOrNone(snap.PromptNames)))
 		sb.WriteString(fmt.Sprintf("  resources: %s\n", joinOrNone(snap.ResourceNames)))
+		if len(snap.ResourceTemplateNames) > 0 {
+			sb.WriteString(fmt.Sprintf("  resource templates (expand via read_mcp_resource): %s\n", strings.Join(snap.ResourceTemplateNames, ", ")))
+		}
 	}
 	if count == 0 {
 		if args.Server != "" {
