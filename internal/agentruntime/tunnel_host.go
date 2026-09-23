@@ -282,20 +282,7 @@ func (h *TunnelHost) StartShare(cfg ShareConfig) (*ShareResult, error) {
 		oldMgr := h.upgradeMgr
 		h.upgradeMgr = nil
 		h.mu.Unlock()
-		if oldMgr != nil {
-			oldMgr.Stop()
-		}
-		if oldRef.broker != nil {
-			oldRef.broker.Stop()
-		}
-		// #2413: mirror StopShare's teardown order - the relay websocket
-		// lives on the session's client; stopping only the broker left the
-		// overwritten session's relay connection alive until process exit,
-		// unreachable by any later StopShare.
-		if oldRef.session != nil {
-			oldRef.session.Stop()
-		}
-		h.DetachOnlineBroker()
+		h.teardownShareRef(oldRef, oldMgr)
 		h.mu.Lock()
 	}
 	h.activeShare = &tunnelSessionRef{session: sess, broker: broker}
@@ -475,6 +462,38 @@ func (h *TunnelHost) DetachOnlineBroker() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.onlineBroker = nil
+}
+
+// teardownShareRef stops an overwritten share's resources in StopShare's
+// order (#1787 case 1 leak fix, #2413 relay session). Callers must NOT hold
+// h.mu. #2689: the online-broker detach is CONDITIONAL - in the StartShare
+// overwrite path, step 4 has already attached the NEW broker by the time
+// this teardown runs, and the unconditional detach inherited from StopShare
+// cleared it. recordEvent's forwarding check (onlineBroker != nil) is the
+// ONLY path from session events to the mobile client, and
+// AttachOnlineBroker has no other call site, so a second StartShare left
+// the re-share's client with its one-time replay and no live stream events.
+// Detach only when the attached broker is still the one being torn down;
+// StopShare is unaffected (there the attached broker IS the old one).
+func (h *TunnelHost) teardownShareRef(oldRef *tunnelSessionRef, oldMgr *tunnel.UpgradeManager) {
+	if oldMgr != nil {
+		oldMgr.Stop()
+	}
+	if oldRef.broker != nil {
+		oldRef.broker.Stop()
+	}
+	// #2413: mirror StopShare's teardown order - the relay websocket
+	// lives on the session's client; stopping only the broker left the
+	// overwritten session's relay connection alive until process exit,
+	// unreachable by any later StopShare.
+	if oldRef.session != nil {
+		oldRef.session.Stop()
+	}
+	h.mu.Lock()
+	if h.onlineBroker == oldRef.broker {
+		h.onlineBroker = nil
+	}
+	h.mu.Unlock()
 }
 
 // Close stops any active share gracefully and cleans up resources.
