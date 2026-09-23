@@ -136,9 +136,22 @@ func depCheckoutThenEdit(producerArgs, _ map[string]interface{}) bool {
 }
 
 // depModInitThenGet: go mod init/tidy then go get/build/get/install.
-func depModInitThenGet(producerArgs, _ map[string]interface{}) bool {
+// #2681: the consumer must actually consume the module - a go command that
+// resolves the module graph (get/build/install/run/test/vet). The old
+// producer-only check matched ANY following run_command, flagging read-only
+// commands (git status, ls, cat go.mod) as dependency violations.
+func depModInitThenGet(producerArgs, consumerArgs map[string]interface{}) bool {
 	cmd := strings.ToLower(extractStringArg(producerArgs, "command"))
-	return strings.Contains(cmd, "go mod init") || strings.Contains(cmd, "go mod tidy") || strings.Contains(cmd, "go mod download")
+	if !(strings.Contains(cmd, "go mod init") || strings.Contains(cmd, "go mod tidy") || strings.Contains(cmd, "go mod download")) {
+		return false
+	}
+	consumer := strings.ToLower(extractStringArg(consumerArgs, "command"))
+	for _, kw := range []string{"go get", "go build", "go install", "go run", "go test", "go vet", "go mod verify"} {
+		if strings.Contains(consumer, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
