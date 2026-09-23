@@ -420,6 +420,10 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		if args.Path != "" && args.Path != "." {
 			hints = append(hints, "Try searching from a broader directory (e.g., the project root).")
 		}
+		// Cross-modal escalation: exact-text search failing often means the code
+		// uses different naming than the query. Point at the semantic backend
+		// (code_search, BM25) and name-based lookup (glob) as the next moves.
+		hints = append(hints, "For conceptually-related code under different naming, try code_search with natural-language keywords; use glob to find files by name pattern.")
 		return Result{Content: "No matches found.\nSuggestions:\n  " + strings.Join(hints, "\n  ")}, nil
 	}
 
@@ -622,7 +626,7 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	})
 
 	if len(files) == 0 {
-		return Result{Content: "No matches found."}, nil
+		return Result{Content: "No matches found. Try code_search for semantic matching, or grep with a broader pattern/type filter."}, nil
 	}
 
 	// Parallel search

@@ -308,6 +308,7 @@ func searchFilesZeroMatchHint(pattern, directory, includePattern string) string 
 		hints = append(hints, fmt.Sprintf("You searched in %q — try searching from the project root instead.", directory))
 	}
 	hints = append(hints, "Try: simplify the regex, remove anchors (^/$), or use grep with ignore_case=true")
+	hints = append(hints, "For conceptually-related code under different naming, try code_search with natural-language keywords; use glob to find files by name pattern.")
 	return strings.Join(hints, "\n")
 }
 
