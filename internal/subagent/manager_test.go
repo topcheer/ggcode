@@ -615,3 +615,35 @@ func TestDefaultMaxConcurrentIs16(t *testing.T) {
 		t.Errorf("default maxConcurrent = %d, want 16 (also update spawn_agent description if intentional)", m.maxConcurrent)
 	}
 }
+
+func TestManagerSetWorktree(t *testing.T) {
+	m := newTestManager()
+	defer m.Shutdown()
+
+	id := m.Spawn("wt-test", "task", "task", nil, context.Background())
+	if id == "" {
+		t.Fatal("expected agent id")
+	}
+
+	m.SetWorktree(id, "/repo/.ggcode/worktrees/agent-1")
+	snap, ok := m.SnapshotByID(id)
+	if !ok {
+		t.Fatalf("snapshot not found for %s", id)
+	}
+	if snap.Worktree != "/repo/.ggcode/worktrees/agent-1" {
+		t.Errorf("snapshot worktree = %q, want isolated path", snap.Worktree)
+	}
+
+	// Unknown ID must be a safe no-op.
+	m.SetWorktree("sa-does-not-exist", "/tmp/x")
+
+	// Default remains empty for non-isolated spawns.
+	id2 := m.Spawn("wt-none", "task", "task", nil, context.Background())
+	snap2, ok := m.SnapshotByID(id2)
+	if !ok {
+		t.Fatalf("snapshot not found for %s", id2)
+	}
+	if snap2.Worktree != "" {
+		t.Errorf("default worktree = %q, want empty", snap2.Worktree)
+	}
+}
