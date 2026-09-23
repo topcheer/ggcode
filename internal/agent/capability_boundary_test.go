@@ -46,6 +46,27 @@ func TestScanApproachPivots(t *testing.T) {
 			text: "I'll try a different strategy this time.",
 			want: 1,
 		},
+		// #2641: branch-level cases for the i'll pivot branch. The
+		// fallback branch (`different (tack|strategy|approach)`) does NOT
+		// cover way/tactic or another/alternative phrasing, so these
+		// inputs can only match via the i\s*'ll branch itself - before
+		// the fix (i\s+'ll requiring whitespace inside "I'll") all three
+		// were silent misses.
+		{
+			name: "I'll try a different way", // #2641
+			text: "I'll try a different way of parsing the input.",
+			want: 1,
+		},
+		{
+			name: "I'll try another tactic", // #2641
+			text: "I'll try another tactic if this fails again.",
+			want: 1,
+		},
+		{
+			name: "I'll try an alternative approach", // #2641
+			text: "I'll try an alternative approach here.",
+			want: 1,
+		},
 		{
 			name: "switching to",
 			text: "Switching to a more robust solution now.",
