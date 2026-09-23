@@ -420,8 +420,16 @@ func (p *OpenAIProvider) Name() string {
 }
 
 // UpdateRuntimeHeaders updates the injected headers at runtime.
+// GGCode-SessionID is session-lifecycle state owned by SetSessionID —
+// callers that replace the whole header set (e.g. the impersonation
+// panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
 	if p.transport != nil {
+		if sid := p.transport.snapshotHeaders().Get("GGCode-SessionID"); sid != "" && headers.Get("GGCode-SessionID") == "" {
+			merged := headers.Clone()
+			merged.Set("GGCode-SessionID", sid)
+			headers = merged
+		}
 		p.transport.UpdateHeaders(headers)
 	}
 }
