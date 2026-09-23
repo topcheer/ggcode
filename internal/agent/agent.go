@@ -3953,8 +3953,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
 			// Record tool result for adaptive sampling classification.
+			// #2636: pass errText so sampling applies the same
+			// error-recovery filtering as the effort adapter above.
 			if a.adaptiveSampling != nil {
-				a.adaptiveSampling.recordToolResult(tc.Name, result.IsError)
+				a.adaptiveSampling.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
 			// Strategy stagnation detector: tracks same-tool+target retries
 			// after failure. When 2+ consecutive failures with identical

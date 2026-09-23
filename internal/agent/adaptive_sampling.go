@@ -79,12 +79,15 @@ func newAdaptiveSamplingState() *adaptiveSamplingState {
 	return &adaptiveSamplingState{}
 }
 
-// recordToolResult appends a tool interaction to the sliding window.
-// Reuses the same entry type as adaptive effort for consistency.
-func (s *adaptiveSamplingState) recordToolResult(toolName string, isError bool) {
+// recordToolResultErr appends a tool interaction to the sliding window.
+// Reuses the same entry type and error-filtering semantics as adaptive
+// effort (#2636): errText lets classifyPhase exclude param-format edit
+// failures from the error-recovery count, matching the effort adapter's
+// recordToolResultErr contract.
+func (s *adaptiveSamplingState) recordToolResultErr(toolName string, isError bool, errText string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = append(s.entries, effortEntry{toolName: toolName, isError: isError})
+	s.entries = append(s.entries, effortEntry{toolName: toolName, isError: isError, errText: errText})
 	if len(s.entries) > adaptiveSamplingWindow {
 		s.entries = s.entries[len(s.entries)-adaptiveSamplingWindow:]
 	}
@@ -129,7 +132,15 @@ func (s *adaptiveSamplingState) classifyPhase() samplingPhase {
 
 	for _, e := range s.entries {
 		if e.isError {
-			recentErrors++
+			// #2636: mirror the effort-side filter (#1436-A/#1836) - only
+			// edit-family retries are recovery signals. Two read-only
+			// exploration misses (grep no-match, LSP not ready) used to
+			// flip the phase to error-recovery and pin temperature at 0.0,
+			// suppressing exactly the exploration diversity this module's
+			// charter reserves 0.4 for.
+			if errorRecoverySignals[e.toolName] && !isParamFormatEditFailure(e.toolName, e.errText) {
+				recentErrors++
+			}
 			continue
 		}
 		if editTools[e.toolName] {
