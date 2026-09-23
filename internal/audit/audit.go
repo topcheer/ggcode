@@ -27,6 +27,7 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -135,15 +136,81 @@ func Open(path, session string) (*Ledger, error) {
 	}
 	l := &Ledger{path: path, session: session, f: f, prev: GenesisPrevHash}
 	entries, scanErr := scanEntries(path)
+	// #2692: a crash-torn trailing partial line scans into the malformed
+	// sentinel, and taking it as the chain tail (seq=0, prev="") made every
+	// subsequent Append write a broken entry - Verify failed forever on the
+	// crash-recovery path the ledger exists for. The torn line never
+	// committed (line-level atomicity, same rule as the session store's
+	// torn-tail recovery), so heal it: truncate to the last complete line
+	// and recover from the last DURABLE entry. Mid-file malformed lines are
+	// corruption evidence and are never touched - only a trailing sentinel
+	// triggers the heal, and only when it is the last entry.
+	if scanErr == nil && len(entries) > 0 && isMalformedSentinel(entries[len(entries)-1]) {
+		_ = truncateTornTail(f) // best-effort; on failure fall through with the sentinel tail (pre-#2692 behavior)
+		entries, scanErr = scanEntries(path)
+	}
 	if scanErr == nil && len(entries) > 0 {
 		last := entries[len(entries)-1]
-		l.seq = last.Seq
-		l.prev = last.Hash
+		if !isMalformedSentinel(last) {
+			l.seq = last.Seq
+			l.prev = last.Hash
+		}
 	}
 	// A scan error on an existing file is deliberately tolerated here (the
 	// file may be mid-verification by another process); Append will still
 	// extend the file, and Verify will surface the pre-existing corruption.
 	return l, nil
+}
+
+// isMalformedSentinel reports whether e is the placeholder scanEntries emits
+// for an unparseable line (used to keep corruption visible to Verify).
+func isMalformedSentinel(e Entry) bool {
+	return e.Seq == 0 && e.Tool == "malformed line"
+}
+
+// truncateTornTail walks the file backwards, dropping trailing non-empty
+// lines that do not parse as entries (crash-torn partial writes), and
+// truncates the file to the end of the last kept line. A trailing line that
+// parses, or an empty/whitespace tail, stops the walk - only never-committed
+// partial writes are discarded. The file is then flush-to-disk consistent
+// with the hash chain over its complete lines.
+func truncateTornTail(f *os.File) error {
+	data, err := os.ReadFile(f.Name())
+	if err != nil {
+		return err
+	}
+	cut := len(data)
+	for cut > 0 {
+		// The last line is data[lineStart:end]: strip ONE terminating '\n'
+		// first - after dropping a line, cut points at the next line's start
+		// and the '\n' at cut-1 belongs to the line BEFORE it; searching
+		// without stripping it located an empty segment and stopped the walk
+		// early, leaving interior torn lines unhealed.
+		end := cut
+		if data[end-1] == '\n' {
+			end--
+		}
+		if end == 0 {
+			break // only newline(s) remain; keep
+		}
+		lineStart := bytes.LastIndexByte(data[:end], '\n') + 1
+		line := bytes.TrimSpace(data[lineStart:end])
+		if len(line) == 0 {
+			break // harmless trailing whitespace; keep
+		}
+		var probe Entry
+		if json.Unmarshal(line, &probe) == nil {
+			break // complete entry: durable tail
+		}
+		cut = lineStart // never-committed partial line: drop with its newline
+	}
+	if cut == len(data) {
+		return nil
+	}
+	if err := f.Truncate(int64(cut)); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // Path returns the ledger file path.
