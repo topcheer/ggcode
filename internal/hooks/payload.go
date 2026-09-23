@@ -44,11 +44,13 @@ type PayloadStop struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// PayloadCompaction carries compaction metrics for on_compaction hooks.
+// PayloadCompaction carries compaction metrics for on_compaction hooks and
+// the pre-compaction notice for pre_compact hooks.
 type PayloadCompaction struct {
-	TokenBefore int `json:"token_before"` // token count before compaction
-	TokenAfter  int `json:"token_after"`  // token count after compaction
-	Reclaimed   int `json:"reclaimed"`    // tokens reclaimed (before - after)
+	TokenBefore int    `json:"token_before"`      // token count before compaction
+	TokenAfter  int    `json:"token_after"`       // token count after compaction
+	Reclaimed   int    `json:"reclaimed"`         // tokens reclaimed (before - after); 0 for pre_compact
+	Trigger     string `json:"trigger,omitempty"` // "auto", "reactive", or "manual"
 }
 
 // BuildPayload constructs the standardized payload from HookEnv.
@@ -95,6 +97,15 @@ func BuildPayload(env HookEnv) HookPayload {
 			TokenBefore: env.TokenBefore,
 			TokenAfter:  env.TokenAfter,
 			Reclaimed:   env.TokenBefore - env.TokenAfter,
+			Trigger:     env.CompactTrigger,
+		}
+
+	case EventPreCompact:
+		// The outcome is unknown at fire time — only the trigger and the
+		// pre-compaction pressure are meaningful. Reclaimed stays 0.
+		p.Compaction = &PayloadCompaction{
+			TokenBefore: env.TokenBefore,
+			Trigger:     env.CompactTrigger,
 		}
 	}
 

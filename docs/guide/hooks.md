@@ -9,6 +9,8 @@ Hooks let you run shell commands or HTTP webhooks automatically on agent lifecyc
 | `on_user_message` | User submits a message, before LLM call | Sync | Yes |
 | `pre_tool_use` | After permission check, before tool executes | Sync | Yes |
 | `post_tool_use` | After tool executes, before result returns to LLM | Sync | No |
+| `pre_compact` | Before a context compaction begins | Sync | No |
+| `on_compaction` | After a context compaction applied | Async | No |
 | `on_agent_stop` | Agent loop ends (completed/cancelled/error) | Async | No |
 | `on_stream_stop` | Single LLM stream response completes | Async | No |
 
@@ -24,8 +26,31 @@ user message
     → tool.Execute()
     → post_tool_use (sync, can inject output)
   → ... (loop until no more tool calls)
+  → [context pressure]
+    → pre_compact (sync, non-blocking) — last chance to persist state
+    → summarization condenses older turns
+    → on_compaction (async) — reports reclaimed tokens
   → on_agent_stop (async)
 ```
+
+### Compaction events
+
+Two events bracket every context compaction, regardless of what triggered it:
+
+| Trigger | Meaning |
+|---------|---------|
+| `auto` | Token threshold reached; background precompact scheduled and applied |
+| `reactive` | Prompt-too-long recovery after a provider context-overflow error |
+| `manual` | User ran `/compact` |
+
+`pre_compact` runs synchronously BEFORE the summarization request fires, so a
+hook can persist critical state (todo lists, working notes, audit trails) while
+the full context still exists. It can NOT veto compaction: exit 2 / HTTP 403
+are logged but ignored, because refusing to compact would strand the session in
+a context-overflow error.
+
+`on_compaction` fires after the compacted context is applied, with before/after
+token counts so hooks can log how much context was reclaimed.
 
 ## Hook Types
 
@@ -61,7 +86,7 @@ Sends an HTTP POST with the standardized JSON payload.
 | command | exit code 2 (stderr → block reason) | Other non-zero: allow, log warning |
 | http | HTTP 403 (response body → block reason) | Connection error/timeout/non-2xx: allow, log warning |
 
-Only `on_user_message` and `pre_tool_use` can block. `post_tool_use`, `on_agent_stop`, and `on_stream_stop` always allow — block responses are ignored.
+Only `on_user_message` and `pre_tool_use` can block. `post_tool_use`, `pre_compact`, `on_compaction`, `on_agent_stop`, and `on_stream_stop` always allow — block responses are ignored.
 
 ## Standard Payload
 
@@ -89,7 +114,13 @@ All hooks (both command and http) receive a unified JSON payload:
     "content": "fix the bug"
   },
   "stop_reason": "completed",
-  "stop_error": ""
+  "stop_error": "",
+  "compaction": {
+    "token_before": 180000,
+    "token_after": 42000,
+    "reclaimed": 138000,
+    "trigger": "auto"
+  }
 }
 ```
 
@@ -100,6 +131,8 @@ Fields populated per event:
 | `on_user_message` | `message` |
 | `pre_tool_use` | `tool` |
 | `post_tool_use` | `tool` + `result` |
+| `pre_compact` | `compaction` (`token_before` + `trigger`) |
+| `on_compaction` | `compaction` (`token_before` + `token_after` + `reclaimed` + `trigger`) |
 | `on_agent_stop` | `stop_reason` + `stop_error` |
 | `on_stream_stop` | `stop_reason` |
 
@@ -133,7 +166,7 @@ Fields populated per event:
 
 ## Match Patterns
 
-Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `on_agent_stop`, `on_stream_stop`), use `*` to match all.
+Match patterns apply to tool events (`pre_tool_use`, `post_tool_use`). For non-tool events (`on_user_message`, `pre_compact`, `on_compaction`, `on_agent_stop`, `on_stream_stop`), use `*` to match all.
 
 ### Match Modes
 
@@ -201,6 +234,15 @@ hooks:
   on_stream_stop:
     - match: "*"
       command: "notify-send 'done'"
+
+  pre_compact:
+    # Persist working state while the full context still exists.
+    - match: "*"
+      command: "echo compact $(date -u +%FT%TZ) ${PAYLOAD} >> ~/.ggcode/compact-audit.log"
+
+  on_compaction:
+    - match: "*"
+      command: "logger 'ggcode compacted: ${PAYLOAD}'"
 ```
 
 ### Fields
