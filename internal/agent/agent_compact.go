@@ -147,6 +147,15 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 
 	debug.Log("agent", "reactive compact: compacting conversation")
 	onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Compressing conversation via summarization...] "})
+	// sa-159: pre_compact fires before the reactive summarization attempt so
+	// hooks can persist state while the full context still exists. Best-effort:
+	// PTL recovery must proceed regardless of hook outcome.
+	if res := hooks.RunPreCompactHooks(a.GetHookConfig(), hooks.HookEnv{
+		TokenBefore:    tokens,
+		CompactTrigger: "reactive",
+	}); res.Err != nil {
+		debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
+	}
 	// Capture last message ID BEFORE compaction for checkpoint.
 	var lastMsgID string
 	if msgs := a.contextManager.Messages(); len(msgs) > 0 {
@@ -177,8 +186,9 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	// Fire on_compaction hooks (fire-and-forget).
 	hookCfg := a.GetHookConfig()
 	hooks.RunCompactionHooks(hookCfg, hooks.HookEnv{
-		TokenBefore: tokens,
-		TokenAfter:  newTokens,
+		TokenBefore:    tokens,
+		TokenAfter:     newTokens,
+		CompactTrigger: "reactive",
 	})
 	// Always save checkpoint after reactive compact — the live context was
 	// modified and must be persisted so --resume can restore the compacted

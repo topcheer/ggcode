@@ -48,6 +48,8 @@ func Dispatch(cfg HookConfig, env HookEnv) HookResult {
 		hooks = cfg.OnStreamStop
 	case EventOnCompaction:
 		hooks = cfg.OnCompaction
+	case EventPreCompact:
+		hooks = cfg.PreCompact
 	default:
 		return HookResult{Allowed: true}
 	}
@@ -408,10 +410,22 @@ func RunStreamStopHooks(cfg HookConfig, env HookEnv) {
 
 // RunCompactionHooks runs on_compaction hooks asynchronously (fire-and-forget).
 // env should include TokenBefore and TokenAfter for the hook to see how much
-// context was reclaimed.
+// context was reclaimed, plus CompactTrigger ("auto", "reactive", "manual")
+// for the hook to know what initiated the compaction.
 func RunCompactionHooks(cfg HookConfig, env HookEnv) {
 	env.Event = EventOnCompaction
 	Dispatch(cfg, env)
+}
+
+// RunPreCompactHooks runs pre_compact hooks synchronously and returns the
+// result so callers can log failures. Unlike the blocking events, pre_compact
+// hooks CANNOT veto compaction (an exit 2 / HTTP 403 is recorded but ignored):
+// refusing to compact would leave the session stuck at a context-overflow
+// error. Synchronous execution is deliberate - the whole point of the event
+// is to let hooks persist state BEFORE the summarizer condenses older turns.
+func RunPreCompactHooks(cfg HookConfig, env HookEnv) HookResult {
+	env.Event = EventPreCompact
+	return Dispatch(cfg, env)
 }
 
 // --- Matching ---

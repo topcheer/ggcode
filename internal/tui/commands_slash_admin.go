@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
+	"github.com/topcheer/ggcode/internal/hooks"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/session"
@@ -132,10 +133,25 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 			if msgs := cm.Messages(); len(msgs) > 0 {
 				lastMsgID = msgs[len(msgs)-1].ID
 			}
+			// sa-159: pre_compact lets hooks persist critical state before
+			// the manual summarize condenses the context. Best-effort.
+			if res := hooks.RunPreCompactHooks(m.agent.GetHookConfig(), hooks.HookEnv{
+				TokenBefore:    tokens,
+				CompactTrigger: "manual",
+			}); res.Err != nil {
+				debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
+			}
 			if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
 				return compactResultMsg{err: fmt.Sprintf(m.t("compact.failed"), err)}
 			}
 			newTokens := cm.TokenCount()
+			// sa-159: report the manual compaction outcome to on_compaction
+			// hooks (fire-and-forget), consistent with auto/reactive paths.
+			hooks.RunCompactionHooks(m.agent.GetHookConfig(), hooks.HookEnv{
+				TokenBefore:    tokens,
+				TokenAfter:     newTokens,
+				CompactTrigger: "manual",
+			})
 			// Persist the compacted context as a checkpoint so --resume
 			// restores the compacted state instead of the full history.
 			m.agent.SaveCheckpointWithLastMsgID(lastMsgID)

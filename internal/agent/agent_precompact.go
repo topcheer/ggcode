@@ -182,6 +182,17 @@ func (a *Agent) StartPreCompact() {
 		defer close(pc.done)
 		defer cancel()
 
+		// sa-159: fire pre_compact hooks BEFORE the summarization request so
+		// hooks get a last chance to persist critical state while the full
+		// context still exists. Best-effort: hook failures never abort the
+		// compaction (refusing to compact would strand the session at PTL).
+		if res := hooks.RunPreCompactHooks(a.GetHookConfig(), hooks.HookEnv{
+			TokenBefore:    tokens,
+			CompactTrigger: "auto",
+		}); res.Err != nil {
+			debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
+		}
+
 		// Delay before sending the compression request.
 		// When precompact triggers, the agent's regular LLM turn fires
 		// simultaneously — the API rate-limits one of them if both hit at
@@ -271,6 +282,14 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			// Batch 2: guidance injection counters reset after compaction
 			// (the injected guidance text was compacted away).
 			a.resetGuidanceCounters()
+			// sa-159: on_compaction now also covers the primary auto path
+			// (background precompact consumption); previously only the reactive
+			// PTL-recovery path fired compaction hooks.
+			hooks.RunCompactionHooks(a.GetHookConfig(), hooks.HookEnv{
+				TokenBefore:    pc.startTok,
+				TokenAfter:     newTokens,
+				CompactTrigger: "auto",
+			})
 		}
 		if !applied {
 			reason := "unknown"

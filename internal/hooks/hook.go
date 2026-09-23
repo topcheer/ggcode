@@ -45,6 +45,13 @@ const (
 	EventOnAgentStop   = "on_agent_stop"
 	EventOnStreamStop  = "on_stream_stop"
 	EventOnCompaction  = "on_compaction"
+	// EventPreCompact fires synchronously BEFORE a context compaction begins,
+	// giving hooks a last chance to persist critical state (todo lists, working
+	// notes, audit trails) before older turns are summarized away. Mirrors the
+	// Claude Code PreCompact lifecycle event; non-blocking by design - a hook
+	// can never veto compaction, because refusing to compact ends the session
+	// in a context-overflow error.
+	EventPreCompact = "pre_compact"
 )
 
 // HookConfig holds all hooks from configuration, keyed by event.
@@ -55,6 +62,7 @@ type HookConfig struct {
 	OnAgentStop   []Hook `yaml:"on_agent_stop" json:"on_agent_stop"`
 	OnStreamStop  []Hook `yaml:"on_stream_stop" json:"on_stream_stop"`
 	OnCompaction  []Hook `yaml:"on_compaction" json:"on_compaction"`
+	PreCompact    []Hook `yaml:"pre_compact" json:"pre_compact"`
 }
 
 // HookResult is the result of running one or more hooks.
@@ -98,9 +106,13 @@ type HookEnv struct {
 	StopReason string // "completed", "cancelled", "error"
 	StopError  string
 
-	// Compaction context (on_compaction only)
+	// Compaction context (on_compaction, pre_compact only)
 	TokenBefore int // token count before compaction
-	TokenAfter  int // token count after compaction
+	TokenAfter  int // token count after compaction (0 for pre_compact)
+	// CompactTrigger explains what initiated the compaction: "auto"
+	// (threshold-scheduled background precompact or its consumption),
+	// "reactive" (prompt-too-long recovery), or "manual" (/compact).
+	CompactTrigger string
 
 	// Ctx allows callers to propagate cancellation (e.g., session cancellation)
 	// to hook execution. If nil, context.Background() is used.
@@ -158,6 +170,7 @@ func ValidateHooks(cfg HookConfig) []string {
 	validate("on_agent_stop", cfg.OnAgentStop)
 	validate("on_stream_stop", cfg.OnStreamStop)
 	validate("on_compaction", cfg.OnCompaction)
+	validate("pre_compact", cfg.PreCompact)
 
 	return errs
 }
