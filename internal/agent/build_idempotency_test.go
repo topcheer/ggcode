@@ -219,7 +219,7 @@ func TestDetectBuildTestCommand(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		isBuild, label := detectBuildTestCommand(tt.cmd)
+		isBuild, label, _ := detectBuildTestCommand(tt.cmd)
 		if isBuild != tt.isBuild {
 			t.Errorf("detectBuildTestCommand(%q): isBuild = %v, want %v", tt.cmd, isBuild, tt.isBuild)
 		}
@@ -231,22 +231,27 @@ func TestDetectBuildTestCommand(t *testing.T) {
 
 func TestDetectBuildTestCommand_EnvVarPrefix(t *testing.T) {
 	// Commands with env var prefixes should still be detected.
-	isBuild, label := detectBuildTestCommand("GOOS=linux go build ./...")
+	isBuild, label, key := detectBuildTestCommand("GOOS=linux go build ./...")
 	if !isBuild || label != "go build" {
 		t.Errorf("env-prefixed go build: isBuild=%v label=%q", isBuild, label)
+	}
+	// #2640: build-affecting env stays in the identity key so
+	// cross-compile and native builds never compare equal.
+	if key != "goos=linux|go build ./..." {
+		t.Errorf("identity key = %q, want goos=linux|go build ./...", key)
 	}
 }
 
 func TestDetectBuildTestCommand_CommentPrefix(t *testing.T) {
 	// Commands with leading comment lines should still be detected.
-	isBuild, label := detectBuildTestCommand("# build everything\ngo build ./...")
+	isBuild, label, _ := detectBuildTestCommand("# build everything\ngo build ./...")
 	if !isBuild || label != "go build" {
 		t.Errorf("comment-prefixed go build: isBuild=%v label=%q", isBuild, label)
 	}
 }
 
 func TestDetectBuildTestCommand_CaseInsensitive(t *testing.T) {
-	isBuild, _ := detectBuildTestCommand("GO TEST ./...")
+	isBuild, _, _ := detectBuildTestCommand("GO TEST ./...")
 	if !isBuild {
 		t.Error("uppercase GO TEST should be detected")
 	}
@@ -341,5 +346,45 @@ func TestShellMutatesSourcesCommonWriteSurfaces(t *testing.T) {
 		if !shellMutatesSources(cmd) {
 			t.Errorf("must be detected as source mutation: %q", cmd)
 		}
+	}
+}
+
+// TestBuildIdempotency_SameLabelDifferentCommand pins #2640: commands that
+// normalize to the SAME coarse label but are NOT the same command (different
+// package targets, different -run filters) must not trigger the "guaranteed
+// identical" warning — the target may have never run this session.
+func TestBuildIdempotency_SameLabelDifferentCommand(t *testing.T) {
+	s := newBuildIdempotencyState()
+	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
+		"command": "go test ./internal/a/",
+	}), 1)
+	// Scenario A: different package, same "go test" label.
+	w := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
+		"command": "go test ./internal/b/",
+	}), 2)
+	if w != "" {
+		t.Fatalf("scenario A: different package target must not warn, got: %s", w)
+	}
+	// Scenario C: different -run filter, same package.
+	w = s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
+		"command": "go test -run TestFoo ./internal/b/",
+	}), 3)
+	if w != "" {
+		t.Fatalf("scenario C: different -run filter must not warn, got: %s", w)
+	}
+}
+
+// TestBuildIdempotency_GOOSChangesIdentity pins #2640 scenario B: a
+// cross-compile rebuild after a native build is NOT redundant.
+func TestBuildIdempotency_GOOSChangesIdentity(t *testing.T) {
+	s := newBuildIdempotencyState()
+	s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
+		"command": "GOOS=linux go build ./...",
+	}), 1)
+	w := s.recordToolCall("run_command", mustJSONIdempot(t, map[string]interface{}{
+		"command": "go build ./...",
+	}), 2)
+	if w != "" {
+		t.Fatalf("native build after cross-compile must not warn, got: %s", w)
 	}
 }

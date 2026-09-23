@@ -16,17 +16,17 @@ import (
 //     repeat operations without new information. Categorises these as "redundant
 //     action" failures in the AgentErrorTaxonomy.
 //   - "A Self-Improving Coding Agent" (SICA, arXiv:2504.15228, NeurIPS 2025):
-//     trajectory waste is the primary bottleneck — 17-53% of iterations produce
+//     trajectory waste is the primary bottleneck - 17-53% of iterations produce
 //     no forward progress.
 //   - GAP: Graph-based Agent Planning (NeurIPS 2025 NORA): models
 //     inter-task dependencies to avoid redundant computation. The key insight:
-//     build/test commands are DETERMINISTIC — re-running them without source
+//     build/test commands are DETERMINISTIC - re-running them without source
 //     changes is guaranteed to produce identical results.
 //
 // Problem: AI coding agents waste iterations re-running deterministic build or
 // test commands (`go build`, `go test`, `npm test`, `make test`, etc.) when NO
 // source files were edited since the last build/test run. The output is
-// guaranteed identical, so the iteration is pure waste — consuming tokens,
+// guaranteed identical, so the iteration is pure waste - consuming tokens,
 // time, and context budget for zero new information.
 //
 // Example waste trajectory:
@@ -89,7 +89,7 @@ func (s *buildIdempotencyState) reset() {
 }
 
 // sourceMutatingTools lists tools that change source code, justifying a
-// rebuild. Canonical definition lives in verify_hint.go (#154) — this alias
+// rebuild. Canonical definition lives in verify_hint.go (#154) - this alias
 // keeps the historical name working and guaranteed in sync.
 var sourceMutatingToolsAlias = sourceMutatingTools
 
@@ -163,31 +163,69 @@ func stripEnvVars(s string) string {
 	return s
 }
 
+// buildAffectingEnv: assignments that change build/test outputs. #2640:
+// stripping them entirely made `GOOS=linux go build ./...` and
+// `go build ./...` compare equal, so cross-compile vs native builds were
+// declared "guaranteed identical".
+var buildAffectingEnv = map[string]bool{
+	"goos":        true,
+	"goarch":      true,
+	"cgo_enabled": true,
+	"goflags":     true,
+}
+
+// stripEnvVarsKeepBuildEnv behaves like stripEnvVars but records the
+// build-affecting assignments it removes into envKey (#2640).
+func stripEnvVarsKeepBuildEnv(s string, envKey *[]string) string {
+	for strings.Contains(s, "=") && !hasBuildTestPrefix(s) {
+		idx := strings.Index(s, " ")
+		if idx == -1 {
+			return s
+		}
+		assignment := s[:idx]
+		if eq := strings.Index(assignment, "="); eq > 0 {
+			name := strings.ToLower(strings.TrimSpace(assignment[:eq]))
+			if buildAffectingEnv[name] && envKey != nil {
+				*envKey = append(*envKey, assignment)
+			}
+		}
+		s = strings.TrimSpace(s[idx:])
+	}
+	return s
+}
+
 // detectBuildTestCommand checks whether a command string represents a deterministic
-// build or test operation whose output depends only on source files.
-func detectBuildTestCommand(cmd string) (bool, string) {
+// build or test operation whose output depends only on source files. It returns
+// (isBuild, displayLabel, identityKey): displayLabel is the coarse canonical
+// label used in warnings; identityKey is the full normalized command prefixed
+// by any build-affecting env assignments and is what redundancy comparison
+// uses (#2640 - the old label-only comparison treated `go test ./a/` and
+// `go test ./b/` as the same command and warned "guaranteed identical"
+// about a package that had never run).
+func detectBuildTestCommand(cmd string) (bool, string, string) {
 	c := strings.ToLower(strings.TrimSpace(cmd))
 	if c == "" {
-		return false, ""
+		return false, "", ""
 	}
 
 	// Strip leading shell comments and env vars to find the actual command.
 	// e.g. "# build\nGOOS=linux go build ./..." -> "go build ./..."
+	var envKey []string
 	for _, rawLine := range strings.Split(c, "\n") {
 		trimmed := strings.TrimSpace(rawLine)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		c = stripEnvVars(trimmed)
+		c = stripEnvVarsKeepBuildEnv(trimmed, &envKey)
 		break
 	}
 
 	for _, pat := range buildTestPatterns {
 		if strings.HasPrefix(c, pat.prefix) {
-			return true, pat.label
+			return true, pat.label, strings.Join(envKey, " ") + "|" + c
 		}
 	}
-	return false, ""
+	return false, "", ""
 }
 
 // recordToolCall processes a tool call. If it's a build/test command, it checks
@@ -222,7 +260,7 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 		s.editsSinceLastBuild++
 	}
 
-	isBuild, label := detectBuildTestCommand(cmd)
+	isBuild, label, cmdKey := detectBuildTestCommand(cmd)
 	if !isBuild {
 		return ""
 	}
@@ -238,7 +276,12 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 	// after a green build). The guarantee only holds for the SAME command;
 	// lastBuildCmd was written but never read (the third same-command
 	// evidence alongside the docblock's rationale and examples).
-	if s.lastBuildIter > 0 && s.editsSinceLastBuild == 0 && label == s.lastBuildCmd {
+	// #2640: compare on the full identity key (normalized command +
+	// build-affecting env), not the coarse label - the label collapsed
+	// `go test ./a/` and `go test ./b/` into the same "go test" and
+	// warned "guaranteed identical" about a never-run package; the same
+	// held for GOOS=linux vs native builds and different -run filters.
+	if s.lastBuildIter > 0 && s.editsSinceLastBuild == 0 && cmdKey == s.lastBuildCmd {
 		s.totalRedundant++
 		if s.warnsIssued < s.maxWarns {
 			s.warnsIssued++
@@ -250,7 +293,7 @@ func (s *buildIdempotencyState) recordToolCall(toolName string, args json.RawMes
 
 	// Update state: this is now the most recent build.
 	s.lastBuildIter = iteration
-	s.lastBuildCmd = label
+	s.lastBuildCmd = cmdKey
 	s.editsSinceLastBuild = 0
 
 	return warning
