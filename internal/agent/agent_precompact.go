@@ -234,6 +234,11 @@ func (a *Agent) StartPreCompact() {
 	})
 }
 
+// sa159RunCompactionHooks routes the auto-path on_compaction fire through a
+// package-level var so tests can count invocations (#2687: the deleted
+// legacy duplicate fire made this untestable from the agent side).
+var sa159RunCompactionHooks = hooks.RunCompactionHooks
+
 // consumeReadyPreCompact applies a completed background pre-compact without
 // waiting. If compaction is still running, the current LLM turn proceeds with
 // the existing context; a later turn can apply the result.
@@ -285,7 +290,7 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 			// sa-159: on_compaction now also covers the primary auto path
 			// (background precompact consumption); previously only the reactive
 			// PTL-recovery path fired compaction hooks.
-			hooks.RunCompactionHooks(a.GetHookConfig(), hooks.HookEnv{
+			sa159RunCompactionHooks(a.GetHookConfig(), hooks.HookEnv{
 				TokenBefore:    pc.startTok,
 				TokenAfter:     newTokens,
 				CompactTrigger: "auto",
@@ -372,12 +377,12 @@ func (a *Agent) consumeReadyPreCompact(onEvent func(provider.StreamEvent)) bool 
 		if onEvent != nil {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Auto-compressing context... done (%d → %d tokens)] ", pc.startTok, newTokens)})
 		}
-		// Fire on_compaction hooks (fire-and-forget).
-		hookCfg := a.GetHookConfig()
-		hooks.RunCompactionHooks(hookCfg, hooks.HookEnv{
-			TokenBefore: pc.startTok,
-			TokenAfter:  newTokens,
-		})
+		// #2687: the legacy on_compaction fire that used to live here was
+		// REMOVED - sa-159 added the auto-trigger call above (L288) without
+		// deleting it, so every successful auto-precompact fired on_compaction
+		// twice (second event with an empty CompactTrigger, polluting trigger
+		// classification and doubling counting hooks). Exactly one fire with
+		// trigger=auto per successful compaction is pinned in zz_issue2687_test.
 		return true
 	default:
 		debug.Log("precompact", "still running; continuing without waiting")
