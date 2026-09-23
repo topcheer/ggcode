@@ -355,9 +355,25 @@ func shellMutatesSources(cmd string) bool {
 	for _, pat := range []string{
 		"tee ",       // tee file.go (no redirection form)
 		"cp ", "mv ", // overwrite/replace targets
-		"git restore",                       // discard local edits
-		"git checkout --", "git checkout .", // revert working tree
+		"git restore", // discard local edits
+		// #2655: `git checkout` relaxed from the two narrow arg forms ("--",
+		// ".") to prefix match - the branch form `git checkout <branch>` and
+		// `git switch` rewrite potentially every tracked file, yet passed the
+		// old table, so a cached `go test` from the OLD branch replayed with a
+		// literally false "no source files have changed" note for the full
+		// 10-minute TTL. FP forms (`git checkout -b`) cost one lost cache
+		// reuse - the asymmetry this table is documented on.
+		"git checkout",          // branch switch or working-tree revert
+		"git switch",            // branch switch rewrites tracked files
+		"git pull", "git merge", // fast-forward/merge advance the worktree
 		"git stash", // drop/apply cycles mutate sources
+		// #2655: download/copy/extract surfaces that write into the tree.
+		// Broad on purpose (a bare `curl` to stdout is an accepted FP - same
+		// posture as "cp "); `wget` writes by default, and `tar`/`unzip`
+		// extract over whatever stands in their way. `scp` is already caught
+		// by the "cp " substring; listed explicitly for self-documentation.
+		"curl ", "wget ", "rsync ", "scp ",
+		"tar ", "unzip ",
 		"clang-format -i", "perl -pi", "perl -i",
 		" of=", // dd of=file (any position)
 		"install ",

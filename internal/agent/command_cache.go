@@ -140,7 +140,12 @@ func isCacheableCommand(command string) bool {
 	cacheablePrefixes := []string{
 		"make build", "make test", "make lint", "make check", "make verify", "make ci",
 		"make\tbuild", "make\ttest", "make\tlint", "make\tcheck", "make\tverify", "make\tci",
-		"go build", "go test", "go vet", "go check", "go fmt", "go lint",
+		// #2655: "go fmt" removed - a dead entry since #1028: every `go fmt`
+		// run is classified a source mutation, so its own put (agent.go)
+		// is invalidated in the same iteration and the entry can never hit.
+		// A file-writing command also violates the "deterministic
+		// build/test/lint" charter (cf. excluded `go generate`, `npm install`).
+		"go build", "go test", "go vet", "go check", "go lint",
 		"npm test", "npm run test", "npm run build", "npm run lint", "npm run check",
 		"npm run verify", "npm run typecheck", "npm run type-check",
 		"npx tsc", "npx eslint", "npx jest",
