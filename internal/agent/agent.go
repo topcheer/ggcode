@@ -4637,14 +4637,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// metered at full size dilutes it).
 			measuredLen := len(result.Content)
 			a.applyToolResultGuidance(&result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint)
+			// Untrusted-content spotlighting: the block sent to the provider
+			// is wrapped in untrusted_tool_output markers (data marking);
+			// TUI events and detector chains keep the raw result.Content.
+			llmContent := spotlightUntrustedOutput(tc.Name, result.Content)
 			if len(result.Images) > 0 && a.SupportsVision() {
 				imgs := make([]provider.ContentImage, len(result.Images))
 				for i, ri := range result.Images {
 					imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 				}
-				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, result.Content, imgs, result.IsError))
+				toolResults = append(toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, llmContent, imgs, result.IsError))
 			} else {
-				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, result.Content, result.IsError))
+				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, llmContent, result.IsError))
 			}
 			onEvent(provider.StreamEvent{
 				Type:    provider.StreamEventToolResult,
