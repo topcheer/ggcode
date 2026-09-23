@@ -14,25 +14,16 @@ ggcode will invoke the specified agent, which runs in the current working direct
 
 ## Supported Agents
 
-ggcode auto-detects the following agents. Only agents found on your system appear in the `delegate` tool.
+ggcode auto-detects ACP-compatible agents from the built-in registry
+(`internal/acp/discovery.go`). Only agents whose binary is found in `$PATH`
+appear in the `delegate` tool — its description always lists the exact set
+detected on your system.
 
 | Agent | Binary | Use Case |
 |-------|--------|----------|
 | **GitHub Copilot** | `copilot` | GitHub workflows, code explanation, refactoring |
-| **Claude** (Anthropic) | `claude` | Deep reasoning, complex code generation |
-| **Cursor** | `cursor` | Code-aware editing and refactoring |
-| **Codex** (OpenAI) | `codex` | Code generation and debugging |
-| **Gemini** (Google) | `gemini` | Multimodal analysis, code review |
-| **Kimi** (Moonshot) | `kimi` | Long-context code understanding |
-| **Qwen** (Alibaba) | `qwen` | Multi-language code generation |
-| **Droid** (Factory) | `droid` | Autonomous multi-file refactoring |
-| **OpenCode** | `opencode` | Lightweight multi-provider agent |
-| **KiloCode** | `kilocode` | Code generation and transformation |
-| **Trae** (ByteDance) | `trae` | Real-time coding assistance |
-| **Kiro** (AWS) | `kiro` | IDE-integrated development |
-| **Qoder** | `qoder` | Code generation and review |
-| **Pi** (PolyMind) | `pi` | Specialized analysis |
-| **Fast Agent** | `fast-agent` | MCP-native agent framework |
+| **Droid** (Factory) | `droid` | Autonomous code generation, multi-file refactoring |
+| **OpenCode** | `opencode` | Lightweight agent with multi-provider LLM support |
 
 ## Usage
 
@@ -41,9 +32,9 @@ ggcode auto-detects the following agents. Only agents found on your system appea
 Simply mention the agent by name:
 
 ```
-> ask claude to review the security of src/auth/
-> let cursor refactor the database layer
-> use codex to write tests for internal/handler/
+> ask copilot to review the security of src/auth/
+> let opencode refactor the database layer
+> use droid to write tests for internal/handler/
 ```
 
 ### Direct Tool Call

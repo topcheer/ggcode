@@ -27,15 +27,21 @@ Connect ggcode to instant messaging platforms so you can send prompts and receiv
 
 ### Add an Adapter
 
+The adapter name is a positional argument; credentials are passed via `--extra KEY=VALUE`:
+
 ```bash
-ggcode im config add --platform telegram --name my-tg --token YOUR_TOKEN
+ggcode im config add my-tg --platform telegram --extra token=YOUR_TOKEN
 ```
+
+Run `ggcode im config add` with no arguments to enter the interactive setup wizard.
 
 ### List Adapters
 
 ```bash
-ggcode im config list
+ggcode im list
 ```
+
+(There is no `im config list` — `list` is a direct `im` subcommand, aliased `adapters`.)
 
 ### Remove an Adapter
 
@@ -118,10 +124,10 @@ The IM runtime includes a **binding hot watcher** (`binding_watcher.go`) that mo
 
 ## Sharing Sessions
 
-Share a session with an IM channel:
+You don't need a command to share a session with an IM channel: once an adapter
+is bound (via `ggcode im bind` or `ggcode im pair`), the agent's replies in that
+workspace are delivered to the bound channel automatically.
 
-```bash
-ggcode im share
-```
-
-This mirrors the agent's output to the IM channel, allowing remote monitoring and interaction.
+Note: `ggcode im share` (PrivateClaw share-link generation) is a placeholder in
+the current CLI — it requires a running PrivateClaw adapter and is not yet
+functional.

@@ -18,11 +18,14 @@ ggcode Mobile connects to your desktop or CLI ggcode instance via a relay server
 Pair your mobile device by scanning a QR code generated from either:
 
 - The desktop app (Settings → Pair Mobile)
-- The CLI:
+- The interactive TUI, via the `/share` (or `/tunnel`) slash command — a "Mobile Tunnel" QR overlay appears and the connect URL is copied to your clipboard:
 
-```bash
-ggcode mobile pair
+```text
+/share
 ```
+
+There is no standalone `ggcode mobile` CLI subcommand; pairing always happens
+through a running TUI or desktop instance.
 
 Scan the QR code with the ggcode Mobile app to complete pairing.
 

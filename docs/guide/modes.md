@@ -116,10 +116,13 @@ Switch modes without restarting using the `/mode` slash command, or press `Shift
 
 ## Pipe Mode
 
-When using pipe mode (`-p`), ggcode defaults to `supervised` mode unless `--bypass` is specified:
+Pipe mode (`-p`) is non-interactive, so a `supervised` default would block on
+confirmations. In pipe mode ggcode therefore runs in `auto` mode by default.
+`--bypass` forces bypass mode, and a configured `default_mode` of `plan`,
+`bypass`, or `autopilot` is honored as well:
 
 ```bash
-echo "fix the typo" | ggcode -p            # supervised mode (asks confirmation)
+echo "fix the typo" | ggcode -p            # auto mode (safe ops approved, dangerous ones refused)
 echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
 ```
 
