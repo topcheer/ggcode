@@ -81,7 +81,7 @@ var approachPivotRe = regexp.MustCompile(`(?i)(?:` +
 	`|alternatively[,!.]` +
 	`|another\s+(?:approach|strategy|way|method|option)\s+(?:would|could|to|is)` +
 	`|let\s+me\s+(?:reconsider|rethink|revisit|take\s+a\s+step\s+back)` +
-	`|i\s+'ll\s+(?:try\s+)?(?:a\s+)?(?:different|another|alternative)\s+(?:approach|strategy|way|tactic)` +
+	`|i\s*'ll\s+(?:try\s+)?(?:a\s+|an\s+)?(?:different|another|alternative)\s+(?:approach|strategy|way|tactic)` +
 	`|switching\s+(?:to|approach|strategy)` +
 	`|pivoting\s+(?:to|from)` +
 	`|instead\s+of\s+.{2,60}[,;.]\s+let(?:'s|\s+me)\s+` +
