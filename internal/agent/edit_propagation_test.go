@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEditPropagation_BasicTracking(t *testing.T) {
 	s := newEditPropagationState()
@@ -50,17 +53,22 @@ func TestEditPropagation_WarnAt4Files(t *testing.T) {
 	}
 }
 
-func TestEditPropagation_EscalateAt7(t *testing.T) {
+func TestEditPropagation_WarnAt7Files_SingleTier(t *testing.T) {
 	s := newEditPropagationState()
 
-	for i, p := range []string{"/a.go", "/b.go", "/c.go", "/d.go", "/e.go", "/f.go", "/g.go"} {
-		_ = i
+	for _, p := range []string{"/a.go", "/b.go", "/c.go", "/d.go", "/e.go", "/f.go", "/g.go"} {
 		s.recordEdit("edit_file", `{"file_path":"`+p+`"}`)
 	}
 
 	msg := s.maybeWarn(5)
 	if msg == "" {
 		t.Fatal("should warn at 7 files")
+	}
+	// Single tier (#2709): the former escalation wording ("Run a build+test
+	// NOW... non-linearly") was removed with the unreachable escalation
+	// branch; the 7-file case must use the same single-tier copy as 4 files.
+	if strings.Contains(msg, "build+test NOW") {
+		t.Fatalf("escalation wording should be gone in single-tier design, got: %s", msg)
 	}
 }
 
