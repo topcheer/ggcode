@@ -88,7 +88,7 @@ var (
 var neverExecutedMarkers = []string{
 	"Permission denied for tool", // policy/user denial (agent_tool.go)
 	"invalid input:",             // argument parse failure
-	"blocked",                    // command gate block
+	"Command blocked:",           // command gate block - exact prefix (#2711): the bare word "blocked" also appears in real executed failures ("Request blocked by proxy")
 	"failed to resolve shell",    // environment failure
 	"command job manager not available",
 	"failed to start command job", // never spawned
