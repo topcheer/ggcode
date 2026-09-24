@@ -194,7 +194,7 @@ type WaitCommandTool struct {
 func (t WaitCommandTool) Name() string { return "wait_command" }
 
 func (t WaitCommandTool) Description() string {
-	return "Wait briefly for a background command job and then return its current status plus recent output. Use since_line as the last Total lines value already seen to poll incrementally."
+	return "Wait briefly (15-60s, default 30) for a background job, then return its status plus output since the given since_line. Keep wait_seconds short and re-poll instead of waiting the full expected runtime: jobs often fail early."
 }
 
 func (t WaitCommandTool) Parameters() json.RawMessage {
@@ -207,7 +207,7 @@ func (t WaitCommandTool) Parameters() json.RawMessage {
 		},
 		"wait_seconds": {
 			"type": "integer",
-			"description": "How long to wait before returning (default: 30)"
+			"description": "How long to wait before returning (default: 30). Keep short (15-60s) and re-poll."
 		},
 		"tail_lines": {
 			"type": "integer",

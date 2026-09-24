@@ -25,7 +25,7 @@ type WaitAgentTool struct {
 func (t WaitAgentTool) Name() string { return "wait_agent" }
 
 func (t WaitAgentTool) Description() string {
-	return "Wait briefly for a spawned one-shot agent run, then return its current status snapshot. Completed runs include their result; running runs include phase and progress. This does not send new instructions or cancel the run."
+	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run."
 }
 
 func (t WaitAgentTool) Parameters() json.RawMessage {
@@ -38,7 +38,7 @@ func (t WaitAgentTool) Parameters() json.RawMessage {
 		},
 		"wait_seconds": {
 			"type": "integer",
-			"description": "How long to wait before returning a status snapshot (default: 30)"
+			"description": "How long to wait before returning a status snapshot (default: 30). Keep short (15-60s) and re-poll."
 		},
 		"description": {
 			"type": "string",
