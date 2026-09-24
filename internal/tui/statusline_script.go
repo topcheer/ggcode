@@ -128,6 +128,15 @@ func runStatuslineCommand(command string, payload statuslinePayload, timeout tim
 	} else {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
+	// The shell may fork the real script as a grandchild that inherits the
+	// stdout pipe; killing only the direct child leaves the grandchild alive
+	// holding the pipe, so cmd.Output() blocks until it exits naturally (CI
+	// showed a 5s `sleep 5` surviving an 80ms timeout). Kill the whole
+	// process group on timeout, and keep WaitDelay as the cross-platform
+	// backstop that force-closes the pipes if any survivor still holds them.
+	cmd.SysProcAttr = statuslineProcAttr()
+	cmd.Cancel = func() error { return statuslineCancelKill(cmd) }
+	cmd.WaitDelay = time.Second
 	cmd.Stdin = bytes.NewReader(input)
 	out, err := cmd.Output()
 	if err != nil {
