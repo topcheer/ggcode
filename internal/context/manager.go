@@ -1553,12 +1553,24 @@ const reasoningCompactMinLen = 200
 // EstimateClearableTokens was removed (#718): it returned ~920*count CHARS
 // while its name/doc promised TOKENS (a 4x overestimate that would have made
 // any cache-break-vs-savings gate decide in the wrong direction), and it had
-// zero callers repo-wide. ClearOldToolResults below is the live mechanism.
+// zero callers repo-wide.
+//
+// ClearOldToolResults below is NOT wired into the live pipeline either:
+// v1.3.153 (49204c22) intentionally removed the multi-tier progressive
+// clearing schedule from StartPreCompact. The only mechanical recovery steps
+// in the live compaction path are CompactOldReasoningBlocks and
+// CompactSupersededReads (agent_precompact.go). ClearOldToolResults and
+// ClearOldToolUseInputs are retained as exported API only.
 
 // ClearOldToolResults replaces large tool_result outputs from older messages
 // with short placeholders, keeping the most recent `keepN` tool results intact.
 // This is a cheap, mechanical context-recovery technique that avoids the cost
 // of LLM-based compaction. It is safe to call repeatedly (idempotent).
+//
+// STATUS (since v1.3.153): NOT called by the agent pipeline. The multi-tier
+// clearing schedule was intentionally simplified away; only
+// CompactSupersededReads remains wired in agent_precompact.go. Retained as
+// exported API for compatibility - do not assume it runs automatically.
 //
 // Only clears:
 //   - tool_result blocks with Output > toolResultClearMinLen
@@ -1876,6 +1888,9 @@ func headRunesPlain(s string, maxBytes int) string {
 // whose corresponding tool_result has already been cleared by ClearOldToolResults.
 // This recovers context from large tool arguments (e.g., full file content in
 // edit_file/write_file Input) that are no longer needed once the result is gone.
+//
+// STATUS (since v1.3.153): NOT called by the agent pipeline (see
+// ClearOldToolResults). Retained as exported API for compatibility.
 //
 // Only clears tool_use blocks where:
 //   - Input length exceeds toolUseInputClearMinLen
