@@ -82,12 +82,31 @@ func LoadInstanceConfig(workspace string) *Config {
 	var rawKeys map[string]interface{}
 	if err := yaml.Unmarshal(data, &rawKeys); err == nil {
 		cfg.explicitKeys = make(map[string]bool, len(rawKeys))
-		for k := range rawKeys {
-			cfg.explicitKeys[k] = true
-		}
+		flattenExplicitKeys("", rawKeys, cfg.explicitKeys)
 	}
 	cfg.FilePath = path
 	return &cfg
+}
+
+// flattenExplicitKeys records every key path the instance file explicitly
+// contains, recursing into nested maps as dotted paths ("a2a.auth.api_key").
+// Top-level scalars keep their plain name so existing lookups like
+// explicit("language") are unchanged; nested sections additionally record
+// each intermediate path ("a2a", "a2a.auth"). #2702: the a2a/knight merges
+// need sub-key explicitness - a raw "enabled: false" under knight must
+// override a truthy global, which the old top-level-only set could not
+// express, so cleared/disabled values silently resurrected on reload.
+func flattenExplicitKeys(prefix string, m map[string]interface{}, out map[string]bool) {
+	for k, v := range m {
+		path := k
+		if prefix != "" {
+			path = prefix + "." + k
+		}
+		out[path] = true
+		if nested, ok := v.(map[string]interface{}); ok {
+			flattenExplicitKeys(path, nested, out)
+		}
+	}
 }
 
 // HasInstanceConfig returns true if an instance config file exists for the workspace.
@@ -209,10 +228,10 @@ func MergeInstance(global, instance *Config) {
 	// in instanceFields — without this, instance knight/a2a/subagents/swarm
 	// values leaked into the global ggcode.yaml on Save() (same class of bug
 	// the hook leak was fixed with via mergeHookConfig's tracked map).
-	mergeKnightConfig(&global.KnightConfig, &instance.KnightConfig, global.instanceFields)
+	mergeKnightConfig(&global.KnightConfig, &instance.KnightConfig, global.instanceFields, explicit)
 
 	// A2A
-	mergeA2AConfigFields(&global.A2A, &instance.A2A, global.instanceFields)
+	mergeA2AConfigFields(&global.A2A, &instance.A2A, global.instanceFields, explicit)
 
 	// SubAgents
 	mergeSubAgentConfig(&global.SubAgents, &instance.SubAgents, global.instanceFields)
@@ -287,13 +306,12 @@ func mergeIMConfig(global, instance *IMConfig, tracked map[string]bool) {
 // mergeKnightConfig merges instance Knight config into global. Fields filled
 // from the instance are recorded in tracked so Save() strips them from the
 // global file write (#609).
-func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool) {
-	// Knight.Enabled default is true; only override if global is explicitly false
-	// and instance is true, or vice versa. Since we can't distinguish "explicitly
-	// false" from "default false" without the YAML raw data, we use the simple rule:
-	// instance wins only if global is at default.
-	// For simplicity: if instance sets Enabled differently, we respect instance
-	// only when global is at the DefaultKnightConfig value.
+func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool, explicit func(string) bool) {
+	// #2702: an instance file that EXPLICITLY contains knight.<key>
+	// overrides the global even with a zero/false value - the write side
+	// (diffKnight) deliberately persists explicit clears/disables, and the
+	// old gap-fill-only gates silently resurrected the global value on
+	// reload (knight.enabled=false written, knight re-enabled on restart).
 	if !global.Enabled && instance.Enabled {
 		// Global is false (could be default or explicit), instance wants true.
 		// Since we can't tell, we let instance fill the gap.
@@ -302,17 +320,20 @@ func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool) 
 		// may want to enable knight for a specific project.
 		global.Enabled = instance.Enabled
 		tracked["knight"] = true
+	} else if explicit("knight.enabled") && global.Enabled != instance.Enabled {
+		global.Enabled = instance.Enabled
+		tracked["knight"] = true
 	}
 
-	if global.TrustLevel == "" && instance.TrustLevel != "" {
+	if global.TrustLevel == "" && instance.TrustLevel != "" || explicit("knight.trust_level") {
 		global.TrustLevel = instance.TrustLevel
 		tracked["knight"] = true
 	}
-	if global.DailyTokenBudget == 0 && instance.DailyTokenBudget != 0 {
+	if global.DailyTokenBudget == 0 && instance.DailyTokenBudget != 0 || explicit("knight.daily_token_budget") {
 		global.DailyTokenBudget = instance.DailyTokenBudget
 		tracked["knight"] = true
 	}
-	if global.IdleDelaySec == 0 && instance.IdleDelaySec != 0 {
+	if global.IdleDelaySec == 0 && instance.IdleDelaySec != 0 || explicit("knight.idle_delay_sec") {
 		global.IdleDelaySec = instance.IdleDelaySec
 		tracked["knight"] = true
 	}
@@ -337,28 +358,33 @@ func mergeKnightConfig(global, instance *KnightConfig, tracked map[string]bool) 
 // mergeA2AConfigFields merges instance A2A config into global.
 // Uses the same "global wins if set" rule. Instance-filled fields are
 // tracked so Save() keeps them out of the global file (#609).
-func mergeA2AConfigFields(global, instance *A2AConfig, tracked map[string]bool) {
-	if !global.Disabled && instance.Disabled {
-		global.Disabled = instance.Disabled
-		tracked["a2a"] = true
+func mergeA2AConfigFields(global, instance *A2AConfig, tracked map[string]bool, explicit func(string) bool) {
+	// #2702: same explicit-override rule as mergeKnightConfig - diffA2A
+	// deliberately writes explicit clears (a2a.auth.api_key="" etc.),
+	// which gap-fill-only gates resurrected on reload.
+	if !global.Disabled && instance.Disabled || explicit("a2a.disabled") {
+		if global.Disabled != instance.Disabled {
+			global.Disabled = instance.Disabled
+			tracked["a2a"] = true
+		}
 	}
-	if global.Port == 0 && instance.Port != 0 {
+	if global.Port == 0 && instance.Port != 0 || explicit("a2a.port") {
 		global.Port = instance.Port
 		tracked["a2a"] = true
 	}
-	if global.Host == "" && instance.Host != "" {
+	if global.Host == "" && instance.Host != "" || explicit("a2a.host") {
 		global.Host = instance.Host
 		tracked["a2a"] = true
 	}
-	if global.MaxTasks == 0 && instance.MaxTasks != 0 {
+	if global.MaxTasks == 0 && instance.MaxTasks != 0 || explicit("a2a.max_tasks") {
 		global.MaxTasks = instance.MaxTasks
 		tracked["a2a"] = true
 	}
-	if global.TaskTimeout == "" && instance.TaskTimeout != "" {
+	if global.TaskTimeout == "" && instance.TaskTimeout != "" || explicit("a2a.task_timeout") {
 		global.TaskTimeout = instance.TaskTimeout
 		tracked["a2a"] = true
 	}
-	if global.Auth.APIKey == "" && instance.Auth.APIKey != "" {
+	if global.Auth.APIKey == "" && instance.Auth.APIKey != "" || explicit("a2a.auth.api_key") {
 		global.Auth.APIKey = instance.Auth.APIKey
 		tracked["a2a"] = true
 	}
