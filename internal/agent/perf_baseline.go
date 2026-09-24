@@ -371,11 +371,15 @@ func (a *Agent) maybeInjectPerfRegression() {
 	// Count how many of the last 3 runs exceeded regression thresholds,
 	// bucketed per metric. Consensus requires at least 2 of 3 recent runs to
 	// regress on the SAME metric -- cross-metric votes (run1 hits iterations,
-	// run2 hits duration) must not pass the gate (#1143).
+	// run2 hits duration) must not pass the gate (#1143). A single run that
+	// regresses on several metrics votes for EACH of them (#2723): metrics
+	// like iterations and duration are strongly correlated, and letting the
+	// first hit monopolize the run's vote systematically hid real 2/3
+	// same-metric consensus.
 	metricCounts := make(map[string]int)
 	for _, r := range recent3 {
-		if _, metric := checkSingleRunRegression(r, mid); metric != "" {
-			metricCounts[metric]++
+		for _, m := range collectRunRegressionMetrics(r, mid) {
+			metricCounts[m]++
 		}
 	}
 
@@ -404,15 +408,29 @@ func (a *Agent) maybeInjectPerfRegression() {
 }
 
 // checkSingleRunRegression checks if a single run regressed against baseline.
-// Returns (true, metricName) if any key metric regressed.
+// Returns (true, metricName) for the first regressed metric in perfMetricOrder
+// priority. Callers that need ALL regressed metrics (voting, worst-run
+// selection) must use collectRunRegressionMetrics (#2723).
 func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
+	if hits := collectRunRegressionMetrics(run, baseline); len(hits) > 0 {
+		return true, hits[0]
+	}
+	return false, ""
+}
+
+// collectRunRegressionMetrics returns EVERY metric this run regressed on,
+// in perfMetricOrder priority (#2723). The old first-hit-only return let a
+// dual-regression run (common: iterations and duration move together) cast
+// a single vote and hid same-metric 2/3 consensus.
+func collectRunRegressionMetrics(run, baseline perfBaselineEntry) []string {
+	var hits []string
 	// Iterations regression: 1.5x baseline
 	if baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor) {
-		return true, "iterations"
+		hits = append(hits, "iterations")
 	}
 	// Duration regression: 1.5x baseline (skip if baseline is very short)
 	if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
-		return true, "duration"
+		hits = append(hits, "duration")
 	}
 	// Error rate regression: 2x baseline error count.
 	// #1143: removed the always-true "baseline.Errors >= 0" guard.
@@ -421,21 +439,20 @@ func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 		runRate := float64(run.Errors) / float64(run.ToolCalls)
 		if baseRate == 0 && runRate > 0.05 {
 			// Baseline had 0 errors, current run has >5% error rate
-			return true, "error_rate"
-		}
-		if baseRate > 0 && runRate > baseRate*perfErrorRateFactor {
-			return true, "error_rate"
+			hits = append(hits, "error_rate")
+		} else if baseRate > 0 && runRate > baseRate*perfErrorRateFactor {
+			hits = append(hits, "error_rate")
 		}
 	}
 	// Context peak regression: context is growing 1.5x baseline
 	if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
-		return true, "context_usage"
+		hits = append(hits, "context_usage")
 	}
 	// Compaction regression: significantly more compactions than baseline
 	if baseline.Compactions == 0 && run.Compactions >= 3 {
-		return true, "compaction"
+		hits = append(hits, "compaction")
 	}
-	return false, ""
+	return hits
 }
 
 // perfRegressionConsensusRuns is how many of the recent runs must regress on
@@ -468,7 +485,16 @@ func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, me
 	worst := runs[len(runs)-1]
 	bestVal := -1
 	for _, r := range runs {
-		if _, m := checkSingleRunRegression(r, baseline); m != metric {
+		// Membership via the full collected set, not the first-hit metric: a
+		// dual-regression run IS a hit for duration too (#2723).
+		hit := false
+		for _, m := range collectRunRegressionMetrics(r, baseline) {
+			if m == metric {
+				hit = true
+				break
+			}
+		}
+		if !hit {
 			continue
 		}
 		if v := perfMetricValue(r, metric); v > bestVal {
