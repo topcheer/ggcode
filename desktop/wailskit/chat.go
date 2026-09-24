@@ -1916,11 +1916,16 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 				return
 			}
 			key := "run-insights"
-			existing, _, err := autoMem.LoadAll()
+			// #2715 (same as #1752 case 3 / #1388): LoadAll merges EVERY
+			// active memory key - writing the merge back into run-insights
+			// cross-pollutes all project memories into run-insights, which
+			// is then reinjected with every prompt and snowballs. The TUI
+			// and daemon reflection paths already use LoadKey.
+			existing, err := autoMem.LoadKey(key)
 			if err == nil && existing != "" {
 				insights = agent.MergeInsights(existing, insights)
 			}
-			if err := autoMem.SaveMemory(key, insights); err != nil {
+			if err := autoMem.SaveMemoryWithSource(key, insights, "run-reflection"); err != nil {
 				log.Printf("[reflection] failed to save insights: %v", err)
 			}
 		})
