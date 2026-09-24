@@ -472,80 +472,102 @@ type closeLoopWalker struct {
 // (a bare break binds to that select/switch instead of the loop).
 func (w *closeLoopWalker) scanStmtList(stmts []ast.Stmt, funcLit, breakBarrier bool) {
 	for i, s := range stmts {
-		switch n := s.(type) {
-		case *ast.ExprStmt:
-			if ce, ok := n.X.(*ast.CallExpr); ok && isCloseCall(ce) {
-				w.recordIfNotExempted(ce, closeCtx{stmts: stmts, next: i + 1, funcLit: funcLit, breakBarrier: breakBarrier})
-			} else {
-				w.walkExprForFuncLits(n.X, breakBarrier)
-			}
-		case *ast.DeferStmt:
-			if isCloseCall(n.Call) {
-				w.recordIfNotExempted(n.Call, closeCtx{stmts: stmts, next: i + 1, funcLit: funcLit, breakBarrier: breakBarrier})
-			} else {
-				w.walkExprForFuncLits(n.Call, breakBarrier)
-			}
-		case *ast.GoStmt:
-			if isCloseCall(n.Call) {
-				w.recordIfNotExempted(n.Call, closeCtx{stmts: stmts, next: i + 1, funcLit: funcLit, breakBarrier: breakBarrier})
-			} else {
-				w.walkExprForFuncLits(n.Call, breakBarrier)
-			}
-		case *ast.AssignStmt:
-			for _, rhs := range n.Rhs {
-				w.walkExprForFuncLits(rhs, breakBarrier)
-			}
-		case *ast.ReturnStmt:
-			for _, v := range n.Results {
-				w.walkExprForFuncLits(v, breakBarrier)
-			}
-		case *ast.SendStmt:
-			w.walkExprForFuncLits(n.Value, breakBarrier)
-		case *ast.IfStmt:
-			w.walkExprForFuncLits(n.Cond, breakBarrier)
-			w.scanStmtList(n.Body.List, funcLit, breakBarrier)
-			if elseBlock, ok := n.Else.(*ast.BlockStmt); ok {
-				w.scanStmtList(elseBlock.List, funcLit, breakBarrier)
-			} else if elseIf, ok := n.Else.(*ast.IfStmt); ok {
-				w.scanStmtList([]ast.Stmt{elseIf}, funcLit, breakBarrier)
-			}
-		case *ast.ForStmt:
-			if n.Body != nil {
-				w.scanStmtList(n.Body.List, funcLit, breakBarrier)
-			}
-		case *ast.RangeStmt:
-			if n.Body != nil {
-				w.scanStmtList(n.Body.List, funcLit, breakBarrier)
-			}
-		case *ast.SelectStmt:
-			if n.Body != nil {
-				for _, cc := range n.Body.List {
-					if comm, ok := cc.(*ast.CommClause); ok {
-						w.scanStmtList(comm.Body, funcLit, true)
-					}
-				}
-			}
-		case *ast.SwitchStmt:
-			if n.Body != nil {
-				for _, cc := range n.Body.List {
-					if cs, ok := cc.(*ast.CaseClause); ok {
-						w.scanStmtList(cs.Body, funcLit, true)
-					}
-				}
-			}
-		case *ast.TypeSwitchStmt:
-			if n.Body != nil {
-				for _, cc := range n.Body.List {
-					if cs, ok := cc.(*ast.CaseClause); ok {
-						w.scanStmtList(cs.Body, funcLit, true)
-					}
-				}
-			}
-		case *ast.LabeledStmt:
-			w.scanStmtList([]ast.Stmt{n.Stmt}, funcLit, breakBarrier)
-		case *ast.BlockStmt:
-			w.scanStmtList(n.List, funcLit, breakBarrier)
+		if w.scanCloseBearingStmt(s, closeCtx{stmts: stmts, next: i + 1, funcLit: funcLit, breakBarrier: breakBarrier}) {
+			continue
 		}
+		w.scanContainerStmt(s, funcLit, breakBarrier)
+	}
+}
+
+// scanCloseBearingStmt handles statement forms whose expressions can carry a
+// close call or function literals (expression / defer / go / assign /
+// return / send). It reports whether the statement was handled here.
+func (w *closeLoopWalker) scanCloseBearingStmt(s ast.Stmt, ctx closeCtx) bool {
+	switch n := s.(type) {
+	case *ast.ExprStmt:
+		if ce, ok := n.X.(*ast.CallExpr); ok && isCloseCall(ce) {
+			w.recordIfNotExempted(ce, ctx)
+		} else {
+			w.walkExprForFuncLits(n.X, ctx.breakBarrier)
+		}
+	case *ast.DeferStmt:
+		if isCloseCall(n.Call) {
+			w.recordIfNotExempted(n.Call, ctx)
+		} else {
+			w.walkExprForFuncLits(n.Call, ctx.breakBarrier)
+		}
+	case *ast.GoStmt:
+		if isCloseCall(n.Call) {
+			w.recordIfNotExempted(n.Call, ctx)
+		} else {
+			w.walkExprForFuncLits(n.Call, ctx.breakBarrier)
+		}
+	case *ast.AssignStmt:
+		for _, rhs := range n.Rhs {
+			w.walkExprForFuncLits(rhs, ctx.breakBarrier)
+		}
+	case *ast.ReturnStmt:
+		for _, v := range n.Results {
+			w.walkExprForFuncLits(v, ctx.breakBarrier)
+		}
+	case *ast.SendStmt:
+		w.walkExprForFuncLits(n.Value, ctx.breakBarrier)
+	default:
+		return false
+	}
+	return true
+}
+
+// scanContainerStmt descends into nested statement lists (if / for / range /
+// select / switch / type-switch / labeled / block). Clause bodies of select
+// and switch set the break barrier: a bare break there binds to the clause,
+// not the enclosing loop.
+func (w *closeLoopWalker) scanContainerStmt(s ast.Stmt, funcLit, breakBarrier bool) {
+	switch n := s.(type) {
+	case *ast.IfStmt:
+		w.walkExprForFuncLits(n.Cond, breakBarrier)
+		w.scanStmtList(n.Body.List, funcLit, breakBarrier)
+		if elseBlock, ok := n.Else.(*ast.BlockStmt); ok {
+			w.scanStmtList(elseBlock.List, funcLit, breakBarrier)
+		} else if elseIf, ok := n.Else.(*ast.IfStmt); ok {
+			w.scanStmtList([]ast.Stmt{elseIf}, funcLit, breakBarrier)
+		}
+	case *ast.ForStmt:
+		if n.Body != nil {
+			w.scanStmtList(n.Body.List, funcLit, breakBarrier)
+		}
+	case *ast.RangeStmt:
+		if n.Body != nil {
+			w.scanStmtList(n.Body.List, funcLit, breakBarrier)
+		}
+	case *ast.SelectStmt:
+		if n.Body != nil {
+			for _, cc := range n.Body.List {
+				if comm, ok := cc.(*ast.CommClause); ok {
+					w.scanStmtList(comm.Body, funcLit, true)
+				}
+			}
+		}
+	case *ast.SwitchStmt:
+		if n.Body != nil {
+			for _, cc := range n.Body.List {
+				if cs, ok := cc.(*ast.CaseClause); ok {
+					w.scanStmtList(cs.Body, funcLit, true)
+				}
+			}
+		}
+	case *ast.TypeSwitchStmt:
+		if n.Body != nil {
+			for _, cc := range n.Body.List {
+				if cs, ok := cc.(*ast.CaseClause); ok {
+					w.scanStmtList(cs.Body, funcLit, true)
+				}
+			}
+		}
+	case *ast.LabeledStmt:
+		w.scanStmtList([]ast.Stmt{n.Stmt}, funcLit, breakBarrier)
+	case *ast.BlockStmt:
+		w.scanStmtList(n.List, funcLit, breakBarrier)
 	}
 }
 
