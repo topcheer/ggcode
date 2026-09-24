@@ -463,3 +463,52 @@ func TestPlaybookAtomicSave(t *testing.T) {
 		t.Errorf("expected playbook to contain 'bugfix' task type")
 	}
 }
+
+// TestPlaybookHintsForTaskAdaptive verifies the Just-in-Time curation
+// (arXiv:2609.27334) ordering: entries whose TaskType matches the current
+// prompt's classified task type rank first regardless of raw playbookScore.
+func TestPlaybookHintsForTaskAdaptive(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	// One build entry with a huge score (10 uses, 1 iteration) ...
+	pb.entries = append(pb.entries, PlaybookEntry{
+		ID: "1", TaskType: "build", ToolSequence: "exec", Uses: 10, AvgIter: 1, LastSeen: time.Now(),
+	})
+	// ... and one bugfix entry with a small score (1 use, 5 iterations).
+	pb.entries = append(pb.entries, PlaybookEntry{
+		ID: "2", TaskType: "bugfix", ToolSequence: "read-edit-exec", Uses: 1, AvgIter: 5, LastSeen: time.Now(),
+	})
+
+	// A bugfix prompt must surface the bugfix entry first even though the
+	// build entry dominates on frequency x efficiency.
+	hints := pb.HintsForTask(2, "fix the panic in handler.go")
+	first := linesOf(hints)[0]
+	if !strings.HasPrefix(first, "- bugfix") {
+		t.Errorf("expected bugfix entry first for bugfix prompt, got: %s", first)
+	}
+
+	// A build prompt keeps the high-score build entry first.
+	hints = pb.HintsForTask(2, "deploy the new version to production")
+	first = linesOf(hints)[0]
+	if !strings.HasPrefix(first, "- build") {
+		t.Errorf("expected build entry first for build prompt, got: %s", first)
+	}
+
+	// Empty prompt = legacy behavior (pure playbookScore: build first).
+	hints = pb.HintsForTask(2, "")
+	first = linesOf(hints)[0]
+	if !strings.HasPrefix(first, "- build") {
+		t.Errorf("expected pure-score ordering for empty prompt, got: %s", first)
+	}
+}
+
+func linesOf(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, "- ") {
+			out = append(out, line)
+		}
+	}
+	return out
+}

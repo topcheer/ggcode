@@ -323,18 +323,29 @@ func (pb *Playbook) evict() {
 }
 
 // HintsForPrompt generates brief strategy hints for the system prompt.
-// Returns at most maxHints entries, prioritized by a composite score that
-// considers both frequency and efficiency.
-//
-// Inspired by SICA's utility function (Robeyns et al., arXiv:2504.15228):
-// patterns that lead to faster completion are more valuable than patterns
-// used frequently but slowly. The score combines:
-//   - Frequency weight: more observations = higher confidence
-//   - Efficiency weight: fewer iterations = better strategy
-//
-// This ensures that a pattern observed 3 times at ~5 iterations ranks higher
-// than one observed 5 times at ~50 iterations.
+// Returns at most maxHints entries. Kept as the task-agnostic entry point
+// (delegates to HintsForTask with no query) for callers without prompt
+// context; new call sites should prefer HintsForTask.
 func (pb *Playbook) HintsForPrompt(maxHints int) string {
+	return pb.HintsForTask(maxHints, "")
+}
+
+// HintsForTask is the task-adaptive variant of HintsForPrompt, applying the
+// "Just-in-Time Memory" curation principle (arXiv:2609.27334): memory injected
+// into a run should be selected for the task at hand, not merely by global
+// popularity. Playbook entries already carry the TaskType that
+// classifyTaskType derived from the *recording* run's prompt; matching it
+// against the *current* prompt's task type biases selection toward strategies
+// that proved efficient for this exact kind of work (e.g. a bugfix prompt
+// surfaces the "read→exec→edit" bugfix pattern instead of an unrelated
+// build pattern that merely has more observations).
+//
+// Ordering: entries whose TaskType matches the current prompt rank first by
+// playbookScore (frequency × efficiency); entries of other task types fill
+// any remaining slots in the same order, so a task type with no recorded
+// strategies degrades gracefully to the previous behavior. An empty
+// userPrompt skips the adaptive partition entirely (pure playbookScore).
+func (pb *Playbook) HintsForTask(maxHints int, userPrompt string) string {
 	if pb == nil {
 		return ""
 	}
@@ -346,14 +357,19 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 		return ""
 	}
 
-	// Sort entries by composite score (descending).
-	// Score = frequency × efficiency, where:
-	//   frequency = min(uses, 10) — cap at 10 to prevent over-weighting
-	//   efficiency = 10 / avgIter — fewer iterations = higher score
-	// This rewards patterns that are both well-observed AND efficient.
+	taskType := ""
+	if strings.TrimSpace(userPrompt) != "" {
+		taskType = classifyTaskType(userPrompt)
+	}
+
+	// Sort entries by (task-match, composite score), both descending.
 	sorted := make([]PlaybookEntry, len(pb.entries))
 	copy(sorted, pb.entries)
 	sort.Slice(sorted, func(i, j int) bool {
+		mi, mj := sorted[i].TaskType == taskType && taskType != "", sorted[j].TaskType == taskType && taskType != ""
+		if mi != mj {
+			return mi
+		}
 		return playbookScore(sorted[i]) > playbookScore(sorted[j])
 	})
 

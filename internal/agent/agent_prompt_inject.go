@@ -28,7 +28,11 @@ import (
 // reuse, saving 40-80% of system prompt token costs.
 //
 // This function is called once at the start of each agent Run().
-func (a *Agent) maybeInjectDynamicSystemPrompt() {
+//
+// userPrompt is the prompt that started this run. It is used to bias the
+// playbook strategy hints toward strategies recorded for the same task type
+// (Just-in-Time curation, arXiv:2609.27334); pass "" when unavailable.
+func (a *Agent) maybeInjectDynamicSystemPrompt(userPrompt string) {
 	a.mu.Lock()
 	base := a.baseSystemPrompt
 	fn := a.systemPromptInjector
@@ -93,7 +97,7 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	// Layer 4: playbook strategy hints (ACE-inspired).
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(3)
+			playbookText := pb.HintsForTask(3, userPrompt)
 			if playbookText != "" {
 				dynamicParts = append(dynamicParts, playbookText)
 				debug.Log("agent", "Injected playbook strategy hints into system prompt")
