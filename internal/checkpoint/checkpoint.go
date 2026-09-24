@@ -649,6 +649,12 @@ func (m *Manager) Clear() {
 	m.redoStack = nil
 	m.corrections = nil
 	m.evictedRuns = nil
+	// #2696: fileExisted must reset too - it caches each file's FIRST
+	// checkpoint's Existed (seen-only write, #1539 case D). Reusing the
+	// Manager across a session switch (TUI switchToSession) kept the old
+	// session's values, misreporting IsNew for every re-touched file and
+	// growing the map unboundedly.
+	m.fileExisted = nil
 }
 
 // RecentCorrections returns corrections recorded since the last run start.
