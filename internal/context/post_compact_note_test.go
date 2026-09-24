@@ -75,6 +75,51 @@ func TestPostCompactNoteSurvivesDirectSummarize(t *testing.T) {
 	}
 }
 
+// TestPostCompactNoteAppliedViaApplyCompactResult verifies the note is also
+// re-materialized on the ApplyCompactResult path (the precompact consumer),
+// not just the direct Summarize path.
+func TestPostCompactNoteAppliedViaApplyCompactResult(t *testing.T) {
+	cm := NewManager(10000)
+	buildFiveMessageContext(cm)
+	cm.SetPostCompactNoteProvider(func() string {
+		return "Task board: 2 pending, 0 in_progress, 0 completed."
+	})
+
+	live := cm.Messages()
+	snapshot := CompactSnapshot{
+		Messages:      live,
+		OrigLen:       len(live),
+		LastMsgID:     live[len(live)-1].ID,
+		ContextWindow: 10000,
+	}
+
+	summaryMsg := provider.Message{Role: "system"}
+	summaryMsg.Content = []provider.ContentBlock{{Type: "text", Text: "[Previous conversation summary]\nSummary of earlier work."}}
+	result := CompactResult{
+		Messages:   []provider.Message{summaryMsg},
+		TokenCount: 100,
+		Changed:    true,
+	}
+
+	applied, _ := cm.ApplyCompactResult(snapshot, result)
+	if !applied {
+		t.Fatal("ApplyCompactResult rejected a valid result")
+	}
+
+	msgs := cm.Messages()
+	summaryIdx := findSystemMsg("[Previous conversation summary]", msgs)
+	noteIdx := findSystemMsg("[Session State Note", msgs)
+	if summaryIdx < 0 {
+		t.Fatal("expected summary message after ApplyCompactResult")
+	}
+	if noteIdx != summaryIdx+1 {
+		t.Fatalf("expected note right after summary on ApplyCompactResult path, got summary=%d note=%d", summaryIdx, noteIdx)
+	}
+	if !strings.Contains(msgs[noteIdx].Content[0].Text, "2 pending") {
+		t.Fatalf("expected board content in note, got %q", msgs[noteIdx].Content[0].Text)
+	}
+}
+
 // TestPostCompactNoteStaleReplaced verifies a second compaction replaces
 // the stale note instead of accumulating copies.
 func TestPostCompactNoteStaleReplaced(t *testing.T) {
