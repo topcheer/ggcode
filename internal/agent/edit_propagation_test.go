@@ -91,23 +91,24 @@ func TestEditPropagation_MaxWarnings(t *testing.T) {
 	s.recordEdit("edit_file", `{"file_path":"/c.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/d.go"}`)
 
-	// First warning fires
+	// First warning fires (soft tier, 4+)
 	msg1 := s.maybeWarn(5)
 	if msg1 == "" {
 		t.Fatal("expected first warning")
 	}
 
-	// Second call: suppressed (1 per run, batch 2 guidance-noise cleanup)
+	// #2709: second tier (7+) fires the escalation once — the cap is two
+	// (one per tier), not the batch-2 cap=1 residue that made this dead code.
 	s.recordEdit("edit_file", `{"file_path":"/e.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/f.go"}`)
 	s.recordEdit("edit_file", `{"file_path":"/g.go"}`)
 
 	msg2 := s.maybeWarn(5)
-	if msg2 != "" {
-		t.Fatalf("expected second warning to be suppressed, got: %s", msg2)
+	if msg2 == "" {
+		t.Fatal("expected escalation warning at 7 files (#2709 two-tier semantics)")
 	}
 
-	// Third call: should be suppressed
+	// Third call: suppressed (both tier quotas spent)
 	msg3 := s.maybeWarn(5)
 	if msg3 != "" {
 		t.Error("should not warn more than max times")

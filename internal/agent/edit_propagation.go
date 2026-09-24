@@ -55,8 +55,12 @@ const (
 	// propagationWarn2: distinct files threshold for escalation.
 	propagationWarn2 = 7
 
-	// propagationMaxWarnings: max warnings per run.
-	propagationMaxWarnings = 1
+	// propagationMaxWarnings: max warnings per run. #2709: two-tier
+	// semantics restored - the soft tier (4+) and the escalation tier (7+)
+	// each consume one of the two quotas, so the escalation message is
+	// reachable in progressive edit flows while total noise stays capped
+	// (one advisory per tier per run; compaction may re-arm the quota).
+	propagationMaxWarnings = 2
 
 	// propagationMaxTracked: max distinct file paths to track (memory bound).
 	propagationMaxTracked = 60
@@ -133,10 +137,14 @@ func (s *editPropagationState) maybeWarn(iteration int) string {
 		return ""
 	}
 
-	s.warningsIssued++
-
 	var msg string
-	if count >= propagationWarn2 {
+	// #2709: tier-scoped quotas instead of one global slot. The soft tier (4+)
+	// only ever spends the first quota; the escalation tier (7+) fires once
+	// on top of it, spending the second (a batch jump straight past 7, e.g.
+	// multi_file_write of 7+ files, skips the soft tier and spends both at
+	// once with the escalation message).
+	if count >= propagationWarn2 && s.warningsIssued <= propagationMaxWarnings-1 {
+		s.warningsIssued = propagationMaxWarnings
 		msg = fmt.Sprintf(
 			"%s%d%s",
 			"[Cross-file propagation risk: ", count,
@@ -147,7 +155,8 @@ func (s *editPropagationState) maybeWarn(iteration int) string {
 				"cross-file edits (MAST taxonomy, Cemri et al. 2025). Run a build+test NOW "+
 				"to establish a verified baseline before the error surface grows further.]",
 		)
-	} else {
+	} else if s.warningsIssued == 0 {
+		s.warningsIssued = 1
 		msg = fmt.Sprintf(
 			"%s%d%s",
 			"[Cross-file propagation risk: ", count,
@@ -156,6 +165,8 @@ func (s *editPropagationState) maybeWarn(iteration int) string {
 				"dependency propagation paths. Run a build+test to verify accumulated "+
 				"changes before adding more files to the unverified set.]",
 		)
+	} else {
+		return ""
 	}
 
 	debug.Log("agent", "edit propagation warning #%d: %d distinct files since green build (iter=%d)",
