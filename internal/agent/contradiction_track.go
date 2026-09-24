@@ -15,6 +15,14 @@ package agent
 //     root-cause reversals where the agent identifies the bug in file A, then
 //     later identifies the bug in file B without explaining why the earlier
 //     conclusion was wrong.
+//   - "Agent-Editing World Model" (AEWM, arXiv:2609.28416, Sep 2026): names
+//     the failure mode TASK-STATE CONTAMINATION -- unsupported assumptions
+//     and outdated conclusions persist in history and distort subsequent
+//     decisions -- and argues a harness should revise the STATE underlying
+//     later decisions rather than merely critique. This module's revision
+//     ledger is the deterministic, inference-time analog: an acknowledged
+//     correction records which standing beliefs it retired, and the revised
+//     state rides on guidance the harness already injects.
 //
 // Problem: AI coding agents often make a definitive root-cause or location
 // claim in one turn ("the bug is in auth.go", "the issue is caused by the
@@ -49,6 +57,14 @@ package agent
 //   - When 2+ contradictions accumulate, injects guidance to reconcile
 //   - Zero LLM cost -- pure deterministic pattern matching
 //   - Non-blocking advisory, max 2 warnings per run
+//   - Revision ledger (AEWM State Revision): a STRONG acknowledged revision
+//     ("I was wrong -- the root cause is B") records retired→current belief
+//     pairs. Well-acknowledged revisions skip contradiction pairing (#1536
+//     case C), so without the ledger they leave ZERO persistent trace and
+//     the retired conclusion keeps contaminating later turns from raw
+//     history. The ledger rides on existing guidance (warning footer) and,
+//     when the warning channel is capped or below threshold, surfaces once
+//     per run as a compact [State Revision] note.
 
 import (
 	"fmt"
@@ -68,6 +84,22 @@ const (
 
 	// contradictionMaxExcerpts: max excerpts shown in warning.
 	contradictionMaxExcerpts = 4
+
+	// contradictionMaxLedger: cap stored revision-ledger entries.
+	contradictionMaxLedger = 6
+
+	// contradictionMaxRetiredShown: max retired entities recorded per
+	// revision claim and shown in a standalone revision note. The claims
+	// that distort subsequent decisions are the most RECENT standing
+	// beliefs, not the oldest ones.
+	contradictionMaxRetiredShown = 2
+
+	// contradictionMaxLedgerShown: max ledger entries in a warning footer.
+	contradictionMaxLedgerShown = 3
+
+	// contradictionMaxRevisionNotes: max standalone state-revision notes
+	// per run (warnings carry the ledger footer instead).
+	contradictionMaxRevisionNotes = 1
 )
 
 // contradictionClaim represents a single root-cause/location claim.
@@ -95,11 +127,27 @@ type contradictionInstance struct {
 	newClaim   contradictionClaim
 }
 
+// revisionEntry records one acknowledged supersession: a standing belief
+// that a strong revision ("I was wrong -- the root cause is B") retired in
+// favor of a newer claim. Inference-time analog of AEWM's State Revision
+// (arXiv:2609.28416).
+type revisionEntry struct {
+	retired     string
+	current     string
+	retiredIter int
+	currentIter int
+}
+
 // contradictionState tracks claims and detected reversals across a run.
 type contradictionState struct {
 	claims         []contradictionClaim
 	contradictions []contradictionInstance
 	warnings       int
+	// ledger records acknowledged supersessions (retired → current) so the
+	// revised state can be carried forward on guidance already injected.
+	ledger []revisionEntry
+	// revisionNotesIssued bounds standalone state-revision notes per run.
+	revisionNotesIssued int
 }
 
 func newContradictionState() *contradictionState {
@@ -110,6 +158,19 @@ func (s *contradictionState) reset() {
 	s.claims = nil
 	s.contradictions = nil
 	s.warnings = 0
+	s.ledger = nil
+	s.revisionNotesIssued = 0
+}
+
+// contradictionEntitiesConflict reports whether two normalized entities are
+// distinct enough to count as competing claims -- the shared predicate of
+// contradiction pairing and the revision ledger ("auth" vs "auth.go" are
+// the same root, not competing claims).
+func contradictionEntitiesConflict(a, b string) bool {
+	if a == b {
+		return false
+	}
+	return !strings.Contains(a, b) && !strings.Contains(b, a)
 }
 
 // Root-cause / issue-location claim patterns.
@@ -278,8 +339,10 @@ func extractClaims(text string, iteration int) []contradictionClaim {
 }
 
 // recordContradictionClaims adds new claims from the current iteration's text
-// and detects contradictions against prior claims.
-func (s *contradictionState) recordContradictionClaims(text string, iteration int) {
+// and detects contradictions against prior claims. Returns the number of NEW
+// revision-ledger entries recorded this call (0 when no strong revision
+// occurred).
+func (s *contradictionState) recordContradictionClaims(text string, iteration int) int {
 	newClaims := extractClaims(text, iteration)
 
 	// Check new claims against prior claims for contradictions.
@@ -308,6 +371,14 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 			}
 		}
 	}
+	// AEWM State Revision ledger: a strong revision is a state change, not
+	// just a new opinion -- record which standing beliefs it retired so the
+	// harness can carry the revised state forward even when the warning
+	// channel is capped or below threshold.
+	newLedger := 0
+	if hasRevision {
+		newLedger = s.recordRevisionLedger(newClaims, iteration)
+	}
 	for _, nc := range newClaims {
 		if nc.acknowledged {
 			continue
@@ -316,13 +387,9 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 			if pc.superseded {
 				continue // retired by an acknowledged revision
 			}
-			// A contradiction occurs when the new entity differs from a prior
-			// entity AND they aren't substrings of each other (e.g. "auth" vs
-			// "auth.go" are the same root, not a contradiction).
-			if nc.entity == pc.entity {
-				continue
-			}
-			if strings.Contains(nc.entity, pc.entity) || strings.Contains(pc.entity, nc.entity) {
+			// A contradiction occurs when the entities are distinct enough to
+			// be competing claims ("auth" vs "auth.go" are the same root).
+			if !contradictionEntitiesConflict(nc.entity, pc.entity) {
 				continue
 			}
 
@@ -341,28 +408,94 @@ func (s *contradictionState) recordContradictionClaims(text string, iteration in
 	if len(s.claims) > contradictionMaxClaims {
 		s.claims = s.claims[len(s.claims)-contradictionMaxClaims:]
 	}
+	return newLedger
+}
+
+// recordRevisionLedger adds ledger entries for a strong revision: each
+// revision-flagged claim retires the most recent standing beliefs it
+// conflicts with (same pairing predicate as contradiction detection).
+// Entries are deduped and bounded; returns the number of NEW entries.
+func (s *contradictionState) recordRevisionLedger(newClaims []contradictionClaim, iteration int) int {
+	seen := make(map[string]bool, len(s.ledger))
+	for _, e := range s.ledger {
+		seen[e.retired+"→"+e.current] = true
+	}
+	added := 0
+	for _, nc := range newClaims {
+		if !nc.revision {
+			continue
+		}
+		retired := make(map[string]bool, contradictionMaxRetiredShown)
+		// Scan backward: the beliefs that distort subsequent decisions are
+		// the agent's most RECENT standing claims, not the oldest ones.
+		for i := len(s.claims) - 1; i >= 0 && len(retired) < contradictionMaxRetiredShown; i-- {
+			pc := s.claims[i]
+			if retired[pc.entity] || !contradictionEntitiesConflict(nc.entity, pc.entity) {
+				continue
+			}
+			retired[pc.entity] = true
+			key := pc.entity + "→" + nc.entity
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			s.ledger = append(s.ledger, revisionEntry{
+				retired:     pc.entity,
+				current:     nc.entity,
+				retiredIter: pc.iteration,
+				currentIter: iteration,
+			})
+			added++
+		}
+	}
+	if len(s.ledger) > contradictionMaxLedger {
+		s.ledger = s.ledger[len(s.ledger)-contradictionMaxLedger:]
+	}
+	return added
+}
+
+// recentLedgerEntries returns up to n of the most recent ledger entries.
+func (s *contradictionState) recentLedgerEntries(n int) []revisionEntry {
+	if len(s.ledger) == 0 {
+		return nil
+	}
+	if len(s.ledger) > n {
+		return s.ledger[len(s.ledger)-n:]
+	}
+	return s.ledger
 }
 
 // maybeWarnContradiction checks for accumulated cross-turn contradictions
-// and returns a guidance message. Returns empty string if no warning is needed.
+// and returns a guidance message. When the warning channel is silent
+// (below threshold or capped), an acknowledged revision still surfaces once
+// per run as a compact [State Revision] note -- the AEWM inference-time
+// analog of revising the state underlying subsequent decisions.
 func (a *Agent) maybeWarnContradiction(assistantText string, iteration int) string {
 	if a.contradiction == nil {
 		return ""
 	}
 
-	a.contradiction.recordContradictionClaims(assistantText, iteration)
-
-	if a.contradiction.warnings >= contradictionMaxWarnings {
-		return ""
-	}
+	newLedger := a.contradiction.recordContradictionClaims(assistantText, iteration)
 
 	total := len(a.contradiction.contradictions)
-	if total < contradictionThreshold {
-		return ""
+	if total >= contradictionThreshold && a.contradiction.warnings < contradictionMaxWarnings {
+		a.contradiction.warnings++
+		return a.contradiction.buildContradictionWarning(total)
 	}
 
-	a.contradiction.warnings++
+	if newLedger > 0 && a.contradiction.revisionNotesIssued < contradictionMaxRevisionNotes {
+		a.contradiction.revisionNotesIssued++
+		return formatRevisionNote(a.contradiction.recentLedgerEntries(contradictionMaxRetiredShown))
+	}
 
+	return ""
+}
+
+// buildContradictionWarning renders the standard contradiction warning and,
+// when the revision ledger is non-empty, appends the revised state so the
+// model reconciles against CURRENT beliefs, not just raw excerpt pairs. The
+// footer piggybacks on this already-injected message -- no extra injection.
+func (s *contradictionState) buildContradictionWarning(total int) string {
 	// Build excerpts from recent contradictions.
 	var excerpts []string
 	startIdx := 0
@@ -370,7 +503,7 @@ func (a *Agent) maybeWarnContradiction(assistantText string, iteration int) stri
 		startIdx = total - contradictionMaxExcerpts
 	}
 	for i := startIdx; i < total && len(excerpts) < contradictionMaxExcerpts; i++ {
-		c := a.contradiction.contradictions[i]
+		c := s.contradictions[i]
 		excerpts = append(excerpts, fmt.Sprintf(
 			"  - [iter %d] claimed \"%s\" vs [iter %d] claimed \"%s\"",
 			c.priorClaim.iteration+1, c.priorClaim.entity,
@@ -386,5 +519,47 @@ func (a *Agent) maybeWarnContradiction(assistantText string, iteration int) stri
 		"evidence (tool output, test result) confirms it? Explicitly state which "+
 		"earlier conclusion was wrong and why.",
 		total, strings.Join(excerpts, "\n"))
+
+	if footer := formatRevisionFooter(s.recentLedgerEntries(contradictionMaxLedgerShown)); footer != "" {
+		msg += "\n" + footer
+	}
 	return msg
+}
+
+// formatRevisionFooter renders the revised-state block appended to
+// contradiction warnings.
+func formatRevisionFooter(entries []revisionEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("Revised state (from your own acknowledged corrections):")
+	for _, e := range entries {
+		fmt.Fprintf(&sb, "\n  - \"%s\" (iter %d) was superseded by \"%s\" (iter %d) -- treat \"%s\" as retired.",
+			e.retired, e.retiredIter+1, e.current, e.currentIter+1, e.retired)
+	}
+	return sb.String()
+}
+
+// formatRevisionNote renders the one-shot state-revision note emitted when
+// the warning channel stays silent (acknowledged revisions skip pairing, so
+// this is often the only persistent trace of the correction).
+func formatRevisionNote(entries []revisionEntry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	e := entries[len(entries)-1]
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[State Revision] You explicitly corrected a prior conclusion: "+
+		"your current standing belief is \"%s\" (iter %d), which supersedes \"%s\" (iter %d). "+
+		"Treat \"%s\" as retired -- do not act on it or revert to it; build on \"%s\" "+
+		"unless new tool evidence says otherwise.",
+		e.current, e.currentIter+1, e.retired, e.retiredIter+1, e.retired, e.current)
+	if len(entries) > 1 {
+		sb.WriteString("\nAlso superseded by your corrections:")
+		for _, p := range entries[:len(entries)-1] {
+			fmt.Fprintf(&sb, "\n  - \"%s\" (iter %d) → \"%s\"", p.retired, p.retiredIter+1, p.current)
+		}
+	}
+	return sb.String()
 }

@@ -232,3 +232,102 @@ func TestContradictionAcknowledgedRevisionNotCounted(t *testing.T) {
 		t.Fatal("unacknowledged revision not counted - guard over-broad")
 	}
 }
+
+func TestContradictionEntitiesConflict(t *testing.T) {
+	if contradictionEntitiesConflict("auth.go", "auth.go") {
+		t.Error("identical entities must not conflict")
+	}
+	if contradictionEntitiesConflict("auth", "auth.go") {
+		t.Error("substring entities are the same root, must not conflict")
+	}
+	if !contradictionEntitiesConflict("auth.go", "router.go") {
+		t.Error("distinct entities must conflict")
+	}
+}
+
+// TestRevisionLedgerRecordsAcknowledgedSupersession pins the AEWM State
+// Revision gap: a well-acknowledged revision leaves zero contradictions, but
+// must record retired→current pairs in the revision ledger.
+func TestRevisionLedgerRecordsAcknowledgedSupersession(t *testing.T) {
+	s := newContradictionState()
+	s.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
+	n := s.recordContradictionClaims("Earlier I thought auth.go, but I was wrong - the retry loop is the root cause of the crash.", 2)
+	if len(s.contradictions) != 0 {
+		t.Fatalf("acknowledged revision must not pair as contradiction, got %d", len(s.contradictions))
+	}
+	if n == 0 || len(s.ledger) == 0 {
+		t.Fatalf("expected ledger entry, got %d new entries", n)
+	}
+	e := s.ledger[len(s.ledger)-1]
+	if e.retired != "auth module" || e.current != "retry loop" {
+		t.Errorf("unexpected ledger entry: %+v", e)
+	}
+	if e.currentIter != 2 {
+		t.Errorf("currentIter = %d, want 2", e.currentIter)
+	}
+}
+
+// TestNoLedgerWithoutStrongRevision: weak openers ("actually, i") must not
+// populate the ledger.
+func TestNoLedgerWithoutStrongRevision(t *testing.T) {
+	s := newContradictionState()
+	s.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
+	s.recordContradictionClaims("Actually, I think the retry loop is the root cause of the crash.", 2)
+	if len(s.ledger) != 0 {
+		t.Fatalf("weak opener must not record ledger entries, got %d", len(s.ledger))
+	}
+}
+
+// TestRevisionNoteEmittedWhenWarningSilent: acknowledged revisions skip
+// pairing, so with zero contradictions the one-shot [State Revision] note is
+// the only persistent trace of the correction.
+func TestRevisionNoteEmittedWhenWarningSilent(t *testing.T) {
+	a := &Agent{contradiction: newContradictionState()}
+	a.maybeWarnContradiction("the auth module is the root cause of the crash.", 1)
+	out := a.maybeWarnContradiction("Earlier I thought auth.go, but I was wrong - the retry loop is the root cause of the crash.", 2)
+	if out == "" {
+		t.Fatal("expected state-revision note when warning channel is silent")
+	}
+	if !contains(out, "[State Revision]") {
+		t.Errorf("note should contain [State Revision] tag, got: %s", out)
+	}
+	if !contains(out, "retry loop") || !contains(out, "auth module") {
+		t.Errorf("note should cite current and retired beliefs, got: %s", out)
+	}
+	// One-shot cap: a second revision adds no further note.
+	a.maybeWarnContradiction("I was mistaken - the root cause is the config parser.", 3)
+	if out2 := a.maybeWarnContradiction("correction: the root cause is the network layer.", 4); contains(out2, "[State Revision]") {
+		t.Errorf("state-revision note should fire at most once per run, got: %s", out2)
+	}
+}
+
+// TestLedgerFooterOnContradictionWarning: when the standard warning fires,
+// the revised state rides on the same message as a footer.
+func TestLedgerFooterOnContradictionWarning(t *testing.T) {
+	a := &Agent{contradiction: newContradictionState()}
+	s := a.contradiction
+	// Seed a ledger entry first (acknowledged revision).
+	s.recordContradictionClaims("the auth module is the root cause of the crash.", 1)
+	s.recordContradictionClaims("I was wrong - the retry loop is the root cause of the crash.", 2)
+	// Now accumulate unacknowledged contradictions to cross the threshold.
+	a.maybeWarnContradiction("the bug is in router.go.", 3)
+	out := a.maybeWarnContradiction("the bug is in cache.go.", 4)
+	if out == "" || !contains(out, "[CONTRADICTION-DETECTED]") {
+		t.Fatalf("expected contradiction warning, got: %s", out)
+	}
+	if !contains(out, "Revised state") {
+		t.Errorf("warning should carry revised-state footer, got: %s", out)
+	}
+}
+
+// TestLedgerBounded pins the ledger memory bound.
+func TestLedgerBounded(t *testing.T) {
+	s := newContradictionState()
+	for i := 0; i < contradictionMaxLedger+5; i++ {
+		s.recordContradictionClaims("the auth module is the root cause of the crash.", i)
+		s.recordContradictionClaims("I was wrong - the real issue is in mod"+string(rune('a'+i%26))+".go.", i+1)
+	}
+	if len(s.ledger) > contradictionMaxLedger {
+		t.Errorf("ledger not bounded: got %d, max %d", len(s.ledger), contradictionMaxLedger)
+	}
+}
