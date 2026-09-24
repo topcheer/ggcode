@@ -2,8 +2,10 @@ package task
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type TaskStatus string
@@ -132,6 +134,70 @@ func (m *Manager) List() []Task {
 		out = append(out, t.Snapshot())
 	}
 	return out
+}
+
+// Defaults for Digest when the caller passes non-positive caps.
+const (
+	defaultDigestMaxTasks = 20
+	defaultDigestMaxChars = 1200
+)
+
+// Digest renders a compact summary of the non-completed tasks for
+// re-injection into model context after compaction (task-board
+// rehydration). Completed tasks are counted but not listed: the
+// compaction summary's "Done" section already carries them narratively,
+// and listing them wastes attention budget. Returns "" when nothing is
+// pending or in progress. maxTasks caps the number of listed tasks;
+// maxChars caps the total output (rune-safe).
+func (m *Manager) Digest(maxTasks, maxChars int) string {
+	if maxTasks <= 0 {
+		maxTasks = defaultDigestMaxTasks
+	}
+	if maxChars <= 0 {
+		maxChars = defaultDigestMaxChars
+	}
+
+	pending, inProgress, completed, lines := 0, 0, 0, 0
+	var sb strings.Builder
+	for _, t := range m.List() {
+		switch t.Status {
+		case StatusInProgress:
+			inProgress++
+		case StatusCompleted:
+			completed++
+		default:
+			pending++
+		}
+		if t.Status != StatusCompleted && lines < maxTasks {
+			lines++
+			fmt.Fprintf(&sb, "- %s [%s] %s\n", t.ID, t.Status, truncateDigestSubject(t.Subject))
+		}
+	}
+	if pending+inProgress == 0 {
+		return ""
+	}
+
+	header := fmt.Sprintf("Task board: %d pending, %d in_progress, %d completed. Task IDs remain valid; call task_list for full details.", pending, inProgress, completed)
+	body := strings.TrimRight(sb.String(), "\n")
+	out := header
+	if body != "" {
+		out += "\n" + body
+	}
+	if n := utf8.RuneCountInString(out); n > maxChars {
+		runes := []rune(out)
+		out = string(runes[:maxChars]) + "\n... (truncated)"
+	}
+	return out
+}
+
+// truncateDigestSubject caps a task subject for digest rendering (rune-safe
+// so CJK subjects are not cut mid-rune).
+func truncateDigestSubject(s string) string {
+	const maxDigestSubject = 80
+	if n := utf8.RuneCountInString(s); n > maxDigestSubject {
+		return string([]rune(s)[:maxDigestSubject]) + "..."
+	}
+	return s
 }
 
 // Update modifies a task according to opts. Returns the updated snapshot.
