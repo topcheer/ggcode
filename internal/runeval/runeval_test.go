@@ -245,3 +245,195 @@ func TestUnpairedResultIgnored(t *testing.T) {
 		t.Fatalf("unpaired result leaked: %+v", r)
 	}
 }
+
+func TestUncorrectedRetryPenalized(t *testing.T) {
+	// The same input sent three times, failing identically the first two:
+	// the first failure is information, the second failed re-send is the
+	// uncorrected retry (the third attempt succeeded — transient failure).
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t1", "boom: no such file", true)),
+		msg("assistant", toolUse("t2", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t2", "boom: no such file", true)),
+		msg("assistant", toolUse("t3", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t3", "match line", false)),
+	}
+	r := Evaluate(msgs, nil)
+	if r.RetrySameInput != 1 {
+		t.Fatalf("retrySameInput=%d, want 1 (failed re-sends beyond the first failure)", r.RetrySameInput)
+	}
+	if !strings.Contains(r.WorstRetry, "grep") {
+		t.Fatalf("worstRetry=%q, want grep call", r.WorstRetry)
+	}
+	// 1 retry × 12 penalty = 12.
+	if r.ReliabilityScore != 88 {
+		t.Fatalf("reliability=%d, want 88", r.ReliabilityScore)
+	}
+	found := false
+	for _, f := range r.Findings {
+		if strings.Contains(f, "re-sent an input that had already failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing retry finding: %v", r.Findings)
+	}
+}
+
+func TestSingleFailureNotARetry(t *testing.T) {
+	// One failure then success on a DIFFERENT input is a corrected retry —
+	// not penalized on the reliability axis.
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t1", "err", true)),
+		msg("assistant", toolUse("t2", "grep", `{"pattern":"bar"}`)),
+		msg("user", toolResult("t2", "ok", false)),
+	}
+	r := Evaluate(msgs, nil)
+	if r.RetrySameInput != 0 {
+		t.Fatalf("retrySameInput=%d, want 0 (corrected retry)", r.RetrySameInput)
+	}
+	if r.ReliabilityScore != 100 {
+		t.Fatalf("reliability=%d, want 100", r.ReliabilityScore)
+	}
+}
+
+func TestChurnDetected(t *testing.T) {
+	// Same file written three times with distinct inputs: rework churn.
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "edit_file", `{"path":"a.go","old":"x","new":"y"}`)),
+		msg("user", toolResult("t1", "ok", false)),
+		msg("assistant", toolUse("t2", "edit_file", `{"path":"a.go","old":"y","new":"z"}`)),
+		msg("user", toolResult("t2", "ok", false)),
+		msg("assistant", toolUse("t3", "edit_file", `{"path":"a.go","old":"z","new":"w"}`)),
+		msg("user", toolResult("t3", "ok", false)),
+	}
+	r := Evaluate(msgs, nil)
+	if len(r.ChurnedFiles) != 1 || r.ChurnedFiles[0].Edits != 3 {
+		t.Fatalf("churned=%+v, want one file with 3 edits", r.ChurnedFiles)
+	}
+	if r.ChurnExtraEdits != 2 {
+		t.Fatalf("extraEdits=%d, want 2", r.ChurnExtraEdits)
+	}
+	// 2 rework edits × 8 penalty = 16.
+	if r.ReliabilityScore != 84 {
+		t.Fatalf("reliability=%d, want 84", r.ReliabilityScore)
+	}
+	found := false
+	for _, f := range r.Findings {
+		if strings.Contains(f, "written more than once") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing churn finding: %v", r.Findings)
+	}
+}
+
+func TestSingleWriteNoChurn(t *testing.T) {
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "write_file", `{"path":"new.go","content":"x"}`)),
+		msg("user", toolResult("t1", "ok", false)),
+	}
+	r := Evaluate(msgs, nil)
+	if len(r.ChurnedFiles) != 0 || r.ChurnExtraEdits != 0 {
+		t.Fatalf("single write flagged as churn: %+v", r.ChurnedFiles)
+	}
+	if r.ReliabilityScore != 100 {
+		t.Fatalf("reliability=%d, want 100", r.ReliabilityScore)
+	}
+}
+
+func TestDegradationFlag(t *testing.T) {
+	// Clean first half, erroring second half: degraded trend.
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "grep", `{"pattern":"a"}`)),
+		msg("user", toolResult("t1", "ok", false)),
+		msg("assistant", toolUse("t2", "grep", `{"pattern":"b"}`)),
+		msg("user", toolResult("t2", "ok", false)),
+		msg("assistant", toolUse("t3", "glob", `{"pattern":"c"}`)),
+		msg("user", toolResult("t3", "err", true)),
+		msg("assistant", toolUse("t4", "glob", `{"pattern":"d"}`)),
+		msg("user", toolResult("t4", "err", true)),
+		msg("assistant", toolUse("t5", "glob", `{"pattern":"e"}`)),
+		msg("user", toolResult("t5", "err", true)),
+	}
+	r := Evaluate(msgs, nil)
+	if !r.Degraded {
+		t.Fatal("expected degraded=true for late-half error concentration")
+	}
+	// Only the degradation penalty (12) applies: distinct inputs, so no
+	// uncorrected retries, and read tools only, so no churn.
+	if r.ReliabilityScore != 88 {
+		t.Fatalf("reliability=%d, want 88", r.ReliabilityScore)
+	}
+	found := false
+	for _, f := range r.Findings {
+		if strings.Contains(f, "degraded instead of recovering") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing degradation finding: %v", r.Findings)
+	}
+}
+
+func TestEarlyErrorsNotDegraded(t *testing.T) {
+	// Errors early, clean later: the run recovered — not degraded.
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "grep", `{"pattern":"a"}`)),
+		msg("user", toolResult("t1", "err", true)),
+		msg("assistant", toolUse("t2", "grep", `{"pattern":"b"}`)),
+		msg("user", toolResult("t2", "err", true)),
+		msg("assistant", toolUse("t3", "glob", `{"pattern":"c"}`)),
+		msg("user", toolResult("t3", "err", true)),
+		msg("assistant", toolUse("t4", "glob", `{"pattern":"d"}`)),
+		msg("user", toolResult("t4", "ok", false)),
+		msg("assistant", toolUse("t5", "glob", `{"pattern":"e"}`)),
+		msg("user", toolResult("t5", "ok", false)),
+	}
+	r := Evaluate(msgs, nil)
+	if r.Degraded {
+		t.Fatal("early errors with clean recovery must not be degraded")
+	}
+}
+
+func TestReliabilityRender(t *testing.T) {
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t1", "boom", true)),
+		msg("assistant", toolUse("t2", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t2", "boom", true)),
+		msg("assistant", toolUse("t3", "grep", `{"pattern":"foo"}`)),
+		msg("user", toolResult("t3", "ok", false)),
+	}
+	r := Evaluate(msgs, nil)
+	if r.Degraded {
+		t.Fatal("2 errors across both halves must not be degraded")
+	}
+	out := Render(r)
+	for _, want := range []string{"reliability", "Reliability:", "re-sent an input"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "degraded trend") {
+		t.Fatalf("degraded trend must not render when not degraded:\n%s", out)
+	}
+}
+
+func TestInputPathExtraction(t *testing.T) {
+	cases := map[string]string{
+		`{"file_path":"/a/b.go","old":"x"}`: "/a/b.go",
+		`{"path":"main.go"}`:                "main.go",
+		`{"notebook_path":"n.ipynb"}`:       "n.ipynb",
+		`{"pattern":"foo"}`:                 "",
+		`not json`:                          "",
+		``:                                  "",
+	}
+	for in, want := range cases {
+		if got := inputPath(json.RawMessage(in)); got != want {
+			t.Fatalf("inputPath(%s)=%q, want %q", in, got, want)
+		}
+	}
+}

@@ -17,6 +17,13 @@
 // actionable findings. runeval is that scorecard — pure analysis, no LLM
 // calls, no runtime steering (it is not a detector; the user invokes it via
 // the /runreport slash command).
+//
+// 2026 per-dimension scoring practice (FutureAGI "definitive guide to AI
+// agent evaluation", τ-bench-style trajectory grading) scores multiple axes
+// independently, because a single aggregate hides which dimension regressed.
+// runeval therefore reports two axes: EFFICIENCY (the context tax of
+// redundant work) and RELIABILITY (error recovery, rework churn, and
+// late-run degradation), each with transparent penalties.
 package runeval
 
 import (
@@ -45,6 +52,14 @@ type DuplicateGroup struct {
 	Repeats   int    // Count-1 redundant invocations
 	Identical bool   // every observed result was byte-identical
 	ReadOnly  bool   // tool classified as read-only
+}
+
+// FileChurn counts write-tool invocations against a single file. Rework —
+// editing the same file repeatedly — is the offline signature of unstable
+// assumptions and the strongest predictor of late-run failure spirals.
+type FileChurn struct {
+	File  string
+	Edits int
 }
 
 // Report is the trajectory evaluation output.
@@ -85,6 +100,30 @@ type Report struct {
 	// 0-100; 100 = clean trajectory.
 	EfficiencyScore int
 
+	// Reliability axis — the error-recovery dimension of the scorecard.
+	//
+	// RetrySameInput counts invocations that re-sent an input that had
+	// already failed identically before (an uncorrected retry — the
+	// anti-pattern behind most error spirals). The first failure of any
+	// call is information; only re-sends count. WorstRetry names the worst
+	// offending call for display, empty when there is none.
+	RetrySameInput int
+	WorstRetry     string
+
+	// ChurnedFiles lists files written by write-tools more than once,
+	// worst first; ChurnExtraEdits sums edits beyond each file's first.
+	ChurnedFiles    []FileChurn
+	ChurnExtraEdits int
+
+	// Degraded is true when tool errors concentrate in the later half of
+	// the run (enough errors to clear the noise floor) — the trajectory
+	// got worse over time instead of recovering.
+	Degraded bool
+
+	// ReliabilityScore is 100 minus transparent penalties (see
+	// reliabilityScore). 0-100; 100 = clean recovery behavior.
+	ReliabilityScore int
+
 	// Findings are human-readable, worst-first improvement hints.
 	Findings []string
 }
@@ -123,6 +162,19 @@ const (
 	// minToolsForOverheadPenalty guards the overhead-share penalty against
 	// small-sample noise (a 2-call session has no meaningful overhead).
 	minToolsForOverheadPenalty = 5
+
+	// Reliability penalty caps: no single axis component should zero out
+	// the score by itself (mirrors the efficiency score's weight design).
+	maxRetryPenalty = 36
+	maxChurnPenalty = 32
+
+	// minErrorsForDegradation keeps the half-split trend test away from
+	// small-sample noise (one early + one late error is not a trend).
+	minErrorsForDegradation = 3
+
+	// degradationPenalty subtracted when the late-half error rate exceeds
+	// the early-half rate.
+	degradationPenalty = 12
 )
 
 // readOnlyTools is the conservative whitelist of tools whose repeated
@@ -159,6 +211,38 @@ var readOnlyTools = map[string]bool{
 	"find_element":    true,
 	"list_windows":    true,
 	"display_info":    true,
+}
+
+// writeTools is the whitelist of single-file write tools whose input carries
+// a file path, used for the churn (rework) axis. Multi-file batch tools are
+// deliberately excluded: their per-file edit counts are not visible at the
+// tool-call level and would understate churn unpredictably.
+var writeTools = map[string]bool{
+	"edit_file":       true,
+	"write_file":      true,
+	"multi_edit_file": true,
+	"notebook_edit":   true,
+}
+
+// inputPath extracts the file path from a write-tool input JSON. Returns ""
+// when the input carries no recognizable path field.
+func inputPath(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	for _, k := range []string{"file_path", "path", "notebook_path"} {
+		if v, ok := m[k]; ok {
+			var s string
+			if err := json.Unmarshal(v, &s); err == nil && s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // Evaluate walks the full message log and produces a Report. It is pure:
@@ -243,6 +327,30 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 	}
 
+	// Churn (rework) axis: count write-tool invocations per file.
+	churn := map[string]int{}
+	for i := range msgs {
+		for _, b := range msgs[i].Content {
+			if b.Type == "tool_use" && writeTools[b.ToolName] {
+				if p := inputPath(b.Input); p != "" {
+					churn[p]++
+				}
+			}
+		}
+	}
+	for p, n := range churn {
+		if n >= 2 {
+			r.ChurnedFiles = append(r.ChurnedFiles, FileChurn{File: p, Edits: n})
+			r.ChurnExtraEdits += n - 1
+		}
+	}
+	sort.Slice(r.ChurnedFiles, func(a, b int) bool {
+		if r.ChurnedFiles[a].Edits != r.ChurnedFiles[b].Edits {
+			return r.ChurnedFiles[a].Edits > r.ChurnedFiles[b].Edits
+		}
+		return r.ChurnedFiles[a].File < r.ChurnedFiles[b].File
+	})
+
 	// A call key's LAST result is the informative one: the final state the
 	// agent actually learned from. Every earlier result of the same key is a
 	// superseded attempt - wasted when it failed (no usable information) or
@@ -260,6 +368,56 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		if res.isError || (rec.readOnly && rec.identical()) {
 			r.WastedRepeatCalls++
 			r.WastedResultBytes += res.outLen
+		}
+	}
+
+	// Reliability axis: uncorrected retries (an input that already failed
+	// identically before is sent again) and the early-vs-late error trend.
+	errByKey := map[callKey]int{}
+	half := len(results) / 2
+	var firstErrs, secondErrs int
+	for i, res := range results {
+		if !res.isError {
+			continue
+		}
+		errByKey[res.key]++
+		if i < half {
+			firstErrs++
+		} else {
+			secondErrs++
+		}
+	}
+	// Deterministic worst-selection: iterate keys in sorted order and only
+	// replace the worst on a strictly greater count.
+	retryKeys := make([]callKey, 0, len(errByKey))
+	for k, n := range errByKey {
+		if n >= 2 {
+			retryKeys = append(retryKeys, k)
+		}
+	}
+	sort.Slice(retryKeys, func(a, b int) bool {
+		if retryKeys[a].tool != retryKeys[b].tool {
+			return retryKeys[a].tool < retryKeys[b].tool
+		}
+		return retryKeys[a].input < retryKeys[b].input
+	})
+	var worst callKey
+	worstN := 1
+	for _, k := range retryKeys {
+		n := errByKey[k]
+		r.RetrySameInput += n - 1
+		if n > worstN {
+			worst, worstN = k, n
+		}
+	}
+	if worstN > 1 {
+		r.WorstRetry = fmt.Sprintf("%s(%s) ×%d", worst.tool, truncateDisplay(worst.input), worstN)
+	}
+	if firstErrs+secondErrs >= minErrorsForDegradation && half > 0 {
+		// late-half error rate strictly above early-half rate, compared by
+		// cross-multiplication to stay in integer arithmetic
+		if secondErrs*half > firstErrs*(len(results)-half) {
+			r.Degraded = true
 		}
 	}
 
@@ -296,6 +454,7 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 	}
 
 	r.EfficiencyScore = score(r)
+	r.ReliabilityScore = reliabilityScore(r)
 	r.Findings = findings(r)
 	return r
 }
@@ -317,6 +476,40 @@ func score(r Report) int {
 	}
 	if r.ToolCalls >= minToolsForOverheadPenalty && r.TotalTokens > 0 {
 		s -= 20 * float64(r.OverheadTokens) / float64(r.TotalTokens)
+	}
+	if s < 0 {
+		s = 0
+	}
+	if s > 100 {
+		s = 100
+	}
+	return int(s + 0.5)
+}
+
+// reliabilityScore is the transparent reliability composite: 100 minus
+//   - 12 per uncorrected retry (re-sending an input that already failed),
+//     capped at 36,
+//   - 8 per rework edit beyond a file's first write, capped at 32,
+//   - 12 when the run degrades (late-half error rate above early-half).
+//
+// Weights mirror the efficiency score: uncorrected retries are the classic
+// error-spiral signature (most damaging), rework churn signals unstable
+// assumptions, and the degradation flag catches trajectories that got worse
+// instead of recovering.
+func reliabilityScore(r Report) int {
+	s := 100.0
+	retryPenalty := 12 * float64(r.RetrySameInput)
+	if retryPenalty > maxRetryPenalty {
+		retryPenalty = maxRetryPenalty
+	}
+	s -= retryPenalty
+	churnPenalty := 8 * float64(r.ChurnExtraEdits)
+	if churnPenalty > maxChurnPenalty {
+		churnPenalty = maxChurnPenalty
+	}
+	s -= churnPenalty
+	if r.Degraded {
+		s -= degradationPenalty
 	}
 	if s < 0 {
 		s = 0
@@ -373,24 +566,54 @@ func findings(r Report) []string {
 			comma(r.WastedTokenEstimate), comma(r.WastedResultBytes)))
 	}
 
+	if r.RetrySameInput > 0 {
+		f = append(f, fmt.Sprintf(
+			"%d call(s) re-sent an input that had already failed (worst: %s) — fix the arguments or change approach instead of retrying identically",
+			r.RetrySameInput, r.WorstRetry))
+	}
+
+	if len(r.ChurnedFiles) > 0 {
+		w := r.ChurnedFiles[0]
+		f = append(f, fmt.Sprintf(
+			"%d file(s) written more than once (%d rework edits; worst: %s ×%d) — repeated rework of the same file signals unstable assumptions",
+			len(r.ChurnedFiles), r.ChurnExtraEdits, w.File, w.Edits))
+	}
+
+	if r.Degraded {
+		f = append(f, "tool errors concentrated in the later half of the run — the trajectory degraded instead of recovering")
+	}
+
 	return f
 }
 
 // Render formats the report as a compact scorecard for chat display.
 func Render(r Report) string {
 	var b strings.Builder
+	// The grade reflects the weaker axis: a run cannot be "excellent" while
+	// one dimension is failing (per-dimension scoring practice).
+	weaker := r.EfficiencyScore
+	if r.ReliabilityScore < weaker {
+		weaker = r.ReliabilityScore
+	}
 	grade := "good"
 	switch {
-	case r.EfficiencyScore >= 90:
+	case weaker >= 90:
 		grade = "excellent"
-	case r.EfficiencyScore < 60:
+	case weaker < 60:
 		grade = "needs work"
 	}
-	fmt.Fprintf(&b, "Run report — trajectory scorecard (efficiency %d/100, %s)\n", r.EfficiencyScore, grade)
+	fmt.Fprintf(&b, "Run report — trajectory scorecard (efficiency %d/100 · reliability %d/100, %s)\n",
+		r.EfficiencyScore, r.ReliabilityScore, grade)
 	fmt.Fprintf(&b, "  Steps: %d turns with tool calls · %d tool calls · %d distinct tools\n",
 		r.TurnCount, r.ToolCalls, r.DistinctTools)
 	fmt.Fprintf(&b, "  Failures: %d/%d tool calls errored · wasted repeats: %d\n",
 		r.ToolErrors, r.ToolCalls, r.WastedRepeatCalls)
+	fmt.Fprintf(&b, "  Reliability: %d uncorrected retry(s) · %d rework edit(s) across %d file(s)",
+		r.RetrySameInput, r.ChurnExtraEdits, len(r.ChurnedFiles))
+	if r.Degraded {
+		b.WriteString(" · degraded trend")
+	}
+	b.WriteString("\n")
 	if r.TotalTokens > 0 {
 		share := 100 * float64(r.OverheadTokens) / float64(r.TotalTokens)
 		fmt.Fprintf(&b, "  Tokens: %s total · %.0f%% overhead machinery · ~%s wasted context tax (est.)\n",
