@@ -38,7 +38,7 @@ func TestClassifyEffectOutcome(t *testing.T) {
 		{"plain failure", tool.Result{IsError: true, Content: "STDERR:\nerror: failed to push some refs\nCommand failed: exit status 1"}, true, effectFailed},
 		{"permission denial excluded", tool.Result{IsError: true, Content: "Permission denied for tool \"run_command\". User rejected the request."}, false, 0},
 		{"invalid input excluded", tool.Result{IsError: true, Content: "invalid input: unexpected end of JSON input"}, false, 0},
-		{"gate block excluded", tool.Result{IsError: true, Content: "Command blocked by policy"}, false, 0},
+		{"gate block excluded", tool.Result{IsError: true, Content: "Command blocked: rm -rf / (dangerous command)"}, false, 0},
 		{"shell resolve excluded", tool.Result{IsError: true, Content: "failed to resolve shell: no such file"}, false, 0},
 	}
 	for _, tc := range cases {

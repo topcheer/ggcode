@@ -291,11 +291,24 @@ func stagingPatternMatch(path, pattern string) bool {
 		}
 		return false
 	}
+	// #2710: a pattern containing "/" is a multi-segment path pattern
+	// (".vscode/settings.json", ".idea/shelf/"). Single-segment equality can
+	// never hit such a pattern, which made them dead code after #1704.
+	// Match the file at any depth aligned on segment boundaries: exact path
+	// equality or a "/"+pattern suffix (so "web/.vscode/settings.json"
+	// matches but "my.vscode/settings.json" does not). Trailing-slash
+	// patterns are directory prefixes: they match any path inside.
+	if strings.Contains(pattern, "/") {
+		if strings.HasSuffix(pattern, "/") {
+			return "/"+path+"/" == pattern || strings.Contains("/"+path+"/", "/"+pattern)
+		}
+		return path == pattern || strings.HasSuffix(path, "/"+pattern)
+	}
 	// #1704 case 4: bare Contains matched ".project" inside
 	// docs/my.project.md, "Wire.swift" inside Underwire.swift, and
 	// ".min.js" inside config.min.json. A non-glob pattern now means
 	// an exact FILE-NAME or path-SEGMENT match.
-	if strings.HasPrefix(pattern, ".") || strings.Contains(pattern, "/") {
+	if strings.HasPrefix(pattern, ".") {
 		for _, seg := range strings.Split(path, "/") {
 			if seg == pattern {
 				return true
