@@ -245,3 +245,82 @@ func TestUnpairedResultIgnored(t *testing.T) {
 		t.Fatalf("unpaired result leaked: %+v", r)
 	}
 }
+
+func TestGroundingUngroundedCitationsFlagged(t *testing.T) {
+	msgs := []provider.Message{
+		msg("user", provider.ContentBlock{Type: "text", Text: "fix the bug"}),
+		msg("assistant", toolUse("t1", "read_file", `{"path":"internal/agent/loop.go"}`)),
+		msg("user", toolResult("t1", "package agent", false)),
+		msg("assistant", toolUse("t3", "read_file", `{"path":"/repo/pkg/util.go"}`)),
+		msg("user", toolResult("t3", "package util", false)),
+		msg("assistant", toolUse("t2", "grep", `{"pattern":"compaction"}`)),
+		msg("user", toolResult("t2", "docs/compaction.md:12 mentions it", false)),
+		msg("assistant", provider.ContentBlock{Type: "text", Text: "Fixed internal/agent/loop.go:42 and pkg/util.go — see docs/compaction.md. Also invented ghost/never_edited.go for illustration."}),
+	}
+	r := Evaluate(msgs, nil)
+	if r.CitedPaths != 4 {
+		t.Fatalf("cited=%d, want 4", r.CitedPaths)
+	}
+	if r.UngroundedCount != 1 || len(r.UngroundedCitations) != 1 || r.UngroundedCitations[0] != "ghost/never_edited.go" {
+		t.Fatalf("ungrounded=%+v, want [ghost/never_edited.go]", r.UngroundedCitations)
+	}
+	if out := Render(r); !strings.Contains(out, "Grounding: 3/4") {
+		t.Fatalf("render grounding line missing:\n%s", out)
+	}
+	if !strings.Contains(strings.Join(r.Findings, "\n"), "ungrounded citations") {
+		t.Fatalf("ungrounded finding missing: %v", r.Findings)
+	}
+}
+
+func TestGroundingAllVerified(t *testing.T) {
+	msgs := []provider.Message{
+		msg("assistant", toolUse("t1", "edit_file", `{"file_path":"a.go","old":"x","new":"y"}`)),
+		msg("user", toolResult("t1", "ok", false)),
+		msg("assistant", provider.ContentBlock{Type: "text", Text: "Updated a.go accordingly."}),
+	}
+	r := Evaluate(msgs, nil)
+	if r.CitedPaths != 1 || r.UngroundedCount != 0 {
+		t.Fatalf("cited=%d ungrounded=%d, want 1/0", r.CitedPaths, r.UngroundedCount)
+	}
+	if out := Render(r); !strings.Contains(out, "all 1 cited paths verified") {
+		t.Fatalf("render grounding line missing:\n%s", out)
+	}
+}
+
+func TestGroundingSkippedWithoutToolCalls(t *testing.T) {
+	msgs := []provider.Message{
+		msg("user", provider.ContentBlock{Type: "text", Text: "hello"}),
+		msg("assistant", provider.ContentBlock{Type: "text", Text: "see main.go and docs/x.md"}),
+	}
+	r := Evaluate(msgs, nil)
+	if r.CitedPaths != 0 || r.UngroundedCount != 0 {
+		t.Fatalf("grounding must be skipped without tool calls: %+v", r)
+	}
+	if strings.Contains(Render(r), "Grounding") {
+		t.Fatal("render must not show grounding axis without tool trace")
+	}
+}
+
+func TestCitedPathNormalization(t *testing.T) {
+	cases := map[string]string{
+		"./internal/runeval/runeval.go,": "internal/runeval/runeval.go",
+		"runeval.go:42":                  "runeval.go",
+		"docs/guide.md#L12":              "docs/guide.md",
+		"main.go":                        "main.go",
+		"1.2.3":                          "",
+		"config.value":                   "",
+		"":                               "",
+		"..":                             "",
+	}
+	for in, want := range cases {
+		if got := normalizeCitedPath(in); got != want {
+			t.Fatalf("normalizeCitedPath(%q)=%q, want %q", in, got, want)
+		}
+	}
+	if got := citedPathsFromText("see https://example.com/a/b.go then edit pkg/a.go"); len(got) != 1 || got[0] != "pkg/a.go" {
+		t.Fatalf("citedPathsFromText=%v, want [pkg/a.go] (URL stripped)", got)
+	}
+	if got := citedPathsFromText("versions 1.2.3 and 2.0 shipped"); len(got) != 0 {
+		t.Fatalf("version tokens leaked: %v", got)
+	}
+}

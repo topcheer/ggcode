@@ -9,6 +9,15 @@
 // unnecessary (duplicate) tool calls, loops/retries, and tool error rate.
 // Deterministic code checks cover exactly these signals at zero judge cost.
 //
+// Multi-axis extension: the scorecard also evaluates grounding — a
+// deterministic, judge-free check inspired by GroundEval (arXiv:2606.22737,
+// 2026): file paths cited in the final answer are cross-checked against
+// the run's tool trace (tools that opened/edited them, or tool results
+// that surfaced them). Cited paths with no trace presence are reported
+// as ungrounded citations — plausible answers resting on invalid
+// evidence paths, which final-answer and judge-based evaluation miss by
+// construction. See grounding.go.
+//
 // ggcode already had runtime metacognition (trajectory_health detectors that
 // steer the live loop) and post-run qualitative reflection (run-insights
 // memory). What was missing is the quantitative offline scorecard: given the
@@ -80,6 +89,13 @@ type Report struct {
 	// non-"agent" source (compaction, strategist, verify, ...).
 	OverheadTokens int
 	TotalTokens    int
+
+	// Grounding axis (see grounding.go): file paths cited in the final
+	// assistant answer, and how many were never opened by file tools nor
+	// surfaced in any tool result of this run.
+	CitedPaths          int
+	UngroundedCount     int
+	UngroundedCitations []string
 
 	// EfficiencyScore is 100 minus transparent penalties (see Evaluate).
 	// 0-100; 100 = clean trajectory.
@@ -295,6 +311,9 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 	}
 
+	// Grounding axis (see grounding.go): deterministic citation check.
+	applyGrounding(&r, msgs)
+
 	r.EfficiencyScore = score(r)
 	r.Findings = findings(r)
 	return r
@@ -330,6 +349,12 @@ func score(r Report) int {
 // findings renders worst-first, quantified improvement hints.
 func findings(r Report) []string {
 	var f []string
+
+	if r.UngroundedCount > 0 {
+		f = append(f, fmt.Sprintf(
+			"%d of %d file paths cited in the answer never appear in this run's tool trace (%s) — ungrounded citations; verify these claims are evidence-backed",
+			r.UngroundedCount, r.CitedPaths, strings.Join(r.UngroundedCitations, ", ")))
+	}
 
 	shown := 0
 	for _, g := range r.DuplicateGroups {
@@ -391,6 +416,15 @@ func Render(r Report) string {
 		r.TurnCount, r.ToolCalls, r.DistinctTools)
 	fmt.Fprintf(&b, "  Failures: %d/%d tool calls errored · wasted repeats: %d\n",
 		r.ToolErrors, r.ToolCalls, r.WastedRepeatCalls)
+	if r.CitedPaths > 0 {
+		if r.UngroundedCount > 0 {
+			fmt.Fprintf(&b, "  Grounding: %d/%d cited paths verified in trace · ungrounded: %s\n",
+				r.CitedPaths-r.UngroundedCount, r.CitedPaths,
+				strings.Join(r.UngroundedCitations, ", "))
+		} else {
+			fmt.Fprintf(&b, "  Grounding: all %d cited paths verified in tool trace\n", r.CitedPaths)
+		}
+	}
 	if r.TotalTokens > 0 {
 		share := 100 * float64(r.OverheadTokens) / float64(r.TotalTokens)
 		fmt.Fprintf(&b, "  Tokens: %s total · %.0f%% overhead machinery · ~%s wasted context tax (est.)\n",
