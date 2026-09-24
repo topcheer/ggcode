@@ -177,94 +177,109 @@ var readOnlyTools = map[string]bool{
 	"display_info":    true,
 }
 
-// Evaluate walks the full message log and produces a Report. It is pure:
-// same input, same output, no side effects, no LLM calls.
-func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
-	var r Report
+// resultObs is one ordered tool_result observation; wasted bytes are
+// decided against record state learned during the same walk.
+type resultObs struct {
+	key     callKey
+	isError bool
+	outLen  int
+}
 
-	byID := map[string]*callKey{}        // tool_use ID -> its record key
-	records := map[callKey]*callRecord{} // distinct call keys
-	var keyOrder []callKey               // first-appearance order
+// trajectoryWalk is the raw call/result structure collected from one
+// message log.
+type trajectoryWalk struct {
+	byID       map[string]*callKey
+	records    map[callKey]*callRecord
+	keyOrder   []callKey
+	results    []resultObs
+	toolCalls  int
+	toolErrors int
+}
 
-	// resultObs is one ordered tool_result observation; wasted bytes are
-	// decided against record state learned during the same walk.
-	type resultObs struct {
-		key     callKey
-		isError bool
-		outLen  int
+// walkTrajectory collects the call/result structure of the message log.
+func walkTrajectory(msgs []provider.Message) trajectoryWalk {
+	w := trajectoryWalk{
+		byID:    map[string]*callKey{},
+		records: map[callKey]*callRecord{},
 	}
-	var results []resultObs
-
 	for i := range msgs {
 		for _, b := range msgs[i].Content {
 			switch b.Type {
 			case "tool_use":
-				key := callKey{
-					tool:  b.ToolName,
-					input: canonicalJSON(b.Input),
-				}
-				byID[b.ToolID] = &key
-				rec := records[key]
-				if rec == nil {
-					rec = &callRecord{
-						tool:      key.tool,
-						canonical: key.input,
-						hashes:    map[string]bool{},
-						readOnly:  readOnlyTools[key.tool],
-					}
-					records[key] = rec
-					keyOrder = append(keyOrder, key)
-				}
-				rec.count++
-				r.ToolCalls++
+				w.addCall(b)
 			case "tool_result":
-				key := byID[b.ToolID]
-				if key == nil {
-					continue // unpaired result (e.g. truncated log) — skip
-				}
-				rec := records[*key]
-				if rec == nil {
-					continue
-				}
-				rec.hashes[truncateHash(b.Output)] = true
-				if b.IsError {
-					r.ToolErrors++
-				}
-				results = append(results, resultObs{
-					key:     *key,
-					isError: b.IsError,
-					outLen:  len(b.Output),
-				})
+				w.addResult(b)
 			}
 		}
 	}
+	return w
+}
 
-	// Distinct tools.
-	seenTools := map[string]bool{}
-	for _, k := range keyOrder {
-		seenTools[records[k].tool] = true
+func (w *trajectoryWalk) addCall(b provider.ContentBlock) {
+	key := callKey{
+		tool:  b.ToolName,
+		input: canonicalJSON(b.Input),
 	}
-	r.DistinctTools = len(seenTools)
+	w.byID[b.ToolID] = &key
+	rec := w.records[key]
+	if rec == nil {
+		rec = &callRecord{
+			tool:      key.tool,
+			canonical: key.input,
+			hashes:    map[string]bool{},
+			readOnly:  readOnlyTools[key.tool],
+		}
+		w.records[key] = rec
+		w.keyOrder = append(w.keyOrder, key)
+	}
+	rec.count++
+	w.toolCalls++
+}
 
-	// Turn count: assistant messages that issued at least one tool call.
+func (w *trajectoryWalk) addResult(b provider.ContentBlock) {
+	key := w.byID[b.ToolID]
+	if key == nil {
+		return // unpaired result (e.g. truncated log) — skip
+	}
+	rec := w.records[*key]
+	if rec == nil {
+		return
+	}
+	rec.hashes[truncateHash(b.Output)] = true
+	if b.IsError {
+		w.toolErrors++
+	}
+	w.results = append(w.results, resultObs{
+		key:     *key,
+		isError: b.IsError,
+		outLen:  len(b.Output),
+	})
+}
+
+// countTurns counts assistant messages that issued at least one tool call.
+func countTurns(msgs []provider.Message) int {
+	n := 0
 	for i := range msgs {
 		if msgs[i].Role != "assistant" {
 			continue
 		}
 		for _, b := range msgs[i].Content {
 			if b.Type == "tool_use" {
-				r.TurnCount++
+				n++
 				break
 			}
 		}
 	}
+	return n
+}
 
-	// A call key's LAST result is the informative one: the final state the
-	// agent actually learned from. Every earlier result of the same key is a
-	// superseded attempt - wasted when it failed (no usable information) or
-	// when it is an identical read-only repeat (duplicate of what the last
-	// call returns anyway).
-	lastIdx := map[callKey]int{}
+// wastedRepeats counts superseded results that added no information: the
+// final result of a call key is the informative one — the final state the
+// agent actually learned from; earlier results are wasted when they
+// failed (no usable information) or when they are identical read-only
+// repeats (duplicate of what the last call returns anyway).
+func wastedRepeats(records map[callKey]*callRecord, results []resultObs) (calls, bytes int) {
+	lastIdx := make(map[callKey]int, len(results))
 	for i, res := range results {
 		lastIdx[res.key] = i
 	}
@@ -274,17 +289,22 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			continue
 		}
 		if res.isError || (rec.readOnly && rec.identical()) {
-			r.WastedRepeatCalls++
-			r.WastedResultBytes += res.outLen
+			calls++
+			bytes += res.outLen
 		}
 	}
+	return calls, bytes
+}
 
+// duplicateGroups summarizes keys invoked more than once, worst first.
+func duplicateGroups(records map[callKey]*callRecord, keyOrder []callKey) []DuplicateGroup {
+	var groups []DuplicateGroup
 	for _, k := range keyOrder {
 		rec := records[k]
 		if rec.count < 2 {
 			continue
 		}
-		r.DuplicateGroups = append(r.DuplicateGroups, DuplicateGroup{
+		groups = append(groups, DuplicateGroup{
 			Tool:      rec.tool,
 			Input:     truncateDisplay(rec.canonical),
 			Count:     rec.count,
@@ -293,12 +313,35 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			ReadOnly:  rec.readOnly,
 		})
 	}
-	sort.Slice(r.DuplicateGroups, func(a, b int) bool {
-		if r.DuplicateGroups[a].Repeats != r.DuplicateGroups[b].Repeats {
-			return r.DuplicateGroups[a].Repeats > r.DuplicateGroups[b].Repeats
+	sort.Slice(groups, func(a, b int) bool {
+		if groups[a].Repeats != groups[b].Repeats {
+			return groups[a].Repeats > groups[b].Repeats
 		}
-		return r.DuplicateGroups[a].Tool < r.DuplicateGroups[b].Tool
+		return groups[a].Tool < groups[b].Tool
 	})
+	return groups
+}
+
+// Evaluate walks the full message log and produces a Report. It is pure:
+// same input, same output, no side effects, no LLM calls.
+func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
+	var r Report
+
+	w := walkTrajectory(msgs)
+	r.ToolCalls = w.toolCalls
+	r.ToolErrors = w.toolErrors
+
+	// Distinct tools.
+	seenTools := map[string]bool{}
+	for _, k := range w.keyOrder {
+		seenTools[w.records[k].tool] = true
+	}
+	r.DistinctTools = len(seenTools)
+
+	r.TurnCount = countTurns(msgs)
+
+	r.WastedRepeatCalls, r.WastedResultBytes = wastedRepeats(w.records, w.results)
+	r.DuplicateGroups = duplicateGroups(w.records, w.keyOrder)
 
 	r.WastedTokenEstimate = r.WastedResultBytes / bytesPerToken
 
