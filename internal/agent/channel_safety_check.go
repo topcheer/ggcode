@@ -416,6 +416,14 @@ func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp, col 
 // detectCloseInLoops scans for close(ch) inside loop bodies where ch is not
 // recreated per iteration via make(chan...) inside the same loop. Closing a
 // channel created outside the loop will panic on the second iteration.
+// Exemption (#2699): when the close is followed in the same statement list by
+// a statement that terminates the iteration path — a return (not inside a
+// func literal) or a bare break that binds to the enclosing loop (no
+// select/switch in between) — the close executes at most once and the
+// canonical loop-exit idiom must not be flagged. Plain statements (cleanup,
+// logging) between the close and the terminator are allowed; any nested
+// control-flow construct makes the terminator conditional and voids the
+// exemption.
 func detectCloseInLoops(fset *token.FileSet, body *ast.BlockStmt) []channelSafetyInstance {
 	var instances []channelSafetyInstance
 	seen := make(map[token.Pos]bool)
@@ -436,27 +444,213 @@ func detectCloseInLoops(fset *token.FileSet, body *ast.BlockStmt) []channelSafet
 
 		createdInLoop := collectChanMakeNames(loopBody)
 
-		ast.Inspect(loopBody, func(inner ast.Node) bool {
-			ce, ok := inner.(*ast.CallExpr)
-			if !ok || !isCloseCall(ce) || seen[ce.Pos()] {
-				return true
-			}
-			chName := channelNameFromArg(ce.Args[0])
-			if chName == "" || createdInLoop[chName] {
-				return true
-			}
-			seen[ce.Pos()] = true
-			instances = append(instances, channelSafetyInstance{
-				posStr:  fset.Position(ce.Pos()).String(),
-				channel: chName,
-				kind:    "close-in-loop",
-			})
-			return true
-		})
+		w := &closeLoopWalker{
+			fset:          fset,
+			createdInLoop: createdInLoop,
+			seen:          seen,
+			instances:     &instances,
+		}
+		w.scanStmtList(loopBody.List, false, false)
 		return true
 	})
 
 	return instances
+}
+
+// closeLoopWalker walks loop bodies tracking the control-flow context needed
+// to decide whether a close(ch) is followed by a guaranteed terminator.
+type closeLoopWalker struct {
+	fset          *token.FileSet
+	createdInLoop map[string]bool
+	seen          map[token.Pos]bool
+	instances     *[]channelSafetyInstance
+}
+
+// scanStmtList walks a statement list. funcLit marks that the list lives
+// inside a function literal (return only exits the closure); breakBarrier
+// marks that a select/switch sits between this list and the enclosing loop
+// (a bare break binds to that select/switch instead of the loop).
+func (w *closeLoopWalker) scanStmtList(stmts []ast.Stmt, funcLit, breakBarrier bool) {
+	for i, s := range stmts {
+		if w.scanCloseBearingStmt(s, closeCtx{stmts: stmts, next: i + 1, funcLit: funcLit, breakBarrier: breakBarrier}) {
+			continue
+		}
+		w.scanContainerStmt(s, funcLit, breakBarrier)
+	}
+}
+
+// scanCloseBearingStmt handles statement forms whose expressions can carry a
+// close call or function literals (expression / defer / go / assign /
+// return / send). It reports whether the statement was handled here.
+func (w *closeLoopWalker) scanCloseBearingStmt(s ast.Stmt, ctx closeCtx) bool {
+	switch n := s.(type) {
+	case *ast.ExprStmt:
+		if ce, ok := n.X.(*ast.CallExpr); ok && isCloseCall(ce) {
+			w.recordIfNotExempted(ce, ctx)
+		} else {
+			w.walkExprForFuncLits(n.X, ctx.breakBarrier)
+		}
+	case *ast.DeferStmt:
+		if isCloseCall(n.Call) {
+			w.recordIfNotExempted(n.Call, ctx)
+		} else {
+			w.walkExprForFuncLits(n.Call, ctx.breakBarrier)
+		}
+	case *ast.GoStmt:
+		if isCloseCall(n.Call) {
+			w.recordIfNotExempted(n.Call, ctx)
+		} else {
+			w.walkExprForFuncLits(n.Call, ctx.breakBarrier)
+		}
+	case *ast.AssignStmt:
+		for _, rhs := range n.Rhs {
+			w.walkExprForFuncLits(rhs, ctx.breakBarrier)
+		}
+	case *ast.ReturnStmt:
+		for _, v := range n.Results {
+			w.walkExprForFuncLits(v, ctx.breakBarrier)
+		}
+	case *ast.SendStmt:
+		w.walkExprForFuncLits(n.Value, ctx.breakBarrier)
+	default:
+		return false
+	}
+	return true
+}
+
+// scanContainerStmt descends into nested statement lists (if / for / range /
+// select / switch / type-switch / labeled / block). Clause bodies of select
+// and switch set the break barrier: a bare break there binds to the clause,
+// not the enclosing loop.
+func (w *closeLoopWalker) scanContainerStmt(s ast.Stmt, funcLit, breakBarrier bool) {
+	switch n := s.(type) {
+	case *ast.IfStmt:
+		w.walkExprForFuncLits(n.Cond, breakBarrier)
+		w.scanStmtList(n.Body.List, funcLit, breakBarrier)
+		if elseBlock, ok := n.Else.(*ast.BlockStmt); ok {
+			w.scanStmtList(elseBlock.List, funcLit, breakBarrier)
+		} else if elseIf, ok := n.Else.(*ast.IfStmt); ok {
+			w.scanStmtList([]ast.Stmt{elseIf}, funcLit, breakBarrier)
+		}
+	case *ast.ForStmt:
+		w.scanBody(n.Body, funcLit, breakBarrier)
+	case *ast.RangeStmt:
+		w.scanBody(n.Body, funcLit, breakBarrier)
+	case *ast.SelectStmt:
+		w.walkClauseBodies(n.Body, funcLit)
+	case *ast.SwitchStmt:
+		w.walkClauseBodies(n.Body, funcLit)
+	case *ast.TypeSwitchStmt:
+		w.walkClauseBodies(n.Body, funcLit)
+	case *ast.LabeledStmt:
+		w.scanStmtList([]ast.Stmt{n.Stmt}, funcLit, breakBarrier)
+	case *ast.BlockStmt:
+		w.scanStmtList(n.List, funcLit, breakBarrier)
+	}
+}
+
+// scanBody walks a loop body when present.
+func (w *closeLoopWalker) scanBody(body *ast.BlockStmt, funcLit, breakBarrier bool) {
+	if body != nil {
+		w.scanStmtList(body.List, funcLit, breakBarrier)
+	}
+}
+
+// walkClauseBodies walks the clause bodies of a select/switch statement,
+// applying the break barrier (a bare break inside a clause binds to the
+// clause, not the enclosing loop).
+func (w *closeLoopWalker) walkClauseBodies(body *ast.BlockStmt, funcLit bool) {
+	if body == nil {
+		return
+	}
+	for _, cc := range body.List {
+		switch c := cc.(type) {
+		case *ast.CommClause:
+			w.scanStmtList(c.Body, funcLit, true)
+		case *ast.CaseClause:
+			w.scanStmtList(c.Body, funcLit, true)
+		}
+	}
+}
+
+// walkExprForFuncLits finds function literals inside an expression and walks
+// their bodies with funcLit set (a return there only exits the closure).
+func (w *closeLoopWalker) walkExprForFuncLits(expr ast.Expr, breakBarrier bool) {
+	if expr == nil {
+		return
+	}
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if fl, ok := node.(*ast.FuncLit); ok {
+			w.scanStmtList(fl.Body.List, true, breakBarrier)
+			return false
+		}
+		return true
+	})
+}
+
+// closeCtx carries the control-flow context of a close(ch) call: its
+// containing statement list, the index of the first statement after the
+// close, and the funcLit/breakBarrier flags describing what a return or bare
+// break would actually exit.
+type closeCtx struct {
+	stmts        []ast.Stmt
+	next         int
+	funcLit      bool
+	breakBarrier bool
+}
+
+// recordIfNotExempted records a close(ch) instance unless the channel was
+// created in the loop or a guaranteed terminator follows the close in the
+// same statement list.
+func (w *closeLoopWalker) recordIfNotExempted(ce *ast.CallExpr, ctx closeCtx) {
+	if w.seen[ce.Pos()] {
+		return
+	}
+	chName := channelNameFromArg(ce.Args[0])
+	if chName == "" || w.createdInLoop[chName] {
+		return
+	}
+	w.seen[ce.Pos()] = true
+	if closeFollowedByTerminator(ctx.stmts, ctx.next, ctx.funcLit, ctx.breakBarrier) {
+		return
+	}
+	*w.instances = append(*w.instances, channelSafetyInstance{
+		posStr:  w.fset.Position(ce.Pos()).String(),
+		channel: chName,
+		kind:    "close-in-loop",
+	})
+}
+
+// closeFollowedByTerminator reports whether the statements after a close
+// guarantee the execution path leaves the enclosing loop before a second
+// iteration: a return (outside any func literal) or a bare break that binds
+// to the enclosing loop. Plain non-branching statements in between are
+// skipped; the first control-flow construct decides, conservatively.
+func closeFollowedByTerminator(stmts []ast.Stmt, from int, funcLit, breakBarrier bool) bool {
+	for _, s := range stmts[from:] {
+		switch n := s.(type) {
+		case *ast.ReturnStmt:
+			// Inside a func literal a return only exits the closure, so the
+			// loop can still reach the close again.
+			return !funcLit
+		case *ast.BranchStmt:
+			// Bare break exits the loop only when no select/switch shadows it;
+			// labeled break/goto/continue are not resolved (conservative).
+			if n.Tok == token.BREAK && n.Label == nil {
+				return !funcLit && !breakBarrier
+			}
+			return false
+		case *ast.ExprStmt, *ast.AssignStmt, *ast.IncDecStmt, *ast.SendStmt,
+			*ast.DeclStmt, *ast.EmptyStmt, *ast.DeferStmt, *ast.GoStmt:
+			// Plain statements cannot transfer control; keep scanning.
+			continue
+		default:
+			// Any nested control-flow construct (if/for/select/switch/labeled)
+			// makes an eventual terminator conditional — no exemption.
+			return false
+		}
+	}
+	return false
 }
 
 // collectChanMakeNames returns a set of channel variable names created via
