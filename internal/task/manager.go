@@ -157,28 +157,12 @@ func (m *Manager) Digest(maxTasks, maxChars int) string {
 		maxChars = defaultDigestMaxChars
 	}
 
-	pending, inProgress, completed, lines := 0, 0, 0, 0
-	var sb strings.Builder
-	for _, t := range m.List() {
-		switch t.Status {
-		case StatusInProgress:
-			inProgress++
-		case StatusCompleted:
-			completed++
-		default:
-			pending++
-		}
-		if t.Status != StatusCompleted && lines < maxTasks {
-			lines++
-			fmt.Fprintf(&sb, "- %s [%s] %s\n", t.ID, t.Status, truncateDigestSubject(t.Subject))
-		}
-	}
-	if pending+inProgress == 0 {
+	stats, body := m.digestStats(maxTasks)
+	if stats.pending+stats.inProgress == 0 {
 		return ""
 	}
 
-	header := fmt.Sprintf("Task board: %d pending, %d in_progress, %d completed. Task IDs remain valid; call task_list for full details.", pending, inProgress, completed)
-	body := strings.TrimRight(sb.String(), "\n")
+	header := fmt.Sprintf("Task board: %d pending, %d in_progress, %d completed. Task IDs remain valid; call task_list for full details.", stats.pending, stats.inProgress, stats.completed)
 	out := header
 	if body != "" {
 		out += "\n" + body
@@ -188,6 +172,36 @@ func (m *Manager) Digest(maxTasks, maxChars int) string {
 		out = string(runes[:maxChars]) + "\n... (truncated)"
 	}
 	return out
+}
+
+// digestStats counts tasks by status and renders the capped open-task
+// list (trailing newline trimmed). Split from Digest to keep each unit
+// simple.
+func (m *Manager) digestStats(maxTasks int) (digestStats, string) {
+	var st digestStats
+	var sb strings.Builder
+	for _, t := range m.List() {
+		switch t.Status {
+		case StatusInProgress:
+			st.inProgress++
+		case StatusCompleted:
+			st.completed++
+		default:
+			st.pending++
+		}
+		if t.Status != StatusCompleted && st.lines < maxTasks {
+			st.lines++
+			fmt.Fprintf(&sb, "- %s [%s] %s\n", t.ID, t.Status, truncateDigestSubject(t.Subject))
+		}
+	}
+	return st, strings.TrimRight(sb.String(), "\n")
+}
+
+type digestStats struct {
+	pending    int
+	inProgress int
+	completed  int
+	lines      int
 }
 
 // truncateDigestSubject caps a task subject for digest rendering (rune-safe
