@@ -123,7 +123,7 @@ func (b *Browser) Parameters() json.RawMessage {
 		},
 		"profile": {
 			"type": "string",
-			"description": "Chrome profile name. Each profile runs a separate Chrome instance with its own cookies, extensions, and settings. Use 'default' for a clean ephemeral profile, or specify a name like 'work', 'personal' to persist data between sessions. Defaults to 'default' (temporary, cleared on exit). To use your real Chrome profile, set profile to 'system'."
+			"description": "Chrome profile name. Each profile runs a separate Chrome instance with its own cookies, extensions, and settings. Use 'default' for a clean ephemeral profile, or specify a name like 'work', 'personal' to persist data between sessions. Defaults to 'default' (temporary, cleared on exit). 'system' is a persistent dedicated profile under ~/.ggcode/browser-profiles/system - it does NOT reuse your logged-in Chrome session (Chrome locks the default user data dir while running, and Chrome 136+ disables CDP debugging on it), so reuse of an already-open browser is not supported; log in once inside the 'system' profile and it persists across sessions."
 		},
 		"session": {
 			"type": "string",
@@ -434,13 +434,13 @@ func findChromeExecutable() string {
 }
 
 // getChromeVersion returns the major version number of the installed Chrome.
-// Returns 0 if the version cannot be determined (non-fatal — we warn but don't block).
+// Returns 0 if the version cannot be determined (non-fatal - we warn but don't block).
 //
 // Windows hang guard: chrome.exe is a GUI-subsystem binary; under
 // antivirus/EDR hooks or sandboxed service sessions, `chrome --version`
 // may never write output and never exit. The old cmd.Output() had no
 // deadline, so this pre-flight step could hang an entire browser action
-// indefinitely — and because a failed profile start is not cached, EVERY
+// indefinitely - and because a failed profile start is not cached, EVERY
 // subsequent action re-ran this chain, presenting as "all browser calls
 // time out". The version probe is advisory only, so a timeout just means
 // version 0 (warn path), never a hang.
@@ -500,7 +500,7 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		return nil, fmt.Errorf("%s\n\nThe browser tool requires Chrome or Chromium to be installed on this system.", chromeNotFoundHelp())
 	}
 
-	// Check version — warn (but don't block) if too old
+	// Check version - warn (but don't block) if too old
 	chromeVersion := getChromeVersion(chromePath)
 	if chromeVersion > 0 && chromeVersion < minChromeMajorVersion {
 		// Non-fatal: older Chrome may work for basic operations
@@ -533,15 +533,15 @@ func (b *Browser) getProfile(name string, headless *bool) (*browserProfile, erro
 		opts = append(opts, chromedp.Headless)
 	}
 
-	// Profile-specific data directory
-	if name == "system" {
-		// Use the real Chrome profile directory — inherits existing cookies/login state
-		userDataDir := findChromeUserDataDir()
-		if userDataDir != "" {
-			opts = append(opts, chromedp.UserDataDir(userDataDir))
-		}
-	} else if name != "default" {
-		// Named profile: persist data in ~/.ggcode/browser-profiles/<name>
+	// Profile-specific data directory. 'system' deliberately does NOT reuse
+	// the user's real Chrome user data dir (user report, Windows 2026-09-24):
+	// while Chrome is already running the dir is locked and a new chrome.exe
+	// just forwards the launch to the existing instance and exits, so chromedp
+	// never gets a DevTools endpoint; Chrome 136+ additionally refuses CDP
+	// debugging on the default user data dir. Instead 'system' is a dedicated
+	// persistent profile under ~/.ggcode/browser-profiles/system - a fresh
+	// instance by default, with login state persisted across ggcode sessions.
+	if name != "default" {
 		dataDir := filepath.Join(homeDir(), ".ggcode", "browser-profiles", name)
 		if err := os.MkdirAll(dataDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create profile directory: %w", err)
@@ -656,7 +656,7 @@ func (b *Browser) getSession(profileName, sessionID string, headless *bool) (*br
 // browser navigation (#741). Only http/https are allowed: file:// navigation
 // turns the browser into an unauthenticated local-file reader that bypasses
 // the workspace sandbox read_file enforces, and chrome:// exposes browser
-// internals — neither can be reached through any other vetted channel.
+// internals - neither can be reached through any other vetted channel.
 // Schemeless input is also rejected (chromedp would treat it as a search or
 // relative file path, which is ambiguous and can land on file:// after
 // redirect).
@@ -1120,7 +1120,7 @@ func (b *Browser) doStatus() (Result, error) {
 				status = "closed"
 			}
 			if url != "" {
-				sb.WriteString(fmt.Sprintf("    └─ Session: %s [%s] %s — %s\n", sessID, status, title, url))
+				sb.WriteString(fmt.Sprintf("    └─ Session: %s [%s] %s - %s\n", sessID, status, title, url))
 			} else {
 				sb.WriteString(fmt.Sprintf("    └─ Session: %s [%s]\n", sessID, status))
 			}
@@ -1203,11 +1203,11 @@ func (b *Browser) doSelect(ctx context.Context, profile, session, selector, valu
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 	}
 
-	// Try to set the value via JS — this handles both value and visible text matching
+	// Try to set the value via JS - this handles both value and visible text matching
 	js := fmt.Sprintf(`(() => {
 		const sel = document.querySelector(%q);
 		if (!sel) return { ok: false, error: 'element not found' };
-			if (!sel.options) return { ok: false, error: 'element is not a <select> — cannot set value' };
+			if (!sel.options) return { ok: false, error: 'element is not a <select> - cannot set value' };
 		for (const opt of sel.options) {
 			if (opt.value === %q || opt.text.trim() === %q) {
 				sel.value = opt.value;
@@ -1302,7 +1302,7 @@ func (b *Browser) doPress(ctx context.Context, profile, session, key string, hea
 	// kb package's private-use rune constants (#1312): KeyEvent feeds its
 	// argument through kb.Encode per rune, and passing the ASCII name
 	// ("ArrowDown") typed the literal text into the focused element instead
-	// of pressing the key — 27 key events of garbage, reported as success.
+	// of pressing the key - 27 key events of garbage, reported as success.
 	var cdpKeyName string
 	if mapped, ok := keyMap[lowerKey]; ok {
 		cdpKeyName = mapped
@@ -1359,7 +1359,7 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 	defer cancel()
 
 	if err := chromedp.Run(timeoutCtx,
-		// WaitReady, NOT WaitVisible — many sites hide the real <input type="file">
+		// WaitReady, NOT WaitVisible - many sites hide the real <input type="file">
 		// with display:none and use a styled button. SetUploadFiles only needs the
 		// DOM node to exist, not be visible.
 		chromedp.WaitReady(selector, chromedp.ByQuery),
@@ -1495,32 +1495,6 @@ func (b *Browser) doDrag(ctx context.Context, profile, session, sourceSel, targe
 		return Result{IsError: true, Content: fmt.Sprintf("drag failed: %s", errMsg)}, nil
 	}
 	return Result{Content: fmt.Sprintf("Dragged %s to %s", sourceSel, targetSel)}, nil
-}
-
-// findChromeUserDataDir locates the system Chrome user data directory.
-func findChromeUserDataDir() string {
-	home := homeDir()
-	if home == "" {
-		return ""
-	}
-
-	// Platform-specific Chrome user data directories
-	candidates := []string{
-		// macOS
-		filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
-		// Linux
-		filepath.Join(home, ".config", "google-chrome"),
-		filepath.Join(home, ".config", "chromium"),
-		// Windows (Git Bash style paths)
-		filepath.Join(home, "AppData", "Local", "Google", "Chrome", "User Data"),
-	}
-
-	for _, p := range candidates {
-		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return p
-		}
-	}
-	return ""
 }
 
 // homeDir returns the user's home directory.
