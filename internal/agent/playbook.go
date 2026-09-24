@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Strategy Playbook — inspired by ACE (Agentic Context Engineering,
@@ -230,6 +231,26 @@ func (pb *Playbook) Record(stats *RunStats) {
 
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
+
+	// #2726: recordPlaybook builds a FRESH Playbook per run, so the
+	// instance mutex serializes nothing across instances. Two ggcode
+	// processes (multi-window / multi-IM on one workspace) recording near-
+	// simultaneously both loaded the same on-disk state and the last writer
+	// erased the other's entries. Hold the cross-process file lock around
+	// the whole load->modify->save cycle; on acquisition failure proceed
+	// unlocked (fail-open, same degraded semantics as the cron/probe-cache
+	// callers) rather than blocking the reflection path. The directory must
+	// exist BEFORE the lock open, or O_CREATE fails ENOENT and every
+	// first-run Record silently takes the unlocked path.
+	if pb.path != "" {
+		_ = os.MkdirAll(filepath.Dir(pb.path), 0755)
+	}
+	if unlock, err := util.FileLock(pb.path + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("playbook", "record: failed to acquire playbook lock (proceeding unlocked): %v", err)
+	}
+
 	pb.load()
 
 	taskType := classifyTaskType(stats.UserPrompt)
