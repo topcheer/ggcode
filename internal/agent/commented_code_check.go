@@ -348,10 +348,16 @@ func looksLikeCode(content string) bool {
 		return true
 	}
 
-	// Language-specific keywords
-	for _, indicator := range commentCodeIndicators {
-		if strings.Contains(content, indicator) {
-			return true
+	// Language-specific keywords (#2660): same prose guard as the call-pattern
+	// heuristic below. Without it, godoc prose like "// Print the value if set"
+	// hit the raw substring check on "if " and was flagged as commented-out
+	// code. Prose words (the/is/a/...) never appear in a bare code statement,
+	// so the guard only suppresses natural-language false positives.
+	if !hasProseSignal(content) {
+		for _, indicator := range commentCodeIndicators {
+			if strings.Contains(content, indicator) {
+				return true
+			}
 		}
 	}
 
