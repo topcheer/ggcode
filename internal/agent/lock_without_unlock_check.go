@@ -296,6 +296,92 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 		reportHeld("held at branch end")
 		held = saved
 	}
+	// switchHasDefault reports whether a switch body has a default clause
+	// (CaseClause with no case expressions). Without one, the
+	// no-case-matched path carries the incoming held set straight to the
+	// join, so the join must include it (#2717).
+	switchHasDefault := func(body *ast.BlockStmt) bool {
+		if body == nil {
+			return false
+		}
+		for _, cs := range body.List {
+			if cl, ok := cs.(*ast.CaseClause); ok && cl.List == nil {
+				return true
+			}
+		}
+		return false
+	}
+	// walkClauseBody walks the CaseClause/CommClause statements of a
+	// switch/select body (#2717). Each clause is an alternative execution
+	// path: its body runs on its own branch copy so an Unlock in one case
+	// neither satisfies nor double-releases for the other cases. After all
+	// clauses the join state is the UNION of every case-path end set (a
+	// receiver counts as held iff some path still holds it): all paths
+	// released means released, keeping the select per-case Unlock fan-out
+	// idiom warning-free instead of a false "held at function end"; any
+	// single leaking path still reports. select always runs exactly one
+	// case (blocking is path termination, not bypass); a switch without
+	// default can bypass the whole body, so bypassPossible adds the
+	// incoming set to the join. fallthrough chains are approximated as
+	// independent paths, the same conservative shape used for if/else-if
+	// ladders. Known approximation outside #2717 scope: a TryLock in a
+	// switch tag is modeled as an unconditional acquire, so its failure
+	// branch still reads as held (same shape as an if condition).
+	var walkClauseBody func(body *ast.BlockStmt, bypassPossible bool)
+	walkClauseBody = func(body *ast.BlockStmt, bypassPossible bool) {
+		if body == nil {
+			return
+		}
+		saved := held
+		joined := map[string]*simHeldEntry{}
+		if bypassPossible {
+			joined = copySimHeld(saved)
+		}
+		for _, cs := range body.List {
+			branchHeld := copySimHeld(saved)
+			held = branchHeld
+			switch cl := cs.(type) {
+			case *ast.CaseClause:
+				walkStmts(cl.Body)
+			case *ast.CommClause:
+				if cl.Comm != nil {
+					// case v := <-ch: / case ch <- x: - the comm statement
+					// runs on the taken path; it can carry calls (rare,
+					// but a TryLock in an assignment guard is legal Go).
+					walkStmts([]ast.Stmt{cl.Comm})
+				}
+				walkStmts(cl.Body)
+			default:
+				walkStmts([]ast.Stmt{cs})
+			}
+			reportHeld("held at branch end")
+			for recv, e := range branchHeld {
+				if _, ok := joined[recv]; !ok {
+					joined[recv] = e
+				}
+			}
+		}
+		// Merge the join state back into the incoming set: drop receivers
+		// every path released, add receivers some path acquired and kept.
+		held = saved
+		for recv := range saved {
+			if _, ok := joined[recv]; !ok {
+				delete(saved, recv)
+			}
+		}
+		for recv, e := range joined {
+			if outer, ok := saved[recv]; ok {
+				// A case path already reported this receiver (branch-end
+				// leak): propagate the flag so the function-end check does
+				// not double-report the same lock call (#1099 anchor rule).
+				if e.reported {
+					outer.reported = true
+				}
+			} else {
+				saved[recv] = e
+			}
+		}
+	}
 	walkStmts = func(stmts []ast.Stmt) {
 		for _, st := range stmts {
 			switch s := st.(type) {
@@ -365,17 +451,34 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 					simBranch(func() { walkStmts(s.Body.List) })
 				}
 			case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-				var body *ast.BlockStmt
+				// #2717: switch/select bodies are lists of CaseClause /
+				// CommClause statements, not plain statements. The old
+				// single simBranch(body.List) walk hit the default arm for
+				// every clause header, so Lock/Unlock inside case bodies was
+				// invisible: a Lock leaked inside a case went unreported,
+				// and code that unlocks per-case (select fan-out) was
+				// misreported as held at function end.
 				switch e := st.(type) {
 				case *ast.SwitchStmt:
-					body = e.Body
+					if e.Init != nil {
+						walkStmts([]ast.Stmt{e.Init})
+					}
+					if call, ok := e.Tag.(*ast.CallExpr); ok {
+						// switch mu.TryLock() { case true: ... } - the tag is
+						// evaluated once on the taken path.
+						applyCall(call)
+					}
+					walkClauseBody(e.Body, !switchHasDefault(e.Body))
 				case *ast.TypeSwitchStmt:
-					body = e.Body
+					if e.Init != nil {
+						walkStmts([]ast.Stmt{e.Init})
+					}
+					walkClauseBody(e.Body, !switchHasDefault(e.Body))
 				case *ast.SelectStmt:
-					body = e.Body
-				}
-				if body != nil {
-					simBranch(func() { walkStmts(body.List) })
+					// select always runs exactly one case: blocking until a
+					// case is ready is path termination, not a bypass to the
+					// join, so no default detection is needed.
+					walkClauseBody(e.Body, false)
 				}
 			default:
 				// #2554: `go func(){ mu.Lock() }()` is a PERMANENT deadlock
