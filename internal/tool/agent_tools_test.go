@@ -176,8 +176,9 @@ func TestAgentToolDescriptionsClarifyOneShotRuns(t *testing.T) {
 	}
 
 	waitDesc := WaitAgentTool{}.Description()
-	if !strings.Contains(waitDesc, "one-shot") || !strings.Contains(waitDesc, "does not send new instructions") {
-		t.Fatalf("wait_agent description should clarify polling-only behavior, got %q", waitDesc)
+	// invariant that waiting never injects instructions into the run.
+	if !strings.Contains(waitDesc, "re-poll") || !strings.Contains(waitDesc, "15-60s") {
+		t.Fatalf("wait_agent description should guide short re-polling, got %q", waitDesc)
 	}
 
 	listDesc := ListAgentsTool{}.Description()
