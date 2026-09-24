@@ -189,6 +189,7 @@ type Agent struct {
 	searchInvalidation        *searchInvalidationState   // search-result invalidation: stale grep/lsp results after edits (AgentDiet)
 	wtInvalidation            *wtInvalidationState       // working-tree invalidation: cross-file stale reads after git mutation
 	strategyExhaustion        *seStrategyExhaustionState // strategy exhaustion: diverse recovery strategies failing for same error (EEA robustness entropy)
+	meltdownOnset             *meltdownOnsetState        // meltdown onset: sliding-window tool-sequence entropy (arXiv:2603.29231)
 	editFailRecovery          *editFailState             // consecutive edit failure recovery guidance
 	scopeDrift                *scopeDriftState           // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence           *driftRecurrenceState      // drift recurrence detection (post-warning behavioral persistence)
@@ -407,6 +408,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		searchInvalidation:     newSearchInvalidationState(),
 		wtInvalidation:         newWTInvalidationState(),
 		strategyExhaustion:     newStrategyExhaustionState(),
+		meltdownOnset:          newMeltdownOnsetState(),
 		falsePremise:           newFalsePremiseState(),
 		editFailRecovery:       newEditFailState(),
 		scopeDrift:             newScopeDriftState(),
@@ -1684,6 +1686,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.searchInvalidation.reset()
 	a.wtInvalidation.reset()
 	a.strategyExhaustion.reset()
+	a.meltdownOnset.reset()
 	a.falsePremise.reset()
 	a.phantomVerify.reset()
 	// Reset the edit failure recovery tracker.
@@ -3851,6 +3854,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: seMsg,
+					}},
+				})
+			}
+			// Meltdown onset: sliding-window entropy over the tool-name
+			// sequence detects erratic, non-converging tool-switching with
+			// no error anchor (arXiv:2603.29231 behavioral collapse).
+			if moMsg := a.meltdownOnset.recordToolCall(tc.Name, i+1); moMsg != "" {
+				debug.Log("agent", "Iteration %d: meltdown onset detector triggered", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: moMsg,
 					}},
 				})
 			}
