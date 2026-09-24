@@ -140,6 +140,7 @@ func init() {
 	})
 	regUpdatePlain(func(m Model, msg doneMsg) (tea.Model, tea.Cmd) { return m.handleDoneMsg(msg) })
 	regUpdatePlain(func(m Model, msg agentDoneMsg) (tea.Model, tea.Cmd) { return m.handleAgentDoneMsg(msg) })
+	regUpdatePlain(func(m Model, msg statuslineMsg) (tea.Model, tea.Cmd) { return m.handleStatuslineMsg(msg) })
 	regUpdatePlain(func(m Model, msg shellCommandDoneMsg) (tea.Model, tea.Cmd) { return m.handleShellCommandDoneMsg(msg) })
 	regUpdatePlain(func(m Model, msg errMsg) (tea.Model, tea.Cmd) { return m.handleErrMsg(msg) })
 	regUpdatePlain(func(m Model, msg agentErrMsg) (tea.Model, tea.Cmd) { return m.handleAgentErrMsg(msg) })
