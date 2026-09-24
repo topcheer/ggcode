@@ -213,3 +213,85 @@ func worker() {
 		t.Fatal("expected warning for outer panic not protected by goroutine recover")
 	}
 }
+
+// fix #2721: the delta key was the position string (line:col). Inserting
+// unrelated lines above a pre-existing, untouched panic shifted its
+// posStr, so every such edit re-warned on old panics - violating the
+// "only flags panics INTRODUCED by this edit" contract. The key is now
+// a content fingerprint (function name + normalized call text, same
+// approach as the #1142 pcFingerprint); position is display-only.
+func TestCheckPanicSafety_LineShiftDoesNotRewarn(t *testing.T) {
+	old := `package mypkg
+
+func f() {
+	panic("boom")
+}
+`
+	// One comment line inserted above: the panic shifts from line 4 to 5
+	// but its content is untouched - must NOT re-warn.
+	new := `package mypkg
+
+// unrelated comment inserted above
+func f() {
+	panic("boom")
+}
+`
+	warnings := checkPanicSafety("src/mypkg/f.go", old, new)
+	if len(warnings) != 0 {
+		t.Fatalf("expected 0 warnings for line-shifted untouched panic, got %d: %v", len(warnings), warnings)
+	}
+}
+
+// fix #2721 companion: a genuinely new panic must still warn even when
+// lines also shifted.
+func TestCheckPanicSafety_NewPanicWarnsDespiteShift(t *testing.T) {
+	old := `package mypkg
+
+func f() {
+	panic("boom")
+}
+`
+	new := `package mypkg
+
+// unrelated comment
+func f() {
+	panic("boom")
+}
+
+func g() {
+	panic("new") // introduced by THIS edit
+}
+`
+	warnings := checkPanicSafety("src/mypkg/f.go", old, new)
+	if len(warnings) != 1 {
+		t.Fatalf("expected exactly 1 warning for the newly introduced panic, got %d: %v", len(warnings), warnings)
+	}
+	// The pre-existing f() panic (line-shifted, same content) must be the
+	// suppressed one; the single warning fires on the new g() site. The
+	// advisory text carries position only (not argument text), so we
+	// assert on the warning count and the f-panic's absence from the key.
+	if strings.Contains(warnings[0], "boom") {
+		t.Fatalf("warning should not reference the untouched f() panic, got: %v", warnings[0])
+	}
+}
+
+// fix #2721 companion: changing a panic's argument content (not just its
+// position) is a new fingerprint and must warn.
+func TestCheckPanicSafety_ChangedArgsRewarn(t *testing.T) {
+	old := `package mypkg
+
+func f() {
+	panic("boom")
+}
+`
+	new := `package mypkg
+
+func f() {
+	panic("boom-rewritten")
+}
+`
+	warnings := checkPanicSafety("src/mypkg/f.go", old, new)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for changed panic argument, got %d: %v", len(warnings), warnings)
+	}
+}

@@ -57,7 +57,14 @@ import (
 
 // panicInstance represents a detected bare panic() call.
 type panicInstance struct {
-	posStr string // human-readable position string
+	posStr string // human-readable position string (display only)
+	// fingerprint identifies the panic call by CONTENT, not position:
+	// enclosing function name + normalized call text. Position-keyed
+	// delta breaks when unrelated lines are inserted above (the posStr
+	// shifts and a pre-existing, untouched panic re-warns on every
+	// edit) - the same class #1136 fixed for nplus1 and #1142 for
+	// param_count with pcFingerprint.
+	fingerprint string
 }
 
 // checkPanicSafety detects bare panic() calls in non-main Go functions without
@@ -91,20 +98,23 @@ func checkPanicSafety(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	// Delta check: compare against old content positions (fix #142).
-	var oldPos map[string]bool
+	// Delta check keyed by content fingerprint, not position (fix #142;
+	// re-keyed for #2721). A pre-existing panic whose lines merely
+	// shifted (unrelated insert/delete above) keeps its fingerprint and
+	// must NOT re-warn - only panics introduced by this edit fire.
+	var oldSeen map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
 		for _, iss := range findBarePanics(oldContent) {
-			if oldPos == nil {
-				oldPos = make(map[string]bool)
+			if oldSeen == nil {
+				oldSeen = make(map[string]bool)
 			}
-			oldPos[iss.posStr] = true
+			oldSeen[iss.fingerprint] = true
 		}
 	}
 
 	var warnings []string
 	for _, inst := range newInstances {
-		if oldPos != nil && oldPos[inst.posStr] {
+		if oldSeen != nil && oldSeen[inst.fingerprint] {
 			continue
 		}
 		msg := "Bare `panic()` at " + inst.posStr + " in library code. " +
@@ -149,13 +159,13 @@ func findBarePanics(src string) []panicInstance {
 			if d.Name != nil && strings.HasPrefix(d.Name.Name, "Must") {
 				continue
 			}
-			instances = append(instances, findPanicsInBody(d.Body, fset)...)
+			instances = append(instances, findPanicsInBody(d.Body, fset, d.Name.Name)...)
 
 		case *ast.GenDecl:
 			// GenDecl may contain function literals in var initializers.
 			ast.Inspect(d, func(n ast.Node) bool {
 				if fl, ok := n.(*ast.FuncLit); ok {
-					instances = append(instances, findPanicsInBody(fl.Body, fset)...)
+					instances = append(instances, findPanicsInBody(fl.Body, fset, "<funclit>")...)
 				}
 				return true
 			})
@@ -170,10 +180,10 @@ func findBarePanics(src string) []panicInstance {
 //
 // Frame semantics (fix #239): recover() only takes effect in the function
 // frame where it is deferred. Nested FuncLits (closures, goroutine bodies)
-// constitute separate frames and are analyzed recursively — a recover inside
+// constitute separate frames and are analyzed recursively - a recover inside
 // a closure must not silence panics in this frame, and this frame's recover
 // must not silence panics inside closures/goroutines.
-func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance {
+func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet, funcName string) []panicInstance {
 	if body == nil {
 		return nil
 	}
@@ -186,7 +196,7 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 	ast.Inspect(body, func(n ast.Node) bool {
 		// Separate function frame: analyze independently, do not descend.
 		if fl, ok := n.(*ast.FuncLit); ok {
-			nested = append(nested, findPanicsInBody(fl.Body, fset)...)
+			nested = append(nested, findPanicsInBody(fl.Body, fset, "<funclit>")...)
 			return false
 		}
 		deferStmt, ok := n.(*ast.DeferStmt)
@@ -215,7 +225,7 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 	var instances []panicInstance
 
 	ast.Inspect(body, func(n ast.Node) bool {
-		// Separate frame — already analyzed during the recover pass above.
+		// Separate frame - already analyzed during the recover pass above.
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
@@ -241,10 +251,30 @@ func findPanicsInBody(body *ast.BlockStmt, fset *token.FileSet) []panicInstance 
 
 		instances = append(instances, panicInstance{
 			posStr: fset.Position(call.Pos()).String(),
+			// Content fingerprint (#2721): function name + normalized call
+			// text. Line shifts from unrelated edits above do not change
+			// the fingerprint, so an untouched pre-existing panic stays
+			// suppressed; a genuinely new panic (new args or new site)
+			// always differs.
+			fingerprint: funcName + "|" + normalizePanicCallText(call, fset),
 		})
 
 		return true
 	})
 
 	return append(instances, nested...)
+}
+
+// normalizePanicCallText renders a panic() call to a canonical text form
+// for fingerprinting (#2721, same approach as the #1142 pcFingerprint):
+// argument source text with surrounding whitespace collapsed, so purely
+// cosmetic reformatting (gofmt) does not re-warn either.
+func normalizePanicCallText(call *ast.CallExpr, fset *token.FileSet) string {
+	parts := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		// renderNode (unreachable_code_check.go) prints canonical source
+		// via format.Node: whitespace/formatting-insensitive.
+		parts = append(parts, strings.TrimSpace(renderNode(fset, arg)))
+	}
+	return "panic(" + strings.Join(parts, ", ") + ")"
 }
