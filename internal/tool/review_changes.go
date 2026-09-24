@@ -27,6 +27,14 @@ import (
 // ReviewChanges implements the review_changes tool.
 type ReviewChanges struct{ WorkingDir string }
 
+// Clone implements Cloner (#2596 siblings): these tools are registered by
+// value, so a registry clone without a Cloner shares one instance whose
+// WorkingDir can never be Set through reflection (value semantics) - every
+// teammate/sub-agent's review_changes would analyze the original registry's
+// workspace instead of its own worktree. Returning a pointer copy makes
+// syncToolWorkingDir target each agent independently.
+func (t ReviewChanges) Clone() Tool { return &ReviewChanges{WorkingDir: t.WorkingDir} }
+
 func (t ReviewChanges) Name() string { return "review_changes" }
 
 func (t ReviewChanges) Description() string {
