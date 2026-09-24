@@ -238,20 +238,27 @@ func checkPythonDuplicateDecls(oldContent, newContent string) []dupDecl {
 }
 
 // collectPythonDecls counts Python declarations with class scoping for
-// methods (#753). Top-level def -> function:<name>; indented def under the
-// most recent class line -> method:<Class>.<name>; class -> class:<name>.
-// An indented def before any class line falls back to function:<name>
-// (preserving pre-#753 behavior for module-level nested defs).
+// methods (#753) and nesting scoping for local defs (#2703). Top-level
+// def -> function:<name>; first-level def under the most recent class line
+// -> method:<Class>.<name>; class -> class:<name>. Defs nested inside a
+// method body (indent deeper than the method's own) are LOCAL functions —
+// legal Python idiom in any number — and are skipped entirely. A module-
+// level def (indent 0) after a class clears the class context.
 func collectPythonDecls(src string) map[regexDeclKey]int {
 	counts := make(map[regexDeclKey]int)
 	if strings.TrimSpace(src) == "" {
 		return counts
 	}
 	currentClass := ""
+	// methodIndent is the indentation width of the most recent method under
+	// currentClass; -1 means "no method opened yet". A def indented deeper
+	// than the enclosing method is a nested local def (#2703 scenario 3).
+	methodIndent := -1
 	for _, raw := range strings.Split(src, "\n") {
 		line := strings.TrimRight(raw, "\r")
 		if cm := pythonClassRe.FindStringSubmatch(line); cm != nil {
 			currentClass = cm[1]
+			methodIndent = -1
 			counts[regexDeclKey{"class", cm[1]}]++
 			continue
 		}
@@ -260,9 +267,26 @@ func collectPythonDecls(src string) map[regexDeclKey]int {
 			continue
 		}
 		name := fm[3]
-		if fm[1] != "" && currentClass != "" {
+		indent := len(fm[1])
+		switch {
+		case indent == 0:
+			// Module-level def: not a method, and clears any class context
+			// so later module-level defs are not misattributed (#2703).
+			currentClass = ""
+			methodIndent = -1
+			counts[regexDeclKey{"function", name}]++
+		case currentClass != "" && methodIndent == -1:
+			// First def at class-body level: a method. Record its indent.
+			methodIndent = indent
 			counts[regexDeclKey{"method", currentClass + "." + name}]++
-		} else {
+		case currentClass != "" && indent == methodIndent:
+			// Sibling method of the same class.
+			counts[regexDeclKey{"method", currentClass + "." + name}]++
+		case currentClass != "" && indent > methodIndent:
+			// Nested local def inside a method body: legal, skip (#2703).
+		default:
+			// Indented def with no class context (or shallower than the
+			// method level): pre-#753 fallback for module-level nested defs.
 			counts[regexDeclKey{"function", name}]++
 		}
 	}
@@ -271,14 +295,19 @@ func collectPythonDecls(src string) map[regexDeclKey]int {
 
 // --- JavaScript/TypeScript (regex-based) ---
 
-// jsFuncRe matches function declarations: "function foo(", "function foo (".
-var jsFuncRe = regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(`)
+// jsFuncRe matches TOP-LEVEL function declarations (column 0): "function foo(".
+// Indented "function foo(" is a nested/block-scoped function (legal ES6
+// idiom inside any function body) and is excluded (#2703 scenario 2).
+var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(`)
 
-// jsClassRe matches class declarations.
-var jsClassRe = regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)\s*[\{<]`)
+// jsClassRe matches top-level class declarations.
+var jsClassRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)\s*[\{<]`)
 
-// jsConstFuncRe matches "const foo = (" arrow function declarations.
-var jsConstFuncRe = regexp.MustCompile(`(?m)^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?\(?`)
+// jsConstFuncRe matches top-level "const foo = (" arrow function declarations.
+// Indented const is a block-scoped local (the most common false-positive
+// source — every function body declares const result/options/...) and is
+// excluded (#2703 scenario 1).
+var jsConstFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?\(?`)
 
 // checkJSDuplicateDecls detects duplicate function/class/const declarations.
 func checkJSDuplicateDecls(oldContent, newContent, ext string) []dupDecl {
