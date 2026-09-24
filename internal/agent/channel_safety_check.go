@@ -533,41 +533,43 @@ func (w *closeLoopWalker) scanContainerStmt(s ast.Stmt, funcLit, breakBarrier bo
 			w.scanStmtList([]ast.Stmt{elseIf}, funcLit, breakBarrier)
 		}
 	case *ast.ForStmt:
-		if n.Body != nil {
-			w.scanStmtList(n.Body.List, funcLit, breakBarrier)
-		}
+		w.scanBody(n.Body, funcLit, breakBarrier)
 	case *ast.RangeStmt:
-		if n.Body != nil {
-			w.scanStmtList(n.Body.List, funcLit, breakBarrier)
-		}
+		w.scanBody(n.Body, funcLit, breakBarrier)
 	case *ast.SelectStmt:
-		if n.Body != nil {
-			for _, cc := range n.Body.List {
-				if comm, ok := cc.(*ast.CommClause); ok {
-					w.scanStmtList(comm.Body, funcLit, true)
-				}
-			}
-		}
+		w.walkClauseBodies(n.Body, funcLit)
 	case *ast.SwitchStmt:
-		if n.Body != nil {
-			for _, cc := range n.Body.List {
-				if cs, ok := cc.(*ast.CaseClause); ok {
-					w.scanStmtList(cs.Body, funcLit, true)
-				}
-			}
-		}
+		w.walkClauseBodies(n.Body, funcLit)
 	case *ast.TypeSwitchStmt:
-		if n.Body != nil {
-			for _, cc := range n.Body.List {
-				if cs, ok := cc.(*ast.CaseClause); ok {
-					w.scanStmtList(cs.Body, funcLit, true)
-				}
-			}
-		}
+		w.walkClauseBodies(n.Body, funcLit)
 	case *ast.LabeledStmt:
 		w.scanStmtList([]ast.Stmt{n.Stmt}, funcLit, breakBarrier)
 	case *ast.BlockStmt:
 		w.scanStmtList(n.List, funcLit, breakBarrier)
+	}
+}
+
+// scanBody walks a loop body when present.
+func (w *closeLoopWalker) scanBody(body *ast.BlockStmt, funcLit, breakBarrier bool) {
+	if body != nil {
+		w.scanStmtList(body.List, funcLit, breakBarrier)
+	}
+}
+
+// walkClauseBodies walks the clause bodies of a select/switch statement,
+// applying the break barrier (a bare break inside a clause binds to the
+// clause, not the enclosing loop).
+func (w *closeLoopWalker) walkClauseBodies(body *ast.BlockStmt, funcLit bool) {
+	if body == nil {
+		return
+	}
+	for _, cc := range body.List {
+		switch c := cc.(type) {
+		case *ast.CommClause:
+			w.scanStmtList(c.Body, funcLit, true)
+		case *ast.CaseClause:
+			w.scanStmtList(c.Body, funcLit, true)
+		}
 	}
 }
 
