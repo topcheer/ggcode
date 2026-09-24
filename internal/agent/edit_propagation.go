@@ -33,11 +33,12 @@ package agent
 // Design:
 //   - Tracks the set of distinct source files edited since the last
 //     successful (green) build/test.
-//   - Fires at 4+ distinct files: moderate risk, remind to verify.
-//   - Escalates at 7+ distinct files: high risk, emphasize propagation.
+//   - Fires at 4+ distinct files: remind to verify accumulated cross-file
+//     changes (single tier; the former 7+ escalation tier was removed when
+//     83be1c999 capped the quota at 1 -- see #2709).
 //   - Resets on green build (same as verifyDebt).
 //   - Zero LLM cost -- pure set membership tracking.
-//   - Non-blocking advisory, max 2 warnings per run.
+//   - Non-blocking advisory, max 1 warning per run.
 
 import (
 	"encoding/json"
@@ -49,13 +50,11 @@ import (
 )
 
 const (
-	// propagationWarn1: distinct files threshold for first warning.
+	// propagationWarn1: distinct files threshold for the warning.
 	propagationWarn1 = 4
 
-	// propagationWarn2: distinct files threshold for escalation.
-	propagationWarn2 = 7
-
-	// propagationMaxWarnings: max warnings per run.
+	// propagationMaxWarnings: max warnings per run (B-class once-per-run
+	// denoising, 83be1c999; single tier -- #2709).
 	propagationMaxWarnings = 1
 
 	// propagationMaxTracked: max distinct file paths to track (memory bound).
@@ -69,7 +68,7 @@ type editPropagationState struct {
 	mu             sync.Mutex
 	distinctFiles  map[string]bool // distinct file paths edited since green build
 	totalDistinct  int             // running count (for metrics)
-	warningsIssued int             // warnings issued this run (cap at 2)
+	warningsIssued int             // warnings issued this run (cap at 1)
 }
 
 func newEditPropagationState() *editPropagationState {
@@ -135,28 +134,18 @@ func (s *editPropagationState) maybeWarn(iteration int) string {
 
 	s.warningsIssued++
 
-	var msg string
-	if count >= propagationWarn2 {
-		msg = fmt.Sprintf(
-			"%s%d%s",
-			"[Cross-file propagation risk: ", count,
-			" distinct files edited since the last "+
-				"successful build. Cross-file dependency chains create error propagation "+
-				"paths -- a latent defect in any one file can cascade through imports to "+
-				"all others. Research shows accuracy drops non-linearly with unverified "+
-				"cross-file edits (MAST taxonomy, Cemri et al. 2025). Run a build+test NOW "+
-				"to establish a verified baseline before the error surface grows further.]",
-		)
-	} else {
-		msg = fmt.Sprintf(
-			"%s%d%s",
-			"[Cross-file propagation risk: ", count,
-			" distinct files edited since the last "+
-				"successful build. Edits spread across many files create cross-file "+
-				"dependency propagation paths. Run a build+test to verify accumulated "+
-				"changes before adding more files to the unverified set.]",
-		)
-	}
+	// Single-tier message (#2709): the two-tier escalation wording was
+	// unreachable in the progressive edit flow under cap=1 (quota is
+	// exhausted at the 4-file threshold before 7+ can be reached), so the
+	// escalation branch and its copy were removed rather than kept dead.
+	msg := fmt.Sprintf(
+		"%s%d%s",
+		"[Cross-file propagation risk: ", count,
+		" distinct files edited since the last "+
+			"successful build. Edits spread across many files create cross-file "+
+			"dependency propagation paths. Run a build+test to verify accumulated "+
+			"changes before adding more files to the unverified set.]",
+	)
 
 	debug.Log("agent", "edit propagation warning #%d: %d distinct files since green build (iter=%d)",
 		s.warningsIssued, count, iteration)
