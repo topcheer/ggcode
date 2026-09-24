@@ -139,6 +139,15 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
+// unbindBelongsToWorkspace reports whether a persisted binding's workspace
+// is owned by the daemon running in daemonWorkspace for unbind purposes
+// (#2728). Exact match, or a legacy binding with an empty workspace
+// (pre-v1.3.84 entries predate workspace scoping and can only be managed by
+// whichever daemon encounters them).
+func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
+	return bindingWorkspace == daemonWorkspace || bindingWorkspace == ""
+}
+
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
@@ -1233,12 +1242,33 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		case "enable":
 			return imMgr.EnableBinding(adapter)
 		case "unbind":
+			// #2728: delete only THIS daemon's bindings. Iterating all
+			// persisted bindings and deleting the first adapter-name match
+			// could remove a DIFFERENT workspace's binding (legacy
+			// multi-binding states are real - see desktop/wailskit/im.go
+			// #587 note), with map order deciding the victim. Match
+			// semantics align with the TUI: exact (adapter, workspace) hit;
+			// legacy entries with an empty workspace are treated as ours
+			// (pre-v1.3.84 bindings predate workspace scoping); multiple
+			// matches are all deleted deterministically.
+			deleted := false
 			for _, pb := range imMgr.AllPersistedBindings() {
-				if pb.Adapter == adapter {
-					return imMgr.DeleteBinding(adapter, pb.Workspace)
+				if pb.Adapter != adapter {
+					continue
 				}
+				if !unbindBelongsToWorkspace(pb.Workspace, workingDir) {
+					// Belongs to another workspace's daemon - leave it alone.
+					continue
+				}
+				if err := imMgr.DeleteBinding(adapter, pb.Workspace); err != nil {
+					return err
+				}
+				deleted = true
 			}
-			return fmt.Errorf("no persisted binding for adapter %q", adapter)
+			if !deleted {
+				return fmt.Errorf("no persisted binding for adapter %q in workspace %q", adapter, workingDir)
+			}
+			return nil
 		default:
 			return fmt.Errorf("unknown action: %s", action)
 		}
