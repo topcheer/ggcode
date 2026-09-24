@@ -245,6 +245,14 @@ func inputPath(raw json.RawMessage) string {
 	return ""
 }
 
+// resultObs is one ordered tool_result observation; wasted bytes and the
+// reliability axis are decided against call state learned during the walk.
+type resultObs struct {
+	key     callKey
+	isError bool
+	outLen  int
+}
+
 // Evaluate walks the full message log and produces a Report. It is pure:
 // same input, same output, no side effects, no LLM calls.
 func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
@@ -253,14 +261,6 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 	byID := map[string]*callKey{}        // tool_use ID -> its record key
 	records := map[callKey]*callRecord{} // distinct call keys
 	var keyOrder []callKey               // first-appearance order
-
-	// resultObs is one ordered tool_result observation; wasted bytes are
-	// decided against record state learned during the same walk.
-	type resultObs struct {
-		key     callKey
-		isError bool
-		outLen  int
-	}
 	var results []resultObs
 
 	for i := range msgs {
@@ -327,7 +327,38 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 	}
 
-	// Churn (rework) axis: count write-tool invocations per file.
+	// Churn (rework) and reliability axes, filled by the helpers below.
+	r.countChurn(msgs)
+
+	// A call key's LAST result is the informative one: the final state the
+	// agent actually learned from. Every earlier result of the same key is a
+	// superseded attempt - wasted when it failed (no usable information) or
+	// when it is an identical read-only repeat (duplicate of what the last
+	// call returns anyway).
+	r.countWasted(results, records)
+	r.countReliability(results)
+	r.collectDuplicates(keyOrder, records)
+
+	r.WastedTokenEstimate = r.WastedResultBytes / bytesPerToken
+
+	// Usage split.
+	for _, s := range usage {
+		t := s.Usage.Total()
+		r.TotalTokens += t
+		if s.Source != "" && s.Source != "agent" {
+			r.OverheadTokens += t
+		}
+	}
+
+	r.EfficiencyScore = score(r)
+	r.ReliabilityScore = reliabilityScore(r)
+	r.Findings = findings(r)
+	return r
+}
+
+// countChurn fills the churn (rework) axis: count write-tool invocations
+// per file, keeping files written more than once, worst first.
+func (r *Report) countChurn(msgs []provider.Message) {
 	churn := map[string]int{}
 	for i := range msgs {
 		for _, b := range msgs[i].Content {
@@ -350,12 +381,12 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 		return r.ChurnedFiles[a].File < r.ChurnedFiles[b].File
 	})
+}
 
-	// A call key's LAST result is the informative one: the final state the
-	// agent actually learned from. Every earlier result of the same key is a
-	// superseded attempt - wasted when it failed (no usable information) or
-	// when it is an identical read-only repeat (duplicate of what the last
-	// call returns anyway).
+// countWasted marks superseded results as wasted: every non-final result of
+// a call key whose outcome carried no new information (a failure, or an
+// identical read-only repeat of what the last call returns anyway).
+func (r *Report) countWasted(results []resultObs, records map[callKey]*callRecord) {
 	lastIdx := map[callKey]int{}
 	for i, res := range results {
 		lastIdx[res.key] = i
@@ -370,9 +401,12 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			r.WastedResultBytes += res.outLen
 		}
 	}
+}
 
-	// Reliability axis: uncorrected retries (an input that already failed
-	// identically before is sent again) and the early-vs-late error trend.
+// countReliability fills the reliability axis: uncorrected retries (an
+// input that already failed identically before is sent again) and the
+// early-vs-late error trend.
+func (r *Report) countReliability(results []resultObs) {
 	errByKey := map[callKey]int{}
 	half := len(results) / 2
 	var firstErrs, secondErrs int
@@ -420,7 +454,10 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			r.Degraded = true
 		}
 	}
+}
 
+// collectDuplicates reports call keys invoked more than once, worst first.
+func (r *Report) collectDuplicates(keyOrder []callKey, records map[callKey]*callRecord) {
 	for _, k := range keyOrder {
 		rec := records[k]
 		if rec.count < 2 {
@@ -441,22 +478,6 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		}
 		return r.DuplicateGroups[a].Tool < r.DuplicateGroups[b].Tool
 	})
-
-	r.WastedTokenEstimate = r.WastedResultBytes / bytesPerToken
-
-	// Usage split.
-	for _, s := range usage {
-		t := s.Usage.Total()
-		r.TotalTokens += t
-		if s.Source != "" && s.Source != "agent" {
-			r.OverheadTokens += t
-		}
-	}
-
-	r.EfficiencyScore = score(r)
-	r.ReliabilityScore = reliabilityScore(r)
-	r.Findings = findings(r)
-	return r
 }
 
 // score is the transparent composite: 100 minus
