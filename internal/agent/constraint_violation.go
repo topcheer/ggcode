@@ -152,7 +152,16 @@ func (s *constraintViolationState) checkToolCall(toolName string, args map[strin
 		return ""
 	}
 
-	// Only check tools that modify files.
+	// Only check tools that modify files (#2693): a violation means acting
+	// against a self-declared boundary, and reading a file neither expands
+	// scope nor touches what the agent said it would avoid. cvExtractPath
+	// keys on "path"/"file_path", which read-only tools (read_file, grep,
+	// glob, ...) also use -- without this gate, harmless exploration both
+	// falsely accuses the agent and exhausts the cvMaxWarnings quota before
+	// a real out-of-scope edit lands.
+	if !sourceMutatingTools[toolName] {
+		return ""
+	}
 	path := cvExtractPath(args)
 	if path == "" {
 		return ""

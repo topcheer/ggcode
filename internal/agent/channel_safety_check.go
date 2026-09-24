@@ -150,9 +150,19 @@ type chanOp struct {
 	// #2648: control-flow context so mutually exclusive paths (early
 	// return between ops, or ops in sibling branches of the same if)
 	// are not flagged as sequential double-close / send-after-close.
-	depth  int // block nesting depth at the op site
-	ifID   int // innermost if-statement id (0 = none)
-	ifSide int // 1 = then branch, 2 = else branch
+	depth int // block nesting depth at the op site
+	// #2678: the FULL chain of enclosing if contexts, outermost first.
+	// The innermost if alone (#2648) misses else-if chains: the close in
+	// `if A {}` and the send in `else if B {}` share the OUTER if as their
+	// exclusive ancestor but have different innermost ifs.
+	ifStack []ifCtx
+}
+
+// ifCtx records one enclosing if-statement: its collector-assigned id
+// and which side of it the op sits on (1 = then, 2 = else).
+type ifCtx struct {
+	id   int
+	side int
 }
 
 // terminatorInfo records a function-flow terminating statement (return,
@@ -168,21 +178,22 @@ type chanOpCollector struct {
 	ops         []chanOp
 	terminators []terminatorInfo
 	depth       int
-	ifID        int
-	ifSide      int
+	ifStack     []ifCtx
 	nextIfID    int
 }
 
 func (c *chanOpCollector) recordOp(op, name string, pos token.Pos, deferred bool) {
+	stack := make([]ifCtx, len(c.ifStack))
+	copy(stack, c.ifStack)
 	c.ops = append(c.ops, chanOp{op: op, name: name, pos: pos, deferred: deferred,
-		depth: c.depth, ifID: c.ifID, ifSide: c.ifSide})
+		depth: c.depth, ifStack: stack})
 }
 
 // inspectExprs finds close()/send ops inside a statement's expressions
 // without descending into nested closures (those have their own flow).
 func (c *chanOpCollector) inspectExprs(n ast.Node) {
 	startDepth := c.depth
-	startIfID, startSide := c.ifID, c.ifSide
+	startStack := c.ifStack
 	ast.Inspect(n, func(inner ast.Node) bool {
 		switch e := inner.(type) {
 		case *ast.FuncLit:
@@ -200,7 +211,7 @@ func (c *chanOpCollector) inspectExprs(n ast.Node) {
 		}
 		return true
 	})
-	c.depth, c.ifID, c.ifSide = startDepth, startIfID, startSide
+	c.depth, c.ifStack = startDepth, startStack
 }
 
 func (c *chanOpCollector) walkStmts(list []ast.Stmt) {
@@ -218,15 +229,14 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 	case *ast.IfStmt:
 		c.nextIfID++
 		id := c.nextIfID
-		c.nextIfID++
-		savedID, savedSide := c.ifID, c.ifSide
-		c.ifID, c.ifSide = id, 1
+		savedStack := c.ifStack
+		c.ifStack = append(c.ifStack, ifCtx{id: id, side: 1})
 		c.walkStmt(s.Body)
-		c.ifID, c.ifSide = id, 2
+		c.ifStack[len(c.ifStack)-1].side = 2
 		if s.Else != nil {
 			c.walkStmt(s.Else)
 		}
-		c.ifID, c.ifSide = savedID, savedSide
+		c.ifStack = savedStack
 	case *ast.ForStmt:
 		c.walkStmt(s.Body)
 	case *ast.RangeStmt:
@@ -259,8 +269,14 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 // op a already executed: sibling branches of the same if, or a flow-
 // terminating statement between them at a depth no deeper than a's.
 func (c *chanOpCollector) mutuallyExclusive(a, b chanOp) bool {
-	if a.ifID != 0 && a.ifID == b.ifID && a.ifSide != b.ifSide {
-		return true
+	// Any shared enclosing if taken on opposite sides (#2648 sibling
+	// branches, #2678 else-if chains) makes the two ops exclusive.
+	for _, ca := range a.ifStack {
+		for _, cb := range b.ifStack {
+			if ca.id == cb.id && ca.side != cb.side {
+				return true
+			}
+		}
 	}
 	for _, t := range c.terminators {
 		if t.pos > a.pos && t.pos < b.pos && t.depth <= a.depth {
@@ -380,11 +396,11 @@ func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp, col 
 		}
 		// #2648: a send on a path mutually exclusive with the earlier
 		// close (error-branch close + return, sibling branches) can
-		// never be send-after-close - clear the marker instead of
-		// claiming a guaranteed panic.
+		// never be send-after-close - skip this send only. The close
+		// marker must survive so a later NON-exclusive send is still
+		// checked against the same close (it can execute after it).
 		if haveClose && op.op == "send" {
 			if col.mutuallyExclusive(closeOp, op) {
-				haveClose = false
 				continue
 			}
 			return []channelSafetyInstance{{
