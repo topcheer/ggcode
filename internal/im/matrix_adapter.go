@@ -780,13 +780,18 @@ func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 		}
 	}
 
-	// @localpart in body
+	// @localpart in body. Word-boundary match, same class as #963
+	// (mattermost): a bot named "al" must not fire on "@alex" or on
+	// ordinary words containing "al" (#2719).
 	localPart := a.userID
 	if idx := strings.Index(localPart, ":"); idx > 0 {
 		localPart = localPart[1:idx] // strip @ and :domain
 	}
-	if localPart != "" && strings.Contains(lower, strings.ToLower(localPart)) {
-		return true
+	if localPart != "" {
+		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(localPart) + `\b`)
+		if re.MatchString(lower) {
+			return true
+		}
 	}
 
 	return false
@@ -804,7 +809,9 @@ func (a *matrixAdapter) stripMention(text string) string {
 		localPart = localPart[1:idx]
 	}
 	if localPart != "" {
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(localPart))
+		// \b keeps a longer handle intact: with localPart "al",
+		// "@alex" must NOT be mangled into "ex" (#2719).
+		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(localPart) + `\b`)
 		text = re.ReplaceAllString(text, "")
 	}
 	return strings.TrimSpace(text)

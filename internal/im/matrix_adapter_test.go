@@ -191,9 +191,17 @@ func TestMatrixAdapter_HasMention(t *testing.T) {
 		},
 		{
 			name:    "local part in body",
-			body:    "hey bot can you help",
+			body:    "hey @bot can you help",
 			content: map[string]any{},
 			want:    true,
+		},
+		{
+			// #2719: bare localPart as a plain word inside another handle or
+			// mid-sentence must not fire (ported #963 semantics).
+			name:    "local part as substring not a mention",
+			body:    "请问 @botsquad 这个方案可行吗",
+			content: map[string]any{},
+			want:    false,
 		},
 		{
 			name:    "no mention",
