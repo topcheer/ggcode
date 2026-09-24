@@ -180,7 +180,12 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 					}
 				}
 				if id != "" && href != "" {
-					if decoded, err := url.QueryUnescape(href); err == nil {
+					// OPF hrefs are URI path references (RFC 3986): a literal
+					// '+' is a legal sub-delim with no encoding meaning, so
+					// only %XX escapes may decode. QueryUnescape turned
+					// "C++_basics.xhtml" into "C  _basics.xhtml" and silently
+					// dropped the chapter (#2713).
+					if decoded, err := url.PathUnescape(href); err == nil {
 						href = decoded
 					}
 					manifest[id] = href
