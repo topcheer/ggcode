@@ -7,6 +7,7 @@ import (
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/rollback"
 )
 
 // maybeInjectCorrectionFeedback checks whether the user has undone agent file
@@ -36,12 +37,26 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 	a.mu.RLock()
 	cpMgr := a.checkpoints
 	a.mu.RUnlock()
-	if cpMgr == nil {
-		return
+
+	// Rollback fence advisory (ACRFence): commands that executed before a
+	// restore keep their external effects; disclose them so the model
+	// verifies instead of blindly re-running (duplicate PRs, pushes, ...).
+	var fenced []rollback.Action
+	if a.rbFence != nil {
+		fenced = a.rbFence.Fenced()
 	}
 
-	corrections := cpMgr.RecentCorrections()
-	if len(corrections) == 0 {
+	var corrections []checkpoint.Correction
+	if cpMgr != nil {
+		corrections = cpMgr.RecentCorrections()
+	}
+	if len(corrections) == 0 && len(fenced) == 0 {
+		return
+	}
+	if cpMgr == nil {
+		// No checkpoint manager: fence-only advisory. Normally the fence and
+		// the checkpoint manager share a session, so this is defensive.
+		a.injectRollbackFenceNote()
 		return
 	}
 
@@ -60,6 +75,14 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 		}
 	}
 	if len(filtered) == 0 {
+		if len(fenced) == 0 {
+			return
+		}
+		// Agent-sourced corrections are not rejection signals (#1449-A), but
+		// the fence advisory still applies: the agent must not re-fire
+		// commands whose effects predate its own revert. Do NOT clear
+		// corrections here - they still belong to the pending user cycle.
+		a.injectRollbackFenceNote()
 		return
 	}
 	corrections = filtered
@@ -96,6 +119,9 @@ func (a *Agent) maybeInjectCorrectionFeedback() {
 	b.WriteString("3. If unsure why your changes were rejected, ask the user for clarification\n")
 
 	msg := b.String()
+
+	// Append the rollback-fence disclosure (no-op when nothing is fenced).
+	msg += a.rollbackFenceNote()
 
 	// Inject as a user message so it's visible to the model and distinct
 	// from the user's actual request that follows.

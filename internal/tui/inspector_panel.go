@@ -419,6 +419,9 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 		}
 		// Invalidate tool caches (same as /undo) to prevent stale results.
 		m.agent.InvalidateToolCaches()
+		// Rollback fence (ACRFence): restore reverts files only — disclose
+		// commands whose external effects were not rolled back.
+		acted := m.agent.ActivateRollbackFence(cp.Timestamp)
 		// #685: a multi-file span revert restores EVERY file after the target
 		// checkpoint, not just the checkpoint's own file — showing a single
 		// filename understated the rollback and could lure the user into
@@ -432,7 +435,9 @@ func (m *Model) handleInspectorPrimaryAction(items []inspectorPanelItem) (Model,
 		if len(names) == 0 {
 			names = []string{cp.FilePath}
 		}
-		m.setInspectorMessage(inspectorText(m.currentLanguage(), "reverted", strings.Join(names, ", ")))
+		msg := inspectorText(m.currentLanguage(), "reverted", strings.Join(names, ", "))
+		msg += rollbackAdvisoryText(acted)
+		m.setInspectorMessage(msg)
 		return *m, nil
 	case inspectorPanelStatus:
 		return m.handleInspectorLSPStatusAction(items)

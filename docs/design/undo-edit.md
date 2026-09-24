@@ -68,3 +68,32 @@ The user-facing Esc+Esc rewind and the agent-facing `undo_edit` tool share the s
 - If the agent undoes an edit, the user's Esc+Esc history is also updated
 - If the user rewinds via Esc+Esc, the agent's undo stack reflects the new state
 - No synchronization issues — both paths use the same mutex-protected data structure
+
+## Rollback Fence (side-effect disclosure & re-execution warning)
+
+Checkpoint restore rolls back **file state only**. Commands the agent ran
+before the restore (`git push`, `gh pr create`, `npm publish`, messages sent)
+keep their external effects — and after a restore the model frequently
+re-issues a semantically equal command with fresh arguments (new IDs,
+timestamps, flags), duplicating irreversible side effects. This is the
+"semantic rollback" problem studied by ACRFence (arXiv:2603.20625).
+
+ggcode implements a deterministic, no-LLM variant in `internal/rollback`:
+
+- **Record**: successful `run_command` / `start_command` executions are kept in
+  a bounded rolling window on the agent.
+- **Fence**: every restore path (`/undo`, `/undo-run`, checkpoint panel revert,
+  `undo_edit` undo/revert) moves the commands executed since the restored
+  checkpoint's timestamp into a *fenced* set.
+- **Disclosure**: the restore output (TUI and agent-injected correction
+  feedback) lists the fenced commands with an explicit note that their
+  external effects were **not** rolled back.
+- **Re-execution warning**: when a command matching a fenced entry
+  (whitespace-normalized comparison) runs again, a `[rollback-fence]` warning
+  is appended to the tool result telling the model to verify the earlier
+  effect (e.g. list existing PRs) before repeating.
+
+Key files: `internal/rollback/fence.go`, `internal/agent/agent_rollback_fence.go`,
+wiring in `agent_tool.go` (`executeTool`, `executeUndoEditInner`),
+`correction_feedback.go`, and the TUI restore paths in
+`commands_slash_admin.go` / `inspector_panel.go`.

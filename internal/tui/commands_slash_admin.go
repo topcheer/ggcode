@@ -17,6 +17,7 @@ import (
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/rollback"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
@@ -144,6 +145,25 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	)
 }
 
+// rollbackAdvisoryText renders the ACRFence-style disclosure (arXiv:2603.20625)
+// for commands whose external effects were NOT rolled back by a checkpoint
+// restore. Empty when nothing was fenced.
+func rollbackAdvisoryText(acted []rollback.Action) string {
+	if len(acted) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n⚠ Rollback advisory: these command(s) ran before the revert; their external effects were NOT rolled back:\n")
+	for i, act := range acted {
+		if i >= 5 {
+			b.WriteString(fmt.Sprintf("  ... and %d more\n", len(acted)-5))
+			break
+		}
+		b.WriteString("  - " + rollback.NormalizeCommand(act.Command) + "\n")
+	}
+	return b.String()
+}
+
 func (m *Model) handleUndoCommand() tea.Cmd {
 	if m.agent == nil {
 		return func() tea.Msg {
@@ -164,12 +184,16 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		// are cleared; mtime-based entries (read_file) are safe because the
 		// file's mtime changed during the undo write.
 		m.agent.InvalidateToolCaches()
+		// Rollback fence (ACRFence): restore reverts files only — disclose
+		// and fence commands run since the undone checkpoint.
+		acted := m.agent.ActivateRollbackFence(cp.Timestamp)
 		// Show diff (new -> old)
 		diffText := diff.UnifiedDiff(cp.NewContent, cp.OldContent, 3)
 		var b strings.Builder
 		b.WriteString(m.t("checkpoint.undid", cp.ToolCall, displayToolFileTarget(cp.FilePath), cp.ID))
 		b.WriteString(FormatDiff(diffText))
 		b.WriteString("\n")
+		b.WriteString(rollbackAdvisoryText(acted))
 		return streamMsg(b.String())
 	}
 }
@@ -216,6 +240,15 @@ func (m *Model) handleUndoRunCommand() tea.Cmd {
 		}
 		// Invalidate tool caches so the agent doesn't serve stale results.
 		m.agent.InvalidateToolCaches()
+		// Rollback fence (ACRFence): fence commands run since the earliest
+		// reverted checkpoint — their external effects were not rolled back.
+		earliest := reverted[0].Timestamp
+		for _, cp := range reverted[1:] {
+			if cp.Timestamp.Before(earliest) {
+				earliest = cp.Timestamp
+			}
+		}
+		acted := m.agent.ActivateRollbackFence(earliest)
 
 		// Build summary of reverted files.
 		seen := make(map[string]bool)
@@ -232,6 +265,7 @@ func (m *Model) handleUndoRunCommand() tea.Cmd {
 			b.WriteString(fmt.Sprintf("  - %s\n", f))
 		}
 		b.WriteString("\nUse /redo to re-apply changes one at a time.")
+		b.WriteString(rollbackAdvisoryText(acted))
 		return streamMsg(b.String())
 	}
 }

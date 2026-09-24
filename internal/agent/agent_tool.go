@@ -260,7 +260,12 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if suppressed := a.dedupLedger().suppressDuplicate(tc.Name, string(tc.Arguments)); suppressed != nil {
 		return *suppressed
 	}
+	// Rollback fence (ACRFence): remember whether this call re-executes a
+	// command that ran before a recent checkpoint restore, so a duplicate-
+	// effect warning can be appended to the result.
+	_, fencedHit := a.fenceMatchFor(tc.Name, tc.Arguments)
 	res := a.executeToolInner(ctx, tc)
+	res = a.fenceObserve(tc.Name, tc.Arguments, res, fencedHit)
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
 	return res
 }
@@ -1783,6 +1788,9 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 		// read/edit bookkeeping" was a no-op its unit test only pinned by
 		// calling recordUndo directly.
 		a.expiredRead.recordUndo(cp.FilePath)
+		// Restore reverts files only; fence commands run since the undone
+		// checkpoint so their re-execution gets a duplicate-effect warning.
+		a.activateRollbackFence(cp.Timestamp)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		// Include a diff summary of what changed
 		if !isNew && diff.HasChanges(cp.NewContent, cp.OldContent) {
@@ -1830,6 +1838,9 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 		for _, f := range revertedFiles {
 			a.expiredRead.recordUndo(f)
 		}
+		// Restore reverts files only; fence commands run since the reverted
+		// checkpoint so their re-execution gets a duplicate-effect warning.
+		a.activateRollbackFence(cp.Timestamp)
 		result := tool.FormatUndoResult(cp.FilePath, cp.ToolCall, isNew)
 		result += fmt.Sprintf("\n\nAll edits after checkpoint %s have also been reverted.", args.CheckpointID)
 		debug.Log("agent", "undo_edit: reverted to %s for %s", args.CheckpointID, cp.FilePath)

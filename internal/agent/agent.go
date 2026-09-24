@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/rollback"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/util"
@@ -140,6 +141,7 @@ type Agent struct {
 	workingDir                string
 	sessionID                 string // current session ID; determines todo file path
 	checkpoints               *checkpoint.Manager
+	rbFence                   *rollback.Fence        // ACRFence-style restore fence (arXiv:2603.20625): records command executions, fences them on restore
 	codeIndex                 *tool.CodeIndexManager // optional: background BM25 index for code_search
 	diffConfirm               DiffConfirmFunc
 	onInterrupt               interruptionHandler

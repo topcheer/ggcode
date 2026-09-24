@@ -179,3 +179,5 @@ Quick-send messages to other ggcode instances on your LAN directly from the main
 | `Esc Esc` (double) | Trigger `/undo` (checkpoint rollback) |
 
 > **Note:** The agent can also undo its own edits programmatically via the `undo_edit` tool (actions: `undo`, `list`, `revert`). This shares the same checkpoint store as the user-facing `/undo` command.
+>
+> Rollback advisory: `/undo` and `/undo-run` revert **files only**. If commands with external effects (e.g. `git push`, `gh pr create`) ran before the revert, they are listed in a "Rollback advisory" so you can check for duplicated side effects; the agent is likewise warned if it re-runs one of them.

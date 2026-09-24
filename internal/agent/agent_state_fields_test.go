@@ -57,6 +57,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"ruleStore":            "loaded lazily via SetRuleStore (guarded)",
 		"ruleInjectCount":      "lazily initialized at first use (verify.go)",
 		"checkpoints":          "checkpoint manager, injected via setter (guarded)",
+		"rbFence":              "rollback fence (arXiv:2603.20625), lazily initialized on first tool execution/restore (guarded)",
 		"codeIndex":            "code index manager, injected via setter (guarded)",
 		"precompact":           "created lazily when precompaction starts (guarded)",
 		"metadata":             "dead field — no read/write sites outside declaration",
