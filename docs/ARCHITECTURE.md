@@ -169,6 +169,7 @@ internal/
     glob.go                # Glob pattern file matching
     grep.go                # Ripgrep-based search with context lines
     run_command.go         # Synchronous shell command execution
+    output_spool.go        # Full-output disk spooling for oversized command logs (.ggcode/spool/)
     command_jobs.go        # Background command job manager and buffered output
     command_job_tools.go   # Async command tools (start/read/wait/write/stop/list)
     web_fetch.go           # HTTP fetch with SSRF protection

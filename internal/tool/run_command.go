@@ -328,8 +328,14 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
 
 	var stdout, stderr = newBoundedOutputWriter(2 * maxOutputSize), newBoundedOutputWriter(2 * maxOutputSize)
+	// Full-output spooling (r98): the bounded writers and truncateMiddle both
+	// drop the middle of oversized streams; the spool writers lazily mirror
+	// the exact raw stream to <workdir>/.ggcode/spool/ once a stream crosses
+	// spoolThreshold, so the agent can grep the full log instead of
+	// re-running the command.
+	swOut, swErr := newSpoolOutputWriter(stdout, t.WorkingDir), newSpoolOutputWriter(stderr, t.WorkingDir)
 	var pwOut, pwErr *streamingProgressWriter
-	pwOut, pwErr = t.wireCommandOutput(cmd, stdout, stderr, progressFn)
+	pwOut, pwErr = t.wireCommandOutput(cmd, swOut, swErr, progressFn)
 
 	// GUI commands: start and return immediately.
 	if isGUI {
@@ -358,6 +364,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 				t.OnPostExec(code, waitErr)
 			}
 		})
+		// Close any spool files the detached GUI app's output may have opened;
+		// GUI results are not annotated with spool paths.
+		swOut.finishEntry("stdout")
+		swErr.finishEntry("stderr")
 		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
 	}
 
@@ -371,7 +381,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		if isDevServerCommand(args.Command) {
 			delay = autoBackgroundDelay
 		}
-		return t.executeWithAutoBackground(ctx, cancel, cmd, args.Command, time.Duration(args.Timeout)*time.Second, delay, progressFn)
+		return t.executeWithAutoBackground(ctx, cancel, cmd, args.Command, time.Duration(args.Timeout)*time.Second, delay, progressFn, swOut, swErr)
 	}
 
 	err = cmd.Run()
@@ -393,7 +403,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	output := util.StripANSI(stdout.String())
 	errOutput := util.StripANSI(stderr.String())
 
-	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
+	note := spoolNote(swOut.finishEntry("stdout"), swErr.finishEntry("stderr"))
+
+	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot, note)
 	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
 	// config knob so the agent adapts instead of retrying blindly.
 	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
@@ -404,9 +416,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 // finalizeCommandResult assembles the tool Result after cmd.Run() returns:
 // truncation (head+tail), STDERR sectioning, failure diagnostics with exit
-// code, mtime-diff file-change notices, and the structured build/test
-// summary prefix. Inputs are the already-stripped stdout/stderr strings.
-func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time) Result {
+// code, mtime-diff file-change notices, the structured build/test summary
+// prefix, and the full-output spool annotation (empty when nothing was
+// spooled). Inputs are the already-stripped stdout/stderr strings.
+func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput string, runErr error, mtimeSnapshot map[string]time.Time, spool string) Result {
 	// Truncate output if too large — keep both head and tail.
 	// For most commands (tests, builds, lints), the important info is at the
 	// end (error messages, test results). Keeping only the head would lose it.
@@ -432,7 +445,7 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 		if t.OnPostExec != nil {
 			t.OnPostExec(exitCode, runErr)
 		}
-		return Result{IsError: true, Content: preWarning + t.buildFailureMessage(command, sb.String(), errOutput, runErr, exitCode)}
+		return Result{IsError: true, Content: preWarning + t.buildFailureMessage(command, sb.String(), errOutput, runErr, exitCode) + spool}
 	}
 
 	if t.OnPostExec != nil {
@@ -450,10 +463,10 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	// for large test/build outputs.
 	summary := summarizeCommandOutput(command, sb.String())
 	if summary != "" {
-		return Result{Content: preWarning + summary + sb.String() + fileChanges}
+		return Result{Content: preWarning + summary + sb.String() + spool + fileChanges}
 	}
 
-	return Result{Content: preWarning + sb.String() + fileChanges}
+	return Result{Content: preWarning + sb.String() + spool + fileChanges}
 }
 
 // truncateMiddle keeps the first 40% and last 50% of output, inserting a
@@ -503,7 +516,7 @@ func truncateMiddle(s string, maxLen int, label string) string {
 // the given delay. If the command finishes quickly, its output is returned
 // directly. If it runs longer than the delay, the already-managed job ID is
 // returned. The job manager owns the process and performs the only Wait call.
-func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, command string, timeout time.Duration, delay time.Duration, progressFn ToolProgressFunc) (Result, error) {
+func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, command string, timeout time.Duration, delay time.Duration, progressFn ToolProgressFunc, swOut, swErr *spoolOutputWriter) (Result, error) {
 	if t.JobManager == nil {
 		return Result{IsError: true, Content: "command job manager not available"}, nil
 	}
@@ -530,10 +543,13 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 	if snapshot.Status == CommandJobRunning {
 		// Command is still running in background — pane footer will be
 		// written when the user checks the job output or stops it.
+		// Spool files stay open: the background job keeps mirroring into
+		// them; stale artifacts are pruned by age on the next activation.
+		note := spoolNote(swOut.entry("stdout"), swErr.entry("stderr"))
 		return Result{Content: fmt.Sprintf(
 			"Command is still running after %v. Automatically moved to background (job %s).\nUse `read_command_output` to check progress or `stop_command` to stop it.",
 			delay, snapshot.ID,
-		)}, nil
+		) + note}, nil
 	}
 
 	content := util.StripANSI(commandSnapshotOutput(*snapshot))
@@ -542,17 +558,18 @@ func (t RunCommand) executeWithAutoBackground(ctx context.Context, cancel contex
 		if t.OnPostExec != nil {
 			t.OnPostExec(-1, fmt.Errorf("status: %s", snapshot.Status))
 		}
-		return Result{IsError: true, Content: content}, nil
+		return Result{IsError: true, Content: content + spoolNote(swOut.finishEntry("stdout"), swErr.finishEntry("stderr"))}, nil
 	}
 	t.JobManager.forget(snapshot.ID)
 	if t.OnPostExec != nil {
 		t.OnPostExec(0, nil)
 	}
 	// Build/test output intelligence for auto-background completed commands
+	note := spoolNote(swOut.finishEntry("stdout"), swErr.finishEntry("stderr"))
 	if summary := summarizeCommandOutput(command, content); summary != "" {
-		return Result{Content: summary + content}, nil
+		return Result{Content: summary + content + note}, nil
 	}
-	return Result{Content: content}, nil
+	return Result{Content: content + note}, nil
 }
 
 func commandSnapshotOutput(snapshot CommandJobSnapshot) string {
@@ -937,7 +954,7 @@ func normalizedCommandEnv() []string {
 // is untrusted and raw buffers grew to gigabytes on heavy builds, slowing
 // the whole process via memory pressure. Retention cap mirrors the
 // post-run truncateMiddle budget (maxOutputSize per stream).
-func (t *RunCommand) wireCommandOutput(cmd *exec.Cmd, stdout, stderr *boundedOutputWriter, progressFn ToolProgressFunc) (*streamingProgressWriter, *streamingProgressWriter) {
+func (t *RunCommand) wireCommandOutput(cmd *exec.Cmd, stdout, stderr io.Writer, progressFn ToolProgressFunc) (*streamingProgressWriter, *streamingProgressWriter) {
 	if progressFn != nil {
 		var tee io.Writer
 		if t.OutputTee != nil {
