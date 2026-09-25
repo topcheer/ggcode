@@ -358,6 +358,14 @@ func parseGoPackageScopes(cmd string) []string {
 		if f == "" {
 			continue
 		}
+		// #2773: file-list args belong to their package directory.
+		if strings.HasSuffix(f, ".go") {
+			if idx := strings.LastIndex(f, "/"); idx > 0 {
+				f = f[:idx]
+			} else {
+				continue
+			}
+		}
 		if strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../") {
 			scopes = append(scopes, strings.TrimPrefix(f, "./"))
 			continue

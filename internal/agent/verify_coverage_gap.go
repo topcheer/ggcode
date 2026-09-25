@@ -370,6 +370,18 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		if strings.Contains(f, "...") && (strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")) {
 			return []string{"ALL"}
 		}
+		// #2773: `go test` accepts file-list args (./pkg/a.go); the file
+		// belongs to its package directory - map the token to that dir
+		// instead of collecting the .go path itself as a "scope" (it never
+		// matched a real package, flagging the explicitly verified package
+		// UNVERIFIED). Bare a.go (cwd) falls through to the bare-Go check.
+		if strings.HasSuffix(f, ".go") {
+			if idx := strings.LastIndex(f, "/"); idx > 0 {
+				f = f[:idx] // "./pkg/a.go" -> "./pkg"
+			} else {
+				continue
+			}
+		}
 		isRel := strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")
 		if !isRel {
 			// Bare relative internal path: slash, no colon (urls), letter
