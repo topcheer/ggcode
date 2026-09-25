@@ -406,44 +406,55 @@ func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 	defer rs.mu.Unlock()
 	rs.load()
 
-	if len(rs.rules) == 0 {
-		return ""
-	}
-
-	now := time.Now()
-	type ruleScore struct {
-		rule  string
-		hint  string
-		score float64
-	}
-	var active []ruleScore
-	for _, r := range rs.rules {
-		if r.HitCount > 0 {
-			active = append(active, ruleScore{
-				rule:  r.Rule,
-				hint:  r.FixHint,
-				score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
-			})
-		}
-	}
+	active := scoredActiveRules(rs.rules, nil)
 	if len(active) == 0 {
 		return ""
 	}
+	if maxRules > 0 && len(active) > maxRules {
+		active = active[:maxRules]
+	}
+	return renderRuleLessons(active)
+}
 
-	// Sort by combined score descending (small N, insertion sort)
+// scoredRule is a rule paired with its recency-weighted prompt score.
+type scoredRule struct {
+	rule     string
+	hint     string
+	score    float64
+	relevant bool
+}
+
+// scoredActiveRules returns rules with at least one hit, scored by
+// recencyWeightedScore and sorted descending (small N, insertion sort).
+// When catSet is non-nil, each rule is additionally flagged relevant.
+func scoredActiveRules(rules []Rule, catSet map[string]bool) []scoredRule {
+	now := time.Now()
+	var active []scoredRule
+	for _, r := range rules {
+		if r.HitCount <= 0 {
+			continue
+		}
+		rel := catSet == nil || catSet[r.Category]
+		active = append(active, scoredRule{
+			rule:     r.Rule,
+			hint:     r.FixHint,
+			score:    recencyWeightedScore(r.HitCount, r.LastSeen, now),
+			relevant: rel,
+		})
+	}
 	for i := 1; i < len(active); i++ {
 		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
 			active[j], active[j-1] = active[j-1], active[j]
 		}
 	}
+	return active
+}
 
-	if maxRules > 0 && len(active) > maxRules {
-		active = active[:maxRules]
-	}
-
+// renderRuleLessons formats scored rules as the prompt lessons block.
+func renderRuleLessons(rules []scoredRule) string {
 	var b strings.Builder
 	b.WriteString("Lessons from previous runs in this workspace:\n")
-	for _, a := range active {
+	for _, a := range rules {
 		b.WriteString(fmt.Sprintf("- %s", a.rule))
 		if a.hint != "" {
 			b.WriteString(fmt.Sprintf(" → %s", a.hint))
@@ -521,60 +532,46 @@ func (rs *RuleStore) TopRulesForTask(maxRules int, userPrompt string) string {
 	if len(rs.rules) == 0 {
 		return ""
 	}
-
 	catSet := make(map[string]bool, len(cats))
 	for _, c := range cats {
 		catSet[c] = true
 	}
-	now := time.Now()
-	type ruleScore struct {
-		rule     string
-		hint     string
-		score    float64
-		relevant bool
-	}
-	var active []ruleScore
-	relevantCount := 0
-	for _, r := range rs.rules {
-		if r.HitCount <= 0 {
-			continue
-		}
-		rel := catSet[r.Category]
-		if rel {
-			relevantCount++
-		}
-		active = append(active, ruleScore{
-			rule:     r.Rule,
-			hint:     r.FixHint,
-			score:    recencyWeightedScore(r.HitCount, r.LastSeen, now),
-			relevant: rel,
-		})
-	}
-	if len(active) == 0 {
+	picked := selectTaskRules(rs.rules, maxRules, catSet)
+	if len(picked) == 0 {
 		return ""
 	}
+	return renderRuleLessons(picked)
+}
 
-	// Sort by combined score descending (small N, insertion sort).
-	for i := 1; i < len(active); i++ {
-		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
-			active[j], active[j-1] = active[j-1], active[j]
+// selectTaskRules picks the injected rules for a classified task: a small
+// global floor of top-scored rules (so the most critical high-hit lessons
+// stay visible even when out of scope), then task-relevant rules. No
+// backfill: irrelevant rules are exactly the noise this filter removes,
+// so slots may stay unfilled, and that is the token saving.
+func selectTaskRules(rules []Rule, maxRules int, catSet map[string]bool) []scoredRule {
+	active := scoredActiveRules(rules, catSet)
+	if len(active) == 0 {
+		return nil
+	}
+	relevantCount := 0
+	for _, s := range active {
+		if s.relevant {
+			relevantCount++
 		}
 	}
-
+	if relevantCount < len(active) {
+		debug.Log("ratchet", "task-selective injection: %d/%d active rules match task categories",
+			relevantCount, len(active))
+	}
 	if maxRules <= 0 {
 		maxRules = len(active)
 	}
-	// Selection: reserve a global floor of top-scored rules (so the most
-	// critical high-hit lessons stay visible even when out of scope), then
-	// fill with task-relevant rules. No backfill: irrelevant rules are
-	// exactly the noise this filter removes, so slots may stay unfilled,
-	// and that is the token saving.
 	const globalFloor = 2
 	floor := globalFloor
 	if floor > maxRules {
 		floor = maxRules
 	}
-	picked := make([]ruleScore, 0, maxRules)
+	picked := make([]scoredRule, 0, maxRules)
 	inPick := make(map[int]bool, maxRules)
 	for i := 0; i < len(active) && len(picked) < floor; i++ {
 		inPick[i] = true
@@ -590,22 +587,7 @@ func (rs *RuleStore) TopRulesForTask(maxRules int, userPrompt string) string {
 		inPick[i] = true
 		picked = append(picked, s)
 	}
-
-	if relevantCount < len(active) {
-		debug.Log("ratchet", "task-selective injection: %d/%d active rules match task categories",
-			relevantCount, len(active))
-	}
-
-	var b strings.Builder
-	b.WriteString("Lessons from previous runs in this workspace:\n")
-	for _, a := range picked {
-		b.WriteString(fmt.Sprintf("- %s", a.rule))
-		if a.hint != "" {
-			b.WriteString(fmt.Sprintf(" → %s", a.hint))
-		}
-		b.WriteString("\n")
-	}
-	return b.String()
+	return picked
 }
 
 // recencyWeightedScore computes a combined score from hit count and recency.

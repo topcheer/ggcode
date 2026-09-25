@@ -84,29 +84,15 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	// arXiv:2603.07670 read-path optimization). The most recent user text
 	// classifies the task; irrelevant rule categories are dropped while a
 	// small global floor keeps the highest-value lessons visible.
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if rs := NewRuleStore(workingDir); rs != nil {
-			var lastUser string
-			if cm, ok := a.contextManager.(*context.Manager); ok {
-				lastUser = lastUserPromptText(cm.Messages())
-			}
-			rulesText := rs.TopRulesForTask(5, lastUser)
-			if rulesText != "" {
-				dynamicParts = append(dynamicParts, rulesText)
-				debug.Log("agent", "Injected learned ratchet rules into system prompt")
-			}
-		}
+	if rulesText := a.ratchetRulesLayer(); rulesText != "" {
+		dynamicParts = append(dynamicParts, rulesText)
+		debug.Log("agent", "Injected learned ratchet rules into system prompt")
 	}
 
 	// Layer 4: playbook strategy hints (ACE-inspired).
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(3)
-			if playbookText != "" {
-				dynamicParts = append(dynamicParts, playbookText)
-				debug.Log("agent", "Injected playbook strategy hints into system prompt")
-			}
-		}
+	if playbookText := a.playbookHintsLayer(); playbookText != "" {
+		dynamicParts = append(dynamicParts, playbookText)
+		debug.Log("agent", "Injected playbook strategy hints into system prompt")
 	}
 
 	// Skip entirely when there is no system prompt and no dynamic content.
@@ -212,6 +198,39 @@ func (a *Agent) maybeInjectRatchetRules() {}
 // maxClassifyPromptRunes caps how much of the latest user prompt is fed
 // into task classification; the head is sufficient for keyword matching.
 const maxClassifyPromptRunes = 2048
+
+// ratchetRulesLayer builds layer 3 of the dynamic system prompt: learned
+// ratchet rules selected for the current task. Empty when there is no
+// working directory, no store, or no rules worth injecting.
+func (a *Agent) ratchetRulesLayer() string {
+	workingDir := a.WorkingDir()
+	if workingDir == "" {
+		return ""
+	}
+	rs := NewRuleStore(workingDir)
+	if rs == nil {
+		return ""
+	}
+	var lastUser string
+	if cm, ok := a.contextManager.(*context.Manager); ok {
+		lastUser = lastUserPromptText(cm.Messages())
+	}
+	return rs.TopRulesForTask(5, lastUser)
+}
+
+// playbookHintsLayer builds layer 4 of the dynamic system prompt: playbook
+// strategy hints learned from successful runs. Empty when unavailable.
+func (a *Agent) playbookHintsLayer() string {
+	workingDir := a.WorkingDir()
+	if workingDir == "" {
+		return ""
+	}
+	pb := NewPlaybook(workingDir)
+	if pb == nil {
+		return ""
+	}
+	return pb.HintsForPrompt(3)
+}
 
 // lastUserPromptText returns the text of the most recent user message for
 // task classification. Only pure text blocks count: tool results are also
