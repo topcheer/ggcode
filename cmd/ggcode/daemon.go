@@ -1668,10 +1668,21 @@ loop:
 		runfile.Remove(ses.ID)
 
 		var args []string
+		// #2739: exec-restart must carry the daemon identity marker, or
+		// daemonIdentityMatches (which keys on "--__daemonized" /
+		// "ggcode[") sees the restarted PID as an unrelated process that
+		// happens to reuse the PID, deletes the PID file, and admits a
+		// second daemon. ForkIntoBackground writes the same marker
+		// (internal/daemon/background.go:282). argv[0] display-name
+		// rewriting is deliberately NOT replicated: ExecSelf treats args
+		// as the flag list after argv[0], so an injected display name
+		// would become a stray positional argument and break cobra
+		// parsing. Contains-based identity matching needs the flag alone.
 		if cfgFile != "" {
 			args = append(args, "--config", cfgFile)
 		}
 		args = append(args, "daemon", "--follow")
+		args = append(args, "--__daemonized")
 		if ses.ID != "" {
 			args = append(args, "--resume", ses.ID)
 		}
