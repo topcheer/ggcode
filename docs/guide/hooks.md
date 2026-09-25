@@ -88,6 +88,24 @@ Sends an HTTP POST with the standardized JSON payload.
 
 Only `on_user_message` and `pre_tool_use` can block. `post_tool_use`, `pre_compact`, `on_compaction`, `on_agent_stop`, and `on_stream_stop` always allow — block responses are ignored.
 
+### Structured Decisions (r61)
+
+Instead of exit codes, a blocking-event hook can return a JSON decision on stdout (command) or in a 200 response body (http). Mirrors the Claude Code `permissionDecision` convention:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"no secrets allowed"}}
+```
+
+Compact forms are also accepted: `{"permissionDecision":"allow","permissionDecisionReason":"..."}` and `{"decision":"deny","reason":"..."}`.
+
+| Decision | Effect |
+|----------|--------|
+| `deny` | Block; the reason becomes the tool result (no approval prompt is shown) |
+| `allow` | Skip the interactive approval prompt for this call (never relaxes a hard policy Deny, e.g. plan mode) |
+| `ask` | Consult the approval handler even if the policy would allow; without a handler, deny |
+
+The first hook that answers wins. `pre_tool_use` hooks run **before** the permission gate, so a `deny` blocks a doomed call without bothering the user. Output without a recognized decision key keeps the legacy exit-code semantics. A `deny` on a non-blocking event (`post_tool_use`) degrades to a policy notice (#684 convention).
+
 ## Standard Payload
 
 All hooks (both command and http) receive a unified JSON payload:

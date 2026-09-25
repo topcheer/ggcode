@@ -59,7 +59,34 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 	a.mu.RLock()
 	policy := a.policy
 	onApproval := a.onApproval
+	hookCfg := a.hookConfig
+	workDir := a.workingDir
 	a.mu.RUnlock()
+
+	// Pre-tool-use hooks fire BEFORE the permission gate (r61,
+	// Claude Code-compatible ordering): a structured stdout JSON decision
+	// ({"hookSpecificOutput":{"permissionDecision":"deny|allow|ask",...}})
+	// — or a legacy exit 2 — overrides the gate:
+	//   deny  → block immediately; the hook's reason becomes the tool
+	//           result (the user is never prompted for a doomed call)
+	//   allow → skip the interactive approval prompt for this call
+	//   ask   → consult the approval handler even if policy would allow
+	// A hook can never relax a hard policy Deny (plan mode, explicit
+	// rules); it can only tighten or resolve an Ask. Hooks still run
+	// exactly once per call (#1035): the run previously at the top of
+	// executeTool moved here with this change.
+	preEnv := hooks.HookEnv{
+		ToolName:   tc.Name,
+		WorkingDir: workDir,
+		FilePath:   hooks.ExtractFilePath(tc.Name, string(tc.Arguments)),
+		RawInput:   string(tc.Arguments),
+	}
+	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, preEnv)
+	if !preResult.Allowed {
+		return tool.Result{Content: preResult.Output, IsError: true}
+	}
+	hookDecision, hookReason := preResult.Decision, preResult.DecisionReason
+	prompted := false
 	if policy != nil {
 		decision, err := policy.Check(tc.Name, tc.Arguments)
 		// Only log non-trivial permission decisions (deny/error), not every allow
@@ -74,6 +101,11 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				IsError: true,
 			}
 		case permission.Ask:
+			// r61: a hook "allow" resolves an Ask without prompting.
+			if hookDecision == hooks.DecisionAllow {
+				debug.Log("hooks", "pre_tool_use hook allow: skipping prompt for %s (%s)", tc.Name, hookReason)
+				break
+			}
 			// Mode-scoped memory (#1281): approvals learned under another
 			// permission mode must not survive a mode switch.
 			if a.approvalMemory != nil && policy != nil {
@@ -92,6 +124,7 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				break
 			}
 			if onApproval != nil {
+				prompted = true
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
 					if a.approvalMemory != nil {
@@ -112,6 +145,30 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 					Content: fmt.Sprintf("Permission denied for tool %q. No approval handler available (running in non-interactive mode).", tc.Name),
 					IsError: true,
 				}
+			}
+		}
+	}
+
+	// r61: a hook "ask" escalates an Allow (or an ungated call) into an
+	// interactive confirmation. If the policy already prompted (Ask verdict),
+	// this is a no-op. With no approval handler, deny by default — same
+	// convention as the Ask path above.
+	if hookDecision == hooks.DecisionAsk && !prompted {
+		if onApproval != nil {
+			if resp := onApproval(ctx, tc.Name, string(tc.Arguments)); resp == permission.Deny {
+				reason := hookReason
+				if reason == "" {
+					reason = "no reason given"
+				}
+				return tool.Result{
+					Content: fmt.Sprintf("Permission denied for tool %q. pre_tool_use hook requested confirmation and the request was rejected (%s).", tc.Name, reason),
+					IsError: true,
+				}
+			}
+		} else {
+			return tool.Result{
+				Content: fmt.Sprintf("Permission denied for tool %q. pre_tool_use hook requested confirmation but no approval handler is available (non-interactive mode).", tc.Name),
+				IsError: true,
 			}
 		}
 	}
@@ -408,13 +465,9 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		RawInput:   string(tc.Arguments),
 	}
 
-	// Pre-tool-use hooks
-	// Run once here for all tools - do NOT repeat in executeMultiFileTool/executeFileTool
-	// Fix #1035: file-edit tools route to specialized functions but hooks should run exactly once
-	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
-	if !preResult.Allowed {
-		return tool.Result{Content: preResult.Output, IsError: true}
-	}
+	// Pre-tool-use hooks now run in executeToolWithPermission BEFORE the
+	// permission gate (r61) so a structured deny/allow/ask decision can
+	// override prompting. Do NOT re-run them here (#1035 exactly-once).
 
 	// For file-editing tools: read old content, compute new, show diff, save checkpoint
 	// #1547 case A: every tool implementing PreviewChanges routes through

@@ -54,6 +54,16 @@ const (
 	EventPreCompact = "pre_compact"
 )
 
+// Structured hook decisions (r61): a blocking-event hook may return a JSON
+// decision on stdout / response body instead of (or in addition to) exit
+// codes. Mirrors the Claude Code permissionDecision convention — see
+// decision.go for the accepted schemas.
+const (
+	DecisionDeny  = "deny"  // block the operation
+	DecisionAllow = "allow" // skip the interactive approval prompt
+	DecisionAsk   = "ask"   // force the interactive approval prompt
+)
+
 // HookConfig holds all hooks from configuration, keyed by event.
 type HookConfig struct {
 	OnUserMessage []Hook `yaml:"on_user_message" json:"on_user_message"`
@@ -70,6 +80,12 @@ type HookResult struct {
 	Allowed bool   // false means block the operation (pre hooks only)
 	Output  string // captured stdout or HTTP response body (for inject_output)
 	Err     error
+	// Decision carries a structured stdout/body decision from a hook (r61):
+	// "deny", "allow" or "ask" ("" = none). Only meaningful for blocking
+	// events; the agent permission gate consumes allow/ask, deny blocks.
+	Decision string
+	// DecisionReason is the free-text reason that accompanied Decision.
+	DecisionReason string
 	// PolicyNotice carries a policy verdict (exit 2 / HTTP 403) from a
 	// NON-blocking event. #684: post_tool_use cannot honor the block, but the
 	// hook author's stderr reason still matters — and every consumer of post

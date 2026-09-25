@@ -96,11 +96,11 @@ func runSync(hooksList []Hook, env HookEnv) HookResult {
 			continue
 		}
 		result := executeHook(h, env, payload)
-		if !result.Allowed && isBlockingEvent(env.Event) {
-			// Only blocking events short-circuit on a block. post_tool_use
-			// hooks cannot un-run the tool, so honoring a block there dropped
-			// the inject_output already collected and skipped remaining
-			// hooks (#679).
+		// r61: an explicit structured decision (deny/allow/ask) on a blocking
+		// event is authoritative — the first hook that answers wins, matching
+		// the "first block wins" determinism. Plain blocks short-circuit as
+		// before (#679: post_tool_use never short-circuits).
+		if isBlockingEvent(env.Event) && (!result.Allowed || result.Decision != "") {
 			return result
 		}
 		if result.Err != nil {
@@ -241,7 +241,31 @@ func executeCommandHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		return HookResult{Allowed: true, Output: stdout.String(), Err: fmt.Errorf("hook command failed: %w", err)}
 	}
 
-	return HookResult{Allowed: true, Output: stdout.String()}
+	// r61: structured decision protocol — a JSON decision on stdout from a
+	// successful (exit 0) hook overrides exit-code semantics.
+	res := HookResult{Allowed: true, Output: stdout.String()}
+	if dec, reason := parseHookDecision(stdout.String()); dec != "" {
+		res.Decision = dec
+		res.DecisionReason = reason
+		switch {
+		case dec == DecisionDeny && isBlockingEvent(env.Event):
+			debug.Log("hooks", "%s BLOCKED (json decision): tool=%s reason=%s", env.Event, env.ToolName, reason)
+			return HookResult{
+				Allowed:        false,
+				Decision:       dec,
+				DecisionReason: reason,
+				Output:         fmt.Sprintf("Blocked by %s hook: %s", env.Event, reason),
+			}
+		case dec == DecisionDeny:
+			// Non-blocking event (post_tool_use): cannot un-run the tool;
+			// surface as a policy notice like a non-blocking exit 2 (#684).
+			debug.Log("hooks", "%s POLICY (json deny, non-blocking): tool=%s reason=%s", env.Event, env.ToolName, reason)
+			res.PolicyNotice = fmt.Sprintf("[%s policy: %s]", env.Event, reason)
+		default:
+			debug.Log("hooks", "%s DECISION %s: tool=%s reason=%s", env.Event, dec, env.ToolName, reason)
+		}
+	}
+	return res
 }
 
 // expandHookTemplate expands $VAR references in a hook command template.
@@ -373,7 +397,26 @@ func executeHTTPHook(h Hook, env HookEnv, payload HookPayload) HookResult {
 		return HookResult{Allowed: true, Err: fmt.Errorf("hook HTTP %d", resp.StatusCode)}
 	}
 
-	return HookResult{Allowed: true, Output: string(body)}
+	// r61: structured decision protocol — a JSON decision in a 200 response
+	// body overrides exit-code semantics (symmetric with command hooks).
+	res := HookResult{Allowed: true, Output: string(body)}
+	if dec, reason := parseHookDecision(string(body)); dec != "" {
+		res.Decision = dec
+		res.DecisionReason = reason
+		if dec == DecisionDeny {
+			if isBlockingEvent(env.Event) {
+				debug.Log("hooks", "%s BLOCKED (json decision): HTTP tool=%s reason=%s", env.Event, env.ToolName, reason)
+				return HookResult{
+					Allowed:        false,
+					Decision:       dec,
+					DecisionReason: reason,
+					Output:         fmt.Sprintf("Blocked by %s hook: %s", env.Event, reason),
+				}
+			}
+			res.PolicyNotice = formatPolicyNotice(env.Event, reason)
+		}
+	}
+	return res
 }
 
 // --- Legacy dispatchers (backward compatibility) ---

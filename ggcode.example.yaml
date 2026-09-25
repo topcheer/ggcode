@@ -644,6 +644,15 @@ mcp_servers:
 #   http:    HTTP 403    = block (response body → agent as block reason)
 #   Non-blocking events (post_tool_use, on_agent_stop, on_stream_stop) ignore block.
 #
+# Structured decisions (r61) — instead of exit codes, pre_tool_use /
+# on_user_message hooks can print a JSON decision to stdout (or return it in
+# a 200 response body):
+#   {"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"..."}}
+#   deny  = block (reason → agent, no approval prompt)
+#   allow = skip the approval prompt for this call
+#   ask   = force the approval prompt
+# The first hook that answers wins; hooks run before the permission gate.
+#
 # Standardized payload (JSON):
 #   Sent as POST body (http), GGCODE_HOOK_PAYLOAD env var + stdin (command).
 #   See docs/guide/hooks.md for full schema.
