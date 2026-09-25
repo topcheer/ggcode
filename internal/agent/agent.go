@@ -108,6 +108,11 @@ type Agent struct {
 	onRunResult                runResultHandler
 	onRunHealth                func(error) // run-level health signal (success/failure) for node health reporting
 
+	// confTraj (r75): trajectory-level confidence tracking over the sa-74
+	// per-turn signal; escalates once per sustained-degradation episode
+	// (arXiv:2601.15778). Lazily initialized in the stream event loop.
+	confTraj *confidenceTrajectory
+
 	// autoVerify enables the post-loop build/test verification pass.
 	// Default false: the system prompt already mandates in-loop verification
 	// of changes ("run the narrowest existing validation that proves the change
@@ -385,6 +390,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		speculator:             newSpeculator(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
+		confTraj:               newConfidenceTrajectory(),
 		verifDebt:              newVerificationDebtState(),
 		undoBlind:              newUndoBlindState(),
 		editAbandon:            newEditAbandonState(),
@@ -4973,6 +4979,18 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 					onEvent(provider.StreamEvent{
 						Type: provider.StreamEventSystem,
 						Text: fmt.Sprintf("[confidence] low model confidence this turn (avg token logprob %.2f) — consider reviewing the output.", conf),
+					})
+				}
+				// r75: trajectory-level tracking (arXiv:2601.15778) —
+				// escalate once per sustained-degradation episode; single
+				// low turns remain handled by the point check above.
+				if a.confTraj == nil {
+					a.confTraj = newConfidenceTrajectory()
+				}
+				if notice, fire := a.confTraj.observe(conf); fire {
+					onEvent(provider.StreamEvent{
+						Type: provider.StreamEventSystem,
+						Text: notice,
 					})
 				}
 			}
