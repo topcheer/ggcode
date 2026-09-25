@@ -214,12 +214,32 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 		}
 	}
 
+	// #2731: fail fast on a closed adapter BEFORE the (blocking) relay
+	// dial: Close() and connectRelay race otherwise - the closed check in
+	// relayLoop happens at iteration top only.
+	a.mu.Lock()
+	closed := a.closed
+	a.mu.Unlock()
+	if closed {
+		return fmt.Errorf("connect %s: adapter closed", relayURL)
+	}
+
 	relay, err := nostr.RelayConnect(ctx, relayURL)
 	if err != nil {
 		return fmt.Errorf("connect %s: %w", relayURL, err)
 	}
 
 	a.mu.Lock()
+	// #2731: re-check under the lock - Close() may have run while
+	// RelayConnect was blocking. Refuse the freshly established relay
+	// instead of appending it to a shut-down adapter (which used to
+	// re-report "connected" state and leave the conn draining inbound
+	// messages until the watchdog window closed it).
+	if a.closed {
+		a.mu.Unlock()
+		relay.Close()
+		return fmt.Errorf("connect %s: adapter closed during dial", relayURL)
+	}
 	a.relayConns = append(a.relayConns, relay)
 	a.connected++
 	a.mu.Unlock()
