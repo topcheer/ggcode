@@ -300,8 +300,14 @@ func collectPythonDecls(src string) map[regexDeclKey]int {
 // idiom inside any function body) and is excluded (#2703 scenario 2).
 var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(`)
 
-// jsClassRe matches top-level class declarations.
-var jsClassRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)\s*[\{<]`)
+// jsClassRe matches top-level class declarations. #2734: inheritance is the
+// dominant class form in real JS/TS (React components extend Component,
+// services extend Base) -- the old `[\{<]` only matched bare classes and
+// silently excluded `class Foo extends Bar {` / `implements`, making the
+// duplicate-class check dead code for those forms (old/new counts both 0,
+// no failure signal). Match an optional extends/implements heritage list
+// before the `{`/`<` terminator.
+var jsClassRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+[\w.<>[\]]+)?(?:\s+implements\s+[\w.<>[\],\s]+)?\s*[\{<]`)
 
 // jsConstFuncRe matches top-level "const foo = (" arrow function declarations.
 // Indented const is a block-scoped local (the most common false-positive
