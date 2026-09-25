@@ -26,19 +26,27 @@ package agent
 //   - Computes a rolling cache hit ratio (cache_read / total_input)
 //   - Detects "cache bust storms": consecutive calls where cache_read drops
 //     to near-zero after previously being high, indicating prefix instability
-//   - When a storm is detected, injects guidance identifying the likely cause
+//   - When a storm is detected, ATTRIBUTES the cause from evidence: each call
+//     carries a fingerprint of the request prefix composition (system prompt
+//     hash + tool definitions hash + tool count), so a delta between the last
+//     warm call and the bust names the part that actually changed. A gap
+//     longer than the provider TTL before the first cold call is attributed
+//     to natural expiry instead. Without evidence the guidance stays
+//     unattributed rather than guessing.
 //
 // This is different from:
 //   - cache_keepalive.go: keeps the cache warm during IDLE periods (TTL-based)
 //   - cache_efficiency_monitor.go (this): detects cache INSTABILITY during
-//     ACTIVE runs (prefix-bust-based)
+//     ACTIVE runs (prefix-bust-based) and explains WHY the prefix broke
 //
 // Zero LLM cost - deterministic token arithmetic + rolling window analysis.
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -61,15 +69,62 @@ const (
 	// that triggers a storm alert.
 	cacheStormConsecutive = 3
 
+	// cacheIdleTTL approximates the sliding TTL most providers apply to the
+	// prompt cache (Anthropic documents 5 minutes). When the gap between the
+	// last warm call and the first cold call reaches this length, the bust is
+	// attributed to natural expiry of the cached prefix, not to instability.
+	cacheIdleTTL = 5 * time.Minute
+
 	// cacheEffWarnOnce: fire at most once per run to avoid nagging.
 	// After the first alert, the root cause guidance has been delivered.
 )
 
 // cacheEffSample records cache metrics for a single LLM call.
 type cacheEffSample struct {
-	input     int // raw input tokens (non-cached)
-	cacheRead int // tokens served from cache
-	total     int // input + cacheRead (total prompt size)
+	input     int       // raw input tokens (non-cached)
+	cacheRead int       // tokens served from cache
+	total     int       // input + cacheRead (total prompt size)
+	sysHash   uint64    // fnv hash of the system prompt sent with this call
+	toolHash  uint64    // fnv hash of the tool definitions sent with this call
+	toolCount int       // number of tool definitions sent with this call
+	at        time.Time // completion time of the call
+}
+
+// cacheReqFingerprint captures the request-prefix composition that providers
+// hash into the prompt-cache key: the system prompt and the tool definitions.
+// Two consecutive calls with identical fingerprints share the same cacheable
+// prefix shape; a delta between the last warm call and a cold call is direct
+// evidence for the bust cause. The zero value means "fingerprint unknown"
+// (e.g. tests) and disables attribution rather than producing false positives.
+type cacheReqFingerprint struct {
+	sysHash   uint64
+	toolHash  uint64
+	toolCount int
+}
+
+// hashCacheString returns a stable fnv hash of a request prefix component.
+func hashCacheString(s string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum64()
+}
+
+// fingerprintToolDefs hashes the parts of each tool definition that providers
+// serialize into the request's tools array (name, description, JSON schema,
+// allowed callers). Returns the hash and the definition count for evidence
+// messages.
+func fingerprintToolDefs(defs []provider.ToolDefinition) (uint64, int) {
+	h := fnv.New64a()
+	for _, d := range defs {
+		_, _ = fmt.Fprintf(h, "%s\x00%s\x00", d.Name, d.Description)
+		_, _ = h.Write(d.Parameters)
+		_, _ = fmt.Fprintf(h, "\x00%d", len(d.AllowedCallers))
+		for _, c := range d.AllowedCallers {
+			_, _ = fmt.Fprintf(h, "\x00%s", c)
+		}
+		_, _ = fmt.Fprint(h, "\x1e")
+	}
+	return h.Sum64(), len(defs)
 }
 
 // cacheEffMonitor tracks prompt cache efficiency across an agent run and
@@ -81,6 +136,11 @@ type cacheEffMonitor struct {
 	warmSeen   bool             // true once we've observed a high-cache-hit call
 	coldStreak int              // consecutive cold calls since last warm call
 	alerted    bool             // fired alert this run
+
+	hasLastWarm bool                // true once lastWarmFP/lastWarmAt are meaningful
+	lastWarmFP  cacheReqFingerprint // request fingerprint at the last warm call
+	lastWarmAt  time.Time           // completion time of the last warm call
+	firstColdAt time.Time           // completion time of the first cold call in the current streak
 }
 
 func newCacheEffMonitor() *cacheEffMonitor {
@@ -97,11 +157,15 @@ func (m *cacheEffMonitor) reset() {
 	m.warmSeen = false
 	m.coldStreak = 0
 	m.alerted = false
+	m.hasLastWarm = false
+	m.lastWarmFP = cacheReqFingerprint{}
+	m.lastWarmAt = time.Time{}
+	m.firstColdAt = time.Time{}
 }
 
 // record tracks a new LLM call's cache metrics. Returns guidance if a cache
 // bust storm is detected.
-func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
+func (m *cacheEffMonitor) record(usage provider.TokenUsage, fp cacheReqFingerprint) string {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -119,6 +183,10 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 		input:     usage.InputTokens,
 		cacheRead: usage.CacheRead,
 		total:     usage.DisplayInputTokens() + usage.CacheRead,
+		sysHash:   fp.sysHash,
+		toolHash:  fp.toolHash,
+		toolCount: fp.toolCount,
+		at:        time.Now(),
 	}
 
 	// Append to rolling window
@@ -153,8 +221,15 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 	if ratio >= cacheHitRatioThreshold {
 		m.warmSeen = true
 		m.coldStreak = 0
+		m.hasLastWarm = true
+		m.lastWarmFP = fp
+		m.lastWarmAt = sample.at
+		m.firstColdAt = time.Time{}
 	} else if ratio <= cacheBustRatioThreshold {
 		if m.warmSeen {
+			if m.coldStreak == 0 {
+				m.firstColdAt = sample.at
+			}
 			m.coldStreak++
 		}
 	} else {
@@ -164,7 +239,8 @@ func (m *cacheEffMonitor) record(usage provider.TokenUsage) string {
 	if m.coldStreak >= cacheStormConsecutive {
 		m.alerted = true
 		guidance := m.formatStormGuidance()
-		debug.Log("cache-efficiency", "cache bust storm detected: coldStreak=%d window=%s", m.coldStreak, m.windowSummary())
+		debug.Log("cache-efficiency", "cache bust storm detected: coldStreak=%d cause=%q window=%s",
+			m.coldStreak, m.bustCause(), m.windowSummary())
 		return guidance
 	}
 
@@ -179,6 +255,43 @@ func (m *cacheEffMonitor) hitRatio(s cacheEffSample) float64 {
 	return float64(s.cacheRead) / float64(s.total)
 }
 
+// bustCause inspects recorded evidence and attributes the bust to a specific
+// mechanism. Comparison is between the triggering (cold) sample and the last
+// warm sample's fingerprint: a hash delta is direct evidence that the cached
+// prefix composition changed, and the gap between the last warm call and the
+// first cold call distinguishes natural TTL expiry. Zero hashes mean the
+// fingerprint was unavailable, in which case nothing is attributed rather
+// than guessed. Returns "" when no mechanism has supporting evidence.
+func (m *cacheEffMonitor) bustCause() string {
+	if len(m.samples) == 0 {
+		return ""
+	}
+	cur := m.samples[len(m.samples)-1]
+
+	if m.hasLastWarm && m.lastWarmFP.toolHash != 0 && cur.toolHash != 0 &&
+		cur.toolHash != m.lastWarmFP.toolHash {
+		return fmt.Sprintf("Attributed cause: tool definitions changed after the last warm call "+
+			"(%d -> %d definitions) - the request's tools array no longer matches the cached prefix, "+
+			"so the bust starts at the tools breakpoint. Stabilize the tool set early in the run "+
+			"(defer MCP reconnects, avoid mid-run enable/disable).",
+			m.lastWarmFP.toolCount, cur.toolCount)
+	}
+	if m.hasLastWarm && m.lastWarmFP.sysHash != 0 && cur.sysHash != 0 &&
+		cur.sysHash != m.lastWarmFP.sysHash {
+		return "Attributed cause: system prompt changed after the last warm call - a dynamic " +
+			"injection or pinned-context update mutated the cached prefix. Move per-turn advisory " +
+			"text into user/tool messages instead of the system prompt."
+	}
+	if m.hasLastWarm && !m.lastWarmAt.IsZero() && !m.firstColdAt.IsZero() &&
+		m.firstColdAt.Sub(m.lastWarmAt) >= cacheIdleTTL {
+		return fmt.Sprintf("Attributed cause: idle gap of %s between the last warm call and the first "+
+			"cold call exceeded the ~%s prompt-cache TTL - the prefix expired naturally. No instability "+
+			"in the run itself; the cold calls simply rebuilt the cache.",
+			m.firstColdAt.Sub(m.lastWarmAt).Truncate(time.Second), cacheIdleTTL)
+	}
+	return ""
+}
+
 // formatStormGuidance produces actionable guidance when a cache bust storm
 // is detected.
 func (m *cacheEffMonitor) formatStormGuidance() string {
@@ -188,7 +301,13 @@ func (m *cacheEffMonitor) formatStormGuidance() string {
 	sb.WriteString(fmt.Sprintf("Cache hit ratio dropped from warm to ~0%% over %d consecutive calls. ", m.coldStreak))
 	sb.WriteString("This means the API is re-processing the full system prompt + conversation prefix each turn, ")
 	sb.WriteString("costing significantly more tokens (1.25x for cache writes vs 0.1x for reads).\n\n")
-	sb.WriteString("Likely causes and fixes:\n")
+
+	if cause := m.bustCause(); cause != "" {
+		sb.WriteString(cause)
+		sb.WriteString("\n\nOther possible causes (no direct evidence this window):\n")
+	} else {
+		sb.WriteString("Likely causes and fixes:\n")
+	}
 	sb.WriteString("  - System prompt instability: intelligence gates or dynamic injections are modifying the system prompt each turn. ")
 	sb.WriteString("Move advisory messages to user/tool messages instead of system prompt.\n")
 	sb.WriteString("  - Tool list churn: adding/removing tools mid-run busts cache from the tools breakpoint. ")

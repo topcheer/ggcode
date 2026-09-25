@@ -1612,6 +1612,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()
 	a.toolSearch.init(toolDefs)
+	// Cache-bust attribution: hash the request prefix composition once per
+	// run so cacheEffMonitor can attribute a detected bust to the part that
+	// actually changed (system prompt vs tool definitions vs idle TTL
+	// expiry) instead of guessing. toolSearch strips the same deferred
+	// schemas every iteration, so intra-run comparisons stay consistent.
+	cacheToolHash, cacheToolCount := fingerprintToolDefs(toolDefs)
 	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
 	// beta): when the provider declares tool_search_tool_regex/bm25, schema
 	// discovery is owned by the API via defer_loading + tool_reference. The
@@ -2303,7 +2309,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// window pressure after each LLM call. Both are zero-LLM-cost
 		// deterministic analysis. Guidance is injected into the context
 		// manager as a low-priority system note.
-		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
+		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage, cacheReqFingerprint{
+			sysHash:   hashCacheString(a.SystemPrompt()),
+			toolHash:  cacheToolHash,
+			toolCount: cacheToolCount,
+		}); cacheGuidance != "" {
 			// Record the firing explicitly: this guidance is injected via
 			// injectGuidance (not appended to tool results), so it is invisible
 			// to crossDetectorConsensus without this call (#952 regression
