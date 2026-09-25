@@ -2,6 +2,7 @@ package agentruntime
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -113,6 +114,16 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 			"**When to escalate:**\n" +
 			"- If progress is blocked on a user action, environment step, or missing external information that you cannot safely do yourself, call `ask_user` promptly.\n" +
 			"- Do not report that you are blocked and waiting — either resolve it yourself or call `ask_user`."
+	}
+	// Selective-escalation guidance (r74, HiL-Bench arXiv:2604.09408): the
+	// judgment bottleneck is knowing when to ask vs. when to proceed. Keep
+	// this section available in every mode (not just autopilot) because
+	// underspecified-task guessing is mode-independent. It only applies when
+	// the ask_user tool is actually registered for this surface.
+	if slices.Contains(toolNames, tool.AskUserToolName) {
+		prompt += "\n\n## Clarifications\n" +
+			"- When a missing detail would materially change the outcome and there is no safe default, ask once via `ask_user` with concrete options instead of guessing.\n" +
+			"- If `ask_user` is unavailable in this session (e.g. a non-interactive run), do not retry it: proceed with the safest reversible assumption and state that assumption explicitly in your final answer.\n"
 	}
 	if strings.TrimSpace(remoteAgentsInfo) != "" {
 		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)

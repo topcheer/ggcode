@@ -9,6 +9,9 @@ import (
 )
 
 const (
+	// AskUserToolName is the registry name of the ask_user tool.
+	AskUserToolName = "ask_user"
+
 	AskUserKindSingle = "single"
 	AskUserKindMulti  = "multi"
 	AskUserKindText   = "text"
@@ -77,7 +80,15 @@ func NewAskUserTool() *AskUserTool {
 	return &AskUserTool{}
 }
 
-func (t *AskUserTool) Name() string { return "ask_user" }
+// askUserNoHandlerGuidance is returned when the session has no interactive
+// user surface attached (pipe runs, remote harnesses, surfaces that did not
+// install a handler). HiL-Bench (arXiv:2604.09408) shows that agents which
+// silently guess on underspecified tasks collapse from 89% to 4% success, so
+// the fallback must convert silent guessing into explicit assumption stating
+// instead of leaving the agent with a bare failure.
+const askUserNoHandlerGuidance = "ask_user has no interactive user surface in this session (non-interactive run such as pipe mode, or a surface that did not install a handler). Do not retry ask_user in this session. Pick the safest reversible assumption, continue the task, and state the assumption explicitly in your final answer."
+
+func (t *AskUserTool) Name() string { return AskUserToolName }
 
 func (t *AskUserTool) Description() string {
 	return "Ask the user structured clarification questions and wait for a response. Use only when a material clarification is needed, the answer changes what you do next, and there is no safe best guess."
@@ -174,7 +185,7 @@ func (t *AskUserTool) AskDirect(ctx context.Context, req AskUserRequest) (AskUse
 	handler := t.handler
 	t.mu.RUnlock()
 	if handler == nil {
-		return AskUserResponse{}, fmt.Errorf("ask_user handler not available in this session")
+		return AskUserResponse{}, fmt.Errorf("ask_user has no interactive user surface in this session")
 	}
 	return handler(ctx, normalized)
 }
@@ -192,7 +203,7 @@ func (t *AskUserTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	handler := t.handler
 	t.mu.RUnlock()
 	if handler == nil {
-		return Result{IsError: true, Content: "ask_user is only available in interactive TUI sessions"}, nil
+		return Result{IsError: true, Content: askUserNoHandlerGuidance}, nil
 	}
 	resp, err := handler(ctx, normalized)
 	if err != nil {

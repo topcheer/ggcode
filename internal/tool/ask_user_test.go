@@ -17,8 +17,25 @@ func TestAskUserToolRequiresInteractiveHandler(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected user-visible error when handler is missing")
 	}
-	if !strings.Contains(result.Content, "interactive TUI") {
-		t.Fatalf("unexpected error content: %s", result.Content)
+	// r74: the no-handler fallback must be a directed escalation fallback
+	// (HiL-Bench arXiv:2604.09408) instead of a bare surface claim.
+	for _, want := range []string{"no interactive user surface", "Do not retry", "safest reversible assumption", "state the assumption explicitly"} {
+		if !strings.Contains(result.Content, want) {
+			t.Fatalf("fallback content should mention %q, got %q", want, result.Content)
+		}
+	}
+}
+
+func TestAskUserAskDirectRequiresHandler(t *testing.T) {
+	tool := NewAskUserTool()
+	_, err := tool.AskDirect(context.Background(), AskUserRequest{
+		Questions: []AskUserQuestion{{Title: "Scope", Prompt: "Pick scope", Kind: AskUserKindSingle, Choices: []AskUserChoice{{Label: "small"}}}},
+	})
+	if err == nil {
+		t.Fatal("expected error when no surface handler is installed")
+	}
+	if !strings.Contains(err.Error(), "no interactive user surface") {
+		t.Fatalf("unexpected AskDirect error: %v", err)
 	}
 }
 

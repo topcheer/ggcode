@@ -67,8 +67,10 @@ func TestMCPElicitationNoHandlerErrors(t *testing.T) {
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "handler not available") {
-		t.Fatalf("want handler-not-available error, got: %v", err)
+	// r74: the error text was aligned with ask_user's directed no-handler
+	// fallback wording ("no interactive user surface in this session").
+	if err == nil || !strings.Contains(err.Error(), "no interactive user surface") {
+		t.Fatalf("want no-interactive-surface error, got: %v", err)
 	}
 }
 

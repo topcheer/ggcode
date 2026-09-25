@@ -123,6 +123,12 @@ echo "fix the typo" | ggcode -p            # supervised mode (asks confirmation)
 echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
 ```
 
+## Selective Escalation (`ask_user`)
+
+In interactive sessions (TUI, IM daemon, desktop), the agent can pause and ask structured clarification questions via the `ask_user` tool — single/multi choice or freeform. System-prompt guidance in every mode tells the agent to ask once, with concrete options, when a missing detail would materially change the outcome and no safe default exists, instead of guessing (HiL-Bench, arXiv:2604.09408: silent guessing on underspecified tasks collapses coding agent success from 89% to 4%).
+
+In surfaces where no user is reachable (pipe mode, headless runs), calling `ask_user` returns a directed fallback instead of a bare error: the agent is told not to retry, to proceed with the safest reversible assumption, and to state that assumption explicitly in its final answer.
+
 ## Recommendations
 
 | Scenario | Mode |
