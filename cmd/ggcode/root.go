@@ -240,6 +240,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newReportCmd())
+	cmd.AddCommand(newTapeCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
 	configureHelpRendering(cmd)
 
