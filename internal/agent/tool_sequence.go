@@ -176,24 +176,37 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	if curr.tool != "read_file" {
 		return ""
 	}
-	// Count consecutive read_file calls in recent history (not including current)
+	// Count consecutive read_file ITERATIONS, not calls (#2767): entries
+	// sharing one iteration number are a parallel batch - executing them
+	// serially does not make the reads "sequential" - so every read_file
+	// call of the same iteration counts once. Same-batch siblings of the
+	// current call are skipped entirely.
 	consecutive := 0
+	lastCountedIter := -1
 	for i := len(v.history) - 1; i >= 0; i-- {
-		if v.history[i].tool == "read_file" {
-			consecutive++
-		} else {
+		if v.history[i].tool != "read_file" {
 			break
 		}
+		if v.history[i].iter == curr.iter {
+			continue // same-batch parallel sibling
+		}
+		if v.history[i].iter != lastCountedIter {
+			consecutive++
+			lastCountedIter = v.history[i].iter
+		}
 	}
-	// Current call is the (consecutive+1)th read_file in a row
+	// Current call is the (consecutive+1)th sequential read_file iteration
 	if consecutive+1 < seqConsecutiveReads {
 		return ""
 	}
 	// Check that these reads are of DIFFERENT files (same file reads are handled by memoization)
 	files := make(map[string]bool)
 	files[curr.filePath] = true
-	for i := len(v.history) - 1; i >= 0 && i >= len(v.history)-consecutive; i-- {
-		if v.history[i].tool == "read_file" && v.history[i].filePath != "" {
+	for i := len(v.history) - 1; i >= 0; i-- {
+		if v.history[i].tool != "read_file" {
+			break
+		}
+		if v.history[i].filePath != "" {
 			files[v.history[i].filePath] = true
 		}
 	}
