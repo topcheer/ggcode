@@ -788,8 +788,14 @@ func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 		localPart = localPart[1:idx] // strip @ and :domain
 	}
 	if localPart != "" {
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(localPart) + `\b`)
-		if re.MatchString(lower) {
+		// #2749: \b is an ASCII word boundary and never matches when the
+		// localpart ends with a non-word char (Matrix legal localpart
+		// charset [a-z0-9._=-+/] allows endings like "bot-", "x=", "a."),
+		// silently dropping those mentions. Go's RE2 has no negative
+		// lookahead, so the boundary is a post-match check: the character
+		// after the hit must NOT be a legal localpart continuation char
+		// (refuses the "@bot" inside "@bot.a" prefix confusion, #2719).
+		if mentionsLocalPart(lower, localPart) {
 			return true
 		}
 	}
@@ -809,12 +815,56 @@ func (a *matrixAdapter) stripMention(text string) string {
 		localPart = localPart[1:idx]
 	}
 	if localPart != "" {
-		// \b keeps a longer handle intact: with localPart "al",
-		// "@alex" must NOT be mangled into "ex" (#2719).
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(localPart) + `\b`)
-		text = re.ReplaceAllString(text, "")
+		// Post-match boundary check (#2749): keeps a longer handle intact
+		// ("@alex" with localPart "al" is NOT mangled) while still matching
+		// non-word endings like "bot-" that \b missed. RE2 has no lookahead.
+		text = stripLocalPartMention(text, localPart)
 	}
 	return strings.TrimSpace(text)
+}
+
+// matrixLocalPartContChars are the characters that may legally continue a
+// Matrix localpart after a prefix (#2749): if the byte following a candidate
+// match is one of these, the match is a strict PREFIX of a longer handle and
+// must not count.
+const matrixLocalPartContChars = "abcdefghijklmnopqrstuvwxyz0123456789._=-+/"
+
+// mentionsLocalPart reports whether text contains "@localpart" NOT followed
+// by a legal localpart continuation character (RE2-safe boundary).
+func mentionsLocalPart(lower, localPart string) bool {
+	needle := "@" + localPart
+	for start := 0; ; {
+		i := strings.Index(lower[start:], needle)
+		if i < 0 {
+			return false
+		}
+		at := start + i
+		end := at + len(needle)
+		if end >= len(lower) || !strings.ContainsAny(string(lower[end]), matrixLocalPartContChars) {
+			return true
+		}
+		start = at + 1
+	}
+}
+
+// stripLocalPartMention removes "@localpart" occurrences that are not
+// prefixes of a longer handle (same boundary rule as mentionsLocalPart).
+func stripLocalPartMention(text, localPart string) string {
+	lower := strings.ToLower(text)
+	needle := "@" + localPart
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(lower[i:], needle) {
+			end := i + len(needle)
+			if end >= len(lower) || !strings.ContainsAny(string(lower[end]), matrixLocalPartContChars) {
+				i = end // skip the mention
+				continue
+			}
+		}
+		b.WriteByte(text[i])
+		i++
+	}
+	return b.String()
 }
 
 // --- Outbound ---
