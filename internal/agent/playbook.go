@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -34,6 +35,16 @@ import (
 
 const (
 	defaultMaxPlaybookEntries = 30
+	// recentItersWindow bounds the per-entry degradation observation window.
+	recentItersWindow = 3
+	// minHistoryForDemotion: cumulative average needs at least this many
+	// observations before it is trusted as a degradation baseline.
+	minHistoryForDemotion = 3
+	// demotionRecencyRatio / demotionMinIterDelta define "significantly
+	// degraded": recent mean must be 1.5× the historical average AND at
+	// least 2 iterations worse.
+	demotionRecencyRatio = 1.5
+	demotionMinIterDelta = 2.0
 )
 
 // PlaybookEntry records a successful strategy pattern for a task type.
@@ -48,6 +59,13 @@ type PlaybookEntry struct {
 	AvgDurationS float64   `json:"avg_duration_s"` // average duration in seconds
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
+	// RecentIters is a bounded ring (last 3 observations) of per-run
+	// iteration counts. It exists to detect degradation: the cumulative
+	// AvgIter smooths over recent regressions (e.g. a strategy that used to
+	// finish in 5 iterations now needs 20 because the codebase grew), so
+	// updateEntry uses this window to demote degraded entries instead of
+	// letting them keep their historical score forever.
+	RecentIters []float64 `json:"recent_iters,omitempty"`
 }
 
 // Playbook accumulates successful strategy patterns across sessions.
@@ -308,7 +326,23 @@ func (pb *Playbook) Record(stats *RunStats) {
 }
 
 // updateEntry merges a new observation into an existing entry using incremental averaging.
+//
+// Degradation demotion (ACE "grow-and-refine", arXiv:2510.04618): a strategy
+// whose recent runs take significantly more iterations than its historical
+// average has stopped being efficient — keeping its old score would keep
+// injecting stale advice (context-rot tax, Chroma 2025) and would crowd out
+// genuinely efficient patterns. When the recent window is consistently
+// degraded we halve Uses (dropping its frequency/confidence weight) and blend
+// AvgIter toward the recent reality so the ranking score reflects the present,
+// not the past. The entry is kept (not deleted) because the degradation may
+// be workspace-transient and the refined entry can recover its rank.
 func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
+	// Push into the recent-iterations ring (keep last recentItersWindow).
+	e.RecentIters = append(e.RecentIters, float64(stats.Iterations))
+	if len(e.RecentIters) > recentItersWindow {
+		e.RecentIters = e.RecentIters[len(e.RecentIters)-recentItersWindow:]
+	}
+
 	n := float64(e.Uses)
 	e.AvgIter = (e.AvgIter*n + float64(stats.Iterations)) / (n + 1)
 	e.AvgDurationS = (e.AvgDurationS*n + stats.Duration.Seconds()) / (n + 1)
@@ -316,17 +350,52 @@ func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
 	e.SuccessRate = 1.0 // only successful runs are recorded, so rate stays 1.0
 	// Note: if we later record failures too, SuccessRate would decrease
 	e.LastSeen = time.Now()
+
+	// Degradation check: need at least 2 recent observations and enough
+	// history for the average to be meaningful (see demotion* constants).
+	if len(e.RecentIters) >= 2 && n >= minHistoryForDemotion {
+		recentSum := 0.0
+		for _, it := range e.RecentIters {
+			recentSum += it
+		}
+		recentMean := recentSum / float64(len(e.RecentIters))
+		if recentMean > demotionRecencyRatio*e.AvgIter && recentMean > e.AvgIter+demotionMinIterDelta {
+			before := playbookScore(*e)
+			// Demote: halve the confidence weight (floor 1), blend AvgIter
+			// halfway toward the recent mean so the score tracks reality.
+			e.Uses = int(n) / 2
+			if e.Uses < 1 {
+				e.Uses = 1
+			}
+			e.AvgIter = (e.AvgIter + recentMean) / 2
+			debug.Log("playbook", "demoted degraded entry %s (%s): recent ~%.0f iter vs avg %.0f, score %.1f→%.1f",
+				e.TaskType, e.ToolSequence, recentMean, e.AvgIter, before, playbookScore(*e))
+		}
+	}
 }
 
-// evict removes the least recently used entries to stay within capacity.
+// evict removes the lowest-utility entries to stay within capacity.
+// ACE "grow-and-refine" semantics (arXiv:2510.04618): curation should remove
+// the least useful strategies, not merely the least recent. We therefore evict
+// by playbookScore ascending (score already folds in efficiency and staleness
+// decay), breaking ties toward older entries. Pure LRU was removed because a
+// high-iteration strategy touched yesterday would survive while a fast,
+// frequently-used strategy unused for a month was dropped — the opposite of
+// what a strategy playbook should keep.
 func (pb *Playbook) evict() {
 	if len(pb.entries) <= pb.maxEntries {
 		return
 	}
-	// Sort by LastSeen descending (most recent first), keep top maxEntries
-	sort.Slice(pb.entries, func(i, j int) bool {
+	sort.SliceStable(pb.entries, func(i, j int) bool {
+		si, sj := playbookScore(pb.entries[i]), playbookScore(pb.entries[j])
+		if si != sj {
+			return si > sj
+		}
 		return pb.entries[i].LastSeen.After(pb.entries[j].LastSeen)
 	})
+	for _, e := range pb.entries[pb.maxEntries:] {
+		debug.Log("playbook", "evicted low-utility entry %s (%s): score %.2f", e.TaskType, e.ToolSequence, playbookScore(e))
+	}
 	pb.entries = pb.entries[:pb.maxEntries]
 }
 
@@ -393,12 +462,16 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 
 // playbookScore computes a composite score for ranking playbook entries.
 // Higher is better. Combines frequency (more observations = higher confidence)
-// with efficiency (fewer iterations = better strategy).
+// with efficiency (fewer iterations = better strategy), then applies a
+// staleness decay so strategies unused for a long time lose rank.
 //
-// Formula: score = min(uses, 10) * (10 / max(avgIter, 1))
+// Formula: score = min(uses, 10) * (10 / max(avgIter, 1)) * staleFactor
 //   - A pattern used 5 times at ~10 iterations scores 5.0
 //   - A pattern used 10 times at ~50 iterations scores 2.0
 //   - A pattern used 3 times at ~5 iterations scores 6.0
+//   - staleFactor halves every 30 days past the last observation (floor 0.25),
+//     so entries that no longer describe how this workspace behaves fade out
+//     of the hint budget instead of occupying slots indefinitely.
 func playbookScore(e PlaybookEntry) float64 {
 	freq := float64(e.Uses)
 	if freq > 10 {
@@ -408,7 +481,33 @@ func playbookScore(e PlaybookEntry) float64 {
 	if iter < 1 {
 		iter = 1
 	}
-	return freq * (10.0 / iter)
+	return freq * (10.0 / iter) * staleFactor(e.LastSeen, time.Now())
+}
+
+// staleFactor returns the staleness multiplier for a last-seen timestamp:
+// 1.0 while fresh, halving every staleHalfLifeDays after that, floored at
+// 0.25 so ancient entries rank below but are not artificially erased (the
+// next observation refreshes LastSeen and fully restores the factor).
+const (
+	staleHalfLifeDays = 30
+	staleFactorFloor  = 0.25
+)
+
+func staleFactor(lastSeen, now time.Time) float64 {
+	// Entries persisted before the staleness mechanism (or crafted in tests)
+	// have a zero timestamp; treat them as fresh rather than ancient.
+	if lastSeen.IsZero() {
+		return 1.0
+	}
+	days := now.Sub(lastSeen).Hours() / 24
+	if days <= staleHalfLifeDays {
+		return 1.0
+	}
+	f := math.Pow(0.5, (days-staleHalfLifeDays)/staleHalfLifeDays)
+	if f < staleFactorFloor {
+		return staleFactorFloor
+	}
+	return f
 }
 
 // recordPlaybook is called from maybeReflect to record successful strategies.

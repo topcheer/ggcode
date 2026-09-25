@@ -463,3 +463,150 @@ func TestPlaybookAtomicSave(t *testing.T) {
 		t.Errorf("expected playbook to contain 'bugfix' task type")
 	}
 }
+
+func TestPlaybookDegradationDemotion(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	// Build history: 4 successful runs at ~5 iterations each.
+	for i := 0; i < 4; i++ {
+		pb.Record(&RunStats{
+			ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1},
+			FilesEdited: []string{"main.go"},
+			Success:     true,
+			Iterations:  5,
+			Duration:    time.Minute,
+			UserPrompt:  "fix a bug",
+		})
+	}
+	pb.mu.Lock()
+	entry := &pb.entries[0]
+	if entry.Uses != 4 || entry.AvgIter != 5 {
+		pb.mu.Unlock()
+		t.Fatalf("setup: want Uses=4 AvgIter=5, got Uses=%d AvgIter=%.1f", entry.Uses, entry.AvgIter)
+	}
+	scoreBefore := playbookScore(*entry)
+	pb.mu.Unlock()
+
+	// Workspace grew: recent successful runs now need many more iterations.
+	// Three consecutive degraded runs are needed: the ring holds the last 3
+	// observations, so the historical 5s must flush out before the recent
+	// mean reflects the degradation.
+	for i := 0; i < 3; i++ {
+		pb.Record(&RunStats{
+			ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1},
+			FilesEdited: []string{"main.go"},
+			Success:     true,
+			Iterations:  20,
+			Duration:    4 * time.Minute,
+			UserPrompt:  "fix a bug",
+		})
+	}
+
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	entry = &pb.entries[0]
+
+	// Demotion must have kicked in: Uses halved, AvgIter blended up.
+	if entry.Uses >= 6 {
+		t.Errorf("expected Uses to be halved after degradation, got %d", entry.Uses)
+	}
+	if entry.AvgIter <= 5 {
+		t.Errorf("expected AvgIter to blend toward recent 20, got %.1f", entry.AvgIter)
+	}
+	if got := playbookScore(*entry); got >= scoreBefore {
+		t.Errorf("expected degraded entry score to drop: before=%.2f after=%.2f", scoreBefore, got)
+	}
+}
+
+func TestPlaybookNoDemotionWhenHealthy(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	// Consistent iterations - no degradation signal.
+	for i := 0; i < 6; i++ {
+		pb.Record(&RunStats{
+			ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1},
+			FilesEdited: []string{"main.go"},
+			Success:     true,
+			Iterations:  6,
+			Duration:    time.Minute,
+			UserPrompt:  "add a feature",
+		})
+	}
+
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	e := pb.entries[0]
+	if e.Uses != 6 {
+		t.Errorf("healthy entry should keep full Uses=6, got %d", e.Uses)
+	}
+	if e.AvgIter != 6 {
+		t.Errorf("healthy entry AvgIter should stay 6, got %.1f", e.AvgIter)
+	}
+}
+
+func TestPlaybookEvictScoreAware(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+	pb.maxEntries = 2
+
+	// A slow, expensive strategy (low score: 1 use, 50 iterations).
+	now := time.Now()
+	pb.mu.Lock()
+	pb.loaded = true
+	pb.entries = []PlaybookEntry{{
+		ID: "slow", TaskType: "refactor", ToolSequence: "read→edit→exec",
+		Uses: 1, SuccessRate: 1, AvgIter: 50, LastSeen: now, CreatedAt: now,
+	}}
+	pb.mu.Unlock()
+
+	// Record two fast entries (high score) → capacity forces eviction of
+	// exactly the low-score entry, not merely the least recently used.
+	for i := 0; i < 2; i++ {
+		pb.Record(&RunStats{
+			ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1},
+			FilesEdited: []string{"main.go"},
+			Success:     true,
+			Iterations:  3,
+			Duration:    time.Minute,
+			UserPrompt:  []string{"fix a bug", "write a test"}[i],
+		})
+	}
+
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	if len(pb.entries) != 2 {
+		t.Fatalf("want 2 entries after eviction, got %d", len(pb.entries))
+	}
+	for _, e := range pb.entries {
+		if e.ID == "slow" {
+			t.Error("low-utility (50-iter) entry should have been evicted in favor of fast strategies")
+		}
+	}
+}
+
+func TestPlaybookScoreStalenessDecay(t *testing.T) {
+	now := time.Now()
+	fresh := PlaybookEntry{Uses: 5, AvgIter: 10, LastSeen: now}
+	old := PlaybookEntry{Uses: 5, AvgIter: 10, LastSeen: now.Add(-100 * 24 * time.Hour)}
+
+	sf := staleFactor(old.LastSeen, now)
+	if sf != staleFactorFloor {
+		t.Errorf("100-day-old entry should be at the staleness floor %.2f, got %.2f", staleFactorFloor, sf)
+	}
+	if staleFactor(fresh.LastSeen, now) != 1.0 {
+		t.Error("fresh entry should have no staleness decay")
+	}
+	if playbookScore(old) >= playbookScore(fresh) {
+		t.Errorf("stale entry (%.2f) should rank below fresh equivalent (%.2f)",
+			playbookScore(old), playbookScore(fresh))
+	}
+
+	// Observation refreshes LastSeen → decay fully lifts.
+	refreshed := old
+	refreshed.LastSeen = now
+	if staleFactor(refreshed.LastSeen, now) != 1.0 {
+		t.Error("refreshed entry should fully recover from staleness")
+	}
+}
