@@ -2,6 +2,8 @@ package im
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"testing"
 
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
@@ -64,5 +66,37 @@ func TestInteractiveTextBridgeResolvesAskUser(t *testing.T) {
 	}
 	if len(response.Answers) != 1 || len(response.Answers[0].SelectedChoiceIDs) != 1 || response.Answers[0].SelectedChoiceIDs[0] != "a" {
 		t.Fatalf("unexpected ask_user response: %#v", response)
+	}
+}
+
+// r64: a plain message (no pending approval/ask_user) must reach Submit
+// wrapped in the inbound provenance envelope - payload intact, delimiters
+// and boundary note present.
+func TestInteractiveTextBridgeWrapsPlainMessage(t *testing.T) {
+	var submitted string
+	bridge := &InteractiveTextBridge{
+		Submit: func(_ context.Context, text, adapter string) error {
+			submitted = text
+			if adapter != "qq" {
+				t.Fatalf("unexpected adapter %q", adapter)
+			}
+			return nil
+		},
+	}
+	if err := bridge.SubmitInboundMessage(context.Background(), InboundMessage{
+		Text:     "run the tests",
+		Envelope: Envelope{Adapter: "qq", Platform: PlatformQQ, SenderID: "7", SenderName: "Bob"},
+	}); err != nil {
+		t.Fatalf("SubmitInboundMessage returned error: %v", err)
+	}
+	beginRe := regexp.MustCompile(`<<<UNTRUSTED-IM-[0-9a-f]{8}-BEGIN>>>`)
+	endRe := regexp.MustCompile(`<<<UNTRUSTED-IM-[0-9a-f]{8}-END>>>`)
+	begin, end := beginRe.FindString(submitted), endRe.FindString(submitted)
+	if begin == "" || end == "" || begin > end {
+		t.Fatalf("plain message not enveloped:\n%s", submitted)
+	}
+	if !strings.Contains(submitted, "sender=\"Bob\"") || !strings.Contains(submitted, "run the tests") ||
+		!strings.Contains(submitted, inboundEnvelopeFooter) {
+		t.Fatalf("envelope missing metadata/payload/footer:\n%s", submitted)
 	}
 }

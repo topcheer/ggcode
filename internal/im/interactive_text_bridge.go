@@ -85,5 +85,5 @@ func (b *InteractiveTextBridge) SubmitInboundMessage(ctx context.Context, msg In
 			}
 		}
 	}
-	return b.Submit(ctx, text, msg.Envelope.Adapter)
+	return b.Submit(ctx, WrapInboundEnvelope(msg, text), msg.Envelope.Adapter)
 }
