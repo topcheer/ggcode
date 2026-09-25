@@ -167,6 +167,12 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 	servers := w.resolveScopeMCPServers()
 	deleted := config.LoadMCPDeleted(w.configDir)
 	merged, _ := mcp.MergeStartupServersWithDeleted(w.workingDir, servers, deleted)
+	// Same containment as startup: a .mcp.json added or edited behind the
+	// running session's back cannot start new child processes unasked.
+	merged, gateWarnings := applyProjectMCPGate(merged, w.workingDir)
+	for _, warning := range gateWarnings {
+		debug.Log("mcp", "%s", warning)
+	}
 	w.manager.Reload(ctx, merged)
 }
 

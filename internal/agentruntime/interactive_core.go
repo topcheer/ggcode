@@ -7,6 +7,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/lsp"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/memory"
@@ -57,7 +58,14 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		return nil, err
 	}
 
-	mergedServers, _ := mcp.MergeStartupServersWithDeleted(workingDir, cfg.MCPServers, cfg.DeletedMCPServers)
+	mergedServers, mergeWarnings := mcp.MergeStartupServersWithDeleted(workingDir, cfg.MCPServers, cfg.DeletedMCPServers)
+	// Containment: workspace .mcp.json servers launch only after the user
+	// approved them for THIS workspace (internal/mcp/project_gate.go).
+	// A cloned repo must not reach child-process execution unasked.
+	mergedServers, gateWarnings := applyProjectMCPGate(mergedServers, workingDir)
+	for _, warning := range append(mergeWarnings, gateWarnings...) {
+		debug.Log("mcp", "%s", warning)
+	}
 	// Placeholder core so the closure below can reach the per-runtime
 	// provider field set later by SetConfigAgent (#1592-B).
 	core := &InteractiveRuntimeCore{}

@@ -126,13 +126,112 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 		},
 	}
 
+	projectGateWD := func() (string, error) { return os.Getwd() }
+
+	approveProjectCmd := &cobra.Command{
+		Use:   "approve-project <name>...",
+		Short: "Approve workspace .mcp.json servers for launch (project gate)",
+		Long:  "Approve workspace .mcp.json servers for launch.\n\nProject-local MCP servers (workspace .mcp.json) are blocked by the startup\ncontainment gate until approved for THIS workspace - a cloned repository\nmust not launch child processes unasked. Run this inside the workspace\nwhose .mcp.json defines the servers. Approval is bound to the server's\ncommand signature: a changed command requires re-approval.\n\nPer-invocation bypass: set GGCODE_ALLOW_PROJECT_MCP=1.",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wd, err := projectGateWD()
+			if err != nil {
+				return err
+			}
+			path := *cfgFile
+			if path == "" {
+				path = config.ConfigPath()
+			}
+			cfg, err := loadMCPConfig(path, false)
+			if err != nil {
+				return err
+			}
+			merged, _ := mcp.MergeStartupServersWithDeleted(wd, cfg.MCPServers, cfg.DeletedMCPServers)
+			approved, err := mcp.ApproveProjectServers(wd, merged, args)
+			if err != nil {
+				return err
+			}
+			if approved == 0 {
+				return fmt.Errorf("no project .mcp.json servers matched: %s (see `ggcode mcp list-project`)", strings.Join(args, ", "))
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Approved %d project MCP server(s) for %s\n", approved, wd)
+			return nil
+		},
+	}
+
+	revokeProjectCmd := &cobra.Command{
+		Use:   "revoke-project <name>...",
+		Short: "Revoke workspace .mcp.json server approvals",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wd, err := projectGateWD()
+			if err != nil {
+				return err
+			}
+			revoked, err := mcp.RevokeProjectServers(wd, args)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked %d project MCP approval(s) for %s\n", revoked, wd)
+			return nil
+		},
+	}
+
+	listProjectCmd := &cobra.Command{
+		Use:   "list-project",
+		Short: "Show workspace .mcp.json servers and gate status",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wd, err := projectGateWD()
+			if err != nil {
+				return err
+			}
+			path := *cfgFile
+			if path == "" {
+				path = config.ConfigPath()
+			}
+			cfg, err := loadMCPConfig(path, false)
+			if err != nil {
+				return err
+			}
+			status, warnings, err := mcp.ProjectServersStatus(wd, cfg.MCPServers, cfg.DeletedMCPServers)
+			for _, warning := range warnings {
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
+			}
+			if err != nil {
+				return err
+			}
+			if len(status) == 0 {
+				_, _ = fmt.Fprint(cmd.OutOrStdout(), "No project (.mcp.json) MCP servers in "+wd+"\n")
+				return nil
+			}
+			for _, row := range status {
+				state := "blocked"
+				switch {
+				case row.Approved:
+					state = "approved"
+				case row.ApprovedCommandChanged:
+					state = "blocked (command changed; re-approve)"
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%-28s %-36s %s\n", row.Name, state, row.Command)
+			}
+			return nil
+		},
+	}
+
 	cmd.AddCommand(installCmd)
 	cmd.AddCommand(listCmd)
 	cmd.AddCommand(uninstallCmd)
+	cmd.AddCommand(approveProjectCmd)
+	cmd.AddCommand(revokeProjectCmd)
+	cmd.AddCommand(listProjectCmd)
 	configureHelpRendering(cmd)
 	configureHelpRendering(installCmd)
 	configureHelpRendering(listCmd)
 	configureHelpRendering(uninstallCmd)
+	configureHelpRendering(approveProjectCmd)
+	configureHelpRendering(revokeProjectCmd)
+	configureHelpRendering(listProjectCmd)
 	return cmd
 }
 
