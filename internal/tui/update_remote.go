@@ -162,14 +162,17 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	// Echo user message to all channels EXCEPT the originating adapter,
 	// so other IM users can see what was asked.
 	m.emitIMLocalUserTextExcept(prompt, m.remoteInboundAdapter)
+	// r64 provenance envelope: what reaches the LLM as a user turn is
+	// wrapped as untrusted external data; the IM echo above stays raw.
+	agentPrompt := im.WrapInboundEnvelope(msg.Message, prompt)
 	// #1762 case 2: match the local Enter gate (update_keys.go) - a
 	// message arriving while project memory is still LOADING would run
 	// its first turn without the project-memory system injection and
 	// reorder behind locally queued messages.
 	if m.loading || m.projectMemoryLoading {
-		m.queuePendingSubmission(prompt)
+		m.queuePendingSubmission(agentPrompt)
 		return m, nil
 	}
-	return m, m.submitText(prompt, false)
+	return m, m.submitText(agentPrompt, false)
 
 }

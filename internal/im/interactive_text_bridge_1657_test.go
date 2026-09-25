@@ -2,6 +2,7 @@ package im
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -57,7 +58,10 @@ func Test1657MultiPendingDisambiguation(t *testing.T) {
 	if err := b.SubmitInboundMessage(nil, mkMsg("y")); err != nil {
 		t.Fatal(err)
 	}
-	if submitted != "y" {
+	// r64: the fall-through payload is wrapped in the inbound provenance
+	// envelope, so assert on the reply being present inside the submission
+	// rather than on an exact match.
+	if !strings.Contains(submitted, "y") {
 		t.Fatalf("bare y must fall through to Submit, got %q", submitted)
 	}
 

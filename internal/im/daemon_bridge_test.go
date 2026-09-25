@@ -68,7 +68,9 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 	bridge.mu.Lock()
 	pending := bridge.pendingInterruptions
 	bridge.mu.Unlock()
-	if len(pending) != 1 || extractText(pending[0].Content) != "second message" {
+	// r64: queued interruption content carries the inbound provenance
+	// envelope, so assert on the payload text rather than an exact match.
+	if len(pending) != 1 || !strings.Contains(extractText(pending[0].Content), "second message") {
 		t.Fatalf("expected 1 pending interruption 'second message', got %v", pending)
 	}
 
@@ -102,7 +104,9 @@ func TestDaemonBridgeInterruptionQueueOrder(t *testing.T) {
 	if len(pending) != 3 {
 		t.Fatalf("expected 3 pending, got %d", len(pending))
 	}
-	if extractText(pending[0].Content) != "msg1" || extractText(pending[1].Content) != "msg2" || extractText(pending[2].Content) != "msg3" {
+	// r64: queued content is enveloped; assert on payload text and order.
+	getText := func(i int) string { return extractText(pending[i].Content) }
+	if len(pending) != 3 || !strings.Contains(getText(0), "msg1") || !strings.Contains(getText(1), "msg2") || !strings.Contains(getText(2), "msg3") {
 		t.Fatalf("wrong order: %v", pending)
 	}
 }

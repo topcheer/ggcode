@@ -749,6 +749,12 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if len(content) == 0 {
 		content = []provider.ContentBlock{{Type: "text", Text: text}}
 	}
+	// r64 provenance envelope: the queued/running payload is read by the
+	// model as a user turn. Wrap it so externally-authored text arrives as
+	// marked untrusted data instead of impersonating a local operator
+	// instruction (see WrapInboundEnvelope). Display paths above
+	// (notifyUserMessage / follow sink) intentionally keep the raw text.
+	content = wrapInboundEnvelopeContent(msg, content)
 	ctx2, queued := b.tryQueueOrBeginRun(content, "")
 	if queued {
 		return nil

@@ -69,7 +69,7 @@ func (b *InteractiveTextBridge) SubmitInboundMessage(ctx context.Context, msg In
 							b.ResolveApproval(ids[idx-1], decision)
 							return nil
 						}
-						return b.Submit(ctx, text, msg.Envelope.Adapter)
+						return b.Submit(ctx, WrapInboundEnvelope(msg, text), msg.Envelope.Adapter)
 					}
 				}
 				b.ResolveApproval(requestID, decision)
