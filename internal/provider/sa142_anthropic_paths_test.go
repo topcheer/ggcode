@@ -381,15 +381,15 @@ func TestSA142_AnthropicPTCAndServerTools(t *testing.T) {
 	if p.ptcCodeExecutionEnabled() {
 		t.Fatal("PTC must be off before any server tool declaration")
 	}
-	if opts := p.ptcRequestOptions(); opts != nil {
-		t.Fatal("ptcRequestOptions must be nil without PTC")
+	if hv := p.betaHeaderValue(false); hv != "" {
+		t.Fatal("betaHeaderValue must be empty without PTC")
 	}
 	p.SetServerTools([]ServerToolConfig{{Type: "code_execution_20260120"}})
 	if !p.ptcCodeExecutionEnabled() {
 		t.Fatal("code_execution declaration must enable PTC")
 	}
-	if opts := p.ptcRequestOptions(); opts == nil {
-		t.Fatal("ptcRequestOptions must be non-nil with PTC enabled")
+	if hv := p.betaHeaderValue(false); hv != ptcBetaHeader {
+		t.Fatalf("betaHeaderValue with PTC = %q, want %q (single aggregated emission, #2774)", hv, ptcBetaHeader)
 	}
 	if p.ServerToolSearchActive() {
 		t.Fatal("tool search beta must be off without search tool declaration")
@@ -398,15 +398,15 @@ func TestSA142_AnthropicPTCAndServerTools(t *testing.T) {
 	if !p.ServerToolSearchActive() {
 		t.Fatal("tool_search_tool_regex must activate the tool search beta")
 	}
-	if opts := p.serverToolOpts(); len(opts) == 0 {
-		t.Fatal("serverToolOpts must carry the advanced-tool-use beta header")
+	if hv := p.betaHeaderValue(false); hv != advancedToolUseBeta {
+		t.Fatal("aggregated beta value must carry the advanced-tool-use beta header")
 	}
 	// Unknown tool types keep both flags off.
 	p.SetServerTools([]ServerToolConfig{{Type: "web_search"}})
 	if p.ptcCodeExecutionEnabled() || p.ServerToolSearchActive() {
 		t.Fatal("web_search must not enable PTC or tool search beta")
 	}
-	if opts := p.serverToolOpts(); opts != nil {
-		t.Fatal("serverToolOpts must be nil without the tool search beta")
+	if hv := p.betaHeaderValue(false); hv != "" {
+		t.Fatal("beta value must be empty without the tool search beta")
 	}
 }

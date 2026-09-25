@@ -194,10 +194,35 @@ func (p *AnthropicProvider) anthropicBetaHeader(hasTools bool) string {
 	return ""
 }
 
-// betaHeaderOpts wraps the beta header into SDK request options for the
-// per-call sites (Messages.New / Messages.NewStreaming).
-func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
+// betaHeaderValue aggregates every enabled anthropic-beta token into one
+// comma-separated value (#2774): interleaved-thinking (manual thinking +
+// tools), programmatic-tool-calling (PTC server tool), and
+// advanced-tool-use (tool search). Multiple WithHeader calls on the same
+// key are Header.Set - the last one wins - so the pre-fix split emitters
+// silently dropped the interleaved token whenever PTC was enabled, and
+// the thinking/effort retry paths rebuilt options without the PTC header
+// while params still declared the code_execution tool; both hard-failed
+// with 400.
+func (p *AnthropicProvider) betaHeaderValue(hasTools bool) string {
+	var tokens []string
 	if h := p.anthropicBetaHeader(hasTools); h != "" {
+		tokens = append(tokens, h)
+	}
+	if p.ptcCodeExecutionEnabled() {
+		tokens = append(tokens, ptcBetaHeader)
+	}
+	if p.toolSearchBeta {
+		tokens = append(tokens, advancedToolUseBeta)
+	}
+	return strings.Join(tokens, ",")
+}
+
+// betaHeaderOpts wraps the aggregated beta header into a SINGLE SDK
+// request option for the per-call sites (Messages.New /
+// Messages.NewStreaming). Call sites must not append further
+// anthropic-beta emitters - a second Set would overwrite this one.
+func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
+	if h := p.betaHeaderValue(hasTools); h != "" {
 		return []option.RequestOption{option.WithHeader("anthropic-beta", h)}
 	}
 	return nil
@@ -287,16 +312,6 @@ func (p *AnthropicProvider) ServerToolSearchActive() bool { return p.toolSearchB
 // Tool Search Tool declarations.
 const advancedToolUseBeta = "advanced-tool-use-2025-11-20"
 
-// serverToolOpts returns the per-request options needed when a Tool Search
-// Tool is configured (nil otherwise, so unaffected deployments never send
-// the beta header).
-func (p *AnthropicProvider) serverToolOpts() []option.RequestOption {
-	if !p.toolSearchBeta {
-		return nil
-	}
-	return []option.RequestOption{option.WithHeader("anthropic-beta", advancedToolUseBeta)}
-}
-
 // SetMemoryTool enables the Anthropic Memory Tool declaration
 // (memory_20250818). Unlike server tools, memory is client-executed: the
 // agent's handler (internal/agent/memory_tool.go) fulfills the model's
@@ -345,15 +360,10 @@ func (p *AnthropicProvider) freshPTCContainer() (string, bool) {
 	return p.ptcContainerID, true
 }
 
-// ptcRequestOptions returns the request options required for programmatic
-// tool calling (the beta-gated code execution server tool), or nil when PTC
-// is not configured.
-func (p *AnthropicProvider) ptcRequestOptions() []option.RequestOption {
-	if !p.ptcCodeExecutionEnabled() {
-		return nil
-	}
-	return []option.RequestOption{option.WithHeader("anthropic-beta", "programmatic-tool-calling-2026-01-20")}
-}
+// ptcBetaHeader is the anthropic-beta token gating programmatic tool
+// calling (the code execution server tool). Aggregated into the single
+// betaHeaderValue emission (#2774) - never sent as a standalone header.
+const ptcBetaHeader = "programmatic-tool-calling-2026-01-20"
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
@@ -380,7 +390,7 @@ func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 // cap tracking. Used by context window probing.
 func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
 	params := p.buildParams(ctx, messages, nil)
-	_, err := p.client.Messages.New(ctx, params, p.serverToolOpts()...)
+	_, err := p.client.Messages.New(ctx, params, p.betaHeaderOpts(false)...)
 	return err
 }
 
@@ -635,22 +645,21 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
-	callOpts := append(p.betaHeaderOpts(len(tools) > 0), p.ptcRequestOptions()...)
+	callOpts := p.betaHeaderOpts(len(tools) > 0)
 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
-		resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.ptcRequestOptions()...)...)
+		resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 		return callErr
 	}, p.policy.attempts())
 	// Retry once without extended thinking if the model rejects it.
 	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
-		callOpts = nil
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
+			resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 			return callErr
 		}, p.policy.attempts())
 	}
@@ -662,7 +671,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		params.OutputConfig = anthropic.OutputConfigParam{}
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
+			resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 			return callErr
 		}, p.policy.attempts())
 	}
@@ -744,7 +753,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			truncated = false
 
 			func() {
-				stream := p.client.Messages.NewStreaming(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.ptcRequestOptions()...)...)
+				stream := p.client.Messages.NewStreaming(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 				defer func() {
 					_ = stream.Close()
 				}()

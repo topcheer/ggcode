@@ -148,14 +148,17 @@ func TestToolSearchDeclarationAndBetaOpts(t *testing.T) {
 	if !p.ServerToolSearchActive() {
 		t.Fatal("ServerToolSearchActive must be true with tool_search_tool_* configured")
 	}
-	opts := p.serverToolOpts()
-	if len(opts) != 1 {
-		t.Fatalf("expected 1 beta request opt, got %d", len(opts))
+	hv := p.betaHeaderValue(false)
+	if hv != advancedToolUseBeta {
+		t.Fatalf("expected aggregated beta value %q, got %q", advancedToolUseBeta, hv)
+	}
+	if len(p.betaHeaderOpts(false)) != 1 {
+		t.Fatal("expected 1 beta request opt")
 	}
 	// Inactive providers must not send the header (proxy compatibility).
 	q := NewAnthropicProviderWithBaseURL("test-key", "claude-sonnet-4-5", 1024, "https://api.anthropic.com")
 	q.SetServerTools([]ServerToolConfig{{Type: "web_search_20250305"}})
-	if len(q.serverToolOpts()) != 0 {
+	if len(q.betaHeaderOpts(false)) != 0 {
 		t.Fatal("beta header must be omitted without tool search")
 	}
 
