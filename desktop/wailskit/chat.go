@@ -1195,6 +1195,39 @@ func (b *ChatBridge) LoadSession(id string) error {
 		}
 		return fmt.Errorf("load session: %w", err)
 	}
+	// #2741: the busy guard at the top of LoadSession is one-shot — a run
+	// started during the disk-IO window above (cleanupEphemeralSession,
+	// session-lock acquire, store load) via IM/cron auto-injection leaves
+	// b.cancel set here. Installing the loaded session now would strand the
+	// still-draining run against the wrong session: LoadSession never bumped
+	// runGeneration, so emitIfCurrent lets the old session's stream events
+	// pollute the new session's liveHistory/frontend, and run_done fires
+	// against the new turn. Mirror ClearCurrentSession (#550 E1): re-check
+	// under the lock and refuse the load while a run is active.
+	b.mu.Lock()
+	busy = b.cancel != nil
+	b.mu.Unlock()
+	if busy {
+		b.mu.Lock()
+		ours := b.sessionLock == lock
+		if ours {
+			b.sessionLock = nil
+		}
+		b.mu.Unlock()
+		if ours {
+			lock.Release()
+		}
+		return fmt.Errorf("session switch while agent is running")
+	}
+	// #489-style: bump before installing so a run that raced through the
+	// residual window (started after the re-check, before setSessionState)
+	// is superseded — its late events/run_done self-drop while its persists
+	// keep routing to the captured runSes snapshot (#270). No bump on the
+	// refuse path above: that run stays current for the session it belongs
+	// to and must keep emitting normally.
+	b.mu.Lock()
+	b.runGeneration++
+	b.mu.Unlock()
 	b.ResetAgent()
 	b.setSessionState(state)
 	if err := b.InitAgent(context.Background()); err != nil {
