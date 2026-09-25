@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
+	"github.com/dop251/goja"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/safego"
 )
 
 // subquery.go implements Recursive Language Model (RLM) sub-queries for the
@@ -102,4 +106,67 @@ func subQueryTruncateContext(s string, max int) string {
 	}
 	return truncateSandboxText(s, max) +
 		fmt.Sprintf("\n[context truncated: %d bytes total, showing first %d]", len(s), max)
+}
+
+// injectSubQueryTool wires tools.subquery into the sandbox tools object.
+// Call only when c.SubQueryFn != nil. subQueries/toolCalls/toolCallsMu are
+// the run-scoped bookkeeping owned by runCode; each call validates args,
+// enforces maxSubQueriesPerRun, composes the isolated prompt, and runs the
+// LLM call on its own goroutine so a slow provider cannot block the VM past
+// the exec deadline (same select pattern as sandboxed tool calls).
+func (c *CodeExecution) injectSubQueryTool(toolsObj *goja.Object, vm *goja.Runtime, ctx context.Context, subQueries *int, toolCalls *[]string, toolCallsMu *sync.Mutex) {
+	toolsObj.Set("subquery", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 2 || goja.IsUndefined(call.Arguments[0]) || goja.IsNull(call.Arguments[0]) ||
+			goja.IsUndefined(call.Arguments[1]) || goja.IsNull(call.Arguments[1]) {
+			return rejectPromise(vm, fmt.Errorf("subquery requires (prompt, context) string arguments"))
+		}
+		task := call.Arguments[0].ToString().String()
+		ctxText := call.Arguments[1].ToString().String()
+		if strings.TrimSpace(task) == "" {
+			return rejectPromise(vm, fmt.Errorf("subquery prompt is empty"))
+		}
+		if strings.TrimSpace(ctxText) == "" {
+			return rejectPromise(vm, fmt.Errorf("subquery context is empty - pass the snippet to analyze"))
+		}
+		toolCallsMu.Lock()
+		if *subQueries >= maxSubQueriesPerRun {
+			toolCallsMu.Unlock()
+			return rejectPromise(vm, fmt.Errorf("subquery budget exceeded: at most %d sub-LLM calls per code_execution run (decompose further in JS instead)", maxSubQueriesPerRun))
+		}
+		*subQueries++
+		n := *subQueries
+		toolCallsMu.Unlock()
+
+		prompt := buildSubQueryPrompt(
+			truncateSandboxText(task, maxSubQueryPromptBytes),
+			subQueryTruncateContext(ctxText, maxSubQueryContextBytes))
+		debug.Log("ptc", "subquery #%d: task=%dB ctx=%dB", n, len(task), len(ctxText))
+
+		type sqOutcome struct {
+			answer string
+			err    error
+		}
+		done := make(chan sqOutcome, 1)
+		safego.Go("code_execution.subquery", func() {
+			ans, err := c.SubQueryFn(ctx, prompt)
+			done <- sqOutcome{answer: ans, err: err}
+		})
+		select {
+		case oc := <-done:
+			toolCallsMu.Lock()
+			if oc.err != nil {
+				*toolCalls = append(*toolCalls, fmt.Sprintf("subquery#%d -> error: %v", n, oc.err))
+				toolCallsMu.Unlock()
+				return rejectPromise(vm, fmt.Errorf("subquery failed: %v", oc.err))
+			}
+			*toolCalls = append(*toolCalls, fmt.Sprintf("subquery#%d", n))
+			toolCallsMu.Unlock()
+			return resolvePromise(vm, oc.answer)
+		case <-ctx.Done():
+			toolCallsMu.Lock()
+			*toolCalls = append(*toolCalls, fmt.Sprintf("subquery#%d -> timeout", n))
+			toolCallsMu.Unlock()
+			return rejectPromise(vm, fmt.Errorf("subquery timed out after %v", codeExecTimeout))
+		}
+	})
 }
