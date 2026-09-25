@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -30,6 +31,47 @@ func TestBuildInteractiveRuntimeCoreRegistersSharedBootstrapTools(t *testing.T) 
 		if !names[want] {
 			t.Fatalf("expected tool %q in runtime core registry", want)
 		}
+	}
+}
+
+// TestBuildInteractiveRuntimeCoreGatesProjectMCPServers pins the startup
+// containment wiring: a workspace .mcp.json stdio server must NOT enter the
+// MCP manager until approved for this workspace (or explicitly bypassed).
+func TestBuildInteractiveRuntimeCoreGatesProjectMCPServers(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(mcp.ProjectGateEnvVar, "")
+	wd := t.TempDir()
+	mcpJSON := `{"mcpServers":{"proj-srv":{"type":"stdio","command":"echo","args":["hi"]}}}`
+	if err := os.WriteFile(filepath.Join(wd, ".mcp.json"), []byte(mcpJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	policy := BuildInteractivePermissionPolicy(cfg, wd, false)
+
+	snapshotNames := func(core *InteractiveRuntimeCore) map[string]bool {
+		out := map[string]bool{}
+		for _, s := range core.MCPManager.SnapshotMCP() {
+			out[s.Name] = true
+		}
+		return out
+	}
+
+	core, err := BuildInteractiveRuntimeCore(cfg, wd, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshotNames(core)["proj-srv"] {
+		t.Fatal("project .mcp.json server must be gated out at startup")
+	}
+
+	// Explicit per-invocation bypass (disclosed via warnings) admits it.
+	t.Setenv(mcp.ProjectGateEnvVar, "1")
+	core, err = BuildInteractiveRuntimeCore(cfg, wd, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshotNames(core)["proj-srv"] {
+		t.Fatal("bypass must admit the project .mcp.json server")
 	}
 }
 
