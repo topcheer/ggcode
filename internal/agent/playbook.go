@@ -117,20 +117,28 @@ func (pb *Playbook) save() {
 // classifyTaskType determines the task category from the user prompt.
 // Order matters: more specific categories are checked first to avoid
 // misclassification (e.g., "add test" should be "test" not "feature").
+// Keywords are matched on word boundaries (#2745): bare substring matching
+// classified "upgrade to the latest version" as test (laTEST), "refactor
+// the contest module" as test (conTEST), "address the failing build" as
+// feature (ADDRESS), and "rebuild the parser" as build (REBUILD) - the
+// misclassified type then polluted the persisted playbook fingerprint and
+// system prompt injection. Keywords written with an explicit leading or
+// trailing space (" fail", "make ", "ci ", "new ") already encode their
+// own anchoring and keep the substring behavior.
 func classifyTaskType(userPrompt string) string {
 	p := strings.ToLower(userPrompt)
 	switch {
-	case containsAny(p, "test", "spec", "coverage", "mock"):
+	case containsAnyWord(p, "test", "spec", "coverage", "mock"):
 		return "test"
-	case containsAny(p, "build", "compile", "make ", "ci ", "deploy", "release", "publish"):
+	case containsAnyWord(p, "build", "compile", "make ", "ci ", "deploy", "release", "publish"):
 		return "build"
-	case containsAny(p, "fix", "bug", "error", "crash", "broken", " fail", "panic", "traceback"):
+	case containsAnyWord(p, "fix", "bug", "error", "crash", "broken", " fail", "panic", "traceback"):
 		return "bugfix"
-	case containsAny(p, "refactor", "clean", "rename", "reorganize", "simplify", "extract"):
+	case containsAnyWord(p, "refactor", "clean", "rename", "reorganize", "simplify", "extract"):
 		return "refactor"
-	case containsAny(p, "review", "check", "audit", "inspect", "scan", "analyze"):
+	case containsAnyWord(p, "review", "check", "audit", "inspect", "scan", "analyze"):
 		return "review"
-	case containsAny(p, "add", "implement", "create", "new ", "support"):
+	case containsAnyWord(p, "add", "implement", "create", "new ", "support"):
 		return "feature"
 	default:
 		return "other"
@@ -426,6 +434,45 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+// containsAnyWord matches whole words only (#2745). A keyword containing
+// an explicit space (" fail", "make ", "new ") encodes its own anchoring
+// and falls back to substring matching, preserving the original intent.
+func containsAnyWord(s string, keywords ...string) bool {
+	for _, kw := range keywords {
+		if strings.ContainsAny(kw, " \t") {
+			if strings.Contains(s, kw) {
+				return true
+			}
+			continue
+		}
+		start := 0
+		for {
+			i := strings.Index(s[start:], kw)
+			if i < 0 {
+				break
+			}
+			at := start + i
+			end := at + len(kw)
+			if wordBoundaryAt(s, at) && wordBoundaryAt(s, end) {
+				return true
+			}
+			start = at + 1
+		}
+	}
+	return false
+}
+
+// wordBoundaryAt reports whether position i in s is a word boundary:
+// either string edge, or the neighboring bytes are not word bytes on both
+// sides of the boundary. Reuses isWordByte from success_declare.go
+// (identifier semantics: [a-z0-9_]).
+func wordBoundaryAt(s string, i int) bool {
+	if i <= 0 || i >= len(s) {
+		return true
+	}
+	return !isWordByte(s[i-1]) || !isWordByte(s[i])
 }
 
 func randomID() string {
