@@ -332,17 +332,29 @@ func (pb *Playbook) evict() {
 
 // HintsForPrompt generates brief strategy hints for the system prompt.
 // Returns at most maxHints entries, prioritized by a composite score that
-// considers both frequency and efficiency.
-//
-// Inspired by SICA's utility function (Robeyns et al., arXiv:2504.15228):
-// patterns that lead to faster completion are more valuable than patterns
-// used frequently but slowly. The score combines:
-//   - Frequency weight: more observations = higher confidence
-//   - Efficiency weight: fewer iterations = better strategy
-//
-// This ensures that a pattern observed 3 times at ~5 iterations ranks higher
-// than one observed 5 times at ~50 iterations.
+// considers both frequency and efficiency. Equivalent to HintsForTask with
+// no task-type filtering.
 func (pb *Playbook) HintsForPrompt(maxHints int) string {
+	return pb.HintsForTask(maxHints, "")
+}
+
+// HintsForTask generates brief strategy hints prioritized for the current
+// task type. Entries whose TaskType matches taskType rank first (within
+// each group, ordered by the frequency × efficiency score); remaining slots
+// are backfilled with the best-scoring entries of other task types. An
+// empty taskType preserves the legacy pure-score ordering.
+//
+// Rationale (progressive disclosure, arXiv:2607.17598): the system prompt is
+// a finite context budget, so injected playbooks should spend it on
+// strategies relevant to the current run — a bugfix session should not see
+// feature-building sequences ahead of proven bugfix ones. Self-evolving
+// agent frameworks (MUSE-Autoskill, arXiv:2605.27366; EvolveR) retrieve
+// distilled experience by task relevance rather than global popularity.
+//
+// Score inspiration (SICA, Robeyns et al., arXiv:2504.15228): patterns that
+// lead to faster completion are more valuable than patterns used frequently
+// but slowly.
+func (pb *Playbook) HintsForTask(maxHints int, taskType string) string {
 	if pb == nil {
 		return ""
 	}
@@ -354,14 +366,17 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 		return ""
 	}
 
-	// Sort entries by composite score (descending).
-	// Score = frequency × efficiency, where:
-	//   frequency = min(uses, 10) — cap at 10 to prevent over-weighting
-	//   efficiency = 10 / avgIter — fewer iterations = higher score
-	// This rewards patterns that are both well-observed AND efficient.
+	// Task-matching entries first, then the rest; each group ordered by the
+	// composite score (frequency × efficiency, descending). sort.SliceStable
+	// keeps ties deterministic.
 	sorted := make([]PlaybookEntry, len(pb.entries))
 	copy(sorted, pb.entries)
-	sort.Slice(sorted, func(i, j int) bool {
+	sort.SliceStable(sorted, func(i, j int) bool {
+		mi := taskType != "" && sorted[i].TaskType == taskType
+		mj := taskType != "" && sorted[j].TaskType == taskType
+		if mi != mj {
+			return mi
+		}
 		return playbookScore(sorted[i]) > playbookScore(sorted[j])
 	})
 
@@ -370,7 +385,16 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 	}
 
 	var lines []string
-	lines = append(lines, "## Strategy Playbook (learned from past successes)")
+	header := "## Strategy Playbook (learned from past successes)"
+	if taskType != "" {
+		for _, e := range sorted[:maxHints] {
+			if e.TaskType == taskType {
+				header = fmt.Sprintf("## Strategy Playbook (learned from past successes; leading entries match the current %s task)", taskType)
+				break
+			}
+		}
+	}
+	lines = append(lines, header)
 	for i := 0; i < maxHints; i++ {
 		e := sorted[i]
 		durHint := ""

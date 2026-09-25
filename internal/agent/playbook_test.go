@@ -269,6 +269,67 @@ func TestPlaybookHintsForPrompt(t *testing.T) {
 	}
 }
 
+func TestPlaybookHintsForTaskRelevance(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	// A heavily-used, moderately fast feature pattern (score = min(10,10) ×
+	// 10/10 = 10) and a lightly-used, very fast bugfix pattern (score = 1 ×
+	// 10/3 ≈ 3.33). Pure score favors feature; a bugfix run must still see
+	// the bugfix entry first.
+	for i := 0; i < 10; i++ {
+		pb.Record(&RunStats{
+			ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1},
+			FilesEdited: []string{"main.go"},
+			Success:     true,
+			Iterations:  10,
+			Duration:    2 * time.Minute,
+			UserPrompt:  "add feature one",
+		})
+	}
+	pb.Record(&RunStats{
+		ToolCalls:   map[string]int{"read_file": 1, "edit_file": 1, "run_command": 1},
+		FilesEdited: []string{"fix.go"},
+		Success:     true,
+		Iterations:  3,
+		Duration:    30 * time.Second,
+		UserPrompt:  "fix bug in parser",
+	})
+
+	hints := pb.HintsForTask(5, "bugfix")
+	if !strings.Contains(hints, "current bugfix task") {
+		t.Fatalf("expected task-relevant header, got: %s", hints)
+	}
+	firstHint := ""
+	for _, line := range strings.Split(hints, "\n") {
+		if strings.HasPrefix(line, "- ") {
+			firstHint = line
+			break
+		}
+	}
+	if !strings.HasPrefix(firstHint, "- bugfix") {
+		t.Errorf("expected bugfix entry first despite lower score, got: %s", firstHint)
+	}
+
+	// An unrelated task type keeps legacy pure-score behavior: the feature
+	// entry (higher score) ranks first, and with no match the header stays
+	// the legacy one.
+	other := pb.HintsForTask(1, "review")
+	if strings.Contains(other, "current review task") {
+		t.Errorf("unexpected task-relevant header without matching entries: %s", other)
+	}
+	firstOther := ""
+	for _, line := range strings.Split(other, "\n") {
+		if strings.HasPrefix(line, "- ") {
+			firstOther = line
+			break
+		}
+	}
+	if !strings.HasPrefix(firstOther, "- feature") {
+		t.Errorf("expected feature entry first for unrelated task, got: %s", firstOther)
+	}
+}
+
 func TestPlaybookHintsForPromptMaxEntries(t *testing.T) {
 	dir := t.TempDir()
 	pb := NewPlaybook(dir)

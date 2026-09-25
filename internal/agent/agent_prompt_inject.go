@@ -27,8 +27,10 @@ import (
 // content at the start with its own cache breakpoint maximises KV cache
 // reuse, saving 40-80% of system prompt token costs.
 //
-// This function is called once at the start of each agent Run().
-func (a *Agent) maybeInjectDynamicSystemPrompt() {
+// This function is called once at the start of each agent Run(). userPrompt
+// (the current run's user request) steers task-relevant playbook hint
+// selection; pass "" when unavailable.
+func (a *Agent) maybeInjectDynamicSystemPrompt(userPrompt string) {
 	a.mu.Lock()
 	base := a.baseSystemPrompt
 	fn := a.systemPromptInjector
@@ -90,13 +92,15 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		}
 	}
 
-	// Layer 4: playbook strategy hints (ACE-inspired).
+	// Layer 4: playbook strategy hints (ACE-inspired), prioritized for the
+	// current task type (progressive disclosure, arXiv:2607.17598).
+	taskType := classifyTaskType(userPrompt)
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(3)
+			playbookText := pb.HintsForTask(3, taskType)
 			if playbookText != "" {
 				dynamicParts = append(dynamicParts, playbookText)
-				debug.Log("agent", "Injected playbook strategy hints into system prompt")
+				debug.Log("agent", "Injected playbook strategy hints into system prompt (taskType=%s)", taskType)
 			}
 		}
 	}
