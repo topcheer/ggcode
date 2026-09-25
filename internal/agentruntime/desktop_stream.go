@@ -73,6 +73,9 @@ func HandleDesktopStreamEvent(ev provider.StreamEvent, round *IMRoundState, emit
 		present := toolpkg.DescribeTool(name, rawArgs)
 		inline := toolpkg.FormatToolInline(present.DisplayName, present.Detail)
 		round.NoteToolCall()
+		for _, p := range toolpkg.ExtractEditedFilePaths(name, rawArgs) {
+			round.NoteEditedFile(p)
+		}
 		if emitter != nil {
 			emitter.TriggerTyping()
 		}
@@ -135,6 +138,13 @@ func HandleDesktopStreamEvent(ev provider.StreamEvent, round *IMRoundState, emit
 	case provider.StreamEventDone:
 		if emitter != nil {
 			text := strings.TrimSpace(round.Text())
+			if footer := toolpkg.FormatChangedFilesFooter("", round.FilesEdited); footer != "" {
+				if text != "" {
+					text += "\n\n" + footer
+				} else {
+					text = footer
+				}
+			}
 			if text != "" || round.ToolCalls > 0 {
 				emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 			}

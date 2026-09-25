@@ -1024,6 +1024,12 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			if !isDaemonSkippedTool(toolName) {
 				round.NoteToolCall()
 			}
+			// Transcript-grounded change receipt: record files actually targeted
+			// by write-class tools (OverclaimBench arXiv:2609.20812) so the final
+			// round message can carry evidence that cannot be overclaimed.
+			for _, p := range toolpkg.ExtractEditedFilePaths(toolName, string(event.Tool.Arguments)) {
+				round.NoteEditedFile(p)
+			}
 			// enter_plan_mode: emit description text to IM so users know
 			// planning has started (the result is hidden, so without this
 			// IM users see nothing until exit_plan_mode).
@@ -1109,6 +1115,11 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			// In summary mode, only send the final LLM text
 			// In quiet/verbose mode, always send the text
 			if strings.TrimSpace(text) != "" {
+				// Append the changed-files receipt so IM users (who see only the
+				// final message) get the same evidence the TUI shows after a run.
+				if footer := toolpkg.FormatChangedFilesFooter(b.language, round.FilesEdited); footer != "" {
+					text += "\n\n" + footer
+				}
 				b.emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
 			}
 			// AskUser is already emitted by HandleAskUser when the tool executes;
