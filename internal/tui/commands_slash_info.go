@@ -752,8 +752,14 @@ func (m *Model) handleTagsCommand() tea.Cmd {
 // mid-session; each model's contribution is shown separately.
 // handleRunReportCommand evaluates the current session trajectory offline
 // (no LLM calls) and prints the efficiency scorecard produced by the runeval
-// package.
-func (m *Model) handleRunReportCommand() tea.Cmd {
+// package. Each evaluation is appended to the local JSONL store and compared
+// against the previous recorded run so the user sees a trend line, not an
+// isolated snapshot — a single scorecard cannot answer whether the latest
+// harness/prompt/model change moved trajectory efficiency.
+func (m *Model) handleRunReportCommand(args []string) tea.Cmd {
+	if len(args) > 0 && (args[0] == "history" || args[0] == "--history" || args[0] == "-h") {
+		return m.renderRunReportHistory()
+	}
 	msgs := m.currentSessionMessages()
 	if len(msgs) == 0 {
 		m.chatWriteSystem(nextSystemID(), "No messages to evaluate yet.")
@@ -770,7 +776,44 @@ func (m *Model) handleRunReportCommand() tea.Cmd {
 			usage = append(usage, runeval.UsageSample{Source: e.Source, Usage: e.Usage})
 		}
 	}
-	m.chatWriteSystem(nextSystemID(), runeval.Render(runeval.Evaluate(msgs, usage)))
+	rep := runeval.Evaluate(msgs, usage)
+	out := runeval.Render(rep)
+	if path := runeval.DefaultStorePath(); path != "" {
+		var prev runeval.ReportRecord
+		if hist, err := runeval.LoadHistory(path, 1); err != nil {
+			debug.Log("tui", "runreport load history: %v", err)
+		} else if len(hist) > 0 {
+			prev = hist[len(hist)-1]
+		}
+		sessID := ""
+		if m.session != nil {
+			sessID = m.session.ID
+		}
+		if err := runeval.AppendReport(path, runeval.RecordFromReport(rep, sessID, time.Now())); err != nil {
+			debug.Log("tui", "runreport append: %v", err)
+		}
+		if d := runeval.RenderDelta(rep, prev); d != "" {
+			out += "\n" + d
+		}
+	}
+	m.chatWriteSystem(nextSystemID(), out)
+	return nil
+}
+
+// renderRunReportHistory prints the recorded cross-session run trend.
+func (m *Model) renderRunReportHistory() tea.Cmd {
+	path := runeval.DefaultStorePath()
+	if path == "" {
+		m.chatWriteSystem(nextSystemID(), "Run history unavailable: cannot resolve config directory.")
+		return nil
+	}
+	recs, err := runeval.LoadHistory(path, 0)
+	if err != nil {
+		debug.Log("tui", "runreport history: %v", err)
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Run history unavailable: %v", err))
+		return nil
+	}
+	m.chatWriteSystem(nextSystemID(), runeval.RenderHistory(recs))
 	return nil
 }
 

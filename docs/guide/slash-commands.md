@@ -17,7 +17,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/export [path]` | Export session to file |
 | `/stats` | Open session statistics panel |
 | `/cost` | Show session token usage and estimated cost |
-| `/runreport` | Evaluate this session's trajectory and print an offline efficiency scorecard (wasted calls, duplicate tool calls, error rate, token overhead) |
+| `/runreport` | Evaluate this session's trajectory and print an offline efficiency scorecard (wasted calls, duplicate tool calls, error rate, token overhead). Each evaluation is recorded to `~/.ggcode/runreports.jsonl` and compared against the previous run so you can see whether trajectory efficiency improved or regressed |
 | `/exit` | Exit ggcode |
 | `/restart` | Restart ggcode (preserves current session) |
 | `/update` | Check and install updates |

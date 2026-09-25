@@ -1018,7 +1018,7 @@ func enCatalog(key string) string {
 	case "slash.context":
 		return "Show context window usage breakdown (tokens, messages, capacity)"
 	case "slash.runreport":
-		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
+		return "Evaluate this session's trajectory and print an offline efficiency scorecard with trend vs previous run ('history' lists recorded runs)"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":

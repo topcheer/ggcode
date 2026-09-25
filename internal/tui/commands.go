@@ -545,7 +545,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/redo":
 			return m.handleRedoCommand()
 		case "/runreport":
-			return m.handleRunReportCommand()
+			return m.handleRunReportCommand(parts[1:])
 		case "/context":
 			return m.handleContextCommand()
 		case "/notify":

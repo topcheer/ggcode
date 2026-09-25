@@ -427,7 +427,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/undo":          "Undo last file edit",
 	"/undo-run":      "Revert ALL file changes from the last agent run",
 	"/redo":          "Redo the last undone file edit (re-apply checkpoint)",
-	"/runreport":     "Evaluate this session's trajectory (offline scorecard)",
+	"/runreport":     "Evaluate this session's trajectory (offline scorecard + trend vs previous run; 'history' lists recorded runs)",
 	"/files":         "Show files modified by agent",
 	"/tools":         "List available tools",
 	"/checkpoints":   "List checkpoints",
