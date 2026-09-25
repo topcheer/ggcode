@@ -106,7 +106,8 @@ type Agent struct {
 	onCheckpoint               func(summaryMsgID, lastMsgID string, tokenCount int)
 	lastCheckpointMessageCount int // tracks last fallback checkpoint to avoid spamming
 	onRunResult                runResultHandler
-	onRunHealth                func(error) // run-level health signal (success/failure) for node health reporting
+	onRunHealth                func(error)      // run-level health signal (success/failure) for node health reporting
+	onRiskNotice               func(RiskNotice) // user-facing risk nudge channel (see risk_notice.go)
 
 	// autoVerify enables the post-loop build/test verification pass.
 	// Default false: the system prompt already mandates in-loop verification
@@ -3183,6 +3184,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.irrevGate != nil {
 			for _, tc := range toolCalls {
 				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
+					tier := irrevClassifyTool(tc.Name, string(tc.Arguments))
+					a.emitRiskNotice(RiskNotice{
+						Source: "irreversibility-gate",
+						Tool:   tc.Name,
+						Tier:   tier,
+						Detail: "under-grounded " + irrevTierName(tier) + "-impact action (verify-before-act advisory injected)",
+					})
 					a.contextManager.Add(provider.Message{
 						Role:    "user",
 						Content: []provider.ContentBlock{{Type: "text", Text: warn}},

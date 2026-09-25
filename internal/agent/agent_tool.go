@@ -69,6 +69,12 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 
 		switch decision {
 		case permission.Deny:
+			a.emitRiskNotice(RiskNotice{
+				Source: "permission-policy",
+				Tool:   tc.Name,
+				Mode:   policy.Mode().String(),
+				Detail: "denied by permission policy",
+			})
 			return tool.Result{
 				Content: a.permissionDeniedMessage(tc.Name),
 				IsError: true,

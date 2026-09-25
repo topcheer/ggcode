@@ -176,6 +176,9 @@ func (r *REPL) RegisterCallbacks() {
 	r.agent.SetToolProgressCallback(func(toolID, toolName, output string) {
 		coalesce.stage(toolID, toolName, output)
 	})
+	r.agent.SetRiskNoticeHandler(func(n agent.RiskNotice) {
+		r.sendProgramMsgs(riskNoticeMsg{notice: n})
+	})
 	safego.Go("tui.toolProgressCoalescer", coalesce.run)
 }
 
