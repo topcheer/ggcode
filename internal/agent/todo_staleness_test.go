@@ -155,3 +155,41 @@ func TestParseTodoCount(t *testing.T) {
 		t.Errorf("expected 0 for missing field, got %d", count)
 	}
 }
+
+// r78: task board activity must feed the same staleness state machine.
+func TestTodoStaleness_BoardUpdate(t *testing.T) {
+	s := newTodoStalenessState()
+
+	// Board-only activity: quick checks in shouldRemind gate on hasTodos,
+	// but recordBoardUpdate must refresh the recency clock and set boardSync.
+	s.recordBoardUpdate(4)
+	if s.lastUpdateIter != 4 || !s.boardSync {
+		t.Errorf("expected lastUpdateIter=4, boardSync=true; got iter=%d, board=%v", s.lastUpdateIter, s.boardSync)
+	}
+	if s.hasTodos {
+		t.Error("board update must not set hasTodos")
+	}
+
+	// Board activity clears the active reminder like a todo_write does.
+	s.reminderActive = true
+	s.recordBoardUpdate(9)
+	if s.reminderActive {
+		t.Error("recordBoardUpdate should clear reminderActive")
+	}
+
+	// reset must clear boardSync too.
+	s.reset()
+	if s.boardSync {
+		t.Error("reset should clear boardSync")
+	}
+}
+
+func TestStaleTaskBoardReminderText(t *testing.T) {
+	text := staleTaskBoardReminderText(2, 6, 12)
+	if !strings.Contains(text, "12 iterations") ||
+		!strings.Contains(text, "2 of 6") ||
+		!strings.Contains(text, "task_update") ||
+		!strings.Contains(text, "task_list") {
+		t.Errorf("board reminder missing key info: %s", text)
+	}
+}

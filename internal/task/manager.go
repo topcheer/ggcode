@@ -440,6 +440,27 @@ func (m *Manager) wouldCreateCycleVirtual(extraBlockedBy map[string][]string, st
 	return check(start)
 }
 
+// SplitBlockers partitions a task's BlockedBy list into still-open and
+// already-completed blocker IDs. r78 plan-graph integrity: task_list used to
+// render "(blocked by task-1, task-2)" regardless of blocker status, so after
+// every blocker finished the task still LOOKED blocked - agents would wait on
+// or skip an actually-ready task (the "subtle misalignment in task
+// interpretation" failure mode from verification-aware-planning research).
+// Dangling/unknown blocker IDs count as open defensively.
+func (m *Manager) SplitBlockers(t Task) (open, done []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, id := range t.BlockedBy {
+		if bt, ok := m.tasks[id]; ok && bt.Status == StatusCompleted {
+			done = append(done, id)
+		} else {
+			open = append(open, id)
+		}
+	}
+	return open, done
+}
+
 func contains(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {

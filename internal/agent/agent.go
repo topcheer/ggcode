@@ -3375,6 +3375,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.appendGuidance(&result, hint)
 				}
 			}
+			// r78: task_create/task_update are plan-sync signals feeding the
+			// SAME staleness detector as todo_write (consolidation, not a new
+			// detector): board activity refreshes the recency clock.
+			if (tc.Name == "task_create" || tc.Name == "task_update") && !result.IsError {
+				a.recordTaskBoardSync(i + 1)
+			}
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
 			// stale. Clear the cache to prevent serving outdated content.

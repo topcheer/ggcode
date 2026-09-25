@@ -213,7 +213,21 @@ func (t TaskListTool) Execute(_ context.Context, _ json.RawMessage) (Result, err
 		}
 		blockedBy := ""
 		if len(tk.BlockedBy) > 0 {
-			blockedBy = fmt.Sprintf(" (blocked by %s)", strings.Join(tk.BlockedBy, ", "))
+			// r78 plan-graph integrity: "(blocked by X, Y)" used to ignore
+			// blocker completion, so a task whose blockers had ALL finished
+			// still rendered as blocked - agents would wait on or skip an
+			// actually-ready task. Distinguish open vs completed blockers.
+			open, done := t.Manager.SplitBlockers(tk)
+			switch {
+			case len(open) == 0:
+				blockedBy = fmt.Sprintf(" (ready: blockers %s completed)", strings.Join(done, ", "))
+			default:
+				blockedBy = fmt.Sprintf(" (blocked by %s", strings.Join(open, ", "))
+				if len(done) > 0 {
+					blockedBy += fmt.Sprintf("; %s already done", strings.Join(done, ", "))
+				}
+				blockedBy += ")"
+			}
 		}
 		fmt.Fprintf(&sb, "- %s [%s] %s%s\n", tk.ID, status, tk.Subject, blockedBy)
 	}

@@ -66,6 +66,83 @@ func TestTaskCreate_MissingSubject(t *testing.T) {
 	}
 }
 
+// r78 plan-graph integrity: task_list must reflect blocker completion state,
+// not render "(blocked by ...)" forever after every blocker finished.
+func TestTaskList_BlockerCompletionState(t *testing.T) {
+	mgr := task.NewManager()
+	create := TaskCreateTool{Manager: mgr}
+	update := TaskUpdateTool{Manager: mgr}
+	mk := func(subject string) string {
+		input, _ := json.Marshal(map[string]interface{}{
+			"subject": subject, "description": "d",
+		})
+		res, err := create.Execute(context.Background(), input)
+		if err != nil || res.IsError {
+			t.Fatalf("create %s failed: %v %s", subject, err, res.Content)
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal([]byte(res.Content), &created); err != nil {
+			t.Fatal(err)
+		}
+		return created.ID
+	}
+
+	blockerA := mk("blocker A")
+	blockerB := mk("blocker B")
+	mk("blocked leaf")
+	// leaf blocked by A and B
+	leaf := mgr.List()
+	var leafID string
+	for _, tk := range leaf {
+		if tk.Subject == "blocked leaf" {
+			leafID = tk.ID
+		}
+	}
+	upd, _ := json.Marshal(map[string]interface{}{"taskId": leafID, "addBlockedBy": []string{blockerA, blockerB}})
+	if res, err := update.Execute(context.Background(), upd); err != nil || res.IsError {
+		t.Fatalf("link deps failed: %v %s", err, res.Content)
+	}
+
+	tl := TaskListTool{Manager: mgr}
+	out := func() string {
+		res, err := tl.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Content
+	}
+
+	// Both blockers open: plain blocked rendering, no ready/done noise.
+	got := out()
+	if !strings.Contains(got, "(blocked by "+blockerA+", "+blockerB+")") {
+		t.Errorf("expected plain blocked rendering, got: %s", got)
+	}
+
+	// Complete A: leaf shows remaining open blocker + done annotation.
+	completed := task.StatusCompleted
+	if _, err := mgr.Update(blockerA, task.UpdateOptions{Status: &completed}); err != nil {
+		t.Fatal(err)
+	}
+	got = out()
+	if !strings.Contains(got, "(blocked by "+blockerB+"; "+blockerA+" already done)") {
+		t.Errorf("expected mixed blocker rendering, got: %s", got)
+	}
+
+	// Complete B: leaf becomes ready, no stale "(blocked by ...)" remains.
+	if _, err := mgr.Update(blockerB, task.UpdateOptions{Status: &completed}); err != nil {
+		t.Fatal(err)
+	}
+	got = out()
+	if strings.Contains(got, "blocked by") {
+		t.Errorf("completed blockers must not render as blocked, got: %s", got)
+	}
+	if !strings.Contains(got, "(ready: blockers "+blockerA+", "+blockerB+" completed)") {
+		t.Errorf("expected ready annotation, got: %s", got)
+	}
+}
+
 func TestTaskList_Basic(t *testing.T) {
 	mgr := task.NewManager()
 	tk := TaskCreateTool{Manager: mgr}
