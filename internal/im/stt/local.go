@@ -60,7 +60,12 @@ type LocalWhisper struct {
 	available         bool
 	checked           bool
 	unavailableReason string
-	mu                sync.Mutex
+	// downloadedModels tracks openai-whisper models whose one-time
+	// download has already landed (#2738): once observed (successful
+	// transcription, or the model file already in ~/.cache/whisper),
+	// subsequent transcriptions fall back to the tight 10-minute bound.
+	downloadedModels map[string]bool
+	mu               sync.Mutex
 }
 
 // NewLocalWhisper creates a local whisper transcriber.
@@ -123,8 +128,13 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 	// bound; the openai flavor gets a one-time-wider bound to let the
 	// download land. The model is cached after the first success, so the
 	// wider bound is paid at most once per model.
+	// #2738: "one-time" is now enforced, not just promised by this
+	// comment: once a model's download has landed (observed by a prior
+	// successful transcription, or probed in ~/.cache/whisper), later
+	// transcriptions take the tight bound. Without this, a cached-model
+	// wedge held the Telegram pump for 60 minutes instead of 10.
 	bound := 10 * time.Minute
-	if w.flavor == flavorOpenAI {
+	if w.flavor == flavorOpenAI && !w.modelDownloaded(modelUsed) {
 		bound = 60 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(ctx, bound)
@@ -136,6 +146,12 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
 		return Result{}, fmt.Errorf("local whisper: execution failed (binary %q, flavor %s): %w", w.binPath, w.flavorName(), err)
+	}
+	// #2738: a successful run proves the model download has landed
+	// (openai-whisper caches it under ~/.cache/whisper before transcribing)
+	// - later runs of the same model take the tight bound.
+	if w.flavor == flavorOpenAI {
+		w.markModelDownloaded(modelUsed)
 	}
 
 	// Both flavors write <outdir>/<audiobase>.txt: openai-whisper because
@@ -155,6 +171,40 @@ func (w *LocalWhisper) Transcribe(ctx context.Context, req Request) (Result, err
 		Provider: "whisper-local",
 		Model:    modelUsed,
 	}, nil
+}
+
+// modelDownloaded reports whether the openai-whisper model's one-time
+// download has already landed (#2738). First consults the in-process
+// observation set (a prior successful transcription), then falls back to
+// probing openai-whisper's default cache dir (~/.cache/whisper/<model>.pt)
+// so a daemon restart immediately gets the tight bound too.
+func (w *LocalWhisper) modelDownloaded(model string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.downloadedModels[model] {
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if _, err := os.Stat(filepath.Join(home, ".cache", "whisper", model+".pt")); err == nil {
+			if w.downloadedModels == nil {
+				w.downloadedModels = map[string]bool{}
+			}
+			w.downloadedModels[model] = true
+			return true
+		}
+	}
+	return false
+}
+
+// markModelDownloaded records that the model's download has landed, proven
+// by a successful transcription run (#2738).
+func (w *LocalWhisper) markModelDownloaded(model string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.downloadedModels == nil {
+		w.downloadedModels = map[string]bool{}
+	}
+	w.downloadedModels[model] = true
 }
 
 // openaiArgs builds the Python openai-whisper CLI command line.
