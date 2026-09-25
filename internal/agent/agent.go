@@ -370,6 +370,9 @@ type modeAwarePolicy interface {
 
 // NewAgent creates a new agent with optional permission policy.
 func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, maxIter int) *Agent {
+	// Route edit_file match-failure repair through this session's provider
+	// (no-op when p is nil; see edit_fixer.go).
+	wireEditFixer(p)
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &Agent{
 		provider:               p,

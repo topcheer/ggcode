@@ -20,7 +20,7 @@ func (t EditFile) Description() string {
 	return "Edit a file by replacing old_text with new_text. " +
 		"ALWAYS read_file first. Copy the numbered lines from read_file output directly into old_text as anchors. " +
 		"Without anchors, old_text must match byte-for-byte (indentation, line endings) and be unique in the file. " +
-		"On failure, the error shows hints (indent style, near-matches, line numbers) — adjust and retry. " +
+		"On failure, the error shows hints (indent style, near-matches, line numbers) - adjust and retry. " +
 		"For multiple edits to the same file, prefer multi_edit_file."
 }
 
@@ -101,6 +101,21 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	content := string(data)
 
 	mr := resolveOldText(content, args.OldText)
+	fixNote := ""
+	if mr.canonical == "" {
+		// All deterministic fallbacks missed. Before bouncing the whole
+		// re-read-and-retry burden back to the main loop, give the optional
+		// edit-fixer one gated shot at correcting old_text (arXiv 2609.00006
+		// "LLM edit-fixer" pattern). The corrected text re-enters the exact
+		// same resolve + uniqueness gates below - it gets no shortcut.
+		if corrected := tryFixOldText(ctx, args.FilePath, content, args.OldText, args.NewText); corrected != "" {
+			if mr2 := resolveOldText(content, corrected); mr2.canonical != "" {
+				args.OldText = corrected
+				mr = mr2
+				fixNote = " (old_text auto-corrected by edit-fixer)"
+			}
+		}
+	}
 	if mr.canonical == "" {
 		hint := diagnoseMatchFailure(content, args.OldText)
 		msg := "old_text not found in file"
@@ -123,7 +138,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 		if count <= 1 {
 			if loose, looseLines := lenientRecount(content, args.OldText, mr); loose > 1 {
 				msg := fmt.Sprintf(
-					"old_text matched %d times in file under whitespace-tolerant matching (match used transform %q) — must be unique. The repeated blocks differ only in whitespace. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence.",
+					"old_text matched %d times in file under whitespace-tolerant matching (match used transform %q) - must be unique. The repeated blocks differ only in whitespace. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence.",
 					loose, mr.transform,
 				)
 				if len(looseLines) > 0 {
@@ -136,7 +151,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	if !args.ReplaceAll && count > 1 && !mr.anchored {
 		lines := findMatchLineNumbers(content, oldText)
 		msg := fmt.Sprintf(
-			"old_text found %d times in file — must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence.",
+			"old_text found %d times in file - must be unique. Add 1-3 lines of surrounding context to disambiguate, copy the exact numbered lines from read_file to anchor the intended occurrence, or set replace_all=true to replace every occurrence.",
 			count,
 		)
 		if len(lines) > 0 {
@@ -192,7 +207,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	writeData := []byte(newContent)
 	writeData, fmtChanged := formatGoBytes(args.FilePath, writeData)
 	if err := atomicWriteFile(args.FilePath, writeData, 0644); err != nil {
-		// #824: the write failed — the file on disk is unchanged, so the
+		// #824: the write failed - the file on disk is unchanged, so the
 		// baseline captured above must not survive (its own comment: "used
 		// when an edit is skipped or fails"). A stale baseline misattributes
 		// diagnostics on later edits.
@@ -209,6 +224,7 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	} else {
 		msg = fmt.Sprintf("Replaced 1 occurrence in %s: %d lines -> %d lines", args.FilePath, oldLines, newLines)
 	}
+	msg += fixNote
 	if fmtChanged {
 		msg += " (auto-formatted)"
 	}
@@ -391,14 +407,14 @@ func diagnoseMatchFailure(content, oldText string) string {
 
 	// Check for CRLF vs LF
 	if strings.Contains(content, "\r\n") && !strings.Contains(oldText, "\r\n") {
-		hints = append(hints, "file uses CRLF line endings — re-read the file to get exact content")
+		hints = append(hints, "file uses CRLF line endings - re-read the file to get exact content")
 	}
 
 	// Check for tab/space mismatch
 	if fileHasTabs && !oldHasTabs && oldHasLeadingSpaces {
-		hints = append(hints, "file uses tab indentation — use \\t in old_text")
+		hints = append(hints, "file uses tab indentation - use \\t in old_text")
 	} else if !fileHasTabs && oldHasTabs && fileIndentSpaces > 0 {
-		hints = append(hints, "file uses space indentation — remove \\t from old_text")
+		hints = append(hints, "file uses space indentation - remove \\t from old_text")
 	}
 
 	// Try to find the nearest matching lines in the full file.
