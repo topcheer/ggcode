@@ -339,7 +339,6 @@ type Agent struct {
 	taintInfluence           *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
 	falsePremise             *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline             *perfBaselineState                    // cross-session performance regression detection
-	heterogeneousModel       *heterogeneousModelState              // FinOps: heterogeneous model selection guidance (sa-131)
 	lastRunStats             *RunStats                             // stats from the most recent run (for post-run summary display)
 	qualityScorer            *ResponseQualityScorer                // per-run response quality scoring for provider/model A/B comparison
 	systemPromptInjector     func() string                         // returns extra system prompt text to inject (e.g. lanchat peer warnings)
@@ -463,7 +462,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolEquivDetect:        newToolEquivDetectState(),
 		bgOrphan:               newBgOrphanState(),
 		actionAnnihil:          newActionAnnihilateState(),
-		heterogeneousModel:     newHeterogeneousModelState(),
 		exploreFrag:            newExploreFragState(),
 		batchCoupling:          newBatchCouplingState(),
 		buildIdempot:           newBuildIdempotencyState(),
@@ -1377,11 +1375,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.buildIdempot.reset()
 	a.orphanFile.reset()
 	a.cfDep.reset()
-	// #1466-A: the per-run reset block's own #677 note lists the
-	// same-family misses it fixed - heterogeneousModel was missed too:
-	// hmMaxWarns=1 burned in run 1 kept the detector silent for every
-	// later run of the Agent's lifetime.
-	a.heterogeneousModel.reset()
 	// #1843 case 1: foresightCalib.reset() was never called outside
 	// compaction - "at most 2 per run" (file-header promise) was in fact
 	// per-LIFETIME: mismatches and warnCount accumulated across every
@@ -3904,12 +3897,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Query convergence tracking: record search queries and code
 			// actions to detect repeated similar searches without progress.
 			a.queryConverge.recordToolCall(tc.Name, string(tc.Arguments), i+1)
-			// cost-effective model tier selection. Detects execution-heavy
-			// patterns and suggests using cheaper models for routine work.
-			// Research basis: 2025-2026 AI Agent trends (Deloitte, Machine Learning Mastery)
-			if hmGuidance := a.heterogeneousModel.recordToolCall(tc.Name, i+1); hmGuidance != "" {
-				a.appendGuidance(&result, hmGuidance)
-			}
 			// Plan drift capture: when exit_plan_mode fires, extract plan items
 			// for later drift detection (spec-driven development tracking).
 			if tc.Name == "exit_plan_mode" {
