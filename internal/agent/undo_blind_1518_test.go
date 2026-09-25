@@ -33,10 +33,12 @@ func Test1518UndoBlindCharterScenario(t *testing.T) {
 	if !s3.pendingUndoFiles["*"] {
 		t.Fatal("pathless git_show must not clear the wildcard")
 	}
-	// But a real file-bearing read does.
+	// #2772 semantic tightening: a file-bearing read does NOT clear the
+	// wildcard either (reading one file is not re-grounding the tree);
+	// only the mutation branch consuming it clears the tree-wide guard.
 	s3.recordToolCall("read_file", []byte(`{"path":"/w/a.go"}`))
-	if s3.pendingUndoFiles["*"] {
-		t.Fatal("file-bearing read must clear the wildcard")
+	if !s3.pendingUndoFiles["*"] {
+		t.Fatal("file-bearing read must not clear the wildcard (#2772)")
 	}
 }
 

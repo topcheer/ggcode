@@ -127,16 +127,13 @@ func (s *undoBlindState) recordToolCall(toolName string, argsJSON []byte) string
 		if fp != "" {
 			delete(s.pendingUndoFiles, fp)
 		}
-		// #1518 case D2: the wildcard used to be cleared by ANY read -
-		// including git_show/git_diff with no path arg (fp==""). The
-		// comment called that "conservative" but it is the opposite: an
-		// unrelated read silently disarmed the whole-tree guard, and the
-		// next blind edit went unwarned. Only a read that actually carries
-		// a file path (i.e. a real re-grounding of a specific file) clears
-		// the wildcard; the mutation-side warning still consumes it.
-		if fp != "" {
-			delete(s.pendingUndoFiles, "*")
-		}
+		// #1518 case D2 + #2772: the wildcard used to be cleared by ANY read.
+		// #1518 stopped no-path reads from clearing it; #2772 closes the
+		// residual hole - a single path-carrying read (even of a file
+		// unrelated to the revert) is NOT a re-grounding of the whole tree.
+		// Reading one file is not re-reading every affected file, so nothing on
+		// the read side may clear the wildcard anymore; only the mutation
+		// branch consuming it (with its warning) clears the tree-wide guard.
 		return ""
 	}
 
