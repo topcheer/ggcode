@@ -51,6 +51,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"reflectionFunc":       "optional reflection callback, injected via setter",
 		"diffConfirm":          "optional diff confirm callback, injected via setter",
 		"policy":               "permission policy interface, injected via SetPermissionPolicy",
+		"utilityProvider":      "auxiliary-workload provider (utility model routing), injected via SetUtilityProvider; nil = auxiliary work runs on the primary provider",
 		"lastRunStats":         "populated only after a run completes",
 		"perfBaseline":         "loaded lazily from disk on first access (guarded)",
 		"guidancePromoter":     "loaded lazily from rule store (guarded)",
