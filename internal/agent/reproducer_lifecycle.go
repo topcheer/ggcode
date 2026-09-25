@@ -39,7 +39,9 @@ package agent
 //     "reproduce", "reproducer", "repro script", "demonstrate the error")
 //   - Phase 2 (EDIT): detects when the agent edits source files AFTER a
 //     reproducer has been established
-//   - Phase 3 (RERUN): detects when the agent re-runs a command after the edit
+//   - Phase 3 (RERUN): detects when the agent re-runs a script-shaped
+//     command after the edit (#2752: bare tool-name matching let any
+//     run_command -- "git diff", "ls" -- silently clear the defense)
 //   - If we reach EDIT but never RERUN before the run ends, inject guidance
 //   - Zero LLM cost -- pure deterministic state machine
 //   - Fires at most once per run (advisory, non-blocking)
@@ -57,9 +59,11 @@ import (
 const (
 	reproLifecycleMaxWarnings = 1 // max warnings per run
 
-	// reproducerFertilityWindow: how many iterations after a reproducer run
-	// we consider the agent "in the edit phase" and expect a re-run.
-	reproducerFertilityWindow = 8
+	// reproducerRerunGrace: iterations to wait after a post-reproducer
+	// edit before warning, giving the agent a chance to re-run the
+	// reproducer. Replaces the never-referenced reproducerFertilityWindow=8
+	// whose "edit phase window" concept was never implemented (#2752).
+	reproducerRerunGrace = 2
 )
 
 // reproducerLifecycleState tracks the reproduce->edit->rerun lifecycle.
@@ -157,9 +161,14 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 			}
 		}
 
-		// Phase 3: detect re-run after edit.
+		// Phase 3: detect re-run after edit. The command itself must look
+		// like a reproducer invocation (#2752): bare tool-name matching
+		// counted "git diff"/"ls" as a re-run and silently disabled the
+		// detector for the top SWE-bench failure mode. We reuse the Phase 1
+		// script-shape predicate so "what counts as a reproducer run" is
+		// defined by one regex in both directions.
 		if s.editedAfterReproducer && !s.reranAfterEdit {
-			if reproducerRunToolNames[tn] {
+			if reproducerRunToolNames[tn] && reproducerCommandRe.MatchString(inp) {
 				s.reranAfterEdit = true
 				debug.Log("agent", "reproducer-lifecycle: re-run after edit at iter %d", iteration)
 			}
@@ -190,11 +199,11 @@ func (s *reproducerLifecycleState) checkIncomplete(iteration int) string {
 		return ""
 	}
 	// Only warn if: reproducer established, code edited after, NOT re-run,
-	// and we're past the fertility window from the edit.
+	// and we're past the grace period from the edit.
 	if !s.hasReproducer || !s.editedAfterReproducer || s.reranAfterEdit {
 		return ""
 	}
-	if iteration-s.editIteration < 2 {
+	if iteration-s.editIteration < reproducerRerunGrace {
 		return "" // give the agent a chance to re-run
 	}
 
