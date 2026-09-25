@@ -313,13 +313,15 @@ func (s *toolTargetState) checkMismatch(statedTargets []statedTarget, actualTarg
 }
 
 // normalizePathTarget normalizes a target string for comparison.
+// No length truncation here (#2769): targets are compared, not displayed, and
+// a tail cut at 60 chars sliced off basenames of longer paths - the basename
+// and boundaryContains branches in targetsMatch both died, flagging perfectly
+// aligned intent/action as mismatch. Display-side truncation is handled
+// separately by the excerpt logic above.
 func normalizePathTarget(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "\"'`")
 	s = strings.ToLower(s)
-	if len(s) > 60 {
-		s = s[:60]
-	}
 	return s
 }
 
