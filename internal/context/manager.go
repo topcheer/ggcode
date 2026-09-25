@@ -166,6 +166,7 @@ type Manager struct {
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
 	toolDefinitionOverhead   int                        // tokens reserved for tool definitions (set by Agent)
 	pinned                   *PinnedContext             // user-pinned context that survives compaction
+	postCompactNoteFn        func() string              // optional: non-empty return is re-injected as a system note after every compaction
 	lastLoggedReserve        int                        // last logged effectiveOutputReserve value (suppress duplicate logs)
 	lastLoggedThreshold      int                        // last logged autoCompactThreshold value (suppress duplicate logs)
 	// #663: attribution for message removals. When ApplyCompactResult rejects
@@ -257,6 +258,69 @@ func (m *Manager) injectPinnedAfterCompaction() {
 	m.messages[insertIdx] = pinnedMsg
 
 	debug.Log("ctx", "injectPinnedAfterCompaction: injected %d pinned items at position %d", len(m.pinned.List()), insertIdx)
+}
+
+// SetPostCompactNoteProvider registers an optional callback invoked after
+// every successful compaction (both the ApplyCompactResult and the direct
+// Summarize paths). Its non-empty return value is injected as a durable
+// system note right after the compaction summary, mirroring the
+// pinned-context contract: state the model must see after compaction is
+// re-materialized rather than entrusted to the summary. A nil provider
+// (the default) or an empty return disables the note. Used by the agent to
+// rehydrate the live task board after compaction.
+func (m *Manager) SetPostCompactNoteProvider(fn func() string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.postCompactNoteFn = fn
+}
+
+// postCompactNoteMarker identifies the injected state note so a stale copy
+// from a previous compaction cycle can be replaced.
+const postCompactNoteMarker = "[Session State Note - refreshed after compaction]"
+
+// injectPostCompactNoteAfterCompaction re-materializes the registered
+// post-compaction note (e.g. the live task board) right after the summary.
+// Without it, structured task state lives only in tool_results that the
+// summary compresses away, leaving the model with no signal that pending
+// work exists or that task IDs remain usable.
+//
+// Must be called with m.mu held.
+func (m *Manager) injectPostCompactNoteAfterCompaction() {
+	// Replace any stale note from a previous compaction cycle.
+	m.removeSystemMessageByMarker(postCompactNoteMarker)
+
+	if m.postCompactNoteFn == nil {
+		return
+	}
+	note := strings.TrimSpace(m.postCompactNoteFn())
+	if note == "" {
+		return
+	}
+
+	noteMsg := provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: postCompactNoteMarker + "\n" + note},
+		},
+	}
+	noteMsg.ID = newMessageID()
+
+	// Insert right after the compaction summary (same positioning as the
+	// pinned-context message), or after the first system message as fallback.
+	insertIdx := m.findSystemMessageIdx("[Previous conversation summary]")
+	if insertIdx >= 0 {
+		insertIdx++ // after the summary
+	} else if len(m.messages) > 0 && m.messages[0].Role == "system" {
+		insertIdx = 1
+	} else {
+		insertIdx = 0
+	}
+
+	m.messages = append(m.messages, provider.Message{})
+	copy(m.messages[insertIdx+1:], m.messages[insertIdx:])
+	m.messages[insertIdx] = noteMsg
+
+	debug.Log("ctx", "injectPostCompactNoteAfterCompaction: injected %d-char note at position %d", len(note), insertIdx)
 }
 
 // findSystemMessageIdx returns the index of the first system message whose
@@ -1008,6 +1072,9 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// summary. This ensures critical context (build flags, constraints, etc.)
 	// is never lost during context summarization.
 	m.injectPinnedAfterCompaction()
+	// Re-materialize the registered post-compaction state note (task board
+	// rehydration) - same "survives compaction" contract as pinned context.
+	m.injectPostCompactNoteAfterCompaction()
 
 	m.version++
 	m.nonTailMutSeq++
@@ -1419,6 +1486,9 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	// (PTL recovery, /compact), not just ApplyCompactResult. Without this,
 	// pinned items compressed into the summary were silently lost (#382).
 	m.injectPinnedAfterCompaction()
+	// Same contract for the registered state note (task board rehydration):
+	// it must survive on the direct Summarize path (PTL recovery, /compact).
+	m.injectPostCompactNoteAfterCompaction()
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()

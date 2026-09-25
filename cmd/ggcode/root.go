@@ -972,6 +972,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Register task, cron, plan mode, config, and send_message tools
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
+	// Post-compaction task-board rehydration (r53): task tool_results are
+	// summarized away on compaction; re-inject the live board so pending
+	// tasks and their IDs survive (Claude Code plan re-injection analog).
+	ag.SetTaskBoardSnapshotter(func() string { return taskMgr.Digest(20, 1200) })
 
 	cronSessionID := resumeID
 	if cronSessionID == "__new__" {
