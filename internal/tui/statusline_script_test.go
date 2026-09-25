@@ -28,18 +28,18 @@ func TestRunStatuslineFirstLineAndStdin(t *testing.T) {
 	cmd := statuslineTestCommand(t, `grep -q '"model"' && printf 'AAA\nBBB\n'`)
 	payload := statuslinePayload{Version: "ggcode"}
 	payload.Model.ID = "test-model"
-	got := runStatuslineCommand(cmd, payload, 2*time.Second)
-	if got != "AAA" {
-		t.Fatalf("runStatuslineCommand = %q, want AAA (first line only)", got)
+	got, ok := runStatuslineCommand(cmd, payload, 2*time.Second)
+	if !ok || got != "AAA" {
+		t.Fatalf("runStatuslineCommand = (%q, %v), want (AAA, true)", got, ok)
 	}
 }
 
 func TestRunStatuslineTimeout(t *testing.T) {
 	cmd := statuslineTestCommand(t, `sleep 5`)
 	start := time.Now()
-	got := runStatuslineCommand(cmd, statuslinePayload{}, 80*time.Millisecond)
-	if got != "" {
-		t.Fatalf("timeout run = %q, want empty", got)
+	got, ok := runStatuslineCommand(cmd, statuslinePayload{}, 80*time.Millisecond)
+	if ok || got != "" {
+		t.Fatalf("timeout run = (%q, %v), want empty/false", got, ok)
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("timeout not enforced, took %s", time.Since(start))
@@ -48,9 +48,9 @@ func TestRunStatuslineTimeout(t *testing.T) {
 
 func TestRunStatuslineErrorReturnsEmpty(t *testing.T) {
 	cmd := statuslineTestCommand(t, `exit 3`)
-	got := runStatuslineCommand(cmd, statuslinePayload{}, time.Second)
-	if got != "" {
-		t.Fatalf("failing run = %q, want empty", got)
+	got, ok := runStatuslineCommand(cmd, statuslinePayload{}, time.Second)
+	if ok || got != "" {
+		t.Fatalf("failing run = (%q, %v), want empty/false", got, ok)
 	}
 }
 
@@ -87,7 +87,7 @@ func TestHandleStatuslineMsgCacheAndStale(t *testing.T) {
 	m := Model{}
 	m.config = statuslineTestConfig()
 	m.statusline = &statuslineState{seq: 2}
-	updated, _ := m.handleStatuslineMsg(statuslineMsg{seq: 2, text: "hello"})
+	updated, _ := m.handleStatuslineMsg(statuslineMsg{seq: 2, text: "hello", ok: true})
 	if got := updated.statusline.text; got != "hello" {
 		t.Fatalf("cache = %q, want hello", got)
 	}

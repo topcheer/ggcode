@@ -29,9 +29,13 @@ import (
 const statuslineDefaultTimeout = 2 * time.Second
 
 // statuslineMsg carries a finished external refresh back into the TUI.
+// ok=false marks a failed/timed-out invocation: the seq is still consumed
+// (ordering) but the cached text must NOT be overwritten (#2748, the
+// #2680 keep-last-good contract).
 type statuslineMsg struct {
 	seq  int
 	text string
+	ok   bool
 }
 
 // statuslineState caches the rendered external status line and serializes
@@ -112,13 +116,16 @@ func (m *Model) buildStatuslinePayload() statuslinePayload {
 }
 
 // runStatuslineCommand executes one external refresh synchronously and
-// returns the first stdout line. On timeout or non-zero exit it returns ""
-// (caller keeps the cached output).
-func runStatuslineCommand(command string, payload statuslinePayload, timeout time.Duration) string {
+// returns the first stdout line. On timeout or non-zero exit it returns
+// ok=false so the caller can keep the cached output (#2748: previously it
+// returned "" and the caller blindly overwrote the last good text with it,
+// violating the keep-last-good contract promised here and in the file
+// header).
+func runStatuslineCommand(command string, payload statuslinePayload, timeout time.Duration) (string, bool) {
 	input, err := json.Marshal(payload)
 	if err != nil {
 		debug.Log("tui", "statusline: payload marshal: %v", err)
-		return ""
+		return "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -145,13 +152,13 @@ func runStatuslineCommand(command string, payload statuslinePayload, timeout tim
 		} else {
 			debug.Log("tui", "statusline: command failed: %v", err)
 		}
-		return ""
+		return "", false
 	}
 	first := out
 	if i := bytes.IndexByte(out, '\n'); i >= 0 {
 		first = out[:i]
 	}
-	return strings.TrimSpace(strings.TrimRight(string(first), "\r"))
+	return strings.TrimSpace(strings.TrimRight(string(first), "\r")), true
 }
 
 // refreshStatusline fires an async external refresh unless one is already in
@@ -184,9 +191,9 @@ func (m *Model) refreshStatusline() {
 	payload := m.buildStatuslinePayload()
 	prog := m.program
 	safego.Go("tui.statusline", func() {
-		text := runStatuslineCommand(command, payload, timeout)
+		text, ok := runStatuslineCommand(command, payload, timeout)
 		if prog != nil {
-			prog.Send(statuslineMsg{seq: seq, text: text})
+			prog.Send(statuslineMsg{seq: seq, text: text, ok: ok})
 		}
 	})
 }
@@ -201,7 +208,12 @@ func (m Model) handleStatuslineMsg(msg statuslineMsg) (Model, tea.Cmd) {
 	requeue := false
 	sl.mu.Lock()
 	if msg.seq >= sl.seq {
-		sl.text = msg.text
+		// #2748: a failed/timed-out refresh consumes its seq (ordering) but
+		// must not clear the cached text - the keep-last-good contract from
+		// #2680. Only a successful refresh updates the display value.
+		if msg.ok {
+			sl.text = msg.text
+		}
 		sl.running = false
 		if sl.dirty {
 			sl.dirty = false
