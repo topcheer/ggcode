@@ -171,8 +171,8 @@ internal/
     run_command.go         # Synchronous shell command execution
     command_jobs.go        # Background command job manager and buffered output
     command_job_tools.go   # Async command tools (start/read/wait/write/stop/list)
-    web_fetch.go           # HTTP fetch with SSRF protection
-    web_search.go          # Web search
+    web_fetch.go           # HTTP fetch with SSRF protection + outbound secret guard
+    web_search.go          # Web search (outbound secret guard on query)
     git_diff.go / git_log.go / git_status.go / git_add.go / git_commit.go / git_blame.go  # Git tools
     diff_scan.go           # Pre-commit quality scanner (debug stmts, secrets, merge markers, TODOs)
     git_show.go / git_branch_list.go / git_remote.go / git_stash.go / git_stash_list.go  # Git tools

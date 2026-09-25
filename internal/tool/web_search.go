@@ -81,6 +81,11 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if args.Query == "" {
 		return Result{IsError: true, Content: "query is required"}, nil
 	}
+	// Outbound exfiltration guard (OWASP LLM02): the query leaves the
+	// machine verbatim inside the search engine request.
+	if msg := guardOutboundSecrets("query", args.Query); msg != "" {
+		return Result{IsError: true, Content: msg}, nil
+	}
 	if args.MaxResults <= 0 {
 		args.MaxResults = 5
 	}

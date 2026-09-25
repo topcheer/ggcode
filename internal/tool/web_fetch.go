@@ -83,6 +83,11 @@ func (t WebFetch) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	if args.URL == "" {
 		return Result{IsError: true, Content: "url is required"}, nil
 	}
+	// Outbound exfiltration guard (OWASP LLM02): secrets must not leave the
+	// machine embedded in the fetched URL.
+	if msg := guardOutboundSecrets("url", args.URL); msg != "" {
+		return Result{IsError: true, Content: msg}, nil
+	}
 
 	u, err := url.Parse(args.URL)
 	if err != nil {

@@ -229,6 +229,11 @@ var browserActions = map[string]func(*Browser, context.Context, *browserActionAr
 		if a.URL == "" {
 			return errResult("url is required for navigate action")
 		}
+		// Outbound exfiltration guard (OWASP LLM02): secrets must not
+		// leave the machine embedded in the navigated URL.
+		if msg := guardOutboundSecrets("url", a.URL); msg != "" {
+			return errResult(msg)
+		}
 		return b.doNavigate(ctx, a.Profile, a.Session, a.URL, a.WaitFor, a.WaitTimeout, a.Headless)
 	},
 	"click": func(b *Browser, ctx context.Context, a *browserActionArgs) (Result, error) {
