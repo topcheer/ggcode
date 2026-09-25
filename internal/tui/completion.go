@@ -369,7 +369,7 @@ func fuzzySubsequenceMatch(s, query string) bool {
 // SlashCommands is the list of all available slash commands.
 var SlashCommands = []string{
 	"/help", "/?", "/sessions", "/resume", "/model", "/provider", "/impersonate",
-	"/clear", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
+	"/clear", "/handoff", "/im", "/qq", "/telegram", "/tg", "/pc", "/discord", "/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa",
 	"/mcp", "/memory", "/undo", "/undo-run", "/files", "/tools", "/checkpoints", "/plugins",
 	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/exit", "/quit",
@@ -400,6 +400,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/impersonate":   "Set client identity (impersonate CLI tools)",
 	"/provider":      "Open provider manager",
 	"/clear":         "Clear conversation",
+	"/handoff":       "Reset context and continue in a fresh session via a structured handoff",
 	"/im":            "Open unified IM channels panel",
 	"/qq":            "Manage QQ channel binding",
 	"/telegram":      "Manage Telegram channel binding",
@@ -524,6 +525,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/restart":       "[debug]",
 	"/checkpoints":   "[list|restore]",
 	"/clear":         "",
+	"/handoff":       "",
 	"/compact":       "",
 	"/ding":          "<subcommand>",
 	"/dingtalk":      "<subcommand>",

@@ -869,6 +869,12 @@ func enCatalog(key string) string {
 		return "Open provider manager"
 	case "slash.clear":
 		return "Clear conversation"
+	case "slash.handoff":
+		return "Reset context and hand off to a fresh session"
+	case "handoff.done":
+		return "Context reset with handoff → session %s\nArtifact: %s\nThe [Session Handoff] briefing and the task board were carried into the fresh context.\n\n"
+	case "handoff.done_noart":
+		return "Context reset with handoff → session %s\n(could not write the artifact file; the briefing is still active in context)\n\n"
 	case "slash.mcp":
 		return "Show MCP servers"
 	case "slash.memory":

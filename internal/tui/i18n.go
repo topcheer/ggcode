@@ -267,6 +267,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.provider")
 	case "/clear":
 		return tr(lang, "slash.clear")
+	case "/handoff":
+		return tr(lang, "slash.handoff")
 	case "/mcp":
 		return tr(lang, "slash.mcp")
 	case "/memory":

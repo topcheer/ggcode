@@ -882,6 +882,12 @@ func zhCatalog(key string) string {
 		return "打开供应商管理界面"
 	case "slash.clear":
 		return "清空对话"
+	case "slash.handoff":
+		return "重置上下文并交接给全新会话"
+	case "handoff.done":
+		return "已带交接重置上下文 → 会话 %s\n工件：%s\n[Session Handoff] 简报与任务看板已带入全新上下文。\n\n"
+	case "handoff.done_noart":
+		return "已带交接重置上下文 → 会话 %s\n（无法写入工件文件；简报仍已注入新会话上下文）\n\n"
 	case "slash.mcp":
 		return "显示 MCP 服务器"
 	case "slash.memory":

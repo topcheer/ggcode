@@ -286,6 +286,9 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/clear":
 			m.handleClearChat()
 			return nil
+		case "/handoff":
+			m.handleHandoffCommand()
+			return nil
 		case "/unshare":
 			m.handleUnshare()
 			return nil

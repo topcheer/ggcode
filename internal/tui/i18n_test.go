@@ -48,7 +48,7 @@ func TestNonZhCatalogsContainNoCJK1725(t *testing.T) {
 // must have a real translation (localizeSlashDescription falls back to the
 // raw command when a case or catalog entry is missing).
 func TestLocalizeSlashDescriptionSessionPinTags(t *testing.T) {
-	cmds := []string{"/pin-session", "/unpin-session", "/tag", "/untag", "/tags"}
+	cmds := []string{"/pin-session", "/unpin-session", "/tag", "/untag", "/tags", "/handoff"}
 	langs := []Language{"en", "zh", "de"}
 	for _, lang := range langs {
 		for _, cmd := range cmds {

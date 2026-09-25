@@ -12,6 +12,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/resume` | Resume a specific session |
 | `/compact` | Compact conversation to save context |
 | `/clear` | Clear conversation |
+| `/handoff` | Reset context and continue in a fresh session with a structured handoff artifact |
 | `/context` | Show context window usage and details |
 | `/copy` | Copy conversation to clipboard |
 | `/export [path]` | Export session to file |
