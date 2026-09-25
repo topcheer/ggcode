@@ -80,7 +80,7 @@ func TestApplyProviderToAgentGatesMemoryTool(t *testing.T) {
 			r := base
 			r.Protocol = tc.protocol
 			r.MemoryTool = tc.memTool
-			ApplyProviderToAgent(a, prov, &r)
+			ApplyProviderToAgent(a, prov, &r, nil)
 			if got := a.MemoryToolEnabled(); got != tc.wantOn {
 				t.Fatalf("MemoryToolEnabled()=%v, want %v (protocol=%q memory_tool=%v)",
 					got, tc.wantOn, tc.protocol, tc.memTool)

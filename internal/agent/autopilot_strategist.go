@@ -107,7 +107,7 @@ What should the agent do next?`, goal, contextStr, lastAssistantText, a.autopilo
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: userPrompt}}},
 	}
 
-	resp, err := a.provider.Chat(ctx, messages, nil)
+	resp, err := a.utilityProviderForWork().Chat(ctx, messages, nil)
 	if err != nil {
 		return nil, fmt.Errorf("strategist call failed: %w", err)
 	}

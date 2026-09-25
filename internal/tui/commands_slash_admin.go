@@ -596,7 +596,7 @@ func (m *Model) tryActivateCurrentSelection() error {
 		return err
 	}
 	if m.agent != nil {
-		agentruntime.ApplyProviderToAgent(m.agent, prov, resolved)
+		agentruntime.ApplyProviderToAgent(m.agent, prov, resolved, m.config)
 		m.applySessionLevelLimits()
 		sessionCW, sessionMT := 0, 0
 		if m.session != nil {
@@ -645,7 +645,7 @@ func (m *Model) ensureProviderSync() {
 		debug.Log("provider", "ensureProviderSync: activate failed: %v", err)
 		return
 	}
-	agentruntime.ApplyProviderToAgent(m.agent, prov, resolved)
+	agentruntime.ApplyProviderToAgent(m.agent, prov, resolved, m.config)
 	m.applySessionLevelLimits()
 	sessionCW, sessionMT := 0, 0
 	if m.session != nil {

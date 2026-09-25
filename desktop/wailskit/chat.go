@@ -1258,7 +1258,7 @@ func (b *ChatBridge) LoadSession(id string) error {
 				b.resolved = resolved
 				agent := b.agent
 				b.mu.Unlock()
-				agentruntime.ApplyProviderToAgent(agent, prov, resolved)
+				agentruntime.ApplyProviderToAgent(agent, prov, resolved, b.cfg)
 			} else {
 				// #1802 case 3: the session's model was silently swapped for
 				// the global default on restore failure (model deleted /
@@ -4131,7 +4131,7 @@ func (b *ChatBridge) SwitchModel(model string) error {
 	b.mu.Lock()
 	b.resolved = resolved
 	b.mu.Unlock()
-	agentruntime.ApplyProviderToAgent(a, prov, resolved)
+	agentruntime.ApplyProviderToAgent(a, prov, resolved, b.cfg)
 
 	// Persist model selection to session JSONL (session-scoped).
 	if b.currentSes != nil {
@@ -4594,7 +4594,7 @@ func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) fu
 		// vm to cfg.Model — restore the user's model so a failed switch cannot
 		// leak the vision model beyond this turn (turn-scoped guarantee).
 		if r, p, rerr := agentruntime.ActivateCurrentSelection(cfg, "", "", userModel); rerr == nil {
-			agentruntime.ApplyProviderToAgent(ag, p, r)
+			agentruntime.ApplyProviderToAgent(ag, p, r, cfg)
 			b.mu.Lock()
 			b.resolved = r
 			b.mu.Unlock()
@@ -4604,7 +4604,7 @@ func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) fu
 		debug.Log("chat", "vision fallback switch failed: %v", err)
 		return func() {}
 	}
-	agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+	agentruntime.ApplyProviderToAgent(ag, prov, resolved, cfg)
 	b.mu.Lock()
 	b.resolved = resolved
 	b.mu.Unlock()
@@ -4618,7 +4618,7 @@ func (b *ChatBridge) beginVisionTurnIfNeeded(content []provider.ContentBlock) fu
 			return
 		}
 		if r, p, err := agentruntime.ActivateCurrentSelection(cfg, "", "", userModel); err == nil {
-			agentruntime.ApplyProviderToAgent(ag, p, r)
+			agentruntime.ApplyProviderToAgent(ag, p, r, cfg)
 			b.mu.Lock()
 			b.resolved = r
 			b.mu.Unlock()

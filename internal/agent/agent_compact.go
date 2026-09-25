@@ -162,7 +162,7 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 		lastMsgID = msgs[len(msgs)-1].ID
 	}
 	changed := false
-	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.provider)
+	changed, compactErr := a.contextManager.CheckAndSummarize(ctx, a.utilityProviderForWork())
 	if compactErr != nil {
 		debug.Log("agent", "reactive compact: summarization failed (%v), falling back to truncation", compactErr)
 	}

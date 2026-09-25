@@ -2992,6 +2992,17 @@ var vendorModels = map[string]vendorModelInfo{
 	}},
 }
 
+// VendorSmallModelDefault returns the built-in small/cheap default model a
+// vendor declares, or "" when it declares none. Utility model routing
+// (internal/agentruntime/utility_route.go) uses it as the fallback when the
+// explicit `utility_model` config is unset.
+func VendorSmallModelDefault(vendorID string) string {
+	if info, ok := vendorDefaultModels[vendorID]; ok {
+		return info.SmallModel
+	}
+	return ""
+}
+
 // vendorDefaultModels maps provider ID to its default model IDs.
 var vendorDefaultModels = map[string]defaultModelInfo{
 	"302ai":                    {LargeModel: "claude-opus-4-7", SmallModel: ""},

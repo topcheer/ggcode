@@ -30,8 +30,32 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `max_iterations` | int | Agent loop limit per turn (0 = unlimited) |
 | `session_token_budget` | int | Max total tokens (input + output) per agent run. Progressive warnings at 75%/90%, hard stop at 100%. |
 | `tool_call_budget` | int | Max total tool calls per agent run. Warnings at 80%/95%, hard stop at 100%. When unset, auto-derived from `max_iterations` (x8), or 500 for unlimited. |
+| `utility_model` | string | Route auxiliary LLM workloads (autopilot strategist passes, compaction summarization) to a cheaper model on the same vendor/endpoint. Empty = run on the primary model. See below. |
 | `output_style` | string | Response verbosity: `default`, `concise` (terse), `detailed` (reasoning + context), `socratic` (guided learning). Default: `default`. Cycle at runtime with `Ctrl+O` or `/style`. |
 | `allowed_dirs` | []string | Directories the agent may access |
+
+### Utility Model Routing
+
+Not every LLM call in a session needs a frontier model. Auxiliary,
+non-conversational workloads — the autopilot strategist's next-action
+reasoning pass and reactive compaction summarization — are bounded tasks that
+a smaller or cheaper model handles fine. Set `utility_model` to route them:
+
+```yaml
+model: claude-fable-5-1
+utility_model: glm-5.3-flash   # strategist + compaction calls run here
+```
+
+- The utility model must be served by the **same vendor/endpoint** as the
+  primary model (credentials, protocol adapter, and HTTP settings are reused;
+  only the model name changes).
+- If the utility model equals the primary model, or the endpoint cannot be
+  resolved, routing is silently disabled and auxiliary work stays on the
+  primary provider — configuration mistakes never block a session.
+- Routing is re-derived on every provider hot-swap (`/model`, config panel
+  changes), so switching vendors re-points utility work at the new vendor.
+- Cost/usage of utility calls keeps its existing attribution (`strategist`,
+  compaction), so you can see exactly what the cheaper model is doing.
 
 ## Vendors & Endpoints
 

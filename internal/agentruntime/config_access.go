@@ -1361,7 +1361,7 @@ func (a *configAccess) reloadProvider() {
 		return
 	}
 
-	ApplyProviderToAgent(a.agentInst, prov, resolved)
+	ApplyProviderToAgent(a.agentInst, prov, resolved, a.cfg)
 	ApplySessionTokenBudget(a.agentInst, a.cfg)
 	ApplyToolCallBudget(a.agentInst, a.cfg)
 	ApplySessionTimeout(a.agentInst, a.cfg, false)

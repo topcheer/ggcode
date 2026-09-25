@@ -97,11 +97,15 @@ func ActivateCurrentSelection(cfg *config.Config, vendor, endpoint, model string
 	return ResolveCurrentSelection(cfg)
 }
 
-func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolved *config.ResolvedEndpoint) {
+// ApplyProviderToAgent installs a (re)built primary provider on the agent and
+// re-derives utility model routing from cfg. cfg may be nil (desktop paths
+// before config is available): utility routing then keeps its previous state.
+func ApplyProviderToAgent(agentInst *agent.Agent, prov provider.Provider, resolved *config.ResolvedEndpoint, cfg *config.Config) {
 	if agentInst == nil || prov == nil || resolved == nil {
 		return
 	}
 	agentInst.SetProvider(prov)
+	ApplyUtilityProvider(agentInst, cfg)
 	ApplyResolvedLimitsToAgent(agentInst, resolved)
 	agentInst.SetSupportsVision(resolved.SupportsVision)
 	agentInst.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))

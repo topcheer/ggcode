@@ -888,7 +888,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		if err != nil {
 			return "", err
 		}
-		agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+		agentruntime.ApplyProviderToAgent(ag, prov, resolved, cfg)
 		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
@@ -941,14 +941,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				// selection so a failed switch cannot leak the vision model.
 				if prev != "" && prev != model {
 					if r, p, rerr := agentruntime.ActivateCurrentSelection(cfg, "", "", prev); rerr == nil {
-						agentruntime.ApplyProviderToAgent(ag, p, r)
+						agentruntime.ApplyProviderToAgent(ag, p, r, cfg)
 					} else {
 						debug.Log("daemon", "vision turn switch failed and restore failed: %v / %v", err, rerr)
 					}
 				}
 				return err
 			}
-			agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+			agentruntime.ApplyProviderToAgent(ag, prov, resolved, cfg)
 			return nil
 		})
 	debug.Log("daemon", "Knight config: enabled=%v trust=%s budget=%d idle=%ds capabilities=%v",
