@@ -58,6 +58,7 @@ var mutatingToolNames = map[string]bool{
 	"write_file":       true,
 	"edit_file":        true,
 	"multi_file_write": true,
+	"multi_edit_file":  true, // #2766: fileMutatingTools listed it for the epoch bump, but record()'s isMutatingTool gate early-returned first, leaving that entry dead code
 	"notebook_edit":    true,
 	"file_ops":         true,
 	"git_add":          true,
