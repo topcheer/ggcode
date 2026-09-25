@@ -516,13 +516,6 @@ var guidanceCounterResets = []func(*Agent){
 		}
 	},
 	func(a *Agent) {
-		if a.heterogeneousModel != nil {
-			a.heterogeneousModel.mu.Lock()
-			a.heterogeneousModel.warnsIssued = 0
-			a.heterogeneousModel.mu.Unlock()
-		}
-	},
-	func(a *Agent) {
 		if a.selfMod != nil {
 			a.selfMod.mu.Lock()
 			a.selfMod.warningCount = 0
