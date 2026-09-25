@@ -260,9 +260,85 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		defer cancel()
 	}
 
-	cmd, _, err := util.NewShellCommandContext(cmdCtx, args.Command)
+	cmd, finalCommand, err := t.resolveShellCommand(cmdCtx, args.Command)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", err)}, nil
+	}
+
+	// Layered OS-level containment: wrap the resolved shell spawn so the
+	// KERNEL (not the heuristic gates above) enforces the write/network
+	// boundary. Skipped for GUI launches - detached editors/builders need
+	// their real file system access (#568/#1245).
+	sandboxed := false
+	if !isGUI {
+		wrapped, wrapErr := wrapShellCommandOS(cmd, t.WorkingDir, t.Sandbox)
+		if wrapErr != nil {
+			// Fail closed: an opted-in sandbox that cannot be enforced must
+			// never silently degrade into an unsandboxed execution.
+			return Result{IsError: true, Content: "Error: " + wrapErr.Error()}, nil
+		}
+		sandboxed = wrapped
+	}
+
+	if t.OnPreExec != nil {
+		t.OnPreExec(finalCommand, args.Description)
+	}
+
+	// Extract progress callback for streaming (if available).
+	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
+
+	var stdout, stderr = newBoundedOutputWriter(2 * maxOutputSize), newBoundedOutputWriter(2 * maxOutputSize)
+	var pwOut, pwErr *streamingProgressWriter
+	pwOut, pwErr = t.wireCommandOutput(cmd, stdout, stderr, progressFn)
+
+	run := commandRun{
+		cmd:           cmd,
+		command:       finalCommand,
+		preWarning:    preWarning,
+		progressFn:    progressFn,
+		pwOut:         pwOut,
+		pwErr:         pwErr,
+		stdout:        stdout,
+		stderr:        stderr,
+		mtimeSnapshot: mtimeSnapshot,
+		sandboxed:     sandboxed,
+	}
+
+	// GUI commands: start and return immediately.
+	if isGUI {
+		return t.launchGUI(run, cancel)
+	}
+
+	// For non-GUI commands, start the process and race between
+	// completion and auto-background delay. This prevents slow commands
+	// from blocking the agent loop.
+	// - Dev server commands: 15s threshold (known long-running)
+	// - Other commands: 120s threshold (stalled detection)
+	if t.JobManager != nil {
+		delay := stalledCommandDelay
+		if isDevServerCommand(run.command) {
+			delay = autoBackgroundDelay
+		}
+		return t.executeWithAutoBackground(ctx, cancel, run.cmd, run.command, time.Duration(args.Timeout)*time.Second, delay, run.progressFn)
+	}
+
+	return t.runForeground(run)
+}
+
+// resolveShellCommand builds the spawn target for command: it rewrites git
+// commit commands to inject the Co-Authored-By trailer, resolves the
+// platform shell once, pins the agent's fixed WorkingDir (LLM-provided
+// working_dir is ignored), and normalizes the terminal environment.
+// Returns the prepared cmd plus the final command string after any rewrite.
+func (t RunCommand) resolveShellCommand(ctx context.Context, command string) (*exec.Cmd, string, error) {
+	// Inject Co-Authored-By trailer for git commit commands before resolving
+	// the shell, so the rewritten line is the only one ever spawned.
+	if isGitCommitCommand(command) {
+		command = injectCoAuthorTrailer(command)
+	}
+	cmd, _, err := util.NewShellCommandContext(ctx, command)
+	if err != nil {
+		return nil, "", err
 	}
 	configureCommandCancellation(cmd)
 	// Use the fixed WorkingDir from agent, ignore LLM-provided working_dir
@@ -284,119 +360,86 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	//     (npm, cargo, gradle, gcloud, etc.), suppressing interactive prompts
 	//     and progress bars
 	cmd.Env = normalizedCommandEnv()
-	if isGitCommand(args.Command) {
+	if isGitCommand(command) {
 		cmd.Env = append(cmd.Env, "GIT_PAGER=cat")
 	}
-	// Inject Co-Authored-By trailer for git commit commands
-	if isGitCommitCommand(args.Command) {
-		args.Command = injectCoAuthorTrailer(args.Command)
-		newCmd, _, cmdErr := util.NewShellCommandContext(cmdCtx, args.Command)
-		if cmdErr != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("failed to resolve shell: %v", cmdErr)}, nil
-		}
-		cmd = newCmd
-		configureCommandCancellation(cmd)
-		if t.WorkingDir != "" {
-			cmd.Dir = t.WorkingDir
-		}
-		cmd.Env = normalizedCommandEnv()
-		if isGitCommand(args.Command) {
-			cmd.Env = append(cmd.Env, "GIT_PAGER=cat")
-		}
+	return cmd, command, nil
+}
+
+// commandRun carries the per-execution state shared by the GUI and
+// foreground runners: the wired process, the final command string, the
+// streaming output plumbing, and the metadata result assembly needs.
+type commandRun struct {
+	cmd            *exec.Cmd
+	command        string
+	preWarning     string
+	progressFn     ToolProgressFunc
+	pwOut, pwErr   *streamingProgressWriter
+	stdout, stderr *boundedOutputWriter
+	mtimeSnapshot  map[string]time.Time
+	sandboxed      bool
+}
+
+// launchGUI starts a detached GUI application and returns immediately. The
+// process was created on a Background-derived cancel-only context with no
+// timeout clock (#568/#1245); the guiWait goroutine owns cancel and fires
+// it after the app process exits.
+func (t RunCommand) launchGUI(r commandRun, cancel context.CancelFunc) (Result, error) {
+	if err := r.cmd.Start(); err != nil {
+		// Release the timeout timer now — nothing else owns cancel on this
+		// early-return path.
+		cancel()
+		return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
 	}
-
-	// Layered OS-level containment: wrap the resolved shell spawn so the
-	// KERNEL (not the heuristic gates above) enforces the write/network
-	// boundary. Skipped for GUI launches - detached editors/builders need
-	// their real file system access (#568/#1245).
-	sandboxed := false
-	if !isGUI {
-		wrapped, wrapErr := wrapShellCommandOS(cmd, t.WorkingDir, t.Sandbox)
-		if wrapErr != nil {
-			// Fail closed: an opted-in sandbox that cannot be enforced must
-			// never silently degrade into an unsandboxed execution.
-			return Result{IsError: true, Content: "Error: " + wrapErr.Error()}, nil
-		}
-		sandboxed = wrapped
-	}
-
-	if t.OnPreExec != nil {
-		t.OnPreExec(args.Command, args.Description)
-	}
-
-	// Extract progress callback for streaming (if available).
-	progressFn, _ := ctx.Value(ToolProgressKey{}).(ToolProgressFunc)
-
-	var stdout, stderr = newBoundedOutputWriter(2 * maxOutputSize), newBoundedOutputWriter(2 * maxOutputSize)
-	var pwOut, pwErr *streamingProgressWriter
-	pwOut, pwErr = t.wireCommandOutput(cmd, stdout, stderr, progressFn)
-
-	// GUI commands: start and return immediately.
-	if isGUI {
-		if err := cmd.Start(); err != nil {
-			// Release the timeout timer now — nothing else owns cancel on this
-			// early-return path.
-			cancel()
-			return Result{IsError: true, Content: fmt.Sprintf("failed to start GUI command: %v", err)}, nil
-		}
-		// Detach — don't wait for exit. The guiWait goroutine owns cancel and
-		// fires it after the app process exits; GUI apps carry no timeout
-		// clock at all, so a long-lived editor is never killed by the tool
-		// call returning (#568) nor by a delayed timer (#1245).
-		safego.Go("tool.runCommand.guiWait", func() {
-			// #1699 case 4: the non-GUI success/failure paths both invoke
-			// OnPostExec, but the GUI path never did - hooks mounted on
-			// post-exec never saw GUI launches. Mirror the completion
-			// semantics once the app process exits.
-			waitErr := cmd.Wait()
-			cancel()
-			if t.OnPostExec != nil {
-				code := 0
-				if waitErr != nil {
-					code = -1
-				}
-				t.OnPostExec(code, waitErr)
+	// Detach — don't wait for exit. The guiWait goroutine owns cancel and
+	// fires it after the app process exits; GUI apps carry no timeout
+	// clock at all, so a long-lived editor is never killed by the tool
+	// call returning (#568) nor by a delayed timer (#1245).
+	safego.Go("tool.runCommand.guiWait", func() {
+		// #1699 case 4: the non-GUI success/failure paths both invoke
+		// OnPostExec, but the GUI path never did - hooks mounted on
+		// post-exec never saw GUI launches. Mirror the completion
+		// semantics once the app process exits.
+		waitErr := r.cmd.Wait()
+		cancel()
+		if t.OnPostExec != nil {
+			code := 0
+			if waitErr != nil {
+				code = -1
 			}
-		})
-		return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", cmd.Process.Pid)}, nil
-	}
-
-	// For non-GUI commands, start the process and race between
-	// completion and auto-background delay. This prevents slow commands
-	// from blocking the agent loop.
-	// - Dev server commands: 15s threshold (known long-running)
-	// - Other commands: 120s threshold (stalled detection)
-	if t.JobManager != nil {
-		delay := stalledCommandDelay
-		if isDevServerCommand(args.Command) {
-			delay = autoBackgroundDelay
+			t.OnPostExec(code, waitErr)
 		}
-		return t.executeWithAutoBackground(ctx, cancel, cmd, args.Command, time.Duration(args.Timeout)*time.Second, delay, progressFn)
-	}
+	})
+	return Result{Content: fmt.Sprintf("GUI application launched (pid %d).", r.cmd.Process.Pid)}, nil
+}
 
-	err = cmd.Run()
+// runForeground executes the command synchronously on the request context
+// and assembles the final tool Result: throttled-tail flush, ANSI
+// stripping, truncation, and the sandbox-denial hint when applicable.
+func (t RunCommand) runForeground(r commandRun) (Result, error) {
+	err := r.cmd.Run()
 
 	// Flush any output that landed inside the last 300ms throttle window:
 	// Write() only buffers lines while throttled, so a command finishing
 	// mid-window would never emit its final tail (the streaming view would
 	// silently miss the last burst). The terminal-state SetResult replaces
 	// the body afterwards, so this only affects the last streaming frame.
-	if progressFn != nil {
-		if pwOut != nil {
-			pwOut.flush()
+	if r.progressFn != nil {
+		if r.pwOut != nil {
+			r.pwOut.flush()
 		}
-		if pwErr != nil {
-			pwErr.flush()
+		if r.pwErr != nil {
+			r.pwErr.flush()
 		}
 	}
 
-	output := util.StripANSI(stdout.String())
-	errOutput := util.StripANSI(stderr.String())
+	output := util.StripANSI(r.stdout.String())
+	errOutput := util.StripANSI(r.stderr.String())
 
-	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
+	result := t.finalizeCommandResult(r.command, r.preWarning, output, errOutput, err, r.mtimeSnapshot)
 	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
 	// config knob so the agent adapts instead of retrying blindly.
-	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
+	if r.sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
 		result.Content += sandboxEPERMHint
 	}
 	return result, nil
