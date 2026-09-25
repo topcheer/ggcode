@@ -1,8 +1,10 @@
 package tool
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -337,5 +339,33 @@ func TestReadRegistryBundleRejectsOversize(t *testing.T) {
 func TestReadRegistryBundleEmptyURL(t *testing.T) {
 	if _, err := readRegistryBundle("  "); err == nil {
 		t.Fatal("expected error for empty bundle URL")
+	}
+}
+
+// TestRegistryDispatchViaExecute verifies the "#registry:" prefix routes
+// through SkillTool.Execute to the registry handlers (wiring test).
+func TestRegistryDispatchViaExecute(t *testing.T) {
+	// Skills must be non-nil to pass the availability gate; an empty lookup
+	// suffices since #registry: never resolves local skills.
+	tool := SkillTool{Skills: &fakeRegistryLookup{skills: map[string]*commands.Command{}}}
+	t.Setenv(registryEnvVar, "") // no source -> actionable error, proves dispatch
+
+	input, _ := json.Marshal(map[string]string{"skill": "#registry:list"})
+	res, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, registryEnvVar) {
+		t.Fatalf("expected no-source-configured error via Execute, got: %+v", res)
+	}
+
+	// Empty subcommand reaches the usage handler.
+	input, _ = json.Marshal(map[string]string{"skill": "#registry:"})
+	res, err = tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "#registry:install") {
+		t.Fatalf("expected usage via Execute, got: %+v", res)
 	}
 }
