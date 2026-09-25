@@ -1,8 +1,14 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 // TestConfidenceTrajectorySustainedDegradation (r75): the micro-stability
@@ -82,5 +88,52 @@ func TestConfidenceTrajectoryNoFalsePositive(t *testing.T) {
 	// Single hard-low turn: point-check territory (caller), tracker silent.
 	if _, fire := tr.observe(-3.0); fire {
 		t.Fatal("single low turn must not escalate at trajectory level")
+	}
+}
+
+// TestRunStreamConfidenceTrajectoryEscalation (r75): loop-level integration —
+// sustained multi-turn confidence degradation passes through the real stream
+// loop and escalates exactly once; later turns within the episode stay quiet,
+// and turns above the single-turn point threshold (-2.5) never fire that
+// check, isolating the trajectory layer (arXiv:2601.15778).
+func TestRunStreamConfidenceTrajectoryEscalation(t *testing.T) {
+	confs := []float64{-0.3, -1.9, -2.0, -2.1, -2.2}
+	turns := make([][]provider.StreamEvent, 0, len(confs))
+	for i, c := range confs {
+		turns = append(turns, []provider.StreamEvent{
+			// Unregistered tool call: execution fails and the loop advances
+			// to the next turn (same pattern as
+			// TestRunStreamCarriesPTCCallerIntoNextRequest).
+			{Type: provider.StreamEventToolCallDone, Tool: provider.ToolCallDelta{
+				ID: fmt.Sprintf("toolu_c%d", i), Name: "no_such_tool",
+				Arguments: json.RawMessage(`{}`),
+			}},
+			{Type: provider.StreamEventDone, Usage: &provider.TokenUsage{InputTokens: 5, OutputTokens: 2}, Confidence: &c},
+		})
+	}
+	mp := &mockProvider{streamEvents: turns}
+	a := NewAgent(mp, tool.NewRegistry(), "", len(confs)+1)
+	defer a.Close()
+
+	var trajNotices, singleNotices int
+	err := a.RunStream(context.Background(), "question", func(event provider.StreamEvent) {
+		if event.Type != provider.StreamEventSystem {
+			return
+		}
+		if strings.Contains(event.Text, "degrading across turns") {
+			trajNotices++
+		}
+		if strings.Contains(event.Text, "low model confidence this turn") {
+			singleNotices++
+		}
+	})
+	if err != nil {
+		t.Fatalf("RunStream() error = %v", err)
+	}
+	if trajNotices != 1 {
+		t.Fatalf("expected exactly 1 trajectory escalation across %d turns, got %d", len(confs), trajNotices)
+	}
+	if singleNotices != 0 {
+		t.Fatalf("single-turn point check must stay silent above -2.5, fired %d times", singleNotices)
 	}
 }
