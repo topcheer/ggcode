@@ -752,6 +752,14 @@ func (a *Agent) safeExecute(t tool.Tool, ctx context.Context, args json.RawMessa
 		a.auditToolResult(t.Name(), args, audit.StatusInvalid, r.Content, time.Since(startTime))
 		return *r, nil
 	}
+	// Trace-integrity guard (arXiv:2609.30266): while the audit ledger is
+	// enabled, reject any tool call whose arguments reference the ledger or
+	// its .head anchor, and seal the attempt into the ledger as
+	// audit.StatusInvalid - the tamper attempt becomes part of the
+	// tamper-evident record it was trying to destroy.
+	if res, denied := a.enforceTraceGuard(t.Name(), args, time.Since(startTime)); denied {
+		return res, nil
+	}
 	// Deterministic replay (GGCODE_TOOL_TAPE=replay:<path>): serve recorded
 	// results without ever invoking the real tool. See tool_tape.go. A tape
 	// miss returns an explicit error result - never a silent live fallback.
