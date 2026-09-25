@@ -193,6 +193,7 @@ type Agent struct {
 	scopeDrift                *scopeDriftState           // semantic scope creep detection (file-diversity tracking)
 	driftRecurrence           *driftRecurrenceState      // drift recurrence detection (post-warning behavioral persistence)
 	constraintAmnesia         *constraintAmnesiaState    // constraint amnesia detection (early constraint forgetting)
+	goalReminder              *goalReminderState         // goal fade-out reminder (OpenDev arXiv:2603.05344 event-driven reminders; pure cadence, not a detector)
 	constraintViolation       *constraintViolationState  // self-declared constraint violation detection (AgentRx step-level tracking)
 	exportGuard               *exportGuardState          // breaking change detection for exported Go symbols (regression guard)
 	hubPackageGuard           *hubPackageState           // per-edit blast-radius awareness for high fan-in packages
@@ -412,6 +413,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeDrift:             newScopeDriftState(),
 		driftRecurrence:        newDriftRecurrenceState(),
 		constraintAmnesia:      newConstraintAmnesiaState(),
+		goalReminder:           newGoalReminderState(),
 		constraintViolation:    newConstraintViolationState(),
 		exportGuard:            newExportGuardState(),
 		hubPackageGuard:        newHubPackageState(),
@@ -1532,6 +1534,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// precedent; constraintAmnesia.reset() now runs here too, BEFORE the
 	// record.
 	a.constraintAmnesia.reset()
+	a.goalReminder.reset()
 	a.constraintAmnesia.recordConstraints(userText, 1)
 	a.mu.RLock()
 	hookCfg := a.hookConfig
@@ -2086,6 +2089,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
 			a.injectGuidance(caMsg)
 			msgs = a.contextManager.Messages()
+		}
+		// Goal fade-out reminder: the active goal lives only in the system
+		// prompt (injected once at Run start) and fades from attention over
+		// long runs (instruction fade-out, OpenDev arXiv:2603.05344).
+		// Periodically re-anchor it mid-run. Pure turn cadence - no detection.
+		if grMsg := a.goalReminder.maybeRemind(i+1, a.getAutopilotGoal()); grMsg != "" {
+			if a.injectGuidance(grMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				// Budget-saturated turn: refund the cadence slot so the
+				// reminder retries next iteration (#681 returned != delivered).
+				a.goalReminder.markUndelivered(i + 1)
+			}
 		}
 		// Diagnostic-action disconnect detection: when the agent has received
 		// diagnostic content (errors, undefined symbols) but subsequent actions

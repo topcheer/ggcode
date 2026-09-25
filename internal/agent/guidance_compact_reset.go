@@ -189,6 +189,14 @@ var guidanceCounterResets = []func(*Agent){
 			a.constraintAmnesia.warnings = 0
 		}
 	},
+	// goal_reminder (no mutex; agent-loop single-goroutine access):
+	// post-compaction the goal is re-emitted in the system prompt, so the
+	// fade-out clock restarts and the per-run quota is refunded.
+	func(a *Agent) {
+		if a.goalReminder != nil {
+			a.goalReminder.reset()
+		}
+	},
 	// correction_spiral (no mutex; agent-loop single-goroutine access)
 	func(a *Agent) {
 		if a.correctionSpiral != nil {
