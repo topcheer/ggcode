@@ -79,10 +79,18 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		}
 	}
 
-	// Layer 3: proactive ratchet rules.
+	// Layer 3: proactive ratchet rules, selected for task relevance
+	// (token-efficient retrieval: Mem0 "State of AI Agent Memory" 2026;
+	// arXiv:2603.07670 read-path optimization). The most recent user text
+	// classifies the task; irrelevant rule categories are dropped while a
+	// small global floor keeps the highest-value lessons visible.
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if rs := NewRuleStore(workingDir); rs != nil {
-			rulesText := rs.TopRulesForPrompt(5)
+			var lastUser string
+			if cm, ok := a.contextManager.(*context.Manager); ok {
+				lastUser = lastUserPromptText(cm.Messages())
+			}
+			rulesText := rs.TopRulesForTask(5, lastUser)
 			if rulesText != "" {
 				dynamicParts = append(dynamicParts, rulesText)
 				debug.Log("agent", "Injected learned ratchet rules into system prompt")
@@ -200,3 +208,38 @@ func (a *Agent) withTemporalContext(base string) string {
 // maybeInjectRatchetRules is a no-op retained for backward compatibility.
 // Ratchet rule injection is now handled by maybeInjectDynamicSystemPrompt.
 func (a *Agent) maybeInjectRatchetRules() {}
+
+// maxClassifyPromptRunes caps how much of the latest user prompt is fed
+// into task classification; the head is sufficient for keyword matching.
+const maxClassifyPromptRunes = 2048
+
+// lastUserPromptText returns the text of the most recent user message for
+// task classification. Only pure text blocks count: tool results are also
+// delivered in user-role messages, but as tool_result blocks without Text.
+// Messages without text are skipped so an earlier real user prompt is still
+// found. Returns "" when no user text exists (e.g. before the first turn),
+// which makes rule injection fall back to the unfiltered global top-N.
+func lastUserPromptText(msgs []provider.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		var b strings.Builder
+		for _, blk := range msgs[i].Content {
+			if blk.Type == "text" {
+				b.WriteString(blk.Text)
+				b.WriteByte(' ')
+			}
+		}
+		text := strings.TrimSpace(b.String())
+		if text == "" {
+			continue
+		}
+		// Classification only needs the head of the prompt; cap rune-safely.
+		if runes := []rune(text); len(runes) > maxClassifyPromptRunes {
+			text = string(runes[:maxClassifyPromptRunes])
+		}
+		return text
+	}
+	return ""
+}

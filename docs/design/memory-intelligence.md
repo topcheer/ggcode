@@ -74,6 +74,43 @@ fmt.Println(report.FormatHealthReport())
 - All other entries listed as title-only index for on-demand read_file
 - Budget: 6000 bytes total inline (~1500 tokens)
 
+### Ratchet Rule Staleness Sweep (`ratchet.go`)
+The learned-rules store (`.ggcode/agent-rules.json`) previously declared a
+staleness policy (`staleRuleThreshold` = 30 days, `staleRuleMinHits` = 3) as
+constants but never executed it: stale low-value rules survived forever and
+competed for the prompt injection slots. A consolidation sweep now runs at
+the end of every run (inside `runRatchet`, before the error-matching early
+return, so quiet runs also sweep):
+- `CleanStale()` removes rules not seen in 30 days unless they have >= 3
+  hits (proven lessons are preserved indefinitely)
+- `DeduplicateRules()` merges near-duplicate rules that accumulated since
+  the last sweep
+
+This implements the "write-manage-read" memory loop (arXiv:2603.07670):
+stored lessons need periodic management sweeps, not just LRU eviction when
+the 60-slot cap overflows.
+
+### Task-Selective Rule Injection (`ratchet.go`, `agent_prompt_inject.go`)
+`TopRulesForPrompt(N)` injected the global top-N rules regardless of what
+the user asked for. Injection is now task-aware (`TopRulesForTask`):
+1. The latest user message is classified with the playbook's
+   `classifyTaskType` (plus a CJK keyword supplement, since the Latin
+   word-boundary check cannot anchor CJK keywords against adjacent ASCII).
+2. Task type maps to relevant rule categories: bugfix/build/test ->
+   `build`+`test`, refactor/feature -> `convention`+`build`, review ->
+   `convention`+`security`, git prompts (CJK) -> `git`.
+3. A global floor of the top-2 recency-weighted rules is always kept so
+   critical high-hit lessons survive even when out of scope; remaining
+   slots go to task-relevant rules. No backfill: unfilled slots are the
+   token saving.
+
+Rationale: token-efficient retrieval (Mem0 "State of AI Agent Memory"
+2026; arXiv:2603.07670 read-path optimization) - a small task-relevant
+lesson block beats a global top-N dump, and the rules live in the
+non-cacheable dynamic prompt layer, so every injected irrelevant rule is
+re-paid on every run. Prompts that classify as "other" (or are empty, e.g.
+before the first turn) fall back to the unfiltered global top-N.
+
 ## Competitor Comparison
 
 | Feature              | ggcode | Claude Code | Cursor | Devin |

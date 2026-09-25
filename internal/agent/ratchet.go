@@ -334,6 +334,51 @@ func (rs *RuleStore) DeduplicateRules() int {
 	return merged
 }
 
+// CleanStale removes rules that have not been matched within
+// staleRuleThreshold, unless staleRuleMinHits preserves them. It enforces
+// the staleness policy that was previously declared as constants but never
+// executed (the recency decay only deprioritized stale rules in prompt
+// scoring; it never reclaimed the slots or the file).
+//
+// This implements the "write-manage-read" memory loop (arXiv:2603.07670):
+// stored lessons need periodic management sweeps — filtering and staleness
+// detection — not just LRU eviction at add time. Rules with zero-value
+// timestamps fall back to CreatedAt; rules with neither timestamp are
+// treated as maximally stale.
+func (rs *RuleStore) CleanStale() int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+
+	if len(rs.rules) == 0 {
+		return 0
+	}
+
+	now := time.Now()
+	kept := make([]Rule, 0, len(rs.rules))
+	removed := 0
+	for _, r := range rs.rules {
+		last := r.LastSeen
+		if last.IsZero() {
+			last = r.CreatedAt
+		}
+		if !last.IsZero() && now.Sub(last) > staleRuleThreshold && r.HitCount < staleRuleMinHits {
+			removed++
+			debug.Log("ratchet", "cleaned stale rule %s (last seen %s, hits %d): %s",
+				r.ID, last.Format("2006-01-02"), r.HitCount, truncStr(r.Rule, 60))
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed > 0 {
+		rs.rules = kept
+		if err := rs.save(); err != nil {
+			debug.Log("ratchet", "failed to save rules after staleness sweep: %v", err)
+		}
+	}
+	return removed
+}
+
 // Rules returns a copy of all rules.
 func (rs *RuleStore) Rules() []Rule {
 	rs.mu.Lock()
@@ -399,6 +444,161 @@ func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 	var b strings.Builder
 	b.WriteString("Lessons from previous runs in this workspace:\n")
 	for _, a := range active {
+		b.WriteString(fmt.Sprintf("- %s", a.rule))
+		if a.hint != "" {
+			b.WriteString(fmt.Sprintf(" → %s", a.hint))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// taskRuleCategories maps a classified task type to the ratchet rule
+// categories relevant for that kind of work. A nil result means "no
+// filter" — inject the global top rules as before.
+//
+// Rationale (token-efficient retrieval, Mem0 "State of AI Agent Memory"
+// 2026 and the arXiv:2603.07670 read-path findings): a small task-relevant
+// lesson block beats a global top-N dump; irrelevant lessons are context
+// noise that costs tokens in the non-cacheable dynamic prompt layer.
+func taskRuleCategories(userPrompt string) []string {
+	task := classifyTaskType(userPrompt)
+	// CJK supplement: classifyTaskType is Latin-keyword based, and its
+	// word-boundary check ([a-z0-9_]) cannot anchor CJK keywords against
+	// adjacent ASCII (see #2745). Scan unambiguous CJK task verbs with
+	// plain substring matching for Chinese prompts. Only consulted when
+	// the Latin classifier found nothing, so it never overrides it.
+	if task == "other" {
+		p := strings.ToLower(userPrompt)
+		switch {
+		case containsAny(p, "测试", "单测", "用例"):
+			return []string{"test", "build"}
+		case containsAny(p, "构建", "编译", "部署", "发布"):
+			return []string{"build", "test"}
+		case containsAny(p, "修复", "报错", "崩溃", "调试"):
+			return []string{"build", "test"}
+		case containsAny(p, "重构", "重命名", "清理"):
+			return []string{"convention", "build"}
+		case containsAny(p, "审查", "评审", "检查"):
+			return []string{"convention", "security"}
+		case containsAny(p, "提交", "分支", "合并", "推送", "拉取"):
+			return []string{"git"}
+		}
+		return nil
+	}
+	switch task {
+	case "test", "build", "bugfix":
+		// Fix/build/test flows drive run_command: build and test lessons apply.
+		return []string{"build", "test"}
+	case "refactor", "feature":
+		// Code writing: editing conventions first, build verification second.
+		return []string{"convention", "build"}
+	case "review":
+		// Reading/auditing code: standards and security lessons.
+		return []string{"convention", "security"}
+	default:
+		return nil
+	}
+}
+
+// TopRulesForTask is the task-relevant variant of TopRulesForPrompt: the
+// user prompt is classified (playbook classifyTaskType + CJK supplement)
+// and rules from relevant categories are preferred. A small global floor
+// (top-scored rules regardless of category) guarantees that the most
+// critical high-hit lessons survive even when their category is out of
+// scope for the current task. Prompts that classify as "other" (or are
+// empty) fall back to the unfiltered TopRulesForPrompt behavior.
+func (rs *RuleStore) TopRulesForTask(maxRules int, userPrompt string) string {
+	cats := taskRuleCategories(userPrompt)
+	if len(cats) == 0 {
+		return rs.TopRulesForPrompt(maxRules)
+	}
+
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+
+	if len(rs.rules) == 0 {
+		return ""
+	}
+
+	catSet := make(map[string]bool, len(cats))
+	for _, c := range cats {
+		catSet[c] = true
+	}
+	now := time.Now()
+	type ruleScore struct {
+		rule     string
+		hint     string
+		score    float64
+		relevant bool
+	}
+	var active []ruleScore
+	relevantCount := 0
+	for _, r := range rs.rules {
+		if r.HitCount <= 0 {
+			continue
+		}
+		rel := catSet[r.Category]
+		if rel {
+			relevantCount++
+		}
+		active = append(active, ruleScore{
+			rule:     r.Rule,
+			hint:     r.FixHint,
+			score:    recencyWeightedScore(r.HitCount, r.LastSeen, now),
+			relevant: rel,
+		})
+	}
+	if len(active) == 0 {
+		return ""
+	}
+
+	// Sort by combined score descending (small N, insertion sort).
+	for i := 1; i < len(active); i++ {
+		for j := i; j > 0 && active[j].score > active[j-1].score; j-- {
+			active[j], active[j-1] = active[j-1], active[j]
+		}
+	}
+
+	if maxRules <= 0 {
+		maxRules = len(active)
+	}
+	// Selection: reserve a global floor of top-scored rules (so the most
+	// critical high-hit lessons stay visible even when out of scope), then
+	// fill with task-relevant rules. No backfill: irrelevant rules are
+	// exactly the noise this filter removes, so slots may stay unfilled,
+	// and that is the token saving.
+	const globalFloor = 2
+	floor := globalFloor
+	if floor > maxRules {
+		floor = maxRules
+	}
+	picked := make([]ruleScore, 0, maxRules)
+	inPick := make(map[int]bool, maxRules)
+	for i := 0; i < len(active) && len(picked) < floor; i++ {
+		inPick[i] = true
+		picked = append(picked, active[i])
+	}
+	for i, s := range active {
+		if len(picked) >= maxRules {
+			break
+		}
+		if inPick[i] || !s.relevant {
+			continue
+		}
+		inPick[i] = true
+		picked = append(picked, s)
+	}
+
+	if relevantCount < len(active) {
+		debug.Log("ratchet", "task-selective injection: %d/%d active rules match task categories",
+			relevantCount, len(active))
+	}
+
+	var b strings.Builder
+	b.WriteString("Lessons from previous runs in this workspace:\n")
+	for _, a := range picked {
 		b.WriteString(fmt.Sprintf("- %s", a.rule))
 		if a.hint != "" {
 			b.WriteString(fmt.Sprintf(" → %s", a.hint))
@@ -631,18 +831,30 @@ func (a *Agent) ProcessErrorsWithLLM(parentCtx context.Context, errors []string,
 	return &output, nil
 }
 
-// runRatchet is the full pipeline: match -> generalize with retry -> store.
-// Called from reflection after a run with errors.
+// runRatchet is the full pipeline: consolidate -> match -> generalize with
+// retry -> store. Called from reflection after a run.
 func (a *Agent) runRatchet(stats *RunStats) {
-	if len(stats.Errors) == 0 {
-		return
-	}
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
 		return
 	}
 	rs := NewRuleStore(workingDir)
 	if rs == nil {
+		return
+	}
+
+	// Consolidation sweep (write-manage-read memory loop, arXiv:2603.07670):
+	// prune rules that aged past the staleness threshold and merge
+	// near-duplicates, even when the current run had no errors. Without
+	// this sweep the declared staleness policy (staleRuleThreshold /
+	// staleRuleMinHits) was dead code: stale low-value rules survived
+	// forever and competed for prompt injection slots.
+	if removed := rs.CleanStale(); removed > 0 {
+		debug.Log("ratchet", "staleness sweep removed %d stale rules", removed)
+	}
+	rs.DeduplicateRules()
+
+	if len(stats.Errors) == 0 {
 		return
 	}
 
