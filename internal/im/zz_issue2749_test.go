@@ -58,3 +58,22 @@ func TestIssue2749_WordEndingLocalpartUnchanged(t *testing.T) {
 		t.Errorf("prefix confusion regression")
 	}
 }
+
+func TestIssue2749_MixedCaseLocalpart(t *testing.T) {
+	// #2749 case follow-up: self-hosted homeservers may issue mixed-case
+	// localparts; the old (?i) regex matched them. Lower both sides.
+	a := &matrixAdapter{userID: "@Bot-:matrix.org"}
+	if !a.hasMention("@Bot- check the build", nil) {
+		t.Errorf("mixed-case non-word-ending mention must match")
+	}
+	if !a.hasMention("hey @BOT- run tests", nil) {
+		t.Errorf("uppercase body mention of mixed-case localpart must match")
+	}
+	b := &matrixAdapter{userID: "@Al:matrix.org"}
+	if !b.hasMention("@al do it", nil) {
+		t.Errorf("lowercase body mention of uppercase localpart must match")
+	}
+	if got := a.stripMention("@Bot- check the build"); got != "check the build" {
+		t.Errorf("stripMention mixed-case = %q, want %q", got, "check the build")
+	}
+}

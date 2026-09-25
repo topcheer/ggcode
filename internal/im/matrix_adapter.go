@@ -832,7 +832,10 @@ const matrixLocalPartContChars = "abcdefghijklmnopqrstuvwxyz0123456789._=-+/"
 // mentionsLocalPart reports whether text contains "@localpart" NOT followed
 // by a legal localpart continuation character (RE2-safe boundary).
 func mentionsLocalPart(lower, localPart string) bool {
-	needle := "@" + localPart
+	// #2749 case follow-up: the old (?i) regex was case-insensitive, and
+	// self-hosted homeservers may issue mixed-case localparts (@Bot:...).
+	// The body is already lowered by callers; lower the needle too.
+	needle := "@" + strings.ToLower(localPart)
 	for start := 0; ; {
 		i := strings.Index(lower[start:], needle)
 		if i < 0 {
@@ -851,7 +854,8 @@ func mentionsLocalPart(lower, localPart string) bool {
 // prefixes of a longer handle (same boundary rule as mentionsLocalPart).
 func stripLocalPartMention(text, localPart string) string {
 	lower := strings.ToLower(text)
-	needle := "@" + localPart
+	// #2749 case follow-up: lower the needle to match the (?i) behavior.
+	needle := "@" + strings.ToLower(localPart)
 	var b strings.Builder
 	for i := 0; i < len(text); {
 		if strings.HasPrefix(lower[i:], needle) {
