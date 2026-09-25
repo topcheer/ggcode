@@ -1034,6 +1034,24 @@ func zhCatalog(key string) string {
 		return "显示上下文窗口使用情况（token、消息、容量）"
 	case "slash.runreport":
 		return "评估本次会话轨迹，离线输出效率评分卡"
+	case "slash.spec":
+		return "管理规格驱动开发工件（列出/创建/激活/停用）"
+	case "spec.list_header":
+		return "规格（spec-driven development）：\n"
+	case "spec.none":
+		return "（尚无规格——用 `/spec <slug> [标题]` 创建）\n"
+	case "spec.created":
+		return "已创建并激活规格 %q（specs/ 目录下），agent 每轮将自动对齐该规格。"
+	case "spec.activated":
+		return "已激活规格 %q —— 规格对齐注入已开启。"
+	case "spec.off":
+		return "规格已停用 —— 不再注入规格对齐提示。"
+	case "spec.notfound":
+		return "specs/ 下未找到规格 %q。"
+	case "spec.usage":
+		return "用法：/spec | /spec <slug> [标题] | /spec activate <slug> | /spec off"
+	case "spec.err":
+		return "spec 命令出错：%v"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":

@@ -1019,6 +1019,24 @@ func enCatalog(key string) string {
 		return "Show context window usage breakdown (tokens, messages, capacity)"
 	case "slash.runreport":
 		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
+	case "slash.spec":
+		return "Manage spec-driven development specs (list/create/activate/off)"
+	case "spec.list_header":
+		return "Specs (spec-driven development):\n"
+	case "spec.none":
+		return "(no specs yet — create one with `/spec <slug> [title]`)\n"
+	case "spec.created":
+		return "Created and activated spec %q under specs/. The agent is now grounded to it each turn."
+	case "spec.activated":
+		return "Activated spec %q — grounding injection enabled."
+	case "spec.off":
+		return "Spec deactivated — no active-spec grounding."
+	case "spec.notfound":
+		return "Spec %q not found under specs/."
+	case "spec.usage":
+		return "Usage: /spec | /spec <slug> [title] | /spec activate <slug> | /spec off"
+	case "spec.err":
+		return "Spec command error: %v"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":

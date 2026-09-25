@@ -384,7 +384,7 @@ var SlashCommands = []string{
 	"/search",
 	// #889: these have descriptions/placeholders (and real handlers) but
 	// were missing from the list, so Tab completion never offered them.
-	"/redo", "/notify", "/export-trace", "/runreport",
+	"/redo", "/notify", "/export-trace", "/runreport", "/spec",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -428,6 +428,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/undo-run":      "Revert ALL file changes from the last agent run",
 	"/redo":          "Redo the last undone file edit (re-apply checkpoint)",
 	"/runreport":     "Evaluate this session's trajectory (offline scorecard)",
+	"/spec":          "Manage spec-driven development specs (list/create/activate/off)",
 	"/files":         "Show files modified by agent",
 	"/tools":         "List available tools",
 	"/checkpoints":   "List checkpoints",

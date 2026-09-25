@@ -18,6 +18,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/stats` | Open session statistics panel |
 | `/cost` | Show session token usage and estimated cost |
 | `/runreport` | Evaluate this session's trajectory and print an offline efficiency scorecard (wasted calls, duplicate tool calls, error rate, token overhead) |
+| `/spec` | Manage spec-driven development artifacts (Spec Kit/Kiro style): `/spec` list, `/spec <slug> [title]` create+activate, `/spec activate <slug>`, `/spec off`. An active spec is injected into the agent's system prompt each turn with requirement progress and next unchecked items |
 | `/exit` | Exit ggcode |
 | `/restart` | Restart ggcode (preserves current session) |
 | `/update` | Check and install updates |

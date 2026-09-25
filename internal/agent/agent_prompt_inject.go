@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/spec"
 )
 
 // maybeInjectDynamicSystemPrompt builds the system prompt from scratch on
@@ -19,6 +20,7 @@ import (
 //  2. Dynamic system prompt from injector callback (if set)
 //  3. Top learned ratchet rules (if any exist for this workspace)
 //  4. Playbook strategy hints (if any exist for this workspace)
+//  5. Active spec grounding (spec-driven development, if a spec is active)
 //
 // The static base (layer 1) is emitted as a separate content block with
 // Cache=true so providers like Anthropic can cache it across turns even
@@ -98,6 +100,15 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 				dynamicParts = append(dynamicParts, playbookText)
 				debug.Log("agent", "Injected playbook strategy hints into system prompt")
 			}
+		}
+	}
+
+	// Layer 5: active spec grounding (spec-driven development, Spec Kit style).
+	// Zero-cost when no spec is active; bounded output when one is.
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if specText := spec.PromptInjection(workingDir); specText != "" {
+			dynamicParts = append(dynamicParts, specText)
+			debug.Log("agent", "Injected active spec grounding into system prompt")
 		}
 	}
 
