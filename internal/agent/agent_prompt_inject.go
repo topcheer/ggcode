@@ -27,6 +27,19 @@ import (
 // content at the start with its own cache breakpoint maximises KV cache
 // reuse, saving 40-80% of system prompt token costs.
 //
+// The function is split into three stages following the State-Grounded
+// Conditioning design principle (arXiv:2609.27606), which separates
+// state-dependent control into Perception (observe live state),
+// Grounding (decide whether/how to act on it), and Interaction (commit)
+// wrappers:
+//
+//   - collectDynamicPromptLayers -- Perception: gathers dynamic content
+//     slices; observes state, makes no commit decisions.
+//   - this function body -- Grounding: anchors temporal context, skips
+//     empty builds, detects no-op rebuilds, and enforces the budget.
+//   - commitSystemPrompt -- Interaction: assembles provider content
+//     blocks and writes them to the context manager.
+//
 // This function is called once at the start of each agent Run().
 func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	a.mu.Lock()
@@ -40,66 +53,8 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	// scaffolding mutation). See harness_fingerprint.go for rationale.
 	defer a.logHarnessFingerprint()
 
-	// Collect dynamic layers.
-	var dynamicParts []string
-
-	// Layer 1.5: autopilot goal (must survive compaction).
-	// The goal is injected into the system prompt rather than the conversation
-	// body so it persists across context compaction. Without this, the main
-	// agent loses sight of its objective after summarization — only the
-	// strategist remembers it. This is the "Goal Mode" pattern (Codex CLI /goal):
-	// a persistent directive that survives compaction and interruptions.
-	if a.currentMode() == permission.AutopilotMode {
-		if goal := a.getAutopilotGoal(); goal != "" {
-			dynamicParts = append(dynamicParts, fmt.Sprintf(
-				"⏵ ACTIVE GOAL (persistent — do not lose sight of this):\n%s\n\n"+
-					"Continue working toward this goal. Do not ask the user for confirmation "+
-					"unless genuinely blocked. Use best judgment for implementation decisions.",
-				goal,
-			))
-		}
-	}
-
-	// Layer 2: dynamic system prompt from external injector.
-	if fn != nil {
-		extra := strings.TrimSpace(fn())
-		if extra != "" {
-			dynamicParts = append(dynamicParts, extra)
-		}
-	}
-
-	// Layer 2.5: named prompt layers (e.g. resume reconciliation). Same
-	// dynamic bucket as layer 2 — rebuilt every run, never cached.
-	for _, layer := range a.systemPromptLayers {
-		if layer.fn == nil {
-			continue
-		}
-		if extra := strings.TrimSpace(layer.fn()); extra != "" {
-			dynamicParts = append(dynamicParts, extra)
-		}
-	}
-
-	// Layer 3: proactive ratchet rules.
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if rs := NewRuleStore(workingDir); rs != nil {
-			rulesText := rs.TopRulesForPrompt(5)
-			if rulesText != "" {
-				dynamicParts = append(dynamicParts, rulesText)
-				debug.Log("agent", "Injected learned ratchet rules into system prompt")
-			}
-		}
-	}
-
-	// Layer 4: playbook strategy hints (ACE-inspired).
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(3)
-			if playbookText != "" {
-				dynamicParts = append(dynamicParts, playbookText)
-				debug.Log("agent", "Injected playbook strategy hints into system prompt")
-			}
-		}
-	}
+	// Perception: gather all state-dependent dynamic layers.
+	dynamicParts := a.collectDynamicPromptLayers(fn)
 
 	// Skip entirely when there is no system prompt and no dynamic content.
 	// This preserves backward compatibility: tests and setups that rely on
@@ -142,8 +97,88 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		return
 	}
 
-	// Build content blocks: static base (cacheable) + dynamic (not cached).
-	// When there is no dynamic content, emit a single cached block.
+	// Interaction: write the assembled prompt to the context manager.
+	commitSystemPrompt(cm, base, dynamicParts)
+}
+
+// collectDynamicPromptLayers gathers the state-dependent prompt layers in
+// canonical order. This is the Perception wrapper: it only observes live
+// agent/workspace state and returns text slices; it makes no decisions
+// about caching, budgets, or commits. Layers:
+//
+//	1.5 autopilot goal (must survive compaction, see below)
+//	2   external injector callback
+//	2.5 named prompt layers (e.g. resume reconciliation)
+//	3   proactive ratchet rules
+//	4   playbook strategy hints
+func (a *Agent) collectDynamicPromptLayers(injector func() string) []string {
+	var dynamicParts []string
+
+	// Layer 1.5: autopilot goal (must survive compaction).
+	// The goal is injected into the system prompt rather than the conversation
+	// body so it persists across context compaction. Without this, the main
+	// agent loses sight of its objective after summarization — only the
+	// strategist remembers it. This is the "Goal Mode" pattern (Codex CLI /goal):
+	// a persistent directive that survives compaction and interruptions.
+	if a.currentMode() == permission.AutopilotMode {
+		if goal := a.getAutopilotGoal(); goal != "" {
+			dynamicParts = append(dynamicParts, fmt.Sprintf(
+				"⏵ ACTIVE GOAL (persistent — do not lose sight of this):\n%s\n\n"+
+					"Continue working toward this goal. Do not ask the user for confirmation "+
+					"unless genuinely blocked. Use best judgment for implementation decisions.",
+				goal,
+			))
+		}
+	}
+
+	// Layer 2: dynamic system prompt from external injector.
+	if injector != nil {
+		if extra := strings.TrimSpace(injector()); extra != "" {
+			dynamicParts = append(dynamicParts, extra)
+		}
+	}
+
+	// Layer 2.5: named prompt layers (e.g. resume reconciliation). Same
+	// dynamic bucket as layer 2 — rebuilt every run, never cached.
+	for _, layer := range a.systemPromptLayers {
+		if layer.fn == nil {
+			continue
+		}
+		if extra := strings.TrimSpace(layer.fn()); extra != "" {
+			dynamicParts = append(dynamicParts, extra)
+		}
+	}
+
+	// Layer 3: proactive ratchet rules.
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if rs := NewRuleStore(workingDir); rs != nil {
+			rulesText := rs.TopRulesForPrompt(5)
+			if rulesText != "" {
+				dynamicParts = append(dynamicParts, rulesText)
+				debug.Log("agent", "Injected learned ratchet rules into system prompt")
+			}
+		}
+	}
+
+	// Layer 4: playbook strategy hints (ACE-inspired).
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if pb := NewPlaybook(workingDir); pb != nil {
+			playbookText := pb.HintsForPrompt(3)
+			if playbookText != "" {
+				dynamicParts = append(dynamicParts, playbookText)
+				debug.Log("agent", "Injected playbook strategy hints into system prompt")
+			}
+		}
+	}
+
+	return dynamicParts
+}
+
+// commitSystemPrompt is the Interaction wrapper: it assembles the provider
+// content blocks -- static base first with Cache=true, joined dynamic layers
+// after without caching -- and writes them into the context manager. When
+// there is no dynamic content a single cached block is emitted.
+func commitSystemPrompt(cm *context.Manager, base string, dynamicParts []string) {
 	if len(dynamicParts) == 0 {
 		cm.UpdateFirstSystemMessage(provider.Message{
 			Role:    "system",
@@ -152,12 +187,11 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 		return
 	}
 
-	dynamicText := strings.Join(dynamicParts, "\n\n")
 	cm.UpdateFirstSystemMessage(provider.Message{
 		Role: "system",
 		Content: []provider.ContentBlock{
 			{Type: "text", Text: base, Cache: true},
-			{Type: "text", Text: dynamicText},
+			{Type: "text", Text: strings.Join(dynamicParts, "\n\n")},
 		},
 	})
 }
