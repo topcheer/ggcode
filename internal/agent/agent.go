@@ -350,6 +350,7 @@ type Agent struct {
 	onVerifyProgress         func(text string)                     // called during async verification (status updates)
 	onVerifyResult           func(VerifyResult)                    // called when async verification completes
 	onToolProgress           func(toolID, toolName, output string) // called for streaming tool output (e.g. wait_command)
+	streamSpec               *streamSpeculator                     // intra-decode speculative executor for the current LLM turn (spec_stream.go)
 	mu                       sync.RWMutex
 }
 type providerAwareContextManager interface {
@@ -2196,6 +2197,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// apply's previous read the leaked value) and ReasoningEffort()
 		// reported the wrong state for the rest of the session. The closure's
 		// defer restores on every exit including panic-unwind.
+		// Intra-decode speculative execution (arXiv:2512.15834): start
+		// read-only tools as their arguments finish streaming, overlapping
+		// tool I/O with the rest of the decode.
+		spec := newStreamSpeculator(a, ctx)
+		a.streamSpec = spec
 		resp, textBuf, toolCalls, truncated, policyBlocked, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
 			defer func() {
 				if samplingApplied >= 0 {
@@ -2205,8 +2211,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.restoreEffort(effortPrev)
 				}
 			}()
-			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
+			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent, spec)
 		}()
+		if err != nil {
+			spec.abort() // free in-flight speculations fast; the turn is retried
+		}
+		specResults := spec.collect()
+		a.streamSpec = nil
 		if err != nil {
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0
@@ -3122,6 +3133,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// are executed concurrently before the sequential loop. Results are
 		// consumed in-order; side-effect tools still run sequentially.
 		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
+		// Merge intra-decode speculative results (spec_stream.go): same map,
+		// same permission semantics via usePreExecutedWithPermission. Batch
+		// results take precedence only for indexes the speculator did not cover.
+		for si, sr := range specResults {
+			if preExecuted == nil {
+				preExecuted = make(map[int]preExecutedResult)
+			}
+			if _, dup := preExecuted[si]; !dup {
+				preExecuted[si] = sr
+			}
+		}
 		// Parallel pre-execution of wait-family tools (wait_agent,
 		// teammate_results): concurrent waits make batch latency the MAX
 		// instead of the SUM of remaining sub-agent runtimes, and every wait's
@@ -4882,7 +4904,7 @@ func (a *Agent) injectPendingInterruptions() bool {
 // and returns the assembled response, the raw assistant text buffer, any
 // completed tool calls, and whether the stream ended truncated and/or blocked
 // by a provider policy filter.
-func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
+func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent), spec *streamSpeculator) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	rawStream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
@@ -4942,6 +4964,9 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 			turnMetrics.closeThinkWindow()
 			flushText()
 			onEvent(event)
+			// Intra-decode speculation: execute the just-completed read-only
+			// call while the model keeps decoding the rest of the response.
+			spec.onToolCallDone(event.Tool)
 			toolCalls = append(toolCalls, event.Tool)
 			blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
 			blk.ThinkingSignature = string(event.Tool.ThoughtSignature) // #1610-A

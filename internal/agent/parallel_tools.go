@@ -158,6 +158,10 @@ func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending
 			debug.Log("parallel", "withholding %s (index=%d) from pre-exec: collides with pending mutation", tc.Name, i)
 			continue
 		}
+		if a.streamSpec != nil && a.streamSpec.covers(i) {
+			debug.Log("parallel", "skipping batch pre-exec %s (index=%d) - covered by stream speculation", tc.Name, i)
+			continue
+		}
 		if a.speculator.hasCached(tc.Name, tc.Arguments) {
 			continue
 		}

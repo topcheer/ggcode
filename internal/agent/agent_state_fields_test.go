@@ -41,6 +41,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"onVerifyProgress":     "optional callback, injected via setter",
 		"onVerifyResult":       "optional callback, injected via setter",
 		"onToolProgress":       "optional callback, injected via setter",
+		"streamSpec":           "intra-decode speculative executor (spec_stream.go); created per LLM turn inside RunStreamWithContent",
 		"onApproval":           "optional approval callback, injected via SetApprovalFunc",
 		"onCheckpoint":         "optional callback, injected via setter",
 		"onInterrupt":          "optional interruption handler, injected via setter",
