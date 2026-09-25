@@ -275,3 +275,36 @@ func TestIssue2581_TransitiveCrossArrayCycleRejectedAtomically(t *testing.T) {
 		t.Fatal("retry after rejection must also fail")
 	}
 }
+
+// r78: SplitBlockers partitions blockers by completion status.
+func TestSplitBlockers(t *testing.T) {
+	m := NewManager()
+	done := StatusCompleted
+	a := m.Create("a", "", "", nil)
+	b := m.Create("b", "", "", nil)
+	leaf := m.Create("leaf", "", "", nil)
+	if _, err := m.Update(leaf.ID, UpdateOptions{AddBlockedBy: []string{a.ID, b.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Update(a.ID, UpdateOptions{Status: &done}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-fetch: the Create-returned snapshot predates the dependency links.
+	fresh, _ := m.Get(leaf.ID)
+	open, doneList := m.SplitBlockers(fresh)
+
+	if len(doneList) != 1 || doneList[0] != a.ID {
+		t.Fatalf("expected done=[%s], got %v", a.ID, doneList)
+	}
+	if len(open) != 1 || open[0] != b.ID {
+		t.Fatalf("expected open=[%s], got %v", b.ID, open)
+	}
+
+	// No blockers at all: both partitions empty.
+	solo := m.Create("solo", "", "", nil)
+	open, doneList = m.SplitBlockers(solo)
+	if len(open) != 0 || len(doneList) != 0 {
+		t.Fatalf("expected empty partitions, got open=%v done=%v", open, doneList)
+	}
+}
