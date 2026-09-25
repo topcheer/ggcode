@@ -85,6 +85,14 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("registering tools: %w", err)
 			}
 
+			// r86 (RLM, arXiv:2512.24601): bind the code_execution sub-query
+			// adapter to this ACP session's provider.
+			if sqt, _ := registry.Get("code_execution"); sqt != nil {
+				if sq, ok := sqt.(interface{ SetSubQueryFn(tool.SubQueryFn) }); ok {
+					sq.SetSubQueryFn(tool.NewProviderSubQueryFn(func() provider.Provider { return prov }))
+				}
+			}
+
 			// Create ACP transport and handler
 			transport := acp.NewTransport(os.Stdin, os.Stdout)
 			handler := acp.NewHandler(cfg, registry, transport, prov)

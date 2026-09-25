@@ -61,6 +61,15 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	// Placeholder core so the closure below can reach the per-runtime
 	// provider field set later by SetConfigAgent (#1592-B).
 	core := &InteractiveRuntimeCore{}
+
+	// r86 (RLM, arXiv:2512.24601): late-bind the code_execution sub-query
+	// adapter to THIS runtime's provider - the same closure pattern as the
+	// MCP sampling handler (#1592-B); the getter is read at call time.
+	if sqt, _ := registry.Get("code_execution"); sqt != nil {
+		if sq, ok := sqt.(interface{ SetSubQueryFn(tool.SubQueryFn) }); ok {
+			sq.SetSubQueryFn(tool.NewProviderSubQueryFn(func() provider.Provider { return core.samplingProvider }))
+		}
+	}
 	mcpMgr := plugin.NewMCPManager(mergedServers, registry, workingDir)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
 	_ = registry.Register(tool.GetMCPPromptTool{Runtime: mcpMgr})

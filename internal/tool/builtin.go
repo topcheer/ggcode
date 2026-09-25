@@ -214,8 +214,10 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	}
 
 	// Code Execution (PTC): must be registered last — it holds a reference
-	// to the registry to look up tools at execution time.
-	if err := registry.Register(CodeExecution{Registry: registry}); err != nil {
+	// to the registry to look up tools at execution time. Registered as a
+	// POINTER so runtimes can late-bind the RLM sub-query provider via
+	// SetSubQueryFn after registration (r86, arXiv:2512.24601).
+	if err := registry.Register(&CodeExecution{Registry: registry}); err != nil {
 		return err
 	}
 

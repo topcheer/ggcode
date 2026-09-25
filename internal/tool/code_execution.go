@@ -78,6 +78,20 @@ type CodeExecution struct {
 	// dynamically registered tools (e.g., MCP tools promoted to the
 	// read-only whitelist) are immediately callable.
 	Registry *Registry
+
+	// SubQueryFn, when non-nil, enables tools.subquery() — Recursive
+	// Language Model sub-queries (arXiv:2512.24601): focused LLM calls
+	// over context snippets the model selected inside the sandbox.
+	// Late-bound via SetSubQueryFn so runtimes that bind their provider
+	// after tool registration still resolve correctly (#1592-B pattern).
+	SubQueryFn SubQueryFn
+}
+
+// SetSubQueryFn late-binds the RLM sub-query provider adapter.
+func (c *CodeExecution) SetSubQueryFn(fn SubQueryFn) {
+	if fn != nil {
+		c.SubQueryFn = fn
+	}
 }
 
 func (CodeExecution) Name() string { return "code_execution" }
@@ -97,6 +111,14 @@ Discover them with JSON.parse(await tools.mcpList()) → [{name, description, sa
 Fetch one schema on demand: await tools.mcpDescribe('mcp__server__tool') → {name, description, parameters}.
 Large MCP results stay inside the sandbox — filter/map/reduce them in JS and console.log only summaries.
 Budget: at most 30 MCP tool calls per run.
+
+Sub-LLM recursion (RLM, arXiv:2512.24601):
+  await tools.subquery(prompt, context) → answer string
+  ONE focused LLM call over a context snippet YOU selected (e.g. a slice of a huge
+  tool result already stored in a JS variable), so multi-part analysis of oversized
+  outputs never enters the main context window. Budget: at most 8 calls per run;
+  context capped at 64KB, prompt at 8KB (both rune-safe, truncation is marked).
+  Present only when a provider is bound.
 
 Tool results are strings — use JSON.parse() if needed. async/await supported.
 console.log(...) output is returned to you.
@@ -466,6 +488,72 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		}
 		return resolvePromise(vm, string(b))
 	})
+
+	// r86 (RLM, arXiv:2512.24601): tools.subquery adds the recursion half
+	// of the Recursive Language Model paradigm. The sandbox already keeps
+	// large tool results as JS variables ("context as environment");
+	// subquery lets the model recursively route ONE focused LLM call over a
+	// snippet it selected, so decomposing a 200KB log or 5MB JSON never
+	// floods the main context window. Budgets bound the recursion: at most
+	// maxSubQueriesPerRun calls per run, context/prompt size caps, and the
+	// per-call deadline is the sandbox's own execCtx.
+	if c.SubQueryFn != nil {
+		subQueries := 0
+		toolsObj.Set("subquery", func(call goja.FunctionCall) goja.Value {
+			if len(call.Arguments) < 2 || goja.IsUndefined(call.Arguments[0]) || goja.IsNull(call.Arguments[0]) ||
+				goja.IsUndefined(call.Arguments[1]) || goja.IsNull(call.Arguments[1]) {
+				return rejectPromise(vm, fmt.Errorf("subquery requires (prompt, context) string arguments"))
+			}
+			task := call.Arguments[0].ToString().String()
+			ctxText := call.Arguments[1].ToString().String()
+			if strings.TrimSpace(task) == "" {
+				return rejectPromise(vm, fmt.Errorf("subquery prompt is empty"))
+			}
+			if strings.TrimSpace(ctxText) == "" {
+				return rejectPromise(vm, fmt.Errorf("subquery context is empty - pass the snippet to analyze"))
+			}
+			toolCallsMu.Lock()
+			if subQueries >= maxSubQueriesPerRun {
+				toolCallsMu.Unlock()
+				return rejectPromise(vm, fmt.Errorf("subquery budget exceeded: at most %d sub-LLM calls per code_execution run (decompose further in JS instead)", maxSubQueriesPerRun))
+			}
+			subQueries++
+			n := subQueries
+			toolCallsMu.Unlock()
+
+			prompt := buildSubQueryPrompt(
+				truncateSandboxText(task, maxSubQueryPromptBytes),
+				subQueryTruncateContext(ctxText, maxSubQueryContextBytes))
+			debug.Log("ptc", "subquery #%d: task=%dB ctx=%dB", n, len(task), len(ctxText))
+
+			type sqOutcome struct {
+				answer string
+				err    error
+			}
+			done := make(chan sqOutcome, 1)
+			safego.Go("code_execution.subquery", func() {
+				ans, err := c.SubQueryFn(ctx, prompt)
+				done <- sqOutcome{answer: ans, err: err}
+			})
+			select {
+			case oc := <-done:
+				toolCallsMu.Lock()
+				if oc.err != nil {
+					toolCalls = append(toolCalls, fmt.Sprintf("subquery#%d → error: %v", n, oc.err))
+					toolCallsMu.Unlock()
+					return rejectPromise(vm, fmt.Errorf("subquery failed: %v", oc.err))
+				}
+				toolCalls = append(toolCalls, fmt.Sprintf("subquery#%d", n))
+				toolCallsMu.Unlock()
+				return resolvePromise(vm, oc.answer)
+			case <-ctx.Done():
+				toolCallsMu.Lock()
+				toolCalls = append(toolCalls, fmt.Sprintf("subquery#%d → timeout", n))
+				toolCallsMu.Unlock()
+				return rejectPromise(vm, fmt.Errorf("subquery timed out after %v", codeExecTimeout))
+			}
+		})
+	}
 
 	vm.Set("tools", toolsObj)
 
