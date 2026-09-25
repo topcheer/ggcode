@@ -97,6 +97,11 @@ func (t MultiEditFile) Execute(ctx context.Context, input json.RawMessage) (Resu
 	// pass its own guard inside our window.
 	unlockMulti := LockWritePath(args.FilePath)
 	defer unlockMulti()
+	// r77 evidence-grounding gate: same as edit_file — refuse to act on a
+	// command-modified file the agent has not re-read (arXiv:2605.08828).
+	if gate := externalModGate(args.FilePath); gate != "" {
+		return Result{IsError: true, Content: "Error: " + gate}, nil
+	}
 	data, err := os.ReadFile(args.FilePath)
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error reading file: %v", err)}, nil

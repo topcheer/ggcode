@@ -158,6 +158,13 @@ func (t WriteFile) Execute(ctx context.Context, input json.RawMessage) (Result, 
 				since.Format("2006-01-02 15:04:05"),
 			)}, nil
 		}
+		// r77 evidence-grounding gate: CheckStale passes once
+		// detectChangedFilesFromCommand re-stats the baseline, but the agent
+		// still has not OBSERVED the new content. Block until re-read
+		// (arXiv:2605.08828 action gating).
+		if gate := externalModGate(args.Path); gate != "" {
+			return Result{IsError: true, Content: "Error: " + gate}, nil
+		}
 	}
 
 	// Capture old content before overwriting (for diff feedback).

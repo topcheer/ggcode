@@ -26,6 +26,12 @@ import (
 type FileIntegrityTracker struct {
 	mu       sync.RWMutex
 	modtimes map[string]time.Time // normalized path → last known mtime
+	// dirty records paths detected as externally modified (by a command the
+	// agent ran) whose new content the agent has NOT yet re-observed via
+	// read_file or absorbed via its own write. r77 evidence-grounding gate:
+	// while dirty, write tools refuse the path instead of silently acting on
+	// stale in-context content (arXiv:2605.08828, EGD action gating).
+	dirty map[string]time.Time // normalized path → detection time
 }
 
 // defaultFileTracker is the package-level singleton used by all file tools.
@@ -59,6 +65,7 @@ func LockWritePath(path string) func() {
 func NewFileIntegrityTracker() *FileIntegrityTracker {
 	return &FileIntegrityTracker{
 		modtimes: make(map[string]time.Time),
+		dirty:    make(map[string]time.Time),
 	}
 }
 
@@ -94,6 +101,7 @@ func (t *FileIntegrityTracker) RecordRead(path string) {
 	key := normalizePath(path)
 	t.mu.Lock()
 	t.modtimes[key] = info.ModTime()
+	delete(t.dirty, key) // re-observed on disk: the r77 external-mod gate lifts
 	t.mu.Unlock()
 }
 
@@ -108,6 +116,7 @@ func (t *FileIntegrityTracker) RecordWrite(path string) {
 	key := normalizePath(path)
 	t.mu.Lock()
 	t.modtimes[key] = info.ModTime()
+	delete(t.dirty, key) // the agent's own write is an authoritative observation
 	t.mu.Unlock()
 }
 
@@ -182,8 +191,16 @@ func (t *FileIntegrityTracker) ChangedSince(snapshot map[string]time.Time) []str
 			changed = append(changed, path)
 			// Update the tracker so subsequent stale-read checks are relative
 			// to this external change, not the agent's prior read.
+			// r77: ALSO flag the path dirty. The baseline bump keeps CheckStale
+			// bookkeeping consistent, but it must not silently re-brand
+			// unobserved external content as agent-known evidence - otherwise
+			// the next edit proceeds on stale in-context content, and even a
+			// match-failure staleReadHint is suppressed (the exact EGD failure
+			// mode of arXiv:2605.08828: treating an outdated observation as
+			// sufficient ground for action).
 			t.mu.Lock()
 			t.modtimes[path] = info.ModTime()
+			t.dirty[path] = time.Now()
 			t.mu.Unlock()
 		}
 	}
@@ -196,6 +213,7 @@ func (t *FileIntegrityTracker) RemoveTracking(path string) {
 	key := normalizePath(path)
 	t.mu.Lock()
 	delete(t.modtimes, key)
+	delete(t.dirty, key)
 	t.mu.Unlock()
 }
 
@@ -203,7 +221,41 @@ func (t *FileIntegrityTracker) RemoveTracking(path string) {
 func (t *FileIntegrityTracker) Reset() {
 	t.mu.Lock()
 	t.modtimes = make(map[string]time.Time)
+	t.dirty = make(map[string]time.Time)
 	t.mu.Unlock()
+}
+
+// CheckExternalMod reports whether the file at path was detected as externally
+// modified (by a command the agent ran - e.g. gofmt, sed -i, git checkout, a
+// code generator) and has NOT been re-observed since. Unlike CheckStale, this
+// survives ChangedSince's baseline re-stat: the baseline bump keeps stale-check
+// bookkeeping consistent, but it must not silently re-brand unobserved external
+// content as agent-known evidence.
+func (t *FileIntegrityTracker) CheckExternalMod(path string) (dirty bool, detected time.Time) {
+	key := normalizePath(path)
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	at, ok := t.dirty[key]
+	return ok, at
+}
+
+// externalModGate is the r77 evidence-grounding action gate (arXiv:2605.08828):
+// an agent must not act on environment claims it has not resolved against the
+// current state. When a command-run detection flagged the path and the agent
+// has not re-read it, write tools return this blocking error instead of
+// silently editing stale content. Cleared by RecordRead (re-observation) or
+// RecordWrite (the agent's own authoritative full-content write).
+func externalModGate(path string) string {
+	dirty, at := defaultFileTracker.CheckExternalMod(path)
+	if !dirty {
+		return ""
+	}
+	return fmt.Sprintf(
+		"file was modified by an external command since you last observed it (detected %s) and has not been re-read. "+
+			"Your in-context copy is stale - acting on it risks overwriting or duplicating the external changes. "+
+			"Re-read the file with read_file, then retry.",
+		at.Format("2006-01-02 15:04:05"),
+	)
 }
 
 // detectChangedFilesFromCommand returns a notice string listing any tracked

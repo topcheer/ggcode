@@ -87,6 +87,13 @@ func (t EditFile) Execute(ctx context.Context, input json.RawMessage) (Result, e
 	// pass its own guard inside our window.
 	unlockEdit := LockWritePath(args.FilePath)
 	defer unlockEdit()
+	// r77 evidence-grounding gate: a command-modified, not-yet-re-read file
+	// must not be edited from stale in-context content (arXiv:2605.08828).
+	// Previously only match-FAILURES carried a stale hint, and even that was
+	// suppressed once ChangedSince re-stat'ed the mtime baseline.
+	if gate := externalModGate(args.FilePath); gate != "" {
+		return Result{IsError: true, Content: "Error: " + gate}, nil
+	}
 	data, err := os.ReadFile(args.FilePath)
 	if err != nil {
 		msg := fmt.Sprintf("error reading file: %v", err)

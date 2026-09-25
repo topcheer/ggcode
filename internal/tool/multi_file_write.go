@@ -239,6 +239,20 @@ func (t MultiFileWrite) Execute(ctx context.Context, input json.RawMessage) (Res
 				})
 				continue
 			}
+			// r77 evidence-grounding gate: the baseline re-stat by the
+			// command-run detector makes CheckStale pass, but the agent has
+			// not re-observed the content. Block until re-read
+			// (arXiv:2605.08828 action gating).
+			if gate := externalModGate(f.Path); gate != "" {
+				unlockW()
+				failed++
+				results = append(results, writeResult{
+					Path:   f.Path,
+					Status: "error",
+					Error:  gate,
+				})
+				continue
+			}
 		}
 
 		// Write the file using atomic write (temp+rename) to prevent

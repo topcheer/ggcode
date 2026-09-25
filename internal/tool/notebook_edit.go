@@ -107,6 +107,12 @@ func (t NotebookEdit) Execute(ctx context.Context, input json.RawMessage) (Resul
 			since.Format("2006-01-02 15:04:05"),
 		)}, nil
 	}
+	// r77 evidence-grounding gate: same as edit_file/write_file - the
+	// baseline re-stat by the command-run detector makes CheckStale pass,
+	// but the agent has not re-observed the content (arXiv:2605.08828).
+	if gate := externalModGate(args.NotebookPath); gate != "" {
+		return Result{IsError: true, Content: "Error: " + gate}, nil
+	}
 
 	// Read and parse notebook
 	data, err := os.ReadFile(args.NotebookPath)
