@@ -511,19 +511,19 @@ func koCatalog(key string) string {
 	case "init.resolve_failed":
 		return "초기화 대상 확인 실패: %v\n\n"
 	case "init.generate_failed":
-		return "GGCODE.md 콘텐츠 생성 실패: %v\n\n"
+		return "AGENTS.md 콘텐츠 생성 실패: %v\n\n"
 	case "init.collecting":
 		return "프로젝트 지식 수집 중..."
 	case "init.prompt.title":
 		return "프로젝트 초기화"
 	case "init.prompt.body":
-		return "이 프로젝트에 GGCODE.md가 없습니다. 에이전트가 프로젝트를 이해하는 데 도움이 되도록 생성하세요."
+		return "이 프로젝트에 AGENTS.md가 없습니다. 에이전트가 프로젝트를 이해하는 데 도움이 되도록 생성하세요."
 	case "init.prompt.yes":
 		return "생성"
 	case "init.prompt.no":
 		return "건너뛰기"
 	case "init.prompt.hint":
-		return " y = GGCODE.md 생성 • n/Esc = 건너뛰기"
+		return " y = AGENTS.md 생성 • n/Esc = 건너뛰기"
 	case "command.model_switched":
 		return "모델 전환: %s (제공자: %s)\n\n"
 	case "command.model_failed":
@@ -797,7 +797,7 @@ func koCatalog(key string) string {
 	case "slash.image":
 		return "이미지 첨부"
 	case "slash.init":
-		return "프로젝트 GGCODE.md 생성"
+		return "프로젝트 AGENTS.md 생성"
 	case "slash.lang":
 		return "인터페이스 언어 전환"
 	case "slash.skills":
@@ -1113,7 +1113,7 @@ func koCatalog(key string) string {
   /cost              세션 토큰 사용량 및 예상 비용 표시
   /context           컨텍스트 윈도우 사용량 내역 표시
   /hooks             설정된 훅 표시
-  /init              현재 프로젝트에서 GGCODE.md 생성
+  /init              현재 프로젝트에서 AGENTS.md 생성
   /todo              할 일 목록 보기
   /todo clear        할 일 목록 지우기
 

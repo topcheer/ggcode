@@ -31,7 +31,7 @@ var CompatibilitySubdirRules = []string{
 	".github/copilot-instructions.md",
 }
 
-const DefaultProjectMemoryFilename = "GGCODE.md"
+const DefaultProjectMemoryFilename = "AGENTS.md"
 
 // LoadProjectMemory reads supported project bootstrap documents from the
 // global config dir (~/.ggcode/) and the current working directory only.

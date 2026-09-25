@@ -585,19 +585,19 @@ func zhCatalog(key string) string {
 	case "init.resolve_failed":
 		return "解析初始化目标失败：%v\n\n"
 	case "init.generate_failed":
-		return "生成 GGCODE.md 内容失败：%v\n\n"
+		return "生成 AGENTS.md 内容失败：%v\n\n"
 	case "init.collecting":
 		return "正在收集项目知识..."
 	case "init.prompt.title":
 		return "初始化项目"
 	case "init.prompt.body":
-		return "此项目中未找到 GGCODE.md。是否创建一个，帮助 agent 了解你的代码规范？"
+		return "此项目中未找到 AGENTS.md。是否创建一个，帮助 agent 了解你的代码规范？"
 	case "init.prompt.yes":
 		return "创建"
 	case "init.prompt.no":
 		return "跳过"
 	case "init.prompt.hint":
-		return " y = 创建 GGCODE.md • n/Esc = 跳过"
+		return " y = 创建 AGENTS.md • n/Esc = 跳过"
 	case "command.model_switched":
 		return "已切换模型为：%s（供应商：%s）\n\n"
 	case "command.model_failed":
@@ -901,7 +901,7 @@ func zhCatalog(key string) string {
 	case "slash.image":
 		return "附加图片"
 	case "slash.init":
-		return "生成项目 GGCODE.md"
+		return "生成项目 AGENTS.md"
 	case "slash.lang":
 		return "切换界面语言"
 	case "slash.skills":
@@ -1252,7 +1252,7 @@ func zhCatalog(key string) string {
   /allow [tool]      在当前模式中永久允许某个工具
   /files             打开全屏文件浏览器（含预览）
   /inspector [filt]  打开检查器面板（工具调用、上下文、指标）
-  /init              基于当前项目生成 GGCODE.md
+  /init              基于当前项目生成 AGENTS.md
   /todo              查看 todo 列表
   /todo clear        清空 todo 列表
   /reflect           触发 Agent 对近期运行的自省

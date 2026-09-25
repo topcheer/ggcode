@@ -507,19 +507,19 @@ func esCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Error al resolver el objetivo de init: %v\n\n"
 	case "init.generate_failed":
-		return "Error al generar contenido de GGCODE.md: %v\n\n"
+		return "Error al generar contenido de AGENTS.md: %v\n\n"
 	case "init.collecting":
 		return "Recopilando conocimiento del proyecto..."
 	case "init.prompt.title":
 		return "Inicializar proyecto"
 	case "init.prompt.body":
-		return "No se encontro GGCODE.md en este proyecto. Crear uno para ayudar al agente a entender las convenciones de su código?"
+		return "No se encontro AGENTS.md en este proyecto. Crear uno para ayudar al agente a entender las convenciones de su código?"
 	case "init.prompt.yes":
 		return "Crear"
 	case "init.prompt.no":
 		return "Omitir"
 	case "init.prompt.hint":
-		return " y = crear GGCODE.md • n/Esc = omitir"
+		return " y = crear AGENTS.md • n/Esc = omitir"
 	case "command.model_switched":
 		return "Modelo cambiado a: %s (proveedor: %s)\n\n"
 	case "command.model_failed":
@@ -791,7 +791,7 @@ func esCatalog(key string) string {
 	case "slash.image":
 		return "Adjuntar una imagen"
 	case "slash.init":
-		return "Generar GGCODE.md del proyecto"
+		return "Generar AGENTS.md del proyecto"
 	case "slash.lang":
 		return "Cambiar idioma de interfaz"
 	case "slash.skills":
@@ -1057,7 +1057,7 @@ Desarrollo:
   /cost              Mostrar uso de tokens y costo estimado de la sesión
   /context           Mostrar desglose de uso de ventana de contexto
   /hooks             Mostrar hooks configurados
-  /init              Generar GGCODE.md del proyecto actual
+  /init              Generar AGENTS.md del proyecto actual
   /todo              Ver lista de táreas
   /todo clear        Limpiar lista de táreas
 

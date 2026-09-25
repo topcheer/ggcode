@@ -436,7 +436,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/chat":          "Open LAN chat panel",
 	"/nick":          "Set LAN chat nickname, role, and team",
 	"/image":         "Attach an image",
-	"/init":          "Create GGCODE.md",
+	"/init":          "Create AGENTS.md",
 	"/exit":          "Exit ggcode",
 	"/quit":          "Exit ggcode",
 	"/compact":       "Compress conversation history",

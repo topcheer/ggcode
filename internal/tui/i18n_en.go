@@ -574,19 +574,19 @@ func enCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Failed to resolve init target: %v\n\n"
 	case "init.generate_failed":
-		return "Failed to generate GGCODE.md content: %v\n\n"
+		return "Failed to generate AGENTS.md content: %v\n\n"
 	case "init.collecting":
 		return "Collecting project knowledge..."
 	case "init.prompt.title":
 		return "Initialize project"
 	case "init.prompt.body":
-		return "No GGCODE.md found in this project. Create one to help the agent understand your codebase conventions?"
+		return "No AGENTS.md found in this project. Create one to help the agent understand your codebase conventions?"
 	case "init.prompt.yes":
 		return "Create"
 	case "init.prompt.no":
 		return "Skip"
 	case "init.prompt.hint":
-		return " y = create GGCODE.md • n/Esc = skip"
+		return " y = create AGENTS.md • n/Esc = skip"
 	case "command.model_switched":
 		return "Switched model to: %s (vendor: %s)\n\n"
 	case "command.model_failed":
@@ -888,7 +888,7 @@ func enCatalog(key string) string {
 	case "slash.image":
 		return "Attach an image"
 	case "slash.init":
-		return "Generate project GGCODE.md"
+		return "Generate project AGENTS.md"
 	case "slash.lang":
 		return "Switch interface language"
 	case "slash.skills":
@@ -1241,7 +1241,7 @@ Development:
   /allow [tool]      Permanently allow a tool in current mode
   /files             Open fullscreen file browser with preview
   /inspector [filt]  Open inspector panel (tool calls, context, metrics)
-  /init              Generate GGCODE.md from the current project
+  /init              Generate AGENTS.md from the current project
   /todo              View todo list
   /todo clear        Clear todo list
   /reflect           Trigger agent self-reflection on recent runs

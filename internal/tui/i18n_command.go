@@ -21,7 +21,7 @@ func enCommandModule() map[string]string {
 		"slash.plugins":             "List loaded plugins",
 		"slash.image":               "Attach an image",
 		"slash.mode":                "Set permission mode",
-		"slash.init":                "Generate project GGCODE.md",
+		"slash.init":                "Generate project AGENTS.md",
 		"slash.lang":                "Switch interface language",
 		"slash.skills":              "Browse available skills",
 		"slash.exit":                "Exit ggcode",
@@ -83,7 +83,7 @@ func enCommandModule() map[string]string {
 		"command.mention_error":     "Mention expansion error: %v",
 		"command.skill_agent_only":  "Skill %s can only be invoked by the agent.",
 		"init.resolve_failed":       "Failed to resolve init target: %v\n\n",
-		"init.generate_failed":      "Failed to generate GGCODE.md content: %v\n\n",
+		"init.generate_failed":      "Failed to generate AGENTS.md content: %v\n\n",
 		"init.collecting":           "Collecting project knowledge...",
 		"help.text": `Available commands:
   /help, /?          Show this help message
@@ -117,7 +117,7 @@ func enCommandModule() map[string]string {
   /plugins           List loaded plugins and their tools
   /image <path>      Attach an image file
   /mode <mode>       Set agent mode (supervised|plan|auto|bypass|autopilot)
-  /init              Generate GGCODE.md from the current project
+  /init              Generate AGENTS.md from the current project
   /agents            List sub-agents
   /agent <id>        Show sub-agent details
   /agent cancel <id> Cancel a sub-agent
@@ -166,7 +166,7 @@ func zhCommandModule() map[string]string {
 		"slash.plugins":             "列出已加载插件",
 		"slash.image":               "附加图片",
 		"slash.mode":                "设置权限模式",
-		"slash.init":                "生成项目 GGCODE.md",
+		"slash.init":                "生成项目 AGENTS.md",
 		"slash.lang":                "切换界面语言",
 		"slash.skills":              "浏览可用 skills",
 		"slash.exit":                "退出 ggcode",
@@ -228,7 +228,7 @@ func zhCommandModule() map[string]string {
 		"command.mention_error":     "展开 @ 引用失败：%v",
 		"command.skill_agent_only":  "技能 %s 只能由 agent 调用。",
 		"init.resolve_failed":       "解析初始化目标失败：%v\n\n",
-		"init.generate_failed":      "生成 GGCODE.md 内容失败：%v\n\n",
+		"init.generate_failed":      "生成 AGENTS.md 内容失败：%v\n\n",
 		"init.collecting":           "正在收集项目知识...",
 		"help.text": `可用命令：
   /help, /?          显示帮助
@@ -262,7 +262,7 @@ func zhCommandModule() map[string]string {
   /plugins           列出已加载插件及其工具
   /image <path>      附加图片文件
   /mode <mode>       设置运行模式（supervised|plan|auto|bypass|autopilot）
-  /init              基于当前项目生成 GGCODE.md
+  /init              基于当前项目生成 AGENTS.md
   /agents            列出子 Agent
   /agent <id>        查看子 Agent 详情
   /agent cancel <id> 取消子 Agent

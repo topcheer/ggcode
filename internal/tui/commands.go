@@ -691,13 +691,32 @@ func (m *Model) handleInitCommand() tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("init.generate_failed", err))
 		return nil
 	}
-	// Build init prompt directly
-	var prompt string
+	// Exploration-first init prompt (#AGENTS.md standard): the agent must
+	// understand the repository BEFORE writing the memory file, instead of
+	// dumping the heuristic snapshot verbatim. The detected facts below are
+	// hints to verify, not the final content.
+	verb := "Create"
 	if existed {
-		prompt = fmt.Sprintf("Update project memory file at %s with the following content:\n\n%s", targetPath, content)
-	} else {
-		prompt = fmt.Sprintf("Create project memory file at %s with the following content:\n\n%s", targetPath, content)
+		verb = "Update"
 	}
+	prompt := fmt.Sprintf(`%s the project memory file at %s (AGENTS.md - the cross-CLI agent instructions standard).
+
+FIRST understand this repository - do NOT write the file from a generic template:
+1. Read the README and docs/ overview: what does this application do?
+2. Read build manifests (go.mod / package.json / Cargo.toml / ...) and map entrypoints (cmd/, main.*, src/) to major directories and their responsibilities.
+3. Read Makefile / CI workflows (.github/workflows, ...) to learn the REAL build, test, and lint commands.
+4. Skim a few representative source and test files to infer conventions (logging, error handling, i18n, testing style).
+
+THEN %s AGENTS.md with durable guidance for coding agents:
+- Project snapshot: what the app is, module path, stack
+- Validation: exact build/test/lint commands as verified in CI/Makefile
+- Architecture: major directories and what lives where
+- Coding conventions: rules this repo actually follows
+- Concise (~100-150 lines), durable guidance only - no one-off task plans
+
+Heuristically detected hints (VERIFY each against the repository; discard anything wrong or stale):
+
+%s`, verb, targetPath, verb, content)
 
 	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")

@@ -507,19 +507,19 @@ func viCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Không thể giải quyết mục tiêu init: %v\n\n"
 	case "init.generate_failed":
-		return "Không thể tạo nội dung GGCODE.md: %v\n\n"
+		return "Không thể tạo nội dung AGENTS.md: %v\n\n"
 	case "init.collecting":
 		return "Đang thu thập kiến thức dự án..."
 	case "init.prompt.title":
 		return "Khởi tạo dự án"
 	case "init.prompt.body":
-		return "Không tìm thấy GGCODE.md trong dự án này. Tạo một tệp để giúp agent hiểu quy ước codebase của bạn?"
+		return "Không tìm thấy AGENTS.md trong dự án này. Tạo một tệp để giúp agent hiểu quy ước codebase của bạn?"
 	case "init.prompt.yes":
 		return "Tạo"
 	case "init.prompt.no":
 		return "Bỏ qua"
 	case "init.prompt.hint":
-		return " y = tạo GGCODE.md • n/Esc = bỏ qua"
+		return " y = tạo AGENTS.md • n/Esc = bỏ qua"
 	case "command.model_switched":
 		return "Đã chuyển mô hình sang: %s (nhà cung cấp: %s)\n\n"
 	case "command.model_failed":
@@ -791,7 +791,7 @@ func viCatalog(key string) string {
 	case "slash.image":
 		return "Đính kèm ảnh"
 	case "slash.init":
-		return "Tạo GGCODE.md cho dự án"
+		return "Tạo AGENTS.md cho dự án"
 	case "slash.lang":
 		return "Chuyển ngôn ngữ giao diện"
 	case "slash.skills":
@@ -1057,7 +1057,7 @@ Phát triển:
   /cost              Hiện sử dụng token và chi phí ước tính
   /context           Hiện phân tích cửa sổ ngữ cảnh
   /hooks             Hiện hook đã cấu hình
-  /init              Tạo GGCODE.md từ dự án hiện tại
+  /init              Tạo AGENTS.md từ dự án hiện tại
   /todo              Xem danh sách todo
   /todo clear        Xóa danh sách todo
 

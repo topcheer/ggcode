@@ -729,7 +729,7 @@ func (m Model) Init() tea.Cmd {
 		// place for the chain to start; explain-side checks gate it).
 		func() tea.Msg { return usageSidebarRefreshMsg{} },
 	}
-	// Check whether the project has a GGCODE.md (or AGENTS.md, CLAUDE.md,
+	// Check whether the project has an AGENTS.md (or GGCODE.md, CLAUDE.md,
 	// COPILOT.md). If none exist AND the directory has real project files
 	// (non-hidden), prompt the user to initialize. The HOME directory is
 	// skipped: users often run ggcode there for ad-hoc chores, not to
