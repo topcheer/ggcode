@@ -373,7 +373,7 @@ var SlashCommands = []string{
 	"/mcp", "/memory", "/undo", "/undo-run", "/files", "/tools", "/checkpoints", "/plugins",
 	"/inspector", "/image", "/mode", "/allow", "/export", "/bug", "/config", "/reflect", "/rules",
 	"/chat", "/nick", "/init", "/exit", "/quit",
-	"/compact", "/todo", "/status", "/stats", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
+	"/compact", "/todo", "/status", "/stats", "/playbook", "/knight", "/tmux", "/update", "/restart", "/lang", "/skills", "/stream", "/share", "/tunnel", "/unshare",
 	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug",
 	"/retry",
 	"/edit",

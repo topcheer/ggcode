@@ -373,6 +373,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.nick")
 	case "/stats":
 		return tr(lang, "slash.stats")
+	case "/playbook":
+		return tr(lang, "slash.playbook")
 	case "/tmux":
 		return tr(lang, "slash.tmux")
 	case "/share":

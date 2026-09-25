@@ -33,6 +33,7 @@ func (m *Model) handleResize(width, height int) {
 	m.syncConversationViewport()
 	// chatList items cache by width — will re-render automatically on next Render()
 	m.syncStatsPanelViewport(false)
+	m.syncPlaybookPanelViewport(false)
 
 }
 
@@ -65,6 +66,7 @@ func (m *Model) relayoutAfterSidebarChange() {
 	m.syncQuestionnaireInputWidth()
 	m.syncConversationViewport()
 	m.syncStatsPanelViewport(false)
+	m.syncPlaybookPanelViewport(false)
 }
 
 func (m *Model) calcViewportHeight() int {

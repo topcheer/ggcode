@@ -1180,6 +1180,8 @@ func zhCatalog(key string) string {
 		return "通过隧道分享会话（移动中继）"
 	case "slash.stats":
 		return "显示会话统计（token、迭代、工具）"
+	case "slash.playbook":
+		return "查看自进化健康（任务策略、学习规则陈旧度）"
 	case "slash.tmux":
 		return "打开 tmux 面板管理菜单"
 	case "slash.tunnel":

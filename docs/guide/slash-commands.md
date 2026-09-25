@@ -43,6 +43,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/init` | Create `GGCODE.md` project memory file |
 | `/memory` | Manage project memory |
 | `/rules` | Manage ratchet rules (learned error patterns) |
+| `/playbook` | Open harness self-evolution health panel (task strategies + learned-rule staleness) |
 | `/undo` | Undo last file changes |
 | `/redo` | Redo previously undone file changes |
 | `/checkpoints` | Show available checkpoints |

@@ -216,6 +216,7 @@ type Model struct {
 	pendingDeviceCodes    []deviceCodeInfo
 	skillsPanel           *skillsPanelState
 	statsPanel            *statsPanelState
+	playbookPanel         *playbookPanelState
 	usagePanel            *usagePanelState // #2150 batch 2: /usage panel
 	usageService          *usage.Service   // lazy; shared by panel + sidebar
 	sidebarUsage          *usage.UsageInfo // last probe result for the active vendor (nil = render nothing)
@@ -1118,6 +1119,7 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		}
 	})
 	m.syncStatsPanelViewport(false)
+	m.syncPlaybookPanelViewport(false)
 }
 
 func (m *Model) SetIMManager(mgr *im.Manager) {
@@ -1320,6 +1322,7 @@ func (m *Model) panelRegistry() []panelEntry {
 		{"mcpPanel", func() bool { return m.mcpPanel != nil }, m.closeMCPPanel},
 		{"skillsPanel", func() bool { return m.skillsPanel != nil }, m.closeSkillsPanel},
 		{"statsPanel", func() bool { return m.statsPanel != nil }, m.closeStatsPanel},
+		{"playbookPanel", func() bool { return m.playbookPanel != nil }, m.closePlaybookPanel},
 		{"usagePanel", func() bool { return m.usagePanel != nil }, func() { m.usagePanel = nil }}, // #2363: no dedicated closer
 		{"inspectorPanel", func() bool { return m.inspectorPanel != nil }, m.closeInspectorPanel},
 		{"streamPanel", func() bool { return m.streamPanel != nil }, m.closeStreamPanel},

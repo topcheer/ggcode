@@ -1167,6 +1167,8 @@ func enCatalog(key string) string {
 		return "Share session via tunnel (mobile relay)"
 	case "slash.stats":
 		return "Show session statistics (tokens, iterations, tools)"
+	case "slash.playbook":
+		return "Show harness self-evolution health (task strategies, learned rules staleness)"
 	case "slash.tmux":
 		return "Open tmux pane management menu"
 	case "slash.tunnel":
