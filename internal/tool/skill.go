@@ -66,7 +66,7 @@ type SkillTool struct {
 func (t SkillTool) Name() string { return "skill" }
 
 func (t SkillTool) Description() string {
-	return "Load a reusable skill workflow or prompt, or search available skills by keyword. Use this when a listed skill clearly matches the user's task, then continue using the returned guidance. To discover skills by keyword, prefix with '?' (e.g. skill: '?deploy'). To export a skill as a portable .ggskill bundle, use '#export:<name>'. To import a .ggskill bundle from a path or URL, use '#import:<path-or-url>'. Do not use for built-in CLI commands like /help or /clear."
+	return "Load a reusable skill workflow or prompt, or search available skills by keyword. Use this when a listed skill clearly matches the user's task, then continue using the returned guidance. To discover skills by keyword, prefix with '?' (e.g. skill: '?deploy'). To export a skill as a portable .ggskill bundle, use '#export:<name>'. To import a .ggskill bundle from a path or URL, use '#import:<path-or-url>'. To search or install skills from a configured registry, use '#registry:search <query>' or '#registry:install <name>[@<version>]'. Do not use for built-in CLI commands like /help or /clear."
 }
 
 func (t SkillTool) Parameters() json.RawMessage {
@@ -75,7 +75,7 @@ func (t SkillTool) Parameters() json.RawMessage {
 	"properties": {
 		"skill": {
 			"type": "string",
-			"description": "Skill name to load, '?' to search by keyword, '#export:<name>' to bundle a skill into a .ggskill file, or '#import:<path-or-url>' to extract a .ggskill bundle. Must match a listed reusable skill; do not pass built-in CLI/slash commands."
+			"description": "Skill name to load, '?' to search by keyword, '#export:<name>' to bundle a skill into a .ggskill file, '#import:<path-or-url>' to extract a .ggskill bundle, or '#registry:search|install|list' for registry discovery/installation. Must match a listed reusable skill; do not pass built-in CLI/slash commands."
 		},
 		"args": {
 			"type": "string",
@@ -116,6 +116,11 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	// Skill import mode: prefix '#import:' extracts a .ggskill bundle.
 	if rest, ok := strings.CutPrefix(args.Skill, "#import:"); ok {
 		return t.handleImportSkill(rest, strings.TrimSpace(args.Args)), nil
+	}
+	// Skill registry mode: prefix '#registry:' searches/installs from a
+	// configured registry index (GGCODE_SKILL_REGISTRY).
+	if rest, ok := strings.CutPrefix(args.Skill, "#registry:"); ok {
+		return t.handleRegistrySkill(rest, strings.TrimSpace(args.Args)), nil
 	}
 	cmd, errResult, resolved := t.resolveSkill(ctx, args.Skill, args.Args)
 	if !resolved {
