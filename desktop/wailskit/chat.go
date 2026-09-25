@@ -1902,33 +1902,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	// Post-run reflection — save insights to project memory so knowledge
 	// compounds across sessions. Same logic as TUI and daemon.
 	if b.workingDir != "" {
-		wd := b.workingDir
-		a.SetReflectionFunc(func(stats agent.RunStats) {
-			if !agent.ShouldReflect(stats) {
-				return
-			}
-			insights := agent.GenerateInsights(stats)
-			if insights == "" {
-				return
-			}
-			autoMem := memory.NewProjectAutoMemory(wd)
-			if autoMem == nil {
-				return
-			}
-			key := "run-insights"
-			// #2715 (same as #1752 case 3 / #1388): LoadAll merges EVERY
-			// active memory key - writing the merge back into run-insights
-			// cross-pollutes all project memories into run-insights, which
-			// is then reinjected with every prompt and snowballs. The TUI
-			// and daemon reflection paths already use LoadKey.
-			existing, err := autoMem.LoadKey(key)
-			if err == nil && existing != "" {
-				insights = agent.MergeInsights(existing, insights)
-			}
-			if err := autoMem.SaveMemoryWithSource(key, insights, "run-reflection"); err != nil {
-				log.Printf("[reflection] failed to save insights: %v", err)
-			}
-		})
+		a.SetReflectionFunc(buildReflectionFunc(b.workingDir))
 	}
 
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
