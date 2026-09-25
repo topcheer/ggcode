@@ -144,8 +144,17 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 // (#2728). Exact match, or a legacy binding with an empty workspace
 // (pre-v1.3.84 entries predate workspace scoping and can only be managed by
 // whichever daemon encounters them).
+//
+// #2763: both sides are normalized (EvalSymlinks + Clean) before comparing.
+// Persisted bindings were normalized on save, but daemonWorkspace came raw
+// from os.Getwd(); under a symlinked PWD (or a non-Clean path) the raw ==
+// comparison never matched, so WebUI unbind always reported "no persisted
+// binding" while bind/list (which normalize internally) kept working.
 func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
-	return bindingWorkspace == daemonWorkspace || bindingWorkspace == ""
+	if bindingWorkspace == "" {
+		return true
+	}
+	return session.NormalizeWorkspacePath(bindingWorkspace) == session.NormalizeWorkspacePath(daemonWorkspace)
 }
 
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
