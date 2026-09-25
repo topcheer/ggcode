@@ -222,3 +222,45 @@ func TestHandleDesktopStreamEventErrorResetsRound(t *testing.T) {
 		t.Fatalf("error branch must reset round, got text=%q calls=%d", round.Text(), round.ToolCalls)
 	}
 }
+
+func TestHandleDesktopStreamEventRoundSummaryIncludesChangedFiles(t *testing.T) {
+	// r60: write-class tool calls must surface a transcript-grounded
+	// changed-files receipt in the final round summary (OverclaimBench
+	// arXiv:2609.20812), and read-only tools must not add one.
+	emitter := &testDesktopEmitter{}
+	round := &IMRoundState{}
+
+	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "done editing"}, round, emitter, nil)
+	HandleDesktopStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolCallDone,
+		Tool: provider.ToolCallDelta{ID: "t1", Name: "edit_file", Arguments: []byte(`{"file_path":"a.go"}`)},
+	}, round, emitter, nil)
+	HandleDesktopStreamEvent(provider.StreamEvent{
+		Type:    provider.StreamEventToolResult,
+		Tool:    provider.ToolCallDelta{ID: "t1", Name: "edit_file", Arguments: []byte(`{"file_path":"a.go"}`)},
+		Result:  "ok",
+		IsError: false,
+	}, round, emitter, nil)
+	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventDone}, round, emitter, nil)
+
+	if len(emitter.roundSummaries) != 1 {
+		t.Fatalf("round summaries = %d, want 1", len(emitter.roundSummaries))
+	}
+	got := emitter.roundSummaries[0].text
+	if !strings.Contains(got, "done editing") || !strings.Contains(got, "Changed files: a.go") {
+		t.Fatalf("summary text missing receipt, got %q", got)
+	}
+
+	// Read-only round: no footer.
+	emitter2 := &testDesktopEmitter{}
+	round2 := &IMRoundState{}
+	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "just reading"}, round2, emitter2, nil)
+	HandleDesktopStreamEvent(provider.StreamEvent{
+		Type: provider.StreamEventToolCallDone,
+		Tool: provider.ToolCallDelta{ID: "t2", Name: "read_file", Arguments: []byte(`{"path":"a.go"}`)},
+	}, round2, emitter2, nil)
+	HandleDesktopStreamEvent(provider.StreamEvent{Type: provider.StreamEventDone}, round2, emitter2, nil)
+	if got2 := emitter2.roundSummaries[0].text; strings.Contains(got2, "Changed files") {
+		t.Fatalf("read-only round must not carry receipt, got %q", got2)
+	}
+}
