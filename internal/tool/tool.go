@@ -110,9 +110,10 @@ type SandboxSafe interface {
 
 // Registry manages the set of available tools.
 type Registry struct {
-	tools     map[string]Tool
-	codeIndex *CodeIndexManager // optional: shared code index for @ fuzzy search
-	mu        sync.RWMutex
+	tools      map[string]Tool
+	codeIndex  *CodeIndexManager  // optional: shared code index for @ fuzzy search
+	jobManager *CommandJobManager // r71: shared command job manager for shutdown reaping
+	mu         sync.RWMutex
 }
 
 // NewRegistry creates an empty tool registry.
@@ -125,6 +126,15 @@ func (r *Registry) CodeIndex() *CodeIndexManager {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.codeIndex
+}
+
+// JobManager returns the built-in command job manager, if one was registered
+// by RegisterBuiltinTools. Callers use it to reap running background jobs at
+// session/process shutdown (ShutdownAll).
+func (r *Registry) JobManager() *CommandJobManager {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.jobManager
 }
 
 // Register adds a tool to the registry. Returns error if name is already taken.

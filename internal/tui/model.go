@@ -169,6 +169,7 @@ type Model struct {
 	autoMemFiles            []string
 	pluginMgr               *plugin.Manager
 	subAgentMgr             *subagent.Manager
+	jobManager              *toolpkg.CommandJobManager // r71: reaped by shutdownAll
 	subAgentFollow          subAgentFollowState
 	usageTurnIndex          int
 	lastMetricDigestTurn    int
@@ -1621,6 +1622,13 @@ func asciiLogo() string {
 
 func (m *Model) SetSubAgentManager(mgr *subagent.Manager) {
 	m.subAgentMgr = mgr
+}
+
+// SetJobManager wires the shared background-command manager so shutdownAll
+// can reap running start_command jobs (r71: they were the only background
+// work class not cancelled at exit, orphaning detach=true children).
+func (m *Model) SetJobManager(jm *toolpkg.CommandJobManager) {
+	m.jobManager = jm
 }
 
 func (m *Model) SetKnight(k *knight.Knight) {

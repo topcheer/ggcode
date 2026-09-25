@@ -44,6 +44,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	}
 	jobManager := NewCommandJobManager(workingDir)
 	jobManager.SetSandboxPolicy(sandbox)
+	registry.jobManager = jobManager
 	codeIndex := NewCodeIndexManager(workingDir)
 	registry.codeIndex = codeIndex
 	tools := []Tool{
