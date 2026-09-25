@@ -201,6 +201,137 @@ func TestPlaybookRecordSkipsShortRuns(t *testing.T) {
 	}
 }
 
+func TestPlaybookRecordFailureAttributesToExistingEntry(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	good := &RunStats{
+		ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1, "run_command": 1},
+		FilesEdited: []string{"main.go"},
+		Success:     true,
+		Iterations:  5,
+		Duration:    time.Minute,
+		UserPrompt:  "fix the login bug",
+	}
+	pb.Record(good)
+
+	bad := &RunStats{
+		ToolCalls:   map[string]int{"read_file": 3, "edit_file": 1, "run_command": 2},
+		FilesEdited: []string{"auth.go"},
+		Success:     false,
+		Iterations:  30,
+		Duration:    10 * time.Minute,
+		UserPrompt:  "fix the login bug again",
+	}
+	pb.RecordFailure(bad)
+
+	if len(pb.entries) != 1 {
+		t.Fatalf("expected 1 entry after failure attribution, got %d", len(pb.entries))
+	}
+	e := pb.entries[0]
+	if e.Uses != 2 {
+		t.Errorf("expected uses=2, got %d", e.Uses)
+	}
+	if e.Failures != 1 {
+		t.Errorf("expected failures=1, got %d", e.Failures)
+	}
+	if e.SuccessRate != 0.5 {
+		t.Errorf("expected success rate 0.5, got %f", e.SuccessRate)
+	}
+	// Averages stay success-only so the efficiency signal remains clean.
+	if e.AvgIter != 5.0 {
+		t.Errorf("expected avg iter to remain 5.0, got %f", e.AvgIter)
+	}
+}
+
+func TestPlaybookRecordFailureDoesNotCreateEntry(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+
+	stats := &RunStats{
+		ToolCalls:  map[string]int{"read_file": 5, "edit_file": 2, "run_command": 1},
+		Success:    false,
+		Iterations: 12,
+		UserPrompt: "fix something",
+	}
+	pb.RecordFailure(stats)
+
+	if len(pb.entries) != 0 {
+		t.Errorf("expected 0 entries for unmatched failure, got %d", len(pb.entries))
+	}
+}
+
+func TestPlaybookScoreOutcomeDriven(t *testing.T) {
+	reliable := PlaybookEntry{Uses: 4, AvgIter: 5}
+	flaky := PlaybookEntry{Uses: 4, Failures: 2, AvgIter: 5}
+	if playbookScore(flaky) >= playbookScore(reliable) {
+		t.Errorf("expected flaky pattern to rank lower: flaky=%f reliable=%f",
+			playbookScore(flaky), playbookScore(reliable))
+	}
+	if playbookScore(reliable) <= 0 {
+		t.Errorf("expected positive score for reliable pattern, got %f", playbookScore(reliable))
+	}
+}
+
+func TestPlaybookHintsShowSuccessRate(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+	now := time.Now()
+	pb.entries = []PlaybookEntry{{
+		ID: "flaky", TaskType: "bugfix", ToolSequence: "read→edit", FileTypes: ".go",
+		Uses: 4, Failures: 2, SuccessRate: 0.5, AvgIter: 5,
+		LastSeen: now, CreatedAt: now,
+	}}
+	hints := pb.HintsForPrompt(5)
+	if !strings.Contains(hints, "50% ok") {
+		t.Errorf("expected hint to contain '50%% ok', got %q", hints)
+	}
+
+	pb2 := NewPlaybook(t.TempDir())
+	pb2.entries = []PlaybookEntry{{
+		ID: "solid", TaskType: "bugfix", ToolSequence: "read→edit", FileTypes: ".go",
+		Uses: 4, SuccessRate: 1.0, AvgIter: 5,
+		LastSeen: now, CreatedAt: now,
+	}}
+	hints2 := pb2.HintsForPrompt(5)
+	if strings.Contains(hints2, "% ok") {
+		t.Errorf("fully successful pattern should not show rate, got %q", hints2)
+	}
+}
+
+func TestPlaybookFailurePersistenceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	pb := NewPlaybook(dir)
+	stats := &RunStats{
+		ToolCalls:   map[string]int{"read_file": 2, "edit_file": 1, "run_command": 1},
+		FilesEdited: []string{"main.go"},
+		Success:     true,
+		Iterations:  5,
+		Duration:    time.Minute,
+		UserPrompt:  "fix the login bug",
+	}
+	pb.Record(stats)
+	bad := &RunStats{
+		ToolCalls:   map[string]int{"read_file": 3, "edit_file": 1, "run_command": 2},
+		FilesEdited: []string{"auth.go"},
+		Success:     false,
+		Iterations:  30,
+		UserPrompt:  "fix the login bug again",
+	}
+	pb.RecordFailure(bad)
+
+	reloaded := NewPlaybook(dir)
+	reloaded.load()
+	if len(reloaded.entries) != 1 {
+		t.Fatalf("expected 1 entry on reload, got %d", len(reloaded.entries))
+	}
+	e := reloaded.entries[0]
+	if e.Failures != 1 || e.SuccessRate != 0.5 {
+		t.Errorf("expected failures=1 rate=0.5 after reload, got failures=%d rate=%f",
+			e.Failures, e.SuccessRate)
+	}
+}
+
 func TestPlaybookPersistence(t *testing.T) {
 	dir := t.TempDir()
 

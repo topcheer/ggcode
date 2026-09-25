@@ -21,11 +21,16 @@ import (
 //
 // ACE treats contexts as "evolving playbooks that accumulate, refine, and
 // organize strategies." ggcode's ratchet rules learn from FAILURES (error
-// patterns → prevention rules). The playbook learns from SUCCESSES: which
-// tool call patterns lead to efficient task completion.
+// patterns → prevention rules). The playbook learns from run outcomes:
+// successes seed strategy patterns, and subsequent failed runs are
+// attributed back to those patterns so ranking stays outcome-driven
+// ("Library Drift", arXiv:2605.19576: skill libraries without
+// outcome-driven lifecycle management suffer retrieval degradation and
+// false-positive injections).
 //
 // Key design:
 //   - Records successful tool call sequences categorized by task type
+//   - Attributes failed runs to existing patterns (never creates entries)
 //   - Persists to .ggcode/playbook.json (per-workspace)
 //   - Injects brief strategy hints into the system prompt at run start
 //   - Uses incremental updates (ACE principle: prevent "context collapse")
@@ -39,13 +44,14 @@ const (
 // PlaybookEntry records a successful strategy pattern for a task type.
 type PlaybookEntry struct {
 	ID           string    `json:"id"`
-	TaskType     string    `json:"task_type"`      // bugfix, feature, refactor, review, test, build, other
-	ToolSequence string    `json:"tool_sequence"`  // abstracted: "read→edit→build"
-	FileTypes    string    `json:"file_types"`     // ".go", ".ts", ".py", mixed
-	Uses         int       `json:"uses"`           // how many times this pattern was seen
-	SuccessRate  float64   `json:"success_rate"`   // running success rate (0-1)
-	AvgIter      float64   `json:"avg_iter"`       // average iterations to complete
-	AvgDurationS float64   `json:"avg_duration_s"` // average duration in seconds
+	TaskType     string    `json:"task_type"`          // bugfix, feature, refactor, review, test, build, other
+	ToolSequence string    `json:"tool_sequence"`      // abstracted: "read→edit→build"
+	FileTypes    string    `json:"file_types"`         // ".go", ".ts", ".py", mixed
+	Uses         int       `json:"uses"`               // total runs observed (successes + failures)
+	SuccessRate  float64   `json:"success_rate"`       // observed success rate (successes/uses, 0-1)
+	Failures     int       `json:"failures,omitempty"` // failed runs attributed to this pattern
+	AvgIter      float64   `json:"avg_iter"`           // average iterations on successful runs
+	AvgDurationS float64   `json:"avg_duration_s"`     // average duration in seconds
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -224,7 +230,22 @@ func extractFileTypes(filesEdited []string) string {
 // Record extracts a strategy pattern from a successful run and updates the playbook.
 // Called from maybeReflect after a successful agent run.
 func (pb *Playbook) Record(stats *RunStats) {
-	if pb == nil || stats == nil || !stats.Success {
+	pb.record(stats, true)
+}
+
+// RecordFailure attributes a failed run to the playbook entry matching the
+// run's strategy fingerprint (taskType|toolSeq|fileTypes). It never creates
+// a new entry: patterns are born only from successes, but once a pattern
+// exists its observed failures must count against it. Otherwise SuccessRate
+// is a constant 1.0 and ranking cannot distinguish reliable patterns from
+// lucky or degrading ones. Averages stay success-only so the efficiency
+// signal in hints remains clean; the outcome signal lives in Failures.
+func (pb *Playbook) RecordFailure(stats *RunStats) {
+	pb.record(stats, false)
+}
+
+func (pb *Playbook) record(stats *RunStats, success bool) {
+	if pb == nil || stats == nil || success != stats.Success {
 		return
 	}
 
@@ -275,11 +296,24 @@ func (pb *Playbook) Record(stats *RunStats) {
 		if ep == fingerprint {
 			// Update existing entry with incremental average (ACE principle:
 			// "structured, incremental updates that preserve detailed knowledge")
-			pb.updateEntry(e, stats)
+			if success {
+				pb.updateEntry(e, stats)
+				debug.Log("playbook", "updated entry %s (uses=%d, success=%.1f%%)", e.TaskType, e.Uses, e.SuccessRate*100)
+			} else {
+				pb.updateFailure(e)
+				debug.Log("playbook", "attributed failure to entry %s (uses=%d, success=%.1f%%)", e.TaskType, e.Uses, e.SuccessRate*100)
+			}
 			pb.save()
-			debug.Log("playbook", "updated entry %s (uses=%d, success=%.1f%%)", e.TaskType, e.Uses, e.SuccessRate*100)
 			return
 		}
+	}
+
+	// Failed runs never create entries: a pattern with zero successes has
+	// nothing to hint about and would pollute the hint space with an
+	// unproven fingerprint.
+	if !success {
+		debug.Log("playbook", "failed run matched no playbook entry; no entry created")
+		return
 	}
 
 	// Create new entry
@@ -307,15 +341,38 @@ func (pb *Playbook) Record(stats *RunStats) {
 	debug.Log("playbook", "recorded new %s strategy: %s (files=%s)", taskType, toolSeq, fileTypes)
 }
 
-// updateEntry merges a new observation into an existing entry using incremental averaging.
+// updateEntry merges a new successful observation into an existing entry
+// using incremental averaging. Averages are success-only; failures are
+// tracked separately by updateFailure.
 func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
 	n := float64(e.Uses)
 	e.AvgIter = (e.AvgIter*n + float64(stats.Iterations)) / (n + 1)
 	e.AvgDurationS = (e.AvgDurationS*n + stats.Duration.Seconds()) / (n + 1)
 	e.Uses++
-	e.SuccessRate = 1.0 // only successful runs are recorded, so rate stays 1.0
-	// Note: if we later record failures too, SuccessRate would decrease
+	e.SuccessRate = successRate(*e)
 	e.LastSeen = time.Now()
+}
+
+// updateFailure attributes a failed run to an existing entry. Uses grows so
+// that the "N runs" figure in hints reflects total observations; Averages
+// are untouched so the efficiency signal stays success-only.
+func (pb *Playbook) updateFailure(e *PlaybookEntry) {
+	e.Uses++
+	e.Failures++
+	e.SuccessRate = successRate(*e)
+	e.LastSeen = time.Now()
+}
+
+// successRate computes the observed success rate (0-1) from run counts.
+func successRate(e PlaybookEntry) float64 {
+	if e.Uses <= 0 {
+		return 1.0
+	}
+	ok := e.Uses - e.Failures
+	if ok < 0 {
+		ok = 0
+	}
+	return float64(ok) / float64(e.Uses)
 }
 
 // evict removes the least recently used entries to stay within capacity.
@@ -385,20 +442,26 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 		if e.FileTypes != "" {
 			fileHint = fmt.Sprintf(" [%s]", e.FileTypes)
 		}
-		lines = append(lines, fmt.Sprintf("- %s%s: %s (%d runs, ~%.0f iter%s)",
-			e.TaskType, fileHint, e.ToolSequence, e.Uses, e.AvgIter, durHint))
+		okHint := ""
+		if r := successRate(e); r < 1.0 {
+			okHint = fmt.Sprintf(", %d%% ok", int(r*100+0.5))
+		}
+		lines = append(lines, fmt.Sprintf("- %s%s: %s (%d runs%s, ~%.0f iter%s)",
+			e.TaskType, fileHint, e.ToolSequence, e.Uses, okHint, e.AvgIter, durHint))
 	}
 	return strings.Join(lines, "\n")
 }
 
 // playbookScore computes a composite score for ranking playbook entries.
-// Higher is better. Combines frequency (more observations = higher confidence)
-// with efficiency (fewer iterations = better strategy).
+// Higher is better. Combines frequency (more observations = higher
+// confidence), efficiency (fewer iterations = better strategy) and outcome
+// (observed success rate demotes patterns whose follow-up runs tend to fail).
 //
-// Formula: score = min(uses, 10) * (10 / max(avgIter, 1))
+// Formula: score = min(uses, 10) * (10 / max(avgIter, 1)) * successRate
 //   - A pattern used 5 times at ~10 iterations scores 5.0
 //   - A pattern used 10 times at ~50 iterations scores 2.0
 //   - A pattern used 3 times at ~5 iterations scores 6.0
+//   - The same pattern at 50% observed success would score 3.0
 func playbookScore(e PlaybookEntry) float64 {
 	freq := float64(e.Uses)
 	if freq > 10 {
@@ -408,12 +471,14 @@ func playbookScore(e PlaybookEntry) float64 {
 	if iter < 1 {
 		iter = 1
 	}
-	return freq * (10.0 / iter)
+	return freq * (10.0 / iter) * successRate(e)
 }
 
-// recordPlaybook is called from maybeReflect to record successful strategies.
+// recordPlaybook is called from maybeReflect to record run outcomes:
+// successes create or refine strategy patterns; failed runs are attributed
+// to existing patterns so their SuccessRate reflects reality.
 func (a *Agent) recordPlaybook(stats *RunStats) {
-	if stats == nil || !stats.Success {
+	if stats == nil {
 		return
 	}
 	workingDir := a.WorkingDir()
@@ -424,7 +489,11 @@ func (a *Agent) recordPlaybook(stats *RunStats) {
 	if pb == nil {
 		return
 	}
-	pb.Record(stats)
+	if stats.Success {
+		pb.Record(stats)
+	} else {
+		pb.RecordFailure(stats)
+	}
 }
 
 func containsAny(s string, substrs ...string) bool {

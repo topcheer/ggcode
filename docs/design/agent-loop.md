@@ -81,7 +81,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 |-------|------|---------|
 | Ratchet | `ratchet.go` + `ratchet_reactive.go` | Learned error rules matched proactively and reactively |
 | Verify hint | `verify_hint.go` | Post-edit build reminders with smart reset on verify commands |
-| Playbook | `playbook.go` | Strategy pattern learning from successful runs (ACE-inspired) |
+| Playbook | `playbook.go` | Strategy pattern learning from run outcomes (ACE-inspired); failed runs are attributed to existing patterns so `SuccessRate` and hint ranking stay outcome-driven ("Library Drift", arXiv:2605.19576) |
 | Reflection | `reflection.go` | Run-level self-assessment and insight recording |
 
 ## Pre-Completion Verification

@@ -447,8 +447,10 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 			}
 		}()
 		fn(s)
-		// Record successful strategies in the playbook (ACE-inspired).
-		// Learns from SUCCESSES to complement ratchet's learning from failures.
+		// Record run outcomes in the playbook (ACE-inspired). Successes
+		// create or refine strategy patterns; failed runs are attributed to
+		// existing patterns so SuccessRate stays outcome-driven ("Library
+		// Drift", arXiv:2605.19576). Complements ratchet's error learning.
 		a.recordPlaybook(&s)
 		// Run ratchet: match errors against existing rules, generalize
 		// unmatched ones via LLM. This is the learning ratchet — every
