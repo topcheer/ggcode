@@ -187,13 +187,19 @@ func (s *subgoalState) recordToolCall(toolName, args string) {
 		return
 	}
 	argLower := strings.ToLower(args)
-	toolLower := strings.ToLower(toolName)
 	for i := range s.subgoals {
 		if s.subgoals[i].addressed {
 			continue
 		}
 		for _, kw := range s.subgoals[i].keywords {
-			if strings.Contains(argLower, kw) || strings.Contains(toolLower, kw) {
+			// #2758: match keywords against the tool ARGUMENTS only. The old
+			// `|| strings.Contains(toolLower, kw)` matched tool NAMES - any
+			// read_file whitewashed a "file" keyword, search_files a "search"
+			// keyword - so unrelated calls marked subgoals addressed and the
+			// un-addressed-subgoal warning went silent (systematic
+			// under-reporting). Tool names are generic verbs/nouns by design
+			// and carry no evidence about WHICH subgoal was addressed.
+			if strings.Contains(argLower, kw) {
 				s.subgoals[i].addressed = true
 				break
 			}
