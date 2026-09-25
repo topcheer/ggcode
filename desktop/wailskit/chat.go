@@ -106,7 +106,6 @@ type ChatBridge struct {
 	metricEvents         []metrics.MetricEvent
 	usageTurnIndex       int
 	lastMetricDigestTurn int
-	pendingDigests       []provider.Message
 	desktopTurnCounter   int64
 	desktopTurnID        string
 	desktopAssistantID   string
@@ -854,7 +853,6 @@ func (b *ChatBridge) ClearCurrentSession() error {
 		b.liveHistory = nil
 	}
 	b.metricEvents = nil
-	b.pendingDigests = nil
 	if b.tunnelHost != nil {
 		b.tunnelHost.ResetStreamState()
 	}
@@ -1087,7 +1085,6 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.liveHistory = nil
 	b.metricEvents = nil
-	b.pendingDigests = nil
 	if b.currentSes != nil {
 		// Merge tunnel-recorded user messages at rebuild time so they are
 		// visible in liveHistory too (#242) — previously the merge only ran
@@ -3341,11 +3338,10 @@ func (b *ChatBridge) emitTurnDigest() {
 		Role:    "system",
 		Content: text,
 	})
-	// Stage digest for the next saveSession() — do NOT write to
-	// currentSes.Messages directly, as saveSession() replaces them
-	// with agent.Messages().
-	digestMsg := provider.Message{Role: "system", Content: []provider.ContentBlock{provider.TextBlock(text)}}
-	b.pendingDigests = append(b.pendingDigests, digestMsg)
+	// #2742: the digest used to also be staged into b.pendingDigests for a
+	// saveSession() sink that no longer exists (removed with #594) — the
+	// channel had zero consumers. liveHistory + the frontend event stream
+	// below are the real sinks; nothing else is staged.
 	b.mu.Unlock()
 
 	// Push to frontend via event stream.
