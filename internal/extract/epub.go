@@ -116,7 +116,10 @@ func findOPFPath(r *zip.Reader) (string, error) {
 					break
 				}
 				if err != nil {
-					break
+					// #2732: a real parse failure must surface with context;
+					// breaking here used to report the misleading "missing
+					// container.xml or rootfile" verdict for a file we opened.
+					return "", fmt.Errorf("parse container.xml: %w", err)
 				}
 				if se, ok := token.(xml.StartElement); ok {
 					if se.Name.Local == "rootfile" {
@@ -166,7 +169,10 @@ func parseOPFSpine(r *zip.Reader, opfPath string) ([]string, error) {
 			break
 		}
 		if err != nil {
-			break
+			// #2732: a real parse failure must surface with context;
+			// breaking here used to report the misleading "empty spine"
+			// verdict for a manifest corrupted before the spine.
+			return nil, fmt.Errorf("parse OPF: %w", err)
 		}
 		if se, ok := token.(xml.StartElement); ok {
 			if se.Name.Local == "item" {
