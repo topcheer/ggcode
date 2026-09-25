@@ -134,8 +134,18 @@ func gitStatusSnapshot(dir string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(string(out), "\n") {
 		if len(line) > 3 && strings.HasPrefix(line[3:], prefix) {
+			rest := strings.TrimPrefix(line[3:], prefix)
+			// #2755: a staged rename reads "R old -> new" and BOTH sides are
+			// root-relative. The old whole-line strip left the dst side
+			// prefixed ("R .ggcode/a.md -> mobile/.ggcode/b.md"), so the pure
+			// .ggcode rename exemption (which requires both sides in .ggcode)
+			// failed in monorepo subdirs and fired a false guardrail
+			// violation. Strip the dst side too.
+			if arrow := strings.Index(rest, " -> "); arrow >= 0 {
+				rest = rest[:arrow] + " -> " + strings.TrimPrefix(rest[arrow+4:], prefix)
+			}
 			b.WriteString(line[:3])
-			b.WriteString(line[3+len(prefix):])
+			b.WriteString(rest)
 		} else {
 			b.WriteString(line)
 		}
