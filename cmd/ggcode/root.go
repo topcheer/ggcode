@@ -241,6 +241,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
+	cmd.AddCommand(newDoctorCmd(&cfgFile))
 	configureHelpRendering(cmd)
 
 	return cmd

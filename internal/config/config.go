@@ -1341,6 +1341,9 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
+	// Surface keys the non-strict decode above will silently drop
+	// (see validate_unknown.go). Diagnostics only, never fails loading.
+	logUnknownConfigKeys(path, data)
 	if hasLegacyProviderKeys(raw) {
 		return nil, fmt.Errorf("legacy provider/providers config is no longer supported; use vendor/endpoint/vendors instead")
 	}
