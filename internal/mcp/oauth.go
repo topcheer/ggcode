@@ -990,7 +990,14 @@ func (h *OAuthHandler) startCallbackServer(expectedState string) (int, chan oaut
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprintf(w, "OAuth error: %s %s", errParam, desc)
-			ch <- oauthCallbackResult{err: fmt.Errorf("OAuth error: %s %s", errParam, desc)}
+			// #2771: non-blocking send - duplicate/prefetch/late callbacks arrive
+			// with the buffer full (WaitForCallback consumed once, server reused
+			// across OAuth retries); a bare send wedges this handler goroutine
+			// forever (Shutdown does not interrupt in-flight handlers).
+			select {
+			case ch <- oauthCallbackResult{err: fmt.Errorf("OAuth error: %s %s", errParam, desc)}:
+			default:
+			}
 			return
 		}
 
@@ -998,14 +1005,20 @@ func (h *OAuthHandler) startCallbackServer(expectedState string) (int, chan oaut
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, "Invalid callback: missing code or state mismatch")
-			ch <- oauthCallbackResult{err: fmt.Errorf("invalid callback: missing code or state mismatch")}
+			select {
+			case ch <- oauthCallbackResult{err: fmt.Errorf("invalid callback: missing code or state mismatch")}:
+			default:
+			}
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "Authorization successful. You can close this tab.")
-		ch <- oauthCallbackResult{code: code}
+		select {
+		case ch <- oauthCallbackResult{code: code}:
+		default:
+		}
 	})
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
