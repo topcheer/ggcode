@@ -32,6 +32,11 @@ type HealthReport struct {
 	StaleBrokenPaths int
 	StaleOversized   int
 	StaleAncient     int
+	StaleDatePassed  int // entries whose content horizon dates fully passed
+
+	// r100 date-horizon expiry: active entries hidden from prompt injection
+	// because all their content horizons passed (non-persistent only).
+	DateExpiredHidden int
 
 	// Newest and oldest entry ages
 	OldestDays int
@@ -56,13 +61,15 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 
 	now := time.Now()
 	active, expired, deduped, capped := curateEntries(metas, now)
+	active, dateHidden := am.filterDateExpired(active, now)
 
 	report := HealthReport{
-		Total:   len(metas),
-		Active:  len(active),
-		Expired: expired,
-		Deduped: deduped,
-		Capped:  capped,
+		Total:             len(metas),
+		Active:            len(active),
+		Expired:           expired,
+		Deduped:           deduped,
+		Capped:            capped,
+		DateExpiredHidden: len(dateHidden),
 	}
 
 	// Category distribution.
@@ -99,6 +106,7 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	report.StaleBrokenPaths = stale.BrokenPaths
 	report.StaleOversized = stale.Oversized
 	report.StaleAncient = stale.Ancient
+	report.StaleDatePassed = stale.DatePassed
 
 	// Duplicate group detection (same dedup key among active entries).
 	report.DuplicateGroups = countDuplicateGroups(active)
@@ -146,6 +154,14 @@ func (r HealthReport) FormatHealthReport() string {
 	}
 	if r.StaleAncient > 0 {
 		sb.WriteString(fmt.Sprintf("  [ANCIENT] %d persistent entries older than 180 days\n", r.StaleAncient))
+		warnings++
+	}
+	if r.StaleDatePassed > 0 {
+		sb.WriteString(fmt.Sprintf("  [DATE-PASSED] %d entries reference fully passed calendar horizons\n", r.StaleDatePassed))
+		warnings++
+	}
+	if r.DateExpiredHidden > 0 {
+		sb.WriteString(fmt.Sprintf("  [HORIZON-EXPIRED] %d entries hidden from prompt injection (all content horizons passed)\n", r.DateExpiredHidden))
 		warnings++
 	}
 	if r.DuplicateGroups > 0 {

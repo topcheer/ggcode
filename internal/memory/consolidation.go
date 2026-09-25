@@ -125,6 +125,11 @@ func (am *AutoMemory) Consolidate(workingDir string) ConsolidationReport {
 			continue
 		}
 		entries = append(entries, entry{meta: m, content: string(data)})
+		// r100 date-horizon expiry: persist passed horizons as stale findings
+		// so the sweep reports time-bound entries that quietly expired.
+		if detail := horizonExpiryDetail(string(data), now); detail != "" {
+			staleMap[m.Key] = append(staleMap[m.Key], detail)
+		}
 	}
 
 	// --- 3. Pairwise contradiction scan (claim-level, deterministic). ---

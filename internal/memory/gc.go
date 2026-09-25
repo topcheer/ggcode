@@ -50,6 +50,14 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		activeKeys[m.Key] = true // capped ≠ dead: keep the file
 	}
 
+	// r100 date-horizon expiry: horizon-expired entries are hidden from
+	// prompts by curation but are NOT deletable — only expiry-by-category
+	// and dedup losers may be physically removed (#779 doctrine). Whitelist
+	// them so a GC run never destroys a false-positive parse.
+	for key := range am.dateExpiredKeys(active, now) {
+		activeKeys[key] = true
+	}
+
 	stats := GCStats{Total: len(metas)}
 
 	for _, m := range metas {

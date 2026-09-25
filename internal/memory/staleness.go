@@ -24,6 +24,7 @@ type StaleReport struct {
 	BrokenPaths int
 	Oversized   int
 	Ancient     int
+	DatePassed  int
 	Findings    []StaleFinding
 }
 
@@ -99,6 +100,19 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 				Age:    age,
 			})
 			report.Oversized++
+		}
+
+		// Check for passed date horizons (any category; informational —
+		// curation only hides non-persistent entries; persistent stays
+		// visible per its documented "Never expires" contract).
+		if detail := horizonExpiryDetail(content, now); detail != "" {
+			report.Findings = append(report.Findings, StaleFinding{
+				Key:    m.Key,
+				Reason: "date-passed",
+				Detail: detail,
+				Age:    age,
+			})
+			report.DatePassed++
 		}
 
 		// Check for ancient persistent entries.

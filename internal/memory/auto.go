@@ -27,6 +27,9 @@ type AutoMemory struct {
 	// refresh storms rebuild the index on every save; without the debounce
 	// one burst would multiply usage counters.
 	useOnce sync.Map
+	// horizonCache memoizes date-horizon verdicts per (file, ModTime) so
+	// prompt rebuilds do not rescan entry contents (see date_expiry.go).
+	horizonCache sync.Map
 }
 
 // writeMu serializes writes to the same memory FILE path across separate
@@ -136,7 +139,11 @@ func (am *AutoMemory) LoadIndex() (string, []string, error) {
 	}
 	now := time.Now()
 	active, expired, deduped, capped := curateEntries(metas, now)
+	active, horizonExpired := am.filterDateExpired(active, now)
 	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped, capped))
+	if len(horizonExpired) > 0 {
+		debug.Log("memory", "date-horizon expiry: %d active entries hidden from index/injection", len(horizonExpired))
+	}
 
 	var keys, files []string
 	for _, m := range active {
@@ -172,7 +179,11 @@ func (am *AutoMemory) LoadAll() (string, []string, error) {
 	}
 	now := time.Now()
 	active, expired, deduped, capped := curateEntries(metas, now)
+	active, horizonExpired := am.filterDateExpired(active, now)
 	debug.Log("memory", "%s", formatMemorySummary(len(metas), len(active), expired, deduped, capped))
+	if len(horizonExpired) > 0 {
+		debug.Log("memory", "date-horizon expiry: %d active entries hidden from index/injection", len(horizonExpired))
+	}
 
 	var files []string
 	var builder strings.Builder
@@ -309,6 +320,7 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 	}
 	now := time.Now()
 	active, _, _, _ := curateEntries(metas, now)
+	active, _ = am.filterDateExpired(active, now)
 
 	// Sort active entries: persistent first (inline priority), then by key
 	// for deterministic output.
