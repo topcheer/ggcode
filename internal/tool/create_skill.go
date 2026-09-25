@@ -142,10 +142,27 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		t.CommandMgr.Reload()
 	}
 
-	return Result{Content: fmt.Sprintf(
+	msg := fmt.Sprintf(
 		"Skill %q created successfully at %s\nIt is now available via: skill: %q\n"+
 			"Or invoke with the skill tool using name: %s",
-		name, scopeDirLabel(scope), name, name)}, nil
+		name, scopeDirLabel(scope), name, name)
+	return Result{Content: msg + buildCreateSkillInventoryNote(t.CommandMgr)}, nil
+}
+
+// buildCreateSkillInventoryNote appends a cross-session inventory health
+// summary (usage evidence) to the create_skill result when the command
+// manager can list loaded skills. Managers that cannot list names (or nil
+// doubles in tests) silently omit the note.
+func buildCreateSkillInventoryNote(mgr SkillReloader) string {
+	lister, ok := mgr.(skillInventoryLister)
+	if !ok {
+		return ""
+	}
+	note := buildSkillInventoryNote(lister.SkillNames())
+	if note == "" {
+		return ""
+	}
+	return "\n\n" + note
 }
 
 // validateCreateSkillArgs validates name/description/content/scope fields.

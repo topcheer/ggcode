@@ -28,6 +28,31 @@ var (
 	lastWriteByName = map[string]time.Time{}
 )
 
+// SkillUsageEvidence is the raw cross-session usage evidence recorded for a
+// skill: how often it was loaded and when it was last used.
+type SkillUsageEvidence struct {
+	UsageCount int
+	LastUsedAt int64 // unix milliseconds; 0 when never used
+}
+
+// SkillUsageSnapshot returns a snapshot of all recorded skill usage evidence,
+// keyed by normalized skill name. A missing key means the skill has never
+// been recorded (never used). The result is a fresh copy; callers may
+// retain it.
+func SkillUsageSnapshot() map[string]SkillUsageEvidence {
+	skillUsageMu.Lock()
+	defer skillUsageMu.Unlock()
+	usage, err := loadUsageLocked()
+	if err != nil {
+		return map[string]SkillUsageEvidence{}
+	}
+	out := make(map[string]SkillUsageEvidence, len(usage))
+	for name, e := range usage {
+		out[name] = SkillUsageEvidence{UsageCount: e.UsageCount, LastUsedAt: e.LastUsedAt}
+	}
+	return out
+}
+
 func RecordUsage(name string) error {
 	trimmed := normalizeSkillName(name)
 	if trimmed == "" {

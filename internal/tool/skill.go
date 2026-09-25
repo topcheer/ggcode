@@ -452,15 +452,20 @@ func (t SkillTool) searchSkills(query string) Result {
 }
 
 type skillSearchMatch struct {
-	name    string
-	desc    string
-	version string
-	score   int
+	name       string
+	desc       string
+	version    string
+	usage      string
+	usageCount int
+	score      int
 }
 
 // collectSkillMatches iterates all skills, scoring each against the query.
+// Each match carries cross-session usage evidence so proven skills can be
+// preferred over unproven ones.
 func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skillSearchMatch {
 	var matches []skillSearchMatch
+	snap := commands.SkillUsageSnapshot()
 	for _, name := range names {
 		cmd, ok := t.Skills.Get(name)
 		if !ok || cmd == nil {
@@ -468,7 +473,15 @@ func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skil
 		}
 		score, desc := scoreSkill(name, cmd, queryLower)
 		if score > 0 {
-			matches = append(matches, skillSearchMatch{name: name, desc: desc, version: cmd.Version, score: score})
+			ev, hasUsage := snap[skillUsageKey(name)]
+			matches = append(matches, skillSearchMatch{
+				name:       name,
+				desc:       desc,
+				version:    cmd.Version,
+				score:      score,
+				usage:      skillUsageEvidenceLabel(ev, hasUsage, time.Now()),
+				usageCount: ev.UsageCount,
+			})
 		}
 	}
 	return matches
@@ -502,6 +515,11 @@ func sortMatches(matches []skillSearchMatch) {
 		if matches[i].score != matches[j].score {
 			return matches[i].score > matches[j].score
 		}
+		// Usage evidence breaks relevance ties: proven skills rank above
+		// never-used ones so the model sees the best-evidenced match first.
+		if matches[i].usageCount != matches[j].usageCount {
+			return matches[i].usageCount > matches[j].usageCount
+		}
 		return matches[i].name < matches[j].name
 	})
 }
@@ -527,6 +545,9 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 			} else {
 				sb.WriteString(": " + m.desc)
 			}
+		}
+		if m.usage != "" {
+			sb.WriteString(" " + m.usage)
 		}
 		sb.WriteString("\n")
 	}

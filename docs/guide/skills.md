@@ -115,6 +115,24 @@ Version mismatch: check-env (requires >=1.0.0, found 0.9.0).
 Version mismatches are advisory -- they do not block execution. This lets the
 agent proceed while alerting it to potential incompatibilities.
 
+## Usage Evidence
+
+Every skill load is recorded (usage count and last-used time, persisted in
+`~/.ggcode/skill_usage.json`). This evidence is surfaced back into the
+feedback loop so proven skills are preferred over unproven ones:
+
+- **Skill search and browse** (`skill: "?"` or keyword search) annotates each
+  result with a marker such as `(used 3x, last 2d ago)`, `(used 1x, last 45d
+  ago, stale)` (stale = unused for 30+ days), or `(never used)`. When
+  multiple skills match with equal relevance, the proven skill ranks first.
+- **create_skill** appends an inventory health summary (total skills, how
+  many have recorded usage, how many were never used) and nudges the agent
+  to reuse or refine a proven skill instead of creating a new one.
+
+This closes the sedimentation loop: skills accumulate usage evidence across
+sessions, and that evidence guides both skill selection and new-skill
+creation.
+
 ## Skill Chaining
 
 Skills can chain -- one skill can invoke another within its workflow:
