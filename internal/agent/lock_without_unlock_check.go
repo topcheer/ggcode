@@ -258,9 +258,29 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 			return
 		}
 		if _, isLock := lockMethodNames[sel.Sel.Name]; isLock {
-			if _, exists := held[recv]; !exists {
-				held[recv] = &simHeldEntry{lock: lockCall{receiver: recv, method: sel.Sel.Name, pos: call.Pos()}}
+			if prev, exists := held[recv]; exists {
+				// #2740: re-acquiring an already-held lock on the same
+				// receiver is a guaranteed self-deadlock (Go mutexes are not
+				// reentrant) even when the function is syntactically
+				// balanced. The header's failure mode #3 promises this
+				// detection; the old code silently returned. Only Lock/
+				// TryLock warn - RLock re-entry is legal (sync.RWMutex
+				// reader reentrancy) and stays silent per the issue's
+				// conservative guidance. Mark the held entry reported so the
+				// function-end check does not emit a second, misleading
+				// missing-unlock warning for the same anchor (#1099).
+				if !prev.reported && (sel.Sel.Name == "Lock" || sel.Sel.Name == "TryLock") {
+					prev.reported = true
+					instances = append(instances, lockWithoutUnlockInstance{
+						receiver: recv,
+						method:   sel.Sel.Name,
+						funcName: fn.Name.Name,
+						posStr:   fset.Position(call.Pos()).String() + " (double lock / non-reentrant re-acquire)",
+					})
+				}
+				return
 			}
+			held[recv] = &simHeldEntry{lock: lockCall{receiver: recv, method: sel.Sel.Name, pos: call.Pos()}}
 			return
 		}
 		if sel.Sel.Name == "Unlock" || sel.Sel.Name == "RUnlock" {
