@@ -221,17 +221,7 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 	preWarning := preWarn
 
-	if args.Timeout <= 0 {
-		args.Timeout = int(defaultCommandTimeout / time.Second)
-	}
-	// #513: clamp before the seconds→nanoseconds multiplication.
-	// time.Duration(x)*time.Second has no overflow guard — e.g. 9223372037s
-	// wraps negative (WithTimeout expires instantly, command killed at 0s)
-	// and 18446744074s wraps to a positive ~290ms. Values above one day
-	// are never meaningful for a shell command.
-	if args.Timeout > maxCommandTimeoutSeconds {
-		args.Timeout = maxCommandTimeoutSeconds
-	}
+	args.Timeout = normalizeCommandTimeout(args.Timeout)
 
 	// #568: GUI commands also return immediately after Start — if their ctx
 	// derived from the request context, the deferred cancel would SIGTERM and
@@ -239,24 +229,8 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// success message ("GUI application launched") still told the agent it
 	// worked. GUI apps must live on a Background-derived ctx like managed jobs.
 	isGUI := isGUICommand(args.Command)
-	var cmdCtx context.Context
-	var cancel context.CancelFunc
-	if t.JobManager != nil || isGUI {
-		if isGUI {
-			// #1245: a detached GUI app must not carry a timeout timer at
-			// all. The timer is armed at creation and fires independently of
-			// Wait, so `code`/`cursor` still running 30 minutes later were
-			// process-group SIGKILLed. Plain WithCancel: the only thing that
-			// can ever fire is guiWait's cancel after the app process exits.
-			cmdCtx, cancel = context.WithCancel(context.Background())
-		} else {
-			// Managed background jobs outlive this tool call, so their
-			// context must not derive from the request context or be
-			// deferred here — but they keep the timeout clock (#568 scope).
-			cmdCtx, cancel = context.WithTimeout(context.Background(), time.Duration(args.Timeout)*time.Second)
-		}
-	} else {
-		cmdCtx, cancel = context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
+	cmdCtx, cancel, cancelWithRequest := t.newCommandContext(ctx, isGUI, args.Timeout)
+	if cancelWithRequest {
 		defer cancel()
 	}
 
@@ -323,6 +297,50 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	}
 
 	return t.runForeground(run)
+}
+
+// normalizeCommandTimeout applies the default for non-positive values and
+// clamps to the maximum before any seconds→nanoseconds multiplication.
+func normalizeCommandTimeout(timeout int) int {
+	if timeout <= 0 {
+		return int(defaultCommandTimeout / time.Second)
+	}
+	// #513: clamp before the seconds→nanoseconds multiplication.
+	// time.Duration(x)*time.Second has no overflow guard — e.g. 9223372037s
+	// wraps negative (WithTimeout expires instantly, command killed at 0s)
+	// and 18446744074s wraps to a positive ~290ms. Values above one day
+	// are never meaningful for a shell command.
+	if timeout > maxCommandTimeoutSeconds {
+		return maxCommandTimeoutSeconds
+	}
+	return timeout
+}
+
+// newCommandContext selects the lifetime context for the command process:
+// detached GUI apps and managed background jobs live on Background-derived
+// contexts — they outlive this tool call and must not be cancelled when the
+// call returns (#568/#1245) — while plain foreground commands derive from
+// the request context. Returns whether the caller owns the cancel (and must
+// defer it): true only for the request-derived foreground case.
+func (t RunCommand) newCommandContext(requestCtx context.Context, isGUI bool, timeoutSecs int) (context.Context, context.CancelFunc, bool) {
+	if isGUI {
+		// #1245: a detached GUI app must not carry a timeout timer at
+		// all. The timer is armed at creation and fires independently of
+		// Wait, so `code`/`cursor` still running 30 minutes later were
+		// process-group SIGKILLed. Plain WithCancel: the only thing that
+		// can ever fire is guiWait's cancel after the app process exits.
+		c, cancel := context.WithCancel(context.Background())
+		return c, cancel, false
+	}
+	if t.JobManager != nil {
+		// Managed background jobs outlive this tool call, so their
+		// context must not derive from the request context or be
+		// deferred here — but they keep the timeout clock (#568 scope).
+		c, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSecs)*time.Second)
+		return c, cancel, false
+	}
+	c, cancel := context.WithTimeout(requestCtx, time.Duration(timeoutSecs)*time.Second)
+	return c, cancel, true
 }
 
 // resolveShellCommand builds the spawn target for command: it rewrites git
