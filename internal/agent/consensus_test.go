@@ -50,6 +50,12 @@ func TestConsensusState_MaxAlerts(t *testing.T) {
 		t.Fatal("expected first alert")
 	}
 
+	// haltRequested must stay false after ONLY the first alert: one strong
+	// intervention is a warning tier, not the escalation tier.
+	if s.haltRequested() {
+		t.Fatal("haltRequested must be false after a single consensus alert")
+	}
+
 	// Advance the tool-call step past the cooldown, fire again (#1446-C:
 	// the step axis is caller-supplied - advancing it is the caller's job).
 	for i := 1; i <= consensusCooldownSteps; i++ {
@@ -63,6 +69,12 @@ func TestConsensusState_MaxAlerts(t *testing.T) {
 		t.Fatal("expected second alert")
 	}
 
+	// The repeat alert means the breakdown persisted despite intervention:
+	// escalation tier engaged.
+	if !s.haltRequested() {
+		t.Fatal("haltRequested must be true after the repeat consensus alert")
+	}
+
 	// Reset step again for third attempt
 	for i := 1; i <= consensusCooldownSteps; i++ {
 		s.recordFiring("Error Rush", 30+i)
@@ -73,6 +85,18 @@ func TestConsensusState_MaxAlerts(t *testing.T) {
 	// Third alert should be blocked (max 2)
 	if msg := s.check(); msg != "" {
 		t.Errorf("expected no third alert (max %d), got: %s", consensusMaxAlerts, msg)
+	}
+
+	// Escalation stays latched after alerts are exhausted.
+	if !s.haltRequested() {
+		t.Fatal("haltRequested must stay latched once escalation threshold is reached")
+	}
+}
+
+func TestConsensusState_HaltRequested_NilSafe(t *testing.T) {
+	var s *consensusState
+	if s.haltRequested() {
+		t.Fatal("nil state must never request a halt")
 	}
 }
 

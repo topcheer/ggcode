@@ -61,6 +61,7 @@ The loop monitors its own trajectory and injects guidance when patterns look pat
 | Todo staleness | `todo_staleness.go` | Mid-run stale todo detection (plan abandonment awareness) |
 | Latency tracker | `latency_tracker.go` | Per-tool latency baseline and slow-tool outlier detection |
 | Tool call budget | `tool_call_budget.go` | Per-session tool invocation limit with progressive warnings (80%/95%) and hard stop. Auto-derived from maxIter when unset; provides safety net for autopilot/cron (default 500). |
+| Consensus escalation | `consensus.go` + loop tail | Semantic-halting failsafe (arXiv:2606.27009): when ≥3 detectors co-fire in a 5-step window, a strong "step back" consensus alert is injected (max 2 per run). If the breakdown persists and the RECURRING alert fires, the tool loop hard-stops after committing tool results (tool_use/tool_result pairs stay balanced), emits a run summary, and returns a sentinel error so the user can intervene instead of the session burning tokens on a stuck approach. |
 
 ## Tool Reliability
 

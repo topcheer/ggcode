@@ -4812,6 +4812,29 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			msgs = a.contextManager.Messages()
 		}
+		// Consensus escalation (semantic-halting failsafe, arXiv:2606.27009):
+		// the repeat cross-detector consensus alert has fired, meaning the
+		// systemic breakdown persisted DESPITE the first strong "step back"
+		// warning. Both alert texts already delivered the full recovery
+		// playbook; continuing the loop only burns tokens on a stuck approach
+		// (runaway-session mode). Hard-stop here, AFTER tool results are
+		// committed (tool_use/tool_result pairs stay balanced) and mirroring
+		// the toolCallBudget hard-stop pattern above: summary + sentinel error
+		// so callers (sub-agents, ACP loops, cron) can distinguish this from
+		// normal completion.
+		if a.crossDetectorConsensus.haltRequested() {
+			debug.Log("agent", "consensus escalation: %d alerts issued, halting tool loop for human intervention",
+				a.crossDetectorConsensus.alertsIssued)
+			runStats.finalize(nil)
+			summary := runStats.Summary()
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventText,
+				Text: fmt.Sprintf("\nRepeated systemic failure detected (multiple independent behavioral detectors kept firing after the first intervention). Loop paused to avoid burning tokens on a stuck approach. Summary: %s.\nYour task may be partially complete - review the changes above, then continue with a follow-up message (e.g. a different approach or clarification).", summary),
+			})
+			err := fmt.Errorf("cross-detector consensus escalation: systemic failure persisted after %d interventions", a.crossDetectorConsensus.alertsIssued)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+			return err
+		}
 	}
 	// Session wall-clock timeout (#611): this break path previously fell through
 	// to the shared post-loop block, misreporting "max iterations (N) reached"

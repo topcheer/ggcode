@@ -194,3 +194,23 @@ func (s *consensusState) checkOnly() string {
 	}
 	return s.check()
 }
+
+// haltRequested reports whether the consensus escalation threshold has been
+// reached: the repeat alert (consensusMaxAlerts-th alert) has been issued,
+// meaning the systemic breakdown persisted DESPITE the first strong
+// "step back" warning. This is the semantic-halting failsafe idea
+// (Shrivastava, arXiv:2606.27009) applied at the agent-loop level: cheap
+// signals fire first (guidance warnings), and only when they keep firing
+// does the unconditional failsafe tier engage and stop the loop.
+//
+// Escalation is justified because the two alert texts already carry the full
+// recovery playbook (abandon approach / re-read requirements / ask for
+// clarification). A second consensus alert within one run means the model
+// consumed that playbook and kept churning - continuing the loop only burns
+// tokens (the runaway-session failure mode: 14k redundant tool calls in a
+// stuck LangChain agent, 2026). The agent loop checks this AFTER tool results
+// are committed (keeping tool_use/tool_result pairs balanced) and mirrors the
+// toolCallBudget hard-stop path.
+func (s *consensusState) haltRequested() bool {
+	return s != nil && s.alertsIssued >= consensusMaxAlerts
+}
