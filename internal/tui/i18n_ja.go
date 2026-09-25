@@ -548,19 +548,19 @@ func jaCatalog(key string) string {
 	case "init.resolve_failed":
 		return "初期化ターゲットの解決に失敗しました: %v\n\n"
 	case "init.generate_failed":
-		return "GGCODE.md コンテンツの生成に失敗しました: %v\n\n"
+		return "AGENTS.md コンテンツの生成に失敗しました: %v\n\n"
 	case "init.collecting":
 		return "プロジェクト知識を収集中..."
 	case "init.prompt.title":
 		return "プロジェクトを初期化"
 	case "init.prompt.body":
-		return "このプロジェクトに GGCODE.md が見つかりません。エージェントがコードベースの規約を理解できるように作成しますか？"
+		return "このプロジェクトに AGENTS.md が見つかりません。エージェントがコードベースの規約を理解できるように作成しますか？"
 	case "init.prompt.yes":
 		return "作成"
 	case "init.prompt.no":
 		return "スキップ"
 	case "init.prompt.hint":
-		return " y = GGCODE.md作成 • n/Esc = スキップ"
+		return " y = AGENTS.md作成 • n/Esc = スキップ"
 	case "command.model_switched":
 		return "モデルを %s に切り替えました（ベンダー: %s）\n\n"
 	case "command.model_failed":
@@ -836,7 +836,7 @@ func jaCatalog(key string) string {
 	case "slash.image":
 		return "画像を添付"
 	case "slash.init":
-		return "GGCODE.md を生成"
+		return "AGENTS.md を生成"
 	case "slash.lang":
 		return "言語を切り替え"
 	case "slash.skills":
@@ -1102,7 +1102,7 @@ func jaCatalog(key string) string {
   /cost              セッショントークン使用量と推定コストを表示
   /context           コンテキストウィンドウ使用量の内訳を表示
   /hooks             設定済みフックを表示
-  /init              現在のプロジェクトから GGCODE.md を生成
+  /init              現在のプロジェクトから AGENTS.md を生成
   /todo              TODOリストを表示
   /todo clear        TODOリストをクリア
 

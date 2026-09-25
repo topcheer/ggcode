@@ -551,19 +551,19 @@ func ruCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Не удалось разрешить цель init: %v\n\n"
 	case "init.generate_failed":
-		return "Не удалось сгенерировать содержимое GGCODE.md: %v\n\n"
+		return "Не удалось сгенерировать содержимое AGENTS.md: %v\n\n"
 	case "init.collecting":
 		return "Сбор знаний о проекте..."
 	case "init.prompt.title":
 		return "Инициализация проекта"
 	case "init.prompt.body":
-		return "GGCODE.md не найдена в этом проекте. Создать, чтобы агент понимал конвенции вашей кодовой базы?"
+		return "AGENTS.md не найдена в этом проекте. Создать, чтобы агент понимал конвенции вашей кодовой базы?"
 	case "init.prompt.yes":
 		return "Создать"
 	case "init.prompt.no":
 		return "Пропустить"
 	case "init.prompt.hint":
-		return " y = создать GGCODE.md • n/Esc = пропустить"
+		return " y = создать AGENTS.md • n/Esc = пропустить"
 
 	// --- Model commands ---
 	case "command.model_switched":
@@ -865,7 +865,7 @@ func ruCatalog(key string) string {
 	case "slash.image":
 		return "Прикрепить изображение"
 	case "slash.init":
-		return "Сгенерировать GGCODE.md для проекта"
+		return "Сгенерировать AGENTS.md для проекта"
 	case "slash.lang":
 		return "Сменить язык интерфейса"
 	case "slash.skills":
@@ -1141,7 +1141,7 @@ func ruCatalog(key string) string {
   /cost              Показать использование токенов и оценочную стоимость
   /context           Показать разбивку контекстного окна
   /hooks             Показать настроенные хуки
-  /init              Сгенерировать GGCODE.md из текущего проекта
+  /init              Сгенерировать AGENTS.md из текущего проекта
   /todo              Показать список задач
   /todo clear        Очистить список задач
 

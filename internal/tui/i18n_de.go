@@ -559,19 +559,19 @@ func deCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Init-Ziel konnte nicht aufgelöst werden: %v\n\n"
 	case "init.generate_failed":
-		return "GGCODE.md-Inhalt konnte nicht generiert werden: %v\n\n"
+		return "AGENTS.md-Inhalt konnte nicht generiert werden: %v\n\n"
 	case "init.collecting":
 		return "Projektwissen wird gesammelt..."
 	case "init.prompt.title":
 		return "Projekt initialisieren"
 	case "init.prompt.body":
-		return "Keine GGCODE.md in diesem Projekt gefunden. Eine erstellen, damit der Agent Ihre Codebase-Konventionen versteht?"
+		return "Keine AGENTS.md in diesem Projekt gefunden. Eine erstellen, damit der Agent Ihre Codebase-Konventionen versteht?"
 	case "init.prompt.yes":
 		return "Erstellen"
 	case "init.prompt.no":
 		return "Überspringen"
 	case "init.prompt.hint":
-		return " y = GGCODE.md erstellen • n/Esc = überspringen"
+		return " y = AGENTS.md erstellen • n/Esc = überspringen"
 
 	// --- Model commands ---
 	case "command.model_switched":
@@ -873,7 +873,7 @@ func deCatalog(key string) string {
 	case "slash.image":
 		return "Bild anhängen"
 	case "slash.init":
-		return "Projekt-GGCODE.md generieren"
+		return "Projekt-AGENTS.md generieren"
 	case "slash.lang":
 		return "Oberflächensprache wechseln"
 	case "slash.skills":
@@ -1159,7 +1159,7 @@ Entwicklung:
   /cost              Sitzungs-Token-Nutzung und geschätzte Kosten anzeigen
   /context           Kontextfenster-Nutzung aufschlüsseln
   /hooks             Konfigurierte Hooks anzeigen
-  /init              GGCODE.md aus aktuellem Projekt generieren
+  /init              AGENTS.md aus aktuellem Projekt generieren
   /todo              Todo-Liste anzeigen
   /todo clear        Todo-Liste löschen
 

@@ -166,7 +166,7 @@ func ptCatalog(key string) string {
 	case "slash.context":
 		return "Mostrar detalhamento de uso da janela de contexto"
 	case "slash.init":
-		return "Gerar GGCODE.md a partir do projeto atual"
+		return "Gerar AGENTS.md a partir do projeto atual"
 	case "slash.im":
 		return "Abrir painel unificado de canais IM"
 	case "slash.mcp":
@@ -336,13 +336,13 @@ func ptCatalog(key string) string {
 	case "init.prompt.title":
 		return "Inicializar projeto"
 	case "init.prompt.body":
-		return "Nenhum GGCODE.md encontrado neste projeto. Criar um para ajudar o agente a entender as convenções do seu código?"
+		return "Nenhum AGENTS.md encontrado neste projeto. Criar um para ajudar o agente a entender as convenções do seu código?"
 	case "init.prompt.yes":
 		return "Criar"
 	case "init.prompt.no":
 		return "Pular"
 	case "init.prompt.hint":
-		return " y = criar GGCODE.md • n/Esc = pular"
+		return " y = criar AGENTS.md • n/Esc = pular"
 
 	// ── Activity ──────────────────────────────────────────────────
 	case "activity.idle":
@@ -1016,7 +1016,7 @@ func ptCatalog(key string) string {
 
 	// ── Init ──────────────────────────────────────────────────────
 	case "init.generate_failed":
-		return "Falha ao gerar conteúdo GGCODE.md: %v\n\n"
+		return "Falha ao gerar conteúdo AGENTS.md: %v\n\n"
 	case "init.resolve_failed":
 		return "Falha ao resolver destino de inicialização: %v\n\n"
 

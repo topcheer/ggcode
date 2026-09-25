@@ -817,7 +817,7 @@ func setValueAtCursor(ta *textarea.Model, value string, row, col int) {
 	ta.SetCursorColumn(col)
 }
 
-// handleInitPromptKey handles keyboard input for the startup "Create GGCODE.md?" prompt.
+// handleInitPromptKey handles keyboard input for the startup "Create AGENTS.md?" prompt.
 func (m Model) handleInitPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
