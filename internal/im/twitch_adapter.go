@@ -987,10 +987,18 @@ func (a *twitchAdapter) sendRaw(line string) error {
 	// queued behind it, and the conn.Close() that would unblock everything
 	// sat behind the QUIT: StopAdapter then held the IM Manager's m.mu for
 	// the TCP retransmit timeout (15-30min) - a global manager stall.
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	}
+	// #2747: call SetWriteDeadline through the net.Conn interface - the
+	// production conn is ALWAYS a *tls.Conn (defaultDialIRC wraps in
+	// tls.Client), so the old *net.TCPConn type assertion never matched and
+	// the deadline was never set: the whole #2113 F2 anti-wedge protection
+	// was dead code on every real connection. tls.Conn propagates the
+	// deadline to the wrapped TCP conn, and the proxy path (proxyDial)
+	// returns plain conns where the interface call is equally valid. Clear
+	// the deadline after the write so later reads on this conn are not
+	// affected by a lingering write deadline.
+	_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	_, err := fmt.Fprintf(c, "%s\r\n", line)
+	_ = c.SetWriteDeadline(time.Time{})
 	return err
 }
 
