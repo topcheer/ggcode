@@ -228,6 +228,15 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 		return nil
 	}
 
+	// Deterministic reclaim first: free stale tool outputs / reasoning /
+	// superseded reads without an LLM call. If that brings us back under the
+	// threshold, the background summarization can be skipped entirely.
+	if reclaimed, under := a.maybeReclaimOverThreshold("auto-compact threshold"); under {
+		debug.Log("agent", "maybeAutoCompact: deterministic reclaim freed %d tokens, deferring precompact (tokens=%d threshold=%d)", reclaimed, a.contextManager.TokenCount(), threshold)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Context trimmed deterministically (%d tokens reclaimed), compaction deferred] ", reclaimed)})
+		return nil
+	}
+
 	// Cooldown: after a precompact attempt (success or failure), wait before
 	// trying again.
 	if time.Now().Before(cooldownUntil) {
@@ -299,10 +308,22 @@ func (a *Agent) compactLocallyForSendBudget(reason string) bool {
 		return false
 	}
 
-	// Only truncation remains — no microcompact (removed to preserve
-	// tool_result integrity for precompact summarization).
+	// Only truncation remains beyond the deterministic reclaim pass - no
+	// microcompact (removed to preserve tool_result integrity for precompact
+	// summarization).
+	//
+	// Deterministic reclaim goes first: shrinking stale tool outputs /
+	// reasoning / superseded reads preserves far more information than
+	// dropping whole message groups, and costs no LLM call.
+	a.deterministicReclaim(reason)
+	tokens := a.contextManager.TokenCount()
+	if tokens < budget {
+		debug.Log("agent", "%s: deterministic reclaim alone restored sendability %d→%d tokens budget=%d", reason, before, tokens, budget)
+		a.maybeSaveCheckpoint()
+		return true
+	}
+
 	changed := false
-	tokens := before
 	dropped := 0
 	if cm, ok := a.contextManager.(oldestGroupTruncater); ok {
 		for tokens >= budget && cm.TruncateOldestGroupForRetry() {
