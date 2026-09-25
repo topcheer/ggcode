@@ -1275,7 +1275,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 				deleted = true
 			}
 			if !deleted {
-				return fmt.Errorf("no persisted binding for adapter %q in workspace %q", adapter, workingDir)
+				// Report the normalized workspace so the error matches what
+				// is actually persisted (bindings are stored normalized).
+				return fmt.Errorf("no persisted binding for adapter %q in workspace %q", adapter, session.NormalizeWorkspacePath(workingDir))
 			}
 			return nil
 		default:
