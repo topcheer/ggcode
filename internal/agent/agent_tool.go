@@ -132,6 +132,16 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 		a.appendGuidance(&result, latencyHint)
 	}
 
+	// Read-repeat loop guard (r91): tool_dedup is mutating-only by design
+	// (replaying cached reads is unsafe), so the read-only half of the
+	// infinite-agentic-loop failure mode (arXiv:2607.01641) is covered here:
+	// an identical re-issue of a read/search call with no intervening state
+	// change executes normally but gets a budgeted advisory telling the model
+	// to act on the data it already has instead of re-reading.
+	if hint := a.repeatGuard().observe(tc.Name, tc.Arguments); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+
 	// Tool affinity learning: record outcomes for predictive recommendations (sa-126)
 	// Fire tool metric (non-blocking - caller must handle asynchronously).
 	errMsg := ""

@@ -218,6 +218,8 @@ type Agent struct {
 	mutateLedger              *mutatingLedger            // non-atomic failure semantics: ambiguous mutating-call attempts per (tool,args), per run
 	toolDedup                 *toolDedupLedger           // duplicate-suppression ledger for non-idempotent mutating tool calls
 	toolDedupOnce             sync.Once                  // lazy init guard for toolDedup
+	readRepeatGuard           *readRepeatGuard           // read-repeat loop guard: advisory-only nudge for redundant identical reads
+	readRepeatOnce            sync.Once                  // lazy init guard for readRepeatGuard
 	metadata                  map[string]string          // persistent metadata for session persistence
 	compoundingFailure        *compoundingFailureState   // sliding-window cross-tool failure rate (strategy reset detection)
 	failureMode               *failureModeState          // meta-level failure mode classification (transient/structural/systemic)
@@ -441,6 +443,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
 		latencyTracker:         NewLatencyTracker(),
 		toolDedup:              newToolDedupLedger(),
+		readRepeatGuard:        newReadRepeatGuard(),
 		toolSequence:           newToolSequenceValidator(),
 		adaptiveSampling:       newAdaptiveSamplingState(),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
