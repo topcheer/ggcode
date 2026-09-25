@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
+	"github.com/topcheer/ggcode/internal/commands"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -4449,6 +4450,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						a.expiredRead.recordRead(p)
 						a.wtInvalidation.recordRead(p)
 					}
+					// Conditional skill activation (paths frontmatter, r95):
+					// feed touched paths to the skill gate so path-gated
+					// skills surface in discovery once their trigger file is
+					// read or edited.
+					commands.NoteTouchedPaths(readPaths...)
 					// Post-edit re-read check: warn if re-reading shortly after edit.
 					// First path only — each hint appends, N hints would spam.
 					if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {

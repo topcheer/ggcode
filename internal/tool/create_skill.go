@@ -64,6 +64,11 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 				"items": {"type": "string"},
 				"description": "External CLI tools that must be on PATH for this skill to work (e.g. ["docker", "kubectl"]). Validated at load time."
 			},
+			"paths": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Glob patterns for conditional activation. The skill stays hidden from skill discovery until the agent touches (reads/edits) a matching file. Supports ** wildcards (e.g. ["**/*.pb.go", "src/api/**"])."
+			},
 			"dependencies": {
 				"type": "array",
 				"items": {"type": "string"},
@@ -96,6 +101,7 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		WhenToUse     string   `json:"when_to_use"`
 		AllowedTools  []string `json:"allowed_tools"`
 		RequiresTools []string `json:"requires_tools"`
+		Paths         []string `json:"paths"`
 		Dependencies  []string `json:"dependencies"`
 		Scope         string   `json:"scope"`
 		Context       string   `json:"context"`
@@ -130,7 +136,7 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if _, err := os.Stat(skillFile); err == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk. Use a different name or delete the existing skill first.", name)}, nil
 	}
-	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, body)
+	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Paths, args.Dependencies, args.Context, body)
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil
 	}
@@ -246,13 +252,14 @@ func validateSkillName(name string) error {
 }
 
 // buildSkillMarkdown creates the SKILL.md file content with YAML frontmatter.
-func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, dependencies []string, execMode, body string) string {
+func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, paths, dependencies []string, execMode, body string) string {
 	type frontmatter struct {
 		Name                   string   `yaml:"name"`
 		Description            string   `yaml:"description"`
 		WhenToUse              string   `yaml:"when_to_use,omitempty"`
 		AllowedTools           []string `yaml:"allowed-tools,omitempty"`
 		RequiresTools          []string `yaml:"requires-tools,omitempty"`
+		Paths                  []string `yaml:"paths,omitempty"`
 		Dependencies           []string `yaml:"dependencies,omitempty"`
 		Context                string   `yaml:"context,omitempty"`
 		DisableModelInvocation bool     `yaml:"disable-model-invocation,omitempty"`
@@ -270,6 +277,9 @@ func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requi
 	}
 	if len(requiresTools) > 0 {
 		fm.RequiresTools = requiresTools
+	}
+	if len(paths) > 0 {
+		fm.Paths = paths
 	}
 	if len(dependencies) > 0 {
 		fm.Dependencies = dependencies

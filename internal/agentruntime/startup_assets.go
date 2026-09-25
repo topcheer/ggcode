@@ -103,6 +103,13 @@ func BuildSkillsSystemPromptWithPromptRefs(skills []*commands.Command) (string, 
 		if name == "" {
 			continue
 		}
+		// Conditional activation (paths frontmatter, r95): path-gated
+		// skills stay out of the prompt until the agent has touched a
+		// matching file. They become discoverable via skill '?search'
+		// (SkillNames is gate-aware) as soon as activation fires.
+		if len(skill.Paths) > 0 && commands.SkillHiddenByPaths(name) {
+			continue
+		}
 		if skill.LoadedFrom == commands.LoadedFromMCP || skill.Source == commands.SourceMCP {
 			mcpSkillCount++
 			if server, _, ok := strings.Cut(name, ":"); ok {

@@ -25,6 +25,7 @@ type frontmatter struct {
 	Arguments              []string `yaml:"arguments"`
 	WhenToUse              string   `yaml:"when_to_use"`
 	RequiresTools          []string `yaml:"requires-tools"`
+	Paths                  []string `yaml:"paths"`
 	Dependencies           []string `yaml:"dependencies"`
 	Version                string   `yaml:"version"`
 	UserInvocable          *bool    `yaml:"user-invocable"`
@@ -170,6 +171,7 @@ func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
 		Arguments:              append([]string(nil), meta.Arguments...),
 		WhenToUse:              strings.TrimSpace(meta.WhenToUse),
 		RequiresTools:          append([]string(nil), meta.RequiresTools...),
+		Paths:                  append([]string(nil), meta.Paths...),
 		Dependencies:           append([]string(nil), meta.Dependencies...),
 		Version:                strings.TrimSpace(meta.Version),
 		DisableModelInvocation: meta.DisableModelInvocation,

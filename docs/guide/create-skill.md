@@ -20,6 +20,7 @@ The `create_skill` tool lets the agent create **reusable skill files** that pers
 | `when_to_use` | No | When this skill should be used (shown in skill search) |
 | `allowed_tools` | No | Tools this skill can use in fork mode |
 | `requires_tools` | No | External CLI tools that must be on PATH (e.g. `["docker", "kubectl"]`). Validated at load time |
+| `paths` | No | Glob patterns for conditional activation (e.g. `["**/*.proto"]`). The skill stays hidden from skill discovery until the agent touches a matching file |
 | `dependencies` | No | Prerequisite skill names, optionally with version constraints (e.g. `base-skill@>=1.0.0`) |
 | `scope` | No | `project` (default, saved to `.ggcode/skills/`) or `global` (saved to `~/.ggcode/skills/`) |
 | `context` | No | `inline` (default) or `fork` execution mode |
@@ -60,6 +61,18 @@ requires-tools:
 ```
 
 When the skill is invoked, ggcode validates each tool exists on `PATH` via `exec.LookPath`. If any are missing, execution is blocked with a clear error message listing the missing tools.
+
+### `paths` (conditional activation)
+
+Glob patterns that gate skill *discovery* on the files the agent works with:
+
+```yaml
+paths:
+  - "**/*.proto"
+  - "src/api/**"
+```
+
+A skill declaring `paths:` is hidden from the model's skill list and `?search` until the agent reads or edits a file matching at least one pattern (matched against the full path; `**` spans directories). Once activated, the skill stays visible for the rest of the session. Direct invocation by exact name and user `/slash` invocation are never blocked - gating filters discovery, not execution. This matches Claude Code's `paths` frontmatter semantics, so skills authored for Claude Code keep their activation behavior in ggcode.
 
 ### `dependencies`
 

@@ -36,6 +36,7 @@ type Command struct {
 	Arguments              []string
 	WhenToUse              string
 	RequiresTools          []string // external CLI tools that must be on PATH (e.g. docker, kubectl)
+	Paths                  []string // path-gated conditional activation: hidden from model discovery until a matching file is touched (Claude Code-compatible `paths` frontmatter)
 	Dependencies           []string // prerequisite skill names that should be loaded first
 	Version                string   // semantic version declared in frontmatter (e.g. "1.0.0")
 	UserInvocable          bool

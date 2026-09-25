@@ -99,6 +99,11 @@ func (m *Manager) SkillNames() []string {
 		if cmd == nil || !cmd.Enabled || cmd.DisableModelInvocation {
 			continue
 		}
+		// Conditional activation (paths frontmatter): hidden from model
+		// discovery until a matching file has been touched this session.
+		if len(cmd.Paths) > 0 && SkillHiddenByPaths(name) {
+			continue
+		}
 		names = append(names, name)
 	}
 	return names
@@ -193,6 +198,15 @@ func (m *Manager) combinedCommands() map[string]*Command {
 	m.mu.Lock()
 	ApplyDisabledState(out)
 	m.mu.Unlock()
+	// Conditional activation (paths frontmatter): keep the path gate in
+	// sync with the current skill set, including hot reloads.
+	for name, cmd := range out {
+		if cmd != nil && len(cmd.Paths) > 0 {
+			registerGatedSkill(name, cmd.Paths)
+		} else {
+			unregisterGatedSkill(name)
+		}
+	}
 	return out
 }
 
