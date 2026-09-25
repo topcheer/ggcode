@@ -58,6 +58,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"ruleInjectCount":      "lazily initialized at first use (verify.go)",
 		"checkpoints":          "checkpoint manager, injected via setter (guarded)",
 		"codeIndex":            "code index manager, injected via setter (guarded)",
+		"hookDenyNoteWired":    "context manager the hook-deny post-compact note was registered on; set lazily by syncContextManagerHookDenyNoteLocked on first manager sync",
 		"precompact":           "created lazily when precompaction starts (guarded)",
 		"metadata":             "dead field — no read/write sites outside declaration",
 	}

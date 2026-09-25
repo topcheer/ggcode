@@ -137,6 +137,8 @@ type Agent struct {
 	adversarialReviewRounds   int
 	adversarialReviewLastRun  string // task prompt of the last review; resets rounds per task
 	hookConfig                hooks.HookConfig
+	hookDenies                *DenyLedger
+	hookDenyNoteWired         interface{} // last context manager the hook-deny post-compact note was registered on
 	workingDir                string
 	sessionID                 string // current session ID; determines todo file path
 	checkpoints               *checkpoint.Manager
@@ -391,6 +393,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolCallBudget:         newToolCallBudget(),
 		commandCache:           newCommandCache(),
 		effectLedger:           newEffectLedger(),
+		hookDenies:             newDenyLedger(),
 		toolSearch:             newToolSearchState(),
 		errorClassifier:        NewErrorClassifier(),
 		planner:                newPlanState(),
@@ -775,6 +778,7 @@ func (a *Agent) SetContextManager(cm ctxpkg.ContextManager) {
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
 	a.syncContextManagerTodoPathLocked()
+	a.syncContextManagerHookDenyNoteLocked()
 }
 
 // AddMessage appends a message to the conversation context.
@@ -1225,6 +1229,36 @@ func (a *Agent) syncContextManagerTodoPathLocked() {
 	if cm, ok := a.contextManager.(todoPathAwareContextManager); ok {
 		cm.SetTodoFilePath(tool.TodoFilePath(a.sessionID))
 	}
+}
+
+// postCompactNoteAdder is the optional capability of the context manager
+// (same optional-interface pattern as todoPathAwareContextManager) that
+// appends a note provider without replacing existing ones.
+type postCompactNoteAdder interface {
+	AddPostCompactNoteProvider(fn func() string)
+}
+
+// syncContextManagerHookDenyNoteLocked registers the hook-deny ledger's
+// durable post-compaction note on the active context manager. After every
+// successful compaction, the model re-reads a compact per-tool summary of
+// all pre_tool_use hook denials recorded this session, so a hook policy
+// decision cannot be silently forgotten once its denial leaves the visible
+// history (arXiv 2609.30217, EvasionBench). Idempotent per manager: repeated
+// SetContextManager calls with the same instance do not stack duplicate
+// providers.
+func (a *Agent) syncContextManagerHookDenyNoteLocked() {
+	if a.hookDenies == nil {
+		return
+	}
+	adder, ok := a.contextManager.(postCompactNoteAdder)
+	if !ok {
+		return
+	}
+	if a.hookDenyNoteWired == a.contextManager {
+		return
+	}
+	adder.AddPostCompactNoteProvider(a.hookDenies.PostCompactNote)
+	a.hookDenyNoteWired = a.contextManager
 }
 
 // Clear resets the conversation (keeps system prompt).

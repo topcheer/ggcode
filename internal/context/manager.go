@@ -166,7 +166,7 @@ type Manager struct {
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
 	toolDefinitionOverhead   int                        // tokens reserved for tool definitions (set by Agent)
 	pinned                   *PinnedContext             // user-pinned context that survives compaction
-	postCompactNoteFn        func() string              // optional: non-empty return is re-injected as a system note after every compaction
+	postCompactNoteFns       []func() string            // optional: non-empty returns are concatenated and re-injected as a system note after every compaction
 	lastLoggedReserve        int                        // last logged effectiveOutputReserve value (suppress duplicate logs)
 	lastLoggedThreshold      int                        // last logged autoCompactThreshold value (suppress duplicate logs)
 	// #663: attribution for message removals. When ApplyCompactResult rejects
@@ -271,7 +271,25 @@ func (m *Manager) injectPinnedAfterCompaction() {
 func (m *Manager) SetPostCompactNoteProvider(fn func() string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.postCompactNoteFn = fn
+	m.postCompactNoteFns = nil
+	if fn != nil {
+		m.postCompactNoteFns = append(m.postCompactNoteFns, fn)
+	}
+}
+
+// AddPostCompactNoteProvider appends an additional post-compaction note
+// provider alongside any already-registered ones (Set replaces the whole
+// set, Add extends it). Non-empty returns from every registered provider
+// are concatenated in registration order into the durable system note
+// injected after each compaction summary. Used by the agent to register
+// supplementary durable state (e.g. the hook-deny ledger) without clobbering
+// the task-board rehydration provider.
+func (m *Manager) AddPostCompactNoteProvider(fn func() string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if fn != nil {
+		m.postCompactNoteFns = append(m.postCompactNoteFns, fn)
+	}
 }
 
 // postCompactNoteMarker identifies the injected state note so a stale copy
@@ -289,13 +307,22 @@ func (m *Manager) injectPostCompactNoteAfterCompaction() {
 	// Replace any stale note from a previous compaction cycle.
 	m.removeSystemMessageByMarker(postCompactNoteMarker)
 
-	if m.postCompactNoteFn == nil {
+	if len(m.postCompactNoteFns) == 0 {
 		return
 	}
-	note := strings.TrimSpace(m.postCompactNoteFn())
-	if note == "" {
+	var parts []string
+	for _, fn := range m.postCompactNoteFns {
+		if fn == nil {
+			continue
+		}
+		if part := strings.TrimSpace(fn()); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
 		return
 	}
+	note := strings.Join(parts, "\n\n")
 
 	noteMsg := provider.Message{
 		Role: "system",

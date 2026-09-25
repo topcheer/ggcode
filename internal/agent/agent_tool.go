@@ -413,7 +413,14 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// Fix #1035: file-edit tools route to specialized functions but hooks should run exactly once
 	preResult := hooks.RunPreHooks(hookCfg.PreToolUse, env)
 	if !preResult.Allowed {
-		return tool.Result{Content: preResult.Output, IsError: true}
+		// r68 hook-deny stickiness: hook denials are transient tool_results.
+		// EvasionBench (arXiv 2609.30217) shows agents retry blocked ops with
+		// rephrased/encoded/split variants until the denial leaves the
+		// monitor's visible history. Record the denial in the session-scoped
+		// ledger and restate the running count on every new denial; the same
+		// ledger is re-injected as a durable post-compaction note.
+		a.hookDenies.Record(tc.Name, preResult.Output)
+		return tool.Result{Content: preResult.Output + a.hookDenies.StickyFeedback(tc.Name), IsError: true}
 	}
 
 	// For file-editing tools: read old content, compute new, show diff, save checkpoint
