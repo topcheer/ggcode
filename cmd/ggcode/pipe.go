@@ -24,6 +24,7 @@ import (
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/trust"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -80,7 +81,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	defer core.Close()
 
 	// Load project memory file list (for path-triggered dynamic loading).
-	projectMemFiles, _ := memory.ProjectMemoryFilesForPath(workingDir)
+	// Workspace trust gate: untrusted folders do not inject project memory.
+	var projectMemFiles []string
+	if trust.IsTrusted(workingDir) {
+		projectMemFiles, _ = memory.ProjectMemoryFilesForPath(workingDir)
+	} else if trust.NeedsTrustPrompt(workingDir) {
+		fmt.Fprintf(os.Stderr, "[ggcode] Untrusted workspace: project memory/skills/commands/.mcp.json disabled; run `ggcode trust` to enable.\n")
+	}
 
 	autoMem := core.AutoMemory
 	projectAutoMem := core.ProjectAutoMem

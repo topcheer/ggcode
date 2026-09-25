@@ -22,6 +22,7 @@ import (
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/session"
 	toolpkg "github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/trust"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
 
@@ -805,6 +806,39 @@ func (m *Model) persistPermissionRules() {
 //	/notify bell <on|off>
 //	/notify desktop <on|off>
 //	/notify min_duration <seconds>
+//
+// handleTrustCommand implements /trust: grant (or with --revoke, revoke)
+// workspace trust for the current folder and flip project-scoped skill
+// loading immediately. The system prompt picks the change up via the
+// skills hot-reload ticker; .mcp.json servers apply on next start.
+func (m *Model) handleTrustCommand(args []string) tea.Cmd {
+	workDir, err := os.Getwd()
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("trust: resolve working directory: %v", err))
+		return nil
+	}
+	if len(args) > 0 && (args[0] == "--revoke" || args[0] == "-r") {
+		if err := trust.Untrust(workDir); err != nil {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("trust revoke failed: %v", err))
+			return nil
+		}
+		if m.commandMgr != nil {
+			_ = m.commandMgr.SetIncludeProjectSources(false)
+		}
+		m.chatWriteSystem(nextSystemID(), m.t("slash.trust_revoked"))
+		return nil
+	}
+	if err := trust.Trust(workDir); err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("trust failed: %v", err))
+		return nil
+	}
+	if m.commandMgr != nil {
+		_ = m.commandMgr.SetIncludeProjectSources(true)
+	}
+	m.chatWriteSystem(nextSystemID(), m.t("slash.trust_enabled"))
+	return nil
+}
+
 func (m *Model) handleNotifyCommand(args []string) tea.Cmd {
 	if m.config == nil {
 		m.chatWriteSystem(nextSystemID(), "Configuration not available.")

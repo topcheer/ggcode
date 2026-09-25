@@ -39,6 +39,7 @@ import (
 	"github.com/topcheer/ggcode/internal/swarm"
 	"github.com/topcheer/ggcode/internal/task"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/trust"
 	"github.com/topcheer/ggcode/internal/tui"
 	"github.com/topcheer/ggcode/internal/update"
 	"github.com/topcheer/ggcode/internal/vcs"
@@ -239,6 +240,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
+	cmd.AddCommand(newTrustCmd())
 	cmd.AddCommand(newReportCmd())
 	cmd.AddCommand(newLoginCmd(&cfgFile))
 	configureHelpRendering(cmd)
@@ -430,6 +432,8 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	workingDir, _ := os.Getwd()
 	trace.Mark("working directory")
+	workspaceTrustGate(workingDir)
+	trace.Mark("workspace trust gate")
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")
@@ -455,6 +459,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	trace.Mark("build interactive runtime core")
 
 	projectMemoryLoader := func() (string, []string, error) {
+		// Workspace trust gate: untrusted folders do not inject project
+		// memory files (prompt-injection surface in cloned repositories).
+		if !trust.IsTrusted(workingDir) {
+			return "", nil, nil
+		}
 		files, err := memory.ProjectMemoryFilesForPath(workingDir)
 		if err != nil {
 			return "", nil, err

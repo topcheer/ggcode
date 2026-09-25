@@ -16,9 +16,25 @@ type Manager struct {
 }
 
 func NewManager(projectDir string) *Manager {
-	m := &Manager{loader: NewLoader(projectDir)}
+	return NewManagerWithOptions(projectDir, true)
+}
+
+// NewManagerWithOptions builds a manager; includeProjectSources=false is the
+// workspace-trust restricted mode (project skills/commands not auto-loaded).
+func NewManagerWithOptions(projectDir string, includeProjectSources bool) *Manager {
+	m := &Manager{loader: NewLoaderWithOptions(projectDir, includeProjectSources)}
 	m.Reload()
 	return m
+}
+
+// SetIncludeProjectSources flips project-scoped loading and reloads so the
+// change is immediately visible (used by the /trust approval surface).
+func (m *Manager) SetIncludeProjectSources(include bool) bool {
+	if m == nil || m.loader == nil {
+		return false
+	}
+	m.loader.SetIncludeProjectSources(include)
+	return m.Reload()
 }
 
 func (m *Manager) Reload() bool {

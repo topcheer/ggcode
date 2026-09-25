@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/tool"
+	"github.com/topcheer/ggcode/internal/trust"
 )
 
 type StartupAssets struct {
@@ -29,6 +30,9 @@ func LoadInteractiveStartupAssets(
 		autoFiles  []string
 		commandMgr *commands.Manager
 	)
+	// Workspace trust gate: project-scoped skills/commands only load for
+	// trusted folders (see internal/trust). /trust re-enables at runtime.
+	trusted := trust.IsTrusted(workingDir)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -54,7 +58,7 @@ func LoadInteractiveStartupAssets(
 	safego.Go("agentruntime.startup.commands", func() {
 		defer wg.Done()
 		start := time.Now()
-		commandMgr = commands.NewManager(workingDir)
+		commandMgr = commands.NewManagerWithOptions(workingDir, trusted)
 		cmdCount := 0
 		if commandMgr != nil {
 			cmdCount = len(commandMgr.Commands())
@@ -64,7 +68,7 @@ func LoadInteractiveStartupAssets(
 
 	wg.Wait()
 	if commandMgr == nil {
-		commandMgr = commands.NewManager(workingDir)
+		commandMgr = commands.NewManagerWithOptions(workingDir, trusted)
 	}
 
 	return StartupAssets{

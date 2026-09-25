@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/trust"
 )
 
 func TestMergeStartupServers_DedupsClaudeSources(t *testing.T) {
@@ -19,6 +20,12 @@ func TestMergeStartupServers_DedupsClaudeSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	// The trust gate suppresses project .mcp.json until trusted; this test
+	// exercises migration merging, so grant trust explicitly (isolated HOME
+	// keeps the decision out of the real store).
+	if err := trust.Trust(project); err != nil {
+		t.Fatal(err)
+	}
 
 	globalConfig := `{"mcpServers":{"same-cmd":{"type":"stdio","command":"npx","args":["-y","pkg"]},"remote":{"type":"http","url":"https://example.com/mcp"}}}`
 	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(globalConfig), 0o644); err != nil {

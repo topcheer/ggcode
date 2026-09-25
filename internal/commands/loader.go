@@ -34,22 +34,50 @@ type frontmatter struct {
 
 // Loader finds and loads reusable skills and legacy custom slash commands.
 type Loader struct {
-	targets []loadTarget
+	targets    []loadTarget
+	projectDir string
 }
 
 // NewLoader creates a loader scanning global and project-local skills and commands.
 func NewLoader(projectDir string) *Loader {
+	return NewLoaderWithOptions(projectDir, true)
+}
+
+// NewLoaderWithOptions creates a loader; includeProjectSources=false skips
+// project-scoped skill/command directories (workspace trust restricted mode:
+// a cloned repo must not auto-inject executable prompt assets).
+func NewLoaderWithOptions(projectDir string, includeProjectSources bool) *Loader {
+	l := &Loader{projectDir: projectDir}
+	l.setTargets(projectDir, includeProjectSources)
+	return l
+}
+
+// SetIncludeProjectSources toggles project-scoped directories and must be
+// followed by Manager.Reload() to take effect.
+func (l *Loader) SetIncludeProjectSources(include bool) {
+	if l == nil {
+		return
+	}
+	projectDir := l.projectDir
+	if projectDir != "" {
+		l.setTargets(projectDir, include)
+	}
+}
+
+func (l *Loader) setTargets(projectDir string, includeProjectSources bool) {
 	home := config.HomeDir()
-	targets := dedupeLoadTargets([]loadTarget{
+	targets := []loadTarget{
 		{Dir: filepath.Join(home, ".agents", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
 		{Dir: filepath.Join(home, ".ggcode", "skills"), Source: SourceUser, LoadedFrom: LoadedFromSkills},
 		{Dir: filepath.Join(home, ".ggcode", "commands"), Source: SourceUser, LoadedFrom: LoadedFromCommands},
-		{Dir: filepath.Join(projectDir, ".ggcode", "skills"), Source: SourceProject, LoadedFrom: LoadedFromSkills},
-		{Dir: filepath.Join(projectDir, ".ggcode", "commands"), Source: SourceProject, LoadedFrom: LoadedFromCommands},
-	})
-	return &Loader{
-		targets: targets,
 	}
+	if includeProjectSources {
+		targets = append(targets,
+			loadTarget{Dir: filepath.Join(projectDir, ".ggcode", "skills"), Source: SourceProject, LoadedFrom: LoadedFromSkills},
+			loadTarget{Dir: filepath.Join(projectDir, ".ggcode", "commands"), Source: SourceProject, LoadedFrom: LoadedFromCommands},
+		)
+	}
+	l.targets = dedupeLoadTargets(targets)
 }
 
 func dedupeLoadTargets(targets []loadTarget) []loadTarget {

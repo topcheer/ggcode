@@ -377,7 +377,7 @@ var SlashCommands = []string{
 	"/diff", "/hooks", "/cost", "/usage", "/commit", "/review", "/copy", "/context", "/debug",
 	"/retry",
 	"/edit",
-	"/regenerate", "/regen", "/branch", "/fork",
+	"/regenerate", "/regen", "/branch", "/fork", "/trust",
 	"/cron",
 	"/title",
 	"/pin-session", "/unpin-session", "/tag", "/untag", "/tags",
@@ -474,6 +474,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/untag":         "Remove tags from the session (e.g. /untag rust)",
 	"/tags":          "Show the current session's tags",
 	"/fork":          "Fork current conversation into a new session",
+	"/trust":         "Trust this workspace: enable project skills/commands/memory",
 	"/mode":          "Set permission mode (supervised|plan|auto|bypass|autopilot)",
 	"/allow":         "Always allow a specific tool",
 	"/export":        "Export session to markdown file",
@@ -568,6 +569,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/untag":         "<tag>...",
 	"/tags":          "",
 	"/fork":          "",
+	"/trust":         "",
 }
 
 // CompleteSlashCommand returns matching slash commands for a given prefix.

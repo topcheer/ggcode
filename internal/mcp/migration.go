@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/trust"
 )
 
 type claudeConfigFile struct {
@@ -107,8 +108,12 @@ func mergeServers(explicit []config.MCPServerConfig, sources []migrationSource, 
 }
 
 func knownClaudeSources(workingDir string) []migrationSource {
-	sources := []migrationSource{
-		{Path: filepath.Join(workingDir, ".mcp.json"), Source: "claude-project", Priority: 3},
+	sources := []migrationSource{}
+	// Workspace trust gate: a project .mcp.json ships executable MCP server
+	// definitions authored by whoever published the repository. Skip it while
+	// the folder is untrusted; user-level sources are unaffected.
+	if trust.IsTrusted(workingDir) {
+		sources = append(sources, migrationSource{Path: filepath.Join(workingDir, ".mcp.json"), Source: "claude-project", Priority: 3})
 	}
 	return append(sources, knownUserClaudeSources()...)
 }

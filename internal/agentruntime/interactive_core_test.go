@@ -7,6 +7,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/trust"
 )
 
 func TestBuildInteractiveRuntimeCoreRegistersSharedBootstrapTools(t *testing.T) {
@@ -34,7 +35,12 @@ func TestBuildInteractiveRuntimeCoreRegistersSharedBootstrapTools(t *testing.T) 
 }
 
 func TestBuildInteractiveRuntimeCoreLoadsProjectSkills(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// Trust gate: project skills only load for trusted folders.
 	wd := t.TempDir()
+	if err := trust.Trust(wd); err != nil {
+		t.Fatal(err)
+	}
 	skillsDir := filepath.Join(wd, ".ggcode", "skills", "collaborate")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		t.Fatal(err)
