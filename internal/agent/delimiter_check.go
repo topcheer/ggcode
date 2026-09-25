@@ -173,300 +173,336 @@ type openBracket struct {
 
 // scanDelimiters scans content for unbalanced (), {}, [] outside of strings and
 // comments. Returns an empty string if balanced, or a diagnostic message.
+// delimScanner carries the mutable state of the delimiter scan. Splitting
+// the former 330-line scanDelimiters into per-state step functions keeps
+// each piece independently readable and testable without changing the
+// scanning semantics documented in the fix notes below.
+type delimScanner struct {
+	stack          []openBracket
+	line           int
+	state          int
+	pendingHeredoc string
+	heredocTerm    string
+}
+
 func scanDelimiters(content string, style commentStyle) string {
-	var stack []openBracket
-	line := 1
-	state := dsCode
-	var pendingHeredoc, heredocTerm string
-
+	s := &delimScanner{line: 1, state: dsCode}
 	i := 0
-	n := len(content)
-
-	for i < n {
-		c := content[i]
-
-		// Line tracking.
-		if c == '\n' {
-			line++
-			if state == dsLineComment {
-				state = dsCode
-			}
-			if state == dsRegex || state == dsRegexClass {
-				// A JS regex literal cannot span lines, so a newline inside one
-				// means the regex-context heuristic misfired (it was really a
-				// division, e.g. "a /= b"). Contain the damage to that line:
-				// resume code state without reporting.
-				state = dsCode
-			}
-			if state == dsCode && pendingHeredoc != "" {
-				// A heredoc start was seen earlier on the line that just ended;
-				// its body begins on this next line (fix #538).
-				heredocTerm = pendingHeredoc
-				pendingHeredoc = ""
-				state = dsHeredoc
-				i++
-				continue
-			}
-			if state == dsHeredoc {
-				if end, ok := heredocTerminatorEnd(content, i+1, heredocTerm); ok {
-					i = end
-					state = dsCode
-					continue
-				}
-			}
-			i++
+	for i < len(content) {
+		if content[i] == '\n' {
+			i = s.stepNewline(content, i)
 			continue
 		}
+		if s.state == dsCode {
+			var errMsg string
+			i, errMsg = s.stepCode(content, style, i)
+			if errMsg != "" {
+				return errMsg
+			}
+			continue
+		}
+		i = s.stepBody(content, style, i)
+	}
+	return s.finalReport(content, i)
+}
 
-		switch state {
-		case dsCode:
-			// --- Triple-quoted strings (Python) ---
-			if style.tripleQuotes && i+2 < n {
-				tri := string(content[i : i+3])
-				if tri == `"""` {
-					state = dsTripleDouble
-					i += 3
-					continue
-				}
-				if tri == `'''` {
-					state = dsTripleSingle
-					i += 3
-					continue
-				}
-			}
+// stepNewline handles a '\n' at content[i]: line counting plus the
+// end-of-line state transitions (line comments end, misfired JS regex
+// literals are contained, pending Ruby heredocs begin, heredoc terminators
+// close). Returns the next scan index.
+func (s *delimScanner) stepNewline(content string, i int) int {
+	s.line++
+	if s.state == dsLineComment {
+		s.state = dsCode
+	}
+	if s.state == dsRegex || s.state == dsRegexClass {
+		// A JS regex literal cannot span lines, so a newline inside one
+		// means the regex-context heuristic misfired (it was really a
+		// division, e.g. "a /= b"). Contain the damage to that line:
+		// resume code state without reporting.
+		s.state = dsCode
+	}
+	if s.state == dsCode && s.pendingHeredoc != "" {
+		// A heredoc start was seen earlier on the line that just ended;
+		// its body begins on this next line (fix #538).
+		s.heredocTerm = s.pendingHeredoc
+		s.pendingHeredoc = ""
+		s.state = dsHeredoc
+		return i + 1
+	}
+	if s.state == dsHeredoc {
+		if end, ok := heredocTerminatorEnd(content, i+1, s.heredocTerm); ok {
+			s.state = dsCode
+			return end
+		}
+	}
+	return i + 1
+}
 
-			// --- Block comment open ---
-			if style.blockOpen != "" && i+1 < n && content[i:i+len(style.blockOpen)] == style.blockOpen {
-				state = dsBlockComment
-				i += len(style.blockOpen)
-				continue
-			}
+// stepCode consumes one token in code state starting at content[i] (which is
+// known not to be a newline). Returns the next scan index and, when the token
+// proves a definite imbalance, the terminal error message.
+func (s *delimScanner) stepCode(content string, style commentStyle, i int) (int, string) {
+	if next, ok := s.openStructuredToken(content, style, i); ok {
+		return next, ""
+	}
+	if next, errMsg, ok := s.rustRawStringToken(content, style, i); ok {
+		return next, errMsg
+	}
+	if next, ok := s.openQuote(content, style, i); ok {
+		return next, ""
+	}
+	return s.trackBracket(content, i)
+}
 
-			// --- Line comment ---
-			isLineCmt := false
-			for _, lc := range style.lineComments {
-				if i+len(lc) <= n && content[i:i+len(lc)] == lc {
-					state = dsLineComment
-					i += len(lc)
-					isLineCmt = true
-					break
-				}
-			}
-			if isLineCmt {
-				continue
-			}
+// openStructuredToken detects tokens that switch the scanner into a
+// structured sub-state: Python triple-quoted strings, block comments, line
+// comments, Ruby heredoc starts and JS/TS regex literal starts. ok=false
+// means no structured token matched at i and scanning must fall through.
+func (s *delimScanner) openStructuredToken(content string, style commentStyle, i int) (int, bool) {
+	n := len(content)
+	c := content[i]
 
-			// --- Ruby heredoc start (fix #538): <<~ID, <<-ID, <<ID, <<"ID", <<'ID' ---
-			// The heredoc body is string data, so bare brackets inside it must
-			// not enter the balance stack. The body only begins on the NEXT
-			// line, so just remember the terminator here and keep scanning the
-			// rest of the start line as code (e.g. in foo(<<~SQL.strip) the
-			// paren still closes on the same line).
-			if style.heredoc && c == '<' && i+1 < n && content[i+1] == '<' {
-				if term, next, ok := rubyHeredocStart(content, i); ok {
-					pendingHeredoc = term
-					i = next
-					continue
-				}
-			}
-
-			// --- JS regex literal vs division (fix #538) ---
-			// Decided from the previous significant character: after operators,
-			// opening brackets, separators or keywords a '/' opens a regex. The
-			// regex body (and its character classes) is consumed wholesale so
-			// patterns like /['"]+/ or /[(]/ no longer derange the string and
-			// bracket states. Note: '/' after ')' is treated as division (the
-			// common (a+b)/2 case); "if (x) /re/" misreads are contained by the
-			// newline fallback above.
-			if style.jsLike && c == '/' && regexMayStart(content, i) {
-				state = dsRegex
-				i++
-				continue
-			}
-
-			// --- Rust raw strings r"...", r#"..."#, r##"..."## ... (fix #237, #276) ---
-			// Rust allows an arbitrary number of hashes; the string closes only
-			// at a '"' followed by the same number of hashes. Content may itself
-			// contain "#, which is why counting k is required.
-			if style.rust && c == 'r' && i+2 < n && content[i+1] == '"' {
-				if end := strings.IndexByte(content[i+2:], '"'); end >= 0 {
-					line += strings.Count(content[i:i+2+end+1], "\n")
-					i += 2 + end + 1
-					continue
-				}
-				return fmt.Sprintf("line %d: unterminated raw string literal - missing closing \"", line)
-			}
-			if style.rust && c == 'r' && i+1 < n && content[i+1] == '#' {
-				// Count consecutive hashes after 'r'.
-				k := 1
-				for i+1+k < n && content[i+1+k] == '#' {
-					k++
-				}
-				if i+1+k < n && content[i+1+k] == '"' {
-					start := i + 1 + k // index of opening '"'
-					if end, ok := indexRawStringClose(content[start+1:], k); ok {
-						closed := start + 1 + end + 1 + k // past '"' and k hashes
-						line += strings.Count(content[i:closed], "\n")
-						i = closed
-						continue
-					}
-					return fmt.Sprintf("line %d: unterminated raw string literal - missing closing quote followed by %d '#'", line, k)
-				}
-				// 'r' followed by hashes but no quote: not a raw string (e.g.
-				// an identifier); fall through to normal handling.
-			}
-
-			// --- String starts ---
-			if c == '\'' {
-				// Rust lifetime vs char literal (fix #237): lifetimes ('a,
-				// 'static) never close and must not enter the string state;
-				// char literals ('x', '\n') close compactly and contain no
-				// brackets, so consuming them as code is safe.
-				if style.rust {
-					if next, handled := rustSingleQuoteSpan(content, i); handled {
-						i = next
-						continue
-					}
-				}
-				state = dsStringSingle
-				i++
-				continue
-			}
-			if c == '"' {
-				state = dsStringDouble
-				i++
-				continue
-			}
-			if c == '`' {
-				state = dsStringBack
-				i++
-				continue
-			}
-
-			// --- Bracket tracking ---
-			switch c {
-			case '(', '{', '[':
-				stack = append(stack, openBracket{char: c, line: line})
-			case ')', '}', ']':
-				if len(stack) == 0 {
-					return fmt.Sprintf("line %d: unexpected '%c' with no matching opening delimiter", line, c)
-				}
-				top := stack[len(stack)-1]
-				if !isMatchingBracket(top.char, c) {
-					return fmt.Sprintf("line %d: '%c' does not match '%c' opened at line %d", line, c, top.char, top.line)
-				}
-				stack = stack[:len(stack)-1]
-			}
-			i++
-
-		case dsStringSingle:
-			if c == '\\' {
-				i += 2 // skip escaped char
-				continue
-			}
-			if c == '\'' {
-				state = dsCode
-			}
-			i++
-
-		case dsStringDouble:
-			if c == '\\' {
-				i += 2
-				continue
-			}
-			if c == '"' {
-				state = dsCode
-			}
-			i++
-
-		case dsStringBack:
-			if c == '\\' {
-				i += 2
-				continue
-			}
-			if c == '`' {
-				state = dsCode
-			}
-			i++
-
-		case dsRegex:
-			if c == '\\' {
-				i += 2 // skip escaped char
-				continue
-			}
-			if c == '[' {
-				state = dsRegexClass
-				i++
-				continue
-			}
-			if c == '/' {
-				state = dsCode
-			}
-			// Newlines are handled by the shared handler above (containment).
-			i++
-
-		case dsRegexClass:
-			if c == '\\' {
-				i += 2
-				continue
-			}
-			if c == ']' {
-				state = dsRegex
-			}
-			i++
-
-		case dsHeredoc:
-			// Everything until the terminator line is string data; terminator
-			// detection happens in the shared newline handler above.
-			i++
-
-		case dsLineComment:
-			// Consumed by newline handler above.
-			i++
-
-		case dsBlockComment:
-			if style.blockClose != "" && i+len(style.blockClose) <= n && content[i:i+len(style.blockClose)] == style.blockClose {
-				state = dsCode
-				i += len(style.blockClose)
-				continue
-			}
-			i++
-
-		case dsTripleDouble:
-			if i+2 < n && content[i:i+3] == `"""` {
-				state = dsCode
-				i += 3
-				continue
-			}
-			if c == '\n' {
-				line++
-			}
-			i++
-
-		case dsTripleSingle:
-			if i+2 < n && content[i:i+3] == `'''` {
-				state = dsCode
-				i += 3
-				continue
-			}
-			if c == '\n' {
-				line++
-			}
-			i++
-
-		default:
-			i++
+	// --- Triple-quoted strings (Python) ---
+	if style.tripleQuotes && i+2 < n {
+		tri := string(content[i : i+3])
+		if tri == `"""` {
+			s.state = dsTripleDouble
+			return i + 3, true
+		}
+		if tri == `'''` {
+			s.state = dsTripleSingle
+			return i + 3, true
 		}
 	}
 
-	// Check for unclosed string literals, block comments, or triple-quoted
-	// strings. An agent edit that leaves a string or comment unterminated
-	// causes a syntax error in every language — this is a very common failure
-	// mode for partial edits. The scanner state machine tracks these states
-	// while scanning (to skip brackets inside them), but previously did not
-	// report them if the file ended while still inside one.
-	if state != dsCode {
-		switch state {
+	// --- Block comment open ---
+	if style.blockOpen != "" && i+1 < n && content[i:i+len(style.blockOpen)] == style.blockOpen {
+		s.state = dsBlockComment
+		return i + len(style.blockOpen), true
+	}
+
+	// --- Line comment ---
+	for _, lc := range style.lineComments {
+		if i+len(lc) <= n && content[i:i+len(lc)] == lc {
+			s.state = dsLineComment
+			return i + len(lc), true
+		}
+	}
+
+	// --- Ruby heredoc start (fix #538): <<~ID, <<-ID, <<ID, <<"ID", <<'ID' ---
+	// The heredoc body is string data, so bare brackets inside it must
+	// not enter the balance stack. The body only begins on the NEXT
+	// line, so just remember the terminator here and keep scanning the
+	// rest of the start line as code (e.g. in foo(<<~SQL.strip) the
+	// paren still closes on the same line).
+	if style.heredoc && c == '<' && i+1 < n && content[i+1] == '<' {
+		if term, next, ok := rubyHeredocStart(content, i); ok {
+			s.pendingHeredoc = term
+			return next, true
+		}
+	}
+
+	// --- JS regex literal vs division (fix #538) ---
+	// Decided from the previous significant character: after operators,
+	// opening brackets, separators or keywords a '/' opens a regex. The
+	// regex body (and its character classes) is consumed wholesale so
+	// patterns like /['"]+/ or /[(]/ no longer derange the string and
+	// bracket states. Note: '/' after ')' is treated as division (the
+	// common (a+b)/2 case); "if (x) /re/" misreads are contained by the
+	// newline fallback above.
+	if style.jsLike && c == '/' && regexMayStart(content, i) {
+		s.state = dsRegex
+		return i + 1, true
+	}
+
+	return i, false
+}
+
+// rustRawStringToken consumes Rust raw strings r"...", r#"..."#, r##"..."##
+// (fix #237, #276). Rust allows an arbitrary number of hashes; the string
+// closes only at a '"' followed by the same number of hashes, and the content
+// may itself contain '"#', which is why counting k is required. ok=false
+// means this is not a raw-string start and scanning falls through (an 'r'
+// followed by hashes but no quote is just an identifier).
+func (s *delimScanner) rustRawStringToken(content string, style commentStyle, i int) (int, string, bool) {
+	n := len(content)
+	if !style.rust || content[i] != 'r' {
+		return i, "", false
+	}
+
+	// r"..." (no hashes): the string closes at the next '"'.
+	if i+2 < n && content[i+1] == '"' {
+		if end := strings.IndexByte(content[i+2:], '"'); end >= 0 {
+			closed := i + 2 + end + 1
+			s.line += strings.Count(content[i:closed], "\n")
+			return closed, "", true
+		}
+		return i, fmt.Sprintf("line %d: unterminated raw string literal - missing closing \"", s.line), true
+	}
+
+	// r#..."..."# (k hashes).
+	if i+1 < n && content[i+1] == '#' {
+		k := 1
+		for i+1+k < n && content[i+1+k] == '#' {
+			k++
+		}
+		if i+1+k < n && content[i+1+k] == '"' {
+			start := i + 1 + k // index of opening '"'
+			if end, ok := indexRawStringClose(content[start+1:], k); ok {
+				closed := start + 1 + end + 1 + k // past '"' and k hashes
+				s.line += strings.Count(content[i:closed], "\n")
+				return closed, "", true
+			}
+			return i, fmt.Sprintf("line %d: unterminated raw string literal - missing closing quote followed by %d '#'", s.line, k), true
+		}
+	}
+	return i, "", false
+}
+
+// openQuote enters the single-character string states on a quote character,
+// handling the Rust lifetime-vs-char-literal disambiguation (fix #237).
+func (s *delimScanner) openQuote(content string, style commentStyle, i int) (int, bool) {
+	switch content[i] {
+	case '\'':
+		// Rust lifetime vs char literal (fix #237): lifetimes ('a,
+		// 'static) never close and must not enter the string state;
+		// char literals ('x', '\n') close compactly and contain no
+		// brackets, so consuming them as code is safe.
+		if style.rust {
+			if next, handled := rustSingleQuoteSpan(content, i); handled {
+				return next, true
+			}
+		}
+		s.state = dsStringSingle
+		return i + 1, true
+	case '"':
+		s.state = dsStringDouble
+		return i + 1, true
+	case '`':
+		s.state = dsStringBack
+		return i + 1, true
+	}
+	return i, false
+}
+
+// trackBracket applies the bracket push/pop for a plain code character at
+// content[i] and returns the next scan index plus a terminal mismatch
+// description ("" while balanced).
+func (s *delimScanner) trackBracket(content string, i int) (int, string) {
+	switch content[i] {
+	case '(', '{', '[':
+		s.stack = append(s.stack, openBracket{char: content[i], line: s.line})
+	case ')', '}', ']':
+		if len(s.stack) == 0 {
+			return i + 1, fmt.Sprintf("line %d: unexpected '%c' with no matching opening delimiter", s.line, content[i])
+		}
+		top := s.stack[len(s.stack)-1]
+		if !isMatchingBracket(top.char, content[i]) {
+			return i + 1, fmt.Sprintf("line %d: '%c' does not match '%c' opened at line %d", s.line, content[i], top.char, top.line)
+		}
+		s.stack = s.stack[:len(s.stack)-1]
+	}
+	return i + 1, ""
+}
+
+// stepBody consumes one character inside a non-code state (string and regex
+// literal bodies, heredoc and comment bodies, Python triple-quoted strings)
+// and returns the next scan index.
+func (s *delimScanner) stepBody(content string, style commentStyle, i int) int {
+	c := content[i]
+	switch s.state {
+	case dsStringSingle:
+		if c == '\\' {
+			return i + 2 // skip escaped char
+		}
+		if c == '\'' {
+			s.state = dsCode
+		}
+		return i + 1
+
+	case dsStringDouble:
+		if c == '\\' {
+			return i + 2
+		}
+		if c == '"' {
+			s.state = dsCode
+		}
+		return i + 1
+
+	case dsStringBack:
+		if c == '\\' {
+			return i + 2
+		}
+		if c == '`' {
+			s.state = dsCode
+		}
+		return i + 1
+
+	case dsRegex:
+		if c == '\\' {
+			return i + 2 // skip escaped char
+		}
+		if c == '[' {
+			s.state = dsRegexClass
+			return i + 1
+		}
+		if c == '/' {
+			s.state = dsCode
+		}
+		// Newlines are handled by the shared newline handler above (containment).
+		return i + 1
+
+	case dsRegexClass:
+		if c == '\\' {
+			return i + 2
+		}
+		if c == ']' {
+			s.state = dsRegex
+		}
+		return i + 1
+
+	case dsHeredoc:
+		// Everything until the terminator line is string data; terminator
+		// detection happens in the shared newline handler above.
+		return i + 1
+
+	case dsLineComment:
+		// Consumed by newline handler above.
+		return i + 1
+
+	case dsBlockComment:
+		n := len(content)
+		if style.blockClose != "" && i+len(style.blockClose) <= n && content[i:i+len(style.blockClose)] == style.blockClose {
+			s.state = dsCode
+			return i + len(style.blockClose)
+		}
+		return i + 1
+
+	case dsTripleDouble, dsTripleSingle:
+		closer := `"""`
+		if s.state == dsTripleSingle {
+			closer = `'''`
+		}
+		if i+2 < len(content) && content[i:i+3] == closer {
+			s.state = dsCode
+			return i + 3
+		}
+		if c == '\n' {
+			s.line++
+		}
+		return i + 1
+
+	default:
+		return i + 1
+	}
+}
+
+// finalReport reports the terminal imbalance at end of input: an
+// unterminated string/comment/heredoc state, or unclosed opening delimiters.
+func (s *delimScanner) finalReport(content string, i int) string {
+	if s.state != dsCode {
+		switch s.state {
 		case dsStringSingle:
 			return fmt.Sprintf("line %d: unterminated single-quoted string - missing closing '", unclosedStringLine(content, i))
 		case dsStringDouble:
@@ -480,7 +516,7 @@ func scanDelimiters(content string, style commentStyle) string {
 		case dsTripleSingle:
 			return fmt.Sprintf("line %d: unterminated triple-quoted string - missing closing '''", unclosedStringLine(content, i))
 		case dsHeredoc:
-			return fmt.Sprintf("line %d: unterminated heredoc - missing terminator %s", unclosedStringLine(content, i), heredocTerm)
+			return fmt.Sprintf("line %d: unterminated heredoc - missing terminator %s", unclosedStringLine(content, i), s.heredocTerm)
 			// dsRegex/dsRegexClass are deliberately NOT reported at EOF: that
 			// can also mean the heuristic read a division as a regex start
 			// (e.g. "x /= 2" on the last line); staying silent keeps this
@@ -489,14 +525,14 @@ func scanDelimiters(content string, style commentStyle) string {
 	}
 
 	// Check for unclosed opening delimiters.
-	if len(stack) > 0 {
-		unclosed := stack[0] // outermost unclosed
+	if len(s.stack) > 0 {
+		unclosed := s.stack[0] // outermost unclosed
 		// #605 G4: include the count so a 1→2 worsening write produces a
 		// DIFFERENT message than the pre-existing single imbalance — the
 		// delta gate compares messages to separate "untouched" from
 		// "introduced/worsened".
-		if len(stack) > 1 {
-			return fmt.Sprintf("line %d: unclosed '%s' — missing closing delimiter (%d unclosed total)", unclosed.line, bracketName(unclosed.char), len(stack))
+		if len(s.stack) > 1 {
+			return fmt.Sprintf("line %d: unclosed '%s' — missing closing delimiter (%d unclosed total)", unclosed.line, bracketName(unclosed.char), len(s.stack))
 		}
 		return fmt.Sprintf("line %d: unclosed '%s' — missing closing delimiter", unclosed.line, bracketName(unclosed.char))
 	}
