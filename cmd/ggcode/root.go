@@ -955,6 +955,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
 	})
+	repl.SetJobManager(registry.JobManager())
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
 	repl.SetCommandPane(registry, workingDir)

@@ -784,6 +784,15 @@ func (r *REPL) SetSystemPromptBuilder(fn func(task, agentType string) string) {
 }
 
 // SetSubAgentManager wires the sub-agent manager and registers sub-agent tools.
+// SetJobManager wires the shared background-command manager to the TUI model
+// so exit-time shutdownAll can reap running start_command jobs (r71).
+func (r *REPL) SetJobManager(jm *tool.CommandJobManager) {
+	if jm == nil {
+		return
+	}
+	r.model.SetJobManager(jm)
+}
+
 func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider, tools *tool.Registry) {
 	r.model.SetSubAgentManager(mgr)
 

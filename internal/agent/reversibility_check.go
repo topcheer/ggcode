@@ -91,9 +91,15 @@ func (r *reversibilityState) recordSafetySignal(toolName, args string) {
 			if hasCommandToken(tokens[1:], "test", "check") {
 				r.testsRan = true
 			}
-		case "test", "pytest":
-			// pytest as the command's first token IS the test command
+		case "pytest", "py.test", "vitest", "jest":
+			// Bare test-runner commands as the first token ARE test runs
 			// (#1194: `pytest -q scripts/` has no `test` token following).
+			// #2754: bare `test` is NOT in this list - it is the POSIX
+			// shell builtin (`test -f x`, `test -d dist && rm -rf dist`),
+			// a conditional, not a test run. Counting it flipped testsRan
+			// and silently disarmed the commit/push gate - the same
+			// false-verification family as #2255 ("build:" in a commit
+			// message) and #2552 (`make clean` counted as build).
 			r.testsRan = true
 		}
 	case "git_add", "git_commit":

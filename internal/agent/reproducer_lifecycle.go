@@ -57,9 +57,11 @@ import (
 const (
 	reproLifecycleMaxWarnings = 1 // max warnings per run
 
-	// reproducerFertilityWindow: how many iterations after a reproducer run
-	// we consider the agent "in the edit phase" and expect a re-run.
-	reproducerFertilityWindow = 8
+	reproducerRerunGraceIterations = 2 // iterations to wait after edit before warning
+
+	// commandTokenMinLen: minimum length of a command token to count for
+	// overlap matching (filters out short generic words).
+	commandTokenMinLen = 3
 )
 
 // reproducerLifecycleState tracks the reproduce->edit->rerun lifecycle.
@@ -126,6 +128,70 @@ var reproducerRunToolNames = map[string]bool{
 	"start_command": true,
 }
 
+// reproducerRerunMatches reports whether a run tool input qualifies as a
+// re-run of the reproducer itself (#2752). It qualifies if it matches the
+// reproducer script shape (e.g. `python3 repro.py`), or if it shares a
+// meaningful token overlap with the recorded reproducer snippet (covers
+// text-established reproducers whose snippet may be prose-like).
+func reproducerRerunMatches(inp, snippet string) bool {
+	if inp == "" {
+		return false
+	}
+	if reproducerCommandRe.MatchString(inp) {
+		return true
+	}
+	if snippet == "" {
+		return false
+	}
+	return reproCommandTokenOverlap(inp, snippet)
+}
+
+// reproCommandTokenOverlap checks whether the two command strings share a
+// distinctive script/path token (e.g. both reference `repro.py`).
+func reproCommandTokenOverlap(a, b string) bool {
+	tokensA := reproCommandTokens(a)
+	tokensB := reproCommandTokens(b)
+	if len(tokensA) == 0 || len(tokensB) == 0 {
+		return false
+	}
+	for ta := range tokensA {
+		if tokensB[ta] {
+			return true
+		}
+	}
+	return false
+}
+
+// reproCommandTokens splits a command string into lowercase tokens suitable
+// for overlap matching. Fields are additionally split on path separators so
+// `./cmd/reprogo/main.go` and `go run ./cmd/reprogo` share `reprogo`.
+// Generic shell verbs, flags, and common directory names are dropped so
+// overlap means script/argument identity rather than generic words.
+func reproCommandTokens(s string) map[string]bool {
+	generic := map[string]bool{
+		"and": true, "the": true, "run": true, "bash": true, "sh": true,
+		"python": true, "python3": true, "node": true, "ruby": true,
+		"cargo": true, "go": true, "test": true, "tests": true, "cd": true,
+		"echo": true, "make": true, "cmd": true, "src": true, "pkg": true,
+		"internal": true, "desktop": true, "main": true, "github.com": true,
+		"github": true, "www": true, "head": true, "git": true, "diff": true,
+	}
+	tokens := make(map[string]bool)
+	for _, field := range strings.Fields(strings.ToLower(s)) {
+		for _, comp := range strings.Split(field, "/") {
+			comp = strings.Trim(comp, "\"'`$();|&~.:")
+			if len(comp) < commandTokenMinLen || strings.HasPrefix(comp, "-") {
+				continue
+			}
+			if generic[comp] {
+				continue
+			}
+			tokens[comp] = true
+		}
+	}
+	return tokens
+}
+
 // observeToolCalls updates the lifecycle state based on the tools the agent
 // invoked this iteration.
 func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []string, toolInputs []string) {
@@ -157,9 +223,12 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 			}
 		}
 
-		// Phase 3: detect re-run after edit.
+		// Phase 3: detect re-run of the reproducer itself after edit (#2752).
+		// A bare run_command (e.g. `git diff`, `ls`) must NOT discharge the
+		// re-run obligation: the command must either match the reproducer
+		// script shape or resemble the recorded reproducer snippet.
 		if s.editedAfterReproducer && !s.reranAfterEdit {
-			if reproducerRunToolNames[tn] {
+			if reproducerRunToolNames[tn] && reproducerRerunMatches(inp, s.reproducerSnippet) {
 				s.reranAfterEdit = true
 				debug.Log("agent", "reproducer-lifecycle: re-run after edit at iter %d", iteration)
 			}
@@ -189,12 +258,13 @@ func (s *reproducerLifecycleState) checkIncomplete(iteration int) string {
 	if s.warned {
 		return ""
 	}
-	// Only warn if: reproducer established, code edited after, NOT re-run,
-	// and we're past the fertility window from the edit.
+	// Only warn if: reproducer established, code edited after, and the
+	// reproducer itself has NOT been re-run. Wait a grace period after the
+	// edit so the agent has a chance to re-run it.
 	if !s.hasReproducer || !s.editedAfterReproducer || s.reranAfterEdit {
 		return ""
 	}
-	if iteration-s.editIteration < 2 {
+	if iteration-s.editIteration < reproducerRerunGraceIterations {
 		return "" // give the agent a chance to re-run
 	}
 

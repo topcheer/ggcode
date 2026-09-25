@@ -77,6 +77,11 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 	registry := core.Registry
 	core.StartBackgroundServices()
+	// r71: reap managed background jobs (detach=true included) when the pipe
+	// run ends so its children do not outlive the process as orphans.
+	if jm := registry.JobManager(); jm != nil {
+		defer jm.ShutdownAll(2 * time.Second)
+	}
 	defer core.Close()
 
 	// Load project memory file list (for path-triggered dynamic loading).

@@ -126,12 +126,39 @@ func (s *constraintViolationState) recordReasoning(text string, iter int) {
 	}
 	s.currentIter = iter
 	extracted := cvExtractConstraints(text, iter)
+
+	// #2733: scope declarations have REPLACE semantics, not accumulate.
+	// Scope constraints are task-local commitments about where changes will
+	// land; a later declaration ("I'll limit changes to docs/") supersedes an
+	// earlier one ("I'll only modify auth/"). Accumulating them forms an
+	// implicit global AND -- after two different scope declarations, EVERY edit
+	// violates at least one of them, burning the cvMaxWarnings quota with
+	// false positives and silencing real violations. Avoid constraints are
+	// naturally additive and keep accumulating.
+	var newScopes []cvConstraint
+	for _, c := range extracted {
+		if c.constraintT == "scope" {
+			newScopes = append(newScopes, c)
+		}
+	}
+	if len(newScopes) > 0 {
+		kept := s.constraints[:0]
+		for _, existing := range s.constraints {
+			if existing.constraintT == "scope" {
+				continue // superseded by this turn's scope declaration(s)
+			}
+			kept = append(kept, existing)
+		}
+		s.constraints = kept
+	}
+
 	for _, c := range extracted {
 		if len(s.constraints) >= cvMaxTracked {
 			break
 		}
 		// Deduplicate: skip if we already track a constraint with the same
-		// pattern and type.
+		// pattern and type (covers re-declaring the same scope this turn --
+		// a re-declaration must not re-arm an identical superseded scope).
 		dup := false
 		for _, existing := range s.constraints {
 			if existing.constraintT == c.constraintT && existing.pattern == c.pattern {

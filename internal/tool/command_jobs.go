@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"runtime"
+	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,13 +100,159 @@ type CommandJobManager struct {
 	// sandbox, when non-nil and Enabled, wraps managed job spawns in the
 	// OS-level containment sandbox (same policy as run_command).
 	sandbox *SandboxPolicy
+
+	// r71 lifecycle governance: concurrently RUNNING jobs are capped and new
+	// spawns are refused while the ggcode process holds more than
+	// maxJobMemBytes of OS-obtained memory. Both are sampled at spawn time
+	// (no background goroutines); thresholds resolve from env with safe
+	// defaults. Unbounded parallel background jobs were the documented OOM
+	// vector on memory-constrained machines (build/test jobs die with exit
+	// 137), matching the harness-engineering guidance that the cheap caps
+	// (a bounded running set + a resource floor) are the floor for
+	// production loops.
+	maxRunningJobs int
+	maxJobMemBytes uint64
 }
 
 func NewCommandJobManager(workingDir string) *CommandJobManager {
 	return &CommandJobManager{
-		workingDir: workingDir,
-		jobs:       make(map[string]*CommandJob),
+		workingDir:     workingDir,
+		jobs:           make(map[string]*CommandJob),
+		maxRunningJobs: jobEnvPositiveInt("GGCODE_MAX_RUNNING_JOBS", maxRunningJobsDefault),
+		maxJobMemBytes: resolveJobMemLimit(),
 	}
+}
+
+const (
+	// maxRunningJobsDefault caps concurrently RUNNING managed jobs. It is a
+	// safety floor, not a throughput limit: finished jobs never count, and
+	// the cap is per-manager (the agent's long-lived manager). 8 covers the
+	// practical parallel-build/test workload while preventing the runaway
+	// pattern where every retry piles another build onto an
+	// already-swapping machine.
+	maxRunningJobsDefault = 8
+	// jobMemLimitDefault is the process memory ceiling (bytes obtained from
+	// the OS, runtime.MemStats.Sys) beyond which new background jobs are
+	// refused. Overridden by GGCODE_JOB_MEM_LIMIT, or derived from
+	// GOMEMLIMIT (x1.5) when that env is set.
+	jobMemLimitDefault = uint64(3) << 30
+)
+
+// jobEnvPositiveInt resolves an env override to a positive int, falling back
+// to def on missing/invalid values (0 disables the cap).
+func jobEnvPositiveInt(name string, def int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(v); err == nil {
+		return n
+	}
+	return def
+}
+
+// resolveJobMemLimit picks the memory-pressure ceiling for new background
+// jobs. Precedence: GGCODE_JOB_MEM_LIMIT (bytes) > GOMEMLIMIT*1.5 (the Go
+// runtime reports the env-configured soft limit via SetMemoryLimit(-1)) >
+// jobMemLimitDefault. Invalid values fall through to the next tier.
+func resolveJobMemLimit() uint64 {
+	if n, err := strconv.ParseUint(strings.TrimSpace(os.Getenv("GGCODE_JOB_MEM_LIMIT")), 10, 64); err == nil && n > 0 {
+		return n
+	}
+	if lim := debug.SetMemoryLimit(-1); lim > 0 && lim < 1<<62 {
+		return uint64(lim) + uint64(lim)/2
+	}
+	return jobMemLimitDefault
+}
+
+// jobMemSampleFn samples the process's OS-obtained memory in bytes. A
+// package-level seam so tests can inject a value without allocating.
+var jobMemSampleFn = func() uint64 {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return ms.Sys
+}
+
+// admissionBlockReason returns a non-empty actionable message when the
+// manager must refuse a new background job right now: either the concurrent
+// running-job cap is reached, or the process is above its memory ceiling.
+// Read-only; safe to call before the manager takes ownership of the spawn.
+func (m *CommandJobManager) admissionBlockReason() string {
+	m.mu.Lock()
+	running := 0
+	for _, j := range m.jobs {
+		if !j.isTerminal() {
+			running++
+		}
+	}
+	maxRunning := m.maxRunningJobs
+	memLimit := m.maxJobMemBytes
+	m.mu.Unlock()
+
+	var reasons []string
+	if maxRunning > 0 && running >= maxRunning {
+		reasons = append(reasons, fmt.Sprintf(
+			"concurrent running background jobs at cap (%d/%d, GGCODE_MAX_RUNNING_JOBS) — poll or stop_command an older job before starting another",
+			running, maxRunning))
+	}
+	if memLimit > 0 {
+		if sys := jobMemSampleFn(); sys > memLimit {
+			reasons = append(reasons, fmt.Sprintf(
+				"process memory pressure: %d MiB obtained from OS exceeds the %d MiB ceiling — finish or stop_command running jobs before starting new ones (tune GGCODE_JOB_MEM_LIMIT to override)",
+				sys>>20, memLimit>>20))
+		}
+	}
+	return strings.Join(reasons, "; ")
+}
+
+// ShutdownAll cancels every running job and waits up to wait for each to
+// terminate, returning the number of running jobs reaped. Called at session
+// and process shutdown (TUI quit, /restart exec handoff, pipe/ACP exit) so
+// managed children — especially detach=true services — do not outlive the
+// harness as orphan processes. Cancelled jobs stay in the map as terminal
+// entries so a late read_command_output still shows why they stopped; normal
+// finished-job eviction reclaims them.
+func (m *CommandJobManager) ShutdownAll(wait time.Duration) int {
+	m.mu.Lock()
+	var running []*CommandJob
+	for _, j := range m.jobs {
+		if !j.isTerminal() {
+			running = append(running, j)
+		}
+	}
+	// Collect cancels, then cancel OUTSIDE m.mu: cancel wakes the job's
+	// waiter goroutine, whose finish path re-enters m.mu (recordFinish) —
+	// cancelling under the lock would serially block on it.
+	var cancels []context.CancelFunc
+	for _, j := range running {
+		j.mu.Lock()
+		if j.cancel != nil {
+			cancels = append(cancels, j.cancel)
+		}
+		j.mu.Unlock()
+	}
+	m.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+	if len(running) == 0 {
+		return 0
+	}
+
+	deadline := time.Now().Add(wait)
+	reaped := 0
+	for _, j := range running {
+		d := time.Until(deadline)
+		if d <= 0 {
+			d = time.Millisecond
+		}
+		select {
+		case <-j.done:
+			reaped++
+		case <-time.After(d):
+		}
+	}
+	return reaped
 }
 
 // SetOutputTee sets an optional writer that receives a copy of stdout/stderr.
@@ -185,7 +335,12 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 	}
 
 	_, snapshot, err := m.startExisting(jobCtx, command, timeout, cancel, cmd)
-	return snapshot, err
+	if err != nil {
+		// Refusal/ownership never happened: release the ctx/timer tree.
+		cancel()
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 // StartExisting starts an already-configured command as a managed background job.
@@ -213,6 +368,12 @@ func (m *CommandJobManager) StartExisting(ctx context.Context, cmd *exec.Cmd, co
 }
 
 func (m *CommandJobManager) startExisting(ctx context.Context, command string, timeout time.Duration, cancel context.CancelFunc, cmd *exec.Cmd) (*CommandJob, *CommandJobSnapshot, error) {
+	// r71 admission gate: refuse BEFORE the manager takes ownership of the
+	// spawn. The caller keeps cancel ownership on error and must cancel it
+	// (Start's wrapper and executeWithAutoBackground both do).
+	if reason := m.admissionBlockReason(); reason != "" {
+		return nil, nil, fmt.Errorf("background job refused: %s", reason)
+	}
 	job := m.newJob(command, timeout, cancel)
 	writer := &commandJobWriter{job: job}
 

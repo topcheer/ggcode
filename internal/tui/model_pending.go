@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/agentruntime"
@@ -229,6 +230,14 @@ func (m *Model) shutdownAll() {
 	}
 	if m.cmdPaneMgr != nil {
 		m.cmdPaneMgr.Close()
+	}
+	// r71: reap managed background command jobs too. start_command children
+	// (especially detach=true dev servers/builds) were the only background
+	// work class surviving exit as orphan processes. Same fire-and-forget
+	// discipline as the sub-agent cancel above: the process is quitting.
+	if m.jobManager != nil {
+		jm := m.jobManager
+		safego.Go("tui.shutdownAll.commandJobs", func() { jm.ShutdownAll(2 * time.Second) })
 	}
 	// #1364: knight adhoc tasks (LLM-backed, formerly context.Background)
 	// must die with the session - otherwise they keep billing and running
