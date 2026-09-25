@@ -212,3 +212,28 @@ func TestLastUserPromptText(t *testing.T) {
 		t.Fatalf("expected truncation to %d runes, got %d", maxClassifyPromptRunes, len([]rune(got)))
 	}
 }
+
+// TestRunRatchetSweepsWithoutErrors guards the wiring of the consolidation
+// sweep: it must run even when the run had no errors (the early return for
+// empty stats.Errors must come after the sweep, not before it).
+func TestRunRatchetSweepsWithoutErrors(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuleStore(dir)
+	old := time.Now().Add(-60 * 24 * time.Hour)
+	rs.mu.Lock()
+	rs.rules = []Rule{{Category: "git", Rule: "old unused rule", MatchPattern: "boom", HitCount: 1, LastSeen: old, CreatedAt: old}}
+	saveErr := rs.save()
+	rs.mu.Unlock()
+	if saveErr != nil {
+		t.Fatalf("seed save: %v", saveErr)
+	}
+
+	a := &Agent{workingDir: dir}
+	a.runRatchet(&RunStats{}) // no errors: previously returned before any sweep
+
+	for _, r := range NewRuleStore(dir).Rules() {
+		if r.Rule == "old unused rule" {
+			t.Fatal("runRatchet should sweep stale rules even on error-free runs")
+		}
+	}
+}
