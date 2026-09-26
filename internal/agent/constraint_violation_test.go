@@ -256,3 +256,68 @@ func TestCVExtractConstraints_NoConstraints(t *testing.T) {
 		t.Errorf("expected 0 constraints from neutral text, got %d", len(constraints))
 	}
 }
+
+// TestConstraintViolation_ReadOnlyToolsNotChecked locks the #2693/#2777
+// contract: checkToolCall only evaluates mutating tools. Read-only tools
+// (read_file, grep, search_files, ...) that carry path/file_path arguments
+// must never trigger scope/avoid warnings -- reading a file neither expands
+// scope nor touches what the agent said it would avoid, and read-only false
+// positives would silently exhaust the cvMaxWarnings quota before a real
+// out-of-scope edit lands.
+func TestConstraintViolation_ReadOnlyToolsNotChecked(t *testing.T) {
+	// #2777 scenario 1: scope declaration followed by an out-of-scope read_file.
+	s := newConstraintViolationState()
+	s.recordReasoning("I only modify files in the internal/auth directory", 1)
+	if msg := s.checkToolCall("read_file", map[string]any{"file_path": "cmd/ggcode/root.go"}, 2); msg != "" {
+		t.Errorf("read_file out of declared scope must not warn, got: %s", msg)
+	}
+	// #2777 scenario 2: grep with an out-of-scope path argument.
+	if msg := s.checkToolCall("grep", map[string]any{"path": "internal/config", "pattern": "x"}, 3); msg != "" {
+		t.Errorf("grep out of declared scope must not warn, got: %s", msg)
+	}
+	// Other read-only shapes: multi_file_read, search_files, list_directory, glob.
+	for _, tool := range []string{"multi_file_read", "search_files", "list_directory", "glob"} {
+		if msg := s.checkToolCall(tool, map[string]any{"path": "internal/config"}, 4); msg != "" {
+			t.Errorf("%s must not warn (read-only), got: %s", tool, msg)
+		}
+	}
+	// #2777 scenario 3 (avoid): "leave the database alone" then read schema.
+	s2 := newConstraintViolationState()
+	s2.recordReasoning("I leave the database alone for this task.", 1)
+	if msg := s2.checkToolCall("read_file", map[string]any{"file_path": "internal/database/schema.go"}, 2); msg != "" {
+		t.Errorf("read of avoided path must not warn, got: %s", msg)
+	}
+}
+
+// TestConstraintViolation_ReadOnlyCallsDoNotExhaustQuota locks the flip side
+// of #2777: read-only calls must not consume the cvMaxWarnings budget, so a
+// real out-of-scope edit after several such reads still warns.
+func TestConstraintViolation_ReadOnlyCallsDoNotExhaustQuota(t *testing.T) {
+	s := newConstraintViolationState()
+	s.recordReasoning("I'll only modify files in auth/.", 1)
+	// Two out-of-scope read-only calls -- would exhaust cvMaxWarnings if the
+	// gate were missing (#2777 repro).
+	if msg := s.checkToolCall("read_file", map[string]any{"file_path": "internal/tool/builtin.go"}, 2); msg != "" {
+		t.Fatalf("read_file must not warn, got: %s", msg)
+	}
+	if msg := s.checkToolCall("grep", map[string]any{"path": "cmd"}, 3); msg != "" {
+		t.Fatalf("grep must not warn, got: %s", msg)
+	}
+	// Real out-of-scope edit must still fire: quota untouched by the reads.
+	if msg := s.checkToolCall("edit_file", map[string]any{"file_path": "internal/tool/builtin.go"}, 4); msg == "" {
+		t.Fatal("expected warning for genuine out-of-scope edit after read-only calls")
+	}
+}
+
+// TestConstraintViolation_MutatingToolsStillChecked guards against over-
+// filtering: every entry in the canonical sourceMutatingTools map must still
+// be evaluated (the #2693 gate uses exactly this map).
+func TestConstraintViolation_MutatingToolsStillChecked(t *testing.T) {
+	for tool := range sourceMutatingTools {
+		s := newConstraintViolationState()
+		s.recordReasoning("I'll only modify files in auth/.", 1)
+		if msg := s.checkToolCall(tool, map[string]any{"file_path": "internal/tool/builtin.go"}, 2); msg == "" {
+			t.Errorf("mutating tool %s out of scope must warn", tool)
+		}
+	}
+}
