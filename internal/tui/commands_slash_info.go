@@ -1,7 +1,7 @@
 package tui
 
 import (
-	stdctx "context"
+	context "context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
 	"github.com/topcheer/ggcode/internal/config"
-	"github.com/topcheer/ggcode/internal/context"
+	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -532,7 +532,7 @@ func (m *Model) handleDiffCommand(parts []string) tea.Cmd {
 	// must not block"). A timeout bounds pathological repos; results come
 	// back as a streamMsg like the other async handlers.
 	return func() tea.Msg {
-		ctx, cancel := stdctx.WithTimeout(stdctx.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = workDir
@@ -1166,7 +1166,7 @@ func (m *Model) handleContextCommand() tea.Cmd {
 
 	// System prompt token estimate
 	sysPrompt := m.agent.SystemPrompt()
-	sysTokens := context.EstimateTokens(sysPrompt)
+	sysTokens := ctxpkg.EstimateTokens(sysPrompt)
 
 	// Count messages by role
 	var userMsgs, asstMsgs, toolMsgs int
@@ -1238,20 +1238,20 @@ func (m *Model) handleContextCommand() tea.Cmd {
 }
 
 // estimateMessageTokens sums token estimates across all content blocks.
-// Uses context.EstimateTokens for text (ASCII fast path + CJK aware),
+// Uses ctxpkg.EstimateTokens for text (ASCII fast path + CJK aware),
 // and adds overhead for images and tool calls.
 func estimateMessageTokens(msg provider.Message) int {
 	var total int
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":
-			total += context.EstimateTokens(block.Text)
+			total += ctxpkg.EstimateTokens(block.Text)
 		case "image":
 			// Vision tokens are larger; approximate as 1000 per image
 			total += 1000
 		default:
 			// Tool calls/results have JSON structure overhead
-			total += context.EstimateTokens(block.Output+block.ToolName+string(block.Input)) + 6
+			total += ctxpkg.EstimateTokens(block.Output+block.ToolName+string(block.Input)) + 6
 		}
 	}
 	return total
