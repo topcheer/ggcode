@@ -741,8 +741,27 @@ func LoadWithInstance(path, workspace string) (*Config, error) {
 
 	// Also apply legacy .ggcode/a2a.yaml if it exists (for backward compat).
 	// This uses "instance wins" semantics (unlike MergeInstance's "global wins").
+	// r138: gated per field on the instance explicit-key set. MigrateA2AYaml
+	// permanently skips migration whenever an instance config already exists,
+	// so a legacy a2a.yaml can coexist with an instance a2a section forever -
+	// and the previous unconditional override re-stomped those fields on
+	// every load, making any A2A value written through the instance config
+	// (onboarding, SaveInstanceScoped, manual edits) silently dead. Fields
+	// the instance file explicitly contains (instanceCfg.explicitKeys,
+	// #2284-C) now win; the legacy file degrades to a gap-filler for the rest.
 	if a2aOverride := LoadA2AOverride(workspace); a2aOverride != nil {
-		MergeA2AConfig(&cfg.A2A, a2aOverride)
+		gated := 0
+		gate := func(key string) bool {
+			if instanceCfg != nil && instanceCfg.explicitKeys[key] {
+				gated++
+				return true
+			}
+			return false
+		}
+		MergeA2AConfigWithGate(&cfg.A2A, a2aOverride, gate)
+		if gated > 0 {
+			debug.Log("config", "a2a override: %d field(s) skipped - instance config explicitly owns them", gated)
+		}
 		// #1519-B: register the merged section like mergeA2AConfigFields does
 		// on the instance path. Without the registration, Save's strip step
 		// never removed "a2a" from the global view, so a workspace's legacy
@@ -781,6 +800,25 @@ func MigrateA2AYaml(workspace string) bool {
 	var a2aRaw map[string]interface{}
 	if err := yaml.Unmarshal(data, &a2aRaw); err != nil {
 		return false
+	}
+
+	// r138: legacy override files in the flat form ("api_key: X") lost the
+	// key during migration - the wrapped "a2a" section has no top-level
+	// api_key field, so the typed unmarshal on load dropped it and the
+	// workspace's A2A auth silently broke. Move it to auth.api_key exactly
+	// like LoadA2AOverride does (#1515-A). ${VAR} references are preserved
+	// unexpanded: the instance path does not expand env refs, and baking a
+	// snapshot would freeze the value across rotations.
+	if legacyKey, hasLegacy := a2aRaw["api_key"]; hasLegacy {
+		auth, _ := a2aRaw["auth"].(map[string]interface{})
+		if auth == nil {
+			auth = map[string]interface{}{}
+		}
+		if _, exists := auth["api_key"]; !exists {
+			auth["api_key"] = legacyKey
+			a2aRaw["auth"] = auth
+		}
+		delete(a2aRaw, "api_key")
 	}
 
 	// Create instance config with A2A content

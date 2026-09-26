@@ -72,46 +72,62 @@ func LoadA2AOverride(workspace string) *A2AConfig {
 // MergeA2AConfig applies instance-level overrides on top of global A2A config.
 // Only non-zero fields from override are applied.
 func MergeA2AConfig(base *A2AConfig, override *A2AConfig) {
+	MergeA2AConfigWithGate(base, override, nil)
+}
+
+// MergeA2AConfigWithGate is MergeA2AConfig with an optional ownership gate.
+// When gate(key) returns true for a field's dotted instance explicit-key path
+// (e.g. "a2a.port"), that override field is skipped entirely so a value the
+// instance config explicitly contains is never re-stomped by the legacy
+// override file (r138: LoadWithInstance wires this to instanceCfg.explicitKeys,
+// the #2284-C/#2702 mechanism). A nil gate applies every field unchanged.
+func MergeA2AConfigWithGate(base *A2AConfig, override *A2AConfig, gate func(key string) bool) {
 	if override == nil {
 		return
 	}
+	gated := func(key string) bool { return gate != nil && gate(key) }
 	// #665: instance wins — when the "disabled" key was explicitly present
 	// in the override yaml (true OR false), assign it unconditionally so a
 	// workspace a2a.yaml with `disabled: false` can re-enable a globally
 	// disabled A2A. Overrides constructed programmatically (no explicit
 	// marker) keep the legacy one-way merge: only disable, never re-enable.
-	if override.disabledExplicit {
-		base.Disabled = override.Disabled
-	} else if override.Disabled {
-		base.Disabled = true
+	// r138: the instance-explicit gate outranks even the #665 re-enable -
+	// a workspace that explicitly disabled A2A via its instance config must
+	// not be silently re-enabled by a stale legacy file.
+	if !gated("a2a.disabled") {
+		if override.disabledExplicit {
+			base.Disabled = override.Disabled
+		} else if override.Disabled {
+			base.Disabled = true
+		}
 	}
-	if override.Port != 0 {
+	if !gated("a2a.port") && override.Port != 0 {
 		base.Port = override.Port
 	}
-	if override.Host != "" {
+	if !gated("a2a.host") && override.Host != "" {
 		base.Host = override.Host
 	}
-	if override.MaxTasks != 0 {
+	if !gated("a2a.max_tasks") && override.MaxTasks != 0 {
 		base.MaxTasks = override.MaxTasks
 	}
-	if override.TaskTimeout != "" {
+	if !gated("a2a.task_timeout") && override.TaskTimeout != "" {
 		base.TaskTimeout = override.TaskTimeout
 	}
 
 	// Auth overrides
-	if override.Auth.APIKey != "" {
+	if !gated("a2a.auth.api_key") && override.Auth.APIKey != "" {
 		base.Auth.APIKey = override.Auth.APIKey
 	}
-	if len(override.Auth.APIKeys) > 0 {
+	if !gated("a2a.auth.api_keys") && len(override.Auth.APIKeys) > 0 {
 		base.Auth.APIKeys = append(base.Auth.APIKeys, override.Auth.APIKeys...)
 	}
-	if override.Auth.OAuth2 != nil {
+	if !gated("a2a.auth.oauth2") && override.Auth.OAuth2 != nil {
 		base.Auth.OAuth2 = override.Auth.OAuth2
 	}
-	if override.Auth.OIDC != nil {
+	if !gated("a2a.auth.oidc") && override.Auth.OIDC != nil {
 		base.Auth.OIDC = override.Auth.OIDC
 	}
-	if override.Auth.MTLS != nil {
+	if !gated("a2a.auth.mtls") && override.Auth.MTLS != nil {
 		base.Auth.MTLS = override.Auth.MTLS
 	}
 }

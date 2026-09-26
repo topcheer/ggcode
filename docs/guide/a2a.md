@@ -124,6 +124,13 @@ All team members must use the same key.
 
 Per-workspace A2A config via `.ggcode/a2a.yaml` in the workspace root.
 
+`.ggcode/a2a.yaml` is the legacy override format. On first load without an
+instance config it is migrated into the instance config
+(`~/.ggcode/instances/<hash>/ggcode.yaml`) and removed. If an instance config
+already exists, the legacy file stays but becomes a gap-filler: fields the
+instance config explicitly sets under `a2a:` always win, and the legacy file
+only supplies fields the instance config does not define.
+
 ## Security
 
 - A built-in default key (`ggcode-lan-a2a-v1`) is always active when no custom auth is configured — it ensures only ggcode instances can connect
