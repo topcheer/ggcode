@@ -70,6 +70,7 @@ The input supports three modes:
 | `/model [name]` | Switch model |
 | `/mode [mode]` | Switch permission mode (supervised/plan/auto/bypass/autopilot) |
 | `/compact` | Compact conversation to save context |
+| `/docaudit` | Audit prompt docs for stale path/command references |
 | `/exit` | Exit ggcode |
 
 ## 5. Next Steps

@@ -42,6 +42,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/allow [tool]` | Permanently allow a tool (override permission policy) |
 | `/init` | Create `GGCODE.md` project memory file |
 | `/memory` | Manage project memory |
+| `/docaudit` | Audit prompt docs (AGENTS.md etc.) for stale path/command references |
 | `/rules` | Manage ratchet rules (learned error patterns) |
 | `/undo` | Undo last file changes |
 | `/redo` | Redo previously undone file changes |

@@ -16,6 +16,7 @@ import (
 	"github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/cost"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/docaudit"
 	"github.com/topcheer/ggcode/internal/metrics"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -475,6 +476,28 @@ func (m *Model) handleBugCommand() tea.Cmd {
 
 func (m *Model) handleStatusCommand() tea.Cmd {
 	m.openInspectorPanel(inspectorPanelStatus)
+	return nil
+}
+
+// handleDocauditCommand audits the project prompt bootstrap documents
+// (AGENTS.md, CLAUDE.md, ...) for stale references: dead paths and
+// slash commands/skills that no longer resolve. These documents are
+// injected into every model turn, so a dead reference silently wastes
+// agent turns. Mirrors the deterministic subset of the 2026-era
+// "prompt-audit" idea (Claude Code /doctor prompt-audit, 2026-09-25).
+func (m *Model) handleDocauditCommand() tea.Cmd {
+	known := make(map[string]bool, len(SlashCommands))
+	for _, c := range SlashCommands {
+		known[strings.TrimPrefix(strings.ToLower(c), "/")] = true
+	}
+	if m.commandMgr != nil {
+		for name := range m.commandMgr.Commands() {
+			known[strings.ToLower(name)] = true
+		}
+	}
+	workDir, _ := os.Getwd()
+	rep := docaudit.Audit(workDir, known)
+	m.chatWriteSystem(nextSystemID(), rep.String())
 	return nil
 }
 

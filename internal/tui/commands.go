@@ -502,6 +502,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleCheckpointsCommand()
 		case "/compact":
 			return m.handleCompactCommand()
+		case "/docaudit":
+			return m.handleDocauditCommand()
 		case "/todo":
 			return m.handleTodoCommand(parts)
 		case "/bug":
