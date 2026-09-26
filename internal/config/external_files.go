@@ -227,6 +227,25 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 		}
 		return nil
 	}
+	// #608 parity: Load() expands ${VAR} references in im.yaml into memory
+	// (loadIMFile), and Save() writes that expanded config back here. Without
+	// the restore step below, any Save would rewrite im.yaml with the
+	// materialized literal values — destroying the env references (the same
+	// data-loss class the vendors.yaml writer guards against; adapters.*.env
+	// and other IM fields are commonly env-managed credentials). Before
+	// writing, restore any ${VAR} leaf from the current on-disk file whose
+	// expansion equals the in-memory value about to be written. If the
+	// in-memory value differs from the expansion (user actually changed it),
+	// the new value is kept.
+	if existingData, readErr := os.ReadFile(path); readErr == nil {
+		existingRaw := map[string]interface{}{}
+		if yaml.Unmarshal(existingData, &existingRaw) == nil {
+			lookup := runtimeEnvLookup(nil)
+			if restored, ok := restoreEnvRefs(existingRaw, raw, lookup).(map[string]interface{}); ok {
+				raw = restored
+			}
+		}
+	}
 	out, err := yaml.Marshal(raw)
 	if err != nil {
 		return err
@@ -273,9 +292,33 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 			ReadOnly:          s.ReadOnly,
 		})
 	}
-	out, err := yaml.Marshal(persist)
+	firstPass, err := yaml.Marshal(persist)
 	if err != nil {
 		return fmt.Errorf("marshaling mcp servers: %w", err)
+	}
+	// #608 parity: Load() expands ${VAR} references in mcp_servers.yaml into
+	// memory (loadMCPServersFile), and Save() writes the expanded config back.
+	// Restore any ${VAR} leaf from the current on-disk file whose expansion
+	// equals the outgoing value so env-managed credentials (server env,
+	// headers, oauth secrets) keep referencing the environment instead of
+	// being materialized into the file. Entries whose position in the list
+	// changed or whose value was genuinely edited keep the outgoing value.
+	outList := []interface{}{}
+	if err := yaml.Unmarshal(firstPass, &outList); err != nil {
+		return fmt.Errorf("parsing mcp servers: %w", err)
+	}
+	if existingData, readErr := os.ReadFile(path); readErr == nil {
+		existingRaw := []interface{}{}
+		if yaml.Unmarshal(existingData, &existingRaw) == nil {
+			lookup := runtimeEnvLookup(nil)
+			if restored, ok := restoreEnvRefs(existingRaw, outList, lookup).([]interface{}); ok {
+				outList = restored
+			}
+		}
+	}
+	out, err := yaml.Marshal(outList)
+	if err != nil {
+		return err
 	}
 	return writeSecureConfigFile(path, out)
 }

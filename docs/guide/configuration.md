@@ -342,3 +342,5 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
 > API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML — they are never stored directly in `ggcode.yaml`.
+>
+> `${VAR}` references in the external files (`vendors.yaml`, `im.yaml`, `mcp_servers.yaml`) survive saves: if the in-memory value is just the expansion of the on-disk reference, the reference is written back verbatim. Only values you actually changed are stored as literals.
