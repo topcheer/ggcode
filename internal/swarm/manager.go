@@ -607,19 +607,37 @@ func (m *Manager) CancelAll() {
 
 // SendToTeammate sends a message to a specific teammate's inbox.
 func (m *Manager) SendToTeammate(teamID, tmID string, msg MailMessage) error {
+	// #2788: hold both locks (m.mu -> team.mu, canonical order, same as
+	// DeleteTeam and the #2121 SpawnTeammate fix) across the existence
+	// check AND the delivery. The old sequence - fetch the team pointer,
+	// drop m.mu, then look up the teammate and push with no mutual
+	// exclusion - raced a concurrent DeleteTeam/ShutdownTeammate: a send
+	// descheduled in that window delivered into the inbox of an
+	// already-cancelled teammate (runner exited, nobody consumes it) and
+	// still returned nil: a fake delivery. The Inbox push is non-blocking
+	// (select/default), so holding the locks here cannot stall.
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	team, ok := m.teams[teamID]
 	if !ok {
-		m.mu.Unlock()
 		return fmt.Errorf("team %q not found", teamID)
 	}
-	m.mu.Unlock()
-
-	tm, ok := team.getTeammate(tmID)
+	team.mu.RLock()
+	defer team.mu.RUnlock()
+	tm, ok := team.Teammates[tmID]
 	if !ok {
 		return fmt.Errorf("teammate %q not found in team %q", tmID, teamID)
 	}
-
+	// Cancellation awareness: a teammate mid-shutdown (cancel already
+	// fired under tm.mu, removeTeammate still pending on team.mu) would
+	// otherwise pass the existence check above and swallow the message
+	// into a dead inbox. Reject instead of faking a delivery.
+	tm.mu.Lock()
+	shutdown := tm.Status == TeammateShuttingDown || (tm.ctx != nil && tm.ctx.Err() != nil)
+	tm.mu.Unlock()
+	if shutdown {
+		return fmt.Errorf("teammate %q is shutting down, message not delivered", tmID)
+	}
 	select {
 	case tm.Inbox <- msg:
 		return nil
