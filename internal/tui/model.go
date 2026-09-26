@@ -436,6 +436,9 @@ type MCPInfo struct {
 	Transport     string
 	Migrated      bool
 	Disabled      bool
+	// TrustNotes surfaces MCP tool-trust drift (description/schema changed
+	// vs the persisted baseline). Empty means no drift detected.
+	TrustNotes []string
 }
 
 type mcpManager interface {

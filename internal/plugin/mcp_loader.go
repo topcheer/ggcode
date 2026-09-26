@@ -41,6 +41,9 @@ type MCPServerInfo struct {
 	Migrated              bool
 	Disabled              bool
 	OAuthRequired         bool
+	// TrustNotes carries MCP tool-trust drift notes (description/schema
+	// changed vs the persisted baseline). Empty means no drift detected.
+	TrustNotes []string
 }
 
 // MCPOAuthRequiredError signals that OAuth is needed for an MCP server.
@@ -113,6 +116,12 @@ type MCPPlugin struct {
 	// elicitationHandler, if set, is propagated to each new MCP client so
 	// the server can request structured user input via elicitation/create.
 	elicitationHandler mcp.ElicitationHandler
+
+	// trust, when non-nil, fingerprints every discovered tool definition
+	// against the persisted trust baseline (rug-pull defense); trustNotes
+	// holds the drift notes surfaced via Info(). Both guarded by mu.
+	trust      *trustTracker
+	trustNotes []string
 }
 
 // NewMCPPlugin creates a plugin from an MCP server configuration.
@@ -307,6 +316,7 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	// silent-server ack deadlines (live freeze capture 2026-09-18).
 	m.startReconnectWatcher(client)
 	m.startWSHealthProbe(client)
+	m.recordTrustSnapshotAsync(tools)
 	return m.adapter, nil
 }
 
@@ -450,6 +460,7 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 	}
 
 	debug.Log("mcp-notif", "server=%s tools refreshed: %d tools", m.cfg.Name, len(tools))
+	m.recordTrustSnapshotAsync(tools)
 	return true, len(tools)
 }
 
@@ -722,6 +733,7 @@ func (m *MCPPlugin) Info() MCPServerInfo {
 	if m.adapter != nil {
 		info.ToolNames = m.adapter.ToolNames()
 	}
+	info.TrustNotes = append([]string(nil), m.trustNotes...)
 	return info
 }
 
@@ -906,6 +918,7 @@ type MCPManager struct {
 	// the global bucket - the pre-#2390 semantics.
 	scope              string
 	registry           *tool.Registry
+	trust              *trustTracker
 	onUpdate           func([]MCPServerInfo)
 	mu                 sync.RWMutex
 	warnings           []string
@@ -920,14 +933,17 @@ type MCPManager struct {
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, scope string) *MCPManager {
 	plugins := make([]*MCPPlugin, 0, len(servers))
+	trust := newTrustTracker()
 	for _, server := range servers {
 		p := NewMCPPlugin(server)
 		p.registry = registry
+		p.trust = trust
 		plugins = append(plugins, p)
 	}
 	return &MCPManager{
 		plugins:      plugins,
 		registry:     registry,
+		trust:        trust,
 		scope:        scope,
 		timeout:      8 * time.Second,
 		stdioTimeout: 2 * time.Minute,
@@ -1194,6 +1210,7 @@ func (m *MCPManager) Refresh(name string) (found bool, outcome RefreshOutcome, c
 
 func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig) error {
 	plugin := NewMCPPlugin(server)
+	plugin.trust = m.trust
 
 	var previous *MCPPlugin
 	m.mu.Lock()
@@ -1640,6 +1657,7 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	p := NewMCPPlugin(s)
 	p.registry = m.registry
+	p.trust = m.trust
 	if m.samplingHandler != nil {
 		p.SetSamplingHandler(m.samplingHandler)
 	}

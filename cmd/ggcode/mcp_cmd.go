@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/mcp"
+	"github.com/topcheer/ggcode/internal/mcptrust"
+	"github.com/topcheer/ggcode/internal/plugin"
 )
 
 func newMCPCmd(cfgFile *string) *cobra.Command {
@@ -126,14 +129,87 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 		},
 	}
 
+	trustCmd := &cobra.Command{
+		Use:   "trust [--reset <name>]",
+		Short: "Show or reset the MCP tool-trust baseline",
+		Long: "Show or reset the MCP tool-trust baseline.\n\n" +
+			"ggcode fingerprints every discovered MCP tool (name, description,\n" +
+			"input schema, annotations) and re-verifies the fingerprint on every\n" +
+			"later connection. A silent description/schema change is surfaced as\n" +
+			"drift because tool text is injected straight into the planner\n" +
+			"context -- the classic MCP tool-poisoning / rug-pull vector.\n\n" +
+			"Examples:\n" +
+			"  ggcode mcp trust\n" +
+			"  ggcode mcp trust --reset github",
+		DisableFlagParsing: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 2 && args[0] == "--reset" {
+				name := strings.TrimSpace(args[1])
+				if name == "" {
+					return fmt.Errorf("server name required after --reset")
+				}
+				if err := plugin.ResetMCPTrustBaseline(name); err != nil {
+					return err
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Reset trust baseline for MCP server %q; the next connection re-seeds it silently.\n", name)
+				return nil
+			}
+			if len(args) > 0 {
+				return fmt.Errorf("usage: %s", cmd.UseLine())
+			}
+			return runMCPTrustList(cmd.OutOrStdout())
+		},
+	}
+
 	cmd.AddCommand(installCmd)
 	cmd.AddCommand(listCmd)
 	cmd.AddCommand(uninstallCmd)
+	cmd.AddCommand(trustCmd)
 	configureHelpRendering(cmd)
 	configureHelpRendering(installCmd)
 	configureHelpRendering(listCmd)
 	configureHelpRendering(uninstallCmd)
+	configureHelpRendering(trustCmd)
 	return cmd
+}
+
+// runMCPTrustList prints the persisted trust baseline. Read-only: it never
+// contacts the MCP servers.
+func runMCPTrustList(out io.Writer) error {
+	path, ok := mcptrust.ResolvePath()
+	if !ok {
+		_, _ = fmt.Fprintln(out, "Trust baseline is disabled (GGCODE_MCP_TRUST=off).")
+		return nil
+	}
+	store, err := mcptrust.Load(path)
+	if err != nil {
+		return fmt.Errorf("loading baseline %s: %w", path, err)
+	}
+	if len(store.Servers) == 0 {
+		_, _ = fmt.Fprintf(out, "No trust baselines yet (%s).\nBaselines are seeded on the first connection to each MCP server.\n", path)
+		return nil
+	}
+	names := make([]string, 0, len(store.Servers))
+	for name := range store.Servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		entry := store.Servers[name]
+		fmt.Fprintf(&b, "%s (baseline updated %s, %d tools)\n", name, entry.UpdatedAt.Format("2006-01-02 15:04:05"), len(entry.Tools))
+		toolNames := make([]string, 0, len(entry.Tools))
+		for tn := range entry.Tools {
+			toolNames = append(toolNames, tn)
+		}
+		sort.Strings(toolNames)
+		for _, tn := range toolNames {
+			te := entry.Tools[tn]
+			fmt.Fprintf(&b, "  %-40s %s  %s\n", tn, mcptrust.ShortHash(te.Hash), te.UpdatedAt.Format("2006-01-02 15:04:05"))
+		}
+	}
+	_, _ = fmt.Fprint(out, b.String())
+	return nil
 }
 
 func firstNonEmptyTransport(transport string) string {

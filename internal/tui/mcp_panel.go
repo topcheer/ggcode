@@ -162,6 +162,12 @@ func (m Model) renderMCPPanel() string {
 		if srv.Error != "" {
 			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" Error: "+srv.Error))
 		}
+		// Tool-trust drift: a connected server whose tool descriptions/schemas
+		// silently changed vs the persisted baseline (rug-pull defense). Shown
+		// in amber so it reads as "review this", not a connection failure.
+		for _, note := range srv.TrustNotes {
+			body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(" Trust: "+note))
+		}
 		body = append(body, "", lipgloss.NewStyle().Bold(true).Render(" Tools"))
 		if len(srv.ToolNames) == 0 {
 			body = append(body, "  (none discovered yet)")

@@ -148,6 +148,9 @@ internal/
     types.go               # SessionCost / TokenUsage (local type to avoid circular deps)
     tracker.go             # In-flight token counting
 
+  mcptrust/                # MCP tool-description trust baseline (rug-pull defense)
+    mcptrust.go            # Per-tool fingerprints (name+description+schema+annotations), persisted per-server baselines, drift diff
+
   permission/              # Permission and sandbox policy
     mode.go                # PermissionMode enum (supervised/plan/auto/bypass/autopilot)
     policy.go              # PermissionPolicy interface
