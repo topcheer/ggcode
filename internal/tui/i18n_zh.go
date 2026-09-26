@@ -188,6 +188,8 @@ func zhCatalog(key string) string {
 		return "提示：用 @path 引用文件，/? 查看帮助，Shift+Tab 切换模式。"
 	case "startup.banner":
 		return "正在准备终端界面并过滤启动期的终端噪声。你现在就可以输入；一旦界面进入可交互状态，这个提示会自动消失。"
+	case "config.load_warning":
+		return "配置警告：%s 解析失败（%v），该文件本次启动被忽略；修改设置并保存时可能用默认值覆盖它。"
 	case "hint.autocomplete":
 		return "Tab/Shift+Tab 切换 • Enter 应用 • Esc 关闭"
 	case "hint.mention":

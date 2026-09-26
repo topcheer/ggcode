@@ -443,3 +443,10 @@ func tr(lang Language, key string, args ...any) string {
 	}
 	return fmt.Sprintf(msg, args...)
 }
+
+// FormatConfigLoadWarning renders a config load warning in the given
+// language. Used by the pipe (non-TUI) startup path, which prints warnings
+// to stderr; the TUI path renders the same key through m.t.
+func FormatConfigLoadWarning(lang Language, file, errText string) string {
+	return tr(lang, "config.load_warning", file, errText)
+}

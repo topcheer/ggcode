@@ -757,6 +757,13 @@ func (m Model) Init() tea.Cmd {
 		layout := m.tmuxStartupSetupLayout
 		cmds = append(cmds, func() tea.Msg { return tmuxStartupSetupMsg{Layout: layout} })
 	}
+	// Surface external config files that failed to parse (im.yaml etc.) as
+	// chat system messages. Previously these failures only reached the debug
+	// log, while a later Save() could overwrite the hand-written file with
+	// in-memory defaults with no user-visible trace.
+	cmds = append(cmds, func() tea.Msg {
+		return configLoadWarningsMsg{Warnings: config.TakeConfigLoadWarnings()}
+	})
 	return tea.Batch(cmds...)
 }
 

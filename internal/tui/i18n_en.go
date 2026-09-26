@@ -1350,6 +1350,8 @@ Mouse:
 		return "The current pairing request has been rejected. Please re-initiate to continue."
 	case "pairing.blacklisted":
 		return "This channel has been blacklisted due to multiple rejections."
+	case "config.load_warning":
+		return "Config warning: failed to parse %s (%v). The file is ignored for this session; saving settings may overwrite it with defaults."
 	default:
 		if v, ok := lookupModuleCatalog(LangEnglish, key); ok {
 			return v

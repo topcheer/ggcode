@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -157,6 +158,14 @@ type systemNotifyMsg struct {
 	Text    string
 	ItemID  string
 	Replace bool // if true, replace existing item text instead of appending (used by retry status)
+}
+
+// configLoadWarningsMsg carries external config files that failed to parse
+// during startup (collected by internal/config). The TUI surfaces each one
+// as a chat system message so the user can fix the YAML before the next
+// Save() overwrites the file with in-memory defaults.
+type configLoadWarningsMsg struct {
+	Warnings []config.LoadWarning
 }
 
 type skillsChangedMsg struct{}

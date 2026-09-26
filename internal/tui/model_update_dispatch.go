@@ -184,6 +184,9 @@ func init() {
 		return m.handleSubAgentFollowRefreshMsg(msg)
 	})
 	regUpdatePlain(func(m Model, msg systemNotifyMsg) (tea.Model, tea.Cmd) { return m.handleSystemNotifyMsg(msg) })
+	regUpdatePlain(func(m Model, msg configLoadWarningsMsg) (tea.Model, tea.Cmd) {
+		return m.handleConfigLoadWarningsMsg(msg)
+	})
 	regUpdatePlain(func(m Model, msg followGraceTickMsg) (tea.Model, tea.Cmd) { return m.handleFollowGraceTickMsg(msg) })
 	regUpdatePlain(func(m Model, msg subAgentDoneMsg) (tea.Model, tea.Cmd) { return m.handleSubAgentDoneMsg(msg) })
 	regUpdatePlain(func(m Model, msg subAgentsCancelDoneMsg) (tea.Model, tea.Cmd) {

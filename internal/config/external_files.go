@@ -43,6 +43,8 @@ func LoadMCPDeleted(configDir string) []string {
 	}
 	var names []string
 	if err := yaml.Unmarshal(data, &names); err != nil {
+		debug.Log("config", "failed to parse %s: %v", MCPDeletedPath(configDir), err)
+		recordLoadWarning(MCPDeletedPath(configDir), err.Error())
 		return nil
 	}
 	return names
@@ -328,6 +330,7 @@ func loadVendorsFile(path string) map[string]VendorConfig {
 	raw := map[string]interface{}{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		debug.Log("config", "failed to parse %s: %v", path, err)
+		recordLoadWarning(path, err.Error())
 		return nil
 	}
 	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
@@ -336,6 +339,7 @@ func loadVendorsFile(path string) map[string]VendorConfig {
 	var vendors map[string]VendorConfig
 	if err := yaml.Unmarshal(expandedData, &vendors); err != nil {
 		debug.Log("config", "failed to parse vendors from %s: %v", path, err)
+		recordLoadWarning(path, err.Error())
 		return nil
 	}
 	return vendors
@@ -351,6 +355,7 @@ func loadIMFile(path string) *IMConfig {
 	raw := map[string]interface{}{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		debug.Log("config", "failed to parse %s: %v", path, err)
+		recordLoadWarning(path, err.Error())
 		return nil
 	}
 	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
@@ -359,6 +364,7 @@ func loadIMFile(path string) *IMConfig {
 	var im IMConfig
 	if err := yaml.Unmarshal(expandedData, &im); err != nil {
 		debug.Log("config", "failed to parse im config from %s: %v", path, err)
+		recordLoadWarning(path, err.Error())
 		return nil
 	}
 	return &im
@@ -377,6 +383,7 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 	var rawList []map[string]interface{}
 	if err := yaml.Unmarshal(data, &rawList); err != nil {
 		debug.Log("config", "failed to parse mcp servers from %s: %v", path, err)
+		recordLoadWarning(path, err.Error())
 		return nil
 	}
 	for i, m := range rawList {
@@ -387,6 +394,7 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 	var servers []MCPServerConfig
 	if err := yaml.Unmarshal(expandedData, &servers); err != nil {
 		debug.Log("config", "failed to parse mcp servers from %s: %v", path, err)
+		recordLoadWarning(path, err.Error())
 		return nil
 	}
 	return servers

@@ -17,6 +17,12 @@ ggcode stores its configuration in `~/.ggcode/ggcode.yaml`. See `ggcode.example.
 
 Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=instance` in the config tool to save settings for a specific workspace only.
 
+### Startup Config Warnings
+
+Split-out config files (`vendors.yaml`, `im.yaml`, `mcp_servers.yaml`, `mcp_deleted.yaml`) are parsed at startup. If one of them contains a YAML syntax error, ggcode ignores that file for the session and keeps running with defaults, and a warning naming the file and the parse error is shown: as a system message in the interactive TUI, and on stderr in pipe (non-interactive) mode.
+
+Fix the YAML before changing and saving any settings: a later save rewrites these files from the in-memory state, which would replace the unreadable content with defaults.
+
 ## Core Settings
 
 | Key | Type | Description |

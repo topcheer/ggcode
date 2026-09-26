@@ -106,6 +106,13 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
+				// Surface external config files that failed to parse before the
+				// run starts: stderr stays visible in pipe mode while stdout
+				// carries agent output. The interactive TUI path surfaces these
+				// as chat system messages via configLoadWarningsMsg instead.
+				for _, w := range config.TakeConfigLoadWarnings() {
+					fmt.Fprintln(os.Stderr, tui.FormatConfigLoadWarning(tui.NormalizeLanguage(cfg.Language), w.File, w.Err))
+				}
 				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
 				if code != 0 {
 					debug.Close()

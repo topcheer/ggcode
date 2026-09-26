@@ -109,6 +109,19 @@ func (m Model) handleSystemNotifyMsg(msg systemNotifyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleConfigLoadWarningsMsg renders each startup config parse failure as a
+// chat system message. Warnings are consumed once by Model.Init, so this
+// fires exactly once per process.
+func (m Model) handleConfigLoadWarningsMsg(msg configLoadWarningsMsg) (tea.Model, tea.Cmd) {
+	for _, w := range msg.Warnings {
+		m.chatWriteSystem(nextSystemID(), m.t("config.load_warning", w.File, w.Err))
+	}
+	if len(msg.Warnings) > 0 {
+		m.chatListFollowOutput()
+	}
+	return m, nil
+}
+
 func (m Model) handleGitBranchTickMsg(msg gitBranchTickMsg) (tea.Model, tea.Cmd) {
 	m.refreshCachedGitBranch()
 	return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
