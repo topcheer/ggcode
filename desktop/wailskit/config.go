@@ -555,7 +555,31 @@ func saveWithInstanceWriteback(cfg *config.Config, vendor string) error {
 }
 
 // SaveAPIKey saves an API key for a vendor/endpoint.
+//
+// After a successful save the running chat session's provider must be
+// rebuilt: providers only read credentials when they are constructed (see
+// the #616 comment on CompleteAnthropicOAuth), so without a refresh the
+// active conversation keeps using the OLD key after the user rotates it in
+// Settings — requests keep failing with 401 until restart or a model
+// switch, while the settings UI shows the new key as saved. Symmetric with
+// App.UpdateConfig's post-save OnConfigProviderChanged (ggcode-desktop-wails
+// app.go) and the #616/#670 OAuth refresh paths.
 func SaveAPIKey(vendor, endpoint, apiKey string) error {
+	if err := saveAPIKeyLocked(vendor, endpoint, apiKey); err != nil {
+		return err
+	}
+	// Deliberately OUTSIDE globalMu: refreshRunningProviderAfterAuth's chain
+	// (OnConfigProviderChanged → ResolveCurrentSelection → SetProvider →
+	// session meta append) never takes globalMu, but the same discipline as
+	// the #616 call site avoids serializing the provider rebuild against
+	// every other config writer while a slow provider construction runs.
+	refreshRunningProviderAfterAuth()
+	return nil
+}
+
+// saveAPIKeyLocked performs the scope heuristic, the key write, and the
+// (instance-aware) persistence under globalMu.
+func saveAPIKeyLocked(vendor, endpoint, apiKey string) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	cfg := globalCfg

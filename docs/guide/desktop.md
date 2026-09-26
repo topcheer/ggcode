@@ -45,6 +45,7 @@ Download from GitHub Releases:
 
 ### Settings & Configuration
 - **Config editor** — edit vendor, endpoint, model, API key, and permission settings through a structured UI
+- **Live API key rotation** — saving a new API key in Settings takes effect immediately for the running session (the provider is rebuilt in place); no restart or model switch is needed
 - **Provider picker** — switch between configured LLM providers visually
 - **Permission modes** — switch between supervised, plan, auto, bypass, and autopilot
 
