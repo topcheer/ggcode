@@ -335,6 +335,12 @@ func loadVendorsFile(path string) map[string]VendorConfig {
 	// `"8907"`, so a numeric reference (`port: ${PORT}`) failed the typed
 	// unmarshal and silently dropped the whole section.
 	expanded := expandAndCoerceMap(raw, lookup)
+
+	// #559 (Bug F) coverage parity with the main Load path: report ${...}
+	// forms the expander does not understand instead of letting them
+	// silently become literal credential values in the vendors section.
+	WarnUnresolvedEnvRefs(expanded)
+
 	expandedData, _ := yaml.Marshal(expanded)
 
 	var vendors map[string]VendorConfig
@@ -360,6 +366,12 @@ func loadIMFile(path string) *IMConfig {
 	// expandAndCoerceMap: numeric/bool refs must survive the re-marshal +
 	// typed unmarshal round-trip (r140, see loadVendorsFile).
 	expanded := expandAndCoerceMap(raw, lookup)
+
+	// #559 (Bug F) coverage parity with the main Load path: report ${...}
+	// forms the expander does not understand instead of letting them
+	// silently become literal credential values in the im section.
+	WarnUnresolvedEnvRefs(expanded)
+
 	expandedData, _ := yaml.Marshal(expanded)
 
 	var im IMConfig
@@ -386,7 +398,11 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 		return nil
 	}
 	for i, m := range rawList {
-		rawList[i] = expandAndCoerceMap(m, lookup)
+		expanded := expandAndCoerceMap(m, lookup)
+		// #559 (Bug F) coverage parity with the main Load path: report
+		// unrecognized ${...} forms per server entry.
+		WarnUnresolvedEnvRefs(expanded)
+		rawList[i] = expanded
 	}
 	expandedData, _ := yaml.Marshal(rawList)
 

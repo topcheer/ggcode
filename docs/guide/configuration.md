@@ -91,6 +91,11 @@ fields accept references too (`max_iterations: ${ITERS}`,
 does not touch (including pre-quoted strings like `"12345"`) keep their
 original type.
 
+Unrecognized `${...}` forms (for example `${KEY:?required}`) are reported as
+warnings at load time instead of silently becoming literal values — in the
+main config, the instance config, and the external `vendors.yaml` /
+`im.yaml` / `mcp_servers.yaml` section files alike.
+
 ## MCP Servers
 
 Configure MCP (Model Context Protocol) servers for tool integration:
