@@ -81,6 +81,11 @@ vendor: anthropic
 api_key: ${ANTHROPIC_API_KEY}
 ```
 
+If a plaintext key or secret is found in any config file (the main
+`ggcode.yaml` or an external section file such as `vendors.yaml`,
+`im.yaml`, or `mcp_servers.yaml`), ggcode automatically moves it to
+`keys.env` and rewrites the YAML to a `${VAR}` reference at startup.
+
 ## MCP Servers
 
 Configure MCP (Model Context Protocol) servers for tool integration:

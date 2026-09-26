@@ -1364,6 +1364,34 @@ func Load(path string) (*Config, error) {
 	if migrateErr != nil {
 		debug.Log("config", "MigratePlaintextAPIKeys error: %v", migrateErr)
 	}
+	if !skipAuto {
+		// Plaintext secrets can also live in external section files (#250
+		// covered vendors.yaml on Save only; im.yaml / mcp_servers.yaml had
+		// no migration path at all). Remediate them here so a plaintext
+		// token reaches keys.env on the first load, not just on the next
+		// Save. os.Setenv happens inside the migrate helpers, so the env
+		// expansion performed by loadExternalSections below still resolves
+		// the rewritten ${VAR} references. No-op for absent files.
+		extDir := filepath.Dir(path)
+		for _, ext := range []struct {
+			label string
+			path  string
+			fn    func(string, string) ([]APIKeyFinding, error)
+		}{
+			{"vendors.yaml", VendorsPath(extDir), MigrateVendorsFilePlaintextAPIKeys},
+			{"im.yaml", IMPath(extDir), MigrateIMFilePlaintextAPIKeys},
+			{"mcp_servers.yaml", MCPServersPath(extDir), MigrateMCPServersFilePlaintextAPIKeys},
+		} {
+			extFindings, extErr := ext.fn(ext.path, "")
+			if extErr != nil {
+				debug.Log("config", "Load: %s plaintext migration error: %v", ext.label, extErr)
+				continue
+			}
+			if len(extFindings) > 0 {
+				debug.Log("config", "Load: migrated %d plaintext secrets out of %s", len(extFindings), ext.label)
+			}
+		}
+	}
 	if len(migrated) > 0 {
 		for _, m := range migrated {
 			switch m.Section {

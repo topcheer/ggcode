@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/secretfield"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -57,7 +58,38 @@ func DetectPlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	return detectPlaintextAPIKeysFromRaw(raw), nil
+	findings := detectPlaintextAPIKeysFromRaw(raw)
+	// #250/#293 covered vendors.yaml on Save only, and im.yaml / mcp_servers.yaml
+	// had no coverage at all: plaintext secrets that live in external section
+	// files were invisible to both the startup warning and the migration. Scan
+	// them here (read-only) so callers see the full picture. Best-effort: a
+	// corrupt external file is logged and skipped rather than failing detection.
+	findings = append(findings, detectExternalSectionPlaintextAPIKeys(filepath.Dir(path))...)
+	return findings, nil
+}
+
+// detectExternalSectionPlaintextAPIKeys scans vendors.yaml, im.yaml and
+// mcp_servers.yaml in configDir for plaintext secrets. Read-only; never
+// touches files.
+func detectExternalSectionPlaintextAPIKeys(configDir string) []APIKeyFinding {
+	var findings []APIKeyFinding
+	if raw, err := loadRawConfigMap(VendorsPath(configDir)); err == nil {
+		findings = append(findings, detectPlaintextAPIKeysFromRaw(map[string]interface{}{"vendors": raw})...)
+	} else {
+		debug.Log("config", "scanning vendors.yaml for plaintext keys: %v", err)
+	}
+	if raw, err := loadRawConfigMap(IMPath(configDir)); err == nil {
+		findings = append(findings, detectPlaintextAPIKeysFromRaw(map[string]interface{}{"im": raw})...)
+	} else {
+		debug.Log("config", "scanning im.yaml for plaintext keys: %v", err)
+	}
+	if seq, err := loadRawConfigSeq(MCPServersPath(configDir)); err == nil {
+		findings = append(findings, detectPlaintextAPIKeysFromRaw(map[string]interface{}{"mcp_servers": seq})...)
+	} else {
+		debug.Log("config", "scanning mcp_servers.yaml for plaintext keys: %v", err)
+	}
+	sort.Slice(findings, func(i, j int) bool { return findings[i].KeyPath < findings[j].KeyPath })
+	return findings
 }
 
 func loadRawConfigMap(path string) (map[string]interface{}, error) {
@@ -76,6 +108,26 @@ func loadRawConfigMap(path string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 	return raw, nil
+}
+
+// loadRawConfigSeq loads a YAML file whose top level is a sequence (used for
+// mcp_servers.yaml, which stores the server list without a wrapper key).
+func loadRawConfigSeq(path string) ([]interface{}, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	var seq []interface{}
+	if err := yaml.Unmarshal(data, &seq); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return seq, nil
 }
 
 func detectPlaintextAPIKeysFromRaw(raw map[string]interface{}) []APIKeyFinding {
@@ -695,6 +747,118 @@ func MigrateVendorsFilePlaintextAPIKeys(vendorsPath, keysPath string) ([]APIKeyF
 	}
 	if err := writeSecureConfigFile(vendorsPath, updated); err != nil {
 		return nil, fmt.Errorf("writing migrated vendors.yaml %s: %w", vendorsPath, err)
+	}
+	return findings, nil
+}
+
+// MigrateIMFilePlaintextAPIKeys detects plaintext secrets in a standalone
+// im.yaml (external section file), persists them to keys.env, and rewrites
+// the YAML to use ${VAR} references. im.yaml holds the IMConfig mapping at
+// the top level (no "im:" wrapper), so the raw map is wrapped before reuse
+// of the shared detection/migration helpers and unwrapped before the file
+// is rewritten. Before this existed, an adapter secret that landed in
+// im.yaml (new secret saved by the TUI, or a section split out by an older
+// build before the plaintext migration ran) had no migration path at all:
+// it was never reported by the startup warning and never reached keys.env.
+func MigrateIMFilePlaintextAPIKeys(imPath, keysPath string) ([]APIKeyFinding, error) {
+	raw, err := loadRawConfigMap(imPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	// Wrap under "im" so the shared detection/migration helpers apply.
+	wrapped := map[string]interface{}{"im": raw}
+	findings := detectPlaintextAPIKeysFromRaw(wrapped)
+	if len(findings) == 0 {
+		return nil, nil
+	}
+
+	envEntries := make(map[string]string)
+	for _, f := range findings {
+		if f.Section != "im" {
+			continue
+		}
+		migrateIMFinding(wrapped, f, envEntries)
+	}
+	if len(envEntries) == 0 {
+		return nil, nil
+	}
+
+	if keysPath == "" {
+		keysPath = KeysEnvPath()
+	}
+	if err := writeKeysEnvTo(envEntries, keysPath); err != nil {
+		return nil, fmt.Errorf("writing keys.env: %w", err)
+	}
+
+	migrated, ok := wrapped["im"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("im section missing after migration: %s", imPath)
+	}
+	updated, err := yaml.Marshal(migrated)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling migrated im.yaml: %w", err)
+	}
+	if err := writeSecureConfigFile(imPath, updated); err != nil {
+		return nil, fmt.Errorf("writing migrated im.yaml %s: %w", imPath, err)
+	}
+	return findings, nil
+}
+
+// MigrateMCPServersFilePlaintextAPIKeys detects plaintext env/header secrets
+// in a standalone mcp_servers.yaml (external section file), persists them to
+// keys.env, and rewrites the YAML to use ${VAR} references. The file holds a
+// YAML sequence at the top level, so it is loaded with loadRawConfigSeq and
+// wrapped under "mcp_servers" before reuse of the shared helpers. Same
+// motivation as MigrateIMFilePlaintextAPIKeys: server env values split out
+// of the main config previously had no migration path.
+func MigrateMCPServersFilePlaintextAPIKeys(mcpPath, keysPath string) ([]APIKeyFinding, error) {
+	seq, err := loadRawConfigSeq(mcpPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(seq) == 0 {
+		return nil, nil
+	}
+
+	// Wrap under "mcp_servers" so the shared detection/migration helpers apply.
+	wrapped := map[string]interface{}{"mcp_servers": seq}
+	findings := detectPlaintextAPIKeysFromRaw(wrapped)
+	if len(findings) == 0 {
+		return nil, nil
+	}
+
+	envEntries := make(map[string]string)
+	for _, f := range findings {
+		if f.Section != "mcp_env" && f.Section != "mcp_headers" {
+			continue
+		}
+		migrateMCPFinding(wrapped, f, envEntries)
+	}
+	if len(envEntries) == 0 {
+		return nil, nil
+	}
+
+	if keysPath == "" {
+		keysPath = KeysEnvPath()
+	}
+	if err := writeKeysEnvTo(envEntries, keysPath); err != nil {
+		return nil, fmt.Errorf("writing keys.env: %w", err)
+	}
+
+	migrated, ok := wrapped["mcp_servers"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("mcp_servers section missing after migration: %s", mcpPath)
+	}
+	updated, err := yaml.Marshal(migrated)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling migrated mcp_servers.yaml: %w", err)
+	}
+	if err := writeSecureConfigFile(mcpPath, updated); err != nil {
+		return nil, fmt.Errorf("writing migrated mcp_servers.yaml %s: %w", mcpPath, err)
 	}
 	return findings, nil
 }

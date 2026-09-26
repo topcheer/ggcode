@@ -156,6 +156,27 @@ func (c *Config) Save() error {
 	} else if len(migrated) > 0 {
 		debug.Log("config", "Save: migrated %d plaintext API keys out of vendors.yaml", len(migrated))
 	}
+	// Same remediation for im.yaml and mcp_servers.yaml: plaintext adapter
+	// secrets or MCP env/header values written by an older build (or a
+	// manual edit) previously had no migration path at all. Uses the same
+	// directory and global keys.env as the vendors.yaml call above (#293).
+	for _, ext := range []struct {
+		label string
+		path  string
+		fn    func(string, string) ([]APIKeyFinding, error)
+	}{
+		{"im.yaml", IMPath(extDir), MigrateIMFilePlaintextAPIKeys},
+		{"mcp_servers.yaml", MCPServersPath(extDir), MigrateMCPServersFilePlaintextAPIKeys},
+	} {
+		extFindings, extErr := ext.fn(ext.path, "")
+		if extErr != nil {
+			debug.Log("config", "Save: %s plaintext migration error: %v", ext.label, extErr)
+			continue
+		}
+		if len(extFindings) > 0 {
+			debug.Log("config", "Save: migrated %d plaintext secrets out of %s", len(extFindings), ext.label)
+		}
+	}
 	return nil
 }
 
