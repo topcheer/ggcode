@@ -364,6 +364,7 @@ type Config struct {
 	imAdaptersMu   sync.RWMutex
 	Hooks          hooks.HookConfig           `yaml:"hooks" json:"hooks"`
 	DefaultMode    string                     `yaml:"default_mode" json:"default_mode"`
+	AutoCommit     bool                       `yaml:"auto_commit,omitempty" json:"auto_commit,omitempty"`
 	SubAgents      SubAgentConfig             `yaml:"subagents" json:"subagents"`
 	Impersonation  ImpersonationConfig        `yaml:"impersonation,omitempty" json:"impersonation,omitempty"`
 	KnightConfig   KnightConfig               `yaml:"knight,omitempty" json:"knight,omitempty"`

@@ -53,9 +53,17 @@ func (c *commitHintState) reset() {
 // stash is an explicit decision to park changes — but see the stash-pop
 // note in checkCommitHintGate (#698).
 
+// commitGateResult carries both the advisory reminder and the attributable
+// uncommitted file set so callers can either inject the hint (default) or act
+// on the files directly (auto_commit).
+type commitGateResult struct {
+	hint  string
+	files []string
+}
+
 // checkCommitHintGate checks whether the agent should be reminded to commit.
 // Returns a non-empty message if the agent made edits but hasn't committed them.
-// Returns empty string when:
+// Returns empty message when:
 //   - the gate already fired this run
 //   - no code was edited in this run
 //   - the agent already used git_add or git_commit
@@ -69,21 +77,27 @@ func (c *commitHintState) reset() {
 // edits it never made. The hint now scopes to the agent's own edit list and
 // separately discloses unrelated tree dirt.
 func (a *Agent) checkCommitHintGate(runStats *RunStats) string {
+	return a.runCommitGate(runStats).hint
+}
+
+// runCommitGate is checkCommitHintGate's implementation; it additionally
+// returns the attributable file set for the auto-commit path (auto_commit.go).
+func (a *Agent) runCommitGate(runStats *RunStats) commitGateResult {
 	if a.commitHint == nil || a.commitHint.fired {
-		return ""
+		return commitGateResult{}
 	}
 	a.commitHint.fired = true
 
 	// Only hint when the agent made actual source-code edits.
 	if !codeChangedInRun(runStats) {
-		return ""
+		return commitGateResult{}
 	}
 
 	// The agent's own edits are the hint's scope. Without per-file data there
 	// is nothing attributable to the agent — do not claim the whole tree.
 	edited := runStats.FilesEdited
 	if len(edited) == 0 {
-		return ""
+		return commitGateResult{}
 	}
 
 	// If the agent already staged or committed, it handled version control.
@@ -92,25 +106,25 @@ func (a *Agent) checkCommitHintGate(runStats *RunStats) string {
 	// exactly the situation this gate exists to flag.
 	for toolName := range runStats.ToolCalls {
 		if toolName == "git_commit" || toolName == "git_add" {
-			return ""
+			return commitGateResult{}
 		}
 	}
 
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
-		return ""
+		return commitGateResult{}
 	}
 
 	// Check for uncommitted changes (staged or unstaged).
 	status, err := gitStatusPorcelain(workingDir)
 	if err != nil {
 		debug.Log("commit-hint", "git status failed: %v", err)
-		return ""
+		return commitGateResult{}
 	}
 
 	if status == "" {
 		// No uncommitted changes — nothing to hint about.
-		return ""
+		return commitGateResult{}
 	}
 
 	// #698: only the intersection of the agent's edit list with the dirty
@@ -142,7 +156,7 @@ func (a *Agent) checkCommitHintGate(runStats *RunStats) string {
 		// None of the agent's edits are dirty — the tree's dirt belongs to
 		// someone else; never urge the agent to commit it.
 		debug.Log("commit-hint", "skipped: none of the agent's %d edited files are dirty", len(edited))
-		return ""
+		return commitGateResult{}
 	}
 	others := len(dirty) - len(mine)
 
@@ -165,7 +179,7 @@ func (a *Agent) checkCommitHintGate(runStats *RunStats) string {
 	sb.WriteString("Use a clear, conventional commit message (e.g. 'feat:', 'fix:', 'refactor:'). ")
 	sb.WriteString("Scope the commit to the files listed above only; do NOT use 'git add -A' or 'git commit -a'.]")
 
-	return sb.String()
+	return commitGateResult{hint: sb.String(), files: mine}
 }
 
 // gitStatusPorcelain runs `git status --porcelain` and returns the raw output.

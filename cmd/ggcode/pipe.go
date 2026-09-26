@@ -131,6 +131,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	ag.SetAutoCommit(cfg.AutoCommit)
 	core.SetConfigAgent(ag)
 	ag.SetProjectMemoryFiles(projectMemFiles)
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)

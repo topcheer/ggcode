@@ -208,6 +208,7 @@ type Agent struct {
 	permDenyStreak            *permDenyStreakState       // consecutive permission-deny mode guard (#1210)
 	diffSummary               *diffSummaryState          // pre-completion holistic change summary for self-review
 	commitHint                *commitHintState           // post-completion commit reminder for uncommitted changes
+	autoCommit                bool                       // auto-commit attributable edits at run end (config auto_commit)
 	verifyRegression          *verifyRegressionState     // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate        *selfCorrectionGateState   // EIR/ECR stability gate: detects net-negative self-correction loops
 	lastGoodCheckpoint        *lastGoodCheckpoint        // last-known-good file snapshot: actionable revert targets for failed self-correction
@@ -796,6 +797,13 @@ func (a *Agent) ReconcileToolCalls() bool {
 
 // SetProjectMemoryFiles seeds the set of already-loaded project memory files so
 // path-triggered dynamic loading can avoid reinjecting startup guidance.
+// SetAutoCommit enables end-of-run auto-commit of attributable edits
+// (config "auto_commit"). Opt-in; default off. When enabled, the
+// post-completion commit gate stages exactly the agent's attributable files
+// and commits them instead of injecting the advisory reminder. Any git
+// failure falls back to the advisory hint.
+func (a *Agent) SetAutoCommit(v bool) { a.autoCommit = v }
+
 func (a *Agent) SetProjectMemoryFiles(files []string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -3038,16 +3046,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				continue
 			}
-			// Post-completion commit hint: after all gates pass, remind the agent
-			// to stage and commit its work if it hasn't already. This is the last
-			// gate and is advisory (non-blocking) -- it does not force a continue.
-			if commitHintMsg := a.checkCommitHintGate(runStats); commitHintMsg != "" {
-				debug.Log("agent", "Iteration %d: commit hint gate injected reminder", i+1)
+			// Post-completion commit handling: after all gates pass. Default
+			// behavior injects an advisory reminder (non-blocking). With
+			// auto_commit enabled, the attributable edits are staged and
+			// committed directly; any git failure falls back to the reminder.
+			if gate := a.runCommitGate(runStats); gate.hint != "" {
+				text := gate.hint
+				if a.autoCommit {
+					if note := a.tryAutoCommit(runStats, gate.files); note != "" {
+						text = note
+					}
+				}
+				debug.Log("agent", "Iteration %d: commit gate injected message (auto_commit=%v)", i+1, a.autoCommit)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
 					Content: []provider.ContentBlock{{
 						Type: "text",
-						Text: commitHintMsg,
+						Text: text,
 					}},
 				})
 				continue

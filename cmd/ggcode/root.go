@@ -631,6 +631,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	ag.SetAutoCommit(cfg.AutoCommit)
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()

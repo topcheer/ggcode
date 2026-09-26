@@ -152,6 +152,10 @@ func MergeInstance(global, instance *Config) {
 		global.DefaultMode = instance.DefaultMode
 		global.instanceFields["default_mode"] = true
 	}
+	if !global.AutoCommit && instance.AutoCommit {
+		global.AutoCommit = true
+		global.instanceFields["auto_commit"] = true
+	}
 	if (global.MaxIterations == 0 && instance.MaxIterations != 0) || explicit("max_iterations") {
 		global.MaxIterations = instance.MaxIterations
 		global.instanceFields["max_iterations"] = true
