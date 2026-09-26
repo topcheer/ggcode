@@ -194,10 +194,17 @@ When `match_mode: regex`, the `match` field is compiled as a Go regexp and teste
 
 | Pattern | Description |
 |---------|-------------|
-| `write_file|edit_file` | Match either tool (regex alternation) |
-| `^run_command\s+git\s+(push|force)` | Match git push/force commands |
-| `delete|remove|drop` | Match any tool with these keywords in input |
+| `write_file\|edit_file` | Match either tool (regex alternation) |
+| `run_command.*git\s+(push\|force)` | Match git push/force commands |
+| `delete\|remove\|drop` | Match any tool with these keywords in input |
 | `.*` | Match everything (equivalent to `*` in glob) |
+
+> **Caution:** the regex is matched against `toolName + " " + rawInput`, where
+> `rawInput` is the **JSON-encoded** tool arguments (e.g.
+> `run_command {"command":"git push --force"}`). Patterns anchored right after
+> the tool name (like `^run_command\s+git`) never fire because the next
+> character after the space is `{`, not the argument text. Verify patterns
+> with the CLI tester below before trusting them.
 
 > **Note:** Invalid regex patterns will cause hook validation to fail at startup. The desktop UI includes a regex tester for interactive validation.
 
@@ -217,7 +224,7 @@ hooks:
       type: http
       url: "https://security.example.com/scan"
       timeout: "5s"
-    - match: "^run_command\s+git\s+(push|force)"
+    - match: "run_command.*git\\s+(push|force)"
       match_mode: regex
       command: "echo 'git push/force blocked' >&2; exit 2"
 
@@ -269,6 +276,47 @@ Hooks in instance config (`~/.ggcode/instances/{hash}/ggcode.yaml`) are **append
 Hooks work in all agent modes: TUI, daemon, desktop (Wails), pipe, and ACP (JetBrains/Zed).
 
 ## Debugging
+
+### CLI verification
+
+Hooks are deterministic rules; verify them like code — both that a rule fires
+when it must fire, and that it does NOT fire when it must not. Rules only ever
+checked from one side silently drift towards matching everything.
+
+```bash
+ggcode hooks list                 # every configured hook, grouped by event
+ggcode hooks validate             # schema problems (missing url/command, bad regex, ...)
+ggcode hooks test run_command '{"command":"git push --force"}'
+```
+
+`hooks test` evaluates every hook on the selected event against a sample tool
+call using the **same matcher as the runtime**, without executing anything:
+
+```text
+event=pre_tool_use tool="run_command" input="{\"command\":\"git push --force\"}"
+  0  MATCH     match="run_command(git push*)" mode=glob type=command
+  1  NO MATCH  match="write_file" mode=glob type=http
+1/2 hook(s) fire on this input.
+```
+
+Options:
+
+| Flag | Description |
+|------|-------------|
+| `--event` | `pre_tool_use` (default) or `post_tool_use` |
+| `--expect-match=true\|false` | Exit 1 unless the outcome matches, for scripted two-sided tests |
+
+Example two-sided check:
+
+```bash
+ggcode hooks test run_command '{"command":"git push --force"}' --expect-match=true
+ggcode hooks test run_command '{"command":"git status"}' --expect-match=false
+```
+
+The second form is the must-not-fire side: it fails loudly if the rule later
+loosens and starts matching calls it was never meant to block.
+
+### Debug logging
 
 Enable debug logging:
 

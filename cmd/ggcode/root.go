@@ -237,6 +237,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newIMCmd(&cfgFile))
 	cmd.AddCommand(newDaemonCmd(&cfgFile))
 	cmd.AddCommand(newLLMProbeCmd(&cfgFile))
+	cmd.AddCommand(newHooksCmd(&cfgFile))
 	cmd.AddCommand(newACPCommand(&cfgFile))
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newReportCmd())

@@ -35,6 +35,7 @@ cmd/ggcode/                # CLI entrypoint
   pipe.go                  # Non-interactive pipe mode (-p flag)
   daemon.go                # Daemon mode: headless agent, follow display, tunnel/IM, lanchat Hub, session auto-load
   im_cmd.go                # IM adapter management CLI
+  hooks_cmd.go             # Hook configuration CLI (list/validate/test match patterns)
   mcp_cmd.go               # MCP server management CLI
   report.go                # Session analytics report generator (HTML output)
   acp.go                   # ACP server CLI (expose ggcode as an ACP agent)
