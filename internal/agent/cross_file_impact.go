@@ -119,12 +119,7 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 	}
 
 	// Collect edited Go files.
-	var goFiles []string
-	for _, f := range runStats.FilesEdited {
-		if filepath.Ext(f) == ".go" {
-			goFiles = append(goFiles, f)
-		}
-	}
+	goFiles := editedGoFiles(runStats.FilesEdited)
 	if len(goFiles) == 0 {
 		return ""
 	}
@@ -133,14 +128,7 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 	// below — a symbol move (definition removed in a.go, references updated
 	// in b.go) previously flagged the co-edited b.go as "affected by a file
 	// you did NOT edit", a false positive on a fully consistent edit set.
-	editedAbs := make(map[string]bool, len(goFiles))
-	for _, f := range goFiles {
-		af := f
-		if !filepath.IsAbs(af) {
-			af = filepath.Join(workingDir, af)
-		}
-		editedAbs[filepath.Clean(af)] = true
-	}
+	editedAbs := absEditedSet(workingDir, goFiles)
 
 	if len(goFiles) > 20 {
 		debug.Log("cross_impact", "skipping: %d Go files edited (too many)", len(goFiles))
@@ -155,120 +143,8 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 			debug.Log("cross_impact", "analysis timed out after %v", impactScanTimeout)
 			break
 		}
-
-		absPath := editedFile
-		if !filepath.IsAbs(absPath) {
-			absPath = filepath.Join(workingDir, editedFile)
-		}
-
-		newContent, err := os.ReadFile(absPath)
-		if err != nil {
-			continue
-		}
-
-		oldContent, err := gitFileContentAtHEAD(workingDir, editedFile)
-		if err != nil || oldContent == "" {
-			continue
-		}
-
-		removed := extractImpactRemovedSymbols(oldContent, string(newContent), absPath)
-		if len(removed) == 0 {
-			continue
-		}
-
-		dir := filepath.Dir(absPath)
-		siblings := findSiblingGoFiles(dir, absPath, maxScanFiles)
-		if len(siblings) == 0 {
-			continue
-		}
-
-		affectedSet := make(map[string]bool)
-		names, methodOwners := impactNameTables(removed)
-		if len(names) == 0 {
-			continue
-		}
-		// Shared file set: sibling ASTs feed both the cheap visitor pass and
-		// the optional #2164 typed pass below.
-		dirFset := token.NewFileSet()
-		type impactPending struct {
-			relPath string
-			file    *ast.File
-			near    []impactNearMiss
-		}
-		var pendings []impactPending
-		var pkgFiles []*ast.File
-		for _, sibling := range siblings {
-			if time.Now().After(deadline) {
-				break
-			}
-			if editedAbs[filepath.Clean(sibling)] {
-				continue // co-edited this run — not "a file you did NOT edit" (#550 C1)
-			}
-			content, err := os.ReadFile(sibling)
-			if err != nil {
-				continue
-			}
-			relPath, _ := filepath.Rel(workingDir, sibling)
-			if relPath == "" {
-				relPath = sibling
-			}
-			file, perr := parser.ParseFile(dirFset, sibling, content, 0)
-			if perr != nil {
-				// Unparsable siblings fall back to the conservative text scan
-				// (unchanged pre-#2164 behavior, #1773 case 5 fallback).
-				for name := range names {
-					if containsGoIdent(string(content), name) {
-						affectedSet[relPath] = true
-						break
-					}
-				}
-				continue
-			}
-			pkgFiles = append(pkgFiles, file)
-			found, near := walkImpactRefs(file, names, methodOwners)
-			if found {
-				affectedSet[relPath] = true
-				continue
-			}
-			if len(near) > 0 {
-				pendings = append(pendings, impactPending{relPath: relPath, file: file, near: near})
-			}
-		}
-		// #2164: variable-receiver method calls (s.run()) are conservative
-		// misses for the syntax-only visitor. Resolve them with in-process
-		// stdlib go/types over the post-edit package sources - ONLY when a
-		// near-miss candidate exists, so the cost stays at zero for the
-		// common no-candidate path. No subprocess, no new dependency
-		// (governance constraints on #2164: no x/tools, no LSP coupling).
-		// Any unresolved receiver stays a miss: the compiler remains the
-		// ground truth and the zero-false-positive property of #2100/#2163
-		// is preserved (exact owner-type match required to upgrade).
-		if len(pendings) > 0 && len(methodOwners) > 0 && time.Now().Before(deadline) {
-			if ef, perr := parser.ParseFile(dirFset, absPath, newContent, 0); perr == nil {
-				pkgFiles = append(pkgFiles, ef) // decl sites may live in the edited file
-			}
-			infos := impactTypeCheckGroups(dirFset, pkgFiles)
-			for _, p := range pendings {
-				info := infos[p.file.Name.Name]
-				for _, m := range p.near {
-					if impactResolveNearMiss(info, m, methodOwners) {
-						affectedSet[p.relPath] = true
-						break
-					}
-				}
-			}
-		}
-
-		if len(affectedSet) > 0 {
-			var affected []string
-			for f := range affectedSet {
-				affected = append(affected, f)
-			}
-			impacts = append(impacts, fileImpact{
-				editedFile:    editedFile,
-				removedSyms:   removed,
-				affectedFiles: affected,
-			})
+		if imp := analyzeEditedFileImpact(workingDir, editedFile, editedAbs, deadline); imp != nil {
+			impacts = append(impacts, *imp)
 		}
 	}
 
@@ -276,12 +152,7 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		return ""
 	}
 
-	totalAffected := 0
-	totalRemoved := 0
-	for _, imp := range impacts {
-		totalAffected += len(imp.affectedFiles)
-		totalRemoved += len(imp.removedSyms)
-	}
+	totalAffected, totalRemoved := impactTotals(impacts)
 
 	// Real output ahead: claim the once-per-run flag NOW (#1773 case 6).
 	a.crossFileImpact.mu.Lock()
@@ -292,6 +163,204 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 	a.crossFileImpact.fired = true
 	a.crossFileImpact.mu.Unlock()
 
+	warning := renderImpactWarning(impacts, totalRemoved, totalAffected)
+
+	debug.Log("cross_impact", "detected %d affected files across %d edited files", totalAffected, len(impacts))
+	return warning
+}
+
+// editedGoFiles filters the run's edited-file list down to Go source paths,
+// preserving order.
+func editedGoFiles(files []string) []string {
+	var goFiles []string
+	for _, f := range files {
+		if filepath.Ext(f) == ".go" {
+			goFiles = append(goFiles, f)
+		}
+	}
+	return goFiles
+}
+
+// absEditedSet maps every edited file's cleaned absolute path — the exclusion
+// set for the sibling scan.
+//
+// #550 C1: every file edited THIS run is excluded from the sibling scan — a
+// symbol move (definition removed in a.go, references updated in b.go)
+// previously flagged the co-edited b.go as "affected by a file you did NOT
+// edit", a false positive on a fully consistent edit set.
+func absEditedSet(workingDir string, goFiles []string) map[string]bool {
+	editedAbs := make(map[string]bool, len(goFiles))
+	for _, f := range goFiles {
+		af := f
+		if !filepath.IsAbs(af) {
+			af = filepath.Join(workingDir, af)
+		}
+		editedAbs[filepath.Clean(af)] = true
+	}
+	return editedAbs
+}
+
+// impactTotals sums affected-file and removed-symbol counts across impacts.
+func impactTotals(impacts []fileImpact) (affected, removed int) {
+	for _, imp := range impacts {
+		affected += len(imp.affectedFiles)
+		removed += len(imp.removedSyms)
+	}
+	return affected, removed
+}
+
+// impactPending is a sibling file with #2164 near-miss candidates awaiting
+// typed resolution.
+type impactPending struct {
+	relPath string
+	file    *ast.File
+	near    []impactNearMiss
+}
+
+// impactSiblingScan aggregates one edited file's sibling scan: definite
+// affected files, the parsed sibling ASTs (shared with the typed pass), and
+// near-miss candidates.
+type impactSiblingScan struct {
+	affectedSet map[string]bool
+	pkgFiles    []*ast.File
+	pendings    []impactPending
+}
+
+// analyzeEditedFileImpact runs the full per-file pipeline for one edited Go
+// file — old-vs-new symbol diff, sibling scan, typed near-miss resolution —
+// and returns the impact record, or nil when there is nothing to report
+// (unreadable new content, no committed baseline, no removed symbols, no
+// siblings, no affected files).
+func analyzeEditedFileImpact(workingDir, editedFile string, editedAbs map[string]bool, deadline time.Time) *fileImpact {
+	absPath := editedFile
+	if !filepath.IsAbs(absPath) {
+		absPath = filepath.Join(workingDir, editedFile)
+	}
+
+	newContent, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil
+	}
+
+	oldContent, err := gitFileContentAtHEAD(workingDir, editedFile)
+	if err != nil || oldContent == "" {
+		return nil
+	}
+
+	removed := extractImpactRemovedSymbols(oldContent, string(newContent), absPath)
+	if len(removed) == 0 {
+		return nil
+	}
+
+	dir := filepath.Dir(absPath)
+	siblings := findSiblingGoFiles(dir, absPath, maxScanFiles)
+	if len(siblings) == 0 {
+		return nil
+	}
+
+	names, methodOwners := impactNameTables(removed)
+	if len(names) == 0 {
+		return nil
+	}
+
+	// Shared file set: sibling ASTs feed both the cheap visitor pass and
+	// the optional #2164 typed pass below.
+	dirFset := token.NewFileSet()
+	scan := scanSiblingsForImpact(dirFset, siblings, editedAbs, workingDir, names, methodOwners, deadline)
+	resolveImpactPendings(dirFset, &scan, absPath, string(newContent), methodOwners, deadline)
+
+	if len(scan.affectedSet) == 0 {
+		return nil
+	}
+	affected := make([]string, 0, len(scan.affectedSet))
+	for f := range scan.affectedSet {
+		affected = append(affected, f)
+	}
+	return &fileImpact{
+		editedFile:    editedFile,
+		removedSyms:   removed,
+		affectedFiles: affected,
+	}
+}
+
+// scanSiblingsForImpact walks the sibling files of one edited file, marking
+// definite references in affectedSet. Unparsable siblings fall back to the
+// conservative text scan (unchanged pre-#2164 behavior, #1773 case 5
+// fallback); variable-receiver near misses are collected as pendings for the
+// typed pass.
+func scanSiblingsForImpact(dirFset *token.FileSet, siblings []string, editedAbs map[string]bool, workingDir string, names map[string]bool, methodOwners map[string]map[string]bool, deadline time.Time) impactSiblingScan {
+	scan := impactSiblingScan{affectedSet: make(map[string]bool)}
+	for _, sibling := range siblings {
+		if time.Now().After(deadline) {
+			break
+		}
+		if editedAbs[filepath.Clean(sibling)] {
+			continue // co-edited this run — not "a file you did NOT edit" (#550 C1)
+		}
+		content, err := os.ReadFile(sibling)
+		if err != nil {
+			continue
+		}
+		relPath, _ := filepath.Rel(workingDir, sibling)
+		if relPath == "" {
+			relPath = sibling
+		}
+		file, perr := parser.ParseFile(dirFset, sibling, content, 0)
+		if perr != nil {
+			// Unparsable siblings fall back to the conservative text scan
+			// (unchanged pre-#2164 behavior, #1773 case 5 fallback).
+			for name := range names {
+				if containsGoIdent(string(content), name) {
+					scan.affectedSet[relPath] = true
+					break
+				}
+			}
+			continue
+		}
+		scan.pkgFiles = append(scan.pkgFiles, file)
+		found, near := walkImpactRefs(file, names, methodOwners)
+		if found {
+			scan.affectedSet[relPath] = true
+			continue
+		}
+		if len(near) > 0 {
+			scan.pendings = append(scan.pendings, impactPending{relPath: relPath, file: file, near: near})
+		}
+	}
+	return scan
+}
+
+// resolveImpactPendings upgrades near-miss variable-receiver method calls
+// (s.run()) that the syntax-only visitor conservatively missed, using
+// in-process stdlib go/types over the post-edit package sources - ONLY when
+// a near-miss candidate exists, so the cost stays at zero for the common
+// no-candidate path. No subprocess, no new dependency (governance
+// constraints on #2164: no x/tools, no LSP coupling). Any unresolved
+// receiver stays a miss: the compiler remains the ground truth and the
+// zero-false-positive property of #2100/#2163 is preserved (exact
+// owner-type match required to upgrade).
+func resolveImpactPendings(dirFset *token.FileSet, scan *impactSiblingScan, editedAbsPath, newContent string, methodOwners map[string]map[string]bool, deadline time.Time) {
+	if len(scan.pendings) == 0 || len(methodOwners) == 0 || !time.Now().Before(deadline) {
+		return
+	}
+	if ef, perr := parser.ParseFile(dirFset, editedAbsPath, newContent, 0); perr == nil {
+		scan.pkgFiles = append(scan.pkgFiles, ef) // decl sites may live in the edited file
+	}
+	infos := impactTypeCheckGroups(dirFset, scan.pkgFiles)
+	for _, p := range scan.pendings {
+		info := infos[p.file.Name.Name]
+		for _, m := range p.near {
+			if impactResolveNearMiss(info, m, methodOwners) {
+				scan.affectedSet[p.relPath] = true
+				break
+			}
+		}
+	}
+}
+
+// renderImpactWarning formats the advisory message shown to the agent,
+// capping the affected-file listing at maxImpactFiles entries.
+func renderImpactWarning(impacts []fileImpact, totalRemoved, totalAffected int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(
 		"[cross-file impact analysis] Your edits removed or renamed %d exported symbol(s) "+
@@ -322,8 +391,6 @@ func (a *Agent) checkCrossFileImpact(runStats *RunStats) string {
 		b.WriteString(fmt.Sprintf("  ... and %d more\n", totalAffected-maxImpactFiles))
 	}
 	b.WriteString("\nVerify with `go build` after fixing these files.")
-
-	debug.Log("cross_impact", "detected %d affected files across %d edited files", totalAffected, len(impacts))
 	return b.String()
 }
 
@@ -530,8 +597,6 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 		}
 		return false
 	}
-	v := &impactRefVisitor{names: names, methodOwners: methodOwners}
-	ast.Walk(v, file)
 	found, _ := walkImpactRefs(file, names, methodOwners)
 	return found
 }
