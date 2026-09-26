@@ -69,7 +69,7 @@ The input supports three modes:
 | `/sessions` | List and resume sessions |
 | `/model [name]` | Switch model |
 | `/mode [mode]` | Switch permission mode (supervised/plan/auto/bypass/autopilot) |
-| `/compact` | Compact conversation to save context |
+| `/compact [focus]` | Compact conversation to save context; optional focus directives (e.g. `/compact keep the API design decisions`) steer what the summary preserves |
 | `/exit` | Exit ggcode |
 
 ## 5. Next Steps

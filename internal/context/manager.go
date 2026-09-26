@@ -40,6 +40,7 @@ type ContextManager interface {
 	SetOutputReserve(n int)
 	RecordUsage(usage provider.TokenUsage)
 	Summarize(ctx context.Context, prov provider.Provider) error
+	SummarizeWithFocus(ctx context.Context, prov provider.Provider, focus string) error
 	CheckAndSummarize(ctx context.Context, prov provider.Provider) (bool, error)
 	TruncateOldestGroupForRetry() bool
 	RemoveLastAssistantGroup() string
@@ -1391,6 +1392,15 @@ func (m *Manager) PromptBudget() int {
 // the async compaction window. On the next trigger, the summary itself is
 // included in the compression input, producing a fresh summary.
 func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
+	return m.SummarizeWithFocus(ctx, prov, "")
+}
+
+// SummarizeWithFocus is Summarize with optional user-supplied compaction
+// directives (e.g. from "/compact keep the API design discussion"). When
+// non-empty, the directives are injected into the summarization system
+// prompt as highest-priority guidance (directed compaction: "Compact,
+// preserving X" beats generic "Compact this conversation").
+func (m *Manager) SummarizeWithFocus(ctx context.Context, prov provider.Provider, focus string) error {
 	plan, ok := m.buildSummaryPlan()
 	if !ok {
 		debug.Log("ctx", "Summarize: no plan built, nothing to summarize")
@@ -1407,7 +1417,7 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	if len(plan.recentMsgs) == 0 {
 		trigger = lastUserMessageText(plan.oldMsgs)
 	}
-	summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens(), trigger)
+	summaryText, err := summarizeMessages(ctx, prov, plan.oldMsgs, m.onUsage, m.summaryReserveTokens(), trigger, focus)
 	if err != nil {
 		debug.Log("ctx", "Summarize: summarizeMessages FAILED: %v", err)
 		return err
@@ -2587,7 +2597,7 @@ func headRunes(s string, n int) string {
 	return string(runes[:n]) + fmt.Sprintf("\n... (truncated, original %d runes)", len(runes))
 }
 
-func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage), summaryTokenLimit int, trigger string) (string, error) {
+func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provider.Message, onUsage func(provider.TokenUsage), summaryTokenLimit int, trigger string, focus string) (string, error) {
 	current := append([]provider.Message(nil), msgs...)
 	for attempt := 0; attempt <= maxPTLRetries; attempt++ {
 		payload := buildSummaryPayload(current)
@@ -2597,12 +2607,7 @@ func summarizeMessages(ctx context.Context, prov provider.Provider, msgs []provi
 		if trigger != "" {
 			payload = "=== TRIGGER MESSAGE VERBATIM (the live user request that triggered this compaction — reproduce it under ## User Requests, condensed only for the token budget) ===\n" + trigger + "\n\n" + payload
 		}
-		summaryMsgs := []provider.Message{
-			{
-				Role: "system",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf(`You are summarizing a conversation between a user and an AI coding assistant (agentic coding tool). Produce a concise, structured summary that preserves the information most critical for continuing work autonomously.
+		systemPrompt := fmt.Sprintf(`You are summarizing a conversation between a user and an AI coding assistant (agentic coding tool). Produce a concise, structured summary that preserves the information most critical for continuing work autonomously.
 
 Your summary must be under %d tokens. Be extremely concise — every token wasted on filler is a token lost to the agent's working memory.
 
@@ -2643,7 +2648,16 @@ Omit entirely:
 - Full source code (reference paths + key signatures only)
 - Verbose command output (state the outcome in one phrase)
 - Repeated status checks, confirmations, or idle chatter
-- Tool call mechanics (focus on what was done, not which tool)`, summaryTokenLimit),
+- Tool call mechanics (focus on what was done, not which tool)`, summaryTokenLimit)
+		if focus != "" {
+			systemPrompt += "\n\n## User Compaction Focus Directives (HIGHEST PRIORITY)\nThe user explicitly requested this focus for the summary. Apply it in addition to the structure above; where the default guidance and these directives conflict, the user directives win:\n" + focus + "\n"
+		}
+		summaryMsgs := []provider.Message{
+			{
+				Role: "system",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: systemPrompt,
 				}},
 			},
 			{

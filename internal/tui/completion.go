@@ -524,7 +524,7 @@ var SlashCommandPlaceholders = map[string]string{
 	"/restart":       "[debug]",
 	"/checkpoints":   "[list|restore]",
 	"/clear":         "",
-	"/compact":       "",
+	"/compact":       "[focus]",
 	"/ding":          "<subcommand>",
 	"/dingtalk":      "<subcommand>",
 	"/discord":       "<subcommand>",

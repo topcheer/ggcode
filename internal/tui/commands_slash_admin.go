@@ -107,7 +107,10 @@ func (m *Model) persistSidebarPreference() {
 	}
 }
 
-func (m *Model) handleCompactCommand() tea.Cmd {
+// handleCompactCommand compacts the conversation. An optional focus
+// (everything after "/compact" on the command line) is forwarded as
+// user compaction directives injected into the summarization prompt.
+func (m *Model) handleCompactCommand(focus string) tea.Cmd {
 	if m.agent == nil {
 		return func() tea.Msg {
 			return compactResultMsg{err: m.t("compact.unavailable")}
@@ -141,7 +144,7 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 			}); res.Err != nil {
 				debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
 			}
-			if err := cm.Summarize(context.Background(), m.agent.Provider()); err != nil {
+			if err := cm.SummarizeWithFocus(context.Background(), m.agent.Provider(), focus); err != nil {
 				return compactResultMsg{err: fmt.Sprintf(m.t("compact.failed"), err)}
 			}
 			newTokens := cm.TokenCount()
