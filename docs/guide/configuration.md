@@ -17,6 +17,8 @@ ggcode stores its configuration in `~/.ggcode/ggcode.yaml`. See `ggcode.example.
 
 Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=instance` in the config tool to save settings for a specific workspace only.
 
+Like the global config, instance config values support `${VAR}` references (also `${VAR:-default}`), resolved at load time from the process environment, `~/.ggcode/keys.env`, and the instance's own `keys.env` (instance keys win). The file on disk keeps the `${VAR}` reference; unset plain references are preserved literally. Numeric references (`max_iterations: ${ITERS}`) work: the expanded value is typed as if written directly.
+
 ## Core Settings
 
 | Key | Type | Description |

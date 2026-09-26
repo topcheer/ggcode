@@ -10,6 +10,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
+	"gopkg.in/yaml.v3"
 )
 
 // envPattern matches the plain ${VAR} form.
@@ -109,6 +110,64 @@ func expandValueWithLookup(v interface{}, lookup envLookupFunc) interface{} {
 	default:
 		return v
 	}
+}
+
+// expandAndCoerceMap is the map-level entry point of expandAndCoerceValue.
+func expandAndCoerceMap(m map[string]interface{}, lookup envLookupFunc) map[string]interface{} {
+	result := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		result[k] = expandAndCoerceValue(v, lookup)
+	}
+	return result
+}
+
+// expandAndCoerceValue expands ${VAR} references like expandValueWithLookup,
+// but when expansion actually changes a string value it re-infers the implicit
+// YAML scalar type of the result (int/float/bool/...). This matters for the
+// re-marshal round-trip used by Load paths that expand raw maps: yaml.Marshal
+// quotes a string like "42" as `"42"` to preserve its Go type, so a numeric
+// reference (`max_iterations: ${RATIONS}`) would otherwise fail the typed
+// unmarshal with "cannot unmarshal !!str into int". Values expansion did NOT
+// touch keep their original type, so pre-existing quoted numeric strings
+// (`api_key: "12345"`) are never coerced - the semantics are exactly those of
+// the expanded literal having been written directly into the file.
+func expandAndCoerceValue(v interface{}, lookup envLookupFunc) interface{} {
+	switch val := v.(type) {
+	case string:
+		expanded := ExpandEnvWithLookup(val, lookup)
+		if expanded == val {
+			return val
+		}
+		return coerceYAMLScalar(expanded)
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(val))
+		for k, item := range val {
+			result[k] = expandAndCoerceValue(item, lookup)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, item := range val {
+			result[i] = expandAndCoerceValue(item, lookup)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+// coerceYAMLScalar re-parses s as a YAML scalar and returns the implicitly
+// typed value (int, float64, bool, ...). Strings that parse as strings (or do
+// not parse at all) are returned unchanged.
+func coerceYAMLScalar(s string) interface{} {
+	var probe interface{}
+	if err := yaml.Unmarshal([]byte(s), &probe); err != nil {
+		return s
+	}
+	if _, isStr := probe.(string); isStr || probe == nil {
+		return s
+	}
+	return probe
 }
 
 // WarnUnresolvedEnvRefs reports ${...} references in the given raw config map

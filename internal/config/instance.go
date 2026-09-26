@@ -68,19 +68,42 @@ func LoadInstanceConfig(workspace string) *Config {
 	if err != nil {
 		return nil
 	}
+	// Expand ${VAR} references exactly like the main Load path does
+	// (config.go: ExpandEnvRecursiveWithLookup over the raw map, then
+	// re-marshal into the typed struct). LoadInstanceConfig previously did
+	// a bare typed unmarshal, so a value like `a2a.auth.api_key: ${MY_KEY}`
+	// stayed the literal string "${MY_KEY}" - merged over the global value
+	// by MergeInstance and then used as the actual credential. This is the
+	// exact pre-#559 (Bug F) defect class the main path already fixed, and
+	// it defeated the #2293 instance keys.env resolver wiring: LoadWithInstance
+	// loads instance keys into the resolver map BEFORE calling this function,
+	// but nothing ever consulted them on this path.
+	var rawKeys map[string]interface{}
+	source := data
+	if err := yaml.Unmarshal(data, &rawKeys); err == nil {
+		lookup := runtimeEnvLookup(rawKeys)
+		expanded := expandAndCoerceMap(rawKeys, lookup)
+		WarnUnresolvedEnvRefs(expanded)
+		if expandedData, marshalErr := yaml.Marshal(expanded); marshalErr == nil {
+			source = expandedData
+		} else {
+			debug.Log("config", "instance config re-marshal after env expansion failed %s: %v", path, marshalErr)
+		}
+	}
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal(source, &cfg); err != nil {
 		debug.Log("config", "instance config parse error %s: %v", path, err)
 		return nil
 	}
-	// #2284-C: also unmarshal as a raw map to record which top-level keys
-	// the instance file EXPLICITLY contains. yaml cannot distinguish
+	// #2284-C: record which top-level keys the instance file EXPLICITLY
+	// contains. yaml cannot distinguish
 	// "max_iterations: 0" from an absent key after typed unmarshal, and the
 	// zero-value merge gate resurrected cleared values (set 80 -> clear to
 	// 0 -> SaveInstance -> reload -> 80 back). With the explicit set, the
 	// merge treats a present key as an override even when its value is zero.
-	var rawKeys map[string]interface{}
-	if err := yaml.Unmarshal(data, &rawKeys); err == nil {
+	// Key PATHS are unaffected by value expansion, so the explicit set is
+	// computed from the same raw map that drove the expansion.
+	if rawKeys != nil {
 		cfg.explicitKeys = make(map[string]bool, len(rawKeys))
 		flattenExplicitKeys("", rawKeys, cfg.explicitKeys)
 	}
