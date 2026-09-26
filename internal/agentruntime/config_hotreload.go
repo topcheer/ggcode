@@ -176,6 +176,13 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	old.MaxIterations = fresh.MaxIterations
 	old.SessionTokenBudget = fresh.SessionTokenBudget
 	old.ToolCallBudget = fresh.ToolCallBudget
+	// Verify switches (verify.auto_after_run / claims_supervision /
+	// adversarial_review) are consumed ONLY via ApplyVerifyConfigToAgent at
+	// agent construction (root.go/pipe.go/daemon.go), never per-turn. The
+	// missing field refresh here left edits silent behind the "config
+	// refreshed" log until restart - same failure shape as the #1482
+	// fallbacks chain above. Mirror the field, then replay the Apply below.
+	old.Verify = fresh.Verify
 	// #1482 case D: snapshot the log fields under the same lock the
 	// setFallbacks* writers now hold - the old post-Unlock read raced
 	// concurrent fallback writes.
@@ -187,10 +194,14 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 		vendorCount, fallbackConfigured)
 
 	// Re-apply turn-scoped budgets so the next turn picks them up.
+	// ApplyVerifyConfigToAgent replays the verify switches onto the live
+	// agent (claims supervision mirrors unconditionally; auto/adversarial
+	// are one-way enable, matching their startup semantics).
 	if a.agentInst != nil {
 		ApplySessionTokenBudget(a.agentInst, old)
 		ApplyToolCallBudget(a.agentInst, old)
 		ApplySessionTimeout(a.agentInst, old, false)
+		ApplyVerifyConfigToAgent(a.agentInst, old)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 )
 
@@ -205,4 +206,41 @@ func TestApplyFreshConfigRefreshesFallbacks(t *testing.T) {
 	if len(a.cfg.Fallbacks) != 1 || a.cfg.Fallbacks[0].Vendor != "new" {
 		t.Fatalf("fallbacks chain not refreshed: %+v", a.cfg.Fallbacks)
 	}
+}
+
+func TestApplyFreshConfigReplaysVerifyConfig(t *testing.T) {
+	// Regression: verify.* switches are consumed ONLY via
+	// ApplyVerifyConfigToAgent at agent construction, so a ggcode.yaml edit
+	// mid-session sat silent behind the "config refreshed" log until
+	// restart. applyFreshConfig must refresh the field AND replay the Apply
+	// onto the live agent, like the budget fields do.
+	a := &configAccess{cfg: &config.Config{}}
+	a.agentInst = agent.NewAgent(nil, nil, "", 10)
+	w := &ConfigHotReload{access: a}
+
+	fresh := &config.Config{}
+	fresh.Verify.ClaimsSupervision = true
+	w.applyFreshConfig(fresh)
+
+	if !a.cfg.Verify.ClaimsSupervision {
+		t.Fatal("live config verify.claims_supervision not refreshed")
+	}
+	if !a.agentInst.ClaimsSupervisionEnabled() {
+		t.Fatal("ApplyVerifyConfigToAgent not replayed onto the live agent")
+	}
+
+	// Field-conservative default: a fresh config without verify settings
+	// must not enable anything on its own.
+	other := &configAccess{cfg: &config.Config{}}
+	other.agentInst = agent.NewAgent(nil, nil, "", 10)
+	w2 := &ConfigHotReload{access: other}
+	w2.applyFreshConfig(&config.Config{})
+	if other.agentInst.ClaimsSupervisionEnabled() {
+		t.Fatal("unset verify config must not enable claims supervision")
+	}
+
+	// nil-agent access must stay a no-op (pre-existing guard).
+	plain := &configAccess{cfg: &config.Config{}}
+	w3 := &ConfigHotReload{access: plain}
+	w3.applyFreshConfig(fresh)
 }
