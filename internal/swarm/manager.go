@@ -53,7 +53,9 @@ type Manager struct {
 	onUsage      func(provider.TokenUsage)
 
 	// results stores the most recent task output per teammate (key=teammateID).
-	// Written on teammate_idle events, cleared on teammate shutdown.
+	// Written on teammate_idle events. Retained after teammate shutdown so the
+	// leader can collect it afterwards (#1814/#2787); stale ungoverned entries
+	// are pruned by the next shutdown and the whole set is reclaimed on DeleteTeam.
 	results map[string]string
 
 	// workingDir is the project directory injected into teammate system prompts
@@ -523,15 +525,35 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	tm.EndedAt = time.Now()
 	tm.mu.Unlock()
 
-	// #1633 case 2: free the quota slot AND the stored result. The map
-	// entries used to linger forever: len(team.Teammates) counted
-	// shut-down teammates (16 spawn/shutdown cycles permanently
-	// exhausted the quota - removal landed in-flight), and m.results
-	// leaked one entry per shutdown despite the field comment saying
-	// "cleared on teammate shutdown" (it was only cleared in
-	// DeleteTeam).
+	// #2787: keep this teammate's stored result retrievable - #1814 made
+	// "shut the worker down, THEN collect the output" the supported order
+	// and the emit comment promises the last result survives shutdown, but
+	// the old #1633 delete here contradicted both (terminal data loss: the
+	// #2121 guard never writes a result back after removal). Bounded
+	// retention instead of the delete: drop entries whose teammate belongs
+	// to no live team (results from earlier shutdown cycles that were never
+	// collected - the #1633 leak stays fixed), while DeleteTeam still
+	// reclaims a whole team's entries. Lock order m.mu -> team.mu matches
+	// DeleteTeam.
 	m.mu.Lock()
-	delete(m.results, tmID)
+	for id := range m.results {
+		if id == tmID {
+			continue
+		}
+		governed := false
+		for _, t := range m.teams {
+			t.mu.RLock()
+			_, member := t.Teammates[id]
+			t.mu.RUnlock()
+			if member {
+				governed = true
+				break
+			}
+		}
+		if !governed {
+			delete(m.results, id)
+		}
+	}
 	m.mu.Unlock()
 
 	team.removeTeammate(tmID)
@@ -778,11 +800,12 @@ func (m *Manager) emit(ev Event) {
 	case "teammate_idle":
 		if ev.Result != "" {
 			// #2121: only store results for a teammate that is still
-			// governed by some team. ShutdownTeammate clears m.results
-			// and removes the teammate BEFORE its runner exits; a late
-			// idle emit otherwise wrote the result back AFTER that cleanup,
-			// leaving an entry no later DeleteTeam sweep could reach (its
-			// loop iterates team.Teammates, which no longer has the ID).
+			// governed by some team. ShutdownTeammate removes the teammate
+			// BEFORE its runner exits; a late idle emit otherwise wrote the
+			// result back AFTER that removal, leaving an entry no later
+			// DeleteTeam sweep could reach (its loop iterates
+			// team.Teammates, which no longer has the ID) - only a later
+			// shutdown's ungoverned-prune would eventually drop it (#2787).
 			if m.teammateGoverned(ev.TeammateID) {
 				debug.Log("swarm", "emit: storing result for %s len=%d", ev.TeammateID, len(ev.Result))
 				m.mu.Lock()
