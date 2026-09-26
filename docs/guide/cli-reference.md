@@ -181,6 +181,23 @@ ggcode llm-probe --timeout 30          # 30s timeout per API call
 ggcode llm-probe -v                    # Verbose: full request/response
 ```
 
+### replay
+
+Deterministically replay a recorded session's read-only tool calls and diff
+against the recorded results (zero LLM inference, see
+[docs/guide/deterministic-replay.md](deterministic-replay.md)):
+
+```bash
+ggcode replay <session-id>              # Replay all steps, print drift report
+ggcode replay <session-id> --limit 50   # Replay only the first 50 steps
+ggcode replay <session-id> --json       # Machine-readable JSON report
+ggcode replay <session-id> --workdir /path/to/repo # Tool calls run in this dir
+```
+
+Mutating tools are never re-executed (reported as SKIP). Exit code 1 signals
+drift: at least one live tool result differs from what the agent saw during
+the original run.
+
 ### status
 
 Discover running ggcode instances and query their runtime state:
