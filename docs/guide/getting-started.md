@@ -72,6 +72,11 @@ The input supports three modes:
 | `/compact` | Compact conversation to save context |
 | `/exit` | Exit ggcode |
 
+The agent itself can also reclaim context by calling the `compact_context`
+tool (Context-as-Tool): it runs a cheap mechanical pass immediately and, at
+or above the auto-compact threshold, schedules background summarization that
+applies at the next turn boundary.
+
 ## 5. Next Steps
 
 - [Configuration](./configuration.md) — Full config reference
