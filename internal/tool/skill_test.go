@@ -63,6 +63,53 @@ func (r fakeRunner) RunStream(ctx context.Context, prompt string, onEvent func(p
 	return nil
 }
 
+type capturingRunner struct {
+	prompt string
+}
+
+func (r *capturingRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
+	r.prompt = prompt
+	onEvent(provider.StreamEvent{Type: provider.StreamEventText, Text: "forked result"})
+	return nil
+}
+
+// TestSkillToolPositionalArgsForked verifies positional argument templating
+// is wired through the skill tool's fork execution path (skills receive
+// $1/$2 positional refs expanded from the invocation args).
+func TestSkillToolPositionalArgsForked(t *testing.T) {
+	registry := NewRegistry()
+	runner := &capturingRunner{}
+	tool := SkillTool{
+		Skills: stubSkillLookup{
+			"deploy": {
+				Name:        "deploy",
+				Template:    "Deploy build $2 to the $1 environment ($ARGUMENTS)",
+				Context:     "fork",
+				Description: "Deploy the app",
+				Enabled:     true,
+			},
+		},
+		Provider: fakeProvider{},
+		Tools:    registry,
+		AgentFactory: func(prov provider.Provider, tools interface{}, systemPrompt string, maxTurns int) subagent.AgentRunner {
+			return runner
+		},
+	}
+	input := json.RawMessage(`{"skill":"deploy","args":"staging \"1.2.3\""}`)
+
+	result, err := tool.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected tool error: %+v", result)
+	}
+	want := `Deploy build 1.2.3 to the staging environment (staging 1.2.3)`
+	if runner.prompt != want {
+		t.Fatalf("expanded prompt = %q, want %q", runner.prompt, want)
+	}
+}
+
 func TestSkillToolExecute(t *testing.T) {
 	var callback SkillExecutionEvent
 	tool := SkillTool{
