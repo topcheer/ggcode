@@ -2357,702 +2357,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		consecutiveEmptyResponses = 0
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
-			// Truncated response recovery: the LLM hit the output token limit
-			// mid-response. Save the partial output and inject a continuation
-			// prompt so the model picks up where it left off. This prevents
-			// silent loss of partial content (the old behavior sent a hard error
-			// and discarded everything already streamed).
-			if truncated && !policyBlocked && truncationContinues < 3 {
-				truncationContinues++
-				debug.Log("agent", "Iteration %d: response truncated by output limit, auto-continuing (attempt %d/3)", i+1, truncationContinues)
-				a.contextManager.Add(resp.Message)
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Response was truncated by output length limit — continuing...] ",
-				})
-				// #677: continuation protocol, NOT detector guidance — a budget-
-				// suppressed continuation prompt would strand the partial output, so
-				// it stays a direct add (own cap: truncationContinues < 3).
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: "Your previous response was cut off by the output token limit. Continue from where you left off — do not repeat what you already wrote.",
-					}},
-				})
+			// handleNoToolCallResponse owns the entire no-tool-call response
+			// path (truncation recovery, inline tool-call nudging, the text
+			// advisory fleet, autopilot strategist, completion gates). It
+			// returns true where the original inline block executed
+			// `continue`; the caller returns nil where it returned nil.
+			if a.handleNoToolCallResponse(ctx, onEvent, resp, textBuf, toolCalls, truncated, policyBlocked, i, runStats, userPromptForStats, &truncationContinues, &inlineToolCallNudges, &todoCheckCount, &syncVerifyRetries, &asyncVerifyStats) {
 				continue
 			}
-			if truncated && policyBlocked {
-				// Truncated by a provider policy filter (SAFETY/RECITATION/etc.),
-				// not by the output token limit. Auto-continuation would resend
-				// the full context and hit the same filter again. Keep the partial
-				// output in history and stop (#266).
-				debug.Log("agent", "Iteration %d: response blocked by provider policy, skipping auto-continuation", i+1)
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Response blocked by provider safety policy — partial output kept, not retrying.] ",
-				})
-			}
-			// Detect inline tool calls in text/reasoning (common with lower-reasoning
-			// models that write tool calls in prose instead of structured tool_use blocks).
-			// Nudge the model to use proper tool call format and retry.
-			assistantText := textBuf
-			a.constraintViolation.recordReasoning(assistantText, i+1)
-			a.reasoningRedund.recordReasoning(assistantText, false)
-			a.recordGiveupText(assistantText)
-			// History error accumulation: check if assistant text addresses
-			// pending issues from a prior multi-issue tool result.
-			// Silent degradation propagation: check if the agent acknowledged
-			// a prior degraded tool result in its reasoning text. If not, it is
-			// silently building on corrupted state (Galileo error propagation chain).
-			// (#1823 case 1: the over-reflection detector this comment announced was
-			// removed in 387282a6 — pure-text-turn waste is a recorded trade-off,
-			// partially compensated by errorStrategyLoop's rerun-same-command check.)
-			if hasInlineToolCall(assistantText) && inlineToolCallNudges < 2 {
-				inlineToolCallNudges++
-				debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, inlineToolCallNudges)
-				a.contextManager.Add(resp.Message)
-				// #677: format-correction protocol, NOT detector guidance — if the
-				// budget suppressed it, a model that only writes inline tool calls
-				// could never emit a structured tool_use block again this turn
-				// (own cap: 2 nudges).
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: "Use structured tool_use format, not inline text syntax for tool calls.",
-					}},
-				})
-				continue
-			}
-			// Tool output integration monitoring: check if evidence tokens
-			// from the previous tool call appear in this assistant text.
-			// (TRACE-inspired cross-step evidence tracking).
-			a.contextManager.Add(resp.Message)
-			// Assumption tracker: scan assistant text for implicit unverified
-			// assumption language ("I assume", "probably", etc.). If threshold
-			// is exceeded, inject guidance to verify before proceeding.
-			// Diagnostic fixation detector: detect when the agent restates the
-			// same diagnostic hypothesis (root-cause claim about a specific
-			// entity) across multiple turns without evolving it. This is belief
-			// perseverance -- the agent keeps blaming the same file/function
-			// even as evidence accumulates.
-			// (#1823 case 1: the satisficing detector this comment announced was
-			// removed in 387282a6.)
-			// Metacognitive monitor: track cognitive state stability and detect
-			// self-contradiction, plan changes, and interpretive drift.
-			// Records each turn's tools, action summary, and interpretation.
-			// Fires guidance when consistency drops below threshold (Li et al. 2025, Peters 2026).
-			// Sycophancy detector: detect when the agent agrees with a
-			// user-stated premise without independent verification.
-			// (#1823 case 2: the premature-surrender detector this comment announced
-			// was removed in 387282a6 (noise trade-off); the narrow give-up+revert
-			// re-add lives in giveupRevertCheck — see premature_success.go.)
-			// Agentic abstention detection: track whether the assistant text
-			// acknowledges negative environment signals, and inject guidance
-			// if unacknowledged negatives accumulate. arXiv:2606.28733.
-			// Phantom output inheritance detection: check if subsequent tool calls
-			// are referencing identifiers from previously failed tool calls.
-			// Advance delayed-observation turn counter before checks.
-			// Delayed observation contradiction: positive claims that contradict
-			// an aged negative observation from a successful tool call.
-			// False premise detection: scan assistant text for success claims
-			// that contradict recent tool error results (world-model drift).
-			if fpMsg := a.falsePremise.checkFalsePremise(assistantText); fpMsg != "" {
-				debug.Log("agent", "Iteration %d: false premise detected (ungrounded success claim)", i+1)
-				a.recordUncertainty("false_premise", weightFalsePremise)
-				a.injectGuidance(fpMsg)
-			}
-			// Tool output integration monitor: check whether the assistant text
-			// references key evidence from the previous information-tool result
-			// (TRACE cross-step evidence, issue #341).
-			a.integrationCheckAndWarn(assistantText)
-			// Unverified confidence detector: scan for overconfident completion
-			// claims ("this definitely works", "fix is complete") that aren't
-			// backed by actual verification (build/test/lint). EpiCaR-inspired
-			// calibration gap detection.
-			// Evidence-induced overconfidence: detect definitive claims or code
-			// edits derived from evidence tools (web_search, grep, read) without
-			// cross-verification. Tool-type calibration asymmetry (arXiv:2601.15778).
-			// Scope overgeneralization: detect universal scope claims
-			// ("no other", "all references", "only these files") derived from
-			// narrow evidence searches. Epistemic miscalibration (arXiv:2605.23414).
-			// Green build illusion: detect when agent declares completion after
-			// a build-only command without running tests. arXiv 2026 studies show
-			// this is a primary cause of AI-generated PR rejection.
-			// Premature success claim: detect edits without verification
-			// followed by success declaration text.
-			// Premature success claim: gated behind claimsSupervision (see field
-			// comment) - lexical heuristics over intermediate states are noise for
-			// models that already verify in-loop per the system prompt mandate.
-			if a.claimsSupervision {
-				if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
-					debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
-					a.injectGuidance(psHint)
-					// Feed the compounded-uncertainty accumulator: an unverified
-					// success claim is a 1.5-unit epistemic risk event (#484 — this
-					// channel was declared in the accumulator's weights but never
-					// wired, so the documented 4-channel design only ever saw 2).
-					a.recordUncertainty("unverified_success", weightUnverifiedSucc)
-				}
-			}
-			// Verification outcome disconnect: detect verification failures
-			// that the agent advances past without addressing. Behavioral
-			// overconfidence gap (arXiv:2508.06225).
-			// Phantom verification: detect category-specific verification claims
-			// ("tests pass", "build compiles") without a matching verification
-			// command in the trajectory. Process supervision gap (AgentPro, EMNLP 2025).
-			// Phantom verification: gated behind claimsSupervision (default off,
-			// see field comment) - same success-claim lexical family.
-			if a.claimsSupervision {
-				if pvHint := a.maybeWarnPhantomVerify(assistantText); pvHint != "" {
-					debug.Log("agent", "Iteration %d: phantom verification detector found unverified category claims", i+1)
-					a.injectGuidance(pvHint)
-				}
-			}
-			// Narrative-evidence decoupling: detect when the agent's text claims
-			// directly contradict the actual content of recent tool outputs
-			// (arXiv:2605.01604 - Explanation-Decision Decoupling).
-			a.successDeclare.recordAssistantText(assistantText, i)
-			a.criteriaDrift.recordAssistantText(assistantText, i)
-			a.subgoalTrack.recordAssistantText(assistantText, i)
-			// Belief defense escalation: detect when an agent re-states an earlier
-			// belief after a contradicting tool output (arXiv:2606.22936).
-			// Bridging rationalization: detect when an agent explains away a
-			// contradiction by attributing it to external/transient causes
-			// instead of re-verifying (RECAP 2026, stale-context benchmark).
-			// Verification scope decay: detect progressive narrowing of
-			// test/build scope across the run.
-			// Symbol grounding verifier: detect code symbols mentioned in
-			// assistant text that were never found via tool calls.
-			// Selective evidence detector: detect confirmation bias pattern where
-			// the agent emphasizes positive evidence while dismissing negatives.
-			// Temporal blindness: detect when agent claims a verification
-			// result is still valid after mutations invalidated it.
-			// Unverified self-diagnosis: detect definitive diagnosis claims
-			// about recent errors without verification (correlated failure).
-			// Deferred work tracker: detect when the agent defers work to
-			// "later" or "next" but never circles back. If stale deferrals
-			// accumulate or the agent declares completion with open items,
-			// inject guidance to address them.
-			// Truncated output completeness fallacy: detect when the agent
-			// makes exhaustiveness claims after receiving a truncated tool
-			// result. The agent may claim "only N files" or "no other
-			// matches" without realizing data was cut off.
-			if truncHint := a.truncClaim.maybeWarnTruncClaim(assistantText, i); truncHint != "" {
-				debug.Log("agent", "Iteration %d: truncated output completeness fallacy detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: truncHint,
-					}},
-				})
-			}
-			// Circular reasoning detector: scan assistant text for tautological
-			// or circular justification patterns. When 2+ instances accumulate,
-			// inject guidance to provide concrete evidence instead.
-			if circularHint := a.maybeWarnCircularReasoning(assistantText, i); circularHint != "" {
-				debug.Log("agent", "Iteration %d: circular reasoning detector triggered (%d instances)", i+1, len(a.circularReasoning.instances))
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: circularHint,
-					}},
-				})
-			}
-			// Cross-turn contradiction detector: tracks root-cause/location
-			// claims across iterations. When the agent contradicts its own prior
-			// claim about where the bug/issue is, injects guidance to reconcile.
-			if contradictionHint := a.maybeWarnContradiction(assistantText, i); contradictionHint != "" {
-				debug.Log("agent", "Iteration %d: cross-turn contradiction detector triggered (%d contradictions)", i+1, len(a.contradiction.contradictions))
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: contradictionHint,
-					}},
-				})
-			}
-			// Scope creep detector: scan assistant text for language indicating
-			// unsolicited expansion beyond the user's request ("while I'm at it",
-			// "I've gone ahead and also fixed...", etc.). If threshold is exceeded,
-			// inject guidance to stay within scope.
-			if scopeHint := a.maybeWarnScopeCreep(assistantText); scopeHint != "" {
-				debug.Log("agent", "Iteration %d: scope creep detector detected unsolicited expansion", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: scopeHint,
-					}},
-				})
-			}
-			// Premature abstraction detector: scan assistant text for language
-			// indicating over-engineering within the task scope (factory patterns,
-			// interface hierarchies with single implementations, config systems).
-			if abstrHint := a.maybeWarnPrematureAbstraction(assistantText); abstrHint != "" {
-				debug.Log("agent", "Iteration %d: premature abstraction detector detected over-engineering", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: abstrHint,
-					}},
-				})
-			}
-			// Capability boundary detector: tracks repeated approach pivots
-			// after failures. If the agent has tried 3+ distinct strategies that
-			// all failed, inject guidance to escalate to user or reconsider.
-			if capHint := a.maybeWarnCapabilityBoundary(assistantText); capHint != "" {
-				debug.Log("agent", "Iteration %d: capability boundary detector detected stubborn persistence", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: capHint,
-					}},
-				})
-			}
-			// Plan abandonment detector: tracks multi-step plans declared by
-			// the agent across iterations. If a completion claim arrives after
-			// 3+ plan steps were declared AND execution evidence is missing
-			// (#490: a declared edit/run step category with zero matching
-			// FilesEdited/CommandsRun evidence), inject guidance.
-			if planHint := a.maybeWarnPlanAbandon(assistantText, runStats); planHint != "" {
-				debug.Log("agent", "Iteration %d: plan abandonment detector triggered (declared %d steps)", i+1, len(a.planAbandon.declaredSteps))
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: planHint,
-					}},
-				})
-			}
-			// Reproducer lifecycle tracker: observes reproduce->edit->rerun
-			// lifecycle. If the agent edits after running a reproducer but
-			// never re-runs it, inject guidance to verify the fix.
-			reproToolNames, reproToolInputs := extractToolNamesAndInputs(toolCalls)
-			// #1488: the text path's gate must match the tool path's
-			// semantics - reproducer intent counts only when a command-
-			// executing tool ran. Passing "any tool call present" let a
-			// read-only iteration that merely said "reproduce" forge the
-			// REPRO state and later draw edit-without-rerun warnings.
-			reproRan := false
-			for _, tn := range reproToolNames {
-				if reproducerRunToolNames[tn] {
-					reproRan = true
-					break
-				}
-			}
-			a.reproducerLifecycle.observeText(i+1, assistantText, reproRan)
-			a.reproducerLifecycle.observeToolCalls(i+1, reproToolNames, reproToolInputs)
-			if rlHint := a.reproducerLifecycle.checkIncomplete(i + 1); rlHint != "" {
-				debug.Log("agent", "Iteration %d: reproducer lifecycle detector triggered", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: rlHint,
-					}},
-				})
-			}
-			// Tool-target mismatch detector: compares the agent's stated intent
-			// ("I'll read X") against the actual tool call target. When they
-			// diverge, inject guidance to verify the correct target.
-			if ttHint := a.maybeWarnToolTargetMismatch(assistantText, toolCalls); ttHint != "" {
-				debug.Log("agent", "Iteration %d: tool-target mismatch detector triggered", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: ttHint,
-					}},
-				})
-			}
-			// Outcome misattribution detector: checks whether the agent
-			// claims success ("done", "fixed", "works") in its narrative
-			// despite a failure indicator in the preceding tool result.
-			if omHint := a.outcomeMisattrib.checkMisattribution(assistantText, i+1); omHint != "" {
-				debug.Log("agent", "Iteration %d: outcome misattribution detector triggered", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: omHint,
-					}},
-				})
-			}
-			// Reasoning-action alignment verifier: checks whether the cognitive
-			// category of the agent's stated reasoning matches the cognitive
-			// category of its actual tool calls. Metacognition-driven LLM
-			// frameworks (SAGE Journals 2025) show this alignment is a core
-			// predictor of agent success.
-			if raHint := a.maybeWarnReasonAction(assistantText, toolCalls); raHint != "" {
-				debug.Log("agent", "Iteration %d: reasoning-action alignment verifier triggered", i+1)
-				a.injectGuidance(raHint)
-			}
-			// Mindless action detector: tracks consecutive tool-call steps
-			// with minimal reasoning text. When 4+ consecutive mindless steps
-			// occur, inject guidance to pause and reflect before continuing.
-			if a.mindlessAction.recordStep(len(assistantText), len(toolCalls) > 0) {
-				debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
-				a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
-			}
-			// Trajectory health synthesizer (metacognitive layer): record
-			// per-iteration tool activity stats for composite health scoring.
-			if a.trajectoryHealth != nil {
-				eCnt, rCnt := countToolTypes(toolCalls)
-				assCnt := 0 // assumption tracking removed
-				a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
-			}
-			// Trajectory health warning: when composite score exceeds threshold,
-			// inject holistic guidance about accumulating risk.
-			if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
-				debug.Log("agent", "Iteration %d: trajectory health synthesizer detected composite degradation", i+1)
-				a.injectGuidance(healthHint)
-			}
-			// Token waste budget warning (AgentDiet arXiv:2509.23586):
-			// when aggregate waste ratio exceeds 40%, inject guidance.
-			if wasteHint := a.maybeWarnTokenWaste(); wasteHint != "" {
-				debug.Log("agent", "Iteration %d: token waste budget exceeded 40%% threshold", i+1)
-				a.injectGuidance(wasteHint)
-			}
-			// Foresight calibration (WorldEvolver arXiv:2606.30639): record
-			// the agent's predictions about upcoming tool outcomes BEFORE
-			// execution. After execution, checkCalibration compares them
-			// against actual results to detect prediction-observation gaps.
-			a.foresightCalib.recordPrediction(assistantText, toolCalls, i+1)
-			// Context-length goal drift: check if recent tool targets have
-			// drifted from the original user request keywords (arXiv:2505.02709).
-			if gdHint := a.goalDriftCtx.checkDrift(i + 1); gdHint != "" {
-				debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
-				a.injectGuidance(gdHint)
-			}
-			if a.injectPendingInterruptions() {
-				continue
-			}
-			// Autopilot strategist: when in autopilot mode with a confirmed
-			// goal, call an independent LLM to analyze the full conversation
-			// context and decide what the agent should do next. This replaces
-			// the old deterministic text-pattern-matching autopilot logic.
-			//
-			// The strategist is ONLY called when the LLM stops calling tools
-			// (len(toolCalls)==0), i.e., at natural decision points. Between
-			// strategist calls there can be many tool-execution iterations
-			// (3-10 typically), so the effective work per budget unit is much
-			// higher than the raw count suggests.
-			//
-			// Budget: 100 calls per Run. With ~5 tool iterations between each
-			// strategist call, this covers ~500 tool operations — enough for
-			// large-scale implementation tasks. For very large projects, the user
-			// sends another message ("continue") to reset the budget.
-			if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
-				a.strategistNoProgressCount++
-				a.autopilotStrategistCount++
-				// Deadlock detection: if the agent has made NO tool calls for
-				// several consecutive strategist rounds, the agent believes it's
-				// done but the strategist keeps asking for verification. This is
-				// a deadlock that wastes the entire 100-call budget. Force-terminate.
-				if a.strategistNoProgressCount >= maxConsecutiveStrategistNoProgress {
-					debug.Log("agent", "Iteration %d: autopilot force-terminate after %d consecutive no-progress rounds", i+1, a.strategistNoProgressCount)
-					preview := textBuf
-					if len(preview) > 200 {
-						preview = preview[:200]
-					}
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
-					a.ClearAutopilotGoal()
-					return nil
-				}
-				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d, no-progress=%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls, a.strategistNoProgressCount, maxConsecutiveStrategistNoProgress)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d/%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
-				result, sErr := a.runAutopilotStrategist(ctx, textBuf)
-				if sErr != nil {
-					debug.Log("agent", "autopilot strategist failed: %v", sErr)
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist unavailable (%v) — autopilot stopping]", sErr)})
-					// Fall through to normal return — can't drive autonomously.
-				} else if result.Complete {
-					debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
-					summary := result.Guidance
-					// Strip the completion marker (possibly markdown-wrapped); the
-					// rest is the strategist's summary of what was accomplished.
-					if idx := strings.Index(strings.ToUpper(summary), strategistCompleteMarker); idx >= 0 {
-						after := summary[idx+len(strategistCompleteMarker):]
-						summary = strings.TrimSpace(after)
-					}
-					msg := "[Strategist: goal achieved — autopilot complete.]"
-					if summary != "" {
-						msg = fmt.Sprintf("[Strategist: goal achieved — autopilot complete. %s]", summary)
-					}
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
-					a.ClearAutopilotGoal()
-					return nil
-				} else if result.Guidance != "" {
-					debug.Log("agent", "Iteration %d: strategist injecting guidance (%d chars)", i+1, len(result.Guidance))
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: result.Guidance,
-						}},
-					})
-					continue
-				} else {
-					// Strategist returned empty guidance (not complete, not error).
-					// This is an anomaly signal (content-filtered or malformed API
-					// response), NOT a "goal achieved" signal. The old behavior
-					// (#1036) cleared the goal and returned nil on a single empty
-					// response - silently ending the run as "complete" while
-					// skipping every completion gate below. Instead, inject a
-					// default continuation guidance and keep going; the existing
-					// strategistNoProgressCount cap above force-terminates if
-					// this recurs, so no infinite-loop risk.
-					debug.Log("agent", "Iteration %d: strategist returned empty guidance; continuing autonomously", i+1)
-					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Strategist returned no guidance - continuing autonomously]"})
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: "Continue the task autonomously: check remaining work, run build/tests to verify, then finish and summarize what was completed.",
-						}},
-					})
-					continue
-				}
-			} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {
-				// Strategist call budget exhausted. Inject a one-time guidance
-				// message so the agent can wrap up or continue with its own
-				// judgment. Without the flag this would re-inject on every
-				// subsequent no-tool-call iteration, creating an infinite loop.
-				a.strategistBudgetAnnounced = true
-				debug.Log("agent", "Iteration %d: strategist budget exhausted (%d/%d), injecting one-time continuation guidance", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget at limit (%d/%d) — continuing autonomously]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: "Strategist budget exhausted. Continue remaining tasks autonomously — build, test, verify, then summarize.",
-					}},
-				})
-				continue
-			}
-			// Check for incomplete todos before finishing. If the agent
-			// created todos but didn't complete them, inject a reminder
-			// instead of silently finishing. Max 2 reminders to avoid loops.
-			if todoCheckCount < 2 {
-				if reminder := a.checkIncompleteTodos(); reminder != "" {
-					todoCheckCount++
-					debug.Log("agent", "Iteration %d: incomplete todos detected, injecting reminder (%d/2)", i+1, todoCheckCount)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: reminder,
-						}},
-					})
-					continue
-				}
-				// Plan drift gate: before returning, check if plan items (from
-				// exit_plan_mode) were actually addressed by the agent's work.
-				// Zero-LLM-cost heuristic inspired by Kiro/GitHub Spec Kit.
-				if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
-					debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", i+1)
-					// #1452-C: plan_drift fires must arm the recurrence
-					// detector too - markWarning's doc says 'scope_drift,
-					// plan_drift, or similar' but only scope_drift wired it,
-					// so plan-dimension recurrence never activated.
-					a.driftRecurrenceMarkWarn(runStats.Iterations)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: driftMsg,
-						}},
-					})
-					continue
-				}
-				// Request fulfillment gate: before returning, verify that the
-				// agent's actual work matches the user's request. This catches
-				// silent partial completion when no todo list was created.
-				// Zero-LLM-cost heuristic inspired by Claude Code/Cursor/Aider
-				// completion verification patterns.
-				if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
-					debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: fulfillmentMsg,
-						}},
-					})
-					continue
-				}
-				// Unverified success claim detection: before returning, check if
-				// the agent's response claims verification results ("tests pass",
-				// "build succeeds") without having actually run verification
-				// commands. Zero-LLM-cost heuristic.
-				// Unverified success claim detection: gated behind claimsSupervision
-				// (default off, see field comment) - lexical claim-vs-command cross-
-				// reference over intermediate states is noise for current models.
-				if a.claimsSupervision {
-					if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
-						debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
-						a.contextManager.Add(provider.Message{
-							Role: "user",
-							Content: []provider.ContentBlock{{
-								Type: "text",
-								Text: claimMsg,
-							}},
-						})
-						continue
-					}
-				}
-				// Companion file guard: before returning, check if the agent
-				// edited source files that have existing test companions but
-				// did not update those tests. Zero-LLM-cost heuristic.
-				if companionMsg := a.companionGuard.checkCompanionFiles(runStats, a.WorkingDir()); companionMsg != "" {
-					debug.Log("agent", "Iteration %d: companion file guard detected unedited test companions", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: companionMsg,
-						}},
-					})
-					continue
-				}
-				// Specification gaming detection: before returning, check if
-				// the agent is gaming verification (editing tests instead of
-				// source, adding skip markers, tampering with CI config) rather
-				// than fixing the actual problem. Zero-LLM-cost heuristic.
-				if specGamingMsg := a.checkSpecGaming(runStats, userPromptForStats); specGamingMsg != "" {
-					debug.Log("agent", "Iteration %d: specification gaming detected, injecting warning", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: specGamingMsg,
-						}},
-					})
-					continue
-				}
-			}
-			// Synchronous verification with auto-repair.
-			// Before returning, verify the build if code was changed. If it
-			// fails and retry budget remains, inject errors and continue the
-			// loop — this is the "fix-on-fail" pattern used by Claude Code,
-			// Aider, and Cursor. It eliminates the manual round-trip where
-			// the user must say "fix the build" after every failed change.
-			syncPassed := false
-			if codeChangedInRun(runStats) && a.currentMode() != permission.PlanMode && ctx.Err() == nil {
-				// #953: syncVerifyAndGate now reports whether verification PASSED,
-				// not merely whether it ran. A pass on a retry round (build failed,
-				// agent repaired, round 2 passed) also skips the redundant async
-				// verify — the old `syncVerifyRetries == 0` condition only skipped
-				// first-attempt passes and re-ran the full build/test in the defer.
-				if shouldContinue, passed := a.syncVerifyAndGate(ctx, runStats, syncVerifyRetries); shouldContinue {
-					syncVerifyRetries++
-					debug.Log("agent", "Iteration %d: sync verify failed, auto-repairing (retry %d/%d)", i+1, syncVerifyRetries, maxSyncVerifyRetries)
-					continue
-				} else if passed {
-					syncPassed = true
-				}
-			}
-			if syncPassed {
-				debug.Log("agent", "sync verify passed, skipping async verify")
-			} else {
-				// Capture stats for async verification before returning.
-				asyncVerifyStats = runStats
-			}
-			// Complexity quality gate: after build verification passes (or no
-			// build was needed), check edited Go files for complexity hotspots.
-			// This is an advisory warning — it doesn't block completion but
-			// alerts the agent to refactor-worthy functions before finishing.
-			if complexityMsg := a.checkComplexityGate(runStats); complexityMsg != "" {
-				debug.Log("agent", "Iteration %d: complexity gate detected quality issues, injecting advisory", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: complexityMsg,
-					}},
-				})
-				continue
-			}
-			// Cross-file impact analysis gate: detect removed/renamed exported symbols
-			// that are referenced by sibling files the agent did NOT edit. This catches
-			// breakage from function/type/method removal before the agent declares done.
-			if impactMsg := a.checkCrossFileImpact(runStats); impactMsg != "" {
-				debug.Log("agent", "Iteration %d: cross-file impact analysis detected potential breakage", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: impactMsg,
-					}},
-				})
-				continue
-			}
-			// Change reconciliation gate: after all other gates pass, check
-			// whether shell commands caused unexpected source file changes.
-			// This catches side effects from tools like go mod tidy, code
-			// generators, or format-on-save hooks.
-			if reconcileMsg := a.checkChangeReconcile(runStats); reconcileMsg != "" {
-				debug.Log("agent", "Iteration %d: change reconciliation detected unexpected files", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: reconcileMsg,
-					}},
-				})
-				continue
-			}
-			// Adversarial evaluator gate (generator-evaluator separation):
-			// independent fresh-context LLM review of the run's diff against
-			// the original task. Complements the deterministic gates above
-			// with semantic review; FAIL findings loop the agent back to
-			// repair (bounded rounds in the gate itself).
-			if evalMsg := a.checkAdversarialReviewGate(ctx, runStats, userPromptForStats); evalMsg != "" {
-				debug.Log("agent", "Iteration %d: adversarial evaluator returned findings", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: evalMsg,
-					}},
-				})
-				continue
-			}
-			// Diff summary self-review gate: inject a compact git diff --stat
-			// summary so the agent can holistically review ALL its changes before
-			// returning to the user. Fires once per run, only for multi-file edits.
-			if diffSummaryMsg := a.checkDiffSummaryGate(runStats); diffSummaryMsg != "" {
-				debug.Log("agent", "Iteration %d: diff summary gate injected self-review", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: diffSummaryMsg,
-					}},
-				})
-				continue
-			}
-			// Post-completion commit hint: after all gates pass, remind the agent
-			// to stage and commit its work if it hasn't already. This is the last
-			// gate and is advisory (non-blocking) -- it does not force a continue.
-			if commitHintMsg := a.checkCommitHintGate(runStats); commitHintMsg != "" {
-				debug.Log("agent", "Iteration %d: commit hint gate injected reminder", i+1)
-				a.contextManager.Add(provider.Message{
-					Role: "user",
-					Content: []provider.ContentBlock{{
-						Type: "text",
-						Text: commitHintMsg,
-					}},
-				})
-				continue
-			}
-			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
@@ -4833,6 +4145,734 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return err
 	}
 	return nil
+}
+
+// handleNoToolCallResponse handles a streamed assistant response that
+// contained no structured tool calls: the terminal path of a stream
+// iteration. Truncation recovery, inline tool-call nudging, the entire
+// text-path advisory fleet, the autopilot strategist, and every
+// completion gate run here before the run finally ends.
+//
+// Extracted verbatim from RunStreamWithContent (r126 refactor). Control
+// flow maps 1:1: every `continue` of the original inline block returns
+// true, every `return nil` returns false. Loop-local counters are passed
+// by pointer (same style as injectPreSendAdvisories' progressCheckInjected)
+// and asyncVerifyStats is written through a pointer so the deferred
+// async-verify closure keeps observing the same variable.
+func (a *Agent) handleNoToolCallResponse(
+	ctx context.Context,
+	onEvent func(provider.StreamEvent),
+	resp *provider.ChatResponse,
+	textBuf string,
+	toolCalls []provider.ToolCallDelta,
+	truncated bool,
+	policyBlocked bool,
+	i int,
+	runStats *RunStats,
+	userPromptForStats string,
+	truncationContinues *int,
+	inlineToolCallNudges *int,
+	todoCheckCount *int,
+	syncVerifyRetries *int,
+	asyncVerifyStats **RunStats,
+) (continueLoop bool) {
+	// Truncated response recovery: the LLM hit the output token limit
+	// mid-response. Save the partial output and inject a continuation
+	// prompt so the model picks up where it left off. This prevents
+	// silent loss of partial content (the old behavior sent a hard error
+	// and discarded everything already streamed).
+	if truncated && !policyBlocked && *truncationContinues < 3 {
+		*truncationContinues++
+		debug.Log("agent", "Iteration %d: response truncated by output limit, auto-continuing (attempt %d/3)", i+1, *truncationContinues)
+		a.contextManager.Add(resp.Message)
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventSystem,
+			Text: "[Response was truncated by output length limit — continuing...] ",
+		})
+		// #677: continuation protocol, NOT detector guidance — a budget-
+		// suppressed continuation prompt would strand the partial output, so
+		// it stays a direct add (own cap: truncationContinues < 3).
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: "Your previous response was cut off by the output token limit. Continue from where you left off — do not repeat what you already wrote.",
+			}},
+		})
+		return true
+	}
+	if truncated && policyBlocked {
+		// Truncated by a provider policy filter (SAFETY/RECITATION/etc.),
+		// not by the output token limit. Auto-continuation would resend
+		// the full context and hit the same filter again. Keep the partial
+		// output in history and stop (#266).
+		debug.Log("agent", "Iteration %d: response blocked by provider policy, skipping auto-continuation", i+1)
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventSystem,
+			Text: "[Response blocked by provider safety policy — partial output kept, not retrying.] ",
+		})
+	}
+	// Detect inline tool calls in text/reasoning (common with lower-reasoning
+	// models that write tool calls in prose instead of structured tool_use blocks).
+	// Nudge the model to use proper tool call format and retry.
+	assistantText := textBuf
+	a.constraintViolation.recordReasoning(assistantText, i+1)
+	a.reasoningRedund.recordReasoning(assistantText, false)
+	a.recordGiveupText(assistantText)
+	// History error accumulation: check if assistant text addresses
+	// pending issues from a prior multi-issue tool result.
+	// Silent degradation propagation: check if the agent acknowledged
+	// a prior degraded tool result in its reasoning text. If not, it is
+	// silently building on corrupted state (Galileo error propagation chain).
+	// (#1823 case 1: the over-reflection detector this comment announced was
+	// removed in 387282a6 — pure-text-turn waste is a recorded trade-off,
+	// partially compensated by errorStrategyLoop's rerun-same-command check.)
+	if hasInlineToolCall(assistantText) && *inlineToolCallNudges < 2 {
+		*inlineToolCallNudges++
+		debug.Log("agent", "Iteration %d: inline tool call detected in text, nudging model (attempt %d/2)", i+1, *inlineToolCallNudges)
+		a.contextManager.Add(resp.Message)
+		// #677: format-correction protocol, NOT detector guidance — if the
+		// budget suppressed it, a model that only writes inline tool calls
+		// could never emit a structured tool_use block again this turn
+		// (own cap: 2 nudges).
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: "Use structured tool_use format, not inline text syntax for tool calls.",
+			}},
+		})
+		return true
+	}
+	// Tool output integration monitoring: check if evidence tokens
+	// from the previous tool call appear in this assistant text.
+	// (TRACE-inspired cross-step evidence tracking).
+	a.contextManager.Add(resp.Message)
+	// Assumption tracker: scan assistant text for implicit unverified
+	// assumption language ("I assume", "probably", etc.). If threshold
+	// is exceeded, inject guidance to verify before proceeding.
+	// Diagnostic fixation detector: detect when the agent restates the
+	// same diagnostic hypothesis (root-cause claim about a specific
+	// entity) across multiple turns without evolving it. This is belief
+	// perseverance -- the agent keeps blaming the same file/function
+	// even as evidence accumulates.
+	// (#1823 case 1: the satisficing detector this comment announced was
+	// removed in 387282a6.)
+	// Metacognitive monitor: track cognitive state stability and detect
+	// self-contradiction, plan changes, and interpretive drift.
+	// Records each turn's tools, action summary, and interpretation.
+	// Fires guidance when consistency drops below threshold (Li et al. 2025, Peters 2026).
+	// Sycophancy detector: detect when the agent agrees with a
+	// user-stated premise without independent verification.
+	// (#1823 case 2: the premature-surrender detector this comment announced
+	// was removed in 387282a6 (noise trade-off); the narrow give-up+revert
+	// re-add lives in giveupRevertCheck — see premature_success.go.)
+	// Agentic abstention detection: track whether the assistant text
+	// acknowledges negative environment signals, and inject guidance
+	// if unacknowledged negatives accumulate. arXiv:2606.28733.
+	// Phantom output inheritance detection: check if subsequent tool calls
+	// are referencing identifiers from previously failed tool calls.
+	// Advance delayed-observation turn counter before checks.
+	// Delayed observation contradiction: positive claims that contradict
+	// an aged negative observation from a successful tool call.
+	// False premise detection: scan assistant text for success claims
+	// that contradict recent tool error results (world-model drift).
+	if fpMsg := a.falsePremise.checkFalsePremise(assistantText); fpMsg != "" {
+		debug.Log("agent", "Iteration %d: false premise detected (ungrounded success claim)", i+1)
+		a.recordUncertainty("false_premise", weightFalsePremise)
+		a.injectGuidance(fpMsg)
+	}
+	// Tool output integration monitor: check whether the assistant text
+	// references key evidence from the previous information-tool result
+	// (TRACE cross-step evidence, issue #341).
+	a.integrationCheckAndWarn(assistantText)
+	// Unverified confidence detector: scan for overconfident completion
+	// claims ("this definitely works", "fix is complete") that aren't
+	// backed by actual verification (build/test/lint). EpiCaR-inspired
+	// calibration gap detection.
+	// Evidence-induced overconfidence: detect definitive claims or code
+	// edits derived from evidence tools (web_search, grep, read) without
+	// cross-verification. Tool-type calibration asymmetry (arXiv:2601.15778).
+	// Scope overgeneralization: detect universal scope claims
+	// ("no other", "all references", "only these files") derived from
+	// narrow evidence searches. Epistemic miscalibration (arXiv:2605.23414).
+	// Green build illusion: detect when agent declares completion after
+	// a build-only command without running tests. arXiv 2026 studies show
+	// this is a primary cause of AI-generated PR rejection.
+	// Premature success claim: detect edits without verification
+	// followed by success declaration text.
+	// Premature success claim: gated behind claimsSupervision (see field
+	// comment) - lexical heuristics over intermediate states are noise for
+	// models that already verify in-loop per the system prompt mandate.
+	if a.claimsSupervision {
+		if psHint := a.prematureSuccess.checkSuccessClaim(assistantText); psHint != "" {
+			debug.Log("agent", "Iteration %d: premature success claim detected (edits without verification)", i+1)
+			a.injectGuidance(psHint)
+			// Feed the compounded-uncertainty accumulator: an unverified
+			// success claim is a 1.5-unit epistemic risk event (#484 — this
+			// channel was declared in the accumulator's weights but never
+			// wired, so the documented 4-channel design only ever saw 2).
+			a.recordUncertainty("unverified_success", weightUnverifiedSucc)
+		}
+	}
+	// Verification outcome disconnect: detect verification failures
+	// that the agent advances past without addressing. Behavioral
+	// overconfidence gap (arXiv:2508.06225).
+	// Phantom verification: detect category-specific verification claims
+	// ("tests pass", "build compiles") without a matching verification
+	// command in the trajectory. Process supervision gap (AgentPro, EMNLP 2025).
+	// Phantom verification: gated behind claimsSupervision (default off,
+	// see field comment) - same success-claim lexical family.
+	if a.claimsSupervision {
+		if pvHint := a.maybeWarnPhantomVerify(assistantText); pvHint != "" {
+			debug.Log("agent", "Iteration %d: phantom verification detector found unverified category claims", i+1)
+			a.injectGuidance(pvHint)
+		}
+	}
+	// Narrative-evidence decoupling: detect when the agent's text claims
+	// directly contradict the actual content of recent tool outputs
+	// (arXiv:2605.01604 - Explanation-Decision Decoupling).
+	a.successDeclare.recordAssistantText(assistantText, i)
+	a.criteriaDrift.recordAssistantText(assistantText, i)
+	a.subgoalTrack.recordAssistantText(assistantText, i)
+	// Belief defense escalation: detect when an agent re-states an earlier
+	// belief after a contradicting tool output (arXiv:2606.22936).
+	// Bridging rationalization: detect when an agent explains away a
+	// contradiction by attributing it to external/transient causes
+	// instead of re-verifying (RECAP 2026, stale-context benchmark).
+	// Verification scope decay: detect progressive narrowing of
+	// test/build scope across the run.
+	// Symbol grounding verifier: detect code symbols mentioned in
+	// assistant text that were never found via tool calls.
+	// Selective evidence detector: detect confirmation bias pattern where
+	// the agent emphasizes positive evidence while dismissing negatives.
+	// Temporal blindness: detect when agent claims a verification
+	// result is still valid after mutations invalidated it.
+	// Unverified self-diagnosis: detect definitive diagnosis claims
+	// about recent errors without verification (correlated failure).
+	// Deferred work tracker: detect when the agent defers work to
+	// "later" or "next" but never circles back. If stale deferrals
+	// accumulate or the agent declares completion with open items,
+	// inject guidance to address them.
+	// Truncated output completeness fallacy: detect when the agent
+	// makes exhaustiveness claims after receiving a truncated tool
+	// result. The agent may claim "only N files" or "no other
+	// matches" without realizing data was cut off.
+	if truncHint := a.truncClaim.maybeWarnTruncClaim(assistantText, i); truncHint != "" {
+		debug.Log("agent", "Iteration %d: truncated output completeness fallacy detected", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: truncHint,
+			}},
+		})
+	}
+	// Circular reasoning detector: scan assistant text for tautological
+	// or circular justification patterns. When 2+ instances accumulate,
+	// inject guidance to provide concrete evidence instead.
+	if circularHint := a.maybeWarnCircularReasoning(assistantText, i); circularHint != "" {
+		debug.Log("agent", "Iteration %d: circular reasoning detector triggered (%d instances)", i+1, len(a.circularReasoning.instances))
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: circularHint,
+			}},
+		})
+	}
+	// Cross-turn contradiction detector: tracks root-cause/location
+	// claims across iterations. When the agent contradicts its own prior
+	// claim about where the bug/issue is, injects guidance to reconcile.
+	if contradictionHint := a.maybeWarnContradiction(assistantText, i); contradictionHint != "" {
+		debug.Log("agent", "Iteration %d: cross-turn contradiction detector triggered (%d contradictions)", i+1, len(a.contradiction.contradictions))
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: contradictionHint,
+			}},
+		})
+	}
+	// Scope creep detector: scan assistant text for language indicating
+	// unsolicited expansion beyond the user's request ("while I'm at it",
+	// "I've gone ahead and also fixed...", etc.). If threshold is exceeded,
+	// inject guidance to stay within scope.
+	if scopeHint := a.maybeWarnScopeCreep(assistantText); scopeHint != "" {
+		debug.Log("agent", "Iteration %d: scope creep detector detected unsolicited expansion", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: scopeHint,
+			}},
+		})
+	}
+	// Premature abstraction detector: scan assistant text for language
+	// indicating over-engineering within the task scope (factory patterns,
+	// interface hierarchies with single implementations, config systems).
+	if abstrHint := a.maybeWarnPrematureAbstraction(assistantText); abstrHint != "" {
+		debug.Log("agent", "Iteration %d: premature abstraction detector detected over-engineering", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: abstrHint,
+			}},
+		})
+	}
+	// Capability boundary detector: tracks repeated approach pivots
+	// after failures. If the agent has tried 3+ distinct strategies that
+	// all failed, inject guidance to escalate to user or reconsider.
+	if capHint := a.maybeWarnCapabilityBoundary(assistantText); capHint != "" {
+		debug.Log("agent", "Iteration %d: capability boundary detector detected stubborn persistence", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: capHint,
+			}},
+		})
+	}
+	// Plan abandonment detector: tracks multi-step plans declared by
+	// the agent across iterations. If a completion claim arrives after
+	// 3+ plan steps were declared AND execution evidence is missing
+	// (#490: a declared edit/run step category with zero matching
+	// FilesEdited/CommandsRun evidence), inject guidance.
+	if planHint := a.maybeWarnPlanAbandon(assistantText, runStats); planHint != "" {
+		debug.Log("agent", "Iteration %d: plan abandonment detector triggered (declared %d steps)", i+1, len(a.planAbandon.declaredSteps))
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: planHint,
+			}},
+		})
+	}
+	// Reproducer lifecycle tracker: observes reproduce->edit->rerun
+	// lifecycle. If the agent edits after running a reproducer but
+	// never re-runs it, inject guidance to verify the fix.
+	reproToolNames, reproToolInputs := extractToolNamesAndInputs(toolCalls)
+	// #1488: the text path's gate must match the tool path's
+	// semantics - reproducer intent counts only when a command-
+	// executing tool ran. Passing "any tool call present" let a
+	// read-only iteration that merely said "reproduce" forge the
+	// REPRO state and later draw edit-without-rerun warnings.
+	reproRan := false
+	for _, tn := range reproToolNames {
+		if reproducerRunToolNames[tn] {
+			reproRan = true
+			break
+		}
+	}
+	a.reproducerLifecycle.observeText(i+1, assistantText, reproRan)
+	a.reproducerLifecycle.observeToolCalls(i+1, reproToolNames, reproToolInputs)
+	if rlHint := a.reproducerLifecycle.checkIncomplete(i + 1); rlHint != "" {
+		debug.Log("agent", "Iteration %d: reproducer lifecycle detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: rlHint,
+			}},
+		})
+	}
+	// Tool-target mismatch detector: compares the agent's stated intent
+	// ("I'll read X") against the actual tool call target. When they
+	// diverge, inject guidance to verify the correct target.
+	if ttHint := a.maybeWarnToolTargetMismatch(assistantText, toolCalls); ttHint != "" {
+		debug.Log("agent", "Iteration %d: tool-target mismatch detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: ttHint,
+			}},
+		})
+	}
+	// Outcome misattribution detector: checks whether the agent
+	// claims success ("done", "fixed", "works") in its narrative
+	// despite a failure indicator in the preceding tool result.
+	if omHint := a.outcomeMisattrib.checkMisattribution(assistantText, i+1); omHint != "" {
+		debug.Log("agent", "Iteration %d: outcome misattribution detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: omHint,
+			}},
+		})
+	}
+	// Reasoning-action alignment verifier: checks whether the cognitive
+	// category of the agent's stated reasoning matches the cognitive
+	// category of its actual tool calls. Metacognition-driven LLM
+	// frameworks (SAGE Journals 2025) show this alignment is a core
+	// predictor of agent success.
+	if raHint := a.maybeWarnReasonAction(assistantText, toolCalls); raHint != "" {
+		debug.Log("agent", "Iteration %d: reasoning-action alignment verifier triggered", i+1)
+		a.injectGuidance(raHint)
+	}
+	// Mindless action detector: tracks consecutive tool-call steps
+	// with minimal reasoning text. When 4+ consecutive mindless steps
+	// occur, inject guidance to pause and reflect before continuing.
+	if a.mindlessAction.recordStep(len(assistantText), len(toolCalls) > 0) {
+		debug.Log("agent", "Iteration %d: mindless action detector triggered (streak=%d)", i+1, a.mindlessAction.streak)
+		a.injectGuidance(mindlessActionWarning(a.mindlessAction.streak))
+	}
+	// Trajectory health synthesizer (metacognitive layer): record
+	// per-iteration tool activity stats for composite health scoring.
+	if a.trajectoryHealth != nil {
+		eCnt, rCnt := countToolTypes(toolCalls)
+		assCnt := 0 // assumption tracking removed
+		a.trajectoryHealth.recordIteration(eCnt, 0, len(toolCalls), rCnt, assCnt)
+	}
+	// Trajectory health warning: when composite score exceeds threshold,
+	// inject holistic guidance about accumulating risk.
+	if healthHint := a.maybeWarnTrajectoryHealth(); healthHint != "" {
+		debug.Log("agent", "Iteration %d: trajectory health synthesizer detected composite degradation", i+1)
+		a.injectGuidance(healthHint)
+	}
+	// Token waste budget warning (AgentDiet arXiv:2509.23586):
+	// when aggregate waste ratio exceeds 40%, inject guidance.
+	if wasteHint := a.maybeWarnTokenWaste(); wasteHint != "" {
+		debug.Log("agent", "Iteration %d: token waste budget exceeded 40%% threshold", i+1)
+		a.injectGuidance(wasteHint)
+	}
+	// Foresight calibration (WorldEvolver arXiv:2606.30639): record
+	// the agent's predictions about upcoming tool outcomes BEFORE
+	// execution. After execution, checkCalibration compares them
+	// against actual results to detect prediction-observation gaps.
+	a.foresightCalib.recordPrediction(assistantText, toolCalls, i+1)
+	// Context-length goal drift: check if recent tool targets have
+	// drifted from the original user request keywords (arXiv:2505.02709).
+	if gdHint := a.goalDriftCtx.checkDrift(i + 1); gdHint != "" {
+		debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
+		a.injectGuidance(gdHint)
+	}
+	if a.injectPendingInterruptions() {
+		return true
+	}
+	// Autopilot strategist: when in autopilot mode with a confirmed
+	// goal, call an independent LLM to analyze the full conversation
+	// context and decide what the agent should do next. This replaces
+	// the old deterministic text-pattern-matching autopilot logic.
+	//
+	// The strategist is ONLY called when the LLM stops calling tools
+	// (len(toolCalls)==0), i.e., at natural decision points. Between
+	// strategist calls there can be many tool-execution iterations
+	// (3-10 typically), so the effective work per budget unit is much
+	// higher than the raw count suggests.
+	//
+	// Budget: 100 calls per Run. With ~5 tool iterations between each
+	// strategist call, this covers ~500 tool operations — enough for
+	// large-scale implementation tasks. For very large projects, the user
+	// sends another message ("continue") to reset the budget.
+	if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && a.autopilotStrategistCount < maxAutopilotStrategistCalls {
+		a.strategistNoProgressCount++
+		a.autopilotStrategistCount++
+		// Deadlock detection: if the agent has made NO tool calls for
+		// several consecutive strategist rounds, the agent believes it's
+		// done but the strategist keeps asking for verification. This is
+		// a deadlock that wastes the entire 100-call budget. Force-terminate.
+		if a.strategistNoProgressCount >= maxConsecutiveStrategistNoProgress {
+			debug.Log("agent", "Iteration %d: autopilot force-terminate after %d consecutive no-progress rounds", i+1, a.strategistNoProgressCount)
+			preview := textBuf
+			if len(preview) > 200 {
+				preview = preview[:200]
+			}
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
+			a.ClearAutopilotGoal()
+			return false
+		}
+		debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d, no-progress=%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls, a.strategistNoProgressCount, maxConsecutiveStrategistNoProgress)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist #%d/%d: analyzing conversation and deciding next steps...] ", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
+		result, sErr := a.runAutopilotStrategist(ctx, textBuf)
+		if sErr != nil {
+			debug.Log("agent", "autopilot strategist failed: %v", sErr)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist unavailable (%v) — autopilot stopping]", sErr)})
+			// Fall through to normal return — can't drive autonomously.
+		} else if result.Complete {
+			debug.Log("agent", "Iteration %d: strategist declared goal achieved", i+1)
+			summary := result.Guidance
+			// Strip the completion marker (possibly markdown-wrapped); the
+			// rest is the strategist's summary of what was accomplished.
+			if idx := strings.Index(strings.ToUpper(summary), strategistCompleteMarker); idx >= 0 {
+				after := summary[idx+len(strategistCompleteMarker):]
+				summary = strings.TrimSpace(after)
+			}
+			msg := "[Strategist: goal achieved — autopilot complete.]"
+			if summary != "" {
+				msg = fmt.Sprintf("[Strategist: goal achieved — autopilot complete. %s]", summary)
+			}
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
+			a.ClearAutopilotGoal()
+			return false
+		} else if result.Guidance != "" {
+			debug.Log("agent", "Iteration %d: strategist injecting guidance (%d chars)", i+1, len(result.Guidance))
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: result.Guidance,
+				}},
+			})
+			return true
+		} else {
+			// Strategist returned empty guidance (not complete, not error).
+			// This is an anomaly signal (content-filtered or malformed API
+			// response), NOT a "goal achieved" signal. The old behavior
+			// (#1036) cleared the goal and returned nil on a single empty
+			// response - silently ending the run as "complete" while
+			// skipping every completion gate below. Instead, inject a
+			// default continuation guidance and keep going; the existing
+			// strategistNoProgressCount cap above force-terminates if
+			// this recurs, so no infinite-loop risk.
+			debug.Log("agent", "Iteration %d: strategist returned empty guidance; continuing autonomously", i+1)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: "[Strategist returned no guidance - continuing autonomously]"})
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: "Continue the task autonomously: check remaining work, run build/tests to verify, then finish and summarize what was completed.",
+				}},
+			})
+			return true
+		}
+	} else if a.currentMode() == permission.AutopilotMode && a.hasAutopilotGoal() && !a.strategistBudgetAnnounced {
+		// Strategist call budget exhausted. Inject a one-time guidance
+		// message so the agent can wrap up or continue with its own
+		// judgment. Without the flag this would re-inject on every
+		// subsequent no-tool-call iteration, creating an infinite loop.
+		a.strategistBudgetAnnounced = true
+		debug.Log("agent", "Iteration %d: strategist budget exhausted (%d/%d), injecting one-time continuation guidance", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Strategist budget at limit (%d/%d) — continuing autonomously]", a.autopilotStrategistCount, maxAutopilotStrategistCalls)})
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: "Strategist budget exhausted. Continue remaining tasks autonomously — build, test, verify, then summarize.",
+			}},
+		})
+		return true
+	}
+	// Check for incomplete todos before finishing. If the agent
+	// created todos but didn't complete them, inject a reminder
+	// instead of silently finishing. Max 2 reminders to avoid loops.
+	if *todoCheckCount < 2 {
+		if reminder := a.checkIncompleteTodos(); reminder != "" {
+			*todoCheckCount++
+			debug.Log("agent", "Iteration %d: incomplete todos detected, injecting reminder (%d/2)", i+1, *todoCheckCount)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: reminder,
+				}},
+			})
+			return true
+		}
+		// Plan drift gate: before returning, check if plan items (from
+		// exit_plan_mode) were actually addressed by the agent's work.
+		// Zero-LLM-cost heuristic inspired by Kiro/GitHub Spec Kit.
+		if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
+			debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", i+1)
+			// #1452-C: plan_drift fires must arm the recurrence
+			// detector too - markWarning's doc says 'scope_drift,
+			// plan_drift, or similar' but only scope_drift wired it,
+			// so plan-dimension recurrence never activated.
+			a.driftRecurrenceMarkWarn(runStats.Iterations)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: driftMsg,
+				}},
+			})
+			return true
+		}
+		// Request fulfillment gate: before returning, verify that the
+		// agent's actual work matches the user's request. This catches
+		// silent partial completion when no todo list was created.
+		// Zero-LLM-cost heuristic inspired by Claude Code/Cursor/Aider
+		// completion verification patterns.
+		if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
+			debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: fulfillmentMsg,
+				}},
+			})
+			return true
+		}
+		// Unverified success claim detection: before returning, check if
+		// the agent's response claims verification results ("tests pass",
+		// "build succeeds") without having actually run verification
+		// commands. Zero-LLM-cost heuristic.
+		// Unverified success claim detection: gated behind claimsSupervision
+		// (default off, see field comment) - lexical claim-vs-command cross-
+		// reference over intermediate states is noise for current models.
+		if a.claimsSupervision {
+			if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
+				debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: claimMsg,
+					}},
+				})
+				return true
+			}
+		}
+		// Companion file guard: before returning, check if the agent
+		// edited source files that have existing test companions but
+		// did not update those tests. Zero-LLM-cost heuristic.
+		if companionMsg := a.companionGuard.checkCompanionFiles(runStats, a.WorkingDir()); companionMsg != "" {
+			debug.Log("agent", "Iteration %d: companion file guard detected unedited test companions", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: companionMsg,
+				}},
+			})
+			return true
+		}
+		// Specification gaming detection: before returning, check if
+		// the agent is gaming verification (editing tests instead of
+		// source, adding skip markers, tampering with CI config) rather
+		// than fixing the actual problem. Zero-LLM-cost heuristic.
+		if specGamingMsg := a.checkSpecGaming(runStats, userPromptForStats); specGamingMsg != "" {
+			debug.Log("agent", "Iteration %d: specification gaming detected, injecting warning", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: specGamingMsg,
+				}},
+			})
+			return true
+		}
+	}
+	// Synchronous verification with auto-repair.
+	// Before returning, verify the build if code was changed. If it
+	// fails and retry budget remains, inject errors and continue the
+	// loop — this is the "fix-on-fail" pattern used by Claude Code,
+	// Aider, and Cursor. It eliminates the manual round-trip where
+	// the user must say "fix the build" after every failed change.
+	syncPassed := false
+	if codeChangedInRun(runStats) && a.currentMode() != permission.PlanMode && ctx.Err() == nil {
+		// #953: syncVerifyAndGate now reports whether verification PASSED,
+		// not merely whether it ran. A pass on a retry round (build failed,
+		// agent repaired, round 2 passed) also skips the redundant async
+		// verify — the old `syncVerifyRetries == 0` condition only skipped
+		// first-attempt passes and re-ran the full build/test in the defer.
+		if shouldContinue, passed := a.syncVerifyAndGate(ctx, runStats, *syncVerifyRetries); shouldContinue {
+			*syncVerifyRetries++
+			debug.Log("agent", "Iteration %d: sync verify failed, auto-repairing (retry %d/%d)", i+1, *syncVerifyRetries, maxSyncVerifyRetries)
+			return true
+		} else if passed {
+			syncPassed = true
+		}
+	}
+	if syncPassed {
+		debug.Log("agent", "sync verify passed, skipping async verify")
+	} else {
+		// Capture stats for async verification before returning.
+		*asyncVerifyStats = runStats
+	}
+	// Complexity quality gate: after build verification passes (or no
+	// build was needed), check edited Go files for complexity hotspots.
+	// This is an advisory warning — it doesn't block completion but
+	// alerts the agent to refactor-worthy functions before finishing.
+	if complexityMsg := a.checkComplexityGate(runStats); complexityMsg != "" {
+		debug.Log("agent", "Iteration %d: complexity gate detected quality issues, injecting advisory", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: complexityMsg,
+			}},
+		})
+		return true
+	}
+	// Cross-file impact analysis gate: detect removed/renamed exported symbols
+	// that are referenced by sibling files the agent did NOT edit. This catches
+	// breakage from function/type/method removal before the agent declares done.
+	if impactMsg := a.checkCrossFileImpact(runStats); impactMsg != "" {
+		debug.Log("agent", "Iteration %d: cross-file impact analysis detected potential breakage", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: impactMsg,
+			}},
+		})
+		return true
+	}
+	// Change reconciliation gate: after all other gates pass, check
+	// whether shell commands caused unexpected source file changes.
+	// This catches side effects from tools like go mod tidy, code
+	// generators, or format-on-save hooks.
+	if reconcileMsg := a.checkChangeReconcile(runStats); reconcileMsg != "" {
+		debug.Log("agent", "Iteration %d: change reconciliation detected unexpected files", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: reconcileMsg,
+			}},
+		})
+		return true
+	}
+	// Adversarial evaluator gate (generator-evaluator separation):
+	// independent fresh-context LLM review of the run's diff against
+	// the original task. Complements the deterministic gates above
+	// with semantic review; FAIL findings loop the agent back to
+	// repair (bounded rounds in the gate itself).
+	if evalMsg := a.checkAdversarialReviewGate(ctx, runStats, userPromptForStats); evalMsg != "" {
+		debug.Log("agent", "Iteration %d: adversarial evaluator returned findings", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: evalMsg,
+			}},
+		})
+		return true
+	}
+	// Diff summary self-review gate: inject a compact git diff --stat
+	// summary so the agent can holistically review ALL its changes before
+	// returning to the user. Fires once per run, only for multi-file edits.
+	if diffSummaryMsg := a.checkDiffSummaryGate(runStats); diffSummaryMsg != "" {
+		debug.Log("agent", "Iteration %d: diff summary gate injected self-review", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: diffSummaryMsg,
+			}},
+		})
+		return true
+	}
+	// Post-completion commit hint: after all gates pass, remind the agent
+	// to stage and commit its work if it hasn't already. This is the last
+	// gate and is advisory (non-blocking) -- it does not force a continue.
+	if commitHintMsg := a.checkCommitHintGate(runStats); commitHintMsg != "" {
+		debug.Log("agent", "Iteration %d: commit hint gate injected reminder", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: commitHintMsg,
+			}},
+		})
+		return true
+	}
+	debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
+	return false
 }
 
 // --- Interruption injection ---
