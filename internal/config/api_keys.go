@@ -383,13 +383,21 @@ func MigratePlaintextAPIKeys(path string) ([]APIKeyFinding, error) {
 	return migratePlaintextAPIKeysTo(path, "", "")
 }
 
+// instanceEnvVarPrefix namespaces instance-scope migrated secrets. It is
+// ggcode-internal: no user shell exports names with this prefix, and the
+// only producer is MigrateInstancePlaintextAPIKeys.
+const instanceEnvVarPrefix = "GGCODE_I_"
+
 // MigrateInstancePlaintextAPIKeys is the instance-level version of
 // MigratePlaintextAPIKeys. It writes keys to the instance directory's
 // keys.env and uses instance-prefixed env var names (GGCODE_I_{hash}_*)
-// to avoid collisions with global keys.
+// to avoid collisions with global keys. Unlike the global migration it
+// does NOT push values into the process env (#2293: instance keys stay
+// out of os.Environ, and a Setenv'd copy would permanently shadow
+// fresher keys.env values in LoadInstanceKeysEnv).
 // instanceHash is the short SHA256 hash of the workspace path.
 func MigrateInstancePlaintextAPIKeys(path, instanceHash string) ([]APIKeyFinding, error) {
-	prefix := "GGCODE_I_" + instanceHash + "_"
+	prefix := instanceEnvVarPrefix + instanceHash + "_"
 	return migratePlaintextAPIKeysTo(path, prefix, filepath.Join(filepath.Dir(path), "keys.env"))
 }
 
@@ -447,6 +455,22 @@ func migratePlaintextAPIKeysTo(path, envPrefix, keysPath string) ([]APIKeyFindin
 	}
 
 	return findings, nil
+}
+
+// setMigrationEnv publishes a freshly migrated secret to the process env for
+// global-scope names only. Instance-scope names (instanceEnvVarPrefix) must
+// not join os.Environ: (a) #2293 keeps instance keys out of the process env
+// because child commands and MCP subprocesses inherit it; (b) loadKeysEnvInto
+// skips keys.env entries whose name already exists non-empty in the process
+// env, so a Setenv'd migration copy would permanently shadow the value that
+// LoadInstanceKeysEnv reads on every later reload - a key rotated by another
+// process (CLI updating a workspace key) would never reach this long-running
+// session's resolver map.
+func setMigrationEnv(name, value string) {
+	if strings.HasPrefix(name, instanceEnvVarPrefix) {
+		return
+	}
+	_ = os.Setenv(name, value)
 }
 
 // KeysEnvPath returns the path to the managed env file for API keys.
@@ -716,7 +740,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 			return
 		}
 		util.RegisterSecretEnv(f.EnvVar) // #2284-A
-		os.Setenv(f.EnvVar, value)
+		setMigrationEnv(f.EnvVar, value)
 		envEntries[f.EnvVar] = value
 		vendorMap["api_key"] = "${" + f.EnvVar + "}"
 	} else {
@@ -730,7 +754,7 @@ func migrateVendorFinding(raw map[string]interface{}, f APIKeyFinding, envEntrie
 			return
 		}
 		util.RegisterSecretEnv(f.EnvVar) // #2284-A
-		os.Setenv(f.EnvVar, value)
+		setMigrationEnv(f.EnvVar, value)
 		envEntries[f.EnvVar] = value
 		epMap["api_key"] = "${" + f.EnvVar + "}"
 		endpoints[f.Endpoint] = epMap
@@ -759,7 +783,7 @@ func migrateIMFinding(raw map[string]interface{}, f APIKeyFinding, envEntries ma
 		return
 	}
 	util.RegisterSecretEnv(f.EnvVar) // #2284-A
-	os.Setenv(f.EnvVar, value)
+	setMigrationEnv(f.EnvVar, value)
 	envEntries[f.EnvVar] = value
 	extra[keyName] = "${" + f.EnvVar + "}"
 	adapterMap["extra"] = extra
@@ -810,7 +834,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 				return
 			}
 			util.RegisterSecretEnv(f.EnvVar) // #2284-A
-			os.Setenv(f.EnvVar, value)
+			setMigrationEnv(f.EnvVar, value)
 			envEntries[f.EnvVar] = value
 			headers[keyName] = "${" + f.EnvVar + "}"
 			srv["headers"] = headers
@@ -821,7 +845,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 				return
 			}
 			util.RegisterSecretEnv(f.EnvVar) // #2284-A
-			os.Setenv(f.EnvVar, value)
+			setMigrationEnv(f.EnvVar, value)
 			envEntries[f.EnvVar] = value
 			env[keyName] = "${" + f.EnvVar + "}"
 			srv["env"] = env
