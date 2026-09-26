@@ -563,11 +563,24 @@ func SaveAPIKey(vendor, endpoint, apiKey string) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// Determine scope: if the vendor has multiple endpoints (gateway type),
-	// save to endpoint scope; otherwise vendor scope.
+	// Determine scope. Default (no endpoint-level binding yet) follows
+	// #115/#116/#117: single-endpoint vendors keep the key at vendor level,
+	// gateway vendors (multiple endpoints) store it per endpoint. But when
+	// the target endpoint ALREADY has a key binding - written by the TUI
+	// provider panel, /config set apikey, the agent config tool, or the
+	// webui, which all use endpoint scope for this same action - the update
+	// must stay endpoint-scoped. A vendor-level write here would be silently
+	// shadowed by the existing endpoint key at resolve time
+	// (resolveEffectiveAPIKeyRef prefers a resolvable endpoint ref), so the
+	// user replaces the key in the desktop app and requests keep failing
+	// with the old one.
 	vendorScoped := true
-	if vc, ok := cfg.Vendors[vendor]; ok && len(vc.Endpoints) > 1 {
-		vendorScoped = false
+	if vc, ok := cfg.Vendors[vendor]; ok {
+		if len(vc.Endpoints) > 1 {
+			vendorScoped = false
+		} else if ep, ok := vc.Endpoints[endpoint]; ok && strings.TrimSpace(ep.APIKey) != "" {
+			vendorScoped = false
+		}
 	}
 
 	if err := cfg.SetEndpointAPIKey(vendor, endpoint, apiKey, vendorScoped); err != nil {

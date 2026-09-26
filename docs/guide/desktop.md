@@ -45,6 +45,7 @@ Download from GitHub Releases:
 
 ### Settings & Configuration
 - **Config editor** — edit vendor, endpoint, model, API key, and permission settings through a structured UI
+- **API key scoping** — saving a key in the desktop settings page matches the other surfaces (TUI, WebUI, agent): if the endpoint already has a key, the update replaces it at endpoint scope; for a fresh single-endpoint vendor the key is stored at vendor scope so every endpoint falls back to it
 - **Provider picker** — switch between configured LLM providers visually
 - **Permission modes** — switch between supervised, plan, auto, bypass, and autopilot
 
