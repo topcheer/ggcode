@@ -142,10 +142,35 @@ func saveExternalSections(cfg *Config, configDir string, vendors map[string]Vend
 	}
 }
 
+// externalFileUnreadable reports whether path exists but cannot be parsed as
+// YAML - the signature of a hand-edit typo, a disk-full partial write, or an
+// editor/sync mishap. A file in this state is the LAST copy of the user's
+// data: its section loaded as nil (loadVendorsFile/loadIMFile/loadMCPServersFile
+// return nil on parse failure), so the in-memory config only holds defaults
+// and any derived-state save would silently overwrite or os.Remove the user's
+// content (including the auto "compact migration save" in Load). Durable-state
+// rule: the prior committed version must remain readable - quarantine the
+// file and require the user to fix or remove it manually.
+func externalFileUnreadable(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false // missing (or unreadable for other reasons) - not our signal
+	}
+	var v interface{}
+	return yaml.Unmarshal(data, &v) != nil
+}
+
 // SaveVendors writes vendor definitions to vendors.yaml, stripping default
 // vendors and applying flow-style formatting for models/tags arrays.
 func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	path := VendorsPath(configDir)
+
+	// Quarantine guard: a vendors.yaml we cannot parse never loaded, so the
+	// incoming set is defaults-derived and writing/removing it would destroy
+	// the user's only copy (vendor overrides + API keys).
+	if externalFileUnreadable(path) {
+		return fmt.Errorf("vendors.yaml exists but is not valid YAML; refusing to overwrite or delete it - fix or remove the file manually")
+	}
 
 	// Marshal vendors to raw map
 	data, err := yaml.Marshal(vendors)
@@ -212,6 +237,12 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 func SaveIMConfig(configDir string, im *IMConfig) error {
 	path := IMPath(configDir)
 
+	// Quarantine guard, same rationale as SaveVendors: an unparseable im.yaml
+	// never loaded, so writing/removing it would destroy the user's only copy.
+	if externalFileUnreadable(path) {
+		return fmt.Errorf("im.yaml exists but is not valid YAML; refusing to overwrite or delete it - fix or remove the file manually")
+	}
+
 	data, err := yaml.Marshal(im)
 	if err != nil {
 		return fmt.Errorf("marshaling im config: %w", err)
@@ -237,6 +268,13 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 // SaveMCPServers writes MCP server list to mcp_servers.yaml.
 func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	path := MCPServersPath(configDir)
+
+	// Quarantine guard, same rationale as SaveVendors: an unparseable
+	// mcp_servers.yaml never loaded, so writing/removing it would destroy the
+	// user's only copy (server commands, URLs, auth headers).
+	if externalFileUnreadable(path) {
+		return fmt.Errorf("mcp_servers.yaml exists but is not valid YAML; refusing to overwrite or delete it - fix or remove the file manually")
+	}
 
 	if len(servers) == 0 {
 		if fileExists(path) {

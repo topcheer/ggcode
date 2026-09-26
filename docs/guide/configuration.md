@@ -98,6 +98,12 @@ mcp_servers:
 
 See [MCP Integration](./mcp.md) for details.
 
+### External Config File Protection
+
+`vendors.yaml`, `im.yaml`, and `mcp_servers.yaml` live next to your main config file. ggcode treats them as user-owned state:
+
+- If one of these files exists but **cannot be parsed** (a hand-edit typo, a partial write, a sync-tool mishap), ggcode will **not** overwrite or delete it. The affected section loads as empty for that run, and any save reports an error asking you to fix or remove the file manually - the corrupt file is kept intact because it is the last recoverable copy of your settings.
+
 ## LSP Servers
 
 Override auto-detected LSP servers or configure custom ones:
