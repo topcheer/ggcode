@@ -842,3 +842,18 @@ The WebUI subsystem provides an HTTP+WebSocket interface for browser-based inter
 2. **DaemonBridge.SendUserMessage**: TOCTOU-safe — cancelFunc check and run-slot claim happen under a single mutex lock.
 3. **TUIChatBridge**: No direct agent access. Messages route through bubbletea event loop (`program.Send`), identical to keyboard input.
 4. **Broadcast**: Non-blocking sends to subscriber channels. Slow subscribers drop events instead of blocking.
+
+## Platform Server Architecture
+
+`internal/platform` + `ggcode serve` provide a self-hosted multi-user background-agent API: code stays on the machine running the server (no cloud VM). See `docs/guide/platform-server.md`.
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| JWT (HS256) | `internal/platform/jwt.go` | Token sign/verify, alg-confusion + tamper + expiry rejection |
+| User registry | `internal/platform/users.go` | PBKDF2-HMAC-SHA256 password store (`~/.ggcode/platform/users.json`) |
+| Workspace allowlist | `internal/platform/workspace.go` | Symlink-resolved containment check; jobs cannot escape whitelisted roots |
+| Job store | `internal/platform/jobs.go` | File-per-job persistence (`jobs/job-*.json`), 16-hex ID traversal-safe |
+| Executor | `internal/platform/executor.go` | 1-concurrent semaphore queue, cancellation for queued+running jobs, 256 KiB output tail cap |
+| HTTP API | `internal/platform/server.go` | `/api/v1/auth/login`, `/api/v1/jobs` CRUD; user-scoped 404 isolation; fail-closed auth |
+
+Job execution shells out to the local binary itself (`ggcode --prompt` in the job workspace via `os.Executable`), giving process/crash/memory isolation per job. Admin users see all jobs; regular users only their own (existence non-enumerable).
