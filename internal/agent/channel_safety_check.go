@@ -147,44 +147,162 @@ type chanOp struct {
 	name     string
 	pos      token.Pos
 	deferred bool // true if inside a defer statement
+	// exitsAfter: the operation's statement is followed (in the same block)
+	// by a terminating statement (return/break/continue/goto/panic), so later
+	// operations in this function cannot execute after it (#2776: close+return
+	// producer-exit and mutex error-handling are safe Go idioms).
+	exitsAfter bool
+	// branchFrames records which side of each enclosing if/else the op is on.
+	// Two ops on different sides of the same if/else are mutually exclusive.
+	branchFrames []branchFrame
+}
+
+// branchFrame records one if/else branch decision point.
+type branchFrame struct {
+	ifPos token.Pos // position of the enclosing IfStmt
+	side  int       // 0 = then branch, 1 = else branch
+}
+
+// mutuallyExclusiveOps returns true if two ops can never both execute
+// because they sit on different sides of the same if/else (#2776).
+func mutuallyExclusiveOps(a, b chanOp) bool {
+	for _, fa := range a.branchFrames {
+		for _, fb := range b.branchFrames {
+			if fa.ifPos == fb.ifPos && fa.side != fb.side {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isTerminatingStmt returns true for statements that exit the enclosing flow
+// (return, break, continue, goto, panic).
+func isTerminatingStmt(s ast.Stmt) bool {
+	switch v := s.(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BranchStmt:
+		return v.Tok != token.FALLTHROUGH
+	case *ast.ExprStmt:
+		if ce, ok := v.X.(*ast.CallExpr); ok {
+			if id, ok := ce.Fun.(*ast.Ident); ok && id.Name == "panic" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// appendChanOpsFromExpr extracts channel ops from a single expression.
+func appendChanOpsFromExpr(expr ast.Expr, stack []branchFrame, exitsAfter bool, ops *[]chanOp) {
+	ast.Inspect(expr, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.CallExpr:
+			if isCloseCall(n) {
+				if chName := channelNameFromArg(n.Args[0]); chName != "" {
+					*ops = append(*ops, chanOp{op: "close", name: chName, pos: n.Pos(), exitsAfter: exitsAfter, branchFrames: append([]branchFrame(nil), stack...)})
+				}
+			}
+		case *ast.SendStmt:
+			if chName := channelNameFromExpr(n.Chan); chName != "" {
+				*ops = append(*ops, chanOp{op: "send", name: chName, pos: n.Pos(), exitsAfter: exitsAfter, branchFrames: append([]branchFrame(nil), stack...)})
+			}
+		}
+		return true
+	})
+}
+
+// walkStmtsForChanOps walks statements maintaining the if/else branch stack and
+// computing exitsAfter (next sibling statement terminates) for each op (#2776).
+func walkStmtsForChanOps(stmts []ast.Stmt, stack []branchFrame, ops *[]chanOp) {
+	for i, s := range stmts {
+		exitsAfter := i+1 < len(stmts) && isTerminatingStmt(stmts[i+1])
+		switch v := s.(type) {
+		case *ast.DeferStmt:
+			// Deferred closes execute at function return — after all sends.
+			ast.Inspect(v.Call, func(inner ast.Node) bool {
+				if ce, ok := inner.(*ast.CallExpr); ok && isCloseCall(ce) {
+					if chName := channelNameFromArg(ce.Args[0]); chName != "" {
+						*ops = append(*ops, chanOp{op: "close", name: chName, pos: ce.Pos(), deferred: true, branchFrames: append([]branchFrame(nil), stack...)})
+					}
+				}
+				return true
+			})
+		case *ast.IfStmt:
+			appendChanOpsFromExpr(v.Cond, stack, exitsAfter, ops)
+			walkStmtsForChanOps(v.Body.List, append(stack, branchFrame{ifPos: v.Pos(), side: 0}), ops)
+			if v.Else != nil {
+				if eb, ok := v.Else.(*ast.BlockStmt); ok {
+					walkStmtsForChanOps(eb.List, append(stack, branchFrame{ifPos: v.Pos(), side: 1}), ops)
+				} else if ei, ok := v.Else.(*ast.IfStmt); ok { // else-if chain
+					walkStmtsForChanOps([]ast.Stmt{ei}, append(stack, branchFrame{ifPos: v.Pos(), side: 1}), ops)
+				}
+			}
+		case *ast.GoStmt:
+			// Nested func literals (goroutines) execute in the same textual
+			// scope for detection purposes — walk their bodies with a fresh
+			// branch stack (control-flow frames don't cross function bounds).
+			if fl, ok := v.Call.Fun.(*ast.FuncLit); ok && fl.Body != nil {
+				walkStmtsForChanOps(fl.Body.List, nil, ops)
+			}
+		case *ast.ForStmt:
+			if v.Body != nil {
+				walkStmtsForChanOps(v.Body.List, stack, ops)
+			}
+		case *ast.RangeStmt:
+			if v.Body != nil {
+				walkStmtsForChanOps(v.Body.List, stack, ops)
+			}
+		case *ast.SwitchStmt:
+			if v.Body != nil {
+				for _, cc := range v.Body.List {
+					if cl, ok := cc.(*ast.CaseClause); ok {
+						walkStmtsForChanOps(cl.Body, stack, ops)
+					}
+				}
+			}
+		case *ast.SelectStmt:
+			if v.Body != nil {
+				for _, cc := range v.Body.List {
+					if cl, ok := cc.(*ast.CommClause); ok {
+						walkStmtsForChanOps(cl.Body, stack, ops)
+					}
+				}
+			}
+		default:
+			// close(ch) and ch <- v are statements in Go — extract from
+			// simple statements (ExprStmt / SendStmt).
+			collectStmtOps(s, stack, exitsAfter, ops)
+		}
+	}
+}
+
+// collectStmtOps extracts channel ops from a single simple statement: an
+// ExprStmt wrapping close(ch), or a bare SendStmt ch <- v.
+func collectStmtOps(s ast.Stmt, stack []branchFrame, exitsAfter bool, ops *[]chanOp) {
+	switch v := s.(type) {
+	case *ast.ExprStmt:
+		if ce, ok := v.X.(*ast.CallExpr); ok && isCloseCall(ce) {
+			if chName := channelNameFromArg(ce.Args[0]); chName != "" {
+				*ops = append(*ops, chanOp{op: "close", name: chName, pos: ce.Pos(), exitsAfter: exitsAfter, branchFrames: append([]branchFrame(nil), stack...)})
+			}
+		}
+	case *ast.SendStmt:
+		if chName := channelNameFromExpr(v.Chan); chName != "" {
+			*ops = append(*ops, chanOp{op: "send", name: chName, pos: v.Pos(), exitsAfter: exitsAfter, branchFrames: append([]branchFrame(nil), stack...)})
+		}
+	}
 }
 
 // analyzeChannelOpsInFunc inspects a function body for channel safety issues.
 func analyzeChannelOpsInFunc(fset *token.FileSet, body *ast.BlockStmt) []channelSafetyInstance {
 	var instances []channelSafetyInstance
 
-	// Collect all close() calls and their channels, in source order.
+	// Collect all close() calls and their channels, in source order, with
+	// control-flow context (#2776): exitsAfter + if/else branch frames.
 	var ops []chanOp
-
-	ast.Inspect(body, func(node ast.Node) bool {
-		switch n := node.(type) {
-		case *ast.DeferStmt:
-			// Visit children of defer with a deferred flag.
-			ast.Inspect(n.Call, func(inner ast.Node) bool {
-				if ce, ok := inner.(*ast.CallExpr); ok && isCloseCall(ce) {
-					chName := channelNameFromArg(ce.Args[0])
-					if chName != "" {
-						ops = append(ops, chanOp{op: "close", name: chName, pos: ce.Pos(), deferred: true})
-					}
-				}
-				return true
-			})
-			return false // already handled children
-		case *ast.CallExpr:
-			if isCloseCall(n) {
-				chName := channelNameFromArg(n.Args[0])
-				if chName != "" {
-					ops = append(ops, chanOp{op: "close", name: chName, pos: n.Pos()})
-				}
-			}
-		case *ast.SendStmt:
-			chName := channelNameFromExpr(n.Chan)
-			if chName != "" {
-				ops = append(ops, chanOp{op: "send", name: chName, pos: n.Pos()})
-			}
-		}
-		return true
-	})
+	walkStmtsForChanOps(body.List, nil, &ops)
 
 	// Build per-channel operation sequences.
 	chanOps := make(map[string][]chanOp)
@@ -198,7 +316,7 @@ func analyzeChannelOpsInFunc(fset *token.FileSet, body *ast.BlockStmt) []channel
 	}
 
 	// Detect close(ch) inside loops where ch is not recreated per iteration.
-	instances = append(instances, detectCloseInLoops(fset, body)...)
+	instances = append(instances, detectCloseInLoops(fset, body, ops)...)
 
 	return instances
 }
@@ -235,30 +353,41 @@ func channelNameFromExpr(expr ast.Expr) string {
 }
 
 // detectDoubleClose flags when close(ch) appears twice for the same channel
-// in the same function scope.
+// in the same function scope. #2776: a close followed by a terminating
+// statement (return/break/panic) cannot pair with a later close, and two
+// closes on different sides of the same if/else are mutually exclusive —
+// both are safe Go idioms, not double-close bugs.
 func detectDoubleClose(fset *token.FileSet, chName string, ops []chanOp) []channelSafetyInstance {
 	var instances []channelSafetyInstance
-	closeCount := 0
-	for _, op := range ops {
-		if op.op != "close" {
+	var prevClose *chanOp
+	for i := range ops {
+		op := ops[i]
+		if op.op != "close" || op.deferred {
 			continue
 		}
-		closeCount++
-		if closeCount >= 2 {
+		if prevClose != nil && !prevClose.exitsAfter && !mutuallyExclusiveOps(*prevClose, op) {
 			instances = append(instances, channelSafetyInstance{
 				posStr:  fset.Position(op.pos).String(),
 				channel: chName,
 				kind:    "double-close",
 			})
 		}
+		if prevClose == nil || !prevClose.exitsAfter {
+			// Keep tracking unless the earlier close provably exits the flow.
+			cp := op
+			prevClose = &cp
+		}
 	}
 	return instances
 }
 
 // detectSendAfterClose flags when a send appears after a close on the same
-// channel in the same function scope (by source order).
+// channel in the same function scope (by source order). #2776: a close that
+// exits the flow (close+return) and send/close pairs on different sides of
+// the same if/else cannot execute in that order — skip them.
 func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp) []channelSafetyInstance {
 	closed := false
+	var lastClose chanOp
 	for _, op := range ops {
 		if op.op == "close" {
 			// Deferred closes execute at function return — AFTER all sends.
@@ -266,10 +395,13 @@ func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp) []ch
 			if op.deferred {
 				continue
 			}
-			closed = true
+			if !op.exitsAfter {
+				closed = true
+				lastClose = op
+			}
 			continue
 		}
-		if closed && op.op == "send" {
+		if closed && op.op == "send" && !mutuallyExclusiveOps(lastClose, op) {
 			return []channelSafetyInstance{{
 				posStr:  fset.Position(op.pos).String(),
 				channel: chName,
@@ -283,9 +415,18 @@ func detectSendAfterClose(fset *token.FileSet, chName string, ops []chanOp) []ch
 // detectCloseInLoops scans for close(ch) inside loop bodies where ch is not
 // recreated per iteration via make(chan...) inside the same loop. Closing a
 // channel created outside the loop will panic on the second iteration.
-func detectCloseInLoops(fset *token.FileSet, body *ast.BlockStmt) []channelSafetyInstance {
+// #2776: close followed by a terminating statement (close+return producer
+// exit) never reaches a second iteration — skip it.
+func detectCloseInLoops(fset *token.FileSet, body *ast.BlockStmt, ops []chanOp) []channelSafetyInstance {
 	var instances []channelSafetyInstance
 	seen := make(map[token.Pos]bool)
+	// exitsAfterByPos: fast lookup of control-flow context per close op.
+	exitsAfterByPos := make(map[token.Pos]bool, len(ops))
+	for _, op := range ops {
+		if op.op == "close" {
+			exitsAfterByPos[op.pos] = op.exitsAfter
+		}
+	}
 
 	ast.Inspect(body, func(node ast.Node) bool {
 		var loopBody *ast.BlockStmt
@@ -310,6 +451,10 @@ func detectCloseInLoops(fset *token.FileSet, body *ast.BlockStmt) []channelSafet
 			}
 			chName := channelNameFromArg(ce.Args[0])
 			if chName == "" || createdInLoop[chName] {
+				return true
+			}
+			if exitsAfterByPos[ce.Pos()] {
+				// close+return/break: the loop exits before a second close (#2776).
 				return true
 			}
 			seen[ce.Pos()] = true
