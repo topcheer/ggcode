@@ -452,3 +452,44 @@ mcp_servers:
 		t.Errorf("expected MCP env ref in migrated config, got:\n%s", migrated)
 	}
 }
+
+// removeKeysEnv rewrites the whole keys.env. It must replace the file
+// atomically (util.AtomicWriteFile), not truncate-then-write: a crash mid
+// write would destroy every stored API key, and temp artifacts or a mode
+// downgrade would leak or break shell sourcing.
+func TestRemoveKeysEnvAtomicRewritePreservesSiblings(t *testing.T) {
+	withTestHome(t)
+	if err := writeKeysEnv(map[string]string{"AAA_KEY": "a", "BBB_KEY": "b", "CCC_KEY": "c"}); err != nil {
+		t.Fatalf("writeKeysEnv: %v", err)
+	}
+	if err := removeKeysEnv([]string{"BBB_KEY"}); err != nil {
+		t.Fatalf("removeKeysEnv: %v", err)
+	}
+	data, err := os.ReadFile(KeysEnvPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if strings.Contains(got, "BBB_KEY") {
+		t.Errorf("BBB_KEY should be gone, got:\n%s", got)
+	}
+	if !strings.Contains(got, "AAA_KEY='a'") || !strings.Contains(got, "CCC_KEY='c'") {
+		t.Errorf("sibling keys must survive intact, got:\n%s", got)
+	}
+	entries, err := os.ReadDir(filepath.Dir(KeysEnvPath()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".ggcode-tmp-") {
+			t.Errorf("temp artifact left behind: %s", e.Name())
+		}
+	}
+	info, err := os.Stat(KeysEnvPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("keys.env perm = %v, want 0600", info.Mode().Perm())
+	}
+}

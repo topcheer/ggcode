@@ -593,7 +593,16 @@ func removeKeysEnv(names []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), secureConfigDirMode); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(b.String()), secureConfigFileMode)
+	// Atomic replace, not os.WriteFile: removeKeysEnv rewrites the WHOLE
+	// keys.env (every managed key), and a crash or ENOSPC between O_TRUNC
+	// and the final write would truncate the file and destroy every stored
+	// API key at once. writeKeysEnvTo below already routes through
+	// util.AtomicWriteFile for exactly this failure mode; the removal
+	// path must too.
+	if err := util.AtomicWriteFile(path, []byte(b.String()), secureConfigFileMode); err != nil {
+		return fmt.Errorf("writing keys.env: %w", err)
+	}
+	return nil
 }
 
 // writeKeysEnvTo merges new entries into the keys.env file at the given path.

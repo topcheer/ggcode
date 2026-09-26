@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // NamedAgentTemplate is a persisted subagent configuration that defines
@@ -85,7 +86,13 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 			return fmt.Errorf("template name %q collides with existing %q (same sanitized filename); choose a different name", t.Name, onDisk.Name)
 		}
 	}
-	return os.WriteFile(path, data, 0644)
+	// Atomic replace via util.AtomicWriteFile: Save() rewrites a user's
+	// hand-written system prompt, and a crash mid os.WriteFile (O_TRUNC
+	// before the bytes land) leaves the template truncated or empty with
+	// no way to recover the original prompt. Same crash-safety contract
+	// as keys.env and the other state stores; also inherits #1359
+	// symlink-resolving semantics.
+	return util.AtomicWriteFile(path, data, 0644)
 }
 
 // LoadExisting checks if a template exists and returns it with a boolean

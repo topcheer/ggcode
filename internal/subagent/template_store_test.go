@@ -3,6 +3,8 @@ package subagent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -201,5 +203,37 @@ func TestTemplateStore_DeleteNormalized(t *testing.T) {
 	}
 	if _, err := s.Load("Code Reviewer"); err == nil {
 		t.Fatal("template must be gone after normalized delete")
+	}
+}
+
+// Save() replaces a template file wholesale. It must swap the file
+// atomically (util.AtomicWriteFile): a crash mid os.WriteFile leaves the
+// user's hand-written system prompt truncated with no recovery path.
+func TestTemplateStore_SaveAtomicReplace(t *testing.T) {
+	dir := t.TempDir()
+	s := &TemplateStore{dir: dir}
+	tmpl := NamedAgentTemplate{Name: "atomic-check", SystemPrompt: "do things"}
+	if err := s.Save(tmpl); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	tmpl.SystemPrompt = "much longer replacement prompt for the atomic check"
+	if err := s.Save(tmpl); err != nil {
+		t.Fatalf("Save replace: %v", err)
+	}
+	got, err := s.Load("atomic-check")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.SystemPrompt != tmpl.SystemPrompt {
+		t.Errorf("prompt = %q, want %q", got.SystemPrompt, tmpl.SystemPrompt)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".ggcode-tmp-") {
+			t.Errorf("temp artifact left behind: %s", e.Name())
+		}
 	}
 }
