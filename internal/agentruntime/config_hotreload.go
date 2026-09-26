@@ -176,6 +176,11 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	old.MaxIterations = fresh.MaxIterations
 	old.SessionTokenBudget = fresh.SessionTokenBudget
 	old.ToolCallBudget = fresh.ToolCallBudget
+	// SessionTimeout is consumed by the ApplySessionTimeout re-arm below, so
+	// leaving it at the startup snapshot meant session_timeout edits were
+	// silently ignored while the "config refreshed" log implied success
+	// (same failure shape as the #1482 fallbacks chain above).
+	old.SessionTimeout = fresh.SessionTimeout
 	// #1482 case D: snapshot the log fields under the same lock the
 	// setFallbacks* writers now hold - the old post-Unlock read raced
 	// concurrent fallback writes.

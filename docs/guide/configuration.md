@@ -4,6 +4,8 @@
 
 ggcode stores its configuration in `~/.ggcode/ggcode.yaml`. See `ggcode.example.yaml` for the full schema.
 
+See [Configuration Hot Reload](config-hot-reload.md) for which settings take effect live and which require a restart.
+
 ### Resolution Order
 
 ```

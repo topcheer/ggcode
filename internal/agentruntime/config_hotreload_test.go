@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,5 +205,78 @@ func TestApplyFreshConfigRefreshesFallbacks(t *testing.T) {
 	w.applyFreshConfig(fresh)
 	if len(a.cfg.Fallbacks) != 1 || a.cfg.Fallbacks[0].Vendor != "new" {
 		t.Fatalf("fallbacks chain not refreshed: %+v", a.cfg.Fallbacks)
+	}
+}
+
+func TestApplyFreshConfigRefreshesSessionTimeout(t *testing.T) {
+	// Regression: the reload block re-arms SessionTimeout via
+	// ApplySessionTimeout(agentInst, old, false) but never copied the fresh
+	// field onto old, so session_timeout edits were silently ignored while
+	// the "config refreshed" log implied success (same failure shape as the
+	// #1482 fallbacks chain).
+	a := &configAccess{cfg: &config.Config{}}
+	a.cfg.SessionTimeout = 5 * time.Minute
+	a.cfg.Language = "en"
+	w := &ConfigHotReload{access: a}
+	fresh := &config.Config{}
+	fresh.SessionTimeout = 30 * time.Minute
+	fresh.Language = "zh-CN" // not in the refresh set; must keep snapshot
+	w.applyFreshConfig(fresh)
+	if a.cfg.SessionTimeout != 30*time.Minute {
+		t.Fatalf("session_timeout not refreshed: %v", a.cfg.SessionTimeout)
+	}
+	if a.cfg.Language != "en" {
+		t.Fatalf("language unexpectedly refreshed: %q", a.cfg.Language)
+	}
+}
+
+func TestConfigHotReload_SessionTimeoutRefresh(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "ggcode.yaml")
+	if err := os.WriteFile(cfgPath, []byte("language: en\nsession_timeout: 5m\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	access := newTestAccess(t, cfgPath)
+	if access.cfg.SessionTimeout != 5*time.Minute {
+		t.Fatalf("baseline session_timeout: %v", access.cfg.SessionTimeout)
+	}
+
+	w := NewConfigHotReload(cfgPath, access)
+
+	// Edit: bump the session timeout.
+	if err := os.WriteFile(cfgPath, []byte("language: en\nsession_timeout: 30m\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.pollOnce()
+
+	if access.cfg.SessionTimeout != 30*time.Minute {
+		t.Fatalf("session_timeout not refreshed after edit: %v", access.cfg.SessionTimeout)
+	}
+}
+
+func TestConfigHotReloadDocListsRefreshedFields(t *testing.T) {
+	// Sync guard: docs/guide/config-hot-reload.md documents the reloadable
+	// vs restart-only split. Every field applyFreshConfig refreshes must be
+	// listed there, so the user-facing matrix cannot silently drift from the
+	// code. Update both in the same commit when the refresh set changes.
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "guide", "config-hot-reload.md"))
+	if err != nil {
+		t.Fatalf("hot reload doc missing: %v", err)
+	}
+	doc := string(data)
+	for _, key := range []string{
+		"vendors", "fallback", "fallbacks", "knight", "max_iterations",
+		"session_token_budget", "tool_call_budget", "session_timeout",
+	} {
+		if !strings.Contains(doc, "`"+key+"`") {
+			t.Errorf("hot-reload doc does not list refreshed field %q", key)
+		}
+	}
+	// Watched files and the restart-only default must stay documented too.
+	for _, want := range []string{"ggcode.yaml", "vendors.yaml", "im.yaml", "restart"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("hot-reload doc does not mention %q", want)
+		}
 	}
 }
