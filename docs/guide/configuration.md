@@ -64,6 +64,23 @@ vendors:
 
 See [Providers](./providers.md) for the full list of built-in vendor presets.
 
+## Config Hot Reload
+
+While a session is running, ggcode watches `ggcode.yaml` and `vendors.yaml`
+(polling every 2 seconds) and applies eligible edits without a restart. The
+outcome is reported in the chat area so you can tell whether your edit
+converged:
+
+- Vendor definitions (endpoints, model lists, API keys) refresh immediately.
+- Fallback chains, Knight budgets, iteration caps and token budgets are
+  next-turn effective; provider selection stays session-scoped and never
+  switches mid-turn.
+- A broken YAML edit is rejected: the session keeps the last good config and
+  shows the parse error in the chat. Fix the file and the next change resumes
+  reloading.
+- `im.yaml` is deliberately not watched (a live IM reconnect is out of scope);
+  MCP config has its own watcher (see [MCP Servers](#mcp-servers)).
+
 ## API Key Security
 
 API keys are stored in `~/.ggcode/keys.env` — **never** in the YAML file. This keeps secrets out of version control.

@@ -1676,6 +1676,15 @@ func (r *REPL) Run() error {
 				}
 			})
 		}
+		// Surface config hot-reload outcomes as chat system messages: edits
+		// to ggcode.yaml/vendors.yaml made outside this session (hand edit,
+		// another instance) otherwise converge silently - applied merges and
+		// rejected (broken YAML) cycles alike end in debug logs only.
+		if r.program != nil {
+			r.core.ConfigReloadNotify = func(e agentruntime.ConfigReloadEvent) {
+				r.program.Send(configReloadedMsg{Event: e})
+			}
+		}
 		if r.mcpMgr != nil {
 			start := time.Now()
 			r.core.StartBackgroundServices()

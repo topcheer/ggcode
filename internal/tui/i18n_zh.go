@@ -766,6 +766,10 @@ func zhCatalog(key string) string {
 		return "配置：language = %s\n\n"
 	case "config.unknown_key":
 		return "未知配置项：%s\n支持：model, provider, language\n\n"
+	case "config.reload_applied":
+		return "配置已热重载：已刷新 %d 个 vendor 定义，fallback=%v。供应商选择下轮生效。\n"
+	case "config.reload_rejected":
+		return "配置热重载已跳过（%v）。保留上一个有效配置；修复 YAML 错误后热重载将恢复。\n"
 	case "config.title":
 		return "当前配置：\n"
 	case "status.title":

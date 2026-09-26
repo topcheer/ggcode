@@ -37,6 +37,12 @@ type InteractiveRuntimeCore struct {
 	configPath       string // ggcode.yaml the session loaded (hot-reload watch target)
 	workingDir       string
 
+	// ConfigReloadNotify, when set before StartBackgroundServices, receives
+	// the outcome of every config hot-reload cycle (applied or rejected) so
+	// the interactive frontend can surface convergence to the user. Leave
+	// nil in pipe/daemon mode to keep their behavior unchanged.
+	ConfigReloadNotify func(ConfigReloadEvent)
+
 	mcpCtx          context.Context
 	mcpCancel       context.CancelFunc
 	mcpHotReload    *MCPHotReload
@@ -179,6 +185,7 @@ func (c *InteractiveRuntimeCore) StartBackgroundServices() {
 	// Start ggcode.yaml/vendors.yaml config hot-reload (#763).
 	if c.configAccess != nil && c.configPath != "" {
 		c.configHotReload = NewConfigHotReload(c.configPath, c.configAccess)
+		c.configHotReload.SetReloadListener(c.ConfigReloadNotify)
 		c.configHotReload.Start(c.mcpCtx)
 	}
 }

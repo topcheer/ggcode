@@ -109,6 +109,25 @@ func (m Model) handleSystemNotifyMsg(msg systemNotifyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleConfigReloadedMsg surfaces a config hot-reload outcome as a chat
+// system message: applied merges confirm which fields refreshed, rejected
+// edits explain why the session keeps running on the last good config.
+func (m Model) handleConfigReloadedMsg(msg configReloadedMsg) (tea.Model, tea.Cmd) {
+	var text string
+	if msg.Event.Applied {
+		text = m.t("config.reload_applied", msg.Event.Vendors, msg.Event.Fallback)
+	} else {
+		reason := "unknown error"
+		if msg.Event.Err != nil {
+			reason = msg.Event.Err.Error()
+		}
+		text = m.t("config.reload_rejected", reason)
+	}
+	m.chatWriteSystem(nextSystemID(), text)
+	m.chatListFollowOutput()
+	return m, nil
+}
+
 func (m Model) handleGitBranchTickMsg(msg gitBranchTickMsg) (tea.Model, tea.Cmd) {
 	m.refreshCachedGitBranch()
 	return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/knight"
 	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/metrics"
@@ -157,6 +158,13 @@ type systemNotifyMsg struct {
 	Text    string
 	ItemID  string
 	Replace bool // if true, replace existing item text instead of appending (used by retry status)
+}
+
+// configReloadedMsg reports one config hot-reload cycle (ggcode.yaml /
+// vendors.yaml watcher) so applied merges and rejected edits surface in the
+// chat area instead of ending in debug logs only.
+type configReloadedMsg struct {
+	Event agentruntime.ConfigReloadEvent
 }
 
 type skillsChangedMsg struct{}

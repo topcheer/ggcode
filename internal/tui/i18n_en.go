@@ -755,6 +755,10 @@ func enCatalog(key string) string {
 		return "Config: language = %s\n\n"
 	case "config.unknown_key":
 		return "Unknown config key: %s\nSupported: model, provider, language\n\n"
+	case "config.reload_applied":
+		return "Config hot-reloaded: %d vendor definitions refreshed, fallback=%v. Provider selection takes effect next turn.\n"
+	case "config.reload_rejected":
+		return "Config reload skipped (%v). Keeping the last good config; fix the YAML error to resume hot reload.\n"
 	case "config.title":
 		return "Current Configuration:\n"
 	case "status.title":

@@ -52,6 +52,12 @@ type ConfigHotReload struct {
 
 	baselines map[string]fileBaseline
 
+	// onEvent receives one ConfigReloadEvent per applied/rejected reload
+	// cycle. Optional: register via SetReloadListener before Start - the
+	// poll goroutine is created afterwards, so goroutine start gives the
+	// needed happens-before edge and no extra lock is required.
+	onEvent func(ConfigReloadEvent)
+
 	// polling (guarded by mu) is true while pollOnce runs. It lets tests
 	// observe that the poll loop has quiesced after ctx cancel, so temp-dir
 	// cleanup does not race an in-flight config.Load rewriting the file.
@@ -62,6 +68,19 @@ type ConfigHotReload struct {
 type fileBaseline struct {
 	exists bool
 	hash   string
+}
+
+// ConfigReloadEvent reports the outcome of one hot-reload cycle. Hot reload
+// is a convergence problem, not only a parsing problem: a rejected edit
+// (broken YAML) or a successful merge previously ended in debug.Log only,
+// leaving an interactive session silently running stale config with no way
+// for the user to tell whether their edit landed. Events are delivered via
+// SetReloadListener; pipe/daemon callers simply leave it unset.
+type ConfigReloadEvent struct {
+	Applied  bool  // true: fresh config merged into the live session
+	Err      error // rejection reason (broken YAML); nil when Applied
+	Vendors  int   // vendor definition count after the merge (Applied only)
+	Fallback bool  // legacy fallback configured after the merge (Applied only)
 }
 
 // NewConfigHotReload creates the watcher. configPath is the ggcode.yaml the
@@ -86,6 +105,14 @@ func (w *ConfigHotReload) watchedFiles() []string {
 		w.configPath,
 		filepath.Join(w.externalDir, "vendors.yaml"),
 	}
+}
+
+// SetReloadListener registers a callback invoked once per reload cycle with
+// the outcome (applied or rejected). Must be called before Start. The
+// callback runs on the polling goroutine: it must not block for long and
+// must hand off to the UI asynchronously (e.g. tea.Program.Send).
+func (w *ConfigHotReload) SetReloadListener(fn func(ConfigReloadEvent)) {
+	w.onEvent = fn
 }
 
 // Start launches the polling goroutine. Returns immediately.
@@ -135,9 +162,11 @@ func (w *ConfigHotReload) pollOnce() {
 
 	fresh, err := config.Load(w.configPath)
 	if err != nil {
-		// Broken edit: keep the last good snapshot. The user's editor will
-		// show the YAML error on their side; we log it once per change.
+		// Broken edit: keep the last good snapshot and report the rejection
+		// to the listener so the user learns their edit did not converge,
+		// instead of the session silently running on stale config.
 		debug.Log("config-hotreload", "reload skipped (invalid yaml): %v", err)
+		w.emit(ConfigReloadEvent{Applied: false, Err: err})
 		return
 	}
 
@@ -185,12 +214,20 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 
 	debug.Log("config-hotreload", "config refreshed: vendors=%d fallback=%v",
 		vendorCount, fallbackConfigured)
+	w.emit(ConfigReloadEvent{Applied: true, Vendors: vendorCount, Fallback: fallbackConfigured})
 
 	// Re-apply turn-scoped budgets so the next turn picks them up.
 	if a.agentInst != nil {
 		ApplySessionTokenBudget(a.agentInst, old)
 		ApplyToolCallBudget(a.agentInst, old)
 		ApplySessionTimeout(a.agentInst, old, false)
+	}
+}
+
+// emit delivers the reload outcome to the registered listener, if any.
+func (w *ConfigHotReload) emit(e ConfigReloadEvent) {
+	if w.onEvent != nil {
+		w.onEvent(e)
 	}
 }
 
