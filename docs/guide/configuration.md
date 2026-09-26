@@ -342,3 +342,16 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
 > API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML — they are never stored directly in `ggcode.yaml`.
+
+## Config Self-Save Recognition
+
+The config hot-reload watcher polls `ggcode.yaml` and `vendors.yaml` for
+**external** edits (another running instance, or a manual edit in your
+editor) and applies them within about 2 seconds.
+
+Changes saved by the session itself — TUI panels, `/config` commands, the
+WebUI, or agent-driven config changes — are recognized as self-authored:
+the watcher skips them entirely. The writer already applied the change to
+the live in-memory config before persisting, so reloading would only
+re-merge identical values. Cross-instance propagation is unaffected: each
+process only recognizes its own saves.

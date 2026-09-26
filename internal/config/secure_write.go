@@ -33,5 +33,9 @@ func writeSecureConfigFile(path string, data []byte) error {
 	if err := os.Chmod(path, secureConfigFileMode); err != nil {
 		return fmt.Errorf("chmod config file: %w", err)
 	}
+	// Attribute this write to the current process so the agentruntime
+	// hot-reload watcher can recognize the session's own saves and skip
+	// the redundant reload cycle (see self_write.go).
+	NoteConfigSelfWrite(path, data)
 	return nil
 }

@@ -125,6 +125,15 @@ func (w *ConfigHotReload) pollOnce() {
 		if !ok || cur.exists != base.exists || cur.hash != base.hash {
 			w.baselines[p] = cur
 			if cur.exists {
+				// Self-authored save: this process persisted its own config
+				// (the writer mutates the shared in-memory config before
+				// persisting), so a reload would just re-merge identical
+				// values. Recognize it and keep the watcher's signal
+				// reserved for genuine external edits.
+				if config.MatchesRecentSelfWrite(p, cur.hash) {
+					debug.Log("config-hotreload", "skipping self-authored save: %s", filepath.Base(p))
+					continue
+				}
 				changed = true
 			}
 		}
