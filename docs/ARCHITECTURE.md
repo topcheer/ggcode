@@ -741,6 +741,7 @@ The agent loop (`internal/agent/`) includes multiple research-inspired optimizat
 | Smart verify hint | `verify_hint.go` | Generate-Verify-Fix loop | Post-edit build reminders with smart reset |
 | Fallback checkpoint | `agent_compact.go` | — | Force checkpoint when messages > 500 even if compaction fails |
 | Prompt cache keepalive | `cache_keepalive.go` | Aider pattern | Ping provider every 270s during idle to keep cache warm (Anthropic only) |
+| Incremental msg cache breakpoint | `anthropic_msg_cache.go` (provider) | Manus/Anthropic prefix caching | Breakpoint on conversation tail so each turn bills only new tokens; `GGCODE_MSG_CACHE_BREAKPOINT=off` to disable |
 | Token calibration | `token_calibrator.go` (context) | — | Self-calibrating char/token ratio using API feedback |
 | MCP read-only mode | `readonly.go` (mcp) | Devin enterprise | Per-server read_only flag blocks write-type tool calls |
 

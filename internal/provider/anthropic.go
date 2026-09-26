@@ -1681,6 +1681,11 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	// Dump full request JSON for debugging protocol violations.
 	// Covers both Chat() (e.g. summarization) and ChatStream() (normal flow).
 
+	// Incremental conversation cache breakpoint: extend the cached prefix to
+	// the conversation tail so each turn re-bills only new tokens instead of
+	// the full history (tools/system breakpoints alone never covered msgs).
+	addMessageCacheBreakpoint(&params)
+
 	return params
 }
 
