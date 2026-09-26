@@ -334,6 +334,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	setupDaemonReflection(ag, workingDir)
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
+	// Mirror root.go/pipe.go: honor verify config (verify.auto_after_run,
+	// verify.claims_supervision, verify.adversarial_review) on the daemon
+	// main agent too. Without this call the flags silently no-op in daemon
+	// sessions while taking effect in REPL and pipe mode.
+	agentruntime.ApplyVerifyConfigToAgent(ag, cfg)
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
