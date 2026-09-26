@@ -652,6 +652,13 @@ func writeKeysEnvTo(newEntries map[string]string, path string) error {
 // file is rewritten. Returns findings so callers can log the migration; when
 // no plaintext keys are found no file is touched.
 func MigrateVendorsFilePlaintextAPIKeys(vendorsPath, keysPath string) ([]APIKeyFinding, error) {
+	// Hold the per-file config lock across the full read-merge-write window
+	// (read vendors.yaml, persist to keys.env, rewrite with ${VAR} refs).
+	// Unlocked, this rewrite races SaveVendors and patchExternalFile, and the
+	// last full-file write silently drops the other writer's fields.
+	unlock := lockConfigFile(vendorsPath)
+	defer unlock()
+
 	raw, err := loadRawConfigMap(vendorsPath)
 	if err != nil {
 		return nil, err

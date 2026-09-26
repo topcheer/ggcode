@@ -147,6 +147,15 @@ func saveExternalSections(cfg *Config, configDir string, vendors map[string]Vend
 func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	path := VendorsPath(configDir)
 
+	// Hold the per-file config lock across the whole read-merge-write window
+	// (default stripping, the #608 env-ref restore that reads the on-disk
+	// file, and the final write). Without it this full-file writer races the
+	// locked patchExternalFile path and same-process Saves from a different
+	// scope (instance vs global main-file locks do not serialize it here),
+	// so the last full-file write silently drops the other writer's fields.
+	unlock := lockConfigFile(path)
+	defer unlock()
+
 	// Marshal vendors to raw map
 	data, err := yaml.Marshal(vendors)
 	if err != nil {
@@ -212,6 +221,12 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 func SaveIMConfig(configDir string, im *IMConfig) error {
 	path := IMPath(configDir)
 
+	// Serialize the full-file overwrite (including the remove branch) against
+	// the locked patchIMAdapterFile read-modify-write path; unlocked, a
+	// concurrent Save could erase an adapter patch or vice versa.
+	unlock := lockConfigFile(path)
+	defer unlock()
+
 	data, err := yaml.Marshal(im)
 	if err != nil {
 		return fmt.Errorf("marshaling im config: %w", err)
@@ -237,6 +252,13 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 // SaveMCPServers writes MCP server list to mcp_servers.yaml.
 func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	path := MCPServersPath(configDir)
+
+	// Serialize against patchExternalFile (locked) and other same-process
+	// writers such as the desktop/CLI SaveMCPServers callers; the write below
+	// is a full overwrite, so without the lock the last writer wins and
+	// concurrently added servers are silently dropped.
+	unlock := lockConfigFile(path)
+	defer unlock()
 
 	if len(servers) == 0 {
 		if fileExists(path) {
