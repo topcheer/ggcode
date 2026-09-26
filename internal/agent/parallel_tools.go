@@ -154,6 +154,11 @@ func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending
 		if !speculativeSafeTools[tc.Name] {
 			continue
 		}
+		if a.streamPrefetch.has(i) {
+			// Already dispatched during streaming (stream_prefetch.go);
+			// its future is harvested into the same preExecuted map.
+			continue
+		}
 		if len(mutatedPaths) > 0 && readAffectedByMutation(tc.Name, tc.Arguments, mutatedPaths) {
 			debug.Log("parallel", "withholding %s (index=%d) from pre-exec: collides with pending mutation", tc.Name, i)
 			continue

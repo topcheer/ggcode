@@ -163,6 +163,7 @@ type Agent struct {
 	overseer                  *overseerState             // deterministic async-overseer: trajectory analysis for stuck/drift/spam
 	repetition                *repetitionTracker         // semantic-level repetition detection for failed edit clusters
 	speculator                *speculator                // pattern-aware speculative tool execution (PASTE-inspired)
+	streamPrefetch            *streamPrefetcher          // stream-overlapped read-only execution (PASTE "Act While Thinking")
 	toolMemo                  *toolMemo                  // read-only tool result memoization (ToolCaching-inspired)
 	confidence                *confidenceState           // holistic trajectory confidence scoring (HTC-inspired)
 	verifDebt                 *verificationDebtState     // verification debt tracker (SAUP-inspired uncertainty propagation)
@@ -383,6 +384,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		overseer:               newOverseerState(),
 		repetition:             newRepetitionTracker(),
 		speculator:             newSpeculator(),
+		streamPrefetch:         newStreamPrefetcher(),
 		toolMemo:               newToolMemo(),
 		confidence:             newConfidenceState(),
 		verifDebt:              newVerificationDebtState(),
@@ -3121,7 +3123,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// When the LLM returns multiple tool calls, independent read-only tools
 		// are executed concurrently before the sequential loop. Results are
 		// consumed in-order; side-effect tools still run sequentially.
+		// Stream-overlapped results first ("Act While Thinking"): read-only
+		// calls dispatched during generation, commit-checked against the full
+		// batch's mutation set now that streaming is complete. Batch pre-exec
+		// skips already-dispatched indices (no double execution).
+		streamPre := a.harvestStreamPrefetch(ctx, toolCalls)
 		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
+		for pIdx, pRes := range streamPre {
+			if _, exists := preExecuted[pIdx]; !exists {
+				if preExecuted == nil {
+					preExecuted = make(map[int]preExecutedResult, len(streamPre))
+				}
+				preExecuted[pIdx] = pRes
+			}
+		}
 		// Parallel pre-execution of wait-family tools (wait_agent,
 		// teammate_results): concurrent waits make batch latency the MAX
 		// instead of the SUM of remaining sub-agent runtimes, and every wait's
@@ -4883,6 +4898,9 @@ func (a *Agent) injectPendingInterruptions() bool {
 // completed tool calls, and whether the stream ended truncated and/or blocked
 // by a provider policy filter.
 func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
+	// Fresh per-stream prefetcher: read-only calls whose JSON closes mid-stream
+	// are dispatched while generation continues (stream_prefetch.go).
+	a.streamPrefetch = newStreamPrefetcher()
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	rawStream, err := a.provider.ChatStream(streamCtx, msgs, toolDefs)
@@ -4941,6 +4959,10 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		case provider.StreamEventToolCallDone:
 			turnMetrics.closeThinkWindow()
 			flushText()
+			// Overlap execution with generation (PASTE, arXiv:2603.18897):
+			// dispatch read-only calls now instead of after Done. len(toolCalls)
+			// is the index this call will occupy once appended below.
+			a.streamPrefetch.mayStart(ctx, a, event.Tool, len(toolCalls))
 			onEvent(event)
 			toolCalls = append(toolCalls, event.Tool)
 			blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
