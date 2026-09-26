@@ -48,6 +48,29 @@ Download from GitHub Releases:
 - **Provider picker** — switch between configured LLM providers visually
 - **Permission modes** — switch between supervised, plan, auto, bypass, and autopilot
 
+### Secrets & API Keys
+
+Desktop uses the exact same secret storage as the CLI. There is no separate
+desktop credential store:
+
+- API keys are written to `~/.ggcode/keys.env` (permission `0600`), and the
+  vendor/endpoint config stores only a `${VAR}` reference. Keys never appear
+  in `ggcode.yaml` or `vendors.yaml` in plaintext.
+- The settings UI never displays a stored key. It shows a masked preview
+  only, so shoulder-surfing and screen shares stay safe.
+- Legacy plaintext keys already present on disk are migrated to `keys.env`
+  automatically the next time the config is loaded or saved.
+- Because `keys.env` is shared, a key saved in Desktop is available to the
+  CLI immediately (and vice versa).
+- Shell environment takes precedence: if the variable for a key is already
+  exported in the shell that launched Desktop with a different value, the
+  shell value wins and the saved key is ignored until the export is removed.
+  Desktop logs a warning when it detects this shadowing.
+
+Desktop also picks up config edits made outside the app (for example from
+the CLI or a manual editor) within a few seconds, so both front-ends stay in
+sync without a restart.
+
 ### Integrations
 - **MCP browser** — explore connected MCP servers, their tools, prompts, and resources
 - **Language Servers (LSP)** — view detection status and install missing servers with one click (scope: user > global > project)
