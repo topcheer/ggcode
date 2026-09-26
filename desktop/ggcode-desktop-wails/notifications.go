@@ -261,7 +261,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 	// and is never re-queued either.
 	if runtime.GOOS == "windows" {
 		if !nm.enqueueWinToast(title, body) {
-			nm.rollbackNotify(key)
+			count = nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after toast enqueue failure: %s", title)
 		}
 	} else if runtime.GOOS == "darwin" {
@@ -270,7 +270,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 		// storms exactly like winQueue, and a bare blocking send stalled the
 		// stream-event dispatch goroutine for tens of seconds.
 		if !nm.enqueueUnixToast(title, body) {
-			nm.rollbackNotify(key)
+			count = nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
 		}
 	} else {
@@ -279,7 +279,7 @@ func (nm *NotificationManager) Notify(title, body string) {
 		// queue-full signal - the same failure mode the darwin branch above
 		// rolls back for (#1866), because Linux shares unixQueue with darwin.
 		if !nm.showOSNotification(title, body) {
-			nm.rollbackNotify(key)
+			count = nm.rollbackNotify(key)
 			debug.Log("desktop", "notification rolled back after unix enqueue failure: %s", title)
 		}
 	}
@@ -533,14 +533,25 @@ func (nm *NotificationManager) enqueueUnixToast(title, body string) bool {
 
 // rollbackNotify undoes the dedup-map and unread commits Notify made
 // before handing the banner to a bounded queue (#600 N4 / #1866).
-func (nm *NotificationManager) rollbackNotify(key string) {
+// #2789: it returns the post-rollback count and refreshes the badge -
+// Notify's tail frontend emit still feeds the #2410 title-listener
+// contract, and the badge was already set from the pre-rollback snapshot
+// at L255; without this both would keep reporting the rolled-back bump
+// until the next notification (forever if the dropped one was the last
+// of a storm). Mirrors the #2411 fix in NotifyApprovalNeeded's rollback.
+func (nm *NotificationManager) rollbackNotify(key string) int {
 	nm.mu.Lock()
 	delete(nm.lastShown, key)
 	nm.unread--
 	if nm.unread < 0 {
 		nm.unread = 0
 	}
+	count := nm.unread
 	nm.mu.Unlock()
+	// count==0 clears the badge (setBadge delegates to clearBadge),
+	// matching Notify's unconditional setBadge(count) at commit time.
+	nm.setBadge(count)
+	return count
 }
 
 // drainUnixQueue serializes non-Windows notifications (#1431-A):
