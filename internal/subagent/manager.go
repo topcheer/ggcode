@@ -550,6 +550,10 @@ func (m *Manager) reapInactiveAgents() {
 		}
 		sa.mu.Unlock()
 		m.mu.Unlock()
+		// #2785: the started-but-stuck path goes through Cancel() (which
+		// notifies); this direct flip used to be silent, leaving TUI and
+		// desktop collectors showing the agent as pending forever.
+		m.notifyUpdate(sa)
 		debug.Log("subagent", "watchdog: failed never-started pending sub-agent %s (slot reclaimed)", id)
 	}
 	// Also purge old terminal agents to bound memory growth
