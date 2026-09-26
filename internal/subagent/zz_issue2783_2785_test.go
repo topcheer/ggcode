@@ -130,10 +130,11 @@ func TestIssue2785NeverStartedFailsWithNotification(t *testing.T) {
 	if !ok {
 		t.Fatal("spawn failed")
 	}
-	// Simulate the runner goroutine never starting: Pending + not started,
-	// lastActivity beyond the inactivity timeout.
+	// Simulate the runner goroutine never starting: Pending + not started.
+	// The pending clock is CreatedAt (lastActivity stays zero for Pending,
+	// per #2119), so age the creation timestamp past the timeout.
 	sa.mu.Lock()
-	sa.lastActivity = time.Now().Add(-200 * time.Millisecond)
+	sa.CreatedAt = time.Now().Add(-200 * time.Millisecond)
 	sa.mu.Unlock()
 
 	rec.snapshot() // drain
