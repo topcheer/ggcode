@@ -145,20 +145,8 @@ func findConcurrentMapAccess(fset *token.FileSet, file *ast.File) []concurrentMa
 			continue
 		}
 		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			if _, isMap := vs.Type.(*ast.MapType); isMap {
-				for _, name := range vs.Names {
-					pkgMaps[name.Name] = true
-				}
-				continue
-			}
-			for i, val := range vs.Values {
-				if isMapValuedExpr(val) && i < len(vs.Names) {
-					pkgMaps[vs.Names[i].Name] = true
-				}
+			if vs, ok := spec.(*ast.ValueSpec); ok {
+				mapNamesInValueSpec(vs, pkgMaps)
 			}
 		}
 	}
@@ -202,8 +190,12 @@ type mapConcurrencyInfo struct {
 // analyzeFuncForMapConcurrency inspects a function for concurrent map
 // access patterns (#1445-A: takes the FuncDecl so map-typed params and
 // receivers seed the declaration-proof set BEFORE the write scan).
+// // r110 decomposition (behavior-preserving):
+//  1. seed proof: package-level maps + map-typed params/receivers
+//  2. pass 1: collectDeclarationProof — names PROVEN to be maps
+//  3. pass 2: scanWritesAndSync — go statements, sync evidence, writes
+//  4. finalize: any sync evidence clears all pending writes
 func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) mapConcurrencyInfo {
-	body := fn.Body
 	info := mapConcurrencyInfo{
 		unsyncMapWrites: make(map[string]token.Pos),
 		mapDeclared:     make(map[string]bool),
@@ -215,20 +207,8 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 		info.mapDeclared[name] = true
 	}
 	// Params/receiver declared as maps are proof (func worker(m map...)).
-	seed := func(fl *ast.FieldList) {
-		if fl == nil {
-			return
-		}
-		for _, fld := range fl.List {
-			if _, isMap := fld.Type.(*ast.MapType); isMap {
-				for _, name := range fld.Names {
-					info.mapDeclared[name.Name] = true
-				}
-			}
-		}
-	}
-	seed(fn.Type.Params)
-	seed(fn.Recv)
+	seedMapTypedFields(fn.Type.Params, info.mapDeclared)
+	seedMapTypedFields(fn.Recv, info.mapDeclared)
 
 	// #1445-A pass 1: collect names PROVEN to be maps - the old check
 	// counted ANY indexed assignment (`out[i] = v` on a slice, `arr[0]`,
@@ -238,133 +218,10 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 	// (the #511 tombstone lesson repeating). Without go/types we prove
 	// map-ness from the declaration shapes: make(map[...]), var x map[...],
 	// or a map composite literal.
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.AssignStmt:
-			for _, rhs := range node.Rhs {
-				if isMapValuedExpr(rhs) {
-					for _, lhs := range node.Lhs {
-						if id, ok := lhs.(*ast.Ident); ok {
-							info.mapDeclared[id.Name] = true
-						}
-					}
-				}
-			}
-		case *ast.DeclStmt:
-			if d, ok := node.Decl.(*ast.GenDecl); ok && d.Tok == token.VAR {
-				for _, spec := range d.Specs {
-					vs, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
-					if _, isMap := vs.Type.(*ast.MapType); isMap {
-						for _, name := range vs.Names {
-							info.mapDeclared[name.Name] = true
-						}
-						continue
-					}
-					// #1533-B: `var m = make(map[string]int)` and
-					// `var m = map[string]int{}` fall between the DeclStmt
-					// (Type-only) and AssignStmt (isMapValuedExpr) branches -
-					// the idiomatic inferred declaration was never proven.
-					for i, val := range vs.Values {
-						if isMapValuedExpr(val) && i < len(vs.Names) {
-							info.mapDeclared[vs.Names[i].Name] = true
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
+	info.collectDeclarationProof(fn.Body)
 
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.GoStmt:
-			info.hasGoStatement = true
-
-		case *ast.SelectorExpr:
-			// Detect sync.Map usage: sync.Map or field of type accessed via
-			// sync.Map methods (Store, Load, LoadOrStore, Delete, Range).
-			// Only MUTUAL-EXCLUSION or concurrent-safe-map types count (#218):
-			// WaitGroup/Once/Pool provide no map protection — counting them
-			// cleared all warnings for the most common fan-out crash pattern
-			// (goroutines writing a map under wg.Add/Done).
-			if ident, ok := node.X.(*ast.Ident); ok {
-				if ident.Name == "sync" && node.Sel != nil {
-					switch node.Sel.Name {
-					case "Map", "Mutex", "RWMutex", "Locker":
-						info.hasSync = true
-					}
-				}
-			}
-
-		case *ast.CallExpr:
-			// Detect Lock/Unlock/RLock/RUnlock method calls as evidence of sync.
-			if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil {
-				switch sel.Sel.Name {
-				case "Lock", "Unlock", "RLock", "RUnlock", "TryLock", "TryRLock":
-					info.hasSync = true
-				}
-			}
-
-			// Detect mutex type declarations via make or struct literal.
-			if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "Lock" {
-				info.hasSync = true
-			}
-
-			// Detect delete(m, k) -- another map write operation.
-			if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "delete" && len(node.Args) > 0 {
-				if mapName := mapVarName(node.Args[0]); mapName != "" {
-					if _, exists := info.unsyncMapWrites[mapName]; !exists {
-						info.unsyncMapWrites[mapName] = node.Pos()
-					}
-				}
-			}
-
-		case *ast.IncDecStmt:
-			// #1533-C: m[k]++ (concurrent counters are a top real-world
-			// concurrent-map crash shape) - IncDecStmt is NOT an AssignStmt,
-			// so it escaped the switch entirely.
-			if idx, ok := node.X.(*ast.IndexExpr); ok {
-				name := mapVarName(idx.X)
-				if name != "" && (strings.Contains(name, ".") || info.mapDeclared[name]) {
-					if _, exists := info.unsyncMapWrites[name]; !exists {
-						info.unsyncMapWrites[name] = node.Pos()
-					}
-				}
-			}
-
-		case *ast.AssignStmt:
-			// Detect map write: m[k] = v  (#1533-C: and m[k] += v etc. -
-			// compound assignments used to be filtered out alongside :=/=).
-			isAssignTok := node.Tok == token.ASSIGN || node.Tok == token.DEFINE ||
-				node.Tok == token.ADD_ASSIGN || node.Tok == token.SUB_ASSIGN ||
-				node.Tok == token.MUL_ASSIGN || node.Tok == token.QUO_ASSIGN ||
-				node.Tok == token.REM_ASSIGN || node.Tok == token.AND_ASSIGN ||
-				node.Tok == token.OR_ASSIGN || node.Tok == token.XOR_ASSIGN ||
-				node.Tok == token.SHL_ASSIGN || node.Tok == token.SHR_ASSIGN ||
-				node.Tok == token.AND_NOT_ASSIGN
-			if isAssignTok {
-				for _, lhs := range node.Lhs {
-					if idx, ok := lhs.(*ast.IndexExpr); ok {
-						// #1445-A: plain identifiers need declaration proof (a
-						// slice out[i]=v is not a map write); struct-field
-						// selectors keep the conservative old behavior (the
-						// field's type lives outside this function).
-						name := mapVarName(idx.X)
-						isMapWrite := name != "" && (strings.Contains(name, ".") || info.mapDeclared[name])
-						if isMapWrite {
-							if _, exists := info.unsyncMapWrites[name]; !exists {
-								info.unsyncMapWrites[name] = node.Pos()
-							}
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
+	// Pass 2: goroutine spawns, sync evidence, unsynchronized map writes.
+	info.scanWritesAndSync(fn.Body)
 
 	// If the function uses sync primitives, clear the warnings.
 	if info.hasSync {
@@ -372,6 +229,182 @@ func analyzeFuncForMapConcurrency(fn *ast.FuncDecl, pkgMaps map[string]bool) map
 	}
 
 	return info
+}
+
+// assignWriteTokens lists every assignment token that stores into its LHS.
+// #1533-C: compound assignments (m[k] += v etc.) count alongside = and :=.
+var assignWriteTokens = map[token.Token]bool{
+	token.ASSIGN: true, token.DEFINE: true,
+	token.ADD_ASSIGN: true, token.SUB_ASSIGN: true,
+	token.MUL_ASSIGN: true, token.QUO_ASSIGN: true, token.REM_ASSIGN: true,
+	token.AND_ASSIGN: true, token.OR_ASSIGN: true, token.XOR_ASSIGN: true,
+	token.SHL_ASSIGN: true, token.SHR_ASSIGN: true, token.AND_NOT_ASSIGN: true,
+}
+
+// seedMapTypedFields records every map-typed name in a field list (params
+// or receiver) as proven map (func worker(m map[string]int)).
+func seedMapTypedFields(fl *ast.FieldList, declared map[string]bool) {
+	if fl == nil {
+		return
+	}
+	for _, fld := range fl.List {
+		if _, isMap := fld.Type.(*ast.MapType); isMap {
+			for _, name := range fld.Names {
+				declared[name.Name] = true
+			}
+		}
+	}
+}
+
+// mapNamesInValueSpec records map-typed or map-initialized names from one
+// var ValueSpec. Shared by the package-level scan (findConcurrentMapAccess)
+// and the in-function proof pass - one copy prevents the two proof paths
+// from drifting (the #1533-B gap was exactly such drift).
+func mapNamesInValueSpec(vs *ast.ValueSpec, declared map[string]bool) {
+	if _, isMap := vs.Type.(*ast.MapType); isMap {
+		for _, name := range vs.Names {
+			declared[name.Name] = true
+		}
+		return
+	}
+	for i, val := range vs.Values {
+		if isMapValuedExpr(val) && i < len(vs.Names) {
+			declared[vs.Names[i].Name] = true
+		}
+	}
+}
+
+// collectDeclarationProof is pass 1 (#1445-A): walk the body and record
+// every name whose declaration shape proves it holds a map.
+func (m *mapConcurrencyInfo) collectDeclarationProof(body ast.Node) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			for _, rhs := range node.Rhs {
+				if isMapValuedExpr(rhs) {
+					for _, lhs := range node.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							m.mapDeclared[id.Name] = true
+						}
+					}
+				}
+			}
+		case *ast.DeclStmt:
+			// #1533-B: `var m = make(map[string]int)` and
+			// `var m = map[string]int{}` fall between the DeclStmt
+			// (Type-only) and AssignStmt (isMapValuedExpr) branches -
+			// the idiomatic inferred declaration was never proven.
+			if d, ok := node.Decl.(*ast.GenDecl); ok && d.Tok == token.VAR {
+				for _, spec := range d.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						mapNamesInValueSpec(vs, m.mapDeclared)
+					}
+				}
+			}
+		}
+		return true
+	})
+}
+
+// scanWritesAndSync is pass 2: goroutine spawns, mutual-exclusion evidence,
+// and unsynchronized map writes (delete / index-assign / index-incdec).
+func (m *mapConcurrencyInfo) scanWritesAndSync(body ast.Node) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.GoStmt:
+			m.hasGoStatement = true
+		case *ast.SelectorExpr:
+			m.noteSyncSelector(node)
+		case *ast.CallExpr:
+			m.noteCallEvidence(node)
+		case *ast.IncDecStmt:
+			// #1533-C: m[k]++ (concurrent counters are a top real-world
+			// concurrent-map crash shape) - IncDecStmt is NOT an AssignStmt,
+			// so it escaped the switch entirely.
+			if idx, ok := node.X.(*ast.IndexExpr); ok {
+				m.noteProvenMapWrite(idx.X, node.Pos())
+			}
+		case *ast.AssignStmt:
+			m.noteAssignWrites(node)
+		}
+		return true
+	})
+}
+
+// noteSyncSelector detects sync.Map/Mutex/RWMutex/Locker usage. Only
+// MUTUAL-EXCLUSION or concurrent-safe-map types count (#218): WaitGroup /
+// Once/Pool provide no map protection — counting them cleared all warnings
+// for the most common fan-out crash pattern (goroutines writing a map
+// under wg.Add/Done).
+func (m *mapConcurrencyInfo) noteSyncSelector(node *ast.SelectorExpr) {
+	ident, ok := node.X.(*ast.Ident)
+	if !ok || ident.Name != "sync" || node.Sel == nil {
+		return
+	}
+	switch node.Sel.Name {
+	case "Map", "Mutex", "RWMutex", "Locker":
+		m.hasSync = true
+	}
+}
+
+// noteCallEvidence inspects a call expression for sync evidence (Lock /
+// Unlock/RLock/RUnlock/TryLock/TryRLock method calls, or a bare Lock
+// identifier) and for the delete(m, k) map-write form. delete requires a
+// map operand to compile, so no declaration proof is needed there.
+func (m *mapConcurrencyInfo) noteCallEvidence(node *ast.CallExpr) {
+	if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel != nil {
+		switch sel.Sel.Name {
+		case "Lock", "Unlock", "RLock", "RUnlock", "TryLock", "TryRLock":
+			m.hasSync = true
+		}
+	}
+	if ident, ok := node.Fun.(*ast.Ident); ok {
+		switch ident.Name {
+		case "Lock":
+			m.hasSync = true
+		case "delete":
+			if len(node.Args) > 0 {
+				if mapName := mapVarName(node.Args[0]); mapName != "" {
+					m.recordMapWrite(mapName, node.Pos())
+				}
+			}
+		}
+	}
+}
+
+// noteAssignWrites records m[k] = v (and compound forms) as map writes.
+func (m *mapConcurrencyInfo) noteAssignWrites(node *ast.AssignStmt) {
+	if !assignWriteTokens[node.Tok] {
+		return
+	}
+	for _, lhs := range node.Lhs {
+		if idx, ok := lhs.(*ast.IndexExpr); ok {
+			// #1445-A: plain identifiers need declaration proof (a
+			// slice out[i]=v is not a map write); struct-field
+			// selectors keep the conservative old behavior (the
+			// field's type lives outside this function).
+			m.noteProvenMapWrite(idx.X, node.Pos())
+		}
+	}
+}
+
+// noteProvenMapWrite records the first write position for a base expression
+// that is plausibly a map: dotted names (s.items) pass conservatively
+// without proof (the field's type lives outside this function); plain
+// identifiers require proof (#1445-A).
+func (m *mapConcurrencyInfo) noteProvenMapWrite(base ast.Expr, pos token.Pos) {
+	name := mapVarName(base)
+	if name == "" || (!strings.Contains(name, ".") && !m.mapDeclared[name]) {
+		return
+	}
+	m.recordMapWrite(name, pos)
+}
+
+// recordMapWrite keeps only the first write position per map name.
+func (m *mapConcurrencyInfo) recordMapWrite(name string, pos token.Pos) {
+	if _, exists := m.unsyncMapWrites[name]; !exists {
+		m.unsyncMapWrites[name] = pos
+	}
 }
 
 // mapVarName extracts the variable name from a map expression, handling
