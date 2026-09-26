@@ -550,6 +550,13 @@ max_iterations: 0
 # Warnings at 80% and 95%, hard stop at 100%.
 # tool_call_budget: 0
 
+# Optional LLM refinement of weak session titles (default false). When the
+# deterministic title heuristics leave an empty or generic title (common for
+# paste-heavy first messages), one small side LLM call generates a concise,
+# task-describing title. Off by default; titles are also user-editable via
+# /title and never overridden once set manually.
+# auto_title_llm: false
+
 # Post-loop verification and success-claim supervision. Both are OFF by
 # default: the system prompt already requires the model to verify its own
 # changes inside the loop (scoped to what changed), which current models

@@ -170,6 +170,7 @@ func (m Model) handleAgentDoneMsg(msg agentDoneMsg) (Model, tea.Cmd) {
 	if !wasCanceled && !wasFailed {
 		m.persistFullSessionMessages()
 		m.maybeRefineSessionTitle(doneToolCount)
+		m.maybeLLMRefineSessionTitle()
 	}
 	// Fire an armed agent-requested restart now that the turn's tool results
 	// and trailing text are persisted (#347). Fires for canceled/failed runs

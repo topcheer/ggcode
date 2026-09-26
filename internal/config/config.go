@@ -328,22 +328,27 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 
 // Config is the top-level configuration.
 type Config struct {
-	Vendor             string                    `yaml:"vendor" json:"vendor"`
-	Endpoint           string                    `yaml:"endpoint" json:"endpoint"`
-	Model              string                    `yaml:"model" json:"model"`
-	Language           string                    `yaml:"language" json:"language"`
-	UI                 UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
-	IM                 IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
-	ExtraPrompt        string                    `yaml:"extra_prompt" json:"extra_prompt"`
-	Vendors            map[string]VendorConfig   `yaml:"vendors" json:"vendors"`
-	AllowedDirs        []string                  `yaml:"allowed_dirs" json:"allowed_dirs"`
-	MaxIterations      int                       `yaml:"max_iterations" json:"max_iterations"`
-	SessionTimeout     time.Duration             `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
-	SessionTokenBudget int64                     `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
-	ToolCallBudget     int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
-	ToolPerms          map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
-	Plugins            []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
-	MCPServers         []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
+	Vendor             string                  `yaml:"vendor" json:"vendor"`
+	Endpoint           string                  `yaml:"endpoint" json:"endpoint"`
+	Model              string                  `yaml:"model" json:"model"`
+	Language           string                  `yaml:"language" json:"language"`
+	UI                 UIConfig                `yaml:"ui,omitempty" json:"ui,omitempty"`
+	IM                 IMConfig                `yaml:"im,omitempty" json:"im,omitempty"`
+	ExtraPrompt        string                  `yaml:"extra_prompt" json:"extra_prompt"`
+	Vendors            map[string]VendorConfig `yaml:"vendors" json:"vendors"`
+	AllowedDirs        []string                `yaml:"allowed_dirs" json:"allowed_dirs"`
+	MaxIterations      int                     `yaml:"max_iterations" json:"max_iterations"`
+	SessionTimeout     time.Duration           `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
+	SessionTokenBudget int64                   `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
+	ToolCallBudget     int                     `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
+	// AutoTitleLLM enables the optional LLM side call that refines weak
+	// session titles (empty/generic after the deterministic heuristics in
+	// internal/agentruntime/auto_title.go) into task-describing ones.
+	// Default off: the heuristics stay the free default path.
+	AutoTitleLLM bool                      `yaml:"auto_title_llm,omitempty" json:"auto_title_llm,omitempty"`
+	ToolPerms    map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
+	Plugins      []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
+	MCPServers   []MCPServerConfig         `yaml:"mcp_servers" json:"mcp_servers"`
 	// MCPSamplingDisabled (#1484-D) turns the MCP sampling handler off
 	// entirely - sampling is the only LLM-consumption path with no gate:
 	// a buggy/malicious server could loop sampling requests and burn the
