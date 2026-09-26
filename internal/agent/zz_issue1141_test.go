@@ -121,15 +121,19 @@ func TestIssue1141RealDiagnosticStillGuardsLargeEdit(t *testing.T) {
 // rules onto the visible payload (#1141).
 //
 // Implementation detail: the detector's final state machine wiring lives in
-// internal/agent/agent.go inside executeToolCalls, while the implementation
+// internal/agent/tool_exec.go inside executeToolBatch (extracted from
+// RunStreamWithContent in r129), while the implementation
 // under test here lives in overcorrection_cascade.go, so the source is read
 // directly instead of going through lsp_document_highlights.
 func TestIssue1141RecorderRunsBeforeRuleInjection(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatalf("cannot read agent.go: %v", err)
+	var code string
+	for _, f := range []string{"agent.go", "tool_exec.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", f, err)
+		}
+		code += string(b) + "\n"
 	}
-	code := string(src)
 
 	// The injection-statement shape, unique within executeToolCalls.
 	injectRe := regexp.MustCompile(`(?m)^\t*result\.Content = a\.injectRulesIntoResult\(tc\.Name, tc\.Arguments, result\.Content\)$`)

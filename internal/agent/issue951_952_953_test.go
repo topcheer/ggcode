@@ -210,9 +210,16 @@ func TestTokenWasteBudgetOriginalLenDrivesMetering(t *testing.T) {
 // BEFORE guidance hints are appended, so metering reflects the real
 // context cost in both directions (#553 inflation and #1819 shrink).
 func TestAgentGoOriginalContentLenCapturedBeforeDetectorChain(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatalf("read agent.go: %v", err)
+	// The metering capture lives in tool_exec.go (extracted from
+	// RunStreamWithContent in r129); scan both files so the ordering
+	// contract survives future moves.
+	var src []byte
+	for _, f := range []string{"agent.go", "tool_exec.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		src = append(src, b...)
 	}
 	captureIdx := strings.Index(string(src), "measuredLen := len(result.Content)")
 	applyIdx := strings.Index(string(src), "a.applyToolResultGuidance(")

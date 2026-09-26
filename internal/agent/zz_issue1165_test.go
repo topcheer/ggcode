@@ -30,15 +30,19 @@ import (
 //  3. falsePremise still behaves correctly on pristine content after the move.
 
 // TestIssue1165RecordersRunBeforeRuleInjection pins call ordering inside
-// executeToolCalls: overcorrectionRecordError (#1141), then
+// executeToolBatch (tool_exec.go, extracted from RunStreamWithContent in
+// r129): overcorrectionRecordError (#1141), then
 // falsePremise.recordToolResult and integrationRecordToolResult (#1165), all
 // strictly before the injectRulesIntoResult rewrite.
 func TestIssue1165RecordersRunBeforeRuleInjection(t *testing.T) {
-	src, err := os.ReadFile("agent.go")
-	if err != nil {
-		t.Fatalf("cannot read agent.go: %v", err)
+	var code string
+	for _, f := range []string{"agent.go", "tool_exec.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("cannot read %s: %v", f, err)
+		}
+		code += string(b) + "\n"
 	}
-	code := string(src)
 
 	injectRe := regexp.MustCompile(
 		`(?m)\t*result\.Content = a\.injectRulesIntoResult\(tc\.Name, tc\.Arguments, result\.Content\)`)
