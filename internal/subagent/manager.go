@@ -401,7 +401,7 @@ type Manager struct {
 	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
 	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
 	onSystem     func(agentID, text string)                                                        // called on system events (retry, compaction)
-	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
+	lastNotify   map[string]time.Time                                                              // per-agent throttle watermark (#2784): last onUpdate time per agent ID
 	nextID       int
 	// maxConcurrent is the configured concurrency limit (cfg.MaxConcurrent,
 	// default 16). Spawn's early-reject check uses this instead of a hardcoded
@@ -1037,11 +1037,24 @@ func (m *Manager) Complete(id string, result string, err error) {
 		// completed work. Now any non-empty result is backfilled when sa.Result
 		// is empty; the terminal status and error stay untouched so the parent
 		// still sees the cancellation.
+		backfilled := false
 		if result != "" && sa.Result == "" {
 			sa.Result = result
+			backfilled = true
 		}
 		sa.closeDone()
 		sa.mu.Unlock()
+		// #2783: the backfilled result is new information the UI collectors
+		// have never seen - the terminal branch used to return silently, so
+		// a successful output computed before the cancel was invisible (no
+		// TUI subAgentDoneMsg, no desktop onComplete collection). Cancel's
+		// own notifyUpdate already covered the terminal transition itself.
+		if backfilled {
+			if onComplete != nil {
+				onComplete(sa)
+			}
+			m.notifyUpdate(sa)
+		}
 		return
 	}
 	if err != nil {
@@ -1362,21 +1375,31 @@ func (m *Manager) ShowOutput() bool {
 func (m *Manager) notifyUpdate(sa *SubAgent) {
 	m.mu.Lock()
 	fn := m.onUpdate
-	now := time.Now()
-	lastNotify := m.lastNotify
-	m.mu.Unlock()
 	if fn == nil {
+		m.mu.Unlock()
 		return
 	}
-	// Throttle: skip if we notified less than 100ms ago.
-	// Do NOT update m.lastNotify on skipped calls — that would advance the
-	// watermark unconditionally and permanently suppress updates during
-	// continuous streaming (events arriving <100ms apart).
-	if !lastNotify.IsZero() && now.Sub(lastNotify) < 100*time.Millisecond {
+	now := time.Now()
+	if m.lastNotify == nil {
+		m.lastNotify = make(map[string]time.Time)
+	}
+	last := m.lastNotify[sa.ID]
+	// #2784: the throttle watermark is PER AGENT. A Manager-level single
+	// timestamp meant one streaming agent suppressed every other agent's
+	// notifications within the 100ms window - including low-frequency
+	// terminal states that have no follow-up event to recover with.
+	// Terminal-state transitions are additionally EXEMPT from throttling:
+	// they are rare, and dropping one (e.g. a terminal-branch backfill
+	// arriving right after the cancel notification, #2783) leaves the UI
+	// stale indefinitely.
+	sa.mu.Lock()
+	terminal := sa.Status == StatusCompleted || sa.Status == StatusFailed || sa.Status == StatusCancelled
+	sa.mu.Unlock()
+	if !terminal && !last.IsZero() && now.Sub(last) < 100*time.Millisecond {
+		m.mu.Unlock()
 		return
 	}
-	m.mu.Lock()
-	m.lastNotify = time.Now()
+	m.lastNotify[sa.ID] = now
 	m.mu.Unlock()
 	fn(sa)
 }
