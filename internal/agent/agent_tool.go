@@ -324,6 +324,21 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	if repaired, ok := provider.RepairJSON(tc.Arguments); ok {
 		debug.Log("agent", "repaired malformed JSON arguments for tool %s", tc.Name)
 		tc.Arguments = repaired
+	} else if trimmed := bytes.TrimSpace(tc.Arguments); len(trimmed) > 0 && !json.Valid(trimmed) {
+		// Repair failed and the arguments remain unparsable. Returning an
+		// actionable error now is better than letting the tool fail later
+		// with a confusing low-level "invalid arguments" message: the model
+		// gets told exactly what is wrong and how to resend (dynamic
+		// fallback principle — reject what cannot be salvaged, but explain).
+		detail := describeJSONError(trimmed)
+		debug.Log("agent", "arguments for tool %s are unrecoverable JSON: %s", tc.Name, detail)
+		return tool.Result{
+			Content: fmt.Sprintf(
+				"Tool %q: arguments are not valid JSON and could not be auto-repaired (%s). "+
+					"Resend the complete arguments as valid JSON: double-quoted keys and string values, no trailing commas, no single quotes.",
+				tc.Name, detail),
+			IsError: true,
+		}
 	}
 
 	// Schema-aware argument coercion: weak models (open-weight models via
@@ -1910,4 +1925,18 @@ func truncateString(s string, maxLen int) string {
 		return string(runes[:maxLen])
 	}
 	return string(runes[:maxLen-3]) + "..."
+}
+
+// describeJSONError summarizes why tool-call arguments failed to parse as
+// JSON, for actionable error messages returned to the model.
+func describeJSONError(raw []byte) string {
+	var v any
+	err := json.Unmarshal(raw, &v)
+	if err == nil {
+		return "unknown parse error"
+	}
+	if se, ok := err.(*json.SyntaxError); ok {
+		return fmt.Sprintf("%s at byte offset %d", se.Error(), se.Offset)
+	}
+	return err.Error()
 }

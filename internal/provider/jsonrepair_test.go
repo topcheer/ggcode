@@ -271,3 +271,121 @@ func TestNormalizeQuotes(t *testing.T) {
 		t.Errorf("normalizeQuotes = %q, want %q", got, `"hello"`)
 	}
 }
+
+func TestRepairJSON_UnquotedKeys(t *testing.T) {
+	input := `{path: "/tmp/main.go", recursive: true}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for unquoted keys")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["path"] != "/tmp/main.go" {
+		t.Errorf("expected path=/tmp/main.go, got %v", m["path"])
+	}
+	if m["recursive"] != true {
+		t.Errorf("expected recursive=true, got %v", m["recursive"])
+	}
+}
+
+func TestRepairJSON_PythonLiterals(t *testing.T) {
+	input := `{"checkpoint_id": None, "force": True, "cached": False}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for Python literals")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if v, ok := m["checkpoint_id"]; !ok || v != nil {
+		t.Errorf("expected checkpoint_id=null, got %v", m["checkpoint_id"])
+	}
+	if m["force"] != true || m["cached"] != false {
+		t.Errorf("expected force=true cached=false, got force=%v cached=%v", m["force"], m["cached"])
+	}
+}
+
+func TestRepairJSON_PythonLiteralsInsideStringPreserved(t *testing.T) {
+	// Bare keys + Python literal inside a string value: the string content
+	// must not be rewritten.
+	input := `{msg: "it is True and None", n: 1}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["msg"] != "it is True and None" {
+		t.Errorf("string content must be preserved, got %v", m["msg"])
+	}
+}
+
+func TestRepairJSON_SingleQuotedValue(t *testing.T) {
+	input := `{path: '/tmp/main.go'}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for single-quoted value")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["path"] != "/tmp/main.go" {
+		t.Errorf("expected path=/tmp/main.go, got %v", m["path"])
+	}
+}
+
+func TestRepairJSON_SingleQuotedEmbeddedDoubleQuote(t *testing.T) {
+	input := `{content: 'say "hi" now'}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["content"] != `say "hi" now` {
+		t.Errorf("embedded double quote must be escaped, got %v", m["content"])
+	}
+}
+
+func TestRepairJSON_SingleQuotedAmbiguousApostrophe(t *testing.T) {
+	// Embedded apostrophe makes pairing ambiguous - must NOT be repaired.
+	input := `{content: 'don't stop'}`
+	_, repaired := RepairJSON([]byte(input))
+	if repaired {
+		t.Errorf("ambiguous single-quoted content must not be repaired")
+	}
+}
+
+func TestRepairJSON_CombinedMalformations(t *testing.T) {
+	// Real-world combo: prose wrapper + bare keys + single quotes + Python
+	// literal, all in one broken payload.
+	input := "Here are the arguments:\n{file_path: 'a.go', old_text: 'foo', all: True}\nDone."
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for combined malformations")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["file_path"] != "a.go" || m["old_text"] != "foo" || m["all"] != true {
+		t.Errorf("unexpected repaired content: %v", m)
+	}
+}
+
+func TestQuoteUnquotedKeys_ArrayValuesNotQuoted(t *testing.T) {
+	// Array element positions must not be treated as keys.
+	input := `[alpha, beta]`
+	got := quoteUnquotedKeys(input)
+	if got != input {
+		t.Errorf("array elements must stay untouched, got %q", got)
+	}
+}
