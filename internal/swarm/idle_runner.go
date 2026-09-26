@@ -301,12 +301,8 @@ func tryClaimPendingTask(
 				// Mark task as completed with error metadata so it's not re-claimed.
 				// Using "completed" instead of adding a new "failed" status keeps the
 				// task board consistent — the metadata records the permanent failure.
-				completed := task.StatusCompleted
-				errMsg := util.Truncate(taskErr.Error(), 200)
-				tmMgr.Update(claimed.ID, task.UpdateOptions{
-					Status:   &completed,
-					Metadata: map[string]string{"permanent_error": fc.String(), "error": errMsg},
-				})
+				// #2786: parking also cascades the failure to BlockedBy dependents.
+				parkTaskFailed(tmMgr, claimed.ID, fc.String(), util.Truncate(taskErr.Error(), 200), parkOpts{})
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
 			} else {
@@ -323,16 +319,9 @@ func tryClaimPendingTask(
 				}
 				attempts++
 				if attempts >= maxTransientTaskRetries {
-					completed := task.StatusCompleted
-					errMsg := util.Truncate(taskErr.Error(), 200)
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
-						Status: &completed,
-						Metadata: map[string]string{
-							"permanent_error": "max_retries_exceeded",
-							"error":           errMsg,
-							"retry_attempts":  strconv.Itoa(attempts),
-						},
-					})
+					// #2786: parking cascades the failure to BlockedBy dependents.
+					parkTaskFailed(tmMgr, claimed.ID, "max_retries_exceeded", util.Truncate(taskErr.Error(), 200),
+						parkOpts{extra: map[string]string{"retry_attempts": strconv.Itoa(attempts)}})
 					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
 						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
 				} else {
@@ -347,7 +336,14 @@ func tryClaimPendingTask(
 			}
 		} else {
 			completed := task.StatusCompleted
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+			// #2786: guard with in_progress — if the task was parked by a
+			// cascade while we were still running (its own dependency failed),
+			// a bare status overwrite would resurrect it as a clean success
+			// and re-unlock its dependents.
+			inProgressStatus := task.StatusInProgress
+			if _, uerr := tmMgr.Update(claimed.ID, task.UpdateOptions{ExpectedStatus: &inProgressStatus, Status: &completed}); uerr != nil {
+				debug.Log("swarm", "teammate %s task %s result discarded: %v", tm.ID, claimed.ID, uerr)
+			}
 		}
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
@@ -442,18 +438,9 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	}
 	attempts++
 	if attempts >= maxTransientTaskRetries {
-		completed := task.StatusCompleted
-		if _, uerr := board.Update(taskID, task.UpdateOptions{
-			ExpectedStatus: &inProgress,
-			Status:         &completed,
-			Metadata: map[string]string{
-				"permanent_error": "max_retries_exceeded",
-				"error":           "teammate panicked repeatedly",
-				"retry_attempts":  strconv.Itoa(attempts),
-			},
-		}); uerr != nil {
-			debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
-		}
+		// #2786: parking cascades the failure to BlockedBy dependents.
+		parkTaskFailed(board, taskID, "max_retries_exceeded", "teammate panicked repeatedly",
+			parkOpts{extra: map[string]string{"retry_attempts": strconv.Itoa(attempts)}, expected: &inProgress})
 		debug.Log("swarm", "panic rollback: task=%s exceeded %d retries (teammate panic), parking as completed(max_retries)", taskID, maxTransientTaskRetries)
 		return
 	}
@@ -623,4 +610,85 @@ func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 		}
 	}
 	return true
+}
+
+// parkTaskFailed marks a permanently-failed task as completed with
+// permanent_error metadata so it is never re-claimed, clears its owner, and
+// cascades the failure to BlockedBy dependents (#2786). expected, when
+// non-nil, guards the update like the claim/rollback paths (#2579).
+func parkTaskFailed(board *task.Manager, taskID, reason, errMsg string, opts parkOpts) {
+	meta := map[string]string{"permanent_error": reason, "error": errMsg}
+	for k, v := range opts.extra {
+		meta[k] = v
+	}
+	completed := task.StatusCompleted
+	emptyOwner := ""
+	if _, err := board.Update(taskID, task.UpdateOptions{
+		ExpectedStatus: opts.expected,
+		Status:         &completed,
+		Owner:          &emptyOwner,
+		Metadata:       meta,
+	}); err != nil {
+		debug.Log("swarm", "park failed task=%s err=%v", taskID, err)
+		return
+	}
+	cascadeFailedDependency(board, taskID)
+}
+
+// parkOpts carries the optional parking variants: extra metadata entries and
+// the #2579 ExpectedStatus guard used by the panic-rollback path.
+type parkOpts struct {
+	extra    map[string]string
+	expected *task.TaskStatus
+}
+
+// cascadeFailedDependency parks every non-terminal task that (transitively)
+// depends on the given failed task. The parking paths mark failed tasks
+// completed so the board stays consistent (#1295), but allBlockersComplete
+// only reads Status — a parked failure therefore "unblocked" its BlockedBy
+// dependents, and teammates executed them against output that never existed
+// (#2786). Propagating the failure along the reverse-dependency closure
+// follows reliable-orchestration semantics (OrchestraBench, arXiv:2608.05263):
+// a permanently failed node must fail its downstream, not unlock it.
+func cascadeFailedDependency(board *task.Manager, failedID string) {
+	failed := map[string]bool{failedID: true}
+	queue := []string{failedID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, tk := range board.List() {
+			if failed[tk.ID] || !containsString(tk.BlockedBy, id) {
+				continue
+			}
+			if tk.Status != task.StatusPending && tk.Status != task.StatusInProgress {
+				continue // already terminal (e.g. genuinely succeeded) — leave it
+			}
+			failed[tk.ID] = true
+			queue = append(queue, tk.ID)
+			completed := task.StatusCompleted
+			emptyOwner := ""
+			if _, err := board.Update(tk.ID, task.UpdateOptions{
+				Status: &completed,
+				Owner:  &emptyOwner,
+				Metadata: map[string]string{
+					"permanent_error":   "dependency_failed",
+					"failed_dependency": id,
+					"error":             fmt.Sprintf("blocked by failed task %s", id),
+				},
+			}); err != nil {
+				debug.Log("swarm", "cascade park dependent task=%s err=%v", tk.ID, err)
+			} else {
+				debug.Log("swarm", "cascade: task=%s parked (dependency_failed) due to failed task=%s", tk.ID, id)
+			}
+		}
+	}
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
