@@ -666,6 +666,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
 	agentruntime.ApplyVerifyConfigToAgent(ag, cfg)
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
+	// Keep behaviorally aligned with pipe.go: without the probe key the
+	// reactive path in tryReactiveCompact (agent_compact.go) cannot infer the
+	// real context window from an overflow error: InferContextWindowFromError
+	// short-circuits on an empty key, so prompt-too-long recovery in the REPL
+	// compacts against a stale window and can loop until retries exhaust.
+	// ApplyProviderToAgent only re-sets this on /model switches, not startup.
+	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetWorkingDir(workingDir)
