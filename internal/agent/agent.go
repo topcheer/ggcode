@@ -1888,268 +1888,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
 				i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
 		}
-		// Agent-side planning: inject a plan suggestion or reminder early in
-		// the conversation when the request was detected as complex. This is
-		// a deterministic, zero-LLM-cost approach inspired by Devin's Planner
-		// and Claude Code's auto-todo behavior.
-		if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Mid-run stale todo detection: if the agent created a todo list but
-		// hasn't updated it for several iterations while there are still
-		// incomplete items, inject a one-time reminder to sync the plan.
-		if staleReminder := a.maybeRemindStaleTodo(i + 1); staleReminder != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Task re-anchoring: prevent context collapse on long repair chains.
-		// File freshness sentinel: proactively detect externally modified files
-		// (IDE save, formatter, git pull, another agent). Injects a notification
-		// BEFORE the agent uses stale content, not reactively at edit time.
-		if staleMsg := a.fileFreshness.maybeCheckStaleFiles(i + 1); staleMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Tool thermal profile: detect imbalanced tool-call distribution
-		// (e.g., 90% reads with no edits = agent is spinning). Zero-LLM-cost
-		// heuristic based on cross-tool category analysis.
-		if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
-			debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
-			a.injectGuidance(thermalMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Error compounding risk: compute geometric compounding probability
-		// and warn when accumulated errors make the trajectory unreliable.
-		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
-			// #681: maybeWarn consumed the per-run quota ("at most 2 per run")
-			// by returning; only a delivered message may keep it. Suppressed
-			// fires are rolled back so the quota is not burned with zero
-			// guidance delivered.
-			if a.injectGuidance(ecMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.errorCompound.markUndelivered()
-			}
-		}
-		// Correction spiral: detect error severity escalation across fix attempts.
-		// Warns when each correction introduces a worse error (feedback control instability).
-		if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
-			a.injectGuidance(csMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Verification debt: warn when source edits accumulate without a
-		// successful build. Prevents last-mile failure from compounding
-		// unverified changes (arXiv:2602.16666).
-		if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
-			a.injectGuidance(vdMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Cross-file edit propagation risk: warn when many DISTINCT files
-		// are edited without verification. Cross-file dependency chains
-		// create error propagation paths (MAST taxonomy, Cemri et al. 2025).
-		if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
-			a.injectGuidance(epMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Premature success declaration: if the agent claimed completion in a
-		// prior iteration but has since continued making tool calls, flag the
-		// metacognitive calibration gap.
-		// #1499 case A: subgoal tracking is a lexical heuristic in the
-		// claims-supervision family - unconditioned, it interfered with
-		// every user by default while its sibling (success_declare) is
-		// opt-in. Same gate.
-		if a.claimsSupervision {
-			if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
-				debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-				a.injectGuidance(sgMsg)
-				msgs = a.contextManager.Messages()
-			}
-		}
-		// Success-declaration calibration detector is gated behind
-		// claimsSupervision (default off): lexical success-phrase heuristics on
-		// intermediate states inject noise current models don't need.
-		if a.claimsSupervision {
-			if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
-				debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-				a.injectGuidance(sdMsg)
-				msgs = a.contextManager.Messages()
-			}
-		}
-		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
-			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
-			a.injectGuidance(cdMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Attempt brief: compact summary of failed approaches to prevent
-		// repeating the same dead-end strategy.
-		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
-			debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
-			a.injectGuidance(abMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Wasted exploration detection: nudge the agent when previous
-		// search results containing file paths were never acted upon.
-		// Information scent decay detection: nudge when consecutive
-		// exploration calls yield diminishing novel information.
-		if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
-			a.injectGuidance(scentMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Orphaned background command detection: nudge the agent to check
-		// output of background commands (start_command) that haven't been
-		// read for several iterations.
-		// Query convergence failure: detect repeated similar search queries
-		// across iterations without progressing to code action.
-		if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
-			a.injectGuidance(qcMsg)
-			msgs = a.contextManager.Messages()
-		}
-		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
-			a.injectGuidance(bgOrphanMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Reasoning redundancy detection: consecutive text-only iterations with
-		// near-duplicate content indicate overthinking (arXiv:2503.16419).
-		// Nudge the agent to stop deliberating and act.
-		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
-			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
-			a.injectGuidance(rrMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Iteration pressure degradation: detect verify/edit ratio drop
-		// near the iteration budget limit (metacognitive monitoring).
-		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
-			a.injectGuidance(ipMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Unverified mutation streak: detect consecutive edits without any
-		// verification (build/test/run) to encourage tight feedback loops.
-		if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
-			a.injectGuidance(bsMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Verification coverage gap: handled in tool-execution loop below.
-		// Strategy fixation: detect when the agent has edited the same file
-		// multiple times with intervening failed verifications, suggesting an
-		// approach-level failure (PARC arXiv:2512.03549).
-		if sfMsg := a.strategyFixation.check(); sfMsg != "" {
-			a.injectGuidance(sfMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Error rush: detect panic coding -- blind-fixing after consecutive
-		// errors without diagnostic reads in between (Agentic Overconfidence,
-		// arXiv 2026; AgentDiet, FSE 2026).
-		if erMsg := a.errorRush.check(); erMsg != "" {
-			a.injectGuidance(erMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Attention fragmentation: detect rapid directory context-switching
-		// that creates extraneous cognitive load (CLT for LLM agents,
-		// arXiv:2506.06843). High switch density means the model is thrashing
-		// between unrelated concerns instead of maintaining coherent focus.
-		if afMsg := a.attentionFragment.analyze(); afMsg != "" {
-			a.injectGuidance(afMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Drift-recurrence iteration bookkeeping: check()'s post-warning
-		// window (driftRecurrencePostWarnWindow) compares against the current
-		// iteration — without this call currentIteration stayed 0 and the
-		// window guard was permanently false, letting stale warnings from
-		// dozens of iterations ago fire on a normal edit rhythm (#377).
-		a.driftRecurrence.recordIteration(i + 1)
-		// Futile cycle: detect when the agent re-reads the same set of files
-		// that it explored earlier without making any edits in between.
-		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
-			a.injectGuidance(fcMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Constraint amnesia: remind the agent of user-specified constraints
-		// that may have scrolled out of effective attention after many iterations.
-		// Catastrophic forgetting in token space (Letta/MemGPT 2025).
-		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
-			a.injectGuidance(caMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Diagnostic-action disconnect detection: when the agent has received
-		// diagnostic content (errors, undefined symbols) but subsequent actions
-		// don't address it, inject guidance to refocus on the known issue.
-		// Delegation orchestration intelligence: detect orphaned delegations
-		// (spawned agents whose results were never consumed), serial delegation
-		// anti-pattern (should batch parallelizable tasks), and over-delegation
-		// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
-		if a.delegationOrch != nil {
-			// Gate activation per #345/#348 decision: only the over-delegation
-			// gate is active. The orphan gate's ID matching never fired in
-			// production (tool-call ID vs agent/task ID namespaces are
-			// disjoint, so legitimate consumption never cleared orphan timers
-			// and the gate false-positived); the serial gate was not part of
-			// the activation decision. Both detection paths are now fixed and
-			// kept dormant behind flags for re-enablement after validation.
-			if delegationOrphanGateEnabled {
-				if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
-					debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
-					a.injectGuidance(delOrchMsg)
-					msgs = a.contextManager.Messages()
-				}
-			}
-			if delegationSerialGateEnabled {
-				if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
-					debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
-					a.injectGuidance(serialMsg)
-					msgs = a.contextManager.Messages()
-				}
-			}
-			if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
-				debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
-				a.injectGuidance(overDelMsg)
-				msgs = a.contextManager.Messages()
-			}
-		}
-		// Monorepo scope sprawl detection: if the agent is editing across many
-		// packages in a monorepo without apparent cross-package intent, inject
-		// a one-time hint to confirm scope and consider package-scoped ops.
-		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
-			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
-			// #681: one-shot hint — if the per-turn budget suppresses it, the
-			// one-time chance is restored so it retries on a later iteration
-			// instead of the detector going dark for the rest of the run.
-			if a.injectGuidance(monorepoMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.monorepoScoper.markUndelivered()
-			}
-		}
-		// Mid-point progress checkpoint: at 60% of max iterations, inject a
-		// one-time progress assessment. This is the lightweight "overseer"
-		// pattern from SICA — giving the agent a chance to course-correct
-		// before running out of iteration budget.
-		// Only fires when maxIter >= 20 to avoid interfering with short runs.
-		if a.maxIter >= 20 && !progressCheckInjected && i+1 >= a.maxIter*3/5 {
-			progressCheckInjected = true
-			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
-			// #681: one-shot protocol prompt — direct add, exempt from the
-			// per-turn guidance budget like the loop-recovery nudges above
-			// (budget suppression would silently burn the run's only
-			// checkpoint exactly when the run is struggling hardest).
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
-					"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
-					i+1, a.maxIter,
-				)}},
-			})
-			msgs = a.contextManager.Messages() // refresh after adding checkpoint
-		}
+		// Deterministic pre-send advisory fleet (plan/stale/freshness/
+		// thermal/compounding/spiral/delegation/monorepo/progress...).
+		// Grouped verbatim in injectPreSendAdvisories by the r125 refactor;
+		// same detectors, same order, same #681 delivery/rollback rules.
+		msgs = a.injectPreSendAdvisories(i, &progressCheckInjected)
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
@@ -5098,4 +4841,287 @@ func (a *Agent) fillCancelledToolResults(pending []provider.ToolCallDelta, resul
 			Content: *results,
 		})
 	}
+}
+
+// injectPreSendAdvisories runs the deterministic pre-send advisory fleet
+// between context assembly and the provider call: plan hint, stale todo,
+// file freshness, tool thermal profile, error compounding, correction
+// spiral, verification debt, edit propagation, claims supervision,
+// criteria drift, attempt brief, info scent, query convergence,
+// background orphans, reasoning redundancy, iteration pressure, bare
+// edit streak, strategy fixation, error rush, attention fragmentation,
+// futile cycles, constraint amnesia, delegation orchestration gates,
+// monorepo scope sprawl, and the mid-point progress checkpoint.
+//
+// Extracted verbatim from RunStreamWithContent (r125 refactor): same
+// detectors, same order, same #681 delivery/rollback rules. Each gate
+// appends via the context manager or a.injectGuidance, then refreshes
+// the message slice; the final snapshot is returned for the provider
+// call. progressCheckInjected is the one-shot mid-point checkpoint flag
+// owned by the enclosing run.
+func (a *Agent) injectPreSendAdvisories(i int, progressCheckInjected *bool) []provider.Message {
+	msgs := a.contextManager.Messages()
+	// Agent-side planning: inject a plan suggestion or reminder early in
+	// the conversation when the request was detected as complex. This is
+	// a deterministic, zero-LLM-cost approach inspired by Devin's Planner
+	// and Claude Code's auto-todo behavior.
+	if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Mid-run stale todo detection: if the agent created a todo list but
+	// hasn't updated it for several iterations while there are still
+	// incomplete items, inject a one-time reminder to sync the plan.
+	if staleReminder := a.maybeRemindStaleTodo(i + 1); staleReminder != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Task re-anchoring: prevent context collapse on long repair chains.
+	// File freshness sentinel: proactively detect externally modified files
+	// (IDE save, formatter, git pull, another agent). Injects a notification
+	// BEFORE the agent uses stale content, not reactively at edit time.
+	if staleMsg := a.fileFreshness.maybeCheckStaleFiles(i + 1); staleMsg != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Tool thermal profile: detect imbalanced tool-call distribution
+	// (e.g., 90% reads with no edits = agent is spinning). Zero-LLM-cost
+	// heuristic based on cross-tool category analysis.
+	if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
+		debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
+		a.injectGuidance(thermalMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Error compounding risk: compute geometric compounding probability
+	// and warn when accumulated errors make the trajectory unreliable.
+	if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
+		// #681: maybeWarn consumed the per-run quota ("at most 2 per run")
+		// by returning; only a delivered message may keep it. Suppressed
+		// fires are rolled back so the quota is not burned with zero
+		// guidance delivered.
+		if a.injectGuidance(ecMsg) {
+			msgs = a.contextManager.Messages()
+		} else {
+			a.errorCompound.markUndelivered()
+		}
+	}
+	// Correction spiral: detect error severity escalation across fix attempts.
+	// Warns when each correction introduces a worse error (feedback control instability).
+	if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
+		a.injectGuidance(csMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Verification debt: warn when source edits accumulate without a
+	// successful build. Prevents last-mile failure from compounding
+	// unverified changes (arXiv:2602.16666).
+	if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
+		a.injectGuidance(vdMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Cross-file edit propagation risk: warn when many DISTINCT files
+	// are edited without verification. Cross-file dependency chains
+	// create error propagation paths (MAST taxonomy, Cemri et al. 2025).
+	if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
+		a.injectGuidance(epMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Premature success declaration: if the agent claimed completion in a
+	// prior iteration but has since continued making tool calls, flag the
+	// metacognitive calibration gap.
+	// #1499 case A: subgoal tracking is a lexical heuristic in the
+	// claims-supervision family - unconditioned, it interfered with
+	// every user by default while its sibling (success_declare) is
+	// opt-in. Same gate.
+	if a.claimsSupervision {
+		if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
+			debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
+			a.injectGuidance(sgMsg)
+			msgs = a.contextManager.Messages()
+		}
+	}
+	// Success-declaration calibration detector is gated behind
+	// claimsSupervision (default off): lexical success-phrase heuristics on
+	// intermediate states inject noise current models don't need.
+	if a.claimsSupervision {
+		if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
+			debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
+			a.injectGuidance(sdMsg)
+			msgs = a.contextManager.Messages()
+		}
+	}
+	if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
+		debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
+		a.injectGuidance(cdMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Attempt brief: compact summary of failed approaches to prevent
+	// repeating the same dead-end strategy.
+	if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
+		debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
+		a.injectGuidance(abMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Wasted exploration detection: nudge the agent when previous
+	// search results containing file paths were never acted upon.
+	// Information scent decay detection: nudge when consecutive
+	// exploration calls yield diminishing novel information.
+	if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
+		a.injectGuidance(scentMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Orphaned background command detection: nudge the agent to check
+	// output of background commands (start_command) that haven't been
+	// read for several iterations.
+	// Query convergence failure: detect repeated similar search queries
+	// across iterations without progressing to code action.
+	if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
+		a.injectGuidance(qcMsg)
+		msgs = a.contextManager.Messages()
+	}
+	if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
+		a.injectGuidance(bgOrphanMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Reasoning redundancy detection: consecutive text-only iterations with
+	// near-duplicate content indicate overthinking (arXiv:2503.16419).
+	// Nudge the agent to stop deliberating and act.
+	if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
+		debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
+		a.injectGuidance(rrMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Iteration pressure degradation: detect verify/edit ratio drop
+	// near the iteration budget limit (metacognitive monitoring).
+	if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
+		a.injectGuidance(ipMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Unverified mutation streak: detect consecutive edits without any
+	// verification (build/test/run) to encourage tight feedback loops.
+	if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
+		a.injectGuidance(bsMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Verification coverage gap: handled in tool-execution loop below.
+	// Strategy fixation: detect when the agent has edited the same file
+	// multiple times with intervening failed verifications, suggesting an
+	// approach-level failure (PARC arXiv:2512.03549).
+	if sfMsg := a.strategyFixation.check(); sfMsg != "" {
+		a.injectGuidance(sfMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Error rush: detect panic coding -- blind-fixing after consecutive
+	// errors without diagnostic reads in between (Agentic Overconfidence,
+	// arXiv 2026; AgentDiet, FSE 2026).
+	if erMsg := a.errorRush.check(); erMsg != "" {
+		a.injectGuidance(erMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Attention fragmentation: detect rapid directory context-switching
+	// that creates extraneous cognitive load (CLT for LLM agents,
+	// arXiv:2506.06843). High switch density means the model is thrashing
+	// between unrelated concerns instead of maintaining coherent focus.
+	if afMsg := a.attentionFragment.analyze(); afMsg != "" {
+		a.injectGuidance(afMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Drift-recurrence iteration bookkeeping: check()'s post-warning
+	// window (driftRecurrencePostWarnWindow) compares against the current
+	// iteration — without this call currentIteration stayed 0 and the
+	// window guard was permanently false, letting stale warnings from
+	// dozens of iterations ago fire on a normal edit rhythm (#377).
+	a.driftRecurrence.recordIteration(i + 1)
+	// Futile cycle: detect when the agent re-reads the same set of files
+	// that it explored earlier without making any edits in between.
+	if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
+		a.injectGuidance(fcMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Constraint amnesia: remind the agent of user-specified constraints
+	// that may have scrolled out of effective attention after many iterations.
+	// Catastrophic forgetting in token space (Letta/MemGPT 2025).
+	if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
+		a.injectGuidance(caMsg)
+		msgs = a.contextManager.Messages()
+	}
+	// Diagnostic-action disconnect detection: when the agent has received
+	// diagnostic content (errors, undefined symbols) but subsequent actions
+	// don't address it, inject guidance to refocus on the known issue.
+	// Delegation orchestration intelligence: detect orphaned delegations
+	// (spawned agents whose results were never consumed), serial delegation
+	// anti-pattern (should batch parallelizable tasks), and over-delegation
+	// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
+	if a.delegationOrch != nil {
+		// Gate activation per #345/#348 decision: only the over-delegation
+		// gate is active. The orphan gate's ID matching never fired in
+		// production (tool-call ID vs agent/task ID namespaces are
+		// disjoint, so legitimate consumption never cleared orphan timers
+		// and the gate false-positived); the serial gate was not part of
+		// the activation decision. Both detection paths are now fixed and
+		// kept dormant behind flags for re-enablement after validation.
+		if delegationOrphanGateEnabled {
+			if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
+				debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
+				a.injectGuidance(delOrchMsg)
+				msgs = a.contextManager.Messages()
+			}
+		}
+		if delegationSerialGateEnabled {
+			if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
+				debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
+				a.injectGuidance(serialMsg)
+				msgs = a.contextManager.Messages()
+			}
+		}
+		if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
+			debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
+			a.injectGuidance(overDelMsg)
+			msgs = a.contextManager.Messages()
+		}
+	}
+	// Monorepo scope sprawl detection: if the agent is editing across many
+	// packages in a monorepo without apparent cross-package intent, inject
+	// a one-time hint to confirm scope and consider package-scoped ops.
+	if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
+		debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
+		// #681: one-shot hint — if the per-turn budget suppresses it, the
+		// one-time chance is restored so it retries on a later iteration
+		// instead of the detector going dark for the rest of the run.
+		if a.injectGuidance(monorepoMsg) {
+			msgs = a.contextManager.Messages()
+		} else {
+			a.monorepoScoper.markUndelivered()
+		}
+	}
+	// Mid-point progress checkpoint: at 60% of max iterations, inject a
+	// one-time progress assessment. This is the lightweight "overseer"
+	// pattern from SICA — giving the agent a chance to course-correct
+	// before running out of iteration budget.
+	// Only fires when maxIter >= 20 to avoid interfering with short runs.
+	if a.maxIter >= 20 && !*progressCheckInjected && i+1 >= a.maxIter*3/5 {
+		*progressCheckInjected = true
+		debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
+		// #681: one-shot protocol prompt — direct add, exempt from the
+		// per-turn guidance budget like the loop-recovery nudges above
+		// (budget suppression would silently burn the run's only
+		// checkpoint exactly when the run is struggling hardest).
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
+				"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
+				i+1, a.maxIter,
+			)}},
+		})
+		msgs = a.contextManager.Messages() // refresh after adding checkpoint
+	}
+	return msgs
 }
