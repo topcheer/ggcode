@@ -173,13 +173,26 @@ type terminatorInfo struct {
 	depth int
 }
 
+// breakInfo records a bare `break` that binds to an enclosing loop, along
+// with that loop body's source range. A close before the break and any op
+// inside the same loop body after it cannot both execute: the break exits
+// the loop before the later op's position is reached (#2776).
+type breakInfo struct {
+	pos       token.Pos
+	loopStart token.Pos
+	loopEnd   token.Pos
+}
+
 // chanOpCollector walks a function body tracking control-flow context.
 type chanOpCollector struct {
 	ops         []chanOp
 	terminators []terminatorInfo
+	breaks      []breakInfo
 	depth       int
 	ifStack     []ifCtx
 	nextIfID    int
+	curLoop     *ast.BlockStmt // innermost loop body being walked
+	inClause    bool           // inside a select/switch clause (bare break binds to it)
 }
 
 func (c *chanOpCollector) recordOp(op, name string, pos token.Pos, deferred bool) {
@@ -238,9 +251,19 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 		}
 		c.ifStack = savedStack
 	case *ast.ForStmt:
+		saved := c.curLoop
+		if s.Body != nil {
+			c.curLoop = s.Body
+		}
 		c.walkStmt(s.Body)
+		c.curLoop = saved
 	case *ast.RangeStmt:
+		saved := c.curLoop
+		if s.Body != nil {
+			c.curLoop = s.Body
+		}
 		c.walkStmt(s.Body)
+		c.curLoop = saved
 	case *ast.SwitchStmt:
 		c.walkStmt(s.Body)
 	case *ast.TypeSwitchStmt:
@@ -248,7 +271,27 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 	case *ast.SelectStmt:
 		c.walkStmt(s.Body)
 	case *ast.CaseClause:
+		savedClause := c.inClause
+		c.inClause = true
 		c.walkStmts(s.Body)
+		c.inClause = savedClause
+	case *ast.CommClause:
+		savedClause := c.inClause
+		c.inClause = true
+		c.walkStmts(s.Body)
+		c.inClause = savedClause
+	case *ast.BranchStmt:
+		// #2776: a bare break with no select/switch clause barrier binds to
+		// the innermost enclosing loop and exits it; statements later in that
+		// loop body are unreachable after it. Labeled breaks are not resolved
+		// (conservative: not recorded as terminators).
+		if s.Tok == token.BREAK && s.Label == nil && !c.inClause && c.curLoop != nil {
+			c.breaks = append(c.breaks, breakInfo{
+				pos:       s.Pos(),
+				loopStart: c.curLoop.Pos(),
+				loopEnd:   c.curLoop.End(),
+			})
+		}
 	case *ast.DeferStmt:
 		if ce := s.Call; isCloseCall(ce) {
 			if chName := channelNameFromArg(ce.Args[0]); chName != "" {
@@ -280,6 +323,13 @@ func (c *chanOpCollector) mutuallyExclusive(a, b chanOp) bool {
 	}
 	for _, t := range c.terminators {
 		if t.pos > a.pos && t.pos < b.pos && t.depth <= a.depth {
+			return true
+		}
+	}
+	// #2776: a bare break between the two ops exits the loop that contains
+	// them; the later op inside the same loop body never executes.
+	for _, br := range c.breaks {
+		if br.pos > a.pos && br.pos < b.pos && b.pos >= br.loopStart && b.pos <= br.loopEnd {
 			return true
 		}
 	}
