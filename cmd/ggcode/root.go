@@ -1430,6 +1430,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 			srv.Stop()
 			return nil, nil, nil, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
 		}
+		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
+		// (#1503) - without it an auth0/azure preset without a filled
+		// tenant starts the server clean and every JWKS fetch hits an
+		// NXDOMAIN placeholder host: silent per-request 401s.
+		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
+		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,
 				auth.WithHMACSecret(cfg.A2A.Auth.HMACSecret),
