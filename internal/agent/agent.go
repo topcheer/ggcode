@@ -267,6 +267,7 @@ type Agent struct {
 	irrevGate                 *irrevGateState            // irreversibility-weighted calibration gate (caution scales with action reversibility)
 	verifyDebt                *verifyDebtState           // verification debt accumulator (edits since last green build)
 	editPropagation           *editPropagationState      // cross-file edit propagation risk (distinct files since green build)
+	todoRecite                *todoReciter               // plan recitation (periodic todo re-anchoring near context tail, ephemeral)
 	errorCascade              *errorCascadeState         // cascading failure detection (common-root-cause error clustering)
 	errorPropagate            *errorPropagateState       // error propagation chain detection (degraded-output contamination tracking)
 	delegationOrch            *delegationState           // delegation orchestration intelligence (orphaned delegations, serial anti-pattern, over-delegation)
@@ -513,6 +514,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
 		iterPressure:           newIterPressureState(maxIter),
+		todoRecite:             newTodoReciter(),
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
 		giveupRevert:           &giveupRevertState{},
@@ -2189,6 +2191,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Taking Messages() at the send site closes every current and
 		// future Add-then-continue path.
 		msgs = a.contextManager.Messages()
+		// Todo recitation (Manus todo-recitation; Anthropic "Effective harnesses
+		// for long-running agents", Nov 2025): re-anchor the active plan near
+		// the context tail so long runs don't drift from the plan between
+		// compaction and stale-todo nudges. Ephemeral request-scoped message —
+		// see agent_recitation.go for the non-overlap rationale.
+		msgs = a.appendTodoRecitation(i+1, msgs)
 		// #1817 case 2: the restore must survive a panic inside
 		// streamChatResponse. Run() recovers panics into error returns, but
 		// the old positional restores after the call never executed on that

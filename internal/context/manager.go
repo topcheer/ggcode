@@ -3139,6 +3139,15 @@ func extractPostCompactStateFilePaths(text string) []string {
 	return paths
 }
 
+// TodoRecitationSummary returns the current todo-state summary for periodic
+// plan recitation, or "" when no todo file is bound or it has no entries.
+// The content is identical to the todo section of the post-compact state
+// (buildPostCompactState), so the model sees one stable plan format on both
+// paths.
+func (m *Manager) TodoRecitationSummary() string {
+	return m.readTodoSummary()
+}
+
 func (m *Manager) readTodoSummary() string {
 	path := strings.TrimSpace(m.todoPath)
 	if path == "" {
