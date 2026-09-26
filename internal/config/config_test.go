@@ -677,6 +677,56 @@ providers:
 	}
 }
 
+func TestLoad_AutoTitleLLM(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	content := `
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+auto_title_llm: true
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`
+	os.WriteFile(path, []byte(content), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.AutoTitleLLM {
+		t.Fatal("expected auto_title_llm: true to parse to AutoTitleLLM=true")
+	}
+
+	// Default must stay off (zero-cost heuristic path).
+	path2 := filepath.Join(dir, "default.yaml")
+	os.WriteFile(path2, []byte(content[:0]+`
+vendor: zai
+endpoint: cn-coding-openai
+model: test
+vendors:
+  zai:
+    api_key: key
+    endpoints:
+      cn-coding-openai:
+        protocol: openai
+        base_url: https://example.com
+`), 0644)
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatalf("Load(default) returned error: %v", err)
+	}
+	if cfg2.AutoTitleLLM {
+		t.Fatal("auto_title_llm must default to false")
+	}
+}
+
 func TestLoad_InvalidMaxIterations(t *testing.T) {
 	withTestHome(t)
 	dir := t.TempDir()
