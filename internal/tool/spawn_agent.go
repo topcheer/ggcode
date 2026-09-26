@@ -17,6 +17,9 @@ import (
 // must never interact with the user, spawn nested agents, or manage teams.
 var subAgentBlockedTools = []string{
 	"ask_user",
+	// compact_context (CAT) requests compaction of the OWNING agent's
+	// conversation; a one-shot sub-agent must not compact its parent.
+	"compact_context",
 	"spawn_agent",
 	"wait_agent",
 	"list_agents",

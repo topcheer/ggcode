@@ -7,7 +7,10 @@ import (
 // TestSubAgentBlockedTools verifies the blocklist contains all expected entries.
 func TestSubAgentBlockedTools(t *testing.T) {
 	expected := map[string]bool{
-		"ask_user":          true,
+		"ask_user": true,
+		// compact_context (CAT) compacts the OWNING agent's conversation;
+		// a one-shot sub-agent must not compact its parent.
+		"compact_context":   true,
 		"spawn_agent":       true,
 		"wait_agent":        true,
 		"list_agents":       true,

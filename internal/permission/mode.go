@@ -138,6 +138,10 @@ func IsAlwaysAllowedTool(name string) bool {
 	switch name {
 	case "lanchat", "switch_mode", "runtime":
 		return true
+	// compact_context (CAT): session-scoped context reclaim with no
+	// filesystem or external side effects; see internal/tool/compact_context.go.
+	case "compact_context":
+		return true
 	}
 	return false
 }

@@ -63,6 +63,8 @@ func DescribeTool(toolName, rawArgs string) ToolPresentation {
 	}
 
 	switch toolName {
+	case "compact_context":
+		return toolPres("Compact", "")
 	case "read_file":
 		return toolPres("Read", fileTarget)
 	case "edit_file":
