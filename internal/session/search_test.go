@@ -179,7 +179,7 @@ func TestMakeSnippet(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := makeSnippet(tc.text, tc.matchIdx, tc.needle)
+			got := makeSnippet(tc.text, tc.matchIdx, len(tc.needle))
 			// For short text, snippet should contain the needle
 			if len(tc.text) <= 200 {
 				if got != tc.want && !contains(got, tc.needle) {

@@ -540,7 +540,7 @@ func TestSA146ExportSessionMarkdownWithDisplay(t *testing.T) {
 
 func TestSA146SearchJSONLLine(t *testing.T) {
 	line := `{"type":"message","session_id":"sa146-search","message":{"role":"user","content":[{"type":"text","text":"Fix the Parser Bug TODAY"}]}}`
-	res, ok := searchJSONLLine(line, "/tmp/sa146-search.jsonl", "Search Title", "parser bug")
+	res, ok := searchJSONLLine(line, "/tmp/sa146-search.jsonl", "Search Title", []string{"parser bug"})
 	if !ok {
 		t.Fatal("expected case-insensitive match")
 	}
@@ -558,7 +558,7 @@ func TestSA146SearchJSONLLine(t *testing.T) {
 		`{"type":"message","session_id":"x","message":{"role":"assistant","content":[{"type":"tool_use","tool_name":"ls"}]}}`,
 	}
 	for _, s := range skips {
-		if _, ok := searchJSONLLine(s, "/tmp/x.jsonl", "t", "parser"); ok {
+		if _, ok := searchJSONLLine(s, "/tmp/x.jsonl", "t", []string{"parser"}); ok {
 			t.Errorf("line should not match: %s", s)
 		}
 	}
@@ -1065,7 +1065,7 @@ func TestSA146MakeSnippetBoundaries(t *testing.T) {
 	// Match at the very start: no leading ellipsis.
 	res, ok := searchJSONLLine(
 		`{"type":"message","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"needle at start"}]}}`,
-		"/tmp/x.jsonl", "t", "needle")
+		"/tmp/x.jsonl", "t", []string{"needle"})
 	if !ok {
 		t.Fatal("start match not found")
 	}
@@ -1075,7 +1075,7 @@ func TestSA146MakeSnippetBoundaries(t *testing.T) {
 	// Match at the very end: no trailing ellipsis.
 	res2, ok := searchJSONLLine(
 		`{"type":"message","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"tail ends with needle"}]}}`,
-		"/tmp/x.jsonl", "t", "needle")
+		"/tmp/x.jsonl", "t", []string{"needle"})
 	if !ok {
 		t.Fatal("end match not found")
 	}
@@ -1086,7 +1086,7 @@ func TestSA146MakeSnippetBoundaries(t *testing.T) {
 	longNeedle := strings.Repeat("x", 210)
 	res3, ok := searchJSONLLine(
 		`{"type":"message","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"`+longNeedle+` tail"}]}}`,
-		"/tmp/x.jsonl", "t", longNeedle)
+		"/tmp/x.jsonl", "t", []string{longNeedle})
 	if !ok {
 		t.Fatal("long-needle match not found")
 	}

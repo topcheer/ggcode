@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -23,7 +24,15 @@ type SearchResult struct {
 }
 
 // SearchSessions scans the message content of all sessions and returns hits
-// matching the query (case-insensitive substring). Each session is scanned at
+// matching the query (case-insensitive). The query is tokenized by
+// tokenizeQuery: bare words are whitespace-separated substrings, and a
+// double-quoted segment is matched as a single phrase. All terms must appear
+// in the same text block (AND semantics) — multi-keyword queries such as
+// "oauth token refresh" previously required that exact consecutive substring
+// and therefore almost always returned zero hits (#r111, LongMemEval-style
+// multi-facet recall).
+//
+// Each session is scanned at
 // most once, and only message-type JSONL records are inspected — usage,
 // metric, and meta records are skipped for speed.
 //
@@ -32,10 +41,10 @@ type SearchResult struct {
 // sessions into memory, and stops after maxResults hits (0 = unlimited).
 func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResult, error) {
 	query = strings.TrimSpace(query)
-	if query == "" {
+	terms := tokenizeQuery(query)
+	if len(terms) == 0 {
 		return nil, nil
 	}
-	needle := strings.ToLower(query)
 
 	s.mu.Lock()
 	idx, err := s.loadIndex()
@@ -58,7 +67,7 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 	// result was not "the N most recent matches".
 	var results []SearchResult
 	for _, e := range idx {
-		hits, err := searchInSessionFile(s.sessionPath(e.ID), e.Title, needle)
+		hits, err := searchInSessionFile(s.sessionPath(e.ID), e.Title, terms)
 		if err != nil {
 			continue // skip unreadable sessions
 		}
@@ -77,14 +86,14 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 }
 
 // searchInSessionFile scans a single JSONL session file for message records
-// whose text content contains the (already lowercased) needle.
+// whose text content contains every (already lowercased) term.
 //
 // #478: uses bufio.Reader (not Scanner) so a single over-long JSONL line
 // (e.g. a multi-MB base64 image blob — same class as #291) only discards
 // THAT line: previously bufio.Scanner's 10MB cap aborted the whole scan,
 // and the caller's error-continue silently dropped every hit already
 // collected plus everything after, with no log.
-func searchInSessionFile(path, title, needle string) ([]SearchResult, error) {
+func searchInSessionFile(path, title string, terms []string) ([]SearchResult, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -103,9 +112,14 @@ func searchInSessionFile(path, title, needle string) ([]SearchResult, error) {
 			continue // oversized line consumed; scan resumes at the next one
 		}
 		trimmed := strings.TrimSpace(string(line))
-		if trimmed != "" && strings.Contains(strings.ToLower(trimmed), needle) {
-			if hit, ok := searchJSONLLine(trimmed, path, title, needle); ok {
-				hits = append(hits, hit)
+		// Line-level prefilter: cheap ToLower + Contains scan before paying
+		// for a JSON unmarshal. matchAllTerms returns -1 unless every term
+		// occurs; for a single term this is exactly the old Contains check.
+		if trimmed != "" {
+			if idx, _ := matchAllTerms(strings.ToLower(trimmed), terms); idx >= 0 {
+				if hit, ok := searchJSONLLine(trimmed, path, title, terms); ok {
+					hits = append(hits, hit)
+				}
 			}
 		}
 		if rerr != nil {
@@ -150,9 +164,10 @@ func readLineLimited(br *bufio.Reader, limit int) ([]byte, error) {
 	}
 }
 
-// searchJSONLLine unmarshals one JSONL line and returns a match if any
-// text block contains the needle.
-func searchJSONLLine(line, path, title, needle string) (SearchResult, bool) {
+// searchJSONLLine unmarshals one JSONL line and returns a match if any text
+// block contains every term. The snippet is anchored on the earliest term
+// occurrence inside the matching block.
+func searchJSONLLine(line, path, title string, terms []string) (SearchResult, bool) {
 	var rec jsonlRecord
 	if err := json.Unmarshal([]byte(line), &rec); err != nil {
 		return SearchResult{}, false
@@ -164,7 +179,7 @@ func searchJSONLLine(line, path, title, needle string) (SearchResult, bool) {
 		if block.Type != "text" {
 			continue
 		}
-		idx := strings.Index(strings.ToLower(block.Text), needle)
+		idx, tlen := matchAllTerms(strings.ToLower(block.Text), terms)
 		if idx < 0 {
 			continue
 		}
@@ -172,17 +187,68 @@ func searchJSONLLine(line, path, title, needle string) (SearchResult, bool) {
 			SessionID: extractSessionID(path),
 			Title:     title,
 			Role:      rec.Message.Role,
-			Snippet:   makeSnippet(block.Text, idx, needle),
+			Snippet:   makeSnippet(block.Text, idx, tlen),
 			Timestamp: rec.Timestamp,
 		}, true
 	}
 	return SearchResult{}, false
 }
 
-// makeSnippet extracts up to 200 characters of context centered on the match.
-func makeSnippet(text string, matchIdx int, needle string) string {
+// matchAllTerms reports whether every term occurs in the lowercased text.
+// It returns the byte index and length of the EARLIEST term occurrence (for
+// snippet anchoring), or (-1, 0) when any term is missing.
+func matchAllTerms(lowerText string, terms []string) (int, int) {
+	earliestIdx, earliestLen := -1, 0
+	for _, t := range terms {
+		idx := strings.Index(lowerText, t)
+		if idx < 0 {
+			return -1, 0
+		}
+		if earliestIdx < 0 || idx < earliestIdx {
+			earliestIdx, earliestLen = idx, len(t)
+		}
+	}
+	return earliestIdx, earliestLen
+}
+
+// tokenizeQuery splits a raw query into lowercased search terms: bare words
+// are whitespace-separated, and a double-quoted segment stays one phrase
+// term (quotes stripped), so `oauth "rate limit"` searches for messages
+// containing both "oauth" and the phrase "rate limit". Unbalanced quotes
+// treat the rest of the query as a phrase; a query of only quotes, or with
+// only whitespace inside quotes, yields no terms (caller treats that as an
+// empty query).
+func tokenizeQuery(query string) []string {
+	var terms []string
+	var buf strings.Builder
+	inQuote := false
+	flush := func() {
+		// Whitespace-only phrases (`" "`) are not meaningful search terms.
+		if strings.TrimSpace(buf.String()) != "" {
+			terms = append(terms, strings.ToLower(buf.String()))
+		}
+		buf.Reset()
+	}
+	for _, r := range query {
+		switch {
+		case r == '"':
+			flush()
+			inQuote = !inQuote
+		case !inQuote && unicode.IsSpace(r):
+			flush()
+		default:
+			buf.WriteRune(r)
+		}
+	}
+	flush()
+	return terms
+}
+
+// makeSnippet extracts up to 200 characters of context centered on the
+// match. matchLen is the byte length of the matched term.
+func makeSnippet(text string, matchIdx, matchLen int) string {
 	const maxSnippet = 200
-	half := (maxSnippet - len(needle)) / 2
+	half := (maxSnippet - matchLen) / 2
 	if half < 0 {
 		half = 0
 	}
@@ -191,7 +257,7 @@ func makeSnippet(text string, matchIdx int, needle string) string {
 	if start < 0 {
 		start = 0
 	}
-	end := matchIdx + len(needle) + half
+	end := matchIdx + matchLen + half
 	if end > len(text) {
 		end = len(text)
 	}

@@ -17,24 +17,38 @@ Copilot's conversation search) all offer full-text search across past conversati
 Search scans the JSONL message records of all sessions in the store directory.
 It matches case-insensitively on message content (both user and assistant messages).
 
+### Query Semantics (r111)
+
+The query is tokenized before matching:
+
+- **Bare words** are whitespace-separated and matched as case-insensitive substrings.
+- **Double-quoted segments** stay one phrase term: `/search oauth "rate limit"`
+  requires both `oauth` and the exact phrase `rate limit`.
+- **AND semantics**: every term must appear in the same message text block.
+  Multi-keyword queries such as `oauth token refresh` no longer require the
+  terms to appear as one consecutive substring.
+- Unbalanced quotes treat the remainder as a phrase; queries that reduce to
+  no terms (empty, quotes-only) return no results.
+- Single-term queries behave exactly as before this change.
+
 ### Implementation
 
 **`internal/session/search.go`** — `SearchSessions(query string, limit int)` on `JSONLStore`:
 
-1. Enumerate all session files via `loadIndex()`.
-2. For each session, stream-read the JSONL file line-by-line with a `bufio.Scanner`
-   (avoids loading entire sessions into memory).
-3. For each record, extract message content from `Message.Content` and check for a
-   case-insensitive substring match.
-4. On match, extract a snippet (~120 chars centered on the match) and record:
+1. Tokenize the query (`tokenizeQuery`) into lowercased terms (words + quoted phrases).
+2. Enumerate all session files via `loadIndex()`.
+3. For each session, stream-read the JSONL file line-by-line with a
+   line-length-bounded reader (avoids loading entire sessions into memory).
+4. For each record, extract message content from `Message.Content` and require an
+   all-terms match (`matchAllTerms`) inside one text block.
+5. On match, extract a snippet (~200 chars centered on the earliest term hit) and record:
    - `SessionID` — for resume action
    - `Title` — from the session index
    - `Role` — user/assistant
    - `Snippet` — context around the match
    - `Timestamp` — from the record
-   - `Score` — simple relevance ranking (match position, multiple matches boost)
-5. Sort results by score descending, then by timestamp descending.
-6. Cap at `limit` (default 100) to bound response size.
+6. Sort results by timestamp descending.
+7. Cap at `limit` (default 100) to bound response size.
 
 ### TUI Integration
 
