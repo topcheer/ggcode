@@ -44,6 +44,34 @@ dependencies:
 2. Deploy with vercel CLI...
 ```
 
+## Template Variables
+
+Skill and custom slash-command bodies support template variables that are
+substituted at invocation time (both when the user types `/my-skill args...`
+and when the agent invokes the skill with arguments):
+
+| Variable | Description |
+|----------|-------------|
+| `$ARGS` | The full argument string as typed |
+| `$DIR` | Current working directory |
+| `$FILE` | File argument, when applicable |
+| `$ARGUMENTS` | All arguments joined by single spaces |
+| `$1` .. `$9` | 1-based positional argument (missing positions become empty) |
+| `${1}` .. `${9}` | Brace form of the positional arguments (use this for positions >= 10, e.g. `${10}`) |
+| `$ARGUMENTS[0]` | 0-based positional argument (bracket form) |
+
+Example — `/deploy staging 1.2.3` with a skill body of:
+
+```markdown
+Deploy build $2 to the $1 environment: `deploy.sh --env=$1 --version=$2`
+```
+
+Arguments are split on whitespace; double quotes group words with spaces into
+a single positional argument (`"my env" v2` → two arguments). A positional
+placeholder is only expanded when the invocation carries at least one
+argument, so legacy skill bodies that use shell variables like `$1` in code
+blocks keep working when the skill is invoked without arguments.
+
 ## Dependency Declaration
 
 Skills can declare two types of dependencies in frontmatter:

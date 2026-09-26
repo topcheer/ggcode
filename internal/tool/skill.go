@@ -148,10 +148,11 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		return result, err
 	}
 	workDir, _ := os.Getwd()
-	content := cmd.Expand(map[string]string{
+	skillArgs := strings.TrimSpace(args.Args)
+	content := cmd.ExpandWithArgs(map[string]string{
 		"DIR":  workDir,
-		"ARGS": strings.TrimSpace(args.Args),
-	})
+		"ARGS": skillArgs,
+	}, commands.SplitArgs(skillArgs))
 	content = strings.TrimSpace(content)
 
 	// If the skill declares dependencies on other skills, advise the agent.
@@ -219,10 +220,10 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 	}
 
 	workDir, _ := os.Getwd()
-	task := strings.TrimSpace(cmd.Expand(map[string]string{
+	task := strings.TrimSpace(cmd.ExpandWithArgs(map[string]string{
 		"DIR":  workDir,
 		"ARGS": args,
-	}))
+	}, commands.SplitArgs(args)))
 	if task == "" {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q has no executable content", cmd.Name)}, nil
 	}

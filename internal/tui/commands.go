@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -573,11 +574,12 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 					if m.commandMgr != nil {
 						m.commandMgr.RecordUsage(cmdName)
 					}
+					rawArgs := strings.TrimSpace(strings.TrimPrefix(text, parts[0]))
 					vars := map[string]string{
 						"DIR":  workingDirFromModel(m),
-						"ARGS": strings.TrimSpace(strings.TrimPrefix(text, parts[0])),
+						"ARGS": rawArgs,
 					}
-					expanded := custom.Expand(vars)
+					expanded := custom.ExpandWithArgs(vars, commands.SplitArgs(rawArgs))
 					m.chatWriteSystem(nextSystemID(), m.t("command.custom", cmdName))
 					m.chatWriteSystem(nextSystemID(), expanded)
 					m.appendUserMessage(expanded)
