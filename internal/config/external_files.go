@@ -52,6 +52,11 @@ func LoadMCPDeleted(configDir string) []string {
 // list removes the file.
 func SaveMCPDeleted(configDir string, names []string) error {
 	path := MCPDeletedPath(configDir)
+	// Full-file rewrite: hold the per-file lock so concurrent tombstone
+	// writers (panel removes, rollbacks) cannot clobber each other's
+	// entries, matching patchExternalFile and migrateSectionToExternal.
+	unlock := lockConfigFile(path)
+	defer unlock()
 	if len(names) == 0 {
 		if fileExists(path) {
 			return os.Remove(path)
@@ -146,6 +151,18 @@ func saveExternalSections(cfg *Config, configDir string, vendors map[string]Vend
 // vendors and applying flow-style formatting for models/tags arrays.
 func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 	path := VendorsPath(configDir)
+	// Test-isolation guard, matching Save() (see GuardRealHomePath).
+	if err := GuardRealHomePath(path, "SaveVendors()"); err != nil {
+		return err
+	}
+	// Full-section rewrite from a possibly stale in-memory snapshot: hold
+	// this file's lock so a concurrent writer's entry (patchExternalFile,
+	// Config.Save()'s saveExternalSections pass, CLI/desktop direct savers)
+	// cannot be silently clobbered after the fact. Same discipline as
+	// migrateSectionToExternal (#981), which locks across its read-merge-
+	// delete-write window.
+	unlock := lockConfigFile(path)
+	defer unlock()
 
 	// Marshal vendors to raw map
 	data, err := yaml.Marshal(vendors)
@@ -211,6 +228,15 @@ func SaveVendors(configDir string, vendors map[string]VendorConfig) error {
 // SaveIMConfig writes IM configuration to im.yaml.
 func SaveIMConfig(configDir string, im *IMConfig) error {
 	path := IMPath(configDir)
+	// Test-isolation guard, matching Save() (see GuardRealHomePath).
+	if err := GuardRealHomePath(path, "SaveIMConfig()"); err != nil {
+		return err
+	}
+	// Full-section rewrite: hold the per-file lock so the rewrite cannot
+	// clobber a concurrent patchExternalFile mutation (adapter toggles run
+	// on their own lock) or vice versa. See SaveVendors for details.
+	unlock := lockConfigFile(path)
+	defer unlock()
 
 	data, err := yaml.Marshal(im)
 	if err != nil {
@@ -237,6 +263,16 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 // SaveMCPServers writes MCP server list to mcp_servers.yaml.
 func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	path := MCPServersPath(configDir)
+	// Test-isolation guard, matching Save() (see GuardRealHomePath).
+	if err := GuardRealHomePath(path, "SaveMCPServers()"); err != nil {
+		return err
+	}
+	// Full-section rewrite: hold the per-file lock so the rewrite cannot
+	// clobber a concurrent writer — Config.Save()'s saveExternalSections
+	// pass runs from another snapshot, and patchExternalFile mutates the
+	// same file under this lock. See SaveVendors for details.
+	unlock := lockConfigFile(path)
+	defer unlock()
 
 	if len(servers) == 0 {
 		if fileExists(path) {

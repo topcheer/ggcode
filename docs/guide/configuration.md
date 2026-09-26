@@ -17,6 +17,12 @@ ggcode stores its configuration in `~/.ggcode/ggcode.yaml`. See `ggcode.example.
 
 Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=instance` in the config tool to save settings for a specific workspace only.
 
+### Concurrent Writes
+
+The split-out config files (`vendors.yaml`, `im.yaml`, `mcp_servers.yaml`) are written by several surfaces at once: the TUI, the desktop panels, the CLI (`ggcode mcp add`/`remove`), and automatic post-load saves. All writers inside one ggcode process serialize on a per-file lock before rewriting, and every write is atomic (temp file + rename), so a save can never observe or produce a partially written file.
+
+One caveat: the lock is per-process. If a CLI process and the desktop app run side by side and you change the same setting in both at the same instant, the later atomic write wins and the earlier one is discarded — avoid editing the same field from two running instances simultaneously.
+
 ## Core Settings
 
 | Key | Type | Description |
