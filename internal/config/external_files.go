@@ -330,7 +330,11 @@ func loadVendorsFile(path string) map[string]VendorConfig {
 		debug.Log("config", "failed to parse %s: %v", path, err)
 		return nil
 	}
-	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
+	// expandAndCoerceMap recovers the implicit YAML scalar type of expanded
+	// values (r140): the re-marshal below quotes the string "8907" as
+	// `"8907"`, so a numeric reference (`port: ${PORT}`) failed the typed
+	// unmarshal and silently dropped the whole section.
+	expanded := expandAndCoerceMap(raw, lookup)
 	expandedData, _ := yaml.Marshal(expanded)
 
 	var vendors map[string]VendorConfig
@@ -353,7 +357,9 @@ func loadIMFile(path string) *IMConfig {
 		debug.Log("config", "failed to parse %s: %v", path, err)
 		return nil
 	}
-	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
+	// expandAndCoerceMap: numeric/bool refs must survive the re-marshal +
+	// typed unmarshal round-trip (r140, see loadVendorsFile).
+	expanded := expandAndCoerceMap(raw, lookup)
 	expandedData, _ := yaml.Marshal(expanded)
 
 	var im IMConfig
@@ -380,7 +386,7 @@ func loadMCPServersFile(path string) []MCPServerConfig {
 		return nil
 	}
 	for i, m := range rawList {
-		rawList[i] = ExpandEnvRecursiveWithLookup(m, lookup)
+		rawList[i] = expandAndCoerceMap(m, lookup)
 	}
 	expandedData, _ := yaml.Marshal(rawList)
 

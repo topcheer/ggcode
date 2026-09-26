@@ -83,6 +83,14 @@ vendor: anthropic
 api_key: ${ANTHROPIC_API_KEY}
 ```
 
+`${VAR}` references work for every config value, not just API keys. Expanded
+values are typed as if written directly into the file: numeric and boolean
+fields accept references too (`max_iterations: ${ITERS}`,
+`mcp_sampling_disabled: ${FLAG}`), across `ggcode.yaml` and the external
+`vendors.yaml` / `im.yaml` / `mcp_servers.yaml` section files. Values expansion
+does not touch (including pre-quoted strings like `"12345"`) keep their
+original type.
+
 ## MCP Servers
 
 Configure MCP (Model Context Protocol) servers for tool integration:

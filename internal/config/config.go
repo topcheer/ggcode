@@ -1412,7 +1412,15 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	expanded := ExpandEnvRecursiveWithLookup(raw, lookup)
+	// expandAndCoerceMap (r139/r140) both expands ${VAR} refs and recovers
+	// the implicit YAML scalar type of expanded values - required by the
+	// re-marshal + typed unmarshal round-trip below: yaml.Marshal quotes the
+	// string "30" as `"30"`, so a numeric reference (`max_iterations: ${N}`)
+	// failed with "cannot unmarshal !!str into int" and aborted the whole
+	// Load. Values expansion did not touch keep their original type, and
+	// expanded values with YAML structure indicators stay strings (see
+	// coerceYAMLScalar).
+	expanded := expandAndCoerceMap(raw, lookup)
 
 	// #559 (Bug F): surface ${...} forms the expander does not understand
 	// (e.g. "${KEY:?err}") instead of letting them silently become literal

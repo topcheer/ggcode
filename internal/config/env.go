@@ -159,15 +159,28 @@ func expandAndCoerceValue(v interface{}, lookup envLookupFunc) interface{} {
 // coerceYAMLScalar re-parses s as a YAML scalar and returns the implicitly
 // typed value (int, float64, bool, ...). Strings that parse as strings (or do
 // not parse at all) are returned unchanged.
+//
+// r140 structural guard: an expanded value containing YAML structure
+// indicators ("a: b", "- x", "{...}") probes as a map/slice, not a scalar.
+// Returning that structure would silently rewrite the value's shape (a
+// secret or command string containing ": " would become a nested mapping),
+// so any non-scalar probe keeps the original string. Only scalar coercions
+// (the numeric/bool type recovery this helper exists for) are applied.
 func coerceYAMLScalar(s string) interface{} {
 	var probe interface{}
 	if err := yaml.Unmarshal([]byte(s), &probe); err != nil {
 		return s
 	}
-	if _, isStr := probe.(string); isStr || probe == nil {
+	switch probe.(type) {
+	case string, nil:
 		return s
+	case map[string]interface{}, []interface{}:
+		// Expanded value carries YAML structure syntax - it is a string
+		// value, not a mapping/sequence. Keep it verbatim.
+		return s
+	default:
+		return probe
 	}
-	return probe
 }
 
 // WarnUnresolvedEnvRefs reports ${...} references in the given raw config map
