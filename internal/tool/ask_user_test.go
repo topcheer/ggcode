@@ -7,18 +7,24 @@ import (
 	"testing"
 )
 
-func TestAskUserToolRequiresInteractiveHandler(t *testing.T) {
+// #r113: headless sessions must not dead-end on ask_user. Per arXiv:2603.26233
+// ("Ask or Assume?") the correct fallback is an explicit declared assumption,
+// not an error that invites retries.
+func TestAskUserToolHeadlessFallbackDeclaresAssumption(t *testing.T) {
 	tool := NewAskUserTool()
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{"questions":[{"title":"Need scope","prompt":"Pick scope","kind":"single","choices":[{"label":"small"}]}]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.IsError {
-		t.Fatal("expected user-visible error when handler is missing")
+	if result.IsError {
+		t.Fatalf("headless fallback must not be an error result: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "interactive TUI") {
-		t.Fatalf("unexpected error content: %s", result.Content)
+	if !strings.Contains(result.Content, "Do not call ask_user again") {
+		t.Fatalf("expected retry-suppression guidance, got: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Assumption:") {
+		t.Fatalf("expected explicit-assumption guidance, got: %s", result.Content)
 	}
 }
 

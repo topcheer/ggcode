@@ -192,7 +192,13 @@ func (t *AskUserTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	handler := t.handler
 	t.mu.RUnlock()
 	if handler == nil {
-		return Result{IsError: true, Content: "ask_user is only available in interactive TUI sessions"}, nil
+		// Headless/pipe sessions have no interactive user to answer. Per the
+		// clarification-seeking literature (arXiv:2603.26233 "Ask or Assume?",
+		// ClarEval), agents that cannot ask must fall back to an explicit,
+		// declared assumption instead of an error dead-end (which invites
+		// retry loops) or a silent guess (which hides the ambiguity from
+		// the user reviewing the transcript).
+		return Result{Content: "ask_user is unavailable in this headless session: there is no interactive user to answer. Do not call ask_user again in this session. Resolve the ambiguity yourself: pick the safest reasonable interpretation, proceed with the work, and state the assumption explicitly in your final response (one short line per assumption, e.g. \"Assumption: ...\") so the user can correct it later."}, nil
 	}
 	resp, err := handler(ctx, normalized)
 	if err != nil {

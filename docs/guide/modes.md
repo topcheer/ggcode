@@ -82,6 +82,10 @@ In autopilot mode, the agent starts each session by declaring a **Goal** via a `
 
 This means you can start a session and walk away — the agent will work through to completion.
 
+#### Headless `ask_user` Fallback
+
+In non-interactive sessions (pipe mode, CI jobs, headless automation) there is no user to answer an `ask_user` questionnaire. Instead of failing with an error, the tool returns guidance telling the agent to resolve the ambiguity itself: pick the safest reasonable interpretation, proceed, and declare each assumption explicitly in the final response (`Assumption: ...`) so a reviewer can spot and correct it. Repeated `ask_user` calls are explicitly discouraged.
+
 ## Session-Scoped Persistence
 
 Permission mode and sidebar visibility are **persisted per session** in the session JSONL meta record, not globally:
