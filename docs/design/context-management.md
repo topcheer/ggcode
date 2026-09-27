@@ -15,8 +15,8 @@ Key responsibilities:
 - `CheckAndSummarize(ctx, prov)` — check threshold and summarize if needed.
 - `ReconcileToolCalls()` — ensure every `tool_use` has a matching `tool_result`.
 - `CompactSupersededReads()` — replace stale re-reads of the same file.
-- `ClearOldToolResults(keepN)` — replace old tool_result outputs with placeholders.
-- `ClearOldToolUseInputs()` — truncate old edit/write Input arguments.
+- `ClearOldToolResults(keepN)` — replace old tool_result outputs with placeholders. **Retired from the live pipeline since v1.3.153** (multi-tier clearing removed); retained as exported API, not called by the agent.
+- `ClearOldToolUseInputs()` — truncate old edit/write Input arguments. **Retired since v1.3.153**, same as above.
 - `buildPostCompactState(msgs)` — build a short post-compact state string (recent files + todo summary).
 
 ## Token Estimation
@@ -27,11 +27,12 @@ Key responsibilities:
 
 When context fills up, the following pipeline runs in order:
 
-1. **Superseded reads compaction** — replace earlier reads of the same file with placeholders. Safest because the newer read already has current content.
-2. **Tool-result clearing tiers** — at 50%, 65%, and 75% of the compaction threshold, progressively replace older `tool_result` outputs. Keeps the last `N` results intact (`12` / `8` / `4`).
-3. **Tool-use input clearing** — truncate old `tool_use` Input arguments whose matching results have been cleared.
-4. **Background precompact** — `agent_precompact.go` starts an LLM summarization in a background goroutine with a 6-second delay and 180-second timeout. It triggers when token count reaches the precompact threshold (99% of the usable prompt budget).
-5. **Reactive compact fallback** — if precompact fails or context is still too high, `agent_compact.go` performs synchronous truncation as a fallback.
+1. **Reasoning block compaction** — replace verbose reasoning text from old turns with compact placeholders (`CompactOldReasoningBlocks`).
+2. **Superseded reads compaction** — replace earlier reads of the same file with placeholders. Safest because the newer read already has current content.
+3. **Background precompact** — `agent_precompact.go` starts an LLM summarization in a background goroutine with a 6-second delay and 180-second timeout. It triggers when token count reaches the precompact threshold (99% of the usable prompt budget).
+4. **Reactive compact fallback** — if precompact fails or context is still too high, `agent_compact.go` performs synchronous truncation as a fallback.
+
+> Note: the multi-tier progressive tool-result clearing schedule (50%/65%/75% thresholds, `ClearOldToolResults` + `ClearOldToolUseInputs`) was removed in v1.3.153 as an intentional simplification. Those methods remain exported on `Manager` but have no live callers. See v1.3.153 release notes.
 
 ## Context-Fill-Aware Output Guard
 
