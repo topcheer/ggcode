@@ -154,6 +154,26 @@ root.go:
 4. Output collected in `strings.Builder`, stored as `LastResult`
 5. Leader retrieves via `teammate_results` or `send_message` reply channel
 
+### Dependency Findings Handoff (team blackboard)
+
+When a teammate completes a board task, its final output is persisted on the
+task itself (`metadata["result"]`, capped at 2000 runes). When a later task
+with `BlockedBy` dependencies is claimed from the board, the persisted
+results of its completed dependencies are appended to the claim prompt
+(bounded: max 6 entries, 800 runes each, 4800 runes total — the same cost
+profile as the subagent findings handoff). This closes the dependency-chain
+content gap: `BlockedBy` used to convey ordering only, forcing the claiming
+agent to re-derive findings its teammate had already produced.
+
+Boundaries:
+
+- Failed or parked tasks (e.g. `permanent_error`) never persist a result,
+  so their metadata cannot leak into a dependent's prompt.
+- Direct-inbox delivery (`send_message`, assigned tasks) is unchanged —
+  the sender already controls that prompt.
+- Findings are injected into the teammate's task prompt before execution
+  starts; the leader's context is never enlarged.
+
 ### Key Differences from Subagent
 
 - **Persistent**: Teammate runs an idle loop and handles multiple tasks over its lifetime (subagent handles one task then exits)
