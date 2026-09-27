@@ -57,60 +57,94 @@ func StartCurrentBindingAdapter(parent context.Context, cfg config.IMConfig, mgr
 	}
 
 	for _, binding := range bindings {
-		if strings.TrimSpace(binding.Adapter) == "" {
+		if skipBindingStart(binding, mgr) {
 			continue
-		}
-		// Skip muted bindings — muted adapters must never start connections
-		if binding.Muted {
-			debug.Log("im", "StartCurrentBindingAdapter: skipping muted adapter %q", binding.Adapter)
-			continue
-		}
-		// Skip bindings owned by another session. If the binding has a
-		// persisted LastSessionID that doesn't match our session, another
-		// instance owns it — only the matching session should activate it.
-		// Bindings with empty LastSessionID use the old logic (first process
-		// claims all) and are started here.
-		if binding.LastSessionID != "" {
-			sessionID := mgr.CurrentSessionID()
-			if sessionID == "" || binding.LastSessionID != sessionID {
-				debug.Log("im", "StartCurrentBindingAdapter: skipping adapter %q — owned by session %s, ours=%s",
-					binding.Adapter, binding.LastSessionID, sessionID)
-				continue
-			}
 		}
 		// Built-in PC adapter — only start when binding explicitly targets it.
-		// #1543: startPCAdapter's "explicit config already present" skip
-		// must only fire for the AUTO binding name (_pc_builtin). A binding
-		// literally NAMED "privateclaw" (UI default names bindings after
-		// the platform) hit the same skip via the platform-name match, so
-		// the CLI/daemon restore path returned from startPCAdapter and the
-		// continue skipped startConfiguredAdapter - zero startup, zero
-		// logs, zero errors.
-		if binding.Adapter == "_pc_builtin" || strings.EqualFold(binding.Adapter, string(PlatformPrivateClaw)) {
-			if binding.Adapter == "_pc_builtin" {
-				startPCAdapter(ctx, cfg, mgr)
-			} else {
-				// User-named binding: treat like any explicit config entry.
-				adapterCfg, ok := cfg.Adapters[binding.Adapter]
-				if ok && adapterCfg.Enabled {
-					if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
-						debug.Log("im", "binding adapter %q: %v", binding.Adapter, err)
-					}
-				}
-			}
+		if isPCBindingAdapter(binding.Adapter) {
+			startPCBinding(ctx, cfg, binding, mgr)
 			continue
 		}
-
-		adapterCfg, ok := cfg.Adapters[binding.Adapter]
-		if !ok || !adapterCfg.Enabled {
-			continue
-		}
-		if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
+		if err := startBindingAdapter(ctx, cfg, binding.Adapter, mgr); err != nil {
 			cancel()
 			return nil, err
 		}
 	}
 	return controller, nil
+}
+
+// bindingSessionOwnedElsewhere is the pure session-ownership predicate behind
+// skipBindingStart: a persisted LastSessionID that doesn't match our (possibly
+// empty) session id means another instance owns the binding. Bindings with an
+// empty LastSessionID use the old logic (first process claims all) and never
+// take this path.
+func bindingSessionOwnedElsewhere(lastSessionID, currentSessionID string) bool {
+	return currentSessionID == "" || lastSessionID != currentSessionID
+}
+
+// skipBindingStart reports whether the binding must not be started, keeping
+// the original guard order and per-reason diagnostics: a silent skip for an
+// empty adapter name, a logged skip for muted bindings (muted adapters must
+// never start connections), and a logged skip for a binding owned by another
+// session. The session lookup only happens for bindings that carry a
+// LastSessionID, matching the previous inline control flow.
+func skipBindingStart(binding ChannelBinding, mgr *Manager) bool {
+	if strings.TrimSpace(binding.Adapter) == "" {
+		return true
+	}
+	if binding.Muted {
+		debug.Log("im", "StartCurrentBindingAdapter: skipping muted adapter %q", binding.Adapter)
+		return true
+	}
+	if binding.LastSessionID != "" {
+		sessionID := mgr.CurrentSessionID()
+		if bindingSessionOwnedElsewhere(binding.LastSessionID, sessionID) {
+			debug.Log("im", "StartCurrentBindingAdapter: skipping adapter %q — owned by session %s, ours=%s",
+				binding.Adapter, binding.LastSessionID, sessionID)
+			return true
+		}
+	}
+	return false
+}
+
+// isPCBindingAdapter reports whether the binding targets the built-in
+// PrivateClaw adapter: either the reserved _pc_builtin auto binding name or a
+// binding matching the platform name. #1543: the platform-name arm exists so
+// a binding literally NAMED "privateclaw" (UI default names bindings after
+// the platform) takes the PC branch instead of falling through to
+// startConfiguredAdapter.
+func isPCBindingAdapter(adapter string) bool {
+	return adapter == "_pc_builtin" || strings.EqualFold(adapter, string(PlatformPrivateClaw))
+}
+
+// startPCBinding starts the built-in PrivateClaw adapter for a PC-targeted
+// binding. The reserved _pc_builtin binding always auto-starts with defaults;
+// a user-named binding is treated like any explicit config entry — it starts
+// only when an enabled config entry exists, and its start errors are logged
+// rather than fatal for sibling bindings.
+func startPCBinding(ctx context.Context, cfg config.IMConfig, binding ChannelBinding, mgr *Manager) {
+	if binding.Adapter == "_pc_builtin" {
+		startPCAdapter(ctx, cfg, mgr)
+		return
+	}
+	// User-named binding: treat like any explicit config entry.
+	if adapterCfg, ok := cfg.Adapters[binding.Adapter]; ok && adapterCfg.Enabled {
+		if err := startConfiguredAdapter(ctx, cfg, binding.Adapter, adapterCfg, mgr); err != nil {
+			debug.Log("im", "binding adapter %q: %v", binding.Adapter, err)
+		}
+	}
+}
+
+// startBindingAdapter resolves the binding's adapter config and starts it.
+// A missing or disabled config entry is a silent no-op (nil error); a
+// construction/start error is fatal for the whole restore path — the caller
+// cancels the controller and aborts.
+func startBindingAdapter(ctx context.Context, cfg config.IMConfig, name string, mgr *Manager) error {
+	adapterCfg, ok := cfg.Adapters[name]
+	if !ok || !adapterCfg.Enabled {
+		return nil
+	}
+	return startConfiguredAdapter(ctx, cfg, name, adapterCfg, mgr)
 }
 
 func StartNamedAdapter(parent context.Context, cfg config.IMConfig, name string, mgr *Manager) error {
