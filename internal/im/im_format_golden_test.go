@@ -2,6 +2,9 @@ package im
 
 // r166 golden harness for imLabel + formatToolCallText.
 // r168 extension: RESULT section pinning formatToolResultText.
+// r169 extension: STATUS section pinning localizedToolActivity (pure
+// function-level dump; DescribeTool/FormatIMStatus depend on os.Getwd and
+// are NOT golden-safe).
 //
 // Provenance: names and label keys below were extracted MECHANICALLY from
 // origin/main 29fad0ab0 (internal/im/tool_format.go:22-363 and
@@ -328,6 +331,21 @@ var goldenResultShapes = []goldenResultShape{
 
 var goldenLangs = []ToolLanguage{ToolLangEn, ToolLangZhCN}
 
+// goldenActivityActions covers every case label of localizedToolActivity
+// (extracted mechanically from the pristine switch) plus an unknown-action
+// probe that exercises the localizedGenericActivity default tail.
+var goldenActivityActions = []string{
+	"read", "edit", "create", "write", "search", "find", "list",
+	"run", "fetch", "todo", "task", "skill", "ask", "inspect",
+	// default-path probe (no dedicated case in either switch)
+	"totally_unknown_action",
+}
+
+// goldenActivityTargets: empty (no-target switch) and a non-empty probe
+// (with-target switch). Note the pristine with-target switch has no "todo"
+// case - todo+target falls through to localizedGenericActivity.
+var goldenActivityTargets = []string{"", "chart.html"}
+
 func goldenFilePath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join("testdata", "im_format_golden.txt")
@@ -383,6 +401,16 @@ func TestDumpIMFormatGolden(t *testing.T) {
 			}
 		}
 	}
+	for _, lang := range goldenLangs {
+		for _, action := range goldenActivityActions {
+			for ti, target := range goldenActivityTargets {
+				out := localizedToolActivity(lang, action, target)
+				if _, err := fmt.Fprintf(w, "STATUS\t%s\t%s\t%d\t%q\n", lang, action, ti, out); err != nil {
+					t.Fatalf("write status: %v", err)
+				}
+			}
+		}
+	}
 	if err := w.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -410,6 +438,14 @@ func loadGolden(t *testing.T) map[string]string {
 				t.Fatalf("malformed golden line: %q", line)
 			}
 			g[parts[0]+"\t"+parts[1]+"\t"+parts[2]+"\t"+parts[3]+"\t"+parts[4]] = parts[5]
+			continue
+		}
+		if strings.HasPrefix(line, "STATUS\t") {
+			parts := strings.SplitN(line, "\t", 5) // STATUS, lang, action, targetIdx, %q
+			if len(parts) != 5 {
+				t.Fatalf("malformed golden line: %q", line)
+			}
+			g[parts[0]+"\t"+parts[1]+"\t"+parts[2]+"\t"+parts[3]] = parts[4]
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 5) // CALL, lang, name, shapeIdx, %q
@@ -496,6 +532,33 @@ func TestFormatToolResultGolden(t *testing.T) {
 				})
 				if got != want {
 					t.Errorf("formatToolResultText(%s,%q,shape%d):\n got %q\nwant %q", lang, name, si, got, want)
+				}
+			}
+		}
+	}
+}
+
+// TestLocalizedToolActivityGolden pins the localizedToolActivity tables
+// (both the no-target and with-target switches, plus the
+// localizedGenericActivity default tail for unknown actions / todo+target)
+// against the pristine baseline.
+func TestLocalizedToolActivityGolden(t *testing.T) {
+	g := loadGolden(t)
+	for _, lang := range goldenLangs {
+		for _, action := range goldenActivityActions {
+			for ti, target := range goldenActivityTargets {
+				key := fmt.Sprintf("STATUS\t%s\t%s\t%d", lang, action, ti)
+				wantRaw, ok := g[key]
+				if !ok {
+					t.Fatalf("golden missing %s", key)
+				}
+				want, err := strconv.Unquote(wantRaw)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", key, err)
+				}
+				got := localizedToolActivity(lang, action, target)
+				if got != want {
+					t.Errorf("localizedToolActivity(%s,%q,target%d):\n got %q\nwant %q", lang, action, ti, got, want)
 				}
 			}
 		}
