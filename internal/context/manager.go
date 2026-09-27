@@ -3043,11 +3043,38 @@ func isPromptTooLongError(err error) bool {
 	return false
 }
 
+// Section headers and budgets for the [Post-compact state] message. Modified
+// files are listed separately from recently-read files because the two need
+// different lifecycles across compaction chains: reads age out of the recent
+// window, but files the agent edited must persist for the whole task (see
+// buildPostCompactState).
+const (
+	recentFilesSection   = "Recent files"
+	modifiedFilesSection = "Files modified this session"
+	recentFileLimit      = 5
+	modifiedFileLimit    = 8
+)
+
 func (m *Manager) buildPostCompactState(msgs []provider.Message) string {
 	var sections []string
 
-	if files := collectRecentFilePaths(msgs, 5); len(files) > 0 {
-		sections = append(sections, fmt.Sprintf("Recent files:\n- %s", strings.Join(files, "\n- ")))
+	// Artifact tracking first. Files the agent MODIFIED are the artifact
+	// class production compaction methods preserve worst: Factory.ai's audit
+	// of 36,611 production messages scored artifact tracking ("which files
+	// were modified") 2.19-2.45/5.0 across every summarization approach, and
+	// compaction chains compound the loss — a second pass re-summarizes the
+	// first summary, smoothing out early-session edits. Counter that two
+	// ways: (1) list mutating-tool targets explicitly, ahead of reads, and
+	// (2) re-collect them from prior [Post-compact state] messages so the
+	// modified list survives chained compaction instead of aging out of the
+	// recent-N window.
+	modified := collectCarriedModifiedPaths(msgs)
+	modified = appendModifiedPaths(modified, collectToolFilePaths(msgs, modifiedFileLimit))
+	if len(modified) > 0 {
+		sections = append(sections, fmt.Sprintf("%s:\n- %s", modifiedFilesSection, strings.Join(modified, "\n- ")))
+	}
+	if files := collectRecentFilePaths(msgs, recentFileLimit, pathSet(modified)); len(files) > 0 {
+		sections = append(sections, fmt.Sprintf("%s:\n- %s", recentFilesSection, strings.Join(files, "\n- ")))
 	}
 	if todoSummary := m.readTodoSummary(); todoSummary != "" {
 		sections = append(sections, todoSummary)
@@ -3059,34 +3086,59 @@ func (m *Manager) buildPostCompactState(msgs []provider.Message) string {
 	return "[Post-compact state]\n" + strings.Join(sections, "\n\n")
 }
 
-func collectRecentFilePaths(msgs []provider.Message, limit int) []string {
+// mutatingToolNames are the built-in tools whose tool_use mutates the file
+// named in their path/file_path/notebook_path input (edit_file, write_file,
+// multi_edit, notebook_edit, apply_patch — apply_patch requires top-level
+// "path").
+var mutatingToolNames = map[string]struct{}{
+	"edit_file":     {},
+	"write_file":    {},
+	"multi_edit":    {},
+	"notebook_edit": {},
+	"apply_patch":   {},
+}
+
+// collectCarriedModifiedPaths recovers modified files listed in prior
+// [Post-compact state] messages, so the modified list survives compaction
+// chains instead of being flattened into the next summary.
+func collectCarriedModifiedPaths(msgs []provider.Message) []string {
+	var paths []string
+	for i := range msgs {
+		for _, block := range msgs[i].Content {
+			if block.Type == "text" && strings.Contains(block.Text, "[Post-compact state]") {
+				paths = append(paths, extractPostCompactStateFilePaths(block.Text, modifiedFilesSection)...)
+			}
+		}
+	}
+	return paths
+}
+
+// collectToolFilePaths walks msgs forward and returns up to limit distinct
+// file paths targeted by mutating tool_use inputs. Forward order keeps the
+// result chronological (oldest edit first), which reads naturally after a
+// compaction that dropped the surrounding history.
+func collectToolFilePaths(msgs []provider.Message, limit int) []string {
 	if limit <= 0 {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	paths := make([]string, 0, limit)
-	for i := len(msgs) - 1; i >= 0 && len(paths) < limit; i-- {
+	for i := range msgs {
 		for _, block := range msgs[i].Content {
-			if block.Type == "text" && block.Text != "" {
-				for _, path := range extractPostCompactStateFilePaths(block.Text) {
-					if len(paths) >= limit {
-						break
-					}
-					if _, exists := seen[path]; exists {
-						continue
-					}
-					seen[path] = struct{}{}
-					paths = append(paths, path)
-				}
+			if len(paths) >= limit {
+				return paths
 			}
-			if block.Type != "tool_use" || len(block.Input) == 0 || len(paths) >= limit {
+			if block.Type != "tool_use" || len(block.Input) == 0 {
+				continue
+			}
+			if _, ok := mutatingToolNames[block.ToolName]; !ok {
 				continue
 			}
 			var input map[string]any
 			if err := json.Unmarshal(block.Input, &input); err != nil {
 				continue
 			}
-			for _, key := range []string{"path", "file_path"} {
+			for _, key := range []string{"path", "file_path", "notebook_path"} {
 				raw, ok := input[key]
 				if !ok {
 					continue
@@ -3107,8 +3159,95 @@ func collectRecentFilePaths(msgs []provider.Message, limit int) []string {
 	return paths
 }
 
-func extractPostCompactStateFilePaths(text string) []string {
-	if !strings.Contains(text, "[Post-compact state]") || !strings.Contains(text, "Recent files:") {
+// appendModifiedPaths merges chain-carried modified paths with fresh ones,
+// deduplicating in order and capping at modifiedFileLimit.
+func appendModifiedPaths(carried, fresh []string) []string {
+	out := make([]string, 0, modifiedFileLimit)
+	seen := make(map[string]struct{})
+	for _, p := range append(append([]string(nil), carried...), fresh...) {
+		if p == "" {
+			continue
+		}
+		if _, exists := seen[p]; exists {
+			continue
+		}
+		if len(out) >= modifiedFileLimit {
+			break
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func pathSet(paths []string) map[string]struct{} {
+	s := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		s[p] = struct{}{}
+	}
+	return s
+}
+
+// collectRecentFilePaths scans backwards for recently touched file paths
+// (reads and writes alike). Paths in exclude are skipped — the caller lists
+// modified files in their own section, so a file that was both read and
+// edited should not appear twice.
+func collectRecentFilePaths(msgs []provider.Message, limit int, exclude map[string]struct{}) []string {
+	if limit <= 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(exclude))
+	for p := range exclude {
+		seen[p] = struct{}{}
+	}
+	paths := make([]string, 0, limit)
+	for i := len(msgs) - 1; i >= 0 && len(paths) < limit; i-- {
+		for _, block := range msgs[i].Content {
+			if block.Type == "text" && block.Text != "" {
+				for _, path := range extractPostCompactStateFilePaths(block.Text, recentFilesSection) {
+					if len(paths) >= limit {
+						break
+					}
+					if _, exists := seen[path]; exists {
+						continue
+					}
+					seen[path] = struct{}{}
+					paths = append(paths, path)
+				}
+			}
+			if block.Type != "tool_use" || len(block.Input) == 0 || len(paths) >= limit {
+				continue
+			}
+			var input map[string]any
+			if err := json.Unmarshal(block.Input, &input); err != nil {
+				continue
+			}
+			for _, key := range []string{"path", "file_path", "notebook_path"} {
+				raw, ok := input[key]
+				if !ok {
+					continue
+				}
+				path, ok := raw.(string)
+				if !ok || path == "" {
+					continue
+				}
+				if _, exists := seen[path]; exists {
+					break
+				}
+				seen[path] = struct{}{}
+				paths = append(paths, path)
+				break
+			}
+		}
+	}
+	return paths
+}
+
+// extractPostCompactStateFilePaths recovers the bullet paths from one named
+// section of a prior [Post-compact state] message, so those lists survive
+// compaction chains instead of being flattened into the next summary.
+func extractPostCompactStateFilePaths(text, section string) []string {
+	if !strings.Contains(text, "[Post-compact state]") || !strings.Contains(text, section+":") {
 		return nil
 	}
 	lines := strings.Split(text, "\n")
@@ -3117,7 +3256,7 @@ func extractPostCompactStateFilePaths(text string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		switch {
-		case trimmed == "Recent files:":
+		case trimmed == section+":":
 			inFiles = true
 		case !inFiles:
 			continue
