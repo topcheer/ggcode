@@ -1083,6 +1083,9 @@ func formatToolInline(toolName, input string) string {
 // runAgentStream executes the agent with streaming output sent to IM.
 // IM messages mirror TUI behavior exactly: text is only emitted on
 // StreamEventDone (not per-token), tool status is emitted as it happens.
+// runAgentStream drives one agent streaming round for the daemon bridge.
+// The stream callback is a thin dispatcher: each event phase lives in its own
+// seam so the orchestration (setup → run → per-phase handling) stays flat.
 func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.ContentBlock) error {
 	round := &daemonRoundState{}
 	b.mu.Lock()
@@ -1100,132 +1103,176 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 
 		switch event.Type {
 		case provider.StreamEventText:
-			// Accumulate text, do NOT send to IM per-token
-			round.AppendText(event.Text)
-			b.emitter.TriggerTyping()
-			if sink != nil {
-				sink.OnStreamText(event.Text)
-			}
+			b.onStreamText(event, round, sink)
 
 		case provider.StreamEventToolCallDone:
-			toolName := strings.TrimSpace(event.Tool.Name)
-			if toolName == "ask_user" {
-				round.SetAskUser(b.emitter.FormatAskUserPrompt(string(event.Tool.Arguments)))
-			}
-			if !isDaemonSkippedTool(toolName) {
-				round.NoteToolCall()
-			}
-			// enter_plan_mode: emit description text to IM so users know
-			// planning has started (the result is hidden, so without this
-			// IM users see nothing until exit_plan_mode).
-			if toolName == "enter_plan_mode" {
-				label := "📝 Planning..."
-				if toolLang(b.language) == ToolLangZhCN {
-					label = "📝 正在规划..."
-				}
-				var args struct {
-					Description string `json:"description"`
-				}
-				if json.Unmarshal([]byte(event.Tool.Arguments), &args) == nil && args.Description != "" {
-					label = "📝 " + args.Description
-				}
-				_ = b.emitter.EmitText(label)
-			}
-			// Sleep tool is special: emit the duration immediately
-			// so the user sees it before the tool blocks.
-			// Only emit in verbose mode — quiet/summary aggregate it.
-			if toolName == "sleep" && b.resolveEffectiveOutputMode() == "verbose" {
-				b.emitter.EmitEvent(OutboundEvent{
-					Kind: OutboundEventToolCall,
-					ToolCall: &ToolCallInfo{
-						ToolName: "sleep",
-						Args:     string(event.Tool.Arguments),
-						Detail:   formatSleepDuration(string(event.Tool.Arguments)),
-					},
-				})
-			}
-			// Do NOT emit intermediate status to IM — only final results
-			// via OutboundEventToolResult (mirrors terminal follow behavior).
-			b.emitter.TriggerTyping()
-			// Note: followSink does NOT get OnToolStatus — only final
-			// OnToolResult is forwarded to keep terminal output clean.
+			b.onStreamToolCallDone(event, round)
 
 		case provider.StreamEventToolResult:
-			round.NoteToolResult(event.IsError)
-			toolInfo := ToolResultInfo{
-				ToolName: event.Tool.Name,
-				Args:     string(event.Tool.Arguments),
-				Result:   event.Result,
-				IsError:  event.IsError,
-				Lang:     b.language,
-			}
-
-			switch b.resolveEffectiveOutputMode() {
-			case "summary":
-				// Only buffer, never send individual tool results
-				round.PendingTools = append(round.PendingTools, toolInfo)
-			case "quiet":
-				// Buffer for aggregation; errors still sent immediately
-				if event.IsError {
-					b.emitter.EmitEvent(OutboundEvent{
-						Kind:    OutboundEventToolResult,
-						ToolRes: &toolInfo,
-					})
-				} else {
-					round.PendingTools = append(round.PendingTools, toolInfo)
-				}
-			default: // verbose
-				b.emitter.EmitEvent(OutboundEvent{
-					Kind:    OutboundEventToolResult,
-					ToolRes: &toolInfo,
-				})
-			}
-			b.emitter.TriggerTyping()
-			if sink != nil {
-				sink.OnToolResult(event.Tool.Name, string(event.Tool.Arguments), event.Result, event.IsError)
-			}
+			b.onStreamToolResult(event, round, sink)
 
 		case provider.StreamEventDone:
-			text := round.Text()
-			mode := b.resolveEffectiveOutputMode()
-
-			// For quiet/summary modes, emit aggregated tool summary
-			if (mode == "quiet" || mode == "summary") && len(round.PendingTools) > 0 {
-				summary := formatToolSummary(b.language, round.PendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
-				if summary != "" {
-					_ = b.emitter.EmitText(summary)
-				}
-			}
-
-			// In summary mode, only send the final LLM text
-			// In quiet/verbose mode, always send the text
-			if strings.TrimSpace(text) != "" {
-				b.emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
-			}
-			// AskUser is already emitted by HandleAskUser when the tool executes;
-			// do not emit again here to avoid duplicate messages.
-			// Save assistant messages to session
-			b.appendAssistantMessages()
-			round.Reset()
-			if sink != nil {
-				sink.OnRoundDone()
-			}
+			b.finishStreamRound(round, sink)
 
 		case provider.StreamEventError:
-			if !errors.Is(event.Error, context.Canceled) {
-				_ = b.emitter.EmitText(provider.UserFacingError(event.Error))
-			}
-			// #552-D: a failed round must not leak its partial text into
-			// the next round — without this Reset, half-streamed text from
-			// the failed attempt is concatenated with the retry's text in
-			// the same message bubble at the next StreamEventDone.
-			round.Reset()
-			if sink != nil {
-				sink.OnError(event.Error)
-			}
+			b.onStreamError(event.Error, round, sink)
 		}
 	})
 	return err
+}
+
+// onStreamText accumulates streamed text without forwarding per-token to IM.
+func (b *DaemonBridge) onStreamText(event provider.StreamEvent, round *daemonRoundState, sink daemon.FollowSink) {
+	// Accumulate text, do NOT send to IM per-token
+	round.AppendText(event.Text)
+	b.emitter.TriggerTyping()
+	if sink != nil {
+		sink.OnStreamText(event.Text)
+	}
+}
+
+// onStreamToolCallDone records a finished tool call and emits the few
+// tool-start notices the IM channel relies on (plan-mode label, sleep duration).
+func (b *DaemonBridge) onStreamToolCallDone(event provider.StreamEvent, round *daemonRoundState) {
+	toolName := strings.TrimSpace(event.Tool.Name)
+	if toolName == "ask_user" {
+		round.SetAskUser(b.emitter.FormatAskUserPrompt(string(event.Tool.Arguments)))
+	}
+	if !isDaemonSkippedTool(toolName) {
+		round.NoteToolCall()
+	}
+	// enter_plan_mode: emit description text to IM so users know
+	// planning has started (the result is hidden, so without this
+	// IM users see nothing until exit_plan_mode).
+	if toolName == "enter_plan_mode" {
+		_ = b.emitter.EmitText(planModeStartLabel(string(event.Tool.Arguments), b.language))
+	}
+	// Sleep tool is special: emit the duration immediately
+	// so the user sees it before the tool blocks.
+	// Only emit in verbose mode — quiet/summary aggregate it.
+	if toolName == "sleep" && b.resolveEffectiveOutputMode() == "verbose" {
+		b.emitter.EmitEvent(newSleepToolEvent(string(event.Tool.Arguments)))
+	}
+	// Do NOT emit intermediate status to IM — only final results
+	// via OutboundEventToolResult (mirrors terminal follow behavior).
+	b.emitter.TriggerTyping()
+	// Note: followSink does NOT get OnToolStatus — only final
+	// OnToolResult is forwarded to keep terminal output clean.
+}
+
+// onStreamToolResult records the tool result and routes it according to the
+// effective output mode (buffer for aggregation vs. immediate emit).
+func (b *DaemonBridge) onStreamToolResult(event provider.StreamEvent, round *daemonRoundState, sink daemon.FollowSink) {
+	round.NoteToolResult(event.IsError)
+	toolInfo := ToolResultInfo{
+		ToolName: event.Tool.Name,
+		Args:     string(event.Tool.Arguments),
+		Result:   event.Result,
+		IsError:  event.IsError,
+		Lang:     b.language,
+	}
+
+	if bufferToolResult(b.resolveEffectiveOutputMode(), event.IsError) {
+		// Only buffer, never send individual tool results
+		round.PendingTools = append(round.PendingTools, toolInfo)
+	} else {
+		b.emitter.EmitEvent(OutboundEvent{
+			Kind:    OutboundEventToolResult,
+			ToolRes: &toolInfo,
+		})
+	}
+	b.emitter.TriggerTyping()
+	if sink != nil {
+		sink.OnToolResult(event.Tool.Name, string(event.Tool.Arguments), event.Result, event.IsError)
+	}
+}
+
+// finishStreamRound emits the aggregated tool summary (quiet/summary modes)
+// plus the round summary, persists assistant messages, and resets the round.
+func (b *DaemonBridge) finishStreamRound(round *daemonRoundState, sink daemon.FollowSink) {
+	text := round.Text()
+	mode := b.resolveEffectiveOutputMode()
+
+	// For quiet/summary modes, emit aggregated tool summary
+	if (mode == "quiet" || mode == "summary") && len(round.PendingTools) > 0 {
+		summary := formatToolSummary(b.language, round.PendingTools, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
+		if summary != "" {
+			_ = b.emitter.EmitText(summary)
+		}
+	}
+
+	// In summary mode, only send the final LLM text
+	// In quiet/verbose mode, always send the text
+	if strings.TrimSpace(text) != "" {
+		b.emitter.EmitRoundSummary(text, round.ToolCalls, round.ToolSuccesses, round.ToolFailures)
+	}
+	// AskUser is already emitted by HandleAskUser when the tool executes;
+	// do not emit again here to avoid duplicate messages.
+	// Save assistant messages to session
+	b.appendAssistantMessages()
+	round.Reset()
+	if sink != nil {
+		sink.OnRoundDone()
+	}
+}
+
+// onStreamError surfaces non-cancel failures to IM and resets the round.
+func (b *DaemonBridge) onStreamError(err error, round *daemonRoundState, sink daemon.FollowSink) {
+	if !errors.Is(err, context.Canceled) {
+		_ = b.emitter.EmitText(provider.UserFacingError(err))
+	}
+	// #552-D: a failed round must not leak its partial text into
+	// the next round — without this Reset, half-streamed text from
+	// the failed attempt is concatenated with the retry's text in
+	// the same message bubble at the next StreamEventDone.
+	round.Reset()
+	if sink != nil {
+		sink.OnError(err)
+	}
+}
+
+// planModeStartLabel renders the IM notice shown when enter_plan_mode runs.
+// A non-empty description in the tool arguments overrides the generic label.
+func planModeStartLabel(argsJSON, lang string) string {
+	label := "📝 Planning..."
+	if toolLang(lang) == ToolLangZhCN {
+		label = "📝 正在规划..."
+	}
+	var args struct {
+		Description string `json:"description"`
+	}
+	if json.Unmarshal([]byte(argsJSON), &args) == nil && args.Description != "" {
+		label = "📝 " + args.Description
+	}
+	return label
+}
+
+// newSleepToolEvent builds the verbose-mode tool-call notice for the sleep
+// tool; Detail carries the parsed duration so users see it before the block.
+func newSleepToolEvent(argsJSON string) OutboundEvent {
+	return OutboundEvent{
+		Kind: OutboundEventToolCall,
+		ToolCall: &ToolCallInfo{
+			ToolName: "sleep",
+			Args:     argsJSON,
+			Detail:   formatSleepDuration(argsJSON),
+		},
+	}
+}
+
+// bufferToolResult reports whether a tool result should be buffered into the
+// round's pending list instead of being emitted immediately: summary buffers
+// everything, quiet buffers successes but forwards errors right away, and
+// verbose forwards everything.
+func bufferToolResult(mode string, isError bool) bool {
+	switch mode {
+	case "summary":
+		return true
+	case "quiet":
+		return !isError
+	default: // verbose
+		return false
+	}
 }
 
 // truncate shortens s to maxLen for logging.
