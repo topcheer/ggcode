@@ -102,6 +102,13 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p.editingField != "" {
 				p.editingField = ""
 				p.message = ""
+				// #2800: abandoning a custom add must also leave customMode,
+				// otherwise a later `e` edit falls into the custom "key" save
+				// branch and appends a bogus target from stale inputs.
+				p.customMode = false
+				p.nameInput.SetValue("")
+				p.urlInput.SetValue("")
+				p.keyInput.SetValue("")
 				return m, nil
 			}
 			m.closeStreamPanel()
@@ -223,9 +230,7 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 				p.targets[p.selectedIndex].Key = p.keyInput.Value()
 			}
 		case "url":
-			if p.customMode {
-				p.urlInput.SetValue(p.urlInput.Value())
-			}
+			// (removed no-op self-assignment, #2800)
 		case "name":
 			// For custom: name → url → key flow
 			if p.customMode && p.editingField == "name" {
