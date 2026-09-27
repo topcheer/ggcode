@@ -296,135 +296,32 @@ func localizedToolLabel(lang ToolLanguage, action string) string {
 	return localizedGenericToolName(lang, action)
 }
 
+// localizedToolActivity resolves the progress activity line for a tool
+// action. Tables live in tool_activity_tables.go (extracted r169 from the
+// former inline switches, mirroring the r166 imLabel split). The pristine
+// with-target switch has no "todo" entry, so todo+target falls through to
+// localizedGenericActivity; unknown actions always do. Output is pinned
+// byte-for-byte by TestLocalizedToolActivityGolden.
 func localizedToolActivity(lang ToolLanguage, action, target string) string {
 	if target == "" {
-		switch lang {
-		case ToolLangZhCN:
-			switch action {
-			case "read":
-				return "读取文件"
-			case "edit":
-				return "编辑文件"
-			case "create":
-				return "创建文件"
-			case "write":
-				return "写入文件"
-			case "search":
-				return "搜索中..."
-			case "find":
-				return "查找文件"
-			case "list":
-				return "列出目录"
-			case "run":
-				return "执行命令"
-			case "fetch":
-				return "抓取网页"
-			case "todo":
-				return "更新待办"
-			case "task":
-				return "执行任务"
-			case "skill":
-				return "加载技能"
-			case "ask":
-				return "等待用户输入"
-			case "inspect":
-				return "检查中..."
-			}
-		default:
-			switch action {
-			case "read":
-				return "Reading file"
-			case "edit":
-				return "Editing file"
-			case "create":
-				return "Creating file"
-			case "write":
-				return "Writing file"
-			case "search":
-				return "Searching..."
-			case "find":
-				return "Finding files"
-			case "list":
-				return "Listing directory"
-			case "run":
-				return "Running command"
-			case "fetch":
-				return "Fetching page"
-			case "todo":
-				return "Updating todos"
-			case "task":
-				return "Running task"
-			case "skill":
-				return "Loading skill"
-			case "ask":
-				return "Waiting for user input"
-			case "inspect":
-				return "Inspecting..."
-			}
+		if v, ok := toolActivityTable(toolActivityNoTargetZh, toolActivityNoTargetEn, lang)[action]; ok {
+			return v
 		}
+		return localizedGenericActivity(lang, "")
 	}
-
-	switch lang {
-	case ToolLangZhCN:
-		switch action {
-		case "read":
-			return "读取 " + target
-		case "edit":
-			return "编辑 " + target
-		case "create":
-			return "创建 " + target
-		case "write":
-			return "写入 " + target
-		case "search":
-			return "搜索 " + target
-		case "find":
-			return "查找 " + target
-		case "list":
-			return "列出 " + target
-		case "run":
-			return "执行 " + target
-		case "fetch":
-			return "抓取 " + target
-		case "task":
-			return "执行任务 " + target
-		case "skill":
-			return "加载技能 " + target
-		case "ask":
-			return "提问 " + target
-		case "inspect":
-			return "检查 " + target
-		}
-	default:
-		switch action {
-		case "read":
-			return "Reading " + target
-		case "edit":
-			return "Editing " + target
-		case "create":
-			return "Creating " + target
-		case "write":
-			return "Writing " + target
-		case "search":
-			return "Searching " + target
-		case "find":
-			return "Finding " + target
-		case "list":
-			return "Listing " + target
-		case "run":
-			return "Running " + target
-		case "fetch":
-			return "Fetching " + target
-		case "task":
-			return "Running task " + target
-		case "skill":
-			return "Loading skill " + target
-		case "ask":
-			return "Asking " + target
-		case "inspect":
-			return "Inspecting " + target
-		}
+	if v, ok := toolActivityTable(toolActivityWithTargetZh, toolActivityWithTargetEn, lang)[action]; ok {
+		return v + target
 	}
 	return localizedGenericActivity(lang, target)
+}
+
+// toolActivityTable picks the zh table for zh-CN and the en table for every
+// other language, mirroring the pre-refactor switch's case/default split.
+func toolActivityTable(zh, en map[string]string, lang ToolLanguage) map[string]string {
+	if lang == ToolLangZhCN {
+		return zh
+	}
+	return en
 }
 
 func localizedCommandActivity(lang ToolLanguage, desc string) string {
