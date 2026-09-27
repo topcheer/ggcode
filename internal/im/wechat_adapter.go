@@ -669,11 +669,9 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	// so fail visibly with an actionable message instead. A zero timestamp
 	// (legacy binding persisted before the field existed) is treated as
 	// unknown-age and allowed through; the server remains the source of truth.
-	if contextToken != "" && !binding.ContextTokenUpdatedAt.IsZero() {
-		if age := time.Since(binding.ContextTokenUpdatedAt); age > wechatContextTokenTTL {
-			debug.Log("wechat", "adapter=%s Send: context_token expired (age=%s)", a.name, age.Truncate(time.Minute))
-			return fmt.Errorf("wechat adapter %q: context_token expired (age %s > %s); send a message to the bot to refresh it", a.name, age.Truncate(time.Minute), wechatContextTokenTTL)
-		}
+	if age, expired := wechatTokenExpired(contextToken, binding.ContextTokenUpdatedAt, time.Now()); expired {
+		debug.Log("wechat", "adapter=%s Send: context_token expired (age=%s)", a.name, age.Truncate(time.Minute))
+		return fmt.Errorf("wechat adapter %q: context_token expired (age %s > %s); send a message to the bot to refresh it", a.name, age.Truncate(time.Minute), wechatContextTokenTTL)
 	}
 
 	toUserID := binding.ChannelID
@@ -687,45 +685,20 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	// real images. Local paths and data URLs degrade to a visible notice.
 	images, remainder := ExtractImagesFromText(text)
 	text = stripMarkdown(strings.TrimSpace(remainder))
-	sentImage := false
-	attempted := 0
-	sentImages := 0
-	for _, img := range images {
-		url := wechatImageURL(img)
-		if url == "" {
-			debug.Log("wechat", "adapter=%s image kind=%s not deliverable via iLink (needs public URL), skipped", a.name, img.Kind)
-			continue
-		}
-		attempted++
-		if err := a.sendSingleImage(ctx, token, toUserID, contextToken, url); err != nil {
-			debug.Log("wechat", "adapter=%s image %s failed: %v", a.name, url, err)
-			continue
-		}
-		sentImage = true
-		sentImages++
-		// #1250: match the text-chunk path's spacing — iLink is a passive-reply
-		// window protocol that is rate sensitive (5 msgs/inbound); back-to-back
-		// image POSTs asked for throttling the same way the chunks do. This
-		// also spaces the last image from the first text chunk.
-		select {
-		case <-time.After(500 * time.Millisecond):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	sentImage, attempted, sentImages, err := a.sendWechatImages(ctx, token, toUserID, contextToken, images)
+	if err != nil {
+		return err
 	}
 
 	if text == "" {
-		if sentImage || len(images) == 0 {
-			debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
-			return nil
-		}
 		// #1250: every image failed or was undeliverable — the old "[image
 		// sent above]" placeholder claimed success while the images were
 		// lost, misleading both the user and the agent. Fail honestly.
-		if attempted > 0 {
-			return fmt.Errorf("wechat: all %d image(s) failed to send via iLink", attempted)
+		if err := wechatEmptyTextResult(sentImage, attempted, len(images)); err != nil {
+			return err
 		}
-		return fmt.Errorf("wechat: %d image(s) not deliverable via iLink (need public URLs)", len(images))
+		debug.Log("wechat", "adapter=%s Send skipped: outboundText returned empty for kind=%s", a.name, event.Kind)
+		return nil
 	}
 
 	debug.Log("wechat", "adapter=%s Send to=%s context_token=%s text_len=%d kind=%s",
@@ -734,6 +707,43 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	// Split long messages — WeChat iLink API has a ~2048 byte limit per message.
 	// Without splitting, long messages get silently truncated or rejected.
 	chunks := SplitMessageForPlatform(text, PlatformWechat)
+	chunks = wechatCapChunks(a.name, chunks, sentImages)
+	if err := a.sendWechatChunks(ctx, token, toUserID, contextToken, chunks); err != nil {
+		return err
+	}
+
+	debug.Log("wechat", "adapter=%s sendmessage OK to=%s chunks=%d", a.name, toUserID, len(chunks))
+	return nil
+}
+
+// wechatTokenExpired reports whether the iLink context_token has aged past
+// wechatContextTokenTTL relative to now. An empty token or a zero timestamp
+// (legacy binding persisted before the field existed) is treated as
+// unknown-age and never expires here; the server remains the source of truth.
+func wechatTokenExpired(contextToken string, updatedAt, now time.Time) (time.Duration, bool) {
+	if contextToken == "" || updatedAt.IsZero() {
+		return 0, false
+	}
+	age := now.Sub(updatedAt)
+	return age, age > wechatContextTokenTTL
+}
+
+// wechatEmptyTextResult decides the Send outcome when the outbound text is
+// empty after the image pass. A delivered image — or a text-only event with
+// no images at all — counts as delivered; anything else fails honestly.
+func wechatEmptyTextResult(sentImage bool, attempted, images int) error {
+	if sentImage || images == 0 {
+		return nil
+	}
+	if attempted > 0 {
+		return fmt.Errorf("wechat: all %d image(s) failed to send via iLink", attempted)
+	}
+	return fmt.Errorf("wechat: %d image(s) not deliverable via iLink (need public URLs)", images)
+}
+
+// wechatCapChunks enforces the shared iLink passive-reply quota on the text
+// chunks and returns the (possibly capped) slice.
+func wechatCapChunks(name string, chunks []string, sentImages int) []string {
 	// #973: iLink caps passive replies at ~5 messages per inbound. Cap the
 	// chunk count and make the truncation visible via a notice on the last
 	// chunk, instead of sending chunks the server silently drops past quota
@@ -745,19 +755,60 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	if textQuota < 1 {
 		textQuota = 1
 	}
-	if len(chunks) > textQuota {
-		origChunks := len(chunks)
-		// #1599-A: index by textQuota, not wechatMaxChunksPerSend - the
-		// fixed index panicked (chunks[4] with quota 3) and re-inflated
-		// the send count past the shared image+text budget the cap exists
-		// to enforce.
-		last := chunks[textQuota-1]
-		if maxBytes := PlatformLimits[PlatformWechat]; maxBytes > 0 && len(last)+len(wechatTruncateNotice) > maxBytes {
-			last = truncateWechatBytes(last, maxBytes-len(wechatTruncateNotice))
-		}
-		chunks = append(chunks[:textQuota-1], last+wechatTruncateNotice)
-		debug.Log("wechat", "adapter=%s Send: capped %d chunks to %d with truncation notice", a.name, origChunks, textQuota)
+	if len(chunks) <= textQuota {
+		return chunks
 	}
+	origChunks := len(chunks)
+	// #1599-A: index by textQuota, not wechatMaxChunksPerSend - the
+	// fixed index panicked (chunks[4] with quota 3) and re-inflated
+	// the send count past the shared image+text budget the cap exists
+	// to enforce.
+	last := chunks[textQuota-1]
+	if maxBytes := PlatformLimits[PlatformWechat]; maxBytes > 0 && len(last)+len(wechatTruncateNotice) > maxBytes {
+		last = truncateWechatBytes(last, maxBytes-len(wechatTruncateNotice))
+	}
+	chunks = append(chunks[:textQuota-1], last+wechatTruncateNotice)
+	debug.Log("wechat", "adapter=%s Send: capped %d chunks to %d with truncation notice", name, origChunks, textQuota)
+	return chunks
+}
+
+// sendWechatImages delivers the public-URL images extracted from the outbound
+// text (iLink carries images as item type 2 with a public image_url — no
+// upload API, so only http(s) URLs are deliverable). Undeliverable kinds are
+// skipped; per-image failures are logged without aborting the pass. It
+// reports whether at least one image was delivered, how many were attempted,
+// and how many were delivered.
+func (a *WechatAdapter) sendWechatImages(ctx context.Context, token, toUserID, contextToken string, images []ExtractedImage) (sentImage bool, attempted, sentImages int, err error) {
+	for _, img := range images {
+		url := wechatImageURL(img)
+		if url == "" {
+			debug.Log("wechat", "adapter=%s image kind=%s not deliverable via iLink (needs public URL), skipped", a.name, img.Kind)
+			continue
+		}
+		attempted++
+		if sendErr := a.sendSingleImage(ctx, token, toUserID, contextToken, url); sendErr != nil {
+			debug.Log("wechat", "adapter=%s image %s failed: %v", a.name, url, sendErr)
+			continue
+		}
+		sentImage = true
+		sentImages++
+		// #1250: match the text-chunk path's spacing — iLink is a passive-reply
+		// window protocol that is rate sensitive (5 msgs/inbound); back-to-back
+		// image POSTs asked for throttling the same way the chunks do. This
+		// also spaces the last image from the first text chunk.
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return sentImage, attempted, sentImages, ctx.Err()
+		}
+	}
+	return sentImage, attempted, sentImages, nil
+}
+
+// sendWechatChunks posts the text chunks sequentially and stops at the first
+// failure. Sends are spaced to avoid WeChat iLink API rate limiting; between
+// chunks the context cancellation is honored.
+func (a *WechatAdapter) sendWechatChunks(ctx context.Context, token, toUserID, contextToken string, chunks []string) error {
 	for i, chunk := range chunks {
 		if err := a.sendSingleChunk(ctx, token, toUserID, contextToken, chunk); err != nil {
 			debug.Log("wechat", "adapter=%s chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
@@ -772,8 +823,6 @@ func (a *WechatAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 			}
 		}
 	}
-
-	debug.Log("wechat", "adapter=%s sendmessage OK to=%s chunks=%d", a.name, toUserID, len(chunks))
 	return nil
 }
 
