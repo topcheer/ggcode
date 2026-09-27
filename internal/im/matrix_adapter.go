@@ -552,18 +552,9 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	debug.Log("matrix", "adapter=%s handleEvent room=%s sender=%s type=%s", a.name, roomID, sender, evt.Type.Type)
 
 	// Handle E2EE: decrypt encrypted events
-	if evt.Type == event.EventEncrypted {
-		if a.mach == nil {
-			debug.Log("matrix", "adapter=%s encrypted event but no crypto machine, dropping", a.name)
-			return
-		}
-		decrypted, err := a.mach.DecryptMegolmEvent(ctx, evt)
-		if err != nil {
-			debug.Log("matrix", "adapter=%s decrypt failed room=%s: %v", a.name, roomID, err)
-			return
-		}
-		debug.Log("matrix", "adapter=%s decrypted event in room=%s -> type=%s", a.name, roomID, decrypted.Type.Type)
-		evt = decrypted
+	evt, ok := a.decryptEvent(ctx, evt)
+	if !ok {
+		return
 	}
 
 	// Only handle text messages
@@ -579,11 +570,76 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 
 	// Dedup
 	eventID := string(evt.ID)
+	if !a.markEventSeen(eventID) {
+		return
+	}
+
+	// Extract content
+	content, ok := a.messageContent(evt)
+	if !ok {
+		return
+	}
+
+	body, ok := a.textBody(content)
+	if !ok {
+		return
+	}
+
+	debug.Log("matrix", "adapter=%s message room=%s sender=%s body=%.80s", a.name, roomID, sender, body)
+
+	// Allowed users check
+	if !a.senderAllowed(sender) {
+		debug.Log("matrix", "adapter=%s sender=%s not in allowed_users, dropping", a.name, sender)
+		return
+	}
+
+	isDM := a.resolveDM(ctx, roomID)
+
+	body, ok = a.mentionGate(roomID, body, evt.Content.Raw, isDM)
+	if !ok {
+		return
+	}
+
+	msg := a.buildInboundMessage(ctx, evt, a.getDisplayName(ctx, sender), body)
+
+	debug.Log("matrix", "adapter=%s -> HandlePairingInbound", a.name)
+
+	if a.handlePairing(ctx, msg, roomID) {
+		return
+	}
+
+	a.deliverInbound(ctx, msg)
+}
+
+// decryptEvent decrypts E2EE-encrypted events via the crypto machine and
+// returns the (possibly decrypted) event; ok=false drops the event.
+func (a *matrixAdapter) decryptEvent(ctx context.Context, evt *event.Event) (*event.Event, bool) {
+	// Handle E2EE: decrypt encrypted events
+	if evt.Type != event.EventEncrypted {
+		return evt, true
+	}
+	if a.mach == nil {
+		debug.Log("matrix", "adapter=%s encrypted event but no crypto machine, dropping", a.name)
+		return nil, false
+	}
+	decrypted, err := a.mach.DecryptMegolmEvent(ctx, evt)
+	if err != nil {
+		debug.Log("matrix", "adapter=%s decrypt failed room=%s: %v", a.name, string(evt.RoomID), err)
+		return nil, false
+	}
+	debug.Log("matrix", "adapter=%s decrypted event in room=%s -> type=%s", a.name, string(evt.RoomID), decrypted.Type.Type)
+	return decrypted, true
+}
+
+// markEventSeen records an event ID for dedup and reports whether it is new.
+// Duplicates within the 5-minute window are dropped; entries older than 10
+// minutes are evicted.
+func (a *matrixAdapter) markEventSeen(eventID string) bool {
 	now := time.Now()
 	a.mu.Lock()
 	if t, ok := a.seen[eventID]; ok && now.Sub(t) < 5*time.Minute {
 		a.mu.Unlock()
-		return
+		return false
 	}
 	a.seen[eventID] = now
 	for k, v := range a.seen {
@@ -592,51 +648,69 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		}
 	}
 	a.mu.Unlock()
+	return true
+}
 
-	// Extract content
+// messageContent extracts the parsed message content, falling back to raw
+// JSON parsing when the SDK did not pre-parse the payload.
+func (a *matrixAdapter) messageContent(evt *event.Event) (*event.MessageEventContent, bool) {
 	content, ok := evt.Content.Parsed.(*event.MessageEventContent)
-	if !ok {
-		debug.Log("matrix", "adapter=%s content not parsed, trying raw (hasRaw=%v)", a.name, evt.Content.Raw != nil)
-		var rawContent struct {
-			MsgType string `json:"msgtype"`
-			Body    string `json:"body"`
-		}
-		rawBytes, _ := json.Marshal(evt.Content.Raw)
-		if err := json.Unmarshal(rawBytes, &rawContent); err != nil {
-			debug.Log("matrix", "adapter=%s raw content parse error: %v", a.name, err)
-			return
-		}
-		if rawContent.MsgType != "m.text" && rawContent.MsgType != "" {
-			debug.Log("matrix", "adapter=%s skipping non-text raw msgtype=%s", a.name, rawContent.MsgType)
-			return
-		}
-		content = &event.MessageEventContent{
-			MsgType: event.MessageType(rawContent.MsgType),
-			Body:    rawContent.Body,
-		}
+	if ok {
+		return content, true
 	}
+	debug.Log("matrix", "adapter=%s content not parsed, trying raw (hasRaw=%v)", a.name, evt.Content.Raw != nil)
+	return a.rawMessageContent(evt.Content.Raw)
+}
 
+// rawMessageContent parses msgtype/body out of an unparsed event payload;
+// only m.text (or an empty msgtype) is accepted.
+func (a *matrixAdapter) rawMessageContent(raw map[string]any) (*event.MessageEventContent, bool) {
+	var rawContent struct {
+		MsgType string `json:"msgtype"`
+		Body    string `json:"body"`
+	}
+	rawBytes, _ := json.Marshal(raw)
+	if err := json.Unmarshal(rawBytes, &rawContent); err != nil {
+		debug.Log("matrix", "adapter=%s raw content parse error: %v", a.name, err)
+		return nil, false
+	}
+	if rawContent.MsgType != "m.text" && rawContent.MsgType != "" {
+		debug.Log("matrix", "adapter=%s skipping non-text raw msgtype=%s", a.name, rawContent.MsgType)
+		return nil, false
+	}
+	return &event.MessageEventContent{
+		MsgType: event.MessageType(rawContent.MsgType),
+		Body:    rawContent.Body,
+	}, true
+}
+
+// textBody validates the msgtype and returns the body with any reply
+// fallback stripped; ok=false skips non-text message types.
+func (a *matrixAdapter) textBody(content *event.MessageEventContent) (string, bool) {
 	msgtype := string(content.MsgType)
 	body := content.Body
 
 	if msgtype != "m.text" && msgtype != "" {
 		debug.Log("matrix", "adapter=%s skipping msgtype=%s", a.name, msgtype)
-		return
+		return "", false
 	}
 
 	// Strip reply fallback
 	if content.GetReplyTo() != "" {
 		body = stripMatrixReplyFallback(body)
 	}
+	return body, true
+}
 
-	debug.Log("matrix", "adapter=%s message room=%s sender=%s body=%.80s", a.name, roomID, sender, body)
+// senderAllowed applies the allowed_users gate; an empty allowlist admits
+// every sender.
+func (a *matrixAdapter) senderAllowed(sender string) bool {
+	return len(a.allowedUsers) == 0 || entryMatches(a.allowedUsers, sender)
+}
 
-	// Allowed users check
-	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
-		debug.Log("matrix", "adapter=%s sender=%s not in allowed_users, dropping", a.name, sender)
-		return
-	}
-
+// resolveDM reports whether the room is a DM, checking the cached m.direct
+// room set first and falling back to the API.
+func (a *matrixAdapter) resolveDM(ctx context.Context, roomID string) bool {
 	// DM detection
 	a.mu.RLock()
 	isDM := a.dmRooms[roomID]
@@ -646,53 +720,70 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 		isDM = a.checkIsDMViaAPI(ctx, roomID)
 	}
 	debug.Log("matrix", "adapter=%s room=%s isDM=%v dmRooms=%d", a.name, roomID, isDM, dmCount)
+	return isDM
+}
 
+// mentionGate applies mention gating for non-DM rooms and returns the
+// (possibly mention-stripped) body; ok=false drops the event.
+func (a *matrixAdapter) mentionGate(roomID, body string, raw map[string]any, isDM bool) (string, bool) {
 	// Mention gating for non-DM rooms
-	if !isDM {
-		isFree := entryMatches(a.freeRooms, roomID)
-		if !isFree && a.requireMention {
-			hasMention := a.hasMention(body, evt.Content.Raw)
-			debug.Log("matrix", "adapter=%s non-DM room=%s free=%v mention=%v requireMention=%v", a.name, roomID, isFree, hasMention, a.requireMention)
-			if !hasMention {
-				return
-			}
-			body = a.stripMention(body)
-		}
+	if isDM {
+		return body, true
 	}
+	isFree := entryMatches(a.freeRooms, roomID)
+	if !isFree && a.requireMention {
+		hasMention := a.hasMention(body, raw)
+		debug.Log("matrix", "adapter=%s non-DM room=%s free=%v mention=%v requireMention=%v", a.name, roomID, isFree, hasMention, a.requireMention)
+		if !hasMention {
+			return "", false
+		}
+		body = a.stripMention(body)
+	}
+	return body, true
+}
 
+// buildInboundMessage assembles the normalized InboundMessage envelope from a
+// decrypted Matrix message event.
+func (a *matrixAdapter) buildInboundMessage(ctx context.Context, evt *event.Event, displayName, body string) InboundMessage {
 	// Build inbound message
-	displayName := a.getDisplayName(ctx, sender)
-	msg := InboundMessage{
+	return InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformMatrix,
-			ChannelID:  roomID,
-			SenderID:   sender,
+			ChannelID:  string(evt.RoomID),
+			SenderID:   string(evt.Sender),
 			SenderName: displayName,
-			MessageID:  eventID,
+			MessageID:  string(evt.ID),
 			ReceivedAt: time.Now(),
 		},
 		Text: strings.TrimSpace(body),
 	}
+}
 
-	debug.Log("matrix", "adapter=%s -> HandlePairingInbound", a.name)
-
+// handlePairing runs the pairing flow; it returns true when the message was
+// consumed by pairing and fully handled (reply sent, replacement notified).
+func (a *matrixAdapter) handlePairing(ctx context.Context, msg InboundMessage, roomID string) bool {
 	// Pairing flow
-	if a.manager != nil {
-		pairingResult, err := a.manager.HandlePairingInbound(msg)
-		debug.Log("matrix", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		if err != nil && err.Error() != "no session bound" {
+	if a.manager == nil {
+		return false
+	}
+	pairingResult, err := a.manager.HandlePairingInbound(msg)
+	debug.Log("matrix", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+	if err != nil && err.Error() != "no session bound" {
+		a.publishState(false, "warning", err.Error())
+	}
+	if pairingResult.Consumed {
+		_ = a.sendText(ctx, roomID, "", pairingResult.ReplyText)
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
 			a.publishState(false, "warning", err.Error())
 		}
-		if pairingResult.Consumed {
-			_ = a.sendText(ctx, roomID, "", pairingResult.ReplyText)
-			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-				a.publishState(false, "warning", err.Error())
-			}
-			return
-		}
+		return true
 	}
+	return false
+}
 
+// deliverInbound hands a non-pairing message to the manager, if any.
+func (a *matrixAdapter) deliverInbound(ctx context.Context, msg InboundMessage) {
 	if a.manager != nil {
 		a.manager.HandleInbound(ctx, msg)
 	}
