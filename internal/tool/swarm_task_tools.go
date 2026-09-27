@@ -372,10 +372,31 @@ func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage)
 	if cur, ok := tm.Get(args.TaskID); ok && cur.Status == task.StatusCompleted {
 		return Result{IsError: true, Content: fmt.Sprintf("task %s is already completed (owner %q)", cur.ID, cur.Owner)}, nil
 	}
+	// #2794: the Get above is a friendly fast-path, not the guard - a
+	// concurrent double-complete (stale board views) passed it through the
+	// race window and the unconditional Update accepted completed->completed,
+	// silently succeeding and double-firing EmitBoardUpdated. Close the
+	// window with the same atomic conditional-update primitive the claim
+	// path uses (#861). Two legal predecessor states (the board's in_progress
+	// after a claim, and a direct pending->complete that existing callers
+	// rely on, pinned by the #1705 tests) each get their own CAS: whichever
+	// fires, the concurrent loser finds neither expected state and fails
+	// inside the manager's lock - completed->completed has no path left.
 	completed := task.TaskStatus(task.StatusCompleted)
+	inProgress := task.TaskStatus(task.StatusInProgress)
+	pending := task.TaskStatus(task.StatusPending)
 	updated, err := tm.Update(args.TaskID, task.UpdateOptions{
-		Status: &completed,
+		Status:         &completed,
+		ExpectedStatus: &inProgress,
 	})
+	if err != nil {
+		if cur, ok := tm.Get(args.TaskID); ok && cur.Status == task.StatusPending {
+			updated, err = tm.Update(args.TaskID, task.UpdateOptions{
+				Status:         &completed,
+				ExpectedStatus: &pending,
+			})
+		}
+	}
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
 	}
