@@ -26,105 +26,166 @@ type ToolPresentation struct {
 	Activity    string // e.g. "读取 chart.html", "执行 npm test"
 }
 
+// toolPresentationBuilder renders the presentation for one DescribeTool
+// case. Builders are pure dispatchers over the precomputed (lang, toolName,
+// args, fileTarget) tuple; none re-parse rawArgs or touch global state.
+type toolPresentationBuilder func(lang ToolLanguage, toolName string, args map[string]any, fileTarget string) ToolPresentation
+
+// toolPresentationBuilders carries each former DescribeTool switch case body
+// one-to-one (r193 flatten, table-driven like the r169/r170 label/activity
+// tables). The pristine cases were disjoint string matches with immediate
+// returns, so case order carried no semantics and map lookup + default is
+// equivalent. run_command/bash/powershell/start_command shared a
+// byte-identical body, as did write_command_input and the four background
+// job readers.
+var toolPresentationBuilders = map[string]toolPresentationBuilder{
+	"read_file":           readFilePresentation,
+	"edit_file":           editFilePresentation,
+	"write_file":          writeFilePresentation,
+	"glob":                globPresentation,
+	"grep":                searchToolPresentation,
+	"search_files":        searchToolPresentation,
+	"list_directory":      listDirectoryPresentation,
+	"run_command":         commandToolPresentation,
+	"bash":                commandToolPresentation,
+	"powershell":          commandToolPresentation,
+	"start_command":       commandToolPresentation,
+	"write_command_input": backgroundJobPresentation,
+	"read_command_output": backgroundJobPresentation,
+	"wait_command":        backgroundJobPresentation,
+	"stop_command":        backgroundJobPresentation,
+	"list_commands":       backgroundJobPresentation,
+	"web_fetch":           webFetchPresentation,
+	"web_search":          webSearchPresentation,
+	"todo_write":          todoWritePresentation,
+	"task":                agentTaskPresentation,
+	"agent":               agentTaskPresentation,
+	"skill":               skillPresentation,
+	"ask_user":            askUserPresentation,
+	"git_diff":            gitInspectPresentation,
+	"git_status":          gitInspectPresentation,
+	"git_log":             gitInspectPresentation,
+}
+
 // DescribeTool produces a human-readable presentation of a tool call,
 // mirroring the TUI's describeTool pipeline (tool_labels.go).
+//
+// The former 17-case switch (CC 22) is now a flat orchestrator: the
+// pre-switch (args, fileTarget) computation is unchanged and unconditional,
+// then toolPresentationBuilders dispatches to the per-case body. The
+// default branch stays inline.
 func DescribeTool(lang ToolLanguage, toolName, rawArgs string) ToolPresentation {
 	args := parseToolArgs(rawArgs)
 	fileTarget := displayToolFileTarget(extractFilePath(toolName, rawArgs))
-
-	switch toolName {
-	case "read_file":
-		return toolPresentationFor(lang, "read", fileTarget)
-	case "edit_file":
-		if strings.TrimSpace(argString(args, "old_text")) == "" && fileTarget != "" {
-			return toolPresentationFor(lang, "create", fileTarget)
-		}
-		return toolPresentationFor(lang, "edit", fileTarget)
-	case "write_file":
-		return toolPresentationFor(lang, "write", fileTarget)
-	case "glob":
-		return toolPresentationFor(lang, "find", displayToolTarget(argString(args, "pattern")))
-	case "grep", "search_files":
-		return toolPresentationFor(lang, "search", displayToolTarget(firstNonEmptyStr(
+	if build, ok := toolPresentationBuilders[toolName]; ok {
+		return build(lang, toolName, args, fileTarget)
+	}
+	pretty := prettifyToolName(toolName)
+	return ToolPresentation{
+		DisplayName: pretty,
+		Detail: displayToolTarget(firstNonEmptyStr(
+			fileTarget,
+			displayToolFileTarget(argString(args, "path")),
+			displayToolFileTarget(argString(args, "file_path")),
 			argString(args, "pattern"),
 			argString(args, "query"),
-			argString(args, "path"),
-		)))
-	case "list_directory":
-		return toolPresentationFor(lang, "list", displayToolFileTarget(firstNonEmptyStr(
-			argString(args, "path"),
-			argString(args, "directory"),
-		)))
-	case "run_command", "bash", "powershell":
-		target := displayToolTarget(firstNonEmptyStr(
-			argString(args, "command"),
-			argString(args, "cmd"),
-		))
-		if desc := argString(args, "description"); desc != "" {
-			return ToolPresentation{
-				DisplayName: desc,
-				Detail:      target,
-				Activity:    localizedCommandActivity(lang, desc),
-			}
-		}
-		return toolPresentationFor(lang, "run", target)
-	case "start_command":
-		target := displayToolTarget(firstNonEmptyStr(
-			argString(args, "command"),
-			argString(args, "cmd"),
-		))
-		if desc := argString(args, "description"); desc != "" {
-			return ToolPresentation{
-				DisplayName: desc,
-				Detail:      target,
-				Activity:    localizedCommandActivity(lang, desc),
-			}
-		}
-		return toolPresentationFor(lang, "run", target)
-	case "write_command_input":
-		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmptyStr(
-			argString(args, "job_id"),
-			"background command",
-		)))
-	case "read_command_output", "wait_command", "stop_command", "list_commands":
-		return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmptyStr(
-			argString(args, "job_id"),
-			"background command",
-		)))
-	case "web_fetch":
-		return toolPresentationFor(lang, "fetch", displayToolTarget(argString(args, "url")))
-	case "web_search":
-		return toolPresentationFor(lang, "search", displayToolTarget(argString(args, "query")))
-	case "todo_write":
-		return toolPresentationFor(lang, "todo", "")
-	case "task", "agent":
-		return toolPresentationFor(lang, "task", displayToolTarget(firstNonEmptyStr(
+			argString(args, "url"),
 			argString(args, "description"),
-			argString(args, "prompt"),
-			argString(args, "agent_type"),
-		)))
-	case "skill":
-		return toolPresentationFor(lang, "skill", displayToolTarget(argString(args, "skill")))
-	case "ask_user":
-		return toolPresentationFor(lang, "ask", displayToolTarget(askUserToolTarget(args)))
-	case "git_diff", "git_status", "git_log":
-		return toolPresentationFor(lang, "inspect", displayToolTarget(strings.ReplaceAll(toolName, "_", " ")))
-	default:
-		pretty := prettifyToolName(toolName)
+		)),
+		Activity: localizedGenericActivity(lang, pretty),
+	}
+}
+
+func readFilePresentation(lang ToolLanguage, _ string, _ map[string]any, fileTarget string) ToolPresentation {
+	return toolPresentationFor(lang, "read", fileTarget)
+}
+
+func editFilePresentation(lang ToolLanguage, _ string, args map[string]any, fileTarget string) ToolPresentation {
+	if strings.TrimSpace(argString(args, "old_text")) == "" && fileTarget != "" {
+		return toolPresentationFor(lang, "create", fileTarget)
+	}
+	return toolPresentationFor(lang, "edit", fileTarget)
+}
+
+func writeFilePresentation(lang ToolLanguage, _ string, _ map[string]any, fileTarget string) ToolPresentation {
+	return toolPresentationFor(lang, "write", fileTarget)
+}
+
+func globPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "find", displayToolTarget(argString(args, "pattern")))
+}
+
+func searchToolPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "search", displayToolTarget(firstNonEmptyStr(
+		argString(args, "pattern"),
+		argString(args, "query"),
+		argString(args, "path"),
+	)))
+}
+
+func listDirectoryPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "list", displayToolFileTarget(firstNonEmptyStr(
+		argString(args, "path"),
+		argString(args, "directory"),
+	)))
+}
+
+// commandToolPresentation covers run_command/bash/powershell and
+// start_command, whose former switch bodies were byte-identical.
+func commandToolPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	target := displayToolTarget(firstNonEmptyStr(
+		argString(args, "command"),
+		argString(args, "cmd"),
+	))
+	if desc := argString(args, "description"); desc != "" {
 		return ToolPresentation{
-			DisplayName: pretty,
-			Detail: displayToolTarget(firstNonEmptyStr(
-				fileTarget,
-				displayToolFileTarget(argString(args, "path")),
-				displayToolFileTarget(argString(args, "file_path")),
-				argString(args, "pattern"),
-				argString(args, "query"),
-				argString(args, "url"),
-				argString(args, "description"),
-			)),
-			Activity: localizedGenericActivity(lang, pretty),
+			DisplayName: desc,
+			Detail:      target,
+			Activity:    localizedCommandActivity(lang, desc),
 		}
 	}
+	return toolPresentationFor(lang, "run", target)
+}
+
+// backgroundJobPresentation covers write_command_input and the four
+// background job readers, whose former switch bodies were byte-identical.
+func backgroundJobPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "run", displayToolTarget(firstNonEmptyStr(
+		argString(args, "job_id"),
+		"background command",
+	)))
+}
+
+func webFetchPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "fetch", displayToolTarget(argString(args, "url")))
+}
+
+func webSearchPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "search", displayToolTarget(argString(args, "query")))
+}
+
+func todoWritePresentation(lang ToolLanguage, _ string, _ map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "todo", "")
+}
+
+func agentTaskPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "task", displayToolTarget(firstNonEmptyStr(
+		argString(args, "description"),
+		argString(args, "prompt"),
+		argString(args, "agent_type"),
+	)))
+}
+
+func skillPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "skill", displayToolTarget(argString(args, "skill")))
+}
+
+func askUserPresentation(lang ToolLanguage, _ string, args map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "ask", displayToolTarget(askUserToolTarget(args)))
+}
+
+func gitInspectPresentation(lang ToolLanguage, toolName string, _ map[string]any, _ string) ToolPresentation {
+	return toolPresentationFor(lang, "inspect", displayToolTarget(strings.ReplaceAll(toolName, "_", " ")))
 }
 
 // FormatToolInline formats a tool name and detail as an inline status string,

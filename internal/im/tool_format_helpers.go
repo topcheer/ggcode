@@ -414,6 +414,9 @@ func formatIMTodoResult(tr *ToolResultInfo) string {
 }
 
 // formatIMReadFileResult renders read_file result with format-aware summary.
+// The former nested branches (CC 21) now live one-to-one in the
+// formatIMReadFile{Error,Empty,Doc,Archive,Plain} seams (r193); the
+// orchestrator keeps only the branch predicates and preamble.
 func formatIMReadFileResult(tr *ToolResultInfo) string {
 	lang := toolLang(tr.Lang)
 	path := extractFilePathFromArgs(tr.Args)
@@ -425,66 +428,78 @@ func formatIMReadFileResult(tr *ToolResultInfo) string {
 	output := strings.TrimSpace(redactResult(tr.Result))
 
 	if tr.IsError {
-		if path != "" {
-			return fmt.Sprintf("%s %s\n%s", icon, baseName, imCodeBlock(output))
-		}
-		return fmt.Sprintf("%s Read\n%s", icon, imCodeBlock(output))
+		return formatIMReadFileError(icon, baseName, path, output)
 	}
-
 	if output == "" {
-		if path == "" {
-			return fmt.Sprintf("%s Read", icon)
-		}
-		return fmt.Sprintf("%s %s", icon, baseName)
+		return formatIMReadFileEmpty(icon, baseName, path)
 	}
-
 	firstLine := firstLineOf(output)
-
-	// Document extraction: "[Extracted from pdf, 3 pages]"
 	if strings.HasPrefix(firstLine, "[Extracted from ") {
-		format, pages := parseExtractedInfo(firstLine)
-		lines := countResultLines(output)
-		var summary string
-		if pages > 0 && lines > 0 {
-			summary = imDocSummary(lang, pages, lines)
-		} else if pages > 0 {
-			summary = imPagesSummary(lang, pages)
-		} else if lines > 0 {
-			summary = imLinesSummary(lang, lines)
-		}
-		label := imFileTypeLabel(path)
-		if label == "" {
-			label = format
-		}
-		if summary != "" {
-			return fmt.Sprintf("%s %s (%s)", icon, baseName, summary)
-		}
-		return fmt.Sprintf("%s %s", icon, baseName)
+		return formatIMReadDocResult(lang, icon, baseName, path, firstLine, output)
 	}
-
-	// Archive: "[Archive: zip format, 15 files]"
 	if strings.HasPrefix(firstLine, "[Archive: ") {
-		_, fileCount := parseArchiveInfo(firstLine)
-		// Check second line for truncation notice
-		lines := strings.SplitN(output, "\n", 3)
-		var truncShown, truncTotal int
-		if len(lines) >= 2 {
-			secondLine := strings.TrimSpace(lines[1])
-			if strings.HasPrefix(secondLine, "[Showing first ") {
-				truncShown, truncTotal = parseArchiveTruncation(secondLine)
-			}
-		}
-		if truncTotal > 0 {
-			return fmt.Sprintf("%s %s (%d %s, %s %d)", icon, baseName, truncTotal, imLabel(lang, "files"), imLabel(lang, "showing_first"), truncShown)
-		}
-		if fileCount > 0 {
-			return fmt.Sprintf("%s %s (%d %s)", icon, baseName, fileCount, imLabel(lang, "files"))
-		}
-		return fmt.Sprintf("%s %s", icon, baseName)
+		return formatIMReadArchiveResult(lang, icon, baseName, firstLine, output)
 	}
+	return formatIMReadPlainResult(lang, icon, baseName, path, tr.Args)
+}
 
-	// Plain text or unknown: show file name + range hint if applicable
-	rangeHint := imFormatReadRange(lang, tr.Args)
+func formatIMReadFileError(icon, baseName, path, output string) string {
+	if path != "" {
+		return fmt.Sprintf("%s %s\n%s", icon, baseName, imCodeBlock(output))
+	}
+	return fmt.Sprintf("%s Read\n%s", icon, imCodeBlock(output))
+}
+
+func formatIMReadFileEmpty(icon, baseName, path string) string {
+	if path == "" {
+		return fmt.Sprintf("%s Read", icon)
+	}
+	return fmt.Sprintf("%s %s", icon, baseName)
+}
+
+func formatIMReadDocResult(lang ToolLanguage, icon, baseName, path, firstLine, output string) string {
+	format, pages := parseExtractedInfo(firstLine)
+	lines := countResultLines(output)
+	var summary string
+	if pages > 0 && lines > 0 {
+		summary = imDocSummary(lang, pages, lines)
+	} else if pages > 0 {
+		summary = imPagesSummary(lang, pages)
+	} else if lines > 0 {
+		summary = imLinesSummary(lang, lines)
+	}
+	label := imFileTypeLabel(path)
+	if label == "" {
+		label = format
+	}
+	if summary != "" {
+		return fmt.Sprintf("%s %s (%s)", icon, baseName, summary)
+	}
+	return fmt.Sprintf("%s %s", icon, baseName)
+}
+
+func formatIMReadArchiveResult(lang ToolLanguage, icon, baseName, firstLine, output string) string {
+	_, fileCount := parseArchiveInfo(firstLine)
+	// Check second line for truncation notice
+	lines := strings.SplitN(output, "\n", 3)
+	var truncShown, truncTotal int
+	if len(lines) >= 2 {
+		secondLine := strings.TrimSpace(lines[1])
+		if strings.HasPrefix(secondLine, "[Showing first ") {
+			truncShown, truncTotal = parseArchiveTruncation(secondLine)
+		}
+	}
+	if truncTotal > 0 {
+		return fmt.Sprintf("%s %s (%d %s, %s %d)", icon, baseName, truncTotal, imLabel(lang, "files"), imLabel(lang, "showing_first"), truncShown)
+	}
+	if fileCount > 0 {
+		return fmt.Sprintf("%s %s (%d %s)", icon, baseName, fileCount, imLabel(lang, "files"))
+	}
+	return fmt.Sprintf("%s %s", icon, baseName)
+}
+
+func formatIMReadPlainResult(lang ToolLanguage, icon, baseName, path, rawArgs string) string {
+	rangeHint := imFormatReadRange(lang, rawArgs)
 	if path == "" {
 		if rangeHint != "" {
 			return fmt.Sprintf("%s Read %s", icon, rangeHint)
@@ -1096,9 +1111,58 @@ func countDiffLines(result string) (added, deleted int) {
 	return
 }
 
+// gitStatusCounts tallies porcelain XY classifications, one counter per
+// kind, extracted mechanically from the former inline switch (r193).
+type gitStatusCounts struct {
+	modified, added, deleted, renamed, untracked int
+}
+
+// bumpGitStatusCount classifies one porcelain XY pair and bumps the first
+// matching counter; the former case order is preserved (A beats R, D beats
+// M, "C " etc. fall through with no bump).
+func (c *gitStatusCounts) bumpGitStatusCount(x, y byte) {
+	switch {
+	case x == '?' && y == '?':
+		c.untracked++
+	case x == 'A' || y == 'A':
+		c.added++
+	case x == 'R' || y == 'R':
+		c.renamed++
+	case x == 'D' || y == 'D':
+		c.deleted++
+	case (x == 'M' || y == 'M') && x != 'D' && y != 'D':
+		c.modified++
+	}
+}
+
+// renderGitStatusSummary joins nonzero counters in the fixed contract order
+// (modified, added, deleted, renamed, untracked) or returns "clean".
+func renderGitStatusSummary(c gitStatusCounts) string {
+	var parts []string
+	if c.modified > 0 {
+		parts = append(parts, fmt.Sprintf("%d modified", c.modified))
+	}
+	if c.added > 0 {
+		parts = append(parts, fmt.Sprintf("%d added", c.added))
+	}
+	if c.deleted > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", c.deleted))
+	}
+	if c.renamed > 0 {
+		parts = append(parts, fmt.Sprintf("%d renamed", c.renamed))
+	}
+	if c.untracked > 0 {
+		parts = append(parts, fmt.Sprintf("%d untracked", c.untracked))
+	}
+	if len(parts) == 0 {
+		return "clean"
+	}
+	return strings.Join(parts, ", ")
+}
+
 // formatIMGitStatusSummary renders a concise git status summary for IM.
 func formatIMGitStatusSummary(output string) string {
-	modified, added, deleted, untracked, renamed := 0, 0, 0, 0, 0
+	var counts gitStatusCounts
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if len(line) < 3 {
@@ -1111,39 +1175,9 @@ func formatIMGitStatusSummary(output string) string {
 			path = path[1:]
 		}
 		_ = path
-		switch {
-		case x == '?' && y == '?':
-			untracked++
-		case x == 'A' || y == 'A':
-			added++
-		case x == 'R' || y == 'R':
-			renamed++
-		case x == 'D' || y == 'D':
-			deleted++
-		case (x == 'M' || y == 'M') && x != 'D' && y != 'D':
-			modified++
-		}
+		counts.bumpGitStatusCount(x, y)
 	}
-	var parts []string
-	if modified > 0 {
-		parts = append(parts, fmt.Sprintf("%d modified", modified))
-	}
-	if added > 0 {
-		parts = append(parts, fmt.Sprintf("%d added", added))
-	}
-	if deleted > 0 {
-		parts = append(parts, fmt.Sprintf("%d deleted", deleted))
-	}
-	if renamed > 0 {
-		parts = append(parts, fmt.Sprintf("%d renamed", renamed))
-	}
-	if untracked > 0 {
-		parts = append(parts, fmt.Sprintf("%d untracked", untracked))
-	}
-	if len(parts) == 0 {
-		return "clean"
-	}
-	return strings.Join(parts, ", ")
+	return renderGitStatusSummary(counts)
 }
 
 // formatIMGitLogSummary renders up to 3 recent commits for IM.
