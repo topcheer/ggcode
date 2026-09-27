@@ -542,19 +542,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 		return fmt.Errorf("daemon bridge not initialized")
 	}
 	text := strings.TrimSpace(msg.Text)
-	// #1628-B: gate activity on TEXT only meant a pure-image message (the
-	// exact #1584-A scenario) never tickled the Knight idle timer - an
-	// active user read as idle (idle notices/timeouts skewed). Check the
-	// RAW fields (text or attachments): ProviderContent() has a
-	// non-empty-block fallback (#1628-C) and would be always-true here.
-	if text != "" || len(msg.Attachments) > 0 {
-		b.mu.Lock()
-		onActivity := b.onActivity
-		b.mu.Unlock()
-		if onActivity != nil {
-			onActivity()
-		}
-	}
+	b.notifyInboundActivity(text, len(msg.Attachments))
 
 	b.mu.Lock()
 	hasPendingApproval := b.pendingApproval != nil
@@ -572,48 +560,14 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// loop. Order mirrors RouteInboundText: after slash, before approval/ask
 	// (approval replies y/n/a never start with $ or !).
 	if route.Kind == InboundRouteShell {
-		// #2205: mirror the TUI-side gate (#2185/PR #2203) - arbitrary
-		// shell from a remote IM peer is the dominant attack surface and
-		// is hard-denied without the im.remote_dangerous_commands opt-in
-		// (fail closed, same semantics as the TUI remote path).
-		if !b.remoteDangerousAllowed() {
-			if b.emitTextOverride != nil {
-				_ = b.emitTextOverride("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
-			} else {
-				_ = b.emitter.EmitText("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
-			}
-			return nil
-		}
-		b.handleShellInbound(route.Text)
+		b.handleShellPassthrough(route)
 		return nil
 	}
 
-	// #2111: a reply-shaped text arriving within the suppression window
-	// after a question expired is far more likely the late answer to the
-	// EXPIRED prompt than to a successor registered seconds ago — without
-	// question correlation the two are indistinguishable, and the wrong
-	// guess auto-approves a tool or answers a questionnaire (#2111 ProbeB).
-	// #2127: the empty-window half (ProbeB2) needs the same guard on the
-	// MESSAGE route - after expiry the pending registration is cleared, so
-	// a bare "y" routes as an ordinary message and was submitted to the
-	// agent as a fresh prompt. Narrow scope: only approval-SHAPED tokens
-	// (ParseApprovalReply-recognizable), so real messages are untouched.
-	b.mu.Lock()
-	staleUntil := b.staleReplySuppressUntil
-	b.mu.Unlock()
-	if time.Now().Before(staleUntil) {
-		if route.Kind == InboundRouteApproval || route.Kind == InboundRouteAskUser {
-			debug.Log("daemon-bridge", "dropping reply-shaped text inside stale-reply window: %q", truncateStr(text, 80))
-			_ = b.emitter.EmitText("⏱ That looked like a reply to the expired prompt, so it was ignored. Please resend it for the current question.")
-			return nil
-		}
-		if route.Kind == InboundRouteMessage {
-			if _, ok := ParseApprovalReply(strings.TrimSpace(text)); ok {
-				debug.Log("daemon-bridge", "dropping bare approval token inside stale-reply window (ProbeB2): %q", truncateStr(text, 80))
-				_ = b.emitter.EmitText("⏱ That looked like a reply to the expired approval, so it was ignored. Send your actual message again if you meant it as one.")
-				return nil
-			}
-		}
+	// #2111/#2127: reply-shaped text inside the stale-reply suppression
+	// window is dropped (semantics pinned in dropStaleReply).
+	if b.dropStaleReply(text, route) {
+		return nil
 	}
 
 	// Check for pending approval — y/a/n reply for tool permission
@@ -621,33 +575,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	approvalCh := b.pendingApproval
 	b.mu.Unlock()
 	if route.Kind == InboundRouteApproval {
-		// #569 A: the route decision came from a snapshot taken before this
-		// re-read. If the channel vanished in between (approval timed out),
-		// the late reply must be dropped — leaking it to the agent path would
-		// resubmit "y" as a fresh prompt.
-		if approvalCh == nil {
-			debug.Log("daemon-bridge", "dropping approval reply after timeout: %q", truncateStr(text, 80))
-			return nil
-		}
-		// #943: send the full route (Decision + AlwaysAllow) — the old
-		// permission.Decision-only channel silently dropped the always-allow
-		// semantics computed by RouteInboundText, degrading "a" to one-shot "y".
-		// #1551-B: non-blocking send, mirroring the ask_user path's #944 fix —
-		// a bare blocking send deadlocked the SECOND concurrent replier (both
-		// snapshot the channel before compare-then-clear; the first fills the
-		// single buffer, the asker has exited, the second blocks forever) and
-		// leaked the adapter receive goroutine.
-		select {
-		case approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}:
-			b.mu.Lock()
-			if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
-				b.pendingApproval = nil
-			}
-			b.mu.Unlock()
-		default:
-			debug.Log("daemon-bridge", "dropping approval reply: no waiting asker")
-		}
-		return nil
+		return b.handleApprovalRoute(route, approvalCh, text)
 	}
 
 	// Check for pending ask_user — if so, route reply there
@@ -655,45 +583,199 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	pending := b.pendingAsk
 	b.mu.Unlock()
 	if route.Kind == InboundRouteAskUser {
-		if pending != nil {
-			resp := BuildAskUserResponseFromText(pending.request, route.Text)
-			// #944: non-blocking send, mirroring the interactive callback path
-			// (L175-178). A second concurrent sender after the buffer is full
-			// would otherwise block forever when HandleAskUser exits via ctx.Done()
-			// without draining — leaking the adapter receive goroutine.
-			select {
-			case pending.response <- resp:
-			default:
-			}
-			b.mu.Lock()
-			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
-				b.pendingAsk = nil
-			}
-			b.mu.Unlock()
-			return nil
-		}
-		// AskUser timed out between snapshot and re-lock
-		debug.Log("daemon-bridge", "dropping stale ask_user reply: %s", text)
-		return nil
+		return b.handleAskUserRoute(route, pending, text)
 	}
 
-	// #569: the agent path dereferences b.agent (interruption handler, run
-	// loop). A bridge constructed without an agent must fail explicitly
-	// instead of panicking. However, when a run is already active
-	// (cancelFunc != nil) the message is only queued as an interruption —
-	// the agent is never dereferenced on this path — so queuing must stay
-	// allowed for agent-less bridges (tests simulate active runs this way).
-	b.mu.Lock()
-	runActive := b.cancelFunc != nil
-	b.mu.Unlock()
-	if b.agent == nil && !runActive {
+	// #569: the agent path dereferences b.agent — gate pinned in
+	// agentReadyForSubmission (agent-less bridges may still queue while a
+	// run is active).
+	if !b.agentReadyForSubmission() {
 		return fmt.Errorf("daemon bridge has no agent attached")
 	}
 
-	// Normal agent submission
-	content := msg.ProviderContent()
-	if len(content) == 0 {
+	// Normal agent submission: content preparation (vision fallback +
+	// effective-empty gate) followed by queue-or-run. The ordering pin in
+	// prepareAgentSubmission restores the vision turn on gate drops, matching
+	// the original defer-before-gate registration.
+	content, restoreVision, drop := b.prepareAgentSubmission(text, msg)
+	if drop {
 		return nil
+	}
+	defer restoreVision()
+	b.submitToAgentRun(ctx, text, content)
+
+	return nil
+}
+
+// notifyInboundActivity ticks the bridge activity callback when the inbound
+// message carries meaningful activity.
+//
+// #1628-B: gate activity on TEXT only meant a pure-image message (the
+// exact #1584-A scenario) never tickled the Knight idle timer - an
+// active user read as idle (idle notices/timeouts skewed). Check the
+// RAW fields (text or attachments): ProviderContent() has a
+// non-empty-block fallback (#1628-C) and would be always-true here.
+func (b *DaemonBridge) notifyInboundActivity(text string, nAttachments int) {
+	if text == "" && nAttachments == 0 {
+		return
+	}
+	b.mu.Lock()
+	onActivity := b.onActivity
+	b.mu.Unlock()
+	if onActivity != nil {
+		onActivity()
+	}
+}
+
+// handleShellPassthrough executes a routed $/! shell command; the refusal
+// path only emits a notice, the caller returns nil afterwards either way.
+//
+// #2205: mirror the TUI-side gate (#2185/PR #2203) - arbitrary
+// shell from a remote IM peer is the dominant attack surface and
+// is hard-denied without the im.remote_dangerous_commands opt-in
+// (fail closed, same semantics as the TUI remote path).
+func (b *DaemonBridge) handleShellPassthrough(route InboundRoute) {
+	if !b.remoteDangerousAllowed() {
+		if b.emitTextOverride != nil {
+			_ = b.emitTextOverride("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
+		} else {
+			_ = b.emitter.EmitText("shell passthrough ($/! commands) over IM requires the im.remote_dangerous_commands opt-in - refused (#2185/#2205)")
+		}
+		return
+	}
+	b.handleShellInbound(route.Text)
+}
+
+// dropStaleReply reports whether the inbound reply must be dropped because it
+// arrived inside the stale-reply suppression window, emitting the user notice
+// when it does.
+//
+// #2111: a reply-shaped text arriving within the suppression window
+// after a question expired is far more likely the late answer to the
+// EXPIRED prompt than to a successor registered seconds ago — without
+// question correlation the two are indistinguishable, and the wrong
+// guess auto-approves a tool or answers a questionnaire (#2111 ProbeB).
+// #2127: the empty-window half (ProbeB2) needs the same guard on the
+// MESSAGE route - after expiry the pending registration is cleared, so
+// a bare "y" routes as an ordinary message and was submitted to the
+// agent as a fresh prompt. Narrow scope: only approval-SHAPED tokens
+// (ParseApprovalReply-recognizable), so real messages are untouched.
+func (b *DaemonBridge) dropStaleReply(text string, route InboundRoute) bool {
+	b.mu.Lock()
+	staleUntil := b.staleReplySuppressUntil
+	b.mu.Unlock()
+	if !time.Now().Before(staleUntil) {
+		return false
+	}
+	if route.Kind == InboundRouteApproval || route.Kind == InboundRouteAskUser {
+		debug.Log("daemon-bridge", "dropping reply-shaped text inside stale-reply window: %q", truncateStr(text, 80))
+		_ = b.emitter.EmitText("⏱ That looked like a reply to the expired prompt, so it was ignored. Please resend it for the current question.")
+		return true
+	}
+	if route.Kind == InboundRouteMessage {
+		if _, ok := ParseApprovalReply(strings.TrimSpace(text)); ok {
+			debug.Log("daemon-bridge", "dropping bare approval token inside stale-reply window (ProbeB2): %q", truncateStr(text, 80))
+			_ = b.emitter.EmitText("⏱ That looked like a reply to the expired approval, so it was ignored. Send your actual message again if you meant it as one.")
+			return true
+		}
+	}
+	return false
+}
+
+// handleApprovalRoute routes an approval reply (y/a/n) into the pending
+// approval channel, or drops it when the asker is gone. The approvalCh
+// snapshot is taken by the caller BEFORE this helper runs, preserving the
+// original snapshot-then-dispatch timing.
+//
+// #569 A: the route decision came from a snapshot taken before this
+// re-read. If the channel vanished in between (approval timed out),
+// the late reply must be dropped — leaking it to the agent path would
+// resubmit "y" as a fresh prompt.
+func (b *DaemonBridge) handleApprovalRoute(route InboundRoute, approvalCh chan approvalReply, text string) error {
+	if approvalCh == nil {
+		debug.Log("daemon-bridge", "dropping approval reply after timeout: %q", truncateStr(text, 80))
+		return nil
+	}
+	// #943/#1551-B semantics pinned in dispatchApprovalReply.
+	b.dispatchApprovalReply(approvalCh, route)
+	return nil
+}
+
+// dispatchApprovalReply performs the non-blocking send of an approval reply
+// and the compare-then-clear of the pending registration.
+//
+// #943: send the full route (Decision + AlwaysAllow) — the old
+// permission.Decision-only channel silently dropped the always-allow
+// semantics computed by RouteInboundText, degrading "a" to one-shot "y".
+// #1551-B: non-blocking send, mirroring the ask_user path's #944 fix —
+// a bare blocking send deadlocked the SECOND concurrent replier (both
+// snapshot the channel before compare-then-clear; the first fills the
+// single buffer, the asker has exited, the second blocks forever) and
+// leaked the adapter receive goroutine.
+func (b *DaemonBridge) dispatchApprovalReply(approvalCh chan approvalReply, route InboundRoute) {
+	select {
+	case approvalCh <- approvalReply{Decision: route.Decision, Always: route.AlwaysAllow}:
+		b.mu.Lock()
+		if b.pendingApproval == approvalCh { // #655: compare-then-clear — a concurrent reply for the NEXT question must not be wiped
+			b.pendingApproval = nil
+		}
+		b.mu.Unlock()
+	default:
+		debug.Log("daemon-bridge", "dropping approval reply: no waiting asker")
+	}
+}
+
+// handleAskUserRoute routes a reply into the pending ask_user request's
+// response channel, or drops it when the question timed out between the
+// caller's snapshot and this dispatch.
+func (b *DaemonBridge) handleAskUserRoute(route InboundRoute, pending *pendingAskUser, text string) error {
+	if pending != nil {
+		resp := BuildAskUserResponseFromText(pending.request, route.Text)
+		// #944: non-blocking send, mirroring the interactive callback path
+		// (L175-178). A second concurrent sender after the buffer is full
+		// would otherwise block forever when HandleAskUser exits via ctx.Done()
+		// without draining — leaking the adapter receive goroutine.
+		select {
+		case pending.response <- resp:
+		default:
+		}
+		b.mu.Lock()
+		if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
+			b.pendingAsk = nil
+		}
+		b.mu.Unlock()
+		return nil
+	}
+	// AskUser timed out between snapshot and re-lock
+	debug.Log("daemon-bridge", "dropping stale ask_user reply: %s", text)
+	return nil
+}
+
+// agentReadyForSubmission reports whether a normal agent submission may
+// proceed.
+//
+// #569: the agent path dereferences b.agent (interruption handler, run
+// loop). A bridge constructed without an agent must fail explicitly
+// instead of panicking. However, when a run is already active
+// (cancelFunc != nil) the message is only queued as an interruption —
+// the agent is never dereferenced on this path — so queuing must stay
+// allowed for agent-less bridges (tests simulate active runs this way).
+func (b *DaemonBridge) agentReadyForSubmission() bool {
+	b.mu.Lock()
+	runActive := b.cancelFunc != nil
+	b.mu.Unlock()
+	return b.agent != nil || runActive
+}
+
+// prepareAgentSubmission computes the effective content blocks for a normal
+// agent submission and applies the turn-scoped vision fallback. drop=true
+// means the message is silently ignored; the returned restore callback is
+// only valid when drop=false (drop paths restore internally — see the
+// ordering pin below).
+func (b *DaemonBridge) prepareAgentSubmission(text string, msg InboundMessage) (content []provider.ContentBlock, restoreVision func(), drop bool) {
+	content = msg.ProviderContent()
+	if len(content) == 0 {
+		return nil, nil, true
 	}
 
 	// Turn-scoped vision fallback, mirroring the TUI path: switch to a
@@ -706,7 +788,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if !visionSwitched && contentHasImageBlocks(content) {
 		content = stripImageBlocks(content)
 	}
-	defer restoreVision()
 
 	// #1584-A: route-empty OR text-less messages used to drop here even
 	// when the content blocks were non-empty (a pure image or a
@@ -724,9 +805,21 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	// content block is blank - ProviderContent's #1628-C fallback always
 	// emits at least an empty text block, so a bare len()==0 check would
 	// let truly-empty messages queue an empty block).
+	//
+	// Ordering pin: the original code registered `defer restoreVision()`
+	// BEFORE this gate, so a gate drop still restored the vision turn —
+	// restore explicitly here to keep that behavior byte-identical.
 	if text == "" && contentEffectivelyEmpty(content) {
-		return nil
+		restoreVision()
+		return nil, nil, true
 	}
+	return content, restoreVision, false
+}
+
+// submitToAgentRun performs the final phase of a normal agent submission:
+// user-message notifications, follow-sink fan-out, content rebuild fallback,
+// and the queue-or-begin-run decision.
+func (b *DaemonBridge) submitToAgentRun(ctx context.Context, text string, content []provider.ContentBlock) {
 	b.notifyUserMessage(content)
 
 	// Immediately trigger typing indicator so the user sees feedback
@@ -751,7 +844,7 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	}
 	ctx2, queued := b.tryQueueOrBeginRun(content, "")
 	if queued {
-		return nil
+		return
 	}
 	b.notifyRunStateChange(true)
 	b.runQueuedLoop(ctx2, content, "", func(ctx context.Context, text string) bool {
@@ -759,8 +852,6 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	}, func(err error) {
 		_ = b.emitter.EmitText(provider.UserFacingError(err))
 	})
-
-	return nil
 }
 
 // HandleAskUser is the AskUserHandler for daemon mode — sends questions to IM
