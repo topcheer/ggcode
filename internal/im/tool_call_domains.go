@@ -275,68 +275,92 @@ func formatCallWorktree(lang ToolLanguage, tc *ToolCallInfo) (string, bool) {
 	return "", false
 }
 
+// argOrDetail returns the named arg value, falling back to tc.Detail when the
+// arg is absent or empty.
+func argOrDetail(args, key string, tc *ToolCallInfo) string {
+	v := extractArgValue(args, key)
+	if v == "" {
+		return tc.Detail
+	}
+	return v
+}
+
 // formatCallTeam covers team/swarm/a2a/delegation and agent lifecycle tools.
+// Case bodies were transcribed 1:1 from the r167 domain switch; the team
+// domain itself is sub-split into hidden/swarm/a2a/agent-lifecycle formatters
+// with disjoint tool-name sets, so the partition is behavior-identical.
 func formatCallTeam(lang ToolLanguage, tc *ToolCallInfo) (string, bool) {
 	args := tc.Args
-	switch tc.ToolName {
+	if out, ok := formatCallTeamHidden(tc.ToolName); ok {
+		return out, true
+	}
+	if out, ok := formatCallTeamSwarm(lang, args, tc); ok {
+		return out, true
+	}
+	if out, ok := formatCallTeamA2A(lang, args, tc); ok {
+		return out, true
+	}
+	return formatCallTeamAgentLifecycle(lang, args, tc)
+}
+
+// formatCallTeamHidden hides list/readonly team and a2a plumbing from IM output.
+func formatCallTeamHidden(toolName string) (string, bool) {
+	switch toolName {
 	case "teammate_list", "swarm_task_list", "swarm_task_claim",
 		"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task":
 		return "", true // hidden
+	}
+	return "", false
+}
+
+// formatCallTeamSwarm covers team membership, teammate lifecycle and swarm task tools.
+func formatCallTeamSwarm(lang ToolLanguage, args string, tc *ToolCallInfo) (string, bool) {
+	switch tc.ToolName {
 	case "team_create":
-		name := extractArgValue(args, "name")
-		if name == "" {
-			name = tc.Detail
-		}
+		name := argOrDetail(args, "name", tc)
 		return fmt.Sprintf("👥 %s: %s", imLabel(lang, "team_create"), name), true
 	case "team_delete":
 		return "👥 " + imLabel(lang, "team_delete"), true
 	case "teammate_spawn":
-		name := extractArgValue(args, "name")
-		if name == "" {
-			name = tc.Detail
-		}
+		name := argOrDetail(args, "name", tc)
 		return fmt.Sprintf("🤖 %s: %s", imLabel(lang, "teammate_spawn"), name), true
 	case "teammate_shutdown":
 		return "🤖 " + imLabel(lang, "teammate_shutdown"), true
 	case "send_message":
-		to := extractArgValue(args, "to")
-		if to == "" {
-			to = tc.Detail
-		}
+		to := argOrDetail(args, "to", tc)
 		return fmt.Sprintf("📨 %s → %s", imLabel(lang, "send_message"), to), true
 	case "teammate_results":
 		return "📋 " + imLabel(lang, "teammate_results"), true
 	case "swarm_task_create":
-		subject := extractArgValue(args, "subject")
-		if subject == "" {
-			subject = tc.Detail
-		}
+		subject := argOrDetail(args, "subject", tc)
 		return fmt.Sprintf("📋 %s: %s", imLabel(lang, "swarm_task_create"), subject), true
 	case "swarm_task_complete":
 		return "✅ " + imLabel(lang, "swarm_task_complete"), true
+	}
+	return "", false
+}
+
+// formatCallTeamA2A covers remote a2a task tools.
+func formatCallTeamA2A(lang ToolLanguage, args string, tc *ToolCallInfo) (string, bool) {
+	switch tc.ToolName {
 	case "a2a_remote":
-		target := extractArgValue(args, "target")
-		if target == "" {
-			target = tc.Detail
-		}
+		target := argOrDetail(args, "target", tc)
 		return fmt.Sprintf("🔗 %s → %s", imLabel(lang, "a2a_remote"), target), true
 	case "a2a_send_task":
-		target := extractArgValue(args, "target")
-		if target == "" {
-			target = tc.Detail
-		}
+		target := argOrDetail(args, "target", tc)
 		return fmt.Sprintf("🔗 %s → %s", imLabel(lang, "a2a_send_task"), target), true
+	}
+	return "", false
+}
+
+// formatCallTeamAgentLifecycle covers delegation and agent run lifecycle tools.
+func formatCallTeamAgentLifecycle(lang ToolLanguage, args string, tc *ToolCallInfo) (string, bool) {
+	switch tc.ToolName {
 	case "delegate":
-		agent := extractArgValue(args, "agent")
-		if agent == "" {
-			agent = tc.Detail
-		}
+		agent := argOrDetail(args, "agent", tc)
 		return fmt.Sprintf("🤝 %s: %s", imLabel(lang, "delegate"), agent), true
 	case "spawn_agent":
-		task := extractArgValue(args, "task")
-		if task == "" {
-			task = tc.Detail
-		}
+		task := argOrDetail(args, "task", tc)
 		if task != "" {
 			return fmt.Sprintf("🚀 %s: %s", imLabel(lang, "spawn_agent"), truncateRunes(compactSingleLine(task), 60, "...")), true
 		}
@@ -344,10 +368,7 @@ func formatCallTeam(lang ToolLanguage, tc *ToolCallInfo) (string, bool) {
 	case "wait_agent":
 		return fmt.Sprintf("⏳ %s", imLabel(lang, "wait_agent")), true
 	case "cancel_agent":
-		agentID := extractArgValue(args, "agent_id")
-		if agentID == "" {
-			agentID = tc.Detail
-		}
+		agentID := argOrDetail(args, "agent_id", tc)
 		return fmt.Sprintf("❌ %s: %s", imLabel(lang, "cancel_agent"), agentID), true
 	}
 	return "", false

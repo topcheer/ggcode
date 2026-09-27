@@ -62,91 +62,47 @@ func escapeLine(b *strings.Builder, line string) {
 
 		// Inline code span: find matching closing backtick
 		if c == '`' {
-			j := i + 1
-			for j < n && line[j] != '`' {
-				j++
-			}
-			if j < n {
-				// Found closing backtick — emit the span verbatim
-				b.WriteString(line[i : j+1])
-				i = j + 1
-				continue
-			}
-			// No closing backtick — escape the opening backtick
-			b.WriteString("\\`")
-			i++
+			i = emitCodeSpan(b, line, i)
 			continue
 		}
 
 		// Bold: **text**
-		if c == '*' && i+1 < n && line[i+1] == '*' {
-			if end := findClosingSeq(line, i+2, '*'); end >= 0 {
-				// Emit ** (unescaped) + escaped content + ** (unescaped)
-				b.WriteString("**")
-				escapeText(b, line[i+2:end])
-				b.WriteString("**")
-				i = end + 2
+		if c == '*' {
+			if ni := tryEmitDelimited(b, line, i, '*', "**"); ni >= 0 {
+				i = ni
 				continue
 			}
 		}
 
 		// Italic: __text__
-		if c == '_' && i+1 < n && line[i+1] == '_' {
-			if end := findClosingSeq(line, i+2, '_'); end >= 0 {
-				b.WriteString("__")
-				escapeText(b, line[i+2:end])
-				b.WriteString("__")
-				i = end + 2
+		if c == '_' {
+			if ni := tryEmitDelimited(b, line, i, '_', "__"); ni >= 0 {
+				i = ni
 				continue
 			}
 		}
 
 		// Strikethrough: ~~text~~
-		if c == '~' && i+1 < n && line[i+1] == '~' {
-			if end := findClosingSeq(line, i+2, '~'); end >= 0 {
-				b.WriteString("~~")
-				escapeText(b, line[i+2:end])
-				b.WriteString("~~")
-				i = end + 2
+		if c == '~' {
+			if ni := tryEmitDelimited(b, line, i, '~', "~~"); ni >= 0 {
+				i = ni
 				continue
 			}
 		}
 
 		// Image: ![alt](url)
 		if c == '!' && i+1 < n && line[i+1] == '[' {
-			if end := findLinkEnd(line, i+1); end > 0 {
-				// Emit ![ ]( ) structure unescaped, escape alt text
-				altStart := i + 2
-				altEnd := strings.IndexByte(line[altStart:], ']')
-				if altEnd >= 0 {
-					altEnd += altStart
-					b.WriteString("![")
-					escapeText(b, line[altStart:altEnd])
-					b.WriteString("](")
-					urlEnd := end - 1 // before the closing ')'
-					escapeMDV2LinkURL(b, line[altEnd+2:urlEnd+1])
-					b.WriteString(")")
-					i = end + 1
-					continue
-				}
+			if ni := tryEmitLink(b, line, i+1, "!"); ni >= 0 {
+				i = ni
+				continue
 			}
 		}
 
 		// Link: [text](url)
 		if c == '[' {
-			if end := findLinkEnd(line, i); end > 0 {
-				altEnd := strings.IndexByte(line[i+1:], ']')
-				if altEnd >= 0 {
-					altEnd += i + 1
-					b.WriteString("[")
-					escapeText(b, line[i+1:altEnd])
-					b.WriteString("](")
-					urlEnd := end - 1
-					escapeMDV2LinkURL(b, line[altEnd+2:urlEnd+1])
-					b.WriteString(")")
-					i = end + 1
-					continue
-				}
+			if ni := tryEmitLink(b, line, i, ""); ni >= 0 {
+				i = ni
+				continue
 			}
 		}
 
@@ -157,6 +113,71 @@ func escapeLine(b *strings.Builder, line string) {
 		b.WriteByte(c)
 		i++
 	}
+}
+
+// emitCodeSpan emits the inline code span starting at the backtick line[i],
+// verbatim including its backticks. When no closing backtick exists the
+// opening backtick is escaped and the scan advances by one.
+func emitCodeSpan(b *strings.Builder, line string, i int) int {
+	n := len(line)
+	j := i + 1
+	for j < n && line[j] != '`' {
+		j++
+	}
+	if j < n {
+		// Found closing backtick — emit the span verbatim
+		b.WriteString(line[i : j+1])
+		return j + 1
+	}
+	// No closing backtick — escape the opening backtick
+	b.WriteString("\\`")
+	return i + 1
+}
+
+// tryEmitDelimited emits a doubled-delimiter span (**bold**, __italic__,
+// ~~strikethrough~~) starting at line[i] == ch: the delimiter pair is written
+// unescaped around the escaped inner text. Returns the next scan index, or -1
+// when no closed span starts here so the caller falls through.
+func tryEmitDelimited(b *strings.Builder, line string, i int, ch byte, delim string) int {
+	if i+1 >= len(line) || line[i+1] != ch {
+		return -1
+	}
+	end := findClosingSeq(line, i+2, ch)
+	if end < 0 {
+		return -1
+	}
+	// Emit <delim> (unescaped) + escaped content + <delim> (unescaped)
+	b.WriteString(delim)
+	escapeText(b, line[i+2:end])
+	b.WriteString(delim)
+	return end + 2
+}
+
+// tryEmitLink emits a [text](url) link (prefix "") or an ![alt](url) image
+// (prefix "!") whose '[' sits at bracketStart. Structure characters are
+// emitted unescaped while alt text and URL are escaped. Returns the next scan
+// index, or -1 when no well-formed link starts here so the caller falls
+// through.
+func tryEmitLink(b *strings.Builder, line string, bracketStart int, prefix string) int {
+	end := findLinkEnd(line, bracketStart)
+	if end <= 0 {
+		return -1
+	}
+	// Emit <prefix>[ ]( ) structure unescaped, escape alt text
+	altStart := bracketStart + 1
+	altEnd := strings.IndexByte(line[altStart:], ']')
+	if altEnd < 0 {
+		return -1
+	}
+	altEnd += altStart
+	b.WriteString(prefix)
+	b.WriteString("[")
+	escapeText(b, line[altStart:altEnd])
+	b.WriteString("](")
+	urlEnd := end - 1 // before the closing ')'
+	escapeMDV2LinkURL(b, line[altEnd+2:urlEnd+1])
+	b.WriteString(")")
+	return end + 1
 }
 
 // escapeText escapes special characters in plain text content (inside bold/italic/etc).
