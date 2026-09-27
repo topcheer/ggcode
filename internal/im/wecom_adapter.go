@@ -387,83 +387,26 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		return
 	}
 
-	msgID := jsonStringField(body, "msgid")
-	if msgID == "" {
-		msgID = payloadReqID(payload)
-	}
+	msgID := wecomMsgID(body, payload)
 	if msgID == "" {
 		return
 	}
 
-	// Dedup
-	a.mu.Lock()
-	if _, seen := a.seen[msgID]; seen {
-		a.mu.Unlock()
+	// Dedup + req_id bookkeeping share one critical section (#974, #1567-D).
+	reqID := payloadReqID(payload)
+	if !a.dedupeAndRemember(msgID, reqID) {
 		return
 	}
-	a.seen[msgID] = time.Now()
-	// Evict old entries
-	if len(a.seen) > wecomDedupMaxSize {
-		cutoff := time.Now().Add(-5 * time.Minute)
-		for k, t := range a.seen {
-			if t.Before(cutoff) {
-				delete(a.seen, k)
-			}
-		}
-		// #1567-D (#974 pattern, missed here): a burst inside the TTL window
-		// leaves the map over-capacity with no oldest-entry fallback - it
-		// grows unbounded until entries age out. Drop oldest by timestamp.
-		for len(a.seen) >= wecomDedupMaxSize {
-			var oldestKey string
-			var oldestT time.Time
-			for k, t := range a.seen {
-				if oldestKey == "" || t.Before(oldestT) {
-					oldestKey, oldestT = k, t
-				}
-			}
-			delete(a.seen, oldestKey)
-		}
-	}
-	// Remember req_id for respond_msg replies
-	reqID := payloadReqID(payload)
-	if reqID != "" {
-		a.replyReqIDs[msgID] = reqID
-		a.replyReqOrder = append(a.replyReqOrder, msgID)
-		// Evict oldest-first instead of a random map entry (#974): random
-		// eviction could drop exactly the req_id we are about to reply to.
-		for len(a.replyReqIDs) > wecomDedupMaxSize && len(a.replyReqOrder) > 0 {
-			oldest := a.replyReqOrder[0]
-			a.replyReqOrder = a.replyReqOrder[1:]
-			delete(a.replyReqIDs, oldest)
-		}
-	}
-	a.mu.Unlock()
 
 	// Extract sender
-	from, _ := body["from"].(map[string]any)
-	senderID := jsonStringField(from, "userid")
-	chatID := jsonStringField(body, "chatid")
-	if chatID == "" {
-		chatID = senderID
-	}
+	senderID, chatID, isGroup := wecomInboundSender(body)
 	if chatID == "" {
 		return
 	}
 
-	chatType, _ := body["chattype"].(string)
-	isGroup := strings.EqualFold(chatType, "group")
-
 	// Access policy check
-	if isGroup {
-		if !a.isGroupAllowed(chatID, senderID) {
-			debug.Log("wecom", "adapter=%s group %s sender %s blocked by policy", a.name, chatID, senderID)
-			return
-		}
-	} else {
-		if !a.isDMAllowed(senderID) {
-			debug.Log("wecom", "adapter=%s DM sender %s blocked by policy", a.name, senderID)
-			return
-		}
+	if !a.passWecomPolicy(chatID, senderID, isGroup) {
+		return
 	}
 
 	// Extract text and quote
@@ -485,43 +428,8 @@ func (a *wecomAdapter) handleMessage(ctx context.Context, payload map[string]any
 		return
 	}
 
-	msg := InboundMessage{
-		Envelope: Envelope{
-			Adapter:    a.name,
-			Platform:   PlatformWeCom,
-			ChannelID:  chatID,
-			SenderID:   senderID,
-			SenderName: senderID,
-			ReceivedAt: time.Now(),
-		},
-		Text:        text,
-		Attachments: attachments,
-	}
-
-	// Pairing flow: first inbound from an unbound channel triggers pairing.
-	if a.manager != nil {
-		pairingResult, err := a.manager.HandlePairingInbound(msg)
-		debug.Log("wecom", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		if err != nil && err != ErrNoSessionBound {
-			// #1255: message-level pairing errors do not flip the adapter state
-			// (#1238/#1243/#1248 family, 4th instance): connected is published
-			// only once on websocket login and nothing re-publishes it while the
-			// connection lives, so one transient store hiccup pinned a healthy
-			// adapter at warning until the next reconnect. Log only.
-			debug.Log("wecom", "adapter=%s pairing error (websocket unaffected): %v", a.name, err)
-		}
-		if pairingResult.Consumed {
-			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
-			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-				debug.Log("wecom", "adapter=%s notify previous: %v", a.name, err)
-			}
-			return
-		}
-	}
-
-	if a.manager != nil {
-		a.manager.HandleInbound(ctx, msg)
-	}
+	msg := wecomInboundMessage(a.name, chatID, senderID, text, attachments, time.Now())
+	a.deliverWecomInbound(ctx, msg, chatID)
 }
 
 // extractText extracts plain text content from the callback body.
@@ -594,21 +502,8 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 
 	// Image
 	if strings.EqualFold(msgType, "image") {
-		if img, _ := body["image"].(map[string]any); img != nil {
-			if url := jsonStringField(img, "url"); url != "" {
-				attachments = append(attachments, Attachment{
-					Kind: AttachmentImage,
-					URL:  url,
-				})
-			}
-			// base64 image data
-			if b64 := jsonStringField(img, "base64"); b64 != "" {
-				attachments = append(attachments, Attachment{
-					Kind:       AttachmentImage,
-					DataBase64: b64,
-				})
-			}
-		}
+		img, _ := body["image"].(map[string]any)
+		attachments = append(attachments, wecomImageBlockAttachments(img)...)
 	}
 
 	// #1253: mixed messages carry per-item msgtypes - each image item must be
@@ -616,87 +511,25 @@ func (a *wecomAdapter) extractAttachments(body map[string]any) []Attachment {
 	// compositions delivered the text while the screenshot silently vanished
 	// (neither in text nor in attachments).
 	if strings.EqualFold(msgType, "mixed") {
-		if mixed, _ := body["mixed"].(map[string]any); mixed != nil {
-			if items, _ := mixed["msg_item"].([]any); items != nil {
-				for _, item := range items {
-					itemMap, _ := item.(map[string]any)
-					if itemMap == nil || !strings.EqualFold(jsonStringField(itemMap, "msgtype"), "image") {
-						continue
-					}
-					img, _ := itemMap["image"].(map[string]any)
-					if img == nil {
-						continue
-					}
-					if url := jsonStringField(img, "url"); url != "" {
-						attachments = append(attachments, Attachment{Kind: AttachmentImage, URL: url})
-					}
-					if b64 := jsonStringField(img, "base64"); b64 != "" {
-						attachments = append(attachments, Attachment{Kind: AttachmentImage, DataBase64: b64})
-					}
-				}
-			}
-		}
+		mixed, _ := body["mixed"].(map[string]any)
+		attachments = append(attachments, wecomMixedImageAttachments(mixed)...)
 	}
 
 	// File
 	if strings.EqualFold(msgType, "file") {
-		if file, _ := body["file"].(map[string]any); file != nil {
-			if url := jsonStringField(file, "url"); url != "" {
-				attachments = append(attachments, Attachment{
-					Kind: AttachmentFile,
-					URL:  url,
-				})
-			}
-		}
+		file, _ := body["file"].(map[string]any)
+		attachments = append(attachments, wecomFileURLAttachment(file)...)
 	}
 
 	// App message file/image (AI Bot attachments like PDF/Word/Excel)
 	if strings.EqualFold(msgType, "appmsg") {
 		appmsg, _ := body["appmsg"].(map[string]any)
-		if appmsg != nil {
-			if file, _ := appmsg["file"].(map[string]any); file != nil {
-				if url := jsonStringField(file, "url"); url != "" {
-					attachments = append(attachments, Attachment{
-						Kind: AttachmentFile,
-						URL:  url,
-						Name: jsonStringField(appmsg, "title"),
-					})
-				}
-			}
-			if img, _ := appmsg["image"].(map[string]any); img != nil {
-				if url := jsonStringField(img, "url"); url != "" {
-					attachments = append(attachments, Attachment{
-						Kind: AttachmentImage,
-						URL:  url,
-					})
-				}
-			}
-		}
+		attachments = append(attachments, wecomAppmsgAttachments(appmsg)...)
 	}
 
 	// Quote image/file
 	if quote, _ := body["quote"].(map[string]any); quote != nil {
-		quoteType, _ := quote["msgtype"].(string)
-		switch strings.ToLower(quoteType) {
-		case "image":
-			if img, _ := quote["image"].(map[string]any); img != nil {
-				if url := jsonStringField(img, "url"); url != "" {
-					attachments = append(attachments, Attachment{
-						Kind: AttachmentImage,
-						URL:  url,
-					})
-				}
-			}
-		case "file":
-			if file, _ := quote["file"].(map[string]any); file != nil {
-				if url := jsonStringField(file, "url"); url != "" {
-					attachments = append(attachments, Attachment{
-						Kind: AttachmentFile,
-						URL:  url,
-					})
-				}
-			}
-		}
+		attachments = append(attachments, wecomQuoteAttachments(quote)...)
 	}
 
 	return attachments
