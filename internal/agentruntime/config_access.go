@@ -669,7 +669,35 @@ func (a *configAccess) listAPIKeys() (string, error) {
 	return strings.Join(entries, "\n"), nil
 }
 
+// commitAPIKeyClear applies a probe-free API-key clear under cfgMu and
+// reloads the provider on success. Shared by the api_key Set paths when the
+// value is empty/whitespace (clear intent); commit runs under the lock so it
+// observes the same config snapshot the caller validated.
+func (a *configAccess) commitAPIKeyClear(commit func() error) error {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	if a.cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if err := commit(); err != nil {
+		return err
+	}
+	a.reloadProvider()
+	return nil
+}
+
 func (a *configAccess) setAPIKeyWithProbe(value string) error {
+	// Empty value = clear intent. An empty key can never pass a probe, so
+	// probing would make clearing impossible through this path while TUI and
+	// webui clear freely via the same config setters. Commit the clear
+	// probe-free: the config layer owns empty-string clear semantics
+	// (env-ref purge, alias cleanup), and a clear cannot invalidate the
+	// resolved selection the way a bad key can.
+	if strings.TrimSpace(value) == "" {
+		return a.commitAPIKeyClear(func() error {
+			return a.cfg.SetEndpointAPIKey(a.cfg.Vendor, a.cfg.Endpoint, "", false)
+		})
+	}
 	// #957: snapshot + resolve under the lock, probe outside, re-validate on
 	// commit (same pattern as setWithProbe).
 	a.cfgMu.Lock()
@@ -719,6 +747,12 @@ func (a *configAccess) setAPIKeyByPathWithProbe(path, value string) error {
 
 // setVendorAPIKeyWithProbe probes and commits a vendor-level API key.
 func (a *configAccess) setVendorAPIKeyWithProbe(vendor, value string) error {
+	// Empty value = clear intent (probe-free; see setAPIKeyWithProbe).
+	if strings.TrimSpace(value) == "" {
+		return a.commitAPIKeyClear(func() error {
+			return a.cfg.SetVendorAPIKey(vendor, "")
+		})
+	}
 	// #875: the session's endpoint name belongs to the session's VENDOR —
 	// probing vendor X with it either rejects legal keys (endpoint not
 	// configured for X) or probes a same-named wrong endpoint. Prefer an
@@ -767,6 +801,12 @@ func (a *configAccess) setVendorAPIKeyWithProbe(vendor, value string) error {
 
 // setEndpointAPIKeyWithProbe probes and commits an endpoint-level API key.
 func (a *configAccess) setEndpointAPIKeyWithProbe(vendor, endpoint, value string) error {
+	// Empty value = clear intent (probe-free; see setAPIKeyWithProbe).
+	if strings.TrimSpace(value) == "" {
+		return a.commitAPIKeyClear(func() error {
+			return a.cfg.SetEndpointAPIKey(vendor, endpoint, "", false)
+		})
+	}
 	a.cfgMu.Lock()
 	if a.cfg == nil {
 		a.cfgMu.Unlock()

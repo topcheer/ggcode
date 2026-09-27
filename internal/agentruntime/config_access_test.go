@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -243,5 +244,87 @@ func TestConfigAccess_SetModelProbeDoesNotBlockGet(t *testing.T) {
 	close(release)
 	if err := <-setDone; err != nil {
 		t.Fatalf("Set(model) failed: %v", err)
+	}
+}
+
+// ============================================================================
+// Empty api_key value = clear intent: must commit probe-free (TUI/webui
+// parity) instead of "refusing to set" on a probe that cannot pass.
+// ============================================================================
+
+func newAPIKeyProbeTestConfig(t *testing.T) (*config.Config, *configAccess) {
+	cfg := &config.Config{
+		Vendor:   "v",
+		Endpoint: "e",
+		Model:    "m1",
+		FilePath: filepath.Join(t.TempDir(), "ggcode.yaml"),
+		Vendors: map[string]config.VendorConfig{
+			"v": {
+				APIKey: "vendor-key",
+				Endpoints: map[string]config.EndpointConfig{
+					"e": {Protocol: "openai", BaseURL: "http://127.0.0.1:1/v1", DefaultModel: "m1", APIKey: "sk-old"},
+				},
+			},
+		},
+	}
+	return cfg, NewConfigAccess(cfg, t.TempDir())
+}
+
+func TestConfigAccess_SetAPIKeyEmptyClearsProbeFree(t *testing.T) {
+	cfg, access := newAPIKeyProbeTestConfig(t)
+
+	probeCalls := 0
+	orig := probeProviderFn
+	probeProviderFn = func(r *config.ResolvedEndpoint) error {
+		probeCalls++
+		return nil
+	}
+	t.Cleanup(func() { probeProviderFn = orig })
+
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{"active endpoint key", "api_key"},
+		{"vendor key", "api_key.v"},
+		{"endpoint key", "api_key.v.e"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := access.Set(tc.key, ""); err != nil {
+				t.Fatalf("Set(%q, \"\") = %v, want nil", tc.key, err)
+			}
+			// Whitespace-only matches the config layer's TrimSpace clear
+			// semantics and must also take the probe-free clear path.
+			if err := access.Set(tc.key, "   "); err != nil {
+				t.Fatalf("Set(%q, whitespace) = %v, want nil", tc.key, err)
+			}
+		})
+	}
+	if probeCalls != 0 {
+		t.Fatalf("clear path invoked the provider probe %d times, want 0", probeCalls)
+	}
+	if got := cfg.Vendors["v"].Endpoints["e"].APIKey; got != "" {
+		t.Fatalf("endpoint key = %q, want cleared", got)
+	}
+	if got := cfg.Vendors["v"].APIKey; got != "" {
+		t.Fatalf("vendor key = %q, want cleared", got)
+	}
+}
+
+func TestConfigAccess_SetAPIKeyNonEmptyStillProbes(t *testing.T) {
+	cfg, access := newAPIKeyProbeTestConfig(t)
+
+	orig := probeProviderFn
+	probeProviderFn = func(r *config.ResolvedEndpoint) error {
+		return errors.New("401 unauthorized")
+	}
+	t.Cleanup(func() { probeProviderFn = orig })
+
+	if err := access.Set("api_key.v.e", "sk-bad"); err == nil {
+		t.Fatal("Set(api_key.v.e, bad key) should fail the probe and error")
+	}
+	if got := cfg.Vendors["v"].Endpoints["e"].APIKey; got != "sk-old" {
+		t.Fatalf("endpoint key = %q after refused set, want unchanged \"sk-old\"", got)
 	}
 }
