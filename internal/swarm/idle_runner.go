@@ -115,6 +115,8 @@ func runTeammateLoop(
 }
 
 // handleMessage processes an inbox message (task or general message).
+// Direct messages carry no board task ID (#1688); the result is delivered
+// back to the caller via msg.ReplyTo when present.
 func handleMessage(
 	ctx context.Context,
 	tm *Teammate,
@@ -126,25 +128,56 @@ func handleMessage(
 	msg MailMessage,
 ) {
 	if agent == nil {
-		if onEvent != nil {
-			onEvent(Event{
-				Type:       "teammate_error",
-				TeamID:     team.ID,
-				TeammateID: tm.ID,
-				Error:      fmt.Errorf("teammate %q has no agent (factory or toolBuilder may be nil)", tm.ID),
-				Timestamp:  time.Now(),
-			})
-		}
+		emitTeammateError(tm, team, onEvent, fmt.Errorf("teammate %q has no agent (factory or toolBuilder may be nil)", tm.ID))
 		// Reply to caller so they don't block forever on ReplyTo channel.
-		if msg.ReplyTo != nil {
-			select {
-			case msg.ReplyTo <- TaskResult{Error: fmt.Errorf("teammate %q has no agent", tm.ID)}:
-			case <-ctx.Done():
-			}
-		}
+		sendReply(ctx, msg.ReplyTo, TaskResult{Error: fmt.Errorf("teammate %q has no agent", tm.ID)})
 		return
 	}
 
+	result, taskErr := runDirectTask(ctx, tm, team, agent, onEvent, taskTimeout, msg)
+	// Send result back to caller if they requested it.
+	sendReply(ctx, msg.ReplyTo, TaskResult{Output: result, Error: taskErr})
+	settleAfterDirectTask(ctx, tm, team, onEvent, result, taskErr)
+}
+
+// emitTeammateError reports a teammate-level failure on the event stream.
+func emitTeammateError(tm *Teammate, team *Team, onEvent func(Event), err error) {
+	if onEvent == nil {
+		return
+	}
+	onEvent(Event{
+		Type:       "teammate_error",
+		TeamID:     team.ID,
+		TeammateID: tm.ID,
+		Error:      err,
+		Timestamp:  time.Now(),
+	})
+}
+
+// sendReply delivers a task result on the caller's reply channel without
+// blocking forever on an unbuffered/abandoned channel: it gives up as soon
+// as ctx is cancelled.
+func sendReply(ctx context.Context, replyTo chan<- TaskResult, res TaskResult) {
+	if replyTo == nil {
+		return
+	}
+	select {
+	case replyTo <- res:
+	case <-ctx.Done():
+	}
+}
+
+// runDirectTask marks the teammate working and executes an inbox message
+// that is not backed by a board task.
+func runDirectTask(
+	ctx context.Context,
+	tm *Teammate,
+	team *Team,
+	agent AgentRunner,
+	onEvent func(Event),
+	taskTimeout time.Duration,
+	msg MailMessage,
+) (string, error) {
 	tm.mu.Lock()
 	tm.CurrentTaskID = "" // direct messages carry no board ID (#1688)
 	tm.mu.Unlock()
@@ -161,18 +194,13 @@ func handleMessage(
 		})
 	}
 
-	result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
+	return executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
+}
 
-	// Send result back to caller if they requested it.
-	if msg.ReplyTo != nil {
-		select {
-		case msg.ReplyTo <- TaskResult{Output: result, Error: taskErr}:
-		case <-ctx.Done():
-			// Caller cancelled or teammate is shutting down; don't block forever
-			// on an unbuffered/abandoned ReplyTo channel.
-		}
-	}
-
+// settleAfterDirectTask records the result and transitions the teammate to
+// its post-task state: shutting down when the context was cancelled
+// (e.g. CancelAll), otherwise idle with a teammate_idle event.
+func settleAfterDirectTask(ctx context.Context, tm *Teammate, team *Team, onEvent func(Event), result string, taskErr error) {
 	tm.setLastResult(result)
 
 	debug.Log("swarm", "teammate %s setLastResult len=%d", tm.ID, len(result))
