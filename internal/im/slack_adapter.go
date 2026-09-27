@@ -452,32 +452,25 @@ func (a *slackAdapter) appsConnectionsOpen(ctx context.Context) (string, error) 
 	return wsURL, nil
 }
 
+// handleMessage is a flat orchestrator for inbound Slack message events:
+// own-message guard → field extraction → subtype gate → dedup → attachments
+// → mention strip → inbound assembly → pairing → dispatch. The phases live
+// in slack_inbound.go (r195 mechanical extraction; guard ordering, debug
+// lines and comments are byte-identical to the pre-refactor body).
 func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) {
-	// Skip bot's own messages. #1236: bot-posted events (chat.postMessage,
-	// files.upload) carry bot_id and NO user field, so the userID comparison
-	// below never matched them; file_share events (whitelisted) fed the agent
-	// its own images as fresh user input.
 	userID, _ := event["user"].(string)
 	eventBotID, _ := event["bot_id"].(string)
 	a.mu.RLock()
 	botID := a.botUserID
 	ownBotID := a.botID
 	a.mu.RUnlock()
-	if userID == botID {
-		return
-	}
-	if ownBotID != "" && eventBotID == ownBotID {
+	if slackOwnMessage(userID, eventBotID, botID, ownBotID) {
 		return
 	}
 
-	channel, _ := event["channel"].(string)
-	text, _ := event["text"].(string)
-	ts, _ := event["ts"].(string)
-	threadTS, _ := event["thread_ts"].(string)
-	subtype, _ := event["subtype"].(string)
+	channel, text, ts, threadTS, subtype := slackMessageFields(event)
 
-	// Skip non-text subtypes (except file_share)
-	if subtype != "" && subtype != "file_share" {
+	if slackSubtypeBlocked(subtype) {
 		return
 	}
 
@@ -491,13 +484,7 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 
 	// Process file attachments (images, files, audio)
 	attachments, voiceText := a.processSlackAttachments(ctx, event)
-	if voiceText != "" {
-		if text != "" {
-			text += "\n\n" + voiceText
-		} else {
-			text = voiceText
-		}
-	}
+	text = slackMergeVoiceText(text, voiceText)
 
 	// Strip the bot's own @-mention token. In channels the only way to
 	// trigger the bot is an @-mention, and Slack renders it as a literal
@@ -513,54 +500,17 @@ func (a *slackAdapter) handleMessage(ctx context.Context, event map[string]any) 
 
 	debug.Log("slack", "adapter=%s inbound channel=%s user=%s len=%d attachments=%d", a.name, channel, userID, len(text), len(attachments))
 
-	inbound := InboundMessage{
-		Envelope: Envelope{
-			Adapter:    a.name,
-			Platform:   PlatformSlack,
-			ChannelID:  channel,
-			ThreadID:   threadTS,
-			SenderID:   userID,
-			MessageID:  ts,
-			ReceivedAt: time.Now(),
-		},
-		Text:        text,
-		Attachments: attachments,
-	}
+	inbound := slackBuildInbound(a.name, channel, threadTS, userID, ts, text, attachments, time.Now())
 
 	if a.manager == nil {
 		// nil manager only occurs in unit-test constructions; pairing and
 		// inbound dispatch both require it (#968, mirrors the signal guard).
 		return
 	}
-	pairingResult, err := a.manager.HandlePairingInbound(inbound)
-	if err != nil && err != ErrNoSessionBound {
-		a.publishState(false, "warning", err.Error())
-	}
-	if pairingResult.Consumed {
-		if _, sendErr := a.sendChannelMessage(ctx, channel, threadTS, pairingResult.ReplyText); sendErr != nil {
-			a.publishState(false, "warning", sendErr.Error())
-		}
-		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-			a.publishState(false, "warning", err.Error())
-		}
+	if a.handleMessagePairing(ctx, channel, threadTS, inbound) {
 		return
 	}
-
-	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
-		if err == ErrInboundChannelDenied {
-			debug.Log("slack", "adapter=%s unauthorized inbound channel=%s", a.name, channel)
-			return
-		}
-		// Processing failed — the message would otherwise be silently dropped.
-		// Acknowledge the failure back to the sender so they know to retry (#260).
-		// Reply failure is only logged, never recursed.
-		if _, sendErr := a.sendChannelMessage(ctx, channel, threadTS, "message could not be delivered (session not ready), please retry"); sendErr != nil {
-			debug.Log("slack", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
-		}
-		if err != ErrNoChannelBound {
-			a.publishState(false, "warning", err.Error())
-		}
-	}
+	a.dispatchInbound(ctx, channel, threadTS, inbound)
 }
 
 // stripBotMention removes the bot's own mention token from an inbound text.
