@@ -137,83 +137,98 @@ func formatReplyInstructions(lang string, questions []toolpkg.AskUserQuestion, m
 	if len(questions) == 0 {
 		return ""
 	}
-
 	if !multiQuestion {
-		q := questions[0]
-		switch lang {
-		case "zh-CN":
-			switch q.Kind {
-			case toolpkg.AskUserKindText:
-				return "💬 直接回复文本即可。"
-			case toolpkg.AskUserKindSingle:
-				return "💬 回复编号或选项文本。"
-			case toolpkg.AskUserKindMulti:
-				return "💬 回复多个编号（用逗号或空格分隔）或选项文本。"
-			}
-		default:
-			switch q.Kind {
-			case toolpkg.AskUserKindText:
-				return "💬 Just reply with your text."
-			case toolpkg.AskUserKindSingle:
-				return "💬 Reply with the number or option text."
-			case toolpkg.AskUserKindMulti:
-				return "💬 Reply with multiple numbers (comma or space separated) or option text."
-			}
-		}
-		return ""
+		return singleQuestionReplyHint(lang, questions[0])
 	}
+	return multiQuestionReplyInstructions(lang, questions)
+}
 
-	// Multi-question: provide structured reply guidance
+// singleQuestionReplyHint renders the one-line reply guidance for a
+// single-question prompt.
+func singleQuestionReplyHint(lang string, q toolpkg.AskUserQuestion) string {
 	switch lang {
 	case "zh-CN":
-		result := "💬 **回复格式：**\n"
-		if len(questions) == 2 {
-			result += "每行回答一个问题，或用空行分隔。例如：\n"
-		} else {
-			result += "按顺序逐行回答，每行对应一个问题。例如：\n"
+		switch q.Kind {
+		case toolpkg.AskUserKindText:
+			return "💬 直接回复文本即可。"
+		case toolpkg.AskUserKindSingle:
+			return "💬 回复编号或选项文本。"
+		case toolpkg.AskUserKindMulti:
+			return "💬 回复多个编号（用逗号或空格分隔）或选项文本。"
 		}
-		for i, q := range questions {
-			switch q.Kind {
-			case toolpkg.AskUserKindSingle:
-				result += fmt.Sprintf("> %d\n", 1)
-			case toolpkg.AskUserKindMulti:
-				result += fmt.Sprintf("> %d,%d\n", 1, 2)
-			case toolpkg.AskUserKindText:
-				switch i {
-				case 0:
-					result += "> 我的答案\n"
-				case 1:
-					result += "> 另一个回答\n"
-				default:
-					result += fmt.Sprintf("> 第%d个回答\n", i+1)
-				}
-			}
-		}
-		return strings.TrimSpace(result)
 	default:
-		result := "💬 **Reply format:**\n"
-		if len(questions) == 2 {
-			result += "Answer one question per line, or separate with blank lines. Example:\n"
-		} else {
-			result += "Answer in order, one per line. Example:\n"
+		switch q.Kind {
+		case toolpkg.AskUserKindText:
+			return "💬 Just reply with your text."
+		case toolpkg.AskUserKindSingle:
+			return "💬 Reply with the number or option text."
+		case toolpkg.AskUserKindMulti:
+			return "💬 Reply with multiple numbers (comma or space separated) or option text."
 		}
-		for i, q := range questions {
-			switch q.Kind {
-			case toolpkg.AskUserKindSingle:
-				result += fmt.Sprintf("> %d\n", 1)
-			case toolpkg.AskUserKindMulti:
-				result += fmt.Sprintf("> %d,%d\n", 1, 2)
-			case toolpkg.AskUserKindText:
-				switch i {
-				case 0:
-					result += "> my answer\n"
-				case 1:
-					result += "> another answer\n"
-				default:
-					result += fmt.Sprintf("> answer %d\n", i+1)
-				}
-			}
+	}
+	return ""
+}
+
+// multiQuestionReplyInstructions renders the structured multi-question reply
+// guidance: a header plus one example line per question.
+func multiQuestionReplyInstructions(lang string, questions []toolpkg.AskUserQuestion) string {
+	result := multiQuestionReplyHeader(lang, len(questions))
+	for i, q := range questions {
+		result += multiQuestionExampleLine(lang, i, q)
+	}
+	return strings.TrimSpace(result)
+}
+
+// multiQuestionReplyHeader renders the reply-format header; two-question
+// prompts mention blank-line separation.
+func multiQuestionReplyHeader(lang string, count int) string {
+	switch lang {
+	case "zh-CN":
+		if count == 2 {
+			return "💬 **回复格式：**\n每行回答一个问题，或用空行分隔。例如：\n"
 		}
-		return strings.TrimSpace(result)
+		return "💬 **回复格式：**\n按顺序逐行回答，每行对应一个问题。例如：\n"
+	default:
+		if count == 2 {
+			return "💬 **Reply format:**\nAnswer one question per line, or separate with blank lines. Example:\n"
+		}
+		return "💬 **Reply format:**\nAnswer in order, one per line. Example:\n"
+	}
+}
+
+// multiQuestionExampleLine renders the example reply for one question slot.
+func multiQuestionExampleLine(lang string, i int, q toolpkg.AskUserQuestion) string {
+	switch q.Kind {
+	case toolpkg.AskUserKindSingle:
+		return fmt.Sprintf("> %d\n", 1)
+	case toolpkg.AskUserKindMulti:
+		return fmt.Sprintf("> %d,%d\n", 1, 2)
+	case toolpkg.AskUserKindText:
+		return multiQuestionTextExample(lang, i)
+	}
+	return ""
+}
+
+// multiQuestionTextExample renders the freeform-text example for the i-th slot.
+func multiQuestionTextExample(lang string, i int) string {
+	switch lang {
+	case "zh-CN":
+		switch i {
+		case 0:
+			return "> 我的答案\n"
+		case 1:
+			return "> 另一个回答\n"
+		default:
+			return fmt.Sprintf("> 第%d个回答\n", i+1)
+		}
+	default:
+		switch i {
+		case 0:
+			return "> my answer\n"
+		case 1:
+			return "> another answer\n"
+		default:
+			return fmt.Sprintf("> answer %d\n", i+1)
+		}
 	}
 }

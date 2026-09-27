@@ -182,18 +182,7 @@ func ApplyRemoteQuestionnaireAnswer(req toolpkg.AskUserRequest, parsed []ParsedQ
 	if text == "" {
 		return nil, false, -1, fmt.Errorf("empty answer")
 	}
-	if len(parsed) < len(req.Questions) {
-		next := make([]ParsedQuestionAnswer, len(req.Questions))
-		copy(next, parsed)
-		for i := len(parsed); i < len(req.Questions); i++ {
-			next[i] = ParsedQuestionAnswer{QuestionIndex: i}
-		}
-		parsed = next
-	} else {
-		next := make([]ParsedQuestionAnswer, len(parsed))
-		copy(next, parsed)
-		parsed = next
-	}
+	parsed = ensureParsedAnswers(parsed, len(req.Questions))
 
 	unansweredCount := 0
 	firstUnanswered := FirstUnansweredQuestionIndex(req, parsed)
@@ -204,37 +193,8 @@ func ApplyRemoteQuestionnaireAnswer(req toolpkg.AskUserRequest, parsed []ParsedQ
 	}
 
 	if unansweredCount > 1 {
-		rawLines := SplitNonEmptyLines(text)
-		if len(rawLines) > 1 && len(rawLines) <= unansweredCount {
-			applied := 0
-			qi := firstUnanswered
-			for _, line := range rawLines {
-				for qi < len(req.Questions) {
-					if !BuildAskUserAnswer(req.Questions[qi], parsed[qi].Selected, parsed[qi].Freeform).Answered {
-						break
-					}
-					qi++
-				}
-				if qi >= len(req.Questions) {
-					break
-				}
-				selected, freeform, err := ParseRemoteQuestionnaireAnswer(line, req.Questions[qi])
-				if err != nil {
-					break
-				}
-				if selected != nil {
-					parsed[qi].Selected = selected
-				}
-				if freeform != "" || req.Questions[qi].Kind == toolpkg.AskUserKindText || req.Questions[qi].AllowFreeform {
-					parsed[qi].Freeform = freeform
-				}
-				applied++
-				qi++
-			}
-			if applied > 0 {
-				nextIdx := FirstUnansweredQuestionIndex(req, parsed)
-				return parsed, nextIdx < 0, nextIdx, nil
-			}
+		if ok, nextIdx, err := applyMultiLineBatch(req, parsed, text, firstUnanswered, unansweredCount); ok {
+			return parsed, nextIdx < 0, nextIdx, err
 		}
 	}
 
@@ -246,14 +206,72 @@ func ApplyRemoteQuestionnaireAnswer(req toolpkg.AskUserRequest, parsed []ParsedQ
 	if err != nil {
 		return parsed, false, idx, err
 	}
-	if selected != nil {
-		parsed[idx].Selected = selected
-	}
-	if freeform != "" || req.Questions[idx].Kind == toolpkg.AskUserKindText || req.Questions[idx].AllowFreeform {
-		parsed[idx].Freeform = freeform
-	}
+	mergeQuestionAnswer(&parsed[idx], req.Questions[idx], selected, freeform)
 	nextIdx := FirstUnansweredQuestionIndex(req, parsed)
 	return parsed, nextIdx < 0, nextIdx, nil
+}
+
+// ensureParsedAnswers returns a padded, caller-owned copy of parsed with one
+// slot per question. The input slice is never mutated.
+func ensureParsedAnswers(parsed []ParsedQuestionAnswer, total int) []ParsedQuestionAnswer {
+	if len(parsed) < total {
+		next := make([]ParsedQuestionAnswer, total)
+		copy(next, parsed)
+		for i := len(parsed); i < total; i++ {
+			next[i] = ParsedQuestionAnswer{QuestionIndex: i}
+		}
+		return next
+	}
+	next := make([]ParsedQuestionAnswer, len(parsed))
+	copy(next, parsed)
+	return next
+}
+
+// mergeQuestionAnswer merges one parse result into a pending answer slot.
+// Selection replaces only when non-nil; freeform overwrites only when the
+// reply carries text or the question accepts freeform input.
+func mergeQuestionAnswer(dst *ParsedQuestionAnswer, question toolpkg.AskUserQuestion, selected map[string]struct{}, freeform string) {
+	if selected != nil {
+		dst.Selected = selected
+	}
+	if freeform != "" || question.Kind == toolpkg.AskUserKindText || question.AllowFreeform {
+		dst.Freeform = freeform
+	}
+}
+
+// applyMultiLineBatch distributes a multi-line reply across consecutive
+// unanswered questions. ok=false means the caller must fall back to the
+// single-answer path (condition not met or nothing applied).
+func applyMultiLineBatch(req toolpkg.AskUserRequest, parsed []ParsedQuestionAnswer, text string, firstUnanswered, unansweredCount int) (bool, int, error) {
+	rawLines := SplitNonEmptyLines(text)
+	if !(len(rawLines) > 1 && len(rawLines) <= unansweredCount) {
+		return false, -1, nil
+	}
+	applied := 0
+	qi := firstUnanswered
+	for _, line := range rawLines {
+		for qi < len(req.Questions) {
+			if !BuildAskUserAnswer(req.Questions[qi], parsed[qi].Selected, parsed[qi].Freeform).Answered {
+				break
+			}
+			qi++
+		}
+		if qi >= len(req.Questions) {
+			break
+		}
+		selected, freeform, err := ParseRemoteQuestionnaireAnswer(line, req.Questions[qi])
+		if err != nil {
+			break
+		}
+		mergeQuestionAnswer(&parsed[qi], req.Questions[qi], selected, freeform)
+		applied++
+		qi++
+	}
+	if applied > 0 {
+		idx := FirstUnansweredQuestionIndex(req, parsed)
+		return true, idx, nil
+	}
+	return false, -1, nil
 }
 
 // --- internal helpers ---
