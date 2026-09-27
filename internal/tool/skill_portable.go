@@ -260,21 +260,71 @@ func openSkillSource(source string) (io.Reader, func(), error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), skillHTTPTimeout)
 		defer cancel()
-		if addrs, lerr := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname()); lerr == nil {
-			for _, a := range addrs {
-				if ip := a.IP; ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-					return nil, nil, fmt.Errorf("refusing to import skill from %q: resolves to private address %s", u.Hostname(), ip)
+		// #2793: the pre-check used to fail open (lookup error silently
+		// skipped, falling through to the client's own resolution) - a
+		// SERVFAIL for the attacker's domain bypassed the guard entirely.
+		// Skill import is a rare, operator-driven action: refuse on lookup
+		// failure instead.
+		addrs, lerr := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
+		if lerr != nil {
+			return nil, nil, fmt.Errorf("cannot resolve skill import host %q: %w", u.Hostname(), lerr)
+		}
+		for _, a := range addrs {
+			if ip := a.IP; ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+				return nil, nil, fmt.Errorf("refusing to import skill from %q: resolves to private address %s", u.Hostname(), ip)
+			}
+		}
+		// #2793: the redirect guard below was LITERAL-only (isPrivateHost),
+		// so a public URL bouncing 302 to a domain whose A record points at
+		// 127.0.0.5/10.0.0.5 sailed through, and the pre-check above plus
+		// the client's own lookup formed a classic rebinding TOCTOU. Close
+		// both with the web_fetch.go pattern: a custom DialContext resolves
+		// once and dials the verified IP (fail-closed, covers every hop
+		// including redirects); with a proxy configured the dial-level
+		// check never fires, so the redirect hook additionally re-resolves
+		// the target host and rejects private answers (#2165 pattern).
+		var base *http.Transport
+		if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+			base = dt.Clone()
+		} else {
+			base = &http.Transport{}
+		}
+		proxyInUse := isProxyConfigured(base, u)
+		if !proxyInUse {
+			origDial := base.DialContext
+			if origDial == nil {
+				d := &net.Dialer{}
+				origDial = d.DialContext
+			}
+			base.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, fmt.Errorf("invalid address: %w", err)
 				}
+				dialAddr, err := resolvePublicDialAddress(dialCtx, host, port, net.DefaultResolver.LookupIPAddr)
+				if err != nil {
+					return nil, err
+				}
+				return origDial(dialCtx, network, dialAddr)
 			}
 		}
 		client := &http.Client{
-			Timeout: skillHTTPTimeout,
+			Transport: base,
+			Timeout:   skillHTTPTimeout,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects")
 				}
 				if isPrivateHost(req.URL.Hostname()) {
 					return fmt.Errorf("redirect to private host %q refused", req.URL.Hostname())
+				}
+				// #2793: re-resolve the redirect target - the literal check
+				// above passes domains whose A record points at private IP
+				// space. This is the main line of defense on the proxy path
+				// (where the DialContext guard never fires); without a proxy
+				// it is belt-and-braces on top of the dial-level check.
+				if rerr := rejectIfHostResolvesPrivate(req.Context(), req.URL.Hostname(), net.DefaultResolver.LookupIPAddr); rerr != nil {
+					return fmt.Errorf("redirect to %q refused: %w", req.URL.Hostname(), rerr)
 				}
 				return nil
 			},
