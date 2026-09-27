@@ -229,69 +229,8 @@ func localizedWriting(lang ToolLanguage) string {
 }
 
 func localizedToolLabel(lang ToolLanguage, action string) string {
-	switch lang {
-	case ToolLangZhCN:
-		switch action {
-		case "read":
-			return "读"
-		case "edit":
-			return "编辑"
-		case "create":
-			return "创建"
-		case "write":
-			return "写"
-		case "search":
-			return "搜索"
-		case "find":
-			return "查找"
-		case "list":
-			return "列出"
-		case "run":
-			return "执行"
-		case "fetch":
-			return "抓取"
-		case "todo":
-			return "更新待办"
-		case "task":
-			return "执行任务"
-		case "skill":
-			return "加载技能"
-		case "ask":
-			return "提问"
-		case "inspect":
-			return "检查"
-		}
-	default:
-		switch action {
-		case "read":
-			return "Read"
-		case "edit":
-			return "Edit"
-		case "create":
-			return "Create"
-		case "write":
-			return "Write"
-		case "search":
-			return "Search"
-		case "find":
-			return "Find"
-		case "list":
-			return "List"
-		case "run":
-			return "Run"
-		case "fetch":
-			return "Fetch"
-		case "todo":
-			return "Update todos"
-		case "task":
-			return "Run task"
-		case "skill":
-			return "Load skill"
-		case "ask":
-			return "Ask"
-		case "inspect":
-			return "Inspect"
-		}
+	if v, ok := toolActivityTable(toolLabelZh, toolLabelEn, lang)[action]; ok {
+		return v
 	}
 	return localizedGenericToolName(lang, action)
 }
