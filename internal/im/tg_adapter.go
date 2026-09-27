@@ -229,6 +229,59 @@ func (a *tgAdapter) pollUpdates(ctx context.Context) ([]map[string]any, error) {
 	return updates, nil
 }
 
+// tgMessageMeta carries the message-envelope fields extracted from a
+// Telegram message update for the rest of the inbound pipeline.
+type tgMessageMeta struct {
+	msgID      string
+	chatID     string
+	chatType   string
+	senderID   string
+	senderName string
+}
+
+// tgMessageMeta extracts the envelope fields (message/chat/sender) from a
+// Telegram message payload. It reports false when the chat object is absent,
+// matching the original early return in handleUpdate.
+func tgExtractMessageMeta(msg map[string]any) (tgMessageMeta, bool) {
+	msgID := jsonInt64Str(msg["message_id"])
+	chat, _ := msg["chat"].(map[string]any)
+	if chat == nil {
+		return tgMessageMeta{}, false
+	}
+	chatID := jsonInt64Str(chat["id"])
+	chatType, _ := chat["type"].(string)
+	from, _ := msg["from"].(map[string]any)
+	meta := tgMessageMeta{
+		msgID:    msgID,
+		chatID:   chatID,
+		chatType: chatType,
+	}
+	if from != nil {
+		meta.senderID = jsonInt64Str(from["id"])
+		firstName, _ := from["first_name"].(string)
+		lastName, _ := from["last_name"].(string)
+		meta.senderName = strings.TrimSpace(firstName + " " + lastName)
+		username, _ := from["username"].(string)
+		if meta.senderName == "" && username != "" {
+			meta.senderName = username
+		}
+	}
+	return meta, true
+}
+
+// tgMergeTextExtra appends a secondary text source (caption or transcribed
+// voice) to the primary text with a blank-line separator, mirroring the
+// original inline merge in handleUpdate.
+func tgMergeTextExtra(text, extra string) string {
+	if extra == "" {
+		return text
+	}
+	if text != "" {
+		return text + "\n\n" + extra
+	}
+	return extra
+}
+
 func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 	// Handle callback queries (button clicks) first
 	if cb, ok := update["callback_query"].(map[string]any); ok {
@@ -244,78 +297,78 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 	if a.seenUpdate(updateID) {
 		return
 	}
-	msgID := jsonInt64Str(msg["message_id"])
-	chat, _ := msg["chat"].(map[string]any)
-	if chat == nil {
+	meta, ok := tgExtractMessageMeta(msg)
+	if !ok {
 		return
 	}
-	chatID := jsonInt64Str(chat["id"])
-	chatType, _ := chat["type"].(string)
-	from, _ := msg["from"].(map[string]any)
-	senderID := ""
-	senderName := ""
-	if from != nil {
-		senderID = jsonInt64Str(from["id"])
-		firstName, _ := from["first_name"].(string)
-		lastName, _ := from["last_name"].(string)
-		senderName = strings.TrimSpace(firstName + " " + lastName)
-		username, _ := from["username"].(string)
-		if senderName == "" && username != "" {
-			senderName = username
-		}
-	}
 
+	text, attachments := a.assembleInboundText(ctx, msg, meta)
+	inbound := a.buildTGInbound(meta, text, attachments)
+
+	debug.Log("tg", "adapter=%s inbound chat=%s type=%s sender=%s len=%d", a.name, meta.chatID, meta.chatType, meta.senderID, len(text))
+
+	if a.handleTGPairing(ctx, inbound, meta) {
+		return
+	}
+	a.submitTGInbound(ctx, inbound, meta)
+}
+
+// stripGroupMentions removes the bot mention from text and caption for group
+// chats, reading the bot username under the adapter lock.
+func (a *tgAdapter) stripGroupMentions(msg map[string]any, text, caption string) (string, string) {
+	a.mu.RLock()
+	botUN := a.botUsername
+	a.mu.RUnlock()
+	// Structured mention stripping via entities: plain ReplaceAll
+	// corrupts text when the bot username is a prefix of another token
+	// (botUN="dev" turned "@devops" into "ops" and
+	// "dev@devtools.com" into "devtools.com") (#540).
+	text = tgStripBotMention(text, botUN, msg["entities"])
+	if caption != "" {
+		caption = tgStripBotMention(caption, botUN, msg["caption_entities"])
+	}
+	return text, caption
+}
+
+// assembleInboundText builds the final inbound text: plain text and caption
+// (#1240) are merged, group-chat bot mentions are stripped (#540), and voice
+// transcriptions are appended.
+func (a *tgAdapter) assembleInboundText(ctx context.Context, msg map[string]any, meta tgMessageMeta) (string, []Attachment) {
 	text := strings.TrimSpace(stringFromAny(msg["text"]))
 	// #1240: photo/document media carry accompanying text in caption, not
 	// text — without merging, "看这个报错截图，是 panic 了" lost its
 	// instruction half and the agent only saw the image.
 	caption := strings.TrimSpace(stringFromAny(msg["caption"]))
-	if chatType == "group" || chatType == "supergroup" {
-		a.mu.RLock()
-		botUN := a.botUsername
-		a.mu.RUnlock()
-		// Structured mention stripping via entities: plain ReplaceAll
-		// corrupts text when the bot username is a prefix of another token
-		// (botUN="dev" turned "@devops" into "ops" and
-		// "dev@devtools.com" into "devtools.com") (#540).
-		text = tgStripBotMention(text, botUN, msg["entities"])
-		if caption != "" {
-			caption = tgStripBotMention(caption, botUN, msg["caption_entities"])
-		}
+	if meta.chatType == "group" || meta.chatType == "supergroup" {
+		text, caption = a.stripGroupMentions(msg, text, caption)
 	}
-	if caption != "" {
-		if text != "" {
-			text += "\n\n" + caption
-		} else {
-			text = caption
-		}
-	}
+	text = tgMergeTextExtra(text, caption)
 
 	attachments, voiceText := a.processAttachments(ctx, msg)
-	if voiceText != "" {
-		if text != "" {
-			text += "\n\n" + voiceText
-		} else {
-			text = voiceText
-		}
-	}
+	text = tgMergeTextExtra(text, voiceText)
+	return text, attachments
+}
 
-	inbound := InboundMessage{
+// buildTGInbound constructs the InboundMessage envelope for a Telegram update.
+func (a *tgAdapter) buildTGInbound(meta tgMessageMeta, text string, attachments []Attachment) InboundMessage {
+	return InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformTelegram,
-			ChannelID:  chatID,
-			SenderID:   senderID,
-			SenderName: senderName,
-			MessageID:  msgID,
+			ChannelID:  meta.chatID,
+			SenderID:   meta.senderID,
+			SenderName: meta.senderName,
+			MessageID:  meta.msgID,
 			ReceivedAt: time.Now(),
 		},
 		Text:        text,
 		Attachments: attachments,
 	}
+}
 
-	debug.Log("tg", "adapter=%s inbound chat=%s type=%s sender=%s len=%d", a.name, chatID, chatType, senderID, len(text))
-
+// handleTGPairing routes the message through the pairing flow. It reports
+// whether the pairing flow consumed the message (and already replied).
+func (a *tgAdapter) handleTGPairing(ctx context.Context, inbound InboundMessage, meta tgMessageMeta) bool {
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
 		// #1243: message-level errors do not flip the state to warning - the
@@ -324,26 +377,31 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 		// flowed fine. Log only (same fix family as signal #1238).
 		debug.Log("tg", "adapter=%s pairing error (polling unaffected): %v", a.name, err)
 	}
-	if pairingResult.Consumed {
-		if sendErr := a.sendReplyText(ctx, chatID, msgID, pairingResult.ReplyText); sendErr != nil {
-			debug.Log("tg", "adapter=%s pairing reply failed: %v", a.name, sendErr)
-		}
-		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-			debug.Log("tg", "adapter=%s notify previous binding failed: %v", a.name, err)
-		}
-		return
+	if !pairingResult.Consumed {
+		return false
 	}
+	if sendErr := a.sendReplyText(ctx, meta.chatID, meta.msgID, pairingResult.ReplyText); sendErr != nil {
+		debug.Log("tg", "adapter=%s pairing reply failed: %v", a.name, sendErr)
+	}
+	if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+		debug.Log("tg", "adapter=%s notify previous binding failed: %v", a.name, err)
+	}
+	return true
+}
 
+// submitTGInbound delivers the message to the manager and reports failures
+// back to the sender.
+func (a *tgAdapter) submitTGInbound(ctx context.Context, inbound InboundMessage, meta tgMessageMeta) {
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
-			debug.Log("tg", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
-			_ = a.sendUnauthorized(ctx, chatID, msgID)
+			debug.Log("tg", "adapter=%s unauthorized inbound chat=%s", a.name, meta.chatID)
+			_ = a.sendUnauthorized(ctx, meta.chatID, meta.msgID)
 			return
 		}
 		// Processing failed — the message would otherwise be silently dropped.
 		// Acknowledge the failure back to the sender so they know to retry (#260).
 		// Reply failure is only logged, never recursed.
-		if sendErr := a.sendReplyText(ctx, chatID, msgID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
+		if sendErr := a.sendReplyText(ctx, meta.chatID, meta.msgID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("tg", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
 		if err != ErrNoChannelBound {
