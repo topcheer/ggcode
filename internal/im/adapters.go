@@ -130,6 +130,84 @@ func StartNamedAdapter(parent context.Context, cfg config.IMConfig, name string,
 	return startConfiguredAdapter(parent, cfg, name, adapterCfg, mgr)
 }
 
+// adapterBuilder constructs an adapter for the already-resolved start inputs.
+// A constructor error aborts only this adapter's start; sibling adapters in
+// the same config are unaffected.
+type adapterBuilder func() (startableSink, error)
+
+// canonicalPlatform normalizes a configured platform string to the canonical
+// registry ID (see #736): surrounding whitespace is trimmed, case is
+// preserved so legacy non-canonical spellings (e.g. "Telegram") stay
+// unrecognized and take the skip path.
+func canonicalPlatform(raw string) Platform {
+	return Platform(strings.TrimSpace(raw))
+}
+
+// adapterBuilders maps every canonical platform to its constructor, adapted
+// to the uniform adapterBuilder signature. It is pure: building the map has
+// no side effects (constructors run only when the selected builder is
+// invoked), so dispatch order and per-platform argument wiring stay
+// equivalent to the previous inline switch. PlatformSynology deliberately has
+// no entry: it has no constructor today and keeps taking the unknown-platform
+// skip path.
+func adapterBuilders(name string, cfg config.IMConfig, adapterCfg config.IMAdapterConfig, mgr *Manager) map[Platform]adapterBuilder {
+	return map[Platform]adapterBuilder{
+		PlatformQQ: func() (startableSink, error) {
+			return newQQAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformTelegram: func() (startableSink, error) {
+			return newTGAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformPrivateClaw: func() (startableSink, error) {
+			// The PC session store is resolved lazily, right before the
+			// constructor runs, mirroring the previous inline ordering.
+			return newPCAdapter(name, cfg, adapterCfg, mgr, newDefaultPCSessionStore())
+		},
+		PlatformDiscord: func() (startableSink, error) {
+			return newDiscordAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformFeishu: func() (startableSink, error) {
+			return newFeishuAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformDingTalk: func() (startableSink, error) {
+			return newDingtalkAdapter(name, mgr, adapterCfg)
+		},
+		PlatformSlack: func() (startableSink, error) {
+			return newSlackAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformDummy: func() (startableSink, error) {
+			return newDummyAdapter(name, cfg, adapterCfg, mgr), nil
+		},
+		PlatformWechat: func() (startableSink, error) {
+			return newWechatAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformWeCom: func() (startableSink, error) {
+			return newWeComAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformMattermost: func() (startableSink, error) {
+			return newMattermostAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformMatrix: func() (startableSink, error) {
+			return newMatrixAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformSignal: func() (startableSink, error) {
+			return newSignalAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformIRC: func() (startableSink, error) {
+			return newIRCAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformNostr: func() (startableSink, error) {
+			return newNostrAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformTwitch: func() (startableSink, error) {
+			return newTwitchAdapter(name, cfg, adapterCfg, mgr)
+		},
+		PlatformWhatsApp: func() (startableSink, error) {
+			return newWhatsAppAdapter(name, cfg, adapterCfg, mgr)
+		},
+	}
+}
+
 func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name string, adapterCfg config.IMAdapterConfig, mgr *Manager) error {
 	if !adapterCfg.Enabled {
 		return nil
@@ -138,129 +216,8 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 	adapterCtx, adapterCancel := context.WithCancel(ctx)
 	mgr.RegisterAdapterCancel(name, adapterCancel)
 
-	start := func(adapter startableSink) {
-		mgr.RegisterSink(adapter)
-		adapter.Start(adapterCtx)
-	}
-
-	switch Platform(strings.TrimSpace(adapterCfg.Platform)) {
-	case PlatformQQ:
-		adapter, err := newQQAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformTelegram:
-		adapter, err := newTGAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformPrivateClaw:
-		sessionStore := newDefaultPCSessionStore()
-		adapter, err := newPCAdapter(name, cfg, adapterCfg, mgr, sessionStore)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformDiscord:
-		adapter, err := newDiscordAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformFeishu:
-		adapter, err := newFeishuAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformDingTalk:
-		adapter, err := newDingtalkAdapter(name, mgr, adapterCfg)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformSlack:
-		adapter, err := newSlackAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformDummy:
-		adapter := newDummyAdapter(name, cfg, adapterCfg, mgr)
-		start(adapter)
-	case PlatformWechat:
-		adapter, err := newWechatAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformWeCom:
-		adapter, err := newWeComAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformMattermost:
-		adapter, err := newMattermostAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformMatrix:
-		adapter, err := newMatrixAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformSignal:
-		adapter, err := newSignalAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformIRC:
-		adapter, err := newIRCAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformNostr:
-		adapter, err := newNostrAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformTwitch:
-		adapter, err := newTwitchAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	case PlatformWhatsApp:
-		adapter, err := newWhatsAppAdapter(name, cfg, adapterCfg, mgr)
-		if err != nil {
-			adapterCancel()
-			return err
-		}
-		start(adapter)
-	default:
+	build, known := adapterBuilders(name, cfg, adapterCfg, mgr)[canonicalPlatform(adapterCfg.Platform)]
+	if !known {
 		// #736: an unrecognized platform previously fell through silently -
 		// no error, no log, the adapter just never started (a diagnostic
 		// black hole for legacy non-canonical configs like platform:
@@ -268,7 +225,16 @@ func startConfiguredAdapter(ctx context.Context, cfg config.IMConfig, name strin
 		// return an error: one bad adapter must not block the others.
 		adapterCancel()
 		debug.Log("im", "adapter %q: unknown platform %q (expected canonical registry ID e.g. \"telegram\"), skipping start", name, adapterCfg.Platform)
+		return nil
 	}
+
+	adapter, err := build()
+	if err != nil {
+		adapterCancel()
+		return err
+	}
+	mgr.RegisterSink(adapter)
+	adapter.Start(adapterCtx)
 	return nil
 }
 
