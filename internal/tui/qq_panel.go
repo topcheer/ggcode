@@ -358,6 +358,12 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return qqBindResultMsg{err: errors.New(m.t("panel.qq.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
+		// secret WITH spaces was silently truncated to its first token,
+		// then persisted as a guaranteed-to-fail credential. Reject extras.
+		if len(fields) > 3 {
+			return qqBindResultMsg{err: errors.New("extra fields after appsecret (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		appID := strings.TrimSpace(fields[1])
 		appSecret := strings.TrimSpace(fields[2])
@@ -378,11 +384,34 @@ func (m *Model) createQQAdapter(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext secret - without
+						// compensation a wrong secret stays on disk forever and
+						// blocks the name on retry ("already exists"); the panel
+						// has no delete key. The rollback REMOVE is itself a map
+						// write, so it must route through configMutationMsg too
+						// (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return qqBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return qqBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureQQRuntime(false); err != nil {
-						return qqBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startQQAdapterIfNeeded(name); err != nil {
-						return qqBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return qqBindResultMsg{message: m.t("panel.qq.message.added_bot", name)}
 				}
