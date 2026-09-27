@@ -160,60 +160,88 @@ func (b *DaemonBridge) handleInteractiveCallback(cb InteractiveCallback) {
 	expectedMsgID := pending.msgIDs[cb.Adapter]
 	lastEmitted := b.interactiveMsgIDs[cb.Adapter]
 	b.mu.Unlock()
-	if expectedMsgID != "" {
-		if cb.MessageID != expectedMsgID {
-			debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q expected=%q",
-				cb.Adapter, cb.MessageID, expectedMsgID)
-			return
-		}
-	} else if lastEmitted != "" {
-		debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q - current question is text-only, no button was emitted for it",
-			cb.Adapter, cb.MessageID)
+	if detail := interactiveStaleDetail(expectedMsgID, lastEmitted, cb.MessageID); detail != "" {
+		debug.Log("im", "dropping stale interactive callback: adapter=%s messageID=%q %s",
+			cb.Adapter, cb.MessageID, detail)
 		return
 	}
 
-	// Determine the choice value from the callback.
 	// For multi-select, each click toggles a selection; __done__ submits.
-	choice := ""
-	if len(cb.Values) > 0 {
-		choice = cb.Values[0]
-	}
-
+	choice := firstCallbackValue(cb.Values)
 	if pending.multiSelect && choice != "__done__" {
-		// Toggle the selection
-		b.mu.Lock()
-		if b.multiSelectChosen == nil {
-			b.multiSelectChosen = make(map[string]bool)
-		}
-		if b.multiSelectChosen[choice] {
-			delete(b.multiSelectChosen, choice)
-		} else {
-			b.multiSelectChosen[choice] = true
-		}
-		chosen := b.multiSelectChosen
-		b.mu.Unlock()
-		debug.Log("im", "multi-select toggle: choice=%s selected=%v", choice, chosen)
+		b.toggleMultiSelectChoice(choice)
 		return
 	}
 
 	// Submit: single-select sends immediately; multi-select sends accumulated on Done
-	var values []string
+	values := cb.Values
 	if pending.multiSelect {
 		// __done__ was clicked — collect all accumulated selections
-		b.mu.Lock()
-		for v := range b.multiSelectChosen {
-			values = append(values, v)
-		}
-		b.multiSelectChosen = nil
-		b.mu.Unlock()
-	} else {
-		values = cb.Values
+		values = b.collectMultiSelectValues()
 	}
-
 	if len(values) == 0 {
 		return
 	}
+	b.deliverPendingAskResponse(pending, values)
+}
 
+// interactiveStaleDetail reports why an interactive callback targets a stale
+// card (#2134), or "" when the callback matches the current question. The
+// returned string is the detail suffix of the drop log line.
+func interactiveStaleDetail(expectedMsgID, lastEmitted, cbMessageID string) string {
+	if expectedMsgID != "" {
+		if cbMessageID != expectedMsgID {
+			return fmt.Sprintf("expected=%q", expectedMsgID)
+		}
+		return ""
+	}
+	if lastEmitted != "" {
+		return "- current question is text-only, no button was emitted for it"
+	}
+	return ""
+}
+
+// firstCallbackValue picks the primary value of a button callback.
+func firstCallbackValue(values []string) string {
+	if len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// toggleMultiSelectChoice flips one selection in the accumulated multi-select
+// set (each click toggles; __done__ submits).
+func (b *DaemonBridge) toggleMultiSelectChoice(choice string) {
+	b.mu.Lock()
+	if b.multiSelectChosen == nil {
+		b.multiSelectChosen = make(map[string]bool)
+	}
+	if b.multiSelectChosen[choice] {
+		delete(b.multiSelectChosen, choice)
+	} else {
+		b.multiSelectChosen[choice] = true
+	}
+	chosen := b.multiSelectChosen
+	b.mu.Unlock()
+	debug.Log("im", "multi-select toggle: choice=%s selected=%v", choice, chosen)
+}
+
+// collectMultiSelectValues drains the accumulated multi-select selections
+// (__done__ was clicked) and resets the set.
+func (b *DaemonBridge) collectMultiSelectValues() []string {
+	b.mu.Lock()
+	var values []string
+	for v := range b.multiSelectChosen {
+		values = append(values, v)
+	}
+	b.multiSelectChosen = nil
+	b.mu.Unlock()
+	return values
+}
+
+// deliverPendingAskResponse resolves the pending ask_user question with the
+// selected values and clears the registration.
+func (b *DaemonBridge) deliverPendingAskResponse(pending *pendingAskUser, values []string) {
 	text := strings.Join(values, ",")
 	resp := BuildAskUserResponseFromText(pending.request, text)
 	select {
@@ -290,12 +318,8 @@ func (b *DaemonBridge) SetVisionTurnHook(selectFn func() string, switchFn func(m
 // caller should degrade to text-only instead of sending image blocks to a
 // text-only endpoint (which 400s and feeds the auto-retry loop).
 func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(), bool) {
-	hasImage := false
-	for _, c := range content {
-		if c.Type == "image" {
-			hasImage = true
-			break
-		}
+	if !contentHasImage(content) {
+		return func() {}, false
 	}
 	b.mu.Lock()
 	sel := b.visionTurnSelect
@@ -306,9 +330,6 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(),
 		userModel = b.sess.Model
 	}
 	b.mu.Unlock()
-	if !hasImage {
-		return func() {}, false
-	}
 	if sel == nil || sw == nil {
 		debug.Log("daemon-bridge", "vision turn: hooks not installed - degrading to text-only")
 		return func() {}, false
@@ -316,12 +337,8 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(),
 	if ag == nil || ag.SupportsVision() {
 		return func() {}, false
 	}
-	vm := sel()
+	vm := visionModelForTurn(sel, userModel)
 	if vm == "" {
-		debug.Log("daemon-bridge", "vision turn: no comparable vision model on endpoint (user model: %s) - degrading to text-only", userModel)
-		return func() {}, false
-	}
-	if vm == userModel {
 		return func() {}, false
 	}
 	if err := sw(vm); err != nil {
@@ -329,6 +346,39 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(),
 		return func() {}, false
 	}
 	debug.Log("daemon-bridge", "vision turn: switched to %s for this turn (user model: %s)", vm, userModel)
+	return visionTurnRestore(userModel, sw), true
+}
+
+// contentHasImage reports whether any content block carries an image.
+func contentHasImage(content []provider.ContentBlock) bool {
+	for _, c := range content {
+		if c.Type == "image" {
+			return true
+		}
+	}
+	return false
+}
+
+// visionModelForTurn resolves the comparable vision model to switch to, or
+// "" when none is worth switching to (no vision model on the endpoint, or it
+// equals the user model so switching would be a no-op round-trip).
+func visionModelForTurn(sel func() string, userModel string) string {
+	vm := sel()
+	if vm == "" {
+		debug.Log("daemon-bridge", "vision turn: no comparable vision model on endpoint (user model: %s) - degrading to text-only", userModel)
+		return ""
+	}
+	if vm == userModel {
+		return ""
+	}
+	return vm
+}
+
+// visionTurnRestore builds the once-guarded restore closure that switches
+// back to the user's model after a vision turn. An empty user model means
+// there is nothing to restore. (#1584-A: callers MUST defer the returned
+// func when switched=true.)
+func visionTurnRestore(userModel string, sw func(string) error) func() {
 	var once bool
 	return func() {
 		if once {
@@ -341,7 +391,7 @@ func (b *DaemonBridge) beginVisionTurn(content []provider.ContentBlock) (func(),
 		if err := sw(userModel); err != nil {
 			debug.Log("daemon-bridge", "vision turn restore to %s failed: %v", userModel, err)
 		}
-	}, true
+	}
 }
 
 // stripImageBlocks removes image blocks, keeping text and attachment hints,
@@ -862,19 +912,13 @@ func (b *DaemonBridge) submitToAgentRun(ctx context.Context, text string, conten
 // mechanism — either from a text reply or a button callback.
 func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserRequest) (toolpkg.AskUserResponse, error) {
 	answers := make([]toolpkg.AskUserAnswer, len(req.Questions))
-	answeredCount := 0
 
 	for i, q := range req.Questions {
-		// Format the question text (for display + fallback)
 		singleReq := toolpkg.AskUserRequest{
 			Title:     req.Title,
 			Questions: []toolpkg.AskUserQuestion{q},
 		}
-		argsJSON, _ := jsonMarshalArgs(singleReq)
-		text := b.emitter.FormatAskUserPrompt(argsJSON)
-		if text == "" {
-			text = strings.TrimSpace(q.Title)
-		}
+		text := b.askUserPromptText(singleReq, q)
 
 		// Try interactive buttons for choice questions; fallback to text for
 		// adapters that don't support InteractiveSender (e.g. QQ, DingDing).
@@ -886,78 +930,22 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 		// again; the duplicate multiSelectChosen reset also wiped selections
 		// accumulated inside that window.
 		// Send buttons AFTER registering pendingAsk so callbacks can't race.
-		var msgIDs map[string]string
-		isMulti := q.Kind == toolpkg.AskUserKindMulti
-		pending := &pendingAskUser{
-			request:     singleReq, // use single-question request for correct answer mapping
-			response:    make(chan toolpkg.AskUserResponse, 1),
-			multiSelect: isMulti,
-		}
-		b.mu.Lock()
-		b.pendingAsk = pending
-		if isMulti {
-			b.multiSelectChosen = nil // reset accumulated selections
-		}
-		b.mu.Unlock()
+		pending := b.registerPendingAsk(singleReq, q.Kind == toolpkg.AskUserKindMulti)
+		b.emitAskUserQuestion(q, text, pending)
 
-		if len(q.Choices) > 0 {
-			// Send interactive buttons — callbacks can be safely received now.
-			msgIDs = b.emitter.EmitAskUserInteractive(q.Title, q, text)
-			if len(msgIDs) > 0 {
-				b.mu.Lock()
-				b.interactiveMsgIDs = msgIDs
-				// #2134: ownership - record the IDs ON the question they belong
-				// to, so correlation survives registration races and text-only
-				// successors can reject stale cards.
-				pending.msgIDs = msgIDs
-				b.mu.Unlock()
-			}
-		} else {
-			// Text-only question — send plain text to all adapters
-			if text != "" {
-				b.emitter.EmitAskUser(text)
-			}
-		}
-
-		select {
-		case resp := <-pending.response:
-			if len(resp.Answers) > 0 && resp.Answers[0].Answered {
-				answers[i] = resp.Answers[0]
-				answeredCount++
-			} else {
-				answers[i] = toolpkg.AskUserAnswer{
-					ID:               q.ID,
-					Title:            q.Title,
-					Kind:             q.Kind,
-					CompletionStatus: toolpkg.AskUserCompletionUnanswered,
-					AnswerMode:       toolpkg.AskUserAnswerModeNone,
-					Answered:         false,
-				}
-			}
-		case <-ctx.Done():
-			b.mu.Lock()
-			cleared := false
-			if b.pendingAsk == pending { // #655: compare-then-clear, not blind wipe
-				b.pendingAsk = nil
-				cleared = true
-			}
-			b.mu.Unlock()
-			// #1667: the #1656 expiry notice healed only the approval
-			// half. Same structural hole here: no question-correlation on
-			// text replies, so a late "2" typed at the STALE on-screen
-			// question gets parsed against whatever question registered
-			// NEXT - possibly selecting the wrong option. Symmetric
-			// visible stop sign on the stale screen.
-			if cleared {
-				b.mu.Lock()
-				b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
-				b.mu.Unlock()
-				_ = b.emitter.EmitText("⏱ The question above has expired. Any reply to it now will be treated as a NEW message, not an answer.")
-			}
+		answer, ok := b.awaitAskUserAnswer(ctx, pending, q)
+		if !ok {
 			return toolpkg.AskUserResponse{}, ctx.Err()
 		}
+		answers[i] = answer
 	}
 
+	var answeredCount int
+	for _, a := range answers {
+		if a.Answered {
+			answeredCount++
+		}
+	}
 	return toolpkg.AskUserResponse{
 		Status:        toolpkg.AskUserStatusSubmitted,
 		Title:         req.Title,
@@ -967,17 +955,125 @@ func (b *DaemonBridge) HandleAskUser(ctx context.Context, req toolpkg.AskUserReq
 	}, nil
 }
 
+// askUserPromptText formats the display text for one question, falling back
+// to the trimmed question title when the emitter renders nothing.
+func (b *DaemonBridge) askUserPromptText(singleReq toolpkg.AskUserRequest, q toolpkg.AskUserQuestion) string {
+	argsJSON, _ := jsonMarshalArgs(singleReq)
+	text := b.emitter.FormatAskUserPrompt(argsJSON)
+	if text == "" {
+		text = strings.TrimSpace(q.Title)
+	}
+	return text
+}
+
+// registerPendingAsk installs the pendingAsk registration for one question
+// (#655: exactly once, before the prompt/buttons go out) and resets the
+// accumulated multi-select selections.
+func (b *DaemonBridge) registerPendingAsk(singleReq toolpkg.AskUserRequest, multiSelect bool) *pendingAskUser {
+	pending := &pendingAskUser{
+		request:     singleReq, // use single-question request for correct answer mapping
+		response:    make(chan toolpkg.AskUserResponse, 1),
+		multiSelect: multiSelect,
+	}
+	b.mu.Lock()
+	b.pendingAsk = pending
+	if multiSelect {
+		b.multiSelectChosen = nil // reset accumulated selections
+	}
+	b.mu.Unlock()
+	return pending
+}
+
+// emitAskUserQuestion delivers one question: interactive buttons when choices
+// exist (callbacks can be safely received now — registration happened first),
+// plain text otherwise.
+func (b *DaemonBridge) emitAskUserQuestion(q toolpkg.AskUserQuestion, text string, pending *pendingAskUser) {
+	if len(q.Choices) == 0 {
+		// Text-only question — send plain text to all adapters
+		if text != "" {
+			b.emitter.EmitAskUser(text)
+		}
+		return
+	}
+	msgIDs := b.emitter.EmitAskUserInteractive(q.Title, q, text)
+	if len(msgIDs) == 0 {
+		return
+	}
+	b.mu.Lock()
+	b.interactiveMsgIDs = msgIDs
+	// #2134: ownership - record the IDs ON the question they belong
+	// to, so correlation survives registration races and text-only
+	// successors can reject stale cards.
+	pending.msgIDs = msgIDs
+	b.mu.Unlock()
+}
+
+// awaitAskUserAnswer blocks for the user's reply to one question. It returns
+// (answer, true) once a reply arrives (answered or not), or (zero, false)
+// when ctx expires — expiry runs the #655 compare-then-clear plus the #1667
+// visible stop sign on the stale screen.
+func (b *DaemonBridge) awaitAskUserAnswer(ctx context.Context, pending *pendingAskUser, q toolpkg.AskUserQuestion) (toolpkg.AskUserAnswer, bool) {
+	select {
+	case resp := <-pending.response:
+		if len(resp.Answers) > 0 && resp.Answers[0].Answered {
+			return resp.Answers[0], true
+		}
+		return newUnansweredAskUserAnswer(q), true
+	case <-ctx.Done():
+		// #1667: the #1656 expiry notice heals only the approval
+		// half. Same structural hole here: no question-correlation on
+		// text replies, so a late "2" typed at the STALE on-screen
+		// question gets parsed against whatever question registered
+		// NEXT - possibly selecting the wrong option. Symmetric
+		// visible stop sign on the stale screen.
+		if b.clearPendingAskIfCurrent(pending) {
+			b.suppressStaleReplies()
+			_ = b.emitter.EmitText("⏱ The question above has expired. Any reply to it now will be treated as a NEW message, not an answer.")
+		}
+		return toolpkg.AskUserAnswer{}, false
+	}
+}
+
+// clearPendingAskIfCurrent clears the pendingAsk registration only when it is
+// still the one being answered (#655: compare-then-clear, not a blind wipe).
+// Reports whether THIS registration was cleared.
+func (b *DaemonBridge) clearPendingAskIfCurrent(pending *pendingAskUser) bool {
+	b.mu.Lock()
+	cleared := b.pendingAsk == pending
+	if cleared {
+		b.pendingAsk = nil
+	}
+	b.mu.Unlock()
+	return cleared
+}
+
+// suppressStaleReplies opens the stale-reply suppression window (#1656/#1667):
+// replies typed at an expired on-screen prompt must not resolve the NEXT
+// registration.
+func (b *DaemonBridge) suppressStaleReplies() {
+	b.mu.Lock()
+	b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
+	b.mu.Unlock()
+}
+
+// newUnansweredAskUserAnswer builds the placeholder answer recorded when a
+// reply arrives without an answered selection.
+func newUnansweredAskUserAnswer(q toolpkg.AskUserQuestion) toolpkg.AskUserAnswer {
+	return toolpkg.AskUserAnswer{
+		ID:               q.ID,
+		Title:            q.Title,
+		Kind:             q.Kind,
+		CompletionStatus: toolpkg.AskUserCompletionUnanswered,
+		AnswerMode:       toolpkg.AskUserAnswerModeNone,
+		Answered:         false,
+	}
+}
+
 // handleApproval is the ApprovalHandler for daemon mode — pushes tool permission
 // requests to IM and waits for a y/a/n reply.
 func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, input string) permission.Decision {
 	lang := b.language
-	var prompt string
-	if lang == "zh-CN" || lang == "zh" {
-		prompt = FormatApprovalRequest(ToolLangZhCN, toolName, input)
-	} else {
-		prompt = FormatApprovalRequest(ToolLangEn, toolName, input)
-	}
-	if err := b.emitter.EmitText(prompt); err != nil {
+	if err := b.emitter.EmitText(approvalPromptText(lang, toolName, input)); err != nil {
 		debug.Log("daemon", "approval: failed to emit prompt for tool=%s: %v", toolName, err)
 	}
 
@@ -998,47 +1094,65 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 			persistAlwaysAllowGrant(b.agent, toolName, input)
 		}
 		// Send result confirmation back to IM
-		var resultMsg string
-		decisionStr := "deny"
-		if decision == permission.Allow {
-			if reply.Always {
-				decisionStr = "always"
-			} else {
-				decisionStr = "allow"
-			}
-		}
-		if lang == "zh-CN" || lang == "zh" {
-			resultMsg = FormatApprovalResult(ToolLangZhCN, toolName, decisionStr)
-		} else {
-			resultMsg = FormatApprovalResult(ToolLangEn, toolName, decisionStr)
-		}
-		if resultMsg != "" {
+		if resultMsg := approvalResultText(lang, toolName, decision, reply.Always); resultMsg != "" {
 			_ = b.emitter.EmitText(resultMsg)
 		}
 		return decision
 	case <-ctx.Done():
 		debug.Log("daemon", "approval: context cancelled for tool=%s", toolName)
-		b.mu.Lock()
-		cleared := false
-		if b.pendingApproval == ch { // #655: compare-then-clear, not blind wipe
-			b.pendingApproval = nil
-			cleared = true
-		}
-		b.mu.Unlock()
 		// #1656: with no question-correlation on TEXT replies (buttons
 		// have interactiveMsgIDs; text has nothing), a late "y" typed at
 		// the STALE on-screen prompt auto-approved whatever question was
 		// registered NEXT. Closing the ambiguity window at the source:
 		// when THIS question's registration dies, tell the user the
 		// prompt is void - a visible stop sign on the stale screen.
-		if cleared {
-			b.mu.Lock()
-			b.staleReplySuppressUntil = time.Now().Add(staleReplySuppressWindow)
-			b.mu.Unlock()
+		if b.clearPendingApprovalIfCurrent(ch) {
+			b.suppressStaleReplies()
 			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
 		}
 		return permission.Deny
 	}
+}
+
+// approvalPromptText renders the permission prompt in the bridge language.
+func approvalPromptText(lang, toolName, input string) string {
+	if lang == "zh-CN" || lang == "zh" {
+		return FormatApprovalRequest(ToolLangZhCN, toolName, input)
+	}
+	return FormatApprovalRequest(ToolLangEn, toolName, input)
+}
+
+// approvalDecisionLabel names the decision for the confirmation message.
+func approvalDecisionLabel(decision permission.Decision, always bool) string {
+	if decision != permission.Allow {
+		return "deny"
+	}
+	if always {
+		return "always"
+	}
+	return "allow"
+}
+
+// approvalResultText renders the post-decision confirmation for IM.
+func approvalResultText(lang, toolName string, decision permission.Decision, always bool) string {
+	label := approvalDecisionLabel(decision, always)
+	if lang == "zh-CN" || lang == "zh" {
+		return FormatApprovalResult(ToolLangZhCN, toolName, label)
+	}
+	return FormatApprovalResult(ToolLangEn, toolName, label)
+}
+
+// clearPendingApprovalIfCurrent clears the pendingApproval channel only when
+// it is still the one awaiting a reply (#655: compare-then-clear, not a blind
+// wipe). Reports whether THIS registration was cleared.
+func (b *DaemonBridge) clearPendingApprovalIfCurrent(ch chan approvalReply) bool {
+	b.mu.Lock()
+	cleared := b.pendingApproval == ch
+	if cleared {
+		b.pendingApproval = nil
+	}
+	b.mu.Unlock()
+	return cleared
 }
 
 // persistAlwaysAllowGrant establishes a persistent always-allow grant on the
@@ -1421,8 +1535,23 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 	}
 
 	var sb strings.Builder
+	sb.WriteString(toolSummaryHeader(lang, total, successes, failures))
+	for _, item := range aggregateToolUsageStats(tools) {
+		sb.WriteString(formatToolUsageLine(item))
+	}
+	return sb.String()
+}
 
-	// Header line
+// toolUsageStat aggregates one tool display name's call and failure counts.
+type toolUsageStat struct {
+	name     string
+	count    int
+	failures int
+}
+
+// toolSummaryHeader renders the summary header line.
+func toolSummaryHeader(lang string, total, successes, failures int) string {
+	var sb strings.Builder
 	if ToolLanguage(lang) == ToolLangZhCN {
 		sb.WriteString(fmt.Sprintf("⚙ 执行了 %d 个工具调用", total))
 		if failures > 0 {
@@ -1435,57 +1564,55 @@ func formatToolSummary(lang string, tools []ToolResultInfo, total, successes, fa
 		}
 	}
 	sb.WriteString("\n")
+	return sb.String()
+}
 
-	// Aggregate tool names with counts and failure tracking
-	type toolStat struct {
-		count    int
-		failures int
-	}
-	toolStats := make(map[string]*toolStat)
+// aggregateToolUsageStats groups tool results by display name and sorts them
+// by call count descending.
+func aggregateToolUsageStats(tools []ToolResultInfo) []toolUsageStat {
+	stats := make(map[string]*toolUsageStat)
 	for _, t := range tools {
 		name := formatIMToolDisplayName(t.ToolName)
-		stat := toolStats[name]
+		stat := stats[name]
 		if stat == nil {
-			stat = &toolStat{}
-			toolStats[name] = stat
+			stat = &toolUsageStat{name: name}
+			stats[name] = stat
 		}
 		stat.count++
 		if t.IsError {
 			stat.failures++
 		}
 	}
-
-	// Sort by count descending
-	type kv struct {
-		name     string
-		count    int
-		failures int
-	}
-	var sorted []kv
-	for k, v := range toolStats {
-		sorted = append(sorted, kv{k, v.count, v.failures})
+	sorted := make([]toolUsageStat, 0, len(stats))
+	for _, v := range stats {
+		sorted = append(sorted, *v)
 	}
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].count > sorted[j].count
 	})
+	return sorted
+}
 
-	for _, item := range sorted {
-		var symbol string
-		if item.failures > 0 && item.failures == item.count {
-			symbol = "✗" // all calls failed
-		} else if item.failures > 0 {
-			symbol = "⚠" // partial failure
-		} else {
-			symbol = "✓" // all succeeded
-		}
-		if item.count == 1 {
-			sb.WriteString(fmt.Sprintf("  %s %s\n", symbol, item.name))
-		} else {
-			sb.WriteString(fmt.Sprintf("  %s %s ×%d\n", symbol, item.name, item.count))
-		}
+// toolSummarySymbol picks the status glyph: all calls failed, partial
+// failure, or all succeeded.
+func toolSummarySymbol(failures, count int) string {
+	switch {
+	case failures > 0 && failures == count:
+		return "✗" // all calls failed
+	case failures > 0:
+		return "⚠" // partial failure
+	default:
+		return "✓" // all succeeded
 	}
+}
 
-	return sb.String()
+// formatToolUsageLine renders one aggregated tool line.
+func formatToolUsageLine(item toolUsageStat) string {
+	symbol := toolSummarySymbol(item.failures, item.count)
+	if item.count == 1 {
+		return fmt.Sprintf("  %s %s\n", symbol, item.name)
+	}
+	return fmt.Sprintf("  %s %s ×%d\n", symbol, item.name, item.count)
 }
 
 // formatIMToolDisplayName returns a short display name for a tool.
