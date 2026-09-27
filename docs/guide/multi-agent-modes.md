@@ -68,6 +68,15 @@ The `spawn_agent` tool accepts an optional `model` parameter:
 
 The model name is displayed in the TUI as `[model-name]` in the sub-agent label, providing visibility into which model each sub-agent is using.
 
+### Findings Handoff (shared working memory)
+
+Sub-agents spawned **after** an earlier sub-agent completed automatically receive a bounded digest of that agent's result in their system prompt (`=== FINDINGS FROM EARLIER SUB-AGENTS IN THIS SESSION ===`, see `internal/subagent/findings.go`):
+
+- **Why**: wave-2+ agents would otherwise re-do exploration their predecessors already finished, and once the parent's context is compacted or old tool results are cleared, earlier sub-agent results are unrecoverable — the task string is the only channel left, carrying only what the parent still remembers.
+- **Bounds**: newest-first ordering, max 6 entries, ~800 runes per result digest, ~4800 runes total. Failed/cancelled agents are excluded.
+- **Cost profile**: the digest is injected into the sub-agent's *system* prompt, so the parent's context never grows and the payload is strictly bounded.
+- **Applies to**: everything routed through `internal/subagent.Run` — `spawn_agent`, `use_namedagent` templates, and skill-spawned agents. Swarm teammates coordinate via the task board instead.
+
 ### Lifecycle
 
 1. `spawn_agent` tool → `Manager.Spawn()` → `safego.Go(subagent.Run)`

@@ -128,6 +128,12 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 			systemPrompt += fmt.Sprintf("\n\nWorking directory: %s", cfg.WorkingDir)
 		}
 	}
+	// Findings handoff: surface bounded results from earlier completed
+	// sub-agents (blackboard-style shared working memory, see findings.go).
+	// Injected into the system prompt so it never grows the parent context.
+	if cfg.Manager != nil {
+		systemPrompt += cfg.Manager.completedFindings(cfg.SubAgentID)
+	}
 	if cfg.AgentFactory == nil {
 		cfg.Manager.Complete(cfg.SubAgentID, "", fmt.Errorf("AgentFactory not configured"))
 		return
