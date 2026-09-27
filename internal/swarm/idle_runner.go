@@ -30,7 +30,53 @@ func runTeammateLoop(
 	taskTimeout time.Duration,
 ) {
 	// Panic recovery: ensure we always mark the teammate as done.
-	defer func() {
+	defer teammatePanicGuard(tm, team, mgr, onEvent)()
+
+	tm.mu.Lock()
+	tm.StartedAt = time.Now()
+	tm.mu.Unlock()
+
+	// Poll ticker: how often to check the task board for pending tasks.
+	pollInterval := mgr.cfg.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	poller := time.NewTicker(pollInterval)
+	defer poller.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case msg, ok := <-tm.Inbox:
+			if !ok {
+				// inbox closed
+				return
+			}
+			if handleInboxMsg(ctx, tm, team, agent, mgr, onEvent, taskTimeout, msg) {
+				return
+			}
+
+		case <-poller.C:
+			if ctx.Err() != nil {
+				return
+			}
+			// Only poll when idle — skip if already working on something.
+			if tm.getStatus() != TeammateIdle {
+				continue
+			}
+			tryClaimPendingTask(ctx, tm, team, agent, mgr, onEvent, taskTimeout)
+		}
+	}
+}
+
+// teammatePanicGuard returns the deferred shutdown closure for the teammate
+// loop: on panic it logs, rolls the in-flight board task back (#1688), marks
+// the teammate shutting down, and emits teammate_shutdown; in all cases it
+// signals this goroutine has exited by closing tm.done exactly once.
+func teammatePanicGuard(tm *Teammate, team *Team, mgr *Manager, onEvent func(Event)) func() {
+	return func() {
 		if r := recover(); r != nil {
 			debug.Log("swarm", "teammate panic recovered teammate=%s error=%v stack=%s", tm.ID, r, string(runtimedebug.Stack()))
 			// #1688 case 1: roll the in-flight task BACK on the board - the
@@ -59,59 +105,39 @@ func runTeammateLoop(
 			}
 		}
 		tm.mu.Unlock()
-	}()
-
-	tm.mu.Lock()
-	tm.StartedAt = time.Now()
-	tm.mu.Unlock()
-
-	// Poll ticker: how often to check the task board for pending tasks.
-	pollInterval := mgr.cfg.PollInterval
-	if pollInterval <= 0 {
-		pollInterval = 5 * time.Second
 	}
-	poller := time.NewTicker(pollInterval)
-	defer poller.Stop()
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-
-		case msg, ok := <-tm.Inbox:
-			if !ok {
-				// inbox closed
-				return
-			}
-			switch msg.Type {
-			case "shutdown":
-				return
-			case "task_available":
-				if ctx.Err() != nil {
-					return
-				}
-				// Hint: try claiming immediately instead of waiting for poller.
-				if tm.getStatus() == TeammateIdle {
-					tryClaimPendingTask(ctx, tm, team, agent, mgr, onEvent, taskTimeout)
-				}
-			case "task", "message", "":
-				if ctx.Err() != nil {
-					return
-				}
-				handleMessage(ctx, tm, team, agent, mgr, onEvent, taskTimeout, msg)
-			}
-
-		case <-poller.C:
-			if ctx.Err() != nil {
-				return
-			}
-			// Only poll when idle — skip if already working on something.
-			if tm.getStatus() != TeammateIdle {
-				continue
-			}
+// handleInboxMsg processes one inbox message. It returns true when the
+// teammate loop should exit (shutdown message or cancelled context).
+func handleInboxMsg(
+	ctx context.Context,
+	tm *Teammate,
+	team *Team,
+	agent AgentRunner,
+	mgr *Manager,
+	onEvent func(Event),
+	taskTimeout time.Duration,
+	msg MailMessage,
+) bool {
+	switch msg.Type {
+	case "shutdown":
+		return true
+	case "task_available":
+		if ctx.Err() != nil {
+			return true
+		}
+		// Hint: try claiming immediately instead of waiting for poller.
+		if tm.getStatus() == TeammateIdle {
 			tryClaimPendingTask(ctx, tm, team, agent, mgr, onEvent, taskTimeout)
 		}
+	case "task", "message", "":
+		if ctx.Err() != nil {
+			return true
+		}
+		handleMessage(ctx, tm, team, agent, mgr, onEvent, taskTimeout, msg)
 	}
+	return false
 }
 
 // handleMessage processes an inbox message (task or general message).
@@ -221,17 +247,14 @@ func tryClaimPendingTask(
 		return
 	}
 
-	// Find a pending task.
 	pending := task.StatusPending
-	inProgress := task.StatusInProgress
-
 	for _, tk := range tmMgr.List() {
 		if tk.Status != pending {
 			continue
 		}
 		// Skip tasks assigned to a specific teammate that isn't us.
 		// Those are delivered directly to the assignee's inbox by swarm_task_create.
-		if assignee, ok := tk.Metadata["assignee"]; ok && assignee != "" && assignee != tm.ID {
+		if !claimableBy(tm, tk) {
 			continue
 		}
 		// Skip tasks with unmet dependencies — all BlockedBy tasks must be
@@ -242,12 +265,7 @@ func tryClaimPendingTask(
 		}
 
 		// Atomically claim: only succeeds if status is still pending.
-		owner := tm.ID
-		claimed, err := tmMgr.Update(tk.ID, task.UpdateOptions{
-			ExpectedStatus: &pending,
-			Status:         &inProgress,
-			Owner:          &owner,
-		})
+		claimed, err := claimTask(tmMgr, tk.ID, tm.ID)
 		if err != nil {
 			// Another teammate beat us — continue to next task.
 			continue
@@ -256,126 +274,204 @@ func tryClaimPendingTask(
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 		}
 
-		// Build prompt from the claimed task.
-		prompt := buildTaskPrompt(claimed)
-
-		tm.mu.Lock()
-		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
-		tm.mu.Unlock()
-		tm.setStatus(TeammateWorking)
-		tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
-
-		if onEvent != nil {
-			onEvent(Event{
-				Type:         "teammate_working",
-				TeamID:       team.ID,
-				TeammateID:   tm.ID,
-				TeammateName: tm.Name,
-				Timestamp:    time.Now(),
-			})
-		}
-
-		// Execute the task via agent.
-		msg := MailMessage{Content: prompt, Type: "task"}
-		result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
-
-		tm.setLastResult(result)
-
-		if ctx.Err() != nil {
-			pending := task.StatusPending
-			owner := ""
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
-			if onEvent != nil {
-				onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
-			}
-			tm.setStatus(TeammateShuttingDown)
-			return
-		}
-		// Mark task status based on whether agent execution succeeded.
-		if taskErr != nil {
-			// Check if the error is permanent (quota exhaustion or auth failure).
-			// If so, don't revert to pending — another teammate would hit the
-			// same permanent failure, creating a wasteful retry loop.
-			fc := provider.ClassifyLLMError(taskErr)
-			if fc == provider.FailureQuota || fc == provider.FailureAuth {
-				// Mark task as completed with error metadata so it's not re-claimed.
-				// Using "completed" instead of adding a new "failed" status keeps the
-				// task board consistent — the metadata records the permanent failure.
-				completed := task.StatusCompleted
-				errMsg := util.Truncate(taskErr.Error(), 200)
-				tmMgr.Update(claimed.ID, task.UpdateOptions{
-					Status:   &completed,
-					Metadata: map[string]string{"permanent_error": fc.String(), "error": errMsg},
-				})
-				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
-					tm.ID, claimed.ID, fc, taskErr)
-			} else {
-				// Transient error — revert to pending so another teammate can
-				// retry, BUT capped (#1295): without a limit, a poison task
-				// (one that deterministically hits the same 5xx/EOF/DNS/timeout)
-				// was re-claimed every tick forever, burning a full LLM
-				// retry+fallback chain per attempt and starving later tasks.
-				attempts := 0
-				if v, ok := claimed.Metadata["retry_attempts"]; ok {
-					if n, err := strconv.Atoi(v); err == nil {
-						attempts = n
-					}
-				}
-				attempts++
-				if attempts >= maxTransientTaskRetries {
-					completed := task.StatusCompleted
-					errMsg := util.Truncate(taskErr.Error(), 200)
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
-						Status: &completed,
-						Metadata: map[string]string{
-							"permanent_error": "max_retries_exceeded",
-							"error":           errMsg,
-							"retry_attempts":  strconv.Itoa(attempts),
-						},
-					})
-					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
-						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
-				} else {
-					pending := task.StatusPending
-					owner := ""
-					tmMgr.Update(claimed.ID, task.UpdateOptions{
-						Status:   &pending,
-						Owner:    &owner,
-						Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
-					})
-				}
-			}
-		} else {
-			completed := task.StatusCompleted
-			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
-		}
-		if onEvent != nil {
-			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
-		}
-		tm.setStatus(TeammateIdle)
-		tm.setCurrentTask("")
-		// #2579: clear CurrentTaskID once the task is terminal (success,
-		// park, or error) — a stale ID lets a later panic rollback flip an
-		// already-completed task back to pending for re-execution.
-		tm.mu.Lock()
-		tm.CurrentTaskID = ""
-		tm.mu.Unlock()
-
-		if onEvent != nil {
-			onEvent(Event{
-				Type:         "teammate_idle",
-				TeamID:       team.ID,
-				TeammateID:   tm.ID,
-				TeammateName: tm.Name,
-				Result:       util.Truncate(result, 500),
-				Error:        taskErr, // #1497: same as the inbox-task idle event above
-				Timestamp:    time.Now(),
-			})
-		}
+		executeClaimedTask(ctx, tm, team, agent, onEvent, taskTimeout, tmMgr, claimed)
 
 		// Claimed and completed one task — break to let the next poll pick up more.
 		return
 	}
+}
+
+// claimableBy reports whether a pending task may be claimed by teammate tm:
+// tasks assigned to another teammate are delivered directly to that
+// assignee's inbox by swarm_task_create and must not be claimed off the board.
+func claimableBy(tm *Teammate, tk task.Task) bool {
+	assignee, ok := tk.Metadata["assignee"]
+	return !ok || assignee == "" || assignee == tm.ID
+}
+
+// claimTask atomically claims a pending board task for owner via an
+// ExpectedStatus CAS (pending → in_progress). A non-nil error means the task
+// was concurrently modified (usually: another teammate claimed it first).
+func claimTask(tmMgr *task.Manager, taskID, owner string) (task.Task, error) {
+	pending := task.StatusPending
+	inProgress := task.StatusInProgress
+	return tmMgr.Update(taskID, task.UpdateOptions{
+		ExpectedStatus: &pending,
+		Status:         &inProgress,
+		Owner:          &owner,
+	})
+}
+
+// executeClaimedTask runs a claimed board task through the teammate working
+// lifecycle. Terminal transitions (including context cancellation) are
+// handled after the agent run below.
+func executeClaimedTask(
+	ctx context.Context,
+	tm *Teammate,
+	team *Team,
+	agent AgentRunner,
+	onEvent func(Event),
+	taskTimeout time.Duration,
+	tmMgr *task.Manager,
+	claimed task.Task,
+) {
+	// Build prompt from the claimed task.
+	prompt := buildTaskPrompt(claimed)
+
+	tm.mu.Lock()
+	tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
+	tm.mu.Unlock()
+	tm.setStatus(TeammateWorking)
+	tm.setCurrentTask(util.Truncate(claimed.Subject, 100))
+
+	if onEvent != nil {
+		onEvent(Event{
+			Type:         "teammate_working",
+			TeamID:       team.ID,
+			TeammateID:   tm.ID,
+			TeammateName: tm.Name,
+			Timestamp:    time.Now(),
+		})
+	}
+
+	// Execute the task via agent.
+	msg := MailMessage{Content: prompt, Type: "task"}
+	result, taskErr := executeTask(ctx, agent, msg, tm, onEvent, team, taskTimeout)
+
+	tm.setLastResult(result)
+
+	// If context was cancelled (e.g. CancelAll), don't mark a terminal task
+	// state — roll the claim back to pending and shut down instead.
+	if ctx.Err() != nil {
+		pending := task.StatusPending
+		owner := ""
+		tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &pending, Owner: &owner})
+		if onEvent != nil {
+			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
+		}
+		tm.setStatus(TeammateShuttingDown)
+		return
+	}
+
+	finishClaimedTask(tmMgr, tm, team, onEvent, claimed, result, taskErr)
+}
+
+// finishClaimedTask drives a finished (non-cancelled) board task to its
+// terminal status: completed on success, completed(permanent_error) on
+// permanent LLM failure, and the #1295 capped retry-or-park on transient
+// failure; then returns the teammate to idle and emits the idle event.
+func finishClaimedTask(
+	tmMgr *task.Manager,
+	tm *Teammate,
+	team *Team,
+	onEvent func(Event),
+	claimed task.Task,
+	result string,
+	taskErr error,
+) {
+	if taskErr != nil {
+		// Check if the error is permanent (quota exhaustion or auth failure).
+		// If so, don't revert to pending — another teammate would hit the
+		// same permanent failure, creating a wasteful retry loop.
+		fc := provider.ClassifyLLMError(taskErr)
+		if fc == provider.FailureQuota || fc == provider.FailureAuth {
+			// Mark task as completed with error metadata so it's not re-claimed.
+			// Using "completed" instead of adding a new "failed" status keeps the
+			// task board consistent — the metadata records the permanent failure.
+			errMsg := util.Truncate(taskErr.Error(), 200)
+			_ = parkTaskCompleted(tmMgr, claimed.ID, nil, map[string]string{
+				"permanent_error": fc.String(),
+				"error":           errMsg,
+			})
+			debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
+				tm.ID, claimed.ID, fc, taskErr)
+		} else {
+			// Transient error — revert to pending so another teammate can
+			// retry, BUT capped (#1295): without a limit, a poison task
+			// (one that deterministically hits the same 5xx/EOF/DNS/timeout)
+			// was re-claimed every tick forever, burning a full LLM
+			// retry+fallback chain per attempt and starving later tasks.
+			parkTransientFailure(tmMgr, tm, claimed, taskErr)
+		}
+	} else {
+		_ = parkTaskCompleted(tmMgr, claimed.ID, nil, nil)
+	}
+	if onEvent != nil {
+		onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
+	}
+	tm.setStatus(TeammateIdle)
+	tm.setCurrentTask("")
+	// #2579: clear CurrentTaskID once the task is terminal (success,
+	// park, or error) — a stale ID lets a later panic rollback flip an
+	// already-completed task back to pending for re-execution.
+	tm.mu.Lock()
+	tm.CurrentTaskID = ""
+	tm.mu.Unlock()
+
+	if onEvent != nil {
+		onEvent(Event{
+			Type:         "teammate_idle",
+			TeamID:       team.ID,
+			TeammateID:   tm.ID,
+			TeammateName: tm.Name,
+			Result:       util.Truncate(result, 500),
+			Error:        taskErr, // #1497: same as the inbox-task idle event above
+			Timestamp:    time.Now(),
+		})
+	}
+}
+
+// parkTransientFailure applies the #1295 transient-retry policy to a task
+// that failed with a non-permanent error: under the cap it goes back to
+// pending (with retry_attempts bumped) for another teammate to retry; at the
+// cap it is parked as completed(max_retries) so a poison task cannot loop.
+func parkTransientFailure(tmMgr *task.Manager, tm *Teammate, claimed task.Task, taskErr error) {
+	attempts := nextRetryAttempts(claimed.Metadata)
+	if attempts >= maxTransientTaskRetries {
+		errMsg := util.Truncate(taskErr.Error(), 200)
+		_ = parkTaskCompleted(tmMgr, claimed.ID, nil, map[string]string{
+			"permanent_error": "max_retries_exceeded",
+			"error":           errMsg,
+			"retry_attempts":  strconv.Itoa(attempts),
+		})
+		debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
+			tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
+		return
+	}
+	pending := task.StatusPending
+	owner := ""
+	tmMgr.Update(claimed.ID, task.UpdateOptions{
+		Status:   &pending,
+		Owner:    &owner,
+		Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)},
+	})
+}
+
+// nextRetryAttempts reads the retry_attempts metadata key and returns the
+// incremented attempt count (#1295). Shared by the taskErr path and the
+// panic-rollback path so the cap semantics cannot drift apart.
+func nextRetryAttempts(meta map[string]string) int {
+	attempts := 0
+	if v, ok := meta["retry_attempts"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			attempts = n
+		}
+	}
+	return attempts + 1
+}
+
+// parkTaskCompleted marks a board task completed with metadata, optionally
+// guarded by an ExpectedStatus CAS (#2579). It is the shared terminal shape
+// for every "completed" park: success, permanent LLM failure, the #1295
+// transient-retry cap, and the #2118 panic-rollback cap.
+func parkTaskCompleted(board *task.Manager, taskID string, expected *task.TaskStatus, meta map[string]string) error {
+	completed := task.StatusCompleted
+	opts := task.UpdateOptions{Status: &completed, Metadata: meta}
+	if expected != nil {
+		opts.ExpectedStatus = expected
+	}
+	_, err := board.Update(taskID, opts)
+	return err
 }
 
 // maxTransientTaskRetries caps how many times a transiently-failing task
@@ -434,23 +530,12 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	// A completed (or otherwise terminal) task fails the guard and the
 	// rollback is a no-op, mirroring the claim's guard semantics.
 	inProgress := task.StatusInProgress
-	attempts := 0
-	if v, ok := current.Metadata["retry_attempts"]; ok {
-		if n, err := strconv.Atoi(v); err == nil {
-			attempts = n
-		}
-	}
-	attempts++
+	attempts := nextRetryAttempts(current.Metadata)
 	if attempts >= maxTransientTaskRetries {
-		completed := task.StatusCompleted
-		if _, uerr := board.Update(taskID, task.UpdateOptions{
-			ExpectedStatus: &inProgress,
-			Status:         &completed,
-			Metadata: map[string]string{
-				"permanent_error": "max_retries_exceeded",
-				"error":           "teammate panicked repeatedly",
-				"retry_attempts":  strconv.Itoa(attempts),
-			},
+		if uerr := parkTaskCompleted(board, taskID, &inProgress, map[string]string{
+			"permanent_error": "max_retries_exceeded",
+			"error":           "teammate panicked repeatedly",
+			"retry_attempts":  strconv.Itoa(attempts),
 		}); uerr != nil {
 			debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
 		}
@@ -462,6 +547,140 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	if _, uerr := board.Update(taskID, task.UpdateOptions{ExpectedStatus: &inProgress, Status: &pending, Owner: &owner, Metadata: map[string]string{"retry_attempts": strconv.Itoa(attempts)}}); uerr != nil {
 		debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
 	}
+}
+
+// streamCollector accumulates a teammate's streamed run: the full text
+// output, turn-level text buffering (flushed on tool boundaries), and the
+// last tool name used to attribute tool results. Each provider event is
+// mirrored to the teammate event log and the team event bus.
+type streamCollector struct {
+	tm           *Teammate
+	team         *Team
+	onEvent      func(Event)
+	output       strings.Builder
+	textBuf      strings.Builder // accumulate text chunks into turn-level events
+	lastToolName string
+}
+
+// flushText emits buffered text chunks as a single turn-level text event.
+func (sc *streamCollector) flushText() {
+	if sc.textBuf.Len() == 0 {
+		return
+	}
+	text := sc.textBuf.String()
+	sc.textBuf.Reset()
+	sc.tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: text})
+}
+
+// handle dispatches one provider stream event to its typed handler.
+func (sc *streamCollector) handle(event provider.StreamEvent) {
+	switch event.Type {
+	case provider.StreamEventText:
+		sc.handleText(event)
+	case provider.StreamEventReasoning:
+		sc.handleReasoning(event)
+	case provider.StreamEventToolCallDone:
+		sc.handleToolCallDone(event)
+	case provider.StreamEventToolResult:
+		sc.handleToolResult(event)
+	case provider.StreamEventError:
+		sc.handleStreamError(event)
+	}
+}
+
+func (sc *streamCollector) handleText(event provider.StreamEvent) {
+	sc.output.WriteString(event.Text)
+	sc.textBuf.WriteString(event.Text)
+	if sc.onEvent != nil {
+		sc.onEvent(Event{
+			Type:         "teammate_text",
+			TeamID:       sc.team.ID,
+			TeammateID:   sc.tm.ID,
+			TeammateName: sc.tm.Name,
+			Result:       event.Text,
+			Timestamp:    time.Now(),
+		})
+	}
+}
+
+func (sc *streamCollector) handleReasoning(event provider.StreamEvent) {
+	if strings.TrimSpace(event.Text) == "" {
+		return
+	}
+	sc.tm.appendEvent(TeammateEvent{Type: TeammateEventReasoning, Text: event.Text})
+	if sc.onEvent != nil {
+		sc.onEvent(Event{
+			Type:         "teammate_reasoning",
+			TeamID:       sc.team.ID,
+			TeammateID:   sc.tm.ID,
+			TeammateName: sc.tm.Name,
+			Result:       event.Text,
+			Timestamp:    time.Now(),
+		})
+	}
+}
+
+func (sc *streamCollector) handleToolCallDone(event provider.StreamEvent) {
+	sc.flushText()
+	debug.Log("swarm", "teammate %s tool call done", sc.tm.ID)
+	sc.lastToolName = event.Tool.Name
+	sc.tm.appendEvent(TeammateEvent{
+		Type:     TeammateEventToolCall,
+		ToolName: event.Tool.Name,
+		ToolID:   event.Tool.ID,
+		ToolArgs: string(event.Tool.Arguments),
+	})
+	if sc.onEvent != nil {
+		sc.onEvent(Event{
+			Type:         "teammate_tool_call",
+			TeamID:       sc.team.ID,
+			TeammateID:   sc.tm.ID,
+			TeammateName: sc.tm.Name,
+			CurrentTool:  event.Tool.Name,
+			ToolID:       event.Tool.ID,
+			ToolArgs:     string(event.Tool.Arguments),
+			Timestamp:    time.Now(),
+		})
+	}
+}
+
+func (sc *streamCollector) handleToolResult(event provider.StreamEvent) {
+	sc.flushText()
+	sc.tm.appendEvent(TeammateEvent{
+		Type:     TeammateEventToolResult,
+		ToolName: sc.lastToolName,
+		ToolID:   event.Tool.ID,
+		Result:   event.Result,
+		IsError:  event.IsError,
+	})
+	if sc.onEvent != nil {
+		// #1012: the result text belongs in Result - it was written to
+		// ToolArgs (which the Event doc says is for teammate_tool_call
+		// arguments), leaving desktop consumers reading an empty Result.
+		// The two tunnel consumers read ToolArgs "wrongly" in the same
+		// way, cancelling out; they are fixed together here.
+		sc.onEvent(Event{
+			Type:         "teammate_tool_result",
+			TeamID:       sc.team.ID,
+			TeammateID:   sc.tm.ID,
+			TeammateName: sc.tm.Name,
+			CurrentTool:  sc.lastToolName,
+			ToolID:       event.Tool.ID,
+			Result:       event.Result,
+			IsError:      event.IsError,
+			Timestamp:    time.Now(),
+		})
+	}
+}
+
+func (sc *streamCollector) handleStreamError(event provider.StreamEvent) {
+	sc.flushText()
+	sc.output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
+	sc.tm.appendEvent(TeammateEvent{
+		Type:    TeammateEventError,
+		Text:    fmt.Sprintf("%v", event.Error),
+		IsError: true,
+	})
 }
 
 // executeTask runs the agent on a task message and collects the output.
@@ -489,121 +708,30 @@ func executeTask(
 		prompt = fmt.Sprintf("Summary: %s\n%s", msg.Summary, msg.Content)
 	}
 
-	var output strings.Builder
-	var textBuf strings.Builder // accumulate text chunks into turn-level events
-	lastToolName := ""
-	flushText := func() {
-		if textBuf.Len() == 0 {
-			return
-		}
-		text := textBuf.String()
-		textBuf.Reset()
-		tm.appendEvent(TeammateEvent{Type: TeammateEventText, Text: text})
-	}
-	err := agent.RunStream(subCtx, prompt, func(event provider.StreamEvent) {
-		switch event.Type {
-		case provider.StreamEventText:
-			output.WriteString(event.Text)
-			textBuf.WriteString(event.Text)
-			if onEvent != nil {
-				onEvent(Event{
-					Type:         "teammate_text",
-					TeamID:       team.ID,
-					TeammateID:   tm.ID,
-					TeammateName: tm.Name,
-					Result:       event.Text,
-					Timestamp:    time.Now(),
-				})
-			}
-		case provider.StreamEventReasoning:
-			if strings.TrimSpace(event.Text) == "" {
-				return
-			}
-			tm.appendEvent(TeammateEvent{Type: TeammateEventReasoning, Text: event.Text})
-			if onEvent != nil {
-				onEvent(Event{
-					Type:         "teammate_reasoning",
-					TeamID:       team.ID,
-					TeammateID:   tm.ID,
-					TeammateName: tm.Name,
-					Result:       event.Text,
-					Timestamp:    time.Now(),
-				})
-			}
-		case provider.StreamEventToolCallDone:
-			flushText()
-			debug.Log("swarm", "teammate %s tool call done", tm.ID)
-			lastToolName = event.Tool.Name
-			tm.appendEvent(TeammateEvent{
-				Type:     TeammateEventToolCall,
-				ToolName: event.Tool.Name,
-				ToolID:   event.Tool.ID,
-				ToolArgs: string(event.Tool.Arguments),
-			})
-			if onEvent != nil {
-				onEvent(Event{
-					Type:         "teammate_tool_call",
-					TeamID:       team.ID,
-					TeammateID:   tm.ID,
-					TeammateName: tm.Name,
-					CurrentTool:  event.Tool.Name,
-					ToolID:       event.Tool.ID,
-					ToolArgs:     string(event.Tool.Arguments),
-					Timestamp:    time.Now(),
-				})
-			}
-		case provider.StreamEventToolResult:
-			flushText()
-			tm.appendEvent(TeammateEvent{
-				Type:     TeammateEventToolResult,
-				ToolName: lastToolName,
-				ToolID:   event.Tool.ID,
-				Result:   event.Result,
-				IsError:  event.IsError,
-			})
-			if onEvent != nil {
-				// #1012: the result text belongs in Result - it was written to
-				// ToolArgs (which the Event doc says is for teammate_tool_call
-				// arguments), leaving desktop consumers reading an empty Result.
-				// The two tunnel consumers read ToolArgs "wrongly" in the same
-				// way, cancelling out; they are fixed together here.
-				onEvent(Event{
-					Type:         "teammate_tool_result",
-					TeamID:       team.ID,
-					TeammateID:   tm.ID,
-					TeammateName: tm.Name,
-					CurrentTool:  lastToolName,
-					ToolID:       event.Tool.ID,
-					Result:       event.Result,
-					IsError:      event.IsError,
-					Timestamp:    time.Now(),
-				})
-			}
-		case provider.StreamEventError:
-			flushText()
-			output.WriteString(fmt.Sprintf("\n[error: %v]", event.Error))
-			tm.appendEvent(TeammateEvent{
-				Type:    TeammateEventError,
-				Text:    fmt.Sprintf("%v", event.Error),
-				IsError: true,
-			})
-		}
-	})
-	flushText()
+	sc := &streamCollector{tm: tm, team: team, onEvent: onEvent}
+	err := agent.RunStream(subCtx, prompt, sc.handle)
+	sc.flushText()
 
 	if err != nil {
-		debug.Log("swarm", "teammate %s RunStream error: %v output_len=%d", tm.ID, err, output.Len())
-		if subCtx.Err() == context.DeadlineExceeded {
-			output.WriteString("\n[timeout: task exceeded time limit]")
-		} else if subCtx.Err() == context.Canceled {
-			output.WriteString("\n[cancelled]")
-		} else {
-			output.WriteString(fmt.Sprintf("\n[error: %v]", err))
-		}
+		debug.Log("swarm", "teammate %s RunStream error: %v output_len=%d", tm.ID, err, sc.output.Len())
+		appendRunFailureNote(&sc.output, err, subCtx)
 	}
 
-	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
-	return output.String(), err
+	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, sc.output.Len())
+	return sc.output.String(), err
+}
+
+// appendRunFailureNote appends the human-readable failure note matching why
+// RunStream returned: deadline, cancellation, or any other error.
+func appendRunFailureNote(output *strings.Builder, err error, subCtx context.Context) {
+	switch {
+	case subCtx.Err() == context.DeadlineExceeded:
+		output.WriteString("\n[timeout: task exceeded time limit]")
+	case subCtx.Err() == context.Canceled:
+		output.WriteString("\n[cancelled]")
+	default:
+		output.WriteString(fmt.Sprintf("\n[error: %v]", err))
+	}
 }
 
 // allBlockersComplete returns true if every task listed in tk.BlockedBy has
