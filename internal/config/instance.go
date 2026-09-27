@@ -58,7 +58,9 @@ func InstanceConfigPath(workspace string) string {
 }
 
 // LoadInstanceConfig loads the instance-level config for a workspace.
-// Returns nil if no instance config file exists.
+// Returns nil if no instance config file exists. A file that cannot be
+// read or fails to parse also yields nil: parse failures are debug-logged
+// and the instance layer is skipped, so the global config applies unchanged.
 func LoadInstanceConfig(workspace string) *Config {
 	path := InstanceConfigPath(workspace)
 	if path == "" {
