@@ -189,54 +189,97 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 	}
 	debug.Log("slack", "adapter=%s socket mode URL obtained", a.name)
 
+	conn, err := slackDialSocketMode(ctx, wsURL)
+	if err != nil {
+		return err
+	}
+	defer a.teardownSocketConnection(conn)
+	slackArmReadDeadline(conn)
+	a.markSocketConnected(conn)
+	// WebSocket ping ticker — prevents AWS API Gateway idle timeout (10min)
+	// and detects dead connections within slackWSReadTimeout.
+	pingDone := a.startPingLoop(ctx, conn)
+	defer close(pingDone)
+
+	return a.readEnvelopeLoop(ctx, conn)
+}
+
+// slackDialSocketMode dials the Socket Mode websocket URL obtained from
+// apps.connections.open. Errors are wrapped so the run loop's state message
+// keeps the historical "dial socket mode" prefix.
+func slackDialSocketMode(ctx context.Context, wsURL string) (*websocket.Conn, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
-		return fmt.Errorf("dial socket mode: %w", err)
+		return nil, fmt.Errorf("dial socket mode: %w", err)
 	}
-	defer func() {
-		a.mu.Lock()
-		a.connected = false
-		a.ws = nil
-		a.mu.Unlock()
-		conn.Close()
-	}()
+	return conn, nil
+}
 
+// teardownSocketConnection is the connectAndServe exit path: the adapter
+// returns to disconnected state before the raw conn is closed (this ordering
+// is preserved from the original inline defer).
+func (a *slackAdapter) teardownSocketConnection(conn *websocket.Conn) {
+	a.mu.Lock()
+	a.connected = false
+	a.ws = nil
+	a.mu.Unlock()
+	conn.Close()
+}
+
+// slackArmReadDeadline arms the initial read deadline and the pong handler;
+// every pong refreshes the deadline so a live connection survives the
+// slackWSReadTimeout window while a dead one is detected within it.
+func slackArmReadDeadline(conn *websocket.Conn) {
 	conn.SetReadDeadline(time.Now().Add(slackWSReadTimeout))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(slackWSReadTimeout))
 		return nil
 	})
+}
 
+// markSocketConnected registers the socket on the adapter and publishes the
+// connected state.
+func (a *slackAdapter) markSocketConnected(conn *websocket.Conn) {
 	a.mu.Lock()
 	a.ws = conn
 	a.connected = true
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
 	debug.Log("slack", "adapter=%s connected", a.name)
+}
 
-	// WebSocket ping ticker — prevents AWS API Gateway idle timeout (10min)
-	// and detects dead connections within slackWSReadTimeout.
+// startPingLoop launches the ping goroutine and returns the channel that
+// stops it (closed by the caller when the connection is done).
+func (a *slackAdapter) startPingLoop(ctx context.Context, conn *websocket.Conn) chan struct{} {
 	pingDone := make(chan struct{})
-	safego.Go("im.slack.ping", func() {
-		ticker := time.NewTicker(slackWSPingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
-					debug.Log("slack", "adapter=%s ping write error: %v", a.name, err)
-					return
-				}
-			case <-pingDone:
-				return
-			case <-ctx.Done():
+	safego.Go("im.slack.ping", func() { a.runPingLoop(ctx, conn, pingDone) })
+	return pingDone
+}
+
+// runPingLoop sends a websocket ping every slackWSPingInterval and exits on
+// write error, pingDone close, or ctx cancellation.
+func (a *slackAdapter) runPingLoop(ctx context.Context, conn *websocket.Conn, pingDone <-chan struct{}) {
+	ticker := time.NewTicker(slackWSPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				debug.Log("slack", "adapter=%s ping write error: %v", a.name, err)
 				return
 			}
+		case <-pingDone:
+			return
+		case <-ctx.Done():
+			return
 		}
-	})
-	defer close(pingDone)
+	}
+}
 
-	// Message read loop
+// readEnvelopeLoop reads Socket Mode frames until ctx is cancelled (nil
+// return) or the connection breaks. Malformed JSON frames are skipped; every
+// envelope is acked and dispatched.
+func (a *slackAdapter) readEnvelopeLoop(ctx context.Context, conn *websocket.Conn) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -253,39 +296,65 @@ func (a *slackAdapter) connectAndServe(ctx context.Context) error {
 			continue
 		}
 
-		msgType, _ := envelope["type"].(string)
-		envelopeID, _ := envelope["envelope_id"].(string)
+		slackWriteEnvelopeAck(conn, envelope)
+		a.dispatchEnvelope(ctx, envelope)
+	}
+}
 
-		// Acknowledge the envelope (#968): Slack requires an ack for EVERY
-		// envelope carrying an envelope_id, otherwise it redelivers. The old
-		// condition also required accepts_response_payload==true, but that
-		// flag only governs whether the ack response MAY carry a payload -
-		// for message/app_mention envelopes it is commonly false, so most
-		// events went unacked and redelivery was the norm.
-		if ack, ok := slackAckForEnvelope(envelopeID); ok {
-			_ = conn.WriteMessage(websocket.TextMessage, ack)
+// slackWriteEnvelopeAck acks a Socket Mode envelope when it carries an
+// envelope_id. Slack requires an ack for EVERY such envelope, otherwise it
+// redelivers. The old condition also required accepts_response_payload==true,
+// but that flag only governs whether the ack response MAY carry a payload -
+// for message/app_mention envelopes it is commonly false, so most events went
+// unacked and redelivery was the norm (#968). We never attach a payload, so
+// the flag is irrelevant here.
+func slackWriteEnvelopeAck(conn *websocket.Conn, envelope map[string]any) {
+	envelopeID, _ := envelope["envelope_id"].(string)
+	if ack, ok := slackAckForEnvelope(envelopeID); ok {
+		_ = conn.WriteMessage(websocket.TextMessage, ack)
+	}
+}
+
+// dispatchEnvelope routes a decoded Socket Mode envelope to the matching
+// handler: events_api message/app_mention events reach handleMessage,
+// interactive payloads reach handleInteractive, everything else is ignored.
+func (a *slackAdapter) dispatchEnvelope(ctx context.Context, envelope map[string]any) {
+	msgType, _ := envelope["type"].(string)
+	switch msgType {
+	case "events_api":
+		if event := slackEventFromEnvelope(envelope); event != nil && slackHandlesEventType(event) {
+			a.handleMessage(ctx, event)
 		}
-
-		if msgType == "events_api" {
-			payload, _ := envelope["payload"].(map[string]any)
-			if payload != nil {
-				event, _ := payload["event"].(map[string]any)
-				if event != nil {
-					eventType, _ := event["type"].(string)
-					if eventType == "message" {
-						a.handleMessage(ctx, event)
-					} else if eventType == "app_mention" {
-						a.handleMessage(ctx, event)
-					}
-				}
-			}
-		} else if msgType == "interactive" {
-			payload, _ := envelope["payload"].(map[string]any)
-			if payload != nil {
-				a.handleInteractive(ctx, payload)
-			}
+	case "interactive":
+		if payload := slackInteractivePayload(envelope); payload != nil {
+			a.handleInteractive(ctx, payload)
 		}
 	}
+}
+
+// slackEventFromEnvelope extracts the event object from an events_api
+// envelope: nil when the payload or event is missing.
+func slackEventFromEnvelope(envelope map[string]any) map[string]any {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return nil
+	}
+	event, _ := payload["event"].(map[string]any)
+	return event
+}
+
+// slackInteractivePayload extracts the payload object from an interactive
+// envelope: nil when missing.
+func slackInteractivePayload(envelope map[string]any) map[string]any {
+	payload, _ := envelope["payload"].(map[string]any)
+	return payload
+}
+
+// slackHandlesEventType reports whether an events_api event should reach the
+// agent (only message and app_mention today).
+func slackHandlesEventType(event map[string]any) bool {
+	eventType, _ := event["type"].(string)
+	return eventType == "message" || eventType == "app_mention"
 }
 
 // slackAckForEnvelope builds the Socket Mode ack frame for an envelope.
