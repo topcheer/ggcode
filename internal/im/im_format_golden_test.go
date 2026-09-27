@@ -5,6 +5,8 @@ package im
 // r169 extension: STATUS section pinning localizedToolActivity (pure
 // function-level dump; DescribeTool/FormatIMStatus depend on os.Getwd and
 // are NOT golden-safe).
+// r170 extension: TOOLSTATUS section pinning localizedToolLabel (pure
+// function-level dump, same provenance rules as STATUS).
 //
 // Provenance: names and label keys below were extracted MECHANICALLY from
 // origin/main 29fad0ab0 (internal/im/tool_format.go:22-363 and
@@ -411,6 +413,14 @@ func TestDumpIMFormatGolden(t *testing.T) {
 			}
 		}
 	}
+	for _, lang := range goldenLangs {
+		for _, action := range goldenActivityActions {
+			out := localizedToolLabel(lang, action)
+			if _, err := fmt.Fprintf(w, "TOOLSTATUS\t%s\t%s\t%q\n", lang, action, out); err != nil {
+				t.Fatalf("write toolstatus: %v", err)
+			}
+		}
+	}
 	if err := w.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -446,6 +456,14 @@ func loadGolden(t *testing.T) map[string]string {
 				t.Fatalf("malformed golden line: %q", line)
 			}
 			g[parts[0]+"\t"+parts[1]+"\t"+parts[2]+"\t"+parts[3]] = parts[4]
+			continue
+		}
+		if strings.HasPrefix(line, "TOOLSTATUS\t") {
+			parts := strings.SplitN(line, "\t", 4) // TOOLSTATUS, lang, action, %q
+			if len(parts) != 4 {
+				t.Fatalf("malformed golden line: %q", line)
+			}
+			g[parts[0]+"\t"+parts[1]+"\t"+parts[2]] = parts[3]
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 5) // CALL, lang, name, shapeIdx, %q
@@ -560,6 +578,30 @@ func TestLocalizedToolActivityGolden(t *testing.T) {
 				if got != want {
 					t.Errorf("localizedToolActivity(%s,%q,target%d):\n got %q\nwant %q", lang, action, ti, got, want)
 				}
+			}
+		}
+	}
+}
+
+// TestLocalizedToolLabelGolden pins the localizedToolLabel tables (both
+// language switches plus the localizedGenericToolName default tail) against
+// the pristine baseline.
+func TestLocalizedToolLabelGolden(t *testing.T) {
+	g := loadGolden(t)
+	for _, lang := range goldenLangs {
+		for _, action := range goldenActivityActions {
+			key := fmt.Sprintf("TOOLSTATUS\t%s\t%s", lang, action)
+			wantRaw, ok := g[key]
+			if !ok {
+				t.Fatalf("golden missing %s", key)
+			}
+			want, err := strconv.Unquote(wantRaw)
+			if err != nil {
+				t.Fatalf("unquote %s: %v", key, err)
+			}
+			got := localizedToolLabel(lang, action)
+			if got != want {
+				t.Errorf("localizedToolLabel(%s,%q) = %q, want %q", lang, action, got, want)
 			}
 		}
 	}
