@@ -1,11 +1,14 @@
 package im
 
 // r166 golden harness for imLabel + formatToolCallText.
+// r168 extension: RESULT section pinning formatToolResultText.
 //
 // Provenance: names and label keys below were extracted MECHANICALLY from
 // origin/main 29fad0ab0 (internal/im/tool_format.go:22-363 and
 // internal/im/tool_format_helpers.go:52-568) — no hand transcription.
 // The golden file was generated from the pre-refactor switch code.
+// The RESULT section was generated from the pristine r167-im-callsplit
+// state (b979e07c), before the formatSpecialIMToolResult domain split.
 //
 // Regenerate after INTENTIONAL label/copy changes only:
 //
@@ -251,6 +254,78 @@ var goldenArgsShapes = []string{
 	`{"command":"go test ./...","pattern":"foo.*bar","query":"agent auth","url":"https://example.com/x","to":"bob","name":"team-1","mode":"auto","action":"list","subject":"ship it","key":"build-cache","setting":"vendor.model","message":"r166 gold","cron":"*/5 * * * *","target":"a2a-host:99","agent":"codex","agent_id":"agent-7","task":"run the gauntlet","file_path":"/tmp/a.go"}`,
 }
 
+// goldenToolResultNames covers every case label of formatSpecialIMToolResult
+// (extracted mechanically from the pristine switch) plus default-path probes:
+// an lsp_* name (lsp branch), an MCP-style name (underscore/dot heuristic),
+// and a plain name that falls through to unhandled.
+var goldenToolResultNames = []string{
+	// shell + background commands
+	"run_command", "bash", "powershell",
+	"start_command", "stop_command", "read_command_output",
+	"wait_command", "write_command_input", "list_commands",
+	// files
+	"read_file", "list_directory", "glob", "edit_file", "write_file",
+	"search_files", "grep", "multi_file_read", "multi_file_edit",
+	"multi_file_write", "notebook_edit",
+	// web (browser/warp: hidden-verbose)
+	"web_fetch", "web_search", "browser", "warp",
+	// git
+	"git_diff", "git_status", "git_log", "git_add", "git_commit",
+	"git_show", "git_blame", "git_branch_list", "git_remote",
+	"git_stash_list", "git_stash",
+	// agent / skill / memory / mcp inspection
+	"spawn_agent", "wait_agent", "list_agents", "delegate", "lanchat",
+	"ask_user", "skill", "save_memory", "delete_memory",
+	"list_mcp_capabilities", "get_mcp_prompt", "read_mcp_resource",
+	// plan / mode / worktree / tasks
+	"enter_plan_mode", "exit_plan_mode", "switch_mode",
+	"enter_worktree", "exit_worktree", "list_worktree",
+	"todo_write", "task_create", "task_get", "task_list",
+	"task_output", "task_update", "task_stop",
+	// cron / sleep
+	"sleep", "cron_create", "cron_delete", "cron_list",
+	"cron_update", "cron_pause", "cron_resume", "cron_get",
+	// team / swarm / a2a
+	"teammate_list", "swarm_task_list", "swarm_task_claim",
+	"a2a_discover", "a2a_list_tasks", "a2a_cancel_task", "a2a_get_task",
+	"team_create", "team_delete", "teammate_spawn", "teammate_shutdown",
+	"send_message", "swarm_task_create", "swarm_task_complete",
+	"a2a_remote", "a2a_send_task", "teammate_results",
+	// default-path probes
+	"lsp_hover",       // lsp_ prefix → hidden (must precede MCP heuristic, #971)
+	"mcp__cf__search", // MCP-style underscore/dot heuristic
+	"im",              // no underscore/dot → unhandled (false, "")
+}
+
+// goldenResultShape varies the ToolResultInfo fields formatToolResultText
+// consumes: CallNotified (header-strip interplay), IsError, Args (extraction
+// of subject/status/plan/name/target/to/agent), Detail (fallback display)
+// and Result (body output).
+type goldenResultShape struct {
+	callNotified bool
+	isError      bool
+	args         string
+	detail       string
+	result       string
+}
+
+var goldenResultShapes = []goldenResultShape{
+	// s0: bare success — suppress paths (read_file silent, hidden tools, ...)
+	{},
+	// s1: fully populated success, call notified — arg extraction, Detail
+	// fallbacks, task_update completion and header stripping all exercised
+	{
+		callNotified: true,
+		args:         `{"subject":"ship it","status":"completed","plan":"1. refactor\n2. verify","name":"team-1","target":"a2a-host:99","to":"bob","agent":"codex","command":"go test ./...","path":"/tmp/a.go"}`,
+		detail:       "detail-fallback",
+		result:       "line-one\nline-two\nline-three",
+	},
+	// s2: error result — formatIMErrorResult paths
+	{isError: true, result: "boom: exit status 1"},
+	// s3: Detail-only fallback, no args, no body
+	{callNotified: true, detail: "detail-only"},
+}
+
 var goldenLangs = []ToolLanguage{ToolLangEn, ToolLangZhCN}
 
 func goldenFilePath(t *testing.T) string {
@@ -286,6 +361,28 @@ func TestDumpIMFormatGolden(t *testing.T) {
 			}
 		}
 	}
+	for _, lang := range goldenLangs {
+		for _, name := range goldenToolResultNames {
+			for si, shape := range goldenResultShapes {
+				notified := 0
+				if shape.callNotified {
+					notified = 1
+				}
+				out := formatToolResultText(&ToolResultInfo{
+					ToolName:     name,
+					Args:         shape.args,
+					Result:       shape.result,
+					IsError:      shape.isError,
+					Detail:       shape.detail,
+					Lang:         string(lang),
+					CallNotified: shape.callNotified,
+				})
+				if _, err := fmt.Fprintf(w, "RESULT\t%s\t%s\t%d\t%d\t%q\n", lang, name, si, notified, out); err != nil {
+					t.Fatalf("write result: %v", err)
+				}
+			}
+		}
+	}
 	if err := w.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -305,6 +402,14 @@ func loadGolden(t *testing.T) map[string]string {
 				t.Fatalf("malformed golden line: %q", line)
 			}
 			g[parts[0]+"\t"+parts[1]+"\t"+parts[2]] = parts[3]
+			continue
+		}
+		if strings.HasPrefix(line, "RESULT\t") {
+			parts := strings.SplitN(line, "\t", 6) // RESULT, lang, name, shapeIdx, notified, %q
+			if len(parts) != 6 {
+				t.Fatalf("malformed golden line: %q", line)
+			}
+			g[parts[0]+"\t"+parts[1]+"\t"+parts[2]+"\t"+parts[3]+"\t"+parts[4]] = parts[5]
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 5) // CALL, lang, name, shapeIdx, %q
@@ -353,6 +458,44 @@ func TestFormatToolCallGolden(t *testing.T) {
 				got := formatToolCallText(&ToolCallInfo{ToolName: name, Args: args, Detail: fmt.Sprintf("detail-%d", si), Lang: string(lang)})
 				if got != want {
 					t.Errorf("formatToolCallText(%s,%q,shape%d):\n got %q\nwant %q", lang, name, si, got, want)
+				}
+			}
+		}
+	}
+}
+
+// TestFormatToolResultGolden pins formatToolResultText (and transitively the
+// formatSpecialIMToolResult (bool, string) contract, including suppress paths
+// like read_file success) against the pristine baseline.
+func TestFormatToolResultGolden(t *testing.T) {
+	g := loadGolden(t)
+	for _, lang := range goldenLangs {
+		for _, name := range goldenToolResultNames {
+			for si, shape := range goldenResultShapes {
+				notified := 0
+				if shape.callNotified {
+					notified = 1
+				}
+				key := fmt.Sprintf("RESULT\t%s\t%s\t%d\t%d", lang, name, si, notified)
+				wantRaw, ok := g[key]
+				if !ok {
+					t.Fatalf("golden missing %s", key)
+				}
+				want, err := strconv.Unquote(wantRaw)
+				if err != nil {
+					t.Fatalf("unquote %s: %v", key, err)
+				}
+				got := formatToolResultText(&ToolResultInfo{
+					ToolName:     name,
+					Args:         shape.args,
+					Result:       shape.result,
+					IsError:      shape.isError,
+					Detail:       shape.detail,
+					Lang:         string(lang),
+					CallNotified: shape.callNotified,
+				})
+				if got != want {
+					t.Errorf("formatToolResultText(%s,%q,shape%d):\n got %q\nwant %q", lang, name, si, got, want)
 				}
 			}
 		}
