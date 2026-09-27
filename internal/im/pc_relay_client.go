@@ -399,8 +399,10 @@ type pcRenewResult struct {
 	err     error
 }
 
+// handleMessage is a thin dispatcher: peek at the type field, then route to a
+// per-type handler. Parse error strings, debug logs, and mutex scopes are
+// preserved verbatim from the pre-refactor monolith.
 func (c *pcRelayClient) handleMessage(data []byte) error {
-	// Peek at the type field
 	var peek struct {
 		Type string `json:"type"`
 	}
@@ -412,109 +414,151 @@ func (c *pcRelayClient) handleMessage(data []byte) error {
 
 	switch peek.Type {
 	case pcTypeProviderReady:
-		debug.Log("pc", "relay: provider_ready received")
-		// Signal ready
-		c.mu.Lock()
-		if c.readyCh != nil {
-			close(c.readyCh)
-			c.readyCh = nil
-		}
-		c.mu.Unlock()
-		if c.onReady != nil {
-			c.onReady()
-		}
-
+		c.handleProviderReady()
 	case pcTypeSessionCreated:
-		var msg pcRelaySessionCreated
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return fmt.Errorf("parse session_created: %w", err)
-		}
-		c.mu.Lock()
-		ch, ok := c.pendingCreates[msg.RequestID]
-		if ok {
-			ch <- &pcCreateResult{sess: &msg}
-			delete(c.pendingCreates, msg.RequestID)
-		}
-		c.mu.Unlock()
-
+		return c.handleSessionCreated(data)
 	case pcTypeSessionRenewed:
-		var msg pcRelaySessionRenewed
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return fmt.Errorf("parse session_renewed: %w", err)
-		}
-		c.mu.Lock()
-		ch, ok := c.pendingRenewals[msg.RequestID]
-		if ok {
-			ch <- &pcRenewResult{renewed: &msg}
-			delete(c.pendingRenewals, msg.RequestID)
-		}
-		c.mu.Unlock()
-
+		return c.handleSessionRenewed(data)
 	case pcTypeRelayFrame:
-		var msg pcRelayFrame
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return fmt.Errorf("parse relay:frame: %w", err)
-		}
-		if c.onFrame != nil {
-			c.onFrame(msg.SessionID, &msg.Envelope)
-		}
-
+		return c.handleRelayFrame(data)
 	case pcTypeSessionClosed:
-		var msg pcRelaySessionClosed
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return fmt.Errorf("parse session_closed: %w", err)
-		}
-		if c.onSessionClosed != nil {
-			c.onSessionClosed(msg.SessionID, msg.Reason)
-		}
-
+		return c.handleSessionClosed(data)
 	case pcTypeError:
-		var msg pcRelayError
-		if err := json.Unmarshal(data, &msg); err != nil {
-			return fmt.Errorf("parse relay:error: %w", err)
-		}
-		debug.Log("pc", "relay error code=%s message=%s session=%s request=%s",
-			msg.Code, msg.Message, msg.SessionID, msg.RequestID)
-		// Forward to pending requests if applicable. The relay's code and
-		// message travel WITH the result (#1229): closing the channel made
-		// every relay rejection indistinguishable from a local dispose, so
-		// users chased phantom local state instead of the real relay-side
-		// reason (quota/limit/TTL rejections are unretryable and must be
-		// reported as such).
-		createErr := fmt.Errorf("relay rejected create_session: %s: %s", msg.Code, msg.Message)
-		renewErr := fmt.Errorf("relay rejected renew_session: %s: %s", msg.Code, msg.Message)
-		c.mu.Lock()
-		if msg.RequestID != "" {
-			if ch, ok := c.pendingCreates[msg.RequestID]; ok {
-				ch <- &pcCreateResult{err: createErr}
-				delete(c.pendingCreates, msg.RequestID)
-			}
-			if ch, ok := c.pendingRenewals[msg.RequestID]; ok {
-				ch <- &pcRenewResult{err: renewErr}
-				delete(c.pendingRenewals, msg.RequestID)
-			}
-		} else {
-			// No request id: the relay did not say which request failed.
-			// Fail ALL pending waiters with the relay error instead of
-			// leaving them to a 30s timeout (#1229 amplifier).
-			for id, ch := range c.pendingCreates {
-				ch <- &pcCreateResult{err: createErr}
-				delete(c.pendingCreates, id)
-			}
-			for id, ch := range c.pendingRenewals {
-				ch <- &pcRenewResult{err: renewErr}
-				delete(c.pendingRenewals, id)
-			}
-		}
-		c.mu.Unlock()
-		if c.onError != nil {
-			c.onError(msg.Message)
-		}
-
+		return c.handleRelayError(data)
 	default:
 		debug.Log("pc", "unknown relay message type: %s", peek.Type)
 	}
 
+	return nil
+}
+
+// handleProviderReady signals readiness: the waiting Connect select unblocks
+// on the closed readyCh; onReady fires outside the lock.
+func (c *pcRelayClient) handleProviderReady() {
+	debug.Log("pc", "relay: provider_ready received")
+	// Signal ready
+	c.mu.Lock()
+	if c.readyCh != nil {
+		close(c.readyCh)
+		c.readyCh = nil
+	}
+	c.mu.Unlock()
+	if c.onReady != nil {
+		c.onReady()
+	}
+}
+
+// handleSessionCreated routes a create_session reply to its pending waiter (#1229).
+func (c *pcRelayClient) handleSessionCreated(data []byte) error {
+	var msg pcRelaySessionCreated
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("parse session_created: %w", err)
+	}
+	c.mu.Lock()
+	c.dispatchCreateLocked(msg.RequestID, &pcCreateResult{sess: &msg})
+	c.mu.Unlock()
+	return nil
+}
+
+// handleSessionRenewed routes a renew_session reply to its pending waiter.
+func (c *pcRelayClient) handleSessionRenewed(data []byte) error {
+	var msg pcRelaySessionRenewed
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("parse session_renewed: %w", err)
+	}
+	c.mu.Lock()
+	c.dispatchRenewalLocked(msg.RequestID, &pcRenewResult{renewed: &msg})
+	c.mu.Unlock()
+	return nil
+}
+
+// handleRelayFrame forwards a decrypted envelope to the frame callback.
+func (c *pcRelayClient) handleRelayFrame(data []byte) error {
+	var msg pcRelayFrame
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("parse relay:frame: %w", err)
+	}
+	if c.onFrame != nil {
+		c.onFrame(msg.SessionID, &msg.Envelope)
+	}
+	return nil
+}
+
+// handleSessionClosed notifies the adapter that a session ended.
+func (c *pcRelayClient) handleSessionClosed(data []byte) error {
+	var msg pcRelaySessionClosed
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("parse session_closed: %w", err)
+	}
+	if c.onSessionClosed != nil {
+		c.onSessionClosed(msg.SessionID, msg.Reason)
+	}
+	return nil
+}
+
+// dispatchCreateLocked delivers a create result to the pending waiter, if any.
+// Caller must hold c.mu.
+func (c *pcRelayClient) dispatchCreateLocked(requestID string, res *pcCreateResult) {
+	if ch, ok := c.pendingCreates[requestID]; ok {
+		ch <- res
+		delete(c.pendingCreates, requestID)
+	}
+}
+
+// dispatchRenewalLocked delivers a renew result to the pending waiter, if any.
+// Caller must hold c.mu.
+func (c *pcRelayClient) dispatchRenewalLocked(requestID string, res *pcRenewResult) {
+	if ch, ok := c.pendingRenewals[requestID]; ok {
+		ch <- res
+		delete(c.pendingRenewals, requestID)
+	}
+}
+
+// failAllPendingLocked fails every pending create/renewal waiter — used when
+// the relay did not say which request failed (#1229 amplifier).
+// Caller must hold c.mu.
+func (c *pcRelayClient) failAllPendingLocked(createErr, renewErr error) {
+	for id, ch := range c.pendingCreates {
+		ch <- &pcCreateResult{err: createErr}
+		delete(c.pendingCreates, id)
+	}
+	for id, ch := range c.pendingRenewals {
+		ch <- &pcRenewResult{err: renewErr}
+		delete(c.pendingRenewals, id)
+	}
+}
+
+// handleRelayError routes a relay error to pending waiters. The relay's code
+// and message travel WITH the result (#1229): closing the channel made
+// every relay rejection indistinguishable from a local dispose, so
+// users chased phantom local state instead of the real relay-side
+// reason (quota/limit/TTL rejections are unretryable and must be
+// reported as such).
+func (c *pcRelayClient) handleRelayError(data []byte) error {
+	var msg pcRelayError
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("parse relay:error: %w", err)
+	}
+	debug.Log("pc", "relay error code=%s message=%s session=%s request=%s",
+		msg.Code, msg.Message, msg.SessionID, msg.RequestID)
+	// Forward to pending requests if applicable. Both dispatches share ONE
+	// critical section, as in the pre-refactor monolith.
+	createErr := fmt.Errorf("relay rejected create_session: %s: %s", msg.Code, msg.Message)
+	renewErr := fmt.Errorf("relay rejected renew_session: %s: %s", msg.Code, msg.Message)
+	c.mu.Lock()
+	if msg.RequestID != "" {
+		c.dispatchCreateLocked(msg.RequestID, &pcCreateResult{err: createErr})
+		c.dispatchRenewalLocked(msg.RequestID, &pcRenewResult{err: renewErr})
+	} else {
+		// No request id: the relay did not say which request failed.
+		// Fail ALL pending waiters with the relay error instead of
+		// leaving them to a 30s timeout (#1229 amplifier).
+		c.failAllPendingLocked(createErr, renewErr)
+	}
+	c.mu.Unlock()
+	if c.onError != nil {
+		c.onError(msg.Message)
+	}
 	return nil
 }
 

@@ -805,99 +805,141 @@ func (a *pcAdapter) resolvePCAttachment(ctx context.Context, img ExtractedImage,
 		"name": fmt.Sprintf("image_%d", index),
 	}
 
+	var err error
 	switch img.Kind {
 	case "url":
 		if IsLocalFilePath(img.Data) {
 			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
-			f, err := os.Open(img.Data)
-			if err != nil {
-				return nil, fmt.Errorf("read local image: %w", err)
-			}
-			data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
-			f.Close()
-			if err != nil {
-				return nil, fmt.Errorf("read local image: %w", err)
-			}
-			ext := strings.ToLower(filepath.Ext(img.Data))
-			mimeType := "image/png"
-			switch ext {
-			case ".jpg", ".jpeg":
-				mimeType = "image/jpeg"
-			case ".gif":
-				mimeType = "image/gif"
-			case ".webp":
-				mimeType = "image/webp"
-			}
-			att["mimeType"] = mimeType
-			att["sizeBytes"] = len(data)
-			att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
-			att["name"] = filepath.Base(img.Data)
+			err = a.resolveLocalImageAttachment(img.Data, att)
 		} else {
-			// Download the image
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
-			if err != nil {
-				return nil, err
-			}
-			resp, err := a.getHTTPClient().Do(req)
-			if err != nil {
-				return nil, fmt.Errorf("download image: %w", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return nil, fmt.Errorf("download image [%d]", resp.StatusCode)
-			}
-			data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-			if err != nil {
-				return nil, fmt.Errorf("read image data: %w", err)
-			}
-			mimeType := resp.Header.Get("Content-Type")
-			if mimeType == "" {
-				mimeType = "image/png"
-			}
-			att["mimeType"] = mimeType
-			att["sizeBytes"] = len(data)
-			att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
-			att["uri"] = img.Data
-			name := filepath.Base(img.Data)
-			if name != "" && name != "." {
-				att["name"] = name
-			}
+			err = a.resolveRemoteImageAttachment(ctx, img.Data, att)
 		}
 	case "data_url":
-		parts := strings.SplitN(img.Data, ",", 2)
-		if len(parts) < 2 {
-			return nil, fmt.Errorf("invalid data URL")
-		}
-		data, err := base64.StdEncoding.DecodeString(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("invalid base64: %w", err)
-		}
-		mimeType := "image/png"
-		if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
-			mimeType = "image/jpeg"
-		} else if strings.Contains(parts[0], "gif") {
-			mimeType = "image/gif"
-		} else if strings.Contains(parts[0], "webp") {
-			mimeType = "image/webp"
-		}
-		ext := ".png"
-		switch mimeType {
-		case "image/jpeg":
-			ext = ".jpg"
-		case "image/gif":
-			ext = ".gif"
-		case "image/webp":
-			ext = ".webp"
-		}
-		att["mimeType"] = mimeType
-		att["sizeBytes"] = len(data)
-		att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
-		att["name"] = fmt.Sprintf("image_%d%s", index, ext)
+		err = a.resolveDataURLAttachment(img.Data, index, att)
 	default:
 		return nil, fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
-
+	if err != nil {
+		return nil, err
+	}
 	return att, nil
+}
+
+// mimeTypeForImageExt maps a lowercase file extension to an image MIME type,
+// defaulting to image/png for unknown extensions.
+func mimeTypeForImageExt(ext string) string {
+	switch ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	}
+	return "image/png"
+}
+
+// resolveLocalImageAttachment reads a size-bounded local image file and
+// populates att (base64 payload, size, extension-derived MIME). The attachment
+// name is unconditionally overwritten with the file's base name.
+func (a *pcAdapter) resolveLocalImageAttachment(path string, att map[string]interface{}) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read local image: %w", err)
+	}
+	data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("read local image: %w", err)
+	}
+	att["mimeType"] = mimeTypeForImageExt(strings.ToLower(filepath.Ext(path)))
+	att["sizeBytes"] = len(data)
+	att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
+	att["name"] = filepath.Base(path)
+	return nil
+}
+
+// resolveRemoteImageAttachment downloads a remote image over HTTP and
+// populates att (base64 payload, size, Content-Type-derived MIME, source URI).
+// The attachment name is overwritten with the URL's base only when non-empty
+// and non-".".
+func (a *pcAdapter) resolveRemoteImageAttachment(ctx context.Context, rawURL string, att map[string]interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := a.getHTTPClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("download image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("download image [%d]", resp.StatusCode)
+	}
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+	if err != nil {
+		return fmt.Errorf("read image data: %w", err)
+	}
+	mimeType := resp.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "image/png"
+	}
+	att["mimeType"] = mimeType
+	att["sizeBytes"] = len(data)
+	att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
+	att["uri"] = rawURL
+	name := filepath.Base(rawURL)
+	if name != "" && name != "." {
+		att["name"] = name
+	}
+	return nil
+}
+
+// mimeTypeFromDataURLHeader sniffs the MIME type from a data URL's
+// "data:<type>" prefix, defaulting to image/png.
+func mimeTypeFromDataURLHeader(header string) string {
+	if strings.Contains(header, "jpeg") || strings.Contains(header, "jpg") {
+		return "image/jpeg"
+	}
+	if strings.Contains(header, "gif") {
+		return "image/gif"
+	}
+	if strings.Contains(header, "webp") {
+		return "image/webp"
+	}
+	return "image/png"
+}
+
+// extForImageMime maps an image MIME type back to a canonical file extension,
+// defaulting to ".png".
+func extForImageMime(mimeType string) string {
+	switch mimeType {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	}
+	return ".png"
+}
+
+// resolveDataURLAttachment decodes a base64 data URL payload and populates att.
+func (a *pcAdapter) resolveDataURLAttachment(dataURL string, index int, att map[string]interface{}) error {
+	parts := strings.SplitN(dataURL, ",", 2)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid data URL")
+	}
+	data, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid base64: %w", err)
+	}
+	mimeType := mimeTypeFromDataURLHeader(parts[0])
+	att["mimeType"] = mimeType
+	att["sizeBytes"] = len(data)
+	att["dataBase64"] = base64.StdEncoding.EncodeToString(data)
+	att["name"] = fmt.Sprintf("image_%d%s", index, extForImageMime(mimeType))
+	return nil
 }
 
 func (a *pcAdapter) publishState(healthy bool, status, lastErr string) {
