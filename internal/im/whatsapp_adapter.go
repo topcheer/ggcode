@@ -166,45 +166,27 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 		return nil
 	}
 
-	target := binding.ChannelID
-	if target == "" {
-		target = binding.TargetID
-	}
+	target := whatsappOutboundTarget(binding)
 	if target == "" {
 		return nil
 	}
 
-	jid, err := types.ParseJID(target)
+	jid, err := whatsappParseTargetJID(a.name, target)
 	if err != nil {
-		return fmt.Errorf("whatsapp %q: parse JID %q: %w", a.name, target, err)
+		return err
 	}
 
 	// Extract images from text and send them as WhatsApp image messages.
 	images, remainingText := ExtractImagesFromText(content)
-	sentImage := false
-	failedImages := 0
-	for i, img := range images {
-		if err := a.sendExtractedImage(ctx, client, jid, img); err != nil {
-			failedImages++
-			debug.Log("whatsapp", "adapter %q: image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
-			continue
-		}
-		sentImage = true
-		// #1256: space every delivered image (waInterMsgDelay, same intent as
-		// the text chunks) - multi-image bursts tripped rate limiting and the
-		// failures were silently absorbed. This also spaces the last image
-		// from the first text chunk below.
-		select {
-		case <-time.After(waInterMsgDelay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	sentImage, failedImages, err := a.sendOutboundImages(ctx, client, jid, images)
+	if err != nil {
+		return err
 	}
 
 	// Send remaining text
 	text := markdownToWhatsApp(remainingText)
 	if text == "" {
-		if failedImages > 0 && !sentImage && len(images) > 0 {
+		if whatsappAllImagesFailed(failedImages, sentImage, len(images)) {
 			// #1256: every image failed and there is no text to deliver -
 			// returning nil told the caller the send succeeded while nothing
 			// reached the user (the old path only logged).
@@ -216,21 +198,8 @@ func (a *whatsappAdapter) Send(ctx context.Context, binding ChannelBinding, even
 
 	chunks := chunkWARunes(text, waMaxTextLen)
 	debug.Log("whatsapp", "adapter %q: outbound target=%s chunks=%d images=%d len=%d", a.name, target, len(chunks), len(images), len(text))
-	for i, chunk := range chunks {
-		if i > 0 || sentImage {
-			// #1256: also space the image→text transition, not just text→text.
-			select {
-			case <-time.After(waInterMsgDelay):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		msg := &waE2E.Message{Conversation: proto.String(chunk)}
-		_, err := client.SendMessage(ctx, jid, msg)
-		if err != nil {
-			debug.Log("whatsapp", "adapter %q: send chunk %d/%d failed: %v", a.name, i+1, len(chunks), err)
-			return fmt.Errorf("whatsapp %q: send chunk %d: %w", a.name, i+1, err)
-		}
+	if err := a.sendOutboundChunks(ctx, client, jid, chunks, sentImage); err != nil {
+		return err
 	}
 	debug.Log("whatsapp", "adapter %q: outbound delivered target=%s chunks=%d images=%d", a.name, target, len(chunks), len(images))
 	return nil
