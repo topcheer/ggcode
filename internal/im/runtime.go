@@ -698,25 +698,10 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	// rollbackDedup so the platform's redelivery of the SAME MessageID — the
 	// very case this dedup exists to handle (e.g. Feishu SDK retries) — is
 	// reprocessed instead of being silently swallowed (#540).
-	dedupKey := ""
-	if msgID := strings.TrimSpace(msg.Envelope.MessageID); msgID != "" {
-		dedupKey = msg.Envelope.Adapter + ":" + msgID
-		if _, seen := m.seenMessages[dedupKey]; seen {
-			m.mu.Unlock()
-			return nil
-		}
-		m.seenMessages[dedupKey] = time.Now()
-		// Prune entries older than 5 minutes to bound memory.
-		// Only prune every 100 messages to avoid O(n) on every inbound.
-		m.seenMessageCount++
-		if m.seenMessageCount%100 == 0 {
-			now := time.Now()
-			for k, t := range m.seenMessages {
-				if now.Sub(t) > 5*time.Minute {
-					delete(m.seenMessages, k)
-				}
-			}
-		}
+	dedupKey, dup := m.dedupInboundLocked(msg)
+	if dup {
+		m.mu.Unlock()
+		return nil
 	}
 	// rollbackDedup removes the seen-mark so a failed message is retried on
 	// redelivery. Must be called while m.mu is held; a no-op when the
@@ -736,23 +721,93 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 		return nil
 	}
 
-	binding := m.currentBindings[msg.Envelope.Adapter]
-	changed := false
-	if !sessionBound {
+	changed, err := m.prepareInboundLocked(&msg, sessionBound, bridge, rollbackDedup)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	var snapshot StatusSnapshot
+	var cb func(StatusSnapshot)
+	if changed {
+		snapshot, cb = m.snapshotAndCallbackLocked()
+	}
+	m.mu.Unlock()
+	if cb != nil {
+		cb(snapshot)
+	}
+	if err := bridge.SubmitInboundMessage(ctx, msg); err != nil {
+		// Roll the dedup mark back so the platform's retry of the same
+		// MessageID is reprocessed rather than silently dropped (#540).
+		m.mu.Lock()
 		rollbackDedup()
 		m.mu.Unlock()
-		return ErrNoSessionBound
+		return err
+	}
+	return nil
+}
+
+// dedupInboundLocked records the inbound message in the seen-set, returning
+// its dedup key and whether it is a redelivery the caller must skip. The
+// mark is recorded BEFORE processing so concurrent redeliveries are
+// deduplicated; every failure path must roll it back (see #540).
+// Caller holds m.mu.
+func (m *Manager) dedupInboundLocked(msg InboundMessage) (string, bool) {
+	msgID := strings.TrimSpace(msg.Envelope.MessageID)
+	if msgID == "" {
+		return "", false
+	}
+	dedupKey := msg.Envelope.Adapter + ":" + msgID
+	if _, seen := m.seenMessages[dedupKey]; seen {
+		return dedupKey, true
+	}
+	m.seenMessages[dedupKey] = time.Now()
+	m.seenMessageCount++
+	// Prune entries older than 5 minutes to bound memory.
+	// Only prune every 100 messages to avoid O(n) on every inbound.
+	if m.seenMessageCount%100 == 0 {
+		m.pruneSeenLocked()
+	}
+	return dedupKey, false
+}
+
+// pruneSeenLocked drops seen-marks older than 5 minutes to bound memory.
+// Caller holds m.mu.
+func (m *Manager) pruneSeenLocked() {
+	now := time.Now()
+	for k, t := range m.seenMessages {
+		if now.Sub(t) > 5*time.Minute {
+			delete(m.seenMessages, k)
+		}
+	}
+}
+
+// prepareInboundLocked runs the post-dedup inbound pipeline under m.mu: the
+// session/binding/bridge gates, then the binding mutation phase. It returns
+// whether the binding changed. Caller holds m.mu.
+func (m *Manager) prepareInboundLocked(msg *InboundMessage, sessionBound bool, bridge Bridge, rollbackDedup func()) (bool, error) {
+	binding := m.currentBindings[msg.Envelope.Adapter]
+	if !sessionBound {
+		rollbackDedup()
+		return false, ErrNoSessionBound
 	}
 	if binding == nil {
 		rollbackDedup()
-		m.mu.Unlock()
-		return ErrNoChannelBound
+		return false, ErrNoChannelBound
 	}
 	if bridge == nil {
 		rollbackDedup()
-		m.mu.Unlock()
-		return ErrNoBridge
+		return false, ErrNoBridge
 	}
+	return m.mutateInboundBindingLocked(msg, binding, rollbackDedup)
+}
+
+// mutateInboundBindingLocked applies the inbound message to the binding:
+// ReceivedAt fill, ChannelID claim/deny checks, last-inbound bookkeeping, and
+// the single #967 persist with in-memory rollback on store failure. It
+// returns whether the binding changed. rollbackDedup must be invoked on every
+// failure path so the platform's redelivery of the same MessageID is
+// reprocessed (#540). Caller holds m.mu.
+func (m *Manager) mutateInboundBindingLocked(msg *InboundMessage, binding *ChannelBinding, rollbackDedup func()) (bool, error) {
 	if msg.Envelope.ReceivedAt.IsZero() {
 		msg.Envelope.ReceivedAt = time.Now()
 	}
@@ -763,6 +818,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	// to leave memory ahead of disk with no recovery).
 	orig := *binding
 	needPersist := false
+	changed := false
 	if binding.ChannelID == "" && strings.TrimSpace(msg.Envelope.ChannelID) != "" {
 		newChannelID := strings.TrimSpace(msg.Envelope.ChannelID)
 		binding.ChannelID = newChannelID
@@ -776,8 +832,7 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 	// envelope value) - only ClearChannel could recover.
 	if binding.ChannelID != "" && strings.TrimSpace(msg.Envelope.ChannelID) != binding.ChannelID {
 		rollbackDedup()
-		m.mu.Unlock()
-		return ErrInboundChannelDenied
+		return false, ErrInboundChannelDenied
 	}
 	if inboundID := strings.TrimSpace(msg.Envelope.MessageID); inboundID != "" {
 		binding.LastInboundMessageID = inboundID
@@ -798,28 +853,10 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 			binding.PassiveReplyCount = orig.PassiveReplyCount
 			binding.PassiveReplyStartedAt = orig.PassiveReplyStartedAt
 			rollbackDedup()
-			m.mu.Unlock()
-			return err
+			return false, err
 		}
 	}
-	var snapshot StatusSnapshot
-	var cb func(StatusSnapshot)
-	if changed {
-		snapshot, cb = m.snapshotAndCallbackLocked()
-	}
-	m.mu.Unlock()
-	if cb != nil {
-		cb(snapshot)
-	}
-	if err := bridge.SubmitInboundMessage(ctx, msg); err != nil {
-		// Roll the dedup mark back so the platform's retry of the same
-		// MessageID is reprocessed rather than silently dropped (#540).
-		m.mu.Lock()
-		rollbackDedup()
-		m.mu.Unlock()
-		return err
-	}
-	return nil
+	return changed, nil
 }
 
 // HandlePairingInbound processes an inbound IM message for pairing.

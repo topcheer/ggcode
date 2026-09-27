@@ -718,12 +718,58 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 	}
 	// #974: reconnects and offline history sync can redeliver the same msgid;
 	// dedup like signal/slack/wecom do.
-	a.mu.Lock()
-	if _, dup := a.seen[msg.Info.ID]; dup {
-		a.mu.Unlock()
+	if !a.recordSeen(msg.Info.ID) {
 		return
 	}
-	a.seen[msg.Info.ID] = time.Now()
+
+	text := whatsappInboundText(msg)
+
+	debug.Log("whatsapp", "adapter %q: inbound message from=%s chat=%s isFromMe=%v text=%q", a.name, msg.Info.Sender, msg.Info.Chat, msg.Info.IsFromMe, text)
+
+	if text == "" {
+		return
+	}
+
+	sender := msg.Info.Sender.String()
+	chatID := msg.Info.Chat.String()
+
+	// After pairing, only accept messages from the bound channel.
+	// Messages from other groups/chats are silently dropped.
+	if a.dropUnboundChannel(chatID) {
+		return
+	}
+	debug.Log("whatsapp", "adapter %q: inbound chat=%s sender=%s len=%d", a.name, chatID, sender, len(text))
+
+	waMsg := InboundMessage{
+		Text: text,
+		Envelope: Envelope{
+			Platform:  PlatformWhatsApp,
+			Adapter:   a.name,
+			ChannelID: chatID,
+			SenderID:  sender,
+		},
+	}
+
+	// Pairing flow first
+	if a.handlePairingFlow(chatID, waMsg) {
+		return
+	}
+
+	// Normal inbound
+	a.submitInbound(waMsg)
+}
+
+// recordSeen marks the msgid as seen, returning false when it is a
+// redelivery (#974) the caller must drop. Prunes TTL-expired entries first
+// and, on burst overflow inside the TTL window, falls back to dropping the
+// oldest entries (#1567-D, mirroring the wecom pattern).
+func (a *whatsappAdapter) recordSeen(msgID types.MessageID) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, dup := a.seen[msgID]; dup {
+		return false
+	}
+	a.seen[msgID] = time.Now()
 	if len(a.seen) > waDedupMaxSize {
 		cutoff := time.Now().Add(-5 * time.Minute)
 		for k, t := range a.seen {
@@ -744,8 +790,13 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 			delete(a.seen, oldestKey)
 		}
 	}
-	a.mu.Unlock()
+	return true
+}
 
+// whatsappInboundText extracts the user-visible text from an inbound
+// WhatsApp message: plain conversation text, extended text, or — for media
+// messages (#1257) — the accompanying caption, trimmed.
+func whatsappInboundText(msg *events.Message) string {
 	text := ""
 	if conv := msg.Message.GetConversation(); conv != "" {
 		text = conv
@@ -759,63 +810,57 @@ func (a *whatsappAdapter) handleInbound(msg *events.Message) {
 	if strings.TrimSpace(text) == "" {
 		text = whatsappMediaCaption(msg.Message)
 	}
-	text = strings.TrimSpace(text)
+	return strings.TrimSpace(text)
+}
 
-	debug.Log("whatsapp", "adapter %q: inbound message from=%s chat=%s isFromMe=%v text=%q", a.name, msg.Info.Sender, msg.Info.Chat, msg.Info.IsFromMe, text)
+// dropUnboundChannel reports whether a post-pairing message originates from
+// a chat other than the bound channel; such messages are silently dropped.
+func (a *whatsappAdapter) dropUnboundChannel(chatID string) bool {
+	if a.manager == nil {
+		return false
+	}
+	snap := a.manager.Snapshot()
+	if binding := snap.BindingByAdapter(a.name); binding != nil {
+		if binding.ChannelID != "" && binding.ChannelID != chatID {
+			debug.Log("whatsapp", "adapter %q: dropping message from unbound channel %q (bound=%q)", a.name, chatID, binding.ChannelID)
+			return true
+		}
+	}
+	return false
+}
 
-	if text == "" {
+// handlePairingFlow runs the pairing state machine for an inbound message,
+// replying and notifying on a replaced binding, and reports whether the
+// message was consumed by the pairing flow.
+func (a *whatsappAdapter) handlePairingFlow(chatID string, waMsg InboundMessage) bool {
+	if a.manager == nil {
+		return false
+	}
+	pairingResult, err := a.manager.HandlePairingInbound(waMsg)
+	if err != nil && err != ErrNoSessionBound {
+		debug.Log("whatsapp", "adapter %q: pairing: %v", a.name, err)
+	}
+	if pairingResult.Consumed {
+		_ = a.replyToChat(chatID, pairingResult.ReplyText)
+		if err := a.manager.NotifyPreviousBindingReplaced(context.Background(), pairingResult); err != nil {
+			debug.Log("whatsapp", "adapter %q: notify previous: %v", a.name, err)
+		}
+		return true
+	}
+	return false
+}
+
+// submitInbound forwards the message to the manager asynchronously with a
+// bounded 30s context.
+func (a *whatsappAdapter) submitInbound(waMsg InboundMessage) {
+	if a.manager == nil {
 		return
 	}
-
-	sender := msg.Info.Sender.String()
-	chatID := msg.Info.Chat.String()
-
-	// After pairing, only accept messages from the bound channel.
-	// Messages from other groups/chats are silently dropped.
-	if a.manager != nil {
-		snap := a.manager.Snapshot()
-		if binding := snap.BindingByAdapter(a.name); binding != nil {
-			if binding.ChannelID != "" && binding.ChannelID != chatID {
-				debug.Log("whatsapp", "adapter %q: dropping message from unbound channel %q (bound=%q)", a.name, chatID, binding.ChannelID)
-				return
-			}
-		}
-	}
-	debug.Log("whatsapp", "adapter %q: inbound chat=%s sender=%s len=%d", a.name, chatID, sender, len(text))
-
-	waMsg := InboundMessage{
-		Text: text,
-		Envelope: Envelope{
-			Platform:  PlatformWhatsApp,
-			Adapter:   a.name,
-			ChannelID: chatID,
-			SenderID:  sender,
-		},
-	}
-
-	// Pairing flow first
-	if a.manager != nil {
-		pairingResult, err := a.manager.HandlePairingInbound(waMsg)
-		if err != nil && err != ErrNoSessionBound {
-			debug.Log("whatsapp", "adapter %q: pairing: %v", a.name, err)
-		}
-		if pairingResult.Consumed {
-			_ = a.replyToChat(chatID, pairingResult.ReplyText)
-			if err := a.manager.NotifyPreviousBindingReplaced(context.Background(), pairingResult); err != nil {
-				debug.Log("whatsapp", "adapter %q: notify previous: %v", a.name, err)
-			}
-			return
-		}
-	}
-
-	// Normal inbound
-	if a.manager != nil {
-		safego.Go(fmt.Sprintf("whatsapp-inbound-%s", a.name), func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			a.manager.HandleInbound(ctx, waMsg)
-		})
-	}
+	safego.Go(fmt.Sprintf("whatsapp-inbound-%s", a.name), func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		a.manager.HandleInbound(ctx, waMsg)
+	})
 }
 
 func (a *whatsappAdapter) replyToChat(chatID, text string) error {
