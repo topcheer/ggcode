@@ -790,131 +790,214 @@ func (a *tgAdapter) sendPhotoByURL(ctx context.Context, chatID, imageURL, captio
 }
 
 // sendPhotoByUpload sends a photo by uploading file data via multipart/form-data.
+//
+// Per-attempt flow: build the multipart body (#1242 rebuilds it each attempt
+// because a consumed bytes.Buffer cannot be reused), POST it, then handle the
+// response (429 retry_after or terminal result).
 func (a *tgAdapter) sendPhotoByUpload(ctx context.Context, chatID string, data []byte, filename, caption, replyTo string) error {
-	// Telegram Bot API caps multipart photos at 10MB (documents allow 50MB,
-	// but this adapter sends photos only). The extraction layer allows up to
-	// 20MB, so reject locally with a clear message instead of letting the API
-	// return an opaque error after the full upload.
-	const maxPhotoBytes = 10 << 20
-	if len(data) > maxPhotoBytes {
-		return fmt.Errorf("photo is %d bytes; Telegram sendPhoto limit is %d bytes, use a smaller image", len(data), maxPhotoBytes)
+	if err := tgPhotoOversize(data); err != nil {
+		return err
 	}
 
 	path := fmt.Sprintf(tgSendPhotoPath, a.botToken)
 	u := a.apiBase + path
 
-	// #1242: multipart uploads previously bypassed apiRequest's 429 handling
-	// entirely — a rate-limited sendPhoto failed hard and the caller's image
-	// loop dropped it silently. The body is rebuilt per attempt because a
-	// consumed bytes.Buffer cannot be reused.
 	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
-		var buf bytes.Buffer
-		writer := multipart.NewWriter(&buf)
-
-		if err := writer.WriteField("chat_id", chatID); err != nil {
-			return fmt.Errorf("write chat_id: %w", err)
-		}
-
-		part, err := writer.CreateFormFile("photo", filename)
-		if err != nil {
-			return fmt.Errorf("create form file: %w", err)
-		}
-		if _, err := part.Write(data); err != nil {
-			return fmt.Errorf("write photo data: %w", err)
-		}
-
-		if caption != "" {
-			cap := caption
-			if len([]rune(cap)) > 1024 {
-				cap = string([]rune(cap)[:1024])
-			}
-			if a.parseMode == "" {
-				msg := tgmd.Convert(cap)
-				if len(msg.Entities) > 0 {
-					if err := writer.WriteField("caption", msg.Text); err != nil {
-						return fmt.Errorf("write caption: %w", err)
-					}
-					entitiesJSON, _ := json.Marshal(tgEntitiesToRaw(msg.Entities))
-					if err := writer.WriteField("caption_entities", string(entitiesJSON)); err != nil {
-						return fmt.Errorf("write caption_entities: %w", err)
-					}
-				} else {
-					if err := writer.WriteField("caption", cap); err != nil {
-						return fmt.Errorf("write caption: %w", err)
-					}
-				}
-			} else {
-				if err := writer.WriteField("caption", a.legacyCaption(cap)); err != nil {
-					return fmt.Errorf("write caption: %w", err)
-				}
-				if err := writer.WriteField("parse_mode", a.parseMode); err != nil {
-					return fmt.Errorf("write parse_mode: %w", err)
-				}
-			}
-		}
-
-		if strings.TrimSpace(replyTo) != "" {
-			replyToID, perr := parseInt(replyTo)
-			if perr == nil && replyToID != 0 {
-				if err := writer.WriteField("reply_to_message_id", strconv.FormatInt(replyToID, 10)); err != nil {
-					return fmt.Errorf("write reply_to_message_id: %w", err)
-				}
-			}
-		}
-
-		if err := writer.Close(); err != nil {
-			return fmt.Errorf("close multipart writer: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
+		body, contentType, err := a.buildPhotoUploadBody(tgPhotoUpload{
+			chatID: chatID, data: data, filename: filename, caption: caption, replyTo: replyTo,
+		})
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Content-Type", writer.FormDataContentType())
-
-		resp, err := a.httpClient.Do(req)
+		resp, err := a.doPhotoUpload(ctx, u, contentType, body)
 		if err != nil {
 			return err
 		}
-
-		// Handle HTTP 429 with the same retry_after semantics as apiRequest
-		// (#1242): Telegram returns {"ok":false,"error_code":429,
-		// "parameters":{"retry_after":N}} with N in seconds.
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
-			retryAfter := tgExtractRetryAfter(resp)
-			resp.Body.Close()
-			debug.Log("tg", "adapter=%s sendPhoto rate-limited (429), retry %d/%d after %v",
-				a.name, attempt+1, maxRateLimitRetries, retryAfter)
-			if err := sleepRetry(ctx, retryAfter); err != nil {
-				return err
-			}
-			continue
-		}
-
-		respData, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		resp.Body.Close()
+		done, err := a.finishPhotoUpload(ctx, resp, attempt)
 		if err != nil {
 			return err
 		}
-
-		var payload map[string]any
-		if err := json.Unmarshal(respData, &payload); err != nil && len(respData) > 0 {
-			return fmt.Errorf("Telegram sendPhoto parse error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(respData)))
+		if done {
+			return nil
 		}
-		if resp.StatusCode >= 400 {
-			desc := strings.TrimSpace(stringFromAny(payload["description"]))
-			if desc == "" {
-				desc = http.StatusText(resp.StatusCode)
-			}
-			return fmt.Errorf("Telegram sendPhoto [%d]: %s", resp.StatusCode, desc)
-		}
-		if ok, _ := payload["ok"].(bool); !ok {
-			desc := strings.TrimSpace(stringFromAny(payload["description"]))
-			return fmt.Errorf("Telegram sendPhoto not ok: %s", desc)
-		}
-		return nil
 	}
 	return rateLimitExhausted("Telegram")
+}
+
+// tgPhotoOversize enforces the local photo size gate: Telegram Bot API caps
+// multipart photos at 10MB (documents allow 50MB, but this adapter sends
+// photos only). The extraction layer allows up to 20MB, so reject locally
+// with a clear message instead of letting the API return an opaque error
+// after the full upload.
+func tgPhotoOversize(data []byte) error {
+	const maxPhotoBytes = 10 << 20
+	if len(data) > maxPhotoBytes {
+		return fmt.Errorf("photo is %d bytes; Telegram sendPhoto limit is %d bytes, use a smaller image", len(data), maxPhotoBytes)
+	}
+	return nil
+}
+
+// tgPhotoUpload carries the per-call sendPhoto upload fields shared by the
+// orchestrator and the multipart body builder.
+type tgPhotoUpload struct {
+	chatID   string
+	data     []byte
+	filename string
+	caption  string
+	replyTo  string
+}
+
+// buildPhotoUploadBody assembles the multipart/form-data body for sendPhoto.
+// Field write failures and writer close failures surface as wrapped errors;
+// the returned content type must be set on the outgoing request.
+func (a *tgAdapter) buildPhotoUploadBody(up tgPhotoUpload) (*bytes.Buffer, string, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	if err := writer.WriteField("chat_id", up.chatID); err != nil {
+		return nil, "", fmt.Errorf("write chat_id: %w", err)
+	}
+
+	part, err := writer.CreateFormFile("photo", up.filename)
+	if err != nil {
+		return nil, "", fmt.Errorf("create form file: %w", err)
+	}
+	if _, err := part.Write(up.data); err != nil {
+		return nil, "", fmt.Errorf("write photo data: %w", err)
+	}
+
+	if err := a.writePhotoCaptionFields(writer, up.caption); err != nil {
+		return nil, "", err
+	}
+
+	if err := writeReplyToField(writer, up.replyTo); err != nil {
+		return nil, "", err
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, "", fmt.Errorf("close multipart writer: %w", err)
+	}
+	return &buf, writer.FormDataContentType(), nil
+}
+
+// writePhotoCaptionFields writes the caption/caption_entities/parse_mode
+// fields with the same rendering rules as the JSON sendPhoto path: a
+// markdown-converted caption plus raw entities when no explicit parse mode
+// is configured, the escaped legacy caption otherwise.
+func (a *tgAdapter) writePhotoCaptionFields(writer *multipart.Writer, caption string) error {
+	if caption == "" {
+		return nil
+	}
+	cap := caption
+	if len([]rune(cap)) > 1024 {
+		cap = string([]rune(cap)[:1024])
+	}
+	if a.parseMode == "" {
+		msg := tgmd.Convert(cap)
+		if len(msg.Entities) > 0 {
+			if err := writer.WriteField("caption", msg.Text); err != nil {
+				return fmt.Errorf("write caption: %w", err)
+			}
+			entitiesJSON, _ := json.Marshal(tgEntitiesToRaw(msg.Entities))
+			if err := writer.WriteField("caption_entities", string(entitiesJSON)); err != nil {
+				return fmt.Errorf("write caption_entities: %w", err)
+			}
+		} else {
+			if err := writer.WriteField("caption", cap); err != nil {
+				return fmt.Errorf("write caption: %w", err)
+			}
+		}
+	} else {
+		if err := writer.WriteField("caption", a.legacyCaption(cap)); err != nil {
+			return fmt.Errorf("write caption: %w", err)
+		}
+		if err := writer.WriteField("parse_mode", a.parseMode); err != nil {
+			return fmt.Errorf("write parse_mode: %w", err)
+		}
+	}
+	return nil
+}
+
+// tgReplyToID resolves a reply-to reference: blank references are skipped,
+// parsing tolerates surrounding whitespace (parseInt trims), and a parsed 0
+// disables the reply linkage. The untrimmed value is what gets parsed,
+// matching the JSON sendPhoto path.
+func tgReplyToID(replyTo string) (int64, bool) {
+	if strings.TrimSpace(replyTo) == "" {
+		return 0, false
+	}
+	id, err := parseInt(replyTo)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+// writeReplyToField writes reply_to_message_id when replyTo resolves to a
+// usable message id.
+func writeReplyToField(writer *multipart.Writer, replyTo string) error {
+	id, ok := tgReplyToID(replyTo)
+	if !ok {
+		return nil
+	}
+	if err := writer.WriteField("reply_to_message_id", strconv.FormatInt(id, 10)); err != nil {
+		return fmt.Errorf("write reply_to_message_id: %w", err)
+	}
+	return nil
+}
+
+// doPhotoUpload POSTs the multipart body. Request construction and transport
+// errors surface raw, matching the previous inline behavior.
+func (a *tgAdapter) doPhotoUpload(ctx context.Context, u, contentType string, body *bytes.Buffer) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	return a.httpClient.Do(req)
+}
+
+// finishPhotoUpload handles one upload response. It returns done=true when
+// the photo was delivered (or done=false with a non-nil err on terminal
+// failures); done=false with nil err means the retry sleep completed and the
+// caller should attempt again.
+func (a *tgAdapter) finishPhotoUpload(ctx context.Context, resp *http.Response, attempt int) (done bool, err error) {
+	// Handle HTTP 429 with the same retry_after semantics as apiRequest
+	// (#1242): Telegram returns {"ok":false,"error_code":429,
+	// "parameters":{"retry_after":N}} with N in seconds.
+	if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
+		retryAfter := tgExtractRetryAfter(resp)
+		resp.Body.Close()
+		debug.Log("tg", "adapter=%s sendPhoto rate-limited (429), retry %d/%d after %v",
+			a.name, attempt+1, maxRateLimitRetries, retryAfter)
+		if err := sleepRetry(ctx, retryAfter); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	respData, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+	resp.Body.Close()
+	if err != nil {
+		return false, err
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(respData, &payload); err != nil && len(respData) > 0 {
+		return false, fmt.Errorf("Telegram sendPhoto parse error [%d]: %s", resp.StatusCode, strings.TrimSpace(string(respData)))
+	}
+	if resp.StatusCode >= 400 {
+		desc := strings.TrimSpace(stringFromAny(payload["description"]))
+		if desc == "" {
+			desc = http.StatusText(resp.StatusCode)
+		}
+		return false, fmt.Errorf("Telegram sendPhoto [%d]: %s", resp.StatusCode, desc)
+	}
+	if ok, _ := payload["ok"].(bool); !ok {
+		desc := strings.TrimSpace(stringFromAny(payload["description"]))
+		return false, fmt.Errorf("Telegram sendPhoto not ok: %s", desc)
+	}
+	return true, nil
 }
 
 // TriggerTyping sends a "typing" chat action to the Telegram chat.
