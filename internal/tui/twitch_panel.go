@@ -444,8 +444,12 @@ func (m Model) twitchBindingEntries() []twitchBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	// #2796: take the snapshot once - the live-map len above raced the
+	// Update loop's locked writes (#2337's twin, regressed in 14 panels
+	// because its scan test only covered wecom).
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformTwitch)) {
 			keys = append(keys, name)
 		}
