@@ -3113,6 +3113,29 @@ func collectCarriedModifiedPaths(msgs []provider.Message) []string {
 	return paths
 }
 
+// filePathInputKeys are the tool_use input keys that may designate the file
+// a tool operates on, in priority order (edit_file→file_path, write_file and
+// apply_patch→path, notebook_edit→notebook_path).
+var filePathInputKeys = [...]string{"path", "file_path", "notebook_path"}
+
+// toolInputFilePath returns the first non-empty string among the path input
+// keys of a tool_use block, or "" if none. Shared by the modified-files and
+// recent-files collectors.
+func toolInputFilePath(block provider.ContentBlock) string {
+	var input map[string]any
+	if err := json.Unmarshal(block.Input, &input); err != nil {
+		return ""
+	}
+	for _, key := range filePathInputKeys {
+		if raw, ok := input[key]; ok {
+			if path, ok := raw.(string); ok && path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
 // collectToolFilePaths walks msgs forward and returns up to limit distinct
 // file paths targeted by mutating tool_use inputs. Forward order keeps the
 // result chronological (oldest edit first), which reads naturally after a
@@ -3134,25 +3157,11 @@ func collectToolFilePaths(msgs []provider.Message, limit int) []string {
 			if _, ok := mutatingToolNames[block.ToolName]; !ok {
 				continue
 			}
-			var input map[string]any
-			if err := json.Unmarshal(block.Input, &input); err != nil {
-				continue
-			}
-			for _, key := range []string{"path", "file_path", "notebook_path"} {
-				raw, ok := input[key]
-				if !ok {
-					continue
+			if path := toolInputFilePath(block); path != "" {
+				if _, exists := seen[path]; !exists {
+					seen[path] = struct{}{}
+					paths = append(paths, path)
 				}
-				path, ok := raw.(string)
-				if !ok || path == "" {
-					continue
-				}
-				if _, exists := seen[path]; exists {
-					break
-				}
-				seen[path] = struct{}{}
-				paths = append(paths, path)
-				break
 			}
 		}
 	}
@@ -3218,25 +3227,11 @@ func collectRecentFilePaths(msgs []provider.Message, limit int, exclude map[stri
 			if block.Type != "tool_use" || len(block.Input) == 0 || len(paths) >= limit {
 				continue
 			}
-			var input map[string]any
-			if err := json.Unmarshal(block.Input, &input); err != nil {
-				continue
-			}
-			for _, key := range []string{"path", "file_path", "notebook_path"} {
-				raw, ok := input[key]
-				if !ok {
-					continue
+			if path := toolInputFilePath(block); path != "" {
+				if _, exists := seen[path]; !exists {
+					seen[path] = struct{}{}
+					paths = append(paths, path)
 				}
-				path, ok := raw.(string)
-				if !ok || path == "" {
-					continue
-				}
-				if _, exists := seen[path]; exists {
-					break
-				}
-				seen[path] = struct{}{}
-				paths = append(paths, path)
-				break
 			}
 		}
 	}
