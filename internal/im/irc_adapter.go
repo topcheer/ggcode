@@ -191,50 +191,21 @@ func (a *ircAdapter) run(ctx context.Context) {
 	}
 }
 
+// connectAndServe establishes one connection and serves it until the server
+// closes it, the context is cancelled, or the keepalive watchdog detects a
+// dead peer. Error prefixes below are load-bearing: run() surfaces them
+// verbatim in publishState "error" events.
 func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	addr := net.JoinHostPort(a.host, strconv.Itoa(a.port))
 	debug.Log("irc", "adapter=%s connecting to %s (TLS=%v proxy=%s)", a.name, addr, a.useTLS, a.proxy)
 
-	var conn net.Conn
-	var err error
-	if a.proxy != "" {
-		conn, err = proxyDial(a.proxy, addr)
-		if err != nil {
-			return fmt.Errorf("proxy connect: %w", err)
-		}
-		if a.useTLS {
-			tlsConn := tls.Client(conn, &tls.Config{ServerName: a.host})
-			if err := tlsConn.Handshake(); err != nil {
-				conn.Close()
-				return fmt.Errorf("tls handshake: %w", err)
-			}
-			conn = tlsConn
-		}
-	} else {
-		if a.useTLS {
-			conn, err = tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{})
-		} else {
-			conn, err = net.DialTimeout("tcp", addr, 15*time.Second)
-		}
-	}
+	conn, err := a.dialIRC(addr)
 	if err != nil {
-		return fmt.Errorf("connect: %w", err)
+		return err
 	}
 
-	a.mu.Lock()
-	a.conn = conn
-	a.connected = true
-	a.mu.Unlock()
-	a.publishState(true, "connected", "")
-	debug.Log("irc", "adapter=%s connected to %s", a.name, addr)
-
-	defer func() {
-		conn.Close()
-		a.mu.Lock()
-		a.conn = nil
-		a.connected = false
-		a.mu.Unlock()
-	}()
+	a.markConnected(conn, addr)
+	defer a.teardownConn(conn)
 
 	// Register
 	if a.password != "" {
@@ -243,16 +214,74 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 	a.sendRaw(fmt.Sprintf("NICK %s", a.nick))
 	a.sendRaw(fmt.Sprintf("USER %s 0 * :%s", a.nick, a.realName))
 
-	// Read loop
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 4096), 512*1024)
-
 	var lastPongNs atomic.Int64
 	lastPongNs.Store(time.Now().UnixNano())
 
-	// Keepalive: send periodic PING and detect dead connections.
-	// scanner.Scan() blocks indefinitely when the server goes silent,
-	// so the timeout must run in a separate goroutine.
+	keepAliveDone := a.startKeepalive(conn, &lastPongNs)
+	defer close(keepAliveDone)
+
+	return a.readLoop(ctx, conn, &lastPongNs)
+}
+
+// dialIRC opens the raw connection, honouring proxy and TLS settings.
+// Proxy connections wrap TLS with ServerName pinned to the IRC host;
+// direct TLS relies on default config with a 15s dial timeout.
+func (a *ircAdapter) dialIRC(addr string) (net.Conn, error) {
+	if a.proxy != "" {
+		conn, err := proxyDial(a.proxy, addr)
+		if err != nil {
+			return nil, fmt.Errorf("proxy connect: %w", err)
+		}
+		if a.useTLS {
+			tlsConn := tls.Client(conn, &tls.Config{ServerName: a.host})
+			if err := tlsConn.Handshake(); err != nil {
+				conn.Close()
+				return nil, fmt.Errorf("tls handshake: %w", err)
+			}
+			conn = tlsConn
+		}
+		return conn, nil
+	}
+	if a.useTLS {
+		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", addr, &tls.Config{})
+		if err != nil {
+			return nil, fmt.Errorf("connect: %w", err)
+		}
+		return conn, nil
+	}
+	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	return conn, nil
+}
+
+// markConnected records the live connection and publishes the connected state.
+func (a *ircAdapter) markConnected(conn net.Conn, addr string) {
+	a.mu.Lock()
+	a.conn = conn
+	a.connected = true
+	a.mu.Unlock()
+	a.publishState(true, "connected", "")
+	debug.Log("irc", "adapter=%s connected to %s", a.name, addr)
+}
+
+// teardownConn is the deferred cleanup for one connection attempt: close the
+// socket and clear the connection state. It runs after connectAndServe
+// returns (clean close, ctx cancel, or keepalive-detected dead peer).
+func (a *ircAdapter) teardownConn(conn net.Conn) {
+	conn.Close()
+	a.mu.Lock()
+	a.conn = nil
+	a.connected = false
+	a.mu.Unlock()
+}
+
+// startKeepalive launches the periodic PING sender / dead-connection watchdog.
+// scanner.Scan() blocks indefinitely when the server goes silent, so the
+// timeout must run in a separate goroutine. The caller must close the
+// returned channel exactly once (deferred in connectAndServe) to stop it.
+func (a *ircAdapter) startKeepalive(conn net.Conn, lastPongNs *atomic.Int64) chan struct{} {
 	keepAliveDone := make(chan struct{})
 	safego.Go("im.irc.keepalive", func() {
 		ticker := time.NewTicker(ircPingInterval)
@@ -271,7 +300,15 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 			}
 		}
 	})
-	defer close(keepAliveDone)
+	return keepAliveDone
+}
+
+// readLoop drains the connection, handing each parsed line to dispatchIRC.
+// It returns nil on context cancellation or clean close, and a wrapped
+// scanner error otherwise.
+func (a *ircAdapter) readLoop(ctx context.Context, conn net.Conn, lastPongNs *atomic.Int64) error {
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 0, 4096), 512*1024)
 
 	for scanner.Scan() {
 		if ctx.Err() != nil {
@@ -287,45 +324,59 @@ func (a *ircAdapter) connectAndServe(ctx context.Context) error {
 			continue
 		}
 
-		switch msg.Command {
-		case "PING":
-			a.sendRaw(fmt.Sprintf("PONG :%s", msg.Trailing))
-			lastPongNs.Store(time.Now().UnixNano())
-		case "PONG":
-			lastPongNs.Store(time.Now().UnixNano())
-		case "001": // RPL_WELCOME
-			debug.Log("irc", "adapter=%s registered as %s", a.name, a.nick)
-			// NickServ identify
-			if a.nickPass != "" {
-				a.sendRaw(fmt.Sprintf("PRIVMSG NickServ :IDENTIFY %s", a.nickPass))
-			}
-			// Join channels
-			for _, ch := range a.channels {
-				ch = strings.TrimSpace(ch)
-				if ch != "" {
-					a.sendRaw(fmt.Sprintf("JOIN %s", ch))
-					debug.Log("irc", "adapter=%s joining %s", a.name, ch)
-				}
-			}
-		case "433": // NICK in use
-			newNick := a.nick + "_"
-			debug.Log("irc", "adapter=%s nick in use, trying %s", a.name, newNick)
-			a.mu.Lock()
-			a.nick = newNick
-			a.mu.Unlock()
-			a.sendRaw(fmt.Sprintf("NICK %s", newNick))
-		case "PRIVMSG":
-			a.handlePRIVMSG(ctx, msg)
-		}
-
+		a.dispatchIRC(ctx, msg, lastPongNs)
 	}
 
 	// Connection closed (by keepalive goroutine on timeout, or by server)
-
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
 	return nil
+}
+
+// dispatchIRC routes one inbound IRC message to its per-command handler.
+func (a *ircAdapter) dispatchIRC(ctx context.Context, msg *ircMessage, lastPongNs *atomic.Int64) {
+	switch msg.Command {
+	case "PING":
+		a.sendRaw(fmt.Sprintf("PONG :%s", msg.Trailing))
+		lastPongNs.Store(time.Now().UnixNano())
+	case "PONG":
+		lastPongNs.Store(time.Now().UnixNano())
+	case "001": // RPL_WELCOME
+		a.handleWelcome()
+	case "433": // NICK in use
+		a.handleNickInUse()
+	case "PRIVMSG":
+		a.handlePRIVMSG(ctx, msg)
+	}
+}
+
+// handleWelcome reacts to RPL_WELCOME: NickServ identify (optional), then
+// channel joins, skipping blank/whitespace-only entries.
+func (a *ircAdapter) handleWelcome() {
+	debug.Log("irc", "adapter=%s registered as %s", a.name, a.nick)
+	// NickServ identify
+	if a.nickPass != "" {
+		a.sendRaw(fmt.Sprintf("PRIVMSG NickServ :IDENTIFY %s", a.nickPass))
+	}
+	// Join channels
+	for _, ch := range a.channels {
+		ch = strings.TrimSpace(ch)
+		if ch != "" {
+			a.sendRaw(fmt.Sprintf("JOIN %s", ch))
+			debug.Log("irc", "adapter=%s joining %s", a.name, ch)
+		}
+	}
+}
+
+// handleNickInUse reacts to 433 by suffixing "_" onto the nick and retrying.
+func (a *ircAdapter) handleNickInUse() {
+	newNick := a.nick + "_"
+	debug.Log("irc", "adapter=%s nick in use, trying %s", a.name, newNick)
+	a.mu.Lock()
+	a.nick = newNick
+	a.mu.Unlock()
+	a.sendRaw(fmt.Sprintf("NICK %s", newNick))
 }
 
 // ---------------------------------------------------------------------------
