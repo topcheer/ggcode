@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -81,6 +82,15 @@ type actionAnnihilateState struct {
 	// recent actions within the lookback window (max 20).
 	actions []trackedAction
 
+	// #2684: new-commit hash produced by each successful git_commit, keyed
+	// by the iteration that made it. The commit->revert pair requires the
+	// revert's commit argument to match one of these hashes (prefix
+	// compare, both directions of abbreviation) -- reverting an unrelated
+	// historical commit is a first-class bug-fix workflow, not net-zero
+	// waste. Entries are pruned when their iteration leaves the lookback
+	// window alongside s.actions.
+	commitHashes map[int]string
+
 	// cancellation count this run.
 	cancelCount int
 	// max warnings per run.
@@ -94,8 +104,9 @@ type actionAnnihilateState struct {
 // newActionAnnihilateState creates a new detector instance.
 func newActionAnnihilateState() *actionAnnihilateState {
 	return &actionAnnihilateState{
-		maxWarns: 2,
-		lookback: 20,
+		maxWarns:     2,
+		lookback:     20,
+		commitHashes: make(map[int]string),
 	}
 }
 
@@ -105,6 +116,21 @@ func (s *actionAnnihilateState) reset() {
 	s.actions = nil
 	s.cancelCount = 0
 	s.warnsIssued = 0
+	s.commitHashes = make(map[int]string)
+}
+
+// recordCommitHash stores the new-commit hash that a successful git_commit
+// at the given iteration produced, parsed from the tool result by the wiring
+// layer (extractNewCommitHash). A commit whose hash could not be parsed is
+// simply never recorded and can therefore never match a revert -- failing
+// safe toward silence instead of a factually false "net-zero" claim (#2684).
+func (s *actionAnnihilateState) recordCommitHash(iteration int, hash string) {
+	if hash == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commitHashes[iteration] = hash
 }
 
 // annihilationPairs defines known cancellation patterns.
@@ -120,7 +146,11 @@ var annihilationPairs = []annihilationPair{
 		priorTool:   "git_commit",
 		cancelTool:  "git_revert",
 		description: "git_commit then git_revert (committed then reverted)",
-		matchFn:     nil, // any commit→revert pair within window
+		// #2684: matchFn stays nil because args alone cannot prove the revert
+		// targets the prior commit. The wiring records each commit result hash
+		// (recordCommitHash) and checkAnnihilation enforces a hash-prefix match
+		// for this pair, so only reverting YOUR OWN commit fires the warning.
+		matchFn: nil, // any commit→revert pair within window
 	},
 	{
 		priorTool:   "edit_file",
@@ -172,7 +202,13 @@ func (s *actionAnnihilateState) recordToolCall(toolName string, args json.RawMes
 
 	// Trim to lookback window.
 	if len(s.actions) > s.lookback {
+		dropped := s.actions[:len(s.actions)-s.lookback]
 		s.actions = s.actions[len(s.actions)-s.lookback:]
+		// #2684: drop commit hashes whose actions left the window so the
+		// side map cannot grow unbounded over a long run.
+		for _, d := range dropped {
+			delete(s.commitHashes, d.iteration)
+		}
 	}
 
 	return warning
@@ -212,6 +248,14 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 				break
 			}
 			if prior.tool != pair.priorTool {
+				continue
+			}
+			// #2684: commit->revert must target the agent's own commit. The
+			// revert's commit argument (an arbitrary historical hash otherwise)
+			// is prefix-compared against the hash the wiring recorded for this
+			// prior commit. No recorded hash means we cannot verify -- skip
+			// (fail-safe silence) rather than claim a false net-zero.
+			if pair.priorTool == "git_commit" && !s.commitHashMatches(prior.iteration, currentArgs) {
 				continue
 			}
 			// Only match if they're close enough in the window (already trimmed).
@@ -493,4 +537,43 @@ func extractOps(args json.RawMessage) []fileOpEntry {
 		}
 	}
 	return result
+}
+
+// commitHashMatches reports whether the git_revert call's commit argument
+// targets the commit recorded at iter. Abbreviated hashes are accepted in
+// either direction (git accepts them as prefixes). Caller must hold s.mu.
+func (s *actionAnnihilateState) commitHashMatches(iter int, revertArgs json.RawMessage) bool {
+	var parsed struct {
+		Commit string `json:"commit"`
+	}
+	if err := json.Unmarshal(revertArgs, &parsed); err != nil || parsed.Commit == "" {
+		return false
+	}
+	hash, ok := s.commitHashes[iter]
+	if !ok || hash == "" {
+		return false
+	}
+	target := strings.ToLower(parsed.Commit)
+	recorded := strings.ToLower(hash)
+	shorter := len(target)
+	if len(recorded) < shorter {
+		shorter = len(recorded)
+	}
+	return target[:shorter] == recorded[:shorter]
+}
+
+// newCommitHashRegex matches the "[branch abbrev-hash] summary" line git
+// prints on a successful commit, e.g. "[main 5c2b1a3] fix A".
+var newCommitHashRegex = regexp.MustCompile(`\[[^\]\s]+ ([0-9a-f]{7,40})\]`)
+
+// extractNewCommitHash pulls the new commit hash out of a successful
+// git_commit tool result (raw `git commit` output). Empty when no hash can
+// be found (e.g. nothing-to-commit, non-git VCS, unexpected output) -- the
+// caller then leaves the commit unrecorded, failing safe (#2684).
+func extractNewCommitHash(content string) string {
+	m := newCommitHashRegex.FindStringSubmatch(content)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
