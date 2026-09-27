@@ -17,7 +17,7 @@ Key responsibilities:
 - `CompactSupersededReads()` — replace stale re-reads of the same file.
 - `ClearOldToolResults(keepN)` — replace old tool_result outputs with placeholders.
 - `ClearOldToolUseInputs()` — truncate old edit/write Input arguments.
-- `buildPostCompactState(msgs)` — build a short post-compact state string (recent files + todo summary).
+- `buildPostCompactState(msgs)` — build a short post-compact state string (files modified this session + recent files + todo summary).
 
 ## Token Estimation
 
@@ -65,7 +65,7 @@ The precompact trigger is `AutoCompactThreshold()` = 99% of the usable prompt bu
 
 ## Post-Compact State
 
-`buildPostCompactState()` currently preserves the most recent file paths (up to 5) and a todo summary, if any. It does **not** currently preserve arbitrary user constraint sentences across compaction; those still live only in the summarization prompt and the summarized text.
+`buildPostCompactState()` preserves three things: the files the agent modified (up to 8, listed under `Files modified this session`), the most recent file paths (up to 5, under `Recent files`), and a todo summary, if any. The modified-files list is rebuilt from mutating tool_use inputs (`edit_file`, `write_file`, `multi_edit`, `notebook_edit`, `apply_patch`) and is re-collected from prior post-compact state messages, so it survives compaction chains instead of aging out of the recent window. It does **not** currently preserve arbitrary user constraint sentences across compaction; those still live only in the summarization prompt and the summarized text.
 
 ## System Prompt Sections (Background SectionCollector)
 
