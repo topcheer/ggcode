@@ -260,6 +260,11 @@ td .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
           <label>Key</label>
           <input type="password" id="inp-apikey" placeholder="sk-... or ${ENV_VAR}">
         </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:normal">
+            <input type="checkbox" id="chk-vendor-scoped"> Vendor-level key (applies to all endpoints of this vendor)
+          </label>
+        </div>
         <button class="btn btn-primary" onclick="saveAPIKey()">Save Key</button>
       </div>
     </div>
@@ -702,7 +707,7 @@ async function saveAPIKey() {
     await api(`/api/vendors/${config.vendor}/endpoints/${config.endpoint}/apikey`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ api_key: document.getElementById('inp-apikey').value, vendor_scoped: false })
+      body: JSON.stringify({ api_key: document.getElementById('inp-apikey').value, vendor_scoped: document.getElementById('chk-vendor-scoped').checked })
     });
     document.getElementById('inp-apikey').value = '';
     toast('API key saved');
