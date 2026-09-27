@@ -238,8 +238,46 @@ func (a *configAccess) getRuntimeSectionKey(key string) (string, bool, error) {
 		return v, true, err
 	case key == "scope":
 		return a.cfg.GetSaveScope(), true, nil
+	case key == "scope.origins":
+		v, err := a.getScopeOrigins()
+		return v, true, err
+	case strings.HasPrefix(key, "scope.origin."):
+		target := strings.TrimSpace(strings.TrimPrefix(key, "scope.origin."))
+		if target == "" {
+			return "", true, fmt.Errorf("scope.origin requires a key suffix (e.g. scope.origin.default_mode)")
+		}
+		if a.cfg.IsInstanceField(target) {
+			return "instance", true, nil
+		}
+		return "global", true, nil
 	}
 	return "", false, nil
+}
+
+// getScopeOrigins returns a read-only provenance overview of the effective
+// configuration (analogous to Codex /debug-config, upstream openai/codex#26255):
+// which top-level config keys are currently sourced from the instance layer,
+// the sticky save scope, and the instance paths when an instance config is
+// attached. It deliberately contains no config values, so secrets cannot leak
+// through it.
+func (a *configAccess) getScopeOrigins() (string, error) {
+	attached := a.cfg.HasInstanceConfigAttached()
+	payload := map[string]interface{}{
+		"save_scope":        a.cfg.GetSaveScope(),
+		"instance_attached": attached,
+		"instance_fields":   a.cfg.InstanceFields(),
+		"note":              "keys not listed in instance_fields resolve from the global config file or built-in defaults",
+	}
+	if attached {
+		ws := a.cfg.InstanceWorkspace()
+		payload["instance_workspace"] = ws
+		payload["instance_config_file"] = config.InstanceConfigPath(ws)
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal scope origins: %w", err)
+	}
+	return string(b), nil
 }
 
 // --- Set ---

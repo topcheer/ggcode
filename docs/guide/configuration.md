@@ -17,6 +17,14 @@ ggcode stores its configuration in `~/.ggcode/ggcode.yaml`. See `ggcode.example.
 
 Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=instance` in the config tool to save settings for a specific workspace only.
 
+### Scope Provenance
+
+To see which config layer currently supplies each top-level key, use the config tool's read-only provenance keys:
+
+- `scope.origins` — JSON overview: `save_scope` (sticky save target), `instance_attached`, `instance_fields` (top-level keys sourced from the instance layer; all other keys resolve from the global config file or built-in defaults), and the instance workspace/config paths when attached. Config **values** are never included, so it is safe to share in issue reports.
+- `scope.origin.<key>` — per-key answer, `instance` or `global` (e.g. `scope.origin.default_mode`).
+
+
 ## Core Settings
 
 | Key | Type | Description |

@@ -677,6 +677,17 @@ func (c *Config) InstanceFields() []string {
 	return keys
 }
 
+// IsInstanceField reports whether the given top-level YAML key is currently
+// sourced from the instance config layer. This is the read-side provenance
+// predicate behind config introspection (see InstanceFields): keys not
+// registered here resolve from the global config file or built-in defaults.
+func (c *Config) IsInstanceField(key string) bool {
+	if c == nil || key == "" {
+		return false
+	}
+	return c.instanceFields[key]
+}
+
 // SetSaveScope records which config target future save helpers should write to.
 func (c *Config) SetSaveScope(scope string) error {
 	if c == nil {
