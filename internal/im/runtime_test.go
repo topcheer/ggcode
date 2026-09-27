@@ -1133,3 +1133,47 @@ func TestClaimUnclaimedBindingsNilStoreNoPanic(t *testing.T) {
 	m.bindingStore = NewMemoryBindingStore()
 	m.claimUnclaimedBindings("sess-1")
 }
+
+func TestPairingSlotStale(t *testing.T) {
+	now := time.Now()
+	base := PairingChallenge{RequestedAt: now.Add(-time.Minute), LastInboundAt: now.Add(-time.Minute)}
+
+	if stale, _, _ := pairingSlotStale(base, true, now); stale {
+		t.Fatal("fresh same-channel slot should not be stale")
+	}
+	if stale, _, _ := pairingSlotStale(base, false, now); stale {
+		t.Fatal("fresh different-channel slot should not be stale")
+	}
+	old := PairingChallenge{RequestedAt: now.Add(-2 * pairingChallengeTTL), LastInboundAt: now}
+	if stale, _, _ := pairingSlotStale(old, true, now); !stale {
+		t.Fatal("TTL-expired slot should be stale even for same channel")
+	}
+	idle := PairingChallenge{RequestedAt: now.Add(-2 * pairingPreemptIdleAfter), LastInboundAt: now.Add(-2 * pairingPreemptIdleAfter)}
+	if stale, _, _ := pairingSlotStale(idle, false, now); !stale {
+		t.Fatal("idle different-channel slot should be stale")
+	}
+	if stale, _, _ := pairingSlotStale(idle, true, now); stale {
+		t.Fatal("idle same-channel slot should not be stale")
+	}
+	refreshed := PairingChallenge{RequestedAt: now.Add(-2 * pairingPreemptIdleAfter), LastInboundAt: now.Add(-time.Second)}
+	if stale, _, _ := pairingSlotStale(refreshed, false, now); stale {
+		t.Fatal("recently active slot should not be stale")
+	}
+}
+
+func TestPairingChannelAlreadyBound(t *testing.T) {
+	if pairingChannelAlreadyBound(nil, "qq", "c1") {
+		t.Fatal("nil binding is not bound")
+	}
+	b := &ChannelBinding{Adapter: "qq", ChannelID: "c1"}
+	if !pairingChannelAlreadyBound(b, "qq", "c1") {
+		t.Fatal("matching binding should count as already bound")
+	}
+	if pairingChannelAlreadyBound(b, "qq", "other") {
+		t.Fatal("different channel should not count as bound")
+	}
+	blank := &ChannelBinding{Adapter: "qq", ChannelID: "   "}
+	if pairingChannelAlreadyBound(blank, "qq", "   ") {
+		t.Fatal("blank ChannelID should never count as bound")
+	}
+}

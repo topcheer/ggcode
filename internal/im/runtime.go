@@ -828,121 +828,164 @@ func (m *Manager) HandleInbound(ctx context.Context, msg InboundMessage) error {
 // to complete binding and obtain the ChannelID/TargetID.
 func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error) {
 	m.mu.Lock()
+	result, notify, err := m.pairingInboundLocked(msg)
+	m.mu.Unlock()
+	if notify != nil {
+		notify()
+	}
+	return result, err
+}
+
+// pairingInboundLocked runs the pairing state machine with m.mu held. The
+// returned callback (when non-nil) must be invoked by the caller after
+// releasing m.mu; it fires the status snapshot callback and any post-unlock
+// side effects (e.g. the rebind notice) in their original order.
+func (m *Manager) pairingInboundLocked(msg InboundMessage) (PairingResult, func(), error) {
 	if m.session == nil {
-		m.mu.Unlock()
-		return PairingResult{}, ErrNoSessionBound
+		return PairingResult{}, nil, ErrNoSessionBound
 	}
 	// Silently ignore pairing for muted adapters
 	if b, ok := m.currentBindings[msg.Envelope.Adapter]; ok && b.Muted {
-		m.mu.Unlock()
-		return PairingResult{}, nil
+		return PairingResult{}, nil, nil
 	}
 	if msg.Envelope.ReceivedAt.IsZero() {
 		msg.Envelope.ReceivedAt = time.Now()
 	}
 	channelID := strings.TrimSpace(msg.Envelope.ChannelID)
 	if channelID == "" {
-		m.mu.Unlock()
-		return PairingResult{}, nil
+		return PairingResult{}, nil, nil
 	}
 	key := pairingStateKey(msg.Envelope.Adapter, channelID)
 	if state, ok := m.pairingStates[key]; ok && state.IsBlacklisted() {
-		m.mu.Unlock()
 		return PairingResult{
 			Consumed:  true,
 			ReplyText: fmt.Sprintf("该 %s 渠道因多次被拒绝，已被加入黑名单。", msg.Envelope.Platform),
-		}, nil
+		}, nil, nil
 	}
 
 	current := cloneBinding(m.currentBindings[msg.Envelope.Adapter])
-	if current != nil &&
-		current.Adapter == msg.Envelope.Adapter &&
-		strings.TrimSpace(current.ChannelID) != "" &&
-		current.ChannelID == channelID {
-		m.mu.Unlock()
-		return PairingResult{}, nil
+	if pairingChannelAlreadyBound(current, msg.Envelope.Adapter, channelID) {
+		return PairingResult{}, nil, nil
 	}
 
 	if m.pendingPairing != nil {
 		pending := *m.pendingPairing
 		pending.ExistingBinding = cloneBinding(m.pendingPairing.ExistingBinding)
-		sameChannel := pending.Adapter == msg.Envelope.Adapter && pending.ChannelID == channelID
-		// #719 self-healing: the single pairing slot must not be held hostage.
-		// Drop a challenge older than pairingChallengeTTL, or idle longer than
-		// pairingPreemptIdleAfter when a different channel asks, then fall
-		// through so this message creates a fresh challenge.
-		now := time.Now()
-		age := now.Sub(pending.RequestedAt)
-		lastActive := pending.RequestedAt
-		if pending.LastInboundAt.After(lastActive) {
-			lastActive = pending.LastInboundAt
+		result, notify, consumed, err := m.resolvePendingPairingLocked(key, pending, msg, channelID)
+		if consumed || err != nil {
+			return result, notify, err
 		}
-		idle := now.Sub(lastActive)
-		if age > pairingChallengeTTL || (!sameChannel && idle > pairingPreemptIdleAfter) {
-			debug.Log("im", "HandlePairingInbound: dropping stale pairing slot adapter=%s channel=%s age=%s idle=%s", pending.Adapter, pending.ChannelID, age.Truncate(time.Second), idle.Truncate(time.Second))
-			m.pendingPairing = nil
-		} else if sameChannel {
-			if normalizePairingCode(msg.Text) == pending.Code {
-				newBinding := buildPairingBinding(msg, pending.ExistingBinding, m.session.Workspace)
-				bound, err := m.bindChannelLocked(newBinding)
-				if err != nil {
-					m.mu.Unlock()
-					return PairingResult{}, err
-				}
-				delete(m.pairingStates, key)
-				if err := m.savePairingStatesLocked(); err != nil {
-					m.mu.Unlock()
-					return PairingResult{}, err
-				}
-				m.pendingPairing = nil
-				snapshot, cb := m.snapshotAndCallbackLocked()
-				m.mu.Unlock()
-				if cb != nil {
-					cb(snapshot)
-				}
-				var previous *ChannelBinding
-				if pending.Kind == PairingKindRebind && pending.ExistingBinding != nil && strings.TrimSpace(pending.ExistingBinding.ChannelID) != "" {
-					previous = cloneBinding(pending.ExistingBinding)
-				}
-				reply := "绑定成功，现在可以继续对话了。"
-				if pending.Kind == PairingKindRebind {
-					reply = fmt.Sprintf("绑定成功，已切换到当前 %s 渠道。", msg.Envelope.Platform)
-				}
-				copy := bound
-				return PairingResult{
-					Consumed:        true,
-					Kind:            pending.Kind,
-					ReplyText:       reply,
-					Bound:           true,
-					PreviousBinding: previous,
-					NewBinding:      &copy,
-				}, nil
-			}
-			// #719: bound the brute-force surface of the 4-digit code.
-			if result, handled, err := m.recordWrongCodeLocked(key, pending, msg.Envelope.ReceivedAt); handled {
-				m.mu.Unlock()
-				return result, err
-			}
-			m.mu.Unlock()
-			return PairingResult{
-				Consumed:  true,
-				Kind:      pending.Kind,
-				ReplyText: "绑定码不正确，请输入屏幕上显示的 4 位绑定码。",
-			}, nil
-		} else {
-			m.mu.Unlock()
-			return PairingResult{
-				Consumed:  true,
-				Kind:      pending.Kind,
-				ReplyText: fmt.Sprintf("当前已有其他渠道在等待绑定，请在对应 %s 渠道输入屏幕上的 4 位绑定码。", msg.Envelope.Platform),
-			}, nil
-		}
+		// #719: stale slot dropped, fall through to create a fresh challenge.
 	}
 
+	return m.createPairingChallengeLocked(msg, channelID, current)
+}
+
+// pairingChannelAlreadyBound reports whether the requesting channel already
+// matches the adapter's active binding, in which case pairing is a no-op.
+func pairingChannelAlreadyBound(current *ChannelBinding, adapter, channelID string) bool {
+	return current != nil &&
+		current.Adapter == adapter &&
+		strings.TrimSpace(current.ChannelID) != "" &&
+		current.ChannelID == channelID
+}
+
+// pairingSlotStale reports whether the pending challenge should be dropped
+// (#719 self-healing): the challenge is older than pairingChallengeTTL, or it
+// has been idle longer than pairingPreemptIdleAfter while a different channel
+// asks, so the single pairing slot is not held hostage.
+func pairingSlotStale(pending PairingChallenge, sameChannel bool, now time.Time) (stale bool, age, idle time.Duration) {
+	age = now.Sub(pending.RequestedAt)
+	lastActive := pending.RequestedAt
+	if pending.LastInboundAt.After(lastActive) {
+		lastActive = pending.LastInboundAt
+	}
+	idle = now.Sub(lastActive)
+	return age > pairingChallengeTTL || (!sameChannel && idle > pairingPreemptIdleAfter), age, idle
+}
+
+// resolvePendingPairingLocked routes an inbound message against the pending
+// pairing challenge. consumed=false with a nil error means the stale slot was
+// dropped and the caller should create a fresh challenge for this message.
+func (m *Manager) resolvePendingPairingLocked(key string, pending PairingChallenge, msg InboundMessage, channelID string) (PairingResult, func(), bool, error) {
+	sameChannel := pending.Adapter == msg.Envelope.Adapter && pending.ChannelID == channelID
+	stale, age, idle := pairingSlotStale(pending, sameChannel, time.Now())
+	if stale {
+		debug.Log("im", "HandlePairingInbound: dropping stale pairing slot adapter=%s channel=%s age=%s idle=%s", pending.Adapter, pending.ChannelID, age.Truncate(time.Second), idle.Truncate(time.Second))
+		m.pendingPairing = nil
+		return PairingResult{}, nil, false, nil
+	}
+	if sameChannel {
+		if normalizePairingCode(msg.Text) == pending.Code {
+			boundResult, boundNotify, bindErr := m.bindPendingPairingLocked(key, pending, msg)
+			return boundResult, boundNotify, true, bindErr
+		}
+		// #719: bound the brute-force surface of the 4-digit code.
+		if wrongResult, handled, wrongErr := m.recordWrongCodeLocked(key, pending, msg.Envelope.ReceivedAt); handled {
+			return wrongResult, nil, true, wrongErr
+		}
+		return PairingResult{
+			Consumed:  true,
+			Kind:      pending.Kind,
+			ReplyText: "绑定码不正确，请输入屏幕上显示的 4 位绑定码。",
+		}, nil, true, nil
+	}
+	return PairingResult{
+		Consumed:  true,
+		Kind:      pending.Kind,
+		ReplyText: fmt.Sprintf("当前已有其他渠道在等待绑定，请在对应 %s 渠道输入屏幕上的 4 位绑定码。", msg.Envelope.Platform),
+	}, nil, true, nil
+}
+
+// bindPendingPairingLocked completes binding for a correct pairing code: it
+// binds the channel, persists pairing state, clears the pending slot, and
+// builds the success result. The returned callback fires the status snapshot
+// callback after the caller releases m.mu.
+func (m *Manager) bindPendingPairingLocked(key string, pending PairingChallenge, msg InboundMessage) (PairingResult, func(), error) {
+	newBinding := buildPairingBinding(msg, pending.ExistingBinding, m.session.Workspace)
+	bound, err := m.bindChannelLocked(newBinding)
+	if err != nil {
+		return PairingResult{}, nil, err
+	}
+	delete(m.pairingStates, key)
+	if err := m.savePairingStatesLocked(); err != nil {
+		return PairingResult{}, nil, err
+	}
+	m.pendingPairing = nil
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	var previous *ChannelBinding
+	if pending.Kind == PairingKindRebind && pending.ExistingBinding != nil && strings.TrimSpace(pending.ExistingBinding.ChannelID) != "" {
+		previous = cloneBinding(pending.ExistingBinding)
+	}
+	reply := "绑定成功，现在可以继续对话了。"
+	if pending.Kind == PairingKindRebind {
+		reply = fmt.Sprintf("绑定成功，已切换到当前 %s 渠道。", msg.Envelope.Platform)
+	}
+	boundCopy := bound
+	return PairingResult{
+		Consumed:        true,
+		Kind:            pending.Kind,
+		ReplyText:       reply,
+		Bound:           true,
+		PreviousBinding: previous,
+		NewBinding:      &boundCopy,
+	}, func() {
+		if cb != nil {
+			cb(snapshot)
+		}
+	}, nil
+}
+
+// createPairingChallengeLocked starts a new pairing challenge for the
+// requesting channel (bind, or rebind when the adapter already has a
+// different bound channel). The returned callback fires the status snapshot
+// callback and, for rebind, pushes the pairing code notice to the old channel
+// after the caller releases m.mu — preserving the original unlock-then-notify
+// ordering.
+func (m *Manager) createPairingChallengeLocked(msg InboundMessage, channelID string, current *ChannelBinding) (PairingResult, func(), error) {
 	code, err := newPairingCode()
 	if err != nil {
-		m.mu.Unlock()
-		return PairingResult{}, err
+		return PairingResult{}, nil, err
 	}
 	kind := PairingKindBind
 	if current != nil && strings.TrimSpace(current.ChannelID) != "" {
@@ -964,36 +1007,37 @@ func (m *Manager) HandlePairingInbound(msg InboundMessage) (PairingResult, error
 		ExistingBinding:      current,
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
-	m.mu.Unlock()
-	if cb != nil {
-		cb(snapshot)
-	}
 	reply := "请在 ggcode 屏幕上查看 4 位绑定码，并在这里输入完成绑定。"
 	if kind == PairingKindRebind {
 		reply = "该 bot 当前已绑定其他渠道。请在 ggcode 屏幕上查看 4 位绑定码，并在这里输入完成切换。"
 	}
 	// For rebind: also push the pairing code to the old channel so the user
 	// can see it there without having to watch the ggcode screen.
-	if kind == PairingKindRebind && current != nil && strings.TrimSpace(current.ChannelID) != "" {
-		notice := fmt.Sprintf("⚠ 有新渠道正在请求绑定到当前工作空间。配对码：%s\n如非本人操作请忽略，本人操作请在 ggcode 屏幕确认。", code)
-		go func(b ChannelBinding) {
-			defer safego.Recover("im.rebindNotice")
-			_ = m.SendDirect(context.Background(), b, OutboundEvent{
-				Kind: OutboundEventText,
-				Text: notice,
-			})
-		}(*current)
-	}
+	rebindNotice := kind == PairingKindRebind && current != nil && strings.TrimSpace(current.ChannelID) != ""
 	return PairingResult{
 		Consumed:  true,
 		Kind:      kind,
 		ReplyText: reply,
+	}, func() {
+		if cb != nil {
+			cb(snapshot)
+		}
+		if rebindNotice {
+			notice := fmt.Sprintf("⚠ 有新渠道正在请求绑定到当前工作空间。配对码：%s\n如非本人操作请忽略，本人操作请在 ggcode 屏幕确认。", code)
+			go func(b ChannelBinding) {
+				defer safego.Recover("im.rebindNotice")
+				_ = m.SendDirect(context.Background(), b, OutboundEvent{
+					Kind: OutboundEventText,
+					Text: notice,
+				})
+			}(*current)
+		}
 	}, nil
 }
 
 // recordWrongCodeLocked counts one wrong-code submission against the pending
-// challenge (issue #719). Caller must hold m.mu and is responsible for
-// unlocking. When the attempt budget (maxPairingWrongCodeAttempts) is
+// challenge (issue #719). Caller must hold m.mu. When the attempt budget
+// (maxPairingWrongCodeAttempts) is
 // exhausted it discards the challenge, advances the channel's RejectCount
 // through the existing blacklist mechanism, persists pairing state, and
 // returns (cancelResult, true, nil), or (zero, true, err) if persistence
