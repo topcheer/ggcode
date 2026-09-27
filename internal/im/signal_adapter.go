@@ -236,69 +236,20 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 			return nil
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "GET", receiveURL, nil)
-		if err != nil {
-			debug.Log("signal", "adapter=%s receive request error: %v", a.name, err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
+		body, outcome := a.receivePollOnce(ctx, client, receiveURL)
+		switch outcome {
+		case ssePollStop:
+			return nil
+		case ssePollRetry:
+			if !sseBackoff(ctx) {
 				return nil
 			}
 			continue
 		}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			debug.Log("signal", "adapter=%s receive error: %v", a.name, err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
-				return nil
-			}
-			continue
-		}
-
-		// #405: migrate to imagepkg.ReadLimited (missed in the #388 sweep) —
-		// bare LimitReader silently truncated >2MB attachments into corrupt
-		// data; the limit is also unified to the shared 20MB.
-		body, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
-		resp.Body.Close()
-		if err != nil {
-			// #432: oversized-body / read errors must back off like every
-			// other error path in this loop - a bare continue hot-looped the
-			// CPU and the signal-cli/proxy server when the endpoint kept
-			// returning huge bodies.
-			debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
-				return nil
-			}
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-			debug.Log("signal", "adapter=%s receive status %d: %s", a.name, resp.StatusCode, string(body))
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
-				return nil
-			}
-			continue
-		}
-
-		var envelopes []map[string]any
-		if err := json.Unmarshal(body, &envelopes); err != nil {
-			// #432/#968: a non-JSON body (e.g. a proxy injecting an HTML error
-			// page) must back off like every other error path in this loop -
-			// a bare continue hot-looped the CPU and the server.
-			debug.Log("signal", "adapter=%s receive parse error: %v", a.name, err)
-			select {
-			case <-time.After(5 * time.Second):
-			case <-ctx.Done():
+		envelopes, ok := a.parseReceiveEnvelopes(body)
+		if !ok {
+			if !sseBackoff(ctx) {
 				return nil
 			}
 			continue
@@ -310,6 +261,90 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 			a.processEnvelope(ctx, env)
 		}
 	}
+}
+
+// signalReceiveBackoff is the fixed backoff applied after every failed round
+// of the signal receive loop (#432: prevents hot-looping against the
+// signal-cli/proxy server).
+const signalReceiveBackoff = 5 * time.Second
+
+// ssePollOutcome classifies one long-poll round of the receive loop.
+type ssePollOutcome int
+
+const (
+	ssePollOK    ssePollOutcome = iota // a 200/204 body is ready to parse
+	ssePollRetry                       // transient failure: back off, then retry
+	ssePollStop                        // ctx cancelled: stop the loop with nil
+)
+
+// sseBackoffWait blocks for d or until ctx is done. It returns false when ctx
+// was cancelled while waiting — the receive loop must then stop (returning
+// nil, matching its historical shutdown semantics).
+func sseBackoffWait(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// sseBackoff applies the receive loop's fixed backoff.
+func sseBackoff(ctx context.Context) bool {
+	return sseBackoffWait(ctx, signalReceiveBackoff)
+}
+
+// receivePollOnce performs one long-poll round against /v1/receive/ and
+// classifies the outcome. Every failure branch keeps its historical debug
+// log verbatim; the caller owns the backoff/stop decision.
+func (a *signalAdapter) receivePollOnce(ctx context.Context, client *http.Client, receiveURL string) ([]byte, ssePollOutcome) {
+	req, err := http.NewRequestWithContext(ctx, "GET", receiveURL, nil)
+	if err != nil {
+		debug.Log("signal", "adapter=%s receive request error: %v", a.name, err)
+		return nil, ssePollRetry
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ssePollStop
+		}
+		debug.Log("signal", "adapter=%s receive error: %v", a.name, err)
+		return nil, ssePollRetry
+	}
+
+	// #405: migrate to imagepkg.ReadLimited (missed in the #388 sweep) —
+	// bare LimitReader silently truncated >2MB attachments into corrupt
+	// data; the limit is also unified to the shared 20MB.
+	body, err := imagepkg.ReadLimited(resp.Body, imagepkg.MaxSize)
+	resp.Body.Close()
+	if err != nil {
+		// #432: oversized-body / read errors must back off like every
+		// other error path in this loop - a bare continue hot-looped the
+		// CPU and the signal-cli/proxy server when the endpoint kept
+		// returning huge bodies.
+		debug.Log("signal", "adapter=%s receive read error: %v", a.name, err)
+		return nil, ssePollRetry
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		debug.Log("signal", "adapter=%s receive status %d: %s", a.name, resp.StatusCode, string(body))
+		return nil, ssePollRetry
+	}
+
+	return body, ssePollOK
+}
+
+// parseReceiveEnvelopes decodes one long-poll response body. A non-JSON body
+// (e.g. a proxy injecting an HTML error page) is a retryable failure
+// (#432/#968: it must back off like every other error path, not hot-loop).
+func (a *signalAdapter) parseReceiveEnvelopes(body []byte) ([]map[string]any, bool) {
+	var envelopes []map[string]any
+	if err := json.Unmarshal(body, &envelopes); err != nil {
+		debug.Log("signal", "adapter=%s receive parse error: %v", a.name, err)
+		return nil, false
+	}
+	return envelopes, true
 }
 
 // ---------------------------------------------------------------------------
