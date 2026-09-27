@@ -316,81 +316,25 @@ func (a *signalAdapter) sseLoop(ctx context.Context) error {
 // Message processing
 // ---------------------------------------------------------------------------
 
+// processEnvelope converts one signal-cli-rest-api payload into an inbound
+// message. Each phase lives in a small helper below: envelope unwrapping,
+// sync (multi-device) classification, sender/dataMessage extraction, dedup,
+// allow-listing, text rendering and final dispatch.
 func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any) {
 	rawJSON, _ := json.Marshal(raw)
 	debug.Log("signal", "adapter=%s processEnvelope: %s", a.name, string(rawJSON))
 
-	// signal-cli-rest-api wraps the actual envelope in an "envelope" field:
-	// {"account":"+...", "envelope":{...}}
-	inner, _ := raw["envelope"].(map[string]any)
-	if inner != nil {
-		// Merge account-level fields into inner envelope
-		if acct, ok := raw["account"].(string); ok {
-			inner["account"] = acct
-		}
-		raw = inner
+	raw = unwrapSignalEnvelope(raw)
+
+	// syncMessage envelopes (sent by this account from another device) are
+	// promoted to inbound-looking messages; anything else inside a sync
+	// envelope is dropped.
+	isSync, isNoteToSelf, isGroupSync := a.resolveSyncEnvelope(raw)
+	if isSync && !isNoteToSelf && !isGroupSync {
+		return
 	}
 
-	// Check for syncMessage (sent by this account from another device)
-	syncMsg, _ := raw["syncMessage"].(map[string]any)
-	isNoteToSelf := false
-	isGroupSync := false
-	if syncMsg != nil {
-		sentMsg, _ := syncMsg["sentMessage"].(map[string]any)
-		if sentMsg != nil {
-			dest, _ := sentMsg["destinationNumber"].(string)
-			// Check if it's a group message sync
-			groupInfo, _ := sentMsg["groupInfo"].(map[string]any)
-			if dest != "" && dest == a.account {
-				// Check echo suppression
-				ts := jsonInt64(sentMsg, "timestamp")
-				if ts > 0 && a.isSentTimestamp(ts) {
-					a.removeSentTimestamp(ts)
-					return
-				}
-				// Genuine Note to Self
-				isNoteToSelf = true
-				// Set source fields so sender extraction works (#968): the sync
-				// envelope carries no sourceNumber/sourceName, so sender extraction
-				// below yielded "" and every Note to Self message was silently
-				// dropped. Mirrors the group sync branch below.
-				if _, ok := raw["sourceNumber"]; !ok {
-					raw["sourceNumber"] = a.account
-				}
-				if _, ok := raw["sourceName"]; !ok {
-					raw["sourceName"] = "Me"
-				}
-				raw["dataMessage"] = sentMsg
-			} else if groupInfo != nil {
-				// Sync of a message sent to a group from another device
-				ts := jsonInt64(sentMsg, "timestamp")
-				if ts > 0 && a.isSentTimestamp(ts) {
-					a.removeSentTimestamp(ts)
-					return
-				}
-				// Treat as inbound - set source fields so sender extraction works
-				isGroupSync = true
-				raw["dataMessage"] = sentMsg
-				if _, ok := raw["sourceNumber"]; !ok {
-					raw["sourceNumber"] = a.account
-				}
-				if _, ok := raw["sourceName"]; !ok {
-					raw["sourceName"] = "Me"
-				}
-				// Not our sent message — treat as inbound group message
-			}
-		}
-		if !isNoteToSelf && !isGroupSync {
-			return
-		}
-	}
-
-	// Extract sender
-	sender, _ := raw["sourceNumber"].(string)
-	if sender == "" {
-		sender, _ = raw["source"].(string)
-	}
-	senderName, _ := raw["sourceName"].(string)
+	sender, senderName := envelopeSender(raw)
 	if sender == "" {
 		rawJSON, _ := json.Marshal(raw)
 		debug.Log("signal", "adapter=%s ignoring envelope with no sender: %s", a.name, string(rawJSON))
@@ -399,16 +343,10 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 
 	// Self-message filtering (#968): Note to Self and group sync messages
 	// legitimately originate from this account (sent from another device).
-	// Track the flag so the allowed-users check below can exempt them.
+	// Track the flag so the allowed-users check can exempt them.
 	selfOriginated := (isNoteToSelf || isGroupSync) && sender == a.account
 
-	// Get dataMessage (or editMessage)
-	dataMessage, _ := raw["dataMessage"].(map[string]any)
-	if dataMessage == nil {
-		if editMsg, _ := raw["editMessage"].(map[string]any); editMsg != nil {
-			dataMessage, _ = editMsg["dataMessage"].(map[string]any)
-		}
-	}
+	dataMessage := extractSignalDataMessage(raw)
 	if dataMessage == nil {
 		return
 	}
@@ -418,56 +356,22 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 	if ts == 0 {
 		return
 	}
-
-	// Dedup
-	a.mu.Lock()
-	if _, seen := a.seen[ts]; seen {
-		a.mu.Unlock()
+	if a.seenEnvelope(ts) {
 		return
 	}
-	a.seen[ts] = time.Now()
-	if len(a.seen) > signalDedupMaxSize {
-		cutoff := time.Now().Add(-5 * time.Minute)
-		for k, t := range a.seen {
-			if t.Before(cutoff) {
-				delete(a.seen, k)
-			}
-		}
-	}
-	a.mu.Unlock()
 
 	// Check for group
 	groupInfo, _ := dataMessage["groupInfo"].(map[string]any)
 	groupID, _ := groupInfo["groupId"].(string)
 	isGroup := groupID != ""
 
-	// Allowed users check - self-originated sync messages bypass the filter,
-	// otherwise a restricted allowed_users list would drop the account's own
-	// Note to Self / group sync messages (#968).
-	if !selfOriginated && len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, sender) {
+	if !a.senderAllowed(sender, selfOriginated) {
 		debug.Log("signal", "adapter=%s user %s not in allowed list", a.name, sender)
 		return
 	}
 
-	// Extract text
-	text, _ := dataMessage["message"].(string)
-
-	// Render mentions
-	if mentions, _ := dataMessage["mentions"].([]any); len(mentions) > 0 && text != "" {
-		text = renderSignalMentions(text, mentions)
-	}
-
-	// Mention gating for groups (#1018).
-	if isGroup && a.requireMention {
-		var drop bool
-		text, drop = a.gateGroupMention(text, dataMessage)
-		if drop {
-			debug.Log("signal", "adapter=%s ignoring group message (no mention)", a.name)
-			return
-		}
-	}
-
-	if strings.TrimSpace(text) == "" {
+	text, ok := a.inboundText(dataMessage, isGroup)
+	if !ok {
 		return
 	}
 
@@ -489,33 +393,195 @@ func (a *signalAdapter) processEnvelope(ctx context.Context, raw map[string]any)
 		},
 		Text: strings.TrimSpace(text),
 	}
+	a.dispatchInbound(ctx, msg, chatID)
+}
 
-	// Pairing flow
-	if a.manager != nil {
-		pairingResult, err := a.manager.HandlePairingInbound(msg)
-		debug.Log("signal", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		// #1238: pairing errors do NOT flip Healthy. The SSE loop keeps
-		// delivering messages regardless, but nothing ever re-publishes
-		// connected state (sseLoop retries forever without re-entering
-		// connectAndServe), so a single pairing hiccup showed the channel as
-		// offline in every status surface until process restart. Align with
-		// nostr/whatsapp: log only.
-		if err != nil && err != ErrNoSessionBound {
-			debug.Log("signal", "adapter=%s pairing error (connection unaffected): %v", a.name, err)
+// unwrapSignalEnvelope normalizes a signal-cli-rest-api payload: the actual
+// envelope may be wrapped as {"account":"+...", "envelope":{...}}, in which
+// case the account-level fields are merged into the inner envelope.
+func unwrapSignalEnvelope(raw map[string]any) map[string]any {
+	inner, _ := raw["envelope"].(map[string]any)
+	if inner == nil {
+		return raw
+	}
+	if acct, ok := raw["account"].(string); ok {
+		inner["account"] = acct
+	}
+	return inner
+}
+
+// resolveSyncEnvelope classifies a syncMessage envelope (a message sent by
+// this account from another device). It mutates raw in place, promoting the
+// synced sentMessage into an inbound-looking dataMessage with synthesized
+// source fields (#968), and reports:
+//   - sync: raw carries a syncMessage at all
+//   - noteToSelf: genuine Note to Self aimed at this account
+//   - groupSync: sync of a group message sent from another device
+//
+// A sync envelope that is neither (or whose echo timestamp was already seen)
+// must be dropped by the caller.
+func (a *signalAdapter) resolveSyncEnvelope(raw map[string]any) (sync, noteToSelf, groupSync bool) {
+	syncMsg, _ := raw["syncMessage"].(map[string]any)
+	if syncMsg == nil {
+		return false, false, false
+	}
+	sync = true
+	sentMsg, _ := syncMsg["sentMessage"].(map[string]any)
+	if sentMsg == nil {
+		return sync, false, false
+	}
+	dest, _ := sentMsg["destinationNumber"].(string)
+	// Check if it's a group message sync
+	groupInfo, _ := sentMsg["groupInfo"].(map[string]any)
+	if dest != "" && dest == a.account {
+		// Check echo suppression
+		ts := jsonInt64(sentMsg, "timestamp")
+		if ts > 0 && a.isSentTimestamp(ts) {
+			a.removeSentTimestamp(ts)
+			return sync, false, false
 		}
-		if pairingResult.Consumed {
-			// Auto-add first paired group to allowlist
-			_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
-			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-				debug.Log("signal", "adapter=%s notify previous binding failed: %v", a.name, err)
+		// Genuine Note to Self
+		noteToSelf = true
+	} else if groupInfo != nil {
+		// Sync of a message sent to a group from another device; echo
+		// suppression applies here too.
+		ts := jsonInt64(sentMsg, "timestamp")
+		if ts > 0 && a.isSentTimestamp(ts) {
+			a.removeSentTimestamp(ts)
+			return sync, false, false
+		}
+		// Not our sent message — treat as inbound group message
+		groupSync = true
+	} else {
+		return sync, false, false
+	}
+
+	// Set source fields so sender extraction works (#968): the sync
+	// envelope carries no sourceNumber/sourceName, so sender extraction
+	// yielded "" and every Note to Self message was silently dropped.
+	// Mirrors the group sync branch.
+	if _, ok := raw["sourceNumber"]; !ok {
+		raw["sourceNumber"] = a.account
+	}
+	if _, ok := raw["sourceName"]; !ok {
+		raw["sourceName"] = "Me"
+	}
+	raw["dataMessage"] = sentMsg
+	return sync, noteToSelf, groupSync
+}
+
+// envelopeSender extracts the sender number and display name, falling back
+// from sourceNumber to the legacy source field.
+func envelopeSender(raw map[string]any) (sender, senderName string) {
+	sender, _ = raw["sourceNumber"].(string)
+	if sender == "" {
+		sender, _ = raw["source"].(string)
+	}
+	senderName, _ = raw["sourceName"].(string)
+	return sender, senderName
+}
+
+// extractSignalDataMessage returns the message payload of an envelope:
+// dataMessage first, with editMessage.dataMessage (edits of previously sent
+// messages) as fallback.
+func extractSignalDataMessage(raw map[string]any) map[string]any {
+	dataMessage, _ := raw["dataMessage"].(map[string]any)
+	if dataMessage != nil {
+		return dataMessage
+	}
+	if editMsg, _ := raw["editMessage"].(map[string]any); editMsg != nil {
+		dataMessage, _ = editMsg["dataMessage"].(map[string]any)
+	}
+	return dataMessage
+}
+
+// seenEnvelope reports whether the timestamp was already processed and, if
+// not, records it. The seen-map is pruned to a 5 minute window once it grows
+// past signalDedupMaxSize entries.
+func (a *signalAdapter) seenEnvelope(ts int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, seen := a.seen[ts]; seen {
+		return true
+	}
+	a.seen[ts] = time.Now()
+	if len(a.seen) > signalDedupMaxSize {
+		cutoff := time.Now().Add(-5 * time.Minute)
+		for k, t := range a.seen {
+			if t.Before(cutoff) {
+				delete(a.seen, k)
 			}
-			return
+		}
+	}
+	return false
+}
+
+// senderAllowed applies the allowed_users filter. Self-originated sync
+// messages bypass the filter, otherwise a restricted allowed_users list
+// would drop the account's own Note to Self / group sync messages (#968).
+func (a *signalAdapter) senderAllowed(sender string, selfOriginated bool) bool {
+	if selfOriginated || len(a.allowedUsers) == 0 {
+		return true
+	}
+	return entryMatches(a.allowedUsers, sender)
+}
+
+// inboundText renders the final text of a message: mention placeholders are
+// expanded, and for group messages with requireMention, messages without a
+// mention are gated (#1018). ok=false means the envelope carries no text
+// worth dispatching.
+func (a *signalAdapter) inboundText(dataMessage map[string]any, isGroup bool) (text string, ok bool) {
+	// Extract text
+	text, _ = dataMessage["message"].(string)
+
+	// Render mentions
+	if mentions, _ := dataMessage["mentions"].([]any); len(mentions) > 0 && text != "" {
+		text = renderSignalMentions(text, mentions)
+	}
+
+	// Mention gating for groups (#1018).
+	if isGroup && a.requireMention {
+		var drop bool
+		text, drop = a.gateGroupMention(text, dataMessage)
+		if drop {
+			debug.Log("signal", "adapter=%s ignoring group message (no mention)", a.name)
+			return "", false
 		}
 	}
 
-	if a.manager != nil {
-		a.manager.HandleInbound(ctx, msg)
+	if strings.TrimSpace(text) == "" {
+		return "", false
 	}
+	return text, true
+}
+
+// dispatchInbound routes a fully-built inbound message: the pairing handshake
+// intercepts messages while pairing is in progress, everything else goes to
+// the manager. Pairing errors never flip Healthy (#1238).
+func (a *signalAdapter) dispatchInbound(ctx context.Context, msg InboundMessage, chatID string) {
+	if a.manager == nil {
+		return
+	}
+	pairingResult, err := a.manager.HandlePairingInbound(msg)
+	debug.Log("signal", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+	// #1238: pairing errors do NOT flip Healthy. The SSE loop keeps
+	// delivering messages regardless, but nothing ever re-publishes
+	// connected state (sseLoop retries forever without re-entering
+	// connectAndServe), so a single pairing hiccup showed the channel as
+	// offline in every status surface until process restart. Align with
+	// nostr/whatsapp: log only.
+	if err != nil && err != ErrNoSessionBound {
+		debug.Log("signal", "adapter=%s pairing error (connection unaffected): %v", a.name, err)
+	}
+	if pairingResult.Consumed {
+		// Auto-add first paired group to allowlist
+		_ = a.sendText(ctx, chatID, pairingResult.ReplyText)
+		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+			debug.Log("signal", "adapter=%s notify previous binding failed: %v", a.name, err)
+		}
+		return
+	}
+	a.manager.HandleInbound(ctx, msg)
 }
 
 // ---------------------------------------------------------------------------

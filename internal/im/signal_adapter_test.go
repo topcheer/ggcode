@@ -482,3 +482,127 @@ func TestSignalDedup(t *testing.T) {
 	a.processEnvelope(nil, envelope)
 	a.processEnvelope(nil, envelope) // should be deduped
 }
+
+// Pins for the processEnvelope helper seams extracted in r171: sync-envelope
+// classification and signal-cli-rest-api wrapper unwrapping. These lock the
+// contract that the existing end-to-end processEnvelope tests exercise only
+// indirectly (r165 handleMessage pin precedent).
+func TestSignalResolveSyncEnvelope_Classification(t *testing.T) {
+	adapterCfg := config.IMAdapterConfig{
+		Enabled:  true,
+		Platform: "signal",
+		Extra: map[string]interface{}{
+			"account": "+1234567890",
+		},
+	}
+	a, _ := newSignalAdapter("test", config.IMConfig{}, adapterCfg, nil)
+
+	// Not a sync envelope: caller proceeds as normal inbound.
+	raw := map[string]any{"sourceNumber": "+1111111111"}
+	sync, nts, gs := a.resolveSyncEnvelope(raw)
+	if sync || nts || gs {
+		t.Fatalf("non-sync envelope classified as sync=%v nts=%v gs=%v", sync, nts, gs)
+	}
+
+	// Sync envelope without sentMessage: sync but must be dropped.
+	raw = map[string]any{"syncMessage": map[string]any{}}
+	sync, nts, gs = a.resolveSyncEnvelope(raw)
+	if !sync || nts || gs {
+		t.Fatalf("sync w/o sentMessage classified as sync=%v nts=%v gs=%v", sync, nts, gs)
+	}
+
+	// Genuine Note to Self: promoted with synthesized source fields (#968).
+	raw = map[string]any{
+		"syncMessage": map[string]any{
+			"sentMessage": map[string]any{
+				"destinationNumber": "+1234567890",
+				"message":           "note to self",
+				"timestamp":         float64(3000),
+			},
+		},
+	}
+	sync, nts, gs = a.resolveSyncEnvelope(raw)
+	if !sync || !nts || gs {
+		t.Fatalf("note-to-self classified as sync=%v nts=%v gs=%v", sync, nts, gs)
+	}
+	if raw["sourceNumber"] != "+1234567890" || raw["sourceName"] != "Me" {
+		t.Fatalf("note-to-self source fields not synthesized: %v %v", raw["sourceNumber"], raw["sourceName"])
+	}
+	dm, _ := raw["dataMessage"].(map[string]any)
+	if dm == nil || dm["message"] != "note to self" {
+		t.Fatalf("note-to-self dataMessage not promoted: %v", dm)
+	}
+
+	// Direct echo suppression: a timestamp we sent ourselves is dropped.
+	a.addSentTimestamp(4000)
+	raw = map[string]any{
+		"syncMessage": map[string]any{
+			"sentMessage": map[string]any{
+				"destinationNumber": "+1234567890",
+				"message":           "echo",
+				"timestamp":         float64(4000),
+			},
+		},
+	}
+	sync, nts, gs = a.resolveSyncEnvelope(raw)
+	if !sync || nts || gs {
+		t.Fatalf("echo suppressed message classified as sync=%v nts=%v gs=%v", sync, nts, gs)
+	}
+	if _, promoted := raw["dataMessage"]; promoted {
+		t.Fatal("echo suppressed message must not be promoted to dataMessage")
+	}
+
+	// Group sync from another device: promoted as group sync.
+	raw = map[string]any{
+		"syncMessage": map[string]any{
+			"sentMessage": map[string]any{
+				"destinationNumber": "+9999999999",
+				"message":           "from my other device",
+				"timestamp":         float64(5000),
+				"groupInfo":         map[string]any{"groupId": "grp1"},
+			},
+		},
+	}
+	sync, nts, gs = a.resolveSyncEnvelope(raw)
+	if !sync || nts || !gs {
+		t.Fatalf("group sync classified as sync=%v nts=%v gs=%v", sync, nts, gs)
+	}
+	if dm, _ = raw["dataMessage"].(map[string]any); dm == nil {
+		t.Fatal("group sync dataMessage not promoted")
+	}
+
+	// Direct sync to another number without groupInfo: dropped.
+	raw = map[string]any{
+		"syncMessage": map[string]any{
+			"sentMessage": map[string]any{
+				"destinationNumber": "+9999999999",
+				"message":           "unrelated",
+				"timestamp":         float64(6000),
+			},
+		},
+	}
+	sync, nts, gs = a.resolveSyncEnvelope(raw)
+	if !sync || nts || gs {
+		t.Fatalf("unrelated direct sync classified as sync=%v nts=%v gs=%v", sync, nts, gs)
+	}
+}
+
+func TestSignalUnwrapEnvelope(t *testing.T) {
+	// Unwrapped payload passes through untouched.
+	raw := map[string]any{"sourceNumber": "+1111111111"}
+	if got := unwrapSignalEnvelope(raw); got == nil || got["sourceNumber"] != "+1111111111" {
+		t.Fatalf("plain envelope not passed through: %v", got)
+	}
+
+	// signal-cli-rest-api wrapper: inner envelope is returned with the
+	// account-level field merged in.
+	inner := map[string]any{"sourceNumber": "+1111111111"}
+	raw = map[string]any{"account": "+1234567890", "envelope": inner}
+	got := unwrapSignalEnvelope(raw)
+	if got == nil || got["sourceNumber"] != "+1111111111" {
+		t.Fatalf("inner envelope not returned: %v", got)
+	}
+	if got["account"] != "+1234567890" {
+		t.Fatalf("account field not merged: %v", got["account"])
+	}
+}
