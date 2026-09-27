@@ -210,13 +210,13 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 			if _, err := m.knight.ApproveProposal(id, "approved via knight panel"); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
-				kp.message = fmt.Sprintf("✅ Approved proposal: %s", id[:8])
+				kp.message = fmt.Sprintf("✅ Approved proposal: %s", shortProposalID(id))
 			}
 		case "reject":
 			if _, err := m.knight.RejectProposal(id, "rejected via knight panel"); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
-				kp.message = fmt.Sprintf("❌ Rejected proposal: %s", id[:8])
+				kp.message = fmt.Sprintf("❌ Rejected proposal: %s", shortProposalID(id))
 			}
 		}
 		kp.messageTime = time.Now()
@@ -542,10 +542,7 @@ func (m *Model) renderKnightProposals(w int) string {
 		if m.knightPanel.detailIndex == i {
 			prefix = "▶ "
 		}
-		shortID := p.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
+		shortID := shortProposalID(p.ID)
 		sb.WriteString(fmt.Sprintf("%s%s %s [%s]\n", prefix, shortID, p.Goal, p.Status))
 		if m.knightPanel.detailIndex == i {
 			sb.WriteString(fmt.Sprintf("    Path: %s\n", p.Path))
@@ -619,4 +616,14 @@ func (m *Model) renderKnightPolicies(w int) string {
 		}
 	}
 	return m.renderContextBox("/knight", sb.String(), lipgloss.Color("13"))
+}
+
+// shortProposalID truncates a proposal ID for display. Corrupted or
+// hand-edited jsonl entries can carry IDs shorter than 8 bytes; a bare
+// id[:8] slice there panics and takes the TUI down (#2799).
+func shortProposalID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
