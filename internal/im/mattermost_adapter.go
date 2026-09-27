@@ -588,10 +588,8 @@ func (a *mattermostAdapter) Send(ctx context.Context, binding ChannelBinding, ev
 		debug.Log("mattermost", "adapter=%s image uploaded [%d/%d] mime=%s size=%d file_id=%s", a.name, i+1, len(images), mimeType, len(data), fileID)
 		// Rate limit between uploads
 		if i < len(images)-1 {
-			select {
-			case <-time.After(mattermostInterMsgDelay):
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := a.waitInterMessageDelay(ctx); err != nil {
+				return err
 			}
 		}
 	}
@@ -616,45 +614,18 @@ func (a *mattermostAdapter) sendTextWithFiles(ctx context.Context, channelID, ro
 		return nil
 	}
 
-	// Split using markdown-aware logic so code blocks aren't broken across chunks.
-	chunks := SplitMarkdown(text, mattermostDefaultMaxPostLen)
-	if len(chunks) == 0 && len(fileIDs) > 0 {
-		// No text but we have files — send a post with just file attachments
-		chunks = []string{""}
-	}
+	chunks := mattermostChunkPlan(text, fileIDs)
 	for i, chunk := range chunks {
-		payload := map[string]any{
-			"channel_id": channelID,
-			"message":    chunk,
-		}
-		// Only thread the first chunk; subsequent chunks are replies in the same thread
-		if rootID != "" && a.replyMode == "thread" {
-			payload["root_id"] = rootID
-		}
-		// Attach file_ids to the first chunk only. This MUST happen BEFORE
-		// apiPostCtx serializes and sends the payload — writing it after the
-		// call only mutates the local map, leaving the files uploaded but never
-		// attached to any post (orphaned on the server) (#963).
-		if i == 0 && len(fileIDs) > 0 {
-			payload["file_ids"] = fileIDs
-		}
+		payload := a.buildChunkPayload(chunk, channelID, rootID, fileIDs, i == 0)
 		result, err := a.apiPostCtx(ctx, "posts", payload)
 		if err != nil {
 			return fmt.Errorf("Mattermost send chunk %d/%d: %w", i+1, len(chunks), err)
 		}
-		// If this is the first chunk in a thread and we have no rootID yet,
-		// use the new post's ID as root for subsequent chunks.
-		if rootID == "" && len(chunks) > 1 && i == 0 {
-			if newID, ok := result["id"].(string); ok && newID != "" {
-				rootID = newID
-			}
-		}
+		rootID = mattermostPromoteRootID(rootID, result, len(chunks) > 1, i == 0)
 		// Small inter-message delay for multi-chunk sends to avoid rate limiting.
 		if i < len(chunks)-1 {
-			select {
-			case <-time.After(mattermostInterMsgDelay):
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := a.waitInterMessageDelay(ctx); err != nil {
+				return err
 			}
 		}
 	}
