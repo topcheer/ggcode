@@ -110,3 +110,42 @@ func TestInstanceFields(t *testing.T) {
 		t.Errorf("InstanceFields() = %v, should not contain global-only field language", fields)
 	}
 }
+
+// TestIsInstanceField verifies the read-side provenance predicate behind
+// config introspection (scope.origin.<key>): instance-sourced keys answer
+// true, global/defaults keys and unknown keys answer false.
+func TestIsInstanceField(t *testing.T) {
+	withTestHome(t)
+	tmpDir := t.TempDir()
+	globalPath := writeGlobalConfig(t, tmpDir)
+	workspace := t.TempDir()
+
+	instDir := InstanceDir(workspace)
+	if err := os.MkdirAll(instDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instDir, "ggcode.yaml"), []byte("default_mode: auto\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithInstance(globalPath, workspace)
+	if err != nil {
+		t.Fatalf("LoadWithInstance: %v", err)
+	}
+
+	if !cfg.IsInstanceField("default_mode") {
+		t.Error(`IsInstanceField("default_mode") = false, want true (instance-sourced)`)
+	}
+	if cfg.IsInstanceField("language") {
+		t.Error(`IsInstanceField("language") = true, want false (global-only field)`)
+	}
+	if cfg.IsInstanceField("unknown_key") {
+		t.Error(`IsInstanceField("unknown_key") = true, want false`)
+	}
+	if cfg.IsInstanceField("") {
+		t.Error(`IsInstanceField("") = true, want false`)
+	}
+	if (*Config)(nil).IsInstanceField("default_mode") {
+		t.Error("nil receiver must answer false")
+	}
+}
