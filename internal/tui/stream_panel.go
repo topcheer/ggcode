@@ -102,6 +102,14 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p.editingField != "" {
 				p.editingField = ""
 				p.message = ""
+				// #2800: leaving the edit state must also cancel a pending
+				// custom add - customMode surviving Esc hijacked a later
+				// "e" key edit into appending a phantom target from the
+				// residual name/url inputs (or erroring "All fields
+				// required" while silently keeping the key write).
+				p.customMode = false
+				p.nameInput.SetValue("")
+				p.urlInput.SetValue("")
 				return m, nil
 			}
 			m.closeStreamPanel()
@@ -223,9 +231,10 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 				p.targets[p.selectedIndex].Key = p.keyInput.Value()
 			}
 		case "url":
-			if p.customMode {
-				p.urlInput.SetValue(p.urlInput.Value())
-			}
+			// #2800: this case used to self-assign the url input's value
+			// back to itself - a no-op left over from an earlier refactor.
+			// The custom flow reaches "url" only via handleStreamPanelEnter's
+			// name→url advance; nothing to persist here.
 		case "name":
 			// For custom: name → url → key flow
 			if p.customMode && p.editingField == "name" {
