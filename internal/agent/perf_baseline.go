@@ -60,7 +60,7 @@ const (
 	perfBaselineMinRuns = 5
 
 	// perfBaselineMaxWarns caps how many times the regression warning fires
-	// per session. Once per session is enough — the agent should adapt.
+	// per session. Once per session is enough - the agent should adapt.
 	perfBaselineMaxWarns = 1
 
 	// perfRegressionFactor is the multiplier over baseline median that
@@ -70,6 +70,14 @@ const (
 	// perfErrorRateFactor: if error rate (errors/tool_calls) exceeds baseline
 	// by this factor, trigger a warning.
 	perfErrorRateFactor = 2.0
+
+	// perfNoisyRelMAD is the relative median-absolute-deviation (MAD/median)
+	// above which a baseline metric counts as statistically noisy. When
+	// run-to-run spread exceeds this, the 1.5x/2x point thresholds sit within
+	// normal variation, so an advisory measured against that baseline is
+	// qualified as advisory-only (repeated-run research arXiv:2603.25764:
+	// report the uncertainty of repeated-run statistics).
+	perfNoisyRelMAD = 0.5
 
 	// perfBaselineFile is the filename for persisted baseline data.
 	perfBaselineFile = "perf-baseline.json"
@@ -96,7 +104,7 @@ type perfBaselineEntry struct {
 	// (top 3, count desc then name asc). It feeds the regression advisory a
 	// where-did-the-time-go breakdown: an advisory stating only "duration
 	// regressed 9.8x" is a fact the agent cannot act on, while
-	// "run_command:48, read_file:30" points at the behavior to change —
+	// "run_command:48, read_file:30" points at the behavior to change -
 	// loop-prevention research (arXiv:2607.01641) shows runaway loops
 	// persist exactly when the feedback path carries no specifics, and
 	// AgentDiet (FSE 2026) triages trajectories segment-by-segment for the
@@ -396,6 +404,12 @@ func (a *Agent) maybeInjectPerfRegression() {
 	a.perfBaseline.warnCount++
 	a.perfBaseline.warnedThisSession = true // #1180: once per session, across resets
 	msg := formatPerfRegressionWarning(worstMetric, mid, hitRun)
+	// Qualify the advisory with the baseline's run-to-run dispersion when the
+	// winning metric's historical sample is widely dispersed. Annotation
+	// only: the consensus verdict and every threshold stay untouched, the
+	// agent just learns how much to trust the baseline it was measured
+	// against (arXiv:2603.25764 requires reporting that uncertainty).
+	msg += perfBaselineStabilityNote(successfulPerfRuns(a.perfBaseline.historical), worstMetric)
 	debug.Log("perf-baseline", "regression detected: %d/3 recent runs regressed on %s", metricCounts[worstMetric], worstMetric)
 
 	a.contextManager.Add(provider.Message{
@@ -522,6 +536,92 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 	default:
 		return 0
 	}
+}
+
+// successfulPerfRuns returns the successful subset of a history slice - the
+// same population computeMedianBaseline uses for its medians.
+func successfulPerfRuns(runs []perfBaselineEntry) []perfBaselineEntry {
+	valid := make([]perfBaselineEntry, 0, len(runs))
+	for _, r := range runs {
+		if r.Success {
+			valid = append(valid, r)
+		}
+	}
+	return valid
+}
+
+// medianFloat64 returns the median of a float64 slice (0 for empty input).
+func medianFloat64(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(vals))
+	copy(sorted, vals)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 0 {
+		return (sorted[mid-1] + sorted[mid]) / 2
+	}
+	return sorted[mid]
+}
+
+// perfMetricValues extracts per-run observations of a regression metric.
+// error_rate is observed per run as errors/tool_calls - the same ratio the
+// regression check itself compares - so its dispersion is measured on rates,
+// not raw error counts. Other metrics reuse perfMetricValue.
+func perfMetricValues(runs []perfBaselineEntry, metric string) []float64 {
+	out := make([]float64, 0, len(runs))
+	for _, r := range runs {
+		if metric == "error_rate" {
+			if r.ToolCalls > 0 {
+				out = append(out, float64(r.Errors)/float64(r.ToolCalls))
+			}
+			continue
+		}
+		out = append(out, float64(perfMetricValue(r, metric)))
+	}
+	return out
+}
+
+// perfMetricRelMAD measures run-to-run dispersion of a metric across the
+// successful historical population: median absolute deviation relative to
+// the median. Repeated-run research (arXiv:2603.25764) treats spread as a
+// first-class signal - a median baseline computed from widely dispersed runs
+// makes point threshold verdicts (1.5x/2x) indistinguishable from normal
+// variation. Returns 0 for degenerate samples (too few runs, zero median),
+// which callers treat as "stable enough to leave unqualified".
+func perfMetricRelMAD(runs []perfBaselineEntry, metric string) float64 {
+	if len(runs) < perfBaselineMinRuns {
+		return 0
+	}
+	vals := perfMetricValues(runs, metric)
+	med := medianFloat64(vals)
+	if med <= 0 {
+		return 0
+	}
+	devs := make([]float64, len(vals))
+	for i, v := range vals {
+		devs[i] = v - med
+		if devs[i] < 0 {
+			devs[i] = -devs[i]
+		}
+	}
+	return medianFloat64(devs) / med
+}
+
+// perfBaselineStabilityNote qualifies a regression advisory when the winning
+// metric's baseline is statistically noisy, or "" when it is stable. It is
+// annotation-only by design: the #1143/#1148 consensus verdict and every
+// threshold stay untouched - the injected advisory just reports the
+// uncertainty of the baseline it was measured against.
+func perfBaselineStabilityNote(successRuns []perfBaselineEntry, metric string) string {
+	relMAD := perfMetricRelMAD(successRuns, metric)
+	if relMAD <= perfNoisyRelMAD {
+		return ""
+	}
+	return " Note: the baseline for this metric is noisy (median absolute deviation ±" +
+		trimZeros(floatToString(relMAD*100)) + "% across " + intToStr(len(successRuns)) +
+		" successful runs) - treat this comparison as advisory."
 }
 
 // formatPerfRegressionWarning builds a concise advisory message.
