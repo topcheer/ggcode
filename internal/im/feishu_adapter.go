@@ -394,18 +394,8 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 		debug.Log("feishu", "adapter=%s handleLarkMessageEvent: event.Event or event.Event.Message is nil", a.name)
 		return
 	}
-	msg := event.Event.Message
 
-	var openID string
-	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
-		openID = derefStr(event.Event.Sender.SenderId.OpenId)
-	}
-
-	chatID := derefStr(msg.ChatId)
-	messageID := derefStr(msg.MessageId)
-	content := derefStr(msg.Content)
-	chatType := derefStr(msg.ChatType)
-	msgType := derefStr(msg.MessageType)
+	chatID, messageID, content, chatType, msgType, openID := feishuLarkEventFields(event)
 
 	debug.Log("feishu", "adapter=%s raw inbound: chat=%s msgType=%s chatType=%s sender=%s contentLen=%d", a.name, chatID, msgType, chatType, openID, len(content))
 
@@ -413,15 +403,7 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 	attachments, voiceText := a.processAttachments(ctx, msgType, content, messageID)
 
 	// Parse text content
-	text := a.parseMessageContent(content)
-	text = strings.TrimSpace(text)
-	if voiceText != "" {
-		if text != "" {
-			text += "\n\n" + voiceText
-		} else {
-			text = voiceText
-		}
-	}
+	text := mergeVoiceText(strings.TrimSpace(a.parseMessageContent(content)), voiceText)
 	if text == "" && len(attachments) == 0 {
 		debug.Log("feishu", "adapter=%s parsed text is empty, content=%q, msgType=%s", a.name, content, msgType)
 		return
@@ -429,7 +411,7 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 
 	debug.Log("feishu", "adapter=%s inbound chat=%s type=%s sender=%s len=%d attachments=%d", a.name, chatID, chatType, openID, len(text), len(attachments))
 
-	inbound := InboundMessage{
+	a.deliverFeishuInbound(ctx, InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformFeishu,
@@ -440,14 +422,49 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 		},
 		Text:        text,
 		Attachments: attachments,
-	}
+	})
+}
 
+// feishuLarkEventFields flattens the typed SDK message-receive event into
+// the scalar fields the inbound pipeline needs.
+func feishuLarkEventFields(event *larkim.P2MessageReceiveV1) (chatID, messageID, content, chatType, msgType, openID string) {
+	msg := event.Event.Message
+	chatID = derefStr(msg.ChatId)
+	messageID = derefStr(msg.MessageId)
+	content = derefStr(msg.Content)
+	chatType = derefStr(msg.ChatType)
+	msgType = derefStr(msg.MessageType)
+	if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+		openID = derefStr(event.Event.Sender.SenderId.OpenId)
+	}
+	return chatID, messageID, content, chatType, msgType, openID
+}
+
+// mergeVoiceText appends a voice transcript to the parsed text with a blank
+// line separator, or returns the transcript alone when there is no text.
+func mergeVoiceText(text, voiceText string) string {
+	if voiceText == "" {
+		return text
+	}
+	if text != "" {
+		return text + "\n\n" + voiceText
+	}
+	return voiceText
+}
+
+// deliverFeishuInbound routes a fully-parsed inbound message through pairing
+// and normal delivery. It is the shared tail of both the WS branch
+// (handleLarkMessageEvent) and the webhook branch (handleMessageEvent).
+// Processing failures are acknowledged back to the sender because the
+// webhook already replied 200 and Feishu will not retry; reply failures are
+// only logged, never recursed.
+func (a *feishuAdapter) deliverFeishuInbound(ctx context.Context, inbound InboundMessage) {
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
 	if err != nil && err != ErrNoSessionBound {
 		a.publishState(false, "warning", err.Error())
 	}
 	if pairingResult.Consumed {
-		if _, sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
+		if _, sendErr := a.sendTextMessage(ctx, inbound.Envelope.ChannelID, pairingResult.ReplyText); sendErr != nil {
 			a.publishState(false, "warning", sendErr.Error())
 		}
 		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
@@ -458,14 +475,14 @@ func (a *feishuAdapter) handleLarkMessageEvent(ctx context.Context, event *larki
 
 	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
 		if err == ErrInboundChannelDenied {
-			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
+			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, inbound.Envelope.ChannelID)
 			return
 		}
 		// Processing failed — the message would otherwise be silently dropped
 		// (the webhook already replied 200, so Feishu will not retry). Acknowledge
 		// the failure back to the sender via the chat so they know to retry (#260).
 		// Reply failure is only logged, never recursed.
-		if _, sendErr := a.sendTextMessage(ctx, chatID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
+		if _, sendErr := a.sendTextMessage(ctx, inbound.Envelope.ChannelID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
 			debug.Log("feishu", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
 		}
 		if err != ErrNoChannelBound {
@@ -576,9 +593,43 @@ func (a *feishuAdapter) startWebhookServer(ctx context.Context) {
 }
 
 func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	bodyBytes, ok := a.readWebhookBody(w, r)
+	if !ok {
+		return
+	}
+	// Verify signature if encryptKey is set
+	if a.encryptKey != "" && !a.verifyWebhookGuards(w, r, bodyBytes) {
+		return
+	}
+	payload, ok := a.decodeWebhookPayload(w, bodyBytes)
+	if !ok {
+		return
+	}
+
+	// Verify the verification token when configured (#955). Previously this
+	// config was dead (never checked), leaving an unauthenticated callback
+	// surface when encrypt_key was not set.
+	if !a.webhookTokenValid(payload) {
+		debug.Log("feishu", "adapter=%s webhook verification token mismatch", a.name)
+		http.Error(w, "token mismatch", http.StatusUnauthorized)
+		return
+	}
+
+	// Handle URL verification challenge
+	if respondWebhookChallenge(w, payload) {
+		return
+	}
+
+	a.routeWebhookEvent(w, payload)
+}
+
+// readWebhookBody enforces the POST-only gate and reads the request body
+// capped at 1 MiB. It writes the error response and reports ok=false when a
+// gate rejects the request.
+func (a *feishuAdapter) readWebhookBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+		return nil, false
 	}
 	// Cap body size to prevent OOM DoS via Content-Length: 5G style attacks.
 	// 1 MiB is generous for Feishu event envelopes (typical size is <10 KiB).
@@ -586,40 +637,49 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := util.ReadAll(r.Body, util.ReadLimitGeneral)
 	if err != nil {
 		http.Error(w, "read body error", http.StatusRequestEntityTooLarge)
-		return
+		return nil, false
 	}
 	defer r.Body.Close()
+	return bodyBytes, true
+}
 
-	// Verify signature if encryptKey is set
-	if a.encryptKey != "" {
-		timestamp := r.Header.Get("X-Lark-Request-Timestamp")
-		nonce := r.Header.Get("X-Lark-Request-Nonce")
-		signature := r.Header.Get("X-Lark-Signature")
-		if !a.verifySignature(timestamp, nonce, string(bodyBytes), signature) {
-			debug.Log("feishu", "adapter=%s webhook signature verification failed", a.name)
-			http.Error(w, "signature mismatch", http.StatusUnauthorized)
-			return
-		}
-		// Reject stale or replayed requests. Feishu sends timestamp as a
-		// unix-second string. ±5min window matches Feishu's documented
-		// recommendation; combined with nonce LRU this defeats replay even
-		// when the original signature is captured.
-		if !a.acceptTimestamp(timestamp) {
-			debug.Log("feishu", "adapter=%s webhook stale timestamp=%s", a.name, timestamp)
-			http.Error(w, "stale request", http.StatusUnauthorized)
-			return
-		}
-		if !a.acceptNonce(timestamp, nonce) {
-			debug.Log("feishu", "adapter=%s webhook replayed nonce=%s", a.name, nonce)
-			http.Error(w, "replayed request", http.StatusUnauthorized)
-			return
-		}
+// verifyWebhookGuards runs the three encrypt-key gates in Feishu's required
+// order: HMAC signature, fresh timestamp, unseen nonce. Each failure writes
+// the error response and reports false. Only called when encryptKey is set.
+func (a *feishuAdapter) verifyWebhookGuards(w http.ResponseWriter, r *http.Request, bodyBytes []byte) bool {
+	timestamp := r.Header.Get("X-Lark-Request-Timestamp")
+	nonce := r.Header.Get("X-Lark-Request-Nonce")
+	signature := r.Header.Get("X-Lark-Signature")
+	if !a.verifySignature(timestamp, nonce, string(bodyBytes), signature) {
+		debug.Log("feishu", "adapter=%s webhook signature verification failed", a.name)
+		http.Error(w, "signature mismatch", http.StatusUnauthorized)
+		return false
 	}
+	// Reject stale or replayed requests. Feishu sends timestamp as a
+	// unix-second string. ±5min window matches Feishu's documented
+	// recommendation; combined with nonce LRU this defeats replay even
+	// when the original signature is captured.
+	if !a.acceptTimestamp(timestamp) {
+		debug.Log("feishu", "adapter=%s webhook stale timestamp=%s", a.name, timestamp)
+		http.Error(w, "stale request", http.StatusUnauthorized)
+		return false
+	}
+	if !a.acceptNonce(timestamp, nonce) {
+		debug.Log("feishu", "adapter=%s webhook replayed nonce=%s", a.name, nonce)
+		http.Error(w, "replayed request", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
 
+// decodeWebhookPayload parses the JSON envelope and unwraps Feishu's Encrypt
+// Key ciphertext in place when present. It writes the error response and
+// reports ok=false on malformed input.
+func (a *feishuAdapter) decodeWebhookPayload(w http.ResponseWriter, bodyBytes []byte) (map[string]any, bool) {
 	var payload map[string]any
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
+		return nil, false
 	}
 
 	// #2110: Feishu's Encrypt Key callback protocol. When the console has
@@ -635,41 +695,59 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		if a.encryptKey == "" {
 			debug.Log("feishu", "adapter=%s webhook body is encrypted (encrypt key set in the console) but no encrypt_key configured - dropping", a.name)
 			http.Error(w, "encrypted callback but no encrypt_key configured", http.StatusBadRequest)
-			return
+			return nil, false
 		}
 		decrypted, derr := decryptFeishuPayload(enc, a.encryptKey)
 		if derr != nil {
 			debug.Log("feishu", "adapter=%s webhook decrypt failed: %v", a.name, derr)
 			http.Error(w, "decrypt failed", http.StatusBadRequest)
-			return
+			return nil, false
 		}
 		if err := json.Unmarshal(decrypted, &payload); err != nil {
 			debug.Log("feishu", "adapter=%s decrypted webhook payload is not JSON: %v", a.name, err)
 			http.Error(w, "invalid decrypted JSON", http.StatusBadRequest)
-			return
+			return nil, false
 		}
 	}
+	return payload, true
+}
 
-	// Verify the verification token when configured (#955). Previously this
-	// config was dead (never checked), leaving an unauthenticated callback
-	// surface when encrypt_key was not set.
-	if !a.webhookTokenValid(payload) {
-		debug.Log("feishu", "adapter=%s webhook verification token mismatch", a.name)
-		http.Error(w, "token mismatch", http.StatusUnauthorized)
-		return
-	}
-
-	// Handle URL verification challenge
+// respondWebhookChallenge echoes the URL-verification challenge and reports
+// whether the payload was a challenge.
+func respondWebhookChallenge(w http.ResponseWriter, payload map[string]any) bool {
 	if challenge, ok := payload["challenge"].(string); ok {
 		resp := map[string]any{
 			"challenge": challenge,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
-		return
+		return true
 	}
+	return false
+}
 
-	// Process event
+// feishuDedupKey derives the event dedup identity: header.event_id when
+// present, otherwise the nested event.message.message_id.
+func feishuDedupKey(payload map[string]any) string {
+	header, _ := payload["header"].(map[string]any)
+	if eventID, _ := header["event_id"].(string); eventID != "" {
+		return eventID
+	}
+	if event, ok := payload["event"].(map[string]any); ok {
+		if message, ok := event["message"].(map[string]any); ok {
+			if mid, ok := message["message_id"].(string); ok {
+				return mid
+			}
+		}
+	}
+	return ""
+}
+
+// routeWebhookEvent is the final webhook phase: header presence gate, event
+// dedup, then async routing. Feishu retries when the webhook does not reply
+// 200 within ~3s, so dispatched events are acknowledged immediately and
+// processed in detached goroutines.
+func (a *feishuAdapter) routeWebhookEvent(w http.ResponseWriter, payload map[string]any) {
 	header, _ := payload["header"].(map[string]any)
 	if header == nil {
 		return
@@ -678,18 +756,7 @@ func (a *feishuAdapter) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// when the webhook does not reply 200 within ~3s; agent runs commonly
 	// exceed that, so without dedup the same message triggers 2-3 parallel
 	// agent turns and 2-3x the side effects.
-	eventID, _ := header["event_id"].(string)
-	dedupKey := eventID
-	if dedupKey == "" {
-		if event, ok := payload["event"].(map[string]any); ok {
-			if message, ok := event["message"].(map[string]any); ok {
-				if mid, ok := message["message_id"].(string); ok {
-					dedupKey = mid
-				}
-			}
-		}
-	}
-	if dedupKey != "" && a.seenEvent(dedupKey) {
+	if dedupKey := feishuDedupKey(payload); dedupKey != "" && a.seenEvent(dedupKey) {
 		debug.Log("feishu", "adapter=%s duplicate webhook event=%s suppressed", a.name, dedupKey)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -949,23 +1016,16 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 	msgType, _ := message["message_type"].(string)
 
 	// Parse text content
-	text := a.parseMessageContent(content)
-	text = strings.TrimSpace(text)
+	text := strings.TrimSpace(a.parseMessageContent(content))
 	attachments, voiceText := a.processAttachments(ctx, msgType, content, messageID)
-	if voiceText != "" {
-		if text != "" {
-			text += "\n\n" + voiceText
-		} else {
-			text = voiceText
-		}
-	}
+	text = mergeVoiceText(text, voiceText)
 	if text == "" && len(attachments) == 0 {
 		return
 	}
 
 	debug.Log("feishu", "adapter=%s inbound chat=%s type=%s sender=%s len=%d", a.name, chatID, chatType, openID, len(text))
 
-	inbound := InboundMessage{
+	a.deliverFeishuInbound(ctx, InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformFeishu,
@@ -976,38 +1036,7 @@ func (a *feishuAdapter) handleMessageEvent(ctx context.Context, event map[string
 		},
 		Text:        text,
 		Attachments: attachments,
-	}
-
-	pairingResult, err := a.manager.HandlePairingInbound(inbound)
-	if err != nil && err != ErrNoSessionBound {
-		a.publishState(false, "warning", err.Error())
-	}
-	if pairingResult.Consumed {
-		if _, sendErr := a.sendTextMessage(ctx, chatID, pairingResult.ReplyText); sendErr != nil {
-			a.publishState(false, "warning", sendErr.Error())
-		}
-		if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-			a.publishState(false, "warning", err.Error())
-		}
-		return
-	}
-
-	if err := a.manager.HandleInbound(ctx, inbound); err != nil {
-		if err == ErrInboundChannelDenied {
-			debug.Log("feishu", "adapter=%s unauthorized inbound chat=%s", a.name, chatID)
-			return
-		}
-		// Processing failed — the message would otherwise be silently dropped
-		// (the webhook already replied 200, so Feishu will not retry). Acknowledge
-		// the failure back to the sender via the chat so they know to retry (#260).
-		// Reply failure is only logged, never recursed.
-		if _, sendErr := a.sendTextMessage(ctx, chatID, "message could not be delivered (session not ready), please retry"); sendErr != nil {
-			debug.Log("feishu", "adapter=%s failed to notify sender of delivery error: %v", a.name, sendErr)
-		}
-		if err != ErrNoChannelBound {
-			a.publishState(false, "warning", err.Error())
-		}
-	}
+	})
 }
 
 // processAttachments handles non-text message types (image, audio, file)
@@ -1274,51 +1303,8 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 	// map iteration order is random - multi-language posts (auto-translation
 	// / forwarded messages) randomly lost their text with no log. Preference
 	// order: zh_cn, en_us, then first non-empty.
-	var bestText string
-	bestRank := -1
-	for lang, langContent := range parsed {
-		langMap, ok := langContent.(map[string]any)
-		if !ok {
-			continue
-		}
-		contentArr, ok := langMap["content"].([]any)
-		if !ok {
-			continue
-		}
-		var texts []string
-		for _, line := range contentArr {
-			lineArr, ok := line.([]any)
-			if !ok {
-				continue
-			}
-			for _, elem := range lineArr {
-				elemMap, ok := elem.(map[string]any)
-				if !ok {
-					continue
-				}
-				if text, ok := elemMap["text"].(string); ok {
-					texts = append(texts, text)
-				}
-			}
-		}
-		joined := strings.Join(texts, "")
-		if joined == "" {
-			continue
-		}
-		rank := 2
-		switch lang {
-		case "zh_cn":
-			rank = 0
-		case "en_us":
-			rank = 1
-		}
-		if rank < bestRank || bestRank < 0 {
-			bestText = joined
-			bestRank = rank
-		}
-	}
-	if bestRank >= 0 {
-		return bestText
+	if best := bestPostText(parsed); best != "" {
+		return best
 	}
 	// #1550: the content IS structured JSON but carries no text/post
 	// (image_key, file_key, ... media payloads). Returning the raw JSON
@@ -1329,6 +1315,67 @@ func (a *feishuAdapter) parseMessageContent(content string) string {
 		return ""
 	}
 	return content
+}
+
+// postLanguageRank is the #2309 language preference order: zh_cn first,
+// en_us second, any other language last.
+func postLanguageRank(lang string) int {
+	switch lang {
+	case "zh_cn":
+		return 0
+	case "en_us":
+		return 1
+	}
+	return 2
+}
+
+// postLanguageTexts joins the text elements of one language block's content
+// array; entries that are not well-formed line/element pairs are skipped.
+func postLanguageTexts(langMap map[string]any) string {
+	contentArr, ok := langMap["content"].([]any)
+	if !ok {
+		return ""
+	}
+	var texts []string
+	for _, line := range contentArr {
+		lineArr, ok := line.([]any)
+		if !ok {
+			continue
+		}
+		for _, elem := range lineArr {
+			elemMap, ok := elem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := elemMap["text"].(string); ok {
+				texts = append(texts, text)
+			}
+		}
+	}
+	return strings.Join(texts, "")
+}
+
+// bestPostText picks ONE language's joined text from a post language map,
+// preferring zh_cn over en_us over any other language; equal ranks keep the
+// first non-empty block seen. Returns "" when no language yields text.
+func bestPostText(parsed map[string]any) string {
+	var bestText string
+	bestRank := -1
+	for lang, langContent := range parsed {
+		langMap, ok := langContent.(map[string]any)
+		if !ok {
+			continue
+		}
+		joined := postLanguageTexts(langMap)
+		if joined == "" {
+			continue
+		}
+		if rank := postLanguageRank(lang); rank < bestRank || bestRank < 0 {
+			bestText = joined
+			bestRank = rank
+		}
+	}
+	return bestText
 }
 
 func (a *feishuAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
@@ -1595,63 +1642,24 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 
 	switch img.Kind {
 	case "url":
+		var err error
 		if IsLocalFilePath(img.Data) {
 			// #1893: feishu was the one adapter the #1739 sweep missed -
 			// every other adapter reads local paths via ReadLimited.
-			f, err := os.Open(img.Data)
-			if err != nil {
-				return fmt.Errorf("read local image: %w", err)
-			}
-			d, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
-			f.Close()
-			if err != nil {
-				return fmt.Errorf("read local image: %w", err)
-			}
-			data = d
-			filename = filepath.Base(img.Data)
+			data, filename, err = loadLocalImage(img.Data)
 		} else {
 			// Download the image with context for cancellation
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
-			if err != nil {
-				return fmt.Errorf("create image download request: %w", err)
-			}
-			resp, err := a.httpClient.Do(req)
-			if err != nil {
-				return fmt.Errorf("download image: %w", err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode >= 400 {
-				return fmt.Errorf("download image [%d]", resp.StatusCode)
-			}
-			d, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-			if err != nil {
-				return fmt.Errorf("read image data: %w", err)
-			}
-			data = d
-			filename = filepath.Base(img.Data)
-			if filename == "" || filename == "." {
-				filename = "image.png"
-			}
+			data, filename, err = a.downloadImage(ctx, img.Data)
+		}
+		if err != nil {
+			return err
 		}
 	case "data_url":
-		parts := strings.SplitN(img.Data, ",", 2)
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid data URL")
-		}
-		d, err := base64.StdEncoding.DecodeString(parts[1])
+		var err error
+		data, filename, err = dataURLImage(img.Data)
 		if err != nil {
-			return fmt.Errorf("invalid base64: %w", err)
+			return err
 		}
-		data = d
-		ext := ".png"
-		if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
-			ext = ".jpg"
-		} else if strings.Contains(parts[0], "gif") {
-			ext = ".gif"
-		} else if strings.Contains(parts[0], "webp") {
-			ext = ".webp"
-		}
-		filename = "image" + ext
 	default:
 		return fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
@@ -1668,6 +1676,74 @@ func (a *feishuAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 
 	// Step 2: Send image message
 	return a.sendImageMessage(ctx, chatID, imageKey)
+}
+
+// loadLocalImage reads a local file image through the limited image reader.
+func loadLocalImage(path string) ([]byte, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("read local image: %w", err)
+	}
+	d, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+	f.Close()
+	if err != nil {
+		return nil, "", fmt.Errorf("read local image: %w", err)
+	}
+	return d, filepath.Base(path), nil
+}
+
+// downloadImage fetches a remote image over HTTP with context cancellation
+// and derives the upload filename from the URL.
+func (a *feishuAdapter) downloadImage(ctx context.Context, rawURL string) ([]byte, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("create image download request: %w", err)
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("download image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, "", fmt.Errorf("download image [%d]", resp.StatusCode)
+	}
+	d, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+	if err != nil {
+		return nil, "", fmt.Errorf("read image data: %w", err)
+	}
+	return d, remoteImageFilename(rawURL), nil
+}
+
+// remoteImageFilename defaults the upload filename to image.png when the URL
+// base is empty or a dot.
+func remoteImageFilename(rawURL string) string {
+	name := filepath.Base(rawURL)
+	if name == "" || name == "." {
+		return "image.png"
+	}
+	return name
+}
+
+// dataURLImage decodes a data URL image payload and derives the upload
+// filename from the MIME prefix.
+func dataURLImage(data string) ([]byte, string, error) {
+	parts := strings.SplitN(data, ",", 2)
+	if len(parts) < 2 {
+		return nil, "", fmt.Errorf("invalid data URL")
+	}
+	d, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid base64: %w", err)
+	}
+	ext := ".png"
+	if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
+		ext = ".jpg"
+	} else if strings.Contains(parts[0], "gif") {
+		ext = ".gif"
+	} else if strings.Contains(parts[0], "webp") {
+		ext = ".webp"
+	}
+	return d, "image" + ext, nil
 }
 
 // uploadImage uploads an image to Feishu and returns the image_key.
