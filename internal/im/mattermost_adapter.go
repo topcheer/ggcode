@@ -301,6 +301,11 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	}
 }
 
+// handleWSEvent is the flat orchestrator for Mattermost WebSocket events:
+// event-type dispatch → post parsing → ignore filtering → dedup → policy
+// gating → envelope assembly → pairing/inbound routing. Each phase lives in
+// a dedicated seam below; the ordering of the gates mirrors the original
+// single function so observable behavior is unchanged.
 func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]any) {
 	eventType, _ := event["event"].(string)
 	if eventType != "posted" {
@@ -308,42 +313,98 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 	}
 
 	data, _ := event["data"].(map[string]any)
-	if data == nil {
+	post, ok := parsePostedPost(data)
+	if !ok {
 		return
 	}
 
+	userID, _ := post["user_id"].(string)
+	if a.isIgnorablePost(userID, post) {
+		return
+	}
+
+	postID, _ := post["id"].(string)
+	if a.markPostSeen(postID) {
+		return
+	}
+
+	channelID, _ := post["channel_id"].(string)
+	messageText, _ := post["message"].(string)
+	senderName, _ := data["sender_name"].(string)
+	senderName = strings.TrimPrefix(senderName, "@")
+	channelTypeRaw, _ := data["channel_type"].(string)
+
+	// Determine if DM
+	isDM := channelTypeRaw == "D"
+
+	text, proceed := a.applyInboundPolicy(messageText, userID, channelID, isDM)
+	if !proceed {
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+
+	threadID, _ := post["root_id"].(string)
+	msg := a.buildInboundMessage(post, channelID, senderName, text)
+
+	// Pairing flow
+	if a.pairingConsumedMessage(ctx, msg, channelID, threadID) {
+		return
+	}
+
+	a.deliverInbound(ctx, msg)
+}
+
+// parsePostedPost extracts and decodes the embedded post payload from a
+// "posted" event's data section. It reports ok=false when the data is absent
+// or the post string is missing/unparsable — all conditions the original
+// handler treated as silent early returns.
+func parsePostedPost(data map[string]any) (post map[string]any, ok bool) {
 	rawPostStr, _ := data["post"].(string)
 	if rawPostStr == "" {
-		return
+		return nil, false
 	}
 
-	var post map[string]any
-	if err := json.Unmarshal([]byte(rawPostStr), &post); err != nil {
-		return
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(rawPostStr), &parsed); err != nil {
+		return nil, false
 	}
+	return parsed, true
+}
 
+// isIgnorablePost reports whether a decoded post must be dropped before any
+// processing: the adapter's own messages, system posts (join/leave, channel
+// created, etc. — they carry a non-empty "type" field such as
+// "system_join_channel"), and posts without an ID.
+func (a *mattermostAdapter) isIgnorablePost(userID string, post map[string]any) bool {
 	// Ignore own messages
-	userID, _ := post["user_id"].(string)
 	if userID == a.botUserID {
-		return
+		return true
 	}
 
 	// Ignore system posts (join/leave, channel created, etc.)
 	// System posts have non-empty "type" field (e.g. "system_join_channel", "system_leave_channel")
 	if postType, _ := post["type"].(string); postType != "" {
-		return
+		return true
 	}
 
 	postID, _ := post["id"].(string)
-	if postID == "" {
-		return
-	}
+	return postID == ""
+}
 
-	// Dedup
+// markPostSeen records a post ID in the dedup set and reports whether it had
+// already been seen (duplicate delivery). When the set outgrows
+// mattermostDedupMaxSize, entries older than 5 minutes are pruned first;
+// bursts within the window can still leave the map oversized, so the oldest
+// entries are then evicted until back under the cap (#963). The lock scope
+// matches the original inline block exactly.
+func (a *mattermostAdapter) markPostSeen(postID string) bool {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if _, seen := a.seen[postID]; seen {
-		a.mu.Unlock()
-		return
+		return true
 	}
 	a.seen[postID] = time.Now()
 	if len(a.seen) > mattermostDedupMaxSize {
@@ -366,21 +427,19 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 			delete(a.seen, oldestKey)
 		}
 	}
-	a.mu.Unlock()
+	return false
+}
 
-	channelID, _ := post["channel_id"].(string)
-	channelTypeRaw, _ := data["channel_type"].(string)
-	messageText, _ := post["message"].(string)
-	senderName, _ := data["sender_name"].(string)
-	senderName = strings.TrimPrefix(senderName, "@")
-
-	// Determine if DM
-	isDM := channelTypeRaw == "D"
-
+// applyInboundPolicy enforces the adapter's inbound access policy and returns
+// the (possibly mention-stripped) message text. It reports ok=false when the
+// message must be dropped: senders outside the allowed list, or non-DM /
+// non-free-channel messages that do not mention the bot while require_mention
+// is enabled.
+func (a *mattermostAdapter) applyInboundPolicy(messageText, userID, channelID string, isDM bool) (string, bool) {
 	// Allowed users check
 	if len(a.allowedUsers) > 0 && !entryMatches(a.allowedUsers, userID) {
 		debug.Log("mattermost", "adapter=%s user %s not in allowed list", a.name, userID)
-		return
+		return "", false
 	}
 
 	// Mention gating for non-DM channels
@@ -389,20 +448,17 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 		if !isFree && a.requireMention {
 			hasMention := a.hasMention(messageText)
 			if !hasMention {
-				return
+				return "", false
 			}
 			messageText = a.stripMention(messageText)
 		}
 	}
+	return messageText, true
+}
 
-	if strings.TrimSpace(messageText) == "" {
-		return
-	}
-
-	// Thread support
-	threadID, _ := post["root_id"].(string)
-
-	// Extract file IDs as attachment metadata
+// attachmentsFromPost maps a post's file_ids to file attachment metadata; the
+// URL form is resolved by downstream consumers if needed.
+func attachmentsFromPost(post map[string]any, baseURL string) []Attachment {
 	fileIDs, _ := post["file_ids"].([]any)
 	var attachments []Attachment
 	for _, fid := range fileIDs {
@@ -411,12 +467,22 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 			attachments = append(attachments, Attachment{
 				Kind: AttachmentFile,
 				Name: idStr, // Will be resolved to URL by downstream if needed
-				URL:  fmt.Sprintf("%s/%s/files/%s", a.baseURL, mattermostAPIVersion, idStr),
+				URL:  fmt.Sprintf("%s/%s/files/%s", baseURL, mattermostAPIVersion, idStr),
 			})
 		}
 	}
+	return attachments
+}
 
-	msg := InboundMessage{
+// buildInboundMessage assembles the normalized InboundMessage envelope from a
+// decoded post and the policy-approved text. Sender/thread/post IDs are read
+// from the post map directly (pure reads of the same decoded payload the
+// orchestrator gated on, so the values are identical).
+func (a *mattermostAdapter) buildInboundMessage(post map[string]any, channelID, senderName, messageText string) InboundMessage {
+	postID, _ := post["id"].(string)
+	userID, _ := post["user_id"].(string)
+	threadID, _ := post["root_id"].(string)
+	return InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformMattermost,
@@ -428,25 +494,37 @@ func (a *mattermostAdapter) handleWSEvent(ctx context.Context, event map[string]
 			ReceivedAt: time.Now(),
 		},
 		Text:        strings.TrimSpace(messageText),
-		Attachments: attachments,
+		Attachments: attachmentsFromPost(post, a.baseURL),
 	}
+}
 
-	// Pairing flow
-	if a.manager != nil {
-		pairingResult, err := a.manager.HandlePairingInbound(msg)
-		debug.Log("mattermost", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		if err != nil && err != ErrNoSessionBound {
-			a.publishState(false, "warning", err.Error())
-		}
-		if pairingResult.Consumed {
-			_ = a.sendText(ctx, channelID, threadID, pairingResult.ReplyText)
-			if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
-				debug.Log("mattermost", "adapter=%s notify previous: %v", a.name, err)
-			}
-			return
-		}
+// pairingConsumedMessage routes the message through the manager's pairing
+// flow. When the message is consumed (pairing/setup exchange), the pairing
+// reply is sent in-thread and the replaced previous binding is notified, and
+// the caller must stop normal processing. Returns false when no manager is
+// configured or the pairing flow did not consume the message.
+func (a *mattermostAdapter) pairingConsumedMessage(ctx context.Context, msg InboundMessage, channelID, threadID string) bool {
+	if a.manager == nil {
+		return false
 	}
+	pairingResult, err := a.manager.HandlePairingInbound(msg)
+	debug.Log("mattermost", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
+	if err != nil && err != ErrNoSessionBound {
+		a.publishState(false, "warning", err.Error())
+	}
+	if !pairingResult.Consumed {
+		return false
+	}
+	_ = a.sendText(ctx, channelID, threadID, pairingResult.ReplyText)
+	if err := a.manager.NotifyPreviousBindingReplaced(ctx, pairingResult); err != nil {
+		debug.Log("mattermost", "adapter=%s notify previous: %v", a.name, err)
+	}
+	return true
+}
 
+// deliverInbound hands a normalized message to the manager when one is
+// attached; nil-manager adapters (e.g. in tests) drop silently.
+func (a *mattermostAdapter) deliverInbound(ctx context.Context, msg InboundMessage) {
 	if a.manager != nil {
 		a.manager.HandleInbound(ctx, msg)
 	}
