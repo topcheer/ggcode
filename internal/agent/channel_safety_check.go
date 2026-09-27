@@ -154,6 +154,9 @@ type chanOp struct {
 	// `if A {}` and the send in `else if B {}` share the OUTER if as their
 	// exclusive ancestor but have different innermost ifs.
 	ifStack []ifCtx
+	// #2776: enclosing loop positions, outermost first — used to scope
+	// break's loop-exit exclusivity to ops inside that same loop.
+	loopStack []token.Pos
 }
 
 // ifCtx records one enclosing if-statement: its collector-assigned id
@@ -163,12 +166,14 @@ type ifCtx struct {
 	side int
 }
 
-// terminatorInfo records a function-flow terminating statement (return,
-// panic) with its block depth — used to detect that ops before vs after it
-// cannot both execute (#2648).
+// terminatorInfo records a flow-terminating statement (return, panic) or a
+// loop-exit statement (break) with its block depth — used to detect that ops
+// before vs after it cannot both execute (#2648, #2776).
 type terminatorInfo struct {
-	pos   token.Pos
-	depth int
+	pos      token.Pos
+	depth    int
+	loopExit bool      // true for break: terminates only the enclosing loop, not the function
+	loopPos  token.Pos // for loopExit: position of the innermost enclosing loop
 }
 
 // chanOpCollector walks a function body tracking control-flow context.
@@ -177,14 +182,17 @@ type chanOpCollector struct {
 	terminators []terminatorInfo
 	depth       int
 	ifStack     []ifCtx
+	loopStack   []token.Pos
 	nextIfID    int
 }
 
 func (c *chanOpCollector) recordOp(op, name string, pos token.Pos, deferred bool) {
 	stack := make([]ifCtx, len(c.ifStack))
 	copy(stack, c.ifStack)
+	loops := make([]token.Pos, len(c.loopStack))
+	copy(loops, c.loopStack)
 	c.ops = append(c.ops, chanOp{op: op, name: name, pos: pos, deferred: deferred,
-		depth: c.depth, ifStack: stack})
+		depth: c.depth, ifStack: stack, loopStack: loops})
 }
 
 // inspectExprs finds close()/send ops inside a statement's expressions
@@ -236,9 +244,13 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 		}
 		c.ifStack = savedStack
 	case *ast.ForStmt:
+		c.loopStack = append(c.loopStack, s.Pos())
 		c.walkStmt(s.Body)
+		c.loopStack = c.loopStack[:len(c.loopStack)-1]
 	case *ast.RangeStmt:
+		c.loopStack = append(c.loopStack, s.Pos())
 		c.walkStmt(s.Body)
+		c.loopStack = c.loopStack[:len(c.loopStack)-1]
 	case *ast.SwitchStmt:
 		c.walkStmt(s.Body)
 	case *ast.TypeSwitchStmt:
@@ -256,6 +268,18 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 	case *ast.ReturnStmt:
 		c.terminators = append(c.terminators, terminatorInfo{pos: s.Pos(), depth: c.depth})
 		c.inspectExprs(s)
+	case *ast.BranchStmt:
+		// #2776: break exits the enclosing loop, so ops after it within the
+		// loop body (or in iterations that follow) never execute. continue
+		// is deliberately NOT recorded: later iterations still run after a
+		// continue, so a send after a close+continue is a true positive.
+		if s.Tok == token.BREAK {
+			var lp token.Pos
+			if len(c.loopStack) > 0 {
+				lp = c.loopStack[len(c.loopStack)-1]
+			}
+			c.terminators = append(c.terminators, terminatorInfo{pos: s.Pos(), depth: c.depth, loopExit: true, loopPos: lp})
+		}
 	case *ast.GoStmt:
 		// goroutine body is a separate flow; only its launch is here
 	default:
@@ -278,6 +302,19 @@ func (c *chanOpCollector) mutuallyExclusive(a, b chanOp) bool {
 	}
 	for _, t := range c.terminators {
 		if t.pos > a.pos && t.pos < b.pos && t.depth <= a.depth {
+			if t.loopExit {
+				// break only terminates its innermost enclosing loop: b must
+				// also be inside that loop (its loopStack contains it). A send
+				// AFTER the loop can still execute and stays checkable.
+				if t.loopPos.IsValid() {
+					for _, lp := range b.loopStack {
+						if lp == t.loopPos {
+							return true
+						}
+					}
+				}
+				continue
+			}
 			return true
 		}
 	}
