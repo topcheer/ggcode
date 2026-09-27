@@ -63,6 +63,12 @@ type RunStats struct {
 	// Includes both auto-compact and reactive compact.
 	CompactionCount int
 
+	// QualityScore is the ResponseQualityScorer's overall score (0.0–1.0)
+	// for this run, set by maybeReflect right after scoring. 0 means
+	// unscored (cancelled run or pre-field history); the perf baseline
+	// treats 0 as absent and excludes it from score medians.
+	QualityScore float64
+
 	// startTime is used internally to compute Duration.
 	startTime time.Time
 
@@ -434,10 +440,14 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		if m, ok := a.provider.(interface{ ModelName() string }); ok {
 			modelName = m.ModelName()
 		}
-		a.qualityScorer.ScoreRun(&s, providerName, modelName)
-		// Detect quality regression against the rolling historical baseline
-		// (Eval-Driven Development: catch quality degradation early).
-		a.qualityScorer.maybeDetectRegression()
+		qe := a.qualityScorer.ScoreRun(&s, providerName, modelName)
+		// Surface the score to the perf-baseline path: recordPerfBaseline
+		// (agent.go, same goroutine, after maybeReflect returns) persists
+		// stats.QualityScore so the cross-session median baseline watches
+		// quality-score regression (r156 consolidation of the former
+		// quality_regression detector, whose only actionable signal was
+		// debug.Log-only and never surfaced anywhere).
+		stats.QualityScore = qe.Score
 	}
 
 	safego.Go("agent.reflection", func() {

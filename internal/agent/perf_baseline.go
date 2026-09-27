@@ -71,6 +71,15 @@ const (
 	// by this factor, trigger a warning.
 	perfErrorRateFactor = 2.0
 
+	// perfScoreDropFactor / perfScoreBaseFloor gate the quality-score
+	// regression metric (r156): fire when a run's score falls to or below
+	// perfScoreDropFactor of the baseline median (0.75 = 25% drop, matching
+	// the former quality_regression detector's moderate tier), and only
+	// when the baseline median carries a real score (> perfScoreBaseFloor)
+	// so weak or unscored history stays silent.
+	perfScoreDropFactor = 0.75
+	perfScoreBaseFloor  = 0.4
+
 	// perfBaselineFile is the filename for persisted baseline data.
 	perfBaselineFile = "perf-baseline.json"
 
@@ -89,8 +98,14 @@ type perfBaselineEntry struct {
 	DurationSec int    `json:"dur"`
 	Compactions int    `json:"cmp"`
 	ContextPeak int    `json:"ctx"`
-	Success     bool   `json:"ok"`
-	Timestamp   int64  `json:"ts"`
+	// Score is the ResponseQualityScorer overall quality score (0.0–1.0)
+	// captured for this run (r156 consolidation: replaces the removed
+	// quality_regression detector). 0 = unscored (cancelled run or an
+	// entry predating this field); medians and regression checks exclude
+	// zero scores.
+	Score     float64 `json:"score,omitempty"`
+	Success   bool    `json:"ok"`
+	Timestamp int64   `json:"ts"`
 
 	// TopTools holds this run's most-invoked tools as "name:count" entries
 	// (top 3, count desc then name asc). It feeds the regression advisory a
@@ -201,6 +216,20 @@ func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
 		return perfBaselineEntry{}
 	}
 
+	// Score median needs its own quorum: only scored entries (Score > 0)
+	// vote, and legacy baselines recorded before the Score field existed
+	// stay scoreless by design.
+	var scored []perfBaselineEntry
+	for _, r := range valid {
+		if r.Score > 0 {
+			scored = append(scored, r)
+		}
+	}
+	medianScore := 0.0
+	if len(scored) >= perfBaselineMinRuns {
+		medianScore = medianFloat(collectScores(scored))
+	}
+
 	return perfBaselineEntry{
 		Iterations:  medianInt(collectIterations(valid)),
 		ToolCalls:   medianInt(collectToolCalls(valid)),
@@ -209,6 +238,7 @@ func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
 		DurationSec: medianInt(collectDurations(valid)),
 		Compactions: medianInt(collectCompactions(valid)),
 		ContextPeak: medianInt(collectContextPeak(valid)),
+		Score:       medianScore,
 	}
 }
 
@@ -263,6 +293,30 @@ func collectContextPeak(runs []perfBaselineEntry) []int {
 	return out
 }
 
+// collectScores extracts quality scores into a float slice for medians.
+func collectScores(runs []perfBaselineEntry) []float64 {
+	out := make([]float64, len(runs))
+	for i, r := range runs {
+		out[i] = r.Score
+	}
+	return out
+}
+
+// medianFloat returns the median value of a slice of floats.
+func medianFloat(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(vals))
+	copy(sorted, vals)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 0 {
+		return (sorted[mid-1] + sorted[mid]) / 2
+	}
+	return sorted[mid]
+}
+
 // medianInt returns the median value of a slice of ints.
 func medianInt(vals []int) int {
 	if len(vals) == 0 {
@@ -306,6 +360,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		DurationSec: int(stats.Duration.Round(time.Second).Seconds()),
 		Compactions: stats.CompactionCount,
 		ContextPeak: stats.ContextPeakTokens,
+		Score:       stats.QualityScore,
 		Success:     stats.Success,
 		Timestamp:   time.Now().Unix(),
 		TopTools:    topToolMix(stats.ToolCalls, perfTopToolsCount),
@@ -452,6 +507,12 @@ func collectRunRegressionMetrics(run, baseline perfBaselineEntry) []string {
 	if baseline.Compactions == 0 && run.Compactions >= 3 {
 		hits = append(hits, "compaction")
 	}
+	// Quality score regression (r156): score fell to <=75% of the baseline
+	// median. The baseline floor keeps unscored/weak history silent, and a
+	// zero current score means "not scored" (cancelled run), not "regressed".
+	if baseline.Score > perfScoreBaseFloor && run.Score > 0 && run.Score <= baseline.Score*perfScoreDropFactor {
+		hits = append(hits, "quality_score")
+	}
 	return hits
 }
 
@@ -462,7 +523,7 @@ const perfRegressionConsensusRuns = 2
 // perfMetricOrder lists regression metrics in the evaluation priority used by
 // checkSingleRunRegression, keeping worst-metric selection deterministic
 // when multiple metrics reach consensus (#1143).
-var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction"}
+var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction", "quality_score"}
 
 // pickConsensusPerfMetric returns a metric whose hit count reaches
 // perfRegressionConsensusRuns across recent runs, preferring metrics earlier
@@ -519,6 +580,8 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 		return entry.ContextPeak
 	case "compaction":
 		return entry.Compactions
+	case "quality_score":
+		return int(entry.Score * 1000)
 	default:
 		return 0
 	}
@@ -549,6 +612,10 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 		return formatPerfRegressionLine("compaction events",
 			baseline.Compactions, latest.Compactions,
 			"Frequent compaction means context is too large. Prefer narrow, targeted searches over broad exploration.")
+	case "quality_score":
+		return formatPerfRegressionLine("quality score",
+			int(baseline.Score*100), int(latest.Score*100),
+			"Run quality dropped vs baseline: reduce error-prone tool calls, verify edits incrementally, and keep context lean.")
 	default:
 		return ""
 	}
