@@ -256,8 +256,9 @@ func tryClaimPendingTask(
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 		}
 
-		// Build prompt from the claimed task.
-		prompt := buildTaskPrompt(claimed)
+		// Build prompt from the claimed task, plus findings from its
+		// completed dependencies (dep-chain blackboard sharing).
+		prompt := buildTaskPrompt(claimed) + depFindingsPrompt(tmMgr, claimed)
 
 		tm.mu.Lock()
 		tm.CurrentTaskID = claimed.ID // #1688: panic rollback needs the board ID
@@ -348,6 +349,9 @@ func tryClaimPendingTask(
 		} else {
 			completed := task.StatusCompleted
 			tmMgr.Update(claimed.ID, task.UpdateOptions{Status: &completed})
+			// Persist the final output on the board so dependent tasks
+			// claimed later inherit the findings (dep-chain blackboard).
+			persistTaskResult(tmMgr, claimed.ID, result)
 		}
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
