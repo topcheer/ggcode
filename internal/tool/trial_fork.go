@@ -231,7 +231,13 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	winner := pickWinner(results)
 	keep := -1
-	if winner >= 0 && results[winner].Commits > 0 {
+	if winner >= 0 && (results[winner].Commits > 0 || results[winner].VerifyPass) {
+		// #2795: the gate used to be Commits-only, but scoring gives
+		// VerifyPass 100 points and verify runs on the dirty uncommitted
+		// tree - a zero-commit verify-passed winner was force-deleted with
+		// ALL its verified work, while the report still printed an adopt
+		// hint. Keep the worktree when either form of usable work exists,
+		// matching the anyUsable semantics below.
 		keep = winner
 		results[winner].Kept = true
 	}
@@ -476,6 +482,12 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 		fmt.Fprintf(&sb, "\nWINNER: trial %d (branch %s)\n", w.Index, w.Branch)
 		if w.Kept {
 			fmt.Fprintf(&sb, "winner worktree kept for inspection: %s\n", w.Worktree)
+		}
+		if w.Commits == 0 {
+			// #2795: the adopt hint below diffs base..branch, which is empty
+			// when the winner never committed - point the caller at the kept
+			// worktree instead of an empty-diff pipe.
+			fmt.Fprintf(&sb, "warning: winner committed nothing - the adopt diff is empty; the verified work lives uncommitted in the kept worktree above\n")
 		}
 		fmt.Fprintf(&sb, "adopt (non-destructive, from your checkout): git diff %s..%s | git apply\n",
 			abbrevSHA(base), w.Branch)
