@@ -2172,606 +2172,11 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 			a.appendGuidance(&result, hint)
 		}
 	}
-	// File-editing tools invalidate the speculative cache: any
-	// pre-executed read_file/grep results for edited files are now
-	// stale. Clear the cache to prevent serving outdated content.
-	// #1104: undo_edit is included - checkpoint restore rewrites the
-	// file, and without invalidation the next read could be served
-	// from the memoize/speculator/command caches describing the
-	// pre-undo state. See mutatesSourceTree in verify_hint.go.
-	if mutatesSourceTree(tc.Name) && !result.IsError {
-		a.speculator.invalidateCache()
-		// Git whole-tree operations (checkout, reset, revert) change
-		// potentially all files at once. They need nuclear invalidation:
-		// clear mtime-based entries too, because cached reads from the
-		// old branch are now wrong even if individual file mtimes
-		// happened to not change.
-		if gitWholeTreeTools[tc.Name] {
-			a.toolMemo.invalidateAll()
-			debug.Log("agent", "whole-tree git operation %s: invalidated all caches", tc.Name)
-		} else {
-			// Normal file edit or partial git op: invalidate
-			// TTL-based memoize entries (grep, LSP, git) whose
-			// results may be stale. mtime-based entries are kept.
-			a.toolMemo.invalidateTTLBased()
-		}
-		// Invalidate the deterministic command cache: any build/test
-		// results are now stale because source files changed.
-		a.commandCache.invalidate()
-		// Record created files so the unread-edit guard exempts them.
-		for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
-			a.unreadEdit.recordCreated(p)
-			a.tunnelVision.recordFile(p)
-			a.fileFreshness.recordWrite(p)
-			a.readHash.recordWriteHash(p)
-		}
-		// Track edit for recurring-error detection: increments the
-		// "edits since last build error" counter so that a recurring
-		// error with edits in between is flagged as a root-cause gap.
-		a.recurringErrorRecordEdit()
-		// Mark edited files as dirty in the code index so the
-		// background indexer can update them incrementally.
-		if a.codeIndex != nil {
-			a.codeIndex.MarkDirty(extractEditedPaths(tc))
-		}
-	}
-	// #750: shell commands can mutate sources too (gofmt -w, sed -i,
-	// git apply, go mod tidy...). They are invisible to the tool-name
-	// gate above, so cached build/test results would be served stale
-	// with a false "no source files have changed" annotation -- or a
-	// stale PASS after a bad patch (false green light). Reuse the
-	// #749 shellMutatesSources heuristic; FP cost is one lost cache
-	// reuse, FN cost is executing on wrong results.
-	// #1028: a failed compound command can still have mutated sources
-	// (e.g. `sed -i ... && make lint` -- sed rewrote the file, make failed).
-	// The side effects already happened, so the IsError gate must not
-	// skip invalidation here; a stale "no source files have changed"
-	// cache hit would be actively wrong. FP cost: one lost cache reuse.
-	if tc.Name == "run_command" || tc.Name == "start_command" {
-		if cmd, _ := parseRunCommandArgs(tc.Arguments); shellMutatesSources(cmd) {
-			a.speculator.invalidateCache()
-			a.toolMemo.invalidateTTLBased()
-			a.commandCache.invalidate()
-			// #1486: the shell rewrote sources, so re-running a build/test
-			// CAN produce new information - keep the reverify detector in
-			// agreement with the caches we just invalidated.
-			a.redundantReverify.recordShellSourceMutation()
-			debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
-		}
-	}
-	// Store result in memoization cache for read-only tools.
-	// #983: skip the put on a memo hit — the cached entry already holds
-	// the pristine result, and re-putting the annotated copy (with the
-	// "[cached ...]" prefix and any appended hints) would stack one
-	// prefix per repeated call and make the "identical content"
-	// annotation literally false from the second layer on.
-	if speculativeSafeTools[tc.Name] && !result.IsError && !memoHit {
-		a.toolMemo.put(tc.Name, tc.Arguments, result)
-	}
-	// Track files read during this run so the unread-edit guard
-	// knows which files the agent has seen.
-	if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
-		// #1476-B: patch-exhaustion counts CALLS, not paths - the
-		// IFT give-up rule models successive probes (diminishing
-		// returns per RE-visit), and #500's per-path accounting turned
-		// ONE multi_file_read over 4 same-package files (the tool's
-		// documented coordinated-edit prep workflow) into an instant
-		// false 'over-mining' hit. The hint fires once per call on
-		// the LAST path only.
-		readPathsLen := len(extractReadFilePaths(tc.Name, tc.Arguments))
-		// #1782 case 3: a windowed read (read_file with offset/limit)
-		// must not mark the file FULLY read. recordRead had no window
-		// notion, so `read_file {offset:2000, limit:50}` set
-		// filesRead=true and a follow-up edit outside the window
-		// passed the unread guard silently (#463 fixed the redundant
-		// read side only - the fix that reached exactly one consumer).
-		// The other three recorders below are disk-based (they stat or
-		// hash the file itself, not the returned slice), so a windowed
-		// read is equivalent to a full read for them - unchanged.
-		hasWindow := readArgsHaveWindow(tc.Arguments)
-		for pi, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
-			a.unreadEdit.recordReadWindow(p, hasWindow)
-			a.tunnelVision.recordFile(p)
-			a.editFailRecovery.recordRead(p)
-			a.fileFreshness.recordRead(p)
-			a.readHash.recordReadHash(p)
-			if hint := a.redundantRead.checkRedundantRead(p, hasWindow); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			if pi == readPathsLen-1 {
-				if hint := a.patchExhaust.recordRead(p); hint != "" {
-					a.appendGuidance(&result, hint)
-				}
-			}
-		}
-	}
-	// #476: search-tool output counts toward exploration breadth —
-	// grep/code_search/files_with_matches results name the files the
-	// agent has effectively "looked at". Without this, a 12-file grep
-	// sweep plus 2 read_file's scored as 2 files and triggered a
-	// bogus "broaden exploration" warning.
-	if searchResultTools[tc.Name] && !result.IsError {
-		for _, p := range extractSearchResultPaths(result.Content) {
-			a.tunnelVision.recordSearched(p)
-		}
-	}
-	// Unread-file edit guard: warn when editing a file not read in
-	// this run. Fires before the tool executes so the hint is in the
-	// result alongside any error from the edit attempt.
-	if !result.IsError && fileEditingTools[tc.Name] {
-		// #1454-C: was a hand-rolled 3-tool list; write_file/batch_replace/
-		// lsp_rename/file_ops/notebook_edit successes never reset the
-		// failure counter (recordEditSuccess below), violating
-		// edit_fail_recovery's documented "resets on successful edit".
-		// Counted ONCE per tool call: this used to sit inside the per-file
-		// loop below, so one multi_file_edit touching 2 files doubled the
-		// refactor counter and hit the threshold of 2 instantly (#487).
-		a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
-		for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
-			a.editFailRecovery.recordEditSuccess(p)
-			// Content-fingerprint validation MUST run before readHash.recordWriteHash
-			// below: recordWriteHash deletes the stored hash, so validating after
-			// it always misses and the detector is dead in production (#283).
-			// Catches sub-second edits that mtime misses and suppresses false
-			// positives from touch/NFS. Mirrors the #168 ordering precedent.
-			if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			a.fileFreshness.recordWrite(p)
-			a.readHash.recordWriteHash(p)
-			a.redundantRead.recordWrite(p)
-			// Refresh the stale-read baseline: the agent's own edit just
-			// bumped the mtime — without this, checkStaleRead would flag
-			// our own edit as an external modification (#168).
-			a.unreadEdit.recordWrite(p)
-			if a.tokenWasteBudget != nil {
-				a.tokenWasteBudget.markFileEdited(p)
-			}
-			a.patchExhaust.recordEdit(p)
-			// Convergence lock: track post-verification edits.
-			a.convergenceRecordEdit(tc.Name)
-			// Diminishing edit: track edit substance size for polish-spiral detection.
-			a.diminishingRecordEdit(tc.Name, tc.Arguments)
-			// Overcorrection cascade: track edit size vs error severity.
-			// #1823 case 3: gated behind claimsSupervision — same class of
-			// lexical/byte-count heuristic as the claims family, same noise
-			// asymmetry argument. Ungated it enforced only the
-			// “shrink your edit” side while the “verify before claiming”
-			// side stayed opt-in — a directional bias opposite to the
-			// paired-axes design intent.
-			if a.claimsSupervision {
-				if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
-					a.appendGuidance(&result, ocHint)
-				}
-			}
-			// Fix cascade: track edits for wrong-hypothesis lock-in detection.
-			a.fixCascade.recordEdit()
-			// Error regression: track edits for negative progress detection.
-			a.errRegression.recordEdit()
-			if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Stale-read detection: warn when the file was modified on
-			// disk since the last read (external edit, git pull, etc.).
-			if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Expired-read detection: warn when the agent edits a file
-			// it previously read, marking the prior read as expired.
-			if hint := a.expiredRead.recordEdit(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// #1459-B: a rolled-back edit restores the pre-edit
-			// content - the file's read/edit bookkeeping must forget
-			// it so the correct anchor-rebuilding re-read isn't
-			// later misreported as stale.
-			if tc.Name == "undo_edit" && !result.IsError {
-				a.expiredRead.recordUndo(p)
-			}
-			// Export guard: detect breaking changes to exported Go symbols
-			// (removed functions, changed signatures) by comparing against
-			// git HEAD. Fires once per file per run.
-			if hint := a.checkExportGuard(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Hub package guard: per-edit blast-radius awareness for
-			// widely-imported packages. Complements export_guard by
-			// providing scale context even for non-breaking edits.
-			if hint := a.checkHubPackage(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Generated artifact guard: warn when editing lock files,
-			// generated code, vendored files, or files with DO NOT EDIT
-			// headers. Suggests the correct regeneration command.
-			if hint := a.artifactGuard.checkGeneratedArtifact(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Branch guard: warn once per run when editing on a protected
-			// branch (main, master, develop, release/*).
-			if hint := a.checkBranchGuard(); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-		}
-	}
-	// Consecutive edit failure recovery: when an edit fails on a file
-	// 2+ times in a row, inject targeted guidance to re-read the file
-	// before retrying. This catches the common "edit fail loop" pattern
-	// faster than the overseer (which runs every 12 iterations).
-	if result.IsError && fileEditingTools[tc.Name] {
-		a.convergenceRecordEditError()
-		for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
-			if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-		}
-	}
-	// Overcorrection cascade: record error signals for proportionality
-	// analysis. Must run on the pristine result content - moved above
-	// injectRulesIntoResult so injected learned-rule text can never
-	// re-classify as a diagnostic error and self-trigger the recorder
-	// (issue #1141).
-	a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
-	// #1823 case 2: a successful rollback tool after observed give-up
-	// language completes the surrender pairing.
-	if !result.IsError && giveupRollbackTools[tc.Name] {
-		a.recordGiveupRollback()
-	}
-	// False premise detection: record tool errors for later contradiction
-	// analysis against assistant success claims.
-	//
-	// Tool output integration monitor: extract high-signal tokens from
-	// information-tool results for integration checking against the next
-	// assistant text (TRACE cross-step evidence, issue #341).
-	//
-	// Both must run on the PRISTINE result content - moved above
-	// injectRulesIntoResult so injected learned-rule text is never
-	// recorded as an error snippet (its build-fail phrasing would poison
-	// isBuildTestError and the #546/#593 supersede logic) nor mined as
-	// "evidence" tokens the next assistant turn will never echo,
-	// mirroring the same invariant as issue #1141 (issue #1165).
-	a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
-	a.integrationRecordToolResult(tc.Name, result.Content)
-	result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
-	// Batch edit conflict warning: if this tool call targets a file that
-	// is also edited by another call in the same batch, inject a warning
-	// so the model understands why edits may fail and how to consolidate.
-	if warn, ok := batchConflictWarnings[idx]; ok {
-		a.appendGuidance(&result, warn)
-	}
-	if result.IsError {
-		debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
-	}
-	// Overcorrection cascade: increment step counter for non-edit tools
-	// so stale errors expire (#104).
-	if !isEditTool(tc.Name) {
-		a.overcorrection.recordNonEditStep()
-	}
-	// Capability boundary: track consecutive tool failures for
-	// stubborn-persistence detection.
-	a.capBoundary.recordToolResult(result.IsError)
-	// Argument size guard: detect oversized tool arguments (e.g., huge
-	// old_text anchors in edit_file, massive write_file content) and
-	// inject a context-efficiency hint. Fires at most once per run.
-	if argSizeHint := a.checkArgSizeGuard(tc.Name, tc.Arguments); argSizeHint != "" {
-		a.appendGuidance(&result, argSizeHint)
-	}
-	// Tool call sequence validator: detect cross-iteration anti-patterns
-	// (e.g., full read then targeted re-read, sequential individual reads
-	// instead of batch, list_directory then glob on same dir). Each
-	// pattern type fires at most once per run.
-	if seqHint := a.toolSequence.record(tc, i+1); seqHint != "" {
-		a.appendGuidance(&result, seqHint)
-	}
-	// Orphaned background command tracking: record start_command jobs
-	// and mark output checks. Detects forgotten background processes.
-	a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
-	// Action annihilation detection: check if this tool call cancels
-	// a prior tool call's side effects (git_add→git_reset, edit→undo, etc.).
-	// #2675: failed calls have no side effects to cancel, yet were
-	// recorded and matched - a failed checkout followed by error
-	// recovery and a successful retry to the SAME branch fired a bogus
-	// "branch thrashing" warning at the most critical moment (error
-	// recovery). Mirrors the #1459-A lesson applied to fragmentation.
-	if !result.IsError {
-		if annihilWarn := a.actionAnnihil.recordToolCall(tc.Name, tc.Arguments, i+1); annihilWarn != "" {
-			debug.Log("agent", "Iteration %d: action annihilation detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// #2684: record the hash a successful git_commit produced so
-		// a later git_revert is only treated as an annihilation when
-		// it targets that commit -- reverting an unrelated historical
-		// commit is a normal bug-fix workflow, not net-zero waste.
-		if tc.Name == "git_commit" {
-			if h := extractNewCommitHash(result.Content); h != "" {
-				a.actionAnnihil.recordCommitHash(i+1, h)
-			}
-		}
-	}
-	// Exploration fragmentation detection: check if the agent is
-	// issuing many scattered exploration calls without converging.
-	// #1459-A: failed calls (missing args etc.) don't count - two
-	// errored reads plus four good ones used to trip the detector
-	// with the failures' 60-char fallback blobs as fake targets.
-	// #1559-B: the gate must only exclude EXPLORATION COUNTING -
-	// wrapping the whole recordToolCall also disabled the mutating
-	// window reset, so a FAILED run_command (a converging action
-	// being handled) no longer reset the window and the very next
-	// read re-fired "without any converging action (edit, write,
-	// command)" right after the agent had run a command.
-	fragWarn := ""
-	if !result.IsError || mutatingToolNamesFrag[tc.Name] {
-		fragWarn = a.exploreFrag.recordToolCall(tc.Name, tc.Arguments, i+1)
-	}
-	if fragWarn != "" {
-		debug.Log("agent", "Iteration %d: exploration fragmentation detected", i+1)
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: fragWarn}},
-		})
-		msgs = a.contextManager.Messages()
-	}
-	// Orphaned new file detection: check if new source files were
-	// created but never integrated via edits to existing files.
-	// #1587-B: FAILED writes (sandbox rejection, batch abort) never
-	// created anything - tracking them made "file(s) created" fire
-	// with text that lied about disk state. Gate on success.
-	if !result.IsError {
-		if orphanWarn := a.orphanFile.recordToolCall(tc.Name, string(tc.Arguments), i+1); orphanWarn != "" {
-			debug.Log("agent", "Iteration %d: orphaned file detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: orphanWarn}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-	}
-	// Build idempotency detection: check if a deterministic build/test
-	// command is being re-run with 0 source edits since the last build.
-	if idempWarn := a.buildIdempot.recordToolCall(tc.Name, tc.Arguments, i+1); idempWarn != "" {
-		debug.Log("agent", "Iteration %d: build idempotency violation detected", i+1)
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: idempWarn}},
-		})
-		msgs = a.contextManager.Messages()
-	}
-	// Tainted data influence detection (IFC): check if untrusted content
-	// from prior tool outputs has flowed into the arguments of this
-	// privileged tool call. Warns when tainted content influences
-	// write/exec operations. Research: Microsoft IFC (arXiv:2505.23643).
-	if taintWarn := a.taintInfluence.checkInfluence(tc.Name, string(tc.Arguments)); taintWarn != "" {
-		debug.Log("agent", "Iteration %d: tainted data influence detected on %s", i+1, tc.Name)
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: taintWarn}},
-		})
-		msgs = a.contextManager.Messages()
-	}
-	// Tool call storm tracking: record each tool call to detect
-	// diverse-tool bursts without interleaved reasoning.
-	a.serialRead.recordToolCall(tc.Name)
-	a.reasoningRedund.recordReasoning("", true) // tool call breaks text-only streak
-	// Verification coverage gap: detect edits across multiple packages
-	// but verification command only covers a subset.
-	if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
-		debug.Log("agent", "Iteration %d: verification coverage gap detected", i+1)
-		// #1821 case 3: scopeNarrow's message for the SAME command
-		// is near-identical - let it skip once instead of double-
-		// injecting on one tool call.
-		if cmd := extractCommandFromToolCall(tc.Arguments); cmd != "" {
-			a.scopeNarrow.lastCoverageWarnedCmd = cmd
-		}
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: covWarn}},
-		})
-		msgs = a.contextManager.Messages()
-	}
-	// Tool effectiveness tracking: monitor per-tool success rates.
-	// When a tool repeatedly errors or yields poor results (empty
-	// searches, truncated output, edit rejections), inject guidance
-	// suggesting alternative tools or approaches.
-	if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
-		debug.Log("agent", "Iteration %d: tool effectiveness guidance for %s", i+1, tc.Name)
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: effGuidance}},
-		})
-		msgs = a.contextManager.Messages()
-	}
-	// Redundant re-verification: detect same verification command
-	// re-run without intervening file edits (idempotency violation).
-	if rvHint := a.redundantReverify.recordToolCall(tc.Name, string(tc.Arguments), i+1, result.IsError); rvHint != "" {
-		debug.Log("agent", "Iteration %d: redundant re-verification detector triggered", i+1)
-		a.injectGuidance(rvHint)
-	}
-	// Outcome misattribution: record tool calls to track corrective
-	// actions between failure and success claim.
-	a.outcomeMisattrib.recordToolCallForOM(tc.Name)
-	// Verification disconnect: record result to detect failures
-	// that get advanced past without resolution.
-	// Narrative-evidence decoupling: record tool results to detect
-	// contradictions between agent text claims and actual outputs.
-	// Delayed observation contradiction: record negative observations from
-	// *successful* tool calls (no-match, not-found, empty) for later
-	// delayed contradiction analysis.
-	// Belief defense escalation: record tool results to detect
-	// contradicting signals against earlier agent beliefs.
-	// Bridging rationalization: record tool results to detect
-	// contradictions that may be explained away in subsequent text.
-	// History error accumulation: track multi-issue tool outputs
-	// to detect partial acknowledgment patterns.
-	// Verification scope decay: record verification commands to
-	// detect progressive narrowing of test/build scope.
-	// Outcome misattribution: record failure indicators in tool
-	// results to detect success claims that follow failures.
-	a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
-	// Context-length goal drift: record tool call targets to
-	// detect drift from original user request (arXiv:2505.02709).
-	a.goalDriftCtx.recordToolCall(tc.Name, string(tc.Arguments))
-	// Foresight calibration: compare predicted outcome against
-	// actual result to detect prediction-observation mismatches.
-	if fcHint := a.foresightCalib.checkCalibration(tc.Name, result.Content, result.IsError, i+1); fcHint != "" {
-		debug.Log("agent", "Iteration %d: foresight calibration detector triggered", i+1)
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: fcHint,
-			}},
-		})
-	}
-	// Self-declared constraint violation: check if this tool call
-	// violates constraints the agent declared in its own reasoning.
-	if cvMsg := a.constraintViolation.checkToolCall(tc.Name, parseToolArgs(tc.Arguments), i+1); cvMsg != "" {
-		debug.Log("agent", "Iteration %d: constraint violation detector triggered", i+1)
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: cvMsg,
-			}},
-		})
-	}
-	// Error strategy loop: track error categories across all tool
-	// calls to detect systemic approach failures (procedural memory
-	// gap from ProcMEM arXiv:2602.01869).
-	a.errStrategyLoop.recordResult(result.Content, result.IsError)
-	// Strategy exhaustion: track diverse recovery strategies failing
-	// for the same error (EEA robustness entropy, MiRA subgoal decomposition).
-	if seMsg := a.strategyExhaustion.recordToolCall(tc.Name, result.IsError, result.Content, i+1); seMsg != "" {
-		debug.Log("agent", "Iteration %d: strategy exhaustion detector triggered", i+1)
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: seMsg,
-			}},
-		})
-	}
-	// Solution fixation: track failed edit attempts per file to
-	// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
-	// #639: every tool call advances the sliding window (the unit is
-	// "12 tool calls", not "12 edits"); only failed mutation edits
-	// feed the per-file counts (handled inside recordToolCall).
-	a.solutionFixation.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
-	// #1486 case E: a FAILED edit_file/write_file changed nothing on
-	// disk - counting it as editsSince wrongly told the reverify
-	// detector "sources changed since your last verify" and
-	// suppressed a legitimate redundant-rerun warning.
-	if !result.IsError {
-		a.redundantReverify.recordEdit(tc.Name)
-	}
-	if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
-		debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
-		a.injectGuidance(fixationHint)
-	}
-	// Unverified self-diagnosis: record tool results to track errors
-	// and verification calls for correlated failure detection.
-	if strategyHint := a.errStrategyLoop.checkAndWarn(); strategyHint != "" {
-		debug.Log("agent", "Iteration %d: error strategy loop detector triggered", i+1)
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: strategyHint,
-			}},
-		})
-	}
-	// Temporal blindness: track verification results and mutations
-	// to detect stale verification claims after code changes.
-	// Wasted exploration tracking: record search tool results and
-	// file path consumption. Detects searches whose results were
-	// never acted upon.
-	// Self-modification safety: check write tool calls for targets
-	// that modify the agent's own infrastructure (config, memory,
-	// hooks, permissions, system prompts).
-	if selfModMsg := a.checkSelfModification(tc.Name, tc.Arguments); selfModMsg != "" {
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: selfModMsg}},
-		})
-		msgs = a.contextManager.Messages()
-	}
-	// Information scent tracking: record exploration calls and their
-	// path novelty to detect depleted information patches.
-	a.infoScent.recordExploration(tc.Name, string(tc.Arguments), result.Content, i+1)
-	// Query convergence tracking: record search queries and code
-	// actions to detect repeated similar searches without progress.
-	a.queryConverge.recordToolCall(tc.Name, string(tc.Arguments), i+1)
-	// Plan drift capture: when exit_plan_mode fires, extract plan items
-	// for later drift detection (spec-driven development tracking).
-	if tc.Name == "exit_plan_mode" {
-		a.planDrift.capturePlan(extractPlanFromArgs(tc.Arguments))
-	}
-	// Delegation orchestration: track spawned agents and result consumption.
-	if a.delegationOrch != nil {
-		if delegationToolNames[tc.Name] {
-			taskSum := extractDelegationTaskSummary(tc.Name, tc.Arguments)
-			a.delegationOrch.recordDelegationCall(tc.ID, tc.Name, taskSum, result.Content, i+1)
-		} else if delegationResultTools[tc.Name] && !result.IsError {
-			// Only successful result checks count as consumption; a failed
-			// wait/task_output did not actually retrieve anything.
-			a.delegationOrch.recordResultCheck(tc.Name, tc.Arguments, result.Content, i+1)
-		}
-		a.delegationOrch.recordToolCallCount()
-	}
-	// Record tool errors for reflection/ratchet rule extraction.
-	if result.IsError {
-		runStats.recordToolError(tc.Name, result.Content)
-	}
-	// Silent error advancement detection: track when errors go unaddressed.
-	if result.IsError {
-		rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
-		a.silentError.recordToolError(tc.Name, rKey, result.Content, i+1)
-	} else {
-		rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
-		if silentMsg := a.silentError.recordToolAction(tc.Name, rKey); silentMsg != "" {
-			a.appendGuidance(&result, silentMsg)
-		}
-	}
-	if tc.Name == "run_command" || tc.Name == "start_command" {
-		cmd := extractCommandFromToolCall(tc.Arguments)
-		if cmd != "" {
-			// Verification scope narrowing: detect progressively narrowing
-			// test/build commands that mask failures (command-level spec gaming).
-			if narrowMsg := a.scopeNarrow.recordVerificationCommand(tc.Name, cmd, result.Content, result.IsError); narrowMsg != "" {
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: narrowMsg}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-		}
-	}
-	// Record tool result for adaptive effort classification.
-	if a.effortAdapter != nil {
-		a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
-	}
-	// Record tool result for adaptive sampling classification.
-	// #2636: pass errText so sampling applies the same
-	// error-recovery filtering as the effort adapter above.
-	if a.adaptiveSampling != nil {
-		a.adaptiveSampling.recordToolResultErr(tc.Name, result.IsError, result.Content)
-	}
-	// Strategy stagnation detector: tracks same-tool+target retries
-	// after failure. When 2+ consecutive failures with identical
-	// approach occur, inject guidance to pivot strategy.
-	if a.strategyStagnation.recordAttempt(tc.Name, string(tc.Arguments), !result.IsError) {
-		debug.Log("agent", "Iteration %d: strategy stagnation detected (tool=%s)", i+1, tc.Name)
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: strategyStagnationWarning(tc.Name, extractStagnationTarget(tc.Name, string(tc.Arguments)), stagnationFailureThreshold),
-			}},
-		})
-		msgs = a.contextManager.Messages()
-	}
+	a.cacheCoherencePhase(tc, result, memoHit)
+	result = a.fileTrackingPhase(tc, result)
+	result = a.errorSignalPhase(idx, tc, result, batchConflictWarnings)
+	result, msgs = a.flowMonitorPhase(tc, i, result, msgs)
+	result, msgs = a.strategyDetectorPhase(tc, i, result, runStats, msgs)
 	// #952: capture the ORIGINAL content length BEFORE the detector chain
 	// (errorClassifier at errorClassifier below through consensus). Guidance
 	// appended by detectors flows into token-waste metering at record time —
@@ -2865,261 +2270,7 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	if propGuidance := a.errorPropagate.recordResult(tc.Name, result.Content, result.IsError); propGuidance != "" {
 		a.appendGuidance(&result, propGuidance)
 	}
-	// Scope drift: track productive file edits for semantic scope creep.
-	// #1491: gate on success like the sibling driftRecurrenceRecord
-	// below and the #495/#953 pattern at 4067 - failed edits (old_text
-	// mismatch, denied) never changed anything and must not inflate
-	// productiveCount/editFiles/editedDirs.
-	if !result.IsError {
-		a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
-	}
-	// Drift recurrence: track edits and verifications relative to any drift warning.
-	a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
-	// Last-known-good checkpoint: track edits for revert targeting.
-	// #1581-B: FAILED edits (bad old_text, wrong path) never touched
-	// disk - recording them put GHOST files into the revert list,
-	// and formatRevertGuidance suggested removing paths that never
-	// existed. Gate on success like the sibling trackers.
-	// #1762 case 1: multi_file_edit partial_success sets IsError=true
-	// for the WHOLE result, but the files in written_paths ARE on
-	// disk (atomicWriteFile per plan). The whole-result gate excluded
-	// them from the revert list - the opposite distortion of #1581
-	// (real modifications missing from revertGuidance). Record those
-	// per-file. Also closes the multi-file Info gap: a successful
-	// multi-file edit used to record only extractFileHint's first path.
-	if written := extractWrittenPaths(result.Content); len(written) > 0 {
-		for _, p := range written {
-			a.lastGoodCheckpointRecordEdit(tc.Name, p)
-		}
-	} else if !result.IsError {
-		a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
-	}
-	// Monorepo scoper: track which packages are being edited.
-	if fh := extractFileHint(tc.Name, tc.Arguments); fh != "" {
-		a.monorepoScoper.recordEdit(fh)
-	}
-	if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
-		// Mark that a drift warning fired, so drift recurrence can track behavior.
-		a.driftRecurrenceMarkWarn(runStats.Iterations)
-		a.appendGuidance(&result, scopeGuidance)
-	}
-	// Drift recurrence: check if the agent continued the warned pattern.
-	if recurrenceGuidance := a.driftRecurrenceCheck(); recurrenceGuidance != "" {
-		a.appendGuidance(&result, recurrenceGuidance)
-	}
-	// Overseer: deterministic trajectory analysis (SICA-inspired).
-	// Detects tool spam, read-only stall, stuck-on-file, error escalation, and drift.
-	if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), runStats.Iterations); overseerGuidance != "" {
-		a.appendGuidance(&result, overseerGuidance)
-	}
-	// Repetition tracker: semantic-level detection of failed edit clusters.
-	// Catches near-miss loops that exact-match loop detection misses.
-	if repetitionGuidance := a.repetitionCheckEdit(tc.Name, tc.Arguments, result.IsError); repetitionGuidance != "" {
-		a.appendGuidance(&result, repetitionGuidance)
-	}
-	// Also check read-edit-fail cycles for read_file calls.
-	if tc.Name == "read_file" || tc.Name == "multi_file_read" {
-		if readGuidance := a.repetitionCheckRead(extractFileHint(tc.Name, tc.Arguments)); readGuidance != "" {
-			a.appendGuidance(&result, readGuidance)
-		}
-	}
-	// Trajectory confidence: record result and check for early warning.
-	// HTC-inspired: detect "overconfidence in failure" before errors compound.
-	// Causal attribution: record edit steps for failure root-cause tracing.
-	a.causalAttribution.recordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments), i)
-	a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
-	// Causal attribution: on failures, trace backward to the likely causal edit.
-	// #1442-A: gate by TOOL NAME too - the old path ran on EVERY tool's
-	// result, and a multi-line grep/read_file output (path.go:line:content
-	// is character-for-character the error-file regex's shape) with a
-	// stray failure word blamed an INNOCENT edit (probe: CRS=84 on a
-	// passing-test grep). Only command/test channels carry build output.
-	// #1528: read_command_output is the polling channel for
-	// start_command jobs (the tool docs route completion reads
-	// through it) - long-test workflows surface failures there,
-	// not in wait_command. Without it the detector stayed silent
-	// on the most common background-test failure path.
-	if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
-		if result.IsError || looksLikeFailure(result.Content) {
-			// #1528 case C: pass the command text and exit status - a
-			// succeeded grep/cat of logs carrying "FAIL" must not be
-			// attributed as a build failure (shell bypasses the
-			// layer-1 tool-name filter).
-			if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, causalCmdForGate(tc, result.Content), result.IsError); causalHint != "" {
-				a.appendGuidance(&result, causalHint)
-			}
-		}
-	}
-	if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
-		a.appendGuidance(&result, confidenceGuidance)
-	}
-	// Verification debt: track unverified modifications (SAUP-inspired).
-	// Detects when the agent stacks edits without building/testing.
-	a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
-	// Undo-blind moved to pre-execution (#1799 case 1) - see the
-	// loop above; the hint rides the tool result there.
-	// Premature commitment: record exploratory actions to track
-	// evidence gathering before the first edit.
-	a.prematureCommit.recordExploration(tc.Name, extractFileHints(tc.Name, tc.Arguments))
-	if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
-		a.appendGuidance(&result, debtGuidance)
-	}
-	// #1454-A: this record call was accidentally dropped by 31a79906
-	// (its diff replaced editAbandon.recordToolCall with the undoBlind
-	// call) - maybeWarn stayed wired but the state was forever empty:
-	// the detector never fired once since birth. Restored.
-	a.editAbandon.recordToolCall(tc.Name, string(tc.Arguments))
-	if abandonGuidance := a.editAbandon.maybeWarn(); abandonGuidance != "" {
-		a.appendGuidance(&result, abandonGuidance)
-	}
-	// File churn detection: track repeated edits to the same file.
-	// Each re-edit signals an invalidated assumption about the file.
-	if isEditTool(tc.Name) {
-		a.fileChurn.recordEdit(extractEditedPaths(tc))
-		for _, p := range extractEditedPaths(tc) {
-			a.tunnelVision.recordFile(p)
-		}
-		// Premature commitment detection: check evidence sufficiency
-		// at the first edit. ECLoop (arXiv:2607.28815) shows that
-		// editing before gathering sufficient context (callers, tests,
-		// related code) leads to incorrect patches in 20-27% of cases.
-		pcMsg := a.prematureCommit.checkFirstEdit(extractEditedPaths(tc))
-		if pcMsg != "" {
-			a.appendGuidance(&result, pcMsg)
-		}
-		if cg := func() string {
-			if !shouldRunDetector(detectorTierRoutine, i+1) {
-				return ""
-			}
-			return a.fileChurn.check()
-		}(); cg != "" {
-			a.appendGuidance(&result, cg)
-		}
-		// Edit oscillation detection: track content signature reversals.
-		// Convergence Detection (agentpatterns.ai, 2026) identifies
-		// oscillation as a critical failure pattern where the agent
-		// alternates between two versions without resolving trade-offs.
-		a.editOscillation.recordEdit(tc.Name, tc.Arguments, i+1)
-		if om := func() string {
-			if !shouldRunDetector(detectorTierRoutine, i+1) {
-				return ""
-			}
-			return a.editOscillation.check()
-		}(); om != "" {
-			a.appendGuidance(&result, om)
-		}
-	}
-	// Tunnel vision detection: warn when the agent has done many
-	// iterations but only touched a few files (under-exploration).
-	// Coppersun.dev 2026: "context window holds 1-2 files; bugs span 3+"
-	if tv := func() string {
-		if !shouldRunDetector(detectorTierRoutine, i+1) {
-			return ""
-		}
-		return a.tunnelVision.check(runStats.Iterations)
-	}(); tv != "" {
-		a.appendGuidance(&result, tv)
-	}
-	// Tunnel vision detection: warn when the agent has done many
-	// iterations but only touched a few files (under-exploration).
-	// Agentic abstention detection: track negative environment signals
-	// (not found, unavailable) to detect untimely continuation.
-	// Silent degradation propagation: record degraded tool results for
-	// later acknowledgment check against assistant text.
-	// Smart verify hint reset: if the agent ran a build/test/verify command,
-	// reset the edit counter and track the result.
-	a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
-	// #1549: gate by command CONTENT like every sibling (#1455-A's
-	// maybeResetVerifyOnCommand above, #487's propagation counter).
-	// The unconditional call made ANY successful tool - read_file,
-	// grep, even the successful edit itself (clearing right before
-	// recordSourceEdit adds 1 back) - zero the debt, so debt never
-	// exceeded 1 and the warn thresholds (7/12) were unreachable:
-	// the detector was permanently silent.
-	if tc.Name == "run_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
-		a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
-	}
-	// #487: gate on command CONTENT — the unconditional raw setter made
-	// the first read_file count as a build/test and silenced the
-	// detector for the whole run.
-	a.prematureRefactorRecordVerifyForTool(tc.Arguments)
-	// #1455-A: gate on command CONTENT, exactly like the #487 fix two
-	// lines above - the unconditional !IsError reset made ANY
-	// successful tool result (read_file/grep, even the successful
-	// edit_file itself) clear the distinct-file set, and since this
-	// runs BEFORE recordEdit, the set size stayed <=1 and the
-	// detector's own charter ("7 edits to 7 DIFFERENT files") was
-	// unreachable. Only a successful VERIFY COMMAND resets now.
-	if tc.Name == "run_command" && !result.IsError {
-		if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
-			a.editPropagation.recordGreenBuild()
-			// #1460-C: a green verification confirms the edit
-			// sequence was legitimate refinement, not churn.
-			// #1561 case B: only failure-aware verification (test/
-			// build/vet-class) may clear, and the clear is scoped
-			// to the command's path arguments - `gofmt -l .` (green
-			// while REPORTING problems), `make clean` and
-			// scope-unrelated commands no longer wipe the books.
-			if isStrictVerifyCommand(cmd) {
-				a.fileChurn.recordVerifySuccess(cmd)
-			}
-		}
-	}
-	// Convergence lock: record verification result to detect post-verify
-	// unnecessary edit drift. A successful verify arms the lock; a failed
-	// verify disarms it (agent is legitimately fixing issues).
-	a.convergenceRecordVerify(tc.Name, tc.Arguments, result.IsError)
-	// Recurring error detection: when a build/test command returns the
-	// SAME error after file edits, inject guidance that the edits aren't
-	// addressing the root cause. This catches the #1 agent failure mode
-	// (incremental edits that don't fix the underlying problem).
-	if recurringGuidance := a.recurringErrorCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); recurringGuidance != "" {
-		a.appendGuidance(&result, recurringGuidance)
-	}
-	// Fix cascade detection: tracks edit->verify->fail cycles regardless
-	// of specific errors. Detects wrong-hypothesis lock-in where each
-	// edit produces a DIFFERENT error (so recurring_error never fires).
-	// Stalled convergence: track error counts across verifications
-	// to detect diminishing returns (convergence plateau).
-	if stalledGuidance := a.stalledConvergenceCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); stalledGuidance != "" {
-		a.appendGuidance(&result, stalledGuidance)
-	}
-	if regressionGuidance := a.errorRegressionCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); regressionGuidance != "" {
-		a.appendGuidance(&result, regressionGuidance)
-	}
-	// Error compounding risk: track all error signals across the run.
-	// Computes geometric compounding probability to detect systemic risk.
-	if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
-		a.errorCompound.recordStep(hadError)
-	}
-	// Fix amnesia: track errors observed and check new content for recurrence.
-	if result.IsError {
-		if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
-			a.fixAmnesia.recordErrorObserved(cat, file)
-		}
-	}
-	if csIsEditTool(tc.Name) || tc.Name == "write_file" || tc.Name == "multi_edit_file" {
-		fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
-		if result.IsError {
-			// Error observed in this file - track it.
-			if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
-				if file == "" {
-					file = fp
-				}
-				a.fixAmnesia.recordErrorObserved(cat, file)
-			}
-		} else {
-			// #754: successful edit promotes observed errors in this
-			// file to FIXED (observe->fix two-phase wiring; previously
-			// recordErrorObserved alone marked categories "fixed" with
-			// no edit ever happening).
-			a.fixAmnesia.recordFileEdited(fp)
-		}
-		// Check new content for patterns matching previously-fixed errors.
-		if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, result.Content); faGuidance != "" {
-			a.appendGuidance(&result, faGuidance)
-		}
-	}
+	result = a.scopeDriftPhase(tc, i, result, runStats)
 	// Correction spiral: track edits and verify results to detect
 	// error severity escalation across fix attempts. Only genuine
 	// verification commands feed the sequence (#491): a successful
@@ -3422,6 +2573,903 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 				// footers.
 				a.errorPropagate.recordGuardedTruncation(tc.Name, result.Content)
 			}
+		}
+	}
+	return result
+}
+
+// cacheCoherencePhase invalidates stale caches after a tool result and
+// stores the fresh read-only result in the memoize cache.
+// Extracted verbatim from postToolResultPhase (r217).
+func (a *Agent) cacheCoherencePhase(tc provider.ToolCallDelta, result tool.Result, memoHit bool) {
+	// File-editing tools invalidate the speculative cache: any
+	// pre-executed read_file/grep results for edited files are now
+	// stale. Clear the cache to prevent serving outdated content.
+	// #1104: undo_edit is included - checkpoint restore rewrites the
+	// file, and without invalidation the next read could be served
+	// from the memoize/speculator/command caches describing the
+	// pre-undo state. See mutatesSourceTree in verify_hint.go.
+	if mutatesSourceTree(tc.Name) && !result.IsError {
+		a.speculator.invalidateCache()
+		// Git whole-tree operations (checkout, reset, revert) change
+		// potentially all files at once. They need nuclear invalidation:
+		// clear mtime-based entries too, because cached reads from the
+		// old branch are now wrong even if individual file mtimes
+		// happened to not change.
+		if gitWholeTreeTools[tc.Name] {
+			a.toolMemo.invalidateAll()
+			debug.Log("agent", "whole-tree git operation %s: invalidated all caches", tc.Name)
+		} else {
+			// Normal file edit or partial git op: invalidate
+			// TTL-based memoize entries (grep, LSP, git) whose
+			// results may be stale. mtime-based entries are kept.
+			a.toolMemo.invalidateTTLBased()
+		}
+		// Invalidate the deterministic command cache: any build/test
+		// results are now stale because source files changed.
+		a.commandCache.invalidate()
+		// Record created files so the unread-edit guard exempts them.
+		for _, p := range extractCreateFilePaths(tc.Name, tc.Arguments) {
+			a.unreadEdit.recordCreated(p)
+			a.tunnelVision.recordFile(p)
+			a.fileFreshness.recordWrite(p)
+			a.readHash.recordWriteHash(p)
+		}
+		// Track edit for recurring-error detection: increments the
+		// "edits since last build error" counter so that a recurring
+		// error with edits in between is flagged as a root-cause gap.
+		a.recurringErrorRecordEdit()
+		// Mark edited files as dirty in the code index so the
+		// background indexer can update them incrementally.
+		if a.codeIndex != nil {
+			a.codeIndex.MarkDirty(extractEditedPaths(tc))
+		}
+	}
+	// #750: shell commands can mutate sources too (gofmt -w, sed -i,
+	// git apply, go mod tidy...). They are invisible to the tool-name
+	// gate above, so cached build/test results would be served stale
+	// with a false "no source files have changed" annotation -- or a
+	// stale PASS after a bad patch (false green light). Reuse the
+	// #749 shellMutatesSources heuristic; FP cost is one lost cache
+	// reuse, FN cost is executing on wrong results.
+	// #1028: a failed compound command can still have mutated sources
+	// (e.g. `sed -i ... && make lint` -- sed rewrote the file, make failed).
+	// The side effects already happened, so the IsError gate must not
+	// skip invalidation here; a stale "no source files have changed"
+	// cache hit would be actively wrong. FP cost: one lost cache reuse.
+	if tc.Name == "run_command" || tc.Name == "start_command" {
+		if cmd, _ := parseRunCommandArgs(tc.Arguments); shellMutatesSources(cmd) {
+			a.speculator.invalidateCache()
+			a.toolMemo.invalidateTTLBased()
+			a.commandCache.invalidate()
+			// #1486: the shell rewrote sources, so re-running a build/test
+			// CAN produce new information - keep the reverify detector in
+			// agreement with the caches we just invalidated.
+			a.redundantReverify.recordShellSourceMutation()
+			debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
+		}
+	}
+	// Store result in memoization cache for read-only tools.
+	// #983: skip the put on a memo hit — the cached entry already holds
+	// the pristine result, and re-putting the annotated copy (with the
+	// "[cached ...]" prefix and any appended hints) would stack one
+	// prefix per repeated call and make the "identical content"
+	// annotation literally false from the second layer on.
+	if speculativeSafeTools[tc.Name] && !result.IsError && !memoHit {
+		a.toolMemo.put(tc.Name, tc.Arguments, result)
+	}
+}
+
+// fileTrackingPhase records per-file read/edit bookkeeping across the
+// freshness/unread/hash/failure-recovery trackers and appends per-file
+// detector guidance to the result.
+// Extracted verbatim from postToolResultPhase (r217).
+func (a *Agent) fileTrackingPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
+	// Track files read during this run so the unread-edit guard
+	// knows which files the agent has seen.
+	if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
+		// #1476-B: patch-exhaustion counts CALLS, not paths - the
+		// IFT give-up rule models successive probes (diminishing
+		// returns per RE-visit), and #500's per-path accounting turned
+		// ONE multi_file_read over 4 same-package files (the tool's
+		// documented coordinated-edit prep workflow) into an instant
+		// false 'over-mining' hit. The hint fires once per call on
+		// the LAST path only.
+		readPathsLen := len(extractReadFilePaths(tc.Name, tc.Arguments))
+		// #1782 case 3: a windowed read (read_file with offset/limit)
+		// must not mark the file FULLY read. recordRead had no window
+		// notion, so `read_file {offset:2000, limit:50}` set
+		// filesRead=true and a follow-up edit outside the window
+		// passed the unread guard silently (#463 fixed the redundant
+		// read side only - the fix that reached exactly one consumer).
+		// The other three recorders below are disk-based (they stat or
+		// hash the file itself, not the returned slice), so a windowed
+		// read is equivalent to a full read for them - unchanged.
+		hasWindow := readArgsHaveWindow(tc.Arguments)
+		for pi, p := range extractReadFilePaths(tc.Name, tc.Arguments) {
+			a.unreadEdit.recordReadWindow(p, hasWindow)
+			a.tunnelVision.recordFile(p)
+			a.editFailRecovery.recordRead(p)
+			a.fileFreshness.recordRead(p)
+			a.readHash.recordReadHash(p)
+			if hint := a.redundantRead.checkRedundantRead(p, hasWindow); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			if pi == readPathsLen-1 {
+				if hint := a.patchExhaust.recordRead(p); hint != "" {
+					a.appendGuidance(&result, hint)
+				}
+			}
+		}
+	}
+	// #476: search-tool output counts toward exploration breadth —
+	// grep/code_search/files_with_matches results name the files the
+	// agent has effectively "looked at". Without this, a 12-file grep
+	// sweep plus 2 read_file's scored as 2 files and triggered a
+	// bogus "broaden exploration" warning.
+	if searchResultTools[tc.Name] && !result.IsError {
+		for _, p := range extractSearchResultPaths(result.Content) {
+			a.tunnelVision.recordSearched(p)
+		}
+	}
+	// Unread-file edit guard: warn when editing a file not read in
+	// this run. Fires before the tool executes so the hint is in the
+	// result alongside any error from the edit attempt.
+	if !result.IsError && fileEditingTools[tc.Name] {
+		// #1454-C: was a hand-rolled 3-tool list; write_file/batch_replace/
+		// lsp_rename/file_ops/notebook_edit successes never reset the
+		// failure counter (recordEditSuccess below), violating
+		// edit_fail_recovery's documented "resets on successful edit".
+		// Counted ONCE per tool call: this used to sit inside the per-file
+		// loop below, so one multi_file_edit touching 2 files doubled the
+		// refactor counter and hit the threshold of 2 instantly (#487).
+		a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
+		for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+			a.editFailRecovery.recordEditSuccess(p)
+			// Content-fingerprint validation MUST run before readHash.recordWriteHash
+			// below: recordWriteHash deletes the stored hash, so validating after
+			// it always misses and the detector is dead in production (#283).
+			// Catches sub-second edits that mtime misses and suppresses false
+			// positives from touch/NFS. Mirrors the #168 ordering precedent.
+			if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			a.fileFreshness.recordWrite(p)
+			a.readHash.recordWriteHash(p)
+			a.redundantRead.recordWrite(p)
+			// Refresh the stale-read baseline: the agent's own edit just
+			// bumped the mtime — without this, checkStaleRead would flag
+			// our own edit as an external modification (#168).
+			a.unreadEdit.recordWrite(p)
+			if a.tokenWasteBudget != nil {
+				a.tokenWasteBudget.markFileEdited(p)
+			}
+			a.patchExhaust.recordEdit(p)
+			// Convergence lock: track post-verification edits.
+			a.convergenceRecordEdit(tc.Name)
+			// Diminishing edit: track edit substance size for polish-spiral detection.
+			a.diminishingRecordEdit(tc.Name, tc.Arguments)
+			// Overcorrection cascade: track edit size vs error severity.
+			// #1823 case 3: gated behind claimsSupervision — same class of
+			// lexical/byte-count heuristic as the claims family, same noise
+			// asymmetry argument. Ungated it enforced only the
+			// “shrink your edit” side while the “verify before claiming”
+			// side stayed opt-in — a directional bias opposite to the
+			// paired-axes design intent.
+			if a.claimsSupervision {
+				if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
+					a.appendGuidance(&result, ocHint)
+				}
+			}
+			// Fix cascade: track edits for wrong-hypothesis lock-in detection.
+			a.fixCascade.recordEdit()
+			// Error regression: track edits for negative progress detection.
+			a.errRegression.recordEdit()
+			if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			// Stale-read detection: warn when the file was modified on
+			// disk since the last read (external edit, git pull, etc.).
+			if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			// Expired-read detection: warn when the agent edits a file
+			// it previously read, marking the prior read as expired.
+			if hint := a.expiredRead.recordEdit(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			// #1459-B: a rolled-back edit restores the pre-edit
+			// content - the file's read/edit bookkeeping must forget
+			// it so the correct anchor-rebuilding re-read isn't
+			// later misreported as stale.
+			if tc.Name == "undo_edit" && !result.IsError {
+				a.expiredRead.recordUndo(p)
+			}
+			// Export guard: detect breaking changes to exported Go symbols
+			// (removed functions, changed signatures) by comparing against
+			// git HEAD. Fires once per file per run.
+			if hint := a.checkExportGuard(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			// Hub package guard: per-edit blast-radius awareness for
+			// widely-imported packages. Complements export_guard by
+			// providing scale context even for non-breaking edits.
+			if hint := a.checkHubPackage(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			// Generated artifact guard: warn when editing lock files,
+			// generated code, vendored files, or files with DO NOT EDIT
+			// headers. Suggests the correct regeneration command.
+			if hint := a.artifactGuard.checkGeneratedArtifact(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+			// Branch guard: warn once per run when editing on a protected
+			// branch (main, master, develop, release/*).
+			if hint := a.checkBranchGuard(); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+		}
+	}
+	// Consecutive edit failure recovery: when an edit fails on a file
+	// 2+ times in a row, inject targeted guidance to re-read the file
+	// before retrying. This catches the common "edit fail loop" pattern
+	// faster than the overseer (which runs every 12 iterations).
+	if result.IsError && fileEditingTools[tc.Name] {
+		a.convergenceRecordEditError()
+		for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
+			if hint := a.editFailRecovery.recordEditFailure(p); hint != "" {
+				a.appendGuidance(&result, hint)
+			}
+		}
+	}
+	return result
+}
+
+// errorSignalPhase runs the pristine-content error signal recorders,
+// injects learned rules, and applies batch-conflict warnings.
+// Extracted verbatim from postToolResultPhase (r217).
+func (a *Agent) errorSignalPhase(idx int, tc provider.ToolCallDelta, result tool.Result, batchConflictWarnings map[int]string) tool.Result {
+	// Overcorrection cascade: record error signals for proportionality
+	// analysis. Must run on the pristine result content - moved above
+	// injectRulesIntoResult so injected learned-rule text can never
+	// re-classify as a diagnostic error and self-trigger the recorder
+	// (issue #1141).
+	a.overcorrectionRecordError(tc.Name, result.Content, result.IsError)
+	// #1823 case 2: a successful rollback tool after observed give-up
+	// language completes the surrender pairing.
+	if !result.IsError && giveupRollbackTools[tc.Name] {
+		a.recordGiveupRollback()
+	}
+	// False premise detection: record tool errors for later contradiction
+	// analysis against assistant success claims.
+	//
+	// Tool output integration monitor: extract high-signal tokens from
+	// information-tool results for integration checking against the next
+	// assistant text (TRACE cross-step evidence, issue #341).
+	//
+	// Both must run on the PRISTINE result content - moved above
+	// injectRulesIntoResult so injected learned-rule text is never
+	// recorded as an error snippet (its build-fail phrasing would poison
+	// isBuildTestError and the #546/#593 supersede logic) nor mined as
+	// "evidence" tokens the next assistant turn will never echo,
+	// mirroring the same invariant as issue #1141 (issue #1165).
+	a.falsePremise.recordToolResult(tc.Name, result.Content, result.IsError)
+	a.integrationRecordToolResult(tc.Name, result.Content)
+	result.Content = a.injectRulesIntoResult(tc.Name, tc.Arguments, result.Content)
+	// Batch edit conflict warning: if this tool call targets a file that
+	// is also edited by another call in the same batch, inject a warning
+	// so the model understands why edits may fail and how to consolidate.
+	if warn, ok := batchConflictWarnings[idx]; ok {
+		a.appendGuidance(&result, warn)
+	}
+	if result.IsError {
+		debug.Log("agent", "tool result ERROR: tool=%s output=%s", tc.Name, util.Truncate(result.Content, 200))
+	}
+	// Overcorrection cascade: increment step counter for non-edit tools
+	// so stale errors expire (#104).
+	if !isEditTool(tc.Name) {
+		a.overcorrection.recordNonEditStep()
+	}
+	return result
+}
+
+// flowMonitorPhase runs the per-call flow detectors; those that inject a
+// context message refresh msgs, which is returned to the caller.
+// Extracted verbatim from postToolResultPhase (r217).
+func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.Result, msgs []provider.Message) (tool.Result, []provider.Message) {
+	// Capability boundary: track consecutive tool failures for
+	// stubborn-persistence detection.
+	a.capBoundary.recordToolResult(result.IsError)
+	// Argument size guard: detect oversized tool arguments (e.g., huge
+	// old_text anchors in edit_file, massive write_file content) and
+	// inject a context-efficiency hint. Fires at most once per run.
+	if argSizeHint := a.checkArgSizeGuard(tc.Name, tc.Arguments); argSizeHint != "" {
+		a.appendGuidance(&result, argSizeHint)
+	}
+	// Tool call sequence validator: detect cross-iteration anti-patterns
+	// (e.g., full read then targeted re-read, sequential individual reads
+	// instead of batch, list_directory then glob on same dir). Each
+	// pattern type fires at most once per run.
+	if seqHint := a.toolSequence.record(tc, i+1); seqHint != "" {
+		a.appendGuidance(&result, seqHint)
+	}
+	// Orphaned background command tracking: record start_command jobs
+	// and mark output checks. Detects forgotten background processes.
+	a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+	// Action annihilation detection: check if this tool call cancels
+	// a prior tool call's side effects (git_add→git_reset, edit→undo, etc.).
+	// #2675: failed calls have no side effects to cancel, yet were
+	// recorded and matched - a failed checkout followed by error
+	// recovery and a successful retry to the SAME branch fired a bogus
+	// "branch thrashing" warning at the most critical moment (error
+	// recovery). Mirrors the #1459-A lesson applied to fragmentation.
+	if !result.IsError {
+		if annihilWarn := a.actionAnnihil.recordToolCall(tc.Name, tc.Arguments, i+1); annihilWarn != "" {
+			debug.Log("agent", "Iteration %d: action annihilation detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: annihilWarn}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+		// #2684: record the hash a successful git_commit produced so
+		// a later git_revert is only treated as an annihilation when
+		// it targets that commit -- reverting an unrelated historical
+		// commit is a normal bug-fix workflow, not net-zero waste.
+		if tc.Name == "git_commit" {
+			if h := extractNewCommitHash(result.Content); h != "" {
+				a.actionAnnihil.recordCommitHash(i+1, h)
+			}
+		}
+	}
+	// Exploration fragmentation detection: check if the agent is
+	// issuing many scattered exploration calls without converging.
+	// #1459-A: failed calls (missing args etc.) don't count - two
+	// errored reads plus four good ones used to trip the detector
+	// with the failures' 60-char fallback blobs as fake targets.
+	// #1559-B: the gate must only exclude EXPLORATION COUNTING -
+	// wrapping the whole recordToolCall also disabled the mutating
+	// window reset, so a FAILED run_command (a converging action
+	// being handled) no longer reset the window and the very next
+	// read re-fired "without any converging action (edit, write,
+	// command)" right after the agent had run a command.
+	fragWarn := ""
+	if !result.IsError || mutatingToolNamesFrag[tc.Name] {
+		fragWarn = a.exploreFrag.recordToolCall(tc.Name, tc.Arguments, i+1)
+	}
+	if fragWarn != "" {
+		debug.Log("agent", "Iteration %d: exploration fragmentation detected", i+1)
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: fragWarn}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Orphaned new file detection: check if new source files were
+	// created but never integrated via edits to existing files.
+	// #1587-B: FAILED writes (sandbox rejection, batch abort) never
+	// created anything - tracking them made "file(s) created" fire
+	// with text that lied about disk state. Gate on success.
+	if !result.IsError {
+		if orphanWarn := a.orphanFile.recordToolCall(tc.Name, string(tc.Arguments), i+1); orphanWarn != "" {
+			debug.Log("agent", "Iteration %d: orphaned file detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: orphanWarn}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+	}
+	// Build idempotency detection: check if a deterministic build/test
+	// command is being re-run with 0 source edits since the last build.
+	if idempWarn := a.buildIdempot.recordToolCall(tc.Name, tc.Arguments, i+1); idempWarn != "" {
+		debug.Log("agent", "Iteration %d: build idempotency violation detected", i+1)
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: idempWarn}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Tainted data influence detection (IFC): check if untrusted content
+	// from prior tool outputs has flowed into the arguments of this
+	// privileged tool call. Warns when tainted content influences
+	// write/exec operations. Research: Microsoft IFC (arXiv:2505.23643).
+	if taintWarn := a.taintInfluence.checkInfluence(tc.Name, string(tc.Arguments)); taintWarn != "" {
+		debug.Log("agent", "Iteration %d: tainted data influence detected on %s", i+1, tc.Name)
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: taintWarn}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Tool call storm tracking: record each tool call to detect
+	// diverse-tool bursts without interleaved reasoning.
+	a.serialRead.recordToolCall(tc.Name)
+	a.reasoningRedund.recordReasoning("", true) // tool call breaks text-only streak
+	// Verification coverage gap: detect edits across multiple packages
+	// but verification command only covers a subset.
+	if covWarn := a.editCoverage.recordToolCall(tc.Name, string(tc.Arguments)); covWarn != "" {
+		debug.Log("agent", "Iteration %d: verification coverage gap detected", i+1)
+		// #1821 case 3: scopeNarrow's message for the SAME command
+		// is near-identical - let it skip once instead of double-
+		// injecting on one tool call.
+		if cmd := extractCommandFromToolCall(tc.Arguments); cmd != "" {
+			a.scopeNarrow.lastCoverageWarnedCmd = cmd
+		}
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: covWarn}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Tool effectiveness tracking: monitor per-tool success rates.
+	// When a tool repeatedly errors or yields poor results (empty
+	// searches, truncated output, edit rejections), inject guidance
+	// suggesting alternative tools or approaches.
+	if effGuidance := a.toolEff.recordCall(tc.Name, result.Content, result.IsError); effGuidance != "" {
+		debug.Log("agent", "Iteration %d: tool effectiveness guidance for %s", i+1, tc.Name)
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: effGuidance}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	return result, msgs
+}
+
+// strategyDetectorPhase runs verification/strategy recorders and
+// detectors; context-message injections refresh msgs, which is returned
+// to the caller.
+// Extracted verbatim from postToolResultPhase (r217).
+func (a *Agent) strategyDetectorPhase(tc provider.ToolCallDelta, i int, result tool.Result, runStats *RunStats, msgs []provider.Message) (tool.Result, []provider.Message) {
+	// Redundant re-verification: detect same verification command
+	// re-run without intervening file edits (idempotency violation).
+	if rvHint := a.redundantReverify.recordToolCall(tc.Name, string(tc.Arguments), i+1, result.IsError); rvHint != "" {
+		debug.Log("agent", "Iteration %d: redundant re-verification detector triggered", i+1)
+		a.injectGuidance(rvHint)
+	}
+	// Outcome misattribution: record tool calls to track corrective
+	// actions between failure and success claim.
+	a.outcomeMisattrib.recordToolCallForOM(tc.Name)
+	// Verification disconnect: record result to detect failures
+	// that get advanced past without resolution.
+	// Narrative-evidence decoupling: record tool results to detect
+	// contradictions between agent text claims and actual outputs.
+	// Delayed observation contradiction: record negative observations from
+	// *successful* tool calls (no-match, not-found, empty) for later
+	// delayed contradiction analysis.
+	// Belief defense escalation: record tool results to detect
+	// contradicting signals against earlier agent beliefs.
+	// Bridging rationalization: record tool results to detect
+	// contradictions that may be explained away in subsequent text.
+	// History error accumulation: track multi-issue tool outputs
+	// to detect partial acknowledgment patterns.
+	// Verification scope decay: record verification commands to
+	// detect progressive narrowing of test/build scope.
+	// Outcome misattribution: record failure indicators in tool
+	// results to detect success claims that follow failures.
+	a.outcomeMisattrib.recordResult(tc.Name, result.Content, result.IsError, i+1)
+	// Context-length goal drift: record tool call targets to
+	// detect drift from original user request (arXiv:2505.02709).
+	a.goalDriftCtx.recordToolCall(tc.Name, string(tc.Arguments))
+	// Foresight calibration: compare predicted outcome against
+	// actual result to detect prediction-observation mismatches.
+	if fcHint := a.foresightCalib.checkCalibration(tc.Name, result.Content, result.IsError, i+1); fcHint != "" {
+		debug.Log("agent", "Iteration %d: foresight calibration detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: fcHint,
+			}},
+		})
+	}
+	// Self-declared constraint violation: check if this tool call
+	// violates constraints the agent declared in its own reasoning.
+	if cvMsg := a.constraintViolation.checkToolCall(tc.Name, parseToolArgs(tc.Arguments), i+1); cvMsg != "" {
+		debug.Log("agent", "Iteration %d: constraint violation detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: cvMsg,
+			}},
+		})
+	}
+	// Error strategy loop: track error categories across all tool
+	// calls to detect systemic approach failures (procedural memory
+	// gap from ProcMEM arXiv:2602.01869).
+	a.errStrategyLoop.recordResult(result.Content, result.IsError)
+	// Strategy exhaustion: track diverse recovery strategies failing
+	// for the same error (EEA robustness entropy, MiRA subgoal decomposition).
+	if seMsg := a.strategyExhaustion.recordToolCall(tc.Name, result.IsError, result.Content, i+1); seMsg != "" {
+		debug.Log("agent", "Iteration %d: strategy exhaustion detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: seMsg,
+			}},
+		})
+	}
+	// Solution fixation: track failed edit attempts per file to
+	// detect diagnosis anchoring (arXiv:2505.15392, arXiv:2509.25370).
+	// #639: every tool call advances the sliding window (the unit is
+	// "12 tool calls", not "12 edits"); only failed mutation edits
+	// feed the per-file counts (handled inside recordToolCall).
+	a.solutionFixation.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
+	// #1486 case E: a FAILED edit_file/write_file changed nothing on
+	// disk - counting it as editsSince wrongly told the reverify
+	// detector "sources changed since your last verify" and
+	// suppressed a legitimate redundant-rerun warning.
+	if !result.IsError {
+		a.redundantReverify.recordEdit(tc.Name)
+	}
+	if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
+		debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
+		a.injectGuidance(fixationHint)
+	}
+	// Unverified self-diagnosis: record tool results to track errors
+	// and verification calls for correlated failure detection.
+	if strategyHint := a.errStrategyLoop.checkAndWarn(); strategyHint != "" {
+		debug.Log("agent", "Iteration %d: error strategy loop detector triggered", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: strategyHint,
+			}},
+		})
+	}
+	// Temporal blindness: track verification results and mutations
+	// to detect stale verification claims after code changes.
+	// Wasted exploration tracking: record search tool results and
+	// file path consumption. Detects searches whose results were
+	// never acted upon.
+	// Self-modification safety: check write tool calls for targets
+	// that modify the agent's own infrastructure (config, memory,
+	// hooks, permissions, system prompts).
+	if selfModMsg := a.checkSelfModification(tc.Name, tc.Arguments); selfModMsg != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: selfModMsg}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Information scent tracking: record exploration calls and their
+	// path novelty to detect depleted information patches.
+	a.infoScent.recordExploration(tc.Name, string(tc.Arguments), result.Content, i+1)
+	// Query convergence tracking: record search queries and code
+	// actions to detect repeated similar searches without progress.
+	a.queryConverge.recordToolCall(tc.Name, string(tc.Arguments), i+1)
+	// Plan drift capture: when exit_plan_mode fires, extract plan items
+	// for later drift detection (spec-driven development tracking).
+	if tc.Name == "exit_plan_mode" {
+		a.planDrift.capturePlan(extractPlanFromArgs(tc.Arguments))
+	}
+	// Delegation orchestration: track spawned agents and result consumption.
+	if a.delegationOrch != nil {
+		if delegationToolNames[tc.Name] {
+			taskSum := extractDelegationTaskSummary(tc.Name, tc.Arguments)
+			a.delegationOrch.recordDelegationCall(tc.ID, tc.Name, taskSum, result.Content, i+1)
+		} else if delegationResultTools[tc.Name] && !result.IsError {
+			// Only successful result checks count as consumption; a failed
+			// wait/task_output did not actually retrieve anything.
+			a.delegationOrch.recordResultCheck(tc.Name, tc.Arguments, result.Content, i+1)
+		}
+		a.delegationOrch.recordToolCallCount()
+	}
+	// Record tool errors for reflection/ratchet rule extraction.
+	if result.IsError {
+		runStats.recordToolError(tc.Name, result.Content)
+	}
+	// Silent error advancement detection: track when errors go unaddressed.
+	if result.IsError {
+		rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
+		a.silentError.recordToolError(tc.Name, rKey, result.Content, i+1)
+	} else {
+		rKey := extractErrorResourceKey(tc.Name, tc.Arguments)
+		if silentMsg := a.silentError.recordToolAction(tc.Name, rKey); silentMsg != "" {
+			a.appendGuidance(&result, silentMsg)
+		}
+	}
+	if tc.Name == "run_command" || tc.Name == "start_command" {
+		cmd := extractCommandFromToolCall(tc.Arguments)
+		if cmd != "" {
+			// Verification scope narrowing: detect progressively narrowing
+			// test/build commands that mask failures (command-level spec gaming).
+			if narrowMsg := a.scopeNarrow.recordVerificationCommand(tc.Name, cmd, result.Content, result.IsError); narrowMsg != "" {
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: narrowMsg}},
+				})
+				msgs = a.contextManager.Messages()
+			}
+		}
+	}
+	// Record tool result for adaptive effort classification.
+	if a.effortAdapter != nil {
+		a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
+	}
+	// Record tool result for adaptive sampling classification.
+	// #2636: pass errText so sampling applies the same
+	// error-recovery filtering as the effort adapter above.
+	if a.adaptiveSampling != nil {
+		a.adaptiveSampling.recordToolResultErr(tc.Name, result.IsError, result.Content)
+	}
+	// Strategy stagnation detector: tracks same-tool+target retries
+	// after failure. When 2+ consecutive failures with identical
+	// approach occur, inject guidance to pivot strategy.
+	if a.strategyStagnation.recordAttempt(tc.Name, string(tc.Arguments), !result.IsError) {
+		debug.Log("agent", "Iteration %d: strategy stagnation detected (tool=%s)", i+1, tc.Name)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: strategyStagnationWarning(tc.Name, extractStagnationTarget(tc.Name, string(tc.Arguments)), stagnationFailureThreshold),
+			}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	return result, msgs
+}
+
+// scopeDriftPhase runs the scope/drift/churn/fix-amnesia detector group.
+// Extracted verbatim from postToolResultPhase (r217).
+func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Result, runStats *RunStats) tool.Result {
+	// Scope drift: track productive file edits for semantic scope creep.
+	// #1491: gate on success like the sibling driftRecurrenceRecord
+	// below and the #495/#953 pattern at 4067 - failed edits (old_text
+	// mismatch, denied) never changed anything and must not inflate
+	// productiveCount/editFiles/editedDirs.
+	if !result.IsError {
+		a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+	}
+	// Drift recurrence: track edits and verifications relative to any drift warning.
+	a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
+	// Last-known-good checkpoint: track edits for revert targeting.
+	// #1581-B: FAILED edits (bad old_text, wrong path) never touched
+	// disk - recording them put GHOST files into the revert list,
+	// and formatRevertGuidance suggested removing paths that never
+	// existed. Gate on success like the sibling trackers.
+	// #1762 case 1: multi_file_edit partial_success sets IsError=true
+	// for the WHOLE result, but the files in written_paths ARE on
+	// disk (atomicWriteFile per plan). The whole-result gate excluded
+	// them from the revert list - the opposite distortion of #1581
+	// (real modifications missing from revertGuidance). Record those
+	// per-file. Also closes the multi-file Info gap: a successful
+	// multi-file edit used to record only extractFileHint's first path.
+	if written := extractWrittenPaths(result.Content); len(written) > 0 {
+		for _, p := range written {
+			a.lastGoodCheckpointRecordEdit(tc.Name, p)
+		}
+	} else if !result.IsError {
+		a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+	}
+	// Monorepo scoper: track which packages are being edited.
+	if fh := extractFileHint(tc.Name, tc.Arguments); fh != "" {
+		a.monorepoScoper.recordEdit(fh)
+	}
+	if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
+		// Mark that a drift warning fired, so drift recurrence can track behavior.
+		a.driftRecurrenceMarkWarn(runStats.Iterations)
+		a.appendGuidance(&result, scopeGuidance)
+	}
+	// Drift recurrence: check if the agent continued the warned pattern.
+	if recurrenceGuidance := a.driftRecurrenceCheck(); recurrenceGuidance != "" {
+		a.appendGuidance(&result, recurrenceGuidance)
+	}
+	// Overseer: deterministic trajectory analysis (SICA-inspired).
+	// Detects tool spam, read-only stall, stuck-on-file, error escalation, and drift.
+	if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), runStats.Iterations); overseerGuidance != "" {
+		a.appendGuidance(&result, overseerGuidance)
+	}
+	// Repetition tracker: semantic-level detection of failed edit clusters.
+	// Catches near-miss loops that exact-match loop detection misses.
+	if repetitionGuidance := a.repetitionCheckEdit(tc.Name, tc.Arguments, result.IsError); repetitionGuidance != "" {
+		a.appendGuidance(&result, repetitionGuidance)
+	}
+	// Also check read-edit-fail cycles for read_file calls.
+	if tc.Name == "read_file" || tc.Name == "multi_file_read" {
+		if readGuidance := a.repetitionCheckRead(extractFileHint(tc.Name, tc.Arguments)); readGuidance != "" {
+			a.appendGuidance(&result, readGuidance)
+		}
+	}
+	// Trajectory confidence: record result and check for early warning.
+	// HTC-inspired: detect "overconfidence in failure" before errors compound.
+	// Causal attribution: record edit steps for failure root-cause tracing.
+	a.causalAttribution.recordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments), i)
+	a.confidence.recordResult(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments))
+	// Causal attribution: on failures, trace backward to the likely causal edit.
+	// #1442-A: gate by TOOL NAME too - the old path ran on EVERY tool's
+	// result, and a multi-line grep/read_file output (path.go:line:content
+	// is character-for-character the error-file regex's shape) with a
+	// stray failure word blamed an INNOCENT edit (probe: CRS=84 on a
+	// passing-test grep). Only command/test channels carry build output.
+	// #1528: read_command_output is the polling channel for
+	// start_command jobs (the tool docs route completion reads
+	// through it) - long-test workflows surface failures there,
+	// not in wait_command. Without it the detector stayed silent
+	// on the most common background-test failure path.
+	if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
+		if result.IsError || looksLikeFailure(result.Content) {
+			// #1528 case C: pass the command text and exit status - a
+			// succeeded grep/cat of logs carrying "FAIL" must not be
+			// attributed as a build failure (shell bypasses the
+			// layer-1 tool-name filter).
+			if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, causalCmdForGate(tc, result.Content), result.IsError); causalHint != "" {
+				a.appendGuidance(&result, causalHint)
+			}
+		}
+	}
+	if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
+		a.appendGuidance(&result, confidenceGuidance)
+	}
+	// Verification debt: track unverified modifications (SAUP-inspired).
+	// Detects when the agent stacks edits without building/testing.
+	a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
+	// Undo-blind moved to pre-execution (#1799 case 1) - see the
+	// loop above; the hint rides the tool result there.
+	// Premature commitment: record exploratory actions to track
+	// evidence gathering before the first edit.
+	a.prematureCommit.recordExploration(tc.Name, extractFileHints(tc.Name, tc.Arguments))
+	if debtGuidance := a.verifDebt.maybeWarn(); debtGuidance != "" {
+		a.appendGuidance(&result, debtGuidance)
+	}
+	// #1454-A: this record call was accidentally dropped by 31a79906
+	// (its diff replaced editAbandon.recordToolCall with the undoBlind
+	// call) - maybeWarn stayed wired but the state was forever empty:
+	// the detector never fired once since birth. Restored.
+	a.editAbandon.recordToolCall(tc.Name, string(tc.Arguments))
+	if abandonGuidance := a.editAbandon.maybeWarn(); abandonGuidance != "" {
+		a.appendGuidance(&result, abandonGuidance)
+	}
+	// File churn detection: track repeated edits to the same file.
+	// Each re-edit signals an invalidated assumption about the file.
+	if isEditTool(tc.Name) {
+		a.fileChurn.recordEdit(extractEditedPaths(tc))
+		for _, p := range extractEditedPaths(tc) {
+			a.tunnelVision.recordFile(p)
+		}
+		// Premature commitment detection: check evidence sufficiency
+		// at the first edit. ECLoop (arXiv:2607.28815) shows that
+		// editing before gathering sufficient context (callers, tests,
+		// related code) leads to incorrect patches in 20-27% of cases.
+		pcMsg := a.prematureCommit.checkFirstEdit(extractEditedPaths(tc))
+		if pcMsg != "" {
+			a.appendGuidance(&result, pcMsg)
+		}
+		if cg := func() string {
+			if !shouldRunDetector(detectorTierRoutine, i+1) {
+				return ""
+			}
+			return a.fileChurn.check()
+		}(); cg != "" {
+			a.appendGuidance(&result, cg)
+		}
+		// Edit oscillation detection: track content signature reversals.
+		// Convergence Detection (agentpatterns.ai, 2026) identifies
+		// oscillation as a critical failure pattern where the agent
+		// alternates between two versions without resolving trade-offs.
+		a.editOscillation.recordEdit(tc.Name, tc.Arguments, i+1)
+		if om := func() string {
+			if !shouldRunDetector(detectorTierRoutine, i+1) {
+				return ""
+			}
+			return a.editOscillation.check()
+		}(); om != "" {
+			a.appendGuidance(&result, om)
+		}
+	}
+	// Tunnel vision detection: warn when the agent has done many
+	// iterations but only touched a few files (under-exploration).
+	// Coppersun.dev 2026: "context window holds 1-2 files; bugs span 3+"
+	if tv := func() string {
+		if !shouldRunDetector(detectorTierRoutine, i+1) {
+			return ""
+		}
+		return a.tunnelVision.check(runStats.Iterations)
+	}(); tv != "" {
+		a.appendGuidance(&result, tv)
+	}
+	// Tunnel vision detection: warn when the agent has done many
+	// iterations but only touched a few files (under-exploration).
+	// Agentic abstention detection: track negative environment signals
+	// (not found, unavailable) to detect untimely continuation.
+	// Silent degradation propagation: record degraded tool results for
+	// later acknowledgment check against assistant text.
+	// Smart verify hint reset: if the agent ran a build/test/verify command,
+	// reset the edit counter and track the result.
+	a.maybeResetVerifyOnCommand(tc.Name, tc.Arguments, result.IsError)
+	// #1549: gate by command CONTENT like every sibling (#1455-A's
+	// maybeResetVerifyOnCommand above, #487's propagation counter).
+	// The unconditional call made ANY successful tool - read_file,
+	// grep, even the successful edit itself (clearing right before
+	// recordSourceEdit adds 1 back) - zero the debt, so debt never
+	// exceeded 1 and the warn thresholds (7/12) were unreachable:
+	// the detector was permanently silent.
+	if tc.Name == "run_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
+		a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
+	}
+	// #487: gate on command CONTENT — the unconditional raw setter made
+	// the first read_file count as a build/test and silenced the
+	// detector for the whole run.
+	a.prematureRefactorRecordVerifyForTool(tc.Arguments)
+	// #1455-A: gate on command CONTENT, exactly like the #487 fix two
+	// lines above - the unconditional !IsError reset made ANY
+	// successful tool result (read_file/grep, even the successful
+	// edit_file itself) clear the distinct-file set, and since this
+	// runs BEFORE recordEdit, the set size stayed <=1 and the
+	// detector's own charter ("7 edits to 7 DIFFERENT files") was
+	// unreachable. Only a successful VERIFY COMMAND resets now.
+	if tc.Name == "run_command" && !result.IsError {
+		if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
+			a.editPropagation.recordGreenBuild()
+			// #1460-C: a green verification confirms the edit
+			// sequence was legitimate refinement, not churn.
+			// #1561 case B: only failure-aware verification (test/
+			// build/vet-class) may clear, and the clear is scoped
+			// to the command's path arguments - `gofmt -l .` (green
+			// while REPORTING problems), `make clean` and
+			// scope-unrelated commands no longer wipe the books.
+			if isStrictVerifyCommand(cmd) {
+				a.fileChurn.recordVerifySuccess(cmd)
+			}
+		}
+	}
+	// Convergence lock: record verification result to detect post-verify
+	// unnecessary edit drift. A successful verify arms the lock; a failed
+	// verify disarms it (agent is legitimately fixing issues).
+	a.convergenceRecordVerify(tc.Name, tc.Arguments, result.IsError)
+	// Recurring error detection: when a build/test command returns the
+	// SAME error after file edits, inject guidance that the edits aren't
+	// addressing the root cause. This catches the #1 agent failure mode
+	// (incremental edits that don't fix the underlying problem).
+	if recurringGuidance := a.recurringErrorCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); recurringGuidance != "" {
+		a.appendGuidance(&result, recurringGuidance)
+	}
+	// Fix cascade detection: tracks edit->verify->fail cycles regardless
+	// of specific errors. Detects wrong-hypothesis lock-in where each
+	// edit produces a DIFFERENT error (so recurring_error never fires).
+	// Stalled convergence: track error counts across verifications
+	// to detect diminishing returns (convergence plateau).
+	if stalledGuidance := a.stalledConvergenceCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); stalledGuidance != "" {
+		a.appendGuidance(&result, stalledGuidance)
+	}
+	if regressionGuidance := a.errorRegressionCheckCommand(tc.Name, tc.Arguments, result.Content, result.IsError); regressionGuidance != "" {
+		a.appendGuidance(&result, regressionGuidance)
+	}
+	// Error compounding risk: track all error signals across the run.
+	// Computes geometric compounding probability to detect systemic risk.
+	if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
+		a.errorCompound.recordStep(hadError)
+	}
+	// Fix amnesia: track errors observed and check new content for recurrence.
+	if result.IsError {
+		if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
+			a.fixAmnesia.recordErrorObserved(cat, file)
+		}
+	}
+	if csIsEditTool(tc.Name) || tc.Name == "write_file" || tc.Name == "multi_edit_file" {
+		fp := extractFilePathFromArgs(tc.Name, tc.Arguments)
+		if result.IsError {
+			// Error observed in this file - track it.
+			if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
+				if file == "" {
+					file = fp
+				}
+				a.fixAmnesia.recordErrorObserved(cat, file)
+			}
+		} else {
+			// #754: successful edit promotes observed errors in this
+			// file to FIXED (observe->fix two-phase wiring; previously
+			// recordErrorObserved alone marked categories "fixed" with
+			// no edit ever happening).
+			a.fixAmnesia.recordFileEdited(fp)
+		}
+		// Check new content for patterns matching previously-fixed errors.
+		if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, result.Content); faGuidance != "" {
+			a.appendGuidance(&result, faGuidance)
 		}
 	}
 	return result
