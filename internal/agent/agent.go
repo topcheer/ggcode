@@ -3215,8 +3215,23 @@ func (a *Agent) strategyDetectorPhase(tc provider.ToolCallDelta, i int, result t
 }
 
 // scopeDriftPhase runs the scope/drift/churn/fix-amnesia detector group.
-// Extracted verbatim from postToolResultPhase (r217).
+// Extracted verbatim from postToolResultPhase (r217); r218 splits it into
+// 6 detector-family sub-seams with byte-identical bodies (verbatim-diff
+// oracle: 256/256 statements reproduced).
 func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Result, runStats *RunStats) tool.Result {
+	a.scopeTrackersRecordPhase(tc, result)
+	result = a.scopeDriftGuidancePhase(tc, result, runStats)
+	result = a.scopeCausalConfidencePhase(tc, i, result)
+	result = a.scopeEditDebtChurnPhase(tc, i, result, runStats)
+	result = a.scopeVerifyResetPhase(tc, result)
+	result = a.scopeErrorAmnesiaPhase(tc, i, result)
+	return result
+}
+
+// scopeTrackersRecordPhase records post-tool scope state: scope drift,
+// drift recurrence, last-known-good checkpoint and monorepo scoper.
+// Record-only seam: never mutates result.
+func (a *Agent) scopeTrackersRecordPhase(tc provider.ToolCallDelta, result tool.Result) {
 	// Scope drift: track productive file edits for semantic scope creep.
 	// #1491: gate on success like the sibling driftRecurrenceRecord
 	// below and the #495/#953 pattern at 4067 - failed edits (old_text
@@ -3250,6 +3265,11 @@ func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Re
 	if fh := extractFileHint(tc.Name, tc.Arguments); fh != "" {
 		a.monorepoScoper.recordEdit(fh)
 	}
+}
+
+// scopeDriftGuidancePhase runs the scope-guidance, drift-recurrence,
+// overseer and repetition guidance checks in original gate order.
+func (a *Agent) scopeDriftGuidancePhase(tc provider.ToolCallDelta, result tool.Result, runStats *RunStats) tool.Result {
 	if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
 		// Mark that a drift warning fired, so drift recurrence can track behavior.
 		a.driftRecurrenceMarkWarn(runStats.Iterations)
@@ -3275,6 +3295,12 @@ func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Re
 			a.appendGuidance(&result, readGuidance)
 		}
 	}
+	return result
+}
+
+// scopeCausalConfidencePhase records causal-attribution edit steps and
+// trajectory confidence, and runs command-channel failure attribution.
+func (a *Agent) scopeCausalConfidencePhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Trajectory confidence: record result and check for early warning.
 	// HTC-inspired: detect "overconfidence in failure" before errors compound.
 	// Causal attribution: record edit steps for failure root-cause tracing.
@@ -3305,6 +3331,13 @@ func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Re
 	if confidenceGuidance := a.confidence.maybeIntervene(); confidenceGuidance != "" {
 		a.appendGuidance(&result, confidenceGuidance)
 	}
+	return result
+}
+
+// scopeEditDebtChurnPhase tracks verification debt, premature commitment
+// and edit abandonment, then runs the edit-tool-gated churn/oscillation/
+// tunnel-vision block (three tier-gated closures, verbatim).
+func (a *Agent) scopeEditDebtChurnPhase(tc provider.ToolCallDelta, i int, result tool.Result, runStats *RunStats) tool.Result {
 	// Verification debt: track unverified modifications (SAUP-inspired).
 	// Detects when the agent stacks edits without building/testing.
 	a.verifDebt.recordToolCall(tc.Name, string(tc.Arguments))
@@ -3372,6 +3405,12 @@ func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Re
 	}(); tv != "" {
 		a.appendGuidance(&result, tv)
 	}
+	return result
+}
+
+// scopeVerifyResetPhase resets verify/edit bookkeeping on verification
+// commands and records green-build and convergence-lock state.
+func (a *Agent) scopeVerifyResetPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
 	// Tunnel vision detection: warn when the agent has done many
 	// iterations but only touched a few files (under-exploration).
 	// Agentic abstention detection: track negative environment signals
@@ -3421,6 +3460,12 @@ func (a *Agent) scopeDriftPhase(tc provider.ToolCallDelta, i int, result tool.Re
 	// unnecessary edit drift. A successful verify arms the lock; a failed
 	// verify disarms it (agent is legitimately fixing issues).
 	a.convergenceRecordVerify(tc.Name, tc.Arguments, result.IsError)
+	return result
+}
+
+// scopeErrorAmnesiaPhase runs recurring-error, stalled-convergence,
+// error-regression, error-compounding and fix-amnesia detectors.
+func (a *Agent) scopeErrorAmnesiaPhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Recurring error detection: when a build/test command returns the
 	// SAME error after file edits, inject guidance that the edits aren't
 	// addressing the root cause. This catches the #1 agent failure mode
