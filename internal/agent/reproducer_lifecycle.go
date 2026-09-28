@@ -45,6 +45,7 @@ package agent
 //   - Fires at most once per run (advisory, non-blocking)
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -168,6 +169,15 @@ func reproCommandTokenOverlap(a, b string) bool {
 // Generic shell verbs, flags, and common directory names are dropped so
 // overlap means script/argument identity rather than generic words.
 func reproCommandTokens(s string) map[string]bool {
+	// #2827: run_command tool inputs arrive as a raw JSON envelope
+	// ("command":"python3 x.py"). The cutset below has no braces, so the
+	// first token of a space-less envelope head became the pseudo-token
+	// `{"command":"python3` -- shared by EVERY python3 command, letting any
+	// unrelated run discharge the re-run obligation (#2802 bypass). Unwrap
+	// the envelope first, mirroring reversibility_check.commandTokens.
+	if t := reproUnwrapCommandEnvelope(s); t != "" {
+		s = t
+	}
 	generic := map[string]bool{
 		"and": true, "the": true, "run": true, "bash": true, "sh": true,
 		"python": true, "python3": true, "node": true, "ruby": true,
@@ -179,7 +189,7 @@ func reproCommandTokens(s string) map[string]bool {
 	tokens := make(map[string]bool)
 	for _, field := range strings.Fields(strings.ToLower(s)) {
 		for _, comp := range strings.Split(field, "/") {
-			comp = strings.Trim(comp, "\"'`$();|&~.:")
+			comp = strings.Trim(comp, "\"'`$();|&~.:{}[],")
 			if len(comp) < commandTokenMinLen || strings.HasPrefix(comp, "-") {
 				continue
 			}
@@ -190,6 +200,23 @@ func reproCommandTokens(s string) map[string]bool {
 		}
 	}
 	return tokens
+}
+
+// reproUnwrapCommandEnvelope extracts the embedded command value when s is a
+// JSON envelope like {"command":"python3 reproduce_bug.py"} (or a JSON array
+// wrapper). Returns "" when s is not an envelope or carries no command.
+func reproUnwrapCommandEnvelope(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return ""
+	}
+	var env struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &env); err != nil || env.Command == "" {
+		return ""
+	}
+	return env.Command
 }
 
 // observeToolCalls updates the lifecycle state based on the tools the agent
