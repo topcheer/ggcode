@@ -77,68 +77,97 @@ func formatCallFiles(lang ToolLanguage, tc *ToolCallInfo) (string, bool) {
 	args := tc.Args
 	switch tc.ToolName {
 	case "read_file":
-		path := extractFilePathFromArgs(args)
-		if path == "" {
-			path = tc.Detail
-		}
-		icon := imFileExtIcon(path)
-		label := imFileTypeLabel(path)
-		baseName := filepath.Base(path)
-		rangeHint := imFormatReadRange(lang, args)
-		var target string
-		if label != "" {
-			target = fmt.Sprintf("%s %s %s: `%s`", icon, imLabel(lang, "read"), label, baseName)
-		} else {
-			target = fmt.Sprintf("%s %s: `%s`", icon, imLabel(lang, "read_file"), path)
-		}
-		if rangeHint != "" {
-			return target + " " + rangeHint, true
-		}
-		return target, true
+		return formatReadFile(lang, args, tc.Detail), true
 	case "edit_file":
-		path := extractFilePathFromArgs(args)
-		if path == "" {
-			path = tc.Detail
-		}
-		return fmt.Sprintf("✏ %s: `%s`", imLabel(lang, "edit_file"), path), true
+		return formatPathedFileCall(lang, args, tc.Detail, "✏", "edit_file"), true
 	case "write_file":
-		path := extractFilePathFromArgs(args)
-		if path == "" {
-			path = tc.Detail
-		}
-		return fmt.Sprintf("📝 %s: `%s`", imLabel(lang, "write_file"), path), true
+		return formatPathedFileCall(lang, args, tc.Detail, "📝", "write_file"), true
 	case "glob":
-		pattern := extractArgValue(args, "pattern")
-		if pattern == "" {
-			pattern = tc.Detail
-		}
-		return fmt.Sprintf("🔍 %s: `%s`", imLabel(lang, "find_files"), pattern), true
+		return formatGlobCall(lang, args, tc.Detail), true
 	case "grep", "search_files":
-		pattern := firstNonEmptyStr(extractArgValue(args, "pattern"), extractArgValue(args, "query"))
-		if pattern == "" {
-			pattern = tc.Detail
-		}
-		return fmt.Sprintf("🔍 %s: `%s`", imLabel(lang, "search"), pattern), true
+		return formatSearchCall(lang, args, tc.Detail), true
 	case "list_directory":
-		path := firstNonEmptyStr(extractArgValue(args, "path"), extractArgValue(args, "directory"))
-		if path == "" {
-			path = tc.Detail
-		}
-		return fmt.Sprintf("📂 %s: `%s`", imLabel(lang, "list_directory"), path), true
-	case "multi_file_read":
-		return fmt.Sprintf("📖 %s", imLabel(lang, "read_multi")), true
-	case "multi_file_edit":
-		return fmt.Sprintf("✏ %s", imLabel(lang, "edit_multi")), true
-	case "multi_file_write":
-		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi")), true
+		return formatListDirectoryCall(lang, args, tc.Detail), true
+	case "multi_file_read", "multi_file_edit", "multi_file_write":
+		return formatMultiFileCall(lang, tc.ToolName), true
 	case "notebook_edit":
-		path := extractFilePathFromArgs(args)
-		if path == "" {
-			path = tc.Detail
-		}
-		return fmt.Sprintf("📓 %s: `%s`", imLabel(lang, "edit_notebook"), path), true
+		return formatPathedFileCall(lang, args, tc.Detail, "📓", "edit_notebook"), true
 	}
 	return "", false
+}
+
+// formatReadFile renders read_file calls: icon + optional type label + base
+// name, with the localized range hint appended when one is present.
+func formatReadFile(lang ToolLanguage, args, detail string) string {
+	path := extractFilePathFromArgs(args)
+	if path == "" {
+		path = detail
+	}
+	icon := imFileExtIcon(path)
+	label := imFileTypeLabel(path)
+	baseName := filepath.Base(path)
+	rangeHint := imFormatReadRange(lang, args)
+	var target string
+	if label != "" {
+		target = fmt.Sprintf("%s %s %s: `%s`", icon, imLabel(lang, "read"), label, baseName)
+	} else {
+		target = fmt.Sprintf("%s %s: `%s`", icon, imLabel(lang, "read_file"), path)
+	}
+	if rangeHint != "" {
+		return target + " " + rangeHint
+	}
+	return target
+}
+
+// formatPathedFileCall renders the shared edit/write/notebook shape: resolve
+// the path (args first, detail fallback) and prefix it with an icon + label.
+func formatPathedFileCall(lang ToolLanguage, args, detail, icon, labelKey string) string {
+	path := extractFilePathFromArgs(args)
+	if path == "" {
+		path = detail
+	}
+	return fmt.Sprintf("%s %s: `%s`", icon, imLabel(lang, labelKey), path)
+}
+
+// formatGlobCall renders glob invocations with the pattern (detail fallback).
+func formatGlobCall(lang ToolLanguage, args, detail string) string {
+	pattern := extractArgValue(args, "pattern")
+	if pattern == "" {
+		pattern = detail
+	}
+	return fmt.Sprintf("🔍 %s: `%s`", imLabel(lang, "find_files"), pattern)
+}
+
+// formatSearchCall renders grep/search_files with the pattern or query
+// (detail fallback).
+func formatSearchCall(lang ToolLanguage, args, detail string) string {
+	pattern := firstNonEmptyStr(extractArgValue(args, "pattern"), extractArgValue(args, "query"))
+	if pattern == "" {
+		pattern = detail
+	}
+	return fmt.Sprintf("🔍 %s: `%s`", imLabel(lang, "search"), pattern)
+}
+
+// formatListDirectoryCall renders list_directory with the path or directory
+// (detail fallback).
+func formatListDirectoryCall(lang ToolLanguage, args, detail string) string {
+	path := firstNonEmptyStr(extractArgValue(args, "path"), extractArgValue(args, "directory"))
+	if path == "" {
+		path = detail
+	}
+	return fmt.Sprintf("📂 %s: `%s`", imLabel(lang, "list_directory"), path)
+}
+
+// formatMultiFileCall renders the one-line multi-file read/edit/write markers.
+func formatMultiFileCall(lang ToolLanguage, toolName string) string {
+	switch toolName {
+	case "multi_file_read":
+		return fmt.Sprintf("📖 %s", imLabel(lang, "read_multi"))
+	case "multi_file_edit":
+		return fmt.Sprintf("✏ %s", imLabel(lang, "edit_multi"))
+	default: // multi_file_write
+		return fmt.Sprintf("📝 %s", imLabel(lang, "write_multi"))
+	}
 }
 
 // formatCallWeb covers web fetch/search and browser automation.
