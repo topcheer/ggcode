@@ -61,6 +61,45 @@ func TestIssue2808LspRenameAndMultiFileEditBumpEpoch(t *testing.T) {
 	}
 }
 
+// TestIssue2808UndoEditBumpsEpochWithoutSuppression pins the undo_edit gap
+// from the #2808 issue comment (independent re-review sa-166): a successful
+// undo is a real disk write (#1104) and must bump the epoch so a re-run of
+// the same verify command after the undo is NOT suppressed — but undo is not
+// idempotent (each call reverts one more checkpoint), so identical repeat
+// undo_edit calls must never be suppressed-and-replayed either.
+func TestIssue2808UndoEditBumpsEpochWithoutSuppression(t *testing.T) {
+	l := newToolDedupLedger()
+	l.ttl = 5 * time.Second
+
+	// Step 1: successful verify command recorded at epoch E.
+	l.record("run_command", `{"command":"go test ./pkg/"}`, tool.Result{Content: "PASS"})
+	before := l.epoch
+
+	// Step 2: undo_edit succeeds — must bump epoch, not enter the table.
+	l.record("undo_edit", `{"action":"undo"}`, tool.Result{Content: "reverted"})
+	if l.epoch != before+1 {
+		t.Fatalf("undo_edit success did not bump epoch: got %d, want %d", l.epoch, before+1)
+	}
+
+	// Step 3: identical verify command must NOT be suppressed anymore.
+	if got := l.suppressDuplicate("run_command", `{"command":"go test ./pkg/"}`); got != nil {
+		t.Fatalf("identical verify command suppressed after undo_edit (stale replay): %q", got.Content)
+	}
+
+	// Step 4: undo_edit itself must never be suppressed-and-replayed — the
+	// second undo reverts a DIFFERENT checkpoint and must really execute.
+	if got := l.suppressDuplicate("undo_edit", `{"action":"undo"}`); got != nil {
+		t.Fatalf("undo_edit self-suppressed (undo is not idempotent; second undo must execute): %q", got.Content)
+	}
+
+	// Step 5: failed undo must not bump the epoch.
+	l2 := newToolDedupLedger()
+	l2.record("undo_edit", `{"action":"undo"}`, tool.Result{Content: "nothing to undo", IsError: true})
+	if l2.epoch != 0 {
+		t.Fatalf("failed undo_edit bumped epoch: got %d, want 0", l2.epoch)
+	}
+}
+
 // TestIssue2808BatchReplaceParityWithEditFile pins the protection-side
 // semantics: fileMutatingTools members bump the epoch on their own record,
 // so an identical call is deliberately NOT self-suppressed (same safe

@@ -180,7 +180,23 @@ func (l *toolDedupLedger) suppressDuplicate(name, args string) *tool.Result {
 // the TTL can be suppressed. Error results are never recorded — retrying a
 // failed mutating call is normal and often necessary.
 func (l *toolDedupLedger) record(name, args string, res tool.Result) {
-	if l == nil || !isMutatingTool(name) || res.IsError {
+	if l == nil || res.IsError {
+		return
+	}
+	// #2808 (issue comment): undo_edit restores checkpoint content - a real
+	// disk write per #1104 - so its success must bump the epoch, otherwise
+	// "undo_edit -> re-run same verify command" replays the stale success
+	// (false-green, the #2486 danger direction). It is deliberately NOT added
+	// to mutatingToolNames: undo is not idempotent (each call reverts one more
+	// checkpoint), so its own identical re-invocations must never be
+	// suppressed-and-replayed.
+	if name == "undo_edit" {
+		l.mu.Lock()
+		l.epoch++
+		l.mu.Unlock()
+		return
+	}
+	if !isMutatingTool(name) {
 		return
 	}
 	now := time.Now()
