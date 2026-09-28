@@ -1708,7 +1708,14 @@ loop:
 
 		debug.Log("daemon", "exec restart: %s %v", binary, args)
 		if err := restart.ExecRestart(binary, args, env); err != nil {
+			// #2817: resources (bridge/lanchatHub/sessionLock/runfile) are already
+			// irreversibly released above. Returning nil here exits with code 0,
+			// which supervisors (systemd Restart=on-failure, supervisord exitcodes)
+			// treat as a clean stop and never re-launch. Mirror the ResolveBinary
+			// failure branch above: surface the error so the process exits non-zero.
+			debug.Log("daemon", "exec restart failed: %v", err)
 			fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
+			return fmt.Errorf("restart: exec: %w", err)
 		}
 		return nil
 	}
