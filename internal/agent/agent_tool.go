@@ -431,6 +431,20 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		return a.safeExecute(t, execCtx, args)
 	})
 	toolDur := time.Since(toolStart)
+	// Post-execution finishing pipeline: mutating-outcome classification
+	// (verify-before-retry guidance), shell-mutation checkpoint diffing,
+	// post-tool-use hooks, guidance appends and prompt-injection defense.
+	// Split verbatim from executeToolInner (r236).
+	return a.finishToolResult(t, tc, env, hookCfg, shellPre, destructiveWarning, prevMutAmbiguous, toolDur, result)
+}
+
+// finishToolResult runs the post-execution finishing pipeline over a tool
+// result: mutating-outcome classification (verify-before-retry guidance),
+// shell-mutation checkpoint diffing, post-tool-use hooks, error fallback
+// hints, destructive-git warnings and prompt-injection defense. The block
+// order is byte-for-byte identical to the inline sequence it replaces.
+// Split verbatim from executeToolInner (r236).
+func (a *Agent) finishToolResult(t tool.Tool, tc provider.ToolCallDelta, env hooks.HookEnv, hookCfg hooks.HookConfig, shellPre *shellSnapshot, destructiveWarning string, prevMutAmbiguous int, toolDur time.Duration, result tool.Result) tool.Result {
 	// Classify the outcome of mutating calls (pre-exec rejection vs ambiguous
 	// mid-execution failure) and append verify-before-retry guidance. No-op
 	// for read-only tools and clean results without an outstanding ambiguous
