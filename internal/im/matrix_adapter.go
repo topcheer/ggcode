@@ -232,6 +232,38 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("client init: %w", err)
 	}
+	syncStoreRef := a.persistSyncToken(client)
+
+	// 2. Whoami to verify token
+	whoami, err := client.Whoami(ctx)
+	if err != nil {
+		return fmt.Errorf("whoami: %w", err)
+	}
+	a.adoptWhoamiIdentity(whoami, client)
+
+	// 3. Setup E2EE crypto
+	if err := a.setupCrypto(ctx); err != nil {
+		debug.Log("matrix", "adapter=%s crypto setup failed (continuing without E2EE): %v", a.name, err)
+		// Non-fatal: continue without crypto support
+	}
+
+	// 4. Fetch DM rooms
+	a.fetchDMRooms(ctx)
+
+	// 5. Setup syncer
+	a.setupSyncer(client, syncStoreRef)
+
+	a.publishState(true, "connected", "")
+	debug.Log("matrix", "adapter=%s entering sync loop", a.name)
+
+	// 6. Run sync (blocking)
+	return a.runSyncLoop(ctx, client)
+}
+
+// persistSyncToken wires the persistent sync-token store into the client so
+// Sync resumes from the last event instead of replaying the offline
+// timeline, then publishes the client under a.mu for concurrent readers.
+func (a *matrixAdapter) persistSyncToken(client *mautrix.Client) *fileSyncStore {
 	// #1553-A: persist the sync token - a full initial sync on every
 	// restart fed offline timeline events into the didFirstSync drop gate
 	// (silent loss). With the token, Sync resumes from the last event.
@@ -248,29 +280,25 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 	a.mu.Lock()
 	a.client = client
 	a.mu.Unlock()
+	return syncStoreRef
+}
 
-	// 2. Whoami to verify token
-	whoami, err := client.Whoami(ctx)
-	if err != nil {
-		return fmt.Errorf("whoami: %w", err)
-	}
+// adoptWhoamiIdentity applies the whoami response under a.mu (userID is
+// read concurrently by Send/sendImage/TriggerTyping) and mirrors the
+// verified identity onto the client for the crypto stack.
+func (a *matrixAdapter) adoptWhoamiIdentity(whoami *mautrix.RespWhoami, client *mautrix.Client) {
 	a.mu.Lock()
 	a.userID = string(whoami.UserID)
 	a.mu.Unlock()
 	client.UserID = whoami.UserID
 	client.DeviceID = whoami.DeviceID
 	debug.Log("matrix", "adapter=%s authenticated as %s device=%s", a.name, a.userID, client.DeviceID)
+}
 
-	// 3. Setup E2EE crypto
-	if err := a.setupCrypto(ctx); err != nil {
-		debug.Log("matrix", "adapter=%s crypto setup failed (continuing without E2EE): %v", a.name, err)
-		// Non-fatal: continue without crypto support
-	}
-
-	// 4. Fetch DM rooms
-	a.fetchDMRooms(ctx)
-
-	// 5. Setup syncer
+// setupSyncer builds the DefaultSyncer callback wiring (invite auto-join,
+// first-sync gating, crypto to-device/event feed) and installs the #1661
+// self-healing wrapper on the client.
+func (a *matrixAdapter) setupSyncer(client *mautrix.Client, syncStoreRef *fileSyncStore) {
 	syncer := mautrix.NewDefaultSyncer()
 
 	// Auto-join when invited
@@ -325,11 +353,11 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		// per-room timeline, and the gate exists precisely to drop it.
 		a.didFirstSync.Store(false)
 	}}
+}
 
-	a.publishState(true, "connected", "")
-	debug.Log("matrix", "adapter=%s entering sync loop", a.name)
-
-	// 6. Run sync (blocking)
+// runSyncLoop registers the child-context cancel under a.mu (so Close can
+// reach it) and blocks in SyncWithContext until the sync ends.
+func (a *matrixAdapter) runSyncLoop(ctx context.Context, client *mautrix.Client) error {
 	ctx, cancel := context.WithCancel(ctx)
 	// #2139: the error return below (sync failed, run() re-enters) never
 	// called cancel - each re-entry replaced a.cancelFn with the NEW
@@ -352,7 +380,7 @@ func (a *matrixAdapter) runOnce(ctx context.Context) error {
 		return nil
 	}
 
-	err = client.SyncWithContext(ctx)
+	err := client.SyncWithContext(ctx)
 	if err != nil && ctx.Err() == nil {
 		debug.Log("matrix", "adapter=%s sync stopped with error: %v", a.name, err)
 		return fmt.Errorf("sync: %w", err)
