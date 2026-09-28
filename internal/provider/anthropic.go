@@ -1177,7 +1177,31 @@ func (p *AnthropicProvider) remoteCountTokens(ctx context.Context, messages []Me
 // buildCountTokensParams converts internal messages to the Anthropic
 // MessageCountTokensParams format, reusing the same block-conversion logic
 // as buildParams but without tool definitions or max_tokens.
+// appendToToolResultContent inserts the folded guidance text AFTER the last
+// tool_result block (or at the end when none exists). Anthropic requires
+// tool_result blocks to be the first content of the user turn that answers
+// tool_use, so the OpenAI-style prepend-before ordering is invalid here (#2819).
+func appendToToolResultContent(blocks []ContentBlock, prefix string) []ContentBlock {
+	lastToolResult := -1
+	for i, b := range blocks {
+		if b.Type == "tool_result" {
+			lastToolResult = i
+		}
+	}
+	if lastToolResult < 0 {
+		return append(blocks, ContentBlock{Type: "text", Text: prefix})
+	}
+	result := make([]ContentBlock, 0, len(blocks)+1)
+	result = append(result, blocks[:lastToolResult+1]...)
+	result = append(result, ContentBlock{Type: "text", Text: prefix})
+	result = append(result, blocks[lastToolResult+1:]...)
+	return result
+}
+
 func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic.MessageCountTokensParams {
+	// #2819: fold detector-injected text-only user messages into the following
+	// tool_result message (Anthropic ordering: tool_result blocks first).
+	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
 	type sysBlock struct {
 		text string
@@ -1282,6 +1306,12 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 // resolve large images into Files API file_ids (the upload happens inline here,
 // at most once per unique image, and is cancellable with the request).
 func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
+	// #2819: mid-loop detectors inject guidance as text-only user messages
+	// between assistant tool_use and user tool_result. Anthropic rejects that
+	// sequence with a 400 ("tool_use ids found without tool_result blocks
+	// immediately after") and the loop cannot self-heal. Fold such messages
+	// into the tool_result turn, keeping tool_result blocks first.
+	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
 	// Collect system content blocks preserving cache hints so we can emit
 	// separate Anthropic text blocks with selective cache_control breakpoints.
