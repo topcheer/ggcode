@@ -195,23 +195,16 @@ func nostrBackoffNext(backoff time.Duration, err error) time.Duration {
 func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error {
 	debug.Log("nostr", "adapter=%s connecting to %s proxy=%s", a.name, relayURL, a.proxy)
 
-	// #758: the old HTTPS_PROXY env hack never worked reliably -- net/http
-	// caches the env-proxy func in a sync.Once at first use, so the temp
-	// value was either ignored (cache primed by earlier HTTP traffic) or
-	// permanently captured into the process-wide transport. Route this
-	// relay's host through the per-host transport interceptor instead:
-	// deterministic for the relay, untouched for all other traffic.
-	relayHost := ""
-	if a.proxy != "" {
-		if u, err := url.Parse(relayURL); err == nil && u.Host != "" {
-			relayHost = u.Host
-			if err := RegisterHostProxy(relayHost, a.proxy); err != nil {
-				return fmt.Errorf("connect %s: %w", relayURL, err)
-			}
-			defer UnregisterHostProxy(relayHost)
-		} else if err != nil {
-			return fmt.Errorf("connect %s: invalid relay URL: %w", relayURL, err)
-		}
+	// #758: per-host proxy routing. The returned host is registered in the
+	// transport interceptor and must be unregistered before connectRelay
+	// returns; the defer below keeps its original position in the LIFO
+	// defer chain (before the relay cleanup is even registered).
+	relayHost, err := a.relayProxyHost(relayURL)
+	if err != nil {
+		return err
+	}
+	if relayHost != "" {
+		defer UnregisterHostProxy(relayHost)
 	}
 
 	// #2731: fail fast on a closed adapter BEFORE the (blocking) relay
@@ -224,27 +217,10 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 		return fmt.Errorf("connect %s: adapter closed", relayURL)
 	}
 
-	relay, err := nostr.RelayConnect(ctx, relayURL)
+	relay, err := a.dialAndRegisterRelay(ctx, relayURL)
 	if err != nil {
-		return fmt.Errorf("connect %s: %w", relayURL, err)
+		return err
 	}
-
-	a.mu.Lock()
-	// #2731: re-check under the lock - Close() may have run while
-	// RelayConnect was blocking. Refuse the freshly established relay
-	// instead of appending it to a shut-down adapter (which used to
-	// re-report "connected" state and leave the conn draining inbound
-	// messages until the watchdog window closed it).
-	if a.closed {
-		a.mu.Unlock()
-		relay.Close()
-		return fmt.Errorf("connect %s: adapter closed during dial", relayURL)
-	}
-	a.relayConns = append(a.relayConns, relay)
-	a.connected++
-	a.mu.Unlock()
-	a.publishState(true, "connected", "")
-	debug.Log("nostr", "adapter=%s connected to %s", a.name, relayURL)
 
 	defer func() {
 		relay.Close()
@@ -259,6 +235,73 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 		a.mu.Unlock()
 	}()
 
+	sub, err := a.subscribeDMs(ctx, relay, relayURL)
+	if err != nil {
+		return err
+	}
+
+	return a.serveRelayEvents(ctx, relayURL, sub)
+}
+
+// relayProxyHost resolves per-host proxy routing for this relay (#758).
+// The old HTTPS_PROXY env hack never worked reliably -- net/http
+// caches the env-proxy func in a sync.Once at first use, so the temp
+// value was either ignored (cache primed by earlier HTTP traffic) or
+// permanently captured into the process-wide transport. Route this
+// relay's host through the per-host transport interceptor instead:
+// deterministic for the relay, untouched for all other traffic.
+//
+// Returns the registered host ("" when no proxy applies); the caller
+// owns the matching UnregisterHostProxy so the unregister keeps its
+// original position in connectRelay's LIFO defer chain.
+func (a *nostrAdapter) relayProxyHost(relayURL string) (string, error) {
+	if a.proxy == "" {
+		return "", nil
+	}
+	u, err := url.Parse(relayURL)
+	if err != nil {
+		return "", fmt.Errorf("connect %s: invalid relay URL: %w", relayURL, err)
+	}
+	if u.Host == "" {
+		return "", nil
+	}
+	if err := RegisterHostProxy(u.Host, a.proxy); err != nil {
+		return "", fmt.Errorf("connect %s: %w", relayURL, err)
+	}
+	return u.Host, nil
+}
+
+// dialAndRegisterRelay performs the blocking relay dial and, on success,
+// registers the connection on the adapter under the lock.
+func (a *nostrAdapter) dialAndRegisterRelay(ctx context.Context, relayURL string) (*nostr.Relay, error) {
+	relay, err := nostr.RelayConnect(ctx, relayURL)
+	if err != nil {
+		return nil, fmt.Errorf("connect %s: %w", relayURL, err)
+	}
+
+	a.mu.Lock()
+	// #2731: re-check under the lock - Close() may have run while
+	// RelayConnect was blocking. Refuse the freshly established relay
+	// instead of appending it to a shut-down adapter (which used to
+	// re-report "connected" state and leave the conn draining inbound
+	// messages until the watchdog window closed it).
+	if a.closed {
+		a.mu.Unlock()
+		relay.Close()
+		return nil, fmt.Errorf("connect %s: adapter closed during dial", relayURL)
+	}
+	a.relayConns = append(a.relayConns, relay)
+	a.connected++
+	a.mu.Unlock()
+	a.publishState(true, "connected", "")
+	debug.Log("nostr", "adapter=%s connected to %s", a.name, relayURL)
+	return relay, nil
+}
+
+// subscribeDMs subscribes to encrypted direct messages (kind 4) with a
+// p-tag for our pubkey, seeded with a lookback window so events missed
+// across reconnects are recovered.
+func (a *nostrAdapter) subscribeDMs(ctx context.Context, relay *nostr.Relay, relayURL string) (*nostr.Subscription, error) {
 	// Subscribe to DMs (kind 4) with p-tag = our pubkey
 	since := nostr.Now() - nostrStartupLookback
 	filter := nostr.Filter{
@@ -270,10 +313,15 @@ func (a *nostrAdapter) connectRelay(ctx context.Context, relayURL string) error 
 
 	sub, err := relay.Subscribe(ctx, nostr.Filters{filter})
 	if err != nil {
-		return fmt.Errorf("subscribe: %w", err)
+		return nil, fmt.Errorf("subscribe: %w", err)
 	}
 	debug.Log("nostr", "adapter=%s subscribed to DMs on %s", a.name, relayURL)
+	return sub, nil
+}
 
+// serveRelayEvents runs the subscription event loop until ctx is done,
+// the relay closes the subscription, or the watchdog fires.
+func (a *nostrAdapter) serveRelayEvents(ctx context.Context, relayURL string, sub *nostr.Subscription) error {
 	// Event loop with watchdog timer for dead connection detection.
 	// Since go-nostr doesn't expose the WebSocket for read deadlines, we use
 	// a periodic watchdog. Nostr relays persist events, so reconnection with
