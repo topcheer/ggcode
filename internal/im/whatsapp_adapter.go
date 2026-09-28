@@ -416,12 +416,18 @@ func (a *whatsappAdapter) run(ctx context.Context) {
 
 // connectAndServe handles a single connection lifecycle.
 // On failure or logout, the caller (reconnectLoop) retries.
+//
+// r205 behavior-preserving split into lifecycle seams:
+//
+//	openStoreContainer -> newSessionClient -> connectQRLogin /
+//	connectSavedSession -> awaitSessionEnd. The container close-once defer
+//	and the sessionDone-clear defer stay in this orchestrator so their LIFO
+//	order (sessionDone first, container second) is byte-identical to the
+//	pre-split code; awaitSessionEnd receives &containerClosed so the #974
+//	close-before-unlink ordering is unchanged.
 func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
-	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
-	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), &waDebugLogger{prefix: "store"})
+	container, err := a.openStoreContainer(ctx)
 	if err != nil {
-		debug.Log("whatsapp", "adapter %q: open store: %v", a.name, err)
-		a.publishState(false, "error", fmt.Sprintf("store: %v", err))
 		return err
 	}
 	// #974: the storeContainer/device struct fields were removed — the
@@ -436,11 +442,53 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 		}
 	}()
 
+	client, done, err := a.newSessionClient(ctx, container)
+	if err != nil {
+		return err
+	}
+
+	if client.Store.ID == nil {
+		if err := a.connectQRLogin(ctx, client); err != nil {
+			return err
+		}
+	} else {
+		if err := a.connectSavedSession(client); err != nil {
+			return err
+		}
+	}
+
+	defer func() {
+		a.mu.Lock()
+		if a.sessionDone == done {
+			a.sessionDone = nil
+		}
+		a.mu.Unlock()
+	}()
+	return a.awaitSessionEnd(ctx, container, &containerClosed, done)
+}
+
+// openStoreContainer opens the sqlite store for this adapter and reports
+// failures on the adapter state channel. (r205 seam of connectAndServe)
+func (a *whatsappAdapter) openStoreContainer(ctx context.Context) (*sqlstore.Container, error) {
+	dbPath := filepath.Join(a.storeDir, "whatsmeow.db")
+	container, err := sqlstore.New(ctx, "sqlite", fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", dbPath), &waDebugLogger{prefix: "store"})
+	if err != nil {
+		debug.Log("whatsapp", "adapter %q: open store: %v", a.name, err)
+		a.publishState(false, "error", fmt.Sprintf("store: %v", err))
+		return nil, err
+	}
+	return container, nil
+}
+
+// newSessionClient loads (or creates) the device, builds the whatsmeow
+// client and publishes it plus the session-done channel under a.mu.
+// (r205 seam of connectAndServe)
+func (a *whatsappAdapter) newSessionClient(ctx context.Context, container *sqlstore.Container) (*whatsmeow.Client, chan error, error) {
 	devices, err := container.GetAllDevices(ctx)
 	if err != nil {
 		debug.Log("whatsapp", "adapter %q: get devices: %v", a.name, err)
 		a.publishState(false, "error", fmt.Sprintf("devices: %v", err))
-		return err
+		return nil, nil, err
 	}
 	var device *store.Device
 	if len(devices) > 0 {
@@ -460,52 +508,66 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 	a.mu.Lock()
 	a.sessionDone = done
 	a.mu.Unlock()
+	return client, done, nil
+}
 
-	if client.Store.ID == nil {
-		// No session — need QR login
-		debug.Log("whatsapp", "adapter %q: no session, requesting QR code", a.name)
-		a.publishState(false, "pairing", "scan QR code with WhatsApp")
-		qrChan, qrErr := client.GetQRChannel(ctx)
-		if qrErr != nil {
-			debug.Log("whatsapp", "adapter %q: get QR channel: %v", a.name, qrErr)
-		}
-		if err := client.Connect(); err != nil {
-			debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
-			return err
-		}
-		if qrChan != nil {
-			for evt := range qrChan {
-				if evt.Event == "code" {
-					debug.Log("whatsapp", "adapter %q: QR code generated", a.name)
-					img, _ := qrcode.New(evt.Code, qrcode.Medium)
-					img.DisableBorder = false
-					qrASCII := strings.TrimRight(img.ToSmallString(false), "\n")
-					a.mu.Lock()
-					a.lastQR = qrASCII
-					a.mu.Unlock()
-					// Publish state with QR code so TUI can display it
-					a.publishState(false, "pairing", "scan QR code with WhatsApp")
-				} else {
-					// #974: don't silently swallow non-code QR channel events.
-					debug.Log("whatsapp", "adapter %q: QR channel event %q", a.name, evt.Event)
-				}
+// connectQRLogin runs the no-session pairing path: request a QR channel,
+// connect, then stream generated QR codes to the adapter state until the
+// channel closes (paired or failed). A GetQRChannel failure is logged but
+// not fatal — Connect still proceeds without QR delivery. (r205 seam of
+// connectAndServe)
+func (a *whatsappAdapter) connectQRLogin(ctx context.Context, client *whatsmeow.Client) error {
+	// No session — need QR login
+	debug.Log("whatsapp", "adapter %q: no session, requesting QR code", a.name)
+	a.publishState(false, "pairing", "scan QR code with WhatsApp")
+	qrChan, qrErr := client.GetQRChannel(ctx)
+	if qrErr != nil {
+		debug.Log("whatsapp", "adapter %q: get QR channel: %v", a.name, qrErr)
+	}
+	if err := client.Connect(); err != nil {
+		debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
+		return err
+	}
+	if qrChan != nil {
+		for evt := range qrChan {
+			if evt.Event == "code" {
+				debug.Log("whatsapp", "adapter %q: QR code generated", a.name)
+				img, _ := qrcode.New(evt.Code, qrcode.Medium)
+				img.DisableBorder = false
+				qrASCII := strings.TrimRight(img.ToSmallString(false), "\n")
+				a.mu.Lock()
+				a.lastQR = qrASCII
+				a.mu.Unlock()
+				// Publish state with QR code so TUI can display it
+				a.publishState(false, "pairing", "scan QR code with WhatsApp")
+			} else {
+				// #974: don't silently swallow non-code QR channel events.
+				debug.Log("whatsapp", "adapter %q: QR channel event %q", a.name, evt.Event)
 			}
 		}
-	} else {
-		debug.Log("whatsapp", "adapter %q: connecting with saved session", a.name)
-		if err := client.Connect(); err != nil {
-			debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
-			return err
-		}
 	}
+	return nil
+}
 
-	defer func() {
-		a.mu.Lock()
-		if a.sessionDone == done {
-			a.sessionDone = nil
-		}
-		a.mu.Unlock()
-	}()
+// connectSavedSession connects an already-paired device. (r205 seam of
+// connectAndServe)
+func (a *whatsappAdapter) connectSavedSession(client *whatsmeow.Client) error {
+	debug.Log("whatsapp", "adapter %q: connecting with saved session", a.name)
+	if err := client.Connect(); err != nil {
+		debug.Log("whatsapp", "adapter %q: connect: %v", a.name, err)
+		return err
+	}
+	return nil
+}
+
+// awaitSessionEnd blocks until the context is cancelled or the session
+// signals completion, then disconnects via the client snapshot (a.client
+// may be nil'd concurrently by markLoggedOut / Stop — #974 asymmetric-lock
+// fix). On the terminal LoggedOut error the sqlite container is closed
+// BEFORE deleting the DB files — Windows refuses to unlink open files
+// (#974). containerClosed is owned by the connectAndServe orchestrator so
+// its close-once defer never double-closes. (r205 seam of connectAndServe)
+func (a *whatsappAdapter) awaitSessionEnd(ctx context.Context, container *sqlstore.Container, containerClosed *bool, done chan error) error {
 	// Disconnect via snapshot — a.client may be nil'd concurrently by
 	// markLoggedOut / Stop (#974 asymmetric-lock fix).
 	teardown := func() {
@@ -523,7 +585,7 @@ func (a *whatsappAdapter) connectAndServe(ctx context.Context) error {
 			// LoggedOut: close the sqlite container BEFORE deleting the DB
 			// files — Windows refuses to unlink open files (#974).
 			_ = container.Close()
-			containerClosed = true
+			*containerClosed = true
 			a.removeStoreDB()
 		}
 		return err
