@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -90,7 +91,7 @@ func TestReproducerLifecycleWarnsOnlyOnce(t *testing.T) {
 func TestReproducerLifecycleTextIntent(t *testing.T) {
 	s := newReproducerLifecycleState()
 	// Agent text mentions reproducer + has a run tool call
-	s.observeText(1, "Let me write a script to reproduce the error", true)
+	s.observeText(1, "Let me write a script to reproduce the error", true, "")
 	if !s.hasReproducer {
 		t.Fatal("expected hasReproducer=true from text intent")
 	}
@@ -154,11 +155,11 @@ func TestExtractToolNamesAndInputs(t *testing.T) {
 // the REPRO state. The gate must stay false without a command-executing tool.
 func TestObserveTextRequiresRunTool(t *testing.T) {
 	s := newReproducerLifecycleState()
-	s.observeText(1, "let me reproduce this bug", false)
+	s.observeText(1, "let me reproduce this bug", false, "")
 	if s.hasReproducer {
 		t.Fatal("text path must not establish REPRO without a run tool")
 	}
-	s.observeText(2, "let me reproduce this bug", true)
+	s.observeText(2, "let me reproduce this bug", true, "")
 	if !s.hasReproducer {
 		t.Fatal("text path with run tool must establish REPRO")
 	}
@@ -217,7 +218,7 @@ func TestReproducerRerunSameScriptDischarged(t *testing.T) {
 // compare against (snippet == ""), so the loose script-shape match is kept.
 func TestReproducerRerunTextEstablishedKeepsLooseShape(t *testing.T) {
 	s := newReproducerLifecycleState()
-	s.observeText(1, "Let me write a script to reproduce the error", true)
+	s.observeText(1, "Let me write a script to reproduce the error", true, "")
 	if !s.hasReproducer {
 		t.Fatal("expected hasReproducer=true from text intent")
 	}
@@ -232,6 +233,76 @@ func TestReproducerRerunTextEstablishedKeepsLooseShape(t *testing.T) {
 	hint := s.checkIncomplete(6)
 	if hint != "" {
 		t.Fatalf("expected no warning on text path rerun, got: %s", hint)
+	}
+}
+
+// Regression for #2805: a text-established reproducer whose same-iteration
+// run is a test runner (`go test ./pkg/ -run TestX`) must record a snippet so
+// an identical re-run after an edit discharges the re-run obligation and the
+// "Re-run:" tail is non-empty. Previously both discharge channels were dead
+// for this shape: the regex channel lacks `go test`, and observeText never
+// recorded a snippet for the token-overlap channel.
+func TestReproducerGoTestRerunDischarges(t *testing.T) {
+	s := newReproducerLifecycleState()
+	s.observeText(1, "Let me write a test to reproduce the error", true,
+		`{"command":"go test ./internal/foo/ -run TestBar"}`)
+	if !s.hasReproducer {
+		t.Fatal("expected hasReproducer=true via text+go test")
+	}
+	if s.reproducerSnippet == "" {
+		t.Fatal("expected snippet recorded for test-runner reproducer (#2805)")
+	}
+
+	s.observeToolCalls(2, []string{"edit_file"}, []string{`{"file_path":"src/main.go"}`})
+
+	// Identical re-run must discharge.
+	s.observeToolCalls(3, []string{"run_command"}, []string{`{"command":"go test ./internal/foo/ -run TestBar"}`})
+	if !s.reranAfterEdit {
+		t.Fatal("identical go test re-run must discharge reranAfterEdit (#2805)")
+	}
+	if hint := s.checkIncomplete(6); hint != "" {
+		t.Fatalf("expected no warning after discharge, got: %s", hint)
+	}
+}
+
+// #2805 warning path: without the discharge, the hint must carry a
+// non-empty "Re-run:" tail (previously blank for text-established reproducers).
+func TestReproducerGoTestHintHasRerunCommand(t *testing.T) {
+	s := newReproducerLifecycleState()
+	s.observeText(1, "let me reproduce this with a test", true,
+		`{"command":"go test ./internal/foo/ -run TestBar"}`)
+	s.observeToolCalls(2, []string{"edit_file"}, []string{`{"file_path":"src/main.go"}`})
+	s.observeToolCalls(3, []string{"run_command"}, []string{`{"command":"git status"}`})
+	hint := s.checkIncomplete(6)
+	if hint == "" {
+		t.Fatal("expected warning when reproducer not re-run")
+	}
+	if !strings.Contains(hint, "go test ./internal/foo/ -run TestBar") {
+		t.Fatalf("hint must quote the recorded reproducer command, got: %s", hint)
+	}
+}
+
+// #2805 x #2802 guardrail: after a text-established go-test reproducer, an
+// unrelated script run must NOT discharge, and a different package's go test
+// must not either (token overlap, not verb shape).
+func TestReproducerGoTestUnrelatedRerunStillWarns(t *testing.T) {
+	s := newReproducerLifecycleState()
+	s.observeText(1, "Let me write a test to reproduce the error", true,
+		`{"command":"go test ./internal/foo/ -run TestBar"}`)
+	s.observeToolCalls(2, []string{"edit_file"}, []string{`{"file_path":"src/main.go"}`})
+
+	s.observeToolCalls(3, []string{"run_command"}, []string{`{"command":"node test/unit/foo.test.js"}`})
+	if s.reranAfterEdit {
+		t.Fatal("unrelated script must not discharge (#2802 semantics)")
+	}
+
+	s.observeToolCalls(4, []string{"run_command"}, []string{`{"command":"go test ./internal/bar/ -run TestOther"}`})
+	if s.reranAfterEdit {
+		t.Fatal("different package's go test must not discharge (no token overlap)")
+	}
+
+	if hint := s.checkIncomplete(7); hint == "" {
+		t.Fatal("expected warning to persist until the actual reproducer is re-run")
 	}
 }
 

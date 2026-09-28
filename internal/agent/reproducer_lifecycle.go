@@ -45,6 +45,7 @@ package agent
 //   - Fires at most once per run (advisory, non-blocking)
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -116,6 +117,16 @@ var reproducerIntentRe = regexp.MustCompile(
 // a standalone script (the most common reproducer pattern).
 var reproducerCommandRe = regexp.MustCompile(
 	`(?:^|[\s:"])(?:python3?|node|go\s+run|ruby|cargo\s+run|bash|sh)\s+\S+\.(?:py|js|ts|go|rb|rs|sh)`,
+)
+
+// reproducerTestRunnerRe detects run_command invocations that execute a test
+// runner (go test / cargo test / make test / npm test / pytest) rather than a
+// standalone script (#2805). The "write a test to reproduce" workflow has no
+// script path for reproducerCommandRe to anchor on, so text-established
+// reproducers whose same-iteration run is test-runner-shaped used to leave
+// the snippet empty and could never discharge the re-run obligation.
+var reproducerTestRunnerRe = regexp.MustCompile(
+	`(?:^|[\s:"])(?:go\s+test|cargo\s+test|make\s+test|npm\s+test|pytest)\b`,
 )
 
 // reproducerEditToolNames identifies tools that modify source files.
@@ -237,13 +248,28 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 }
 
 // observeText scans the assistant text for reproducer intent (Phase 1 alt path).
-func (s *reproducerLifecycleState) observeText(iteration int, text string, hasRunTool bool) {
+// runInput is the raw input of the iteration's first command-executing tool
+// call ("" when none ran); #2805 uses it to record a snippet for
+// test-runner-shaped reproducers so the token-overlap discharge channel works
+// and the "Re-run:" hint tail is not blank.
+func (s *reproducerLifecycleState) observeText(iteration int, text string, hasRunTool bool, runInput string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if !s.hasReproducer && reproducerIntentRe.MatchString(text) && hasRunTool {
 		s.hasReproducer = true
 		s.reproducerIteration = iteration
+		// #2805: `go test ./pkg/ -run TestX` (and friends) never match
+		// reproducerCommandRe, so the text path used to leave the snippet
+		// empty and an identical re-run after an edit was reported as
+		// "not re-run" with a blank "Re-run:" tail. Record the extracted
+		// command as the snippet so token overlap discharges an identical
+		// (or same-package) re-run while unrelated scripts still do not.
+		// Script-shaped runs keep prior behavior: they establish via the
+		// command path in observeToolCalls, which records the snippet there.
+		if cmd := extractStringField(json.RawMessage(runInput), "command"); cmd != "" && reproducerTestRunnerRe.MatchString(cmd) {
+			s.reproducerSnippet = firstLine(cmd)
+		}
 		debug.Log("agent", "reproducer-lifecycle: reproducer established via text at iter %d", iteration)
 	}
 }
