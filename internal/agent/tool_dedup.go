@@ -57,8 +57,12 @@ var mutatingToolNames = map[string]bool{
 	"start_command":    true,
 	"write_file":       true,
 	"edit_file":        true,
+	"multi_edit_file":  true, // #2808: batch edits duplicate side effects like edit_file
+	"multi_file_edit":  true, // #2808: canonical sourceMutatingTools member, was missing
 	"multi_file_write": true,
 	"notebook_edit":    true,
+	"batch_replace":    true, // #2808
+	"lsp_rename":       true, // #2808
 	"file_ops":         true,
 	"git_add":          true,
 	"git_commit":       true,
@@ -88,9 +92,12 @@ var fileMutatingTools = map[string]bool{
 	"write_file":       true,
 	"edit_file":        true,
 	"multi_edit_file":  true, // #2486: batch edits duplicate side effects like edit_file
+	"multi_file_edit":  true, // #2808: canonical sourceMutatingTools member, was missing
 	"multi_file_write": true,
 	"notebook_edit":    true,
 	"file_ops":         true,
+	"batch_replace":    true, // #2808: bulk pattern replacement rewrites files; epoch must bump
+	"lsp_rename":       true, // #2808: symbol rename touches multiple files; epoch must bump
 	// #2486: these git tools rewrite tracked working-tree state directly
 	// (checkout swaps the tree, stash pop/apply restores changes, reset
 	// --hard discards them, revert applies the inverse patch in both
