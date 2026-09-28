@@ -1362,16 +1362,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if skip {
 			continue
 		}
-		a.ensurePromptSendable()
-		msgs := a.contextManager.Messages()
-		runStats.recordContextUsage(a.contextManager.TokenCount())
-		if runStats.ContextWindow == 0 {
-			runStats.ContextWindow = a.contextManager.ContextWindow()
-		}
-		if debug.IsVerbose("agent") {
-			debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
-				i+1, a.maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
-		}
+		// Iteration-head context snapshot (sendable prompt enforcement, msgs
+		// fetch, usage recording, ContextWindow init, verbose log) extracted
+		// verbatim into iterContextSnapshotPhase (r229). msgs stays the loop
+		// variable; the #1672 re-snapshot at the send site below is unchanged.
+		msgs := a.iterContextSnapshotPhase(runStats, i, a.maxIter)
 		// Agent-side planning: inject a plan suggestion or reminder early in
 		// the conversation when the request was detected as complex. This is
 		// a deterministic, zero-LLM-cost approach inspired by Devin's Planner
@@ -1394,17 +1389,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// contexts), and description truncation misleads the model into
 		// guessing tool behavior from names. All registered tools are sent
 		// with their full, unmodified descriptions.
-		activeToolDefs := a.toolSearch.activeDefs(toolDefs)
-		if a.serverToolSearch {
-			// Provider-side Tool Search Tool: MCP schemas ride every request
-			// flagged defer_loading so the API keeps them out of context until
-			// server-side search expands them. Built-ins stay non-deferred,
-			// satisfying the API's ≥1 non-deferred tool requirement.
-			markServerDeferred(activeToolDefs)
-		}
-		if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
-			cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(activeToolDefs))
-		}
+		// Tool-definition resolution (tool-search active defs, server-side
+		// deferred marking, overhead accounting) extracted verbatim into
+		// resolveActiveToolDefsPhase (r229).
+		activeToolDefs := a.resolveActiveToolDefsPhase(toolDefs)
 		// #1672: read the manager snapshot HERE, at the consumption point.
 		// msgs is initialized once before the loop and only refreshed at
 		// 37 conditional sites; the recovery nudges and final gates Add to
@@ -1558,6 +1546,43 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return a.emitMaxIterationsSummary(runStats, onEvent)
 	}
 	return nil
+}
+
+// iterContextSnapshotPhase performs the iteration-head context snapshot:
+// prompt sendability enforcement, manager message fetch, per-iteration usage
+// recording, one-time ContextWindow init, and verbose iteration logging.
+// Split verbatim from RunStreamWithContent (r229).
+func (a *Agent) iterContextSnapshotPhase(runStats *RunStats, i int, maxIter int) []provider.Message {
+	a.ensurePromptSendable()
+	msgs := a.contextManager.Messages()
+	runStats.recordContextUsage(a.contextManager.TokenCount())
+	if runStats.ContextWindow == 0 {
+		runStats.ContextWindow = a.contextManager.ContextWindow()
+	}
+	if debug.IsVerbose("agent") {
+		debug.Log("agent", "Iteration %d/%d: contextManager messages=%d tokens=%d threshold=%d usage_ratio=%.3f maxTokens=%d",
+			i+1, maxIter, len(msgs), a.contextManager.TokenCount(), a.contextManager.AutoCompactThreshold(), a.contextManager.UsageRatio(), a.contextManager.ContextWindow())
+	}
+	return msgs
+}
+
+// resolveActiveToolDefsPhase resolves the per-request tool definition list:
+// tool-search active defs, optional server-side deferred marking, and tool
+// definition overhead accounting on the context manager. Split verbatim from
+// RunStreamWithContent (r229).
+func (a *Agent) resolveActiveToolDefsPhase(toolDefs []provider.ToolDefinition) []provider.ToolDefinition {
+	activeToolDefs := a.toolSearch.activeDefs(toolDefs)
+	if a.serverToolSearch {
+		// Provider-side Tool Search Tool: MCP schemas ride every request
+		// flagged defer_loading so the API keeps them out of context until
+		// server-side search expands them. Built-ins stay non-deferred,
+		// satisfying the API's ≥1 non-deferred tool requirement.
+		markServerDeferred(activeToolDefs)
+	}
+	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
+		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(activeToolDefs))
+	}
+	return activeToolDefs
 }
 
 // startRunTrackingPhase performs run-start bookkeeping that must run before
