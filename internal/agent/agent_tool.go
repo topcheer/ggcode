@@ -309,54 +309,11 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		debug.Log("agent", "tool search: auto-activated schema for %s called by name", tc.Name)
 	}
 
-	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,
-	// goolm) and weaker models produce arguments that are *almost* valid JSON
-	// but fail strict parsing due to stream truncation, trailing commas, smart
-	// quotes, or surrounding markdown fences. When this happens, every
-	// downstream pre-processor (CoerceArguments, ValidateRequiredParams, etc.)
-	// silently bails out on json.Unmarshal failure, and the tool itself fails
-	// with a confusing "invalid input" error - wasting a full agent iteration.
-	//
-	// RepairJSON is a no-op for already-valid JSON (fast path via json.Valid).
-	// It is already applied in the OpenAI streaming path (provider layer), but
-	// not for other providers (Gemini, Anthropic) or for inline tool calls.
-	// Applying it here in the agent pipeline ensures ALL providers benefit.
-	if repaired, ok := provider.RepairJSON(tc.Arguments); ok {
-		debug.Log("agent", "repaired malformed JSON arguments for tool %s", tc.Name)
-		tc.Arguments = repaired
-	}
-
-	// Schema-aware argument coercion: weak models (open-weight models via
-	// goolm, third-party endpoints) frequently send string values for
-	// integer/number/boolean parameters (e.g. {"offset": "50"}). Without
-	// coercion this causes a json.Unmarshal type error, wasting a full loop
-	// iteration. CoerceArguments is a no-op when args are already well-typed.
-	coercedArgs := tool.CoerceArguments(t.Parameters(), tc.Arguments)
-	if !bytes.Equal(coercedArgs, tc.Arguments) {
-		debug.Log("agent", "coerced arguments for tool %s", tc.Name)
-		tc.Arguments = coercedArgs
-	}
-
-	// Enum value auto-correction: weak models frequently send near-miss enum
-	// values (case mismatch like "JSON" instead of "json", or typos like
-	// "overwite" instead of "overwrite"). CoerceEnumValues silently fixes
-	// unambiguous corrections, saving a wasted agent loop iteration.
-	enumCorrected := tool.CoerceEnumValues(t.Parameters(), tc.Arguments)
-	if !bytes.Equal(enumCorrected, tc.Arguments) {
-		debug.Log("agent", "enum-corrected arguments for tool %s", tc.Name)
-		tc.Arguments = enumCorrected
-	}
-
-	// Description fallback: "description" is a UI-only activity label for most
-	// tools, yet weak models routinely omit it. Rejecting the whole call over a
-	// cosmetic label wastes a full LLM round-trip, so when the schema requires
-	// an activity-label description and the model omitted it, inject a derived
-	// fallback and proceed. Semantic description args (create_skill, cmd_snippet
-	// save, ...) are NOT auto-filled - see InjectDescriptionFallback.
-	if withFallback := tool.InjectDescriptionFallback(t.Parameters(), tc.Arguments, tc.Name); !bytes.Equal(withFallback, tc.Arguments) {
-		debug.Log("agent", "injected fallback description label for tool %s", tc.Name)
-		tc.Arguments = withFallback
-	}
+	// AEGIS-style argument sanitation gate (arXiv:2603.12621): JSON repair,
+	// schema coercion, enum correction, and description fallback run once here,
+	// upstream of validation and policy checks, so every downstream stage sees
+	// canonical input. Split verbatim from executeToolInner (r234).
+	tc = normalizeToolCallArguments(t, tc)
 
 	// Schema-aware required-parameter validation: catches missing required
 	// fields before tool execution, giving the model a clear error message
@@ -538,6 +495,67 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	}
 
 	return result
+}
+
+// normalizeToolCallArguments runs the pre-execution argument sanitation
+// pipeline over a tool call's raw arguments: JSON repair for near-miss JSON
+// from OpenAI-compatible backends, schema-aware type coercion for weak
+// models, enum value auto-correction, and the UI-only description fallback.
+// AEGIS-style firewall staging (arXiv:2603.12621): arguments are normalized
+// once, upstream of required-param/schema validation and policy checks, so
+// every downstream stage sees canonical input. Each stage is a no-op for
+// already-canonical arguments. Split verbatim from executeToolInner (r234).
+func normalizeToolCallArguments(t tool.Tool, tc provider.ToolCallDelta) provider.ToolCallDelta {
+	// JSON argument repair: many OpenAI-compatible backends (vLLM, LiteLLM,
+	// goolm) and weaker models produce arguments that are *almost* valid JSON
+	// but fail strict parsing due to stream truncation, trailing commas, smart
+	// quotes, or surrounding markdown fences. When this happens, every
+	// downstream pre-processor (CoerceArguments, ValidateRequiredParams, etc.)
+	// silently bails out on json.Unmarshal failure, and the tool itself fails
+	// with a confusing "invalid input" error - wasting a full agent iteration.
+	//
+	// RepairJSON is a no-op for already-valid JSON (fast path via json.Valid).
+	// It is already applied in the OpenAI streaming path (provider layer), but
+	// not for other providers (Gemini, Anthropic) or for inline tool calls.
+	// Applying it here in the agent pipeline ensures ALL providers benefit.
+	if repaired, ok := provider.RepairJSON(tc.Arguments); ok {
+		debug.Log("agent", "repaired malformed JSON arguments for tool %s", tc.Name)
+		tc.Arguments = repaired
+	}
+
+	// Schema-aware argument coercion: weak models (open-weight models via
+	// goolm, third-party endpoints) frequently send string values for
+	// integer/number/boolean parameters (e.g. {"offset": "50"}). Without
+	// coercion this causes a json.Unmarshal type error, wasting a full loop
+	// iteration. CoerceArguments is a no-op when args are already well-typed.
+	coercedArgs := tool.CoerceArguments(t.Parameters(), tc.Arguments)
+	if !bytes.Equal(coercedArgs, tc.Arguments) {
+		debug.Log("agent", "coerced arguments for tool %s", tc.Name)
+		tc.Arguments = coercedArgs
+	}
+
+	// Enum value auto-correction: weak models frequently send near-miss enum
+	// values (case mismatch like "JSON" instead of "json", or typos like
+	// "overwite" instead of "overwrite"). CoerceEnumValues silently fixes
+	// unambiguous corrections, saving a wasted agent loop iteration.
+	enumCorrected := tool.CoerceEnumValues(t.Parameters(), tc.Arguments)
+	if !bytes.Equal(enumCorrected, tc.Arguments) {
+		debug.Log("agent", "enum-corrected arguments for tool %s", tc.Name)
+		tc.Arguments = enumCorrected
+	}
+
+	// Description fallback: "description" is a UI-only activity label for most
+	// tools, yet weak models routinely omit it. Rejecting the whole call over a
+	// cosmetic label wastes a full LLM round-trip, so when the schema requires
+	// an activity-label description and the model omitted it, inject a derived
+	// fallback and proceed. Semantic description args (create_skill, cmd_snippet
+	// save, ...) are NOT auto-filled - see InjectDescriptionFallback.
+	if withFallback := tool.InjectDescriptionFallback(t.Parameters(), tc.Arguments, tc.Name); !bytes.Equal(withFallback, tc.Arguments) {
+		debug.Log("agent", "injected fallback description label for tool %s", tc.Name)
+		tc.Arguments = withFallback
+	}
+
+	return tc
 }
 
 func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer interface {
