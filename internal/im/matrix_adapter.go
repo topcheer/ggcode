@@ -1,7 +1,6 @@
 package im
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -30,7 +29,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/safego"
-	"github.com/yuin/goldmark"
 )
 
 const (
@@ -1214,65 +1212,14 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 	for i, chunk := range chunks {
 		// Rate limit: most homeservers limit ~1 msg/sec/user.
 		if i > 0 {
-			select {
-			case <-time.After(matrixInterMessageDelay):
-			case <-ctx.Done():
-				return ctx.Err()
+			if sleepErr := matrixSleepCtx(ctx, matrixInterMessageDelay); sleepErr != nil {
+				return sleepErr
 			}
 		}
 
-		content := &event.MessageEventContent{
-			MsgType: event.MsgText,
-			Body:    chunk,
-		}
-
-		// Render markdown to HTML for rich display in Element
-		var htmlBuf bytes.Buffer
-		if err := goldmark.Convert([]byte(chunk), &htmlBuf); err == nil && htmlBuf.Len() > 0 {
-			content.Format = event.FormatHTML
-			content.FormattedBody = htmlBuf.String()
-		}
-
-		if threadID != "" {
-			content.RelatesTo = &event.RelatesTo{
-				Type:    event.RelThread,
-				EventID: id.EventID(threadID),
-			}
-		}
-
-		txnID := fmt.Sprintf("ggcode-%d", a.txnID.Add(1))
-		var err error
-		for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-			_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
-			if err == nil {
-				break
-			}
-			// Retry on M_LIMIT_EXCEEDED with server-provided delay.
-			var respErr *mautrix.RespError
-			if errors.As(err, &respErr) && respErr.ErrCode == "M_LIMIT_EXCEEDED" && attempt < matrixMaxRetries {
-				retryAfter := matrixInterMessageDelay * 2
-				if ms, ok := respErr.ExtraData["retry_after_ms"]; ok {
-					// #664: clamp BEFORE the float→Duration conversion (same family
-					// as #513/#658). retry_after_ms > 9.22e12 or +Inf wraps to a
-					// large negative duration and time.After(negative) fires
-					// immediately, bypassing the server's backoff.
-					if msFloat, ok2 := ms.(float64); ok2 && msFloat > 0 {
-						retryAfter = matrixRetryAfter(msFloat)
-					}
-				}
-				debug.Log("matrix", "adapter=%s rate-limited (M_LIMIT_EXCEEDED), retry %d/%d after %v",
-					a.name, attempt+1, matrixMaxRetries, retryAfter)
-				select {
-				case <-time.After(retryAfter):
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-				continue
-			}
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("matrix send to %s: %w", roomID, err)
+		content := matrixChunkContent(chunk, threadID)
+		if err := a.sendChunkWithRetry(ctx, client, roomID, content); err != nil {
+			return err
 		}
 	}
 	return nil
