@@ -2022,140 +2022,16 @@ func (a *feishuAdapter) SendInteractive(ctx context.Context, binding ChannelBind
 		return "", fmt.Errorf("Feishu channel is not configured")
 	}
 
-	// Build card with markdown + button column set
-	elements := []any{
-		map[string]any{
-			"tag":     "markdown",
-			"content": msg.Text,
-		},
-	}
-
-	// Build buttons as a column_set
-	var columns []map[string]any
-	for _, btn := range msg.Buttons {
-		btnElem := map[string]any{
-			"tag": "button",
-			"text": map[string]any{
-				"tag":     "plain_text",
-				"content": btn.Label,
-			},
-			"behaviors": []any{
-				map[string]any{
-					"type":  "callback",
-					"value": map[string]any{"choice": btn.Value},
-				},
-			},
-		}
-		switch btn.Style {
-		case "primary":
-			btnElem["type"] = "primary"
-		case "danger":
-			btnElem["type"] = "danger"
-		default:
-			btnElem["type"] = "default"
-		}
-		columns = append(columns, map[string]any{
-			"tag":      "column",
-			"elements": []any{btnElem},
-		})
-	}
-	if msg.MultiSelect {
-		columns = append(columns, map[string]any{
-			"tag": "column",
-			"elements": []any{
-				map[string]any{
-					"tag":  "button",
-					"type": "primary",
-					"text": map[string]any{
-						"tag":     "plain_text",
-						"content": "✅ Done",
-					},
-					"behaviors": []any{
-						map[string]any{
-							"type":  "callback",
-							"value": map[string]any{"choice": "__done__"},
-						},
-					},
-				},
-			},
-		})
-	}
-
-	if len(columns) > 0 {
-		elements = append(elements, map[string]any{
-			"tag":       "column_set",
-			"flex_mode": "bisect",
-			"columns":   columns,
-		})
-	}
-
-	card := map[string]any{
-		"schema": "2.0",
-		"config": map[string]any{
-			"wide_screen_mode": true,
-		},
-		"body": map[string]any{
-			"elements": elements,
-		},
-	}
-
+	card := buildFeishuInteractiveCard(msg)
 	cardBytes, _ := json.Marshal(card)
 	debug.Log("feishu", "adapter=%s SendInteractive card JSON: %s", a.name, string(cardBytes))
 	apiBase := a.resolveAPIBase()
 	url := apiBase + "/im/v1/messages?receive_id_type=chat_id"
-	body := map[string]any{
-		"receive_id": chatID,
-		"msg_type":   "interactive",
-		"content":    string(cardBytes),
-	}
-	bodyBytes, _ := json.Marshal(body)
+	bodyBytes := feishuInteractiveRequestBody(chatID, cardBytes)
 
 	a.mu.RLock()
 	token := a.token
 	a.mu.RUnlock()
 
-	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return "", err
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := a.httpClient.Do(req)
-		if err != nil {
-			return "", err
-		}
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRateLimitRetries {
-			delay := parseRetryAfter(resp)
-			resp.Body.Close()
-			debug.Log("feishu", "adapter=%s SendInteractive rate-limited, retry %d/%d after %v",
-				a.name, attempt+1, maxRateLimitRetries, delay)
-			if err := sleepRetry(ctx, delay); err != nil {
-				return "", err
-			}
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			respBody, _ := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-			return "", fmt.Errorf("Feishu interactive API [%d] %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-		}
-
-		// Extract message_id from response, checking code field for API errors.
-		var result struct {
-			Code int    `json:"code"`
-			Msg  string `json:"msg"`
-			Data struct {
-				MessageID string `json:"message_id"`
-			} `json:"data"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-			if result.Code != 0 {
-				return "", fmt.Errorf("Feishu interactive API error [%d]: %s", result.Code, result.Msg)
-			}
-			return strings.TrimSpace(result.Data.MessageID), nil
-		}
-		return "", nil
-	}
-	return "", rateLimitExhausted("Feishu")
+	return a.sendFeishuInteractiveRequest(ctx, url, token, bodyBytes)
 }
