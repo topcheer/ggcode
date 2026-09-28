@@ -2951,90 +2951,117 @@ func (a *Agent) fileEditSuccessTrackingPhase(tc provider.ToolCallDelta, result t
 		// refactor counter and hit the threshold of 2 instantly (#487).
 		a.prematureRefactorRecordEdit(tc.Name, tc.Arguments)
 		for _, p := range extractEditFilePaths(tc.Name, tc.Arguments) {
-			a.editFailRecovery.recordEditSuccess(p)
-			// Content-fingerprint validation MUST run before readHash.recordWriteHash
-			// below: recordWriteHash deletes the stored hash, so validating after
-			// it always misses and the detector is dead in production (#283).
-			// Catches sub-second edits that mtime misses and suppresses false
-			// positives from touch/NFS. Mirrors the #168 ordering precedent.
-			if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			a.fileFreshness.recordWrite(p)
-			a.readHash.recordWriteHash(p)
-			a.redundantRead.recordWrite(p)
-			// Refresh the stale-read baseline: the agent's own edit just
-			// bumped the mtime — without this, checkStaleRead would flag
-			// our own edit as an external modification (#168).
-			a.unreadEdit.recordWrite(p)
-			if a.tokenWasteBudget != nil {
-				a.tokenWasteBudget.markFileEdited(p)
-			}
-			a.patchExhaust.recordEdit(p)
-			// Convergence lock: track post-verification edits.
-			a.convergenceRecordEdit(tc.Name)
-			// Diminishing edit: track edit substance size for polish-spiral detection.
-			a.diminishingRecordEdit(tc.Name, tc.Arguments)
-			// Overcorrection cascade: track edit size vs error severity.
-			// #1823 case 3: gated behind claimsSupervision — same class of
-			// lexical/byte-count heuristic as the claims family, same noise
-			// asymmetry argument. Ungated it enforced only the
-			// “shrink your edit” side while the “verify before claiming”
-			// side stayed opt-in — a directional bias opposite to the
-			// paired-axes design intent.
-			if a.claimsSupervision {
-				if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
-					a.appendGuidance(&result, ocHint)
-				}
-			}
-			// Fix cascade: track edits for wrong-hypothesis lock-in detection.
-			a.fixCascade.recordEdit()
-			// Error regression: track edits for negative progress detection.
-			a.errRegression.recordEdit()
-			if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Stale-read detection: warn when the file was modified on
-			// disk since the last read (external edit, git pull, etc.).
-			if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Expired-read detection: warn when the agent edits a file
-			// it previously read, marking the prior read as expired.
-			if hint := a.expiredRead.recordEdit(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// #1459-B: a rolled-back edit restores the pre-edit
-			// content - the file's read/edit bookkeeping must forget
-			// it so the correct anchor-rebuilding re-read isn't
-			// later misreported as stale.
-			if tc.Name == "undo_edit" && !result.IsError {
-				a.expiredRead.recordUndo(p)
-			}
-			// Export guard: detect breaking changes to exported Go symbols
-			// (removed functions, changed signatures) by comparing against
-			// git HEAD. Fires once per file per run.
-			if hint := a.checkExportGuard(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Hub package guard: per-edit blast-radius awareness for
-			// widely-imported packages. Complements export_guard by
-			// providing scale context even for non-breaking edits.
-			if hint := a.checkHubPackage(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Generated artifact guard: warn when editing lock files,
-			// generated code, vendored files, or files with DO NOT EDIT
-			// headers. Suggests the correct regeneration command.
-			if hint := a.artifactGuard.checkGeneratedArtifact(p); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
-			// Branch guard: warn once per run when editing on a protected
-			// branch (main, master, develop, release/*).
-			if hint := a.checkBranchGuard(); hint != "" {
-				a.appendGuidance(&result, hint)
-			}
+			result = a.fileEditSuccessFreshnessPhase(tc, p, result)
+			result = a.fileEditSuccessSubstancePhase(tc, p, result)
+			result = a.fileEditSuccessGuardHintsPhase(tc, p, result)
 		}
+	}
+	return result
+}
+
+// fileEditSuccessFreshnessPhase refreshes per-file write bookkeeping for a
+// successful edit: failure-counter reset, content-fingerprint validation,
+// freshness/hash baselines, redundant-read and patch-exhaust tracking.
+// Split verbatim from fileEditSuccessTrackingPhase (r228).
+func (a *Agent) fileEditSuccessFreshnessPhase(tc provider.ToolCallDelta, p string, result tool.Result) tool.Result {
+	a.editFailRecovery.recordEditSuccess(p)
+	// Content-fingerprint validation MUST run before readHash.recordWriteHash
+	// below: recordWriteHash deletes the stored hash, so validating after
+	// it always misses and the detector is dead in production (#283).
+	// Catches sub-second edits that mtime misses and suppresses false
+	// positives from touch/NFS. Mirrors the #168 ordering precedent.
+	if hint := a.readHash.validateContentAtEdit(p, extractOldTextLen(tc.Name, tc.Arguments)); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	a.fileFreshness.recordWrite(p)
+	a.readHash.recordWriteHash(p)
+	a.redundantRead.recordWrite(p)
+	// Refresh the stale-read baseline: the agent's own edit just
+	// bumped the mtime — without this, checkStaleRead would flag
+	// our own edit as an external modification (#168).
+	a.unreadEdit.recordWrite(p)
+	if a.tokenWasteBudget != nil {
+		a.tokenWasteBudget.markFileEdited(p)
+	}
+	a.patchExhaust.recordEdit(p)
+	return result
+}
+
+// fileEditSuccessSubstancePhase tracks edit-substance and progress signals
+// for a successful edit: convergence lock, diminishing edits, overcorrection
+// cascade, fix cascade, and error regression.
+// Split verbatim from fileEditSuccessTrackingPhase (r228).
+func (a *Agent) fileEditSuccessSubstancePhase(tc provider.ToolCallDelta, p string, result tool.Result) tool.Result {
+	// Convergence lock: track post-verification edits.
+	a.convergenceRecordEdit(tc.Name)
+	// Diminishing edit: track edit substance size for polish-spiral detection.
+	a.diminishingRecordEdit(tc.Name, tc.Arguments)
+	// Overcorrection cascade: track edit size vs error severity.
+	// #1823 case 3: gated behind claimsSupervision — same class of
+	// lexical/byte-count heuristic as the claims family, same noise
+	// asymmetry argument. Ungated it enforced only the
+	// “shrink your edit” side while the “verify before claiming”
+	// side stayed opt-in — a directional bias opposite to the
+	// paired-axes design intent.
+	if a.claimsSupervision {
+		if ocHint := a.overcorrectionRecordEdit(tc.Name, tc.Arguments); ocHint != "" {
+			a.appendGuidance(&result, ocHint)
+		}
+	}
+	// Fix cascade: track edits for wrong-hypothesis lock-in detection.
+	a.fixCascade.recordEdit()
+	// Error regression: track edits for negative progress detection.
+	a.errRegression.recordEdit()
+	return result
+}
+
+// fileEditSuccessGuardHintsPhase runs post-edit hint checks and per-file
+// guards: unread/stale/expired reads, undo rollback bookkeeping, and
+// export/hub/artifact/protected-branch guards.
+// Split verbatim from fileEditSuccessTrackingPhase (r228).
+func (a *Agent) fileEditSuccessGuardHintsPhase(tc provider.ToolCallDelta, p string, result tool.Result) tool.Result {
+	if hint := a.unreadEdit.checkUnreadEdit(p); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	// Stale-read detection: warn when the file was modified on
+	// disk since the last read (external edit, git pull, etc.).
+	if hint := a.unreadEdit.checkStaleRead(p); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	// Expired-read detection: warn when the agent edits a file
+	// it previously read, marking the prior read as expired.
+	if hint := a.expiredRead.recordEdit(p); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	// #1459-B: a rolled-back edit restores the pre-edit
+	// content - the file's read/edit bookkeeping must forget
+	// it so the correct anchor-rebuilding re-read isn't
+	// later misreported as stale.
+	if tc.Name == "undo_edit" && !result.IsError {
+		a.expiredRead.recordUndo(p)
+	}
+	// Export guard: detect breaking changes to exported Go symbols
+	// (removed functions, changed signatures) by comparing against
+	// git HEAD. Fires once per file per run.
+	if hint := a.checkExportGuard(p); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	// Hub package guard: per-edit blast-radius awareness for
+	// widely-imported packages. Complements export_guard by
+	// providing scale context even for non-breaking edits.
+	if hint := a.checkHubPackage(p); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	// Generated artifact guard: warn when editing lock files,
+	// generated code, vendored files, or files with DO NOT EDIT
+	// headers. Suggests the correct regeneration command.
+	if hint := a.artifactGuard.checkGeneratedArtifact(p); hint != "" {
+		a.appendGuidance(&result, hint)
+	}
+	// Branch guard: warn once per run when editing on a protected
+	// branch (main, master, develop, release/*).
+	if hint := a.checkBranchGuard(); hint != "" {
+		a.appendGuidance(&result, hint)
 	}
 	return result
 }
