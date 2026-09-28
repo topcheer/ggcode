@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/audit"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -600,20 +601,10 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	// #1786 case 1 (multi-file leg): same TOCTOU as the single-file path -
-	// plan.OldContent comes from the PreviewChanges first read, and the
+	// plan baselines come from the PreviewChanges first read, and the
 	// diffConfirm pause above opens an arbitrary window for external
-	// writers. Refresh each stale plan baseline so per-file undo restores
-	// the true pre-write state instead of erasing external changes.
-	for i := range plans {
-		cur, rerr := os.ReadFile(plans[i].Path)
-		if rerr != nil {
-			continue // unreadable now = executor will surface its own error
-		}
-		if string(cur) != plans[i].OldContent {
-			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
-			plans[i].OldContent = string(cur)
-		}
-	}
+	// writers. See refreshMultiFilePlanBaselines.
+	refreshMultiFilePlanBaselines(plans)
 
 	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
@@ -622,45 +613,12 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 	}
 
-	if cpMgr != nil && len(plans) > 0 {
-		var outcome tool.MultiFileEditContent
-		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
-			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
-			for _, plan := range plans {
-				planByPath[plan.Path] = plan
-			}
-			for _, path := range outcome.WrittenPaths {
-				if plan, ok := planByPath[path]; ok {
-					cpMgr.Save(path, plan.OldContent, plan.NewContent, tc.Name)
-				}
-			}
-		}
-	}
+	saveMultiFileCheckpoints(cpMgr, plans, result, tc.Name)
 
 	// Post-write integrity check: validate each written file's content.
-	// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes
-	// NOTHING - running the read-back comparison against unwritten plans
-	// flagged every plan as a "post-write mismatch" with a wrong semantic
-	// ("write may be partial") on EVERY preview.
-	var dryProbe struct {
-		DryRun bool `json:"dry_run"`
-	}
-	isDryRun := json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
-	// #2143 P2: partial_success mode reports per-file outcomes -
-	// written_paths is authoritative (a pointer probe distinguishes "tool
-	// reports no such field" from "field present but empty", i.e. all
-	// files failed). Unwritten files keep their old disk content and must
-	// not trip the mismatch check.
-	var wpProbe struct {
-		WrittenPaths *[]string `json:"written_paths"`
-	}
-	writtenSet := map[string]bool(nil)
-	if json.Unmarshal([]byte(result.Content), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
-		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
-		for _, p := range *wpProbe.WrittenPaths {
-			writtenSet[p] = true
-		}
-	}
+	// #2143 P1/P2 probes (a dry-run preview writes NOTHING; written_paths is
+	// authoritative in partial_success mode) - see probeMultiFileOutcome.
+	isDryRun, writtenSet := probeMultiFileOutcome(result)
 	if !result.IsError && len(plans) > 0 && !isDryRun {
 		// #2138: the multi-file tools (multi_file_write/edit,
 		// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
@@ -709,6 +667,72 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	return result
+}
+
+// refreshMultiFilePlanBaselines re-reads every plan's path after the
+// diffConfirm pause: plan.OldContent comes from the PreviewChanges first
+// read, so per-file undo would otherwise restore a stale baseline and erase
+// external changes made in the pause window (#1786 case 1, multi-file leg).
+// Split verbatim from executeMultiFileTool (r235).
+func refreshMultiFilePlanBaselines(plans []tool.PlannedFileEdit) {
+	for i := range plans {
+		cur, rerr := os.ReadFile(plans[i].Path)
+		if rerr != nil {
+			continue // unreadable now = executor will surface its own error
+		}
+		if string(cur) != plans[i].OldContent {
+			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
+			plans[i].OldContent = string(cur)
+		}
+	}
+}
+
+// saveMultiFileCheckpoints persists one undo checkpoint per actually-written
+// path, mapping written_paths back to the planned old/new contents. Split
+// verbatim from executeMultiFileTool (r235).
+func saveMultiFileCheckpoints(cpMgr *checkpoint.Manager, plans []tool.PlannedFileEdit, result tool.Result, toolName string) {
+	if cpMgr != nil && len(plans) > 0 {
+		var outcome tool.MultiFileEditContent
+		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
+			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
+			for _, plan := range plans {
+				planByPath[plan.Path] = plan
+			}
+			for _, path := range outcome.WrittenPaths {
+				if plan, ok := planByPath[path]; ok {
+					cpMgr.Save(path, plan.OldContent, plan.NewContent, toolName)
+				}
+			}
+		}
+	}
+}
+
+// probeMultiFileOutcome inspects the raw multi-file tool result twice.
+// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes NOTHING -
+// running the read-back comparison against unwritten plans flagged every
+// plan as a "post-write mismatch" with a wrong semantic ("write may be
+// partial") on EVERY preview. #2143 P2: partial_success mode reports
+// per-file outcomes - written_paths is authoritative (a pointer probe
+// distinguishes "tool reports no such field" from "field present but
+// empty", i.e. all files failed); unwritten files keep their old disk
+// content and must not trip the mismatch check. Split verbatim from
+// executeMultiFileTool (r235).
+func probeMultiFileOutcome(result tool.Result) (isDryRun bool, writtenSet map[string]bool) {
+	var dryProbe struct {
+		DryRun bool `json:"dry_run"`
+	}
+	isDryRun = json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
+	var wpProbe struct {
+		WrittenPaths *[]string `json:"written_paths"`
+	}
+	writtenSet = map[string]bool(nil)
+	if json.Unmarshal([]byte(result.Content), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
+		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
+		for _, p := range *wpProbe.WrittenPaths {
+			writtenSet[p] = true
+		}
+	}
+	return isDryRun, writtenSet
 }
 
 // changedPlans returns the subset of plans whose contents actually differ,
