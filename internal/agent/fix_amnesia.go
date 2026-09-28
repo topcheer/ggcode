@@ -202,6 +202,26 @@ func pathDepth(p string) int {
 	return strings.Count(dir, "/") + 1
 }
 
+// hasFixedPatternsInOtherFiles reports whether any error category has a
+// recorded fix in a file other than newFile - the precondition for a
+// fix-amnesia content check on newFile to be meaningful. It mirrors the
+// same-file exclusion inside checkContentAgainstFixed so the wiring can
+// skip the disk read entirely for runs with no candidate categories (#2803
+// review: gate saves the ReadFile on every successful edit of runs that
+// never fixed anything in another file).
+func (d *fixAmnesiaState) hasFixedPatternsInOtherFiles(newFile string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, files := range d.fixedPatterns {
+		for _, f := range files {
+			if !fixAmnesiaSameFile(f, newFile) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // checkNewContent examines newly written/edited file content for patterns
 // that match previously-fixed error categories. Returns guidance text if
 // fix amnesia is detected, empty string otherwise.

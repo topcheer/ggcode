@@ -4319,23 +4319,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fixAmnesia.recordFileEdited(fp)
 				}
 				// Check new content for patterns matching previously-fixed errors.
-				// #2803: edit_file/write_file result content is a success
-				// message plus a compactDiff truncated to 25 lines - the
-				// import block is routinely outside the hunk (file header vs
-				// mid-function edit), so missingImportInContent false-positived
-				// on mature files that already had the import and advised
-				// adding a duplicate one. The detector's contract is "content
-				// is the NEW content of newFile" (fix_amnesia.go) - read the
-				// real post-edit file; fall back to the diff only when the
-				// read fails (prefer under-reporting over a false claim).
-				newContent := result.Content
-				if fp != "" {
+				// #2803 (+review): edit_file/write_file result content is a success
+				// message plus a compactDiff truncated to 25 lines - the import
+				// block is routinely outside the hunk, and detector input must be
+				// the full NEW file content. Gate on (a) success (error text as
+				// content is another false-positive source - "undefined:
+				// fmt.Sprintf" matches missingImportInContent while a failed edit
+				// wrote nothing), (b) a resolved file path (unresolvable args
+				// would fall back to the diff), and (c) a candidate fixed pattern
+				// in another file (runs without one skip the disk read). A failed
+				// read skips the check entirely - falling back to the diff would
+				// resurrect the root false-positive; prefer under-reporting.
+				if !result.IsError && fp != "" && a.fixAmnesia.hasFixedPatternsInOtherFiles(fp) {
 					if b, rerr := os.ReadFile(fp); rerr == nil {
-						newContent = string(b)
+						if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, string(b)); faGuidance != "" {
+							a.appendGuidance(&result, faGuidance)
+						}
 					}
-				}
-				if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, newContent); faGuidance != "" {
-					a.appendGuidance(&result, faGuidance)
 				}
 			}
 			// Correction spiral: track edits and verify results to detect

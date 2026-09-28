@@ -69,10 +69,12 @@ func TestIssue2803WiringReadsRealFile(t *testing.T) {
 	// must not - covered above; this test pins both sides of the contract.
 }
 
-// TestIssue2803CallSiteReadsFile pins the source-level invariant: the
-// checkContentAgainstFixed call in agent.go must be preceded by the
-// post-edit os.ReadFile assembly (the wiring fix).
-func TestIssue2803CallSiteReadsFile(t *testing.T) {
+// TestIssue2803CallSiteGated pins the source-level invariant: the
+// checkContentAgainstFixed call in agent.go must be (a) success-gated,
+// (b) path-gated, (c) fixed-pattern-gated, and (d) fed from a real
+// post-edit os.ReadFile with NO diff fallback on read failure (#2803 +
+// review residual points).
+func TestIssue2803CallSiteGated(t *testing.T) {
 	src, err := os.ReadFile("agent.go")
 	if err != nil {
 		t.Fatalf("read agent.go: %v", err)
@@ -82,12 +84,36 @@ func TestIssue2803CallSiteReadsFile(t *testing.T) {
 	if callIdx < 0 {
 		t.Fatal("checkContentAgainstFixed call site not found in agent.go")
 	}
-	// The ReadFile assembly must exist shortly before the call (same block).
-	window := s[max(0, callIdx-1500):callIdx]
-	if !strings.Contains(window, "os.ReadFile(fp)") {
-		t.Error("call site does not read the real post-edit file before checking content (#2803 recurrence)")
+	window := s[max(0, callIdx-1600):callIdx]
+	if !strings.Contains(window, "!result.IsError") {
+		t.Error("content check not success-gated - error-text FP source (review pt 2)")
 	}
-	if !strings.Contains(window, "newContent") {
-		t.Error("call site no longer routes content through newContent")
+	if !strings.Contains(window, `fp != ""`) {
+		t.Error("content check not path-gated (review pt 3)")
+	}
+	if !strings.Contains(window, "hasFixedPatternsInOtherFiles(fp)") {
+		t.Error("content check not fixed-pattern-gated")
+	}
+	if !strings.Contains(window, "os.ReadFile(fp)") {
+		t.Error("call site does not read the real post-edit file (#2803 recurrence)")
+	}
+	if strings.Contains(window, "newContent := result.Content") {
+		t.Error("diff fallback re-introduced (review pt 1)")
+	}
+}
+
+// TestIssue2803GateMirrorsSameFile: fixed pattern in ANOTHER file gates in;
+// fixed only in the same file (or nothing fixed) gates out.
+func TestIssue2803GateMirrorsSameFile(t *testing.T) {
+	d := issue2803StateWithFixedImport(t) // fixed in fileA
+	if !d.hasFixedPatternsInOtherFiles(issue2803FileB) {
+		t.Error("fix in another file should gate in")
+	}
+	if d.hasFixedPatternsInOtherFiles(issue2803FileA) {
+		t.Error("fix in the same file should gate out (same-file exclusion)")
+	}
+	empty := newFixAmnesiaState()
+	if empty.hasFixedPatternsInOtherFiles(issue2803FileB) {
+		t.Error("no fixed patterns should gate out")
 	}
 }
