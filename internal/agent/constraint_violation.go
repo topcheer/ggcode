@@ -352,10 +352,25 @@ func cvExtractConstraints(text string, iter int) []cvConstraint {
 	if m := cvLeaveAloneRe.FindStringSubmatch(lower); len(m) > 1 {
 		path := strings.TrimSpace(m[1])
 		// Strip common articles/connectors so the pattern matches file paths.
-		for _, prefix := range []string{"the ", "any ", "all ", "files in ", "files "} {
-			path = strings.TrimPrefix(path, prefix)
+		// Suffix stripping matters too: English puts the noun before "files"
+		// ("leave the config files alone"), and a pattern with an embedded
+		// space can never match a path segment -- the whole constraint would
+		// go dead (#2801). Loop to a fixpoint so interleaved articles and
+		// file-suffixes ("all the config files") normalize fully.
+		for {
+			trimmed := path
+			for _, prefix := range []string{"the ", "any ", "all ", "files in ", "files "} {
+				trimmed = strings.TrimPrefix(trimmed, prefix)
+			}
+			for _, suffix := range []string{" files", " file"} {
+				trimmed = strings.TrimSuffix(trimmed, suffix)
+			}
+			trimmed = strings.TrimSpace(trimmed)
+			if trimmed == path {
+				break
+			}
+			path = trimmed
 		}
-		path = strings.TrimSpace(path)
 		if path != "" && len(path) <= 80 {
 			idx := strings.Index(lower, m[0])
 			if idx >= 0 {
@@ -452,6 +467,13 @@ func cvExtractPathAfter(lowerText string, offset int) string {
 		if end > 0 {
 			return strings.TrimSpace(rest[1 : 1+end])
 		}
+	}
+
+	// #2801 parity: strip trailing " files"/" file" so both extraction
+	// paths share the same normalization contract (the token cut below
+	// already drops anything after the space for single-word modules).
+	for _, suffix := range []string{" files", " file"} {
+		rest = strings.TrimSuffix(rest, suffix)
 	}
 
 	// Case 2: Path-like token (contains / and looks like a file path).

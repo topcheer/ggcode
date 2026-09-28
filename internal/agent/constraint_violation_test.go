@@ -199,6 +199,61 @@ func TestCVExtractConstraints_LeaveAloneViolation(t *testing.T) {
 	}
 }
 
+func TestCVExtractConstraints_LeaveAloneFilesSuffix(t *testing.T) {
+	// #2801: "leave the X files alone" -- English puts the noun before
+	// "files", so the trailing " files" must be suffix-stripped. Otherwise
+	// the pattern keeps an embedded space, which can never match a path
+	// segment and the whole avoid constraint goes dead (silent no-warning).
+	text := "I'll leave the config files alone and only fix the auth bug."
+	constraints := cvExtractConstraints(text, 1)
+	found := false
+	for _, c := range constraints {
+		if c.constraintT == "avoid" && c.pattern == "config" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected avoid constraint pattern 'config' (files suffix stripped), got: %+v", constraints)
+	}
+}
+
+func TestCVExtractConstraints_LeaveAloneFilesSuffixViolation(t *testing.T) {
+	// #2801 end-to-end: editing a file under the promised-untouched module
+	// must fire the violation warning after the suffix strip lands.
+	s := newConstraintViolationState()
+	s.recordReasoning("I'll leave the config files alone and only fix the auth bug.", 1)
+
+	args := map[string]any{"file_path": "internal/config/config.go"}
+	msg := s.checkToolCall("edit_file", args, 2)
+	if msg == "" {
+		t.Error("expected warning for editing config file promised to be left alone (#2801 dead pattern)")
+	}
+}
+
+func TestCVExtractConstraints_LeaveAloneFileSingular(t *testing.T) {
+	// #2801: singular "X file" must normalize the same way.
+	text := "Please leave the schema file alone."
+	constraints := cvExtractConstraints(text, 1)
+	found := false
+	for _, c := range constraints {
+		if c.constraintT == "avoid" && c.pattern == "schema" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected avoid constraint pattern 'schema' (file suffix stripped), got: %+v", constraints)
+	}
+}
+
+func TestCVExtractPathAfter_FilesSuffix(t *testing.T) {
+	// #2801: cvExtractPathAfter must normalize "X files" tails as well so
+	// both extraction paths share the same normalization contract.
+	got := cvExtractPathAfter("i will avoid changing config files", len("i will avoid changing"))
+	if got != "config" {
+		t.Errorf("expected 'config' with files-suffix strip, got %q", got)
+	}
+}
+
 func TestConstraintViolation_NoConstraintsNoWarning(t *testing.T) {
 	s := newConstraintViolationState()
 	args := map[string]any{"file_path": "any/path.go"}
