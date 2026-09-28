@@ -5547,6 +5547,11 @@ func (a *Agent) injectPendingInterruptions() bool {
 // and returns the assembled response, the raw assistant text buffer, any
 // completed tool calls, and whether the stream ended truncated and/or blocked
 // by a provider policy filter.
+//
+// Decomposed into 7 verbatim sub-seams (r225): flush-text accumulation,
+// per-event-family handling (text / reasoning / tool-done / server-tool /
+// done) and final response assembly. The switch skeleton below preserves the
+// original case order; each case body moved byte-for-byte into its seam.
 func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message, toolDefs []provider.ToolDefinition, onEvent func(provider.StreamEvent)) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -5566,17 +5571,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		policyBlocked    bool
 	)
 	flushText := func() {
-		if textBuf.Len() == 0 {
-			return
-		}
-		s := textBuf.String()
-		// Skip whitespace-only text blocks — these occur when models emit
-		// newlines/spaces between tool_use blocks with no meaningful content.
-		// Keeping them wastes tokens and can cause API errors on strict providers.
-		if strings.TrimSpace(s) != "" {
-			content = append(content, provider.TextBlock(s))
-		}
-		textBuf.Reset()
+		a.streamFlushTextPhase(&textBuf, &content)
 	}
 	var thinkingAcc thinkingAccumulator
 	// Metric tracking — records timestamps during streaming, fires onMetric on Done.
@@ -5584,88 +5579,19 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	for event := range stream {
 		switch event.Type {
 		case provider.StreamEventText:
-			turnMetrics.markText(event.Text)
-			onEvent(event)
-			textBuf.WriteString(event.Text)
-			assistantTextBuf.WriteString(event.Text)
+			a.streamTextEventPhase(event, &textBuf, &assistantTextBuf, turnMetrics, onEvent)
 		case provider.StreamEventReasoning:
-			turnMetrics.markReasoning(event.Text)
-			// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
-			onEvent(event)
-			if event.Text != "" {
-				thinkingAcc.onText(event.Text)
-			}
-			// Anthropic sends signature at block_start, before any text deltas.
-			if event.ThinkingSignature != "" {
-				thinkingAcc.onSignature(event.ThinkingSignature)
-			}
+			a.streamReasoningEventPhase(event, &thinkingAcc, turnMetrics, onEvent)
 		case provider.StreamEventToolCallChunk:
 			// #937: tool-call deltas count toward TTFT (see llmTurnMetrics).
 			turnMetrics.markToolChunk()
 			onEvent(event)
 		case provider.StreamEventToolCallDone:
-			turnMetrics.closeThinkWindow()
-			flushText()
-			onEvent(event)
-			toolCalls = append(toolCalls, event.Tool)
-			blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
-			blk.ThinkingSignature = string(event.Tool.ThoughtSignature) // #1610-A
-			blk.CallerRaw = event.Tool.Caller                           // PTC: verbatim echo-back
-			content = append(content, blk)
+			a.streamToolCallDoneEventPhase(event, &toolCalls, &content, flushText, turnMetrics, onEvent)
 		case provider.StreamEventServerTool:
-			// Anthropic server-side tool blocks (web_search/web_fetch): executed
-			// in-API, never client-side. Store verbatim so the next request
-			// echoes the full server_tool_use + result pair back.
-			flushText()
-			onEvent(event)
-			content = append(content, event.Block)
+			a.streamServerToolEventPhase(event, &content, flushText, onEvent)
 		case provider.StreamEventDone:
-			if event.Usage != nil {
-				usage = *event.Usage
-			}
-			truncated = event.Truncated
-			policyBlocked = event.PolicyBlocked
-			// sa-74: confidence telemetry — log the turn's mean token logprob
-			// and surface a low-confidence notice for human review (selective
-			// escalation; "Logprobs Know Uncertainty", ACM KDD 2025). Threshold:
-			// mean logprob < -2.5 ~= e^-2.5 ~= 8% average token probability.
-			// Only fires when the endpoint has logprobs enabled (Confidence nil
-			// otherwise; Anthropic never reports it).
-			if event.Confidence != nil {
-				conf := *event.Confidence
-				debug.Log("agent", "turn confidence: avg token logprob %.3f", conf)
-				if conf < -2.5 {
-					onEvent(provider.StreamEvent{
-						Type: provider.StreamEventSystem,
-						Text: fmt.Sprintf("[confidence] low model confidence this turn (avg token logprob %.2f) — consider reviewing the output.", conf),
-					})
-				}
-			}
-			// Fire LLM metric
-			a.emitMetric(turnMetrics.emit(usage))
-			onEvent(event)
-			// Proactive rate-limit check: if the provider exposes rate-limit
-			// info and quotas are critical, emit a system warning event so
-			// the UI/user is informed before a 429 occurs.
-			if rl, ok := a.provider.(provider.RateLimitProvider); ok {
-				info := rl.RateLimitInfo()
-				if info.IsCritical() && !info.IsEmpty() {
-					debug.Log("agent", "rate limit warning: req %d/%d (%.0f%%), tok %d/%d (%.0f%%)",
-						info.RemainingRequests, info.LimitRequests, info.RequestFractionRemaining()*100,
-						info.RemainingTokens, info.LimitTokens, info.TokenFractionRemaining()*100)
-				}
-			}
-			// on_stream_stop hook (async fire-and-forget).
-			a.mu.RLock()
-			streamHookCfg := a.hookConfig
-			streamWorkDir := a.workingDir
-			a.mu.RUnlock()
-			hooks.RunStreamStopHooks(streamHookCfg, hooks.HookEnv{
-				Event:      hooks.EventOnStreamStop,
-				Workspace:  streamWorkDir,
-				WorkingDir: streamWorkDir,
-				StopReason: "completed",
-			})
+			a.streamDoneEventPhase(event, &usage, &truncated, &policyBlocked, turnMetrics, onEvent)
 		case provider.StreamEventSystem:
 			// Forward provider-level system messages (retry notifications, etc.)
 			onEvent(event)
@@ -5675,6 +5601,145 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 		}
 	}
 	flushText()
+	resp, text, calls, trunc, blocked := a.streamAssembleResponsePhase(content, toolCalls, usage, &thinkingAcc, assistantTextBuf.String(), truncated, policyBlocked)
+	return resp, text, calls, trunc, blocked, nil
+}
+
+// streamFlushTextPhase converts buffered text deltas into a ContentBlock,
+// skipping whitespace-only buffers (models emit newlines/spaces between
+// tool_use blocks with no meaningful content; keeping them wastes tokens and
+// can cause API errors on strict providers).
+// Split verbatim from streamChatResponse's flushText closure (r225).
+func (a *Agent) streamFlushTextPhase(textBuf *strings.Builder, content *[]provider.ContentBlock) {
+	if textBuf.Len() == 0 {
+		return
+	}
+	s := textBuf.String()
+	// Skip whitespace-only text blocks — these occur when models emit
+	// newlines/spaces between tool_use blocks with no meaningful content.
+	// Keeping them wastes tokens and can cause API errors on strict providers.
+	if strings.TrimSpace(s) != "" {
+		*content = append(*content, provider.TextBlock(s))
+	}
+	textBuf.Reset()
+}
+
+// streamTextEventPhase handles StreamEventText: TTFT metrics, UI forwarding
+// and accumulation into the visible + raw assistant text buffers.
+// Split verbatim from streamChatResponse (r225).
+func (a *Agent) streamTextEventPhase(event provider.StreamEvent, textBuf *strings.Builder, assistantTextBuf *strings.Builder, turnMetrics *llmTurnMetrics, onEvent func(provider.StreamEvent)) {
+	turnMetrics.markText(event.Text)
+	onEvent(event)
+	textBuf.WriteString(event.Text)
+	assistantTextBuf.WriteString(event.Text)
+}
+
+// streamReasoningEventPhase handles StreamEventReasoning: TTFT metrics, UI
+// forwarding (GUI collapsible reasoning panel) and thinking-block
+// accumulation (text deltas + Anthropic block signatures).
+// Split verbatim from streamChatResponse (r225).
+func (a *Agent) streamReasoningEventPhase(event provider.StreamEvent, thinkingAcc *thinkingAccumulator, turnMetrics *llmTurnMetrics, onEvent func(provider.StreamEvent)) {
+	turnMetrics.markReasoning(event.Text)
+	// Forward to UI for streaming display (GUI uses it for collapsible reasoning panel).
+	onEvent(event)
+	if event.Text != "" {
+		thinkingAcc.onText(event.Text)
+	}
+	// Anthropic sends signature at block_start, before any text deltas.
+	if event.ThinkingSignature != "" {
+		thinkingAcc.onSignature(event.ThinkingSignature)
+	}
+}
+
+// streamToolCallDoneEventPhase handles StreamEventToolCallDone: closes the
+// thinking window, flushes pending text, and records the completed tool call
+// as both a ToolCallDelta and a ToolUseBlock (#1610-A signature echo-back,
+// PTC verbatim Caller echo-back).
+// Split verbatim from streamChatResponse (r225).
+func (a *Agent) streamToolCallDoneEventPhase(event provider.StreamEvent, toolCalls *[]provider.ToolCallDelta, content *[]provider.ContentBlock, flushText func(), turnMetrics *llmTurnMetrics, onEvent func(provider.StreamEvent)) {
+	turnMetrics.closeThinkWindow()
+	flushText()
+	onEvent(event)
+	*toolCalls = append(*toolCalls, event.Tool)
+	blk := provider.ToolUseBlock(event.Tool.ID, event.Tool.Name, event.Tool.Arguments)
+	blk.ThinkingSignature = string(event.Tool.ThoughtSignature) // #1610-A
+	blk.CallerRaw = event.Tool.Caller                           // PTC: verbatim echo-back
+	*content = append(*content, blk)
+}
+
+// streamServerToolEventPhase handles StreamEventServerTool: Anthropic
+// server-side tool blocks (web_search/web_fetch) executed in-API, stored
+// verbatim so the next request echoes the full server_tool_use + result pair
+// back.
+// Split verbatim from streamChatResponse (r225).
+func (a *Agent) streamServerToolEventPhase(event provider.StreamEvent, content *[]provider.ContentBlock, flushText func(), onEvent func(provider.StreamEvent)) {
+	// Anthropic server-side tool blocks (web_search/web_fetch): executed
+	// in-API, never client-side. Store verbatim so the next request
+	// echoes the full server_tool_use + result pair back.
+	flushText()
+	onEvent(event)
+	*content = append(*content, event.Block)
+}
+
+// streamDoneEventPhase handles StreamEventDone: usage/truncation/policy-flag
+// capture, confidence telemetry (sa-74), LLM turn metric emission, proactive
+// rate-limit warning and on_stream_stop hooks.
+// Split verbatim from streamChatResponse (r225).
+func (a *Agent) streamDoneEventPhase(event provider.StreamEvent, usage *provider.TokenUsage, truncated *bool, policyBlocked *bool, turnMetrics *llmTurnMetrics, onEvent func(provider.StreamEvent)) {
+	if event.Usage != nil {
+		*usage = *event.Usage
+	}
+	*truncated = event.Truncated
+	*policyBlocked = event.PolicyBlocked
+	// sa-74: confidence telemetry — log the turn's mean token logprob
+	// and surface a low-confidence notice for human review (selective
+	// escalation; "Logprobs Know Uncertainty", ACM KDD 2025). Threshold:
+	// mean logprob < -2.5 ~= e^-2.5 ~= 8% average token probability.
+	// Only fires when the endpoint has logprobs enabled (Confidence nil
+	// otherwise; Anthropic never reports it).
+	if event.Confidence != nil {
+		conf := *event.Confidence
+		debug.Log("agent", "turn confidence: avg token logprob %.3f", conf)
+		if conf < -2.5 {
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventSystem,
+				Text: fmt.Sprintf("[confidence] low model confidence this turn (avg token logprob %.2f) — consider reviewing the output.", conf),
+			})
+		}
+	}
+	// Fire LLM metric
+	a.emitMetric(turnMetrics.emit(*usage))
+	onEvent(event)
+	// Proactive rate-limit check: if the provider exposes rate-limit
+	// info and quotas are critical, emit a system warning event so
+	// the UI/user is informed before a 429 occurs.
+	if rl, ok := a.provider.(provider.RateLimitProvider); ok {
+		info := rl.RateLimitInfo()
+		if info.IsCritical() && !info.IsEmpty() {
+			debug.Log("agent", "rate limit warning: req %d/%d (%.0f%%), tok %d/%d (%.0f%%)",
+				info.RemainingRequests, info.LimitRequests, info.RequestFractionRemaining()*100,
+				info.RemainingTokens, info.LimitTokens, info.TokenFractionRemaining()*100)
+		}
+	}
+	// on_stream_stop hook (async fire-and-forget).
+	a.mu.RLock()
+	streamHookCfg := a.hookConfig
+	streamWorkDir := a.workingDir
+	a.mu.RUnlock()
+	hooks.RunStreamStopHooks(streamHookCfg, hooks.HookEnv{
+		Event:      hooks.EventOnStreamStop,
+		Workspace:  streamWorkDir,
+		WorkingDir: streamWorkDir,
+		StopReason: "completed",
+	})
+}
+
+// streamAssembleResponsePhase builds the final assistant ChatResponse after
+// the stream ends: thinking blocks are prepended for echo-back to reasoning
+// models (DeepSeek reasoning_content single unsigned block; Anthropic one
+// signed thinking block per streamed block, before tool_use blocks, #228).
+// Split verbatim from streamChatResponse (r225).
+func (a *Agent) streamAssembleResponsePhase(content []provider.ContentBlock, toolCalls []provider.ToolCallDelta, usage provider.TokenUsage, thinkingAcc *thinkingAccumulator, assistantText string, truncated bool, policyBlocked bool) (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool) {
 	// Build response message with optional reasoning content for echo-back.
 	respMsg := provider.Message{
 		Role:    "assistant",
@@ -5691,7 +5756,7 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 	return &provider.ChatResponse{
 		Message: respMsg,
 		Usage:   usage,
-	}, assistantTextBuf.String(), toolCalls, truncated, policyBlocked, nil
+	}, assistantText, toolCalls, truncated, policyBlocked
 }
 
 // --- Internal helpers ---
