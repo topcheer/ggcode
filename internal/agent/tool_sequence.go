@@ -251,7 +251,23 @@ func (v *toolSequenceValidator) checkReadThenGrep(curr seqEntry) string {
 	}
 	for i := len(v.history) - 1; i >= 0; i-- {
 		e := v.history[i]
+		// #2813: an edit to X after the read invalidates the "you already
+		// have the content" premise - grepping X to re-ground on the CHANGED
+		// content is standard verify behavior and must not be discouraged
+		// (same staleness principle as #2675: state changed → history entry
+		// no longer applies).
+		if sourceMutatingTools[e.tool] && e.filePath == searchPath {
+			return ""
+		}
 		if e.tool == "read_file" && e.filePath == searchPath {
+			// #2813: a ranged read (offset/limit) never produced the full
+			// content - grepping to locate a section is legitimate.
+			if _, hasOffset := e.args["offset"]; hasOffset {
+				return ""
+			}
+			if _, hasLimit := e.args["limit"]; hasLimit {
+				return ""
+			}
 			v.hintsGiven["read_then_grep"] = true
 			return fmt.Sprintf(
 				"[tool-sequence] You already read %s in this session. "+
