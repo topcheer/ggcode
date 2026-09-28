@@ -257,14 +257,27 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 		return ""
 	}
 	unaddressed := 0
+	trackable := 0
 	var missing []string
 	for _, sg := range s.subgoals {
+		// #2839: subgoals whose description yielded NO trackable keywords
+		// (e.g. pure CJK plans - the extractor regex is ASCII-only) can
+		// never be marked addressed by recordToolCall, so counting them
+		// guarantees a false skip-step warning. Exclude them from both
+		// numerator and denominator.
+		if len(sg.keywords) == 0 {
+			continue
+		}
+		trackable++
 		if !sg.addressed {
 			unaddressed++
 			missing = append(missing, fmt.Sprintf("  %d. %s", sg.number, truncate(sg.text, 60)))
 		}
 	}
-	ratio := float64(unaddressed) / float64(len(s.subgoals))
+	if trackable == 0 {
+		return ""
+	}
+	ratio := float64(unaddressed) / float64(trackable)
 	if ratio < sgUnaddressedThresh {
 		return ""
 	}
@@ -275,7 +288,7 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 			"Research shows missing-step planning errors are a top agent failure cause (arXiv:2508.13143). "+
 			"Review whether these subgoals are still needed. If so, address them before declaring completion. "+
 			"If requirements changed, explicitly acknowledge which subgoals were intentionally deferred.",
-		unaddressed, len(s.subgoals), strings.Join(missing, "\n"))
+		unaddressed, trackable, strings.Join(missing, "\n"))
 }
 
 func truncate(s string, max int) string {
