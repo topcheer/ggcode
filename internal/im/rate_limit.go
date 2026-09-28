@@ -38,52 +38,82 @@ func parseRetryAfter(resp *http.Response) time.Duration {
 
 	// Standard Retry-After header (seconds or HTTP-date).
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		ra = strings.TrimSpace(ra)
-		// Try integer seconds first.
-		if secs, err := strconv.Atoi(ra); err == nil && secs >= 0 {
-			return capDuration(time.Duration(secs) * time.Second)
-		}
-		// Try float seconds (e.g. Discord sends "0.5"; some APIs use fractional values).
-		if fsecs, err := strconv.ParseFloat(ra, 64); err == nil && fsecs >= 0 {
-			return capDuration(time.Duration(fsecs * float64(time.Second)))
-		}
-		// Try HTTP-date format.
-		if t, err := http.ParseTime(ra); err == nil {
-			d := time.Until(t)
-			if d > 0 {
-				return capDuration(d)
-			}
+		if d, ok := retryAfterHeaderValue(ra); ok {
+			return capDuration(d)
 		}
 	}
 
 	// Mattermost uses X-RateLimit-Reset (Unix timestamp in milliseconds).
 	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
-		if ms, err := strconv.ParseInt(strings.TrimSpace(reset), 10, 64); err == nil && ms > 0 {
-			resetTime := time.Unix(0, ms*int64(time.Millisecond))
-			d := time.Until(resetTime)
-			if d > 0 {
-				return capDuration(d)
-			}
+		if d, ok := retryAfterFromUnixMilli(reset); ok {
+			return capDuration(d)
 		}
 	}
 
 	// Discord uses X-RateLimit-Reset-After (seconds until reset, can be fractional).
 	// https://discord.com/developers/docs/topics/rate-limits
 	if resetAfter := resp.Header.Get("X-RateLimit-Reset-After"); resetAfter != "" {
-		if fsecs, err := strconv.ParseFloat(strings.TrimSpace(resetAfter), 64); err == nil && fsecs >= 0 {
-			return capDuration(time.Duration(fsecs * float64(time.Second)))
+		if d, ok := fractionalSecondsDuration(resetAfter); ok {
+			return capDuration(d)
 		}
 	}
 
 	// Feishu uses x-ogw-ratelimit-reset (seconds until reset, may be fractional).
 	// https://open.feishu.cn/document/server-docs/api-call-guide/frequency-control
 	if reset := resp.Header.Get("x-ogw-ratelimit-reset"); reset != "" {
-		if fsecs, err := strconv.ParseFloat(strings.TrimSpace(reset), 64); err == nil && fsecs >= 0 {
-			return capDuration(time.Duration(fsecs * float64(time.Second)))
+		if d, ok := fractionalSecondsDuration(reset); ok {
+			return capDuration(d)
 		}
 	}
 
 	return defaultRetryDelay
+}
+
+// retryAfterHeaderValue parses a Retry-After header value: integer seconds
+// first, then fractional seconds, then HTTP-date. Returns ok=false when the
+// value is unparseable or its deadline has already passed.
+func retryAfterHeaderValue(ra string) (time.Duration, bool) {
+	ra = strings.TrimSpace(ra)
+	// Try integer seconds first.
+	if secs, err := strconv.Atoi(ra); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second, true
+	}
+	// Try float seconds (e.g. Discord sends "0.5"; some APIs use fractional values).
+	if fsecs, err := strconv.ParseFloat(ra, 64); err == nil && fsecs >= 0 {
+		return time.Duration(fsecs * float64(time.Second)), true
+	}
+	// Try HTTP-date format.
+	if t, err := http.ParseTime(ra); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
+// retryAfterFromUnixMilli parses a Mattermost X-RateLimit-Reset value
+// (Unix timestamp in milliseconds). Returns ok=false when the value is
+// unparseable, non-positive, or already in the past.
+func retryAfterFromUnixMilli(reset string) (time.Duration, bool) {
+	if ms, err := strconv.ParseInt(strings.TrimSpace(reset), 10, 64); err == nil && ms > 0 {
+		resetTime := time.Unix(0, ms*int64(time.Millisecond))
+		d := time.Until(resetTime)
+		if d > 0 {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
+// fractionalSecondsDuration parses a fractional-seconds-until-reset header
+// value (Discord X-RateLimit-Reset-After, Feishu x-ogw-ratelimit-reset).
+// Returns ok=false when the value is unparseable or negative.
+func fractionalSecondsDuration(v string) (time.Duration, bool) {
+	if fsecs, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && fsecs >= 0 {
+		return time.Duration(fsecs * float64(time.Second)), true
+	}
+	return 0, false
 }
 
 // capDuration clamps a retry delay to maxRetryDelay.
