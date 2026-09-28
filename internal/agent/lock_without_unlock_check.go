@@ -184,6 +184,12 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 //     `v := mu.Unlock` method-value idiom
 //   - defer calling a method whose name suggests release but is not the
 //     canonical Unlock/RUnlock on the same receiver (defer s.release())
+//
+// #2826: a bare-variable defer only keeps the exemption when the identifier
+// itself carries unlock/release semantics. Common non-lock defers (context
+// cancel, builtin close(ch), cleanup/done/stop callbacks) previously exempted
+// the WHOLE function, making a missing Unlock next to them systematically
+// invisible.
 func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
 	indirect := false
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
@@ -193,9 +199,16 @@ func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
 		}
 		switch callee := d.Call.Fun.(type) {
 		case *ast.Ident:
-			// defer unlock() - variable call: cannot resolve the receiver
-			// it releases without type info; treat as indirect.
-			indirect = true
+			// defer unlock() - bare variable call. Without type info the
+			// receiver cannot be resolved, so names carrying unlock/release
+			// semantics (the `v := mu.Unlock; defer v()` method-value
+			// idiom) stay conservative; anything else (cancel, close,
+			// cleanup, done...) is not a release shape the simulator must
+			// silence on (#2826).
+			lower := strings.ToLower(callee.Name)
+			if strings.Contains(lower, "unlock") || strings.Contains(lower, "release") {
+				indirect = true
+			}
 		case *ast.SelectorExpr:
 			if callee.Sel.Name != "Unlock" && callee.Sel.Name != "RUnlock" {
 				lower := strings.ToLower(callee.Sel.Name)
