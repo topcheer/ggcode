@@ -178,8 +178,56 @@ func (a *mattermostAdapter) run(ctx context.Context) {
 	}
 }
 
+// connectAndServe is the flat orchestrator for the Mattermost connection
+// lifecycle: REST identity → WS dial → WS auth → heartbeat/cleanup → read
+// loop. Each phase lives in a dedicated seam below; the ordering of the
+// phases and the error strings mirror the original single function so
+// observable behavior is unchanged.
 func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	// 1. Authenticate via REST to get bot identity
+	if err := a.authREST(ctx); err != nil {
+		return err
+	}
+
+	// 2. Connect WebSocket
+	ws, wsURL, err := a.dialWebsocket(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 3. Authenticate WebSocket
+	if err := a.authWS(ws); err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	a.ws = ws
+	a.connected = true
+	a.mu.Unlock()
+	a.publishState(true, "connected", "")
+	debug.Log("mattermost", "adapter=%s connected to %s", a.name, wsURL)
+
+	// 3.5 Heartbeat goroutine keeps the WebSocket alive (see startHeartbeat).
+	heartbeatCancel := a.startHeartbeat(ctx)
+	defer heartbeatCancel()
+
+	defer func() {
+		a.mu.Lock()
+		a.connected = false
+		if a.ws != nil {
+			a.ws.Close()
+			a.ws = nil
+		}
+		a.mu.Unlock()
+	}()
+
+	// 4. Read loop
+	return a.readWSEvents(ctx)
+}
+
+// authREST authenticates via REST to capture bot identity (users/me) and
+// fetches the first team slug for the ContactURI deep link.
+func (a *mattermostAdapter) authREST(ctx context.Context) error {
 	me, err := a.apiGet("users/me")
 	if err != nil {
 		return fmt.Errorf("auth: %w", err)
@@ -192,17 +240,25 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 
 	// Fetch first team for ContactURI deep link
 	a.fetchTeamInfo(ctx)
+	return nil
+}
 
-	// 2. Connect WebSocket
+// dialWebsocket establishes the WebSocket connection and returns the conn
+// plus the dialed URL (used for the connected log line).
+func (a *mattermostAdapter) dialWebsocket(ctx context.Context) (*websocket.Conn, string, error) {
 	wsURL := strings.Replace(a.baseURL, "http", "ws", 1) + "/" + mattermostAPIVersion + "/websocket"
 	dialCtx, dialCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer dialCancel()
 	ws, _, err := websocket.DefaultDialer.DialContext(dialCtx, wsURL, nil)
 	if err != nil {
-		return fmt.Errorf("ws dial: %w", err)
+		return nil, "", fmt.Errorf("ws dial: %w", err)
 	}
+	return ws, wsURL, nil
+}
 
-	// 3. Authenticate WebSocket
+// authWS sends the authentication challenge frame and arms the read deadline
+// plus pong handler used for dead-connection detection.
+func (a *mattermostAdapter) authWS(ws *websocket.Conn) error {
 	authMsg := map[string]any{
 		"seq":    1,
 		"action": "authentication_challenge",
@@ -221,19 +277,14 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 		ws.SetReadDeadline(time.Now().Add(mattermostWSReadTimeout))
 		return nil
 	})
+	return nil
+}
 
-	a.mu.Lock()
-	a.ws = ws
-	a.connected = true
-	a.mu.Unlock()
-	a.publishState(true, "connected", "")
-	debug.Log("mattermost", "adapter=%s connected to %s", a.name, wsURL)
-
-	// 3.5 Heartbeat goroutine: send application-level ping to keep connection alive.
-	// Mattermost server closes idle WebSocket connections; sending periodic pings
-	// prevents silent TCP drops (NAT expiry, intermediate router timeouts).
+// startHeartbeat launches the application-level ping goroutine and returns
+// its cancel function; the caller defers it so the goroutine stops when the
+// connection serve ends.
+func (a *mattermostAdapter) startHeartbeat(ctx context.Context) context.CancelFunc {
 	heartbeatCtx, heartbeatCancel := context.WithCancel(ctx)
-	defer heartbeatCancel()
 	safego.Go("im.mattermost.heartbeat", func() {
 		ticker := time.NewTicker(mattermostHeartbeatPeriod)
 		defer ticker.Stop()
@@ -262,18 +313,12 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 			}
 		}
 	})
+	return heartbeatCancel
+}
 
-	defer func() {
-		a.mu.Lock()
-		a.connected = false
-		if a.ws != nil {
-			a.ws.Close()
-			a.ws = nil
-		}
-		a.mu.Unlock()
-	}()
-
-	// 4. Read loop
+// readWSEvents reads frames until ctx cancel, connection loss, or a read
+// error, dispatching each parsed event to handleWSEvent.
+func (a *mattermostAdapter) readWSEvents(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
