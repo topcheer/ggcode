@@ -1294,230 +1294,44 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// Write run-start journal entry for crash detection. If the process dies
 	// before the defer below runs, CheckCrashedRun() on next startup will detect
 	// the stale "running" entry and alert the user.
-	a.mu.RLock()
-	sid := a.sessionID
-	a.mu.RUnlock()
-	MarkRunning(sid, userPromptForStatsSafe(content), os.Getpid())
-	// Start tracking messages added during this run for session persistence.
-	// persistFullSessionMessages() will use this to know which messages
-	// were added by the agent and need to be appended to the JSONL file.
-	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
-		cm.StartRunTracking()
-	}
-	// Extract user prompt text for stats tracking
-	userPromptForStats := concatTextBlocks(content)
-	// Context-length goal drift: extract keywords from the original user
-	// request to detect later drift (arXiv:2505.02709).
-	// #1464-A: the per-turn reset (#28) used to run ~45 lines BELOW the
-	// capture, unconditionally wiping what had just been initialized -
-	// initFromUserMessage is set-if-empty and this was its ONLY call
-	// site, so the detector has been completely dead since #28 (20+
-	// iteration runs drifting off the original request never saw a
-	// [goal-drift] hint; recordToolCall accumulated targets that were
-	// never compared). Reset FIRST, then capture.
-	if a.goalDriftCtx != nil {
-		a.goalDriftCtx.reset()
-	}
-	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
-	runStats := newRunStats(userPromptForStats)
-	// Experience recall (Memento-style case-based reasoning): before the
-	// loop starts, retrieve past cases relevant to this task and inject
-	// them once as a system message. Injection happens here — before the
-	// first LLM request — so it never splits a tool_call/tool_result pair,
-	// and the cases ride the prompt cache established at run start.
-	a.maybeInjectExperienceRecall(userPromptForStats)
+	sid, userPromptForStats, runStats := a.startRunTrackingPhase(content)
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
 	// syncVerifyRetries tracks how many auto-repair cycles have been consumed
 	// by the synchronous verification gate. Bounded by maxSyncVerifyRetries.
 	syncVerifyRetries := 0
 	a.resetPreLoopDetectors()
+	// Post-run finalization extracted verbatim into finalizeRunPhase (r221).
+	// The closure preserves defer-time evaluation of err and asyncVerifyStats
+	// (named-return semantics); defer registration order is unchanged.
 	defer func() {
-		// Mark the run as completed in the journal (crash detection cleanup).
-		// This runs for all exit paths: success, error, and cancellation.
-		//
-		// CAVEAT (panic-containment review): this defer takes a.mu below. If a
-		// panic fired while a.mu was already held, this Lock deadlocks and the
-		// outer recover defer (RunStreamWithContent top) never runs - the
-		// process dies instead of converting the panic to an error. Known
-		// trade-off: serializing stats through the mutex is the existing
-		// contract, and lock-holding panics in the loop body are rare (the
-		// loop's own critical sections are tiny). If crash logs ever show a
-		// hang here, MarkCompleted must move off the agent mutex.
-		MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
-		runStats.finalize(err)
-		a.mu.Lock()
-		a.lastRunStats = runStats
-		a.mu.Unlock()
-		// Skip reflection, ratchet LLM calls, and playbook recording on
-		// cancellation. These post-run actions can trigger expensive,
-		// un-cancellable LLM calls (ratchet uses context.Background() with
-		// a 30s timeout) and produce noisy insights for aborted work.
-		// The onRunResult callback and todo cleanup still run to ensure
-		// session persistence and state cleanup.
-		isCancelled := errors.Is(err, context.Canceled) ||
-			(err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled))
-		if !isCancelled {
-			a.maybeReflect(runStats)
-		} else {
-			debug.Log("agent", "skipping reflection/ratchet on cancellation")
-		}
-		// Post-run trajectory intelligence extraction (arXiv:2603.10600).
-		// Extracts strategy/recovery/optimization learnings from the
-		// completed run and persists them for future improvement.
-		if a.trajIntel != nil {
-			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
-		}
-		// Record run metrics for cross-session regression detection.
-		recordPerfBaseline(a.WorkingDir(), runStats)
-		a.mu.RLock()
-		fn := a.onRunResult
-		a.mu.RUnlock()
-		if fn != nil {
-			fn(content, err)
-		}
-		// Node health reporting: separate slot from onRunResult so both
-		// can be registered without conflict.
-		a.mu.RLock()
-		healthFn := a.onRunHealth
-		a.mu.RUnlock()
-		if healthFn != nil {
-			healthFn(err)
-		}
-		// Clean up session todos on agent stop. This prevents permanent todo
-		// residue when the LLM creates todos but forgets to clear them.
-		// Covers normal completion, cancellation, and error cases.
-		if t, ok := a.tools.Get("todo_write"); ok {
-			if tw, ok := t.(*tool.TodoWrite); ok {
-				tw.ClearTodos()
-			}
-		}
-		// Launch async verification — does not block the return.
-		// Runs build/test in background, reports result via callbacks.
-		// Also skipped on cancellation (err != nil).
-		if asyncVerifyStats != nil && err == nil && !isCancelled {
-			statsCopy := *asyncVerifyStats
-			safego.Go("asyncVerify", func() {
-				a.asyncVerify(a.shutdownCtx, &statsCopy)
-			})
-		}
-		// Fallback checkpoint: if the session has accumulated a large number
-		// of messages without compaction succeeding, force-save a checkpoint.
-		// This prevents unbounded context growth in autopilot sessions where
-		// the summarization LLM call keeps failing.
-		a.maybeFallbackCheckpoint()
+		a.finalizeRunPhase(ctx, sid, content, runStats, asyncVerifyStats, err)
 	}()
 	a.contextManager.Add(provider.Message{
 		Role:    "user",
 		Content: content,
 	})
-	// on_user_message hook (synchronous, can block).
-	userText := concatTextBlocks(content)
-	// Record explicit constraints from user message for amnesia detection.
-	// #1446-A: the reset used to sit ~190 lines BELOW this record (inside
-	// the run-start monitoring block), unconditionally clearing what had
-	// just been recorded - the detector could never fire on the production
-	// path (its unit tests call record->maybeWarn directly and masked the
-	// wiring). crossDetectorConsensus.reset() above is the correct-order
-	// precedent; constraintAmnesia.reset() now runs here too, BEFORE the
-	// record.
-	a.constraintAmnesia.reset()
-	a.constraintAmnesia.recordConstraints(userText, 1)
-	a.mu.RLock()
-	hookCfg := a.hookConfig
-	workDir := a.workingDir
-	a.mu.RUnlock()
-	userMsgResult := hooks.RunUserMessageHooks(hookCfg.OnUserMessage, hooks.HookEnv{
-		Event:       hooks.EventOnUserMessage,
-		Workspace:   workDir,
-		WorkingDir:  workDir,
-		UserMessage: userText,
-	})
-	if !userMsgResult.Allowed {
-		onEvent(provider.StreamEvent{
-			Type:  provider.StreamEventError,
-			Error: fmt.Errorf("%s", userMsgResult.Output),
-		})
-		return fmt.Errorf("user message blocked by hook: %s", userMsgResult.Output)
+	// on_user_message gate extracted verbatim into userMessageGatePhase
+	// (r221). The blocked path emits the error event inside the phase and
+	// returns before the agent-stop defer below is registered, preserving
+	// the original defer set on this exit.
+	userText, hookCfg, workDir, err := a.userMessageGatePhase(content, onEvent)
+	if err != nil {
+		return err
 	}
 	// on_agent_stop hook (async, fire-and-forget on return).
+	// on_agent_stop hook (async, fire-and-forget on return). Stop-reason
+	// classification + hook dispatch extracted verbatim into
+	// agentStopHookPhase (r221); the closure keeps defer-time err evaluation.
 	defer func() {
-		stopReason := "completed"
-		stopError := ""
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				stopReason = "cancelled"
-			} else {
-				stopReason = "error"
-				stopError = err.Error()
-			}
-		}
-		hooks.RunAgentStopHooks(hookCfg, hooks.HookEnv{
-			Event:      hooks.EventOnAgentStop,
-			Workspace:  workDir,
-			WorkingDir: workDir,
-			StopReason: stopReason,
-			StopError:  stopError,
-		})
-		// (#466: guidance promoter removed — its RunStartHook injection was
-		// deleted by the monitoring-trim while the write side kept running;
-		// promoted tags were never injected, so persistence was write-only.)
+		a.agentStopHookPhase(hookCfg, workDir, err)
 	}()
-	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
-	// blocks (no matching tool_result blocks in subsequent messages), add a user
-	// message with cancelled tool_result entries. This handles both session
-	// restoration from file and runtime interruption where the agent loop was
-	// cancelled before tool results could be added.
-	if a.ReconcileToolCalls() {
-		debug.Log("agent", "RunStreamWithContent: reconciled unpaired tool_calls")
-	}
-	// Autopilot Goal collection: on the first RunStream after entering
-	// autopilot mode, inject a meta-instruction asking the LLM to propose
-	// a goal and confirm it with the user via ask_user. This works across
-	// all surfaces (TUI questionnaire, Desktop dialog, daemon IM/mobile).
-	//
-	// Also: if mode changed away from autopilot since last run, clear any
-	// stale goal. This handles TUI's cp.SetMode() which mutates the policy
-	// in-place without calling agent.SetPermissionPolicy().
-	a.clearGoalIfNotAutopilot()
-	a.maybeInjectAutopilotGoalCollection()
-	a.maybeInjectCorrectionFeedback()
-	a.maybeInjectSentimentFeedback(userPromptForStats)
-	// Ambiguity point detector: check the user's request for phrases with
-	// multiple valid interpretations. If detected, inject guidance to clarify
-	// before starting work. Zero-LLM-cost heuristic. Research: arXiv:2603.17150
-	if ambMsg := a.checkAmbiguityPoints(userPromptForStats); ambMsg != "" {
-		debug.Log("agent", "ambiguity point detector: injecting disambiguation guidance")
-		a.contextManager.Add(provider.Message{
-			Role: "user",
-			Content: []provider.ContentBlock{{
-				Type: "text",
-				Text: ambMsg,
-			}},
-		})
-	}
-	a.maybeInjectPerfRegression()
-	a.maybeInjectDynamicSystemPrompt()
-	a.maybeInjectRatchetRules()
-	transientCompactWarned := false
-	toolDefs := a.tools.ToDefinitions()
-	a.toolSearch.init(toolDefs)
-	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
-	// beta): when the provider declares tool_search_tool_regex/bm25, schema
-	// discovery is owned by the API via defer_loading + tool_reference. The
-	// client-side meta-tool must yield — it strips deferred schemas from the
-	// request, which the server-side search requires to rank against.
-	if enabler, ok := a.provider.(interface{ ServerToolSearchActive() bool }); ok && enabler.ServerToolSearchActive() {
-		a.toolSearch.disable()
-		a.serverToolSearch = true
-		debug.Log("agent", "server-side tool search active: MCP schemas deferred via defer_loading")
-	}
-	if a.toolSearch.enabled {
-		debug.Log("agent", "tool search: %d MCP tool schemas deferred behind %s", len(a.toolSearch.deferred), ToolSearchToolName)
-	}
-	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
-		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
-	}
+	// Pre-loop reconcile/injection/reset sequence extracted verbatim into
+	// preLoopSetupPhase (r221); returns toolDefs and transientCompactWarned
+	// at their original declaration points for loop scope.
+	toolDefs, transientCompactWarned := a.preLoopSetupPhase(userText, userPromptForStats, runStats)
+	// Loop-scoped retry/progress counters: mutated across iterations, so
+	// they stay in the caller (original declarations, zero-value inits).
 	reactiveCompactRetries := 0
 	agentLLMRetries := 0
 	inlineToolCallNudges := 0
@@ -1525,40 +1339,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	truncationContinues := 0
 	progressCheckInjected := false
 	todoCheckCount := 0
-	a.autopilotStrategistCount = 0
-	a.strategistBudgetAnnounced = false
-	a.strategistNoProgressCount = 0
-	// Reset monitoring systems once at run start, NOT inside the iteration
-	// loop. These systems accumulate state across iterations within a run.
-	a.resetOverseer()
-	a.resetPlanner()
-	// Agent-side planning: analyze the user's first message for complexity.
-	// If complex (multi-file, multi-goal, multi-step), suggest a structured
-	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
-	// #1480: MUST run after resetPlanner above — the previous placement ~80
-	// lines earlier let resetPlanner wipe isComplex before maybeSuggestPlan
-	// could ever consume it, dead-ending the planner on every run.
-	a.plannerAnalyze(userText)
-	a.resetRunScopedDetectors()
-	a.runWorkspacePreRunChecks()
-	// Mark a new run boundary in the checkpoint manager so UndoRun() can
-	// batch-revert all file changes from this run in one operation.
-	if a.checkpoints != nil {
-		a.checkpoints.StartRun(runStats.RunID())
-	}
-	// Start the session wall-clock timeout timer.
-	a.sessionTimeout.start(a.currentMode() == permission.AutopilotMode)
-	// Input underspecification detection: if the user's initial request is
-	// vague/underspecified (no concrete identifiers, short, vague verbs),
-	// inject an advisory before the agent starts exploring. Zero-LLM-cost,
-	// fires at most once per run. Based on Ambig-SWE (arXiv 2502.13069).
-	if underspecHint := a.maybeWarnInputUnderspec(userText); underspecHint != "" {
-		debug.Log("input-underspec", "underspecified user request detected, injecting advisory")
-		a.contextManager.Add(provider.Message{
-			Role:    "user",
-			Content: []provider.ContentBlock{{Type: "text", Text: underspecHint}},
-		})
-	}
 	// Sycophancy detection: capture candidate factual premises from the user
 	// message so the agent's response can be checked for unverified agreement.
 	sessionTimedOut := false // set when the loop breaks due to session wall-clock timeout (#611)
@@ -1567,45 +1347,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		a.guidanceBudget.reset() // reset per-turn guidance injection budget
-		// Check session wall-clock timeout: emit user-visible notifications or stop.
-		// #1492-C: the 80%/95% warnings must ALSO reach the LLM context -
-		// #611's commit message promised exactly that, but the only consumer
-		// emitted a user-visible event, so the model never knew the budget
-		// was running out and the 100% hard stop cut runs mid-edit/mid-verify
-		// - the very truncation this guardrail exists to prevent. The 100%
-		// stop message stays user-only (the loop ends; injecting a directive
-		// would only confuse the next session turn, #367/#611).
-		if msg := a.sessionTimeout.check(); msg != "" {
-			onEvent(provider.StreamEvent{
-				Type: provider.StreamEventSystem,
-				Text: msg,
-			})
-			if a.sessionTimeout.shouldStop() {
-				debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
-				sessionTimedOut = true
-				break
-			}
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: msg,
-				}},
-			})
+		// Loop-head sequence (guidance budget reset, wall-clock timeout check,
+		// pre-compact adoption, interruption drain, auto-compact) extracted
+		// verbatim into preLLMTurnPhase (r221). Exit mapping: timeout stop →
+		// timedOut, interruption drain → skip, compact failure → loopErr.
+		timedOut, skip, loopErr := a.preLLMTurnPhase(ctx, onEvent, runStats, &transientCompactWarned)
+		if loopErr != nil {
+			return loopErr
 		}
-		// Adopt a completed background pre-compact only at an LLM turn
-		// boundary. If it is still running, do not wait; this ChatStream uses
-		// the current context and a later LLM turn can consume the result.
-		if a.consumeReadyPreCompact(onEvent) {
-			runStats.recordCompaction()
+		if timedOut {
+			sessionTimedOut = true
+			break
 		}
-		if a.injectPendingInterruptions() {
+		if skip {
 			continue
-		}
-		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
-			return err
 		}
 		a.ensurePromptSendable()
 		msgs := a.contextManager.Messages()
@@ -1688,41 +1443,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		reactiveCompactRetries = 0
 		agentLLMRetries = 0
-		// Autopilot: extract GOAL: declaration from LLM output as early as
-		// possible, so the strategist detection is active
-		// for subsequent iterations.
-		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
-		a.syncContextManagerUsage(resp.Usage)
-		a.emitUsage(resp.Usage)
-		// #1494 case A: session token budget consumption - setter/getter/
-		// check existed since #543 but the usage-accumulation site was never
-		// wired, so the whole feature was a no-op (10x over-budget ran with
-		// zero warnings or stop). Record here; guidance mirrors the cache-
-		// efficiency injection path.
-		if msg, stop := a.RecordSessionTokenUsage(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)); msg != "" {
-			a.crossDetectorConsensus.recordFiring("Session Token Budget", i+1)
-			a.injectGuidance(msg)
-			debug.Log("session-token-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
-			if stop {
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
-				})
-			}
-		}
-		// Context Engineering: monitor cache efficiency and forecast context
-		// window pressure after each LLM call. Both are zero-LLM-cost
-		// deterministic analysis. Guidance is injected into the context
-		// manager as a low-priority system note.
-		if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
-			// Record the firing explicitly: this guidance is injected via
-			// injectGuidance (not appended to tool results), so it is invisible
-			// to crossDetectorConsensus without this call (#952 regression
-			// follow-up).
-			a.crossDetectorConsensus.recordFiring("Cache Efficiency", i+1)
-			a.injectGuidance(cacheGuidance)
-			debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
-		}
+		// Post-response usage/budget/cache phase extracted verbatim into
+		// postResponseUsagePhase (r221); straight-line, no exit changes.
+		a.postResponseUsagePhase(resp, textBuf, i, onEvent)
 		// Detect empty LLM response: API accepted input but produced no output.
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
 		// in tests or scenarios where usage stats are unavailable.
@@ -1835,6 +1558,389 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return a.emitMaxIterationsSummary(runStats, onEvent)
 	}
 	return nil
+}
+
+// startRunTrackingPhase performs run-start bookkeeping that must run before
+// any defer registration in RunStreamWithContent: session id snapshot,
+// journal MarkRunning, per-run message tracking, goal-drift capture, run
+// stats creation, and experience recall injection. Extracted verbatim from
+// RunStreamWithContent (r221); no behavior change.
+func (a *Agent) startRunTrackingPhase(content []provider.ContentBlock) (sid string, userPromptForStats string, runStats *RunStats) {
+	a.mu.RLock()
+	sid = a.sessionID
+	a.mu.RUnlock()
+	MarkRunning(sid, userPromptForStatsSafe(content), os.Getpid())
+	// Start tracking messages added during this run for session persistence.
+	// persistFullSessionMessages() will use this to know which messages
+	// were added by the agent and need to be appended to the JSONL file.
+	if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+		cm.StartRunTracking()
+	}
+	// Extract user prompt text for stats tracking
+	userPromptForStats = concatTextBlocks(content)
+	// Context-length goal drift: extract keywords from the original user
+	// request to detect later drift (arXiv:2505.02709).
+	// #1464-A: the per-turn reset (#28) used to run ~45 lines BELOW the
+	// capture, unconditionally wiping what had just been initialized -
+	// initFromUserMessage is set-if-empty and this was its ONLY call
+	// site, so the detector has been completely dead since #28 (20+
+	// iteration runs drifting off the original request never saw a
+	// [goal-drift] hint; recordToolCall accumulated targets that were
+	// never compared). Reset FIRST, then capture.
+	if a.goalDriftCtx != nil {
+		a.goalDriftCtx.reset()
+	}
+	a.goalDriftCtx.initFromUserMessage(userPromptForStats)
+	runStats = newRunStats(userPromptForStats)
+	// Experience recall (Memento-style case-based reasoning): before the
+	// loop starts, retrieve past cases relevant to this task and inject
+	// them once as a system message. Injection happens here — before the
+	// first LLM request — so it never splits a tool_call/tool_result pair,
+	// and the cases ride the prompt cache established at run start.
+	a.maybeInjectExperienceRecall(userPromptForStats)
+	return sid, userPromptForStats, runStats
+}
+
+// finalizeRunPhase is the post-run finalization defer body: journal
+// completion, stats finalize, reflection, trajectory intelligence, perf
+// baseline, onRunResult/onRunHealth callbacks, todo cleanup, async verify
+// launch, and fallback checkpoint. Extracted verbatim from
+// RunStreamWithContent (r221); the caller's deferred closure passes err and
+// asyncVerifyStats evaluated at defer-run time, preserving named-return
+// semantics. No behavior change.
+func (a *Agent) finalizeRunPhase(ctx context.Context, sid string, content []provider.ContentBlock, runStats *RunStats, asyncVerifyStats *RunStats, err error) {
+	// Mark the run as completed in the journal (crash detection cleanup).
+	// This runs for all exit paths: success, error, and cancellation.
+	//
+	// CAVEAT (panic-containment review): this defer takes a.mu below. If a
+	// panic fired while a.mu was already held, this Lock deadlocks and the
+	// outer recover defer (RunStreamWithContent top) never runs - the
+	// process dies instead of converting the panic to an error. Known
+	// trade-off: serializing stats through the mutex is the existing
+	// contract, and lock-holding panics in the loop body are rare (the
+	// loop's own critical sections are tiny). If crash logs ever show a
+	// hang here, MarkCompleted must move off the agent mutex.
+	MarkCompleted(sid, err == nil, runStats.Iterations, len(runStats.FilesEdited))
+	runStats.finalize(err)
+	a.mu.Lock()
+	a.lastRunStats = runStats
+	a.mu.Unlock()
+	// Skip reflection, ratchet LLM calls, and playbook recording on
+	// cancellation. These post-run actions can trigger expensive,
+	// un-cancellable LLM calls (ratchet uses context.Background() with
+	// a 30s timeout) and produce noisy insights for aborted work.
+	// The onRunResult callback and todo cleanup still run to ensure
+	// session persistence and state cleanup.
+	isCancelled := errors.Is(err, context.Canceled) ||
+		(err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled))
+	if !isCancelled {
+		a.maybeReflect(runStats)
+	} else {
+		debug.Log("agent", "skipping reflection/ratchet on cancellation")
+	}
+	// Post-run trajectory intelligence extraction (arXiv:2603.10600).
+	// Extracts strategy/recovery/optimization learnings from the
+	// completed run and persists them for future improvement.
+	if a.trajIntel != nil {
+		a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
+	}
+	// Record run metrics for cross-session regression detection.
+	recordPerfBaseline(a.WorkingDir(), runStats)
+	a.mu.RLock()
+	fn := a.onRunResult
+	a.mu.RUnlock()
+	if fn != nil {
+		fn(content, err)
+	}
+	// Node health reporting: separate slot from onRunResult so both
+	// can be registered without conflict.
+	a.mu.RLock()
+	healthFn := a.onRunHealth
+	a.mu.RUnlock()
+	if healthFn != nil {
+		healthFn(err)
+	}
+	// Clean up session todos on agent stop. This prevents permanent todo
+	// residue when the LLM creates todos but forgets to clear them.
+	// Covers normal completion, cancellation, and error cases.
+	if t, ok := a.tools.Get("todo_write"); ok {
+		if tw, ok := t.(*tool.TodoWrite); ok {
+			tw.ClearTodos()
+		}
+	}
+	// Launch async verification — does not block the return.
+	// Runs build/test in background, reports result via callbacks.
+	// Also skipped on cancellation (err != nil).
+	if asyncVerifyStats != nil && err == nil && !isCancelled {
+		statsCopy := *asyncVerifyStats
+		safego.Go("asyncVerify", func() {
+			a.asyncVerify(a.shutdownCtx, &statsCopy)
+		})
+	}
+	// Fallback checkpoint: if the session has accumulated a large number
+	// of messages without compaction succeeding, force-save a checkpoint.
+	// This prevents unbounded context growth in autopilot sessions where
+	// the summarization LLM call keeps failing.
+	a.maybeFallbackCheckpoint()
+}
+
+// userMessageGatePhase adds the user message, records explicit constraints
+// for amnesia detection, and runs the synchronous on_user_message hooks.
+// The blocked path emits the error event and returns a non-nil error so the
+// caller returns before the agent-stop defer is registered (original defer
+// set on this exit). Extracted verbatim from RunStreamWithContent (r221);
+// no behavior change.
+func (a *Agent) userMessageGatePhase(content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (userText string, hookCfg hooks.HookConfig, workDir string, err error) {
+	// on_user_message hook (synchronous, can block).
+	userText = concatTextBlocks(content)
+	// Record explicit constraints from user message for amnesia detection.
+	// #1446-A: the reset used to sit ~190 lines BELOW this record (inside
+	// the run-start monitoring block), unconditionally clearing what had
+	// just been recorded - the detector could never fire on the production
+	// path (its unit tests call record->maybeWarn directly and masked the
+	// wiring). crossDetectorConsensus.reset() above is the correct-order
+	// precedent; constraintAmnesia.reset() now runs here too, BEFORE the
+	// record.
+	a.constraintAmnesia.reset()
+	a.constraintAmnesia.recordConstraints(userText, 1)
+	a.mu.RLock()
+	hookCfg = a.hookConfig
+	workDir = a.workingDir
+	a.mu.RUnlock()
+	userMsgResult := hooks.RunUserMessageHooks(hookCfg.OnUserMessage, hooks.HookEnv{
+		Event:       hooks.EventOnUserMessage,
+		Workspace:   workDir,
+		WorkingDir:  workDir,
+		UserMessage: userText,
+	})
+	if !userMsgResult.Allowed {
+		onEvent(provider.StreamEvent{
+			Type:  provider.StreamEventError,
+			Error: fmt.Errorf("%s", userMsgResult.Output),
+		})
+		return userText, hookCfg, workDir, fmt.Errorf("user message blocked by hook: %s", userMsgResult.Output)
+	}
+	return userText, hookCfg, workDir, nil
+}
+
+// agentStopHookPhase classifies the stop reason and runs the async
+// on_agent_stop hooks (fire-and-forget on return). Extracted verbatim from
+// RunStreamWithContent (r221); no behavior change.
+func (a *Agent) agentStopHookPhase(hookCfg hooks.HookConfig, workDir string, err error) {
+	stopReason := "completed"
+	stopError := ""
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			stopReason = "cancelled"
+		} else {
+			stopReason = "error"
+			stopError = err.Error()
+		}
+	}
+	hooks.RunAgentStopHooks(hookCfg, hooks.HookEnv{
+		Event:      hooks.EventOnAgentStop,
+		Workspace:  workDir,
+		WorkingDir: workDir,
+		StopReason: stopReason,
+		StopError:  stopError,
+	})
+	// (#466: guidance promoter removed — its RunStartHook injection was
+	// deleted by the monitoring-trim while the write side kept running;
+	// promoted tags were never injected, so persistence was write-only.)
+}
+
+// preLoopSetupPhase runs the pre-loop reconcile/injection/reset sequence:
+// tool_call reconciliation, autopilot goal collection, ambiguity/underspec
+// detection, tool search init, monitoring resets, planner analysis, run
+// workspace checks, checkpoint boundary, and the session wall-clock timer.
+// Returns toolDefs and transientCompactWarned at their original declaration
+// points for loop scope. Extracted verbatim from RunStreamWithContent
+// (r221); no behavior change.
+func (a *Agent) preLoopSetupPhase(userText string, userPromptForStats string, runStats *RunStats) (toolDefs []provider.ToolDefinition, transientCompactWarned bool) {
+	// Reconcile tool_calls: if the last assistant message has unpaired tool_use
+	// blocks (no matching tool_result blocks in subsequent messages), add a user
+	// message with cancelled tool_result entries. This handles both session
+	// restoration from file and runtime interruption where the agent loop was
+	// cancelled before tool results could be added.
+	if a.ReconcileToolCalls() {
+		debug.Log("agent", "RunStreamWithContent: reconciled unpaired tool_calls")
+	}
+	// Autopilot Goal collection: on the first RunStream after entering
+	// autopilot mode, inject a meta-instruction asking the LLM to propose
+	// a goal and confirm it with the user via ask_user. This works across
+	// all surfaces (TUI questionnaire, Desktop dialog, daemon IM/mobile).
+	//
+	// Also: if mode changed away from autopilot since last run, clear any
+	// stale goal. This handles TUI's cp.SetMode() which mutates the policy
+	// in-place without calling agent.SetPermissionPolicy().
+	a.clearGoalIfNotAutopilot()
+	a.maybeInjectAutopilotGoalCollection()
+	a.maybeInjectCorrectionFeedback()
+	a.maybeInjectSentimentFeedback(userPromptForStats)
+	// Ambiguity point detector: check the user's request for phrases with
+	// multiple valid interpretations. If detected, inject guidance to clarify
+	// before starting work. Zero-LLM-cost heuristic. Research: arXiv:2603.17150
+	if ambMsg := a.checkAmbiguityPoints(userPromptForStats); ambMsg != "" {
+		debug.Log("agent", "ambiguity point detector: injecting disambiguation guidance")
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: ambMsg,
+			}},
+		})
+	}
+	a.maybeInjectPerfRegression()
+	a.maybeInjectDynamicSystemPrompt()
+	a.maybeInjectRatchetRules()
+	transientCompactWarned = false
+	toolDefs = a.tools.ToDefinitions()
+	a.toolSearch.init(toolDefs)
+	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
+	// beta): when the provider declares tool_search_tool_regex/bm25, schema
+	// discovery is owned by the API via defer_loading + tool_reference. The
+	// client-side meta-tool must yield — it strips deferred schemas from the
+	// request, which the server-side search requires to rank against.
+	if enabler, ok := a.provider.(interface{ ServerToolSearchActive() bool }); ok && enabler.ServerToolSearchActive() {
+		a.toolSearch.disable()
+		a.serverToolSearch = true
+		debug.Log("agent", "server-side tool search active: MCP schemas deferred via defer_loading")
+	}
+	if a.toolSearch.enabled {
+		debug.Log("agent", "tool search: %d MCP tool schemas deferred behind %s", len(a.toolSearch.deferred), ToolSearchToolName)
+	}
+	if cm, ok := a.contextManager.(interface{ SetToolDefinitionOverhead(int) }); ok {
+		cm.SetToolDefinitionOverhead(estimateToolDefinitionOverhead(toolDefs))
+	}
+	a.autopilotStrategistCount = 0
+	a.strategistBudgetAnnounced = false
+	a.strategistNoProgressCount = 0
+	// Reset monitoring systems once at run start, NOT inside the iteration
+	// loop. These systems accumulate state across iterations within a run.
+	a.resetOverseer()
+	a.resetPlanner()
+	// Agent-side planning: analyze the user's first message for complexity.
+	// If complex (multi-file, multi-goal, multi-step), suggest a structured
+	// plan early in the conversation (Devin/Claude Code auto-planning pattern).
+	// #1480: MUST run after resetPlanner above — the previous placement ~80
+	// lines earlier let resetPlanner wipe isComplex before maybeSuggestPlan
+	// could ever consume it, dead-ending the planner on every run.
+	a.plannerAnalyze(userText)
+	a.resetRunScopedDetectors()
+	a.runWorkspacePreRunChecks()
+	// Mark a new run boundary in the checkpoint manager so UndoRun() can
+	// batch-revert all file changes from this run in one operation.
+	if a.checkpoints != nil {
+		a.checkpoints.StartRun(runStats.RunID())
+	}
+	// Start the session wall-clock timeout timer.
+	a.sessionTimeout.start(a.currentMode() == permission.AutopilotMode)
+	// Input underspecification detection: if the user's initial request is
+	// vague/underspecified (no concrete identifiers, short, vague verbs),
+	// inject an advisory before the agent starts exploring. Zero-LLM-cost,
+	// fires at most once per run. Based on Ambig-SWE (arXiv 2502.13069).
+	if underspecHint := a.maybeWarnInputUnderspec(userText); underspecHint != "" {
+		debug.Log("input-underspec", "underspecified user request detected, injecting advisory")
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: underspecHint}},
+		})
+	}
+	return toolDefs, transientCompactWarned
+}
+
+// preLLMTurnPhase is the loop-head sequence before each LLM request:
+// guidance budget reset, wall-clock timeout check (80%/95%/100%), adoption
+// of completed background pre-compacts, interruption drain, and auto-compact.
+// Exit mapping: timeout hard-stop → timedOut=true, interruption drain →
+// skip=true, compact failure → non-nil err (with the error event emitted).
+// Extracted verbatim from RunStreamWithContent (r221); no behavior change.
+func (a *Agent) preLLMTurnPhase(ctx context.Context, onEvent func(provider.StreamEvent), runStats *RunStats, transientCompactWarned *bool) (timedOut, skip bool, err error) {
+	a.guidanceBudget.reset() // reset per-turn guidance injection budget
+	// Check session wall-clock timeout: emit user-visible notifications or stop.
+	// #1492-C: the 80%/95% warnings must ALSO reach the LLM context -
+	// #611's commit message promised exactly that, but the only consumer
+	// emitted a user-visible event, so the model never knew the budget
+	// was running out and the 100% hard stop cut runs mid-edit/mid-verify
+	// - the very truncation this guardrail exists to prevent. The 100%
+	// stop message stays user-only (the loop ends; injecting a directive
+	// would only confuse the next session turn, #367/#611).
+	if msg := a.sessionTimeout.check(); msg != "" {
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventSystem,
+			Text: msg,
+		})
+		if a.sessionTimeout.shouldStop() {
+			debug.Log("session-timeout", "wall-clock timeout exceeded, stopping agent loop")
+			timedOut = true
+			return timedOut, skip, err
+		}
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: msg,
+			}},
+		})
+	}
+	// Adopt a completed background pre-compact only at an LLM turn
+	// boundary. If it is still running, do not wait; this ChatStream uses
+	// the current context and a later LLM turn can consume the result.
+	if a.consumeReadyPreCompact(onEvent) {
+		runStats.recordCompaction()
+	}
+	if a.injectPendingInterruptions() {
+		skip = true
+		return timedOut, skip, err
+	}
+	if err := a.maybeAutoCompact(ctx, onEvent, transientCompactWarned); err != nil {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+		return false, false, err
+	}
+	return timedOut, skip, err
+}
+
+// postResponseUsagePhase records usage and runs post-response budget/cache
+// monitoring after a successful LLM turn: autopilot GOAL extraction, context
+// manager usage sync, usage emission, session token budget check, and cache
+// efficiency guidance. Straight-line, no exits. Extracted verbatim from
+// RunStreamWithContent (r221); no behavior change.
+func (a *Agent) postResponseUsagePhase(resp *provider.ChatResponse, textBuf string, i int, onEvent func(provider.StreamEvent)) {
+	// Autopilot: extract GOAL: declaration from LLM output as early as
+	// possible, so the strategist detection is active
+	// for subsequent iterations.
+	a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
+	a.syncContextManagerUsage(resp.Usage)
+	a.emitUsage(resp.Usage)
+	// #1494 case A: session token budget consumption - setter/getter/
+	// check existed since #543 but the usage-accumulation site was never
+	// wired, so the whole feature was a no-op (10x over-budget ran with
+	// zero warnings or stop). Record here; guidance mirrors the cache-
+	// efficiency injection path.
+	if msg, stop := a.RecordSessionTokenUsage(int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)); msg != "" {
+		a.crossDetectorConsensus.recordFiring("Session Token Budget", i+1)
+		a.injectGuidance(msg)
+		debug.Log("session-token-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
+		if stop {
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventSystem,
+				Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
+			})
+		}
+	}
+	// Context Engineering: monitor cache efficiency and forecast context
+	// window pressure after each LLM call. Both are zero-LLM-cost
+	// deterministic analysis. Guidance is injected into the context
+	// manager as a low-priority system note.
+	if cacheGuidance := a.cacheEffMonitor.record(resp.Usage); cacheGuidance != "" {
+		// Record the firing explicitly: this guidance is injected via
+		// injectGuidance (not appended to tool results), so it is invisible
+		// to crossDetectorConsensus without this call (#952 regression
+		// follow-up).
+		a.crossDetectorConsensus.recordFiring("Cache Efficiency", i+1)
+		a.injectGuidance(cacheGuidance)
+		debug.Log("cache-efficiency", "injecting cache bust storm guidance at iteration %d", i+1)
+	}
 }
 
 // runEpistemicDetectorsPhase runs the three per-turn epistemic detectors
