@@ -1305,12 +1305,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		cm.StartRunTracking()
 	}
 	// Extract user prompt text for stats tracking
-	userPromptForStats := ""
-	for _, b := range content {
-		if b.Type == "text" {
-			userPromptForStats += b.Text
-		}
-	}
+	userPromptForStats := concatTextBlocks(content)
 	// Context-length goal drift: extract keywords from the original user
 	// request to detect later drift (arXiv:2505.02709).
 	// #1464-A: the per-turn reset (#28) used to run ~45 lines BELOW the
@@ -1330,106 +1325,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// them once as a system message. Injection happens here — before the
 	// first LLM request — so it never splits a tool_call/tool_result pair,
 	// and the cases ride the prompt cache established at run start.
-	if a.contextManager != nil {
-		if idx := a.recallExperience(userPromptForStats); idx != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Relevant Experience\n" + idx}},
-			})
-			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
-		}
-	}
+	a.maybeInjectExperienceRecall(userPromptForStats)
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
 	// syncVerifyRetries tracks how many auto-repair cycles have been consumed
 	// by the synchronous verification gate. Bounded by maxSyncVerifyRetries.
 	syncVerifyRetries := 0
-	// Reset loop detector for each new user turn.
-	a.resetLoopDetector()
-	a.errorClassifier.reset()
-	a.resetPostEditVerify()
-	a.resetRepetitionTracker()
-	a.fulfillmentGate.reset()
-	a.ambiguityPoint.reset()
-	a.planDrift.reset()
-	a.unverifiedClaim.reset()
-	a.companionGuard.reset()
-	a.specGaming.reset()
-	a.scopeNarrow.reset()
-	a.crossDetectorConsensus.reset()
-	a.taintInfluence.reset()
-	a.perfBaseline.reset()
-	a.argSizeGuardFires = 0
-	a.redundantRead.reset()
-	a.patchExhaust.reset()
-	a.searchParamGuard.reset()
-	a.toolRedundancy.reset()
-	a.toolEquivDetect.reset()
-	a.toolSequence.reset()
-	a.shellNativeHint.reset()
-	a.monorepoScoper.reset()
-	a.resetBgOrphan()
-	a.actionAnnihil.reset()
-	a.exploreFrag.reset()
-	a.batchCoupling.reset()
-	a.buildIdempot.reset()
-	a.orphanFile.reset()
-	a.cfDep.reset()
-	// #1843 case 1: foresightCalib.reset() was never called outside
-	// compaction - "at most 2 per run" (file-header promise) was in fact
-	// per-LIFETIME: mismatches and warnCount accumulated across every
-	// user turn, so after two early warnings the detector stayed silent
-	// for the rest of the session.
-	a.foresightCalib.reset()
-	a.expiredRead.reset()
-	// Convergence lock must reset per run so post-verification edit drift
-	// counters don't leak across runs (issue #341).
-	a.resetConvergenceLock()
-	a.integrationResetForRun()
-	a.resetSelfMod()
-	a.resetOvercorrection()
-	if a.delegationOrch != nil {
-		a.delegationOrch.resetForNewTurn()
-	}
-	if a.effortAdapter != nil {
-		a.effortAdapter.reset()
-	}
-	if a.adaptiveSampling != nil {
-		a.adaptiveSampling.reset()
-	}
-	if a.iterPressure != nil {
-		a.iterPressure.reset(a.maxIter)
-	}
-	// (removed: momentum/target-scatter resets — detectors deleted batch 1)
-	a.diminishingEdit.reset()
-	a.overcorrection.reset()
-	// #1823 case 2: give-up + rollback re-add is per-run.
-	a.giveupRevert = &giveupRevertState{}
-	a.prematureRefactor.reset()
-	a.errorCompound.reset()
-	a.correctionSpiral.reset()
-	a.bareEditStreak.reset()
-	a.editCoverage.reset()
-	a.prematureSuccess.reset()
-	a.strategyFixation.reset()
-
-	a.errorRush.reset()
-	a.phantomVerify.reset()
-	if a.recklessExec != nil {
-		a.recklessExec.reset()
-	}
-	if a.irrevGate != nil {
-		a.irrevGate.reset()
-	}
-	a.subgoalTrack.reset()
-	a.futileCycle.reset()
-	a.toolResultRedundancy.reset()
-	a.verifyDebt.reset()
-	a.editPropagation.reset()
-	a.successDeclare.reset()
-	a.criteriaDrift.reset()
-	a.reasonAction.reset()
-	a.attemptBrief.reset()
+	a.resetPreLoopDetectors()
 	defer func() {
 		// Mark the run as completed in the journal (crash detection cleanup).
 		// This runs for all exit paths: success, error, and cancellation.
@@ -1510,12 +1412,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		Content: content,
 	})
 	// on_user_message hook (synchronous, can block).
-	userText := ""
-	for _, b := range content {
-		if b.Type == "text" {
-			userText += b.Text
-		}
-	}
+	userText := concatTextBlocks(content)
 	// Record explicit constraints from user message for amnesia detection.
 	// #1446-A: the reset used to sit ~190 lines BELOW this record (inside
 	// the run-start monitoring block), unconditionally clearing what had
@@ -1642,176 +1539,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// lines earlier let resetPlanner wipe isComplex before maybeSuggestPlan
 	// could ever consume it, dead-ending the planner on every run.
 	a.plannerAnalyze(userText)
-	a.resetTodoStaleness()
-	a.resetTodoDrop()
-	a.resetScopeDrift()
-	a.resetDriftRecurrence()
-	// Per-user-turn reset of the attention-fragment directory window: the
-	// sliding window is per-turn semantics per its own doc comment — leaving
-	// it across turns let the first analyze of a new turn fire on the last
-	// turn's directory switches (#378).
-	a.attentionFragment.reset()
-	a.resetLastGoodCheckpoint()
-	a.recurringError.reset()
-	a.errStrategyLoop.reset()
-	a.fixCascade.reset()
-	a.errRegression.reset()
-	a.stalledConvergence.reset()
-	a.speculator.resetSequence()
-	a.toolMemo.reset()
-	a.commandCache.reset()
-	a.confidence.reset()
-	a.verifDebt.reset()
-	a.undoBlind.reset()
-	a.editAbandon.reset()
-	a.toolCallBudget.reset()
-	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
-	// #1494 case A: per-run accumulation reset - without it the 80/95/100
-	// tier flags stay latched from the previous run (stopGiven=true makes
-	// Record permanently silent for every later run in this process).
-	a.resetSessionTokenUsage()
-
-	// Reset the unread-file edit tracker so each run starts fresh.
-	a.unreadEdit.reset()
-	a.expiredRead.reset()
-	a.searchInvalidation.reset()
-	a.wtInvalidation.reset()
-	a.strategyExhaustion.reset()
-	a.falsePremise.reset()
-	a.phantomVerify.reset()
-	// Reset the edit failure recovery tracker.
-	a.editFailRecovery.reset()
-	// #677: solution fixation / redundant re-verify were the only detectors
-	// whose reset() this per-run block never called — "at most 2 warnings per
-	// run" silently degraded to a per-Agent lifetime cap (permanent silence
-	// after the first 2) and firedFor / recentCalls / failedByFile state
-	// leaked across runs.
-	a.solutionFixation.reset()
-	a.redundantReverify.reset()
-	// Reset the export guard so each run starts with a clean checked set.
-	a.exportGuard.reset()
-	a.hubPackageGuard.reset()
-	a.artifactGuard.reset()
-	a.branchGuard.reset()
-	a.destructiveGuard.reset()
-	a.fulfillmentGate.reset()
-	a.ambiguityPoint.reset()
-	a.planDrift.reset()
-	a.unverifiedClaim.reset()
-	a.companionGuard.reset()
-	a.specGaming.reset()
-	a.scopeNarrow.reset()
-	a.verifyRegression.reset()
-	a.resetSelfCorrectionGate()
-	a.argSizeGuardFires = 0
-	a.redundantRead.reset()
-	a.patchExhaust.reset()
-	a.searchParamGuard.reset()
-	a.toolRedundancy.reset()
-	a.toolSequence.reset()
-	a.resetTransientRetryBudget()
-	a.mutateLedger.reset()
-	a.compoundingFailure.reset()
-
-	a.fileChurn.reset()
-	a.editOscillation.reset()
-	a.silentError.reset()
-
-	a.serialRead.reset()
-	a.toolEff.reset()
-	a.reasoningRedund.reset()
-	a.reproducerLifecycle.reset()
-	a.truncClaim.reset()
-	a.circularReasoning.reset()
-	a.contradiction.reset()
-	a.actionHedging.reset()
-	a.scopeCreep.reset()
-	a.prematureAbstr.reset()
-	a.capBoundary.reset()
-	a.planAbandon.reset()
-	a.compoundedUncert.reset()
-	a.trajectoryHealth.reset()
-	if a.tokenWasteBudget != nil {
-		a.tokenWasteBudget.reset()
-	}
-	a.mindlessAction.reset()
-
-	a.strategyStagnation.reset()
-	a.infoScent.reset()
-	a.causalAttribution.reset()
-	a.reversibility.reset()
-	a.constraintViolation.reset()
-	a.inputUnderspec.reset()
-	a.tunnelVision.reset()
-	a.queryConverge.reset()
-	a.prematureCommit.reset()
-	a.failureMode.reset()
-	a.toolFallback.reset()
-	a.errorCascade.reset()
-	a.errorPropagate.reset()
-	a.fileFreshness.reset()
-	a.readHash.reset()
-	a.toolThermal.reset()
-	a.cacheEffMonitor.reset()
-	// Capture the git working tree state BEFORE the agent makes any changes.
-	// This lets the reconciliation gate distinguish pre-existing dirty files
-	// (user's own uncommitted work) from genuine side-effect changes introduced
-	// by the agent's tool calls. Also resets the gate for the new run.
-	a.changeReconcile.reset()
-	a.claimVerify.reset()
-	a.permDenyStreak.reset()
-	a.crossFileImpact.reset()
-	a.diffSummary.reset()
-	a.commitHint.reset()
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		a.changeReconcile.capturePreRunState(workingDir)
-		// Inject awareness if the tree is dirty — the agent should know about
-		// pre-existing uncommitted changes so it can avoid accidentally
-		// staging or committing them.
-		if n := a.changeReconcile.dirtyFileCount(); n > 0 {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf(
-						"[workspace] Note: %d file(s) have uncommitted changes in the working tree "+
-							"(your own work before this session). When committing, stage only the files "+
-							"you modified during this task — do not use 'git add -A' or 'git commit -a' "+
-							"unless the user explicitly asks.",
-						n,
-					),
-				}},
-			})
-		}
-	}
-	// Check disk space on the workspace volume. If critically low, inject an
-	// advisory so the agent can prioritize cleanup before file operations fail.
-	// Zero-LLM-cost, fires at most once per run.
-	a.diskSpace.reset()
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if diskMsg := a.diskSpace.check(workingDir); diskMsg != "" {
-			debug.Log("disk-space", "low disk space detected, injecting advisory")
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: diskMsg}},
-			})
-		}
-	}
-	// Check for env var drift: if .env.example exists but vars are missing
-	// from the local .env or shell environment, inject an advisory so the
-	// agent knows commands may fail. Zero-LLM-cost, fires at most once per run.
-	a.envDrift.reset()
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		// Detect monorepo structure for package-scoped intelligence.
-		a.monorepoScoper.detectMonorepo(workingDir)
-		if envMsg := a.envDrift.check(workingDir); envMsg != "" {
-			debug.Log("env-drift", "env var drift detected, injecting advisory")
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: envMsg}},
-			})
-		}
-	}
+	a.resetRunScopedDetectors()
+	a.runWorkspacePreRunChecks()
 	// Mark a new run boundary in the checkpoint manager so UndoRun() can
 	// batch-revert all file changes from this run in one operation.
 	if a.checkpoints != nil {
@@ -4818,30 +4547,340 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// loops, cron) can distinguish timeout from both normal completion and
 	// iteration exhaustion.
 	if sessionTimedOut {
-		runStats.finalize(nil) // compute Duration for the summary
-		summary := runStats.Summary()
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.timeout.Round(time.Second), summary),
-		})
-		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
-		return ErrSessionTimeout
+		return a.emitSessionTimeoutSummary(runStats, onEvent)
 	}
 	if a.maxIter > 0 {
-		// Emit a summary of what was accomplished before the error, so the
-		// user has actionable context instead of a bare "max iterations" message.
-		runStats.finalize(nil) // compute Duration for the summary
-		summary := runStats.Summary()
-		debug.Log("agent", "RunStreamWithContent END: max iterations reached (%s)", summary)
-		onEvent(provider.StreamEvent{
-			Type: provider.StreamEventText,
-			Text: fmt.Sprintf("\nReached maximum iterations (%d). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.maxIter, summary),
-		})
-		err := fmt.Errorf("max iterations (%d) reached", a.maxIter)
-		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
-		return err
+		return a.emitMaxIterationsSummary(runStats, onEvent)
 	}
 	return nil
+}
+
+// concatTextBlocks joins the text of all text-type content blocks in order.
+// Shared by the stats-prompt extraction and the on_user_message hook path in
+// RunStreamWithContent (previously two duplicated inline loops).
+func concatTextBlocks(content []provider.ContentBlock) string {
+	out := ""
+	for _, b := range content {
+		if b.Type == "text" {
+			out += b.Text
+		}
+	}
+	return out
+}
+
+// maybeInjectExperienceRecall retrieves past cases relevant to this task and
+// injects them once as a system message before the first LLM request.
+func (a *Agent) maybeInjectExperienceRecall(prompt string) {
+	if a.contextManager != nil {
+		if idx := a.recallExperience(prompt); idx != "" {
+			a.contextManager.Add(provider.Message{
+				Role:    "system",
+				Content: []provider.ContentBlock{{Type: "text", Text: "## Relevant Experience\n" + idx}},
+			})
+			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
+		}
+	}
+}
+
+// resetPreLoopDetectors resets the per-user-turn detector fleet before the
+// stream loop starts (extracted verbatim from RunStreamWithContent).
+func (a *Agent) resetPreLoopDetectors() {
+	// Reset loop detector for each new user turn.
+	a.resetLoopDetector()
+	a.errorClassifier.reset()
+	a.resetPostEditVerify()
+	a.resetRepetitionTracker()
+	a.fulfillmentGate.reset()
+	a.ambiguityPoint.reset()
+	a.planDrift.reset()
+	a.unverifiedClaim.reset()
+	a.companionGuard.reset()
+	a.specGaming.reset()
+	a.scopeNarrow.reset()
+	a.crossDetectorConsensus.reset()
+	a.taintInfluence.reset()
+	a.perfBaseline.reset()
+	a.argSizeGuardFires = 0
+	a.redundantRead.reset()
+	a.patchExhaust.reset()
+	a.searchParamGuard.reset()
+	a.toolRedundancy.reset()
+	a.toolEquivDetect.reset()
+	a.toolSequence.reset()
+	a.shellNativeHint.reset()
+	a.monorepoScoper.reset()
+	a.resetBgOrphan()
+	a.actionAnnihil.reset()
+	a.exploreFrag.reset()
+	a.batchCoupling.reset()
+	a.buildIdempot.reset()
+	a.orphanFile.reset()
+	a.cfDep.reset()
+	// #1843 case 1: foresightCalib.reset() was never called outside
+	// compaction - "at most 2 per run" (file-header promise) was in fact
+	// per-LIFETIME: mismatches and warnCount accumulated across every
+	// user turn, so after two early warnings the detector stayed silent
+	// for the rest of the session.
+	a.foresightCalib.reset()
+	a.expiredRead.reset()
+	// Convergence lock must reset per run so post-verification edit drift
+	// counters don't leak across runs (issue #341).
+	a.resetConvergenceLock()
+	a.integrationResetForRun()
+	a.resetSelfMod()
+	a.resetOvercorrection()
+	if a.delegationOrch != nil {
+		a.delegationOrch.resetForNewTurn()
+	}
+	if a.effortAdapter != nil {
+		a.effortAdapter.reset()
+	}
+	if a.adaptiveSampling != nil {
+		a.adaptiveSampling.reset()
+	}
+	if a.iterPressure != nil {
+		a.iterPressure.reset(a.maxIter)
+	}
+	// (removed: momentum/target-scatter resets — detectors deleted batch 1)
+	a.diminishingEdit.reset()
+	a.overcorrection.reset()
+	// #1823 case 2: give-up + rollback re-add is per-run.
+	a.giveupRevert = &giveupRevertState{}
+	a.prematureRefactor.reset()
+	a.errorCompound.reset()
+	a.correctionSpiral.reset()
+	a.bareEditStreak.reset()
+	a.editCoverage.reset()
+	a.prematureSuccess.reset()
+	a.strategyFixation.reset()
+
+	a.errorRush.reset()
+	a.phantomVerify.reset()
+	if a.recklessExec != nil {
+		a.recklessExec.reset()
+	}
+	if a.irrevGate != nil {
+		a.irrevGate.reset()
+	}
+	a.subgoalTrack.reset()
+	a.futileCycle.reset()
+	a.toolResultRedundancy.reset()
+	a.verifyDebt.reset()
+	a.editPropagation.reset()
+	a.successDeclare.reset()
+	a.criteriaDrift.reset()
+	a.reasonAction.reset()
+	a.attemptBrief.reset()
+}
+
+// resetRunScopedDetectors resets the monitoring/detector systems that
+// accumulate state across iterations within a run (extracted verbatim).
+func (a *Agent) resetRunScopedDetectors() {
+	a.resetTodoStaleness()
+	a.resetTodoDrop()
+	a.resetScopeDrift()
+	a.resetDriftRecurrence()
+	// Per-user-turn reset of the attention-fragment directory window: the
+	// sliding window is per-turn semantics per its own doc comment — leaving
+	// it across turns let the first analyze of a new turn fire on the last
+	// turn's directory switches (#378).
+	a.attentionFragment.reset()
+	a.resetLastGoodCheckpoint()
+	a.recurringError.reset()
+	a.errStrategyLoop.reset()
+	a.fixCascade.reset()
+	a.errRegression.reset()
+	a.stalledConvergence.reset()
+	a.speculator.resetSequence()
+	a.toolMemo.reset()
+	a.commandCache.reset()
+	a.confidence.reset()
+	a.verifDebt.reset()
+	a.undoBlind.reset()
+	a.editAbandon.reset()
+	a.toolCallBudget.reset()
+	a.toolCallBudget.SetDefaultBudget(deriveDefaultBudget(a.maxIter))
+	// #1494 case A: per-run accumulation reset - without it the 80/95/100
+	// tier flags stay latched from the previous run (stopGiven=true makes
+	// Record permanently silent for every later run in this process).
+	a.resetSessionTokenUsage()
+
+	// Reset the unread-file edit tracker so each run starts fresh.
+	a.unreadEdit.reset()
+	a.expiredRead.reset()
+	a.searchInvalidation.reset()
+	a.wtInvalidation.reset()
+	a.strategyExhaustion.reset()
+	a.falsePremise.reset()
+	a.phantomVerify.reset()
+	// Reset the edit failure recovery tracker.
+	a.editFailRecovery.reset()
+	// #677: solution fixation / redundant re-verify were the only detectors
+	// whose reset() this per-run block never called — "at most 2 warnings per
+	// run" silently degraded to a per-Agent lifetime cap (permanent silence
+	// after the first 2) and firedFor / recentCalls / failedByFile state
+	// leaked across runs.
+	a.solutionFixation.reset()
+	a.redundantReverify.reset()
+	// Reset the export guard so each run starts with a clean checked set.
+	a.exportGuard.reset()
+	a.hubPackageGuard.reset()
+	a.artifactGuard.reset()
+	a.branchGuard.reset()
+	a.destructiveGuard.reset()
+	a.fulfillmentGate.reset()
+	a.ambiguityPoint.reset()
+	a.planDrift.reset()
+	a.unverifiedClaim.reset()
+	a.companionGuard.reset()
+	a.specGaming.reset()
+	a.scopeNarrow.reset()
+	a.verifyRegression.reset()
+	a.resetSelfCorrectionGate()
+	a.argSizeGuardFires = 0
+	a.redundantRead.reset()
+	a.patchExhaust.reset()
+	a.searchParamGuard.reset()
+	a.toolRedundancy.reset()
+	a.toolSequence.reset()
+	a.resetTransientRetryBudget()
+	a.mutateLedger.reset()
+	a.compoundingFailure.reset()
+
+	a.fileChurn.reset()
+	a.editOscillation.reset()
+	a.silentError.reset()
+
+	a.serialRead.reset()
+	a.toolEff.reset()
+	a.reasoningRedund.reset()
+	a.reproducerLifecycle.reset()
+	a.truncClaim.reset()
+	a.circularReasoning.reset()
+	a.contradiction.reset()
+	a.actionHedging.reset()
+	a.scopeCreep.reset()
+	a.prematureAbstr.reset()
+	a.capBoundary.reset()
+	a.planAbandon.reset()
+	a.compoundedUncert.reset()
+	a.trajectoryHealth.reset()
+	if a.tokenWasteBudget != nil {
+		a.tokenWasteBudget.reset()
+	}
+	a.mindlessAction.reset()
+
+	a.strategyStagnation.reset()
+	a.infoScent.reset()
+	a.causalAttribution.reset()
+	a.reversibility.reset()
+	a.constraintViolation.reset()
+	a.inputUnderspec.reset()
+	a.tunnelVision.reset()
+	a.queryConverge.reset()
+	a.prematureCommit.reset()
+	a.failureMode.reset()
+	a.toolFallback.reset()
+	a.errorCascade.reset()
+	a.errorPropagate.reset()
+	a.fileFreshness.reset()
+	a.readHash.reset()
+	a.toolThermal.reset()
+	a.cacheEffMonitor.reset()
+}
+
+// runWorkspacePreRunChecks captures pre-run git state and injects workspace
+// advisories (dirty tree, low disk, env drift) before the loop starts.
+func (a *Agent) runWorkspacePreRunChecks() {
+	// Capture the git working tree state BEFORE the agent makes any changes.
+	// This lets the reconciliation gate distinguish pre-existing dirty files
+	// (user's own uncommitted work) from genuine side-effect changes introduced
+	// by the agent's tool calls. Also resets the gate for the new run.
+	a.changeReconcile.reset()
+	a.claimVerify.reset()
+	a.permDenyStreak.reset()
+	a.crossFileImpact.reset()
+	a.diffSummary.reset()
+	a.commitHint.reset()
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		a.changeReconcile.capturePreRunState(workingDir)
+		// Inject awareness if the tree is dirty — the agent should know about
+		// pre-existing uncommitted changes so it can avoid accidentally
+		// staging or committing them.
+		if n := a.changeReconcile.dirtyFileCount(); n > 0 {
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: fmt.Sprintf(
+						"[workspace] Note: %d file(s) have uncommitted changes in the working tree "+
+							"(your own work before this session). When committing, stage only the files "+
+							"you modified during this task — do not use 'git add -A' or 'git commit -a' "+
+							"unless the user explicitly asks.",
+						n,
+					),
+				}},
+			})
+		}
+	}
+	// Check disk space on the workspace volume. If critically low, inject an
+	// advisory so the agent can prioritize cleanup before file operations fail.
+	// Zero-LLM-cost, fires at most once per run.
+	a.diskSpace.reset()
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		if diskMsg := a.diskSpace.check(workingDir); diskMsg != "" {
+			debug.Log("disk-space", "low disk space detected, injecting advisory")
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: diskMsg}},
+			})
+		}
+	}
+	// Check for env var drift: if .env.example exists but vars are missing
+	// from the local .env or shell environment, inject an advisory so the
+	// agent knows commands may fail. Zero-LLM-cost, fires at most once per run.
+	a.envDrift.reset()
+	if workingDir := a.WorkingDir(); workingDir != "" {
+		// Detect monorepo structure for package-scoped intelligence.
+		a.monorepoScoper.detectMonorepo(workingDir)
+		if envMsg := a.envDrift.check(workingDir); envMsg != "" {
+			debug.Log("env-drift", "env var drift detected, injecting advisory")
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: envMsg}},
+			})
+		}
+	}
+}
+
+// emitSessionTimeoutSummary emits the session-timeout stop summary and
+// returns the ErrSessionTimeout sentinel (verbatim epilogue seam).
+func (a *Agent) emitSessionTimeoutSummary(runStats *RunStats, onEvent func(provider.StreamEvent)) error {
+	runStats.finalize(nil) // compute Duration for the summary
+	summary := runStats.Summary()
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: fmt.Sprintf("\nSession wall-clock timeout reached (limit: %s). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.sessionTimeout.timeout.Round(time.Second), summary),
+	})
+	onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ErrSessionTimeout})
+	return ErrSessionTimeout
+}
+
+// emitMaxIterationsSummary emits the iteration-exhaustion summary and
+// returns the max-iterations error (verbatim epilogue seam).
+func (a *Agent) emitMaxIterationsSummary(runStats *RunStats, onEvent func(provider.StreamEvent)) error {
+	// Emit a summary of what was accomplished before the error, so the
+	// user has actionable context instead of a bare "max iterations" message.
+	runStats.finalize(nil) // compute Duration for the summary
+	summary := runStats.Summary()
+	debug.Log("agent", "RunStreamWithContent END: max iterations reached (%s)", summary)
+	onEvent(provider.StreamEvent{
+		Type: provider.StreamEventText,
+		Text: fmt.Sprintf("\nReached maximum iterations (%d). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.maxIter, summary),
+	})
+	err := fmt.Errorf("max iterations (%d) reached", a.maxIter)
+	onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+	return err
 }
 
 // --- Interruption injection ---
