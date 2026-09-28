@@ -175,7 +175,7 @@ func reproCommandTokens(s string) map[string]bool {
 	// `{"command":"python3` -- shared by EVERY python3 command, letting any
 	// unrelated run discharge the re-run obligation (#2802 bypass). Unwrap
 	// the envelope first, mirroring reversibility_check.commandTokens.
-	if t := reproUnwrapCommandEnvelope(s); t != "" {
+	if t, handled := reproUnwrapCommandEnvelope(s); handled {
 		s = t
 	}
 	generic := map[string]bool{
@@ -204,19 +204,39 @@ func reproCommandTokens(s string) map[string]bool {
 
 // reproUnwrapCommandEnvelope extracts the embedded command value when s is a
 // JSON envelope like {"command":"python3 reproduce_bug.py"} (or a JSON array
-// wrapper). Returns "" when s is not an envelope or carries no command.
-func reproUnwrapCommandEnvelope(s string) string {
+// wrapper). Returns ("", false) when s is not an envelope (or is not
+// parseable JSON) and the raw string should be tokenized as-is. Returns
+// ("", true) for a parsed envelope carrying no usable command: argument
+// keys ("timeout", "path", ...) must never become distinctive tokens
+// (#2827 CI residual), so the caller tokenizes an empty string instead.
+func reproUnwrapCommandEnvelope(s string) (string, bool) {
 	trimmed := strings.TrimSpace(s)
 	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
-		return ""
+		return "", false
 	}
 	var env struct {
 		Command string `json:"command"`
 	}
-	if err := json.Unmarshal([]byte(trimmed), &env); err != nil || env.Command == "" {
-		return ""
+	if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
+		return "", false
 	}
-	return env.Command
+	if env.Command != "" {
+		return env.Command, true
+	}
+	// Parsed envelope without a command field: fall back to its string
+	// values only (e.g. a description/comment envelope); if none, the
+	// caller yields an empty token set rather than resurrecting keys.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
+		return "", true
+	}
+	var vals []string
+	for _, v := range m {
+		if str, ok := v.(string); ok && str != "" {
+			vals = append(vals, str)
+		}
+	}
+	return strings.Join(vals, " "), true
 }
 
 // observeToolCalls updates the lifecycle state based on the tools the agent

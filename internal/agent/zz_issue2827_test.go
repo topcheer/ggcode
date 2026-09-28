@@ -50,15 +50,9 @@ func TestIssue2827EnvelopePseudoToken(t *testing.T) {
 		t.Errorf("#2827 bare command tokenization changed: %v", toks2)
 	}
 
-	// Envelope without a command field: falls through to plain tokenizing,
-	// which now also trims residual braces from the cutset.
+	// Non-command envelope: keys must not become distinctive tokens at all.
 	toks3 := reproCommandTokens(`{"timeout": 30}`)
-	if len(toks3) == 0 {
-		t.Errorf("#2827 non-command envelope produced no tokens (acceptable) or died")
-	}
-	for tk := range toks3 {
-		if tk == "timeout" {
-			t.Errorf("#2827 residual envelope key kept as distinctive token")
-		}
+	if len(toks3) != 0 {
+		t.Errorf("#2827 non-command envelope yielded distinctive tokens %v, want none (keys are shared pseudo-tokens)", toks3)
 	}
 }
