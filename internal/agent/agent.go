@@ -3108,8 +3108,19 @@ func (a *Agent) errorSignalPhase(idx int, tc provider.ToolCallDelta, result tool
 
 // flowMonitorPhase runs the per-call flow detectors; those that inject a
 // context message refresh msgs, which is returned to the caller.
-// Extracted verbatim from postToolResultPhase (r217).
+// Extracted verbatim from postToolResultPhase (r217); r227 splits it into
+// 4 flow sub-seams with byte-identical bodies (verbatim-diff oracle).
 func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.Result, msgs []provider.Message) (tool.Result, []provider.Message) {
+	result = a.flowCallGuardPhase(tc, i, result)
+	msgs = a.flowAnnihilatePhase(tc, i, result, msgs)
+	msgs = a.flowScatterPhase(tc, i, result, msgs)
+	return result, a.flowExecQualityPhase(tc, i, result, msgs)
+}
+
+// flowCallGuardPhase runs the capability-boundary recorder, the
+// argument-size guard, the tool-sequence validator, and background-command
+// tracking. Split verbatim from flowMonitorPhase (r227).
+func (a *Agent) flowCallGuardPhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Capability boundary: track consecutive tool failures for
 	// stubborn-persistence detection.
 	a.capBoundary.recordToolResult(result.IsError)
@@ -3129,6 +3140,12 @@ func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.R
 	// Orphaned background command tracking: record start_command jobs
 	// and mark output checks. Detects forgotten background processes.
 	a.recordBgToolCall(tc.Name, tc.Arguments, result.Content, i+1)
+	return result
+}
+
+// flowAnnihilatePhase runs action-annihilation detection and successful
+// git_commit hash recording. Split verbatim from flowMonitorPhase (r227).
+func (a *Agent) flowAnnihilatePhase(tc provider.ToolCallDelta, i int, result tool.Result, msgs []provider.Message) []provider.Message {
 	// Action annihilation detection: check if this tool call cancels
 	// a prior tool call's side effects (git_add→git_reset, edit→undo, etc.).
 	// #2675: failed calls have no side effects to cancel, yet were
@@ -3155,6 +3172,12 @@ func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.R
 			}
 		}
 	}
+	return msgs
+}
+
+// flowScatterPhase runs exploration-fragmentation, orphaned-file, and
+// build-idempotency detection. Split verbatim from flowMonitorPhase (r227).
+func (a *Agent) flowScatterPhase(tc provider.ToolCallDelta, i int, result tool.Result, msgs []provider.Message) []provider.Message {
 	// Exploration fragmentation detection: check if the agent is
 	// issuing many scattered exploration calls without converging.
 	// #1459-A: failed calls (missing args etc.) don't count - two
@@ -3203,6 +3226,13 @@ func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.R
 		})
 		msgs = a.contextManager.Messages()
 	}
+	return msgs
+}
+
+// flowExecQualityPhase runs tainted-data influence, tool-storm and
+// reasoning-redundancy recorders, verification-coverage gap, and tool
+// effectiveness tracking. Split verbatim from flowMonitorPhase (r227).
+func (a *Agent) flowExecQualityPhase(tc provider.ToolCallDelta, i int, result tool.Result, msgs []provider.Message) []provider.Message {
 	// Tainted data influence detection (IFC): check if untrusted content
 	// from prior tool outputs has flowed into the arguments of this
 	// privileged tool call. Warns when tainted content influences
@@ -3247,7 +3277,7 @@ func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.R
 		})
 		msgs = a.contextManager.Messages()
 	}
-	return result, msgs
+	return msgs
 }
 
 // strategyDetectorPhase runs verification/strategy recorders and
@@ -3751,9 +3781,8 @@ func (a *Agent) scopeErrorAmnesiaPhase(tc provider.ToolCallDelta, i int, result 
 	}
 	// Error compounding risk: track all error signals across the run.
 	// Computes geometric compounding probability to detect systemic risk.
-	if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
-		a.errorCompound.recordStep(hadError)
-	}
+	hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1)
+	a.errorCompound.recordStep(hadError)
 	// Fix amnesia: track errors observed and check new content for recurrence.
 	if result.IsError {
 		if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {
