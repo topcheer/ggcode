@@ -4101,6 +4101,20 @@ func (a *Agent) emitMaxIterationsSummary(runStats *RunStats, onEvent func(provid
 // is a pure snapshot and the send site re-reads it unconditionally, #1672)
 // and are dropped here.
 func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
+	a.injectContextRefreshAdvisories(i)
+	a.runTrajectoryHealthAdvisories(i)
+	a.runCalibrationAdvisories(i)
+	a.runVerificationHygieneAdvisories(i)
+	a.runDriftBookkeepingAdvisories(i)
+	a.runDelegationScopeAdvisories(i)
+	a.maybeMidPointCheckpoint(i, progressCheckInjected)
+}
+
+// injectContextRefreshAdvisories injects the per-iteration context-refresh
+// messages (plan hint, stale todo reminder, file freshness sentinel)
+// directly into the context manager, bypassing the per-turn guidance
+// budget. r222: moved verbatim from runPerIterationAdvisories.
+func (a *Agent) injectContextRefreshAdvisories(i int) {
 	if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
 		a.contextManager.Add(provider.Message{
 			Role:    "user",
@@ -4126,6 +4140,13 @@ func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
 			Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
 		})
 	}
+}
+
+// runTrajectoryHealthAdvisories runs the trajectory-health advisory gates
+// (tool thermal profile, error compounding, correction spiral,
+// verification debt, cross-file edit propagation). r222: moved verbatim
+// from runPerIterationAdvisories.
+func (a *Agent) runTrajectoryHealthAdvisories(i int) {
 	// Tool thermal profile: detect imbalanced tool-call distribution
 	// (e.g., 90% reads with no edits = agent is spinning). Zero-LLM-cost
 	// heuristic based on cross-tool category analysis.
@@ -4162,6 +4183,14 @@ func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
 	if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
 		a.injectGuidance(epMsg)
 	}
+}
+
+// runCalibrationAdvisories runs the calibration/metacognition gates
+// (subgoal completion gap, premature success declaration, criteria
+// drift, attempt brief, information scent, query convergence,
+// background-command orphan). r222: moved verbatim from
+// runPerIterationAdvisories.
+func (a *Agent) runCalibrationAdvisories(i int) {
 	// Premature success declaration: if the agent claimed completion in a
 	// prior iteration but has since continued making tool calls, flag the
 	// metacognitive calibration gap.
@@ -4212,6 +4241,13 @@ func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
 	if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
 		a.injectGuidance(bgOrphanMsg)
 	}
+}
+
+// runVerificationHygieneAdvisories runs the verification-hygiene and
+// strategy gates (reasoning redundancy, iteration pressure, bare-edit
+// streak, strategy fixation, error rush, attention fragmentation).
+// r222: moved verbatim from runPerIterationAdvisories.
+func (a *Agent) runVerificationHygieneAdvisories(i int) {
 	// Reasoning redundancy detection: consecutive text-only iterations with
 	// near-duplicate content indicate overthinking (arXiv:2503.16419).
 	// Nudge the agent to stop deliberating and act.
@@ -4249,6 +4285,14 @@ func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
 	if afMsg := a.attentionFragment.analyze(); afMsg != "" {
 		a.injectGuidance(afMsg)
 	}
+}
+
+// runDriftBookkeepingAdvisories performs drift-recurrence iteration
+// bookkeeping and the exploration-futility gates (futile cycle,
+// constraint amnesia). The recordIteration call must stay between the
+// attention-fragmentation and futile-cycle gates. r222: moved verbatim
+// from runPerIterationAdvisories.
+func (a *Agent) runDriftBookkeepingAdvisories(i int) {
 	// Drift-recurrence iteration bookkeeping: check()'s post-warning
 	// window (driftRecurrencePostWarnWindow) compares against the current
 	// iteration — without this call currentIteration stayed 0 and the
@@ -4266,6 +4310,12 @@ func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
 	if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
 		a.injectGuidance(caMsg)
 	}
+}
+
+// runDelegationScopeAdvisories runs the delegation-orchestration gates
+// (orphan, serial, over-delegation) and monorepo scope-sprawl hint.
+// r222: moved verbatim from runPerIterationAdvisories.
+func (a *Agent) runDelegationScopeAdvisories(i int) {
 	// Diagnostic-action disconnect detection: when the agent has received
 	// diagnostic content (errors, undefined symbols) but subsequent actions
 	// don't address it, inject guidance to refocus on the known issue.
@@ -4311,6 +4361,14 @@ func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
 			a.monorepoScoper.markUndelivered()
 		}
 	}
+}
+
+// maybeMidPointCheckpoint injects the one-time mid-point progress
+// checkpoint at 60% of the iteration budget (only when maxIter >= 20).
+// progressCheckInjected is the caller-owned cross-iteration one-shot
+// flag and is mutated through the pointer exactly as before. r222:
+// moved verbatim from runPerIterationAdvisories.
+func (a *Agent) maybeMidPointCheckpoint(i int, progressCheckInjected *bool) {
 	// Mid-point progress checkpoint: at 60% of max iterations, inject a
 	// one-time progress assessment. This is the lightweight "overseer"
 	// pattern from SICA — giving the agent a chance to course-correct
