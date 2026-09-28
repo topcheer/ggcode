@@ -411,55 +411,77 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 		return
 	}
 
-	// #1251: voice/video messages have no iLink mapping (no upload API, no
-	// STT path) — the text below comes out empty and the old flow logged
-	// "empty text, skipping" while the message was consumed by the seen-dedup.
-	// To the user the bot simply never reacted, and resending hit the same
-	// wall. Reply with an explicit notice instead of dropping silently.
-	// Quality-review correction: the notice must ONLY fire when the message
-	// carries no usable text — mixed items (voice + transcribed/accompanying
-	// text) route the text normally; intercepting them dropped usable content
-	// behind an "unsupported" notice.
+	// #1251: empty text — reply an explicit unsupported-type notice or drop
+	// silently (gate order preserved; see handleEmptyText).
 	if strings.TrimSpace(text) == "" {
-		if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
-			notice := "[暂不支持语音消息，请发送文字]"
-			switch unsupported {
-			case ilinkItemVideo:
-				notice = "[暂不支持视频消息，请发送文字]"
-			case ilinkItemImage:
-				notice = "[暂不支持图片消息，请发送文字]"
-			case ilinkItemFile:
-				notice = "[暂不支持文件消息，请发送文字]"
-			}
-			debug.Log("wechat", "adapter=%s unsupported item type=%d from=%s, replying notice", a.name, unsupported, msg.FromUserID)
-			channelID := msg.FromUserID
-			if msg.GroupID != "" {
-				channelID = msg.GroupID
-			}
-			if err := a.sendTextToUser(ctx, channelID, notice, msg.ContextToken); err != nil {
-				debug.Log("wechat", "adapter=%s unsupported-type notice to=%s failed: %v", a.name, channelID, err)
-			}
-			return
-		}
-		debug.Log("wechat", "adapter=%s handleMessage: empty text, skipping", a.name)
+		a.handleEmptyText(ctx, msg)
 		return
 	}
 
-	// Determine channel ID (group or direct)
-	channelID := msg.FromUserID
-	if msg.GroupID != "" {
-		channelID = msg.GroupID
+	channelID := wechatChannelID(msg)
+	inbound := a.inboundEnvelope(text, channelID, msg)
+	a.routeInbound(ctx, msg, channelID, inbound)
+}
+
+// handleEmptyText handles an inbound message that carries no usable text.
+// #1251: voice/video messages have no iLink mapping (no upload API, no
+// STT path) — the text below comes out empty and the old flow logged
+// "empty text, skipping" while the message was consumed by the seen-dedup.
+// To the user the bot simply never reacted, and resending hit the same
+// wall. Reply with an explicit notice instead of dropping silently.
+// Quality-review correction: the notice must ONLY fire when the message
+// carries no usable text — mixed items (voice + transcribed/accompanying
+// text) route the text normally; intercepting them dropped usable content
+// behind an "unsupported" notice.
+func (a *WechatAdapter) handleEmptyText(ctx context.Context, msg ilinkMessage) {
+	if unsupported := wechatUnsupportedItemKind(msg); unsupported != 0 {
+		notice := wechatUnsupportedNotice(unsupported)
+		debug.Log("wechat", "adapter=%s unsupported item type=%d from=%s, replying notice", a.name, unsupported, msg.FromUserID)
+		channelID := wechatChannelID(msg)
+		if err := a.sendTextToUser(ctx, channelID, notice, msg.ContextToken); err != nil {
+			debug.Log("wechat", "adapter=%s unsupported-type notice to=%s failed: %v", a.name, channelID, err)
+		}
+		return
 	}
+	debug.Log("wechat", "adapter=%s handleMessage: empty text, skipping", a.name)
+}
 
-	// #973 (pre-auth token poisoning): do NOT persist msg.ContextToken into
-	// the binding here. This update used to run BEFORE the channel check in
-	// HandleInbound, so ANY WeChat user who could message the bot overwrote
-	// the authorized session's context_token — the authorized session's next
-	// reply then carried a stranger's token and was rejected by the server.
-	// The token is now persisted only AFTER authorization passes: on pairing
-	// success (below) or when HandleInbound accepts the inbound.
+// wechatUnsupportedNotice maps an unsupported iLink item type (#1251) to the
+// user-facing notice text. Kind 0 / unknown kinds fall back to the voice
+// notice, mirroring the original inline switch default.
+func wechatUnsupportedNotice(kind int) string {
+	notice := "[暂不支持语音消息，请发送文字]"
+	switch kind {
+	case ilinkItemVideo:
+		notice = "[暂不支持视频消息，请发送文字]"
+	case ilinkItemImage:
+		notice = "[暂不支持图片消息，请发送文字]"
+	case ilinkItemFile:
+		notice = "[暂不支持文件消息，请发送文字]"
+	}
+	return notice
+}
 
-	inbound := InboundMessage{
+// wechatChannelID resolves the reply channel for an inbound message:
+// group messages reply to the group, direct messages to the sender.
+func wechatChannelID(msg ilinkMessage) string {
+	if msg.GroupID != "" {
+		return msg.GroupID
+	}
+	return msg.FromUserID
+}
+
+// inboundEnvelope builds the normalized InboundMessage for a wechat inbound.
+//
+// #973 (pre-auth token poisoning): do NOT persist msg.ContextToken into
+// the binding here. This update used to run BEFORE the channel check in
+// HandleInbound, so ANY WeChat user who could message the bot overwrote
+// the authorized session's context_token — the authorized session's next
+// reply then carried a stranger's token and was rejected by the server.
+// The token is now persisted only AFTER authorization passes: on pairing
+// success (routeInbound) or when HandleInbound accepts the inbound.
+func (a *WechatAdapter) inboundEnvelope(text, channelID string, msg ilinkMessage) InboundMessage {
+	return InboundMessage{
 		Envelope: Envelope{
 			Adapter:    a.name,
 			Platform:   PlatformWechat,
@@ -473,7 +495,11 @@ func (a *WechatAdapter) handleMessage(ctx context.Context, msg ilinkMessage) {
 			"group_id": msg.GroupID,
 		},
 	}
+}
 
+// routeInbound runs the pairing gate, normal inbound routing, and the
+// post-authorization context token persist (#973).
+func (a *WechatAdapter) routeInbound(ctx context.Context, msg ilinkMessage, channelID string, inbound InboundMessage) {
 	// Pairing flow: first inbound message triggers pairing to obtain ChannelID/TargetID
 	// 1. Try HandlePairingInbound — if consumed, reply with pairing instructions
 	pairingResult, err := a.manager.HandlePairingInbound(inbound)
