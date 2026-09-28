@@ -4406,6 +4406,35 @@ func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []prov
 // iteration or guidance was injected); cont=false means the run is finished
 // and the caller must `return retErr` (nil on normal completion).
 func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatResponse, onEvent func(provider.StreamEvent), i int, textBuf string, truncated, policyBlocked bool, runStats *RunStats, userPromptForStats string, toolCalls []provider.ToolCallDelta, truncationContinues, inlineToolCallNudges, todoCheckCount, syncVerifyRetries *int, asyncVerifyStats **RunStats) (cont bool, retErr error) {
+	if cont, retErr := a.finishTruncationRecoveryPhase(resp, onEvent, i, truncated, policyBlocked, truncationContinues); cont || retErr != nil {
+		return cont, retErr
+	}
+	assistantText := a.finishAssistantTextRecordPhase(i, textBuf)
+	if cont, retErr := a.finishInlineToolNudgePhase(i, resp, assistantText, inlineToolCallNudges); cont || retErr != nil {
+		return cont, retErr
+	}
+	if cont, retErr := a.finishTextDetectorsPhase(resp, assistantText, i, runStats); cont || retErr != nil {
+		return cont, retErr
+	}
+	if cont, retErr := a.finishTrajectoryDetectorsPhase(assistantText, i, toolCalls); cont || retErr != nil {
+		return cont, retErr
+	}
+	if cont, retErr := a.finishInterruptionAutopilotPhase(ctx, i, textBuf, onEvent); cont || retErr != nil {
+		return cont, retErr
+	}
+	if cont, retErr := a.finishCompletionGatesPhase(i, runStats, userPromptForStats, textBuf, todoCheckCount); cont || retErr != nil {
+		return cont, retErr
+	}
+	if cont, retErr := a.finishSyncVerifyPhase(ctx, i, runStats, syncVerifyRetries, asyncVerifyStats); cont || retErr != nil {
+		return cont, retErr
+	}
+	return a.finishFinalQualityGatesPhase(ctx, i, runStats, userPromptForStats)
+}
+
+// finishTruncationRecoveryPhase handles truncated responses: auto-
+// continuation within a 3-attempt budget (partial output kept), and the
+// provider-policy-blocked variant that keeps partial output and stops.
+func (a *Agent) finishTruncationRecoveryPhase(resp *provider.ChatResponse, onEvent func(provider.StreamEvent), i int, truncated, policyBlocked bool, truncationContinues *int) (cont bool, retErr error) {
 	// Truncated response recovery: the LLM hit the output token limit
 	// mid-response. Save the partial output and inject a continuation
 	// prompt so the model picks up where it left off. This prevents
@@ -4442,13 +4471,27 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 			Text: "[Response blocked by provider safety policy — partial output kept, not retrying.] ",
 		})
 	}
-	// Detect inline tool calls in text/reasoning (common with lower-reasoning
-	// models that write tool calls in prose instead of structured tool_use blocks).
-	// Nudge the model to use proper tool call format and retry.
+	return false, nil
+}
+
+// finishAssistantTextRecordPhase records the no-tool-turn assistant text
+// into the per-run text-quality recorders (constraint violations,
+// reasoning redundancy, give-up text) and returns the effective text.
+func (a *Agent) finishAssistantTextRecordPhase(i int, textBuf string) string {
 	assistantText := textBuf
 	a.constraintViolation.recordReasoning(assistantText, i+1)
 	a.reasoningRedund.recordReasoning(assistantText, false)
 	a.recordGiveupText(assistantText)
+	return assistantText
+}
+
+// finishInlineToolNudgePhase detects inline tool calls written in prose
+// and nudges the model toward structured tool_use format (own cap: 2
+// nudges per run).
+func (a *Agent) finishInlineToolNudgePhase(i int, resp *provider.ChatResponse, assistantText string, inlineToolCallNudges *int) (cont bool, retErr error) {
+	// Detect inline tool calls in text/reasoning (common with lower-reasoning
+	// models that write tool calls in prose instead of structured tool_use blocks).
+	// Nudge the model to use proper tool call format and retry.
 	// History error accumulation: check if assistant text addresses
 	// pending issues from a prior multi-issue tool result.
 	// Silent degradation propagation: check if the agent acknowledged
@@ -4474,6 +4517,14 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 		})
 		return true, nil
 	}
+	return false, nil
+}
+
+// finishTextDetectorsPhase runs the advisory text-quality detector battery
+// over the no-tool-turn assistant text: evidence integration, false
+// premise, the success-claim family (claimsSupervision-gated), narrative
+// decoupling, and the guidance injectors, in the original detector order.
+func (a *Agent) finishTextDetectorsPhase(resp *provider.ChatResponse, assistantText string, i int, runStats *RunStats) (cont bool, retErr error) {
 	// Tool output integration monitoring: check if evidence tokens
 	// from the previous tool call appear in this assistant text.
 	// (TRACE-inspired cross-step evidence tracking).
@@ -4679,6 +4730,15 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 			}},
 		})
 	}
+	return false, nil
+}
+
+// finishTrajectoryDetectorsPhase runs the tool-trajectory detector family
+// over this iteration's tool calls: reproducer lifecycle, tool-target
+// mismatch, outcome misattribution, reasoning-action alignment, mindless
+// action, trajectory health, token waste, foresight calibration, and
+// context goal drift.
+func (a *Agent) finishTrajectoryDetectorsPhase(assistantText string, i int, toolCalls []provider.ToolCallDelta) (cont bool, retErr error) {
 	// Reproducer lifecycle tracker: observes reproduce->edit->rerun
 	// lifecycle. If the agent edits after running a reproducer but
 	// never re-runs it, inject guidance to verify the fix.
@@ -4779,6 +4839,14 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 		debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
 		a.injectGuidance(gdHint)
 	}
+	return false, nil
+}
+
+// finishInterruptionAutopilotPhase checks pending user interruptions and
+// runs the budget-capped autopilot strategist at natural no-tool-call
+// decision points, with deadlock force-termination and one-shot
+// budget-exhausted continuation guidance.
+func (a *Agent) finishInterruptionAutopilotPhase(ctx context.Context, i int, textBuf string, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
 	if a.injectPendingInterruptions() {
 		return true, nil
 	}
@@ -4885,6 +4953,14 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 		})
 		return true, nil
 	}
+	return false, nil
+}
+
+// finishCompletionGatesPhase runs the pre-verify completion gates in the
+// original gate order: incomplete todos, plan drift, request fulfillment,
+// unverified success claims (gated), companion file guard, and
+// specification gaming. All gates share the 2-reminder todoCheckCount cap.
+func (a *Agent) finishCompletionGatesPhase(i int, runStats *RunStats, userPromptForStats string, textBuf string, todoCheckCount *int) (cont bool, retErr error) {
 	// Check for incomplete todos before finishing. If the agent
 	// created todos but didn't complete them, inject a reminder
 	// instead of silently finishing. Max 2 reminders to avoid loops.
@@ -4986,6 +5062,14 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 			return true, nil
 		}
 	}
+	return false, nil
+}
+
+// finishSyncVerifyPhase runs synchronous build verification with
+// auto-repair when code changed (non-plan mode, context alive) and
+// captures stats for the deferred async verify when sync verification
+// did not pass.
+func (a *Agent) finishSyncVerifyPhase(ctx context.Context, i int, runStats *RunStats, syncVerifyRetries *int, asyncVerifyStats **RunStats) (cont bool, retErr error) {
 	// Synchronous verification with auto-repair.
 	// Before returning, verify the build if code was changed. If it
 	// fails and retry budget remains, inject errors and continue the
@@ -5013,6 +5097,14 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 		// Capture stats for async verification before returning.
 		*asyncVerifyStats = runStats
 	}
+	return false, nil
+}
+
+// finishFinalQualityGatesPhase runs the final advisory gates after sync
+// verification: complexity, cross-file impact, change reconciliation,
+// adversarial review, diff summary self-review, and the post-completion
+// commit hint, then returns (false, nil) for normal completion.
+func (a *Agent) finishFinalQualityGatesPhase(ctx context.Context, i int, runStats *RunStats, userPromptForStats string) (cont bool, retErr error) {
 	// Complexity quality gate: after build verification passes (or no
 	// build was needed), check edited Go files for complexity hotspots.
 	// This is an advisory warning — it doesn't block completion but
