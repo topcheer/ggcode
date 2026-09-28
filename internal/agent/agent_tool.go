@@ -570,17 +570,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// before any file is written. Blocks the entire batch if any file has a
 	// guaranteed-failure condition (syntax error, corruption, etc.).
 	if err == nil && len(plans) > 0 {
-		planBatch := make([]fileEditPlan, 0, len(plans))
-		for _, p := range plans {
-			if diff.HasChanges(p.OldContent, p.NewContent) {
-				planBatch = append(planBatch, fileEditPlan{
-					Path:       p.Path,
-					OldContent: p.OldContent,
-					NewContent: p.NewContent,
-				})
-			}
-		}
-		if blockers := dryRunValidateBatch(planBatch); len(blockers) > 0 {
+		if blockers := dryRunValidateBatch(changedPlans(plans)); len(blockers) > 0 {
 			var b strings.Builder
 			b.WriteString("[Multi-file edit blocked by pre-write validation]\n")
 			b.WriteString("One or more files have fatal issues. NO files were modified.\n\n")
@@ -654,46 +644,27 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 	if !result.IsError && len(plans) > 0 && !isDryRun {
-		var integrityWarnings []string
-		for _, plan := range plans {
-			if writtenSet != nil && !writtenSet[plan.Path] {
-				continue // not actually written (failed/skipped in partial mode)
+		// #2138: the multi-file tools (multi_file_write/edit,
+		// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
+		// for .go files unconditionally - passing the raw plan.NewContent
+		// here made every gofmt-touched write report a fake post-write
+		// mismatch (#2132 fixed only the single-file leg). Mirror the
+		// write-time formatting so mismatch means REAL drift here too.
+		integrityScan := func(path, oldContent, newContent string) string {
+			if writtenSet != nil && !writtenSet[path] {
+				return "" // not actually written (failed/skipped in partial mode)
 			}
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				// #2138: the multi-file tools (multi_file_write/edit,
-				// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
-				// for .go files unconditionally - passing the raw plan.NewContent
-				// here made every gofmt-touched write report a fake post-write
-				// mismatch (#2132 fixed only the single-file leg). Mirror the
-				// write-time formatting so mismatch means REAL drift here too.
-				mirrored := mirrorWriteTimeGoFormat(plan.Path, plan.NewContent)
-				if w := checkWriteIntegrity(plan.Path, plan.OldContent, mirrored); w != "" {
-					integrityWarnings = append(integrityWarnings, w)
-				}
-			}
+			mirrored := mirrorWriteTimeGoFormat(path, newContent)
+			return checkWriteIntegrity(path, oldContent, mirrored)
 		}
-		for _, w := range integrityWarnings {
-			// #1864 case 2: route through appendGuidance so the shared per-turn
-			// budget applies - the direct += appends let N plans stack 3N warning
-			// blocks that neither charged the count cap nor the 2048-byte pool,
-			// breaking guidance_budget's "all paths share one pool" contract.
-			a.appendGuidance(&result, w)
-		}
+		// #1864 case 2: route through appendGuidance so the shared per-turn
+		// budget applies (see appendPostWriteGuidance).
+		a.appendPostWriteGuidance(&result, postWriteScan(plans, integrityScan))
 	}
 
 	// Post-write missing test companion detection for multi-file edits.
 	if !result.IsError && len(plans) > 0 {
-		var testCompanionWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := CheckMissingTestCompanionWithFS(plan.Path, plan.OldContent, plan.NewContent); w != "" {
-					testCompanionWarnings = append(testCompanionWarnings, w)
-				}
-			}
-		}
-		for _, w := range testCompanionWarnings {
-			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
-		}
+		a.appendPostWriteGuidance(&result, postWriteScan(plans, CheckMissingTestCompanionWithFS))
 	}
 
 	// Post-write hardcoded credential detection for multi-file edits
@@ -704,17 +675,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 
 	// Post-write debug statement detection for multi-file edits.
 	if !result.IsError && len(plans) > 0 {
-		var debugWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := checkDebugStmts(plan.Path, plan.OldContent, plan.NewContent); w != "" {
-					debugWarnings = append(debugWarnings, w)
-				}
-			}
-		}
-		for _, w := range debugWarnings {
-			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
-		}
+		a.appendPostWriteGuidance(&result, postWriteScan(plans, checkDebugStmts))
 	}
 
 	postEnv := env
@@ -730,6 +691,52 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	return result
+}
+
+// changedPlans returns the subset of plans whose contents actually differ,
+// in plan order. Split verbatim from executeMultiFileTool (r233).
+func changedPlans(plans []tool.PlannedFileEdit) []fileEditPlan {
+	planBatch := make([]fileEditPlan, 0, len(plans))
+	for _, p := range plans {
+		if diff.HasChanges(p.OldContent, p.NewContent) {
+			planBatch = append(planBatch, fileEditPlan{
+				Path:       p.Path,
+				OldContent: p.OldContent,
+				NewContent: p.NewContent,
+			})
+		}
+	}
+	return planBatch
+}
+
+// postWriteScan applies scan to every plan whose contents actually differ and
+// returns the non-empty warnings, preserving plan order. Split verbatim from
+// executeMultiFileTool (r233): the integrity, missing-test-companion, and
+// debug-statement post-write detectors shared this exact loop shape. Per the
+// F.P.E. control ladder (Format -> Policy -> Execution boundary layer), these
+// policy scans now form one auditable pipeline stage instead of three
+// copy-pasted if-else chains interleaved into the execution path.
+func postWriteScan(plans []tool.PlannedFileEdit, scan func(path, oldContent, newContent string) string) []string {
+	var warnings []string
+	for _, plan := range plans {
+		if diff.HasChanges(plan.OldContent, plan.NewContent) {
+			if w := scan(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+				warnings = append(warnings, w)
+			}
+		}
+	}
+	return warnings
+}
+
+// appendPostWriteGuidance routes each post-write warning through appendGuidance
+// so the shared per-turn budget applies - the direct += appends let N plans
+// stack 3N warning blocks that neither charged the count cap nor the 2048-byte
+// pool, breaking guidance_budget's "all paths share one pool" contract
+// (#1864 case 2). Split verbatim from executeMultiFileTool (r233).
+func (a *Agent) appendPostWriteGuidance(result *tool.Result, warnings []string) {
+	for _, w := range warnings {
+		a.appendGuidance(result, w)
+	}
 }
 
 // safeExecute calls t.Execute with panic recovery and context-aware cancellation.
