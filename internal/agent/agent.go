@@ -2846,8 +2846,20 @@ func (a *Agent) cacheCoherencePhase(tc provider.ToolCallDelta, result tool.Resul
 // fileTrackingPhase records per-file read/edit bookkeeping across the
 // freshness/unread/hash/failure-recovery trackers and appends per-file
 // detector guidance to the result.
-// Extracted verbatim from postToolResultPhase (r217).
+// Extracted verbatim from postToolResultPhase (r217); split into four
+// sub-seams (reads / searches / edit success / edit failure) in r223.
 func (a *Agent) fileTrackingPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
+	result = a.fileReadTrackingPhase(tc, result)
+	result = a.fileSearchTrackingPhase(tc, result)
+	result = a.fileEditSuccessTrackingPhase(tc, result)
+	result = a.fileEditFailureTrackingPhase(tc, result)
+	return result
+}
+
+// fileReadTrackingPhase records read_file/multi_file_read bookkeeping: read windows,
+// redundant-read and patch-exhaustion hints.
+// Split verbatim from fileTrackingPhase (r223).
+func (a *Agent) fileReadTrackingPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
 	// Track files read during this run so the unread-edit guard
 	// knows which files the agent has seen.
 	if (tc.Name == "read_file" || tc.Name == "multi_file_read") && !result.IsError {
@@ -2885,6 +2897,13 @@ func (a *Agent) fileTrackingPhase(tc provider.ToolCallDelta, result tool.Result)
 			}
 		}
 	}
+	return result
+}
+
+// fileSearchTrackingPhase feeds search-tool result paths to the tunnel-vision
+// breadth tracker (#476).
+// Split verbatim from fileTrackingPhase (r223).
+func (a *Agent) fileSearchTrackingPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
 	// #476: search-tool output counts toward exploration breadth —
 	// grep/code_search/files_with_matches results name the files the
 	// agent has effectively "looked at". Without this, a 12-file grep
@@ -2895,6 +2914,13 @@ func (a *Agent) fileTrackingPhase(tc provider.ToolCallDelta, result tool.Result)
 			a.tunnelVision.recordSearched(p)
 		}
 	}
+	return result
+}
+
+// fileEditSuccessTrackingPhase records successful edit bookkeeping across the
+// freshness/hash/failure-recovery/convergence trackers and per-file guard hints.
+// Split verbatim from fileTrackingPhase (r223).
+func (a *Agent) fileEditSuccessTrackingPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
 	// Unread-file edit guard: warn when editing a file not read in
 	// this run. Fires before the tool executes so the hint is in the
 	// result alongside any error from the edit attempt.
@@ -2993,6 +3019,13 @@ func (a *Agent) fileTrackingPhase(tc provider.ToolCallDelta, result tool.Result)
 			}
 		}
 	}
+	return result
+}
+
+// fileEditFailureTrackingPhase handles consecutive edit failures: convergence
+// error bookkeeping and re-read recovery guidance.
+// Split verbatim from fileTrackingPhase (r223).
+func (a *Agent) fileEditFailureTrackingPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
 	// Consecutive edit failure recovery: when an edit fails on a file
 	// 2+ times in a row, inject targeted guidance to re-read the file
 	// before retrying. This catches the common "edit fail loop" pattern
