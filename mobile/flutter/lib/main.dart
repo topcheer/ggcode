@@ -187,7 +187,18 @@ class _AppShellState extends ConsumerState<AppShell>
           isScrollControlled: true,
           backgroundColor: Colors.transparent,
           builder: (_) => const AskUserScreen(),
-        );
+        ).whenComplete(() {
+          // #2816: drag-down / barrier tap pops the route without clearing
+          // askUserProvider (the submit/cancel paths clear it BEFORE the
+          // pop, so a surviving question here means gesture dismiss).
+          // Treat it as cancel — otherwise this sheet's open edge
+          // (prev==null && next!=null) never fires again and the next
+          // questionnaire is silently invisible to mobile users.
+          final pending = ref.read(askUserProvider);
+          if (pending != null) {
+            cancelPendingAskUser(ref, pending.id);
+          }
+        });
       }
     });
 
