@@ -1621,264 +1621,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// the conversation when the request was detected as complex. This is
 		// a deterministic, zero-LLM-cost approach inspired by Devin's Planner
 		// and Claude Code's auto-todo behavior.
-		if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Mid-run stale todo detection: if the agent created a todo list but
-		// hasn't updated it for several iterations while there are still
-		// incomplete items, inject a one-time reminder to sync the plan.
-		if staleReminder := a.maybeRemindStaleTodo(i + 1); staleReminder != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Task re-anchoring: prevent context collapse on long repair chains.
-		// File freshness sentinel: proactively detect externally modified files
-		// (IDE save, formatter, git pull, another agent). Injects a notification
-		// BEFORE the agent uses stale content, not reactively at edit time.
-		if staleMsg := a.fileFreshness.maybeCheckStaleFiles(i + 1); staleMsg != "" {
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Tool thermal profile: detect imbalanced tool-call distribution
-		// (e.g., 90% reads with no edits = agent is spinning). Zero-LLM-cost
-		// heuristic based on cross-tool category analysis.
-		if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
-			debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
-			a.injectGuidance(thermalMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Error compounding risk: compute geometric compounding probability
-		// and warn when accumulated errors make the trajectory unreliable.
-		if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
-			// #681: maybeWarn consumed the per-run quota ("at most 2 per run")
-			// by returning; only a delivered message may keep it. Suppressed
-			// fires are rolled back so the quota is not burned with zero
-			// guidance delivered.
-			if a.injectGuidance(ecMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.errorCompound.markUndelivered()
-			}
-		}
-		// Correction spiral: detect error severity escalation across fix attempts.
-		// Warns when each correction introduces a worse error (feedback control instability).
-		if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
-			a.injectGuidance(csMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Verification debt: warn when source edits accumulate without a
-		// successful build. Prevents last-mile failure from compounding
-		// unverified changes (arXiv:2602.16666).
-		if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
-			a.injectGuidance(vdMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Cross-file edit propagation risk: warn when many DISTINCT files
-		// are edited without verification. Cross-file dependency chains
-		// create error propagation paths (MAST taxonomy, Cemri et al. 2025).
-		if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
-			a.injectGuidance(epMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Premature success declaration: if the agent claimed completion in a
-		// prior iteration but has since continued making tool calls, flag the
-		// metacognitive calibration gap.
-		// #1499 case A: subgoal tracking is a lexical heuristic in the
-		// claims-supervision family - unconditioned, it interfered with
-		// every user by default while its sibling (success_declare) is
-		// opt-in. Same gate.
-		if a.claimsSupervision {
-			if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
-				debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
-				a.injectGuidance(sgMsg)
-				msgs = a.contextManager.Messages()
-			}
-		}
-		// Success-declaration calibration detector is gated behind
-		// claimsSupervision (default off): lexical success-phrase heuristics on
-		// intermediate states inject noise current models don't need.
-		if a.claimsSupervision {
-			if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
-				debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
-				a.injectGuidance(sdMsg)
-				msgs = a.contextManager.Messages()
-			}
-		}
-		if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
-			debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
-			a.injectGuidance(cdMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Attempt brief: compact summary of failed approaches to prevent
-		// repeating the same dead-end strategy.
-		if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
-			debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
-			a.injectGuidance(abMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Wasted exploration detection: nudge the agent when previous
-		// search results containing file paths were never acted upon.
-		// Information scent decay detection: nudge when consecutive
-		// exploration calls yield diminishing novel information.
-		if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
-			a.injectGuidance(scentMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Orphaned background command detection: nudge the agent to check
-		// output of background commands (start_command) that haven't been
-		// read for several iterations.
-		// Query convergence failure: detect repeated similar search queries
-		// across iterations without progressing to code action.
-		if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
-			a.injectGuidance(qcMsg)
-			msgs = a.contextManager.Messages()
-		}
-		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
-			a.injectGuidance(bgOrphanMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Reasoning redundancy detection: consecutive text-only iterations with
-		// near-duplicate content indicate overthinking (arXiv:2503.16419).
-		// Nudge the agent to stop deliberating and act.
-		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
-			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
-			a.injectGuidance(rrMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Iteration pressure degradation: detect verify/edit ratio drop
-		// near the iteration budget limit (metacognitive monitoring).
-		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
-			a.injectGuidance(ipMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Unverified mutation streak: detect consecutive edits without any
-		// verification (build/test/run) to encourage tight feedback loops.
-		if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
-			a.injectGuidance(bsMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Verification coverage gap: handled in tool-execution loop below.
-		// Strategy fixation: detect when the agent has edited the same file
-		// multiple times with intervening failed verifications, suggesting an
-		// approach-level failure (PARC arXiv:2512.03549).
-		if sfMsg := a.strategyFixation.check(); sfMsg != "" {
-			a.injectGuidance(sfMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Error rush: detect panic coding -- blind-fixing after consecutive
-		// errors without diagnostic reads in between (Agentic Overconfidence,
-		// arXiv 2026; AgentDiet, FSE 2026).
-		if erMsg := a.errorRush.check(); erMsg != "" {
-			a.injectGuidance(erMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Attention fragmentation: detect rapid directory context-switching
-		// that creates extraneous cognitive load (CLT for LLM agents,
-		// arXiv:2506.06843). High switch density means the model is thrashing
-		// between unrelated concerns instead of maintaining coherent focus.
-		if afMsg := a.attentionFragment.analyze(); afMsg != "" {
-			a.injectGuidance(afMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Drift-recurrence iteration bookkeeping: check()'s post-warning
-		// window (driftRecurrencePostWarnWindow) compares against the current
-		// iteration — without this call currentIteration stayed 0 and the
-		// window guard was permanently false, letting stale warnings from
-		// dozens of iterations ago fire on a normal edit rhythm (#377).
-		a.driftRecurrence.recordIteration(i + 1)
-		// Futile cycle: detect when the agent re-reads the same set of files
-		// that it explored earlier without making any edits in between.
-		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
-			a.injectGuidance(fcMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Constraint amnesia: remind the agent of user-specified constraints
-		// that may have scrolled out of effective attention after many iterations.
-		// Catastrophic forgetting in token space (Letta/MemGPT 2025).
-		if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
-			a.injectGuidance(caMsg)
-			msgs = a.contextManager.Messages()
-		}
-		// Diagnostic-action disconnect detection: when the agent has received
-		// diagnostic content (errors, undefined symbols) but subsequent actions
-		// don't address it, inject guidance to refocus on the known issue.
-		// Delegation orchestration intelligence: detect orphaned delegations
-		// (spawned agents whose results were never consumed), serial delegation
-		// anti-pattern (should batch parallelizable tasks), and over-delegation
-		// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
-		if a.delegationOrch != nil {
-			// Gate activation per #345/#348 decision: only the over-delegation
-			// gate is active. The orphan gate's ID matching never fired in
-			// production (tool-call ID vs agent/task ID namespaces are
-			// disjoint, so legitimate consumption never cleared orphan timers
-			// and the gate false-positived); the serial gate was not part of
-			// the activation decision. Both detection paths are now fixed and
-			// kept dormant behind flags for re-enablement after validation.
-			if delegationOrphanGateEnabled {
-				if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
-					debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
-					a.injectGuidance(delOrchMsg)
-					msgs = a.contextManager.Messages()
-				}
-			}
-			if delegationSerialGateEnabled {
-				if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
-					debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
-					a.injectGuidance(serialMsg)
-					msgs = a.contextManager.Messages()
-				}
-			}
-			if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
-				debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
-				a.injectGuidance(overDelMsg)
-				msgs = a.contextManager.Messages()
-			}
-		}
-		// Monorepo scope sprawl detection: if the agent is editing across many
-		// packages in a monorepo without apparent cross-package intent, inject
-		// a one-time hint to confirm scope and consider package-scoped ops.
-		if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
-			debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
-			// #681: one-shot hint — if the per-turn budget suppresses it, the
-			// one-time chance is restored so it retries on a later iteration
-			// instead of the detector going dark for the rest of the run.
-			if a.injectGuidance(monorepoMsg) {
-				msgs = a.contextManager.Messages()
-			} else {
-				a.monorepoScoper.markUndelivered()
-			}
-		}
-		// Mid-point progress checkpoint: at 60% of max iterations, inject a
-		// one-time progress assessment. This is the lightweight "overseer"
-		// pattern from SICA — giving the agent a chance to course-correct
-		// before running out of iteration budget.
-		// Only fires when maxIter >= 20 to avoid interfering with short runs.
-		if a.maxIter >= 20 && !progressCheckInjected && i+1 >= a.maxIter*3/5 {
-			progressCheckInjected = true
-			debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
-			// #681: one-shot protocol prompt — direct add, exempt from the
-			// per-turn guidance budget like the loop-recovery nudges above
-			// (budget suppression would silently burn the run's only
-			// checkpoint exactly when the run is struggling hardest).
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
-					"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
-					i+1, a.maxIter,
-				)}},
-			})
-			msgs = a.contextManager.Messages() // refresh after adding checkpoint
-		}
+		a.runPerIterationAdvisories(i, &progressCheckInjected)
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
@@ -1937,65 +1680,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		}()
 		if err != nil {
-			if errors.Is(err, errStreamInterruptedForReplan) {
-				reactiveCompactRetries = 0
-				agentLLMRetries = 0
-				continue
+			cont, retErr := a.classifyStreamResponseError(ctx, err, textBuf, runStats, &reactiveCompactRetries, &agentLLMRetries, onEvent)
+			if !cont {
+				return retErr
 			}
-			if a.tryReactiveCompact(ctx, onEvent, err, &reactiveCompactRetries) {
-				runStats.recordCompaction()
-				continue
-			}
-			// Agent-level retry for transient LLM errors that slip past the
-			// provider's own retry loop (e.g. mid-stream disconnect after
-			// partial output, DNS hiccup between provider retries).
-			if isAgentRetryableLLMError(err) && agentLLMRetries < maxAgentLLMRetries {
-				agentLLMRetries++
-				// Use longer backoff for rate limiting errors (429/overloaded)
-				// vs. transient network errors. Rate limits need more time
-				// to reset before retrying.
-				multiplier := 2 // seconds per retry step
-				errStr := strings.ToLower(err.Error())
-				if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "too many") || strings.Contains(errStr, "overloaded") {
-					multiplier = 5 // 5s, 10s, 15s for rate-limited requests
-				}
-				delay := time.Duration(agentLLMRetries*multiplier) * time.Second
-				debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
-					agentLLMRetries, maxAgentLLMRetries, delay, err)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
-					Text: fmt.Sprintf("[Retrying LLM call (%d/%d) after %v...] ",
-						agentLLMRetries, maxAgentLLMRetries, delay)})
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-					return ctx.Err()
-				}
-				continue
-			}
-			// #983: terminal stream error (cancellation or fatal provider
-			// error) — preserve the assistant text already streamed so a
-			// resumed session doesn't lose the partial turn. Pure text only:
-			// partial tool_use blocks are correctly discarded for pairing
-			// integrity. Mirrors the policyBlocked handling above, which keeps
-			// resp.Message for the same reason (the old behavior "discarded
-			// everything already streamed" and was considered a defect).
-			if strings.TrimSpace(textBuf) != "" {
-				a.contextManager.Add(provider.Message{
-					Role:    "assistant",
-					Content: []provider.ContentBlock{provider.TextBlock(textBuf)},
-				})
-			}
-			// User cancellation: return the original error (which wraps
-			// context.Canceled) so callers can detect it with errors.Is.
-			// Converting to a friendly string would break the error chain.
-			if errors.Is(err, context.Canceled) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled)) {
-				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
-				return ctx.Err()
-			}
-			friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
-			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
-			return friendlyErr
+			continue
 		}
 		reactiveCompactRetries = 0
 		agentLLMRetries = 0
@@ -2038,49 +1727,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Only trigger when InputTokens > 0 (real API call) to avoid false positives
 		// in tests or scenarios where usage stats are unavailable.
 		if resp.Usage.OutputTokens == 0 && resp.Usage.InputTokens > 0 && len(toolCalls) == 0 {
-			// Complete policy block (no partial text, no output tokens): the
-			// request was rejected by a provider safety filter. An empty-response
-			// nudge would just re-trigger the same filter — report and stop (#266).
-			if policyBlocked {
-				debug.Log("agent", "Iteration %d: response fully blocked by provider policy, not retrying", i+1)
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventSystem,
-					Text: "[Response blocked by provider safety policy — not retrying. Try rephrasing the request.] ",
-				})
-				if len(resp.Message.Content) > 0 {
-					a.contextManager.Add(resp.Message)
-				}
-				return nil
+			cont, retErr := a.handleEmptyResponse(resp, toolCalls, policyBlocked, i, &consecutiveEmptyResponses, onEvent)
+			if !cont {
+				return retErr
 			}
-			consecutiveEmptyResponses++
-			debug.Log("agent", "Iteration %d: empty response detected (consecutive=%d, input_tokens=%d)",
-				i+1, consecutiveEmptyResponses, resp.Usage.InputTokens)
-			if consecutiveEmptyResponses >= 3 {
-				debug.Log("agent", "too many consecutive empty responses (%d), aborting", consecutiveEmptyResponses)
-				// #1672: the old text claimed "conversation reset for
-				// recovery" but NOTHING here resets or compacts anything,
-				// and return nil reported the failure upstream as a
-				// normal completion - ACP/subagents/cron had no way to
-				// know the task never ran. Tell the truth and return a
-				// distinguishable error.
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventText,
-					Text: "[run aborted — the model returned 3 consecutive empty responses; the task did not complete]\n",
-				})
-				return fmt.Errorf("agent: aborted after %d consecutive empty responses", consecutiveEmptyResponses)
-			}
-			// Retry: inject a nudge and continue.
-			// #677: loop-recovery protocol, NOT detector guidance — it keeps its
-			// own cap (3 consecutive empties abort the run) and must stay outside
-			// the per-turn guidance budget: budget suppression would make
-			// empty-response recovery impossible.
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: "The previous response was empty. Please try again.",
-				}},
-			})
 			continue
 		}
 		consecutiveEmptyResponses = 0
@@ -4422,120 +4072,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				return err
 			}
 		}
-		if err := ctx.Err(); err != nil {
-			// Context cancelled after all tools executed. toolResults has been
-			// populated but not yet added to contextManager. We MUST add them
-			// before returning to keep tool_use/tool_result pairs balanced.
-			if len(toolResults) > 0 {
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: toolResults,
-				})
-			}
-			return err
-		}
-		if len(toolResults) == 0 {
-			continue
-		}
-		debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(toolResults))
-		a.contextManager.Add(provider.Message{
-			Role:    "user", // Anthropic uses user role for tool results
-			Content: toolResults,
-		})
-		// Serial read serialization detection: check if this turn was a
-		// single read-only call (batching opportunity across turns).
-		if serialWarn := a.serialRead.endTurn(i + 1); serialWarn != "" {
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: serialWarn,
-				}},
-			})
-		}
-		// Speculative tool execution (PASTE-inspired): now that tool results
-		// are sent to the LLM, the LLM will spend 2-5 seconds generating its
-		// next response. Use that idle window to speculatively pre-execute
-		// likely next read-only tool calls based on learned patterns.
-		if len(toolCalls) > 0 {
-			// Context-fill-aware: skip speculation when context is critically
-			// full (>75%). Speculative results arriving into a nearly-full
-			// context window can trigger unnecessary compaction. Speculation
-			// is optional — skipping it is always safe.
-			speculateOK := true
-			if a.contextManager != nil {
-				if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
-					fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
-					if fillRatio >= contextFillCritical {
-						speculateOK = false
-						debug.Log("speculate", "skipping speculation: context fill %.0f%%", fillRatio*100)
-					}
-				}
-			}
-			if speculateOK {
-				lastTC := toolCalls[len(toolCalls)-1]
-				a.speculator.speculate(ctx, a.tools, lastTC.Name, lastTC.Arguments)
-			}
-		}
-		// Inject follow-up messages from tools (e.g., inline skill instructions).
-		for _, msg := range followUpMessages {
-			debug.Log("agent", "Injecting follow-up message from tool: role=%s", msg.Role)
-			a.contextManager.Add(msg)
-		}
-		// Inject deferred project memory after all tool results are submitted.
-		if deferredMemoryContent != "" {
-			targetLabel := deferredMemoryTarget
-			if targetLabel == "" {
-				targetLabel = "the pending path"
-			}
-			a.contextManager.Add(provider.Message{
-				Role:    "system",
-				Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + deferredMemoryContent}},
-			})
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: fmt.Sprintf("Additional project memory now applies to %s. Review that guidance first, then continue the task with the updated constraints.", targetLabel),
-				}},
-			})
-			a.SetProjectMemoryFiles(deferredMemoryFiles)
-			debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(deferredMemoryFiles))
-		}
-		// Tool call budget: check after all tools in this turn executed.
-		// Progressive warnings (80%, 95%) and hard stop at 100%.
-		if tcMsg, stop := a.toolCallBudget.check(); tcMsg != "" {
-			debug.Log("tool-call-budget", "threshold crossed: calls=%d budget=%d stop=%v",
-				a.toolCallBudget.totalCalls, a.toolCallBudget.effectiveBudget(), stop)
-			if stop {
-				// Hard stop mirrors the maxIter path (below): emit a summary
-				// and return a sentinel error so callers (sub-agents, ACP
-				// loops, session resume) can distinguish budget truncation
-				// from normal completion. The old path injected the
-				// "summarize" directive into contextManager and returned nil —
-				// the loop had already ended, so the directive was never
-				// consumed in-run and merely confused the next session turn
-				// (#367).
-				runStats.finalize(nil) // compute Duration for the summary
-				summary := runStats.Summary()
-				onEvent(provider.StreamEvent{
-					Type: provider.StreamEventText,
-					Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
-				})
-				err := fmt.Errorf("tool call budget (%d calls) exhausted", a.toolCallBudget.totalCalls)
-				onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
-				return err
-			}
-			// Soft warning (80% / 95%): inject guidance so the CURRENT run
-			// wraps up — the loop continues and the LLM consumes it.
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: tcMsg,
-				}},
-			})
-			msgs = a.contextManager.Messages()
+		if cont, retErr := a.finishToolTurnPhase(ctx, i, toolCalls, toolResults, followUpMessages, deferredMemoryContent, deferredMemoryTarget, deferredMemoryFiles, runStats, onEvent); !cont {
+			return retErr
 		}
 	}
 	// Session wall-clock timeout (#611): this break path previously fell through
@@ -4881,6 +4419,497 @@ func (a *Agent) emitMaxIterationsSummary(runStats *RunStats, onEvent func(provid
 	err := fmt.Errorf("max iterations (%d) reached", a.maxIter)
 	onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
 	return err
+}
+
+// --- Main-loop body seams (r213, track B behavior-preserving split) ---
+// The methods below were moved verbatim out of the RunStreamWithContent main
+// loop. Control-flow translation only: loop `continue` -> (true, nil),
+// `return e` -> (false, e). Error strings, comments, gate order and defer
+// semantics are unchanged.
+
+// runPerIterationAdvisories runs the per-iteration detector/advisory chain
+// (plan hint, stale todos, file freshness, thermal, error compounding,
+// delegation orchestration, monorepo sprawl, mid-point checkpoint, ...).
+// r213: moved verbatim from the main loop. The interleaved
+// `msgs = a.contextManager.Messages()` refreshes were dead stores (Messages()
+// is a pure snapshot and the send site re-reads it unconditionally, #1672)
+// and are dropped here.
+func (a *Agent) runPerIterationAdvisories(i int, progressCheckInjected *bool) {
+	if planHint := a.maybeSuggestPlan(i + 1); planHint != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: planHint}},
+		})
+	}
+	// Mid-run stale todo detection: if the agent created a todo list but
+	// hasn't updated it for several iterations while there are still
+	// incomplete items, inject a one-time reminder to sync the plan.
+	if staleReminder := a.maybeRemindStaleTodo(i + 1); staleReminder != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: staleReminder}},
+		})
+	}
+	// Task re-anchoring: prevent context collapse on long repair chains.
+	// File freshness sentinel: proactively detect externally modified files
+	// (IDE save, formatter, git pull, another agent). Injects a notification
+	// BEFORE the agent uses stale content, not reactively at edit time.
+	if staleMsg := a.fileFreshness.maybeCheckStaleFiles(i + 1); staleMsg != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: staleMsg}},
+		})
+	}
+	// Tool thermal profile: detect imbalanced tool-call distribution
+	// (e.g., 90% reads with no edits = agent is spinning). Zero-LLM-cost
+	// heuristic based on cross-tool category analysis.
+	if thermalMsg := a.toolThermal.maybeWarn(i); thermalMsg != "" {
+		debug.Log("thermal-profile", "imbalanced tool usage detected at iteration %d: %s", i+1, a.toolThermal.categoryBreakdown())
+		a.injectGuidance(thermalMsg)
+	}
+	// Error compounding risk: compute geometric compounding probability
+	// and warn when accumulated errors make the trajectory unreliable.
+	if ecMsg := a.errorCompound.maybeWarn(i + 1); ecMsg != "" {
+		// #681: maybeWarn consumed the per-run quota ("at most 2 per run")
+		// by returning; only a delivered message may keep it. Suppressed
+		// fires are rolled back so the quota is not burned with zero
+		// guidance delivered.
+		if a.injectGuidance(ecMsg) {
+		} else {
+			a.errorCompound.markUndelivered()
+		}
+	}
+	// Correction spiral: detect error severity escalation across fix attempts.
+	// Warns when each correction introduces a worse error (feedback control instability).
+	if csMsg := a.correctionSpiral.maybeWarn(i + 1); csMsg != "" {
+		a.injectGuidance(csMsg)
+	}
+	// Verification debt: warn when source edits accumulate without a
+	// successful build. Prevents last-mile failure from compounding
+	// unverified changes (arXiv:2602.16666).
+	if vdMsg := a.verifyDebt.maybeWarn(i + 1); vdMsg != "" {
+		a.injectGuidance(vdMsg)
+	}
+	// Cross-file edit propagation risk: warn when many DISTINCT files
+	// are edited without verification. Cross-file dependency chains
+	// create error propagation paths (MAST taxonomy, Cemri et al. 2025).
+	if epMsg := a.editPropagation.maybeWarn(i + 1); epMsg != "" {
+		a.injectGuidance(epMsg)
+	}
+	// Premature success declaration: if the agent claimed completion in a
+	// prior iteration but has since continued making tool calls, flag the
+	// metacognitive calibration gap.
+	// #1499 case A: subgoal tracking is a lexical heuristic in the
+	// claims-supervision family - unconditioned, it interfered with
+	// every user by default while its sibling (success_declare) is
+	// opt-in. Same gate.
+	if a.claimsSupervision {
+		if sgMsg := a.subgoalTrack.maybeWarn(i + 1); sgMsg != "" {
+			debug.Log("agent", "Iteration %d: subgoal completion gap detected", i+1)
+			a.injectGuidance(sgMsg)
+		}
+	}
+	// Success-declaration calibration detector is gated behind
+	// claimsSupervision (default off): lexical success-phrase heuristics on
+	// intermediate states inject noise current models don't need.
+	if a.claimsSupervision {
+		if sdMsg := a.successDeclare.maybeWarn(i + 1); sdMsg != "" {
+			debug.Log("agent", "Iteration %d: premature success declaration detected", i+1)
+			a.injectGuidance(sdMsg)
+		}
+	}
+	if cdMsg := a.criteriaDrift.maybeWarn(i + 1); cdMsg != "" {
+		debug.Log("agent", "Iteration %d: success criteria drift detected", i+1)
+		a.injectGuidance(cdMsg)
+	}
+	// Attempt brief: compact summary of failed approaches to prevent
+	// repeating the same dead-end strategy.
+	if abMsg := a.attemptBrief.maybeBrief(i + 1); abMsg != "" {
+		debug.Log("agent", "Iteration %d: injecting attempt brief", i+1)
+		a.injectGuidance(abMsg)
+	}
+	// Wasted exploration detection: nudge the agent when previous
+	// search results containing file paths were never acted upon.
+	// Information scent decay detection: nudge when consecutive
+	// exploration calls yield diminishing novel information.
+	if scentMsg := a.infoScent.maybeWarn(i + 1); scentMsg != "" {
+		a.injectGuidance(scentMsg)
+	}
+	// Orphaned background command detection: nudge the agent to check
+	// output of background commands (start_command) that haven't been
+	// read for several iterations.
+	// Query convergence failure: detect repeated similar search queries
+	// across iterations without progressing to code action.
+	if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
+		a.injectGuidance(qcMsg)
+	}
+	if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
+		a.injectGuidance(bgOrphanMsg)
+	}
+	// Reasoning redundancy detection: consecutive text-only iterations with
+	// near-duplicate content indicate overthinking (arXiv:2503.16419).
+	// Nudge the agent to stop deliberating and act.
+	if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
+		debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
+		a.injectGuidance(rrMsg)
+	}
+	// Iteration pressure degradation: detect verify/edit ratio drop
+	// near the iteration budget limit (metacognitive monitoring).
+	if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
+		a.injectGuidance(ipMsg)
+	}
+	// Unverified mutation streak: detect consecutive edits without any
+	// verification (build/test/run) to encourage tight feedback loops.
+	if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
+		a.injectGuidance(bsMsg)
+	}
+	// Verification coverage gap: handled in tool-execution loop below.
+	// Strategy fixation: detect when the agent has edited the same file
+	// multiple times with intervening failed verifications, suggesting an
+	// approach-level failure (PARC arXiv:2512.03549).
+	if sfMsg := a.strategyFixation.check(); sfMsg != "" {
+		a.injectGuidance(sfMsg)
+	}
+	// Error rush: detect panic coding -- blind-fixing after consecutive
+	// errors without diagnostic reads in between (Agentic Overconfidence,
+	// arXiv 2026; AgentDiet, FSE 2026).
+	if erMsg := a.errorRush.check(); erMsg != "" {
+		a.injectGuidance(erMsg)
+	}
+	// Attention fragmentation: detect rapid directory context-switching
+	// that creates extraneous cognitive load (CLT for LLM agents,
+	// arXiv:2506.06843). High switch density means the model is thrashing
+	// between unrelated concerns instead of maintaining coherent focus.
+	if afMsg := a.attentionFragment.analyze(); afMsg != "" {
+		a.injectGuidance(afMsg)
+	}
+	// Drift-recurrence iteration bookkeeping: check()'s post-warning
+	// window (driftRecurrencePostWarnWindow) compares against the current
+	// iteration — without this call currentIteration stayed 0 and the
+	// window guard was permanently false, letting stale warnings from
+	// dozens of iterations ago fire on a normal edit rhythm (#377).
+	a.driftRecurrence.recordIteration(i + 1)
+	// Futile cycle: detect when the agent re-reads the same set of files
+	// that it explored earlier without making any edits in between.
+	if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
+		a.injectGuidance(fcMsg)
+	}
+	// Constraint amnesia: remind the agent of user-specified constraints
+	// that may have scrolled out of effective attention after many iterations.
+	// Catastrophic forgetting in token space (Letta/MemGPT 2025).
+	if caMsg := a.constraintAmnesia.maybeWarn(i + 1); caMsg != "" {
+		a.injectGuidance(caMsg)
+	}
+	// Diagnostic-action disconnect detection: when the agent has received
+	// diagnostic content (errors, undefined symbols) but subsequent actions
+	// don't address it, inject guidance to refocus on the known issue.
+	// Delegation orchestration intelligence: detect orphaned delegations
+	// (spawned agents whose results were never consumed), serial delegation
+	// anti-pattern (should batch parallelizable tasks), and over-delegation
+	// (excessive delegation ratio). Zero-LLM-cost deterministic heuristics.
+	if a.delegationOrch != nil {
+		// Gate activation per #345/#348 decision: only the over-delegation
+		// gate is active. The orphan gate's ID matching never fired in
+		// production (tool-call ID vs agent/task ID namespaces are
+		// disjoint, so legitimate consumption never cleared orphan timers
+		// and the gate false-positived); the serial gate was not part of
+		// the activation decision. Both detection paths are now fixed and
+		// kept dormant behind flags for re-enablement after validation.
+		if delegationOrphanGateEnabled {
+			if delOrchMsg := a.delegationOrch.maybeWarnOrphanedDelegations(i + 1); delOrchMsg != "" {
+				debug.Log("agent", "Iteration %d: delegation orphan gate injected guidance", i+1)
+				a.injectGuidance(delOrchMsg)
+			}
+		}
+		if delegationSerialGateEnabled {
+			if serialMsg := a.delegationOrch.maybeWarnSerialDelegation(); serialMsg != "" {
+				debug.Log("agent", "Iteration %d: serial delegation gate injected guidance", i+1)
+				a.injectGuidance(serialMsg)
+			}
+		}
+		if overDelMsg := a.delegationOrch.maybeWarnOverDelegation(); overDelMsg != "" {
+			debug.Log("agent", "Iteration %d: over-delegation gate injected guidance", i+1)
+			a.injectGuidance(overDelMsg)
+		}
+	}
+	// Monorepo scope sprawl detection: if the agent is editing across many
+	// packages in a monorepo without apparent cross-package intent, inject
+	// a one-time hint to confirm scope and consider package-scoped ops.
+	if monorepoMsg := a.monorepoScoper.maybeWarnScopeSprawl(); monorepoMsg != "" {
+		debug.Log("monorepo-scope", "package scope sprawl detected: %s", monorepoMsg)
+		// #681: one-shot hint — if the per-turn budget suppresses it, the
+		// one-time chance is restored so it retries on a later iteration
+		// instead of the detector going dark for the rest of the run.
+		if a.injectGuidance(monorepoMsg) {
+		} else {
+			a.monorepoScoper.markUndelivered()
+		}
+	}
+	// Mid-point progress checkpoint: at 60% of max iterations, inject a
+	// one-time progress assessment. This is the lightweight "overseer"
+	// pattern from SICA — giving the agent a chance to course-correct
+	// before running out of iteration budget.
+	// Only fires when maxIter >= 20 to avoid interfering with short runs.
+	if a.maxIter >= 20 && !*progressCheckInjected && i+1 >= a.maxIter*3/5 {
+		*progressCheckInjected = true
+		debug.Log("agent", "Injecting mid-point progress checkpoint at iteration %d/%d", i+1, a.maxIter)
+		// #681: one-shot protocol prompt — direct add, exempt from the
+		// per-turn guidance budget like the loop-recovery nudges above
+		// (budget suppression would silently burn the run's only
+		// checkpoint exactly when the run is struggling hardest).
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: fmt.Sprintf(
+				"Progress checkpoint: iteration %d/%d. Assess — on track? If not, switch strategy.",
+				i+1, a.maxIter,
+			)}},
+		}) // refresh after adding checkpoint
+	}
+}
+
+// classifyStreamResponseError handles a non-nil stream error: replan
+// interruption, reactive compaction, transient LLM retry with backoff, and
+// terminal classification (partial-text preservation, cancellation,
+// friendly error). Every path either continues the loop ((true, nil)) or
+// terminates the run ((false, err)); the caller maps these to `continue` /
+// `return err`. The post-error retry-counter resets therefore stay outside,
+// exactly as in the original layout.
+func (a *Agent) classifyStreamResponseError(ctx context.Context, err error, textBuf string, runStats *RunStats, reactiveCompactRetries, agentLLMRetries *int, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
+	if errors.Is(err, errStreamInterruptedForReplan) {
+		*reactiveCompactRetries = 0
+		*agentLLMRetries = 0
+		return true, nil
+	}
+	if a.tryReactiveCompact(ctx, onEvent, err, reactiveCompactRetries) {
+		runStats.recordCompaction()
+		return true, nil
+	}
+	// Agent-level retry for transient LLM errors that slip past the
+	// provider's own retry loop (e.g. mid-stream disconnect after
+	// partial output, DNS hiccup between provider retries).
+	if isAgentRetryableLLMError(err) && *agentLLMRetries < maxAgentLLMRetries {
+		(*agentLLMRetries)++
+		// Use longer backoff for rate limiting errors (429/overloaded)
+		// vs. transient network errors. Rate limits need more time
+		// to reset before retrying.
+		multiplier := 2 // seconds per retry step
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "too many") || strings.Contains(errStr, "overloaded") {
+			multiplier = 5 // 5s, 10s, 15s for rate-limited requests
+		}
+		delay := time.Duration(*agentLLMRetries*multiplier) * time.Second
+		debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
+			*agentLLMRetries, maxAgentLLMRetries, delay, err)
+		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
+			Text: fmt.Sprintf("[Retrying LLM call (%d/%d) after %v...] ",
+				*agentLLMRetries, maxAgentLLMRetries, delay)})
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
+			return false, ctx.Err()
+		}
+		return true, nil
+	}
+	// #983: terminal stream error (cancellation or fatal provider
+	// error) — preserve the assistant text already streamed so a
+	// resumed session doesn't lose the partial turn. Pure text only:
+	// partial tool_use blocks are correctly discarded for pairing
+	// integrity. Mirrors the policyBlocked handling above, which keeps
+	// resp.Message for the same reason (the old behavior "discarded
+	// everything already streamed" and was considered a defect).
+	if strings.TrimSpace(textBuf) != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{provider.TextBlock(textBuf)},
+		})
+	}
+	// User cancellation: return the original error (which wraps
+	// context.Canceled) so callers can detect it with errors.Is.
+	// Converting to a friendly string would break the error chain.
+	if errors.Is(err, context.Canceled) || (ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled)) {
+		onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: ctx.Err()})
+		return false, ctx.Err()
+	}
+	friendlyErr := fmt.Errorf("%s", provider.FriendlyError(err))
+	onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: friendlyErr})
+	return false, friendlyErr
+}
+
+// handleEmptyResponse handles the empty LLM response block (policy block
+// stop, 3-strikes abort, nudge-and-continue). Every path continues the loop
+// ((true, nil)) or terminates the run ((false, err)); the caller maps these
+// to `continue` / `return err`, so the trailing consecutive-empty reset only
+// runs when the outer condition is false, exactly as in the original.
+func (a *Agent) handleEmptyResponse(resp *provider.ChatResponse, toolCalls []provider.ToolCallDelta, policyBlocked bool, i int, consecutiveEmptyResponses *int, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
+	// Complete policy block (no partial text, no output tokens): the
+	// request was rejected by a provider safety filter. An empty-response
+	// nudge would just re-trigger the same filter — report and stop (#266).
+	if policyBlocked {
+		debug.Log("agent", "Iteration %d: response fully blocked by provider policy, not retrying", i+1)
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventSystem,
+			Text: "[Response blocked by provider safety policy — not retrying. Try rephrasing the request.] ",
+		})
+		if len(resp.Message.Content) > 0 {
+			a.contextManager.Add(resp.Message)
+		}
+		return false, nil
+	}
+	(*consecutiveEmptyResponses)++
+	debug.Log("agent", "Iteration %d: empty response detected (consecutive=%d, input_tokens=%d)",
+		i+1, *consecutiveEmptyResponses, resp.Usage.InputTokens)
+	if *consecutiveEmptyResponses >= 3 {
+		debug.Log("agent", "too many consecutive empty responses (%d), aborting", *consecutiveEmptyResponses)
+		// #1672: the old text claimed "conversation reset for
+		// recovery" but NOTHING here resets or compacts anything,
+		// and return nil reported the failure upstream as a
+		// normal completion - ACP/subagents/cron had no way to
+		// know the task never ran. Tell the truth and return a
+		// distinguishable error.
+		onEvent(provider.StreamEvent{
+			Type: provider.StreamEventText,
+			Text: "[run aborted — the model returned 3 consecutive empty responses; the task did not complete]\n",
+		})
+		return false, fmt.Errorf("agent: aborted after %d consecutive empty responses", *consecutiveEmptyResponses)
+	}
+	// Retry: inject a nudge and continue.
+	// #677: loop-recovery protocol, NOT detector guidance — it keeps its
+	// own cap (3 consecutive empties abort the run) and must stay outside
+	// the per-turn guidance budget: budget suppression would make
+	// empty-response recovery impossible.
+	a.contextManager.Add(provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: "The previous response was empty. Please try again.",
+		}},
+	})
+	return true, nil
+}
+
+// finishToolTurnPhase delivers tool results back into the context manager
+// (ctx-cancel pairing preservation, serial-read detection, speculative
+// execution, follow-up messages, deferred project memory, tool-call budget).
+// Returns (true, nil) to continue, (false, err) to return err from
+// RunStreamWithContent. Sits at the end of the loop body, so fall-through
+// and continue are equivalent.
+func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []provider.ToolCallDelta, toolResults []provider.ContentBlock, followUpMessages []provider.Message, deferredMemoryContent, deferredMemoryTarget string, deferredMemoryFiles []string, runStats *RunStats, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
+	if err := ctx.Err(); err != nil {
+		// Context cancelled after all tools executed. toolResults has been
+		// populated but not yet added to contextManager. We MUST add them
+		// before returning to keep tool_use/tool_result pairs balanced.
+		if len(toolResults) > 0 {
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: toolResults,
+			})
+		}
+		return false, err
+	}
+	if len(toolResults) == 0 {
+		return true, nil
+	}
+	debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(toolResults))
+	a.contextManager.Add(provider.Message{
+		Role:    "user", // Anthropic uses user role for tool results
+		Content: toolResults,
+	})
+	// Serial read serialization detection: check if this turn was a
+	// single read-only call (batching opportunity across turns).
+	if serialWarn := a.serialRead.endTurn(i + 1); serialWarn != "" {
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: serialWarn,
+			}},
+		})
+	}
+	// Speculative tool execution (PASTE-inspired): now that tool results
+	// are sent to the LLM, the LLM will spend 2-5 seconds generating its
+	// next response. Use that idle window to speculatively pre-execute
+	// likely next read-only tool calls based on learned patterns.
+	if len(toolCalls) > 0 {
+		// Context-fill-aware: skip speculation when context is critically
+		// full (>75%). Speculative results arriving into a nearly-full
+		// context window can trigger unnecessary compaction. Speculation
+		// is optional — skipping it is always safe.
+		speculateOK := true
+		if a.contextManager != nil {
+			if threshold := a.contextManager.AutoCompactThreshold(); threshold > 0 {
+				fillRatio := float64(a.contextManager.TokenCount()) / float64(threshold)
+				if fillRatio >= contextFillCritical {
+					speculateOK = false
+					debug.Log("speculate", "skipping speculation: context fill %.0f%%", fillRatio*100)
+				}
+			}
+		}
+		if speculateOK {
+			lastTC := toolCalls[len(toolCalls)-1]
+			a.speculator.speculate(ctx, a.tools, lastTC.Name, lastTC.Arguments)
+		}
+	}
+	// Inject follow-up messages from tools (e.g., inline skill instructions).
+	for _, msg := range followUpMessages {
+		debug.Log("agent", "Injecting follow-up message from tool: role=%s", msg.Role)
+		a.contextManager.Add(msg)
+	}
+	// Inject deferred project memory after all tool results are submitted.
+	if deferredMemoryContent != "" {
+		targetLabel := deferredMemoryTarget
+		if targetLabel == "" {
+			targetLabel = "the pending path"
+		}
+		a.contextManager.Add(provider.Message{
+			Role:    "system",
+			Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + deferredMemoryContent}},
+		})
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: fmt.Sprintf("Additional project memory now applies to %s. Review that guidance first, then continue the task with the updated constraints.", targetLabel),
+			}},
+		})
+		a.SetProjectMemoryFiles(deferredMemoryFiles)
+		debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(deferredMemoryFiles))
+	}
+	// Tool call budget: check after all tools in this turn executed.
+	// Progressive warnings (80%, 95%) and hard stop at 100%.
+	if tcMsg, stop := a.toolCallBudget.check(); tcMsg != "" {
+		debug.Log("tool-call-budget", "threshold crossed: calls=%d budget=%d stop=%v",
+			a.toolCallBudget.totalCalls, a.toolCallBudget.effectiveBudget(), stop)
+		if stop {
+			// Hard stop mirrors the maxIter path (below): emit a summary
+			// and return a sentinel error so callers (sub-agents, ACP
+			// loops, session resume) can distinguish budget truncation
+			// from normal completion. The old path injected the
+			// "summarize" directive into contextManager and returned nil —
+			// the loop had already ended, so the directive was never
+			// consumed in-run and merely confused the next session turn
+			// (#367).
+			runStats.finalize(nil) // compute Duration for the summary
+			summary := runStats.Summary()
+			onEvent(provider.StreamEvent{
+				Type: provider.StreamEventText,
+				Text: fmt.Sprintf("\nTool call budget exhausted (%d calls). Summary: %s.\nYour task may be partially complete — review the changes above. You can continue by sending a follow-up message.", a.toolCallBudget.totalCalls, summary),
+			})
+			err := fmt.Errorf("tool call budget (%d calls) exhausted", a.toolCallBudget.totalCalls)
+			onEvent(provider.StreamEvent{Type: provider.StreamEventError, Error: err})
+			return false, err
+		}
+		// Soft warning (80% / 95%): inject guidance so the CURRENT run
+		// wraps up — the loop continues and the LLM consumes it.
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: tcMsg,
+			}},
+		})
+	}
+	return true, nil
 }
 
 // --- Interruption injection ---
