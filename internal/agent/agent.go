@@ -2177,6 +2177,25 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	result = a.errorSignalPhase(idx, tc, result, batchConflictWarnings)
 	result, msgs = a.flowMonitorPhase(tc, i, result, msgs)
 	result, msgs = a.strategyDetectorPhase(tc, i, result, runStats, msgs)
+	result = a.immediateGuidancePhase(tc, i, result)
+	result = a.scopeDriftPhase(tc, i, result, runStats)
+	a.verificationLedgerPhase(tc, i, result)
+	result = a.executionConsequencePhase(tc, i, result)
+	result = a.mutationAftermathPhase(tc, i, result)
+	result = a.guidanceConsensusPhase(tc, i, result)
+	a.followUpDispatchPhase(tc, result, followUpMessages)
+	result = a.injectionGuardPhase(tc, result)
+	result = a.outputGuardPhase(tc, i, result)
+	return result
+}
+
+// immediateGuidancePhase runs the pre-scope-drift guidance chain: error
+// classifier, fallback hints, shell-native suggestion, error streak,
+// compounding failure, claim verification, permission-deny guard,
+// failure mode, error cascade, and error propagation. Each detector may
+// append guidance to the result.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) immediateGuidancePhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// #952: capture the ORIGINAL content length BEFORE the detector chain
 	// (errorClassifier at errorClassifier below through consensus). Guidance
 	// appended by detectors flows into token-waste metering at record time —
@@ -2270,7 +2289,15 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	if propGuidance := a.errorPropagate.recordResult(tc.Name, result.Content, result.IsError); propGuidance != "" {
 		a.appendGuidance(&result, propGuidance)
 	}
-	result = a.scopeDriftPhase(tc, i, result, runStats)
+	return result
+}
+
+// verificationLedgerPhase feeds the correction-spiral and the
+// verification-tracker family (bareEditStreak, prematureSuccess,
+// phantomVerify, strategyFixation, errorRush, attentionFragment).
+// Record-only: result is not mutated.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) verificationLedgerPhase(tc provider.ToolCallDelta, i int, result tool.Result) {
 	// Correction spiral: track edits and verify results to detect
 	// error severity escalation across fix attempts. Only genuine
 	// verification commands feed the sequence (#491): a successful
@@ -2347,6 +2374,14 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 		_ = json.Unmarshal(tc.Arguments, &afArgs)
 	}
 	a.attentionFragment.recordToolCall(tc.Name, afArgs)
+}
+
+// executionConsequencePhase records execution side-effect consequences:
+// reckless-execution grounding, irreversibility-gate outcome, and the
+// futile-cycle / expired-read / working-tree read trackers. May append
+// a post-edit re-read hint.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) executionConsequencePhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Reckless execution: track exploration vs edit targets.
 	if a.recklessExec != nil {
 		argsStr := string(tc.Arguments)
@@ -2422,6 +2457,15 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 			a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 		}
 	}
+	return result
+}
+
+// mutationAftermathPhase tracks post-mutation bookkeeping: working-tree
+// mutation invalidation, source-edit debt, edit propagation, success
+// declaration, subgoal and attempt-brief outcome recording. May append
+// invalidation guidance.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) mutationAftermathPhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Working-tree invalidation: detect cross-file stale reads after git mutations
 	// #1527 case C: run_command carrying a mutating git command is
 	// fed through the same invalidation path as the git_* tools.
@@ -2455,6 +2499,15 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	a.subgoalTrack.recordToolCall(tc.Name, string(tc.Arguments))
 	// Attempt brief: record outcome for knowledge reuse.
 	a.attemptBrief.recordOutcome(tc.Name, extractToolTarget(tc.Name, string(tc.Arguments)), !result.IsError, i, result.Content)
+	return result
+}
+
+// guidanceConsensusPhase runs the post-hoc guidance chain: tool result
+// redundancy, fix cascade, post-edit verification hint, convergence
+// lock, diminishing edit, premature refactor, and cross-detector
+// consensus.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) guidanceConsensusPhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Symbol grounding: record file paths and code identifiers from
 	// tool I/O so we can detect ungrounded references later.
 	// Tool result redundancy: detect when result content substantially
@@ -2500,6 +2553,13 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	if consensusGuidance := a.crossDetectorConsensus.checkOnly(); consensusGuidance != "" {
 		a.appendGuidance(&result, consensusGuidance)
 	}
+	return result
+}
+
+// followUpDispatchPhase collects tool follow-up messages (e.g., inline
+// skills) and applies a suggested working-directory change.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) followUpDispatchPhase(tc provider.ToolCallDelta, result tool.Result, followUpMessages *[]provider.Message) {
 	// Collect follow-up messages from tools (e.g., inline skills).
 	if len(result.FollowUpMessages) > 0 {
 		*followUpMessages = append(*followUpMessages, result.FollowUpMessages...)
@@ -2512,6 +2572,14 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 		a.mu.Unlock()
 		debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
 	}
+}
+
+// injectionGuardPhase wraps external-content results with the prompt
+// injection guard, records taint fingerprints for IFC tracking, and
+// counts successful execution-type verification against the
+// spiral-of-hallucination chain.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) injectionGuardPhase(tc provider.ToolCallDelta, result tool.Result) tool.Result {
 	// Prompt injection guard: scan external-content tool results for
 	// adversarial injection patterns and wrap them with a security
 	// notice so the model treats them as untrusted data.
@@ -2529,6 +2597,15 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	if !result.IsError {
 		a.recordSpiralVerification(tc.Name)
 	}
+	return result
+}
+
+// outputGuardPhase applies output-size defenses: repetitive-line
+// compression, then context-fill-aware truncation with disk spill,
+// truncation advisory, trunc-claim recording, and degraded-output
+// back-fill.
+// Extracted verbatim from postToolResultPhase (r220).
+func (a *Agent) outputGuardPhase(tc provider.ToolCallDelta, i int, result tool.Result) tool.Result {
 	// Tool-overuse write bookkeeping is POST-execution (#495): only
 	// a successful edit/write makes later reads suspicious. The old
 	// pre-execution recordWrite counted failed edits too, so the
