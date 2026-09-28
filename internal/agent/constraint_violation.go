@@ -263,8 +263,15 @@ func cvPathMatchesPattern(path, pattern string) bool {
 		return false
 	}
 	// Normalize: strip leading/trailing slashes for flexible matching.
+	// #2820: also strip the leading "./" -- LLM-written tool args commonly
+	// use "./auth/handler/x.go" while quoted patterns say "auth/handler";
+	// without this the prefix/component/dir-prefix checks below all miss,
+	// producing scope false-positives ("outside scope") and avoid
+	// false-negatives. Same normalization as causal_attribution.go.
 	p := strings.TrimPrefix(path, "/")
+	p = strings.TrimPrefix(p, "./")
 	pat := strings.TrimPrefix(pattern, "/")
+	pat = strings.TrimPrefix(pat, "./")
 	pat = strings.TrimSuffix(pat, "/")
 
 	// Prefix match at segment boundary only (#2671): the bare
