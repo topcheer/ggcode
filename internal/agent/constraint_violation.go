@@ -355,7 +355,12 @@ func cvExtractConstraints(text string, iter int) []cvConstraint {
 		for _, prefix := range []string{"the ", "any ", "all ", "files in ", "files "} {
 			path = strings.TrimPrefix(path, prefix)
 		}
-		path = strings.TrimSpace(path)
+		// #2801: natural phrasing puts the noun BEFORE "files" ("leave the
+		// config files alone") - the prefix-only strip left a " files"
+		// suffix behind, and a pattern containing a space can never match
+		// any path segment (cvPathMatchesPattern is segment/token
+		// equality), so the whole avoid constraint went dead. Normalize.
+		path = cvNormalizeTarget(path)
 		if path != "" && len(path) <= 80 {
 			idx := strings.Index(lower, m[0])
 			if idx >= 0 {
@@ -418,6 +423,19 @@ func cvExtractConstraints(text string, iter int) []cvConstraint {
 	return result
 }
 
+// cvNormalizeTarget strips the " files"/" file" noun suffix that natural
+// phrasing leaves on a constraint target ("leave the config files alone",
+// "avoid the config file") plus surrounding whitespace. A pattern that
+// still contains a space can never match a path segment, so the suffix
+// turned the whole constraint into a dead pattern (#2801).
+func cvNormalizeTarget(s string) string {
+	s = strings.TrimSpace(s)
+	for _, suffix := range []string{" files", " file"} {
+		s = strings.TrimSpace(strings.TrimSuffix(s, suffix))
+	}
+	return strings.TrimSpace(s)
+}
+
 // cvExtractPathAfter tries to extract a file path or directory/module name
 // from text starting at the given offset. Looks for quoted paths, backtick
 // paths, or path-like tokens.
@@ -450,7 +468,10 @@ func cvExtractPathAfter(lowerText string, offset int) string {
 		quote := rest[0]
 		end := strings.IndexByte(rest[1:], quote)
 		if end > 0 {
-			return strings.TrimSpace(rest[1 : 1+end])
+			// #2801: quoted multi-word targets like "config files" carry
+			// the same dead-pattern " files" suffix - normalize so
+			// downstream matching sees a real path segment.
+			return cvNormalizeTarget(rest[1 : 1+end])
 		}
 	}
 
