@@ -129,19 +129,19 @@ var reproducerRunToolNames = map[string]bool{
 }
 
 // reproducerRerunMatches reports whether a run tool input qualifies as a
-// re-run of the reproducer itself (#2752). It qualifies if it matches the
-// reproducer script shape (e.g. `python3 repro.py`), or if it shares a
-// meaningful token overlap with the recorded reproducer snippet (covers
-// text-established reproducers whose snippet may be prose-like).
+// re-run of the reproducer itself (#2752). When the reproducer was
+// established via an explicit command (snippet non-empty), only a command
+// that shares a distinctive token with the recorded snippet qualifies —
+// running an UNRELATED script (e.g. `node test/unit/foo.test.js`) must not
+// discharge the re-run obligation (#2802). The loose script-shape match is
+// kept only for text-established reproducers, where no command was recorded
+// to compare against.
 func reproducerRerunMatches(inp, snippet string) bool {
 	if inp == "" {
 		return false
 	}
-	if reproducerCommandRe.MatchString(inp) {
-		return true
-	}
 	if snippet == "" {
-		return false
+		return reproducerCommandRe.MatchString(inp)
 	}
 	return reproCommandTokenOverlap(inp, snippet)
 }
