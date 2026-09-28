@@ -681,7 +681,12 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("matrix", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		if err != nil && err.Error() != "no session bound" {
+		// #2823: the previous string compare ("no session bound") never
+		// matched the sentinel text ("no active session bound"), so a healthy
+		// adapter without a bound session was flagged warning on every
+		// inbound message. Use sentinel comparison like all other adapters;
+		// errors.Is is also immune to %w wrapping.
+		if err != nil && !errors.Is(err, ErrNoSessionBound) {
 			a.publishState(false, "warning", err.Error())
 		}
 		if pairingResult.Consumed {
