@@ -944,70 +944,83 @@ func (a *slackAdapter) publishState(healthy bool, status, lastErr string) {
 func (a *slackAdapter) sendExtractedImage(ctx context.Context, channelID, threadTS string, img ExtractedImage) error {
 	switch img.Kind {
 	case "url":
-		if IsLocalFilePath(img.Data) {
-			// #1739: bound the local-path read (the #1557 qq fix, all adapters).
-			f, err := os.Open(img.Data)
-			if err != nil {
-				return fmt.Errorf("read local image: %w", err)
-			}
-			data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
-			f.Close()
-			if err != nil {
-				return fmt.Errorf("read local image: %w", err)
-			}
-			if err != nil {
-				return fmt.Errorf("read local image: %w", err)
-			}
-			return a.uploadFile(ctx, channelID, threadTS, filepath.Base(img.Data), data, "")
-		}
-		// For remote URLs, download first then upload (with context for cancellation)
-		dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
-		if err != nil {
-			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
-			return err
-		}
-		resp, err := a.httpClient.Do(dlReq)
-		if err != nil {
-			// Fallback: send URL as text
-			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
-			return err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
-			return err
-		}
-		data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-		if err != nil {
-			_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
-			return err
-		}
-		filename := filepath.Base(img.Data)
-		if filename == "" || filename == "." {
-			filename = "image.png"
-		}
-		return a.uploadFile(ctx, channelID, threadTS, filename, data, "")
+		return a.sendSlackURLImage(ctx, channelID, threadTS, img)
 	case "data_url":
-		parts := strings.SplitN(img.Data, ",", 2)
-		if len(parts) < 2 {
-			return fmt.Errorf("invalid data URL")
-		}
-		data, err := base64.StdEncoding.DecodeString(parts[1])
-		if err != nil {
-			return fmt.Errorf("invalid base64 in data URL: %w", err)
-		}
-		ext := ".png"
-		if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
-			ext = ".jpg"
-		} else if strings.Contains(parts[0], "gif") {
-			ext = ".gif"
-		} else if strings.Contains(parts[0], "webp") {
-			ext = ".webp"
-		}
-		return a.uploadFile(ctx, channelID, threadTS, "image"+ext, data, "")
+		return a.sendSlackDataURLImage(ctx, channelID, threadTS, img)
 	default:
 		return fmt.Errorf("unknown image kind: %s", img.Kind)
 	}
+}
+
+// sendSlackURLImage sends one "url"-kind extracted image: local paths are read
+// (bounded) and uploaded; remote URLs are downloaded then uploaded, falling
+// back to posting the URL as plain text on any download failure.
+func (a *slackAdapter) sendSlackURLImage(ctx context.Context, channelID, threadTS string, img ExtractedImage) error {
+	if IsLocalFilePath(img.Data) {
+		// #1739: bound the local-path read (the #1557 qq fix, all adapters).
+		f, err := os.Open(img.Data)
+		if err != nil {
+			return fmt.Errorf("read local image: %w", err)
+		}
+		data, err := imagepkg.ReadLimited(f, imagepkg.MaxSize)
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("read local image: %w", err)
+		}
+		if err != nil {
+			return fmt.Errorf("read local image: %w", err)
+		}
+		return a.uploadFile(ctx, channelID, threadTS, filepath.Base(img.Data), data, "")
+	}
+	// For remote URLs, download first then upload (with context for cancellation)
+	dlReq, err := http.NewRequestWithContext(ctx, http.MethodGet, img.Data, nil)
+	if err != nil {
+		_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
+		return err
+	}
+	resp, err := a.httpClient.Do(dlReq)
+	if err != nil {
+		// Fallback: send URL as text
+		_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
+		return err
+	}
+	data, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+	if err != nil {
+		_, err = a.sendChannelMessage(ctx, channelID, threadTS, img.Data)
+		return err
+	}
+	filename := filepath.Base(img.Data)
+	if filename == "" || filename == "." {
+		filename = "image.png"
+	}
+	return a.uploadFile(ctx, channelID, threadTS, filename, data, "")
+}
+
+// sendSlackDataURLImage decodes one "data_url"-kind extracted image and
+// uploads it; the extension is derived from the data-URL mime segment.
+func (a *slackAdapter) sendSlackDataURLImage(ctx context.Context, channelID, threadTS string, img ExtractedImage) error {
+	parts := strings.SplitN(img.Data, ",", 2)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid data URL")
+	}
+	data, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid base64 in data URL: %w", err)
+	}
+	ext := ".png"
+	if strings.Contains(parts[0], "jpeg") || strings.Contains(parts[0], "jpg") {
+		ext = ".jpg"
+	} else if strings.Contains(parts[0], "gif") {
+		ext = ".gif"
+	} else if strings.Contains(parts[0], "webp") {
+		ext = ".webp"
+	}
+	return a.uploadFile(ctx, channelID, threadTS, "image"+ext, data, "")
 }
 
 // uploadFile uploads a file to a Slack channel via multipart/form-data.
