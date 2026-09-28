@@ -1045,6 +1045,15 @@ func finishReasonError(finishReason string) error {
 //	assistant: [tool_use(id=1)]
 //	user:      [tool_result(id=1), text: "guidance warning\n\nresult"]
 func mergeInjectedUserMessages(messages []Message) []Message {
+	return foldInjectedUserMessages(messages, prependToToolResultContent)
+}
+
+// foldInjectedUserMessages is the provider-agnostic core of
+// mergeInjectedUserMessages. fold controls where the folded guidance text
+// lands within the tool_result message: OpenAI prepends it before the first
+// text/tool_result block, Anthropic must keep tool_result blocks as the FIRST
+// content of the user turn (#2819) so it appends after the tool_result blocks.
+func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, string) []ContentBlock) []Message {
 	if len(messages) < 3 {
 		return messages
 	}
@@ -1081,7 +1090,7 @@ func mergeInjectedUserMessages(messages []Message) []Message {
 		return messages
 	}
 
-	debug.Log("openai", "mergeInjectedUserMessages: folding text-only user messages into tool_result messages")
+	debug.Log("provider", "mergeInjectedUserMessages: folding text-only user messages into tool_result messages")
 
 	result := make([]Message, 0, len(messages))
 	i := 0
@@ -1110,7 +1119,7 @@ func mergeInjectedUserMessages(messages []Message) []Message {
 				merged := messages[j]
 				if len(guidanceTexts) > 0 {
 					prefix := strings.Join(guidanceTexts, "\n\n") + "\n\n"
-					merged.Content = prependToToolResultContent(merged.Content, prefix)
+					merged.Content = fold(merged.Content, prefix)
 				}
 				result = append(result, merged)
 				i = j + 1
