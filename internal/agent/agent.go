@@ -3236,8 +3236,19 @@ func (a *Agent) flowMonitorPhase(tc provider.ToolCallDelta, i int, result tool.R
 // strategyDetectorPhase runs verification/strategy recorders and
 // detectors; context-message injections refresh msgs, which is returned
 // to the caller.
-// Extracted verbatim from postToolResultPhase (r217).
+// Extracted verbatim from postToolResultPhase (r217); r224 splits it into
+// 4 strategy sub-seams with byte-identical bodies (verbatim-diff oracle).
 func (a *Agent) strategyDetectorPhase(tc provider.ToolCallDelta, i int, result tool.Result, runStats *RunStats, msgs []provider.Message) (tool.Result, []provider.Message) {
+	a.strategyAttributionSignalPhase(tc, i, result)
+	a.strategyConstraintExhaustionPhase(tc, i, result)
+	msgs = a.strategyExplorationGovernancePhase(tc, i, result, msgs)
+	return a.strategyExecutionOutcomePhase(tc, i, result, runStats, msgs)
+}
+
+// strategyAttributionSignalPhase runs the redundant-reverification,
+// outcome-misattribution, goal-drift, and foresight-calibration detector
+// feeds. Extracted verbatim from strategyDetectorPhase (r224).
+func (a *Agent) strategyAttributionSignalPhase(tc provider.ToolCallDelta, i int, result tool.Result) {
 	// Redundant re-verification: detect same verification command
 	// re-run without intervening file edits (idempotency violation).
 	if rvHint := a.redundantReverify.recordToolCall(tc.Name, string(tc.Arguments), i+1, result.IsError); rvHint != "" {
@@ -3280,6 +3291,12 @@ func (a *Agent) strategyDetectorPhase(tc provider.ToolCallDelta, i int, result t
 			}},
 		})
 	}
+}
+
+// strategyConstraintExhaustionPhase runs the self-declared-constraint,
+// error-strategy, strategy-exhaustion, and solution-fixation detector
+// feeds. Extracted verbatim from strategyDetectorPhase (r224).
+func (a *Agent) strategyConstraintExhaustionPhase(tc provider.ToolCallDelta, i int, result tool.Result) {
 	// Self-declared constraint violation: check if this tool call
 	// violates constraints the agent declared in its own reasoning.
 	if cvMsg := a.constraintViolation.checkToolCall(tc.Name, parseToolArgs(tc.Arguments), i+1); cvMsg != "" {
@@ -3325,6 +3342,13 @@ func (a *Agent) strategyDetectorPhase(tc provider.ToolCallDelta, i int, result t
 		debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
 		a.injectGuidance(fixationHint)
 	}
+}
+
+// strategyExplorationGovernancePhase runs the unverified-self-diagnosis,
+// self-modification, information-scent, query-convergence, and plan-drift
+// detectors; self-modification injections refresh msgs. Extracted
+// verbatim from strategyDetectorPhase (r224).
+func (a *Agent) strategyExplorationGovernancePhase(tc provider.ToolCallDelta, i int, result tool.Result, msgs []provider.Message) []provider.Message {
 	// Unverified self-diagnosis: record tool results to track errors
 	// and verification calls for correlated failure detection.
 	if strategyHint := a.errStrategyLoop.checkAndWarn(); strategyHint != "" {
@@ -3363,6 +3387,14 @@ func (a *Agent) strategyDetectorPhase(tc provider.ToolCallDelta, i int, result t
 	if tc.Name == "exit_plan_mode" {
 		a.planDrift.capturePlan(extractPlanFromArgs(tc.Arguments))
 	}
+	return msgs
+}
+
+// strategyExecutionOutcomePhase runs the delegation orchestration, error
+// stats, silent-error, verification-scope, adaptive effort/sampling, and
+// strategy-stagnation detectors; returns the possibly mutated result and
+// msgs. Extracted verbatim from strategyDetectorPhase (r224).
+func (a *Agent) strategyExecutionOutcomePhase(tc provider.ToolCallDelta, i int, result tool.Result, runStats *RunStats, msgs []provider.Message) (tool.Result, []provider.Message) {
 	// Delegation orchestration: track spawned agents and result consumption.
 	if a.delegationOrch != nil {
 		if delegationToolNames[tc.Name] {
