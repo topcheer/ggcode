@@ -2403,7 +2403,20 @@ func (a *Agent) immediateGuidancePhase(tc provider.ToolCallDelta, i int, result 
 // phantomVerify, strategyFixation, errorRush, attentionFragment).
 // Record-only: result is not mutated.
 // Extracted verbatim from postToolResultPhase (r220).
+// Split into 3 sub-seams (r226): correction spiral, tracker family,
+// attention fragmentation.
 func (a *Agent) verificationLedgerPhase(tc provider.ToolCallDelta, i int, result tool.Result) {
+	var psArgs map[string]interface{}
+	if len(tc.Arguments) > 0 {
+		_ = json.Unmarshal(tc.Arguments, &psArgs)
+	}
+	a.verificationLedgerCorrectionPhase(tc, i, result, psArgs)
+	a.verificationLedgerTrackersPhase(tc, i, result, psArgs)
+	a.verificationLedgerAttentionPhase(tc, result)
+}
+
+// Split verbatim from verificationLedgerPhase (r226).
+func (a *Agent) verificationLedgerCorrectionPhase(tc provider.ToolCallDelta, i int, result tool.Result, psArgs map[string]interface{}) {
 	// Correction spiral: track edits and verify results to detect
 	// error severity escalation across fix attempts. Only genuine
 	// verification commands feed the sequence (#491): a successful
@@ -2412,10 +2425,6 @@ func (a *Agent) verificationLedgerPhase(tc provider.ToolCallDelta, i int, result
 	// commands polluted the severity sequence. start_command is
 	// excluded entirely: its result reflects job startup, not the
 	// verification outcome.
-	var psArgs map[string]interface{}
-	if len(tc.Arguments) > 0 {
-		_ = json.Unmarshal(tc.Arguments, &psArgs)
-	}
 	if csIsEditTool(tc.Name) {
 		a.correctionSpiral.recordEdit(i + 1)
 	} else if tc.Name == "run_command" && psIsVerifyCommand(sfCommandArg(psArgs)) {
@@ -2445,6 +2454,10 @@ func (a *Agent) verificationLedgerPhase(tc provider.ToolCallDelta, i int, result
 			}
 		}
 	}
+}
+
+// Split verbatim from verificationLedgerPhase (r226).
+func (a *Agent) verificationLedgerTrackersPhase(tc provider.ToolCallDelta, i int, result tool.Result, psArgs map[string]interface{}) {
 	// Unverified mutation streak: track consecutive edits without verification.
 	a.bareEditStreak.recordToolCall(tc.Name, string(tc.Arguments))
 	// Green build illusion: track source modifications, builds, and tests.
@@ -2474,6 +2487,10 @@ func (a *Agent) verificationLedgerPhase(tc provider.ToolCallDelta, i int, result
 	}
 	// Error rush: track error-to-action dynamics for panic coding detection.
 	a.errorRush.recordToolCall(tc.Name, result.Content, result.IsError)
+}
+
+// Split verbatim from verificationLedgerPhase (r226).
+func (a *Agent) verificationLedgerAttentionPhase(tc provider.ToolCallDelta, result tool.Result) {
 	// Attention fragmentation: track directory switches for CLT extraneous load detection.
 	var afArgs map[string]interface{}
 	if len(tc.Arguments) > 0 {
