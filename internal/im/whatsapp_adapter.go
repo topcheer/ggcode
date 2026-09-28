@@ -538,63 +538,13 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 	return func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Connected:
-			a.mu.Lock()
-			a.connected = true
-			a.lastQR = "" // clear QR after successful connect
-			a.mu.Unlock()
-			// Snapshot under lock: Send/publishState run concurrently (#974).
-			client := a.currentClient()
-			jid := ""
-			if client != nil && client.Store.ID != nil {
-				jid = client.Store.ID.String()
-			}
-			debug.Log("whatsapp", "adapter %q: connected (jid=%s)", a.name, jid)
-			a.publishState(true, "connected", "")
-
-			if client != nil {
-				if client.Store.PushName == "" {
-					client.Store.PushName = "ggcode"
-				}
-				// Mark ourselves as available so the server starts pushing messages.
-				if err := client.SendPresence(context.Background(), types.PresenceAvailable); err != nil {
-					debug.Log("whatsapp", "adapter %q: send presence available failed: %v", a.name, err)
-				} else {
-					debug.Log("whatsapp", "adapter %q: presence set to available", a.name)
-				}
-
-				// Fetch critical app state (encryption keys, contact list, group metadata).
-				// Without these, the client cannot decrypt incoming messages.
-				// Matches mautrix-whatsapp bridge's post-connect initialization.
-				safego.Go("im.whatsapp.appstate", func() {
-					ctx := context.Background()
-					for _, name := range []appstate.WAPatchName{
-						appstate.WAPatchCriticalBlock,
-						appstate.WAPatchCriticalUnblockLow,
-					} {
-						if err := client.FetchAppState(ctx, name, false, false); err != nil {
-							debug.Log("whatsapp", "adapter %q: fetch app state %s failed: %v", a.name, name, err)
-						} else {
-							debug.Log("whatsapp", "adapter %q: fetched app state %s", a.name, name)
-						}
-					}
-				})
-			}
+			a.handleEventConnected()
 
 		case *events.Disconnected:
-			a.mu.Lock()
-			a.connected = false
-			a.mu.Unlock()
-			debug.Log("whatsapp", "adapter %q: disconnected", a.name)
-			a.publishState(false, "disconnected", "")
-			a.signalSessionDone(fmt.Errorf("whatsapp disconnected"))
+			a.handleEventDisconnected()
 
 		case *events.LoggedOut:
-			debug.Log("whatsapp", "adapter %q: logged out: %s", a.name, v.Reason)
-			a.markLoggedOut()
-			a.publishState(false, "logged_out", "need re-pairing")
-			a.signalSessionDone(errWhatsAppLoggedOut)
-			// DB file removal happens in connectAndServe after the container is
-			// closed — deleting an open sqlite file fails on Windows (#974).
+			a.handleEventLoggedOut(v)
 
 		case *events.PairSuccess:
 			debug.Log("whatsapp", "adapter %q: paired (JID: %s)", a.name, v.ID)
@@ -625,6 +575,75 @@ func (a *whatsappAdapter) eventHandler() func(interface{}) {
 			debug.Log("whatsapp", "adapter %q: unhandled event %T", a.name, evt)
 		}
 	}
+}
+
+// handleEventConnected marks the session live, clears the pairing QR and runs
+// post-connect initialization (presence + critical app state fetch). Body of
+// the *events.Connected case, extracted for testability.
+func (a *whatsappAdapter) handleEventConnected() {
+	a.mu.Lock()
+	a.connected = true
+	a.lastQR = "" // clear QR after successful connect
+	a.mu.Unlock()
+	// Snapshot under lock: Send/publishState run concurrently (#974).
+	client := a.currentClient()
+	jid := ""
+	if client != nil && client.Store.ID != nil {
+		jid = client.Store.ID.String()
+	}
+	debug.Log("whatsapp", "adapter %q: connected (jid=%s)", a.name, jid)
+	a.publishState(true, "connected", "")
+
+	if client != nil {
+		if client.Store.PushName == "" {
+			client.Store.PushName = "ggcode"
+		}
+		// Mark ourselves as available so the server starts pushing messages.
+		if err := client.SendPresence(context.Background(), types.PresenceAvailable); err != nil {
+			debug.Log("whatsapp", "adapter %q: send presence available failed: %v", a.name, err)
+		} else {
+			debug.Log("whatsapp", "adapter %q: presence set to available", a.name)
+		}
+
+		// Fetch critical app state (encryption keys, contact list, group metadata).
+		// Without these, the client cannot decrypt incoming messages.
+		// Matches mautrix-whatsapp bridge's post-connect initialization.
+		safego.Go("im.whatsapp.appstate", func() {
+			ctx := context.Background()
+			for _, name := range []appstate.WAPatchName{
+				appstate.WAPatchCriticalBlock,
+				appstate.WAPatchCriticalUnblockLow,
+			} {
+				if err := client.FetchAppState(ctx, name, false, false); err != nil {
+					debug.Log("whatsapp", "adapter %q: fetch app state %s failed: %v", a.name, name, err)
+				} else {
+					debug.Log("whatsapp", "adapter %q: fetched app state %s", a.name, name)
+				}
+			}
+		})
+	}
+}
+
+// handleEventDisconnected marks the session down and signals a retryable
+// (non-terminal) session error so reconnectLoop retries with backoff (#603).
+func (a *whatsappAdapter) handleEventDisconnected() {
+	a.mu.Lock()
+	a.connected = false
+	a.mu.Unlock()
+	debug.Log("whatsapp", "adapter %q: disconnected", a.name)
+	a.publishState(false, "disconnected", "")
+	a.signalSessionDone(fmt.Errorf("whatsapp disconnected"))
+}
+
+// handleEventLoggedOut tears the dead session down and signals the terminal
+// errWhatsAppLoggedOut which drives store DB cleanup (#974).
+func (a *whatsappAdapter) handleEventLoggedOut(v *events.LoggedOut) {
+	debug.Log("whatsapp", "adapter %q: logged out: %s", a.name, v.Reason)
+	a.markLoggedOut()
+	a.publishState(false, "logged_out", "need re-pairing")
+	a.signalSessionDone(errWhatsAppLoggedOut)
+	// DB file removal happens in connectAndServe after the container is
+	// closed — deleting an open sqlite file fails on Windows (#974).
 }
 
 func (a *whatsappAdapter) signalSessionDone(err error) {
