@@ -1326,9 +1326,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// at their original declaration points for loop scope.
 	toolDefs, transientCompactWarned := a.preLoopSetupPhase(userText, userPromptForStats, runStats)
 	// Loop-scoped retry/progress counters: mutated across iterations, so
-	// they stay in the caller (original declarations, zero-value inits).
-	reactiveCompactRetries := 0
-	agentLLMRetries := 0
+	// they stay in the caller. The two stream-error retry counters are
+	// aggregated into streamRetryCounters (r232); zero-value init preserved.
+	streamRetries := streamRetryCounters{}
 	consecutiveEmptyResponses := 0
 	progressCheckInjected := false
 	// noToolTurn aggregates the four no-tool-turn retry/check counters
@@ -1416,14 +1416,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		}()
 		if err != nil {
-			cont, retErr := a.classifyStreamResponseError(ctx, err, textBuf, runStats, &reactiveCompactRetries, &agentLLMRetries, onEvent)
+			cont, retErr := a.classifyStreamResponseError(ctx, err, textBuf, runStats, &streamRetries, onEvent)
 			if !cont {
 				return retErr
 			}
 			continue
 		}
-		reactiveCompactRetries = 0
-		agentLLMRetries = 0
+		streamRetries.reactiveCompactRetries = 0
+		streamRetries.agentLLMRetries = 0
 		// Post-response usage/budget/cache phase extracted verbatim into
 		// postResponseUsagePhase (r221); straight-line, no exit changes.
 		a.postResponseUsagePhase(resp, textBuf, i, onEvent)
@@ -4573,6 +4573,16 @@ func (a *Agent) maybeMidPointCheckpoint(i int, progressCheckInjected *bool) {
 	}
 }
 
+// streamRetryCounters aggregates the two stream-error retry counters that
+// classifyStreamResponseError mutates across loop iterations (r232):
+// reactive-compaction budget and transient LLM retry budget. Split verbatim
+// from RunStreamWithContent's loop-scoped declarations; zero-value init and
+// field order preserved.
+type streamRetryCounters struct {
+	reactiveCompactRetries int
+	agentLLMRetries        int
+}
+
 // classifyStreamResponseError handles a non-nil stream error: replan
 // interruption, reactive compaction, transient LLM retry with backoff, and
 // terminal classification (partial-text preservation, cancellation,
@@ -4580,21 +4590,21 @@ func (a *Agent) maybeMidPointCheckpoint(i int, progressCheckInjected *bool) {
 // terminates the run ((false, err)); the caller maps these to `continue` /
 // `return err`. The post-error retry-counter resets therefore stay outside,
 // exactly as in the original layout.
-func (a *Agent) classifyStreamResponseError(ctx context.Context, err error, textBuf string, runStats *RunStats, reactiveCompactRetries, agentLLMRetries *int, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
+func (a *Agent) classifyStreamResponseError(ctx context.Context, err error, textBuf string, runStats *RunStats, retries *streamRetryCounters, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
 	if errors.Is(err, errStreamInterruptedForReplan) {
-		*reactiveCompactRetries = 0
-		*agentLLMRetries = 0
+		retries.reactiveCompactRetries = 0
+		retries.agentLLMRetries = 0
 		return true, nil
 	}
-	if a.tryReactiveCompact(ctx, onEvent, err, reactiveCompactRetries) {
+	if a.tryReactiveCompact(ctx, onEvent, err, &retries.reactiveCompactRetries) {
 		runStats.recordCompaction()
 		return true, nil
 	}
 	// Agent-level retry for transient LLM errors that slip past the
 	// provider's own retry loop (e.g. mid-stream disconnect after
 	// partial output, DNS hiccup between provider retries).
-	if isAgentRetryableLLMError(err) && *agentLLMRetries < maxAgentLLMRetries {
-		(*agentLLMRetries)++
+	if isAgentRetryableLLMError(err) && retries.agentLLMRetries < maxAgentLLMRetries {
+		retries.agentLLMRetries++
 		// Use longer backoff for rate limiting errors (429/overloaded)
 		// vs. transient network errors. Rate limits need more time
 		// to reset before retrying.
@@ -4603,12 +4613,12 @@ func (a *Agent) classifyStreamResponseError(ctx context.Context, err error, text
 		if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "rate_limit") || strings.Contains(errStr, "too many") || strings.Contains(errStr, "overloaded") {
 			multiplier = 5 // 5s, 10s, 15s for rate-limited requests
 		}
-		delay := time.Duration(*agentLLMRetries*multiplier) * time.Second
+		delay := time.Duration(retries.agentLLMRetries*multiplier) * time.Second
 		debug.Log("agent", "transient LLM error (attempt %d/%d), retrying in %v: %v",
-			*agentLLMRetries, maxAgentLLMRetries, delay, err)
+			retries.agentLLMRetries, maxAgentLLMRetries, delay, err)
 		onEvent(provider.StreamEvent{Type: provider.StreamEventSystem,
 			Text: fmt.Sprintf("[Retrying LLM call (%d/%d) after %v...] ",
-				*agentLLMRetries, maxAgentLLMRetries, delay)})
+				retries.agentLLMRetries, maxAgentLLMRetries, delay)})
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
