@@ -199,12 +199,50 @@ func (s *subgoalState) recordToolCall(toolName, args string) {
 			// un-addressed-subgoal warning went silent (systematic
 			// under-reporting). Tool names are generic verbs/nouns by design
 			// and carry no evidence about WHICH subgoal was addressed.
-			if strings.Contains(argLower, kw) {
+			//
+			// #2829: the hit itself now requires a word boundary
+			// (sgKeywordPresent) - pure substring matching let "runtime"
+			// satisfy a "run" keyword and "author.go" satisfy "auth",
+			// burning the addressed flag on unrelated calls the same way.
+			if sgKeywordPresent(argLower, kw) {
 				s.subgoals[i].addressed = true
 				break
 			}
 		}
 	}
+}
+
+// sgKeywordPresent reports whether kw occurs in lower as a standalone word
+// (#2829). Boundaries use sgKeywordWordByte - alphanumerics only, '_' is a
+// SEPARATOR: tool args are full of snake_case tokens where '_' delimits words
+// (test_suite.go legitimately satisfies "test"/"suite"), while letters glue
+// real words ("runtime" does not satisfy "run", "author.go" does not satisfy
+// "auth"). CJK keywords are unaffected - UTF-8 continuation bytes are never
+// word bytes, so every occurrence is a whole-word hit, same as Contains.
+func sgKeywordPresent(lower, kw string) bool {
+	if kw == "" {
+		return false
+	}
+	for from := 0; ; {
+		rel := strings.Index(lower[from:], kw)
+		if rel < 0 {
+			return false
+		}
+		i := from + rel
+		end := i + len(kw)
+		if (i == 0 || !sgKeywordWordByte(lower[i-1])) && (end == len(lower) || !sgKeywordWordByte(lower[end])) {
+			return true
+		}
+		from = end
+	}
+}
+
+// sgKeywordWordByte is the word class for subgoal keyword matching against
+// tool args: alphanumerics only. Unlike isWordByte (#2745, identifier
+// semantics where '_' belongs to the name) it treats '_' as a word
+// SEPARATOR, matching how '_' reads inside paths and snake_case tokens.
+func sgKeywordWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 // maybeWarn checks if unaddressed subgoals warrant a warning.
