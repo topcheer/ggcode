@@ -232,14 +232,6 @@ func (a *Agent) applyAdaptiveSampling() (applied float64, previous float64) {
 	return recommended, previous
 }
 
-// restoreSampling restores the provider's temperature to a previous value
-// after an adaptive adjustment. A previous value of 0 means "provider default"
-// which is the correct restore semantics since 0 = unset.
-func (a *Agent) restoreSampling(previous float64) {
-	p, ok := a.provider.(provider.SamplingConfigProvider)
-	if !ok {
-		return
-	}
-	p.SetTemperature(previous)
-	debug.Log("adaptive-sampling", "restored temperature to: %.2f", previous)
-}
+// restoreSampling was removed in r230: its only call site was the always-false
+// `if samplingApplied >= 0` branch in RunStreamWithContent's stream bracket,
+// dead since adaptive sampling was disabled.

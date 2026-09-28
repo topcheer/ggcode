@@ -1379,11 +1379,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// any temperature value other than 1, causing 400 errors. The benefit
 		// of micro-adjusting temperature per task phase does not justify the
 		// risk of breaking model compatibility. Temperature is left at the
-		// provider default unless the user explicitly sets it.
-		var samplingApplied float64 = -1
-		var samplingPrev float64 = 0
-		_ = samplingApplied
-		_ = samplingPrev
+		// provider default unless the user explicitly sets it. The former
+		// apply/restore bookkeeping around this site was dead (always -1)
+		// and was removed in r230.
 		// No tool filtering or description trimming: dynamic pruning was
 		// removed (it destabilized the tool list mid-run and misfired on CJK
 		// contexts), and description truncation misleads the model into
@@ -1413,9 +1411,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// defer restores on every exit including panic-unwind.
 		resp, textBuf, toolCalls, truncated, policyBlocked, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
 			defer func() {
-				if samplingApplied >= 0 {
-					a.restoreSampling(samplingPrev)
-				}
 				if effortApplied != "" {
 					a.restoreEffort(effortPrev)
 				}
@@ -1463,40 +1458,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Execute tool calls and build tool_result message
 		// Reset the no-progress counter — the agent is making forward progress.
 		a.strategistNoProgressCount = 0
-		var toolResults []provider.ContentBlock
-		// Collect follow-up messages from tools (e.g., inline skills)
-		var followUpMessages []provider.Message
-		// Defer project memory injection until after all tools execute,
-		// so every tool_call gets a matching tool_result.
-		var deferredMemoryContent string
-		var deferredMemoryFiles []string
-		var deferredMemoryTarget string
-		// Parallel pre-execution of read-only tools (LLMCompiler/W&D-inspired).
-		// When the LLM returns multiple tool calls, independent read-only tools
-		// are executed concurrently before the sequential loop. Results are
-		// consumed in-order; side-effect tools still run sequentially.
-		preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
-		// Parallel pre-execution of wait-family tools (wait_agent,
-		// teammate_results): concurrent waits make batch latency the MAX
-		// instead of the SUM of remaining sub-agent runtimes, and every wait's
-		// progress streams live (per-toolID callbacks) instead of only the
-		// first being visible. Consumed in-order below.
-		waitPreExecuted := a.preExecuteWaitTools(ctx, toolCalls)
-		// Batch edit conflict detection: when the LLM emits multiple file-editing
-		// calls targeting the same file in one batch, warn upfront so the model
-		// knows subsequent edits may fail (file content changes after each edit).
-		batchConflictWarnings := detectBatchEditConflicts(toolCalls)
-		// Deduplicate identical read-only tool calls within the same LLM response.
-		// LLMs occasionally emit duplicate calls (e.g., two read_file for the
-		// same path). Skip the second execution and reuse the first result.
-		seenReadOnly := make(map[dedupKey]int) // key → index of first result in toolResults
+		// Per-batch execution state (r230): the former loose locals
+		// (toolResults, followUpMessages, deferredMemory*, preExecuted,
+		// waitPreExecuted, batchConflictWarnings, seenReadOnly) aggregated
+		// into one struct threaded through the tool-batch phases.
+		bc := a.newToolBatchCtx(ctx, toolCalls)
 		// Pre-action batch warnings (counterfactual dependency, batch coupling,
 		// irreversibility gate): run before any tool in this batch executes.
 		// May Add guidance messages; returns the refreshed msgs snapshot when
 		// it did. (r216 seam; verbatim move, no behavior change.)
 		msgs = a.toolBatchWarningPhase(toolCalls, i, msgs)
 		for idx, tc := range toolCalls {
-			undoBlindHint, loopGuidance, searchParamHint, redundancyHint, equivHint, err := a.preToolExecutionPhase(ctx, i, idx, tc, toolCalls, &toolResults, runStats, msgs, &deferredMemoryContent, &deferredMemoryFiles, &deferredMemoryTarget)
+			undoBlindHint, loopGuidance, searchParamHint, redundancyHint, equivHint, err := a.preToolExecutionPhase(ctx, i, idx, tc, toolCalls, bc, runStats, msgs)
 			if err != nil {
 				return err
 			}
@@ -1504,30 +1477,30 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// In-turn deduplication: if the LLM sent the same read-only tool call
 			// twice in this response, reuse the first result instead of re-executing.
 			dedupK := dedupKey{tool: tc.Name, args: string(tc.Arguments)}
-			if a.dedupGuardPhase(tc, dedupK, seenReadOnly, &toolResults, onEvent) {
+			if a.dedupGuardPhase(tc, dedupK, bc, onEvent) {
 				continue
 			}
-			result, memoHit := a.resolveToolResultPhase(ctx, idx, tc, preExecuted, waitPreExecuted)
-			result = a.postToolResultPhase(idx, i, tc, result, runStats, memoHit, batchConflictWarnings, &followUpMessages, msgs)
-			result = a.finalizeToolResultPhase(tc, result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint, &toolResults, onEvent, dedupK, seenReadOnly)
+			result, memoHit := a.resolveToolResultPhase(ctx, idx, tc, bc)
+			result = a.postToolResultPhase(idx, i, tc, result, runStats, memoHit, bc, msgs)
+			result = a.finalizeToolResultPhase(tc, result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint, bc, onEvent, dedupK)
 			if err := ctx.Err(); err != nil {
 				// Context cancelled after completing some tools. Fill "cancelled"
 				// results for remaining tool_calls that have not run yet.
-				a.fillCancelledToolResults(toolCalls[idx+1:], &toolResults)
+				a.fillCancelledToolResults(toolCalls[idx+1:], &bc.toolResults)
 				// fillCancelledToolResults adds to contextManager only when
 				// pending > 0. If this was the last tool call, we still need to
 				// add the completed results to keep tool_use/tool_result pairs
 				// balanced for the next LLM call.
-				if len(toolCalls[idx+1:]) == 0 && len(toolResults) > 0 {
+				if len(toolCalls[idx+1:]) == 0 && len(bc.toolResults) > 0 {
 					a.contextManager.Add(provider.Message{
 						Role:    "user",
-						Content: toolResults,
+						Content: bc.toolResults,
 					})
 				}
 				return err
 			}
 		}
-		if cont, retErr := a.finishToolTurnPhase(ctx, i, toolCalls, toolResults, followUpMessages, deferredMemoryContent, deferredMemoryTarget, deferredMemoryFiles, runStats, onEvent); !cont {
+		if cont, retErr := a.finishToolTurnPhase(ctx, i, toolCalls, bc, runStats, onEvent); !cont {
 			return retErr
 		}
 	}
@@ -1546,6 +1519,63 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return a.emitMaxIterationsSummary(runStats, onEvent)
 	}
 	return nil
+}
+
+// toolBatchCtx carries the per-batch tool execution state for one LLM
+// response's tool-call list: accumulated tool_result blocks, follow-up
+// messages, deferred project-memory payloads, parallel pre-execution
+// snapshots, batch edit-conflict warnings, and the in-turn read-only dedup
+// ledger. Aggregated from loose locals in RunStreamWithContent and threaded
+// through the tool-batch phases as a single pointer (r230).
+type toolBatchCtx struct {
+	toolResults []provider.ContentBlock
+	// Collect follow-up messages from tools (e.g., inline skills)
+	followUpMessages []provider.Message
+	// Defer project memory injection until after all tools execute,
+	// so every tool_call gets a matching tool_result.
+	deferredMemoryContent string
+	deferredMemoryFiles   []string
+	deferredMemoryTarget  string
+	// Parallel pre-execution of read-only tools (LLMCompiler/W&D-inspired):
+	// results are consumed in-order; side-effect tools run sequentially.
+	preExecuted map[int]preExecutedResult
+	// Parallel pre-execution of wait-family tools (wait_agent,
+	// teammate_results): concurrent waits make batch latency the MAX
+	// instead of the SUM of remaining sub-agent runtimes.
+	waitPreExecuted map[int]preExecutedResult
+	// Batch edit conflict detection: same-file edit pairs in one batch,
+	// warned upfront so the model knows subsequent edits may fail.
+	batchConflictWarnings map[int]string
+	// Deduplicate identical read-only tool calls within the same LLM
+	// response: key → index of first result in toolResults.
+	seenReadOnly map[dedupKey]int
+}
+
+// newToolBatchCtx builds the per-batch execution state: parallel
+// pre-execution snapshots, batch edit-conflict warnings, and the in-turn
+// dedup ledger. Split verbatim from RunStreamWithContent (r230).
+func (a *Agent) newToolBatchCtx(ctx context.Context, toolCalls []provider.ToolCallDelta) *toolBatchCtx {
+	// Parallel pre-execution of read-only tools (LLMCompiler/W&D-inspired).
+	// When the LLM returns multiple tool calls, independent read-only tools
+	// are executed concurrently before the sequential loop. Results are
+	// consumed in-order; side-effect tools still run sequentially.
+	preExecuted := a.preExecuteReadOnlyTools(ctx, toolCalls)
+	// Parallel pre-execution of wait-family tools (wait_agent,
+	// teammate_results): concurrent waits make batch latency the MAX
+	// instead of the SUM of remaining sub-agent runtimes, and every wait's
+	// progress streams live (per-toolID callbacks) instead of only the
+	// first being visible. Consumed in-order below.
+	waitPreExecuted := a.preExecuteWaitTools(ctx, toolCalls)
+	// Batch edit conflict detection: when the LLM emits multiple file-editing
+	// calls targeting the same file in one batch, warn upfront so the model
+	// knows subsequent edits may fail (file content changes after each edit).
+	batchConflictWarnings := detectBatchEditConflicts(toolCalls)
+	return &toolBatchCtx{
+		preExecuted:           preExecuted,
+		waitPreExecuted:       waitPreExecuted,
+		batchConflictWarnings: batchConflictWarnings,
+		seenReadOnly:          make(map[dedupKey]int),
+	}
 }
 
 // iterContextSnapshotPhase performs the iteration-head context snapshot:
@@ -2090,14 +2120,14 @@ type dedupKey struct {
 // RunStreamWithContent's tool loop (r215 behavior-preserving split).
 // Returns the guidance hints consumed later by finalizeToolResultPhase.
 // A non-nil err means the context was cancelled and the run must return.
-func (a *Agent) preToolExecutionPhase(ctx context.Context, i, idx int, tc provider.ToolCallDelta, toolCalls []provider.ToolCallDelta, toolResults *[]provider.ContentBlock, runStats *RunStats, msgs []provider.Message, deferredMemoryContent *string, deferredMemoryFiles *[]string, deferredMemoryTarget *string) (string, string, string, string, string, error) {
+func (a *Agent) preToolExecutionPhase(ctx context.Context, i, idx int, tc provider.ToolCallDelta, toolCalls []provider.ToolCallDelta, bc *toolBatchCtx, runStats *RunStats, msgs []provider.Message) (string, string, string, string, string, error) {
 	if err := ctx.Err(); err != nil {
 		// Context cancelled mid-tool-execution. The assistant message
 		// (with tool_use blocks) was already added to contextManager above.
 		// Without matching tool_results, the next LLM API call will fail
 		// because tool_use has no corresponding tool_result (protocol violation).
 		// Fill in "cancelled" results for all tool_calls that have not run yet.
-		a.fillCancelledToolResults(toolCalls[idx:], toolResults)
+		a.fillCancelledToolResults(toolCalls[idx:], &bc.toolResults)
 		return "", "", "", "", "", err
 	}
 	// #1799 case 1: undo-blind detection BEFORE execution. The old
@@ -2167,10 +2197,10 @@ func (a *Agent) preToolExecutionPhase(ctx context.Context, i, idx int, tc provid
 	// write, unchanged dir re-list, trivial env commands).
 	// Check for project memory but defer injection
 	if mc, mf, mt := a.pendingProjectMemoryForTool(tc); len(mf) > 0 && strings.TrimSpace(mc) != "" {
-		if *deferredMemoryContent == "" {
-			*deferredMemoryContent = mc
-			*deferredMemoryFiles = mf
-			*deferredMemoryTarget = mt
+		if bc.deferredMemoryContent == "" {
+			bc.deferredMemoryContent = mc
+			bc.deferredMemoryFiles = mf
+			bc.deferredMemoryTarget = mt
 		}
 	}
 	return undoBlindHint, loopGuidance, searchParamHint, redundancyHint, equivHint, nil
@@ -2181,12 +2211,12 @@ func (a *Agent) preToolExecutionPhase(ctx context.Context, i, idx int, tc provid
 // markers. Extracted verbatim from RunStreamWithContent's tool loop (r215).
 // skip=true means a result was emitted and the loop must continue to the
 // next tool call.
-func (a *Agent) dedupGuardPhase(tc provider.ToolCallDelta, dedupK dedupKey, seenReadOnly map[dedupKey]int, toolResults *[]provider.ContentBlock, onEvent func(provider.StreamEvent)) (skip bool) {
+func (a *Agent) dedupGuardPhase(tc provider.ToolCallDelta, dedupK dedupKey, bc *toolBatchCtx, onEvent func(provider.StreamEvent)) (skip bool) {
 	if speculativeSafeTools[tc.Name] {
-		if firstIdx, ok := seenReadOnly[dedupK]; ok && firstIdx < len(*toolResults) {
-			dedupContent := (*toolResults)[firstIdx].Text
+		if firstIdx, ok := bc.seenReadOnly[dedupK]; ok && firstIdx < len(bc.toolResults) {
+			dedupContent := bc.toolResults[firstIdx].Text
 			debug.Log("agent", "in-turn dedup: %s already executed in this response, reusing result", tc.Name)
-			*toolResults = append(*toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, dedupContent, false))
+			bc.toolResults = append(bc.toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, dedupContent, false))
 			onEvent(provider.StreamEvent{
 				Type:    provider.StreamEventToolResult,
 				Tool:    tc,
@@ -2204,7 +2234,7 @@ func (a *Agent) dedupGuardPhase(tc provider.ToolCallDelta, dedupK dedupKey, seen
 	// secret stored in the target file. Block before any cache or
 	// execution path; the error result carries remediation guidance.
 	if redactWarn := checkRedactedInWrite(tc.Name, string(tc.Arguments)); redactWarn != "" {
-		*toolResults = append(*toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, redactWarn, true))
+		bc.toolResults = append(bc.toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, redactWarn, true))
 		onEvent(provider.StreamEvent{
 			Type:    provider.StreamEventToolResult,
 			Tool:    tc,
@@ -2219,7 +2249,7 @@ func (a *Agent) dedupGuardPhase(tc provider.ToolCallDelta, dedupK dedupKey, seen
 // resolveToolResultPhase resolves one tool result from the memo/speculative
 // caches, pre-executed snapshots, command cache, or gated execution.
 // Extracted verbatim from RunStreamWithContent's tool loop (r215).
-func (a *Agent) resolveToolResultPhase(ctx context.Context, idx int, tc provider.ToolCallDelta, preExecuted, waitPreExecuted map[int]preExecutedResult) (tool.Result, bool) {
+func (a *Agent) resolveToolResultPhase(ctx context.Context, idx int, tc provider.ToolCallDelta, bc *toolBatchCtx) (tool.Result, bool) {
 	var result tool.Result
 	memoHit := false
 	if memoResult, hit := a.toolMemo.get(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
@@ -2246,11 +2276,11 @@ func (a *Agent) resolveToolResultPhase(ctx context.Context, idx int, tc provider
 		// (which handles Ask/approval UX properly).
 		result = cachedResult
 		debug.Log("speculate", "speculative cache hit for %s (saved tool execution)", tc.Name)
-	} else if pre, ok := preExecuted[idx]; ok {
+	} else if pre, ok := bc.preExecuted[idx]; ok {
 		// Parallel pre-execution result (LLMCompiler/W&D-inspired).
 		// Runs permission check; if denied, the read-only result is discarded.
 		result = a.usePreExecutedWithPermission(ctx, tc, pre)
-	} else if pre, ok := waitPreExecuted[idx]; ok {
+	} else if pre, ok := bc.waitPreExecuted[idx]; ok {
 		// Wait-family parallel result: same permission semantics as
 		// read-only pre-execution (waiting is side-effect-free, denial
 		// merely discards the snapshot).
@@ -2282,7 +2312,7 @@ func (a *Agent) resolveToolResultPhase(ctx context.Context, idx int, tc provider
 // loop (r215). msgs is passed by value: the in-body refreshes
 // (msgs = a.contextManager.Messages()) are verified dead stores
 // (msgs is never read after the last pre-loop streamChatResponse call).
-func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, result tool.Result, runStats *RunStats, memoHit bool, batchConflictWarnings map[int]string, followUpMessages *[]provider.Message, msgs []provider.Message) tool.Result {
+func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, result tool.Result, runStats *RunStats, memoHit bool, bc *toolBatchCtx, msgs []provider.Message) tool.Result {
 	// Secret redaction (#1195): mask secret values in external-content
 	// tool results BEFORE any recorder, cache annotation, context append,
 	// or session-history persistence sees them. Applies uniformly to all
@@ -2305,7 +2335,7 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	}
 	a.cacheCoherencePhase(tc, result, memoHit)
 	result = a.fileTrackingPhase(tc, result)
-	result = a.errorSignalPhase(idx, tc, result, batchConflictWarnings)
+	result = a.errorSignalPhase(idx, tc, result, bc.batchConflictWarnings)
 	result, msgs = a.flowMonitorPhase(tc, i, result, msgs)
 	result, msgs = a.strategyDetectorPhase(tc, i, result, runStats, msgs)
 	result = a.immediateGuidancePhase(tc, i, result)
@@ -2314,7 +2344,7 @@ func (a *Agent) postToolResultPhase(idx, i int, tc provider.ToolCallDelta, resul
 	result = a.executionConsequencePhase(tc, i, result)
 	result = a.mutationAftermathPhase(tc, i, result)
 	result = a.guidanceConsensusPhase(tc, i, result)
-	a.followUpDispatchPhase(tc, result, followUpMessages)
+	a.followUpDispatchPhase(tc, result, &bc.followUpMessages)
 	result = a.injectionGuardPhase(tc, result)
 	result = a.outputGuardPhase(tc, i, result)
 	return result
@@ -3869,7 +3899,7 @@ func (a *Agent) scopeErrorAmnesiaPhase(tc provider.ToolCallDelta, i int, result 
 // finalizeToolResultPhase applies coalesced guidance hints, emits the tool
 // result event, registers in-turn dedup state, and records token waste.
 // Extracted verbatim from RunStreamWithContent's tool loop (r215).
-func (a *Agent) finalizeToolResultPhase(tc provider.ToolCallDelta, result tool.Result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint string, toolResults *[]provider.ContentBlock, onEvent func(provider.StreamEvent), dedupK dedupKey, seenReadOnly map[dedupKey]int) tool.Result {
+func (a *Agent) finalizeToolResultPhase(tc provider.ToolCallDelta, result tool.Result, loopGuidance, searchParamHint, redundancyHint, equivHint, undoBlindHint string, bc *toolBatchCtx, onEvent func(provider.StreamEvent), dedupK dedupKey) tool.Result {
 	// Apply coalesced guidance hints to the tool result content.
 	// Both vision and non-vision paths share the same hint assembly logic.
 	// originalContentLen was captured BEFORE the detector chain above (#952,
@@ -3892,9 +3922,9 @@ func (a *Agent) finalizeToolResultPhase(tc provider.ToolCallDelta, result tool.R
 		for i, ri := range result.Images {
 			imgs[i] = provider.ContentImage{MIME: ri.MIME, Base64: ri.Base64}
 		}
-		*toolResults = append(*toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, llmContent, imgs, result.IsError))
+		bc.toolResults = append(bc.toolResults, provider.ToolResultWithImages(tc.ID, tc.Name, llmContent, imgs, result.IsError))
 	} else {
-		*toolResults = append(*toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, llmContent, result.IsError))
+		bc.toolResults = append(bc.toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, llmContent, result.IsError))
 	}
 	onEvent(provider.StreamEvent{
 		Type:    provider.StreamEventToolResult,
@@ -3904,7 +3934,7 @@ func (a *Agent) finalizeToolResultPhase(tc provider.ToolCallDelta, result tool.R
 	})
 	// Register read-only tool results for in-turn deduplication.
 	if speculativeSafeTools[tc.Name] && !result.IsError {
-		seenReadOnly[dedupK] = len(*toolResults) - 1
+		bc.seenReadOnly[dedupK] = len(bc.toolResults) - 1
 	}
 	// Token waste budget tracking (AgentDiet arXiv:2509.23586):
 	// record each tool result's estimated token cost and waste category.
@@ -4681,26 +4711,26 @@ func (a *Agent) handleEmptyResponse(resp *provider.ChatResponse, toolCalls []pro
 // Returns (true, nil) to continue, (false, err) to return err from
 // RunStreamWithContent. Sits at the end of the loop body, so fall-through
 // and continue are equivalent.
-func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []provider.ToolCallDelta, toolResults []provider.ContentBlock, followUpMessages []provider.Message, deferredMemoryContent, deferredMemoryTarget string, deferredMemoryFiles []string, runStats *RunStats, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
+func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []provider.ToolCallDelta, bc *toolBatchCtx, runStats *RunStats, onEvent func(provider.StreamEvent)) (cont bool, retErr error) {
 	if err := ctx.Err(); err != nil {
 		// Context cancelled after all tools executed. toolResults has been
 		// populated but not yet added to contextManager. We MUST add them
 		// before returning to keep tool_use/tool_result pairs balanced.
-		if len(toolResults) > 0 {
+		if len(bc.toolResults) > 0 {
 			a.contextManager.Add(provider.Message{
 				Role:    "user",
-				Content: toolResults,
+				Content: bc.toolResults,
 			})
 		}
 		return false, err
 	}
-	if len(toolResults) == 0 {
+	if len(bc.toolResults) == 0 {
 		return true, nil
 	}
-	debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(toolResults))
+	debug.Log("agent", "Adding tool results to contextManager: blocks=%d", len(bc.toolResults))
 	a.contextManager.Add(provider.Message{
 		Role:    "user", // Anthropic uses user role for tool results
-		Content: toolResults,
+		Content: bc.toolResults,
 	})
 	// Serial read serialization detection: check if this turn was a
 	// single read-only call (batching opportunity across turns).
@@ -4738,19 +4768,19 @@ func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []prov
 		}
 	}
 	// Inject follow-up messages from tools (e.g., inline skill instructions).
-	for _, msg := range followUpMessages {
+	for _, msg := range bc.followUpMessages {
 		debug.Log("agent", "Injecting follow-up message from tool: role=%s", msg.Role)
 		a.contextManager.Add(msg)
 	}
 	// Inject deferred project memory after all tool results are submitted.
-	if deferredMemoryContent != "" {
-		targetLabel := deferredMemoryTarget
+	if bc.deferredMemoryContent != "" {
+		targetLabel := bc.deferredMemoryTarget
 		if targetLabel == "" {
 			targetLabel = "the pending path"
 		}
 		a.contextManager.Add(provider.Message{
 			Role:    "system",
-			Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + deferredMemoryContent}},
+			Content: []provider.ContentBlock{{Type: "text", Text: "## Project Memory\n" + bc.deferredMemoryContent}},
 		})
 		a.contextManager.Add(provider.Message{
 			Role: "user",
@@ -4759,8 +4789,8 @@ func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []prov
 				Text: fmt.Sprintf("Additional project memory now applies to %s. Review that guidance first, then continue the task with the updated constraints.", targetLabel),
 			}},
 		})
-		a.SetProjectMemoryFiles(deferredMemoryFiles)
-		debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(deferredMemoryFiles))
+		a.SetProjectMemoryFiles(bc.deferredMemoryFiles)
+		debug.Log("agent", "injected deferred path-scoped project memory for %s (%d files)", targetLabel, len(bc.deferredMemoryFiles))
 	}
 	// Tool call budget: check after all tools in this turn executed.
 	// Progressive warnings (80%, 95%) and hard stop at 100%.
