@@ -385,6 +385,9 @@ var SlashCommands = []string{
 	// #889: these have descriptions/placeholders (and real handlers) but
 	// were missing from the list, so Tab completion never offered them.
 	"/redo", "/notify", "/export-trace", "/runreport",
+	// #2835: same omission family - /pin /style /goal have live handlers
+	// (commands.go dispatch) but never appeared in Tab completion.
+	"/pin", "/style", "/goal",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -469,6 +472,9 @@ var SlashCommandDescriptions = map[string]string{
 	"/branch":        "Fork current conversation into a new session",
 	"/title":         "Set or show the session title (e.g. /title My new title)",
 	"/pin-session":   "Pin session (protected from cleanup, lists first in /sessions)",
+	"/pin":           "Show or manage pinned context blocks (survive compaction)",
+	"/style":         "Show, set, or list output style presets (/style list)",
+	"/goal":          "Show, set, or clear persistent autopilot goal",
 	"/unpin-session": "Unpin the current session",
 	"/tag":           "Add tags to the session (e.g. /tag rust perf)",
 	"/untag":         "Remove tags from the session (e.g. /untag rust)",
@@ -563,6 +569,9 @@ var SlashCommandPlaceholders = map[string]string{
 	"/branch":        "",
 	"/title":         "<new title>",
 	"/pin-session":   "",
+	"/pin":           "[<subcommand>]",
+	"/style":         "<style-name|list>",
+	"/goal":          "[<goal text>|clear]",
 	"/unpin-session": "",
 	"/tag":           "<tag>...",
 	"/untag":         "<tag>...",
