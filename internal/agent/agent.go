@@ -232,7 +232,6 @@ type Agent struct {
 	unverifiedClaim           *unverifiedClaimState      // unverified success claim detection (text claims vs actual verification)
 	convergenceLock           *convergenceLockState      // post-verification unnecessary edit drift detection
 	userSentiment             *userSentimentState        // negative user feedback detection (frustration/rejection course correction)
-	adaptiveSampling          *adaptiveSamplingState     // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter             *adaptiveEffortState       // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	branchGuard               *branchGuardState          // protected branch edit warning (main/master/develop awareness)
 	destructiveGuard          *gitDestructiveState       // destructive git operation detection (reset --hard, force push, etc.)
@@ -442,7 +441,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		latencyTracker:         NewLatencyTracker(),
 		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
-		adaptiveSampling:       newAdaptiveSamplingState(),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
@@ -1297,9 +1295,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	sid, userPromptForStats, runStats := a.startRunTrackingPhase(content)
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)
-	// syncVerifyRetries tracks how many auto-repair cycles have been consumed
-	// by the synchronous verification gate. Bounded by maxSyncVerifyRetries.
-	syncVerifyRetries := 0
 	a.resetPreLoopDetectors()
 	// Post-run finalization extracted verbatim into finalizeRunPhase (r221).
 	// The closure preserves defer-time evaluation of err and asyncVerifyStats
@@ -1334,11 +1329,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// they stay in the caller (original declarations, zero-value inits).
 	reactiveCompactRetries := 0
 	agentLLMRetries := 0
-	inlineToolCallNudges := 0
 	consecutiveEmptyResponses := 0
-	truncationContinues := 0
 	progressCheckInjected := false
-	todoCheckCount := 0
+	// noToolTurn aggregates the four no-tool-turn retry/check counters
+	// (truncationContinues, inlineToolCallNudges, todoCheckCount,
+	// syncVerifyRetries) threaded into finishNoToolTurnPhase (r231). The
+	// original declarations were zero-value inits; the struct preserves
+	// that and its field order matches the old parameter order.
+	noToolTurn := noToolTurnCounters{}
 	// Sycophancy detection: capture candidate factual premises from the user
 	// message so the agent's response can be checked for unverified agreement.
 	sessionTimedOut := false // set when the loop breaks due to session wall-clock timeout (#611)
@@ -1442,7 +1440,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		consecutiveEmptyResponses = 0
 		// No tool calls → done unless autopilot should continue with best-effort assumptions.
 		if len(toolCalls) == 0 {
-			cont, retErr := a.finishNoToolTurnPhase(ctx, resp, onEvent, i, textBuf, truncated, policyBlocked, runStats, userPromptForStats, toolCalls, &truncationContinues, &inlineToolCallNudges, &todoCheckCount, &syncVerifyRetries, &asyncVerifyStats)
+			cont, retErr := a.finishNoToolTurnPhase(ctx, resp, onEvent, i, textBuf, truncated, policyBlocked, runStats, userPromptForStats, toolCalls, &noToolTurn, &asyncVerifyStats)
 			if !cont {
 				return retErr
 			}
@@ -3568,12 +3566,6 @@ func (a *Agent) strategyExecutionOutcomePhase(tc provider.ToolCallDelta, i int, 
 	if a.effortAdapter != nil {
 		a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
 	}
-	// Record tool result for adaptive sampling classification.
-	// #2636: pass errText so sampling applies the same
-	// error-recovery filtering as the effort adapter above.
-	if a.adaptiveSampling != nil {
-		a.adaptiveSampling.recordToolResultErr(tc.Name, result.IsError, result.Content)
-	}
 	// Strategy stagnation detector: tracks same-tool+target retries
 	// after failure. When 2+ consecutive failures with identical
 	// approach occur, inject guidance to pivot strategy.
@@ -4031,9 +4023,6 @@ func (a *Agent) resetPreLoopDetectors() {
 	}
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
-	}
-	if a.adaptiveSampling != nil {
-		a.adaptiveSampling.reset()
 	}
 	if a.iterPressure != nil {
 		a.iterPressure.reset(a.maxIter)
@@ -4832,6 +4821,19 @@ func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []prov
 // --- Interruption injection ---
 // injectPendingInterruptions checks for mid-run user guidance and injects it
 // as a high-priority user message. Returns true if an interruption was injected.
+// noToolTurnCounters aggregates the four per-run mutable counters that
+// finishNoToolTurnPhase and its sub-phases mutate across loop iterations
+// (r231): truncation-recovery budget, inline-tool-call nudges, todo reminder
+// cap, and sync-verify retry budget. Split verbatim from
+// RunStreamWithContent's loop-scoped declarations; zero-value init and
+// field order preserved.
+type noToolTurnCounters struct {
+	truncationContinues  int
+	inlineToolCallNudges int
+	todoCheckCount       int
+	syncVerifyRetries    int
+}
+
 // finishNoToolTurnPhase handles the len(toolCalls)==0 completion path of the
 // RunStreamWithContent main loop: truncation recovery, inline-tool-call
 // nudging, advisory detectors, autopilot strategist, and the completion
@@ -4839,12 +4841,12 @@ func (a *Agent) finishToolTurnPhase(ctx context.Context, i int, toolCalls []prov
 // means the caller must `continue` the main loop (recovery consumed the
 // iteration or guidance was injected); cont=false means the run is finished
 // and the caller must `return retErr` (nil on normal completion).
-func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatResponse, onEvent func(provider.StreamEvent), i int, textBuf string, truncated, policyBlocked bool, runStats *RunStats, userPromptForStats string, toolCalls []provider.ToolCallDelta, truncationContinues, inlineToolCallNudges, todoCheckCount, syncVerifyRetries *int, asyncVerifyStats **RunStats) (cont bool, retErr error) {
-	if cont, retErr := a.finishTruncationRecoveryPhase(resp, onEvent, i, truncated, policyBlocked, truncationContinues); cont || retErr != nil {
+func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatResponse, onEvent func(provider.StreamEvent), i int, textBuf string, truncated, policyBlocked bool, runStats *RunStats, userPromptForStats string, toolCalls []provider.ToolCallDelta, counters *noToolTurnCounters, asyncVerifyStats **RunStats) (cont bool, retErr error) {
+	if cont, retErr := a.finishTruncationRecoveryPhase(resp, onEvent, i, truncated, policyBlocked, &counters.truncationContinues); cont || retErr != nil {
 		return cont, retErr
 	}
 	assistantText := a.finishAssistantTextRecordPhase(i, textBuf)
-	if cont, retErr := a.finishInlineToolNudgePhase(i, resp, assistantText, inlineToolCallNudges); cont || retErr != nil {
+	if cont, retErr := a.finishInlineToolNudgePhase(i, resp, assistantText, &counters.inlineToolCallNudges); cont || retErr != nil {
 		return cont, retErr
 	}
 	if cont, retErr := a.finishTextDetectorsPhase(resp, assistantText, i, runStats); cont || retErr != nil {
@@ -4856,10 +4858,10 @@ func (a *Agent) finishNoToolTurnPhase(ctx context.Context, resp *provider.ChatRe
 	if cont, retErr := a.finishInterruptionAutopilotPhase(ctx, i, textBuf, onEvent); cont || retErr != nil {
 		return cont, retErr
 	}
-	if cont, retErr := a.finishCompletionGatesPhase(i, runStats, userPromptForStats, textBuf, todoCheckCount); cont || retErr != nil {
+	if cont, retErr := a.finishCompletionGatesPhase(i, runStats, userPromptForStats, textBuf, &counters.todoCheckCount); cont || retErr != nil {
 		return cont, retErr
 	}
-	if cont, retErr := a.finishSyncVerifyPhase(ctx, i, runStats, syncVerifyRetries, asyncVerifyStats); cont || retErr != nil {
+	if cont, retErr := a.finishSyncVerifyPhase(ctx, i, runStats, &counters.syncVerifyRetries, asyncVerifyStats); cont || retErr != nil {
 		return cont, retErr
 	}
 	return a.finishFinalQualityGatesPhase(ctx, i, runStats, userPromptForStats)
