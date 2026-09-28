@@ -412,78 +412,114 @@ func (a *tgAdapter) submitTGInbound(ctx context.Context, inbound InboundMessage,
 	}
 }
 
+// processAttachments walks the media fields of an incoming Telegram message
+// in a fixed gate order (photo -> voice -> document) and returns the collected
+// attachments plus the voice transcript (voiceText).
 func (a *tgAdapter) processAttachments(ctx context.Context, msg map[string]any) ([]Attachment, string) {
 	var attachments []Attachment
 	var voiceText string
 
-	// Photo attachments (Telegram sends multiple sizes, use the largest)
-	if photos, ok := msg["photo"].([]any); ok && len(photos) > 0 {
-		photo, ok := photos[len(photos)-1].(map[string]any)
-		if ok {
-			fileID, _ := photo["file_id"].(string)
-			if fileID != "" {
-				data, mimeType, err := a.downloadTGFile(ctx, fileID)
-				if err == nil && len(data) > 0 {
-					if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
-						mimeType = decoded.MIME
-					}
-					localPath, cacheErr := cacheTGAttachment(data, "photo.jpg", mimeType)
-					if cacheErr == nil {
-						attachments = append(attachments, Attachment{
-							Kind:       AttachmentImage,
-							Name:       "photo.jpg",
-							MIME:       mimeType,
-							Path:       localPath,
-							DataBase64: base64.StdEncoding.EncodeToString(data),
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// Voice / audio
-	if voice, ok := msg["voice"].(map[string]any); ok {
-		fileID, _ := voice["file_id"].(string)
-		if fileID != "" {
-			transcript := ""
-			if a.stt != nil {
-				transcript = a.transcribeTGVoice(ctx, fileID)
-			}
-			if transcript != "" {
-				attachments = append(attachments, Attachment{
-					Kind:       AttachmentVoice,
-					Name:       "voice.ogg",
-					MIME:       "audio/ogg",
-					Transcript: transcript,
-				})
-				voiceText = transcript
-			}
-		}
-	}
-
-	// Document / file
-	if doc, ok := msg["document"].(map[string]any); ok {
-		fileID, _ := doc["file_id"].(string)
-		filename, _ := doc["file_name"].(string)
-		mimeType, _ := doc["mime_type"].(string)
-		if fileID != "" {
-			data, respMime, err := a.downloadTGFile(ctx, fileID)
-			if err == nil && len(data) > 0 {
-				localPath, cacheErr := cacheTGAttachment(data, filename, firstNonEmpty(mimeType, respMime))
-				if cacheErr == nil {
-					attachments = append(attachments, Attachment{
-						Kind: AttachmentFile,
-						Name: filename,
-						MIME: firstNonEmpty(mimeType, respMime),
-						Path: localPath,
-					})
-				}
-			}
-		}
-	}
+	attachments = a.processPhotoAttachment(ctx, msg, attachments)
+	attachments, voiceText = a.processVoiceAttachment(ctx, msg, attachments)
+	attachments = a.processDocumentAttachment(ctx, msg, attachments)
 
 	return attachments, voiceText
+}
+
+// processPhotoAttachment handles the "photo" field: Telegram sends multiple
+// sizes, so only the largest (last) entry is downloaded, MIME-sniffed, cached,
+// and attached inline (DataBase64).
+func (a *tgAdapter) processPhotoAttachment(ctx context.Context, msg map[string]any, attachments []Attachment) []Attachment {
+	// Photo attachments (Telegram sends multiple sizes, use the largest)
+	photos, ok := msg["photo"].([]any)
+	if !ok || len(photos) == 0 {
+		return attachments
+	}
+	photo, ok := photos[len(photos)-1].(map[string]any)
+	if !ok {
+		return attachments
+	}
+	fileID, _ := photo["file_id"].(string)
+	if fileID == "" {
+		return attachments
+	}
+	data, mimeType, err := a.downloadTGFile(ctx, fileID)
+	if err != nil || len(data) == 0 {
+		return attachments
+	}
+	if decoded, decodeErr := imagepkg.Decode(data); decodeErr == nil && strings.TrimSpace(decoded.MIME) != "" {
+		mimeType = decoded.MIME
+	}
+	localPath, cacheErr := cacheTGAttachment(data, "photo.jpg", mimeType)
+	if cacheErr != nil {
+		return attachments
+	}
+	return append(attachments, Attachment{
+		Kind:       AttachmentImage,
+		Name:       "photo.jpg",
+		MIME:       mimeType,
+		Path:       localPath,
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+	})
+}
+
+// processVoiceAttachment handles the "voice" field: when an STT transcriber is
+// configured and produces a non-empty transcript, it is attached as a voice
+// attachment and echoed as voiceText.
+func (a *tgAdapter) processVoiceAttachment(ctx context.Context, msg map[string]any, attachments []Attachment) ([]Attachment, string) {
+	// Voice / audio
+	voice, ok := msg["voice"].(map[string]any)
+	if !ok {
+		return attachments, ""
+	}
+	fileID, _ := voice["file_id"].(string)
+	if fileID == "" {
+		return attachments, ""
+	}
+	transcript := ""
+	if a.stt != nil {
+		transcript = a.transcribeTGVoice(ctx, fileID)
+	}
+	if transcript == "" {
+		return attachments, ""
+	}
+	attachments = append(attachments, Attachment{
+		Kind:       AttachmentVoice,
+		Name:       "voice.ogg",
+		MIME:       "audio/ogg",
+		Transcript: transcript,
+	})
+	return attachments, transcript
+}
+
+// processDocumentAttachment handles the "document" field: the declared
+// mime_type wins over the download response Content-Type.
+func (a *tgAdapter) processDocumentAttachment(ctx context.Context, msg map[string]any, attachments []Attachment) []Attachment {
+	// Document / file
+	doc, ok := msg["document"].(map[string]any)
+	if !ok {
+		return attachments
+	}
+	fileID, _ := doc["file_id"].(string)
+	filename, _ := doc["file_name"].(string)
+	mimeType, _ := doc["mime_type"].(string)
+	if fileID == "" {
+		return attachments
+	}
+	data, respMime, err := a.downloadTGFile(ctx, fileID)
+	if err != nil || len(data) == 0 {
+		return attachments
+	}
+	localPath, cacheErr := cacheTGAttachment(data, filename, firstNonEmpty(mimeType, respMime))
+	if cacheErr != nil {
+		return attachments
+	}
+	return append(attachments, Attachment{
+		Kind: AttachmentFile,
+		Name: filename,
+		MIME: firstNonEmpty(mimeType, respMime),
+		Path: localPath,
+	})
 }
 
 func (a *tgAdapter) transcribeTGVoice(ctx context.Context, fileID string) string {
