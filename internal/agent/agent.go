@@ -1744,55 +1744,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		debug.Log("agent", "Iteration %d: tool_calls=%d", i+1, len(toolCalls))
 		a.contextManager.Add(resp.Message)
-		// Action hedging detector: scan assistant text for verbalized
-		// uncertainty ("hopefully this fixes", "let's try", "best guess")
-		// when the iteration includes mutation tools. If threshold exceeded,
-		// inject guidance to verify before proceeding with edits.
-		hedgingHasMutation := false
-		for _, tc := range toolCalls {
-			if isMutationTool(tc.Name) {
-				hedgingHasMutation = true
-				break
-			}
-		}
-		if hedgingHint := a.maybeWarnActionHedging(textBuf, hedgingHasMutation); hedgingHint != "" {
-			debug.Log("agent", "Iteration %d: action hedging detector detected verbalized uncertainty during mutation", i+1)
-			a.recordUncertainty("hedging", weightHedging)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: hedgingHint,
-				}},
-			})
-		}
-		// Compounded trajectory uncertainty check: after all per-turn epistemic
-		// detectors have run, check if the accumulated trajectory-level
-		// uncertainty has crossed the reliability threshold.
-		if compHint := a.maybeWarnCompoundedUncertainty(); compHint != "" {
-			debug.Log("agent", "Iteration %d: compounded trajectory uncertainty threshold crossed", i+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: compHint,
-				}},
-			})
-		}
-		// Spiral of Hallucination detection: track cross-turn epistemic
-		// error propagation. Record this turn's uncertainty topics and
-		// check for committed assertions on previously uncertain foundations.
-		a.recordSpiralTurn(textBuf)
-		if spiralHint := a.maybeWarnSpiralHallucination(); spiralHint != "" {
-			debug.Log("agent", "Iteration %d: spiral of hallucination pattern detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role: "user",
-				Content: []provider.ContentBlock{{
-					Type: "text",
-					Text: spiralHint,
-				}},
-			})
-		}
+		// Per-turn epistemic detectors (action hedging, compounded trajectory
+		// uncertainty, spiral of hallucination): record this turn's signals
+		// and inject guidance when a threshold fires. (r216 seam; verbatim
+		// move, no behavior change.)
+		a.runEpistemicDetectorsPhase(textBuf, toolCalls, i)
 		// Execute tool calls and build tool_result message
 		// Reset the no-progress counter — the agent is making forward progress.
 		a.strategistNoProgressCount = 0
@@ -1823,49 +1779,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// LLMs occasionally emit duplicate calls (e.g., two read_file for the
 		// same path). Skip the second execution and reuse the first result.
 		seenReadOnly := make(map[dedupKey]int) // key → index of first result in toolResults
-		// Counterfactual dependency detection: check if this batch of tool calls
-		// contains producer-consumer pairs where the consumer assumes the producer
-		// has completed (e.g., write_file + run_command build in parallel).
-		if depWarn := a.recordToolCallBatch(toolCalls, i+1); depWarn != "" {
-			debug.Log("agent", "Iteration %d: counterfactual dependency assumption detected", i+1)
-			a.contextManager.Add(provider.Message{
-				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: depWarn}},
-			})
-			msgs = a.contextManager.Messages()
-		}
-		// Batch coupling detection: check if this batch of tool calls contains
-		// hidden sequential dependencies (e.g., mkdir + write_file to that dir).
-		if len(toolCalls) > 1 {
-			var batchInfos []couplingToolCall
-			for _, tc := range toolCalls {
-				batchInfos = append(batchInfos, couplingToolCall{name: tc.Name, args: tc.Arguments})
-			}
-			if couplingWarn := a.batchCoupling.checkBatchCoupling(batchInfos); couplingWarn != "" {
-				debug.Log("agent", "Iteration %d: batch tool call coupling detected", i+1)
-				a.contextManager.Add(provider.Message{
-					Role:    "user",
-					Content: []provider.ContentBlock{{Type: "text", Text: couplingWarn}},
-				})
-				msgs = a.contextManager.Messages()
-			}
-		}
-		// #1798 case 1: the irreversibility gate is a PRE-action check - it
-		// used to sit in the post-execution result loop, so the "You are
-		// about to execute" warning arrived after the action had already
-		// happened (calibrated abstention had nothing to abstain from).
-		// Recording here also keeps the ledger entry alive for the
-		// post-execution recordOutcome revoke (#1776).
-		if a.irrevGate != nil {
-			for _, tc := range toolCalls {
-				if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
-					a.contextManager.Add(provider.Message{
-						Role:    "user",
-						Content: []provider.ContentBlock{{Type: "text", Text: warn}},
-					})
-				}
-			}
-		}
+		// Pre-action batch warnings (counterfactual dependency, batch coupling,
+		// irreversibility gate): run before any tool in this batch executes.
+		// May Add guidance messages; returns the refreshed msgs snapshot when
+		// it did. (r216 seam; verbatim move, no behavior change.)
+		msgs = a.toolBatchWarningPhase(toolCalls, i, msgs)
 		for idx, tc := range toolCalls {
 			undoBlindHint, loopGuidance, searchParamHint, redundancyHint, equivHint, err := a.preToolExecutionPhase(ctx, i, idx, tc, toolCalls, &toolResults, runStats, msgs, &deferredMemoryContent, &deferredMemoryFiles, &deferredMemoryTarget)
 			if err != nil {
@@ -1917,6 +1835,116 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		return a.emitMaxIterationsSummary(runStats, onEvent)
 	}
 	return nil
+}
+
+// runEpistemicDetectorsPhase runs the three per-turn epistemic detectors
+// (action hedging, compounded trajectory uncertainty, spiral of
+// hallucination): records this turn's signals and injects a guidance
+// message when a threshold fires. Extracted verbatim from
+// RunStreamWithContent (r216); no behavior change.
+func (a *Agent) runEpistemicDetectorsPhase(textBuf string, toolCalls []provider.ToolCallDelta, i int) {
+	// Action hedging detector: scan assistant text for verbalized
+	// uncertainty ("hopefully this fixes", "let's try", "best guess")
+	// when the iteration includes mutation tools. If threshold exceeded,
+	// inject guidance to verify before proceeding with edits.
+	hedgingHasMutation := false
+	for _, tc := range toolCalls {
+		if isMutationTool(tc.Name) {
+			hedgingHasMutation = true
+			break
+		}
+	}
+	if hedgingHint := a.maybeWarnActionHedging(textBuf, hedgingHasMutation); hedgingHint != "" {
+		debug.Log("agent", "Iteration %d: action hedging detector detected verbalized uncertainty during mutation", i+1)
+		a.recordUncertainty("hedging", weightHedging)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: hedgingHint,
+			}},
+		})
+	}
+	// Compounded trajectory uncertainty check: after all per-turn epistemic
+	// detectors have run, check if the accumulated trajectory-level
+	// uncertainty has crossed the reliability threshold.
+	if compHint := a.maybeWarnCompoundedUncertainty(); compHint != "" {
+		debug.Log("agent", "Iteration %d: compounded trajectory uncertainty threshold crossed", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: compHint,
+			}},
+		})
+	}
+	// Spiral of Hallucination detection: track cross-turn epistemic
+	// error propagation. Record this turn's uncertainty topics and
+	// check for committed assertions on previously uncertain foundations.
+	a.recordSpiralTurn(textBuf)
+	if spiralHint := a.maybeWarnSpiralHallucination(); spiralHint != "" {
+		debug.Log("agent", "Iteration %d: spiral of hallucination pattern detected", i+1)
+		a.contextManager.Add(provider.Message{
+			Role: "user",
+			Content: []provider.ContentBlock{{
+				Type: "text",
+				Text: spiralHint,
+			}},
+		})
+	}
+}
+
+// toolBatchWarningPhase runs the pre-execution batch warning detectors
+// (counterfactual dependency, batch coupling, irreversibility gate) for the
+// current tool-call batch. Each detector may inject a guidance message into
+// the context manager; the returned snapshot reflects any such Add so the
+// next LLM send in this turn carries the warning. Extracted verbatim from
+// RunStreamWithContent (r216); no behavior change.
+func (a *Agent) toolBatchWarningPhase(toolCalls []provider.ToolCallDelta, i int, msgs []provider.Message) []provider.Message {
+	// Counterfactual dependency detection: check if this batch of tool calls
+	// contains producer-consumer pairs where the consumer assumes the producer
+	// has completed (e.g., write_file + run_command build in parallel).
+	if depWarn := a.recordToolCallBatch(toolCalls, i+1); depWarn != "" {
+		debug.Log("agent", "Iteration %d: counterfactual dependency assumption detected", i+1)
+		a.contextManager.Add(provider.Message{
+			Role:    "user",
+			Content: []provider.ContentBlock{{Type: "text", Text: depWarn}},
+		})
+		msgs = a.contextManager.Messages()
+	}
+	// Batch coupling detection: check if this batch of tool calls contains
+	// hidden sequential dependencies (e.g., mkdir + write_file to that dir).
+	if len(toolCalls) > 1 {
+		var batchInfos []couplingToolCall
+		for _, tc := range toolCalls {
+			batchInfos = append(batchInfos, couplingToolCall{name: tc.Name, args: tc.Arguments})
+		}
+		if couplingWarn := a.batchCoupling.checkBatchCoupling(batchInfos); couplingWarn != "" {
+			debug.Log("agent", "Iteration %d: batch tool call coupling detected", i+1)
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: couplingWarn}},
+			})
+			msgs = a.contextManager.Messages()
+		}
+	}
+	// #1798 case 1: the irreversibility gate is a PRE-action check - it
+	// used to sit in the post-execution result loop, so the "You are
+	// about to execute" warning arrived after the action had already
+	// happened (calibrated abstention had nothing to abstain from).
+	// Recording here also keeps the ledger entry alive for the
+	// post-execution recordOutcome revoke (#1776).
+	if a.irrevGate != nil {
+		for _, tc := range toolCalls {
+			if warn := a.irrevGate.recordAction(tc.Name, string(tc.Arguments)); warn != "" {
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: warn}},
+				})
+			}
+		}
+	}
+	return msgs
 }
 
 // dedupKey identifies a read-only tool call for in-turn deduplication
