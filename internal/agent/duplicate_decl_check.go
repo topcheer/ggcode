@@ -61,6 +61,14 @@ func checkDuplicateDeclarations(filePath, oldContent, newContent string) string 
 		return ""
 	}
 
+	// #2821: .d.ts files are ambient declaration files whose every function
+	// entry is an overload signature (no body, ';' terminator) — that is the
+	// only legal form there. Counting them as duplicates would misfire on the
+	// file's core idiom.
+	if strings.HasSuffix(filePath, ".d.ts") {
+		return ""
+	}
+
 	ext := filepath.Ext(filePath)
 
 	var dups []dupDecl
@@ -298,7 +306,13 @@ func collectPythonDecls(src string) map[regexDeclKey]int {
 // jsFuncRe matches TOP-LEVEL function declarations (column 0): "function foo(".
 // Indented "function foo(" is a nested/block-scoped function (legal ES6
 // idiom inside any function body) and is excluded (#2703 scenario 2).
-var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(`)
+//
+// #2821: the pattern requires a BODY ("{" after the parameter list and an
+// optional return-type annotation). TypeScript overload signatures
+// ("function foo(s: string): Date;") legally repeat the same name with no
+// body and a ';' terminator — they are not duplicates and must not be
+// counted; only 2+ implementations (both with bodies) are real errors.
+var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\((?:[^;{}()]|\([^()]*\))*\)\s*(?::\s*[^;{=]+)?\s*\{`)
 
 // jsClassRe matches top-level class declarations. #2734: inheritance is the
 // dominant class form in real JS/TS (React components extend Component,
