@@ -4319,7 +4319,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.fixAmnesia.recordFileEdited(fp)
 				}
 				// Check new content for patterns matching previously-fixed errors.
-				if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, result.Content); faGuidance != "" {
+				// #2803: edit_file/write_file result content is a success
+				// message plus a compactDiff truncated to 25 lines - the
+				// import block is routinely outside the hunk (file header vs
+				// mid-function edit), so missingImportInContent false-positived
+				// on mature files that already had the import and advised
+				// adding a duplicate one. The detector's contract is "content
+				// is the NEW content of newFile" (fix_amnesia.go) - read the
+				// real post-edit file; fall back to the diff only when the
+				// read fails (prefer under-reporting over a false claim).
+				newContent := result.Content
+				if fp != "" {
+					if b, rerr := os.ReadFile(fp); rerr == nil {
+						newContent = string(b)
+					}
+				}
+				if faGuidance := a.fixAmnesia.checkContentAgainstFixed(extractFilePathFromError(result.Content), fp, newContent); faGuidance != "" {
 					a.appendGuidance(&result, faGuidance)
 				}
 			}
