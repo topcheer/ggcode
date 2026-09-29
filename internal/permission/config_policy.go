@@ -28,6 +28,7 @@ type ConfigPolicy struct {
 	mode            PermissionMode
 	cmdRules        *CommandRuleSet
 	networkDetector bool // if true, network egress commands trigger Ask in auto/bypass
+	ledger          *exposureLedger
 	mu              sync.RWMutex
 }
 
@@ -56,6 +57,7 @@ func NewConfigPolicyWithModeAndReadOnlyDirs(rules map[string]Decision, allowedDi
 		mode:            mode,
 		cmdRules:        NewCommandRuleSet(),
 		networkDetector: true,
+		ledger:          newExposureLedger(),
 	}
 }
 
@@ -86,6 +88,11 @@ func (p *ConfigPolicy) AllowCommandPattern(pattern string) {
 // Check returns the permission decision for a tool call.
 func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, error) {
 	// Don't dump tool input JSON — can be huge and contains file content
+
+	// Age the composition-exposure ledger on every call so windows close
+	// with real agent activity, not wall time alone (r255, see
+	// exposure_ledger.go).
+	p.ledger.onToolCall()
 
 	// #1595-C: an explicit user Deny is the STRONGEST signal (the #741 /
 	// #573-B comment itself says so) - it must precede the fast paths.
@@ -182,6 +189,32 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 		return Deny, nil
 	}
 
+	// Exposure ledger (r255): record file reads that put sensitive or
+	// out-of-sandbox content into model context, so a LATER egress call can
+	// be composition-gated even when its arguments carry no recognizable
+	// secret (ToolGuardian arXiv:2607.21835: individually-benign calls
+	// compose into an exfiltration channel). Recording is decision-aware:
+	// plan/auto DENY out-of-sandbox reads outright, so their content never
+	// reaches the model there and is not recorded; in-sandbox sensitive
+	// reads (.env, keys.env) are permitted in every mode and recorded
+	// everywhere.
+	if isFileTool(toolName) {
+		recordOutOfSandbox := p.mode == SupervisedMode || p.mode == BypassMode || p.mode == AutopilotMode
+		for _, path := range extractFilePaths(input) {
+			resolved := expandTilde(path)
+			if resolved == "" {
+				continue
+			}
+			if p.sandbox.Allowed(resolved) {
+				if isSensitivePath(resolved) {
+					p.ledger.record(resolved)
+				}
+			} else if recordOutOfSandbox {
+				p.ledger.record(resolved)
+			}
+		}
+	}
+
 	// Mode-specific handling
 	switch p.mode {
 	case BypassMode, AutopilotMode:
@@ -199,6 +232,16 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				if p.networkDetector && IsNetworkExfiltrate(cmd) {
 					debug.Log("permission", "network exfiltration blocked in bypass mode")
 					return Ask, nil
+				}
+				// Exposure ledger (r255): general network egress is normally fine
+				// in bypass, but once secret-bearing content is live in model
+				// context ANY egress channel keeps its human gate — the payload
+				// may carry context the signature checks cannot see.
+				if p.networkDetector && p.hasLiveExposure() {
+					if nc := CheckNetwork(cmd); nc.Risk != NetworkNone {
+						debug.Log("permission", "network egress escalated by exposure ledger in bypass mode: %s", nc.Reason)
+						return Ask, nil
+					}
 				}
 				// #573-C: redirection targets are file writes — hold them to the
 				// same bar as write tools (out-of-sandbox or sensitive path →
@@ -234,6 +277,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 					return Ask, nil
 				}
 			}
+		}
+		// Exposure ledger (r255): web egress keeps its human gate while a
+		// secret-bearing read is live in context, even in bypass/autopilot —
+		// same philosophy as IsNetworkExfiltrate above (egress always needs
+		// a human when data can leak).
+		if isWebEgressTool(toolName) && p.hasLiveExposure() {
+			debug.Log("permission", "web egress escalated by exposure ledger in bypass mode")
+			return Ask, nil
 		}
 		return Allow, nil
 	case PlanMode:
@@ -309,6 +360,13 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 				}
 			}
 		}
+		// Exposure ledger (r255): auto mode permits in-sandbox sensitive
+		// reads (.env, keys.env) silently — once such content is live in
+		// context, web egress is downgraded to Ask.
+		if isWebEgressTool(toolName) && p.hasLiveExposure() {
+			debug.Log("permission", "web egress escalated by exposure ledger in auto mode")
+			return Ask, nil
+		}
 		return Allow, nil
 	}
 
@@ -316,6 +374,14 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// (no per-call confirmation needed), but sensitive paths outside the
 	// sandbox still require confirmation to prevent secret exfiltration.
 	if IsReadOnlyTool(toolName) {
+		// Exposure ledger (r255): web egress is the second half of the
+		// read→exfiltrate loop and normally a silent Allow here; when a
+		// prior read put sensitive/out-of-sandbox content into context it
+		// keeps its human gate instead.
+		if isWebEgressTool(toolName) && p.hasLiveExposure() {
+			debug.Log("permission", "web egress escalated by exposure ledger in supervised mode")
+			return Ask, nil
+		}
 		if isFileTool(toolName) {
 			for _, path := range extractFilePaths(input) {
 				if path != "" && !p.sandbox.Allowed(path) && isSensitivePath(path) {
@@ -441,6 +507,23 @@ func (p *ConfigPolicy) IsDangerous(command string) bool {
 // always need a human in the loop. Consulted at the memory-hit site before
 // treating a learned approval as an Allow.
 func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage) bool {
+	// Exposure ledger (r255): while a secret-bearing read is live in
+	// context, ANY egress channel keeps its human gate even when a learned
+	// approval-memory entry (#1281) would have auto-approved it — the
+	// memory was earned before the exposure and cannot vouch for a
+	// payload it never saw.
+	if p.hasLiveExposure() {
+		if isWebEgressTool(toolName) {
+			return true
+		}
+		if isCommandTool(toolName) {
+			for _, cmd := range extractCommandsForTool(toolName, input) {
+				if nc := CheckNetwork(cmd); nc.Risk != NetworkNone {
+					return true
+				}
+			}
+		}
+	}
 	if isCommandTool(toolName) {
 		for _, cmd := range extractCommandsForTool(toolName, input) {
 			if p.detector.IsDangerous(cmd) || IsNetworkExfiltrate(cmd) {
@@ -449,6 +532,22 @@ func (p *ConfigPolicy) BlocksAutoApprove(toolName string, input json.RawMessage)
 		}
 	}
 	return false
+}
+
+// ExposureRisk reports whether a live composition-exposure window exists —
+// a recent read placed secret-bearing or out-of-sandbox content into model
+// context — and returns the most recent path that caused it. Surfaced for
+// status/debug display and tests (r255).
+func (p *ConfigPolicy) ExposureRisk() (bool, string) {
+	return p.ledger.active()
+}
+
+// hasLiveExposure is the internal decision-shaped view of the ledger.
+// Must not take p.mu: callers hold it (Check) — the ledger carries its
+// own lock.
+func (p *ConfigPolicy) hasLiveExposure() bool {
+	live, _ := p.ledger.active()
+	return live
 }
 
 // AllowedPath returns true if the path is within the sandbox.
@@ -962,6 +1061,12 @@ func (p *ConfigPolicy) checkPlanReadOnlyExceptions(toolName string, input json.R
 					return Deny
 				}
 			}
+		}
+	}
+	if isWebEgressTool(toolName) {
+		if live, pth := p.ledger.active(); live {
+			debug.Log("permission", "web call denied by exposure ledger in plan mode (prior read: %s)", pth)
+			return Deny
 		}
 	}
 	if isWebEgressTool(toolName) && hasDataEgressSignature(input) {
