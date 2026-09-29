@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/agentreliability"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -20,6 +21,9 @@ type ListAgentsTool struct {
 	// (see subagent_cascade.go). Shares CascadeHints with wait_agent.
 	ParentModel  func() string
 	CascadeHints *CascadeHintTracker
+	// Reliability surfaces cross-session ACP delegate reliability profiles
+	// alongside the run list; nil disables the section.
+	Reliability *agentreliability.Reliability
 }
 
 func (t ListAgentsTool) Name() string { return "list_agents" }
@@ -49,7 +53,7 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	}
 	agents := t.Manager.List()
 	if len(agents) == 0 {
-		return Result{Content: "No agent runs have been spawned."}, nil
+		return Result{Content: "No agent runs have been spawned." + reliabilityOverviewSection(t.Reliability)}, nil
 	}
 
 	// Sort by creation time
@@ -69,13 +73,26 @@ func (t ListAgentsTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		lines = append(lines, appendCascadeHint(t.CascadeHints, t.ParentModel, snap))
 	}
 	if len(lines) == 0 {
-		return Result{Content: "No agent runs have been spawned."}, nil
+		return Result{Content: "No agent runs have been spawned." + reliabilityOverviewSection(t.Reliability)}, nil
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%d agent run(s):\n\n", len(lines)))
 	sb.WriteString(strings.Join(lines, "\n"))
+	sb.WriteString(reliabilityOverviewSection(t.Reliability))
 
 	return Result{Content: sb.String()}, nil
+}
+
+// reliabilityOverviewSection renders the cross-session ACP delegate
+// reliability overview appended to list_agents output, so agent selection is
+// grounded in observed outcomes (peer reliability profiles,
+// see internal/agentreliability).
+func reliabilityOverviewSection(rel *agentreliability.Reliability) string {
+	overview := rel.Overview()
+	if overview == "" {
+		return ""
+	}
+	return "\n\nACP delegate reliability (recent): " + overview
 }
 
 func formatSubAgentSnapshot(snap subagent.Snapshot) string {

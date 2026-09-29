@@ -3,10 +3,13 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/topcheer/ggcode/internal/agentreliability"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
 )
@@ -128,6 +131,10 @@ type DelegateTool struct {
 	SubAgentManagerFn func() *subagent.Manager
 	WorkingDir        string
 	WorkingDirFn      func() string
+	// Reliability records delegation outcomes per external agent and renders
+	// recent-completion summaries into results (peer reliability profiles;
+	// nil disables bookkeeping).
+	Reliability *agentreliability.Reliability
 }
 
 func (t DelegateTool) Name() string { return "delegate" }
@@ -220,6 +227,9 @@ func (t DelegateTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 
 	client, err := t.Manager.Get(ctx, params.Agent)
 	if err != nil {
+		// Launch failures are reliability-relevant: a CLI agent that cannot
+		// even start is a real signal for future delegate selection.
+		t.Reliability.Record(params.Agent, agentreliability.OutcomeFailed, time.Now(), 0)
 		return Result{Content: fmt.Sprintf("Agent %q is not available: %v", params.Agent, err), IsError: true}, nil
 	}
 
@@ -233,12 +243,18 @@ func (t DelegateTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 	}
 	defer client.Close()
 
+	started := time.Now()
 	result, err := client.Prompt(ctx, params.Prompt)
+	outcome := agentreliability.OutcomeCompleted
 	if err != nil {
-		return Result{Content: fmt.Sprintf("Agent %q error: %v", params.Agent, err), IsError: true}, nil
+		outcome = classifyDelegateOutcome(err)
+	}
+	t.Reliability.Record(params.Agent, outcome, started, time.Since(started))
+	if err != nil {
+		return Result{Content: appendReliabilityHint(t.Reliability, params.Agent, fmt.Sprintf("Agent %q error: %v", params.Agent, err)), IsError: true}, nil
 	}
 
-	return Result{Content: formatDelegateOutput(title, result)}, nil
+	return Result{Content: appendReliabilityHint(t.Reliability, params.Agent, formatDelegateOutput(title, result))}, nil
 }
 
 func (t DelegateTool) subAgentManager() *subagent.Manager {
@@ -269,6 +285,7 @@ func (t DelegateTool) executeAsync(
 	safego.Go("delegate-tool", func() {
 		defer client.Close()
 
+		runStarted := time.Now()
 		runCtx, cancel := context.WithCancel(mgr.RootContext())
 		if !mgr.SetCancel(id, cancel) {
 			cancel()
@@ -364,6 +381,7 @@ func (t DelegateTool) executeAsync(
 			}
 			mgr.Notify(id)
 			mgr.Complete(id, "", err)
+			t.Reliability.Record(params.Agent, classifyDelegateOutcome(err), runStarted, time.Since(runStarted))
 			return
 		}
 		if latestResult == nil {
@@ -371,7 +389,8 @@ func (t DelegateTool) executeAsync(
 		} else if strings.TrimSpace(latestResult.Text) == "" {
 			latestResult.Text = streamedText.String()
 		}
-		mgr.Complete(id, formatDelegateOutput(title, latestResult), nil)
+		t.Reliability.Record(params.Agent, agentreliability.OutcomeCompleted, runStarted, time.Since(runStarted))
+		mgr.Complete(id, appendReliabilityHint(t.Reliability, params.Agent, formatDelegateOutput(title, latestResult)), nil)
 	})
 
 	return Result{Content: fmt.Sprintf(
@@ -405,4 +424,25 @@ func formatDelegateOutput(title string, result *ACPPromptResult) string {
 		}
 	}
 	return output
+}
+
+// classifyDelegateOutcome maps a delegate prompt error to a reliability
+// outcome: cancellation (user abort / context deadline) is distinct from a
+// hard failure of the external agent.
+func classifyDelegateOutcome(err error) agentreliability.Outcome {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return agentreliability.OutcomeCancelled
+	}
+	return agentreliability.OutcomeFailed
+}
+
+// appendReliabilityHint appends the agent's recent reliability summary so the
+// next delegate selection is grounded in observed outcomes (peer reliability
+// profiles, see internal/agentreliability).
+func appendReliabilityHint(rel *agentreliability.Reliability, agent, content string) string {
+	summary := rel.AgentSummary(agent)
+	if summary == "" {
+		return content
+	}
+	return content + "\n\nReliability (recent): " + summary
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/topcheer/ggcode/internal/acpclient"
+	"github.com/topcheer/ggcode/internal/agentreliability"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -82,6 +83,7 @@ func RegisterDelegateTool(
 		SubAgentManagerFn: subMgrFn,
 		WorkingDir:        workingDir,
 		WorkingDirFn:      workingDirFn,
+		Reliability:       agentreliability.NewDefault(),
 	})
 }
 
@@ -122,6 +124,9 @@ func NewSubAgentManager(
 		Manager:      mgr,
 		ParentModel:  parentModel,
 		CascadeHints: cascadeHints,
+		// Separate read-mostly instance of the same persisted ledger; delegate
+		// tool owns the writes.
+		Reliability: agentreliability.NewDefault(),
 	})
 
 	// Named subagent templates (persisted per-workspace)
