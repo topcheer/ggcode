@@ -77,6 +77,26 @@ The model name is displayed in the TUI as `[model-name]` in the sub-agent label,
 5. `Manager.Complete()` stores full output (no truncation)
 6. Parent retrieves result via `wait_agent` or `list_agents`
 
+### Failure Attribution
+
+When a sub-agent terminates with `failed`, `Manager.Complete()` classifies the run's
+retained event trail into one failure category and attaches a one-line post-mortem to
+the snapshot (`internal/subagent/failure_attribution.go`). `wait_agent`, `list_agents`,
+and the cascade-escalation hint all render it as an `Attribution:` line:
+
+- `tool-error-loop` — the tail of the run is ≥3 errors within the last 5 tool results
+  (retrying the same task shape will fail the same way; escalate or change approach)
+- `tool-error` — tool errors occurred but not clustered at the tail (a retry may succeed)
+- `llm-error` — died on LLM/stream errors with no tool failures (provider outage,
+  context overflow; a re-spawn is usually safe)
+- `silent-failure` — executed but failed with no error event retained (watchdog reap,
+  infra kill)
+
+The line names the failing step (`at step N/M`), the exact invocation
+(`bash(go build ./...): exit status 1`), and notes evicted trail events. Research
+basis: MAST (arXiv:2503.13657, NeurIPS 2025) and Who&When automated failure
+attribution (ICML 2025).
+
 ### Provider Freshness
 
 Sub-agents always use the parent agent's **current runtime provider**, not the provider that was active at process startup. If you switch models mid-session via the model picker, subsequently spawned sub-agents will use the new provider. This ensures sub-agents respect runtime configuration changes.
