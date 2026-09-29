@@ -1,0 +1,27 @@
+# AUR PKGBUILD for ggcode (binary package form).
+# Source points at the GitHub release tarball produced by goreleaser
+# (name_template: ggcode_<os>_<arch>.tar.gz where amd64 -> x86_64).
+# Checksums are placeholders - run ./update.sh <version> to refresh them
+# before publishing an AUR update.
+
+pkgname=ggcode-bin
+pkgver=1.3.247
+pkgrel=1
+pkgdesc="AI coding agent for the terminal with a polished TUI, resumable sessions, MCP integrations, built-in tools, and self-update support"
+arch=("x86_64" "aarch64")
+url="https://github.com/topcheer/ggcode"
+license=("MIT")
+depends=("glibc")
+provides=("ggcode")
+conflicts=("ggcode")
+source_x86_64=("${url}/releases/download/v${pkgver}/ggcode_linux_x86_64.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/ggcode_linux_arm64.tar.gz")
+sha256sums_x86_64=("PLACEHOLDER_X86_64_SHA256")
+sha256sums_aarch64=("PLACEHOLDER_AARCH64_SHA256")
+
+package() {
+    cd "${srcdir}"
+    install -Dm755 ggcode "${pkgdir}/usr/bin/ggcode"
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE" 2>/dev/null || true
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md" 2>/dev/null || true
+}
