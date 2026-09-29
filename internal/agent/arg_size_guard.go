@@ -199,12 +199,23 @@ func analyzeMultiFileEditSize(argMap map[string]json.RawMessage) string {
 		}
 	}
 
-	if maxFieldLen < argSizeSevereField {
+	// Two-tier thresholds aligned with edit_file / analyzeMultiEditFileSize
+	// (#2880): warn at argSizeWarnField, severe at argSizeSevereField. The
+	// original severe-only gate was an oversight from the initial commit
+	// (dd0ddd7f8) that the edit_file alignment pass (3e9ec90d7) missed.
+	if maxFieldLen < argSizeWarnField {
 		return ""
 	}
 
+	if maxFieldLen >= argSizeSevereField {
+		return fmt.Sprintf(
+			"%s in a file edit is %s — use concise line-number anchors from read_file instead of pasting large code blocks. "+
+				"Copy only the specific lines you need to change (e.g., 5-10 lines around the edit target).",
+			maxFieldName, formatArgBytes(maxFieldLen),
+		)
+	}
 	return fmt.Sprintf(
-		"%s in a file edit is %s — use concise line-number anchors from read_file instead of pasting large code blocks",
+		"%s in a file edit is %s — consider using shorter line-number anchors from read_file to reduce context usage",
 		maxFieldName, formatArgBytes(maxFieldLen),
 	)
 }
