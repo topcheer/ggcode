@@ -612,8 +612,9 @@ func (m *Model) wechatBindingEntries() []wechatBindingEntry {
 	}
 
 	// List all wechat adapters from config (not just bound ones)
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformWechat)) {
 			keys = append(keys, name)
 		}
