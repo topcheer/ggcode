@@ -38,6 +38,11 @@ func setupReflection(a *agent.Agent) {
 		// run's verified commands as reusable cmd_snippet entries.
 		distillSnippetsFromRun(a, stats)
 
+		// Preference distillation (Auto Dream Gather seam): durable user
+		// preferences stated in the prompt that were never saved via
+		// save_memory outlive the session instead of dying with it.
+		captureUserPreferences(a, stats)
+
 		insights := agent.GenerateInsights(stats)
 		if insights == "" {
 			return
@@ -121,6 +126,41 @@ func recordExperienceCase(a *agent.Agent, stats agent.RunStats) {
 	if _, _, err := store.Record(stats.UserPrompt, b.String(), outcome, stats.FilesEdited); err != nil {
 		debug.Log("tui", "experience: record failed: %v", err)
 	}
+}
+
+// captureUserPreferences distills high-confidence durable preference
+// statements from the run's user prompt into the "user-preferences"
+// project memory (Auto Dream Gather seam; deterministic, no LLM call).
+// Failures are debug-logged only; capture must never disturb the session.
+func captureUserPreferences(a *agent.Agent, stats agent.RunStats) {
+	prefs := memory.DistillUserPreferences(stats.UserPrompt)
+	if len(prefs) == 0 {
+		return
+	}
+	workingDir := a.WorkingDir()
+	if workingDir == "" {
+		return
+	}
+	autoMem := memory.NewProjectAutoMemory(workingDir)
+	if autoMem == nil {
+		return
+	}
+	const key = "user-preferences"
+	// #1388 discipline: single-key load, merge, save - never blind overwrite.
+	existing, err := autoMem.LoadKey(key)
+	if err != nil {
+		debug.Log("tui", "preferences: failed to load existing, skipping save: %v", err)
+		return
+	}
+	merged, added := memory.MergePreferenceMemory(existing, prefs)
+	if added == 0 {
+		return
+	}
+	if err := autoMem.SaveMemory(key, merged); err != nil {
+		debug.Log("tui", "preferences: save failed: %v", err)
+		return
+	}
+	debug.Log("tui", "preferences: captured %d new user preference(s)", added)
 }
 
 // topToolCalls renders the n most-used tools as "name(count)" pairs.
