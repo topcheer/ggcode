@@ -256,6 +256,24 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 		h.mu.Unlock()
 		return nil, fmt.Errorf("task not found: %s", taskID)
 	}
+	// Idempotent retry (#2896): a follow-up re-sent with the same MessageID
+	// (timeout + client retry) must return the mapped task snapshot instead
+	// of appending the message and executing the side effect twice. The
+	// new-task path has had this since #565 G / #1461-A; the continue path
+	// is the symmetric gap. Checked BEFORE the input-required gate: a
+	// retry may legitimately arrive while the first execution is still
+	// working.
+	if input.MessageID != "" {
+		if tid, mapped := h.messageIndex[input.MessageID]; mapped {
+			if tid != taskID {
+				h.mu.Unlock()
+				return nil, fmt.Errorf("message %s already mapped to different task %s", input.MessageID, tid)
+			}
+			snap := task.Snapshot()
+			h.mu.Unlock()
+			return &snap, nil
+		}
+	}
 	if task.Status.State != TaskStateInputRequired {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("task %s is not in input-required state (current: %s)", taskID, task.Status.State)
@@ -268,6 +286,13 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 	if !ok {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("unknown skill: %s", task.Skill)
+	}
+
+	// Map the consumed MessageID only after all gates pass and before the
+	// side effect starts, so later retries with the same MessageID hit the
+	// dedup snapshot above (#2896).
+	if input.MessageID != "" {
+		h.messageIndex[input.MessageID] = task.ID
 	}
 
 	// Append the new user message to history.
