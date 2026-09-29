@@ -3953,6 +3953,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 						})
 						msgs = a.contextManager.Messages()
 					}
+					// Trajectory→asset distillation: track verified-successful
+					// commands so the post-run distiller can persist them as
+					// cmd_snippet entries.
+					if !result.IsError {
+						runStats.recordSuccessfulCommand(cmd)
+					}
 				}
 			}
 			// Record tool result for adaptive effort classification.

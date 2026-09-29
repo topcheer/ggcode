@@ -34,6 +34,10 @@ func setupReflection(a *agent.Agent) {
 		// recorded even when insight generation yields nothing.
 		recordExperienceCase(a, stats)
 
+		// Trajectory→asset distillation (SE-Agent / ACE): persist the
+		// run's verified commands as reusable cmd_snippet entries.
+		distillSnippetsFromRun(a, stats)
+
 		insights := agent.GenerateInsights(stats)
 		if insights == "" {
 			return
@@ -107,8 +111,8 @@ func recordExperienceCase(a *agent.Agent, stats agent.RunStats) {
 	if len(stats.FilesEdited) > 0 {
 		fmt.Fprintf(&b, " Edited: %s.", strings.Join(stats.FilesEdited, ", "))
 	}
-	if len(stats.CommandsRun) > 0 {
-		fmt.Fprintf(&b, " Commands: %s.", strings.Join(stats.CommandsRun, "; "))
+	if cmds := successfulCommandsLabel(stats); cmds != "" {
+		fmt.Fprintf(&b, " Commands: %s.", cmds)
 	}
 	if stats.ErrorCount > 0 && len(stats.Errors) > 0 {
 		fmt.Fprintf(&b, " First error: %s.", strings.Join(strings.Fields(stats.Errors[0]), " "))

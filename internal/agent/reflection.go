@@ -28,6 +28,12 @@ type RunStats struct {
 	// CommandsRun lists shell commands executed via run_command or start_command.
 	CommandsRun []string
 
+	// SuccessfulCommands lists commands that completed successfully
+	// (non-error result), deduplicated and capped. Consumed by the
+	// trajectory→asset distiller to persist verified commands as
+	// cmd_snippet entries.
+	SuccessfulCommands []string
+
 	// Errors records error messages from failed tool calls or stream errors.
 	// Truncated to 500 chars each, max 10 entries.
 	Errors []string
@@ -111,6 +117,25 @@ func (s *RunStats) recordFileEdit(path string) {
 		}
 	}
 	s.FilesEdited = append(s.FilesEdited, path)
+}
+
+// recordSuccessfulCommand adds a verified-successful shell command
+// (non-error tool result) for trajectory→asset distillation.
+// Deduplicated, max 30 entries, each truncated to 500 chars.
+func (s *RunStats) recordSuccessfulCommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return
+	}
+	for _, existing := range s.SuccessfulCommands {
+		if existing == cmd {
+			return
+		}
+	}
+	if len(s.SuccessfulCommands) >= 30 {
+		return
+	}
+	s.SuccessfulCommands = append(s.SuccessfulCommands, truncatePrompt(cmd, 500))
 }
 
 // recordCommand adds a shell command to the list (truncated).
