@@ -553,6 +553,9 @@ type modelCapability struct {
 func staticCode() string {
 	return `var contextWindowHintPattern = regexp.MustCompile(` + "`" + `(^|[^0-9])(\d+)(k|m)($|[^a-z0-9])` + "`" + `)
 
+// #2857: GLM vision naming is a version-suffix v (glm-4.5v / glm-4.6v).
+var glmVisionSuffixRe = regexp.MustCompile(` + "`" + `glm-[0-9.]+v` + "`" + `)
+
 // inferContextWindow resolves an approximate input context window.
 // Explicit endpoint config should override this; this heuristic exists so
 // auto-compaction can track common models more accurately than a fixed 128k.
@@ -698,7 +701,11 @@ func inferVisionSupport(model, protocol string) bool {
 		strings.Contains(m, "qwen-3.5"),
 		strings.Contains(m, "qwen3.6"),
 		strings.Contains(m, "qwen-3.6"),
-		(strings.Contains(m, "glm-") && strings.Contains(m, "v")),
+		// #2857: GLM vision models follow the version-suffix convention
+		// (glm-4.5v / glm-4.6v). A bare Contains(m,"v") matched the "v" in
+		// vendor prefixes (no**v**ita/...) and words like preview/voice,
+		// misreporting plain-text GLM bases as vision-capable.
+		(strings.Contains(m, "glm-") && glmVisionSuffixRe.MatchString(m)),
 		strings.Contains(m, "kimi-2.5"),
 		strings.Contains(m, "kimi-k2"),
 		strings.Contains(m, "kimi-vl"):
