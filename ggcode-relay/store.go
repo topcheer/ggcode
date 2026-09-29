@@ -644,6 +644,13 @@ func (s *relayStore) loadClientCursor(tokenHash, clientID string) (string, error
 }
 
 // saveClientCursor persists the client's ACK cursor.
+// #2899: the DO UPDATE is guarded so the cursor only moves FORWARD -
+// event IDs are zero-padded ordinals, so lexicographic order is event
+// order. The in-memory path (onAck) already has this monotonic guard, but
+// persistence was an unconditional upsert from per-ack goroutines: two
+// acks racing past each other (E2 commits before E1) would silently roll
+// the persisted cursor back and replay already-acked events after a
+// restart. A stale write is now a no-op.
 func (s *relayStore) saveClientCursor(tokenHash, clientID, sessionID, eventID string) error {
 	if s == nil {
 		return nil
@@ -655,7 +662,8 @@ func (s *relayStore) saveClientCursor(tokenHash, clientID, sessionID, eventID st
 		 ON CONFLICT(room_token_hash, client_id)
 		 DO UPDATE SET session_id = excluded.session_id,
 		               last_acked_event_id = excluded.last_acked_event_id,
-		               updated_at = excluded.updated_at`,
+		               updated_at = excluded.updated_at
+		 WHERE excluded.last_acked_event_id > relay_client_cursors.last_acked_event_id`,
 		tokenHash, clientID, sessionID, eventID, now,
 	)
 	return err
