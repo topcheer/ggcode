@@ -169,11 +169,11 @@ func TestSpawnAgentWorktreeIsolationEndToEnd(t *testing.T) {
 }
 
 func TestAnnotateWorktree(t *testing.T) {
-	if got := annotateWorktree("result", subagent.Snapshot{}); got != "result" {
+	if got := annotateWorktree(context.Background(), "result", subagent.Snapshot{}); got != "result" {
 		t.Errorf("annotateWorktree without worktree = %q", got)
 	}
 	snap := subagent.Snapshot{Worktree: filepath.Join("repo", ".ggcode", "worktrees", "agent-sa-1")}
-	got := annotateWorktree("result", snap)
+	got := annotateWorktree(context.Background(), "result", snap)
 	if !strings.Contains(got, "Isolated worktree:") || !strings.Contains(got, "agent-sa-1") {
 		t.Errorf("annotateWorktree = %q, want worktree annotation", got)
 	}

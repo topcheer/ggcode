@@ -94,16 +94,23 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
-		return Result{Content: annotateWorktree(snap.Result, snap)}, nil
+		return Result{Content: annotateWorktree(ctx, snap.Result, snap)}, nil
 	}
-	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap), snap)}, nil
+	return Result{Content: annotateWorktree(ctx, appendCascadeHint(t.CascadeHints, t.ParentModel, snap), snap)}, nil
 }
 
 // annotateWorktree appends the isolation worktree path to a wait_agent
 // snapshot so the parent can locate the sub-agent's edits after the run.
-func annotateWorktree(content string, snap subagent.Snapshot) string {
+// For terminal snapshots it also appends git-collected proof-of-work so the
+// parent can verify the run's actual effects instead of trusting its
+// self-reported summary (see delegation_proof.go).
+func annotateWorktree(ctx context.Context, content string, snap subagent.Snapshot) string {
 	if snap.Worktree == "" {
 		return content
 	}
-	return content + fmt.Sprintf("\n\nIsolated worktree: %s (branch: %s)", snap.Worktree, filepath.Base(snap.Worktree))
+	out := content + fmt.Sprintf("\n\nIsolated worktree: %s (branch: %s)", snap.Worktree, filepath.Base(snap.Worktree))
+	if terminalSnapshot(snap.Status) {
+		out += "\n\n" + buildWorktreeProof(ctx, snap)
+	}
+	return out
 }
