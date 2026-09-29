@@ -108,6 +108,7 @@ type room struct {
 	protocolVersion int
 	upgradeReason   string
 	serverReady     bool
+	expired         bool // #2898: set by expireRoom under mu; aborts in-flight registrations
 	history         []roomEvent
 	bootstrap       map[string]roomEvent
 	server          *peer
@@ -1322,6 +1323,7 @@ func (h *hub) expireRoom(token string) {
 	}
 	stopOfflineTimerLocked(r)
 	delete(h.rooms, token)
+	r.expired = true // #2898: tombstone - in-flight registrations must abort, not orphan
 	r.mu.Unlock()
 	h.mu.Unlock()
 
@@ -1639,6 +1641,22 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 				shadow.send(relayMessage{Type: "sharing_stopped"})
 				room.mu.Lock()
 			}
+		}
+		// #2898: expireRoom's 5-minute timer may have fired during the
+		// fragmented registration above (kick window, connected-frame write
+		// with up to 30s deadline, hydrate I/O) and removed this room from
+		// the hub + destroyed its store. Committing the registration would
+		// silently orphan the peer: clients get "Room not found" forever
+		// while the server believes it is live. The tombstone is set under
+		// room.mu; checking it at this commit point (same mutex) closes the
+		// race without inverting the h.mu -> room.mu lock order. Do NOT
+		// re-put the room - the store was already destroyed.
+		if room.expired {
+			room.mu.Unlock()
+			p.send(relayMessage{Type: "sharing_stopped"})
+			conn.Close()
+			log.Printf("[relay] %s rejected: room=%s expired during registration", role, shortToken(token))
+			return
 		}
 		room.server = p
 		room.serverReady = false
