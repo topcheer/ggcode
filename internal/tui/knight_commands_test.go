@@ -213,3 +213,43 @@ func TestKnightScenariosAndRejectsClear(t *testing.T) {
 		t.Fatalf("expected rejects-clear message, got %q", out)
 	}
 }
+
+// sa-133: the dispatcher is a handler map, so a subcommand listed in the usage
+// help but missing from knightSubcommands (or vice versa) would silently fall
+// through to the usage fallback instead of failing to compile like the old
+// switch did. Guard against that drift.
+func TestKnightUsageHelpSubcommandsAllHaveHandlers(t *testing.T) {
+	body := strings.TrimPrefix(knightUsageHelp, "Knight commands: ")
+	for _, segment := range strings.Split(body, ", ") {
+		fields := strings.Fields(segment)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		if _, ok := knightSubcommands[name]; !ok {
+			t.Errorf("usage help lists %q but knightSubcommands has no handler for it", name)
+		}
+	}
+	// Implicit and alias entries must survive map refactors too.
+	for _, name := range []string{"", "reject-history"} {
+		if _, ok := knightSubcommands[name]; !ok {
+			t.Errorf("knightSubcommands is missing implicit/alias entry %q", name)
+		}
+	}
+}
+
+// sa-133: bare /knight must keep routing to the status panel (old switch case
+// "status", "") rather than to the usage fallback after the map refactor.
+func TestKnightBareCommandOpensPanel(t *testing.T) {
+	k, _, _ := knightTestStartKnight(t)
+	m := newTestModel()
+	m.SetKnight(k)
+
+	if cmd := m.handleKnightCommand([]string{"/knight"}); cmd != nil {
+		t.Fatal("expected bare command to complete synchronously")
+	}
+	if m.knightPanel == nil {
+		out := renderedOutput(&m)
+		t.Fatalf("expected knight panel to open, got output %q", out)
+	}
+}
