@@ -959,8 +959,20 @@ func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
 	if p.role != "server" || p.room == nil || h == nil {
 		return false
 	}
-	h.trace("server_request", p.room.token, msg)
-	h.destroyRoom(p.room.token)
+	room := p.room
+	// #2890: only the CURRENT room server may stop sharing. A shadow
+	// server (superseded by a newer registration while it was connected)
+	// must not destroy the room out from under the legitimate server and
+	// its clients.
+	room.mu.RLock()
+	isCurrent := room.server == p
+	room.mu.RUnlock()
+	if !isCurrent {
+		h.trace("server_request_ignored_stale_server", room.token, msg)
+		return true // consumed, no-op
+	}
+	h.trace("server_request", room.token, msg)
+	h.destroyRoom(room.token)
 	return true
 }
 
@@ -1204,16 +1216,20 @@ func (h *hub) notifyRelayRestarting() {
 		state := roomRecoveryStateLocked(room)
 		clients := room.snapshotClientsLocked(nil)
 		server := room.server
+		// #2891: copy sessionID inside the RLock critical section - the write
+		// side (bindRoomSession) mutates it under room.mu; reading it after
+		// RUnlock is a data race (torn string header under -race).
+		sessionID := room.sessionID
 		room.mu.RUnlock()
 
 		// Send role-specific server_offline notices with staggered retry delays:
 		// server (host) gets 10s, clients (mobile) get 30s. This ensures host
 		// reconnects first and rebuilds the room before mobile tries.
 		serverNotice := relayServerOfflineMessageWithReason(
-			room.sessionID, state, serverRestartRetryAfter, relayRestartReason,
+			sessionID, state, serverRestartRetryAfter, relayRestartReason,
 		)
 		clientNotice := relayServerOfflineMessageWithReason(
-			room.sessionID, state, clientRestartRetryAfter, relayRestartReason,
+			sessionID, state, clientRestartRetryAfter, relayRestartReason,
 		)
 		for _, client := range clients {
 			if client.trySend(clientNotice) {
@@ -1576,6 +1592,19 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 			room.mu.Unlock()
 			old.send(relayMessage{Type: "sharing_stopped"})
 			room.mu.Lock()
+			// #2890: re-check after relock - a third server connection C may
+			// have registered during the unlock window (it saw room.server ==
+			// nil and claimed the slot). Overwriting unconditionally would
+			// leave C as an unnotified shadow server whose stop_sharing could
+			// later destroy the room (see onStopSharing guard). Kick the
+			// interloper the same way before taking the slot.
+			if shadow := room.server; shadow != nil && shadow != old {
+				room.server = nil
+				room.serverReady = false
+				room.mu.Unlock()
+				shadow.send(relayMessage{Type: "sharing_stopped"})
+				room.mu.Lock()
+			}
 		}
 		room.server = p
 		room.serverReady = false
