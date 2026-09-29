@@ -15,124 +15,26 @@ func ptCatalog(key string) string {
 		return "Endpoint"
 	case "label.session":
 		return "Sessão"
-	case "label.sessions":
-		return "Sessões"
-	case "label.workspace":
-		return "Workspace"
-	case "label.language":
-		return "Idioma"
 	case "label.tools":
 		return "Ferramentas"
 	case "label.context":
 		return "Contexto"
-	case "label.tokens":
-		return "Tokens"
 	case "label.cost":
 		return "Custo"
-	case "label.permissions":
-		return "Permissões"
-	case "label.search":
-		return "Buscar"
-	case "label.filter":
-		return "Filtrar"
-	case "label.confirm":
-		return "Confirmar"
-	case "label.cancel":
-		return "Cancelar"
-	case "label.close":
-		return "Fechar"
-	case "label.save":
-		return "Salvar"
-	case "label.delete":
-		return "Excluir"
-	case "label.rename":
-		return "Renomear"
-	case "label.new":
-		return "Novo"
-	case "label.open":
-		return "Abrir"
-	case "label.copy":
-		return "Copiar"
-	case "label.yes":
-		return "Sim"
-	case "label.no":
-		return "Não"
-	case "label.none":
-		return "Nenhum"
-	case "label.all":
-		return "Todos"
-	case "label.loading":
-		return "Carregando..."
-	case "label.ready":
-		return "Pronto"
-	case "label.idle":
-		return "Inativo"
-	case "label.busy":
-		return "Ocupado"
-	case "label.error":
-		return "Erro"
-	case "label.warning":
-		return "Aviso"
-	case "label.info":
-		return "Informação"
-	case "label.success":
-		return "Sucesso"
 
 	// ── Permission modes ──────────────────────────────────────────
-	case "mode.supervised":
-		return "Supervisionado"
-	case "mode.plan":
-		return "Plano"
-	case "mode.auto":
-		return "Auto"
-	case "mode.bypass":
-		return "Bypass"
-	case "mode.autopilot":
-		return "Autopilot"
 
 	// ── Status bar ────────────────────────────────────────────────
-	case "status.agent_idle":
-		return "Inativo"
-	case "status.agent_thinking":
-		return "Pensando..."
-	case "status.agent_running":
-		return "Executando..."
-	case "status.agent_working":
-		return "Trabalhando..."
-	case "status.context.fill":
-		return "Contexto: %s/%s (%d%%)"
-	case "status.tokens.used":
-		return "Tokens: %s"
 
 	// ── Chat input ────────────────────────────────────────────────
 	case "input.placeholder":
 		return "Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)"
-	case "input.hint":
-		return "Enter para enviar • Shift+Enter para nova linha"
-	case "input.empty_warning":
-		return "A entrada está vazia"
-	case "input.cancel":
-		return "Cancelar"
 
 	// ── Welcome screen ────────────────────────────────────────────
-	case "welcome.title":
-		return "Bem-vindo ao ggcode"
-	case "welcome.subtitle":
-		return "Seu assistente de IA para codificação"
-	case "welcome.prompt.explain":
-		return "Explicar o código selecionado"
-	case "welcome.prompt.review":
-		return "Revisar alterações recentes"
-	case "welcome.prompt.test":
-		return "Escrever testes para código"
-	case "welcome.prompt.debug":
-		return "Depurar um problema"
 
 	// ── Slash command descriptions ────────────────────────────────
 	case "slash.help":
 		return "Mostrar esta mensagem de ajuda"
-	case "slash.help_short":
-		return "Ajuda"
 	case "slash.sessions":
 		return "Listar todas as sessões salvas"
 	case "slash.resume":
@@ -187,12 +89,6 @@ func ptCatalog(key string) string {
 		return "Ver lista de tarefas"
 	case "slash.stats":
 		return "Mostrar estatísticas da sessão (tokens, iterações, ferramentas)"
-	case "slash.perf":
-		return "Mostrar estatísticas de otimização de desempenho"
-	case "slash.doctor":
-		return "Executar diagnósticos de saúde do sistema"
-	case "slash.quit":
-		return "Sair do ggcode"
 	case "slash.exit":
 		return "Sair do ggcode"
 	case "slash.share":
@@ -247,46 +143,12 @@ func ptCatalog(key string) string {
 		return "✓ %s agora é sempre permitido"
 
 	// ── Mode cycling ──────────────────────────────────────────────
-	case "mode.cycled":
-		return "Modo: %s"
-	case "mode.saved":
-		return " (salvo)"
 
 	// ── Doctor ────────────────────────────────────────────────────
-	case "doctor.title":
-		return "Diagnóstico de Saúde do ggcode"
-	case "doctor.ok":
-		return "✓"
-	case "doctor.fail":
-		return "✗"
-	case "doctor.check.api_key":
-		return "Chave de API"
-	case "doctor.check.vendor":
-		return "Fornecedor/Endpoint"
-	case "doctor.check.model":
-		return "Modelo"
-	case "doctor.check.mcp":
-		return "Servidores MCP"
-	case "doctor.check.config":
-		return "Arquivo de configuração"
-	case "doctor.check.git":
-		return "Repositório Git"
 
 	// ── Error messages ────────────────────────────────────────────
-	case "error.agent_not_initialized":
-		return "Agente não inicializado."
-	case "error.permission_denied":
-		return "Permissão negada: %s"
-	case "error.session_not_found":
-		return "Sessão não encontrada: %s"
-	case "error.workspace_not_git":
-		return "O workspace atual não é um repositório Git."
 
 	// ── Thinking/reasoning ────────────────────────────────────────
-	case "reasoning.label":
-		return "Raciocínio"
-	case "reasoning.thinking":
-		return "Pensando..."
 
 	// ── Checkpoint ────────────────────────────────────────────────
 	case "checkpoint.disabled":
@@ -1359,6 +1221,107 @@ func ptCatalog(key string) string {
 		return "Inicializando"
 	case "panel.update":
 		return "Atualizar"
+	case "help.text":
+		// #2842: pt was the only locale of 10 missing this key - the whole
+		// /help page fell back to English for pt/pt-BR users.
+		return `Comandos disponíveis:
+
+Sessão e Histórico:
+  /help, /?          Mostrar esta mensagem de ajuda
+  /sessions          Listar todas as sessões salvas
+  /resume <id>       Retomar uma sessão anterior
+  /export <id>       Exportar sessão para arquivo markdown
+  /export-trace [--otel] [id] Exportar rastreamento de execução (JSON ou OTLP/GenAI)
+  /clear             Limpar histórico da conversa
+  /compact           Compactar histórico da conversa (manual)
+  /undo              Desfazer a última edição de arquivo (rollback de checkpoint)
+  /undo-run          Reverter TODAS as alterações de arquivo da última execução do agente
+  /redo              Refazer edições anteriormente desfeitas
+  /checkpoints       Listar todos os checkpoints de edição de arquivo
+  /retry             Repetir a última execução do agente (recuperar de erros transitórios)
+  /edit              Editar e reenviar sua última mensagem
+  /regenerate        Descartar última resposta e regenerar (alias: /regen)
+  /branch            Bifurcar conversa atual em nova sessão (alias: /fork)
+  /stats             Mostrar painel de estatísticas da sessão
+
+Modelo e Provedor:
+  /model [nome]      Abrir painel de modelos ou alternar diretamente
+  /provider [vendor] Abrir gerenciador de provedores
+  /impersonate [p/m] Testar um provedor/modelo sem alterar a configuração
+  /mode <modo>       Definir modo do agente (supervised|plan|auto|bypass|autopilot)
+  /goal [texto]      Mostrar, definir ou limpar objetivo persistente do autopilot
+  /stream            Alternar modo de saída em stream
+
+Desenvolvimento:
+  /diff [opções]     Mostrar git diff no chat (--cached, --stat, <arquivo>)
+  /review [opções]   Revisão de código por IA das alterações atuais (--cached, --staged)
+  /copy              Copiar última resposta do assistente para a área de transferência
+  /cost              Mostrar uso de tokens da sessão e custo estimado
+  /context           Mostrar detalhamento do uso da janela de contexto
+  /hooks             Mostrar hooks configurados
+  /rules             Gerenciar regras de erro aprendidas (padrões ratchet)
+  /allow [ferramenta] Permitir permanentemente uma ferramenta no modo atual
+  /files             Abrir navegador de arquivos em tela cheia com pré-visualização
+  /inspector [filtro] Abrir painel inspetor (chamadas de ferramenta, contexto, métricas)
+  /init              Gerar AGENTS.md a partir do projeto atual
+  /todo              Ver lista de tarefas
+  /todo clear        Limpar lista de tarefas
+  /reflect           Disparar autorreflexão do agente sobre execuções recentes
+
+Integrações:
+  /im                Abrir painel unificado de canais IM
+  /mcp               Mostrar servidores e ferramentas MCP conectados
+  /plugins           Listar plugins carregados e suas ferramentas
+  /skills            Navegar pelas skills disponíveis
+  /memory            Mostrar arquivos de memória carregados
+  /agents            Listar subagentes
+  /cron <sub>        Gerenciar tarefas agendadas (list|get|pause|resume|pauseall|resumeall)
+  /chat              Abrir painel do LAN Chat
+  /nick [nome@função] Definir identidade do LAN Chat
+  /tunnel            Iniciar compartilhamento de túnel móvel
+  /unshare           Parar compartilhamento de túnel móvel
+
+Sistema:
+  /lang [código]     Escolher ou alternar idioma da interface
+  /config            Mostrar configuração atual
+  /config set <k> <v> Definir um valor de configuração
+  /status            Mostrar status atual
+  /update            Atualizar ggcode para a versão mais recente
+  /restart           Reiniciar ggcode (usa o binário mais recente)
+  /bug               Reportar um bug com diagnósticos
+  /exit, /quit       Sair
+
+Atalhos de teclado:
+  Tab                Alternar autocompletar ou opções de aprovação
+  Shift+Tab          Ciclo reverso de autocompletar, senão alternar modo de permissão
+  Ctrl+G             Alternar esforço de raciocínio (off/low/medium/high)
+  Ctrl+O             Alternar estilo de saída (default/concise/detailed/socratic)
+  Ctrl+R             Alternar barra lateral
+  Ctrl+\             Alternar modo compacto (chat em largura total)
+  Ctrl+L             Iniciar nova sessão (igual a /clear)
+  Ctrl+N             Alternar painel de acompanhamento de subagente
+  Ctrl+T             Alternar escopo de salvamento da configuração (global/instância)
+  Ctrl+Shift+C       Copiar última resposta do assistente para a área de transferência
+  Esc                Cancelar autocompletar / sair do modo shell ocioso
+  Esc Esc            Rewind: desfazer últimas alterações de arquivo (dentro de 500ms)
+  Alt+Up/Down        Navegar entre sessões
+  Enter              Enviar mensagem / aplicar seleção atual
+  Up/Down            Navegar histórico de comandos (ou autocompletar)
+  PgUp/PgDn          Rolar saída da conversa
+  Ctrl+C             Cancelar atividade atual, senão limpar entrada e pressionar novamente para sair
+  Ctrl+D             Sair imediatamente
+  Ctrl+A / Ctrl+E    Mover cursor para início / fim da linha
+  Ctrl+K             Excluir do cursor até o fim da linha
+  Ctrl+U             Excluir do início da linha até o cursor
+  Ctrl+W             Excluir palavra anterior ao cursor
+  Ctrl+Backspace     Remover última imagem anexada
+  Shift+Enter        Inserir nova linha (Ctrl+J ou Alt+Enter no tmux)
+  $ / !              Entrar no modo shell
+  #                  Entrar no modo de envio rápido do LAN Chat
+
+Mouse:
+  Option+arrastar / Shift+arrastar  Selecionar texto para copiar (contorna a captura de mouse do app)
+  Roda do mouse                     Rolar saída da conversa`
 
 		// ── Harness ───────────────────────────────────────────────────
 	}
