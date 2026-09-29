@@ -1,7 +1,13 @@
 package agent
 
-// Regression tests for issue #725 (YAML duplicate-key detector: block scalar
-// tracking + indentation stack) and issue #726 (HTTP plaintext IPv6).
+// Regression tests for issue #725 (YAML duplicate-key detection) and issue
+// #726 (HTTP plaintext IPv6).
+//
+// #2889: the hand-rolled findYAMLDuplicateKeys scanner was removed (its
+// authoritative replacement lives in validateYAML via yaml.v3 node.Decode,
+// #1773). The historical #725 shapes below are now asserted through the
+// production entry point - if the yaml.v3 path ever regresses on block
+// scalars, indentation widths, or duplicate detection, these tests catch it.
 
 import (
 	"strings"
@@ -26,11 +32,8 @@ jobs:
           echo "Phase 2: test"
           echo "Phase 1: build again"
 `
-	if dups := findYAMLDuplicateKeys(yaml); len(dups) > 0 {
-		t.Errorf("block scalar body misparsed as duplicate keys: %v", dups)
-	}
 	if w := validateYAML("ci.yml", yaml); w != "" {
-		t.Errorf("valid workflow flagged: %q", w)
+		t.Errorf("block scalar body misparsed as duplicate keys: %q", w)
 	}
 }
 
@@ -44,8 +47,8 @@ func TestYAMLDuplicateKeysFoldedAndModifiers(t *testing.T) {
 		"ind-then-chomp": "run: >2-\n    echo hi\n",
 	}
 	for name, y := range variants {
-		if dups := findYAMLDuplicateKeys("a: 1\n" + y); len(dups) > 0 {
-			t.Errorf("%s: block scalar body misparsed: %v", name, dups)
+		if w := validateYAML("v.yml", "a: 1\n"+y); w != "" {
+			t.Errorf("%s: block scalar body misparsed: %q", name, w)
 		}
 	}
 }
@@ -61,11 +64,8 @@ a: 3
 	// `a` appears at two different levels - legal. The old `indent/2` logic
 	// mapped the 1-space-indented keys to depth 0 and falsely collided with
 	// the top-level `a`.
-	if dups := findYAMLDuplicateKeys(yaml); len(dups) > 0 {
-		t.Errorf("1-space indent misreported as duplicate keys: %v", dups)
-	}
 	if w := validateYAML("x.yml", yaml); w != "" {
-		t.Errorf("valid 1-space-indent YAML flagged: %q", w)
+		t.Errorf("1-space indent misreported as duplicate keys: %q", w)
 	}
 }
 
@@ -74,12 +74,8 @@ func TestYAMLDuplicateKeysRealDuplicatesStillWarn(t *testing.T) {
 on: push
 name: second
 `
-	dups := findYAMLDuplicateKeys(yaml)
-	if len(dups) == 0 || dups[0] != "name" {
-		t.Errorf("real duplicate key not detected: %v", dups)
-	}
 	w := validateYAML("x.yml", yaml)
-	if !strings.Contains(w, "duplicate key") {
+	if !strings.Contains(w, "already defined") {
 		t.Errorf("validateYAML must warn on real duplicates, got: %q", w)
 	}
 	// Nested duplicate still detected (same level, not cross-level).
@@ -87,8 +83,8 @@ name: second
   b: 1
   b: 2
 `
-	if dups := findYAMLDuplicateKeys(nested); len(dups) == 0 || dups[0] != "b" {
-		t.Errorf("nested duplicate key not detected: %v", dups)
+	if w := validateYAML("n.yml", nested); !strings.Contains(w, "already defined") {
+		t.Errorf("nested duplicate key not detected: %q", w)
 	}
 	// Same key at DIFFERENT levels is legal and must not warn.
 	levels := `a:
@@ -96,8 +92,8 @@ name: second
 c:
   b: 2
 `
-	if dups := findYAMLDuplicateKeys(levels); len(dups) > 0 {
-		t.Errorf("same key at different levels misreported: %v", dups)
+	if w := validateYAML("l.yml", levels); w != "" {
+		t.Errorf("same key at different levels misreported: %q", w)
 	}
 }
 
