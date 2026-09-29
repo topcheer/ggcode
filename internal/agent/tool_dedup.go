@@ -57,8 +57,12 @@ var mutatingToolNames = map[string]bool{
 	"start_command":    true,
 	"write_file":       true,
 	"edit_file":        true,
+	"multi_edit_file":  true, // #2808: batch edits duplicate side effects like edit_file
+	"multi_file_edit":  true, // #2808: canonical sourceMutatingTools member, was missing
 	"multi_file_write": true,
 	"notebook_edit":    true,
+	"batch_replace":    true, // #2808
+	"lsp_rename":       true, // #2808
 	"file_ops":         true,
 	"git_add":          true,
 	"git_commit":       true,
@@ -88,9 +92,12 @@ var fileMutatingTools = map[string]bool{
 	"write_file":       true,
 	"edit_file":        true,
 	"multi_edit_file":  true, // #2486: batch edits duplicate side effects like edit_file
+	"multi_file_edit":  true, // #2808: canonical sourceMutatingTools member, was missing
 	"multi_file_write": true,
 	"notebook_edit":    true,
 	"file_ops":         true,
+	"batch_replace":    true, // #2808: bulk pattern replacement rewrites files; epoch must bump
+	"lsp_rename":       true, // #2808: symbol rename touches multiple files; epoch must bump
 	// #2486: these git tools rewrite tracked working-tree state directly
 	// (checkout swaps the tree, stash pop/apply restores changes, reset
 	// --hard discards them, revert applies the inverse patch in both
@@ -173,7 +180,23 @@ func (l *toolDedupLedger) suppressDuplicate(name, args string) *tool.Result {
 // the TTL can be suppressed. Error results are never recorded — retrying a
 // failed mutating call is normal and often necessary.
 func (l *toolDedupLedger) record(name, args string, res tool.Result) {
-	if l == nil || !isMutatingTool(name) || res.IsError {
+	if l == nil || res.IsError {
+		return
+	}
+	// #2808 (issue comment): undo_edit restores checkpoint content - a real
+	// disk write per #1104 - so its success must bump the epoch, otherwise
+	// "undo_edit -> re-run same verify command" replays the stale success
+	// (false-green, the #2486 danger direction). It is deliberately NOT added
+	// to mutatingToolNames: undo is not idempotent (each call reverts one more
+	// checkpoint), so its own identical re-invocations must never be
+	// suppressed-and-replayed.
+	if name == "undo_edit" {
+		l.mu.Lock()
+		l.epoch++
+		l.mu.Unlock()
+		return
+	}
+	if !isMutatingTool(name) {
 		return
 	}
 	now := time.Now()
