@@ -53,8 +53,17 @@ type Manager struct {
 	onUsage      func(provider.TokenUsage)
 
 	// results stores the most recent task output per teammate (key=teammateID).
-	// Written on teammate_idle events, cleared on teammate shutdown.
+	// Written on teammate_idle events. Entries deliberately SURVIVE teammate
+	// shutdown (#2787/#1814: the leader's most common order is "shut the
+	// worker down, THEN collect the output" - including teammates OTHER
+	// than the one just shut down, whose uncollected results must not be
+	// swept by an unrelated shutdown); they are reclaimed by the team
+	// lifecycle (DeleteTeam's sweep) and, for teams that never get deleted,
+	// by the FIFO bound enforced in storeResultLocked (#1633).
 	results map[string]string
+	// resultsOrder tracks first-store order of results keys for FIFO
+	// eviction in storeResultLocked. Guarded by m.mu.
+	resultsOrder []string
 
 	// workingDir is the project directory injected into teammate system prompts
 	// so teammates know where they are without having to discover it via pwd/ls.
@@ -523,17 +532,17 @@ func (m *Manager) ShutdownTeammate(teamID, tmID string) error {
 	tm.EndedAt = time.Now()
 	tm.mu.Unlock()
 
-	// #1633 case 2: free the quota slot AND the stored result. The map
-	// entries used to linger forever: len(team.Teammates) counted
-	// shut-down teammates (16 spawn/shutdown cycles permanently
-	// exhausted the quota - removal landed in-flight), and m.results
-	// leaked one entry per shutdown despite the field comment saying
-	// "cleared on teammate shutdown" (it was only cleared in
-	// DeleteTeam).
-	m.mu.Lock()
-	delete(m.results, tmID)
-	m.mu.Unlock()
-
+	// #2787: the stored result entry is deliberately KEPT here - #1814 made
+	// "shut the worker down, THEN collect the output" the supported order
+	// and the emit comment promises the last result survives shutdown, but
+	// the old #1633 delete here contradicted both (terminal data loss: the
+	// #2121 guard never writes a result back after removal). Reclamation is
+	// NOT done per-shutdown: pruning "ungoverned" entries here would also
+	// delete OTHER teammates' not-yet-collected results (A shut down
+	// uncollected, B shut down next -> A's output lost). It is unified at
+	// the team lifecycle instead: DeleteTeam sweeps a whole team's entries,
+	// and storeResultLocked's FIFO bound caps growth for teams that are
+	// never deleted (#1633 leak stays fixed).
 	team.removeTeammate(tmID)
 
 	m.emit(Event{
@@ -771,6 +780,31 @@ func (m *Manager) teammateGoverned(tmID string) bool {
 	return false
 }
 
+// maxStoredResults caps the size of the m.results store. Entries are
+// meant to stay retrievable after a teammate shuts down (#1814), so the
+// bound - not a per-shutdown delete - is what keeps long-lived managers
+// from growing m.results without limit (#1633).
+const maxStoredResults = 256
+
+// storeResultLocked records a teammate result under m.mu and enforces the
+// FIFO bound: once more than maxStoredResults entries exist, the oldest
+// stored entries are evicted first (IDs already reclaimed by DeleteTeam
+// are skipped). An existing key keeps its original FIFO position.
+func (m *Manager) storeResultLocked(tmID, result string) {
+	if _, exists := m.results[tmID]; !exists {
+		m.resultsOrder = append(m.resultsOrder, tmID)
+	}
+	m.results[tmID] = result
+	for overflow := len(m.results) - maxStoredResults; overflow > 0 && len(m.resultsOrder) > 0; {
+		oldest := m.resultsOrder[0]
+		m.resultsOrder = m.resultsOrder[1:]
+		if _, still := m.results[oldest]; still {
+			delete(m.results, oldest)
+			overflow--
+		}
+	}
+}
+
 func (m *Manager) emit(ev Event) {
 	// Persist teammate results in the results store.
 	// Hold m.mu to protect concurrent access to m.results.
@@ -778,15 +812,16 @@ func (m *Manager) emit(ev Event) {
 	case "teammate_idle":
 		if ev.Result != "" {
 			// #2121: only store results for a teammate that is still
-			// governed by some team. ShutdownTeammate clears m.results
-			// and removes the teammate BEFORE its runner exits; a late
-			// idle emit otherwise wrote the result back AFTER that cleanup,
-			// leaving an entry no later DeleteTeam sweep could reach (its
-			// loop iterates team.Teammates, which no longer has the ID).
+			// governed by some team. ShutdownTeammate removes the teammate
+			// BEFORE its runner exits; a late idle emit otherwise wrote the
+			// result back AFTER that removal, leaving an entry no later
+			// DeleteTeam sweep could reach (its loop iterates
+			// team.Teammates, which no longer has the ID) - only the FIFO
+			// bound would ever reclaim it.
 			if m.teammateGoverned(ev.TeammateID) {
 				debug.Log("swarm", "emit: storing result for %s len=%d", ev.TeammateID, len(ev.Result))
 				m.mu.Lock()
-				m.results[ev.TeammateID] = ev.Result
+				m.storeResultLocked(ev.TeammateID, ev.Result)
 				m.mu.Unlock()
 			} else {
 				debug.Log("swarm", "emit: dropping late result for ungoverned %s", ev.TeammateID)
