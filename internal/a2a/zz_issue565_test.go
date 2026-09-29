@@ -179,7 +179,7 @@ func TestIssue565A_AllowlistExcludesWriteToolsOnAgentPath(t *testing.T) {
 	// #565 A: executeAgent must honor perm; previously it built the agent
 	// from the FULL registry, letting file-search invoke write_file.
 	_, err := h.executeAgent(context.Background(), perm, SkillFileSearch,
-		Message{Parts: []Part{{Kind: "text", Text: "do it"}}})
+		[]Message{{Parts: []Part{{Kind: "text", Text: "do it"}}}})
 	if err != nil {
 		t.Fatalf("executeAgent: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestIssue565A_PositiveControl_UnrestrictedSkillCanExecuteTool(t *testing.T)
 
 	perm := &SkillPermission{AllowedTools: nil} // unrestricted
 	_, err := h.executeAgent(context.Background(), perm, SkillFullTask,
-		Message{Parts: []Part{{Kind: "text", Text: "write"}}})
+		[]Message{{Parts: []Part{{Kind: "text", Text: "write"}}}})
 	if err != nil {
 		t.Fatalf("executeAgent: %v", err)
 	}
