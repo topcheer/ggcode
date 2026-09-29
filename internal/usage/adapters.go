@@ -244,6 +244,13 @@ func (DeepSeekProbe) Fetch(ctx context.Context, baseURL, apiKey string) (*UsageI
 			return &UsageInfo{Vendor: "deepseek", Balance: f64(float64(b.TotalBalance)), Source: "user/balance"}, nil
 		}
 	}
+	// #2807: multi-currency tables without a USD entry used to fall through
+	// with Balance=nil, silently dropping data the API did return (UI showed
+	// "balance: -"). Honor the documented contract above: "USD first, else
+	// the first entry".
+	if len(payload.BalanceInfos) > 0 {
+		return &UsageInfo{Vendor: "deepseek", Balance: f64(float64(payload.BalanceInfos[0].TotalBalance)), Source: "user/balance"}, nil
+	}
 	return &UsageInfo{Vendor: "deepseek", Source: "user/balance"}, nil
 }
 
