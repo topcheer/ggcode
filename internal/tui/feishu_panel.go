@@ -443,8 +443,9 @@ func (m Model) feishuBindingEntries() []feishuBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformFeishu)) {
 			keys = append(keys, name)
 		}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -202,11 +203,13 @@ var quickTaskPhrases = []string{
 // sides. Bare strings.Contains matched "recent" inside "recently" and
 // "cleanup" inside identifier names, firing clarify guidance on ordinary
 // dev prompts (#381).
-func ambContainsPhrase(text, phrase string) bool {
+// ambPhraseIndex returns the byte index of the first word-boundary match
+// of phrase in text, or -1 when absent.
+func ambPhraseIndex(text, phrase string) int {
 	for from := 0; ; {
 		idx := strings.Index(text[from:], phrase)
 		if idx < 0 {
-			return false
+			return -1
 		}
 		i := from + idx
 		end := i + len(phrase)
@@ -220,10 +223,83 @@ func ambContainsPhrase(text, phrase string) bool {
 			afterOK = true
 		}
 		if beforeOK && afterOK {
-			return true
+			return i
 		}
 		from = end
 	}
+}
+
+func ambContainsPhrase(text, phrase string) bool {
+	return ambPhraseIndex(text, phrase) >= 0
+}
+
+// ambDirectionRe matches explicit sort-direction tokens. When the sentence
+// already states asc/desc, asking "ascending or descending?" is not
+// clarification but contradiction (#2879).
+var ambDirectionRe = regexp.MustCompile(`(?i)\b(asc|desc|ascending|descending)\b`)
+
+// ambiguitySuppressors lists, per pattern phrase, signals that mean the
+// containing sentence ALREADY disambiguates the very point the suggestion
+// would raise. #2879: prefix phrases like "sort the"/"order by"/"rename the"/
+// "improve the" fire on fully-specified instructions because the detector
+// sees only the prefix, not the sentence around it. These checks give it
+// sentence awareness for the confirmed false-positive shapes.
+var ambiguitySuppressors = map[string][]*regexp.Regexp{
+	// "sort the users by last_login descending" / "order by created_at desc"
+	"sort the": {ambDirectionRe},
+	"order by": {ambDirectionRe},
+	// "improve the latency of the hot path by adding a cache":
+	// <metric> of <subject> by <means> names both goal and lever.
+	"improve the": {regexp.MustCompile(`\bof\b.*\bby\b`)},
+	// "rename the file to config.yaml": a CONCRETE new name is stated. Bare
+	// lowercase prose after "to" ("to something more descriptive") stays
+	// vague, so only quoted / dotted-filename / identifier-cased names count.
+	"rename the": {
+		regexp.MustCompile(`\bto\s+["'\x60][^"'\x60]+["'\x60]`),
+		regexp.MustCompile(`\bto\s+[^\s.,;!?]*\.[A-Za-z0-9]+\b`),
+		regexp.MustCompile(`\bto\s+[A-Z][A-Za-z0-9_-]*\b`),
+	},
+	// CJK companions: explicit direction / new-name phrasing.
+	"帮我排序":  {regexp.MustCompile(`升序|降序|倒序|正序|从大到小|从小到大`)},
+	"重命名一下": {regexp.MustCompile(`改成|改为|重命名为`)},
+	"改个名":   {regexp.MustCompile(`改成|改为|重命名为`)},
+}
+
+// ambBreakAt reports whether text[i] terminates a sentence for
+// disambiguation scoping. A '.' followed by a word byte (config.yaml,
+// 3.14) is part of a token, not a boundary - otherwise "rename the file to
+// config.yaml" scopes to "...to config" and the very patterns meant to
+// suppress it become unseeable (#2879).
+func ambBreakAt(text string, i int) bool {
+	b := text[i]
+	if b == '.' && i+1 < len(text) && isWordByte(text[i+1]) {
+		return false
+	}
+	return b == '.' || b == '!' || b == '?' || b == '\n' || b == ';'
+}
+
+// ambSentenceAt expands [start,end) to its surrounding sentence.
+func ambSentenceAt(text string, start, end int) string {
+	left := start
+	for left > 0 && !ambBreakAt(text, left-1) {
+		left--
+	}
+	right := end
+	for right < len(text) && !ambBreakAt(text, right) {
+		right++
+	}
+	return text[left:right]
+}
+
+// ambDisambiguated reports whether the sentence containing the phrase already
+// answers the clarification the phrase's suggestion would ask for.
+func ambDisambiguated(phrase, sentence string) bool {
+	for _, re := range ambiguitySuppressors[phrase] {
+		if re.MatchString(sentence) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkAmbiguityPoints scans the user's initial request for known ambiguity
@@ -271,18 +347,27 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 	var signals []AmbiguitySignal
 	seen := make(map[string]bool)
 	for _, pat := range ambiguityPatterns {
-		if ambContainsPhrase(lower, pat.phrase) {
-			key := pat.category
-			if seen[key] {
-				continue // one signal per category
-			}
-			seen[key] = true
-			signals = append(signals, AmbiguitySignal{
-				Phrase:     pat.phrase,
-				Category:   pat.category,
-				Suggestion: pat.suggestion,
-			})
+		i := ambPhraseIndex(lower, pat.phrase)
+		if i < 0 {
+			continue
 		}
+		// #2879: the prefix alone does not imply ambiguity - if the
+		// containing sentence already carries the disambiguating detail
+		// (explicit sort direction, stated new name, named metric+lever),
+		// the suggestion would contradict the request. Skip it.
+		if ambDisambiguated(pat.phrase, ambSentenceAt(lower, i, i+len(pat.phrase))) {
+			continue
+		}
+		key := pat.category
+		if seen[key] {
+			continue // one signal per category
+		}
+		seen[key] = true
+		signals = append(signals, AmbiguitySignal{
+			Phrase:     pat.phrase,
+			Category:   pat.category,
+			Suggestion: pat.suggestion,
+		})
 	}
 
 	// Need at least 1 signal to fire

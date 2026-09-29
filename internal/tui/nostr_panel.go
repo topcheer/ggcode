@@ -299,6 +299,12 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 1 {
 			return nostrBindResultMsg{err: errors.New(m.t("panel.nostr.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): the switch below consumes at most
+		// name+key+relays (3 fields); anything beyond that was silently
+		// dropped. Reject extras.
+		if len(fields) > 3 {
+			return nostrBindResultMsg{err: errors.New("extra fields after relays (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 
 		var privateKey string
@@ -345,8 +351,31 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext private key - without
+						// compensation a wrong key stays on disk forever and
+						// blocks the name on retry ("already exists"); the panel
+						// has no delete key. The rollback REMOVE is itself a map
+						// write, so it must route through configMutationMsg too
+						// (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return nostrBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return nostrBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureNostrRuntime(); err != nil {
-						return nostrBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startNostrAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errNostrEnableNeeded) {
@@ -354,7 +383,7 @@ func (m *Model) createNostrAdapterCmd(spec string) tea.Cmd {
 							// retry the rest of this flow.
 							return m.enableNostrAdapterMutation(name, nil)
 						}
-						return nostrBindResultMsg{err: err}
+						return rollback(err)
 					}
 
 					// Derive public key for QR code. #2626: privateKey may be
@@ -572,8 +601,9 @@ func (m Model) nostrBindingEntries() []nostrBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformNostr)) {
 			keys = append(keys, name)
 		}

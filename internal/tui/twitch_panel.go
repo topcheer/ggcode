@@ -279,6 +279,12 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 4 {
 			return twitchBindResultMsg{err: errors.New(m.t("panel.twitch.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
+		// token WITH spaces was silently truncated to its first token,
+		// then persisted as a guaranteed-to-fail credential. Reject extras.
+		if len(fields) > 4 {
+			return twitchBindResultMsg{err: errors.New("extra fields after channels (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		token := strings.TrimSpace(fields[1])
 		nick := strings.TrimSpace(fields[2])
@@ -311,11 +317,34 @@ func (m *Model) createTwitchAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext token - without
+						// compensation a wrong token stays on disk forever and
+						// blocks the name on retry ("already exists"); the panel
+						// has no delete key. The rollback REMOVE is itself a map
+						// write, so it must route through configMutationMsg too
+						// (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return twitchBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return twitchBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureTwitchRuntime(); err != nil {
-						return twitchBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startTwitchAdapterIfNeeded(name); err != nil {
-						return twitchBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return twitchBindResultMsg{message: m.t("panel.twitch.message.added_bot", name)}
 				}
@@ -444,8 +473,9 @@ func (m Model) twitchBindingEntries() []twitchBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformTwitch)) {
 			keys = append(keys, name)
 		}

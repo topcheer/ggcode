@@ -140,6 +140,42 @@ func TestCommitHint_StashDoesNotSuppressHint(t *testing.T) {
 	}
 }
 
+// TestCommitHint_NewDirectoryUntrackedFile pins #2887: plain `git status
+// --porcelain` folds a fully-untracked directory into a single "?? dir/"
+// entry, so the agent's per-file edit list never intersects the dirty set and
+// new-directory work silently skipped the commit hint. With -uall every
+// untracked file is listed individually and the hint fires.
+func TestCommitHint_NewDirectoryUntrackedFile(t *testing.T) {
+	dir := t.TempDir()
+	runGitCommitTest(t, dir, "init")
+	runGitCommitTest(t, dir, "config", "user.email", "test@test.com")
+	runGitCommitTest(t, dir, "config", "user.name", "test")
+	writeFileCommitTest(t, dir, "main.go", "package main\n")
+	runGitCommitTest(t, dir, "add", "main.go")
+	runGitCommitTest(t, dir, "commit", "-m", "initial")
+
+	// Agent creates a file inside a brand-new directory (untracked dir).
+	if err := os.MkdirAll(filepath.Join(dir, "newpkg"), 0755); err != nil {
+		t.Fatalf("mkdir newpkg: %v", err)
+	}
+	writeFileCommitTest(t, dir, filepath.Join("newpkg", "helper.go"), "package newpkg\n")
+
+	a := &Agent{commitHint: newCommitHintState()}
+	a.SetWorkingDir(dir)
+
+	stats := &RunStats{
+		ToolCalls:   map[string]int{"write_file": 1},
+		FilesEdited: []string{filepath.Join(dir, "newpkg", "helper.go")},
+	}
+	msg := a.checkCommitHintGate(stats)
+	if msg == "" {
+		t.Fatal("expected commit hint for untracked file in new directory (#2887: dir folding made the intersection empty)")
+	}
+	if !strings.Contains(msg, "helper.go") {
+		t.Errorf("expected message to name helper.go, got: %s", msg)
+	}
+}
+
 func runGitCommitTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

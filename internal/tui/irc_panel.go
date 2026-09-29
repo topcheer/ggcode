@@ -279,6 +279,12 @@ func (m *Model) createIRCAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 4 {
 			return ircBindResultMsg{err: errors.New(m.t("panel.irc.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): Fields splits on whitespace -
+		// channels WITH spaces was silently truncated to its first token.
+		// Reject extras.
+		if len(fields) > 4 {
+			return ircBindResultMsg{err: errors.New("extra fields after channels (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		host := strings.TrimSpace(fields[1])
 		nick := strings.TrimSpace(fields[2])
@@ -301,11 +307,34 @@ func (m *Model) createIRCAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext nick - without
+						// compensation a wrong credential stays on disk forever
+						// and blocks the name on retry ("already exists"); the
+						// panel has no delete key. The rollback REMOVE is itself
+						// a map write, so it must route through configMutationMsg
+						// too (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return ircBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return ircBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureIRCRuntime(); err != nil {
-						return ircBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startIRCAdapterIfNeeded(name); err != nil {
-						return ircBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return ircBindResultMsg{message: m.t("panel.irc.message.added_bot", name)}
 				}
@@ -453,8 +482,9 @@ func (m Model) ircBindingEntries() []ircBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformIRC)) {
 			keys = append(keys, name)
 		}
