@@ -189,6 +189,20 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	if consecutive+1 < seqConsecutiveReads {
 		return ""
 	}
+	// #2767: same-iteration parallel read_file batches are the RECOMMENDED
+	// pattern (system prompt encourages parallel tool calls in one block) —
+	// the hint is only for cross-iteration serial reads. Require the trigger
+	// window (history tail + current) to span at least 2 distinct iterations.
+	iters := make(map[int]bool)
+	iters[curr.iter] = true
+	for i := len(v.history) - 1; i >= 0 && i >= len(v.history)-consecutive; i-- {
+		if v.history[i].tool == "read_file" {
+			iters[v.history[i].iter] = true
+		}
+	}
+	if len(iters) < 2 {
+		return "" // single parallel batch, not sequential reads
+	}
 	// Check that these reads are of DIFFERENT files (same file reads are handled by memoization)
 	files := make(map[string]bool)
 	files[curr.filePath] = true
