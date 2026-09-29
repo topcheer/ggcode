@@ -18,6 +18,21 @@ func TestCheckJSTSAntiPatterns_LooseEquality(t *testing.T) {
 	}
 }
 
+func TestCheckJSTSAntiPatterns_LooseInequality(t *testing.T) {
+	// != introduced (#2908: regex previously only matched ==)
+	new_ := "function f(a, b) {\nif (a != null) return a;\n}\n"
+	result := checkJSTSAntiPatterns("test.js", "", new_)
+	if !strings.Contains(result, "loose equality") {
+		t.Errorf("expected loose equality warning for !=, got: %s", result)
+	}
+	// !== must stay excluded
+	new2 := "function f(a, b) {\nif (a !== b) return a;\n}\n"
+	result2 := checkJSTSAntiPatterns("test.js", "", new2)
+	if strings.Contains(result2, "loose equality") {
+		t.Errorf("!== should not trigger, got: %s", result2)
+	}
+}
+
 func TestCheckJSTSAntiPatterns_StrictEqualityNoWarn(t *testing.T) {
 	// === should not trigger
 	old := "const x = 1;\n"

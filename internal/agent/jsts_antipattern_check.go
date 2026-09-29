@@ -52,7 +52,7 @@ type jstsAntiPattern struct {
 var jstsAntiPatterns = []jstsAntiPattern{
 	{
 		name:        "loose equality ==/!=",
-		pattern:     regexp.MustCompile(`[^=!<>]==[^=]`),
+		pattern:     regexp.MustCompile(`[^=!<>]==[^=]|[^=!<>]!=[^=]`),
 		description: "Loose equality (== or !=) performs type coercion and can cause subtle bugs. Use strict equality (=== or !==) instead.",
 	},
 	{
