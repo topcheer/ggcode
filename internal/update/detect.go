@@ -57,11 +57,30 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// resolvePath returns the fully-resolved form of path: EvalSymlinks when it
+// succeeds (following symlink chains to the real file), falling back to Abs.
+// #2806: on Linux os.Executable() (/proc/self/exe) returns the RESOLVED real
+// path (e.g. the Cellar inner path) while the known-install candidates are
+// symlink paths (linuxbrew bin/ggcode) - comparing bare Abs forms made the
+// currently-running binary report itself as an "other install" with a
+// misleading warning plus a wasted self-subprocess version probe. macOS
+// KERN_PROCARGS keeps the launch symlink path, which masked the bug there.
+func resolvePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		if abs, err := filepath.Abs(resolved); err == nil {
+			return abs
+		}
+		return resolved
+	}
+	abs, _ := filepath.Abs(path)
+	return abs
+}
+
 // FindOtherInstalls scans known installation paths for ggcode binaries
 // other than the one at currentPath. Returns a list of all found installs.
 func FindOtherInstalls(currentPath string) []OtherInstall {
 	var found []OtherInstall
-	currentAbs, _ := filepath.Abs(currentPath)
+	currentAbs := resolvePath(currentPath)
 
 	// dedup by resolved path
 	seen := map[string]bool{}
@@ -70,10 +89,7 @@ func FindOtherInstalls(currentPath string) []OtherInstall {
 		if path == "" {
 			return
 		}
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return
-		}
+		abs := resolvePath(path)
 		if abs == currentAbs {
 			return // skip ourselves
 		}
