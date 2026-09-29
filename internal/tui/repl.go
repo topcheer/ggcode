@@ -1466,6 +1466,11 @@ func (r *REPL) Run() error {
 	traceMark("markdown warmup")
 
 	r.program = tea.NewProgram(r.model)
+	// #2844: give the Model a thread-safe message injector so background
+	// goroutines (context probe results) never touch shared state directly.
+	// Assignment happens before Run(), so the happens-before edge is the
+	// program startup itself.
+	r.model.tuiSend = func(msg tea.Msg) { r.sendTUI(msg) }
 	if r.planSwitcher != nil {
 		r.planSwitcher.program = r.program
 	}

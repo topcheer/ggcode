@@ -138,43 +138,47 @@ type Model struct {
 	inputBellFired          bool // true when delayed input bell already fired
 	session                 *session.Session
 	sessionStore            session.Store
-	costCache               *sessionCostCache // shared pointer — survives Model copies
-	imManager               *im.Manager
-	streamManager           *stream.Manager
-	streamPanel             *streamPanelState
-	knightPanel             *knightPanelState
-	streamViewState         *streamViewStateData // shared pointer — survives Model copies
-	imRuntimeState          *imRuntimeState
-	imEmitter               *im.IMEmitter
-	instanceDetect          *im.InstanceDetect
-	mcpServers              []MCPInfo
-	a2aHandler              *a2a.TaskHandler
-	a2aEventBuf             []a2a.TaskEventMessage // cached recent events for display
-	a2aEventState           *a2aEventBufferState   // built at NewModel; ensureA2AEventState nil-check is a legacy fallback only
-	config                  *config.Config
-	language                Language
-	startupVendor           string
-	cachedPanelHeight       int // set in View() for renderContextBox
-	startupEndpoint         string
-	startupModel            string
-	activeVendor            string
-	activeEndpoint          string
-	activeModel             string
-	terminalTitleWriter     func(string)
-	lastTerminalTitle       string
-	customCmds              map[string]*commands.Command
-	commandMgr              *commands.Manager
-	autoMem                 *memory.AutoMemory
-	projMemFiles            []string
-	autoMemFiles            []string
-	pluginMgr               *plugin.Manager
-	subAgentMgr             *subagent.Manager
-	jobManager              *toolpkg.CommandJobManager // r71: reaped by shutdownAll
-	subAgentFollow          subAgentFollowState
-	usageTurnIndex          int
-	lastMetricDigestTurn    int
-	metricCollectorFlush    func()
-	knight                  *knight.Knight
+	// tuiSend injects a tea.Msg into the Update loop from any goroutine
+	// (#2844). Wired by the REPL once the program is created; nil before
+	// program start (pre-loop phase is single-threaded by construction).
+	tuiSend              func(tea.Msg)
+	costCache            *sessionCostCache // shared pointer — survives Model copies
+	imManager            *im.Manager
+	streamManager        *stream.Manager
+	streamPanel          *streamPanelState
+	knightPanel          *knightPanelState
+	streamViewState      *streamViewStateData // shared pointer — survives Model copies
+	imRuntimeState       *imRuntimeState
+	imEmitter            *im.IMEmitter
+	instanceDetect       *im.InstanceDetect
+	mcpServers           []MCPInfo
+	a2aHandler           *a2a.TaskHandler
+	a2aEventBuf          []a2a.TaskEventMessage // cached recent events for display
+	a2aEventState        *a2aEventBufferState   // built at NewModel; ensureA2AEventState nil-check is a legacy fallback only
+	config               *config.Config
+	language             Language
+	startupVendor        string
+	cachedPanelHeight    int // set in View() for renderContextBox
+	startupEndpoint      string
+	startupModel         string
+	activeVendor         string
+	activeEndpoint       string
+	activeModel          string
+	terminalTitleWriter  func(string)
+	lastTerminalTitle    string
+	customCmds           map[string]*commands.Command
+	commandMgr           *commands.Manager
+	autoMem              *memory.AutoMemory
+	projMemFiles         []string
+	autoMemFiles         []string
+	pluginMgr            *plugin.Manager
+	subAgentMgr          *subagent.Manager
+	jobManager           *toolpkg.CommandJobManager // r71: reaped by shutdownAll
+	subAgentFollow       subAgentFollowState
+	usageTurnIndex       int
+	lastMetricDigestTurn int
+	metricCollectorFlush func()
+	knight               *knight.Knight
 	// #1379: IM-runtime ensure guard. Pointer-held: Model is passed by
 	// value all over the TUI (go vet copylocks forbids a bare mutex).
 	imEnsure *imEnsureGuard
@@ -867,36 +871,64 @@ func (m *Model) startContextProbe() {
 	debug.Log("probe", "startContextProbe: vendor=%s model=%s baseURL=%s",
 		resolved.VendorID, resolved.Model, resolved.BaseURL)
 
+	// #2844: ProbeContextWindow invokes onResult from a background goroutine
+	// (its contract at context_probe.go demands caller-side thread safety).
+	// The old callback read m.config/m.session and wrote
+	// m.session.ContextWindow + AppendMetaToDisk lock-free against the
+	// Update loop (SetSession, vendor/model switches) - a -race hit and a
+	// TOCTOU: the key check could pass and the result then land on a NEW
+	// session. The goroutine now only forwards the result as a message via
+	// tuiSend (wired by the REPL before program start); application happens
+	// in applyProbeResult on the UI goroutine, serialized with all other
+	// state changes.
 	provider.ProbeContextWindow(context.Background(), prov,
 		resolved.VendorID, resolved.BaseURL, resolved.Model,
 		func(r provider.ProbeResult) {
-			// #1789 case 2: a probe started for model A completes after the
-			// user switched to model B - applying it wrote A's window onto
-			// the B session (persisted; the L809 guard then blocked a
-			// correct re-probe). Drop results whose key no longer matches
-			// the CURRENT combination.
-			if cur, ok := m.currentProbeKey(); ok && cur != r.Key {
-				debug.Log("probe", "dropping stale probe result key=%s (now %s)", r.Key, cur)
+			if m.tuiSend != nil {
+				m.tuiSend(contextProbeResultMsg{result: r})
 				return
 			}
-			if r.ContextWindow > 0 {
-				debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
-					r.ContextWindow, r.FromCache)
-				m.agent.ContextManager().SetContextWindow(r.ContextWindow)
-				// Persist probed context_window to session so it survives
-				// restarts without re-probing.
-				if m.session != nil && m.session.ContextWindow == 0 {
-					m.session.ContextWindow = r.ContextWindow
-					if m.sessionStore != nil {
-						if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
-							debug.Log("tui", "contextWindow persist: %v", err)
-						}
-					}
-				}
-			} else {
-				debug.Log("probe", "probe returned 0 (no result), keeping current context window setting")
-			}
+			// Pre-program phase (init/SetSession before program start): no
+			// concurrent Update loop exists yet, so applying inline is safe.
+			m.applyProbeResult(r)
 		})
+}
+
+// contextProbeResultMsg delivers a completed context-window probe from the
+// probe goroutine to the Update loop (#2844).
+type contextProbeResultMsg struct {
+	result provider.ProbeResult
+}
+
+// applyProbeResult applies a probe result to the agent and persists it to
+// the session. Must run on the UI goroutine (or before program start).
+func (m *Model) applyProbeResult(r provider.ProbeResult) {
+	// #1789 case 2: a probe started for model A completes after the
+	// user switched to model B - applying it wrote A's window onto
+	// the B session (persisted; the L809 guard then blocked a
+	// correct re-probe). Drop results whose key no longer matches
+	// the CURRENT combination.
+	if cur, ok := m.currentProbeKey(); ok && cur != r.Key {
+		debug.Log("probe", "dropping stale probe result key=%s (now %s)", r.Key, cur)
+		return
+	}
+	if r.ContextWindow > 0 {
+		debug.Log("probe", "applying context_window=%d fromCache=%v to agent",
+			r.ContextWindow, r.FromCache)
+		m.agent.ContextManager().SetContextWindow(r.ContextWindow)
+		// Persist probed context_window to session so it survives
+		// restarts without re-probing.
+		if m.session != nil && m.session.ContextWindow == 0 {
+			m.session.ContextWindow = r.ContextWindow
+			if m.sessionStore != nil {
+				if err := m.sessionStore.AppendMetaToDisk(m.session); err != nil {
+					debug.Log("tui", "contextWindow persist: %v", err)
+				}
+			}
+		}
+	} else {
+		debug.Log("probe", "probe returned 0 (no result), keeping current context window setting")
+	}
 }
 
 func (m *Model) SetCronScheduler(s *cron.Scheduler) {
