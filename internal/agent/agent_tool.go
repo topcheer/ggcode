@@ -654,46 +654,24 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 	if !result.IsError && len(plans) > 0 && !isDryRun {
-		var integrityWarnings []string
-		for _, plan := range plans {
-			if writtenSet != nil && !writtenSet[plan.Path] {
-				continue // not actually written (failed/skipped in partial mode)
+		a.runPostWriteWarnings(&result, plans, func(path, oldContent, newContent string) string {
+			if writtenSet != nil && !writtenSet[path] {
+				return "" // not actually written (failed/skipped in partial mode)
 			}
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				// #2138: the multi-file tools (multi_file_write/edit,
-				// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
-				// for .go files unconditionally - passing the raw plan.NewContent
-				// here made every gofmt-touched write report a fake post-write
-				// mismatch (#2132 fixed only the single-file leg). Mirror the
-				// write-time formatting so mismatch means REAL drift here too.
-				mirrored := mirrorWriteTimeGoFormat(plan.Path, plan.NewContent)
-				if w := checkWriteIntegrity(plan.Path, plan.OldContent, mirrored); w != "" {
-					integrityWarnings = append(integrityWarnings, w)
-				}
-			}
-		}
-		for _, w := range integrityWarnings {
-			// #1864 case 2: route through appendGuidance so the shared per-turn
-			// budget applies - the direct += appends let N plans stack 3N warning
-			// blocks that neither charged the count cap nor the 2048-byte pool,
-			// breaking guidance_budget's "all paths share one pool" contract.
-			a.appendGuidance(&result, w)
-		}
+			// #2138: the multi-file tools (multi_file_write/edit,
+			// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
+			// for .go files unconditionally - passing the raw plan.NewContent
+			// here made every gofmt-touched write report a fake post-write
+			// mismatch (#2132 fixed only the single-file leg). Mirror the
+			// write-time formatting so mismatch means REAL drift here too.
+			mirrored := mirrorWriteTimeGoFormat(path, newContent)
+			return checkWriteIntegrity(path, oldContent, mirrored)
+		})
 	}
 
 	// Post-write missing test companion detection for multi-file edits.
-	if !result.IsError && len(plans) > 0 {
-		var testCompanionWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := CheckMissingTestCompanionWithFS(plan.Path, plan.OldContent, plan.NewContent); w != "" {
-					testCompanionWarnings = append(testCompanionWarnings, w)
-				}
-			}
-		}
-		for _, w := range testCompanionWarnings {
-			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
-		}
+	if !result.IsError {
+		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS)
 	}
 
 	// Post-write hardcoded credential detection for multi-file edits
@@ -703,18 +681,8 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// registry copy respects the maxIntegrityWarnings cap).
 
 	// Post-write debug statement detection for multi-file edits.
-	if !result.IsError && len(plans) > 0 {
-		var debugWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := checkDebugStmts(plan.Path, plan.OldContent, plan.NewContent); w != "" {
-					debugWarnings = append(debugWarnings, w)
-				}
-			}
-		}
-		for _, w := range debugWarnings {
-			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
-		}
+	if !result.IsError {
+		a.runPostWriteWarnings(&result, plans, checkDebugStmts)
 	}
 
 	postEnv := env
@@ -730,6 +698,27 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	return result
+}
+
+// runPostWriteWarnings runs checker over each changed plan and appends
+// non-empty warnings to the result via appendGuidance - the shared per-turn
+// budget path (#1864 case 2: the direct += appends let N plans stack 3N
+// warning blocks that neither charged the count cap nor the 2048-byte pool).
+func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string) {
+	if len(plans) == 0 {
+		return
+	}
+	var warnings []string
+	for _, plan := range plans {
+		if diff.HasChanges(plan.OldContent, plan.NewContent) {
+			if w := checker(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+				warnings = append(warnings, w)
+			}
+		}
+	}
+	for _, w := range warnings {
+		a.appendGuidance(result, w)
+	}
 }
 
 // safeExecute calls t.Execute with panic recovery and context-aware cancellation.
