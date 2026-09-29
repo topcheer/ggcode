@@ -681,20 +681,38 @@ func gitFileContentAtHEAD(workingDir, relPath string) (string, error) {
 			absWork = a
 		}
 	}
+	// #1564: git may report the repo root with a different symlink
+	// resolution than the caller's workingDir (macOS /tmp vs /private/tmp),
+	// which silently defeats the HasPrefix rebase below. Compare through
+	// EvalSymlinks on both sides.
+	symWork, symRoot := absWork, repoRoot
+	if r, err := filepath.EvalSymlinks(absWork); err == nil {
+		symWork = r
+	}
+	if repoRoot != "" {
+		if r, err := filepath.EvalSymlinks(repoRoot); err == nil {
+			symRoot = r
+		}
+	}
 	target := relPath
 	if filepath.IsAbs(target) {
-		base := repoRoot
+		base := symRoot
 		if base == "" {
-			base = absWork
+			base = symWork
+		}
+		// Resolve the caller's symlinked absolute path (macOS /tmp vs
+		// /private/tmp) before comparing against the git-reported root.
+		if r, err := filepath.EvalSymlinks(target); err == nil {
+			target = r
 		}
 		rel, err := filepath.Rel(base, target)
 		if err != nil {
 			return "", err
 		}
 		target = rel
-	} else if repoRoot != "" && absWork != repoRoot && strings.HasPrefix(absWork, repoRoot+string(filepath.Separator)) {
+	} else if symRoot != "" && symWork != symRoot && strings.HasPrefix(symWork, symRoot+string(filepath.Separator)) {
 		// Subdir-relative path: rebase onto the repo root.
-		target = filepath.Join(strings.TrimPrefix(absWork, repoRoot+string(filepath.Separator)), target)
+		target = filepath.Join(strings.TrimPrefix(symWork, symRoot+string(filepath.Separator)), target)
 	}
 	target = filepath.Clean(target)
 	if target == ".." || strings.HasPrefix(target, ".."+string(filepath.Separator)) {
