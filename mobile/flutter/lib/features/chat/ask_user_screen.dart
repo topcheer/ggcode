@@ -356,20 +356,29 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
       return;
     }
     _responded = true;
-    ref.read(connectionProvider.notifier).send({
-      'type': 'ask_user_response',
-      'data': {'id': id, 'status': 'cancelled', 'answers': []},
-    });
-
-    // Update the ask_user chat message with cancelled status
-    final askUser = ref.read(askUserProvider);
-    if (askUser != null && askUser.msgId.isNotEmpty) {
-      ref.read(chatProvider.notifier).updateAskUserAnswer(
-            askUser.msgId,
-            'Cancelled',
-          );
-    }
-
-    ref.read(askUserProvider.notifier).set(null);
+    cancelPendingAskUser(ref, id);
   }
+}
+
+/// #2816: shared cancel core used by both the in-sheet cancel button and
+/// the gesture-dismiss recovery in main.dart. The connection notifier's
+/// send() is a no-op while disconnected (service?), so this never throws;
+/// per #1873 case 1 the question is cleared regardless of whether the
+/// response actually left the device.
+void cancelPendingAskUser(WidgetRef ref, String id) {
+  final askUser = ref.read(askUserProvider);
+  if (askUser == null) return;
+  ref.read(connectionProvider.notifier).send({
+    'type': 'ask_user_response',
+    'data': {'id': id, 'status': 'cancelled', 'answers': []},
+  });
+
+  if (askUser.msgId.isNotEmpty) {
+    ref.read(chatProvider.notifier).updateAskUserAnswer(
+          askUser.msgId,
+          'Cancelled',
+        );
+  }
+
+  ref.read(askUserProvider.notifier).set(null);
 }

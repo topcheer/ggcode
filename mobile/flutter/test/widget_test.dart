@@ -818,4 +818,76 @@ void main() {
     expect(find.byKey(const Key('workspaceScannerManualConnectButton')),
         findsOneWidget);
   });
+
+  testWidgets(
+      '#2816 drag-dismissing the ask_user sheet clears the provider and lets the next questionnaire open',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: _AskUserSheetHarness()),
+      ),
+    );
+
+    AskUserInfo questionnaire(int n) => AskUserInfo(
+          id: 'ask-$n',
+          title: 'Need input $n',
+          msgId: '',
+          questions: [
+            proto.AskUserQuestion(
+              id: 'q1',
+              prompt: 'Why?',
+              kind: 'text',
+            ),
+          ],
+        );
+
+    final container =
+        ProviderScope.containerOf(tester.element(find.byType(SizedBox)));
+    // Questionnaire A arrives -> sheet opens.
+    container.read(askUserProvider.notifier).set(questionnaire(1));
+    await tester.pumpAndSettle();
+    expect(find.byType(AskUserScreen), findsOneWidget);
+
+    // User drags the sheet away via the handle bar (gesture dismiss —
+    // no cancel button involved).
+    final sheetTopLeft = tester.getTopLeft(find.byType(AskUserScreen));
+    await tester.dragFrom(sheetTopLeft + const Offset(20, 10),
+        const Offset(0, 400));
+    await tester.pumpAndSettle();
+
+    // #2816: the dismiss must be treated as cancel — provider cleared, so
+    // the sheet's open edge (prev==null) can fire for the next one.
+    expect(container.read(askUserProvider), isNull);
+
+    // Questionnaire B arrives -> sheet opens again (pre-fix: never shown).
+    container.read(askUserProvider.notifier).set(questionnaire(2));
+    await tester.pumpAndSettle();
+    expect(find.byType(AskUserScreen), findsOneWidget);
+  });
+}
+
+// Mirrors main.dart's sheet-open listener, including the #2816
+// gesture-dismiss recovery in whenComplete.
+class _AskUserSheetHarness extends ConsumerWidget {
+  const _AskUserSheetHarness();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
+      if (next != null && prev == null) {
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => const AskUserScreen(),
+        ).whenComplete(() {
+          final pending = ref.read(askUserProvider);
+          if (pending != null) {
+            cancelPendingAskUser(ref, pending.id);
+          }
+        });
+      }
+    });
+    return const Scaffold(body: SizedBox.shrink());
+  }
 }
