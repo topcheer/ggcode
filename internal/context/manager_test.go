@@ -1194,8 +1194,6 @@ func TestBuildSummaryPayloadIncludesToolInputs(t *testing.T) {
 	}
 }
 
-// ── ClearOldToolUseInputs tests ──
-
 func TestBuildSummaryPayload_IncludesUserRequests(t *testing.T) {
 	msgs := []provider.Message{
 		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "Fix the memory leak in agent.go"}}},

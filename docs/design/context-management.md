@@ -15,8 +15,7 @@ Key responsibilities:
 - `CheckAndSummarize(ctx, prov)` — check threshold and summarize if needed.
 - `ReconcileToolCalls()` — ensure every `tool_use` has a matching `tool_result`.
 - `CompactSupersededReads()` — replace stale re-reads of the same file.
-- `ClearOldToolResults(keepN)` — replace old tool_result outputs with placeholders. **Retired from the live pipeline since v1.3.153** (multi-tier clearing removed); retained as exported API, not called by the agent.
-- `ClearOldToolUseInputs()` — truncate old edit/write Input arguments. **Retired since v1.3.153**, same as above.
+- ~~`ClearOldToolResults(keepN)`~~ / ~~`ClearOldToolUseInputs()`~~ — **removed as dead code** (see v1.3.153 / #718): never wired into `Compact` or any other call path; compaction uses the summary-payload path instead.
 - `buildPostCompactState(msgs)` — build a short post-compact state string (recent files + todo summary).
 
 ## Token Estimation
@@ -32,7 +31,7 @@ When context fills up, the following pipeline runs in order:
 3. **Background precompact** — `agent_precompact.go` starts an LLM summarization in a background goroutine with a 6-second delay and 180-second timeout. It triggers when token count reaches the precompact threshold (99% of the usable prompt budget).
 4. **Reactive compact fallback** — if precompact fails or context is still too high, `agent_compact.go` performs synchronous truncation as a fallback.
 
-> Note: the multi-tier progressive tool-result clearing schedule (50%/65%/75% thresholds, `ClearOldToolResults` + `ClearOldToolUseInputs`) was removed in v1.3.153 as an intentional simplification. Those methods remain exported on `Manager` but have no live callers. See v1.3.153 release notes.
+> Note: the multi-tier progressive tool-result clearing schedule (50%/65%/75% thresholds, `ClearOldToolResults` + `ClearOldToolUseInputs`) was removed in v1.3.153 as an intentional simplification, and the two methods themselves were later deleted as dead code (they had zero callers repo-wide). See v1.3.153 release notes.
 
 ## Context-Fill-Aware Output Guard
 

@@ -1634,16 +1634,6 @@ func (m *Manager) recalcTokens() {
 	m.invalidateUsageBaselineLocked()
 }
 
-// toolResultClearMinLen is the minimum Output length to bother clearing.
-// Small results (e.g. "ok", "done") waste negligible tokens and may be
-// more useful to keep inline for context.
-const toolResultClearMinLen = 500
-
-// toolUseInputClearMinLen is the minimum Input (arguments) length to bother
-// clearing. Many tool calls have tiny arguments (e.g. {"path": "main.go"})
-// that aren't worth truncating.
-const toolUseInputClearMinLen = 200
-
 // reasoningCompactMinLen is the minimum ReasoningContent length to bother
 // compacting. Short reasoning traces waste negligible tokens. Reasoning
 // from past turns provides zero marginal value once the turn is complete
