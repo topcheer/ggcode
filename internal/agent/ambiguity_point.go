@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -198,6 +199,72 @@ var quickTaskPhrases = []string{
 	"is there", "are there", "where is", "where are",
 }
 
+// #2879: per-category negative checks. The prefix patterns above ("sort the",
+// "order by", "rename the", "improve the", "fix the bug", ...) match shapes
+// that do NOT imply ambiguity by themselves -- the rest of the sentence often
+// already disambiguates exactly what the suggestion would ask about
+// ("sort the users by last_login descending" → "clarify ascending/descending"
+// contradicts the sentence). When the same sentence contains an explicit
+// disambiguation signal, the category is suppressed so the fired-once budget
+// is not burned on a deterministic false positive.
+var (
+	ambSortDirectionRe = regexp.MustCompile(
+		`\b(asc|desc|ascending|descending)\b` +
+			`|\b(newest|oldest|largest|smallest|biggest|highest|lowest)\s+first\b` +
+			`|\b(alphabetical|alphabetically|chronological|chronologically)\b`)
+	ambSortDirectionCJKRe = regexp.MustCompile(`降序|升序|倒序|正序|从大到小|从小到大|新到旧|旧到新`)
+
+	// Narrow metrics only. Bare "performance"/性能 is deliberately excluded:
+	// it is broad enough that "improve toward what goal" is still a fair
+	// question (and the CJK fire-test pins 优化一下…性能 as detected).
+	ambNarrowMetricRe = regexp.MustCompile(
+		`\b(latency|throughput|startup time|memory usage|binary size|bundle size|cpu usage|readability|maintainability|security|test coverage)\b`)
+	ambNarrowMetricCJKRe = regexp.MustCompile(`延迟|吞吐|启动时间|内存占用|二进制大小|可读性|可维护性|覆盖率|安全性`)
+
+	// "simplify X by inlining the helper" / "improve it by adding a cache":
+	// a concrete means is stated, the direction question is answered.
+	ambMeansByIngRe = regexp.MustCompile(`\bby\s+[a-z]+ing\b`)
+
+	// "fix the bug where the parser panics on empty input": the bug is
+	// identified by a clause; bare "fix the bug" stays ambiguous.
+	ambFixBugClauseRe = regexp.MustCompile(`\bfix the bug\b[^.!?]{0,80}\b(where|when|which|that)\b`)
+
+	ambRenameToRe  = regexp.MustCompile(`\brename\b[^.!?]{0,80}\bto\s+([a-z0-9_\-./]+)`)
+	ambRenameCJKRe = regexp.MustCompile(`(改成|改叫|改名叫|改名为|命名为|重命名为)\s*\S`)
+)
+
+// placeholder "targets" that do NOT disambiguate a rename ("rename it to
+// something more descriptive" is still vague despite the "to X" shape).
+var ambRenamePlaceholderTargets = map[string]bool{
+	"something": true, "whatever": true, "anything": true,
+}
+
+// ambDisambiguated reports whether the request already contains an explicit
+// disambiguation for the given category's open question.
+func ambDisambiguated(lower, category string) bool {
+	switch category {
+	case ambSortOrder:
+		return ambSortDirectionRe.MatchString(lower) ||
+			ambSortDirectionCJKRe.MatchString(lower)
+	case ambDirectionVague:
+		return ambNarrowMetricRe.MatchString(lower) ||
+			ambNarrowMetricCJKRe.MatchString(lower) ||
+			ambMeansByIngRe.MatchString(lower) ||
+			ambFixBugClauseRe.MatchString(lower)
+	case ambNamingVague:
+		if ambRenameCJKRe.MatchString(lower) {
+			return true
+		}
+		for _, m := range ambRenameToRe.FindAllStringSubmatch(lower, -1) {
+			if !ambRenamePlaceholderTargets[m[1]] {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
 // ambContainsPhrase matches phrase in text with word boundaries on both
 // sides. Bare strings.Contains matched "recent" inside "recently" and
 // "cleanup" inside identifier names, firing clarify guidance on ordinary
@@ -272,6 +339,12 @@ func (a *Agent) checkAmbiguityPoints(userPrompt string) string {
 	seen := make(map[string]bool)
 	for _, pat := range ambiguityPatterns {
 		if ambContainsPhrase(lower, pat.phrase) {
+			// #2879: the sentence itself already answers this category's
+			// question ("sort ... descending") -- do not fire, and do not
+			// burn the once-per-run budget on a false positive.
+			if ambDisambiguated(lower, pat.category) {
+				continue
+			}
 			key := pat.category
 			if seen[key] {
 				continue // one signal per category
