@@ -107,6 +107,19 @@ func TestExtractNewCommitHash(t *testing.T) {
 			"[feat/x 9f8e7d6a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e] work\n 1 file changed",
 			"9f8e7d6a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e",
 		},
+		// #2804: detached HEAD and root commits are standard git output the
+		// old single-token label regex ([^\]\s]+) could never match -- the
+		// detector went blind exactly in worktree/CI environments.
+		{
+			"detached-head",
+			"[detached HEAD 466523b] detach\n 1 file changed, 1 insertion(+)",
+			"466523b",
+		},
+		{
+			"root-commit",
+			"[master (root-commit) d329121] root\n 2 files changed, 5 insertions(+)",
+			"d329121",
+		},
 		{
 			"prefixed-by-advisory-output",
 			"Committed successfully.\n\n[main 1a2b3c4] msg\n 2 files changed",

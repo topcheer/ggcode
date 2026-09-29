@@ -564,7 +564,13 @@ func (s *actionAnnihilateState) commitHashMatches(iter int, revertArgs json.RawM
 
 // newCommitHashRegex matches the "[branch abbrev-hash] summary" line git
 // prints on a successful commit, e.g. "[main 5c2b1a3] fix A".
-var newCommitHashRegex = regexp.MustCompile(`\[[^\]\s]+ ([0-9a-f]{7,40})\]`)
+// #2804: the bracket label is not always a single token -- detached HEAD
+// ("[detached HEAD 466523b] msg", the norm for worktrees/CI checkouts) and
+// root commits ("[master (root-commit) d329121] msg") are standard git
+// output. The lazy [^]]*? prefix plus the trailing "]" anchor makes the
+// capture the LAST bracket token of 7-40 hex chars, which is the hash in
+// every git commit-summary form.
+var newCommitHashRegex = regexp.MustCompile(`\[[^\]]*?([0-9a-f]{7,40})\]`)
 
 // extractNewCommitHash pulls the new commit hash out of a successful
 // git_commit tool result (raw `git commit` output). Empty when no hash can
