@@ -20,6 +20,12 @@ import (
 // metrics, and architecture layering analysis.
 type DepGraphTool struct{ WorkingDir string }
 
+// Clone implements Cloner (#2596 siblings): registered by value, a shared
+// non-Cloner instance's WorkingDir cannot be Set via reflection, so cloned
+// agents' dep_graph would resolve the original registry's workspace instead
+// of their own worktree (resolveDir(args.Path, t.WorkingDir) in Execute).
+func (t DepGraphTool) Clone() Tool { return &DepGraphTool{WorkingDir: t.WorkingDir} }
+
 func (t DepGraphTool) Name() string { return "dep_graph" }
 
 func (t DepGraphTool) Description() string {

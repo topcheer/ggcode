@@ -37,6 +37,11 @@ type OpenEditorTool struct {
 	WorkingDir string
 }
 
+// Clone implements Cloner (#2596 siblings): same contract as the other
+// WorkingDir-holding tools - a pointer copy per agent so syncToolWorkingDir
+// can retarget each clone instead of sharing the registry-construction dir.
+func (t OpenEditorTool) Clone() Tool { return &OpenEditorTool{WorkingDir: t.WorkingDir} }
+
 func (OpenEditorTool) Name() string { return "open_editor" }
 
 func (OpenEditorTool) Description() string {
