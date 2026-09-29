@@ -30,6 +30,7 @@ type frontmatter struct {
 	UserInvocable          *bool    `yaml:"user-invocable"`
 	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
 	Context                string   `yaml:"context"`
+	Status                 string   `yaml:"status"`
 }
 
 // Loader finds and loads reusable skills and legacy custom slash commands.

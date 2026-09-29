@@ -11,6 +11,9 @@ func TestNewManager(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected non-nil manager")
 	}
+	if got := m.ProjectDir(); got != dir {
+		t.Errorf("ProjectDir() = %q, want %q", got, dir)
+	}
 }
 
 func TestManager_Reload(t *testing.T) {

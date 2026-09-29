@@ -9,6 +9,7 @@ import (
 
 type Manager struct {
 	loader         *Loader
+	projectDir     string
 	mu             sync.RWMutex
 	commands       map[string]*Command
 	signature      string
@@ -16,9 +17,18 @@ type Manager struct {
 }
 
 func NewManager(projectDir string) *Manager {
-	m := &Manager{loader: NewLoader(projectDir)}
+	m := &Manager{loader: NewLoader(projectDir), projectDir: projectDir}
 	m.Reload()
 	return m
+}
+
+// ProjectDir returns the project directory the manager was created with.
+// Used by the skills panel to locate project-local draft skills.
+func (m *Manager) ProjectDir() string {
+	if m == nil {
+		return ""
+	}
+	return m.projectDir
 }
 
 func (m *Manager) Reload() bool {

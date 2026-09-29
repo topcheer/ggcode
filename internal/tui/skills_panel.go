@@ -13,7 +13,10 @@ import (
 
 type skillsPanelState struct {
 	page   int
-	cursor int // index within current page
+	cursor int // index within page; indexes draft skills first, then live skills
+
+	status    string // last activation/toggle feedback line
+	statusErr bool
 }
 
 const skillsPerPage = 10
@@ -63,7 +66,8 @@ func (m Model) renderSkillsPanel() string {
 		return ""
 	}
 	skills := m.listSkills()
-	if len(skills) == 0 {
+	drafts := m.listSkillDrafts()
+	if len(skills) == 0 && len(drafts) == 0 {
 		body := " No skills found.\n Create skills in .ggcode/skills/, ~/.ggcode/skills/, or ~/.agents/skills/."
 		return m.renderContextBox("/skills", body, lipgloss.Color("12"))
 	}
@@ -105,8 +109,30 @@ func (m Model) renderSkillsPanel() string {
 	}
 
 	cursorIdx := m.skillsPanel.cursor
+	draftCount := len(drafts)
 	var body []string
-	flatIdx := 0 // track index within page for cursor
+	// Draft skills surface first: auto-distilled drafts are invisible to the
+	// live registry by design (human review gate), so the panel is their only
+	// discovery surface. Cursor indexes drafts before live skills.
+	if draftCount > 0 {
+		body = append(body, lipgloss.NewStyle().Bold(true).Render("Draft skills (pending review)"))
+		for i, draft := range drafts {
+			prefix := "  "
+			if i == cursorIdx {
+				prefix = "▸ "
+			}
+			line := fmt.Sprintf("%s◌ %s", prefix, draft.Name)
+			if i == cursorIdx {
+				line = lipgloss.NewStyle().Bold(true).Render(line)
+			}
+			body = append(body, line)
+			if desc := summarizeDescription(draft.Description); desc != "" {
+				body = append(body, fmt.Sprintf("    %s", lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(desc)))
+			}
+		}
+		body = append(body, "")
+	}
+	flatIdx := draftCount // track index within page for cursor (after drafts)
 	for _, title := range []string{"Bundled skills", "Project skills", "User skills", "Plugin skills", "MCP skills", "Legacy commands"} {
 		group := groups[title]
 		if len(group) == 0 {
@@ -151,8 +177,21 @@ func (m Model) renderSkillsPanel() string {
 		body = append(body, "")
 	}
 
+	// Status line from the last activation attempt
+	if m.skillsPanel.status != "" {
+		color := lipgloss.Color("2")
+		if m.skillsPanel.statusErr {
+			color = lipgloss.Color("1")
+		}
+		body = append(body, lipgloss.NewStyle().Foreground(color).Render(" "+m.skillsPanel.status))
+	}
+
 	// Footer with navigation hints
-	hints := []string{"←/→ page", "↑/↓ select", "Space toggle", "d toggle all", "Esc close"}
+	hints := []string{"←/→ page", "↑/↓ select", "Space toggle", "d toggle all"}
+	if draftCount > 0 {
+		hints = append(hints, "a activate draft")
+	}
+	hints = append(hints, "Esc close")
 	body = append(body, lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(
 		fmt.Sprintf(" %s  ·  %d/%d", strings.Join(hints, " · "), page+1, pageCount),
 	))
@@ -186,15 +225,25 @@ func (m *Model) handleSkillsPanelKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 			if end > len(skills) {
 				end = len(skills)
 			}
-			max := end - start - 1
+			max := len(m.listSkillDrafts()) + (end - start) - 1
 			if m.skillsPanel.cursor < max {
 				m.skillsPanel.cursor++
 			}
 		}
 	case " ", "space":
-		// Toggle enabled/disabled for selected skill
+		// Toggle enabled/disabled for selected live skill; drafts activate via 'a'
 		if m.skillsPanel != nil {
-			m.toggleSelectedSkill()
+			if m.skillsPanel.cursor < len(m.listSkillDrafts()) {
+				m.skillsPanel.status = "draft skill: press a to activate"
+				m.skillsPanel.statusErr = false
+			} else {
+				m.toggleSelectedSkill()
+			}
+		}
+	case "a":
+		// Activate the selected draft skill (move into .ggcode/skills/)
+		if m.skillsPanel != nil {
+			m.activateSelectedSkillDraft()
 		}
 	case "d":
 		// Toggle all non-builtin skills
@@ -244,9 +293,12 @@ func (m *Model) toggleSelectedSkill() {
 	if m.skillsPanel == nil || m.commandMgr == nil {
 		return
 	}
-	// #911: the cursor indexes the RENDER order (grouped), but this used
-	// to index m.listSkills() directly (usage-score order) - the toggle
-	// flipped the WRONG skill. Build the same grouped flat list.
+	// #911: the cursor indexes the RENDER order (drafts first, then grouped
+	// live skills), so subtract the draft section before indexing live skills.
+	draftCount := len(m.listSkillDrafts())
+	if m.skillsPanel.cursor < draftCount {
+		return // cursor on a draft; toggling is not applicable
+	}
 	skills := m.listSkills()
 	pageCount := skillsPageCount(len(skills))
 	page := clampSkillsPage(m.skillsPanel.page, pageCount)
@@ -256,10 +308,11 @@ func (m *Model) toggleSelectedSkill() {
 		end = len(skills)
 	}
 	flat := groupedSkillsFlat(skills[start:end])
-	if m.skillsPanel.cursor < 0 || m.skillsPanel.cursor >= len(flat) {
+	liveCursor := m.skillsPanel.cursor - draftCount
+	if liveCursor < 0 || liveCursor >= len(flat) {
 		return
 	}
-	skill := flat[m.skillsPanel.cursor]
+	skill := flat[liveCursor]
 	if skill.IsBuiltin() {
 		return // cannot disable builtin skills
 	}
@@ -313,6 +366,40 @@ func (m *Model) listSkills() []*commands.Command {
 	}
 	sortCommands(out)
 	return out
+}
+
+// listSkillDrafts returns pending draft skills from the project's
+// skill-drafts directory (empty when commandMgr or the dir is absent).
+func (m *Model) listSkillDrafts() []commands.SkillDraft {
+	if m.commandMgr == nil {
+		return nil
+	}
+	return commands.ListSkillDrafts(m.commandMgr.ProjectDir())
+}
+
+// activateSelectedSkillDraft moves the selected draft into the live project
+// registry (.ggcode/skills/<name>/SKILL.md) and refreshes the panel and the
+// system prompt so the reviewed skill is immediately usable.
+func (m *Model) activateSelectedSkillDraft() {
+	if m.skillsPanel == nil || m.commandMgr == nil {
+		return
+	}
+	drafts := m.listSkillDrafts()
+	if m.skillsPanel.cursor < 0 || m.skillsPanel.cursor >= len(drafts) {
+		return
+	}
+	draft := drafts[m.skillsPanel.cursor]
+	name, err := commands.ActivateSkillDraft(m.commandMgr.ProjectDir(), draft.Path)
+	if err != nil {
+		m.skillsPanel.status = fmt.Sprintf("activate %s: %v", draft.Name, err)
+		m.skillsPanel.statusErr = true
+		return
+	}
+	m.commandMgr.Reload() // pick up the activated skill immediately (no watcher dependency)
+	m.refreshCommands()
+	m.rebuildSystemPrompt()
+	m.skillsPanel.status = fmt.Sprintf("activated %s → .ggcode/skills/%s", name, name)
+	m.skillsPanel.statusErr = false
 }
 
 func sortCommands(cmds []*commands.Command) {
