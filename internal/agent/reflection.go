@@ -454,6 +454,9 @@ func (a *Agent) maybeReflect(stats *RunStats) {
 		// unmatched ones via LLM. This is the learning ratchet — every
 		// error becomes a rule that prevents future mistakes.
 		a.runRatchet(&s)
+		// Distill the successful procedure into a reviewable skill draft
+		// (CODESKILL-inspired). Deterministic, throttled, no LLM cost.
+		a.maybeDistillSkill(&s)
 	})
 }
 
