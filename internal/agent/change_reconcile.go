@@ -251,19 +251,50 @@ func gitChangedFiles(workingDir string) ([]string, error) {
 	}
 
 	output = strings.TrimSpace(output)
-	if output == "" {
-		return nil, nil
-	}
+	// #2884: an empty diff is NOT "no changes" anymore - untracked files
+	// live only in porcelain status, so fall through to the merge below
+	// instead of returning early.
+	var files []string
 
 	// #550 D2: trim each line and drop empties — git output carrying CR
 	// line endings (core.autocrlf checkouts) or stray padding previously
 	// produced keys like "foo.go\r" that never matched the edited set,
 	// flagging every changed file as unreconciled.
 	lines := strings.Split(output, "\n")
-	files := make([]string, 0, len(lines))
+	files = make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l = strings.TrimSpace(l); l != "" {
 			files = append(files, l)
+		}
+	}
+
+	// #2884: `git diff --name-only HEAD` NEVER includes untracked files,
+	// so source files CREATED by shell commands (protoc/swag/
+	// openapi-generator output - exactly the side-effect class this gate
+	// exists to catch, per the docblock) were invisible to reconciliation.
+	// Merge untracked entries from porcelain, same shape as diff_summary_gate
+	// #1451-A. Use -uall: plain porcelain folds a fully-untracked directory
+	// into a single "?? dir/" entry, which would slip whole trees of fresh
+	// source files through the sourceCodeExts/base filters (the zz_issue705
+	// lesson).
+	if st, err := runGitCommandWithTimeout(
+		gitCommand(workingDir, "status", "--porcelain", "-uall"),
+		gitDiffTimeout,
+	); err == nil {
+		seen := make(map[string]bool, len(files))
+		for _, f := range files {
+			seen[f] = true
+		}
+		for _, line := range strings.Split(st, "\n") {
+			if !strings.HasPrefix(line, "??") {
+				continue
+			}
+			f := strings.TrimSpace(line[2:])
+			if f == "" || seen[f] {
+				continue
+			}
+			seen[f] = true
+			files = append(files, f)
 		}
 	}
 	return files, nil
