@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/worklease"
 )
 
 // --- Helper ---
@@ -431,6 +433,99 @@ func TestWorktreeRoundTrip_KeepAction(t *testing.T) {
 	}
 
 	// Clean up
+	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
+}
+
+func TestEnterWorktree_RegistersAdvisoryLease(t *testing.T) {
+	dir := initTestGitRepo(t)
+	tool := EnterWorktree{WorkingDir: dir}
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"lease-a","claim_paths":["internal/tool/"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("create failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Advisory lease registered") {
+		t.Errorf("expected lease registration notice: %s", result.Content)
+	}
+
+	// Registry must live in the MAIN repo and record owner + claimed scope.
+	data, err := os.ReadFile(filepath.Join(dir, ".ggcode", "leases.json"))
+	if err != nil {
+		t.Fatalf("lease registry missing: %v", err)
+	}
+	if !strings.Contains(string(data), `"lease-a"`) || !strings.Contains(string(data), "internal/tool/") {
+		t.Errorf("registry missing owner/scope: %s", string(data))
+	}
+
+	exec.Command("git", "worktree", "remove", "--force", dir+"/.ggcode/worktrees/lease-a").Run()
+}
+
+func TestEnterWorktree_LeaseConflictWarning(t *testing.T) {
+	dir := initTestGitRepo(t)
+	tool := EnterWorktree{WorkingDir: dir}
+
+	first, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"lease-b","claim_paths":["pkg/"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.IsError {
+		t.Fatalf("first create failed: %s", first.Content)
+	}
+	if strings.Contains(first.Content, "LEASE CONFLICTS") {
+		t.Errorf("no conflicts expected on first claim: %s", first.Content)
+	}
+
+	second, err := tool.Execute(context.Background(), json.RawMessage(`{"name":"lease-c","claim_paths":["pkg/x.go"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.IsError {
+		t.Fatalf("second create failed: %s", second.Content)
+	}
+	// Advisory: conflict is reported, worktree is still created.
+	if !strings.Contains(second.Content, "LEASE CONFLICTS") || !strings.Contains(second.Content, "lease-b") {
+		t.Errorf("expected conflict warning against lease-b: %s", second.Content)
+	}
+
+	exec.Command("git", "worktree", "remove", "--force", dir+"/.ggcode/worktrees/lease-b").Run()
+	exec.Command("git", "worktree", "remove", "--force", dir+"/.ggcode/worktrees/lease-c").Run()
+}
+
+func TestExitWorktree_ReleasesLease(t *testing.T) {
+	dir := initTestGitRepo(t)
+	enterTool := EnterWorktree{WorkingDir: dir}
+	result, err := enterTool.Execute(context.Background(), json.RawMessage(`{"name":"lease-d"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("create failed: %s", result.Content)
+	}
+
+	wtPath := dir + "/.ggcode/worktrees/lease-d"
+	m := worklease.Manager{Dir: dir}
+	active, err := m.Active()
+	if err != nil || len(active) != 1 {
+		t.Fatalf("expected 1 active lease after enter, got %+v err %v", active, err)
+	}
+
+	exitTool := ExitWorktree{WorkingDir: wtPath}
+	result, err = exitTool.Execute(context.Background(), json.RawMessage(`{"action":"keep"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("exit failed: %s", result.Content)
+	}
+
+	active, err = m.Active()
+	if err != nil || len(active) != 0 {
+		t.Fatalf("lease must be released on exit, got %+v err %v", active, err)
+	}
+
 	exec.Command("git", "worktree", "remove", "--force", wtPath).Run()
 }
 

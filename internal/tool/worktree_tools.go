@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/worklease"
 )
 
 // EnterWorktree creates a new git worktree for isolated work.
@@ -35,6 +36,13 @@ func (t EnterWorktree) Parameters() json.RawMessage {
 			"type": "string",
 			"description": "Name for the worktree (used as directory and branch name). Defaults to a random name."
 		},
+		"claim_paths": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Optional repo-relative file domains (files, directories with trailing '/', or globs with * ?) this session intends to modify. Registered as a TTL-backed advisory lease (default 2h) in .ggcode/leases.json; overlaps with other agents' active leases are reported as warnings."
+		},
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
@@ -48,7 +56,8 @@ func (t EnterWorktree) Parameters() json.RawMessage {
 
 func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
-		Name string `json:"name"`
+		Name       string   `json:"name"`
+		ClaimPaths []string `json:"claim_paths"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -96,10 +105,39 @@ func (t EnterWorktree) Execute(ctx context.Context, input json.RawMessage) (Resu
 		return Result{IsError: true, Content: fmt.Sprintf("error creating worktree: %s", strings.TrimSpace(string(out)))}, nil
 	}
 
+	content := fmt.Sprintf("Created worktree at %s (branch: %s). SuggestedWorkingDir is set to this path; use the returned path for subsequent file and command operations inside the worktree.", worktreePath, branchName)
+	content += registerWorktreeLease(gitRoot, branchName, args.ClaimPaths)
 	return Result{
-		Content:             fmt.Sprintf("Created worktree at %s (branch: %s). SuggestedWorkingDir is set to this path; use the returned path for subsequent file and command operations inside the worktree.", worktreePath, branchName),
+		Content:             content,
 		SuggestedWorkingDir: worktreePath,
 	}, nil
+}
+
+// registerWorktreeLease records a TTL-backed advisory lease for the new
+// worktree session (owner = branch name; scope = the worktree directory plus
+// any explicitly claimed file domains) and renders a warning block when the
+// claim overlaps active leases held by other agents. It implements the
+// lease-based coordination protocol from multi-agent research: declare
+// intent before working, warn on overlap, self-recover stale claims via
+// TTL. Fail-open: lease errors are logged, never block worktree creation.
+// When enter_worktree runs from inside an existing worktree, gitRoot points
+// at that worktree, so the registry degrades to a worktree-local file
+// (functional, just not shared with the main tree).
+func registerWorktreeLease(gitRoot, owner string, claimPaths []string) string {
+	m := worklease.Manager{Dir: gitRoot}
+	scopes := []string{".ggcode/worktrees/" + owner + "/"}
+	scopes = append(scopes, claimPaths...)
+	lease, conflicts, err := m.Acquire(owner, worklease.KindWorktree, "", scopes, worklease.DefaultTTL)
+	if err != nil {
+		debug.Log("tool.worktree", "lease registration skipped for %s: %v", owner, err)
+		return ""
+	}
+	msg := fmt.Sprintf("\n\nAdvisory lease registered: owner=%s ttl=%s scopes=%d state=%s",
+		owner, worklease.DefaultTTL, len(lease.Scopes), filepath.Join(gitRoot, ".ggcode", "leases.json"))
+	if len(conflicts) > 0 {
+		msg += "\n\n⚠ LEASE CONFLICTS with other active agents - coordinate before touching these domains:\n" + worklease.FormatConflicts(conflicts)
+	}
+	return msg
 }
 
 // createAgentWorktree creates an isolated git worktree for a spawned
@@ -233,6 +271,7 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	mainRepoRoot, _ := findGitRootFromWorktree(worktreePath)
 
 	if args.Action == "keep" {
+		releaseWorktreeLease(mainRepoRoot, worktreePath)
 		return Result{
 			Content:             fmt.Sprintf("Worktree at %s kept intact.", worktreePath),
 			SuggestedWorkingDir: mainRepoRoot,
@@ -281,6 +320,7 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 	if rmOut, err := rmCmd.CombinedOutput(); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("error removing worktree: %s", strings.TrimSpace(string(rmOut)))}, nil
 	}
+	releaseWorktreeLease(mainRepoRoot, worktreePath)
 
 	// Optionally delete the branch
 	if branchName != "" && branchName != "main" && branchName != "master" {
@@ -321,6 +361,21 @@ func (t ExitWorktree) Execute(ctx context.Context, input json.RawMessage) (Resul
 		Content:             fmt.Sprintf("Removed worktree %s", worktreePath),
 		SuggestedWorkingDir: mainRepoRoot,
 	}, nil
+}
+
+// releaseWorktreeLease drops the advisory lease owned by the exited
+// worktree's branch. mainRepoRoot may be empty if root resolution failed;
+// in that case the lease is left to TTL self-recovery rather than blocking
+// exit (fail-open).
+func releaseWorktreeLease(mainRepoRoot, worktreePath string) {
+	if mainRepoRoot == "" {
+		return
+	}
+	owner := filepath.Base(worktreePath)
+	m := worklease.Manager{Dir: mainRepoRoot}
+	if err := m.Release(owner); err != nil {
+		debug.Log("tool.worktree", "lease release failed for %s: %v", owner, err)
+	}
 }
 
 // isWorktreeNameChar returns true for characters allowed in worktree names.
