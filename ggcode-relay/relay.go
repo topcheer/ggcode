@@ -503,6 +503,44 @@ func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
 
 // ─── Message handlers ───
 
+// relayPersistMaxAttempts bounds persist retries before a failure is
+// escalated to a peer close (#2892).
+const relayPersistMaxAttempts = 3
+
+// persistEventDurable persists a relay event with bounded retries; if the
+// store still fails, the originating peer is closed so the stream fails
+// visibly (the peer reconnects and re-syncs) instead of silently diverging
+// from the replay store. A live-delivered event that never lands in the
+// store creates a permanent gap on resume: clients with eventID/ordinal
+// continuity checks stall forever waiting for an event that exists nowhere
+// (#2892).
+func (h *hub) persistEventDurable(p *peer, label, token string, msg relayMessage, raw []byte) {
+	s := h.store
+	safego.Go(label, func() {
+		var err error
+		for attempt := 1; attempt <= relayPersistMaxAttempts; attempt++ {
+			if attempt > 1 {
+				time.Sleep(time.Duration(attempt-1) * 50 * time.Millisecond)
+			}
+			if err = s.persistEvent(token, msg, raw); err == nil {
+				if h.stats != nil {
+					h.stats.recordPersistResult(true)
+				}
+				return
+			}
+			if h.stats != nil {
+				h.stats.recordPersistResult(false)
+			}
+			log.Printf("[relay] %s: persist error (attempt %d/%d): %v",
+				label, attempt, relayPersistMaxAttempts, err)
+		}
+		h.trace("persist_failed", token, msg)
+		log.Printf("[relay] %s: persist failed after %d attempts, closing peer to force resync: room=%s event=%s err=%v",
+			label, relayPersistMaxAttempts, shortToken(token), msg.EventID, err)
+		p.closeWithReason(1011, "persist failed; please reconnect to resync")
+	})
+}
+
 func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
 	if p.role == "server" {
 		p.handleServerBroadcast(raw, msg)
@@ -561,15 +599,12 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 		return
 	}
 
-	// Persist async.
+	// Persist async. #2892: bounded retries + visible failure via
+	// persistEventDurable (same policy as handleServerBroadcast).
 	if p.hub.store != nil && msg.SessionID != "" {
 		token := p.room.token
-		s := p.hub.store
-		safego.Go("relay.persist-client-event", func() {
-			if err := s.persistEvent(token, msg, append([]byte(nil), raw...)); err != nil {
-				log.Printf("[relay] persist client event error: %v", err)
-			}
-		})
+		p.hub.persistEventDurable(p, "relay.persist-client-event", token, msg,
+			append([]byte(nil), raw...))
 	}
 }
 
@@ -666,14 +701,13 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	// Persist async — only for events with an eventID (durable, replayable).
 	// Transient events (no eventID) are forwarded to live clients but not
 	// persisted, since they can't be dedup'd on replay.
+	// #2892: a live-delivered event that never lands in the store creates a
+	// permanent gap on resume — persistEventDurable retries and closes the
+	// peer on final failure so the stream fails visibly instead.
 	if p.hub.store != nil && msg.SessionID != "" && msg.EventID != "" {
 		token := p.room.token
-		s := p.hub.store
-		safego.Go("relay.persist-event", func() {
-			if err := s.persistEvent(token, msg, append([]byte(nil), wire...)); err != nil {
-				log.Printf("[relay] persist error: %v", err)
-			}
-		})
+		p.hub.persistEventDurable(p, "relay.persist-event", token, msg,
+			append([]byte(nil), wire...))
 	}
 }
 
