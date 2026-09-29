@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -783,6 +784,37 @@ func isJSONMedia(ct string) bool {
 	return strings.Contains(ct, "application/json") || strings.Contains(ct, "a2a+json")
 }
 
+// rpcMaxAttempts bounds total attempts (1 initial + 2 retries) for a single
+// JSON-RPC call.
+const rpcMaxAttempts = 3
+
+// isRetryableHTTPStatus reports whether an HTTP status is a transient fault
+// worth retrying (rate limiting or server-side failure), per the reliability
+// playbook: never retry 4xx-class client errors (except 429).
+func isRetryableHTTPStatus(code int) bool {
+	return code == http.StatusTooManyRequests || (code >= 500 && code != http.StatusNotImplemented)
+}
+
+// retryRPCLater sleeps the next backoff interval (with full jitter) and
+// reports whether another attempt should be made. attempt is 1-based.
+// Retries are safe because the server dedups message/send by MessageID
+// (#565 G / #1461-A / #2896) and the remaining methods are read-only or
+// naturally idempotent (GetTask / ListTasks / CancelTask).
+func retryRPCLater(ctx context.Context, attempt int, backoff *time.Duration, method string) bool {
+	if attempt >= rpcMaxAttempts {
+		return false
+	}
+	wait := time.Duration(rand.Int63n(int64(*backoff) + 1))
+	*backoff *= 2
+	debug.Log("a2a", "rpc %s: transient failure, retry %d/%d in %v", method, attempt, rpcMaxAttempts-1, wait)
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(wait):
+		return true
+	}
+}
+
 func (c *Client) rpc(ctx context.Context, method string, params interface{}, result interface{}) error {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
@@ -799,58 +831,74 @@ func (c *Client) rpc(ctx context.Context, method string, params interface{}, res
 		return fmt.Errorf("a2a %s: marshal request: %w", method, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("a2a %s: %w", method, err)
-	}
-	req.Header.Set("Content-Type", c.requestContentType())
-	req.Header.Set("Accept", acceptHeader)
-	if err := c.applyExtensions(req); err != nil {
-		return fmt.Errorf("a2a %s: %w", method, err)
-	}
-	c.setAuth(req)
+	backoff := 100 * time.Millisecond
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("a2a %s: %w", method, err)
+		}
+		req.Header.Set("Content-Type", c.requestContentType())
+		req.Header.Set("Accept", acceptHeader)
+		if err := c.applyExtensions(req); err != nil {
+			return fmt.Errorf("a2a %s: %w", method, err)
+		}
+		c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("a2a %s: %w", method, err)
-	}
-	defer resp.Body.Close()
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("a2a %s: %w", method, err)
+			}
+			if retryRPCLater(ctx, attempt, &backoff, method) {
+				continue
+			}
+			return fmt.Errorf("a2a %s: %w", method, err)
+		}
 
-	respBody, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
-	if err != nil {
-		return fmt.Errorf("a2a %s: read: %w", method, err)
-	}
-	if resp.StatusCode != http.StatusOK {
+		respBody, err := util.ReadAll(resp.Body, util.ReadLimitGeneral)
+		resp.Body.Close()
+		if err != nil {
+			if retryRPCLater(ctx, attempt, &backoff, method) {
+				continue
+			}
+			return fmt.Errorf("a2a %s: read: %w", method, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			var rpcResp JSONRPCResponse
+			if err := json.Unmarshal(respBody, &rpcResp); err == nil && rpcResp.Error != nil {
+				return rpcResp.Error
+			}
+			msg := strings.TrimSpace(string(respBody))
+			if msg == "" {
+				msg = http.StatusText(resp.StatusCode)
+			}
+			if isRetryableHTTPStatus(resp.StatusCode) && retryRPCLater(ctx, attempt, &backoff, method) {
+				continue
+			}
+			return fmt.Errorf("a2a %s: HTTP %d: %s", method, resp.StatusCode, msg)
+		}
+
 		var rpcResp JSONRPCResponse
-		if err := json.Unmarshal(respBody, &rpcResp); err == nil && rpcResp.Error != nil {
+		if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+			return fmt.Errorf("a2a %s: decode: %w", method, err)
+		}
+		if rpcResp.Error != nil {
+			// JSON-RPC application errors are deterministic; never retry.
 			return rpcResp.Error
 		}
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = http.StatusText(resp.StatusCode)
-		}
-		return fmt.Errorf("a2a %s: HTTP %d: %s", method, resp.StatusCode, msg)
-	}
 
-	var rpcResp JSONRPCResponse
-	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
-		return fmt.Errorf("a2a %s: decode: %w", method, err)
-	}
-	if rpcResp.Error != nil {
-		return rpcResp.Error
-	}
-
-	if result != nil && rpcResp.Result != nil {
-		resultJSON, err := json.Marshal(rpcResp.Result)
-		if err != nil {
-			return fmt.Errorf("a2a %s: re-marshal result: %w", method, err)
+		if result != nil && rpcResp.Result != nil {
+			resultJSON, err := json.Marshal(rpcResp.Result)
+			if err != nil {
+				return fmt.Errorf("a2a %s: re-marshal result: %w", method, err)
+			}
+			if err := json.Unmarshal(resultJSON, result); err != nil {
+				return fmt.Errorf("a2a %s: unmarshal result: %w", method, err)
+			}
 		}
-		if err := json.Unmarshal(resultJSON, result); err != nil {
-			return fmt.Errorf("a2a %s: unmarshal result: %w", method, err)
-		}
-	}
 
-	return nil
+		return nil
+	}
 }
 
 // emitSSEData parses one accumulated SSE event payload and sends it on ch.
