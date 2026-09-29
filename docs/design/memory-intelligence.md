@@ -49,6 +49,32 @@ if dc.IsDuplicate() {
 }
 ```
 
+### Memory Supersession (`supersede.go`)
+Memory evolution — "change as evolution, not replacement" (2026 agent-memory
+research open problem). When a `save_memory` write carries EXPLICIT
+active-voice replacement semantics ("replaces", "instead of", "switched to",
+"now use", "取代", "改用", "不再", ...) AND its claims conflict with an
+existing entry on the same subject, the old entry is retired:
+- Retired = excluded from prompt injection and recall arbitration; the file
+  stays on disk for history (still readable via read_file)
+- Edges recorded in `.ggcode/memory/.superseded.json` sidecar
+  (`{old: {by: new, at: time}}`); re-saving a retired key revives it
+- Conservative by design: passive voice ("superseded by X") is NOT a marker
+  (there X, not the new entry, is the winner); plain conflicting saves
+  without replacement intent keep the warn-only path
+- Replacement prose is stripped before claim extraction so transition
+  commentary does not dilute conflict detection
+- Distinct from existing guards: write-time CheckContradiction only warns;
+  recall-time arbitration only annotates — supersession is the lifecycle
+  resolution that finally closes the conflict
+
+```go
+if olds := am.DetectSupersession(key, content); len(olds) > 0 {
+    _ = am.ApplySupersession(key, olds) // retire olds, revive key if retired
+}
+set := am.SupersededSet() // keys excluded from prompt injection
+```
+
 ### Memory Health Report (`health_report.go`)
 Diagnostic dashboard showing:
 - Total/active/expired/deduped/capped counts

@@ -308,6 +308,22 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 		return nil, nil, err
 	}
 	now := time.Now()
+
+	// Superseded entries (memory evolution, supersede.go): retired from
+	// prompt injection and recall arbitration, but kept on disk for history
+	// (read_file still works). This also stops the ghost-context guard from
+	// re-annotating a conflict that has already been structurally resolved.
+	if sup := am.SupersededSet(); len(sup) > 0 {
+		filtered := make([]MemoryMeta, 0, len(metas))
+		for _, m := range metas {
+			if sup[m.Key] {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		metas = filtered
+	}
+
 	active, _, _, _ := curateEntries(metas, now)
 
 	// Sort active entries: persistent first (inline priority), then by key
