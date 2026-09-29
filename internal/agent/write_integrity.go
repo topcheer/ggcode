@@ -534,6 +534,13 @@ func registerAllChecks() {
 		{Name: "sensitive-json", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSensitiveJSONExposure)},
 		{Name: "hardcoded-secret", Severity: SeverityCritical, Run: sliceCheck(checkHardcodedSecrets)},
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkInsecurePatterns)},
+		// #2904: jsts-antipattern - delta-based JS/TS anti-pattern detection
+		// (loose equality, var, explicit any, as any, empty catch, @ts-ignore).
+		// Previously dead code: checkJSTSAntiPatterns existed but was never
+		// registered, so the documented write-time detection never ran. Now
+		// wired here with comment/string stripping (jstsStripForScan) applied
+		// before delta counting, so comment/string mentions do not misfire.
+		{Name: "jsts-antipattern", Langs: []Language{LangJSTS}, Run: stringCheck(checkJSTSAntiPatterns)},
 		// #571: http-plaintext — detects http:// URLs pointing to non-localhost
 		// hosts (OWASP A02:2021). Complements insecure-patterns (TLS bypass).
 		// Fully implemented + unit tested.
