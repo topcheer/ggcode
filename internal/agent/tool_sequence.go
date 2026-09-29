@@ -193,24 +193,24 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	// pattern (system prompt encourages parallel tool calls in one block) —
 	// the hint is only for cross-iteration serial reads. Require the trigger
 	// window (history tail + current) to span at least 2 distinct iterations.
+	// The trailing `consecutive` entries are all read_file by construction,
+	// so a single reverse pass collects both the iteration set and the
+	// distinct-file set (different files; same-file re-reads are memoized).
 	iters := make(map[int]bool)
+	files := make(map[string]bool)
 	iters[curr.iter] = true
-	for i := len(v.history) - 1; i >= 0 && i >= len(v.history)-consecutive; i-- {
-		if v.history[i].tool == "read_file" {
-			iters[v.history[i].iter] = true
+	files[curr.filePath] = true
+	for i := len(v.history) - 1; i >= len(v.history)-consecutive; i-- {
+		e := v.history[i]
+		iters[e.iter] = true
+		if e.filePath != "" {
+			files[e.filePath] = true
 		}
 	}
 	if len(iters) < 2 {
 		return "" // single parallel batch, not sequential reads
 	}
 	// Check that these reads are of DIFFERENT files (same file reads are handled by memoization)
-	files := make(map[string]bool)
-	files[curr.filePath] = true
-	for i := len(v.history) - 1; i >= 0 && i >= len(v.history)-consecutive; i-- {
-		if v.history[i].tool == "read_file" && v.history[i].filePath != "" {
-			files[v.history[i].filePath] = true
-		}
-	}
 	if len(files) < seqConsecutiveReads {
 		return "" // re-reads of same file, not a batch scenario
 	}

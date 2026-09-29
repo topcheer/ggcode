@@ -144,6 +144,15 @@ func (a *Agent) StartPreCompact() {
 			if freed > 0 {
 				tokens = cm.TokenCount()
 			}
+			// Superseded command compaction: re-run commands (build/test
+			// cycles) leave expired output in context — only the latest
+			// run reflects the current state of the code (AgentDiet's
+			// "expired" waste category).
+			freed = mgr.CompactSupersededCommands()
+			if freed > 0 {
+				debug.Log("precompact", "SUPERSEDED-CMD: freed %d tokens from re-run commands", freed)
+				tokens = cm.TokenCount()
+			}
 		}
 	}
 

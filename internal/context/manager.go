@@ -1887,6 +1887,115 @@ func (m *Manager) CompactSupersededReads() int {
 	return freed
 }
 
+// CompactSupersededCommands replaces the output of earlier run_command calls
+// that were re-run later in the conversation with a compact placeholder.
+// Repeated command execution is one of the largest sources of stale context
+// in coding agents (build/test cycles): once `go build` has been re-run
+// after an edit, the previous run's output is expired — only the latest run
+// reflects the current state of the code (the "expired" waste category from
+// AgentDiet, arXiv:2509.23586). Like CompactSupersededReads this is a purely
+// mechanical operation (no LLM call) and protocol-safe: tool_result output
+// is rewritten in place, so tool_use/tool_result pairing and message order
+// are untouched.
+//
+// Returns the approximate number of tokens freed.
+func (m *Manager) CompactSupersededCommands() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Phase 1: collect run_command tool_use blocks keyed by normalized
+	// command string, preserving chronological order.
+	cmdToToolIDs := make(map[string][]string)
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			cmd := extractCommand(b.ToolName, b.Input)
+			if cmd == "" {
+				continue
+			}
+			cmdToToolIDs[cmd] = append(cmdToToolIDs[cmd], b.ToolID)
+		}
+	}
+
+	// Phase 2: for each command run more than once, all runs except the
+	// last are superseded by the newer run.
+	supersededIDs := make(map[string]bool)
+	for _, ids := range cmdToToolIDs {
+		for _, id := range ids[:len(ids)-1] {
+			supersededIDs[id] = true
+		}
+	}
+	if len(supersededIDs) == 0 {
+		return 0
+	}
+
+	// Phase 3: rewrite superseded tool_results in place.
+	freedChars := 0
+	compacted := 0
+	for i := range m.messages {
+		for j := range m.messages[i].Content {
+			b := &m.messages[i].Content[j]
+			if b.Type != "tool_result" || !supersededIDs[b.ToolID] {
+				continue
+			}
+			// Skip already-cleared or superseded results (idempotent).
+			if strings.HasPrefix(b.Output, "[superseded:") || strings.HasPrefix(b.Output, "[cleared:") {
+				continue
+			}
+			origLen := len(b.Output)
+			if origLen < 200 {
+				continue // skip small results — not worth compacting
+			}
+			b.Output = fmt.Sprintf("[superseded: command was re-run later in the conversation, output was %d chars]", origLen)
+			b.Images = nil
+			freedChars += origLen
+			compacted++
+		}
+	}
+
+	if freedChars == 0 {
+		return 0
+	}
+
+	before := m.tokens
+	m.markBenignRemoval() // benign bookkeeping, same as superseded reads
+	m.version++
+	m.nonTailMutSeq++
+	m.recalcTokens()
+	freed := before - m.tokens
+	debug.Log("ctx", "CompactSupersededCommands: compacted %d superseded command runs, freed ~%d tokens", compacted, freed)
+	return freed
+}
+
+// extractCommand returns the normalized key identifying a run_command
+// invocation, or "" if the tool is not run_command or the input cannot be
+// parsed. The key is the command string (trimmed) plus, when set, the
+// working_dir: `go build` and `cd x && go build` are different commands, and
+// so is the same command run in a different directory - none may supersede
+// each other.
+func extractCommand(toolName string, input json.RawMessage) string {
+	if toolName != "run_command" || len(input) == 0 {
+		return ""
+	}
+	var args struct {
+		Command    string `json:"command"`
+		WorkingDir string `json:"working_dir"`
+	}
+	if json.Unmarshal(input, &args) != nil {
+		return ""
+	}
+	cmd := strings.TrimSpace(args.Command)
+	if cmd == "" {
+		return ""
+	}
+	if wd := strings.TrimSpace(args.WorkingDir); wd != "" {
+		return wd + "\x00" + cmd
+	}
+	return cmd
+}
+
 // readRange describes which slice of a file a read_file call covered.
 // full=true means the whole file was requested (no offset parameter).
 type readRange struct {

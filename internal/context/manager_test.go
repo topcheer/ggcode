@@ -436,7 +436,7 @@ func TestContextManager_ApplyCompactResult_VersionMismatch_AppendAllowed(t *test
 
 	snapshot := cm.CompactSnapshot()
 
-	// Append after snapshot — version changes but first OrigLen messages unchanged.
+	// Append after snapshot - version changes but first OrigLen messages unchanged.
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
 	if cm.version == snapshot.Version {
 		t.Fatal("expected version to change after Add")
@@ -483,7 +483,7 @@ func TestContextManager_ApplyCompactResult_StaleSnapshot_Rejected(t *testing.T) 
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
 	if applied {
-		t.Fatal("expected stale snapshot to be REJECTED (#651): live shrank below snapshot size after Clear — applying the lossy summary would resurrect dropped content")
+		t.Fatal("expected stale snapshot to be REJECTED (#651): live shrank below snapshot size after Clear - applying the lossy summary would resurrect dropped content")
 	}
 }
 
@@ -580,7 +580,7 @@ func TestContextManager_CompactSnapshot_CapturesVersion(t *testing.T) {
 func TestContextManager_ApplyCompactResult_StaleSnapshotStillApplied(t *testing.T) {
 	// If messages within the snapshot range are modified after the snapshot
 	// was taken, the compaction result should STILL be applied.
-	// The summary is lossy compression — a slightly stale source is acceptable.
+	// The summary is lossy compression - a slightly stale source is acceptable.
 	cm := NewManager(1000)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
@@ -906,7 +906,7 @@ func TestContextManager_SetCheckpointBaseline(t *testing.T) {
 		t.Fatal("expected non-zero local estimate before baseline")
 	}
 
-	// Apply checkpoint baseline — simulates session restore with known token count.
+	// Apply checkpoint baseline - simulates session restore with known token count.
 	cm.SetCheckpointBaseline(158811)
 
 	// Token count should now reflect the checkpoint, not the estimate.
@@ -945,7 +945,7 @@ func TestContextManager_SetCheckpointBaselineThenAddMessages(t *testing.T) {
 	// Set baseline AFTER checkpoint messages, BEFORE post-checkpoint messages.
 	cm.SetCheckpointBaseline(100000)
 
-	// Now add post-checkpoint messages — these should increment baselineDelta.
+	// Now add post-checkpoint messages - these should increment baselineDelta.
 	postMsg := provider.Message{
 		Role:    "user",
 		Content: []provider.ContentBlock{{Type: "text", Text: "new message after restore"}},
@@ -963,7 +963,7 @@ func TestContextManager_SetCheckpointBaselineThenAddMessages(t *testing.T) {
 		t.Fatalf("expected positive delta for post-checkpoint message, got %d", delta)
 	}
 
-	// Add another message — delta should grow.
+	// Add another message - delta should grow.
 	cm.Add(provider.Message{
 		Role:    "assistant",
 		Content: []provider.ContentBlock{{Type: "text", Text: "assistant response"}},
@@ -1354,7 +1354,7 @@ func truncate(s string, n int) string {
 func TestCompactSupersededReads_SingleRead(t *testing.T) {
 	m := NewManager(100000)
 
-	// Single read — nothing to compact.
+	// Single read - nothing to compact.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -1380,7 +1380,7 @@ func TestCompactSupersededReads_SingleRead(t *testing.T) {
 func TestCompactSupersededReads_DuplicateRead(t *testing.T) {
 	m := NewManager(100000)
 
-	// Two reads of the same file — first should be compacted.
+	// Two reads of the same file - first should be compacted.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -1437,7 +1437,7 @@ func TestCompactSupersededReads_DuplicateRead(t *testing.T) {
 func TestCompactSupersededReads_DifferentFiles(t *testing.T) {
 	m := NewManager(100000)
 
-	// Reads of different files — nothing to compact.
+	// Reads of different files - nothing to compact.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -1571,7 +1571,7 @@ func TestCompactSupersededReads_PartialMultiFileRead(t *testing.T) {
 
 	freed := m.CompactSupersededReads()
 
-	// mfr-1 should NOT be compacted — files B and C were not re-read.
+	// mfr-1 should NOT be compacted - files B and C were not re-read.
 	msgs := m.Messages()
 	for _, msg := range msgs {
 		for _, b := range msg.Content {
@@ -1675,7 +1675,7 @@ func TestCompactSupersededReads_SkipsSmallResults(t *testing.T) {
 func TestCompactSupersededReads_PathNormalization(t *testing.T) {
 	m := NewManager(100000)
 
-	// Read with "./" prefix and without — should be treated as same file.
+	// Read with "./" prefix and without - should be treated as same file.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -1709,14 +1709,14 @@ func TestCompactSupersededReads_PathNormalization(t *testing.T) {
 
 	freed := m.CompactSupersededReads()
 	if freed <= 0 {
-		t.Fatal("expected tokens freed — ./prefix normalization should match")
+		t.Fatal("expected tokens freed - ./prefix normalization should match")
 	}
 }
 
 func TestCompactSupersededReads_ThreeReadsSameFile(t *testing.T) {
 	m := NewManager(100000)
 
-	// Three reads of the same file — first two should be compacted.
+	// Three reads of the same file - first two should be compacted.
 	for i := 0; i < 3; i++ {
 		toolID := fmt.Sprintf("read-%d", i+1)
 		m.Add(provider.Message{
@@ -1856,5 +1856,144 @@ func TestContextManager_Summarize_RecentGroupBudgetExceeded(t *testing.T) {
 	}
 	if msgs[2].Role != "user" || !strings.Contains(msgs[2].Content[0].Text, strings.Repeat("x", 50)) {
 		t.Fatal("expected last user message kept verbatim after summary")
+	}
+}
+
+// addCommandRun appends an assistant tool_use + user tool_result pair for a
+// run_command invocation with the given command/working dir.
+func addCommandRun(m *Manager, toolID, command, workingDir, output string) {
+	input := map[string]string{"command": command}
+	if workingDir != "" {
+		input["working_dir"] = workingDir
+	}
+	raw, _ := json.Marshal(input)
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   toolID,
+			ToolName: "run_command",
+			Input:    json.RawMessage(raw),
+		}},
+	})
+	m.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{provider.ToolResultBlock(toolID, output, false)},
+	})
+}
+
+func TestCompactSupersededCommands_Rerun(t *testing.T) {
+	m := NewManager(100000)
+
+	// Same command run twice - first run's output should be compacted.
+	addCommandRun(m, "cmd-1", "go build ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go build ./...", "", strings.Repeat("b", 500))
+
+	freed := m.CompactSupersededCommands()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed for superseded command run")
+	}
+
+	for _, msg := range m.Messages() {
+		for _, b := range msg.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			switch b.ToolID {
+			case "cmd-1":
+				if !strings.HasPrefix(b.Output, "[superseded:") {
+					t.Errorf("expected [superseded: prefix for cmd-1, got: %s", b.Output[:min(50, len(b.Output))])
+				}
+			case "cmd-2":
+				if strings.HasPrefix(b.Output, "[superseded:") {
+					t.Error("cmd-2 (latest run) should NOT be compacted")
+				}
+			}
+		}
+	}
+}
+
+func TestCompactSupersededCommands_DifferentCommands(t *testing.T) {
+	m := NewManager(100000)
+
+	// Different commands / working dirs - none supersede each other.
+	addCommandRun(m, "cmd-1", "go build ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go test ./...", "", strings.Repeat("b", 500))
+	addCommandRun(m, "cmd-3", "go build ./...", "/other", strings.Repeat("c", 500))
+
+	if freed := m.CompactSupersededCommands(); freed != 0 {
+		t.Fatalf("expected 0 freed for distinct commands, got %d", freed)
+	}
+}
+
+func TestCompactSupersededCommands_SkipsSmallResults(t *testing.T) {
+	m := NewManager(100000)
+
+	// Re-run but the superseded output is tiny - not worth compacting.
+	addCommandRun(m, "cmd-1", "echo hi", "", "ok")
+	addCommandRun(m, "cmd-2", "echo hi", "", "ok")
+
+	if freed := m.CompactSupersededCommands(); freed != 0 {
+		t.Fatalf("expected 0 freed for small results, got %d", freed)
+	}
+}
+
+func TestCompactSupersededCommands_Idempotent(t *testing.T) {
+	m := NewManager(100000)
+
+	addCommandRun(m, "cmd-1", "go build ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go build ./...", "", strings.Repeat("b", 500))
+
+	if first := m.CompactSupersededCommands(); first <= 0 {
+		t.Fatalf("expected tokens freed on first pass, got %d", first)
+	}
+	if second := m.CompactSupersededCommands(); second != 0 {
+		t.Fatalf("second pass should free nothing (idempotent), got %d", second)
+	}
+}
+
+func TestCompactSupersededCommands_ThreeRunsSameCommand(t *testing.T) {
+	m := NewManager(100000)
+
+	addCommandRun(m, "cmd-1", "go test ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go test ./...", "", strings.Repeat("b", 500))
+	addCommandRun(m, "cmd-3", "go test ./...", "", strings.Repeat("c", 500))
+
+	if freed := m.CompactSupersededCommands(); freed <= 0 {
+		t.Fatal("expected tokens freed")
+	}
+	compacted := 0
+	for _, msg := range m.Messages() {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && strings.HasPrefix(b.Output, "[superseded:") {
+				compacted++
+			}
+		}
+	}
+	if compacted != 2 {
+		t.Errorf("expected 2 superseded runs (all but latest), got %d", compacted)
+	}
+}
+
+func TestCompactSupersededCommands_IgnoresOtherTools(t *testing.T) {
+	m := NewManager(100000)
+
+	// Non-run_command tools must never be treated as commands.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "g-1",
+			ToolName: "grep",
+			Input:    json.RawMessage(`{"command":"go build ./...","pattern":"x"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{provider.ToolResultBlock("g-1", strings.Repeat("a", 500), false)},
+	})
+
+	if freed := m.CompactSupersededCommands(); freed != 0 {
+		t.Fatalf("expected 0 freed for non-run_command tools, got %d", freed)
 	}
 }
