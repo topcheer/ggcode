@@ -2392,6 +2392,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Type: provider.StreamEventSystem,
 					Text: "[Response blocked by provider safety policy — partial output kept, not retrying.] ",
 				})
+			} else if truncated && !policyBlocked && truncationContinues >= 3 {
+				// #2894: output-limit truncation budget exhausted — the partial
+				// output is kept and the run completes, but the response may be
+				// incomplete. Surface that instead of returning silently: the
+				// policyBlocked branch above notifies, and #1672 made the empty-
+				// response budget exhaustion an explicit error — the truncated
+				// variant was the last silent path.
+				debug.Log("agent", "Iteration %d: response truncated, continuation budget exhausted (3/3), keeping partial output", i+1)
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Output truncated — auto-continuation budget exhausted (3/3); response may be incomplete.] ",
+				})
 			}
 			// Detect inline tool calls in text/reasoning (common with lower-reasoning
 			// models that write tool calls in prose instead of structured tool_use blocks).
