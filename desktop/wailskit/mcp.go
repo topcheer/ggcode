@@ -161,7 +161,33 @@ func SetMCPServerEnabled(name string, enabled bool) bool {
 		}
 		return true
 	}
-	return chat.mcpManager.Reconnect(name)
+	// #2872: fast path - the plugin is live in the manager (connected, or
+	// disconnected-but-present); Reconnect re-establishes it.
+	if chat.mcpManager.Reconnect(name) {
+		return true
+	}
+	// #2872: Reconnect has no rebuild path - it only scans the live plugin
+	// snapshot. A server whose definition joined after session start
+	// (workspace .mcp.json edit, migration file, stale scope after a
+	// workspace switch) is not in that set, so the old `return
+	// mcpManager.Reconnect(name)` surfaced false and the UI reported
+	// "enable failed" forever - even though the persist above already hit
+	// disk. That is #2389's disable lie in mirror image. Rebuild the
+	// plugin set from the SAME merged origin the runtime uses at startup:
+	// Reload's connect sweep picks the new plugin up (and still skips
+	// disabled servers), so no second Reconnect is issued here - it would
+	// race the sweep's own connect goroutine.
+	cfg, cfgErr := loadSessionScopedConfigFor(chat)
+	if cfgErr != nil {
+		// The enable already persisted; a failed config load only costs the
+		// in-session revive (next Add/Remove/restart reloads anyway). The
+		// persisted state remains the truth we report (#408).
+		debug.Log("wailskit", "SetMCPServerEnabled: %s enabled on disk but session config reload failed: %v", name, cfgErr)
+		return true
+	}
+	reloadSessionMCPServers(chat, cfg)
+	debug.Log("wailskit", "SetMCPServerEnabled: %s enabled on disk; rebuilt session MCP set (server was not live in manager)", name)
+	return true
 }
 
 // chatScope returns the workspace scope for MCP disabled-state operations
