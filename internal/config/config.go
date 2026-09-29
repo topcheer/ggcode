@@ -476,6 +476,7 @@ type IMTargetConfig struct {
 // SubAgentConfig holds sub-agent configuration.
 type SubAgentConfig struct {
 	MaxConcurrent int           `yaml:"max_concurrent"` // default: 16 - max simultaneously running sub-agents
+	MaxTotal      int           `yaml:"max_total"`      // default: 0 (unlimited) - lifetime spawn budget for this manager; bounds total agent calls per session even when concurrency slots free up
 	Timeout       time.Duration `yaml:"timeout"`
 	ShowOutput    bool          `yaml:"show_output"`
 }
@@ -1699,6 +1700,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SubAgents.MaxConcurrent < 0 {
 		return fmt.Errorf("subagents.max_concurrent must not be negative")
+	}
+	if c.SubAgents.MaxTotal < 0 {
+		return fmt.Errorf("subagents.max_total must not be negative (0 = unlimited)")
 	}
 	if c.SubAgents.Timeout < 0 {
 		return fmt.Errorf("subagents.timeout must not be negative")

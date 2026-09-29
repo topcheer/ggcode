@@ -227,6 +227,7 @@ Control the behavior of sub-agents spawned via the `spawn_agent` tool:
 ```yaml
 subagents:
   max_concurrent: 4    # Max concurrent sub-agents (0 = unlimited)
+  max_total: 64        # Lifetime spawn budget per session (0 = unlimited)
   timeout: 300s        # Timeout per sub-agent run (0 = no timeout)
   show_output: true    # Stream sub-agent output to the parent's TUI
 ```
@@ -234,6 +235,7 @@ subagents:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `max_concurrent` | int | 4 | Maximum number of sub-agents running simultaneously |
+| `max_total` | int | 0 (unlimited) | Lifetime spawn budget for the session; completed agents do NOT release budget. Bounds total agent calls even when concurrency slots free up (cost control against runaway spawn loops) |
 | `timeout` | duration | 0 (none) | Maximum duration for a sub-agent run |
 | `show_output` | bool | false | Whether to stream sub-agent events to the parent's UI |
 

@@ -408,6 +408,16 @@ type Manager struct {
 	// constant so the semaphore capacity and the Spawn check never diverge
 	// when the user configures max_concurrent > 5 (#226).
 	maxConcurrent int
+
+	// maxTotal is the configured lifetime spawn budget (cfg.MaxTotal,
+	// default 0 = unlimited). Unlike maxConcurrent, completed agents do
+	// NOT release budget: it bounds the total number of agent calls a
+	// session can make (2026 production "maxAgentCalls" cost control),
+	// because a runaway loop can otherwise burn unlimited calls in
+	// 16-wide waves. totalSpawned counts every accepted Spawn and never
+	// decreases. Both guarded by m.mu.
+	maxTotal     int
+	totalSpawned int
 	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
 	// goroutine to actually terminate after context cancellation. Each agent gets
 	// the full budget (per-agent, not shared — #619). Default: 5s.
@@ -462,6 +472,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 		watchdogDone:      make(chan struct{}),
 		inactivityTimeout: 5 * time.Minute,
 		maxConcurrent:     max,
+		maxTotal:          cfg.MaxTotal,
 		semOwners:         make(map[string]bool),
 	}
 	m.startWatchdog()
@@ -608,6 +619,26 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	}
 	// Enforce concurrent sub-agent limit to prevent resource exhaustion.
 	m.mu.Lock()
+	// Lifetime budget first: unlike the concurrency limit, this is NOT
+	// released when agents finish - it bounds total agent calls per session.
+	if m.maxTotal > 0 && m.totalSpawned >= m.maxTotal {
+		errID := fmt.Sprintf("sa-budget-%d", time.Now().UnixNano())
+		sa := &SubAgent{
+			ID:           errID,
+			Name:         name,
+			Task:         task,
+			DisplayTask:  displayTask,
+			Status:       StatusFailed,
+			CurrentPhase: "rejected",
+			CreatedAt:    time.Now(),
+			Error:        fmt.Errorf("sub-agent spawn budget exhausted: %d/%d lifetime spawns used (subagents.max_total). Raise the budget in config or continue without new sub-agents.", m.totalSpawned, m.maxTotal),
+			done:         make(chan struct{}),
+		}
+		close(sa.done)
+		m.agents[errID] = sa
+		m.mu.Unlock()
+		return errID
+	}
 	running := 0
 	for _, sa := range m.agents {
 		sa.mu.Lock()
@@ -637,6 +668,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	}
 	m.nextID++
 	id := fmt.Sprintf("sa-%d", m.nextID)
+	m.totalSpawned++
 
 	// Construct outside the lock, then insert in the SAME critical section as
 	// the limit check above (the unlock/relock window between check and insert
