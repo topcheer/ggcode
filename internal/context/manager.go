@@ -437,18 +437,38 @@ func (m *Manager) ReconcileToolCalls() bool {
 	// assistant message (or any open tool_call) are orphaned. Remove them.
 	m.removeOrphanToolResults()
 
-	// ── Phase 1: collect information ──
-	type lateResult struct {
-		msgIdx   int
-		blockIdx int // position of the block inside m.messages[msgIdx].Content (#535)
-		block    provider.ContentBlock
+	fixes := m.collectReconcileFixes()
+	if len(fixes) == 0 {
+		return false
 	}
-	type needFix struct {
-		insertBefore int
-		lateBlocks   []lateResult
-		missingIDs   []struct{ id, name string }
-	}
-	var fixes []needFix
+	return m.applyReconcileFixes(fixes)
+}
+
+// reconcileLateResult locates a tool_result block that arrived after the
+// next assistant message (#535 granularity is block-level).
+type reconcileLateResult struct {
+	msgIdx   int
+	blockIdx int // position of the block inside m.messages[msgIdx].Content (#535)
+	block    provider.ContentBlock
+}
+
+// reconcileID identifies a tool_use that has neither a properly-placed nor a
+// late tool_result and therefore needs a cancelled placeholder.
+type reconcileID struct{ id, name string }
+
+// reconcileNeedFix describes one assistant message whose tool_results need to
+// be relocated (late) or synthesized (missing) before the next assistant msg.
+type reconcileNeedFix struct {
+	insertBefore int
+	lateBlocks   []reconcileLateResult
+	missingIDs   []reconcileID
+}
+
+// collectReconcileFixes scans the message history for assistant tool_use
+// messages whose tool_results are missing or placed after the next assistant
+// message. Callers must hold m.mu.
+func (m *Manager) collectReconcileFixes() []reconcileNeedFix {
+	var fixes []reconcileNeedFix
 
 	for idx := range m.messages {
 		if m.messages[idx].Role != "assistant" {
@@ -464,14 +484,7 @@ func (m *Manager) ReconcileToolCalls() bool {
 			continue
 		}
 
-		// Find the next assistant boundary.
-		nextAssistantIdx := len(m.messages)
-		for j := idx + 1; j < len(m.messages); j++ {
-			if m.messages[j].Role == "assistant" {
-				nextAssistantIdx = j
-				break
-			}
-		}
+		nextAssistantIdx := m.nextAssistantIndex(idx)
 
 		// Collect tool_results BEFORE the next assistant -> properly placed.
 		for j := idx + 1; j < nextAssistantIdx; j++ {
@@ -486,44 +499,61 @@ func (m *Manager) ReconcileToolCalls() bool {
 			continue
 		}
 
-		// Check for LATE results (after next assistant).
-		var late []lateResult
-		var missingIDs []struct{ id, name string }
-		for id, name := range toolIDs {
-			foundLate := false
-			for j := nextAssistantIdx; j < len(m.messages); j++ {
-				for bi, block := range m.messages[j].Content {
-					if block.Type == "tool_result" && block.ToolID == id {
-						late = append(late, lateResult{msgIdx: j, blockIdx: bi, block: block})
-						foundLate = true
-						break
-					}
-				}
-				if foundLate {
-					break
-				}
-			}
-			if !foundLate {
-				missingIDs = append(missingIDs, struct{ id, name string }{id, name})
-			}
-		}
-
+		late, missingIDs := m.findLateOrMissingResults(toolIDs, nextAssistantIdx)
 		if len(late) == 0 && len(missingIDs) == 0 {
 			continue
 		}
 
-		fixes = append(fixes, needFix{
+		fixes = append(fixes, reconcileNeedFix{
 			insertBefore: nextAssistantIdx,
 			lateBlocks:   late,
 			missingIDs:   missingIDs,
 		})
 	}
+	return fixes
+}
 
-	if len(fixes) == 0 {
-		return false
+// nextAssistantIndex returns the index of the first assistant message after
+// start, or len(m.messages) if there is none.
+func (m *Manager) nextAssistantIndex(start int) int {
+	for j := start + 1; j < len(m.messages); j++ {
+		if m.messages[j].Role == "assistant" {
+			return j
+		}
 	}
+	return len(m.messages)
+}
 
-	// ── Phase 2: apply fixes ──
+// findLateOrMissingResults partitions unresolved tool IDs into those whose
+// tool_result appears after boundaryIdx (late) and those with no result at
+// all (missing).
+func (m *Manager) findLateOrMissingResults(toolIDs map[string]string, boundaryIdx int) (late []reconcileLateResult, missingIDs []reconcileID) {
+	for id, name := range toolIDs {
+		foundLate := false
+		for j := boundaryIdx; j < len(m.messages); j++ {
+			for bi, block := range m.messages[j].Content {
+				if block.Type == "tool_result" && block.ToolID == id {
+					late = append(late, reconcileLateResult{msgIdx: j, blockIdx: bi, block: block})
+					foundLate = true
+					break
+				}
+			}
+			if foundLate {
+				break
+			}
+		}
+		if !foundLate {
+			missingIDs = append(missingIDs, reconcileID{id: id, name: name})
+		}
+	}
+	return late, missingIDs
+}
+
+// applyReconcileFixes rebuilds the message history, relocating late
+// tool_results before their assistant boundary, dropping the stale blocks in
+// place (preserving sibling user content, #535), and inserting cancelled
+// placeholders for missing results. Callers must hold m.mu. Returns true.
+func (m *Manager) applyReconcileFixes(fixes []reconcileNeedFix) bool {
 	oldMsgs := m.messages
 
 	// Stale granularity is BLOCK-level, not message-level (#535): a late
@@ -548,18 +578,18 @@ func (m *Manager) ReconcileToolCalls() bool {
 				seen[lr.block.ToolID] = true
 			}
 		}
-		for _, m := range fix.missingIDs {
-			if !seen[m.id] {
-				name := m.name
+		for _, mid := range fix.missingIDs {
+			if !seen[mid.id] {
+				name := mid.name
 				if name == "" {
 					name = "unknown"
 				}
 				content = append(content, provider.ToolResultNamedBlock(
-					m.id, name,
+					mid.id, name,
 					"operation cancelled - tool call was interrupted before it could complete",
 					true,
 				))
-				seen[m.id] = true
+				seen[mid.id] = true
 			}
 		}
 		if len(content) > 0 {
