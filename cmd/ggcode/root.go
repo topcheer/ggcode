@@ -668,6 +668,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
+	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
 	ag.SetCheckpointManager(checkpoint.NewManager(50))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))

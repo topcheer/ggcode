@@ -349,6 +349,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
+	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
 	ag.SetSupportsVision(resolved.SupportsVision)
 	ag.SetCheckpointManager(checkpoint.NewManager(50))

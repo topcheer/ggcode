@@ -59,6 +59,8 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"checkpoints":          "checkpoint manager, injected via setter (guarded)",
 		"codeIndex":            "code index manager, injected via setter (guarded)",
 		"precompact":           "created lazily when precompaction starts (guarded)",
+		"auxResolved":          "task-tier model routing config, injected via SetAuxModel; nil = routing disabled (default)",
+		"auxProvider":          "aux provider built lazily by auxProviderFor() on first auxiliary call",
 		"metadata":             "dead field — no read/write sites outside declaration",
 	}
 

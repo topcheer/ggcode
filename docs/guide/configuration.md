@@ -24,6 +24,7 @@ Per-workspace overrides are stored in `~/.ggcode/instances/<hash>/`. Use `scope=
 | `vendor` | string | Provider vendor name (e.g. `openai`, `anthropic`, `google`, `deepseek`) |
 | `endpoint` | string | Named endpoint key within the vendor (e.g. `default`, NOT a URL) |
 | `model` | string | Model override (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
+| `aux_model` | string | Optional cheaper model on the SAME endpoint for auxiliary LLM calls (context compaction summarization, autopilot strategist, health check). Task-tier model routing cuts cost without touching the primary loop. Empty = all calls use `model`. Construction failure degrades permanently to the main model. |
 | `api_key` | string | API key (use `${ENV_VAR}` syntax; stored in `keys.env`) |
 | `default_mode` | string | Permission mode for **new** sessions: `supervised` (default), `plan`, `auto`, `bypass`, `autopilot` |
 | `language` | string | Interface language: `en` or `zh-CN` |

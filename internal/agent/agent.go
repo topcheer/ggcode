@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/checkpoint"
+	"github.com/topcheer/ggcode/internal/config"
 	ctxpkg "github.com/topcheer/ggcode/internal/context"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -94,7 +95,13 @@ func isAgentRetryableLLMError(err error) bool {
 
 // Agent orchestrates the agentic loop: send messages to LLM, execute tool calls, loop.
 type Agent struct {
-	provider                   provider.Provider
+	provider provider.Provider
+	// Task-tier model routing (model_routing.go): optional aux provider for
+	// mechanical auxiliary calls (strategist, health check, compaction).
+	auxResolved                *config.ResolvedEndpoint // main endpoint clone with Model=aux_model
+	auxProvider                provider.Provider        // lazily built
+	auxModelName               string                   // aux model for diagnostics
+	auxFailed                  bool                     // aux build failed once: permanent fallback to main
 	tools                      *tool.Registry
 	contextManager             ctxpkg.ContextManager
 	maxIter                    int

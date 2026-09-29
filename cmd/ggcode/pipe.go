@@ -139,6 +139,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
+	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
 	// Pipe mode has no session JSONL, but todo_write needs a session ID.
 	// Use a PID-based pseudo ID so todos work during pipe execution and are

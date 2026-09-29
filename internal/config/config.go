@@ -328,9 +328,14 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 
 // Config is the top-level configuration.
 type Config struct {
-	Vendor             string                    `yaml:"vendor" json:"vendor"`
-	Endpoint           string                    `yaml:"endpoint" json:"endpoint"`
-	Model              string                    `yaml:"model" json:"model"`
+	Vendor   string `yaml:"vendor" json:"vendor"`
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+	Model    string `yaml:"model" json:"model"`
+	// AuxModel optionally names a cheaper model on the SAME resolved endpoint
+	// for auxiliary LLM calls (compaction summarization, autopilot strategist,
+	// health check). Task-tier model routing; see internal/agent/model_routing.go.
+	// Empty (default) routes all calls through Model.
+	AuxModel           string                    `yaml:"aux_model,omitempty" json:"aux_model,omitempty"`
 	Language           string                    `yaml:"language" json:"language"`
 	UI                 UIConfig                  `yaml:"ui,omitempty" json:"ui,omitempty"`
 	IM                 IMConfig                  `yaml:"im,omitempty" json:"im,omitempty"`
