@@ -128,6 +128,21 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		contraWarning = cc.FormatContradictionWarning(params.Key)
 	}
 
+	// Memory evolution (supersede.go): when the new content carries explicit
+	// replacement semantics AND conflicts on a shared subject, retire the old
+	// entries from prompt injection (kept on disk for history) instead of
+	// leaving the conflict live forever.
+	var supersedeNote string
+	if olds := target.DetectSupersession(params.Key, params.Content); len(olds) > 0 {
+		if err := target.ApplySupersession(params.Key, olds); err != nil {
+			// Non-fatal: the save itself must proceed; the sidecar failure is
+			// surfaced in the note instead.
+			supersedeNote = fmt.Sprintf("supersede bookkeeping failed: %v", err)
+		} else {
+			supersedeNote = memory.FormatSupersedeNote(olds)
+		}
+	}
+
 	if err := target.SaveMemoryWithSource(params.Key, params.Content, "save_memory:"+scopeLabel); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
 	}
@@ -141,6 +156,9 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 	if contraWarning != "" {
 		msg += "\n\n" + contraWarning
+	}
+	if supersedeNote != "" {
+		msg += "\n\n" + supersedeNote
 	}
 	return Result{Content: msg}, nil
 }
