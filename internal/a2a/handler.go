@@ -338,21 +338,22 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 	switch t.Skill {
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
-		// Use the latest user message (not History[0]) so that follow-up
-		// messages in input-required flows are actually delivered.
-		lastIdx := len(historySnap) - 1
+		// The full history is passed below (#2897) so follow-up messages in
+		// input-required flows are delivered WITH their context.
 		if len(historySnap) > 0 {
 			if h.agent == nil {
 				err = fmt.Errorf("agent required for skill %s", t.Skill)
 			} else {
-				result, err = h.executeAgent(ctx, perm, t.Skill, historySnap[lastIdx])
+				// #2897: pass the full history so the stateless agent has context.
+				result, err = h.executeAgent(ctx, perm, t.Skill, historySnap)
 			}
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
 		if len(historySnap) > 0 {
-			result, err = h.executeAgent(ctx, perm, t.Skill, historySnap[len(historySnap)-1])
+			// #2897: pass the full history so the stateless agent has context.
+			result, err = h.executeAgent(ctx, perm, t.Skill, historySnap)
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
@@ -423,8 +424,17 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 // executeDirectTool runs a tool directly without spinning up a full agent loop.
 // executeAgent runs a full agent loop with restricted permissions.
-func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, skill string, msg Message) (string, error) {
-	text := extractText(msg)
+// #2897: it receives the FULL conversation history, not just the last
+// message. Every call creates a fresh stateless Agent (agent.NewAgent), so
+// the original task instruction, earlier follow-ups, and the agent's own
+// input-required questions must be rendered into the prompt - otherwise a
+// short follow-up like "yes" reaches the new instance with zero context.
+func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, skill string, history []Message) (string, error) {
+	if len(history) == 0 {
+		return "", fmt.Errorf("empty input")
+	}
+	last := history[len(history)-1]
+	text := extractText(last)
 	if text == "" {
 		return "", fmt.Errorf("empty input")
 	}
@@ -451,6 +461,26 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 	a := agent.NewAgent(h.agent.Provider(), reg, h.agent.SystemPrompt(), maxIter)
 
 	prompt := buildAgentPrompt(skill, text)
+	// #2897: prepend the earlier conversation as a transcript so the fresh
+	// stateless agent knows what the follow-up refers to. Roles map directly
+	// (RequestInput appends the agent's question with Role "agent").
+	if prior := history[:len(history)-1]; len(prior) > 0 {
+		var transcript strings.Builder
+		transcript.WriteString("[Conversation history so far]\n")
+		for _, m := range prior {
+			mText := extractText(m)
+			if mText == "" {
+				continue
+			}
+			role := "User"
+			if m.Role == "agent" {
+				role = "Agent"
+			}
+			transcript.WriteString(role + ": " + mText + "\n")
+		}
+		transcript.WriteString("\n[Current request - answer with the full history above in mind]\n")
+		prompt = transcript.String() + prompt
+	}
 
 	var buf strings.Builder
 	err := a.RunStream(ctx, prompt, func(event provider.StreamEvent) {
