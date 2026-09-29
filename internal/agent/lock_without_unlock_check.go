@@ -191,6 +191,30 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 // the WHOLE function, making a missing Unlock next to them systematically
 // invisible.
 func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
+	// #2838: the `un := mu.Unlock; defer un()` method-value idiom survives
+	// renaming (short names like un/v/fn carry no unlock/release substring),
+	// so scan for the ASSIGNMENT source first: any ident bound to a
+	// <selector>.Unlock/RUnlock method value makes a bare `defer <ident>()`
+	// a genuine indirect release. Everything else keeps #2826's tightened
+	// posture (cancel/close/cleanup no longer silence the whole function).
+	methodValues := map[string]bool{}
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != len(assign.Rhs) {
+			return true
+		}
+		for i, rhs := range assign.Rhs {
+			sel, ok := rhs.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "Unlock" && sel.Sel.Name != "RUnlock") {
+				continue
+			}
+			if id, ok := assign.Lhs[i].(*ast.Ident); ok {
+				methodValues[id.Name] = true
+			}
+		}
+		return true
+	})
+
 	indirect := false
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		d, ok := node.(*ast.DeferStmt)
@@ -204,9 +228,11 @@ func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
 			// semantics (the `v := mu.Unlock; defer v()` method-value
 			// idiom) stay conservative; anything else (cancel, close,
 			// cleanup, done...) is not a release shape the simulator must
-			// silence on (#2826).
+			// silence on (#2826). #2838: an ident whose ASSIGNMENT source
+			// is a Unlock/RUnlock method value is the same idiom renamed.
 			lower := strings.ToLower(callee.Name)
-			if strings.Contains(lower, "unlock") || strings.Contains(lower, "release") {
+			if methodValues[callee.Name] ||
+				strings.Contains(lower, "unlock") || strings.Contains(lower, "release") {
 				indirect = true
 			}
 		case *ast.SelectorExpr:
