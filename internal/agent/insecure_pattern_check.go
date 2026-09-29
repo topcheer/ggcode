@@ -139,6 +139,7 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 	// Text-based checks (fast, always available).
 	lines := strings.Split(content, "\n")
 	inBlockComment := false // fix #728: /* */ block comment state across lines
+	inRawString := false    // fix #2902: `...` raw string state across lines
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
@@ -155,6 +156,20 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		if !ok {
 			continue
 		}
+		// #2902: strip Go string-literal contents BEFORE the trailing-comment
+		// strip - string contents like "InsecureSkipVerify: true" (security
+		// fixtures, error messages, test assertions) otherwise reach the
+		// pattern regexes and fire false [Security] warnings. JS (#1063) and
+		// Python already strip strings; Go was the asymmetric gap. Stripping
+		// first also keeps URL-like "scheme://host" contents from confusing the
+		// // trailing-comment heuristic below.
+		// #2902: keyword/signal detection needs PRE-strip text (SQL keywords
+		// and shell names legitimately live INSIDE the query/command string:
+		// `q := "SELECT " + u` is a real injection); structural detection
+		// (concatenation operators) needs POST-strip text (a + inside a
+		// string literal is not concatenation). Keep both views per line.
+		signalLine := code
+		code = goStripStringLiterals(code, &inRawString)
 		trimmed = goStripTrailingComment(code)
 
 		// 1. InsecureSkipVerify: true (assignment shape only, fix #1062)
@@ -183,9 +198,13 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		// `a := b + c // SELECT count FROM users` must not count the comment's
 		// keywords as the query.
 		// Fix #245: `i++` and `x += y` are not concatenation and must not count.
-		upperLine := strings.ToUpper(trimmed)
+		// #2902: keyword detection reads signalLine (pre-string-strip - the
+		// SELECT in a real concatenated query lives inside the literal);
+		// concatenation detection reads trimmed (post-strip - a + inside a
+		// string is not concatenation, so pure-doc strings stop firing).
+		upperLine := strings.ToUpper(goStripTrailingComment(signalLine))
 		if isSQLKeywordLine(upperLine) {
-			// Check for concatenation or Sprintf in the same line
+			// Check for concatenation or Sprintf in the same line (post-strip)
 			if lineHasConcatPlus(trimmed) || strings.Contains(trimmed, "Sprintf") {
 				issues = append(issues, insecurePatternInstance{
 					category: "SQL injection",
@@ -196,10 +215,14 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 		}
 
 		// 4. Command injection: exec.Command with shell + concatenation
+		// #2902: shell-name literals ("sh", "bash") are in-string signals -
+		// read them from signalLine; the concat/"Sprintf" structural signal
+		// stays on the post-strip trimmed line.
+		cmdSignal := goStripTrailingComment(signalLine)
 		if strings.Contains(trimmed, "exec.Command") {
-			if strings.Contains(trimmed, "\"sh\"") || strings.Contains(trimmed, "\"bash\"") ||
-				strings.Contains(trimmed, "\"/bin/sh\"") || strings.Contains(trimmed, "\"/bin/bash\"") {
-				if strings.Contains(trimmed, "+") || strings.Contains(trimmed, "Sprintf") {
+			if strings.Contains(cmdSignal, "\"sh\"") || strings.Contains(cmdSignal, "\"bash\"") ||
+				strings.Contains(cmdSignal, "\"/bin/sh\"") || strings.Contains(cmdSignal, "\"/bin/bash\"") {
+				if lineHasConcatPlus(trimmed) || strings.Contains(trimmed, "Sprintf") {
 					issues = append(issues, insecurePatternInstance{
 						category: "command injection",
 						detail:   "exec.Command with shell and concatenated input - pass arguments as separate args",
@@ -773,6 +796,82 @@ func jsStripCommentsAndStrings(line string) string {
 // Unspaced trailing comments (`x := 1// c`) and /* inside string literals are
 // not handled — a conservative false-negative tradeoff for a line-level
 // heuristic.
+// goStripStringLiterals removes the CONTENTS of Go string literals from a
+// line so text-based insecure-pattern checks only see code (#2902).
+//   - Double-quoted strings honor backslash escapes; contents are dropped.
+//   - Backtick raw strings have no escapes; an unterminated one sets *inRaw
+//     so the caller keeps skipping until the closing backtick on a later
+//     line (mirrors the #728 block-comment state machine).
+//   - Rune literals ('x') are dropped too (single char, never a pattern).
+//
+// Quote characters themselves are kept so line structure (operators,
+// concatenations like "" + user) stays visible to the checks.
+func goStripStringLiterals(line string, inRaw *bool) string {
+	var b strings.Builder
+	r := []rune(line)
+	n := len(r)
+	i := 0
+	for i < n {
+		c := r[i]
+		if *inRaw {
+			// Inside a multi-line raw string: skip until closing backtick.
+			for i < n && r[i] != '`' {
+				i++
+			}
+			if i < n {
+				b.WriteRune('`')
+				i++
+				*inRaw = false
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			b.WriteRune('"')
+			i++
+			for i < n && r[i] != '"' {
+				if r[i] == '\\' && i+1 < n {
+					i++ // skip escaped char
+				}
+				i++
+			}
+			if i < n {
+				b.WriteRune('"')
+				i++
+			}
+		case c == '`':
+			b.WriteRune('`')
+			i++
+			for i < n && r[i] != '`' {
+				i++
+			}
+			if i < n {
+				b.WriteRune('`')
+				i++
+			} else {
+				*inRaw = true // continues on the next line
+			}
+		case c == '\'':
+			b.WriteRune('\'')
+			i++
+			for i < n && r[i] != '\'' {
+				if r[i] == '\\' && i+1 < n {
+					i++
+				}
+				i++
+			}
+			if i < n {
+				b.WriteRune('\'')
+				i++
+			}
+		default:
+			b.WriteRune(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
 func goStripTrailingComment(line string) string {
 	if idx := strings.Index(line, " // "); idx >= 0 {
 		line = line[:idx]
