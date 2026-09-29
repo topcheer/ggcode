@@ -2640,13 +2640,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// read-only iteration that merely said "reproduce" forge the
 			// REPRO state and later draw edit-without-rerun warnings.
 			reproRan := false
-			for _, tn := range reproToolNames {
+			reproRunInput := ""
+			for ti, tn := range reproToolNames {
 				if reproducerRunToolNames[tn] {
 					reproRan = true
+					if ti < len(reproToolInputs) {
+						reproRunInput = reproToolInputs[ti]
+					}
 					break
 				}
 			}
-			a.reproducerLifecycle.observeText(i+1, assistantText, reproRan)
+			a.reproducerLifecycle.observeText(i+1, assistantText, reproRan, reproRunInput)
 			a.reproducerLifecycle.observeToolCalls(i+1, reproToolNames, reproToolInputs)
 			if rlHint := a.reproducerLifecycle.checkIncomplete(i + 1); rlHint != "" {
 				debug.Log("agent", "Iteration %d: reproducer lifecycle detector triggered", i+1)
