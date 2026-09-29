@@ -291,6 +291,17 @@ func TestHeadRunesPlain_RuneSafe(t *testing.T) {
 	}
 }
 
+// truncStr is the rune-safe ellipsis truncation helper from the #718 fix.
+// Its last production caller (summarizeClearedResult) was removed as dead
+// code; the helper is retained here so the #718 rune-safety contract stays
+// tested.
+func truncStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return headRunesPlain(s, maxLen-3) + "..."
+}
+
 func TestTruncStr_RuneSafe(t *testing.T) {
 	s := strings.Repeat("界", 10) // 30 bytes; maxLen 10 keeps 2 full runes + "..."
 	got := truncStr(s, 10)
