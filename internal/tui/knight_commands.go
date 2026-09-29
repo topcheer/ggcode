@@ -13,11 +13,75 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// knightSubcommands maps /knight subcommand names to their handlers.
+// Handlers that ignore extra arguments simply discard parts.
+var knightSubcommands = map[string]func(m *Model, parts []string) tea.Cmd{
+	"status": func(m *Model, _ []string) tea.Cmd {
+		m.openKnightPanel()
+		return nil
+	},
+	"": func(m *Model, _ []string) tea.Cmd {
+		m.openKnightPanel()
+		return nil
+	},
+	"budget": func(m *Model, _ []string) tea.Cmd { return m.knightBudgetCmd() },
+	"queue":  func(m *Model, _ []string) tea.Cmd { return m.knightQueueCmd() },
+	"review": func(m *Model, parts []string) tea.Cmd {
+		return m.knightReviewCmd(parts)
+	},
+	"run": func(m *Model, parts []string) tea.Cmd {
+		return m.knightRunCmd(parts)
+	},
+	"propose": func(m *Model, parts []string) tea.Cmd {
+		return m.knightProposeCmd(parts)
+	},
+	"proposals": func(m *Model, parts []string) tea.Cmd {
+		return m.knightProposalsCmd(parts)
+	},
+	"policies": func(m *Model, _ []string) tea.Cmd { return m.knightPoliciesCmd() },
+	"approve": func(m *Model, parts []string) tea.Cmd {
+		return m.knightApproveSkillCmd(parts)
+	},
+	"reject": func(m *Model, parts []string) tea.Cmd {
+		return m.knightRejectSkillCmd(parts)
+	},
+	"freeze": func(m *Model, parts []string) tea.Cmd {
+		return m.knightSetSkillFrozenCmd(parts, true)
+	},
+	"unfreeze": func(m *Model, parts []string) tea.Cmd {
+		return m.knightSetSkillFrozenCmd(parts, false)
+	},
+	"rollback": func(m *Model, parts []string) tea.Cmd {
+		return m.knightRollbackSkillCmd(parts)
+	},
+	"skills": func(m *Model, _ []string) tea.Cmd { return m.knightSkillsCmd() },
+	"scenarios": func(m *Model, parts []string) tea.Cmd {
+		return m.knightScenariosCmd(parts)
+	},
+	"rejects": func(m *Model, parts []string) tea.Cmd {
+		return m.knightRejectsCmd(parts)
+	},
+	"reject-history": func(m *Model, parts []string) tea.Cmd {
+		return m.knightRejectsCmd(parts)
+	},
+	"memory":  func(m *Model, _ []string) tea.Cmd { return m.knightMemoryCmd() },
+	"audit":   func(m *Model, _ []string) tea.Cmd { return m.knightAuditCmd() },
+	"reflect": func(m *Model, _ []string) tea.Cmd { return m.knightReflectCmd() },
+	"rate": func(m *Model, parts []string) tea.Cmd {
+		return m.knightRateCmd(parts)
+	},
+}
+
+const knightUsageHelp = "Knight commands: status, budget, queue, review [name], run <task>, propose <goal>, proposals [id|approve <id>|reject <id>], policies, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills, scenarios [clear], rejects [clear], memory, audit, reflect"
+
 // handleKnightCommand dispatches /knight subcommands.
 //
 // sa-162: the former 450-line monolith (cyclomatic complexity ~110) is
 // decomposed into per-subcommand helpers below. Behavior is unchanged -
 // user-visible strings, evaluation ordering, and error paths are preserved.
+//
+// sa-133: the dispatcher switch is collapsed into the knightSubcommands
+// handler map above; on/off stay inline since they run in all modes.
 func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	subcmd := ""
 	if len(parts) > 1 {
@@ -25,10 +89,10 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 	}
 
 	// /knight on and /knight off work in all modes (they persist config + toggle runtime).
-	switch subcmd {
-	case "on":
+	if subcmd == "on" {
 		return m.knightSetEnabled(true)
-	case "off":
+	}
+	if subcmd == "off" {
 		return m.knightSetEnabled(false)
 	}
 
@@ -38,51 +102,12 @@ func (m *Model) handleKnightCommand(parts []string) tea.Cmd {
 		return nil
 	}
 
-	switch subcmd {
-	case "status", "":
-		m.openKnightPanel()
-	case "budget":
-		return m.knightBudgetCmd()
-	case "queue":
-		return m.knightQueueCmd()
-	case "review":
-		return m.knightReviewCmd(parts)
-	case "run":
-		return m.knightRunCmd(parts)
-	case "propose":
-		return m.knightProposeCmd(parts)
-	case "proposals":
-		return m.knightProposalsCmd(parts)
-	case "policies":
-		return m.knightPoliciesCmd()
-	case "approve":
-		return m.knightApproveSkillCmd(parts)
-	case "reject":
-		return m.knightRejectSkillCmd(parts)
-	case "freeze":
-		return m.knightSetSkillFrozenCmd(parts, true)
-	case "unfreeze":
-		return m.knightSetSkillFrozenCmd(parts, false)
-	case "rollback":
-		return m.knightRollbackSkillCmd(parts)
-	case "skills":
-		return m.knightSkillsCmd()
-	case "scenarios":
-		return m.knightScenariosCmd(parts)
-	case "rejects", "reject-history":
-		return m.knightRejectsCmd(parts)
-	case "memory":
-		return m.knightMemoryCmd()
-	case "audit":
-		return m.knightAuditCmd()
-	case "reflect":
-		return m.knightReflectCmd()
-	case "rate":
-		return m.knightRateCmd(parts)
-	default:
-		m.chatWriteSystem(nextSystemID(), "Knight commands: status, budget, queue, review [name], run <task>, propose <goal>, proposals [id|approve <id>|reject <id>], policies, approve <name>, reject <name>, freeze <name>, unfreeze <name>, rollback <name>, rate <name> <1-5>, skills, scenarios [clear], rejects [clear], memory, audit, reflect")
+	handler, ok := knightSubcommands[subcmd]
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), knightUsageHelp)
+		return nil
 	}
-	return nil
+	return handler(m, parts)
 }
 
 // knightSetEnabled persists the knight enabled flag and toggles the runtime
