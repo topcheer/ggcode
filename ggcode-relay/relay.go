@@ -627,7 +627,7 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 		return
 	}
 
-	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
+	authorityEpoch, changed := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
 	if msg.SessionID == "" {
 		p.room.mu.Lock()
 		msg.SessionID = p.room.sessionID
@@ -638,11 +638,14 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	msg.AuthorityEpoch = authorityEpoch
 	wire := mustJSON(msg)
 
-	if hydrated {
-		log.Printf("[relay] hydrate room=%s session=%s events=%d",
-			shortToken(p.room.token), msg.SessionID, loaded)
+	// #2907: record the session binding directly (the old `if hydrated` gate
+	// was dead - bindRoomSession never hydrated) so active_session_changes
+	// stops being frozen at zero. Hydration itself is owned by
+	// hydrateRoomFromStore (handleWS path), so hydratedEvents stays 0 here.
+	if changed {
+		log.Printf("[relay] session bind room=%s session=%s", shortToken(p.room.token), msg.SessionID)
 		if p.hub.stats != nil {
-			p.hub.stats.recordActiveSession(changed, loaded)
+			p.hub.stats.recordActiveSession(true, 0)
 		}
 	}
 
@@ -782,7 +785,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	}
 	p.room.mu.Unlock()
 
-	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
+	authorityEpoch, changed := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
 	msg.SessionID = sessionID
 	msg.Generation = 0
 	msg.AuthorityEpoch = authorityEpoch
@@ -794,11 +797,12 @@ func (p *peer) onActiveSession(msg relayMessage) {
 		client.send(msg)
 	}
 
-	if hydrated {
-		log.Printf("[relay] hydrate room=%s session=%s events=%d",
-			shortToken(p.room.token), sessionID, loaded)
+	// #2907: same as the server_broadcast path - record on `changed`, not
+	// behind the never-true `if hydrated` gate.
+	if changed {
+		log.Printf("[relay] session bind room=%s session=%s", shortToken(p.room.token), sessionID)
 		if p.hub.stats != nil {
-			p.hub.stats.recordActiveSession(changed, loaded)
+			p.hub.stats.recordActiveSession(true, 0)
 		}
 	}
 
@@ -1011,11 +1015,11 @@ func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
 	return true
 }
 
-func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceHistory bool) (epoch uint64, changed bool, hydrated bool, loadedCount int) {
+func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceHistory bool) (epoch uint64, changed bool) {
 	if sessionID == "" {
 		p.room.mu.Lock()
 		defer p.room.mu.Unlock()
-		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+		return p.room.ensureAuthorityEpochLocked(), false
 	}
 	if authorityEpoch == 0 {
 		authorityEpoch = 1
@@ -1029,7 +1033,7 @@ func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceH
 	defer p.room.mu.Unlock()
 
 	if expectedSessionID != sessionID && p.room.sessionID != expectedSessionID && p.room.sessionID != sessionID {
-		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+		return p.room.ensureAuthorityEpochLocked(), false
 	}
 
 	changed = p.room.sessionID != sessionID
@@ -1040,7 +1044,12 @@ func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceH
 	}
 	p.room.authorityEpoch = authorityEpoch
 	epoch = p.room.ensureAuthorityEpochLocked()
-	return epoch, changed || authorityChanged, hydrated, loadedCount
+	// #2907: hydrated/loadedCount were named returns that this function never
+	// assigned (always false/0 - dead values left behind by 8e4f36cfa when
+	// hydration moved to hydrateRoomFromStore). They are removed; callers now
+	// record stats on `changed` directly instead of inside a never-entered
+	// `if hydrated` gate that froze the counters.
+	return epoch, changed || authorityChanged
 }
 
 func (h *hub) hydrateRoomFromStore(r *room) (bool, int) {
