@@ -95,17 +95,27 @@ func attributeFailure(events []AgentEvent, dropped int) *FailureAttribution {
 		// is applied over this slice at classification time).
 		errFlags   []bool
 		lastSample string
+		// callArgs joins tool calls to their arguments by ToolID so error
+		// samples can name the exact invocation ("bash(go build ./...): exit
+		// status 1") even though only the call event carries ToolArgs.
+		callArgs = make(map[string]string)
 	)
 	for _, ev := range events {
 		switch ev.Type {
 		case AgentEventToolCall:
 			totalCalls++
+			if ev.ToolID != "" {
+				callArgs[ev.ToolID] = ev.ToolArgs
+			}
 		case AgentEventToolResult:
 			errFlags = append(errFlags, ev.IsError)
 			if ev.IsError {
 				errCalls++
 				if firstErr == 0 {
 					firstErr = totalCalls
+				}
+				if args, ok := callArgs[ev.ToolID]; ok {
+					ev.ToolArgs = args
 				}
 				lastSample = renderErrorEvent(ev)
 			}
