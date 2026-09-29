@@ -256,6 +256,28 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 		h.mu.Unlock()
 		return nil, fmt.Errorf("task not found: %s", taskID)
 	}
+
+	// Idempotent retry (#2896): a re-sent follow-up (timeout + client retry
+	// with the same MessageID) must not append the message and re-execute a
+	// second time - code-edit / command-exec side effects would double-run.
+	// The new-task path has had this dedup since #565 G / #1461-A; the
+	// continue path follows the same idempotency contract. Checked BEFORE the
+	// state check so a retry arriving while the first attempt is still
+	// Working (or already back in input-required) returns the task snapshot
+	// instead of erroring or re-executing.
+	if input.MessageID != "" {
+		if tid, ok := h.messageIndex[input.MessageID]; ok {
+			if tid == taskID {
+				snap := task.Snapshot()
+				h.mu.Unlock()
+				return &snap, nil
+			}
+			// Stale mapping to a different task (client reused the MessageID).
+			// Mirror the new-task path: drop the stale entry and proceed.
+			delete(h.messageIndex, input.MessageID)
+		}
+	}
+
 	if task.Status.State != TaskStateInputRequired {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("task %s is not in input-required state (current: %s)", taskID, task.Status.State)
@@ -272,6 +294,11 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 
 	// Append the new user message to history.
 	task.History = append(task.History, input)
+	// Record the MessageID → task mapping so a client retry of THIS follow-up
+	// hits the dedup above instead of double-executing (#2896).
+	if input.MessageID != "" {
+		h.messageIndex[input.MessageID] = taskID
+	}
 
 	// Transition to working state while still holding the lock,
 	// preventing CancelTask from racing between the check and goroutine start.
