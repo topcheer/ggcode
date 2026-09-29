@@ -210,13 +210,13 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 			if _, err := m.knight.ApproveProposal(id, "approved via knight panel"); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
-				kp.message = fmt.Sprintf("✅ Approved proposal: %s", id[:8])
+				kp.message = fmt.Sprintf("✅ Approved proposal: %s", shortProposalID(id))
 			}
 		case "reject":
 			if _, err := m.knight.RejectProposal(id, "rejected via knight panel"); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
-				kp.message = fmt.Sprintf("❌ Rejected proposal: %s", id[:8])
+				kp.message = fmt.Sprintf("❌ Rejected proposal: %s", shortProposalID(id))
 			}
 		}
 		kp.messageTime = time.Now()
@@ -524,6 +524,20 @@ func (m *Model) renderKnightStaging(w int) string {
 	return sb.String()
 }
 
+// shortProposalID returns the display form of a proposal ID: the first
+// 8 bytes when longer, otherwise the ID unchanged. #2799: the panel's
+// approve/reject success path used to slice id[:8] unguarded while the
+// render path guarded - a short ID from a corrupted/hand-edited
+// project-proposals jsonl panicked the Update loop and killed the TUI
+// after the status write had already succeeded. Both paths share this
+// helper now.
+func shortProposalID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
 func (m *Model) renderKnightProposals(w int) string {
 	if m.knight == nil {
 		return "Knight not available"
@@ -542,10 +556,7 @@ func (m *Model) renderKnightProposals(w int) string {
 		if m.knightPanel.detailIndex == i {
 			prefix = "▶ "
 		}
-		shortID := p.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
+		shortID := shortProposalID(p.ID)
 		sb.WriteString(fmt.Sprintf("%s%s %s [%s]\n", prefix, shortID, p.Goal, p.Status))
 		if m.knightPanel.detailIndex == i {
 			sb.WriteString(fmt.Sprintf("    Path: %s\n", p.Path))
