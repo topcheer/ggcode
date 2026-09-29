@@ -76,6 +76,24 @@ type Report struct {
 	// WastedTokenEstimate approximates the context tax at ~4 bytes/token.
 	WastedTokenEstimate int
 
+	// ErrorRetries counts tool failures whose exact (tool, canonical-input)
+	// pair was invoked again later — the "retry the same broken input"
+	// anti-pattern. 2026 eval practice treats recovery behavior as its own
+	// eval axis, distinct from the happy path.
+	ErrorRetries int
+
+	// ReadOnlyRepeats counts superseded identical results on read-only
+	// tools: information re-fetched when it was already in context (the
+	// deterministic proxy for result-utilization failures).
+	ReadOnlyRepeats int
+
+	// StatefulLoopRepeats counts superseded identical results on stateful
+	// (non-whitelisted) tools — repeated work that returned the same bytes
+	// every time, the deterministic proxy for plan-loop failures. Reported
+	// for the loop-discipline axis only; never folded into
+	// WastedRepeatCalls, which stays conservative about stateful tools.
+	StatefulLoopRepeats int
+
 	// OverheadTokens / TotalTokens split usage by Source. Overhead is any
 	// non-"agent" source (compaction, strategist, verify, ...).
 	OverheadTokens int
@@ -84,6 +102,12 @@ type Report struct {
 	// EfficiencyScore is 100 minus transparent penalties (see Evaluate).
 	// 0-100; 100 = clean trajectory.
 	EfficiencyScore int
+
+	// Axes decompose the composite into named, independently-scored
+	// dimensions (worst first) so a regression is diagnosable without
+	// guessing which penalty moved. Mirrors 2026 per-dimension agent-eval
+	// practice: per-axis scores, the weakest axis is the diagnosis.
+	Axes []AxisScore
 
 	// Findings are human-readable, worst-first improvement hints.
 	Findings []string
@@ -257,10 +281,28 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 		if rec == nil || i == lastIdx[res.key] {
 			continue
 		}
-		if res.isError || (rec.readOnly && rec.identical()) {
+		if res.isError {
+			// A failed superseded attempt — and, by construction of
+			// lastIdx, proof the same canonical input was re-sent later.
 			r.WastedRepeatCalls++
 			r.WastedResultBytes += res.outLen
+			r.ErrorRetries++
+		} else if rec.readOnly && rec.identical() {
+			r.WastedRepeatCalls++
+			r.WastedResultBytes += res.outLen
+			r.ReadOnlyRepeats++
 		}
+	}
+
+	// Stateful identical repeats: every invocation of a non-whitelisted
+	// tool returned byte-identical output — repeated work with no new
+	// information and a possible loop.
+	for _, k := range keyOrder {
+		rec := records[k]
+		if rec.readOnly || rec.count < 2 || !rec.identical() {
+			continue
+		}
+		r.StatefulLoopRepeats += rec.count - 1
 	}
 
 	for _, k := range keyOrder {
@@ -296,7 +338,12 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 	}
 
 	r.EfficiencyScore = score(r)
+	r.Axes = computeAxes(r)
 	r.Findings = findings(r)
+	if len(r.Axes) > 0 && r.Axes[0].Score < weakestAxisFindingThreshold {
+		r.Findings = append(r.Findings, fmt.Sprintf(
+			"weakest axis %s %d/100 — %s", r.Axes[0].Name, r.Axes[0].Score, r.Axes[0].Detail))
+	}
 	return r
 }
 
@@ -391,6 +438,17 @@ func Render(r Report) string {
 		r.TurnCount, r.ToolCalls, r.DistinctTools)
 	fmt.Fprintf(&b, "  Failures: %d/%d tool calls errored · wasted repeats: %d\n",
 		r.ToolErrors, r.ToolCalls, r.WastedRepeatCalls)
+	if len(r.Axes) > 0 {
+		parts := make([]string, len(r.Axes))
+		for i, a := range r.Axes {
+			parts[i] = fmt.Sprintf("%s %d", a.Name, a.Score)
+		}
+		fmt.Fprintf(&b, "  Axes: %s\n", strings.Join(parts, " · "))
+		if r.Axes[0].Score < weakestAxisFindingThreshold {
+			fmt.Fprintf(&b, "  ▼ weakest: %s %d/100 — %s\n",
+				r.Axes[0].Name, r.Axes[0].Score, r.Axes[0].Detail)
+		}
+	}
 	if r.TotalTokens > 0 {
 		share := 100 * float64(r.OverheadTokens) / float64(r.TotalTokens)
 		fmt.Fprintf(&b, "  Tokens: %s total · %.0f%% overhead machinery · ~%s wasted context tax (est.)\n",
