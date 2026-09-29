@@ -333,6 +333,7 @@ type Agent struct {
 	subgoalTrack             *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
 	infoScent                *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	foresightCalib           *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
+	calibration              *calibrationStore                     // cross-run calibration lessons (WorldEvolver semantic memory)
 	causalAttribution        *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
 	attemptBrief             *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	crossDetectorConsensus   *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
@@ -1338,6 +1339,24 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			})
 			debug.Log("agent", "injected experience recall (%d chars)", len(idx))
 		}
+	}
+	// Calibration memory (WorldEvolver semantic memory): wire the
+	// mismatch-persist hook and recall lessons distilled from PREVIOUS
+	// runs, so the same wrong world-model assumption is corrected at
+	// run start rather than re-learned after repeated failures. Same
+	// injection point guarantees: before the first LLM request, riding
+	// the prompt-cache stable prefix, never splitting a
+	// tool_call/tool_result pair.
+	if a.calibration == nil {
+		a.calibration = newCalibrationStore(a.WorkingDir())
+		a.foresightCalib.persist = a.calibration.record
+	}
+	if idx := a.recallCalibration(); idx != "" {
+		a.contextManager.Add(provider.Message{
+			Role:    "system",
+			Content: []provider.ContentBlock{{Type: "text", Text: "## Known Calibration Lessons\n" + idx}},
+		})
+		debug.Log("agent", "injected calibration memory (%d chars)", len(idx))
 	}
 	// asyncVerifyStats captures run stats for the background verification goroutine.
 	asyncVerifyStats := (*RunStats)(nil)

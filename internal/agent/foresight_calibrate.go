@@ -132,6 +132,11 @@ type foresightCalibrateState struct {
 	predictions []foresightPrediction // pending predictions awaiting results
 	mismatches  int                   // total prediction-observation mismatches
 	warnCount   int                   // how many times we've injected guidance
+	// persist (optional) is invoked on every confirmed mismatch so the
+	// observation is distilled into the cross-run calibration store
+	// (WorldEvolver semantic memory; see calibration_memory.go). Nil in
+	// tests and before run-start wiring.
+	persist func(kind, tool, snippet string)
 }
 
 func newForesightCalibrateState() *foresightCalibrateState {
@@ -273,24 +278,31 @@ func (s *foresightCalibrateState) checkCalibration(toolName string, resultConten
 	// Check for mismatch.
 	mismatch := false
 	mismatchDetail := ""
+	mismatchKind := ""
 
 	if pred.predictedOK && !actualOK {
 		// Predicted success, got failure.
 		mismatch = true
 		mismatchDetail = "predicted success but the result indicates failure"
+		mismatchKind = calibKindPredSuccessGotFailure
 	} else if pred.predictedOK && actualEmpty {
 		// Predicted content/existence, got empty.
 		mismatch = true
 		mismatchDetail = "predicted content but the result is empty or not found"
+		mismatchKind = calibKindPredContentGotEmpty
 	} else if !pred.predictedOK && actualOK && !actualEmpty {
 		// Predicted failure, got success (rare but indicates miscalibration).
 		mismatch = true
 		mismatchDetail = "predicted failure but the result succeeded"
+		mismatchKind = calibKindPredFailureGotSuccess
 	}
 
 	if mismatch {
 		s.mismatches++
 		debug.Log("foresight-calibrate", "Iteration %d: prediction-observation mismatch #%d (%s)", iteration, s.mismatches, mismatchDetail)
+		if s.persist != nil {
+			s.persist(mismatchKind, toolName, pred.snippet)
+		}
 	}
 
 	// Inject guidance when threshold is reached.

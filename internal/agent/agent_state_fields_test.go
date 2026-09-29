@@ -52,6 +52,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"diffConfirm":          "optional diff confirm callback, injected via setter",
 		"policy":               "permission policy interface, injected via SetPermissionPolicy",
 		"lastRunStats":         "populated only after a run completes",
+		"calibration":          "loaded lazily at run start when WorkingDir is known (calibration_memory.go)",
 		"perfBaseline":         "loaded lazily from disk on first access (guarded)",
 		"guidancePromoter":     "loaded lazily from rule store (guarded)",
 		"ruleStore":            "loaded lazily via SetRuleStore (guarded)",
