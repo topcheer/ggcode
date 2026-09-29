@@ -155,6 +155,17 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	if err != nil {
 		return err
 	}
+	// #2868: `resolved` is reassigned by the provider-switch hook (IM
+	// goroutine) and read by the keyboard 't' tunnel path and the snapshot
+	// goroutine — guard the pointer with a mutex. ActivateCurrentSelection
+	// returns a FRESH pointer on every activation and never mutates an old
+	// one, so a lock-copied pointer is safe to read without holding the lock.
+	resolvedMu := &sync.Mutex{}
+	currentResolved := func() *config.ResolvedEndpoint {
+		resolvedMu.Lock()
+		defer resolvedMu.Unlock()
+		return resolved
+	}
 	_, knightProv, err := resolveKnightProvider(cfg, resolved, prov)
 	if err != nil {
 		return err
@@ -649,23 +660,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Start mobile tunnel if requested
 	var tunnelSession *tunnel.Session
 	if startTunnel {
+		// #2868: read via currentResolved() so switches land here too.
+		rs := currentResolved()
 		sessionInfo := tunnel.SessionInfoData{
 			Workspace: workingDir,
-			Model:     resolved.Model,
-			Provider:  resolved.VendorName,
+			Model:     rs.Model,
+			Provider:  rs.VendorName,
 			Mode:      mode.String(),
 			Version:   version.Version,
 		}
 		var shareResult *agentruntime.ShareResult
 		result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
 			Workspace: workingDir,
-			Model:     resolved.Model,
-			Provider:  resolved.VendorName,
+			Model:     rs.Model,
+			Provider:  rs.VendorName,
 			Mode:      mode.String(),
 			Version:   version.Version,
 			ClientTag: "daemon",
 			SnapshotProvider: func() tunnel.BrokerSnapshot {
-				return daemonSnapshot(bridge, workingDir, resolved, mode.String())
+				return daemonSnapshot(bridge, workingDir, currentResolved(), mode.String())
 			},
 			OnCommand: func(cmd tunnel.GatewayMessage) {
 				var b *tunnel.Broker
@@ -884,11 +897,19 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 	bridge.SetProviderSwitchHook(func(vendor, endpoint, model string) (string, error) {
-		resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
+		// #2868: do NOT shadow the outer `resolved` with `:=` here — the
+		// shadow left the outer pointer stuck at daemon-startup values, so
+		// every tunnel SessionInfo/BrokerSnapshot reported the stale model
+		// and vendor after any in-session switch. Capture fresh, then
+		// reassign the outer pointer under resolvedMu.
+		r, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
 		if err != nil {
 			return "", err
 		}
-		agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+		resolvedMu.Lock()
+		resolved = r
+		resolvedMu.Unlock()
+		agentruntime.ApplyProviderToAgent(ag, prov, r)
 		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
@@ -1572,10 +1593,12 @@ loop:
 					fmt.Fprintf(os.Stderr, "%s\r\n", strings.ReplaceAll(info.QRCode, "\n", "\r\n"))
 				} else {
 					// Create share controller once (before StartShare so OnCommand can use it)
+					// #2868: read via currentResolved() so switches land here too.
+					rs := currentResolved()
 					sessionInfo := tunnel.SessionInfoData{
 						Workspace: workingDir,
-						Model:     resolved.Model,
-						Provider:  resolved.VendorName,
+						Model:     rs.Model,
+						Provider:  rs.VendorName,
 						Mode:      mode.String(),
 						Version:   version.Version,
 					}
@@ -1584,13 +1607,13 @@ loop:
 					// Start tunnel via unified StartShare
 					result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
 						Workspace: workingDir,
-						Model:     resolved.Model,
-						Provider:  resolved.VendorName,
+						Model:     rs.Model,
+						Provider:  rs.VendorName,
 						Mode:      mode.String(),
 						Version:   version.Version,
 						ClientTag: "daemon",
 						SnapshotProvider: func() tunnel.BrokerSnapshot {
-							return daemonSnapshot(bridge, workingDir, resolved, mode.String())
+							return daemonSnapshot(bridge, workingDir, currentResolved(), mode.String())
 						},
 						OnCommand: func(cmd tunnel.GatewayMessage) {
 							// Route inbound commands through a controller wired to the share broker
