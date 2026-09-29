@@ -21,6 +21,14 @@ const maxReactiveCompactRetries = 3
 // leads to multi-million-token sessions that take minutes to restore.
 const fallbackCheckpointThreshold = 500
 
+// fallbackCheckpointInterval is the minimum message-count GROWTH since the
+// last checkpoint before maybeFallbackCheckpoint writes another one
+// (#2905). The old equality check (==) almost never re-matched because the
+// count is monotonically increasing - the fallback fired on every Run
+// once past the threshold, spamming JSONL checkpoints and repeatedly
+// making an empty-lastMsgID record the "latest" checkpoint.
+const fallbackCheckpointInterval = 50
+
 // maybeFallbackCheckpoint saves a checkpoint when the message count exceeds
 // fallbackCheckpointThreshold, even if no compaction occurred. This is a
 // safety net for sessions where compaction keeps failing.
@@ -35,12 +43,15 @@ func (a *Agent) maybeFallbackCheckpoint() {
 	if len(msgs) < fallbackCheckpointThreshold {
 		return
 	}
-	// Only save if we haven't saved a checkpoint recently (avoid spamming).
-	// #1437-B: lastCheckpointMessageCount is written under a.mu by
+	// Only save if enough messages arrived since the last checkpoint (avoid
+	// spamming). #1437-B: lastCheckpointMessageCount is written under a.mu by
 	// maybeSaveCheckpoint from OTHER goroutines (precompact runs in
 	// parallel with this loop); the read-check-write here was unlocked.
+	// #2905: equality (==) only suppressed the exact same count, which
+	// monotonically increasing counts never re-hit - every Run past the
+	// threshold fired. Require real growth instead.
 	a.mu.Lock()
-	if a.lastCheckpointMessageCount == len(msgs) {
+	if len(msgs)-a.lastCheckpointMessageCount < fallbackCheckpointInterval {
 		a.mu.Unlock()
 		return
 	}
@@ -73,7 +84,15 @@ func (a *Agent) maybeFallbackCheckpoint() {
 		debug.Log("checkpoint", "fallback checkpoint: no summary message; skipping (tail anchor would replace history with one message)")
 		return
 	}
-	fn(fallbackID, "", tokenCount)
+	// #2905: anchor at the LAST message ID (mirrors maybeSaveCheckpoint's
+	// lmid fallback) instead of "" - an empty lastMsgID checkpoint record
+	// becoming the latest degraded resume positioning for every subsequent
+	// real compaction checkpoint.
+	lmid := ""
+	if n := len(msgs); n > 0 {
+		lmid = msgs[n-1].ID
+	}
+	fn(fallbackID, lmid, tokenCount)
 }
 
 // MicrocompactIfOverThreshold is kept as a no-op for API compatibility.
