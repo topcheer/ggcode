@@ -897,8 +897,41 @@ func (m *Model) handleCostCommand(args []string) tea.Cmd {
 		sb.WriteString(fmt.Sprintf("  Total estimated:    $%.4f\n", grandCost))
 	}
 
+	// Consumer attribution: where the spend went inside the agent loop.
+	// Uses the same locked history snapshot as the per-model grouping above.
+	appendConsumerAttribution(&sb, history, usage.Total())
+
 	m.chatWriteSystem(nextSystemID(), sb.String())
 	return nil
+}
+
+// appendConsumerAttribution renders the per-consumer token breakdown
+// (agent vs subagent vs compaction vs verify/strategist/ratchet) onto sb.
+// Extracted from handleCostCommand as a pure function so the attribution
+// rendering is unit-testable without a TUI Model. Only rendered when more
+// than one consumer contributed - a lone "agent 100%" line is noise.
+// sessionTotal is the session-level aggregate; when it is not positive the
+// denominator is recomputed from the history entries themselves.
+func appendConsumerAttribution(sb *strings.Builder, history []session.UsageEntry, sessionTotal int) {
+	bySource := session.UsageBySource(&session.Session{UsageHistory: history})
+	if len(bySource) <= 1 {
+		return
+	}
+	sb.WriteString("\n  By consumer:\n")
+	grand := sessionTotal
+	if grand <= 0 {
+		for _, su := range bySource {
+			grand += su.Usage.Total()
+		}
+	}
+	for _, su := range bySource {
+		share := 0.0
+		if grand > 0 {
+			share = float64(su.Usage.Total()) / float64(grand) * 100
+		}
+		sb.WriteString(fmt.Sprintf("    %-12s %s tok (%.0f%%)\n",
+			su.Source, humanizeTokenCount(su.Usage.Total()), share))
+	}
 }
 
 // handleCostAllCommand is retired (#2312 ruling B): the .cost.json store
