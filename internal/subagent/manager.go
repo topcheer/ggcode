@@ -77,33 +77,34 @@ type AgentMessage struct {
 
 // SubAgent represents a spawned child agent.
 type SubAgent struct {
-	ID               string
-	Name             string // short, meaningful label (required)
-	Task             string
-	DisplayTask      string
-	Model            string
-	Worktree         string // isolation worktree path (spawn_agent isolation=worktree); "" when not isolated
-	Tools            []string
-	ToolCallCount    int
-	Status           Status
-	CurrentPhase     string
-	CurrentTool      string
-	CurrentArgs      string
-	ProgressSummary  string
-	Result           string
-	Error            error
-	CreatedAt        time.Time
-	StartedAt        time.Time
-	EndedAt          time.Time
-	Mailbox          chan AgentMessage
-	events           []AgentEvent
-	eventsDropped    int
-	cancel           context.CancelFunc
-	done             chan struct{} // closed when the sub-agent reaches any terminal state
-	goroutineStarted bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
-	lastActivity     time.Time     // updated on every LLM chunk / tool call; used by watchdog
-	toolExecuting    bool          // true while a tool is running; watchdog skips reap
-	mu               sync.Mutex
+	ID                 string
+	Name               string // short, meaningful label (required)
+	Task               string
+	DisplayTask        string
+	Model              string
+	Worktree           string // isolation worktree path (spawn_agent isolation=worktree); "" when not isolated
+	Tools              []string
+	ToolCallCount      int
+	Status             Status
+	CurrentPhase       string
+	CurrentTool        string
+	CurrentArgs        string
+	ProgressSummary    string
+	Result             string
+	Error              error
+	CreatedAt          time.Time
+	StartedAt          time.Time
+	EndedAt            time.Time
+	Mailbox            chan AgentMessage
+	events             []AgentEvent
+	eventsDropped      int
+	failureAttribution string // rendered post-mortem (failure_attribution.go); set once at Complete on failure
+	cancel             context.CancelFunc
+	done               chan struct{} // closed when the sub-agent reaches any terminal state
+	goroutineStarted   bool          // true once Run() has started the goroutine (SetCancel alone doesn't set this)
+	lastActivity       time.Time     // updated on every LLM chunk / tool call; used by watchdog
+	toolExecuting      bool          // true while a tool is running; watchdog skips reap
+	mu                 sync.Mutex
 }
 
 type Snapshot struct {
@@ -123,10 +124,16 @@ type Snapshot struct {
 	Result          string
 	Error           string
 	EventsDropped   int
-	CreatedAt       time.Time
-	StartedAt       time.Time
-	EndedAt         time.Time
-	Events          []AgentEvent
+	// FailureAttribution is the one-line post-mortem computed from the
+	// run's event trail when the run terminated with StatusFailed (see
+	// failure_attribution.go). Empty for successful, cancelled and
+	// lifecycle-rejected runs (the latter never executed, so there is no
+	// trail to attribute).
+	FailureAttribution string
+	CreatedAt          time.Time
+	StartedAt          time.Time
+	EndedAt            time.Time
+	Events             []AgentEvent
 }
 
 // StatusInfo is a lightweight copy of a sub-agent's identity and status.
@@ -359,6 +366,8 @@ func (s *SubAgent) snapshot() Snapshot {
 		EndedAt:         s.EndedAt,
 		Events:          append([]AgentEvent(nil), s.events...),
 		EventsDropped:   s.eventsDropped,
+
+		FailureAttribution: s.failureAttribution,
 	}
 	if s.Error != nil {
 		snap.Error = s.Error.Error()
@@ -1050,6 +1059,13 @@ func (m *Manager) Complete(id string, result string, err error) {
 		sa.CurrentTool = ""
 		sa.CurrentArgs = ""
 		sa.Error = err
+		// Post-mortem failure attribution (MAST / Who&When): classify the
+		// run's retained event trail once, at the failure boundary, so the
+		// parent's next wait_agent/list_agents poll carries the failing step
+		// and error class instead of a bare error string.
+		if attr := attributeFailure(sa.events, sa.eventsDropped); attr != nil {
+			sa.failureAttribution = attr.String()
+		}
 	} else {
 		sa.Status = StatusCompleted
 		sa.CurrentPhase = "completed"

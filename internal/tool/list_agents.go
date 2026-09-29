@@ -108,6 +108,14 @@ func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 	if snap.Error != "" {
 		sb.WriteString(fmt.Sprintf("    Error: %s\n", truncate(snap.Error, 120)))
 	}
+	// Post-mortem failure attribution (MAST / Who&When): the parent gets the
+	// failing step and error class so it can decide between escalating,
+	// retrying a different shape, or abandoning - instead of re-spawning a
+	// doomed identical run. Rendered after Error so the bare cause stays
+	// first.
+	if snap.FailureAttribution != "" {
+		sb.WriteString(fmt.Sprintf("    Attribution: %s\n", truncate(snap.FailureAttribution, 240)))
+	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
