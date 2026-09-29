@@ -204,11 +204,61 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 			testingTName = fn.Type.Params.List[0].Names[0].Name
 		}
 
-		count := countAssertionCalls(fn.Body, testingTName)
+		count := countAssertionCalls(fn.Body, testingTName, assertionImportQualifiers(file))
 		result[name] = count
 	}
 
 	return result
+}
+
+// assertionImportQualifiers returns the set of package qualifiers in the file
+// that refer to known assertion packages (#2881). Previously the pkg-name
+// match was done on the bare identifier text, so any local variable named
+// check/should/quick was credited as an assertion package and hollow tests
+// escaped detection. Now require/assert/quick/check must actually be imported
+// (with alias or by path base); "should" has no canonical import path
+// (gomega-should style), so it stays a bare-name fallback to avoid a false-
+// negative regression.
+func assertionImportQualifiers(file *ast.File) map[string]bool {
+	quals := map[string]bool{"should": true}
+	if file == nil {
+		return quals
+	}
+	for _, imp := range file.Imports {
+		if imp.Path == nil {
+			continue
+		}
+		path := strings.Trim(imp.Path.Value, "\"")
+		base := path
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		base = trimVersionSuffix(base) // gopkg.in/check.v1 -> check
+		if !goAssertionPkgs[base] {
+			continue
+		}
+		if imp.Name != nil && imp.Name.Name != "_" && imp.Name.Name != "." {
+			quals[imp.Name.Name] = true // aliased import
+		} else {
+			quals[base] = true
+		}
+	}
+	return quals
+}
+
+// trimVersionSuffix strips a trailing ".vN" (N digits) from a package path
+// base: "check.v1" -> "check", "assert.v2" -> "assert".
+func trimVersionSuffix(base string) string {
+	dot := strings.LastIndex(base, ".v")
+	if dot <= 0 {
+		return base
+	}
+	for _, r := range base[dot+2:] {
+		if r < '0' || r > '9' {
+			return base
+		}
+	}
+	return base[:dot]
 }
 
 // countAssertionCalls recursively walks the function body and counts calls that
@@ -222,7 +272,7 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 // re-bind the testing.T name; their parameter names are added to the active set
 // so inner assertions (t.Error inside a closure defined in a function whose
 // outer parameter is "tt") are counted.
-func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
+func countAssertionCalls(body *ast.BlockStmt, testingTName string, quals map[string]bool) int {
 	count := 0
 	names := map[string]bool{testingTName: true}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -233,7 +283,7 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 				names[name] = true
 			}
 		case *ast.CallExpr:
-			if isAssertionCall(node, names) {
+			if isAssertionCall(node, names, quals) {
 				count++
 			}
 		}
@@ -244,8 +294,9 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 
 // isAssertionCall reports whether the call expression looks like a test
 // assertion (or an assertion-delegating call). names is the active set of
-// valid *testing.T receiver identifiers (closure rebinding, #320).
-func isAssertionCall(node *ast.CallExpr, names map[string]bool) bool {
+// valid *testing.T receiver identifiers (closure rebinding, #320); quals is
+// the file's import-qualified assertion package identifiers (#2881).
+func isAssertionCall(node *ast.CallExpr, names, quals map[string]bool) bool {
 	// Delegation: passing a testing.T identifier as an argument means
 	// assertions may live in the callee - count as non-hollow.
 	for _, arg := range node.Args {
@@ -269,9 +320,11 @@ func isAssertionCall(node *ast.CallExpr, names map[string]bool) bool {
 				return true
 			}
 		}
-		// Check for require.X, assert.X, etc.
+		// Check for require.X, assert.X, etc. - only when the qualifier is an
+		// actually imported assertion package (#2881), not any local variable
+		// that happens to share the name.
 		if pkgIdent, ok := sel.X.(*ast.Ident); ok {
-			if goAssertionPkgs[pkgIdent.Name] {
+			if quals[pkgIdent.Name] {
 				return true
 			}
 			// #2638: qualified gomega assertions (gomega.Expect(x).To(...)).
