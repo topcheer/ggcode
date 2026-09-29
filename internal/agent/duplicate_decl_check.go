@@ -34,7 +34,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"regexp"
@@ -174,8 +173,7 @@ func collectGoDecls(filePath, src string) map[goDeclKey]int {
 		return counts
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filePath, src, 0)
+	f, _, err := parseGoSource(filePath, src, 0)
 	if err != nil {
 		// If the file doesn't parse, we can't reliably detect duplicates.
 		// Syntax errors are caught by checkWriteIntegrity; skip here.

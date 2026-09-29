@@ -710,8 +710,7 @@ func goSyntaxWarnings(filename string, parseErr error) []string {
 
 // checkGoSyntax is a convenience wrapper for tests.
 func checkGoSyntax(filename, src string) []string {
-	fset := token.NewFileSet()
-	_, err := parser.ParseFile(fset, filename, src, 0)
+	_, _, err := parseGoSource(filename, src, 0)
 	return goSyntaxWarnings(filename, err)
 }
 

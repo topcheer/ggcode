@@ -31,8 +31,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -213,8 +211,7 @@ func findInsecurePatternsGo(content string) []insecurePatternInstance {
 	}
 
 	// AST-based check: math/rand used for security-sensitive identifiers.
-	fset := token.NewFileSet()
-	tree, err := parser.ParseFile(fset, "", content, 0)
+	tree, fset, err := parseGoSource("", content, 0)
 	if err == nil {
 		// Build import alias -> package path map (fix #243). The previous
 		// text matching (`strings.Contains(fnName, "rand.Read")` plus a

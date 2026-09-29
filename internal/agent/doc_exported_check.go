@@ -109,8 +109,7 @@ func collectExportedWithoutDocsSrc(src string) map[string]docMissingInfo {
 	if strings.TrimSpace(src) == "" {
 		return make(map[string]docMissingInfo)
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, parser.ParseComments)
+	file, _, err := parseGoSource("", src, parser.ParseComments)
 	if err != nil {
 		return make(map[string]docMissingInfo)
 	}

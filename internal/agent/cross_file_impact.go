@@ -354,8 +354,7 @@ func extractImpactRemovedSymbols(oldContent, newContent, filename string) []impa
 // extractImpactSymbols parses Go source and returns all exported top-level
 // declarations (functions, types, variables, constants) and exported methods.
 func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, 0)
+	file, _, err := parseGoSource(filename, src, 0)
 	if err != nil {
 		return nil
 	}
@@ -520,8 +519,7 @@ func referencesAnyImpactSymbol(src string, removed []impactRemovedSymbol) bool {
 	// in this file (local var/param/func/receiver), so it does not
 	// reference the cross-file symbol at all. Unparsable siblings fall
 	// back to the conservative text scan.
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "sibling.go", src, 0)
+	file, _, err := parseGoSource("sibling.go", src, 0)
 	if err != nil {
 		for name := range names {
 			if containsGoIdent(src, name) {

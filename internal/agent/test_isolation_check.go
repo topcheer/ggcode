@@ -162,8 +162,7 @@ func findGlobalStateMutations(filename, src string) []globalStateMutation {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, 0)
+	file, fset, err := parseGoSource(filename, src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

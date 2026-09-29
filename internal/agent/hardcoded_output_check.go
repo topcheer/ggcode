@@ -39,7 +39,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"regexp"
 	"strings"
@@ -112,8 +111,7 @@ func checkHardcodedOutput(fp, oldContent, newContent string) []string {
 // --- Go AST-based detection ---
 
 func checkHardcodedOutputGo(fp, src string) []string {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, fp, src, 0)
+	file, _, err := parseGoSource(fp, src, 0)
 	if err != nil || file == nil {
 		// Fall back to string-based detection
 		return checkHardcodedOutputString(src)

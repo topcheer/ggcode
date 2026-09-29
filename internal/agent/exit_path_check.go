@@ -47,7 +47,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -149,8 +148,7 @@ type exitPathIssue struct {
 
 // findExitPathIssues parses Go source and finds all exit-path quality issues.
 func findExitPathIssues(filename, src string) []exitPathIssue {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, 0)
+	file, fset, err := parseGoSource(filename, src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

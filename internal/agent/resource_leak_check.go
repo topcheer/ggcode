@@ -196,8 +196,7 @@ func checkResourceLeaks(filePath, oldContent, src string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, src, 0)
+	file, fset, err := parseGoSource(filePath, src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

@@ -40,7 +40,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -79,8 +78,7 @@ func checkCopylock(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, 0)
+	file, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil || file == nil {
 		return nil
 	}
@@ -127,8 +125,7 @@ func collectOldCopylockPositions(filePath, oldContent string) map[string]bool {
 	if strings.TrimSpace(oldContent) == "" {
 		return nil
 	}
-	oldFset := token.NewFileSet()
-	oldFile, err := parser.ParseFile(oldFset, filePath, oldContent, 0)
+	oldFile, oldFset, err := parseGoSource(filePath, oldContent, 0)
 	if err != nil || oldFile == nil {
 		return nil
 	}

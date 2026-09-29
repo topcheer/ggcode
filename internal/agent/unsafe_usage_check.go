@@ -36,7 +36,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -130,8 +129,7 @@ func findUnsafeIssues(src string) []unsafeInstance {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, fset, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

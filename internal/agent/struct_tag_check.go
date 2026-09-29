@@ -42,7 +42,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"reflect"
@@ -74,8 +73,7 @@ func checkStructTagConsistency(filePath, oldContent, newContent string) []string
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filePath, newContent, 0)
+	f, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return nil
 	}

@@ -26,8 +26,7 @@ import (
 //     identifier to its declaring object, so an inner shadowing declaration
 //     (x := 5) no longer marks an unused outer param as used.
 func checkUnusedParam(filePath, oldContent, src string) []string {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, src, 0)
+	file, fset, err := parseGoSource(filePath, src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

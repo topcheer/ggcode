@@ -18,8 +18,7 @@ package agent
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -35,8 +34,11 @@ type exportedFuncInfo struct {
 // and methods. Returns nil on parse error or when no exported functions exist.
 // Skips special functions (init, main, Test*).
 func parseExportedFuncs(filePath string) []exportedFuncInfo {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, nil, 0)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil
+	}
+	file, _, err := parseGoSource(filePath, string(data), 0)
 	if err != nil {
 		return nil
 	}
@@ -95,8 +97,11 @@ func receiverTypeName(expr ast.Expr) string {
 // that start with "Test" (the Go testing convention). Returns nil on parse
 // error or when no test functions exist.
 func parseTestFuncNames(filePath string) map[string]bool {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, nil, 0)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil
+	}
+	file, _, err := parseGoSource(filePath, string(data), 0)
 	if err != nil {
 		return nil
 	}

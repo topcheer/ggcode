@@ -64,8 +64,7 @@ func checkMissingPrealloc(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return nil // syntax errors handled by other checks
 	}

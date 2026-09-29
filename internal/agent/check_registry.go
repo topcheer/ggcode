@@ -127,6 +127,9 @@ func init() {
 // recovery. Returns warnings sorted by registration order for deterministic
 // output.
 func runChecksParallel(ctx CheckContext) []string {
+	// Start each check run with a clean parse memo: entries must never
+	// outlive the write that produced them.
+	resetParseMemo()
 	applicable := make([]int, 0, len(allChecks))
 	for i, c := range allChecks {
 		if c.appliesTo(ctx.Lang) {

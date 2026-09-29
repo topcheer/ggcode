@@ -142,8 +142,7 @@ func sensitiveJSONOldKeys(filePath, oldContent string) map[string]bool {
 	if strings.TrimSpace(oldContent) == "" {
 		return keys
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, oldContent, 0)
+	file, fset, err := parseGoSource(filePath, oldContent, 0)
 	if err != nil {
 		return keys
 	}
@@ -176,8 +175,7 @@ func checkSensitiveJSONExposure(filePath, oldContent, newContent string) []strin
 	if filepath.Ext(filePath) != ".go" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, parser.ParseComments)
+	file, fset, err := parseGoSource(filePath, newContent, parser.ParseComments)
 	if err != nil {
 		return nil
 	}

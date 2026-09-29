@@ -49,7 +49,6 @@ package agent
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -138,8 +137,7 @@ func findBarePanics(src string) []panicInstance {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, fset, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

@@ -24,7 +24,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"strings"
 )
@@ -130,8 +129,7 @@ func findExcessiveReturns(src string, isTestFile bool) []returnCountInstance {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, fset, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

@@ -35,8 +35,8 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -162,8 +162,11 @@ func gitHeadExportSymbols(workingDir, filePath string) []exportSymbol {
 // parseExportedSymbols reads a Go source file from disk and returns its
 // exported symbols. Returns nil on parse error.
 func parseExportedSymbols(filePath string) []exportSymbol {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, nil, 0)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil
+	}
+	file, _, err := parseGoSource(filePath, string(data), 0)
 	if err != nil {
 		return nil
 	}
@@ -173,8 +176,7 @@ func parseExportedSymbols(filePath string) []exportSymbol {
 // parseExportedSymbolsFromSource parses Go source from a byte slice and returns
 // its exported symbols.
 func parseExportedSymbolsFromSource(src []byte) []exportSymbol {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, _, err := parseGoSource("", string(src), 0)
 	if err != nil {
 		return nil
 	}

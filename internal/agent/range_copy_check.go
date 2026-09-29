@@ -124,8 +124,7 @@ func findRangeCopyMods(filename, src string) []rangeCopyInfo {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
+	file, fset, err := parseGoSource(filename, src, parser.ParseComments)
 	if err != nil {
 		return nil
 	}
