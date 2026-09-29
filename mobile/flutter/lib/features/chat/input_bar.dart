@@ -54,7 +54,12 @@ class _InputBarState extends ConsumerState<InputBar>
         imageQuality: 70,
       );
       if (picked == null) return;
+      // #2847: the picker and byte reads can outlive the page (user backs
+      // out while the camera/gallery UI or a large image read is in
+      // flight) — guard every await before touching State.
+      if (!mounted) return;
       final bytes = await picked.readAsBytes();
+      if (!mounted) return;
       final base64Data = base64Encode(bytes);
       // Detect mime from extension, default to jpeg
       var mime = 'image/jpeg';
@@ -299,7 +304,14 @@ class _InputBarState extends ConsumerState<InputBar>
               name: img.name,
             ))
         .toList();
-    _pendingImages.clear();
+    // #2847: wrap the clear in setState — controller.clear() is a
+    // programmatic change that does NOT fire TextField.onChanged, so
+    // without this the thumbnail row only rebuilt when a watched provider
+    // happened to change in the same frame, leaving stale images that could
+    // be double-sent.
+    setState(() {
+      _pendingImages.clear();
+    });
 
     ref.read(chatProvider.notifier).addUserMessage(text, images: images);
   }
