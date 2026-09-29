@@ -32,12 +32,10 @@ package agent
 // edits. Parsing is microseconds-fast (single file, stdlib only).
 
 import (
-	"bytes"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -139,24 +137,15 @@ func (a *Agent) checkExportGuard(filePath string) string {
 // gitHeadExportSymbols reads a Go file from git HEAD and returns its exported
 // symbols. Returns nil if the file isn't tracked in git or can't be parsed.
 func gitHeadExportSymbols(workingDir, filePath string) []exportSymbol {
-	relPath := filePath
-	if filepath.IsAbs(relPath) && workingDir != "" {
-		if rel, err := filepath.Rel(workingDir, filePath); err == nil {
-			relPath = rel
-		}
-	}
-
-	cmd := exec.Command("git", "show", "HEAD:"+relPath)
-	cmd.Dir = workingDir
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		debug.Log("export-guard", "git show HEAD:%s failed: %v", relPath, err)
+	// Reuse the hardened HEAD-content helper: it handles absolute paths,
+	// subdir-relative rebasing onto the repo root, and timeouts (#1541),
+	// all of which the previous inline `git show` invocation got wrong.
+	content, err := gitFileContentAtHEAD(workingDir, filePath)
+	if err != nil {
+		debug.Log("export-guard", "git show HEAD:%s failed: %v", filePath, err)
 		return nil
 	}
-
-	return parseExportedSymbolsFromSource(stdout.Bytes())
+	return parseExportedSymbolsFromSource([]byte(content))
 }
 
 // parseExportedSymbols reads a Go source file from disk and returns its
