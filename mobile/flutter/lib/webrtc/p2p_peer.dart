@@ -85,6 +85,11 @@ class P2PPeer {
   RTCDataChannel? _dc;
   bool _disposed = false;
   bool _connected = false;
+  // #2855: candidates arriving before the peer connection exists (relay
+  // reorder/replay) were silently dropped, degrading ICE quality. Buffer
+  // them and flush after setRemoteDescription (#549 Go-side parity).
+  final List<RTCIceCandidate> _pendingCandidates = [];
+  bool _remoteDescriptionSet = false;
   // #1876 case 1: ICE Disconnected is often transient - the ICE agent
   // recovers on its own and the DataChannel stays usable. Treating it as
   // terminal (same as Failed) permanently cleared _connected while the
@@ -204,6 +209,23 @@ class P2PPeer {
       sdpMap['type'] as String? ?? 'offer',
     );
     await _pc!.setRemoteDescription(desc);
+    _remoteDescriptionSet = true;
+    // #2855: flush candidates that arrived while the PC was still being
+    // created or before the remote description was applied.
+    if (_pendingCandidates.isNotEmpty) {
+      final buffered = List<RTCIceCandidate>.from(_pendingCandidates);
+      _pendingCandidates.clear();
+      for (final c in buffered) {
+        try {
+          await _pc!.addCandidate(c);
+        } catch (e) {
+          // A stale/duplicated buffered candidate must not abort the flush
+          // of the remaining ones (the signaling loop has its own catch,
+          // but this loop is ours).
+          debugPrint('[p2p] buffered addCandidate failed: $e');
+        }
+      }
+    }
 
     // Create and send answer.
     final answer = await _pc!.createAnswer({});
@@ -217,7 +239,6 @@ class P2PPeer {
 
   /// Adds a remote ICE candidate received from the host.
   Future<void> addCandidate(String candidateJson) async {
-    if (_pc == null) return;
     final map = jsonDecode(candidateJson) as Map<String, dynamic>;
     final candidate = RTCIceCandidate(
       map['candidate'] as String?,
@@ -226,6 +247,14 @@ class P2PPeer {
           ? (map['sdpMLineIndex'] as num).toInt()
           : null,
     );
+    // #2855: buffer early candidates instead of dropping them. Both windows
+    // matter: _pc not yet created, and _pc created but setRemoteDescription
+    // not yet applied (adding candidates before the remote description is
+    // set can error in some webrtc implementations).
+    if (_pc == null || !_remoteDescriptionSet) {
+      _pendingCandidates.add(candidate);
+      return;
+    }
     await _pc!.addCandidate(candidate);
   }
 
