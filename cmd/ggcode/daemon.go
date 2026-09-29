@@ -889,6 +889,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
 	bridge.SetActivityHook(knightAgent.NotifyActivity)
+	// lanchatHub is assigned later (A2A-enabled branch, after NewHub);
+	// declared here so the provider-switch hook closure below can capture
+	// the variable and keep LAN presence in sync after a switch (#2876).
+	var lanchatHub *lanchat.Hub
 	bridge.SetRestartHook(func() {
 		daemonRestartRequested = true
 		select {
@@ -910,6 +914,12 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		resolved = r
 		resolvedMu.Unlock()
 		agentruntime.ApplyProviderToAgent(ag, prov, r)
+		// #2876: keep LAN presence in sync after a switch - mirrors the TUI
+		// (model.go) and Desktop (chat.go) switch paths. SetModel also clears
+		// stale degraded status (new model = new quota pool / credential).
+		if lanchatHub != nil {
+			lanchatHub.SetModel(r.Model)
+		}
 		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
@@ -1017,7 +1027,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aSrv *a2a.Server
 	// a2aReg already declared above for system prompt access
 	var a2aHandler *a2a.TaskHandler
-	var lanchatHub *lanchat.Hub
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
