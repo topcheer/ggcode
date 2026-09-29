@@ -363,21 +363,20 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 	switch t.Skill {
 	case SkillFileSearch, SkillGitOps, SkillCommandExec:
-		// Use the latest user message (not History[0]) so that follow-up
-		// messages in input-required flows are actually delivered.
-		lastIdx := len(historySnap) - 1
+		// #2897: pass the full history so a fresh stateless agent sees the
+		// original task plus prior Q&A, not just the last follow-up.
 		if len(historySnap) > 0 {
 			if h.agent == nil {
 				err = fmt.Errorf("agent required for skill %s", t.Skill)
 			} else {
-				result, err = h.executeAgent(ctx, perm, t.Skill, historySnap[lastIdx])
+				result, err = h.executeAgent(ctx, perm, t.Skill, historySnap)
 			}
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
 	case SkillCodeEdit, SkillCodeReview, SkillFullTask:
 		if len(historySnap) > 0 {
-			result, err = h.executeAgent(ctx, perm, t.Skill, historySnap[len(historySnap)-1])
+			result, err = h.executeAgent(ctx, perm, t.Skill, historySnap)
 		} else {
 			err = fmt.Errorf("no message history for skill %s", t.Skill)
 		}
@@ -448,9 +447,17 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 // executeDirectTool runs a tool directly without spinning up a full agent loop.
 // executeAgent runs a full agent loop with restricted permissions.
-func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, skill string, msg Message) (string, error) {
-	text := extractText(msg)
-	if text == "" {
+// #2897: receives the FULL message history. A fresh stateless Agent is
+// created per call, so passing only the last message would strip the
+// original task instruction and prior Q&A - a short follow-up ("yes",
+// "continue") would then execute against an empty context. The history is
+// assembled into a transcript; the last message remains the current request.
+func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, skill string, msgs []Message) (string, error) {
+	if len(msgs) == 0 {
+		return "", fmt.Errorf("empty input")
+	}
+	text := buildTranscriptPrompt(msgs)
+	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("empty input")
 	}
 
@@ -933,6 +940,35 @@ func truncateText(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// buildTranscriptPrompt assembles the task history into a single prompt:
+// prior turns become a labelled transcript block, the final message is
+// restated as the current request. Single-message histories degenerate to
+// the bare request (previous behavior).
+func buildTranscriptPrompt(msgs []Message) string {
+	var b strings.Builder
+	started := false
+	for i, m := range msgs {
+		t := strings.TrimSpace(extractText(m))
+		if t == "" {
+			continue
+		}
+		if i == len(msgs)-1 {
+			// Current request.
+			if started {
+				b.WriteString("\n\n## Current request\n")
+			}
+			b.WriteString(t)
+			break
+		}
+		if !started {
+			b.WriteString("## Task context (conversation so far)\n")
+			started = true
+		}
+		fmt.Fprintf(&b, "%s: %s\n", m.Role, t)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func buildAgentPrompt(skill string, text string) string {
