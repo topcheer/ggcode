@@ -488,3 +488,65 @@ func (t *CmdSnippetTool) doSearch(query string) (Result, error) {
 func (t *CmdSnippetTool) Clone() Tool {
 	return &CmdSnippetTool{WorkingDir: t.WorkingDir}
 }
+
+// SaveAutoSnippet persists a command discovered outside the normal
+// cmd_snippet tool flow (e.g. auto-capture from the exec tool). It is
+// idempotent on the command text: saving an already-stored command only
+// bumps its UseCount and UpdatedAt, so repeated auto-captures never
+// create duplicates or evict other entries.
+func (t *CmdSnippetTool) SaveAutoSnippet(name, command, desc string, tags []string) (Result, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return Result{}, fmt.Errorf("command is required")
+	}
+	if desc == "" {
+		desc = "auto-saved"
+	}
+	if len(tags) == 0 {
+		tags = []string{"auto"}
+	}
+
+	verb := "saved"
+	var total int
+	err := t.mutate(true, func(store *cmdSnippetStore) error {
+		now := time.Now()
+		// Dedupe on exact command text: refresh the existing entry.
+		for idx := range store.Entries {
+			if store.Entries[idx].Command == command {
+				store.Entries[idx].UseCount++
+				store.Entries[idx].UpdatedAt = now
+				verb, total = "refreshed", len(store.Entries)
+				return nil
+			}
+		}
+		// Reuse doSave's eviction + append logic via a nested mutate is not
+		// possible (mutate is not reentrant), so replicate the append here.
+		if len(store.Entries) >= cmdSnippetMaxEntries {
+			oldest := 0
+			for idx := range store.Entries {
+				if store.Entries[idx].UpdatedAt.Before(store.Entries[oldest].UpdatedAt) {
+					oldest = idx
+				}
+			}
+			store.Entries = append(store.Entries[:oldest], store.Entries[oldest+1:]...)
+		}
+		store.Entries = append(store.Entries, cmdSnippetEntry{
+			Name:        name,
+			Command:     command,
+			Description: desc,
+			Tags:        tags,
+			UseCount:    1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		})
+		sort.SliceStable(store.Entries, func(a, b int) bool {
+			return strings.ToLower(store.Entries[a].Name) < strings.ToLower(store.Entries[b].Name)
+		})
+		total = len(store.Entries)
+		return nil
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("failed to auto-save snippet: %w", err)
+	}
+	return Result{Content: fmt.Sprintf("Snippet %q %s (%d total).", name, verb, total)}, nil
+}

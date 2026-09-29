@@ -16,6 +16,39 @@ func newCmdSnippetTool(t *testing.T) (*CmdSnippetTool, string) {
 	return &CmdSnippetTool{WorkingDir: dir}, dir
 }
 
+func TestCmdSnippet_SaveAutoSnippetIdempotent(t *testing.T) {
+	tool, _ := newCmdSnippetTool(t)
+
+	res, err := tool.SaveAutoSnippet("auto-build", "go build -tags goolm ./...", "", nil)
+	if err != nil || res.IsError {
+		t.Fatalf("first auto-save failed: %v / %s", err, res.Content)
+	}
+	res, err = tool.SaveAutoSnippet("auto-build-dup", "go build -tags goolm ./...", "", nil)
+	if err != nil || res.IsError {
+		t.Fatalf("second auto-save failed: %v / %s", err, res.Content)
+	}
+	if !strings.Contains(res.Content, "refreshed") {
+		t.Fatalf("expected duplicate save to be refreshed, got: %s", res.Content)
+	}
+
+	// Only one entry should exist; the duplicate must not have been appended.
+	store, err := tool.load()
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if len(store.Entries) != 1 {
+		t.Fatalf("expected 1 entry after dedupe, got %d", len(store.Entries))
+	}
+	if store.Entries[0].UseCount != 2 {
+		t.Fatalf("expected UseCount=2, got %d", store.Entries[0].UseCount)
+	}
+
+	// Empty command must be rejected.
+	if _, err := tool.SaveAutoSnippet("x", "  ", "", nil); err == nil {
+		t.Fatal("expected error for empty command")
+	}
+}
+
 func TestCmdSnippet_SaveAndGet(t *testing.T) {
 	tool, _ := newCmdSnippetTool(t)
 
