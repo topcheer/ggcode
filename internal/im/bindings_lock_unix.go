@@ -3,28 +3,20 @@
 package im
 
 import (
-	"os"
-	"syscall"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
-// lockBindingsFile acquires a blocking exclusive flock on the bindings lock file.
-// This serializes read-modify-write cycles across multiple ggcode processes
-// that share the same im-bindings.json file. The returned cleanup function
-// releases the lock and closes the file descriptor.
+// lockBindingsFile acquires a bounded exclusive flock on the bindings lock
+// file. This serializes read-modify-write cycles across multiple ggcode
+// processes that share the same im-bindings.json file. The returned cleanup
+// function releases the lock and closes the file descriptor.
+//
+// #2809: the four writers call this while already holding s.mu - a bare
+// blocking LOCK_EX meant a live-but-suspended holder (SIGSTOP, App Nap,
+// giant GC) cascaded into s.mu being held forever and every List* call
+// wedging: the IM adapter silently stopped responding. Now delegated to
+// util.FileLock (#1834 case 2 pattern: LOCK_NB + bounded retry, error out
+// on timeout; every caller already degrades via its error return path).
 func lockBindingsFile(bindingsPath string) (func(), error) {
-	lockPath := bindingsPath + ".flock"
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	// Blocking exclusive lock — wait for other processes to finish their
-	// read-modify-write cycle. The wait is typically sub-millisecond.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, err
-	}
-	return func() {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	}, nil
+	return util.FileLock(bindingsPath + ".flock")
 }
