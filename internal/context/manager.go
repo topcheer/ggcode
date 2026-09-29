@@ -1847,42 +1847,13 @@ func (m *Manager) CompactSupersededReads() int {
 	}
 
 	// Phase 3: Compact tool_results for superseded ToolIDs.
-	freedChars := 0
-	compacted := 0
-	for i := range m.messages {
-		for j := range m.messages[i].Content {
-			b := &m.messages[i].Content[j]
-			if b.Type != "tool_result" {
-				continue
-			}
-			if !supersededIDs[b.ToolID] {
-				continue
-			}
-			// Skip already-cleared or superseded results (idempotent).
-			if strings.HasPrefix(b.Output, "[superseded:") || strings.HasPrefix(b.Output, "[cleared:") {
-				continue
-			}
-			origLen := len(b.Output)
-			if origLen < 200 {
-				continue // skip small results — not worth compacting
-			}
-			b.Output = fmt.Sprintf("[superseded: file was re-read later in the conversation, output was %d chars]", origLen)
-			b.Images = nil
-			freedChars += origLen
-			compacted++
-		}
-	}
-
+	freedChars, compacted := m.compactSupersededToolResults(supersededIDs,
+		"file was re-read later in the conversation")
 	if freedChars == 0 {
 		return 0
 	}
 
-	before := m.tokens
-	m.markBenignRemoval() // #663/#702a: superseded-read compaction is benign bookkeeping
-	m.version++
-	m.nonTailMutSeq++
-	m.recalcTokens()
-	freed := before - m.tokens
+	freed := m.commitMechanicalCompaction()
 	debug.Log("ctx", "CompactSupersededReads: compacted %d superseded file reads, freed ~%d tokens", compacted, freed)
 	return freed
 }
@@ -1932,8 +1903,25 @@ func (m *Manager) CompactSupersededCommands() int {
 	}
 
 	// Phase 3: rewrite superseded tool_results in place.
-	freedChars := 0
-	compacted := 0
+	freedChars, compacted := m.compactSupersededToolResults(supersededIDs,
+		"command was re-run later in the conversation")
+	if freedChars == 0 {
+		return 0
+	}
+
+	freed := m.commitMechanicalCompaction()
+	debug.Log("ctx", "CompactSupersededCommands: compacted %d superseded command runs, freed ~%d tokens", compacted, freed)
+	return freed
+}
+
+// compactSupersededToolResults rewrites the tool_result blocks whose ToolID is
+// in supersededIDs with a one-line placeholder. It is the shared Phase 3 of
+// the mechanical supersession passes (reads and commands): both categories
+// expire stale output the same way, so the rewrite loop, the idempotency
+// guard, the small-result threshold and the placeholder format live here.
+// Mutates blocks in place; the caller must hold m.mu. Returns the characters
+// freed and the number of blocks compacted.
+func (m *Manager) compactSupersededToolResults(supersededIDs map[string]bool, reason string) (freedChars, compacted int) {
 	for i := range m.messages {
 		for j := range m.messages[i].Content {
 			b := &m.messages[i].Content[j]
@@ -1948,25 +1936,27 @@ func (m *Manager) CompactSupersededCommands() int {
 			if origLen < 200 {
 				continue // skip small results — not worth compacting
 			}
-			b.Output = fmt.Sprintf("[superseded: command was re-run later in the conversation, output was %d chars]", origLen)
+			b.Output = fmt.Sprintf("[superseded: %s, output was %d chars]", reason, origLen)
 			b.Images = nil
 			freedChars += origLen
 			compacted++
 		}
 	}
+	return freedChars, compacted
+}
 
-	if freedChars == 0 {
-		return 0
-	}
-
+// commitMechanicalCompaction applies the shared bookkeeping after a mechanical
+// supersession pass rewrote tool_result outputs: marks the removal benign
+// (#663/#702a), bumps the version counters, recalculates the token estimate
+// and returns the approximate tokens freed. The caller must hold m.mu and must
+// only call this when something was actually freed.
+func (m *Manager) commitMechanicalCompaction() int {
 	before := m.tokens
-	m.markBenignRemoval() // benign bookkeeping, same as superseded reads
+	m.markBenignRemoval()
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
-	freed := before - m.tokens
-	debug.Log("ctx", "CompactSupersededCommands: compacted %d superseded command runs, freed ~%d tokens", compacted, freed)
-	return freed
+	return before - m.tokens
 }
 
 // extractCommand returns the normalized key identifying a run_command
