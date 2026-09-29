@@ -686,7 +686,7 @@ Thresholds and heuristics:
 - The summary output is capped at 5% of the context window, with a hard maximum of 12,000 tokens.
 - The background precompact goroutine has a 180-second timeout and a 6-second start delay to avoid rate-limit collisions with the main LLM turn.
 - Mechanical clearing tiers are skipped if the estimated token savings are below 2% of the threshold (cache-break awareness).
-- A fallback checkpoint is forced when the conversation exceeds 500 messages even if compaction fails.
+- A fallback checkpoint is forced when the conversation exceeds 500 messages even if compaction fails. It only fires again after at least 50 further messages since the last checkpoint (anti-spam, #2905) and anchors at the real last message ID so resume positioning stays precise.
 
 ### Session Checkpoints
 
