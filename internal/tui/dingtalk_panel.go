@@ -315,6 +315,12 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return dingtalkBindResultMsg{err: errors.New(m.t("panel.dingtalk.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
+		// secret WITH spaces was silently truncated to its first token,
+		// then persisted as a guaranteed-to-fail credential. Reject extras.
+		if len(fields) > 3 {
+			return dingtalkBindResultMsg{err: errors.New("extra fields after app_secret (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		appKey := strings.TrimSpace(fields[1])
 		appSecret := strings.TrimSpace(fields[2])
@@ -347,15 +353,38 @@ func (m *Model) createDingtalkAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext secret - without
+						// compensation a wrong secret stays on disk forever and
+						// blocks the name on retry ("already exists"); the panel
+						// has no delete key. The rollback REMOVE is itself a map
+						// write, so it must route through configMutationMsg too
+						// (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return dingtalkBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return dingtalkBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureDingtalkRuntime(); err != nil {
-						return dingtalkBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startDingtalkAdapterIfNeeded(name); err != nil {
 						if errors.Is(err, errDingtalkEnableNeeded) {
 							// #1719 case 1: enable on the Update loop, then retry.
 							return m.dingtalkEnableMutation(name, nil)
 						}
-						return dingtalkBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return dingtalkBindResultMsg{message: m.t("panel.dingtalk.message.added_bot", name)}
 				}
