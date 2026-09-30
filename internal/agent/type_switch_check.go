@@ -41,7 +41,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strconv"
@@ -101,8 +100,7 @@ func filterDeltaTypeSwitches(filePath, oldContent string, issues []typeSwitchIss
 	if strings.TrimSpace(oldContent) == "" {
 		return issues
 	}
-	oldFset := token.NewFileSet()
-	oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+	oldFile, oldFset, oldErr := parseGoSource(filePath, oldContent, 0)
 	if oldErr != nil || oldFile == nil {
 		return issues
 	}

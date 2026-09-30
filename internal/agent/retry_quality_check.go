@@ -38,7 +38,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -95,8 +94,7 @@ func checkRetryQuality(filePath, oldContent, newContent string) []string {
 
 	// Delta-aware: subtract pre-existing issues from old content.
 	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+		oldFile, oldFset, oldErr := parseGoSource(filePath, oldContent, 0)
 		if oldErr == nil && oldFile != nil {
 			oldIssues := func() []retryLoopIssue {
 				// #632: analyze old content with its own local timer map so

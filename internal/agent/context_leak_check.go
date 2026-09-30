@@ -31,7 +31,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -68,8 +67,7 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 	// false positives when lines shift due to edits above the call site.
 	var oldFPs map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldAST, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+		oldAST, oldFset, oldErr := parseGoSource(filePath, oldContent, 0)
 		if oldErr == nil {
 			oldLeaks := findContextLeaks(oldFset, oldAST)
 			if len(oldLeaks) > 0 {

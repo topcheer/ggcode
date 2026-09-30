@@ -3,7 +3,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"strings"
 )
@@ -42,8 +41,7 @@ func checkUnusedParam(filePath, oldContent, src string) []string {
 	// different receivers) is still reported, while pure line shifts and
 	// re-saves of pre-existing findings stay silent.
 	if strings.TrimSpace(oldContent) != "" && len(issues) > 0 {
-		oldFset := token.NewFileSet()
-		oldFile, perr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+		oldFile, oldFset, perr := parseGoSource(filePath, oldContent, 0)
 		if perr == nil && oldFile != nil {
 			oldCounts := make(map[string]int)
 			for _, decl := range oldFile.Decls {

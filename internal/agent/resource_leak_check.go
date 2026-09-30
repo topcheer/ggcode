@@ -36,7 +36,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/printer"
 	"go/token"
 	"path/filepath"
@@ -141,8 +140,7 @@ func collectOldResourceLeakIndex(filePath, oldContent string) resourceLeakDeltaI
 	if strings.TrimSpace(oldContent) == "" {
 		return idx
 	}
-	oldFset := token.NewFileSet()
-	oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+	oldFile, _, oldErr := parseGoSource(filePath, oldContent, 0)
 	if oldErr != nil || oldFile == nil {
 		return idx
 	}
