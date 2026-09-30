@@ -225,6 +225,10 @@ func (a *Agent) guidanceEmit(msg string, msgs []provider.Message) []provider.Mes
 }
 
 func (a *Agent) injectGuidance(text string) bool {
+	// Cache the pure tag classification once; allow() re-derives it
+	// internally, but chargeBytes and the conflict scan below reused to
+	// re-parse the head tag from the full text on every call.
+	critical := isCriticalGuidance(text)
 	if !a.guidanceBudget.allow(text) {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
 			a.guidanceBudget.suppressed)
@@ -238,8 +242,14 @@ func (a *Agent) injectGuidance(text string) bool {
 	// #1840 case 4: iteration-level guidance joins the conflict scan set.
 	// detectGuidanceConflict previously ran only over one tool result's
 	// retained hints; this path's injections (errorRush "ACT NOW" etc.)
-	// could contradict them unimpeded.
-	if ch := detectGuidanceConflict(append(append([]string{}, a.guidanceBudget.delivered...), text)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
+	// could contradict them unimpeded. The scan copy is pre-sized for
+	// delivered+text so the second append does not reallocate (the old
+	// append(append([]string{}, delivered...), text) grew the slice once
+	// per injection).
+	scan := make([]string, 0, len(a.guidanceBudget.delivered)+1)
+	scan = append(scan, a.guidanceBudget.delivered...)
+	scan = append(scan, text)
+	if ch := detectGuidanceConflict(scan); ch != "" && a.guidanceBudget.allowDeduped(ch) {
 		a.contextManager.Add(provider.Message{
 			Role: "user",
 			Content: []provider.ContentBlock{{
@@ -248,7 +258,7 @@ func (a *Agent) injectGuidance(text string) bool {
 			}},
 		})
 	}
-	a.guidanceBudget.chargeBytes(len(text), isCriticalGuidance(text))
+	a.guidanceBudget.chargeBytes(len(text), critical)
 	a.guidanceBudget.delivered = append(a.guidanceBudget.delivered, text)
 	a.contextManager.Add(provider.Message{
 		Role: "user",
