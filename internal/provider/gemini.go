@@ -689,6 +689,14 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 func ptrToFloat32(v float32) *float32 { return &v }
 
 func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
+	// #2819 (Gemini leg): fold detector-injected text-only "user" messages into
+	// the following tool_result message. The Gemini API requires every model
+	// functionCall turn to be immediately followed by the user turn carrying its
+	// functionResponse parts; a text-only user turn wedged between them 400s the
+	// whole agentic multi-turn request. Append after the tool_result blocks so
+	// functionResponse parts stay first in the turn (same ordering Anthropic
+	// needs); extra Text parts alongside functionResponse parts are accepted.
+	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var contents []*genai.Content
 	var systemParts []*genai.Part
 	toolNamesByID := make(map[string]string)

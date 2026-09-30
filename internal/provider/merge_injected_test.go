@@ -141,3 +141,114 @@ func TestMergeInjectedUserMessagesPreservesIDs(t *testing.T) {
 		t.Errorf("expected tool_result ID 'write_file:13', got %q", toolResultID)
 	}
 }
+
+// TestFoldInjectedUserMessagesAppendOrder covers the append variant used by the
+// Anthropic and Gemini legs (#2819): folded guidance must land AFTER the
+// tool_result blocks so tool_result/functionResponse parts stay first in the
+// user turn, as both APIs require.
+func TestFoldInjectedUserMessagesAppendOrder(t *testing.T) {
+	msgs := []Message{
+		{Role: "assistant", Content: []ContentBlock{
+			{Type: "tool_use", ToolID: "call_1", ToolName: "write_file"},
+		}},
+		{Role: "user", Content: []ContentBlock{
+			{Type: "text", Text: "guidance warning"},
+		}},
+		{Role: "user", Content: []ContentBlock{
+			{Type: "tool_result", ToolID: "call_1", Output: "file created"},
+			{Type: "text", Text: "original text"},
+		}},
+	}
+
+	result := foldInjectedUserMessages(msgs, appendToToolResultContent)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages after fold, got %d", len(result))
+	}
+	merged := result[1]
+	if merged.Role != "user" {
+		t.Fatalf("expected merged message to be user, got %q", merged.Role)
+	}
+
+	// The first block must remain a tool_result — APIs reject a text part first.
+	if len(merged.Content) == 0 || merged.Content[0].Type != "tool_result" {
+		t.Fatalf("expected first block of merged message to be tool_result, got %+v", merged.Content)
+	}
+	if merged.Content[0].ToolID != "call_1" {
+		t.Errorf("expected tool_result ID 'call_1', got %q", merged.Content[0].ToolID)
+	}
+
+	// Guidance text must be present after the tool_result block.
+	foundGuidance, foundOriginal := false, false
+	for _, b := range merged.Content {
+		if b.Type == "text" && strings.Contains(b.Text, "guidance warning") {
+			foundGuidance = true
+		}
+		if b.Type == "text" && strings.Contains(b.Text, "original text") {
+			foundOriginal = true
+		}
+	}
+	if !foundGuidance {
+		t.Errorf("expected folded guidance text in merged message, blocks: %+v", merged.Content)
+	}
+	if !foundOriginal {
+		t.Errorf("expected original text block preserved, blocks: %+v", merged.Content)
+	}
+}
+
+func TestAppendToToolResultContent(t *testing.T) {
+	tests := []struct {
+		name      string
+		blocks    []ContentBlock
+		prefix    string
+		wantFirst string // expected type of the first block
+		wantLast  string // expected substring of the last block's text
+		wantLen   int
+	}{
+		{
+			name: "inserts after trailing tool_result",
+			blocks: []ContentBlock{
+				{Type: "tool_result", ToolID: "c1", Output: "ok"},
+				{Type: "tool_result", ToolID: "c2", Output: "ok2"},
+			},
+			prefix:    "warn\n\n",
+			wantFirst: "tool_result",
+			wantLast:  "warn",
+			wantLen:   3,
+		},
+		{
+			name: "inserts after tool_result but before trailing text",
+			blocks: []ContentBlock{
+				{Type: "tool_result", ToolID: "c1", Output: "ok"},
+				{Type: "text", Text: "trailing"},
+			},
+			prefix:    "warn\n\n",
+			wantFirst: "tool_result",
+			wantLast:  "trailing",
+			wantLen:   3,
+		},
+		{
+			name:      "no tool_result appends at end",
+			blocks:    []ContentBlock{{Type: "text", Text: "plain"}},
+			prefix:    "warn\n\n",
+			wantFirst: "text",
+			wantLast:  "warn",
+			wantLen:   2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := appendToToolResultContent(tt.blocks, tt.prefix)
+			if len(result) != tt.wantLen {
+				t.Fatalf("expected %d blocks, got %d: %+v", tt.wantLen, len(result), result)
+			}
+			if result[0].Type != tt.wantFirst {
+				t.Errorf("expected first block %q, got %q", tt.wantFirst, result[0].Type)
+			}
+			if !strings.Contains(result[len(result)-1].Text, tt.wantLast) {
+				t.Errorf("expected last block text to contain %q, got %+v", tt.wantLast, result[len(result)-1])
+			}
+		})
+	}
+}
