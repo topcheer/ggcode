@@ -126,11 +126,30 @@ var editResultTools = map[string]bool{
 	"write_file":      true,
 }
 
+// filePayloadTools are the tools whose result content is raw FILE CONTENT
+// (possibly binary-extracted) rather than a status/report the tool layer
+// composed. Their isPoorResult truncation-marker branch is skipped entirely
+// (#2964): any "[output truncated]"-style literal inside the result is
+// payload the file itself contains (this repository's own tool sources embed
+// those marker strings), never a tool-layer advisory - read_file and
+// multi_file_read append no markers from the truncation list, and read_file's
+// own range hint "[File truncated: showing lines X-Y of N]" is informational
+// only (not degraded output). Scoping mirrors the #1211 edit-rejection fix.
+var filePayloadTools = map[string]bool{
+	"read_file":       true,
+	"multi_file_read": true,
+}
+
 // isPoorResult checks if a non-error result is still effectively a failure
 // (e.g., empty search results, truncated output with advisory).
 func isPoorResult(toolName, content string) bool {
 	if searchTools[toolName] {
 		return isEmptyResult(content)
+	}
+	// File-payload tools: content is file data, not a tool-layer report -
+	// marker literals are payload (#2964). See filePayloadTools doc comment.
+	if filePayloadTools[toolName] {
+		return false
 	}
 	// Check for truncation advisory markers in tool output. Anchored to the
 	// bracketed advisory form or the result-header form so file CONTENT that
