@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -56,12 +58,39 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 	// accumulated, so older hits from early-scanned (recently-updated)
 	// sessions evicted newer hits from later-scanned sessions — the final
 	// result was not "the N most recent matches".
+	// Scan session files with a small bounded worker pool: the cost is
+	// dominated by per-file I/O + line scanning, which parallelizes cleanly.
+	// Each result lands in the slot matching its index position, so the
+	// flatten order below — and therefore output for tied timestamps —
+	// stays deterministic regardless of goroutine scheduling.
+	perSession := make([][]SearchResult, len(idx))
+	workers := 4
+	if len(idx) < workers {
+		workers = len(idx)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				hits, err := searchInSessionFile(s.sessionPath(idx[i].ID), idx[i].Title, needle)
+				if err != nil {
+					continue // skip unreadable sessions
+				}
+				perSession[i] = hits
+			}
+		}()
+	}
+	for i := range idx {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
 	var results []SearchResult
-	for _, e := range idx {
-		hits, err := searchInSessionFile(s.sessionPath(e.ID), e.Title, needle)
-		if err != nil {
-			continue // skip unreadable sessions
-		}
+	for _, hits := range perSession {
 		results = append(results, hits...)
 	}
 
@@ -127,27 +156,13 @@ var errLineTooLong = errors.New("line exceeds limit")
 // readLineLimited reads one line up to limit bytes. If the line is longer,
 // it consumes and discards the remainder (through the newline) and returns
 // (nil, errLineTooLong) so the caller can continue with the next line.
+//
+// Thin wrapper over readLineLimitedCounted (store.go), which implements the
+// identical discard semantics and additionally reports consumed bytes —
+// kept as one implementation so future line-limit fixes land in both paths.
 func readLineLimited(br *bufio.Reader, limit int) ([]byte, error) {
-	var buf []byte
-	for {
-		chunk, err := br.ReadSlice('\n')
-		if err == bufio.ErrBufferFull {
-			if len(buf)+len(chunk) > limit {
-				// Discard this entire line, keep the reader moving.
-				for err == bufio.ErrBufferFull {
-					chunk, err = br.ReadSlice('\n')
-				}
-				return nil, errLineTooLong
-			}
-			buf = append(buf, chunk...)
-			continue
-		}
-		buf = append(buf, chunk...)
-		if len(buf) > limit {
-			return nil, errLineTooLong
-		}
-		return buf, err
-	}
+	line, _, err := readLineLimitedCounted(br, limit)
+	return line, err
 }
 
 // searchJSONLLine unmarshals one JSONL line and returns a match if any
@@ -194,6 +209,18 @@ func makeSnippet(text string, matchIdx int, needle string) string {
 	end := matchIdx + len(needle) + half
 	if end > len(text) {
 		end = len(text)
+	}
+
+	// Snap to UTF-8 rune boundaries: raw byte slicing splits multi-byte
+	// characters (routine with CJK content), producing mojibake. ToLower can
+	// also shift the match offset slightly when the text contains
+	// length-changing case mappings (e.g. U+0130), so clamping guarantees a
+	// valid snippet in all cases.
+	for start > 0 && !utf8.RuneStart(text[start]) {
+		start--
+	}
+	for end < len(text) && !utf8.RuneStart(text[end]) {
+		end++
 	}
 
 	snippet := strings.TrimSpace(text[start:end])
