@@ -779,11 +779,17 @@ func (h *TunnelHost) recordEvent(ev tunnel.GatewayMessage) {
 			Type:     ev.Type,
 			Data:     append([]byte(nil), ev.Data...),
 		}
+		// #2917: multiple publisher goroutines (agent stream callback,
+		// tunnel/IM inbound) call recordEvent concurrently while desktop
+		// readers walk the same slice on the bound *Session — serialize
+		// append+prune with the session-scoped leaf lock.
+		ses.TunnelEventsMu.Lock()
 		ses.TunnelEvents = append(ses.TunnelEvents, record)
 		if len(ses.TunnelEvents) > session.MaxTunnelEvents {
 			pruneIdx := len(ses.TunnelEvents) - session.MaxTunnelEvents
 			ses.TunnelEvents = ses.TunnelEvents[pruneIdx:]
 		}
+		ses.TunnelEventsMu.Unlock()
 	}
 
 	// Forward to online broker if connected

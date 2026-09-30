@@ -848,7 +848,7 @@ func (b *ChatBridge) ClearCurrentSession() error {
 		// recovery point; keeping the merge keeps both paths consistent.
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	} else {
 		b.liveHistory = nil
@@ -1095,7 +1095,7 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 		// unreachable for any session with renderable messages.
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	if b.tunnelHost != nil {
@@ -2455,7 +2455,7 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 	}
 	msgs := mergeTunnelUserMessages(
 		buildSessionHistoryFromMessages(b.currentSes.Messages),
-		b.currentSes.TunnelEvents,
+		b.currentSes.SnapshotTunnelEvents(),
 	)
 	return msgs
 }
@@ -2533,7 +2533,7 @@ func (b *ChatBridge) appendLiveUserMessage(text string) {
 		// tunnel messages don't vanish once a live event arrives (#357).
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
@@ -2553,7 +2553,7 @@ func (b *ChatBridge) appendLiveError(text string) {
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
@@ -2586,7 +2586,7 @@ func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStr
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	switch semantic.Type {
