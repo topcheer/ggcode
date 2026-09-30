@@ -3,9 +3,7 @@ package agent
 import (
 	"fmt"
 	"go/format"
-	"go/parser"
 	"go/scanner"
-	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -264,8 +262,13 @@ func registerAllChecks() {
 			if ctx.GoAST != nil || strings.TrimSpace(ctx.NewContent) == "" {
 				return nil
 			}
-			fset := token.NewFileSet()
-			_, err := parser.ParseFile(fset, ctx.FilePath, ctx.NewContent, 0)
+			// newCheckContext pre-parses via parseGoSource and records the
+			// error: reuse it instead of re-parsing content that already
+			// failed. Fall back for hand-built contexts without GoParseErr.
+			if ctx.GoParseErr != nil {
+				return goSyntaxWarnings(ctx.FilePath, ctx.GoParseErr)
+			}
+			_, _, err := parseGoSource(ctx.FilePath, ctx.NewContent, 0)
 			return goSyntaxWarnings(ctx.FilePath, err)
 		}},
 		{Name: "nil-map-write", Langs: []Language{LangGo}, Run: stringCheck(checkNilMapWrite)},

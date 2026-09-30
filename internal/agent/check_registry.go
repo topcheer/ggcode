@@ -2,7 +2,6 @@ package agent
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"sort"
@@ -91,8 +90,13 @@ type CheckContext struct {
 
 	// Go-specific: pre-parsed AST shared by all Go checks to avoid
 	// redundant parser.ParseFile calls. nil if not Go or parse failed.
-	GoAST  *ast.File
-	GoFset *token.FileSet
+	GoAST *ast.File
+	// GoParseErr is the error from parsing NewContent as Go (nil on
+	// success or when NewContent was empty / not Go). It lets the
+	// go-syntax check report the error without re-parsing content that
+	// already failed to parse once.
+	GoParseErr error
+	GoFset     *token.FileSet
 }
 
 // IntegrityCheck represents a single post-write integrity check.
@@ -127,9 +131,6 @@ func init() {
 // recovery. Returns warnings sorted by registration order for deterministic
 // output.
 func runChecksParallel(ctx CheckContext) []string {
-	// Start each check run with a clean parse memo: entries must never
-	// outlive the write that produced them.
-	resetParseMemo()
 	applicable := make([]int, 0, len(allChecks))
 	for i, c := range allChecks {
 		if c.appliesTo(ctx.Lang) {
@@ -224,8 +225,14 @@ func formatWarnings(warnings []string) string {
 	return b.String()
 }
 
-// newCheckContext builds a CheckContext, pre-parsing the Go AST if applicable.
+// newCheckContext builds a CheckContext, pre-parsing the Go AST if
+// applicable. The pre-parse goes through parseGoSource so the memoized
+// result is shared with every check that calls parseGoSource on the same
+// (path, content) pair, instead of each re-parsing independently.
 func newCheckContext(filePath, oldContent, newContent string) CheckContext {
+	// Start each write-check cycle with a clean parse memo: entries must
+	// never outlive the write that produced them.
+	resetParseMemo()
 	ctx := CheckContext{
 		FilePath:   filePath,
 		OldContent: oldContent,
@@ -234,8 +241,8 @@ func newCheckContext(filePath, oldContent, newContent string) CheckContext {
 	}
 
 	if ctx.Lang == LangGo && strings.TrimSpace(newContent) != "" {
-		fset := token.NewFileSet()
-		goAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+		goAST, fset, err := parseGoSource(filePath, newContent, 0)
+		ctx.GoParseErr = err
 		if err == nil {
 			ctx.GoFset = fset
 			ctx.GoAST = goAST
