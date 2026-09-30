@@ -49,11 +49,44 @@ var sensitiveFieldPatterns = []string{
 	"privatekey", "private_key", "credential", "ssn", "creditcard",
 }
 
+// tokenCounterSuffixes lists suffixes that give a "token" occurrence
+// counting/quota semantics instead of credential semantics (#2953).
+// "token" is the only pattern matched here as a bare substring against
+// field names like MaxTokens / TokenCount / Tokens / TokenUsage - public
+// request parameters and statistics, not secrets. The exemption is
+// SUFFIX-based so credential compounds that merely contain "tokens"
+// mid-name (AccessTokenService) do not slip through: "accesstoken" et al.
+// are separate patterns and still match on their own.
+var tokenCounterSuffixes = []string{
+	"tokens", "tokencount", "tokenusage", "tokenlimit", "tokenbudget",
+	"tokenleft", "tokenremaining", "tokenprice", "tokencost",
+	"tokensleft", "tokensremaining",
+}
+
 // isSensitiveFieldName checks if a field name contains a sensitive pattern.
+// #2953: the "token" pattern skips names with counter/quota suffixes
+// (MaxTokens, TokenCount, TokenUsage, ...) - those are public parameters
+// and statistics, not credentials, and flagging them Critical with an
+// "add json:\"-\"" suggestion actively induces breaking valid APIs.
 func isSensitiveFieldName(name string) bool {
 	lower := strings.ToLower(name)
 	for _, pat := range sensitiveFieldPatterns {
+		if pat == "token" && hasTokenCounterSuffix(lower) {
+			continue
+		}
 		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTokenCounterSuffix reports whether lower ends with one of the
+// token-counting suffixes ("maxtokens" → "tokens", "tokencount" →
+// "tokencount", ...).
+func hasTokenCounterSuffix(lower string) bool {
+	for _, suf := range tokenCounterSuffixes {
+		if strings.HasSuffix(lower, suf) {
 			return true
 		}
 	}
