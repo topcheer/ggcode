@@ -58,643 +58,362 @@ func toolLabelFor(lang Language, action string) string {
 	return localizedToolLabel(lang, action)
 }
 
+var toolLabelsZh = map[string]string{ // short zh tool labels (#917)
+	"read":                  "读",
+	"edit":                  "编辑",
+	"create":                "创建",
+	"write":                 "写",
+	"search":                "搜索",
+	"find":                  "查找",
+	"list":                  "列出",
+	"run":                   "执行",
+	"run_in_background":     "后台运行",
+	"fetch":                 "抓取",
+	"todo":                  "更新待办",
+	"task":                  "执行任务",
+	"skill":                 "使用技能",
+	"save_memory":           "保存记忆",
+	"delete":                "删除",
+	"delete_memory":         "删除记忆",
+	"sleep":                 "等待",
+	"cron_create":           "创建定时",
+	"cron_update":           "更新定时",
+	"cron_pause":            "暂停定时",
+	"cron_resume":           "恢复定时",
+	"cron_get":              "查看定时",
+	"config":                "配置",
+	"enter_worktree":        "进入工作树",
+	"exit_worktree":         "退出工作树",
+	"send_message":          "发送消息",
+	"enter_plan":            "制定计划",
+	"exit_plan":             "计划",
+	"team_create":           "创建团队",
+	"team_delete":           "删除团队",
+	"teammate_spawn":        "添加成员",
+	"teammate_list":         "成员列表",
+	"teammate_shutdown":     "停止成员",
+	"teammate_results":      "成员结果",
+	"swarm_task_create":     "创建任务",
+	"swarm_task_claim":      "领取任务",
+	"swarm_task_complete":   "完成任务",
+	"swarm_task_list":       "任务列表",
+	"list_mcp_capabilities": "MCP 服务器",
+	"get_mcp_prompt":        "获取 MCP 提示",
+	"read_mcp_resource":     "读取 MCP 资源",
+	"ask":                   "提问",
+	"inspect":               "检查",
+	"input":                 "输入",
+	"output":                "读取输出",
+	"wait":                  "等待",
+	"stop":                  "停止",
+	"list_jobs":             "后台任务",
+	"diff":                  "差异",
+	"log":                   "日志",
+	"show":                  "查看",
+	"blame":                 "溯源",
+	"branches":              "分支",
+	"remote":                "远程",
+	"stash":                 "暂存",
+	"stage":                 "暂存文件",
+	"commit":                "提交",
+	"spawn_agent":           "启动子代理",
+	"list_agents":           "获取子代理列表",
+	"wait_agent":            "检查子代理进度",
+	"a2a_remote":            "远程调用",
+	"a2a_discover":          "发现代理",
+	"a2a_send_task":         "发送任务",
+	"a2a_get_task":          "获取任务",
+	"a2a_list_tasks":        "任务列表",
+	"a2a_cancel_task":       "取消任务",
+	"use_namedagent":        "运行命名代理",
+	"create_namedagent":     "创建命名代理",
+	"delete_namedagent":     "删除命名代理",
+	"list_namedagent":       "命名代理列表",
+}
+
+var toolLabelsEn = map[string]string{ // short en tool labels (#917)
+	"read":                  "Read",
+	"edit":                  "Edit",
+	"create":                "Create",
+	"write":                 "Write",
+	"search":                "Search",
+	"find":                  "Find",
+	"list":                  "List",
+	"run":                   "Run",
+	"run_in_background":     "Run in background",
+	"fetch":                 "Fetch",
+	"todo":                  "Update todos",
+	"task":                  "Run task",
+	"skill":                 "Using Skill",
+	"save_memory":           "Save Memory",
+	"delete":                "Delete",
+	"delete_memory":         "Delete Memory",
+	"sleep":                 "Sleep",
+	"cron_create":           "Create Cron",
+	"cron_update":           "Update Cron",
+	"cron_pause":            "Pause Cron",
+	"cron_resume":           "Resume Cron",
+	"cron_get":              "Inspect Cron",
+	"config":                "Config",
+	"enter_worktree":        "Enter Worktree",
+	"exit_worktree":         "Exit Worktree",
+	"send_message":          "Message",
+	"enter_plan":            "Planning",
+	"exit_plan":             "Plan",
+	"team_create":           "Create Team",
+	"team_delete":           "Delete Team",
+	"teammate_spawn":        "Add Teammate",
+	"teammate_list":         "List Teammates",
+	"teammate_shutdown":     "Shutdown Teammate",
+	"teammate_results":      "Teammate Results",
+	"swarm_task_create":     "Create Task",
+	"swarm_task_claim":      "Claim Task",
+	"swarm_task_complete":   "Complete Task",
+	"swarm_task_list":       "Task List",
+	"list_mcp_capabilities": "MCP Servers",
+	"get_mcp_prompt":        "Get MCP Prompt",
+	"read_mcp_resource":     "Read MCP Resource",
+	"ask":                   "Ask",
+	"inspect":               "Inspect",
+	"input":                 "Input",
+	"output":                "Read Output",
+	"wait":                  "Wait",
+	"stop":                  "Stop",
+	"list_jobs":             "List Jobs",
+	"diff":                  "Diff",
+	"log":                   "Log",
+	"show":                  "Show",
+	"blame":                 "Blame",
+	"branches":              "Branches",
+	"remote":                "Remote",
+	"stash":                 "Stash",
+	"stage":                 "Stage",
+	"commit":                "Commit",
+	"spawn_agent":           "Starting subagent",
+	"list_agents":           "List Agents",
+	"wait_agent":            "Checking subagent progress",
+	"a2a_remote":            "Remote Call",
+	"a2a_discover":          "Discover",
+	"a2a_send_task":         "Send Task",
+	"a2a_get_task":          "Get Task",
+	"a2a_list_tasks":        "List Tasks",
+	"a2a_cancel_task":       "Cancel Task",
+	"use_namedagent":        "Run Agent",
+	"create_namedagent":     "Create Agent",
+	"delete_namedagent":     "Delete Agent",
+	"list_namedagent":       "List Agents",
+}
+
+var toolActivityZh = map[string]string{ // zh activity text, no target
+	"read":                  "读取文件",
+	"edit":                  "编辑文件",
+	"create":                "创建文件",
+	"write":                 "写入文件",
+	"search":                "搜索中...",
+	"find":                  "查找文件",
+	"list":                  "列出目录",
+	"run":                   "执行命令",
+	"run_in_background":     "后台运行命令",
+	"fetch":                 "抓取网页",
+	"todo":                  "更新待办",
+	"task":                  "执行任务",
+	"diff":                  "查看差异",
+	"log":                   "查看提交历史",
+	"show":                  "查看对象",
+	"blame":                 "追溯行历史",
+	"branches":              "列出分支",
+	"remote":                "查看远程仓库",
+	"stash":                 "管理贮藏",
+	"stage":                 "暂存变更",
+	"commit":                "提交变更",
+	"skill":                 "加载技能",
+	"save_memory":           "保存记忆中...",
+	"delete":                "删除中...",
+	"delete_memory":         "删除记忆中...",
+	"sleep":                 "等待中...",
+	"cron_create":           "创建定时任务...",
+	"cron_update":           "更新定时任务...",
+	"cron_pause":            "暂停定时任务...",
+	"cron_resume":           "恢复定时任务...",
+	"cron_get":              "查看定时任务...",
+	"config":                "更新配置...",
+	"enter_worktree":        "创建工作树...",
+	"exit_worktree":         "退出工作树...",
+	"send_message":          "发送消息...",
+	"enter_plan":            "制定计划中...",
+	"exit_plan":             "完成计划...",
+	"team_create":           "创建团队中...",
+	"team_delete":           "删除团队中...",
+	"teammate_spawn":        "添加成员中...",
+	"teammate_list":         "查看成员列表...",
+	"teammate_shutdown":     "停止成员中...",
+	"teammate_results":      "获取成员结果...",
+	"swarm_task_create":     "创建任务中...",
+	"swarm_task_claim":      "领取任务中...",
+	"swarm_task_complete":   "完成任务中...",
+	"swarm_task_list":       "查看任务列表...",
+	"list_mcp_capabilities": "查看 MCP 服务器...",
+	"get_mcp_prompt":        "获取 MCP 提示...",
+	"read_mcp_resource":     "读取 MCP 资源...",
+	"ask":                   "等待用户输入",
+	"inspect":               "检查中...",
+	"input":                 "发送输入",
+	"output":                "读取输出",
+	"wait":                  "等待命令",
+	"stop":                  "停止命令",
+	"list_jobs":             "列出后台任务",
+	"a2a_remote":            "正在远程调用...",
+	"a2a_discover":          "正在发现...",
+	"a2a_send_task":         "正在发送任务...",
+	"a2a_get_task":          "正在获取任务...",
+	"a2a_list_tasks":        "正在列出任务...",
+	"a2a_cancel_task":       "正在取消任务...",
+	"use_namedagent":        "正在运行命名代理...",
+	"create_namedagent":     "正在创建命名代理...",
+	"delete_namedagent":     "正在删除命名代理...",
+	"list_namedagent":       "正在列出命名代理...",
+}
+
+var toolActivityEn = map[string]string{ // en activity text, no target
+	"read":                  "Reading file",
+	"edit":                  "Editing file",
+	"create":                "Creating file",
+	"write":                 "Writing file",
+	"search":                "Searching...",
+	"find":                  "Finding files",
+	"list":                  "Listing directory",
+	"run":                   "Running command",
+	"run_in_background":     "Running command in background",
+	"fetch":                 "Fetching page",
+	"todo":                  "Updating todos",
+	"task":                  "Running task",
+	"diff":                  "Diffing",
+	"log":                   "Reading commit history",
+	"show":                  "Showing object",
+	"blame":                 "Blaming",
+	"branches":              "Listing branches",
+	"remote":                "Inspecting remotes",
+	"stash":                 "Managing stash",
+	"stage":                 "Staging changes",
+	"commit":                "Committing",
+	"skill":                 "Loading skill",
+	"save_memory":           "Saving memory...",
+	"delete":                "Deleting...",
+	"delete_memory":         "Deleting memory...",
+	"sleep":                 "Sleeping...",
+	"cron_create":           "Scheduling...",
+	"cron_update":           "Updating cron job...",
+	"cron_pause":            "Pausing cron job...",
+	"cron_resume":           "Resuming cron job...",
+	"cron_get":              "Inspecting cron job...",
+	"config":                "Updating config...",
+	"enter_worktree":        "Creating worktree...",
+	"exit_worktree":         "Exiting worktree...",
+	"send_message":          "Sending message...",
+	"enter_plan":            "Planning...",
+	"exit_plan":             "Completing plan...",
+	"team_create":           "Creating team...",
+	"team_delete":           "Deleting team...",
+	"teammate_spawn":        "Adding teammate...",
+	"teammate_list":         "Listing teammates...",
+	"teammate_shutdown":     "Shutting down teammate...",
+	"teammate_results":      "Fetching results...",
+	"swarm_task_create":     "Creating task...",
+	"swarm_task_claim":      "Claiming task...",
+	"swarm_task_complete":   "Completing task...",
+	"swarm_task_list":       "Listing tasks...",
+	"list_mcp_capabilities": "Listing MCP servers...",
+	"get_mcp_prompt":        "Fetching MCP prompt...",
+	"read_mcp_resource":     "Reading MCP resource...",
+	"ask":                   "Waiting for user input",
+	"inspect":               "Inspecting...",
+	"input":                 "Sending input",
+	"output":                "Reading output",
+	"wait":                  "Waiting for command",
+	"stop":                  "Stopping command",
+	"list_jobs":             "Listing background jobs",
+	"a2a_remote":            "Calling remote...",
+	"a2a_discover":          "Discovering...",
+	"a2a_send_task":         "Sending task...",
+	"a2a_get_task":          "Getting task...",
+	"a2a_list_tasks":        "Listing tasks...",
+	"a2a_cancel_task":       "Canceling task...",
+	"use_namedagent":        "Running named agent...",
+	"create_namedagent":     "Creating named agent...",
+	"delete_namedagent":     "Deleting named agent...",
+	"list_namedagent":       "Listing named agents...",
+}
+
+var toolActivityVerbZh = map[string]string{ // zh activity verb + " " + target
+	"read":              "读取",
+	"edit":              "编辑",
+	"create":            "创建",
+	"write":             "写入",
+	"search":            "搜索",
+	"find":              "查找",
+	"list":              "列出",
+	"run":               "执行",
+	"run_in_background": "后台运行",
+	"fetch":             "抓取",
+	"task":              "执行任务",
+	"skill":             "加载技能",
+	"ask":               "提问",
+	"inspect":           "检查",
+}
+
+var toolActivityVerbEn = map[string]string{ // en activity verb + " " + target
+	"read":              "Reading",
+	"edit":              "Editing",
+	"create":            "Creating",
+	"write":             "Writing",
+	"search":            "Searching",
+	"find":              "Finding",
+	"list":              "Listing",
+	"run":               "Running",
+	"run_in_background": "Running in background",
+	"fetch":             "Fetching",
+	"task":              "Running task",
+	"skill":             "Loading skill",
+	"ask":               "Asking",
+	"inspect":           "Inspecting",
+}
+
+// localizedToolLabel returns the localized short label for a tool action key,
+// falling back to the generic tool name for unknown actions (#917).
 func localizedToolLabel(lang Language, action string) string {
-	switch lang {
-	case LangZhCN:
-		switch action {
-		case "read":
-			return "读"
-		case "edit":
-			return "编辑"
-		case "create":
-			return "创建"
-		case "write":
-			return "写"
-		case "search":
-			return "搜索"
-		case "find":
-			return "查找"
-		case "list":
-			return "列出"
-		case "run":
-			return "执行"
-		case "run_in_background":
-			return "后台运行"
-		case "fetch":
-			return "抓取"
-		case "todo":
-			return "更新待办"
-		case "task":
-			return "执行任务"
-		case "skill":
-			return "使用技能"
-		case "save_memory":
-			return "保存记忆"
-		case "delete":
-			return "删除"
-		case "delete_memory":
-			return "删除记忆"
-		case "sleep":
-			return "等待"
-		case "cron_create":
-			return "创建定时"
-		case "cron_update":
-			return "更新定时"
-		case "cron_pause":
-			return "暂停定时"
-		case "cron_resume":
-			return "恢复定时"
-		case "cron_get":
-			return "查看定时"
-		case "config":
-			return "配置"
-		case "enter_worktree":
-			return "进入工作树"
-		case "exit_worktree":
-			return "退出工作树"
-		case "send_message":
-			return "发送消息"
-		case "enter_plan":
-			return "制定计划"
-		case "exit_plan":
-			return "计划"
-		case "team_create":
-			return "创建团队"
-		case "team_delete":
-			return "删除团队"
-		case "teammate_spawn":
-			return "添加成员"
-		case "teammate_list":
-			return "成员列表"
-		case "teammate_shutdown":
-			return "停止成员"
-		case "teammate_results":
-			return "成员结果"
-		case "swarm_task_create":
-			return "创建任务"
-		case "swarm_task_claim":
-			return "领取任务"
-		case "swarm_task_complete":
-			return "完成任务"
-		case "swarm_task_list":
-			return "任务列表"
-		case "list_mcp_capabilities":
-			return "MCP 服务器"
-		case "get_mcp_prompt":
-			return "获取 MCP 提示"
-		case "read_mcp_resource":
-			return "读取 MCP 资源"
-		case "ask":
-			return "提问"
-		case "inspect":
-			return "检查"
-		case "input":
-			return "输入"
-		case "output":
-			return "读取输出"
-		case "wait":
-			return "等待"
-		case "stop":
-			return "停止"
-		case "list_jobs":
-			return "后台任务"
-		case "diff":
-			return "差异"
-		case "log":
-			return "日志"
-		case "show":
-			return "查看"
-		case "blame":
-			return "溯源"
-		case "branches":
-			return "分支"
-		case "remote":
-			return "远程"
-		case "stash":
-			return "暂存"
-		case "stage":
-			return "暂存文件"
-		case "commit":
-			return "提交"
-		case "spawn_agent":
-			return "启动子代理" // #917: was untranslated English
-		case "list_agents":
-			return "获取子代理列表"
-		case "wait_agent":
-			return "检查子代理进度" // #917: was untranslated English
-		case "a2a_remote":
-			return "远程调用"
-		case "a2a_discover":
-			return "发现代理"
-		case "a2a_send_task":
-			return "发送任务"
-		case "a2a_get_task":
-			return "获取任务"
-		case "a2a_list_tasks":
-			return "任务列表"
-		case "a2a_cancel_task":
-			return "取消任务"
-		case "use_namedagent":
-			return "运行命名代理"
-		case "create_namedagent":
-			return "创建命名代理"
-		case "delete_namedagent":
-			return "删除命名代理"
-		case "list_namedagent":
-			return "命名代理列表"
+	if lang == LangZhCN {
+		if s, ok := toolLabelsZh[action]; ok {
+			return s
 		}
-	default:
-		switch action {
-		case "read":
-			return "Read"
-		case "edit":
-			return "Edit"
-		case "create":
-			return "Create"
-		case "write":
-			return "Write"
-		case "search":
-			return "Search"
-		case "find":
-			return "Find"
-		case "list":
-			return "List"
-		case "run":
-			return "Run"
-		case "run_in_background":
-			return "Run in background"
-		case "fetch":
-			return "Fetch"
-		case "todo":
-			return "Update todos"
-		case "task":
-			return "Run task"
-		case "skill":
-			return "Using Skill"
-		case "save_memory":
-			return "Save Memory"
-		case "delete":
-			return "Delete"
-		case "delete_memory":
-			return "Delete Memory"
-		case "sleep":
-			return "Sleep"
-		case "cron_create":
-			return "Create Cron"
-		case "cron_update":
-			return "Update Cron"
-		case "cron_pause":
-			return "Pause Cron"
-		case "cron_resume":
-			return "Resume Cron"
-		case "cron_get":
-			return "Inspect Cron"
-		case "config":
-			return "Config"
-		case "enter_worktree":
-			return "Enter Worktree"
-		case "exit_worktree":
-			return "Exit Worktree"
-		case "send_message":
-			return "Message"
-		case "enter_plan":
-			return "Planning"
-		case "exit_plan":
-			return "Plan"
-		case "team_create":
-			return "Create Team"
-		case "team_delete":
-			return "Delete Team"
-		case "teammate_spawn":
-			return "Add Teammate"
-		case "teammate_list":
-			return "List Teammates"
-		case "teammate_shutdown":
-			return "Shutdown Teammate"
-		case "teammate_results":
-			return "Teammate Results"
-		case "swarm_task_create":
-			return "Create Task"
-		case "swarm_task_claim":
-			return "Claim Task"
-		case "swarm_task_complete":
-			return "Complete Task"
-		case "swarm_task_list":
-			return "Task List"
-		case "list_mcp_capabilities":
-			return "MCP Servers"
-		case "get_mcp_prompt":
-			return "Get MCP Prompt"
-		case "read_mcp_resource":
-			return "Read MCP Resource"
-		case "ask":
-			return "Ask"
-		case "inspect":
-			return "Inspect"
-		case "input":
-			return "Input"
-		case "output":
-			return "Read Output"
-		case "wait":
-			return "Wait"
-		case "stop":
-			return "Stop"
-		case "list_jobs":
-			return "List Jobs"
-		case "diff":
-			return "Diff"
-		case "log":
-			return "Log"
-		case "show":
-			return "Show"
-		case "blame":
-			return "Blame"
-		case "branches":
-			return "Branches"
-		case "remote":
-			return "Remote"
-		case "stash":
-			return "Stash"
-		case "stage":
-			return "Stage"
-		case "commit":
-			return "Commit"
-		case "spawn_agent":
-			return "Starting subagent"
-		case "list_agents":
-			return "List Agents"
-		case "wait_agent":
-			return "Checking subagent progress"
-		case "a2a_remote":
-			return "Remote Call"
-		case "a2a_discover":
-			return "Discover"
-		case "a2a_send_task":
-			return "Send Task"
-		case "a2a_get_task":
-			return "Get Task"
-		case "a2a_list_tasks":
-			return "List Tasks"
-		case "a2a_cancel_task":
-			return "Cancel Task"
-		case "use_namedagent":
-			return "Run Agent"
-		case "create_namedagent":
-			return "Create Agent"
-		case "delete_namedagent":
-			return "Delete Agent"
-		case "list_namedagent":
-			return "List Agents"
-		}
+	} else if s, ok := toolLabelsEn[action]; ok {
+		return s
 	}
 	return localizedGenericToolName(lang, action)
 }
 
+// localizedToolActivity returns the running-indicator text for a tool call.
+// Actions with a target render as "<verb> <target>"; the rest use fixed text.
+// #1766: git sub-command actions must resolve here so they never fall back to
+// generic wording; unknown actions with an empty target must not end in a
+// dangling space either.
 func localizedToolActivity(lang Language, action, target string) string {
-	if target == "" {
-		switch lang {
-		case LangZhCN:
-			switch action {
-			case "read":
-				return "读取文件"
-			case "edit":
-				return "编辑文件"
-			case "create":
-				return "创建文件"
-			case "write":
-				return "写入文件"
-			case "search":
-				return "搜索中..."
-			case "find":
-				return "查找文件"
-			case "list":
-				return "列出目录"
-			case "run":
-				return "执行命令"
-			case "run_in_background":
-				return "后台运行命令"
-			case "fetch":
-				return "抓取网页"
-			case "todo":
-				return "更新待办"
-			case "task":
-				return "执行任务"
-			// #1766 case 2: git sub-command actions with no target used to
-			// fall to generic and render "Running " with a trailing space.
-			case "diff":
-				return "查看差异"
-			case "log":
-				return "查看提交历史"
-			case "show":
-				return "查看对象"
-			case "blame":
-				return "追溯行历史"
-			case "branches":
-				return "列出分支"
-			case "remote":
-				return "查看远程仓库"
-			case "stash":
-				return "管理贮藏"
-			case "stage":
-				return "暂存变更"
-			case "commit":
-				return "提交变更"
-			case "skill":
-				return "加载技能"
-			case "save_memory":
-				return "保存记忆中..."
-			case "delete":
-				return "删除中..."
-			case "delete_memory":
-				return "删除记忆中..."
-			case "sleep":
-				return "等待中..."
-			case "cron_create":
-				return "创建定时任务..."
-			case "cron_update":
-				return "更新定时任务..."
-			case "cron_pause":
-				return "暂停定时任务..."
-			case "cron_resume":
-				return "恢复定时任务..."
-			case "cron_get":
-				return "查看定时任务..."
-			case "config":
-				return "更新配置..."
-			case "enter_worktree":
-				return "创建工作树..."
-			case "exit_worktree":
-				return "退出工作树..."
-			case "send_message":
-				return "发送消息..."
-			case "enter_plan":
-				return "制定计划中..."
-			case "exit_plan":
-				return "完成计划..."
-			case "team_create":
-				return "创建团队中..."
-			case "team_delete":
-				return "删除团队中..."
-			case "teammate_spawn":
-				return "添加成员中..."
-			case "teammate_list":
-				return "查看成员列表..."
-			case "teammate_shutdown":
-				return "停止成员中..."
-			case "teammate_results":
-				return "获取成员结果..."
-			case "swarm_task_create":
-				return "创建任务中..."
-			case "swarm_task_claim":
-				return "领取任务中..."
-			case "swarm_task_complete":
-				return "完成任务中..."
-			case "swarm_task_list":
-				return "查看任务列表..."
-			case "list_mcp_capabilities":
-				return "查看 MCP 服务器..."
-			case "get_mcp_prompt":
-				return "获取 MCP 提示..."
-			case "read_mcp_resource":
-				return "读取 MCP 资源..."
-			case "ask":
-				return "等待用户输入"
-			case "inspect":
-				return "检查中..."
-			case "input":
-				return "发送输入"
-			case "output":
-				return "读取输出"
-			case "wait":
-				return "等待命令"
-			case "stop":
-				return "停止命令"
-			case "list_jobs":
-				return "列出后台任务"
-			case "a2a_remote":
-				return "正在远程调用..."
-			case "a2a_discover":
-				return "正在发现..."
-			case "a2a_send_task":
-				return "正在发送任务..."
-			case "a2a_get_task":
-				return "正在获取任务..."
-			case "a2a_list_tasks":
-				return "正在列出任务..."
-			case "a2a_cancel_task":
-				return "正在取消任务..."
-			case "use_namedagent":
-				return "正在运行命名代理..."
-			case "create_namedagent":
-				return "正在创建命名代理..."
-			case "delete_namedagent":
-				return "正在删除命名代理..."
-			case "list_namedagent":
-				return "正在列出命名代理..."
-			}
-		default:
-			switch action {
-			case "read":
-				return "Reading file"
-			case "edit":
-				return "Editing file"
-			case "create":
-				return "Creating file"
-			case "write":
-				return "Writing file"
-			case "search":
-				return "Searching..."
-			case "find":
-				return "Finding files"
-			case "list":
-				return "Listing directory"
-			case "run":
-				return "Running command"
-			case "run_in_background":
-				return "Running command in background"
-			case "fetch":
-				return "Fetching page"
-			case "todo":
-				return "Updating todos"
-			case "task":
-				return "Running task"
-			case "diff":
-				return "Diffing"
-			case "log":
-				return "Reading commit history"
-			case "show":
-				return "Showing object"
-			case "blame":
-				return "Blaming"
-			case "branches":
-				return "Listing branches"
-			case "remote":
-				return "Inspecting remotes"
-			case "stash":
-				return "Managing stash"
-			case "stage":
-				return "Staging changes"
-			case "commit":
-				return "Committing"
-			case "skill":
-				return "Loading skill"
-			case "save_memory":
-				return "Saving memory..."
-			case "delete":
-				return "Deleting..."
-			case "delete_memory":
-				return "Deleting memory..."
-			case "sleep":
-				return "Sleeping..."
-			case "cron_create":
-				return "Scheduling..."
-			case "cron_update":
-				return "Updating cron job..."
-			case "cron_pause":
-				return "Pausing cron job..."
-			case "cron_resume":
-				return "Resuming cron job..."
-			case "cron_get":
-				return "Inspecting cron job..."
-			case "config":
-				return "Updating config..."
-			case "enter_worktree":
-				return "Creating worktree..."
-			case "exit_worktree":
-				return "Exiting worktree..."
-			case "send_message":
-				return "Sending message..."
-			case "enter_plan":
-				return "Planning..."
-			case "exit_plan":
-				return "Completing plan..."
-			case "team_create":
-				return "Creating team..."
-			case "team_delete":
-				return "Deleting team..."
-			case "teammate_spawn":
-				return "Adding teammate..."
-			case "teammate_list":
-				return "Listing teammates..."
-			case "teammate_shutdown":
-				return "Shutting down teammate..."
-			case "teammate_results":
-				return "Fetching results..."
-			case "swarm_task_create":
-				return "Creating task..."
-			case "swarm_task_claim":
-				return "Claiming task..."
-			case "swarm_task_complete":
-				return "Completing task..."
-			case "swarm_task_list":
-				return "Listing tasks..."
-			case "list_mcp_capabilities":
-				return "Listing MCP servers..."
-			case "get_mcp_prompt":
-				return "Fetching MCP prompt..."
-			case "read_mcp_resource":
-				return "Reading MCP resource..."
-			case "ask":
-				return "Waiting for user input"
-			case "inspect":
-				return "Inspecting..."
-			case "input":
-				return "Sending input"
-			case "output":
-				return "Reading output"
-			case "wait":
-				return "Waiting for command"
-			case "stop":
-				return "Stopping command"
-			case "list_jobs":
-				return "Listing background jobs"
-			case "a2a_remote":
-				return "Calling remote..."
-			case "a2a_discover":
-				return "Discovering..."
-			case "a2a_send_task":
-				return "Sending task..."
-			case "a2a_get_task":
-				return "Getting task..."
-			case "a2a_list_tasks":
-				return "Listing tasks..."
-			case "a2a_cancel_task":
-				return "Canceling task..."
-			case "use_namedagent":
-				return "Running named agent..."
-			case "create_namedagent":
-				return "Creating named agent..."
-			case "delete_namedagent":
-				return "Deleting named agent..."
-			case "list_namedagent":
-				return "Listing named agents..."
-			}
-		}
+	texts, verbs := toolActivityEn, toolActivityVerbEn
+	if lang == LangZhCN {
+		texts, verbs = toolActivityZh, toolActivityVerbZh
 	}
-
-	switch lang {
-	case LangZhCN:
-		switch action {
-		case "read":
-			return "读取 " + target
-		case "edit":
-			return "编辑 " + target
-		case "create":
-			return "创建 " + target
-		case "write":
-			return "写入 " + target
-		case "search":
-			return "搜索 " + target
-		case "find":
-			return "查找 " + target
-		case "list":
-			return "列出 " + target
-		case "run":
-			return "执行 " + target
-		case "run_in_background":
-			return "后台运行 " + target
-		case "fetch":
-			return "抓取 " + target
-		case "task":
-			return "执行任务 " + target
-		case "skill":
-			return "加载技能 " + target
-		case "ask":
-			return "提问 " + target
-		case "inspect":
-			return "检查 " + target
+	if target == "" {
+		if s, ok := texts[action]; ok {
+			return s
 		}
-	default:
-		switch action {
-		case "read":
-			return "Reading " + target
-		case "edit":
-			return "Editing " + target
-		case "create":
-			return "Creating " + target
-		case "write":
-			return "Writing " + target
-		case "search":
-			return "Searching " + target
-		case "find":
-			return "Finding " + target
-		case "list":
-			return "Listing " + target
-		case "run":
-			return "Running " + target
-		case "run_in_background":
-			return "Running in background " + target
-		case "fetch":
-			return "Fetching " + target
-		case "task":
-			return "Running task " + target
-		case "skill":
-			return "Loading skill " + target
-		case "ask":
-			return "Asking " + target
-		case "inspect":
-			return "Inspecting " + target
+		// Equivalent to the old fall-through to localizedGenericActivity with an
+		// empty target, minus the trailing space it produced.
+		if lang == LangZhCN {
+			return "运行"
 		}
+		return "Running"
+	}
+	if verb, ok := verbs[action]; ok {
+		return verb + " " + target
 	}
 	return localizedGenericActivity(lang, target)
 }
