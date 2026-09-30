@@ -96,34 +96,60 @@ func categoryDefaultTimeout(cat toolTimeoutCategory) time.Duration {
 	}
 }
 
+// timeoutCategoryByTool maps well-known tool names to their timeout category.
+// Prefix-based rules (mcp__, lsp_, git_) are handled separately in classifyTool;
+// exact matches here take precedence over prefixes (e.g. lsp_rename is an edit tool).
+var timeoutCategoryByTool = map[string]toolTimeoutCategory{
+	// catFileIO
+	"read_file":       catFileIO,
+	"multi_file_read": catFileIO,
+	"list_directory":  catFileIO,
+
+	// catSearch
+	"grep":         catSearch,
+	"search_files": catSearch,
+	"glob":         catSearch,
+	"code_search":  catSearch,
+
+	// catEdit
+	"edit_file":        catEdit,
+	"write_file":       catEdit,
+	"multi_edit_file":  catEdit,
+	"multi_file_edit":  catEdit,
+	"multi_file_write": catEdit,
+	"batch_replace":    catEdit,
+	"lsp_rename":       catEdit,
+	"file_ops":         catEdit,
+	"notebook_edit":    catEdit,
+
+	// catLSP
+	"code_health": catLSP,
+
+	// catWeb
+	"web_search": catWeb,
+	"web_fetch":  catWeb,
+
+	// catBrowser
+	"browser":       catBrowser,
+	"screenshot":    catBrowser,
+	"mobile_device": catBrowser,
+}
+
 // classifyTool returns the timeout category for a given tool name.
-// MCP tools are identified by the "mcp__" prefix.
+// MCP tools are identified by the "mcp__" prefix; LSP and git tools by
+// "lsp_"/"git_" prefixes.
 func classifyTool(toolName string) toolTimeoutCategory {
-	// MCP tools from external servers
 	if strings.HasPrefix(toolName, "mcp__") {
 		return catMCP
 	}
-
-	// Check well-known tool names
+	if cat, ok := timeoutCategoryByTool[toolName]; ok {
+		return cat
+	}
 	switch {
-	case toolName == "read_file" || toolName == "multi_file_read" || toolName == "list_directory":
-		return catFileIO
-	case toolName == "grep" || toolName == "search_files" || toolName == "glob" || toolName == "code_search":
-		return catSearch
-	case toolName == "edit_file" || toolName == "write_file" ||
-		toolName == "multi_edit_file" || toolName == "multi_file_edit" ||
-		toolName == "multi_file_write" || toolName == "batch_replace" ||
-		toolName == "lsp_rename" || toolName == "file_ops" ||
-		toolName == "notebook_edit":
-		return catEdit
-	case strings.HasPrefix(toolName, "lsp_") || toolName == "code_health":
+	case strings.HasPrefix(toolName, "lsp_"):
 		return catLSP
-	case toolName == "web_search" || toolName == "web_fetch":
-		return catWeb
 	case strings.HasPrefix(toolName, "git_"):
 		return catGit
-	case toolName == "browser" || toolName == "screenshot" || toolName == "mobile_device":
-		return catBrowser
 	default:
 		return catDefault
 	}
