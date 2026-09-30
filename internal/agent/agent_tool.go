@@ -614,45 +614,44 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 	}
 
-	if cpMgr != nil && len(plans) > 0 {
-		var outcome tool.MultiFileEditContent
-		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
-			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
-			for _, plan := range plans {
-				planByPath[plan.Path] = plan
-			}
-			for _, path := range outcome.WrittenPaths {
-				if plan, ok := planByPath[path]; ok {
-					cpMgr.Save(path, plan.OldContent, plan.NewContent, tc.Name)
-				}
+	// Parse the tool's JSON outcome ONCE and share it everywhere below.
+	// Previously the checkpoint save, the dry-run probe and the written-paths
+	// set each ran their own json.Unmarshal over the same result payload.
+	// #2143 P2: WrittenPaths is a pointer so "tool reports no such field" is
+	// distinguishable from "field present but empty" (i.e. all files failed).
+	var outcome struct {
+		DryRun       bool      `json:"dry_run"`
+		WrittenPaths *[]string `json:"written_paths"`
+	}
+	hasOutcome := json.Unmarshal([]byte(result.Content), &outcome) == nil
+	// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes
+	// NOTHING - the read-back comparison below must not flag every plan as a
+	// "post-write mismatch" on a preview.
+	isDryRun := hasOutcome && outcome.DryRun
+	writtenSet := map[string]bool(nil)
+	if hasOutcome && outcome.WrittenPaths != nil {
+		writtenSet = make(map[string]bool, len(*outcome.WrittenPaths))
+		for _, p := range *outcome.WrittenPaths {
+			writtenSet[p] = true
+		}
+	}
+
+	if cpMgr != nil && hasOutcome && outcome.WrittenPaths != nil && len(plans) > 0 {
+		planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
+		for _, plan := range plans {
+			planByPath[plan.Path] = plan
+		}
+		for _, path := range *outcome.WrittenPaths {
+			if plan, ok := planByPath[path]; ok {
+				cpMgr.Save(path, plan.OldContent, plan.NewContent, tc.Name)
 			}
 		}
 	}
 
 	// Post-write integrity check: validate each written file's content.
-	// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes
-	// NOTHING - running the read-back comparison against unwritten plans
-	// flagged every plan as a "post-write mismatch" with a wrong semantic
-	// ("write may be partial") on EVERY preview.
-	var dryProbe struct {
-		DryRun bool `json:"dry_run"`
-	}
-	isDryRun := json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
-	// #2143 P2: partial_success mode reports per-file outcomes -
-	// written_paths is authoritative (a pointer probe distinguishes "tool
-	// reports no such field" from "field present but empty", i.e. all
-	// files failed). Unwritten files keep their old disk content and must
-	// not trip the mismatch check.
-	var wpProbe struct {
-		WrittenPaths *[]string `json:"written_paths"`
-	}
-	writtenSet := map[string]bool(nil)
-	if json.Unmarshal([]byte(result.Content), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
-		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
-		for _, p := range *wpProbe.WrittenPaths {
-			writtenSet[p] = true
-		}
-	}
+	// isDryRun and writtenSet were derived from the single outcome parse
+	// above; unwritten files keep their old disk content and must not trip
+	// the mismatch check.
 	if !result.IsError && len(plans) > 0 && !isDryRun {
 		a.runPostWriteWarnings(&result, plans, func(path, oldContent, newContent string) string {
 			if writtenSet != nil && !writtenSet[path] {
