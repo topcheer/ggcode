@@ -210,6 +210,20 @@ func isCriticalGuidance(text string) bool {
 // only consume their one chance / quota when this returns true, otherwise
 // a saturated detector turn burns the quota with ZERO guidance delivered
 // (the detector goes permanently dark - "returned != delivered").
+// guidanceEmit centralizes the run loop's repeated
+// "if msg != " { injectGuidance(msg); msgs = contextManager.Messages() }"
+// sites. Semantics are preserved exactly: a non-empty msg is injected and
+// the conversation slice re-read (even when the budget suppressed delivery,
+// since other traffic may have compacted/refreshed the slice), while an
+// empty msg is a no-op returning the slice untouched.
+func (a *Agent) guidanceEmit(msg string, msgs []provider.Message) []provider.Message {
+	if msg == "" {
+		return msgs
+	}
+	a.injectGuidance(msg)
+	return a.contextManager.Messages()
+}
+
 func (a *Agent) injectGuidance(text string) bool {
 	if !a.guidanceBudget.allow(text) {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
