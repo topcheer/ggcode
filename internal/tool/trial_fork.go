@@ -231,7 +231,11 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	winner := pickWinner(results)
 	keep := -1
-	if winner >= 0 && results[winner].Commits > 0 {
+	if winner >= 0 && (results[winner].Commits > 0 || results[winner].VerifyPass) {
+		// #2795: a verify-passed winner must never be force-deleted -
+		// verify validates the worktree tree state itself, which may be
+		// entirely uncommitted (dirty). "usable" here now matches the
+		// anyUsable semantics below instead of contradicting them.
 		keep = winner
 		results[winner].Kept = true
 	}
@@ -476,6 +480,9 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 		fmt.Fprintf(&sb, "\nWINNER: trial %d (branch %s)\n", w.Index, w.Branch)
 		if w.Kept {
 			fmt.Fprintf(&sb, "winner worktree kept for inspection: %s\n", w.Worktree)
+		}
+		if w.Commits == 0 {
+			sb.WriteString("warning: winner passed verify but committed nothing; the work lives uncommitted in the kept worktree above - the branch diff and the git-apply hint below are EMPTY. Commit inside that worktree first, then adopt.\n")
 		}
 		fmt.Fprintf(&sb, "adopt (non-destructive, from your checkout): git diff %s..%s | git apply\n",
 			abbrevSHA(base), w.Branch)

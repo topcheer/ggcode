@@ -47,6 +47,8 @@ func initTrialRepo(t *testing.T) string {
 // trialStubRunner fakes a trial sub-agent: it writes a marker file and commits
 // inside the worktree named in the prompt, unless the prompt contains the
 // "fail-now" sentinel, in which case it errors like a stuck trial would.
+// The "dirty-trial" sentinel skips the commit (#2795 shape: verify-passed
+// work left uncommitted in the worktree).
 type trialStubRunner struct{}
 
 func (r *trialStubRunner) RunStream(ctx context.Context, prompt string, onEvent func(provider.StreamEvent)) error {
@@ -59,6 +61,9 @@ func (r *trialStubRunner) RunStream(ctx context.Context, prompt string, onEvent 
 	}
 	if err := os.WriteFile(filepath.Join(wt, "TRIAL_MARKER"), []byte("done\n"), 0o644); err != nil {
 		return err
+	}
+	if strings.Contains(prompt, "dirty-trial") {
+		return nil
 	}
 	for _, args := range [][]string{
 		{"-C", wt, "add", "-A"},
@@ -231,6 +236,65 @@ func TestTrialForkRunSelectsWinner(t *testing.T) {
 	if !strings.Contains(string(branches), "trial/direct-approach-t1") ||
 		!strings.Contains(string(branches), "trial/fail-now-t2") {
 		t.Fatalf("trial branches must be kept:\n%s", branches)
+	}
+}
+
+func TestTrialForkKeepsVerifyPassedUncommittedWinner(t *testing.T) {
+	root := initTrialRepo(t)
+	tl := newTrialTool(root, func(provider.TokenUsage) {})
+
+	// One uncommitted-but-verify-passed trial vs one hard failure: the dirty
+	// trial must win on VerifyPass (100 pts) and be kept despite Commits==0.
+	res, err := tl.Execute(context.Background(), trialInput(t, TrialForkInput{
+		Goal:           "add a marker file",
+		Strategies:     []string{"dirty-trial skip-commit", "fail-now"},
+		VerifyCmd:      "test -f TRIAL_MARKER",
+		TimeoutSeconds: 120,
+	}))
+	if err != nil {
+		t.Fatalf("system error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("expected usable result (verify passed), got error: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "WINNER: trial 1") {
+		t.Fatalf("verify-passed uncommitted trial should win:\n%s", res.Content)
+	}
+	if !strings.Contains(res.Content, "committed nothing") {
+		t.Fatalf("expected empty-adopt warning for uncommitted winner:\n%s", res.Content)
+	}
+
+	// #2795: the winner worktree (with its uncommitted TRIAL_MARKER) must
+	// survive cleanupWorktrees instead of being force-deleted.
+	out, err := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").CombinedOutput()
+	if err != nil {
+		t.Fatalf("worktree list: %v: %s", err, out)
+	}
+	if n := strings.Count(string(out), "worktree "); n != 2 { // main + kept winner
+		t.Fatalf("expected 2 worktrees (main + kept winner), got %d:\n%s", n, out)
+	}
+	// git may report the /private-prefixed realpath on macOS; normalize
+	// before comparing against root.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = root
+	}
+	found := false
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		p := strings.TrimPrefix(line, "worktree ")
+		if p == root || p == realRoot {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(p, "TRIAL_MARKER")); err != nil {
+			t.Fatalf("winner work lost from %s: %v", p, err)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("no trial worktree survived:\n%s", out)
 	}
 }
 
