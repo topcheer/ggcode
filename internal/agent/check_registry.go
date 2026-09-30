@@ -127,9 +127,8 @@ func init() {
 // recovery. Returns warnings sorted by registration order for deterministic
 // output.
 func runChecksParallel(ctx CheckContext) []string {
-	// Start each check run with a clean parse memo: entries must never
-	// outlive the write that produced them.
-	resetParseMemo()
+	// The parse memo was reset (and primed) by newCheckContext before this
+	// call; resetting again here would discard that primed parse.
 	applicable := make([]int, 0, len(allChecks))
 	for i, c := range allChecks {
 		if c.appliesTo(ctx.Lang) {
@@ -226,6 +225,10 @@ func formatWarnings(warnings []string) string {
 
 // newCheckContext builds a CheckContext, pre-parsing the Go AST if applicable.
 func newCheckContext(filePath, oldContent, newContent string) CheckContext {
+	// Each write starts with a clean parse memo: entries must never outlive
+	// the write that produced them.
+	resetParseMemo()
+
 	ctx := CheckContext{
 		FilePath:   filePath,
 		OldContent: oldContent,
@@ -234,8 +237,10 @@ func newCheckContext(filePath, oldContent, newContent string) CheckContext {
 	}
 
 	if ctx.Lang == LangGo && strings.TrimSpace(newContent) != "" {
-		fset := token.NewFileSet()
-		goAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+		// Prime the memo with an AllErrors parse: no registered check uses
+		// mode 0, so a bare parser.ParseFile here would be 100% wasted work,
+		// and every AllErrors-mode check now shares this cached parse.
+		goAST, fset, err := parseGoSource(filePath, newContent, parser.AllErrors)
 		if err == nil {
 			ctx.GoFset = fset
 			ctx.GoAST = goAST
