@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/similarity"
 )
 
 // DuplicateCheck checks whether a new memory entry would be a duplicate or
@@ -107,22 +108,7 @@ func tokenize(s string) map[string]struct{} {
 // jaccardSimilarity computes the Jaccard similarity coefficient between two
 // token sets: |intersection| / |union|. Returns 0 if both are empty.
 func jaccardSimilarity(a, b map[string]struct{}) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 0
-	}
-
-	intersection := 0
-	for token := range a {
-		if _, ok := b[token]; ok {
-			intersection++
-		}
-	}
-
-	union := len(a) + len(b) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
+	return similarity.Jaccard(a, b)
 }
 
 // FormatDuplicateWarning returns a human-readable warning message when a

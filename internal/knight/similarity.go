@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/topcheer/ggcode/internal/similarity"
 )
 
 // similarityTokenStopwords is a small English/code stopword list to reduce
@@ -65,20 +67,7 @@ func tokenizeForSimilarity(s string) map[string]struct{} {
 // jaccardSimilarity returns the size of the intersection over the size of the
 // union of two token sets, in the range [0, 1].
 func jaccardSimilarity(a, b map[string]struct{}) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	inter := 0
-	for tok := range a {
-		if _, ok := b[tok]; ok {
-			inter++
-		}
-	}
-	union := len(a) + len(b) - inter
-	if union == 0 {
-		return 0
-	}
-	return float64(inter) / float64(union)
+	return similarity.Jaccard(a, b)
 }
 
 // skillSimilarityFingerprint extracts a token set from a skill's identifying

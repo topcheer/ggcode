@@ -145,7 +145,7 @@ func (t *toolResultRedundancyState) recordResult(toolName, content string, itera
 		if len(entry.lines) < trMinLines {
 			continue
 		}
-		jaccard := trJaccard(lines, entry.lines)
+		jaccard := jaccardSimilarity(lines, entry.lines)
 		if jaccard >= trOverlapThreshold {
 			// Avoid re-warning on consecutive iterations.
 			// #1855 case 2: this compared EQUALITY (iteration ==
@@ -208,22 +208,4 @@ func trNormalize(content string) map[string]bool {
 		lines[line] = true
 	}
 	return lines
-}
-
-// trJaccard computes the Jaccard similarity between two line-sets.
-func trJaccard(a, b map[string]bool) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	intersection := 0
-	for k := range a {
-		if b[k] {
-			intersection++
-		}
-	}
-	union := len(a) + len(b) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
 }

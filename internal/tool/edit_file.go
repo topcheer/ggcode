@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/similarity"
 )
 
 // EditFile implements the edit_file tool for find-and-replace editing.
@@ -507,20 +509,7 @@ func tokenize(s string) map[string]struct{} {
 // jaccardSimilarity computes the Jaccard similarity between two token sets.
 // J(A,B) = |A ∩ B| / |A ∪ B|
 func jaccardSimilarity(a, b map[string]struct{}) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	intersection := 0
-	for token := range a {
-		if _, ok := b[token]; ok {
-			intersection++
-		}
-	}
-	union := len(a) + len(b) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
+	return similarity.Jaccard(a, b)
 }
 
 // visualizeWhitespace replaces tab characters with the literal string "<TAB>"

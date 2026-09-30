@@ -226,19 +226,19 @@ func TestTRJaccard(t *testing.T) {
 	b := map[string]bool{"x": true, "y": true, "w": true}
 
 	// Intersection: {x,y} = 2, Union: {x,y,z,w} = 4, Jaccard = 0.5
-	j := trJaccard(a, b)
+	j := jaccardSimilarity(a, b)
 	if math.Abs(j-0.5) > 1e-9 {
 		t.Errorf("expected Jaccard 0.5, got %.2f", j)
 	}
 
 	// Identical sets.
-	j = trJaccard(a, a)
+	j = jaccardSimilarity(a, a)
 	if math.Abs(j-1.0) > 1e-9 {
 		t.Errorf("identical sets should have Jaccard 1.0, got %.2f", j)
 	}
 
 	// Empty.
-	j = trJaccard(map[string]bool{}, map[string]bool{"a": true})
+	j = jaccardSimilarity(map[string]bool{}, map[string]bool{"a": true})
 	if math.Abs(j) > 1e-9 {
 		t.Errorf("empty set should have Jaccard 0, got %.2f", j)
 	}
