@@ -662,6 +662,10 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 			return 1
 		}
 	})
+	resolveDisplay := displayNameResolver
+	if resolveDisplay == nil {
+		resolveDisplay = func(v, e string) (string, string) { return v, e }
+	}
 	items := make([]inspectorPanelItem, 0, len(sessions))
 	for _, ses := range sessions {
 		if ses == nil {
@@ -683,10 +687,6 @@ func buildSessionInspectorItems(sessions []*session.Session, lang Language, stor
 			summaryParts = append(summaryParts, workspace)
 		} else if workspace != "" {
 			summaryParts = append(summaryParts, inspectorText(lang, "current_workspace"))
-		}
-		resolveDisplay := displayNameResolver
-		if resolveDisplay == nil {
-			resolveDisplay = func(v, e string) (string, string) { return v, e }
 		}
 		vendorDisplay, endpointDisplay := resolveDisplay(ses.Vendor, ses.Endpoint)
 		detail := []string{
@@ -1002,6 +1002,7 @@ func (m Model) inspectorLSPInstallItems() []inspectorPanelItem {
 	if m.inspectorPanel == nil {
 		return nil
 	}
+	lang := m.currentLanguage()
 	options := m.inspectorPanel.lspInstallOptions
 	items := make([]inspectorPanelItem, 0, len(options))
 	for _, option := range options {
@@ -1009,20 +1010,18 @@ func (m Model) inspectorLSPInstallItems() []inspectorPanelItem {
 		summary := option.Binary
 		if option.Recommended {
 			if summary == "" {
-				summary = inspectorText(m.currentLanguage(), "lsp_recommended")
+				summary = inspectorText(lang, "lsp_recommended")
 			} else {
-				summary += " • " + inspectorText(m.currentLanguage(), "lsp_recommended")
+				summary += " • " + inspectorText(lang, "lsp_recommended")
 			}
 		}
-		detailLines := []string{
-			util.FirstNonEmpty(title, m.inspectorPanel.lspLanguageName),
-			"",
-		}
+		detailLines := make([]string, 0, 6)
+		detailLines = append(detailLines, util.FirstNonEmpty(title, m.inspectorPanel.lspLanguageName), "")
 		if option.Binary != "" {
-			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_binary"), option.Binary))
+			detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(lang, "lsp_binary"), option.Binary))
 		}
-		detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(m.currentLanguage(), "lsp_install"), lspInstallOptionDetailLabel(option, m.currentLanguage())))
-		detailLines = append(detailLines, "", inspectorText(m.currentLanguage(), "lsp_install_enter_hint"))
+		detailLines = append(detailLines, fmt.Sprintf("%s: %s", inspectorText(lang, "lsp_install"), lspInstallOptionDetailLabel(option, lang)))
+		detailLines = append(detailLines, "", inspectorText(lang, "lsp_install_enter_hint"))
 		items = append(items, inspectorPanelItem{
 			ID:      option.ID,
 			Title:   title,
@@ -1249,6 +1248,12 @@ func inspectorText(lang Language, key string, args ...any) string {
 			msg = "↑/↓ 选择 • Enter 恢复 • A 全部工作区 • E 导出 • / 过滤 • Esc 关闭"
 		case "session_filter":
 			msg = "过滤: %s (Esc 清除)"
+		case "search_no_query":
+			msg = "用法：/search <关键词> — 在所有会话的消息内容中搜索"
+		case "search_no_results":
+			msg = "未找到匹配的会话。"
+		case "search_results":
+			msg = "找到 %d 条结果（来自 %d 个会话）"
 		case "hint_search":
 			msg = "↑/↓ 选择 • Enter 恢复该会话 • Esc 关闭"
 		case "hint_agents":
@@ -1421,11 +1426,11 @@ func inspectorText(lang Language, key string, args ...any) string {
 		case "session_filter":
 			msg = "Filter: %s (Esc to clear)"
 		case "search_no_query":
-			msg = "用法：/search <关键词> — 在所有会话的消息内容中搜索"
+			msg = "Usage: /search <keyword> — search message content across all sessions"
 		case "search_no_results":
-			msg = "未找到匹配的会话。"
+			msg = "No matching sessions found."
 		case "search_results":
-			msg = "找到 %d 条结果（来自 %d 个会话）"
+			msg = "Found %d results (from %d sessions)"
 		case "hint_search":
 			msg = "↑/↓ select • Enter resume session • Esc close"
 		case "hint_agents":
