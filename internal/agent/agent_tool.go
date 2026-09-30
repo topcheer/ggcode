@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/audit"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -550,14 +551,8 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 
 	plans, err := previewer.PreviewChanges(tc.Arguments)
 	if err == nil && diffFn != nil {
-		if diffText, hasChanges := buildMultiFileDiffText(plans); hasChanges {
-			label := fmt.Sprintf("%d files", len(plans))
-			if len(plans) == 1 {
-				label = plans[0].Path
-			}
-			if !diffFn(ctx, label, diffText) {
-				return tool.Result{Content: "Multi-file write cancelled by user.", IsError: true}
-			}
+		if cancelled := confirmMultiFileDiff(ctx, diffFn, plans); cancelled {
+			return tool.Result{Content: "Multi-file write cancelled by user.", IsError: true}
 		}
 	}
 
@@ -570,42 +565,13 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// before any file is written. Blocks the entire batch if any file has a
 	// guaranteed-failure condition (syntax error, corruption, etc.).
 	if err == nil && len(plans) > 0 {
-		planBatch := make([]fileEditPlan, 0, len(plans))
-		for _, p := range plans {
-			if diff.HasChanges(p.OldContent, p.NewContent) {
-				planBatch = append(planBatch, fileEditPlan{
-					Path:       p.Path,
-					OldContent: p.OldContent,
-					NewContent: p.NewContent,
-				})
-			}
-		}
-		if blockers := dryRunValidateBatch(planBatch); len(blockers) > 0 {
-			var b strings.Builder
-			b.WriteString("[Multi-file edit blocked by pre-write validation]\n")
-			b.WriteString("One or more files have fatal issues. NO files were modified.\n\n")
-			for path, msg := range blockers {
-				b.WriteString(fmt.Sprintf("File: %s\n%s\n\n", path, msg))
-			}
-			return tool.Result{Content: strings.TrimRight(b.String(), "\n"), IsError: true}
+		if blocked := dryRunValidateMultiFile(plans); blocked != "" {
+			return tool.Result{Content: blocked, IsError: true}
 		}
 	}
 
-	// #1786 case 1 (multi-file leg): same TOCTOU as the single-file path -
-	// plan.OldContent comes from the PreviewChanges first read, and the
-	// diffConfirm pause above opens an arbitrary window for external
-	// writers. Refresh each stale plan baseline so per-file undo restores
-	// the true pre-write state instead of erasing external changes.
-	for i := range plans {
-		cur, rerr := os.ReadFile(plans[i].Path)
-		if rerr != nil {
-			continue // unreadable now = executor will surface its own error
-		}
-		if string(cur) != plans[i].OldContent {
-			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
-			plans[i].OldContent = string(cur)
-		}
-	}
+	// #1786 case 1 (multi-file leg): see refreshStalePlanBaselines.
+	refreshStalePlanBaselines(plans)
 
 	multiStart := time.Now()
 	result, err := a.safeExecute(t, ctx, tc.Arguments)
@@ -614,45 +580,16 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		return tool.Result{Content: fmt.Sprintf("tool error: %v%s", err, cancellationFlattenNote(err)), IsError: true}
 	}
 
-	if cpMgr != nil && len(plans) > 0 {
-		var outcome tool.MultiFileEditContent
-		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
-			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
-			for _, plan := range plans {
-				planByPath[plan.Path] = plan
-			}
-			for _, path := range outcome.WrittenPaths {
-				if plan, ok := planByPath[path]; ok {
-					cpMgr.Save(path, plan.OldContent, plan.NewContent, tc.Name)
-				}
-			}
-		}
-	}
+	saveMultiFileCheckpoints(cpMgr, tc.Name, plans, result.Content)
 
 	// Post-write integrity check: validate each written file's content.
 	// #2143 P1: a dry-run preview (batch_replace dry_run=true) writes
 	// NOTHING - running the read-back comparison against unwritten plans
 	// flagged every plan as a "post-write mismatch" with a wrong semantic
 	// ("write may be partial") on EVERY preview.
-	var dryProbe struct {
-		DryRun bool `json:"dry_run"`
-	}
-	isDryRun := json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
-	// #2143 P2: partial_success mode reports per-file outcomes -
-	// written_paths is authoritative (a pointer probe distinguishes "tool
-	// reports no such field" from "field present but empty", i.e. all
-	// files failed). Unwritten files keep their old disk content and must
-	// not trip the mismatch check.
-	var wpProbe struct {
-		WrittenPaths *[]string `json:"written_paths"`
-	}
-	writtenSet := map[string]bool(nil)
-	if json.Unmarshal([]byte(result.Content), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
-		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
-		for _, p := range *wpProbe.WrittenPaths {
-			writtenSet[p] = true
-		}
-	}
+	// #2143 P1: skip integrity check for dry-run previews; #2143 P2: see
+	// multiFileWrittenSet.
+	writtenSet, isDryRun := multiFileWrittenSet(result.Content)
 	if !result.IsError && len(plans) > 0 && !isDryRun {
 		a.runPostWriteWarnings(&result, plans, func(path, oldContent, newContent string) string {
 			if writtenSet != nil && !writtenSet[path] {
@@ -685,19 +622,125 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		a.runPostWriteWarnings(&result, plans, checkDebugStmts)
 	}
 
+	appendMultiFilePostHooks(hookCfg, env, &result, multiDur)
+
+	return result
+}
+
+// confirmMultiFileDiff shows the aggregated multi-file diff and reports
+// whether the user declined it.
+func confirmMultiFileDiff(ctx context.Context, diffFn func(context.Context, string, string) bool, plans []tool.PlannedFileEdit) bool {
+	if diffText, hasChanges := buildMultiFileDiffText(plans); hasChanges {
+		label := fmt.Sprintf("%d files", len(plans))
+		if len(plans) == 1 {
+			label = plans[0].Path
+		}
+		return !diffFn(ctx, label, diffText)
+	}
+	return false
+}
+
+// dryRunValidateMultiFile runs the pre-write dry-run validation over all
+// changed plans and returns a blocking error message, or "".
+func dryRunValidateMultiFile(plans []tool.PlannedFileEdit) string {
+	planBatch := make([]fileEditPlan, 0, len(plans))
+	for _, p := range plans {
+		if diff.HasChanges(p.OldContent, p.NewContent) {
+			planBatch = append(planBatch, fileEditPlan{
+				Path:       p.Path,
+				OldContent: p.OldContent,
+				NewContent: p.NewContent,
+			})
+		}
+	}
+	if blockers := dryRunValidateBatch(planBatch); len(blockers) > 0 {
+		var b strings.Builder
+		b.WriteString("[Multi-file edit blocked by pre-write validation]\n")
+		b.WriteString("One or more files have fatal issues. NO files were modified.\n\n")
+		for path, msg := range blockers {
+			b.WriteString(fmt.Sprintf("File: %s\n%s\n\n", path, msg))
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+	return ""
+}
+
+// refreshStalePlanBaselines re-reads each plan's file so per-file undo
+// restores the true pre-write state instead of erasing external changes
+// (#1786 case 1, multi-file leg): plan.OldContent comes from the
+// PreviewChanges first read, and the diffConfirm pause opens an arbitrary
+// window for external writers.
+func refreshStalePlanBaselines(plans []tool.PlannedFileEdit) {
+	for i := range plans {
+		cur, rerr := os.ReadFile(plans[i].Path)
+		if rerr != nil {
+			continue // unreadable now = executor will surface its own error
+		}
+		if string(cur) != plans[i].OldContent {
+			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
+			plans[i].OldContent = string(cur)
+		}
+	}
+}
+
+// saveMultiFileCheckpoints records per-file undo checkpoints for every
+// path the tool actually wrote.
+func saveMultiFileCheckpoints(cpMgr *checkpoint.Manager, toolName string, plans []tool.PlannedFileEdit, resultContent string) {
+	if cpMgr == nil || len(plans) == 0 {
+		return
+	}
+	var outcome tool.MultiFileEditContent
+	if err := json.Unmarshal([]byte(resultContent), &outcome); err != nil {
+		return
+	}
+	planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
+	for _, plan := range plans {
+		planByPath[plan.Path] = plan
+	}
+	for _, path := range outcome.WrittenPaths {
+		if plan, ok := planByPath[path]; ok {
+			cpMgr.Save(path, plan.OldContent, plan.NewContent, toolName)
+		}
+	}
+}
+
+// multiFileWrittenSet parses the tool result for dry_run and authoritative
+// written_paths markers. writtenSet is nil when the tool reports no
+// written_paths field (#2143 P2: a pointer probe distinguishes "tool
+// reports no such field" from "field present but empty", i.e. all files
+// failed); isDryRun is true for dry-run previews that write nothing
+// (#2143 P1).
+func multiFileWrittenSet(resultContent string) (writtenSet map[string]bool, isDryRun bool) {
+	var dryProbe struct {
+		DryRun bool `json:"dry_run"`
+	}
+	isDryRun = json.Unmarshal([]byte(resultContent), &dryProbe) == nil && dryProbe.DryRun
+	var wpProbe struct {
+		WrittenPaths *[]string `json:"written_paths"`
+	}
+	if json.Unmarshal([]byte(resultContent), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
+		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
+		for _, p := range *wpProbe.WrittenPaths {
+			writtenSet[p] = true
+		}
+	}
+	return writtenSet, isDryRun
+}
+
+// appendMultiFilePostHooks builds the post-tool-use hook environment and
+// appends any hook output to the result.
+func appendMultiFilePostHooks(hookCfg hooks.HookConfig, env hooks.HookEnv, result *tool.Result, dur time.Duration) {
 	postEnv := env
 	postEnv.ToolSuccess = !result.IsError
 	if result.IsError {
 		postEnv.ToolError = truncateString(result.Content, 500)
 	}
 	postEnv.ToolResult = truncateString(result.Content, 4096)
-	postEnv.ToolDuration = multiDur.String()
+	postEnv.ToolDuration = dur.String()
 	postResult := hooks.RunPostHooks(hookCfg.PostToolUse, postEnv)
 	if postResult.Output != "" {
 		result.Content += "\n" + postResult.Output
 	}
-
-	return result
 }
 
 // runPostWriteWarnings runs checker over each changed plan and appends
