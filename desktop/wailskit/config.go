@@ -275,36 +275,27 @@ func GetFullConfig() (*FullConfig, error) {
 // ─── Config Update Methods ────────────────────────────────
 
 // UpdateConfig applies a map of config values and saves.
-func UpdateConfig(values map[string]interface{}) error {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	cfg := globalCfg
-	if cfg == nil {
-		return fmt.Errorf("config not initialized")
-	}
-
-	// #740: validate before mutate. Four checks inside the mutation chain
-	// below can fail and return mid-way (vendor/endpoint existence for
-	// baseURL, duration parsing for the two timeouts), leaving fields that
-	// were already written resident in the shared in-memory cfg — reported by
-	// GetFullConfig, picked up by the next chat session without Save, and
-	// silently persisted by the next successful save through any of the four
-	// Save paths. All fallible validation now happens before a single field
-	// is touched, so a failed update leaves the config exactly as it was.
+// validateUpdateValues runs every fallible check BEFORE any field is
+// mutated. #740: validation inside the mutation chain could fail mid-way and
+// leave already-written fields resident in the shared in-memory cfg — picked
+// up by the next chat session without Save and silently persisted by the next
+// successful save. All fallible validation happens here so a failed update
+// leaves the config exactly as it was.
+//
+// Order matters for error precedence: duration checks run before the
+// vendor/endpoint existence check (observable in which error a bad map with
+// multiple problems reports first) — keep this order stable.
+func validateUpdateValues(cfg *config.Config, values map[string]interface{}) error {
 	if v, ok := values["subAgentTimeout"].(string); ok {
-		d, err := time.ParseDuration(v)
-		if err != nil {
+		if _, err := time.ParseDuration(v); err != nil {
 			// Silent success on a typo'd duration hid the failure (#206).
 			return fmt.Errorf("invalid subAgentTimeout %q (use e.g. \"45s\"): %w", v, err)
 		}
-		_ = d // applied below, after all validation passes
 	}
 	if v, ok := values["swarmTimeout"].(string); ok {
-		d, err := time.ParseDuration(v)
-		if err != nil {
+		if _, err := time.ParseDuration(v); err != nil {
 			return fmt.Errorf("invalid swarmTimeout %q (use e.g. \"45s\"): %w", v, err)
 		}
-		_ = d
 	}
 	if v, ok := values["baseURL"].(string); ok && v != "" {
 		// Mirror the effective vendor/endpoint the mutation chain will use:
@@ -326,7 +317,68 @@ func UpdateConfig(values map[string]interface{}) error {
 			}
 		}
 	}
+	return nil
+}
 
+// applyEndpointBaseURL writes a new base_url into the current endpoint slot.
+// Existence was pre-validated by validateUpdateValues (#740); the not-found
+// returns below are defense in depth for a config mutated between validation
+// and this write.
+func applyEndpointBaseURL(cfg *config.Config, v string) error {
+	if cfg.Vendor == "" || cfg.Endpoint == "" {
+		return nil
+	}
+	if cfg.Vendors == nil {
+		cfg.Vendors = make(map[string]config.VendorConfig)
+	}
+	vc, ok := cfg.Vendors[cfg.Vendor]
+	if !ok {
+		return fmt.Errorf("vendor %q not found", cfg.Vendor)
+	}
+	if vc.Endpoints == nil {
+		vc.Endpoints = make(map[string]config.EndpointConfig)
+	}
+	ep, ok := vc.Endpoints[cfg.Endpoint]
+	if !ok {
+		return fmt.Errorf("endpoint %q not found in vendor %q", cfg.Endpoint, cfg.Vendor)
+	}
+	ep.BaseURL = v
+	vc.Endpoints[cfg.Endpoint] = ep
+	cfg.Vendors[cfg.Vendor] = vc
+	return nil
+}
+
+// applyImpersonatePreset routes the preset change through the same validation
+// and package-global update as ApplyImpersonation. Writing cfg directly left
+// activeImpersonation stale, so the provider rebuild triggered by this update
+// still baked the OLD headers into the new provider; and an unknown preset id
+// persisted silently and died at next init (#1815 case 2; #614's guard only
+// covered the ApplyImpersonation path).
+func applyImpersonatePreset(cfg *config.Config, v string) error {
+	if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
+		return fmt.Errorf("unknown impersonation preset %q", v)
+	}
+	var preset *provider.ImpersonationPreset
+	if v != "none" && v != "" {
+		for _, p := range provider.DefaultImpersonationPresets() {
+			if p.ID == v {
+				preset = &p
+				break
+			}
+		}
+	}
+	// Preserve CustomHeaders/CustomVersion already in cfg; version falls back
+	// to the persisted one so SetActiveImpersonation sees the same state the
+	// next cold init would rebuild from.
+	provider.SetActiveImpersonation(preset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
+	cfg.Impersonation.Preset = v
+	return nil
+}
+
+// applyIdentityAndEndpointUpdate applies vendor/endpoint/model. baseURL is
+// applied after vendor/endpoint because it writes into the slot those fields
+// select.
+func applyIdentityAndEndpointUpdate(cfg *config.Config, values map[string]interface{}) error {
 	if v, ok := values["vendor"].(string); ok && v != "" {
 		cfg.Vendor = v
 	}
@@ -336,6 +388,18 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["model"].(string); ok && v != "" {
 		cfg.Model = v
 	}
+	if v, ok := values["baseURL"].(string); ok && v != "" {
+		if err := applyEndpointBaseURL(cfg, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyBehaviorUpdate applies agent-behavior scalars (language/mode/prompt)
+// plus the impersonation-custom, sub-agent, swarm, a2a, and knight domains.
+// Everything here is infallible; validation already ran (#740).
+func applyBehaviorUpdate(cfg *config.Config, values map[string]interface{}) {
 	if v, ok := values["language"].(string); ok {
 		cfg.Language = v
 	}
@@ -345,68 +409,14 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["defaultMode"].(string); ok {
 		cfg.DefaultMode = v
 	}
-	if v, ok := values["baseURL"].(string); ok && v != "" {
-		// Update the current endpoint's base_url. Existence was pre-validated
-		// above (#740); only the write happens here.
-		if cfg.Vendor != "" && cfg.Endpoint != "" {
-			if cfg.Vendors == nil {
-				cfg.Vendors = make(map[string]config.VendorConfig)
-			}
-			vc, ok := cfg.Vendors[cfg.Vendor]
-			if !ok {
-				return fmt.Errorf("vendor %q not found", cfg.Vendor)
-			}
-			if vc.Endpoints == nil {
-				vc.Endpoints = make(map[string]config.EndpointConfig)
-			}
-			ep, ok := vc.Endpoints[cfg.Endpoint]
-			if !ok {
-				return fmt.Errorf("endpoint %q not found in vendor %q", cfg.Endpoint, cfg.Vendor)
-			}
-			ep.BaseURL = v
-			vc.Endpoints[cfg.Endpoint] = ep
-			cfg.Vendors[cfg.Vendor] = vc
-		}
-	}
 	if v, ok := values["maxIterations"].(float64); ok {
 		cfg.MaxIterations = int(v)
 	}
 	if v, ok := values["probeContext"].(bool); ok {
 		cfg.ProbeContext = v
 	}
-	if v, ok := values["impersonatePreset"].(string); ok {
-		// #1815 case 2: this path must go through the same validation and
-		// package-global update as ApplyImpersonation. Writing cfg directly
-		// left activeImpersonation stale, so the provider rebuild that
-		// App.UpdateConfig triggers still baked the OLD headers into the new
-		// provider; and an unknown preset id persisted silently and died at
-		// next init (#614's guard only covered the ApplyImpersonation path).
-		if v != "none" && v != "" && provider.FindPresetByID(v) == nil {
-			return fmt.Errorf("unknown impersonation preset %q", v)
-		}
-		var preset *provider.ImpersonationPreset
-		if v != "none" && v != "" {
-			for _, p := range provider.DefaultImpersonationPresets() {
-				if p.ID == v {
-					preset = &p
-					break
-				}
-			}
-		}
-		// Preserve CustomHeaders/CustomVersion already in cfg; version falls
-		// back to the persisted one so SetActiveImpersonation sees the same
-		// state the next cold init would rebuild from.
-		provider.SetActiveImpersonation(preset, cfg.Impersonation.CustomVersion, cfg.Impersonation.CustomHeaders)
-		cfg.Impersonation.Preset = v
-	}
 	if v, ok := values["impersonateCustomVersion"].(string); ok {
 		cfg.Impersonation.CustomVersion = v
-	}
-	if v, ok := values["streamEncoder"].(string); ok {
-		cfg.Stream.HardwareEncoder = v
-	}
-	if v, ok := values["streamFPS"].(float64); ok {
-		cfg.Stream.FPS = int(v)
 	}
 	if v, ok := values["subAgentMaxConcurrent"].(float64); ok {
 		cfg.SubAgents.MaxConcurrent = int(v)
@@ -420,21 +430,21 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["swarmInboxSize"].(float64); ok {
 		cfg.Swarm.InboxSize = int(v)
 	}
+	if v, ok := values["subAgentTimeout"].(string); ok {
+		// Pre-parsed by validateUpdateValues (#740); cannot fail here.
+		d, _ := time.ParseDuration(v)
+		cfg.SubAgents.Timeout = d
+	}
+	if v, ok := values["swarmTimeout"].(string); ok {
+		// Pre-parsed by validateUpdateValues (#740); cannot fail here.
+		d, _ := time.ParseDuration(v)
+		cfg.Swarm.TeammateTimeout = d
+	}
 	if v, ok := values["a2aDisabled"].(bool); ok {
 		cfg.A2A.Disabled = v
 	}
 	if v, ok := values["a2aPort"].(float64); ok {
 		cfg.A2A.Port = int(v)
-	}
-	if v, ok := values["subAgentTimeout"].(string); ok {
-		// Pre-parsed above (#740); ParseDuration cannot fail here.
-		d, _ := time.ParseDuration(v)
-		cfg.SubAgents.Timeout = d
-	}
-	if v, ok := values["swarmTimeout"].(string); ok {
-		// Pre-parsed above (#740); ParseDuration cannot fail here.
-		d, _ := time.ParseDuration(v)
-		cfg.Swarm.TeammateTimeout = d
 	}
 	if v, ok := values["a2aHost"].(string); ok {
 		cfg.A2A.Host = v
@@ -445,9 +455,47 @@ func UpdateConfig(values map[string]interface{}) error {
 	if v, ok := values["knightTrustLevel"].(string); ok {
 		cfg.KnightConfig.TrustLevel = v
 	}
+}
+
+// applyStreamAndUIUpdate applies the stream-capture and UI-preference fields.
+func applyStreamAndUIUpdate(cfg *config.Config, values map[string]interface{}) {
+	if v, ok := values["streamEncoder"].(string); ok {
+		cfg.Stream.HardwareEncoder = v
+	}
+	if v, ok := values["streamFPS"].(float64); ok {
+		cfg.Stream.FPS = int(v)
+	}
 	if v, ok := values["sidebarVisible"].(bool); ok {
 		cfg.UI.SidebarVisible = &v
 	}
+}
+
+func UpdateConfig(values map[string]interface{}) error {
+	globalMu.Lock()
+	defer globalMu.Unlock()
+	cfg := globalCfg
+	if cfg == nil {
+		return fmt.Errorf("config not initialized")
+	}
+
+	// #740: validate before mutate (see validateUpdateValues for rationale
+	// and error-precedence order).
+	if err := validateUpdateValues(cfg, values); err != nil {
+		return err
+	}
+
+	// vendor/endpoint/model first (baseURL writes into the slot they select),
+	// then the preset switch (may fail), then the infallible scalar domains.
+	if err := applyIdentityAndEndpointUpdate(cfg, values); err != nil {
+		return err
+	}
+	if v, ok := values["impersonatePreset"].(string); ok {
+		if err := applyImpersonatePreset(cfg, v); err != nil {
+			return err
+		}
+	}
+	applyBehaviorUpdate(cfg, values)
+	applyStreamAndUIUpdate(cfg, values)
 
 	if err := cfg.Save(); err != nil {
 		return err
