@@ -188,7 +188,7 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 		uniq := dedupBrief(targets)
 		tList := strings.Join(uniq, ", ")
 		if len(tList) > 80 {
-			tList = tList[:77] + "..."
+			tList = truncateBrief(tList, 80)
 		}
 		sb.WriteString(fmt.Sprintf("  - %s (%s): %s\n", k.tool, label, tList))
 		gIdx++
@@ -266,7 +266,10 @@ func truncateBrief(s string, max int) string {
 		return s
 	}
 	if len(s) > max {
-		return s[:max-3] + "..."
+		// Rune-safe truncation (see utf8-safe-truncation rule): raw byte
+		// slicing here corrupted multi-byte paths/commands (CJK, emoji) that
+		// get injected into LLM context. Reuses the same-package helper.
+		return truncateRunesSafe(s, max-3) + "..."
 	}
 	return s
 }
