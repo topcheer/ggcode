@@ -452,6 +452,53 @@ func (b *ChatBridge) BindShareCommands(broker *tunnel.Broker, onLanguage func(st
 	})
 }
 
+// drainQueuedAfterSend consumes one queued message (if any) after a run
+// finishes, replaying it with its OWN source and echo-exclusion pair
+// (FIFO pop, index-aligned with the queue — #461/#475): visible messages are
+// replayed through sendMessageData so mobile Meta (attachments/source)
+// survives, hidden ones go through SendHiddenText. Called from the defers of
+// sendMessageData and SendContent (#514) so both run types share one drain
+// path — the previously duplicated blocks had drifted (SendContent missed the
+// tunnel "Processing queued message..." notice), and the old plain SendMessage
+// left pendingSource[0] behind for the NEXT consume — source misattribution
+// (desktop msgs tagged source=im, Telegram echo) and unbounded slice skew
+// (#477 class).
+func (b *ChatBridge) drainQueuedAfterSend() {
+	pending, ok := b.drainPending()
+	if !ok {
+		return
+	}
+	// Notify frontend that a pending message is being consumed
+	if b.OnStreamEvent != nil {
+		b.OnStreamEvent("pending_consumed", nil)
+	}
+	if pending.Hidden {
+		_ = b.SendHiddenText(pending.Text)
+		return
+	}
+	if broker := b.currentTunnelBroker(); broker != nil {
+		broker.PushSystemMessage("Processing queued message...")
+	}
+	data := tunnel.MessageData{Text: pending.Text}
+	src := "desktop"
+	exclude := ""
+	if pending.Meta != nil {
+		data = *pending.Meta
+		src = "mobile"
+	}
+	b.mu.Lock()
+	if len(b.pendingSource) > 0 {
+		src = b.pendingSource[0]
+		b.pendingSource = b.pendingSource[1:]
+	}
+	if len(b.pendingExclude) > 0 {
+		exclude = b.pendingExclude[0]
+		b.pendingExclude = b.pendingExclude[1:]
+	}
+	b.mu.Unlock()
+	_ = b.sendMessageData(data, src, exclude)
+}
+
 func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, excludeAdapter string) error {
 	userMsg := strings.TrimSpace(data.Text)
 	if userMsg == "" {
@@ -508,42 +555,7 @@ func (b *ChatBridge) sendMessageData(data tunnel.MessageData, source string, exc
 		b.mu.Unlock()
 
 		// Process queued messages (mirrors Fyne line 906-919)
-		if pending, ok := b.drainPending(); ok {
-			// Notify frontend that a pending message is being consumed
-			if b.OnStreamEvent != nil {
-				b.OnStreamEvent("pending_consumed", nil)
-			}
-			if pending.Hidden {
-				_ = b.SendHiddenText(pending.Text)
-			} else {
-				if broker := b.currentTunnelBroker(); broker != nil {
-					broker.PushSystemMessage("Processing queued message...")
-				}
-				data := tunnel.MessageData{Text: pending.Text}
-				src := "desktop"
-				exclude := ""
-				if pending.Meta != nil {
-					data = *pending.Meta
-					src = "mobile"
-				}
-				// #461/#475: restore this queued message's OWN source and
-				// echo-exclusion (FIFO pop, index-aligned with the queue) — an
-				// IM-sourced message keeps source="im" so the exclude adapter
-				// is actually consumed; the user never sees their own message
-				// echoed back on the adapter they sent from.
-				b.mu.Lock()
-				if len(b.pendingSource) > 0 {
-					src = b.pendingSource[0]
-					b.pendingSource = b.pendingSource[1:]
-				}
-				if len(b.pendingExclude) > 0 {
-					exclude = b.pendingExclude[0]
-					b.pendingExclude = b.pendingExclude[1:]
-				}
-				b.mu.Unlock()
-				_ = b.sendMessageData(data, src, exclude)
-			}
-		}
+		b.drainQueuedAfterSend()
 	}()
 
 	if b.agent == nil {
@@ -4453,40 +4465,9 @@ func (b *ChatBridge) SendContent(content []provider.ContentBlock) error {
 		b.cancel = nil
 		b.mu.Unlock()
 
-		if pending, ok := b.drainPending(); ok {
-			if b.OnStreamEvent != nil {
-				b.OnStreamEvent("pending_consumed", nil)
-			}
-			if pending.Hidden {
-				_ = b.SendHiddenText(pending.Text)
-			} else {
-				// #514: mirror sendMessageData's drain path (#461/#475) — a
-				// visible queued message must pop its OWN source/exclude pair
-				// (FIFO, index-aligned) and replay its tunnel.MessageData via
-				// sendMessageData so mobile Meta (attachments/source) survives.
-				// The old plain SendMessage left pendingSource[0] behind for the
-				// NEXT consume — source misattribution (desktop msgs tagged
-				// source=im, Telegram echo) and unbounded slice skew (#477 class).
-				data := tunnel.MessageData{Text: pending.Text}
-				src := "desktop"
-				exclude := ""
-				if pending.Meta != nil {
-					data = *pending.Meta
-					src = "mobile"
-				}
-				b.mu.Lock()
-				if len(b.pendingSource) > 0 {
-					src = b.pendingSource[0]
-					b.pendingSource = b.pendingSource[1:]
-				}
-				if len(b.pendingExclude) > 0 {
-					exclude = b.pendingExclude[0]
-					b.pendingExclude = b.pendingExclude[1:]
-				}
-				b.mu.Unlock()
-				_ = b.sendMessageData(data, src, exclude)
-			}
-		}
+		// #514: same replay path as sendMessageData's drain — the queued
+		// message keeps its OWN source/exclude pair and mobile Meta.
+		b.drainQueuedAfterSend()
 	}()
 
 	if b.agent == nil {
