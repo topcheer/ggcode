@@ -932,39 +932,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// Find the last message from the snapshot in live messages using its ID.
 	// Everything after that message is "extra" (arrived during compaction)
 	// and must be preserved. Everything before gets replaced by the summary.
-	extraStart := 0
-	anchorMissing := false
-	if snapshot.LastMsgID != "" {
-		// Scan for the last snapshot message by ID.
-		foundIdx := -1
-		for i, msg := range m.messages {
-			if msg.ID == snapshot.LastMsgID {
-				foundIdx = i
-			}
-		}
-		if foundIdx >= 0 {
-			extraStart = foundIdx + 1
-		} else {
-			// #718: LastMsgID not found — messages were removed during the
-			// compaction window (rewind/clear/another compaction). The old
-			// OrigLen fallback silently replaced every live message at index
-			// >= OrigLen whenever removals were balanced by appends (equal
-			// length passes the shrink guard below), so messages that arrived
-			// during the window were swallowed by the lossy summary. The
-			// anchor ID is the ONLY reliable way to tell snapshot messages
-			// apart from window arrivals; when it is gone, refuse to apply.
-			// Both old fallbacks (OrigLen / len(messages)) fed the same
-			// silent-loss path, so they are removed entirely.
-			anchorMissing = true
-		}
-	} else {
-		// No LastMsgID (old snapshot) — fall back to OrigLen.
-		if snapshot.OrigLen >= 0 && snapshot.OrigLen <= len(m.messages) {
-			extraStart = snapshot.OrigLen
-		} else {
-			extraStart = len(m.messages)
-		}
-	}
+	extraStart, anchorMissing := resolveCompactAnchor(snapshot, m.messages)
 	if extraStart > len(m.messages) {
 		extraStart = len(m.messages)
 	}
@@ -973,22 +941,12 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 
 	if anchorMissing {
 		// #718: refusing to apply is mandatory (we cannot tell snapshot
-		// messages from window arrivals), but the CLASSIFICATION must reuse
-		// the #663 classifier so the agent-side cooldown semantics stay
-		// intact: benignRemoval (orphan cleanup, retry truncation) keeps the
-		// cooldown (BenignTrim) — the live context is still essentially the
-		// one that warranted compaction; userReset (Clear/rewind/another
-		// compaction) refunds it (UserReset); unknown defaults to UserReset,
-		// the pre-#663 safe direction. Orphan cleanup can remove the anchor
-		// message itself (zz_issue702_test.go), which is why this branch —
-		// not just the length guard — needs the classifier.
-		if m.userReset {
-			m.lastReject = CompactRejectUserReset
-		} else if m.benignRemoval {
-			m.lastReject = CompactRejectBenignTrim
-		} else {
-			m.lastReject = CompactRejectUserReset
-		}
+		// messages from window arrivals). The classification reuses the #663
+		// window-mutation classifier so agent-side cooldown semantics stay
+		// intact. Orphan cleanup can remove the anchor message itself
+		// (zz_issue702_test.go), which is why this branch — not just the
+		// length guard — needs the classifier.
+		m.classifyWindowShrinkLocked()
 		debug.Log("ctx", "ApplyCompactResult: REJECT anchor-missing (%s): LastMsgID %q not in live msgs (liveMsgs=%d, snapshotMsgs=%d) — removed during compaction window; refusing to apply",
 			m.lastReject, snapshot.LastMsgID, len(m.messages), len(snapshot.Messages))
 		n := m.tokenCountLocked()
@@ -1006,24 +964,10 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// agent-side liveShrunk refund branch (#612/#633) unreachable outside
 	// mocks. len(extraStart) growth (messages appended) is unaffected.
 	if len(m.messages) < len(snapshot.Messages) {
-		// #663: classify the shrink. userReset (Clear/rewind/another
-		// compaction) is a semantic reset — the agent may refund the precompact
-		// cooldown because the context that triggered compaction no longer
-		// exists. benignRemoval (retry truncation, orphan cleanup, reconcile
-		// rebuild) is bookkeeping — the live context is still essentially the
-		// one that warranted compaction, so the cooldown MUST stay, otherwise
-		// maybeAutoCompact reschedules a redundant full-context summarization
-		// every turn (retry storms amplified this into repeated wasted LLM
-		// calls). Unknown (neither flag set — e.g. a Manager subclass removing
-		// messages some other way) defaults to userReset: refunding is the
-		// pre-#663 behavior and the safe direction for #612/#651 compat.
-		if m.userReset {
-			m.lastReject = CompactRejectUserReset
-		} else if m.benignRemoval {
-			m.lastReject = CompactRejectBenignTrim
-		} else {
-			m.lastReject = CompactRejectUserReset
-		}
+		// #663: classify the shrink with the shared window-mutation
+		// classifier (see classifyWindowShrinkLocked) so the agent-side
+		// cooldown semantics stay intact for #612/#651 compat.
+		m.classifyWindowShrinkLocked()
 		debug.Log("ctx", "ApplyCompactResult: REJECT live-shrunk (%s): liveMsgs=%d < snapshotMsgs=%d (messages removed during compaction window)",
 			m.lastReject, len(m.messages), len(snapshot.Messages))
 		// Unlock before returning — this early return sat between Lock() and
@@ -1040,22 +984,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// Using a slightly stale summary is always better than discarding the
 	// result and never compacting (which leads to hitting the context limit).
 	if m.version != snapshot.Version {
-		mismatches := 0
-		for i := range snapshot.Messages {
-			if i >= len(m.messages) {
-				mismatches++
-				continue
-			}
-			if snapshot.Messages[i].Role == "system" && m.messages[i].Role == "system" {
-				continue // system message is dynamically updated, always skip
-			}
-			live := m.messages[i]
-			snap := snapshot.Messages[i]
-			if live.Role != snap.Role || contentFingerprint(live) != contentFingerprint(snap) {
-				mismatches++
-			}
-		}
-		if mismatches > 0 {
+		if mismatches := countSnapshotMismatches(snapshot.Messages, m.messages); mismatches > 0 {
 			debug.Log("ctx", "ApplyCompactResult: %d/%d messages changed since snapshot — applying anyway (lossy summary is acceptable)",
 				mismatches, len(snapshot.Messages))
 		}
@@ -1078,21 +1007,10 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	newMsgs = append(newMsgs, extra...)
 
 	if hasLiveSystem && len(newMsgs) > 0 {
-		// Identify the summary message by its marker, not by role.
-		// Summarize outputs role=system, so checking role would
-		// overwrite the actual summary with the live system prompt.
-		for i := range newMsgs {
-			if newMsgs[i].Role == "system" && len(newMsgs[i].Content) > 0 &&
-				newMsgs[i].Content[0].Type == "text" &&
-				strings.Contains(newMsgs[i].Content[0].Text, "[Previous conversation summary]") {
-				// Preserve summary, only replace if it's a bare system prompt.
-				continue
-			}
-			if newMsgs[i].Role == "system" {
-				newMsgs[i] = liveSystem
-				break
-			}
-		}
+		// Only bare system prompts get refreshed with the live system
+		// message; the compaction summary (identified by its marker, see
+		// restoreLiveSystemPrompt) is preserved as-is.
+		restoreLiveSystemPrompt(newMsgs, liveSystem)
 	}
 
 	m.messages = newMsgs
@@ -1114,25 +1032,7 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// The compaction summary message must be persisted to JSONL immediately
 	// so that checkpoint restore can find it by ID even if the run is
 	// interrupted. We add it to runAdded AND trigger onPersist directly.
-	var persistedSummary *provider.Message
-	for i := range result.Messages {
-		sm := result.Messages[i]
-		if sm.Role == "system" && len(sm.Content) > 0 && sm.Content[0].Type == "text" &&
-			strings.Contains(sm.Content[0].Text, "[Previous conversation summary]") {
-			if sm.ID == "" {
-				sm.ID = newMessageID()
-			}
-			if m.runAddedIDs == nil {
-				m.runAddedIDs = make(map[string]bool)
-			}
-			if !m.runAddedIDs[sm.ID] {
-				m.runAddedIDs[sm.ID] = true
-				m.runAdded = append(m.runAdded, sm)
-			}
-			persistedSummary = &sm
-			break // only one summary per compaction
-		}
-	}
+	persistedSummary := m.persistCompactSummaryLocked(result.Messages)
 
 	debug.Log("ctx", "ApplyCompactResult: APPLIED liveTokensBefore=%d liveTokensAfter=%d snapshotMsgs=%d compacted=%d extra=%d resultTokenCount=%d",
 		liveTokensBefore, liveTokensAfter, snapshot.OrigLen, len(result.Messages), len(extra), result.TokenCount)
@@ -1145,6 +1045,129 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 		persistFn(*persistedSummary)
 	}
 	return true, liveTokensAfter
+}
+
+// classifyWindowShrinkLocked maps mutations observed on the live context
+// during the compaction window (#663) onto a CompactRejectReason so the
+// agent-side cooldown semantics stay intact:
+//   - userReset (Clear/rewind/another compaction) is a semantic reset — the
+//     agent may refund the pre-compact cooldown because the context that
+//     triggered compaction no longer exists (UserReset);
+//   - benignRemoval (retry truncation, orphan cleanup, reconcile rebuild) is
+//     bookkeeping — the live context is still essentially the one that
+//     warranted compaction, so the cooldown MUST stay, otherwise
+//     maybeAutoCompact reschedules a redundant full-context summarization
+//     every turn (BenignTrim);
+//   - unknown defaults to UserReset, the pre-#663 safe direction.
+//
+// Caller must hold m.mu.
+func (m *Manager) classifyWindowShrinkLocked() {
+	switch {
+	case m.userReset:
+		m.lastReject = CompactRejectUserReset
+	case m.benignRemoval:
+		m.lastReject = CompactRejectBenignTrim
+	default:
+		m.lastReject = CompactRejectUserReset
+	}
+}
+
+// resolveCompactAnchor locates the compaction snapshot's anchor in the live
+// message list and returns where "extra" messages (arrived during the
+// compaction window) start. anchorMissing reports that snapshot.LastMsgID is
+// gone from the live list (#718): messages were removed during the window
+// (rewind/clear/another compaction) and the lossy summary must NOT be
+// applied — the old OrigLen fallback silently replaced every live message at
+// index >= OrigLen whenever removals were balanced by appends, so window
+// arrivals were swallowed by the summary. The anchor ID is the ONLY reliable
+// way to tell snapshot messages apart from window arrivals; when it is gone
+// the caller must reject the result.
+func resolveCompactAnchor(snapshot CompactSnapshot, messages []provider.Message) (extraStart int, anchorMissing bool) {
+	if snapshot.LastMsgID == "" {
+		// No LastMsgID (old snapshot) — fall back to OrigLen.
+		if snapshot.OrigLen >= 0 && snapshot.OrigLen <= len(messages) {
+			return snapshot.OrigLen, false
+		}
+		return len(messages), false
+	}
+	foundIdx := -1
+	for i, msg := range messages {
+		if msg.ID == snapshot.LastMsgID {
+			foundIdx = i
+		}
+	}
+	if foundIdx < 0 {
+		return 0, true // #718: anchor missing — caller must reject
+	}
+	return foundIdx + 1, false
+}
+
+// countSnapshotMismatches counts messages that changed between the compaction
+// snapshot and the live list. The compaction summary is a lossy compression
+// of the conversation — it does not require byte-level accuracy of the
+// source, so the caller only logs mismatches and applies anyway (the
+// alternative — discarding the result — leads to hitting the context limit).
+// The system message is dynamically updated (lanchat peers, memory,
+// autopilot state) and always skipped.
+func countSnapshotMismatches(snapshotMsgs, liveMsgs []provider.Message) int {
+	mismatches := 0
+	for i := range snapshotMsgs {
+		if i >= len(liveMsgs) {
+			mismatches++
+			continue
+		}
+		if snapshotMsgs[i].Role == "system" && liveMsgs[i].Role == "system" {
+			continue
+		}
+		if liveMsgs[i].Role != snapshotMsgs[i].Role || contentFingerprint(liveMsgs[i]) != contentFingerprint(snapshotMsgs[i]) {
+			mismatches++
+		}
+	}
+	return mismatches
+}
+
+// restoreLiveSystemPrompt replaces bare system prompts with the live system
+// message, which may have been dynamically updated during the compaction
+// window. The compaction summary is identified by its marker text rather
+// than by role: summarize outputs role=system, so checking role alone would
+// overwrite the actual summary with the live system prompt.
+func restoreLiveSystemPrompt(msgs []provider.Message, live provider.Message) {
+	for i := range msgs {
+		if msgs[i].Role == "system" && len(msgs[i].Content) > 0 &&
+			msgs[i].Content[0].Type == "text" &&
+			strings.Contains(msgs[i].Content[0].Text, "[Previous conversation summary]") {
+			continue // preserve summary, only replace bare system prompts
+		}
+		if msgs[i].Role == "system" {
+			msgs[i] = live
+			break
+		}
+	}
+}
+
+// persistCompactSummaryLocked registers the compaction summary message for
+// immediate JSONL persistence so checkpoint restore can find it by ID even
+// if the run is interrupted. Returns the summary message, or nil when the
+// result contains none. Caller must hold m.mu.
+func (m *Manager) persistCompactSummaryLocked(msgs []provider.Message) *provider.Message {
+	for i := range msgs {
+		sm := msgs[i]
+		if sm.Role == "system" && len(sm.Content) > 0 && sm.Content[0].Type == "text" &&
+			strings.Contains(sm.Content[0].Text, "[Previous conversation summary]") {
+			if sm.ID == "" {
+				sm.ID = newMessageID()
+			}
+			if m.runAddedIDs == nil {
+				m.runAddedIDs = make(map[string]bool)
+			}
+			if !m.runAddedIDs[sm.ID] {
+				m.runAddedIDs[sm.ID] = true
+				m.runAdded = append(m.runAdded, sm)
+			}
+			return &sm // only one summary per compaction
+		}
+	}
+	return nil
 }
 
 func (m *Manager) TokenCount() int {
