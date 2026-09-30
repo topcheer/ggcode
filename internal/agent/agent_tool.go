@@ -566,20 +566,29 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	a.mu.RUnlock()
 	// PreToolUse hook already run in executeTool - do NOT duplicate here (#1035)
 
-	// Pre-write dry-run validation: check all planned edits for fatal errors
-	// before any file is written. Blocks the entire batch if any file has a
-	// guaranteed-failure condition (syntax error, corruption, etc.).
-	if err == nil && len(plans) > 0 {
-		planBatch := make([]fileEditPlan, 0, len(plans))
-		for _, p := range plans {
-			if diff.HasChanges(p.OldContent, p.NewContent) {
-				planBatch = append(planBatch, fileEditPlan{
-					Path:       p.Path,
-					OldContent: p.OldContent,
-					NewContent: p.NewContent,
-				})
-			}
+	// #1786 case 1 (multi-file leg) + pre-write dry-run validation, merged
+	// into one pass per plan file: plan.OldContent comes from the
+	// PreviewChanges first read, and the diffConfirm pause above opens an
+	// arbitrary window for external writers. Refresh each stale baseline so
+	// per-file undo restores the true pre-write state instead of erasing
+	// external changes, and build the dry-run validation batch from the
+	// refreshed baselines in the same pass - fatal errors (syntax error,
+	// corruption, etc.) block the entire batch before any file is written.
+	planBatch := make([]fileEditPlan, 0, len(plans))
+	for i := range plans {
+		if cur, rerr := os.ReadFile(plans[i].Path); rerr == nil && string(cur) != plans[i].OldContent {
+			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
+			plans[i].OldContent = string(cur)
+		} // unreadable now = executor will surface its own error
+		if diff.HasChanges(plans[i].OldContent, plans[i].NewContent) {
+			planBatch = append(planBatch, fileEditPlan{
+				Path:       plans[i].Path,
+				OldContent: plans[i].OldContent,
+				NewContent: plans[i].NewContent,
+			})
 		}
+	}
+	if err == nil && len(planBatch) > 0 {
 		if blockers := dryRunValidateBatch(planBatch); len(blockers) > 0 {
 			var b strings.Builder
 			b.WriteString("[Multi-file edit blocked by pre-write validation]\n")
@@ -588,22 +597,6 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 				b.WriteString(fmt.Sprintf("File: %s\n%s\n\n", path, msg))
 			}
 			return tool.Result{Content: strings.TrimRight(b.String(), "\n"), IsError: true}
-		}
-	}
-
-	// #1786 case 1 (multi-file leg): same TOCTOU as the single-file path -
-	// plan.OldContent comes from the PreviewChanges first read, and the
-	// diffConfirm pause above opens an arbitrary window for external
-	// writers. Refresh each stale plan baseline so per-file undo restores
-	// the true pre-write state instead of erasing external changes.
-	for i := range plans {
-		cur, rerr := os.ReadFile(plans[i].Path)
-		if rerr != nil {
-			continue // unreadable now = executor will surface its own error
-		}
-		if string(cur) != plans[i].OldContent {
-			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
-			plans[i].OldContent = string(cur)
 		}
 	}
 
@@ -634,22 +627,22 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// NOTHING - running the read-back comparison against unwritten plans
 	// flagged every plan as a "post-write mismatch" with a wrong semantic
 	// ("write may be partial") on EVERY preview.
-	var dryProbe struct {
-		DryRun bool `json:"dry_run"`
-	}
-	isDryRun := json.Unmarshal([]byte(result.Content), &dryProbe) == nil && dryProbe.DryRun
 	// #2143 P2: partial_success mode reports per-file outcomes -
 	// written_paths is authoritative (a pointer probe distinguishes "tool
 	// reports no such field" from "field present but empty", i.e. all
 	// files failed). Unwritten files keep their old disk content and must
-	// not trip the mismatch check.
-	var wpProbe struct {
+	// not trip the mismatch check. dry_run (#2143 P1) shares the same
+	// single unmarshal pass over the result payload.
+	var outcomeProbe struct {
+		DryRun       bool      `json:"dry_run"`
 		WrittenPaths *[]string `json:"written_paths"`
 	}
+	_ = json.Unmarshal([]byte(result.Content), &outcomeProbe)
+	isDryRun := outcomeProbe.DryRun
 	writtenSet := map[string]bool(nil)
-	if json.Unmarshal([]byte(result.Content), &wpProbe) == nil && wpProbe.WrittenPaths != nil {
-		writtenSet = make(map[string]bool, len(*wpProbe.WrittenPaths))
-		for _, p := range *wpProbe.WrittenPaths {
+	if outcomeProbe.WrittenPaths != nil {
+		writtenSet = make(map[string]bool, len(*outcomeProbe.WrittenPaths))
+		for _, p := range *outcomeProbe.WrittenPaths {
 			writtenSet[p] = true
 		}
 	}
