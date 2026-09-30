@@ -1,6 +1,10 @@
 package context
 
-import "unicode"
+import (
+	"encoding/binary"
+	"unicode"
+	"unsafe"
+)
 
 // Script-classified chars/token ratios (#535).
 //
@@ -106,11 +110,35 @@ func EstimateTokensCalibrated(text string, c *TokenCalibrator) int {
 	return tieredTokens(a, ck, le, cy, g, o, asciiRatio, cjkRatio)
 }
 
-// stringsHasNonASCII scans raw bytes rather than decoding runes, which is faster for the
-// common case where the text is pure ASCII and returns false immediately.
+// asciiHighBits has the high bit set in every byte of a 64-bit/32-bit word.
+const (
+	asciiHighBits64 = 0x8080808080808080
+	asciiHighBits32 = 0x80808080
+)
+
+// stringsHasNonASCII reports whether s contains any byte >= 128. It scans raw
+// words instead of single bytes: one load + mask detects a high bit in 8 bytes
+// at once, ~4-8x faster than the byte loop on the large pure-ASCII payloads
+// (logs, file dumps, code) that dominate token estimation. Endianness is
+// irrelevant because the mask is byte-symmetric.
 func stringsHasNonASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 128 {
+	// Zero-copy read-only view of the string's bytes (same trick as the
+	// standard strings package); only ever read from, never written.
+	b := unsafe.Slice(unsafe.StringData(s), len(s))
+	i := 0
+	for ; i+8 <= len(b); i += 8 {
+		if binary.NativeEndian.Uint64(b[i:i+8])&asciiHighBits64 != 0 {
+			return true
+		}
+	}
+	if i+4 <= len(b) {
+		if binary.NativeEndian.Uint32(b[i:i+4])&asciiHighBits32 != 0 {
+			return true
+		}
+		i += 4
+	}
+	for ; i < len(b); i++ {
+		if b[i] >= 128 {
 			return true
 		}
 	}
