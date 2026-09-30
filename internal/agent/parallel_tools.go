@@ -150,6 +150,7 @@ func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending
 		return nil, false
 	}
 	batch := make([]pending, 0, len(toolCalls))
+	seen := make(map[string]struct{}, len(toolCalls))
 	for i, tc := range toolCalls {
 		if !speculativeSafeTools[tc.Name] {
 			continue
@@ -166,6 +167,15 @@ func (a *Agent) buildPreExecBatch(toolCalls []provider.ToolCallDelta) ([]pending
 				continue
 			}
 		}
+		// In-batch dedup: an identical (name, args) pair is pre-executed only
+		// once. Later duplicates are withheld so the sequential loop resolves
+		// them (typically from the speculator cache populated by the first).
+		key := tc.Name + "\x00" + string(tc.Arguments)
+		if _, dup := seen[key]; dup {
+			debug.Log("parallel", "withholding duplicate %s (index=%d) from pre-exec batch", tc.Name, i)
+			continue
+		}
+		seen[key] = struct{}{}
 		batch = append(batch, pending{index: i, name: tc.Name, args: tc.Arguments})
 	}
 	return batch, true
