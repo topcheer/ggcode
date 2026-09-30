@@ -1257,57 +1257,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				if len(guidanceText) > 0 {
 					guidancePrefix = strings.Join(guidanceText, "\n") + "\n\n"
 				}
-				firstTool := true
-				// Convert tool_result blocks to OpenAI tool messages
-				for _, b := range m.Content {
-					if b.Type == "tool_result" {
-						if len(b.Images) > 0 && !b.IsError {
-							// Multimodal tool result: images + text
-							var parts []openai.ChatMessagePart
-							for _, img := range b.Images {
-								parts = append(parts, openai.ChatMessagePart{
-									Type: openai.ChatMessagePartTypeImageURL,
-									ImageURL: &openai.ChatMessageImageURL{
-										URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
-										Detail: openai.ImageURLDetailAuto,
-									},
-								})
-							}
-							if b.Output != "" {
-								parts = append(parts, openai.ChatMessagePart{
-									Type: openai.ChatMessagePartTypeText,
-									Text: b.Output,
-								})
-							}
-							if firstTool && guidancePrefix != "" {
-								// #474: guidance travels INSIDE the first
-								// tool message — ordering contract intact.
-								parts = append([]openai.ChatMessagePart{{
-									Type: openai.ChatMessagePartTypeText,
-									Text: guidancePrefix,
-								}}, parts...)
-							}
-							result = append(result, openai.ChatCompletionMessage{
-								Role:         openai.ChatMessageRoleTool,
-								ToolCallID:   b.ToolID,
-								MultiContent: parts,
-							})
-						} else {
-							content := b.Output
-							if firstTool && guidancePrefix != "" {
-								// #474: guidance travels INSIDE the first
-								// tool message — ordering contract intact.
-								content = guidancePrefix + content
-							}
-							result = append(result, openai.ChatCompletionMessage{
-								Role:       openai.ChatMessageRoleTool,
-								Content:    content,
-								ToolCallID: b.ToolID,
-							})
-						}
-						firstTool = false
-					}
-				}
+				result = appendToolResultMessages(result, m.Content, guidancePrefix)
 				break
 			}
 			// Check if any content block is an image
@@ -1404,42 +1354,59 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			result = append(result, msg)
 		case "tool":
 			// Tool results - each tool_result block becomes a separate message
-			for _, b := range m.Content {
-				if b.Type == "tool_result" {
-					if len(b.Images) > 0 && !b.IsError {
-						var parts []openai.ChatMessagePart
-						for _, img := range b.Images {
-							parts = append(parts, openai.ChatMessagePart{
-								Type: openai.ChatMessagePartTypeImageURL,
-								ImageURL: &openai.ChatMessageImageURL{
-									URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
-									Detail: openai.ImageURLDetailAuto,
-								},
-							})
-						}
-						if b.Output != "" {
-							parts = append(parts, openai.ChatMessagePart{
-								Type: openai.ChatMessagePartTypeText,
-								Text: b.Output,
-							})
-						}
-						result = append(result, openai.ChatCompletionMessage{
-							Role:         openai.ChatMessageRoleTool,
-							ToolCallID:   b.ToolID,
-							MultiContent: parts,
-						})
-					} else {
-						result = append(result, openai.ChatCompletionMessage{
-							Role:       openai.ChatMessageRoleTool,
-							Content:    b.Output,
-							ToolCallID: b.ToolID,
-						})
-					}
-				}
-			}
+			result = appendToolResultMessages(result, m.Content, "")
 		}
 	}
 	return result
+}
+
+// appendToolResultMessages emits each tool_result block in blocks as a
+// separate OpenAI tool message, appending to dst. The first emitted text
+// content is prefixed with guidancePrefix so injected guidance text (#453/#474)
+// can ride along with the first tool result without inserting a user message
+// between assistant tool_calls and tool results (which strict backends reject).
+func appendToolResultMessages(dst []openai.ChatCompletionMessage, blocks []ContentBlock, guidancePrefix string) []openai.ChatCompletionMessage {
+	first := true
+	for _, b := range blocks {
+		if b.Type != "tool_result" {
+			continue
+		}
+		output := b.Output
+		if first && guidancePrefix != "" {
+			output = guidancePrefix + output
+		}
+		if len(b.Images) > 0 && !b.IsError {
+			var parts []openai.ChatMessagePart
+			for _, img := range b.Images {
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{
+						URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
+						Detail: openai.ImageURLDetailAuto,
+					},
+				})
+			}
+			if output != "" {
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeText,
+					Text: output,
+				})
+			}
+			dst = append(dst, openai.ChatCompletionMessage{
+				Role:         openai.ChatMessageRoleTool,
+				ToolCallID:   b.ToolID,
+				MultiContent: parts,
+			})
+		} else {
+			dst = append(dst, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				Content:    output,
+				ToolCallID: b.ToolID,
+			})
+		}
+		first = false
+	}
+	return dst
 }
 
 func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
