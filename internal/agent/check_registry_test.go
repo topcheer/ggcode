@@ -182,6 +182,9 @@ func TestNewCheckContext_GoAST(t *testing.T) {
 	if ctx.GoFset == nil {
 		t.Error("expected GoFset to be set for .go file")
 	}
+	if ctx.GoParseErr != nil {
+		t.Error("expected GoParseErr to be nil for valid Go code")
+	}
 	if ctx.Lang != LangGo {
 		t.Errorf("expected LangGo, got %d", ctx.Lang)
 	}
@@ -191,6 +194,9 @@ func TestNewCheckContext_NonGoNoAST(t *testing.T) {
 	ctx := newCheckContext("test.py", "", "print('hello')\n")
 	if ctx.GoAST != nil {
 		t.Error("expected GoAST to be nil for .py file")
+	}
+	if ctx.GoParseErr != nil {
+		t.Error("expected GoParseErr to be nil for non-Go file")
 	}
 	if ctx.Lang != LangPython {
 		t.Errorf("expected LangPython, got %d", ctx.Lang)
@@ -202,6 +208,9 @@ func TestNewCheckContext_GoSyntaxError(t *testing.T) {
 	ctx := newCheckContext("test.go", "", "package main\n\nfunc broken( {\n")
 	if ctx.GoAST != nil {
 		t.Error("expected GoAST to be nil for invalid Go code")
+	}
+	if ctx.GoParseErr == nil {
+		t.Error("expected GoParseErr to be recorded for invalid Go code")
 	}
 	if ctx.Lang != LangGo {
 		t.Errorf("expected LangGo even with syntax error, got %d", ctx.Lang)

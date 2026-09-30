@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,51 @@ func main() {
 	warnings := checkGoSyntax("valid.go", goodGo)
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings for valid Go, got: %v", warnings)
+	}
+}
+
+// TestGoSyntaxCheck_ReusesContextParseError pins the go-syntax contract:
+// when newCheckContext recorded a parse error, the check reports it without
+// re-parsing; hand-built contexts without GoParseErr fall back to parsing.
+func TestGoSyntaxCheck_ReusesContextParseError(t *testing.T) {
+	var run func(CheckContext) []string
+	for _, c := range allChecks {
+		if c.Name == "go-syntax" {
+			run = c.Run
+		}
+	}
+	if run == nil {
+		t.Fatal("go-syntax check not registered")
+	}
+
+	// Realistic path: newCheckContext pre-parsed and recorded the error.
+	badGo := "package main\n\nfunc broken( {\n"
+	ctx := newCheckContext("reuse.go", "", badGo)
+	if ctx.GoParseErr == nil {
+		t.Fatal("expected newCheckContext to record GoParseErr for invalid Go")
+	}
+	if ws := run(ctx); len(ws) == 0 {
+		t.Error("expected syntax warnings via reused GoParseErr")
+	}
+
+	// Reuse must be distinguishable from fallback: a non-scanner sentinel
+	// error surfaces verbatim only if the check trusts GoParseErr instead
+	// of re-parsing content.
+	sentinel := errors.New("sentinel parse failure")
+	hand := CheckContext{FilePath: "hand.go", Lang: LangGo, NewContent: badGo, GoParseErr: sentinel}
+	if ws := run(hand); len(ws) != 1 || ws[0] != sentinel.Error() {
+		t.Errorf("expected verbatim reuse of GoParseErr, got: %v", ws)
+	}
+
+	// Fallback: hand-built context without GoParseErr still parses content.
+	hand.GoParseErr = nil
+	if ws := run(hand); len(ws) == 0 {
+		t.Error("expected fallback parse warnings without GoParseErr")
+	}
+
+	// No false positives for valid Go.
+	if ws := run(newCheckContext("ok.go", "", "package main\nfunc main() {}\n")); len(ws) != 0 {
+		t.Errorf("expected no warnings for valid Go, got: %v", ws)
 	}
 }
 
