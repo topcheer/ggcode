@@ -237,7 +237,14 @@ func MergeInstance(global, instance *Config) {
 	mergeSubAgentConfig(&global.SubAgents, &instance.SubAgents, global.instanceFields)
 
 	// Impersonation
-	if global.Impersonation.Preset == "" && instance.Impersonation.Preset != "" {
+	// #2936: any non-zero instance field opens the merge, not just Preset -
+	// a CustomHeaders-only override (gateway auth headers with no preset)
+	// previously failed this gate and was silently dropped on load even
+	// though SaveInstance had persisted it correctly.
+	instanceImpNonZero := instance.Impersonation.Preset != "" ||
+		instance.Impersonation.CustomVersion != "" ||
+		len(instance.Impersonation.CustomHeaders) > 0
+	if global.Impersonation.Preset == "" && instanceImpNonZero {
 		global.Impersonation = instance.Impersonation
 		// #1815 case 3: register the merged section like every other merge
 		// field. Without the registration, Save's instance-strip step never

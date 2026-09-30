@@ -58,19 +58,23 @@ func (c *Config) marshalInstanceDelta() map[string]interface{} {
 	c.diffKnight(&c.KnightConfig, &c.globalSnap.KnightConfig, delta)
 
 	// Impersonation
+	// #2936: compare CustomHeaders by content, not length — a same-length
+	// key swap (e.g. {a:1} -> {b:2}) or a full clear previously produced a
+	// delta indistinguishable from "unchanged" and the stale disk value
+	// resurrected via deep-merge. Write all three fields unconditionally
+	// (snapshot semantics): the delta is a map, an explicit "" or empty
+	// map overwrites the deep-merged old value — same #1519-C reasoning.
+	// CustomHeaders is map[string]string, which fails the
+	// map[string]interface{} assertion in deepMergeYAMLMaps and is therefore
+	// replaced wholesale rather than key-merged, so swaps and clears both
+	// round-trip correctly.
 	if c.Impersonation.Preset != c.globalSnap.Impersonation.Preset ||
 		c.Impersonation.CustomVersion != c.globalSnap.Impersonation.CustomVersion ||
-		len(c.Impersonation.CustomHeaders) != len(c.globalSnap.Impersonation.CustomHeaders) {
+		!reflect.DeepEqual(c.Impersonation.CustomHeaders, c.globalSnap.Impersonation.CustomHeaders) {
 		impMap := map[string]interface{}{}
-		if c.Impersonation.Preset != "" {
-			impMap["preset"] = c.Impersonation.Preset
-		}
-		if c.Impersonation.CustomVersion != "" {
-			impMap["custom_version"] = c.Impersonation.CustomVersion
-		}
-		if len(c.Impersonation.CustomHeaders) > 0 {
-			impMap["custom_headers"] = c.Impersonation.CustomHeaders
-		}
+		impMap["preset"] = c.Impersonation.Preset
+		impMap["custom_version"] = c.Impersonation.CustomVersion
+		impMap["custom_headers"] = c.Impersonation.CustomHeaders
 		delta["impersonation"] = impMap
 	}
 
@@ -296,13 +300,17 @@ func (*Config) diffKnight(current, global *KnightConfig, delta map[string]interf
 	if current.Enabled != global.Enabled {
 		knightDelta["enabled"] = current.Enabled
 	}
-	if current.TrustLevel != global.TrustLevel && current.TrustLevel != "" {
+	// #2936: no zero-value suppression on these three — same #1519-C
+	// reasoning as diffScalar/diffInt: the delta is a map, an explicit ""/
+	// 0 ("use the global default") overwrites the deep-merged old value.
+	// The old guards made a nested reset silently impossible.
+	if current.TrustLevel != global.TrustLevel {
 		knightDelta["trust_level"] = current.TrustLevel
 	}
-	if current.DailyTokenBudget != global.DailyTokenBudget && current.DailyTokenBudget != 0 {
+	if current.DailyTokenBudget != global.DailyTokenBudget {
 		knightDelta["daily_token_budget"] = current.DailyTokenBudget
 	}
-	if current.IdleDelaySec != global.IdleDelaySec && current.IdleDelaySec != 0 {
+	if current.IdleDelaySec != global.IdleDelaySec {
 		knightDelta["idle_delay_sec"] = current.IdleDelaySec
 	}
 	if len(current.Capabilities) > 0 && len(global.Capabilities) == 0 {
@@ -345,10 +353,12 @@ func (*Config) diffToolPerms(current, global map[string]ToolPermission, delta ma
 
 func (*Config) diffSubAgents(current, global *SubAgentConfig, delta map[string]interface{}) {
 	subDelta := map[string]interface{}{}
-	if current.MaxConcurrent != global.MaxConcurrent && current.MaxConcurrent != 0 {
+	// #2936: no zero-value suppression — nested reset must reach the
+	// deep merge as an explicit 0/"0s" to overwrite the stale value.
+	if current.MaxConcurrent != global.MaxConcurrent {
 		subDelta["max_concurrent"] = current.MaxConcurrent
 	}
-	if current.Timeout != global.Timeout && current.Timeout != 0 {
+	if current.Timeout != global.Timeout {
 		subDelta["timeout"] = current.Timeout.String()
 	}
 	if len(subDelta) > 0 {
@@ -358,16 +368,18 @@ func (*Config) diffSubAgents(current, global *SubAgentConfig, delta map[string]i
 
 func (*Config) diffSwarm(current, global *SwarmConfig, delta map[string]interface{}) {
 	swDelta := map[string]interface{}{}
-	if current.MaxTeammatesPerTeam != global.MaxTeammatesPerTeam && current.MaxTeammatesPerTeam != 0 {
+	// #2936: no zero-value suppression — nested reset must reach the
+	// deep merge as an explicit 0/"0s" to overwrite the stale value.
+	if current.MaxTeammatesPerTeam != global.MaxTeammatesPerTeam {
 		swDelta["max_teammates_per_team"] = current.MaxTeammatesPerTeam
 	}
-	if current.TeammateTimeout != global.TeammateTimeout && current.TeammateTimeout != 0 {
+	if current.TeammateTimeout != global.TeammateTimeout {
 		swDelta["teammate_timeout"] = current.TeammateTimeout.String()
 	}
-	if current.InboxSize != global.InboxSize && current.InboxSize != 0 {
+	if current.InboxSize != global.InboxSize {
 		swDelta["inbox_size"] = current.InboxSize
 	}
-	if current.PollInterval != global.PollInterval && current.PollInterval != 0 {
+	if current.PollInterval != global.PollInterval {
 		swDelta["poll_interval"] = current.PollInterval.String()
 	}
 	if len(swDelta) > 0 {
