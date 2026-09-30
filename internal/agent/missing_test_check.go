@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,8 +104,7 @@ func checkMissingTestCompanion(filePath, oldContent, newContent string) string {
 	}
 
 	// Existing file: check for newly added exported functions.
-	oldFset := token.NewFileSet()
-	oldAST, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+	oldAST, _, oldErr := parseGoSource(filePath, oldContent, 0)
 	if oldErr != nil {
 		// Old content was unparseable (e.g., file was empty or non-Go before).
 		// Treat all exported functions in new content as new.

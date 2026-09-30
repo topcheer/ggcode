@@ -42,7 +42,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -126,7 +125,7 @@ func checkNPlus1Loop(filePath, oldContent, newContent string) []string {
 	// Parse old content to determine delta.
 	var oldAST *ast.File
 	if strings.TrimSpace(oldContent) != "" {
-		oldAST, _ = parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
+		oldAST, _, _ = parseGoSource(filePath, oldContent, 0)
 	}
 
 	// Find I/O-in-loop patterns in new content.

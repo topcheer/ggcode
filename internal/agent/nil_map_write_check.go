@@ -92,8 +92,7 @@ func checkNilMapWrite(filePath, oldContent, newContent string) string {
 	// Delta check: find instances in old content to suppress pre-existing warnings.
 	var oldInstances []nilMapWriteInstance
 	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
+		oldFile, oldFset, oldErr := parseGoSource(filePath, oldContent, parser.AllErrors)
 		if oldErr == nil {
 			ast.Inspect(oldFile, func(n ast.Node) bool {
 				fn, ok := n.(*ast.FuncDecl)

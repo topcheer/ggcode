@@ -41,7 +41,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -104,8 +103,7 @@ func checkSliceBoundsRisk(filePath, oldContent, newContent string) []string {
 
 	var oldFPs map[string]bool
 	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldAST, oldErr := parser.ParseFile(oldFset, filePath, oldContent, 0)
+		oldAST, oldFset, oldErr := parseGoSource(filePath, oldContent, 0)
 		if oldErr == nil {
 			oldRisks := findSliceBoundsRisks(oldFset, oldAST, strings.Split(oldContent, "\n"))
 			if len(oldRisks) > 0 {

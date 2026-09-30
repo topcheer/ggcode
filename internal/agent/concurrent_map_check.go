@@ -50,7 +50,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -90,7 +89,7 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 			// with "" made posStr keys "file.go:N" vs ".:N" — never equal,
 			// so the skip below was dead code and every edit re-reported
 			// pre-existing patterns.
-			f, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
+			f, _, _ := parseGoSource(filePath, oldContent, 0)
 			return f
 		}()) {
 			if oldLines == nil {

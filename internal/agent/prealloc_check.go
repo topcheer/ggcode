@@ -34,7 +34,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -84,7 +83,7 @@ func checkMissingPrealloc(filePath, oldContent, newContent string) []string {
 	// subtracted. Matching at most oldCount[varName] instances keeps every
 	// genuinely new violation while still suppressing unchanged ones.
 	if strings.TrimSpace(oldContent) != "" {
-		oldAST, _ := parser.ParseFile(token.NewFileSet(), filePath, oldContent, 0)
+		oldAST, _, _ := parseGoSource(filePath, oldContent, 0)
 		if oldAST != nil {
 			oldPatterns := findMissingPrealloc(oldAST, token.NewFileSet())
 			if len(oldPatterns) > 0 {

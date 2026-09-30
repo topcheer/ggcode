@@ -39,7 +39,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 
 	"strings"
@@ -120,8 +119,7 @@ func checkAssertionPresence(filePath, oldContent, newContent string) string {
 	// Collect assertion counts per test function name from old content.
 	oldCounts := map[string]int{}
 	if strings.TrimSpace(oldContent) != "" {
-		oldFset := token.NewFileSet()
-		oldAST, err := parser.ParseFile(oldFset, filePath, oldContent, 0)
+		oldAST, oldFset, err := parseGoSource(filePath, oldContent, 0)
 		if err == nil {
 			for name, count := range countAssertionsPerTest(oldFset, oldAST) {
 				oldCounts[name] = count

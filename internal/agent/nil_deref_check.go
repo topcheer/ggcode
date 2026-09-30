@@ -117,8 +117,7 @@ func collectOldNilDerefIndex(filePath, oldContent string) nilDerefDeltaIndex {
 	if strings.TrimSpace(oldContent) == "" {
 		return idx
 	}
-	oldFset := token.NewFileSet()
-	oldFile, oldErr := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
+	oldFile, oldFset, oldErr := parseGoSource(filePath, oldContent, parser.AllErrors)
 	if oldErr != nil {
 		return idx
 	}
