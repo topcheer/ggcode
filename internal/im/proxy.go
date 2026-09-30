@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -196,13 +197,17 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		return nil, fmt.Errorf("dial socks5 proxy %s: %w", proxyAddr, err)
 	}
 
-	// SOCKS5 handshake: no auth
+	// SOCKS5 handshake: no auth. Read the 2-byte greeting with ReadFull -
+	// a single Read may deliver fragments (some proxies write VER and METHOD
+	// separately; TCP segmentation can split them), leaving a zero byte in
+	// buf[1] that wrongly passes the no-auth check while the real method
+	// byte stays in the stream and corrupts the reply parse (#2970).
 	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 greeting: %w", err)
 	}
 	buf := make([]byte, 2)
-	if _, err := conn.Read(buf); err != nil {
+	if _, err := io.ReadFull(conn, buf); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 greeting response: %w", err)
 	}
@@ -233,20 +238,48 @@ func socks5Dial(proxy *url.URL, targetAddr string) (net.Conn, error) {
 		req = append(req, byte(port>>8), byte(port))
 	}
 
+	// Read the reply header with ReadFull, then drain the bound address
+	// and port per the address type (RFC 1928). A single Read only checked
+	// n >= 4 and left the bound-addr bytes in the stream when the reply was
+	// fragmented - the caller's next write (e.g. a TLS ClientHello) then
+	// interleaved with leftover proxy bytes and the handshake failed with a
+	// misleading error attributed to the target server (#2970).
 	if _, err := conn.Write(req); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 connect write: %w", err)
 	}
 
-	resp := make([]byte, 256)
-	n, err := conn.Read(resp)
-	if err != nil || n < 4 {
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("socks5 connect response: %w", err)
 	}
-	if resp[1] != 0x00 {
+	if head[1] != 0x00 {
 		conn.Close()
-		return nil, fmt.Errorf("socks5 connect failed: status %d", resp[1])
+		return nil, fmt.Errorf("socks5 connect failed: status %d", head[1])
+	}
+
+	// Drain BND.ADDR + BND.PORT based on ATYP so the connection is clean.
+	var boundLen int
+	switch head[3] {
+	case 0x01: // IPv4
+		boundLen = 4
+	case 0x03: // domain: 1 length byte + domain
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("socks5 connect response bound addr: %w", err)
+		}
+		boundLen = int(lenBuf[0])
+	case 0x04: // IPv6
+		boundLen = 16
+	default:
+		conn.Close()
+		return nil, fmt.Errorf("socks5 connect failed: unknown address type %d", head[3])
+	}
+	if _, err := io.CopyN(io.Discard, conn, int64(boundLen+2)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("socks5 connect response bound addr: %w", err)
 	}
 
 	return conn, nil
