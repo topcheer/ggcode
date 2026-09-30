@@ -13,7 +13,11 @@ import (
 
 const winScriptTemplate = `@echo off
 REM ggcode self-restart helper - auto-generated, self-deleting.
-setlocal enabledelayedexpansion
+REM #2775: delayed expansion is intentionally OFF. This template never
+REM uses bang-bracket variable syntax, and with it ON every bare bang in
+REM spliced args or paths was silently eaten or expanded (winEscape only
+REM handles quote and percent) - corrupting prompts and paths that
+REM contain an exclamation mark.
 
 set PARENT_PID={{.PID}}
 set BINARY={{.BinaryWinEscaped}}
