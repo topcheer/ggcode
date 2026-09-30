@@ -24,12 +24,12 @@ import (
 // has had multiple consecutive failures, it should stop and reconsider its
 // entire strategy rather than continuing to try minor variations.
 type loopDetector struct {
-	// History of tool call fingerprints from the current consecutive run.
-	// Reset when a different tool or different arguments are seen.
-	fingerprints []string
-
-	// lastToolName tracks the tool name from the previous call for logging.
-	lastToolName string
+	// lastFingerprint is the fingerprint of the most recent tool call;
+	// streakCount is how many consecutive calls shared it. Both reset when a
+	// different tool or different arguments are seen. (A counter replaces the
+	// old unbounded fingerprint history slice: only the last entry was ever read.)
+	lastFingerprint string
+	streakCount     int
 
 	// consecutiveErrors counts how many tool calls in a row returned errors.
 	// Reset to 0 when any tool call succeeds.
@@ -55,21 +55,20 @@ func (ld *loopDetector) checkDuplicate(tc provider.ToolCallDelta) string {
 	fp := fingerprintToolCall(tc.Name, tc.Arguments)
 
 	// If this is a different fingerprint, reset the streak.
-	if len(ld.fingerprints) == 0 || ld.fingerprints[len(ld.fingerprints)-1] != fp {
-		ld.fingerprints = []string{fp}
-		ld.lastToolName = tc.Name
+	if ld.lastFingerprint != fp {
+		ld.lastFingerprint = fp
+		ld.streakCount = 1
 		return ""
 	}
 
 	// Same fingerprint — increment streak.
-	ld.fingerprints = append(ld.fingerprints, fp)
+	ld.streakCount++
 
 	// Only warn at exactly 3 consecutive duplicates to avoid spamming.
 	// The message itself usually causes the LLM to change approach.
-	streak := len(ld.fingerprints)
+	streak := ld.streakCount
 	if streak == 3 {
 		debug.Log("agent", "loop detection: %s called %d times with identical args, injecting guidance", tc.Name, streak)
-		ld.lastToolName = tc.Name
 		return fmt.Sprintf(
 			"Notice: You have called %s with the exact same arguments %d consecutive times. "+
 				"This suggests you may be stuck in a loop - BUT if the result was marked "+
@@ -112,8 +111,8 @@ func (ld *loopDetector) checkDuplicate(tc provider.ToolCallDelta) string {
 // reset clears the detector state. Called when a different tool call is seen
 // or when a new user turn starts.
 func (ld *loopDetector) reset() {
-	ld.fingerprints = nil
-	ld.lastToolName = ""
+	ld.lastFingerprint = ""
+	ld.streakCount = 0
 	ld.consecutiveErrors = 0
 	ld.errorGuidanceLevel = 0
 }
