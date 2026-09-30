@@ -161,26 +161,19 @@ func ApplySessionTimeout(agentInst *agent.Agent, cfg *config.Config, isAutopilot
 // the global config file so new sessions can discover it without re-configuring
 // API keys. This is called after model switches to propagate vendor/endpoint
 // definitions that were added during the current session.
+// #2911: this runs from model-switch hooks (cmd daemon SetProviderSwitchHook,
+// desktop ChatBridge.SwitchModel) that hold no configAccess instance and thus
+// cannot take cfgMu. Mutating cfg.Vendors directly here raced the cfgMu-guarded
+// writers (configAccess Set*APIKey, hot-reload applyFreshConfig) into a Go
+// runtime-fatal concurrent map write. The map mutation now goes through
+// Config.UpsertVendorEndpoint, which serializes all runtime Vendors writers
+// under config.vendorsWriteMu. SaveScoped stays OUTSIDE that lock (disk I/O,
+// #957 lesson: no file writes under locks that hot paths also need).
 func SyncVendorEndpointToGlobal(cfg *config.Config, vendor, endpoint string) {
 	if cfg == nil || vendor == "" || endpoint == "" {
 		return
 	}
-	changed := false
-	if cfg.Vendors == nil {
-		cfg.Vendors = make(map[string]config.VendorConfig)
-	}
-	vc, ok := cfg.Vendors[vendor]
-	if !ok {
-		vc = config.VendorConfig{Endpoints: make(map[string]config.EndpointConfig)}
-		cfg.Vendors[vendor] = vc
-		changed = true
-	}
-	if _, ok := vc.Endpoints[endpoint]; !ok {
-		vc.Endpoints[endpoint] = config.EndpointConfig{}
-		cfg.Vendors[vendor] = vc
-		changed = true
-	}
-	if changed {
+	if cfg.UpsertVendorEndpoint(vendor, endpoint) {
 		_ = cfg.SaveScoped("global")
 	}
 }

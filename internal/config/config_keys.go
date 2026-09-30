@@ -2,12 +2,25 @@ package config
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/topcheer/ggcode/internal/util"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"os"
 	"strings"
 )
+
+// vendorsWriteMu serializes every runtime mutation of Config.Vendors maps
+// (#2911). The map writes inside SetEndpointAPIKey/SetVendorAPIKey are
+// invoked under the caller's configAccess.cfgMu, but other writers - most
+// notably the model-switch hook's SyncVendorEndpointToGlobal - run with no
+// configAccess instance in reach at all (cmd daemon + desktop ChatBridge).
+// A lock-free write racing any concurrent reader or these writes is a Go
+// runtime fatal (concurrent map read/write), not a recoverable panic, so
+// all runtime writers must share this lock regardless of who holds them.
+// Lock order: configAccess.cfgMu → vendorsWriteMu (never reversed).
+var vendorsWriteMu sync.Mutex
 
 // SetEndpointAPIKey updates the active endpoint or vendor-level API key.
 // The key is stored as an environment variable reference (e.g. ${ZAI_API_KEY})
@@ -17,6 +30,9 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	// #2911: serialize map writes with all other runtime Vendors writers.
+	vendorsWriteMu.Lock()
+	defer vendorsWriteMu.Unlock()
 	vc, ok := c.Vendors[vendor]
 	if !ok {
 		return fmt.Errorf("vendor %q is not configured", vendor)
@@ -143,6 +159,9 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	// #2911: serialize map writes with all other runtime Vendors writers.
+	vendorsWriteMu.Lock()
+	defer vendorsWriteMu.Unlock()
 	vc, ok := c.Vendors[vendor]
 	if !ok {
 		return fmt.Errorf("vendor %q not found", vendor)
@@ -171,6 +190,38 @@ func (c *Config) SetVendorAPIKey(vendor, apiKey string) error {
 	}
 	c.Vendors[vendor] = vc
 	return nil
+}
+
+// UpsertVendorEndpoint ensures a vendor/endpoint definition exists in the
+// config so new sessions can discover it (#2911). It reports whether
+// anything was added; the caller decides whether to persist (SaveScoped).
+// Callers WITHOUT a configAccess instance (model-switch hooks in the cmd
+// daemon and desktop ChatBridge) previously mutated the Vendors map
+// lock-free via SyncVendorEndpointToGlobal, racing the cfgMu-guarded
+// writers above into a runtime-fatal concurrent map write. This method
+// takes vendorsWriteMu so all runtime writers are serialized no matter
+// which side of the configAccess boundary they live on.
+func (c *Config) UpsertVendorEndpoint(vendor, endpoint string) (changed bool) {
+	if c == nil || vendor == "" || endpoint == "" {
+		return false
+	}
+	vendorsWriteMu.Lock()
+	defer vendorsWriteMu.Unlock()
+	if c.Vendors == nil {
+		c.Vendors = make(map[string]VendorConfig)
+	}
+	vc, ok := c.Vendors[vendor]
+	if !ok {
+		vc = VendorConfig{Endpoints: make(map[string]EndpointConfig)}
+		c.Vendors[vendor] = vc
+		changed = true
+	}
+	if _, ok := vc.Endpoints[endpoint]; !ok {
+		vc.Endpoints[endpoint] = EndpointConfig{}
+		c.Vendors[vendor] = vc
+		changed = true
+	}
+	return changed
 }
 
 // resolveEffectiveAPIKeyRef returns the raw API key reference string.
