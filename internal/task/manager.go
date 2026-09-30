@@ -2,6 +2,7 @@ package task
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -124,7 +125,10 @@ func (m *Manager) Get(taskID string) (Task, bool) {
 	return t.Snapshot(), true
 }
 
-// List returns snapshots of all tasks.
+// List returns snapshots of all tasks in a deterministic order (#2764):
+// in-progress first, then by creation time, with task ID as the tiebreaker.
+// Map iteration order is randomized in Go, so without this sort every caller
+// (including Digest) would observe a different subset/order per call.
 func (m *Manager) List() []Task {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -133,6 +137,18 @@ func (m *Manager) List() []Task {
 	for _, t := range m.tasks {
 		out = append(out, t.Snapshot())
 	}
+	sort.Slice(out, func(i, j int) bool {
+		// In-progress tasks lead the list: they are the tasks the model is
+		// actively working on and the most expensive to lose from context.
+		ipi, ipj := out[i].Status == StatusInProgress, out[j].Status == StatusInProgress
+		if ipi != ipj {
+			return ipi
+		}
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
@@ -169,14 +185,24 @@ func (m *Manager) Digest(maxTasks, maxChars int) string {
 	}
 	if n := utf8.RuneCountInString(out); n > maxChars {
 		runes := []rune(out)
-		out = string(runes[:maxChars]) + "\n... (truncated)"
+		cut := string(runes[:maxChars])
+		// Truncate at the last full-line boundary (#2764): a mid-line cut
+		// leaves a broken task ID or subject in the re-injected digest and
+		// shifts between compactions as the preceding lines change.
+		if i := strings.LastIndex(cut, "\n"); i > 0 {
+			cut = cut[:i]
+		}
+		out = cut + "\n... (truncated)"
 	}
 	return out
 }
 
 // digestStats counts tasks by status and renders the capped open-task
 // list (trailing newline trimmed). Split from Digest to keep each unit
-// simple.
+// simple. The listed subset is deterministic (#2764): List is ordered
+// (in-progress first, then oldest-first), so the first maxTasks entries are
+// the most important ones and consecutive digests of an unchanged board are
+// byte-identical.
 func (m *Manager) digestStats(maxTasks int) (digestStats, string) {
 	var st digestStats
 	var sb strings.Builder
