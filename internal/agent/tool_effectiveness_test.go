@@ -337,9 +337,27 @@ func TestIssue1208_TruncationMarkerAnchoring(t *testing.T) {
 		"... [42 lines omitted — output truncated, showing tail] ...",
 		"STDERR:\n... [7 lines omitted — stderr truncated, showing tail] ...",
 	}
+	// Probe with tools that actually EMIT these markers (#2964 changed
+	// the probe away from read_file: read_file/multi_file_read results are
+	// raw file payload and are exempt from marker matching entirely - see
+	// filePayloadTools). run_command emits the showing-tail forms and
+	// mcp__*/lsp_* carry their adapter markers; for these non-payload,
+	// non-search tools the anchored full-text matching still applies
+	// unchanged. (git_show/git_blame are NOT probes: they sit in searchTools
+	// and take the isEmptyResult path before marker matching ever runs.)
+	probeTools := []string{"run_command", "mcp__probe__tool", "lsp_hover"}
 	for _, content := range emitted {
-		if !isPoorResult("read_file", content) {
-			t.Errorf("isPoorResult(read_file, %q) = false, want true (emitted advisory)", content)
+		for _, tool := range probeTools {
+			if !isPoorResult(tool, content) {
+				t.Errorf("isPoorResult(%q, %q) = false, want true (emitted advisory)", tool, content)
+			}
+		}
+		// #2964 pin: the SAME emitted-advisory literals appearing inside a
+		// file-payload tool's result are payload, never status.
+		for _, tool := range []string{"read_file", "multi_file_read"} {
+			if isPoorResult(tool, content) {
+				t.Errorf("isPoorResult(%q, %q) = true, want false (#2964 file payload)", tool, content)
+			}
 		}
 	}
 }
