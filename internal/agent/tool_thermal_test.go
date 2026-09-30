@@ -178,9 +178,8 @@ func TestThermalState_HighModifyNoWarning(t *testing.T) {
 // clocks - a shared one let an explore warning cool down a verify trigger.
 func TestThermalSeparateModeCooldowns1855(t *testing.T) {
 	ts := newThermalState()
-	// Seed an explore-heavy warning at iter 10.
+	// Seed an explore-heavy warning at iter 10 (separate clock).
 	ts.lastExploreWarnIter = 10
-	ts.warned = true
 	// Verify-heavy conditions met at iter 11 (within shared cooldown range).
 	ts.categories[thermalVerify] = 50
 	ts.categories[thermalModify] = 1
