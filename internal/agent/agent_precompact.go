@@ -153,6 +153,14 @@ func (a *Agent) StartPreCompact() {
 				debug.Log("precompact", "SUPERSEDED-CMD: freed %d tokens from re-run commands", freed)
 				tokens = cm.TokenCount()
 			}
+			// Superseded search compaction: iterative debugging repeats the
+			// same grep/search; older match lists are expired output that a
+			// newer run of the identical search fully supersedes.
+			freed = mgr.CompactSupersededSearches()
+			if freed > 0 {
+				debug.Log("precompact", "SUPERSEDED-SEARCH: freed %d tokens from superseded searches", freed)
+				tokens = cm.TokenCount()
+			}
 		}
 	}
 

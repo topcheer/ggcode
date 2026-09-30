@@ -1995,3 +1995,106 @@ func TestCompactSupersededCommands_IgnoresOtherTools(t *testing.T) {
 		t.Fatalf("expected 0 freed for non-run_command tools, got %d", freed)
 	}
 }
+
+// addSearchRun appends an assistant tool_use + user tool_result pair for a
+// search-tool invocation (grep/search_files/code_search) with raw JSON input.
+func addSearchRun(m *Manager, toolID, toolName, input, output string) {
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   toolID,
+			ToolName: toolName,
+			Input:    json.RawMessage(input),
+		}},
+	})
+	m.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{provider.ToolResultBlock(toolID, output, false)},
+	})
+}
+
+func TestCompactSupersededSearches_Rerun(t *testing.T) {
+	m := NewManager(100000)
+
+	// Same grep run twice - the first result list is expired.
+	addSearchRun(m, "s-1", "grep", `{"pattern":"TODO","path":"/w"}`, strings.Repeat("a", 500))
+	addSearchRun(m, "s-2", "grep", `{"pattern":"TODO","path":"/w"}`, strings.Repeat("b", 500))
+
+	freed := m.CompactSupersededSearches()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed for superseded search run")
+	}
+	for _, msg := range m.Messages() {
+		for _, b := range msg.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			if b.ToolID == "s-1" && !strings.HasPrefix(b.Output, "[superseded:") {
+				t.Error("expected [superseded: prefix for s-1")
+			}
+			if b.ToolID == "s-2" && strings.HasPrefix(b.Output, "[superseded:") {
+				t.Error("s-2 (latest run) should NOT be compacted")
+			}
+		}
+	}
+}
+
+func TestCompactSupersededSearches_Distinct(t *testing.T) {
+	m := NewManager(100000)
+
+	// Different patterns/paths/globs never supersede each other; neither do
+	// different search tools.
+	addSearchRun(m, "s-1", "grep", `{"pattern":"TODO","path":"/w"}`, strings.Repeat("a", 500))
+	addSearchRun(m, "s-2", "grep", `{"pattern":"FIXME","path":"/w"}`, strings.Repeat("b", 500))
+	addSearchRun(m, "s-3", "grep", `{"pattern":"TODO","path":"/other"}`, strings.Repeat("c", 500))
+	addSearchRun(m, "s-4", "grep", `{"pattern":"TODO","path":"/w","glob":"*.go"}`, strings.Repeat("d", 500))
+	addSearchRun(m, "s-5", "search_files", `{"pattern":"TODO","directory":"/w"}`, strings.Repeat("e", 500))
+	addSearchRun(m, "s-6", "code_search", `{"query":"TODO handling"}`, strings.Repeat("f", 500))
+
+	if freed := m.CompactSupersededSearches(); freed != 0 {
+		t.Fatalf("expected 0 freed for distinct searches, got %d", freed)
+	}
+}
+
+func TestCompactSupersededSearches_SkipsSmallResults(t *testing.T) {
+	m := NewManager(100000)
+
+	addSearchRun(m, "s-1", "grep", `{"pattern":"TODO","path":"/w"}`, "a.go:1:TODO")
+	addSearchRun(m, "s-2", "grep", `{"pattern":"TODO","path":"/w"}`, "a.go:1:TODO")
+
+	if freed := m.CompactSupersededSearches(); freed != 0 {
+		t.Fatalf("expected 0 freed for tiny superseded output, got %d", freed)
+	}
+}
+
+func TestCompactSupersededSearches_KeepsPairing(t *testing.T) {
+	m := NewManager(100000)
+
+	addSearchRun(m, "s-1", "grep", `{"pattern":"TODO","path":"/w"}`, strings.Repeat("a", 500))
+	addSearchRun(m, "s-2", "grep", `{"pattern":"TODO","path":"/w"}`, strings.Repeat("b", 500))
+
+	m.CompactSupersededSearches()
+
+	// Every tool_use must still have its tool_result (provider protocol).
+	useIDs := map[string]bool{}
+	resultIDs := map[string]bool{}
+	for _, msg := range m.Messages() {
+		for _, b := range msg.Content {
+			switch b.Type {
+			case "tool_use":
+				useIDs[b.ToolID] = true
+			case "tool_result":
+				resultIDs[b.ToolID] = true
+			}
+		}
+	}
+	if len(useIDs) != 2 || len(resultIDs) != 2 {
+		t.Fatalf("expected 2 tool_use and 2 tool_result, got %d/%d", len(useIDs), len(resultIDs))
+	}
+	for id := range useIDs {
+		if !resultIDs[id] {
+			t.Errorf("tool_use %s lost its tool_result", id)
+		}
+	}
+}

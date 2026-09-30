@@ -1934,6 +1934,118 @@ func (m *Manager) CompactSupersededCommands() int {
 	return freed
 }
 
+// CompactSupersededSearches rewrites the tool_result output of search tool
+// invocations (search_files, grep, code_search) that a later, identical search
+// has superseded. Repeating a search during iterative debugging is common, and
+// every repeat leaves the older match list in context even though the newer one
+// reflects the current state of the code. Same mechanical tier as reads and
+// commands (AgentDiet "expired" waste): result blocks are replaced in place
+// with a one-line placeholder, never removed, so tool_use/tool_result pairing
+// is preserved for every provider.
+func (m *Manager) CompactSupersededSearches() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Phase 1: collect search tool_use blocks keyed by normalized search
+	// identity, preserving chronological order.
+	keyToToolIDs := make(map[string][]string)
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			key := extractSearchKey(b.ToolName, b.Input)
+			if key == "" {
+				continue
+			}
+			keyToToolIDs[key] = append(keyToToolIDs[key], b.ToolID)
+		}
+	}
+
+	// Phase 2: for each search run more than once, all runs except the last
+	// are superseded by the newer run.
+	supersededIDs := make(map[string]bool)
+	for _, ids := range keyToToolIDs {
+		for _, id := range ids[:len(ids)-1] {
+			supersededIDs[id] = true
+		}
+	}
+	if len(supersededIDs) == 0 {
+		return 0
+	}
+
+	// Phase 3: rewrite superseded tool_results in place.
+	freedChars, compacted := m.compactSupersededToolResults(supersededIDs,
+		"search was re-run later in the conversation")
+	if freedChars == 0 {
+		return 0
+	}
+
+	freed := m.commitMechanicalCompaction()
+	debug.Log("ctx", "CompactSupersededSearches: compacted %d superseded search runs, freed ~%d tokens", compacted, freed)
+	return freed
+}
+
+// extractSearchKey returns the normalized identity of a search-tool invocation,
+// or "" if the tool is not a search tool. Two invocations share a key when they
+// are the same tool searching for the same thing in the same place, so a later
+// one makes the earlier result stale. Scope qualifiers (type/glob) are part of
+// the identity: a filtered grep does not supersede an unfiltered one.
+func extractSearchKey(toolName string, input json.RawMessage) string {
+	var pattern, query, path, glob, fileType string
+	switch toolName {
+	case "search_files":
+		var args struct {
+			Pattern string `json:"pattern"`
+			Dir     string `json:"directory"`
+			Include string `json:"include_pattern"`
+		}
+		if len(input) == 0 || json.Unmarshal(input, &args) != nil {
+			return ""
+		}
+		pattern, path, glob = args.Pattern, args.Dir, args.Include
+	case "grep":
+		var args struct {
+			Pattern string `json:"pattern"`
+			Path    string `json:"path"`
+			Glob    string `json:"glob"`
+			Type    string `json:"type"`
+		}
+		if len(input) == 0 || json.Unmarshal(input, &args) != nil {
+			return ""
+		}
+		pattern, path, glob, fileType = args.Pattern, args.Path, args.Glob, args.Type
+	case "code_search":
+		var args struct {
+			Query string `json:"query"`
+			Type  string `json:"type"`
+		}
+		if len(input) == 0 || json.Unmarshal(input, &args) != nil {
+			return ""
+		}
+		query, fileType = args.Query, args.Type
+	default:
+		return ""
+	}
+
+	pattern = strings.TrimSpace(pattern)
+	query = strings.TrimSpace(query)
+	if pattern == "" && query == "" {
+		return ""
+	}
+	term := pattern
+	if term == "" {
+		term = query
+	}
+	// An absent path and an explicit "." mean the same thing (cwd).
+	if p := strings.TrimSpace(path); p != "." {
+		path = p
+	} else {
+		path = ""
+	}
+	return toolName + "\x00" + term + "\x00" + path + "\x00" + strings.TrimSpace(glob) + "\x00" + strings.TrimSpace(fileType)
+}
+
 // compactSupersededToolResults rewrites the tool_result blocks whose ToolID is
 // in supersededIDs with a one-line placeholder. It is the shared Phase 3 of
 // the mechanical supersession passes (reads and commands): both categories
