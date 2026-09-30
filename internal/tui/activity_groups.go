@@ -128,33 +128,73 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		return formatToolInline(present.DisplayName, present.Detail)
 	}
 
-	// #1427-B: dedupe duplicate todo IDs AT THE ENTRY (last-write-wins).
-	// The #1409 follow-up only guarded the change-entry map; todoOrder
-	// rebuilt from the RAW todos and the chat card passed the raw slice -
-	// both render paths bypassed the protection, so [t1,t2,t1] still
-	// appended the same card twice (exactly what f7f8a7b3 claimed fixed).
-	// Deduping here fixes all three downstream consumers at once.
-	if len(todos) > 1 {
-		last := make(map[string]todoStateItem, len(todos))
-		for _, td := range todos {
-			last[td.ID] = td // later occurrence wins the STATE
-		}
-		uniq := make([]todoStateItem, 0, len(last))
-		seenPos := make(map[string]struct{}, len(last))
-		for _, td := range todos {
-			if _, dup := seenPos[td.ID]; dup {
-				continue // keep FIRST position, skip later dups
-			}
-			seenPos[td.ID] = struct{}{}
-			uniq = append(uniq, last[td.ID]) // ...but the LAST state
-		}
-		todos = uniq
-	}
+	todos = dedupeTodoItems(todos)
 
 	previous := m.todoSnapshot
 	if previous == nil {
 		previous = map[string]todoStateItem{}
 	}
+	lang := m.currentLanguage()
+	current, changes := diffTodoSnapshot(lang, todos, previous)
+
+	m.todoSnapshot = current
+	m.todoOrder = make([]string, 0, len(todos))
+	for _, td := range todos {
+		m.todoOrder = append(m.todoOrder, td.ID)
+	}
+	m.activeTodo = pickActiveTodo(todos)
+	m.updateTodoSidebarVisibility(previous, current)
+
+	if len(changes) == 0 {
+		// #1360: an identical re-write after /clear must still (re)create the
+		// chat card. chatReset empties chatList but keeps todoSnapshot, so the
+		// diff is empty and this branch used to skip chatUpdateTodoItem -
+		// which is exactly the path that rebuilds a missing card (FindByID
+		// miss -> Append). Without it the sidebar (snapshot-driven) showed
+		// tasks while the chat area had no card, until some future change.
+		if len(todos) > 0 && m.chatList != nil && m.chatList.FindByID(todoToolItemID) == nil {
+			m.chatUpdateTodoItem(todos)
+		}
+		if m.activeTodo != nil {
+			return localizeTodoFocus(lang, m.activeTodo.Content)
+		}
+		if lang == LangZhCN {
+			return "同步待办状态"
+		}
+		return "Synced todo state"
+	}
+	// Update TodoToolItem in chatList
+	m.chatUpdateTodoItem(todos)
+
+	return summarizeTodoChanges(lang, changes)
+}
+
+// dedupeTodoItems applies last-write-wins to duplicate todo IDs (#1427-B).
+// State comes from the LAST occurrence, position from the FIRST — fixing all
+// three downstream consumers (snapshot, todoOrder, chat card) at once.
+func dedupeTodoItems(todos []todoStateItem) []todoStateItem {
+	if len(todos) <= 1 {
+		return todos
+	}
+	last := make(map[string]todoStateItem, len(todos))
+	for _, td := range todos {
+		last[td.ID] = td // later occurrence wins the STATE
+	}
+	uniq := make([]todoStateItem, 0, len(last))
+	seenPos := make(map[string]struct{}, len(last))
+	for _, td := range todos {
+		if _, dup := seenPos[td.ID]; dup {
+			continue // keep FIRST position, skip later dups
+		}
+		seenPos[td.ID] = struct{}{}
+		uniq = append(uniq, last[td.ID]) // ...but the LAST state
+	}
+	return uniq
+}
+
+// diffTodoSnapshot merges timestamp state into the incoming todos, builds the
+// new snapshot map, and produces the localized change summary entries.
+func diffTodoSnapshot(lang Language, todos []todoStateItem, previous map[string]todoStateItem) (map[string]todoStateItem, []string) {
 	current := make(map[string]todoStateItem, len(todos))
 	changes := make([]string, 0, len(todos))
 	now := time.Now()
@@ -190,22 +230,28 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		prev, existed := previous[td.ID]
 		switch {
 		case !existed && td.Status == "in_progress":
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "started", td))
+			changes = append(changes, localizeTodoChange(lang, "started", td))
 		case !existed && td.Status == "done":
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "completed", td))
+			changes = append(changes, localizeTodoChange(lang, "completed", td))
 		case !existed:
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "added", td))
+			changes = append(changes, localizeTodoChange(lang, "added", td))
 		case prev.Status != td.Status && td.Status == "in_progress":
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "started", td))
+			changes = append(changes, localizeTodoChange(lang, "started", td))
 		case prev.Status != td.Status && td.Status == "done":
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "completed", td))
+			changes = append(changes, localizeTodoChange(lang, "completed", td))
 		case prev.Status != td.Status:
-			changes = append(changes, localizeTodoChange(m.currentLanguage(), "updated", td))
+			changes = append(changes, localizeTodoChange(lang, "updated", td))
 		}
 	}
-	// #1409 follow-up: previous-map iteration gave the 'removed' entries a
-	// RANDOM order between renders of the same snapshot pair - sort for
-	// stable summaries.
+	changes = append(changes, removedTodoChanges(lang, previous, current)...)
+	return current, changes
+}
+
+// removedTodoChanges lists todos present in previous but absent from current.
+// #1409 follow-up: previous-map iteration gave the 'removed' entries a
+// RANDOM order between renders of the same snapshot pair - sort for
+// stable summaries.
+func removedTodoChanges(lang Language, previous, current map[string]todoStateItem) []string {
 	removed := make([]string, 0, len(previous))
 	for id := range previous {
 		if _, exists := current[id]; !exists {
@@ -213,18 +259,16 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 		}
 	}
 	sort.Strings(removed)
+	changes := make([]string, 0, len(removed))
 	for _, id := range removed {
-		changes = append(changes, localizeTodoChange(m.currentLanguage(), "removed", previous[id]))
+		changes = append(changes, localizeTodoChange(lang, "removed", previous[id]))
 	}
+	return changes
+}
 
-	m.todoSnapshot = current
-	m.todoOrder = make([]string, 0, len(todos))
-	for _, td := range todos {
-		m.todoOrder = append(m.todoOrder, td.ID)
-	}
-	m.activeTodo = nil
-	// Auto-show sidebar when task mode starts (first todo_write with active items).
-	// Auto-hide when all todos reach terminal state (done/failed/blocked) or are cleared.
+// updateTodoSidebarVisibility auto-shows the sidebar when task mode starts and
+// auto-hides it when all todos reach a terminal state or are cleared.
+func (m *Model) updateTodoSidebarVisibility(previous, current map[string]todoStateItem) {
 	if len(previous) == 0 && len(current) > 0 {
 		// Task mode just started — ensure sidebar is visible.
 		m.sidebarVisible = true
@@ -244,36 +288,17 @@ func (m *Model) applyTodoWrite(ts ToolStatusMsg) string {
 			m.sidebarVisible = false
 		}
 	}
+}
+
+// pickActiveTodo returns the first in_progress todo, if any.
+func pickActiveTodo(todos []todoStateItem) *todoStateItem {
 	for _, td := range todos {
 		if td.Status == "in_progress" {
 			tdCopy := td
-			m.activeTodo = &tdCopy
-			break
+			return &tdCopy
 		}
 	}
-
-	if len(changes) == 0 {
-		// #1360: an identical re-write after /clear must still (re)create the
-		// chat card. chatReset empties chatList but keeps todoSnapshot, so the
-		// diff is empty and this branch used to skip chatUpdateTodoItem -
-		// which is exactly the path that rebuilds a missing card (FindByID
-		// miss -> Append). Without it the sidebar (snapshot-driven) showed
-		// tasks while the chat area had no card, until some future change.
-		if len(todos) > 0 && m.chatList != nil && m.chatList.FindByID(todoToolItemID) == nil {
-			m.chatUpdateTodoItem(todos)
-		}
-		if m.activeTodo != nil {
-			return localizeTodoFocus(m.currentLanguage(), m.activeTodo.Content)
-		}
-		if m.currentLanguage() == LangZhCN {
-			return "同步待办状态"
-		}
-		return "Synced todo state"
-	}
-	// Update TodoToolItem in chatList
-	m.chatUpdateTodoItem(todos)
-
-	return summarizeTodoChanges(m.currentLanguage(), changes)
+	return nil
 }
 
 func parseTodoSnapshot(rawArgs string) ([]todoStateItem, bool) {
@@ -294,7 +319,7 @@ func parseTodoSnapshot(rawArgs string) ([]todoStateItem, bool) {
 		return nil, false
 	}
 	// #885: an explicitly EMPTY todos array is a valid "clear all" snapshot
-	// — returning false here short-circuited applyTodoWrite before the
+	// - returning false here short-circuited applyTodoWrite before the
 	// sidebar auto-hide, so clearing todos left an empty sidebar visible.
 	return args.Todos, true
 }
