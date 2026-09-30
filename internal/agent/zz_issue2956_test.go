@@ -32,15 +32,26 @@ func TestIssue2956FileOpsMoveAttribution(t *testing.T) {
 	// Failed moves attribute BOTH endpoints (source and destination) -
 	// both are fixation-relevant targets of the same failed attempt.
 	s := newSolutionFixationState()
-	s.recordToolCall("file_ops", `{"operations":[{"action":"move","source":"/src/a.go","destination":"/src/b.go"}]}`, true)
-	s.recordToolCall("file_ops", `{"operations":[{"action":"move","source":"/src/a.go","destination":"/src/b.go"}]}`, true)
-	s.recordToolCall("file_ops", `{"operations":[{"action":"move","source":"/src/a.go","destination":"/src/b.go"}]}`, true)
+	args := `{"operations":[{"action":"move","source":"/src/a.go","destination":"/src/b.go"}]}`
+	s.recordToolCall("file_ops", args, true)
+	s.recordToolCall("file_ops", args, true)
+	s.recordToolCall("file_ops", args, true)
+	// #2961: checkAndWarn picks worstFile via map-range, so with both
+	// endpoints tied at 3 failures the file named in the rendered warning
+	// is nondeterministic (a.go or b.go) - asserting on one specific
+	// endpoint flipped ~50% per -count iteration and intermittently
+	// reddened CI. Pin the attribution deterministically on failedByFile
+	// (the actual #2956 behavior under test) and accept either endpoint
+	// in the warning text.
+	if s.failedByFile["/src/a.go"] != 3 || s.failedByFile["/src/b.go"] != 3 {
+		t.Fatalf("move must attribute BOTH endpoints (3 failures each), got: %v", s.failedByFile)
+	}
 	msg := s.checkAndWarn()
 	if msg == "" {
 		t.Fatal("#2956: expected warning after 3 failed file_ops moves on same target pair")
 	}
-	if !strings.Contains(msg, "a.go") {
-		t.Errorf("warning should mention the move source, got: %s", msg)
+	if !strings.Contains(msg, "a.go") && !strings.Contains(msg, "b.go") {
+		t.Errorf("warning should mention a move endpoint, got: %s", msg)
 	}
 }
 
