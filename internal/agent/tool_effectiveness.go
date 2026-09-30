@@ -126,6 +126,22 @@ var editResultTools = map[string]bool{
 	"write_file":      true,
 }
 
+// contentMirrorTools return raw file payloads verbatim (#2964): any marker
+// literal inside their result is the FILE's own content (this repository's
+// tool-layer sources embed the bracket forms), not a tool-layer advisory.
+// For these tools the truncation markers only count when found in the tail
+// window - the position where a layer above read_file would have appended
+// an advisory. read_file itself emits no truncation marker (verified: zero
+// occurrences in tool/read_file.go), so this costs no true positives.
+var contentMirrorTools = map[string]bool{
+	"read_file":       true,
+	"multi_file_read": true,
+}
+
+// truncMarkerTailWindow sizes the tail region a content-mirror result is
+// inspected in for truncation markers (#2964).
+const truncMarkerTailWindow = 256
+
 // isPoorResult checks if a non-error result is still effectively a failure
 // (e.g., empty search results, truncated output with advisory).
 func isPoorResult(toolName, content string) bool {
@@ -144,21 +160,29 @@ func isPoorResult(toolName, content string) bool {
 	// intentionally NOT matched here: guardToolOutput runs after recordCall,
 	// and truncClaim tracks that case separately (#363).
 	lower := strings.ToLower(content)
-	if strings.Contains(lower, "[output truncated]") ||
-		strings.Contains(lower, "[result too large]") ||
-		strings.Contains(lower, "[max results reached]") ||
-		strings.Contains(lower, "[lsp output truncated]") ||
-		strings.Contains(lower, "[... mcp result truncated:") ||
-		strings.Contains(lower, "[... mcp resource truncated:") ||
-		strings.Contains(lower, "[output truncated at") ||
+	// #2964: for content-mirror tools the marker literals are payload unless
+	// they sit in the tail window (appended advisory position).
+	markerHay := lower
+	if contentMirrorTools[toolName] {
+		if len(lower) > truncMarkerTailWindow {
+			markerHay = lower[len(lower)-truncMarkerTailWindow:]
+		}
+	}
+	if strings.Contains(markerHay, "[output truncated]") ||
+		strings.Contains(markerHay, "[result too large]") ||
+		strings.Contains(markerHay, "[max results reached]") ||
+		strings.Contains(markerHay, "[lsp output truncated]") ||
+		strings.Contains(markerHay, "[... mcp result truncated:") ||
+		strings.Contains(markerHay, "[... mcp resource truncated:") ||
+		strings.Contains(markerHay, "[output truncated at") ||
 		// run_command truncateMiddle head+tail marker: "... [N lines
 		// omitted - output truncated, showing tail] ..." (and the stderr
 		// variant). The "truncated, showing tail]" tail is unique to that
 		// marker; output_compress's "[N similar lines omitted]" (agent-side
 		// redundancy compression of guidance lines) must NOT match - that
 		// output is not degraded. Found in #1208 review.
-		strings.Contains(lower, "truncated, showing tail]") ||
-		strings.Contains(lower, "[... truncated:") ||
+		strings.Contains(markerHay, "truncated, showing tail]") ||
+		strings.Contains(markerHay, "[... truncated:") ||
 		strings.HasPrefix(lower, "output truncated") ||
 		strings.HasPrefix(lower, "result too large") ||
 		strings.HasPrefix(lower, "max results reached") {
