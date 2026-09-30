@@ -588,13 +588,12 @@ func NewDefaultStore() (*JSONLStore, error) {
 
 // LoadWithOptions loads a session, optionally forcing all messages to be
 // loaded regardless of the time window. Use fullLoad=true for --full.
+// The store mutex is held during the load, same as Load, so concurrent
+// saves on the same session cannot interleave with the read.
 func (s *JSONLStore) LoadWithOptions(id string, fullLoad bool) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	prev := s.fullLoad
-	s.fullLoad = fullLoad
-	defer func() { s.fullLoad = prev }()
-	return s.loadSession(id)
+	return s.loadSession(id, fullLoad)
 }
 
 // SetFullLoad sets the default loading mode for subsequent Load() calls.
@@ -955,7 +954,7 @@ func (s *JSONLStore) Save(ses *Session) error {
 func (s *JSONLStore) Load(id string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.loadSession(id)
+	return s.loadSession(id, s.fullLoad)
 }
 
 // localLightweightEntry pairs a record type tag with its raw JSONL record.
@@ -1049,7 +1048,7 @@ func capContextTail(msgs []provider.Message) []provider.Message {
 	}}, msgs[start:]...)
 }
 
-func (s *JSONLStore) loadSession(id string) (*Session, error) {
+func (s *JSONLStore) loadSession(id string, fullLoad bool) (*Session, error) {
 	path := s.sessionPath(id)
 
 	// Determine if we should apply time-windowed loading for rendering.
@@ -1059,7 +1058,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	// checkpoint-based compaction.
 	var msgCutoff int64 // byte offset: skip message records before this offset
 	var totalMsgCount int
-	if !s.fullLoad {
+	if !fullLoad {
 		msgCutoff, totalMsgCount, _ = findMessageCutoff(path)
 		if msgCutoff > 0 {
 			debug.Log("session", "loadSession %s: time-windowed load, cutoff at offset %d (%d total messages)", id, msgCutoff, totalMsgCount)
@@ -1078,7 +1077,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		// the pre-migration file is stale. Recompute the cutoff against the
 		// rewritten file, otherwise outdated messages leak past the window on
 		// the first resume after migration.
-		if !s.fullLoad {
+		if !fullLoad {
 			msgCutoff, totalMsgCount, _ = findMessageCutoff(path)
 		}
 	}
@@ -1732,10 +1731,8 @@ func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, b
 // message loading. This is used for validation before deletion (e.g., in
 // pruneInvalidIndexEntries) to ensure we don't delete sessions that have user
 // interaction merely because their tail messages don't include a user message.
-// Uses a lightweight clone to avoid racing on s.fullLoad.
 func (s *JSONLStore) loadSessionFull(id string) (*Session, error) {
-	clone := &JSONLStore{dir: s.dir, fullLoad: true}
-	return clone.loadSession(id)
+	return s.loadSession(id, true)
 }
 
 // RepairIndex scans the sessions directory and reconciles with the index.
@@ -1806,7 +1803,7 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 			}
 		}
 		if !found {
-			ses, loadErr := s.loadSession(id)
+			ses, loadErr := s.loadSession(id, true)
 			if loadErr == nil {
 				// Same full-file check as CleanupIfEmpty: time-windowed loading must
 				// not cause deletion of sessions whose user messages are all older

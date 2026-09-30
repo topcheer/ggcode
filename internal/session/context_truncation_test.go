@@ -42,7 +42,7 @@ func TestContextTruncationKeepsDialogue(t *testing.T) {
 	}
 
 	s := &JSONLStore{dir: dir, fullLoad: true}
-	ses, err := s.loadSession(id)
+	ses, err := s.loadSession(id, true)
 	if err != nil {
 		t.Fatal(err)
 	}

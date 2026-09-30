@@ -98,7 +98,7 @@ func TestIssue662_LoadSessionReturnsErrorOnRealIOError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := store.loadSession(ses.ID)
+	loaded, err := store.loadSession(ses.ID, true)
 	if err == nil {
 		t.Fatalf("loadSession must return an error on a real I/O error instead of silently returning a truncated session (#662), got %v msgs", len(loaded.Messages))
 	}
