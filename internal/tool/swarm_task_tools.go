@@ -369,12 +369,31 @@ func (t SwarmTaskCompleteTool) Execute(_ context.Context, input json.RawMessage)
 	// ExpectedStatus (#861); what IS enforceable here is idempotence - a
 	// second complete on an already-completed task (stale board view,
 	// double-fire) must not silently succeed and bump board counters.
-	if cur, ok := tm.Get(args.TaskID); ok && cur.Status == task.StatusCompleted {
-		return Result{IsError: true, Content: fmt.Sprintf("task %s is already completed (owner %q)", cur.ID, cur.Owner)}, nil
+	//
+	// #2794: the pre-check below narrows the race but cannot close it (Get
+	// and Update are separate acquisitions of m.mu). The atomic guarantee
+	// is the conditional Update itself: the ExpectedStatus CAS pins the
+	// observed status, so a concurrent duplicate (second complete, or a
+	// racing status Write) fails inside the lock instead of silently
+	// flipping a completed task back. Get routes the CAS expectation;
+	// completing either Pending (per #1705 semantics - direct complete of
+	// an unclaimed/assigned task is legal, ownership lives elsewhere) or
+	// InProgress (claim flow) is allowed, Completed is not.
+	cur, ok := tm.Get(args.TaskID)
+	if !ok {
+		return Result{IsError: true, Content: fmt.Sprintf("task %s not found", args.TaskID)}, nil
 	}
+	switch cur.Status {
+	case task.StatusCompleted:
+		return Result{IsError: true, Content: fmt.Sprintf("task %s is already completed (owner %q)", cur.ID, cur.Owner)}, nil
+	case task.StatusInProgress:
+	default: // pending or any other non-terminal state
+	}
+	expected := task.TaskStatus(cur.Status)
 	completed := task.TaskStatus(task.StatusCompleted)
 	updated, err := tm.Update(args.TaskID, task.UpdateOptions{
-		Status: &completed,
+		Status:         &completed,
+		ExpectedStatus: &expected,
 	})
 	if err != nil {
 		return Result{IsError: true, Content: err.Error()}, nil
