@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestDetectLanguage(t *testing.T) {
@@ -153,6 +154,41 @@ func TestRunChecksParallel_DeterministicOrder(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestRunChecksParallel_HungCheckTimeout(t *testing.T) {
+	saved := allChecks
+	t.Cleanup(func() { allChecks = saved })
+
+	// block is never closed during the run, simulating a wedged check
+	// (pathological input, blocked external command).
+	block := make(chan struct{})
+	allChecks = []IntegrityCheck{
+		{Name: "hung", Run: func(ctx CheckContext) []string {
+			<-block
+			return []string{"never"}
+		}},
+		{Name: "healthy", Run: func(ctx CheckContext) []string {
+			return []string{"healthy warning"}
+		}},
+	}
+
+	ctx := CheckContext{Lang: LangAny}
+	start := time.Now()
+	warnings := runChecksParallel(ctx)
+	elapsed := time.Since(start)
+
+	// The hung check must be skipped, not suppress the healthy one.
+	if len(warnings) != 1 || warnings[0] != "healthy warning" {
+		t.Errorf("expected only healthy warning, got %v", warnings)
+	}
+	// The runner must give up on the hung check within roughly one timeout
+	// budget instead of stalling forever. Margin covers scheduling jitter.
+	if budget := checkTimeout + 2*time.Second; elapsed > budget {
+		t.Errorf("runChecksParallel blocked %v on a hung check (budget %v); timeout guard failed", elapsed, budget)
+	}
+	// Release the wedged goroutine so the test leaves nothing behind.
+	close(block)
 }
 
 func TestFormatWarnings_Cap(t *testing.T) {
