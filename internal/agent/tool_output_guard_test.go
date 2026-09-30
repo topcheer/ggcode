@@ -97,15 +97,15 @@ func TestGuardToolOutput_PreservesHeadAndTail(t *testing.T) {
 func TestTruncateHeadTail_LineSnapping(t *testing.T) {
 	lines := make([]string, 200)
 	for i := range lines {
-		lines[i] = strings.Repeat("x", 100) // 100 chars per line
+		lines[i] = fmt.Sprintf("%04d %s", i, strings.Repeat("x", 94)) // 100 chars, unique per line
 	}
 	content := strings.Join(lines, "\n") // ~20KB
 
 	result := truncateHeadTail(content, 10000)
 
 	// Result should not start or end with partial lines (after snapping)
-	// The content starts with "xxx..." so head should be a prefix
-	if !strings.HasPrefix(result, strings.Repeat("x", 100)) {
+	// The content starts with the first full line so head should be a prefix
+	if !strings.HasPrefix(result, lines[0]) {
 		t.Errorf("head should start with full line content")
 	}
 	if !strings.Contains(result, "truncated") {
@@ -219,11 +219,19 @@ func TestTruncateHeadTail_PreservesCriticalLines(t *testing.T) {
 	// Build content where the error is in the middle and would be lost
 	// with simple head-tail truncation. Uses newline-separated lines to
 	// simulate real tool output (build logs, test results).
-	head := strings.Repeat("normal build line\n", 400) // ~7.2KB
+	headLines := make([]string, 400)
+	for i := range headLines {
+		headLines[i] = fmt.Sprintf("normal build line %d", i)
+	}
+	head := strings.Join(headLines, "\n") + "\n" // ~7.5KB
 	middle := "FAIL: test_critical - expected success got failure\n" +
 		"error: undefined reference to 'calculate'\n" +
 		"panic: segment violation at 0x1234\n"
-	tail := strings.Repeat("normal tail line\n", 400) // ~7.2KB
+	tailLines := make([]string, 400)
+	for i := range tailLines {
+		tailLines[i] = fmt.Sprintf("normal tail line %d", i)
+	}
+	tail := strings.Join(tailLines, "\n") + "\n" // ~7.5KB
 	content := head + middle + tail
 
 	result := truncateHeadTail(content, 8000)
@@ -298,5 +306,77 @@ func TestFormatHighlights_Empty(t *testing.T) {
 	result := formatHighlights(nil, 1000)
 	if result != "" {
 		t.Errorf("empty input should return empty string, got %q", result)
+	}
+}
+
+func TestCollapseRuns_Basic(t *testing.T) {
+	in := strings.Repeat("retry...\n", 8)
+	out := collapseRuns(in)
+	want := "retry...  [... x8 repeated ...]\n"
+	if out != want {
+		t.Errorf("collapseRuns = %q, want %q", out, want)
+	}
+}
+
+func TestCollapseRuns_BelowThreshold(t *testing.T) {
+	in := strings.Repeat("same\n", 4) // 4 < 5 threshold
+	if out := collapseRuns(in); out != in {
+		t.Errorf("run of 4 should be unchanged, got %q", out)
+	}
+}
+
+func TestCollapseRuns_NoDuplicates(t *testing.T) {
+	in := "a\nb\nc\nd\ne\nf"
+	if out := collapseRuns(in); out != in {
+		t.Errorf("no dup lines should be unchanged, got %q", out)
+	}
+}
+
+func TestCollapseRuns_Mixed(t *testing.T) {
+	in := "start\n" + strings.Repeat("tick\n", 6) + "end"
+	out := collapseRuns(in)
+	if !strings.HasPrefix(out, "start\ntick  [... x6 repeated ...]\nend") {
+		t.Errorf("mixed content not collapsed correctly: %q", out)
+	}
+}
+
+func TestCollapseRuns_TrailingWhitespaceTolerant(t *testing.T) {
+	// Lines differing only in trailing whitespace count as duplicates.
+	in := "line\nline \t\nline\nline\nline\n"
+	out := collapseRuns(in)
+	if !strings.Contains(out, "x5 repeated") {
+		t.Errorf("trailing-whitespace variants should collapse, got %q", out)
+	}
+}
+
+func TestHasConsecutiveDupLines(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"a\nb\nc", false},
+		{"a\na", true},
+		{"a\n\n\n\n\n\nb", false}, // blank lines never count as dups
+		{"", false},
+		{"x\ny\ny\nz", true},
+	}
+	for _, c := range cases {
+		if got := hasConsecutiveDupLines(c.in); got != c.want {
+			t.Errorf("hasConsecutiveDupLines(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestTruncateHeadTail_CollapseAvoidsTruncation(t *testing.T) {
+	// 100 identical 20-byte lines = 2KB, far over maxLen; after collapse
+	// it fits comfortably and no truncation marker should appear.
+	line := strings.Repeat("y", 19)
+	in := strings.Repeat(line+"\n", 100)
+	out := truncateHeadTail(in, 1024)
+	if strings.Contains(out, toolHeadTailTruncationPrefix) {
+		t.Errorf("collapsed content should not need head+tail truncation: %q...", out[:80])
+	}
+	if !strings.Contains(out, "x100 repeated") {
+		t.Errorf("output missing run marker: %q", out)
 	}
 }

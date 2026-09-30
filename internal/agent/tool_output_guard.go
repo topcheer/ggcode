@@ -78,7 +78,71 @@ func guardToolOutput(content string, contextFill float64) string {
 // agent doesn't lose actionable diagnostics buried in large outputs.
 // Snaps to rune boundaries to prevent UTF-8 corruption, then to line
 // boundaries for readability.
+// collapseRuns squashes runs of >=5 consecutive identical non-empty lines
+// into "<line>  [... xN repeated]" before truncation. Build and test logs
+// frequently contain hundreds of identical progress/retry lines; collapsing
+// them is lossless and frees truncation budget for the informative parts.
+// Output reduction pattern (schema-aware reducers, 2026).
+const collapseRunThreshold = 5
+
+func collapseRuns(s string) string {
+	if !hasConsecutiveDupLines(s) {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	var sb strings.Builder
+	sb.Grow(len(s))
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		trimmed := strings.TrimRight(line, " \t\r")
+		j := i + 1
+		if trimmed != "" {
+			for j < len(lines) && strings.TrimRight(lines[j], " \t\r") == trimmed {
+				j++
+			}
+		}
+		run := j - i
+		if run >= collapseRunThreshold {
+			sb.WriteString(trimmed)
+			sb.WriteString(fmt.Sprintf("  [... x%d repeated ...]", run))
+		} else {
+			sb.WriteString(strings.Join(lines[i:j], "\n"))
+		}
+		// Emit the separator only between elements so a trailing empty
+		// element (from a final "\n") doesn't add an extra newline.
+		if j < len(lines) {
+			sb.WriteByte('\n')
+		}
+		i = j
+	}
+	return sb.String()
+}
+
+// hasConsecutiveDupLines is a fast pre-check: returns true if any line is
+// immediately followed by the same line. Lets collapseRuns skip the
+// split/scan for typical outputs without long duplicate runs.
+func hasConsecutiveDupLines(s string) bool {
+	start := 0
+	var prev string
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == '\n' {
+			cur := strings.TrimRight(s[start:i], " \t\r")
+			if cur != "" && cur == prev {
+				return true
+			}
+			prev = cur
+			start = i + 1
+		}
+	}
+	return false
+}
+
 func truncateHeadTail(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	s = collapseRuns(s)
 	if len(s) <= maxLen {
 		return s
 	}
