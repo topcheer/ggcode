@@ -261,13 +261,33 @@ func (a *pcAdapter) loadSessionsFromStore() {
 	debug.Log("pc", "restored %d sessions from store (skipped %d expired)", restored, len(loaded)-restored)
 }
 
+// resolvePCSessionID picks the sessions-map key for a binding (#2967):
+// pairing-built bindings carry TargetID = appId (ReplyBinding prefers
+// SenderID), but the map is keyed by the invite SessionID (= ChannelID on
+// the same binding). Mirror the nostr adapter fallback: if TargetID misses,
+// try ChannelID. Returns "" when neither field is set.
+func resolvePCSessionID(sessions *sync.Map, binding ChannelBinding) string {
+	sessionID := strings.TrimSpace(binding.TargetID)
+	if sessionID == "" {
+		return ""
+	}
+	if _, ok := sessions.Load(sessionID); !ok {
+		if alt := strings.TrimSpace(binding.ChannelID); alt != "" {
+			if _, ok2 := sessions.Load(alt); ok2 {
+				sessionID = alt
+			}
+		}
+	}
+	return sessionID
+}
+
 func (a *pcAdapter) Send(ctx context.Context, binding ChannelBinding, event OutboundEvent) error {
 	client, err := a.ensureConnected(ctx)
 	if err != nil {
 		return fmt.Errorf("PrivateClaw adapter %q: %w", a.name, err)
 	}
 
-	sessionID := strings.TrimSpace(binding.TargetID)
+	sessionID := resolvePCSessionID(&a.sessions, binding)
 	if sessionID == "" {
 		return fmt.Errorf("PrivateClaw session is not bound")
 	}
