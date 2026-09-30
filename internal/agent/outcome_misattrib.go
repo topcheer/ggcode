@@ -66,25 +66,44 @@ var outcomeFailureRe = regexp.MustCompile(
 	`(?i)(?:error[s]?\s|fail(?:ed|ure|ures)?\b|panic:|fatal:|cannot |could not |not found\b|no results?\b|no matches?\b|no such file|undefined:|compilation aborted|BUILD FAILURE|exit code [1-9]|0 tests? pass|0 matches|traceback|exception|segfault|core dumped)`,
 )
 
-// outcomeZeroFailedContextRe matches the text IMMEDIATELY BEFORE a
-// failed/failures token when it is a zero-count summary ("0 failed",
-// "zero failures") - the passing-state summaries every major test runner
-// prints (cargo "0 failed; 0 ignored", jest "0 failed, 0 skipped").
+// outcomeZeroCountContextRe matches the text IMMEDIATELY BEFORE a
+// countable-family token (failed/failures/errors) when it is a zero-count
+// summary ("0 failed", "zero failures", "0 errors") - the passing-state
+// summaries every major test runner and linter prints (cargo "0 failed;
+// 0 ignored", jest "0 failed, 0 skipped", ruff "Found 0 errors").
 // #2913: these must NOT count as failure indicators, same discipline as
 // the existing "0 tests pass" / "0 matches" guards above.
-var outcomeZeroFailedContextRe = regexp.MustCompile(`(?i)(?:0|zero)\s+$`)
+// #2916: the exemption extends to the error family - the error[s]?\s
+// alternative of outcomeFailureRe matches "errors\n" in line-end form
+// ("Found 0 errors\n") while the comma form ("0 errors, 0 warnings")
+// never matches, so only the line-end form needs the guard.
+var outcomeZeroCountContextRe = regexp.MustCompile(`(?i)(?:0|zero)\s+$`)
 
-// isZeroFailedMatch reports whether the fail-family token ending at
-// content[start:end] is preceded by a zero count.
-func isZeroFailedMatch(content string, start, end int) bool {
+// isZeroCountMatch reports whether the fail/error-family token at
+// content[start:end] is preceded by a standalone zero count. Only
+// countable families qualify; tokens that never take a count prefix
+// (panic:, not found, traceback, ...) are left to the plain rules.
+func isZeroCountMatch(content string, start, end int) bool {
 	tok := strings.ToLower(content[start:end])
-	if !strings.Contains(tok, "fail") {
-		return false // not a fail-family hit; other guards don't apply
+	if !strings.Contains(tok, "fail") && !strings.Contains(tok, "error") {
+		return false // not a countable-family hit; the zero guard doesn't apply
 	}
 	if start == 0 {
 		return false
 	}
-	return outcomeZeroFailedContextRe.MatchString(content[:start])
+	prefix := content[:start]
+	loc := outcomeZeroCountContextRe.FindStringIndex(prefix)
+	if loc == nil {
+		return false
+	}
+	// A trailing "0" inside a larger count ("10 failed", "100 errors")
+	// must not read as a zero count (#2916): the digit run must end at
+	// the matched "0"/"zero". Match-position inspection instead of
+	// lookbehind (Go regexp lacks it).
+	if loc[0] > 0 && prefix[loc[0]-1] >= '0' && prefix[loc[0]-1] <= '9' {
+		return false
+	}
+	return true
 }
 
 // Success claim patterns in assistant narrative.
@@ -144,8 +163,8 @@ func containsFailureIndicator(content string) (bool, string) {
 	// misfire on the zero guard or miss the real signal depending on order.
 	var hit string
 	for _, m := range outcomeFailureRe.FindAllStringIndex(content, -1) {
-		if isZeroFailedMatch(content, m[0], m[1]) {
-			continue // "0 failed" / "zero failures" = passing summary
+		if isZeroCountMatch(content, m[0], m[1]) {
+			continue // "0 failed" / "zero failures" / "0 errors" = passing summary
 		}
 		hit = content[m[0]:m[1]]
 		break
