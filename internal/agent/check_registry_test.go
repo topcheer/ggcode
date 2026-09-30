@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -192,14 +193,45 @@ func TestRunChecksParallel_HungCheckTimeout(t *testing.T) {
 }
 
 func TestFormatWarnings_Cap(t *testing.T) {
-	// Generate more warnings than maxIntegrityWarnings
+	// More warnings than maxIntegrityWarnings: keep the most critical
+	// (first, per upstream severity ordering) plus one suppression indicator
+	// with an accurate suppressed count.
 	warnings := []string{"w1", "w2", "w3", "w4", "w5"}
 	result := formatWarnings(warnings)
 
-	// Should be capped at maxIntegrityWarnings (3)
-	count := strings.Count(result, "\n")
-	if count > maxIntegrityWarnings {
-		t.Errorf("expected at most %d warnings, got %d", maxIntegrityWarnings, count)
+	lines := strings.Split(result, "\n")
+	if len(lines) < 2 || lines[0] != "[Post-write integrity check]" {
+		t.Fatalf("expected header first, got %q", result)
+	}
+	body := lines[1:]
+
+	indicator := fmt.Sprintf("... and %d more integrity warning(s) suppressed (see debug log: integrity)",
+		len(warnings)-maxIntegrityWarnings)
+	substantive, indicators := 0, 0
+	for _, l := range body {
+		if l == indicator {
+			indicators++
+			continue
+		}
+		substantive++
+	}
+	if substantive != maxIntegrityWarnings {
+		t.Errorf("expected %d substantive warnings, got %d: %q", maxIntegrityWarnings, substantive, result)
+	}
+	if indicators != 1 {
+		t.Errorf("expected exactly 1 suppression indicator, got %d: %q", indicators, result)
+	}
+	// The cap must keep the first (highest-severity) warning, not a later one.
+	if body[0] != "w1" {
+		t.Errorf("expected first warning w1 to survive the cap, got %q", body[0])
+	}
+}
+
+func TestFormatWarnings_ExactCapNoIndicator(t *testing.T) {
+	// At exactly maxIntegrityWarnings nothing is suppressed: no indicator line.
+	result := formatWarnings([]string{"w1"})
+	if strings.Contains(result, "suppressed") {
+		t.Errorf("unexpected suppression indicator at exactly maxIntegrityWarnings: %q", result)
 	}
 }
 
