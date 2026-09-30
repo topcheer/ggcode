@@ -66,6 +66,27 @@ var outcomeFailureRe = regexp.MustCompile(
 	`(?i)(?:error[s]?\s|fail(?:ed|ure|ures)?\b|panic:|fatal:|cannot |could not |not found\b|no results?\b|no matches?\b|no such file|undefined:|compilation aborted|BUILD FAILURE|exit code [1-9]|0 tests? pass|0 matches|traceback|exception|segfault|core dumped)`,
 )
 
+// outcomeZeroFailedContextRe matches the text IMMEDIATELY BEFORE a
+// failed/failures token when it is a zero-count summary ("0 failed",
+// "zero failures") - the passing-state summaries every major test runner
+// prints (cargo "0 failed; 0 ignored", jest "0 failed, 0 skipped").
+// #2913: these must NOT count as failure indicators, same discipline as
+// the existing "0 tests pass" / "0 matches" guards above.
+var outcomeZeroFailedContextRe = regexp.MustCompile(`(?i)(?:0|zero)\s+$`)
+
+// isZeroFailedMatch reports whether the fail-family token ending at
+// content[start:end] is preceded by a zero count.
+func isZeroFailedMatch(content string, start, end int) bool {
+	tok := strings.ToLower(content[start:end])
+	if !strings.Contains(tok, "fail") {
+		return false // not a fail-family hit; other guards don't apply
+	}
+	if start == 0 {
+		return false
+	}
+	return outcomeZeroFailedContextRe.MatchString(content[:start])
+}
+
 // Success claim patterns in assistant narrative.
 var outcomeSuccessClaimRe = regexp.MustCompile(
 	`(?i)\b(?:done|fixed|resolved|solved|works?\s+(?:correctly|as\s+expected|now)|all\s+(?:set|good|passing|tests?\s+(?:pass|are\s+passing))|verified\s+(?:that\s+)?(?:it|this|everything)\s+works|successfully\s+(?:completed|implemented|fixed|updated)|everything\s+(?:looks?|is)\s+(?:good|correct|fine)|the\s+(?:fix|change|test|build)\s+(?:works?|passes?|is\s+correct)|no\s+(?:issues?|problems?|errors?))\b`,
@@ -116,12 +137,24 @@ func containsFailureIndicator(content string) (bool, string) {
 	if len(content) < 5 {
 		return false, ""
 	}
-	loc := outcomeFailureRe.FindString(content)
-	if loc == "" {
+	// #2913: scan ALL matches, not just the first - a passing test summary
+	// like cargo's "5 passed; 0 failed;" may contain an earlier benign
+	// "fail"-family token that is zero-guarded while a REAL failure signal
+	// appears later in the same output. First-match-wins would either
+	// misfire on the zero guard or miss the real signal depending on order.
+	var hit string
+	for _, m := range outcomeFailureRe.FindAllStringIndex(content, -1) {
+		if isZeroFailedMatch(content, m[0], m[1]) {
+			continue // "0 failed" / "zero failures" = passing summary
+		}
+		hit = content[m[0]:m[1]]
+		break
+	}
+	if hit == "" {
 		return false, ""
 	}
 	// Classify the failure type for a more useful message.
-	lower := strings.ToLower(loc)
+	lower := strings.ToLower(hit)
 	switch {
 	case strings.Contains(lower, "test") || strings.Contains(lower, "fail"):
 		return true, "test/build failure"
