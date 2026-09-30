@@ -230,7 +230,19 @@ func (a *tgAdapter) pollUpdates(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
-	// Handle callback queries (button clicks) first
+	// #2744: dedup runs BEFORE any branch handling. The callback_query arm
+	// used to return ahead of seenUpdate, so a re-delivered callback (the
+	// ack-on-next-poll window: Telegram re-sends updates until the next
+	// successful getUpdates carries the new offset - a timeout, network
+	// failure, or process restart in between re-delivers the same update_id)
+	// executed the handler twice, flipping multi-select choices and
+	// re-answering the callback. Message updates already deduped here.
+	updateID, _ := intValue(update["update_id"])
+	if a.seenUpdate(updateID) {
+		return
+	}
+
+	// Handle callback queries (button clicks)
 	if cb, ok := update["callback_query"].(map[string]any); ok {
 		a.handleCallbackQuery(ctx, cb)
 		return
@@ -238,10 +250,6 @@ func (a *tgAdapter) handleUpdate(ctx context.Context, update map[string]any) {
 
 	msg, ok := update["message"].(map[string]any)
 	if !ok {
-		return
-	}
-	updateID, _ := intValue(update["update_id"])
-	if a.seenUpdate(updateID) {
 		return
 	}
 	msgID := jsonInt64Str(msg["message_id"])
@@ -1034,6 +1042,13 @@ func (a *tgAdapter) seenUpdate(updateID int) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// #2744: seenUpdate is now on the mandatory path for EVERY update kind
+	// (callback_query included), so a zero-value adapter must not panic on
+	// the nil map write. Production constructors pre-make it; this guards
+	// test/edge constructions that skip it.
+	if a.seen == nil {
+		a.seen = make(map[int]time.Time)
+	}
 	now := time.Now()
 	for id, seenAt := range a.seen {
 		if now.Sub(seenAt) > 5*time.Minute {
@@ -1162,13 +1177,19 @@ func (a *tgAdapter) publishState(healthy bool, status, lastErr string) {
 	if a.manager == nil {
 		return
 	}
+	// #2744: botUsername is written under a.mu by connectAndServe (getMe);
+	// reading it bare here raced on the string header during reconnect.
+	// Same RLock pattern as the group-mention read in handleUpdate.
+	a.mu.RLock()
+	botUN := a.botUsername
+	a.mu.RUnlock()
 	a.manager.PublishAdapterState(AdapterState{
 		Name:       a.name,
 		Platform:   PlatformTelegram,
 		Healthy:    healthy,
 		Status:     status,
 		LastError:  lastErr,
-		ContactURI: "https://t.me/" + a.botUsername,
+		ContactURI: "https://t.me/" + botUN,
 		UpdatedAt:  time.Now(),
 	})
 }
