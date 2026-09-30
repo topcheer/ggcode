@@ -1049,9 +1049,13 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 		}
 	}
 
+	// #2737: wrap as m.room.encrypted when the room is E2EE so bot replies
+	// do not land in plaintext on the homeserver.
+	evtType, payload := a.maybeEncryptMessage(ctx, roomID, content)
+
 	txnID := fmt.Sprintf("ggcode-img-%d", a.txnID.Add(1))
 	for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-		_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+		_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), evtType, payload, mautrix.ReqSendEvent{TransactionID: txnID})
 		if err == nil {
 			return nil
 		}
@@ -1081,6 +1085,26 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 
 func (a *matrixAdapter) outboundText(event OutboundEvent) string {
 	return defaultOutboundText(event)
+}
+
+// maybeEncryptMessage wraps a m.room.message content as m.room.encrypted
+// when the room is E2EE and the Olm machine is available (#2737). On
+// encryption failure it falls back to the plaintext payload so messages are
+// never silently dropped.
+func (a *matrixAdapter) maybeEncryptMessage(ctx context.Context, roomID string, content *event.MessageEventContent) (event.Type, interface{}) {
+	a.mu.RLock()
+	mach := a.mach
+	a.mu.RUnlock()
+	if mach == nil {
+		return event.EventMessage, content
+	}
+	enc, err := mach.EncryptMegolmEvent(ctx, id.RoomID(roomID), event.EventMessage, content)
+	if err != nil {
+		debug.Log("matrix", "adapter=%s encrypt room=%s failed (%v), sending plaintext fallback", a.name, roomID, err)
+		return event.EventMessage, content
+	}
+	debug.Log("matrix", "adapter=%s sending E2EE m.room.encrypted to room=%s", a.name, roomID)
+	return event.EventEncrypted, enc
 }
 
 func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
@@ -1154,10 +1178,14 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			}
 		}
 
+		// #2737: wrap as m.room.encrypted when the room is E2EE so bot replies
+		// (which may carry code, paths, key fragments) do not land in plaintext.
+		evtType, payload := a.maybeEncryptMessage(ctx, roomID, content)
+
 		txnID := fmt.Sprintf("ggcode-%d", a.txnID.Add(1))
 		var err error
 		for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-			_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+			_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), evtType, payload, mautrix.ReqSendEvent{TransactionID: txnID})
 			if err == nil {
 				break
 			}
