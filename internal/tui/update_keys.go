@@ -40,18 +40,19 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		// Don't log dropped keypresses during input drain
 		return m, nil
 	}
-	if msg.String() != "ctrl+c" {
+	key := msg.String()
+	if key != "ctrl+c" {
 		m.resetExitConfirm()
 	}
-	if msg.String() != "ctrl+c" && msg.String() != "esc" {
+	if key != "ctrl+c" && key != "esc" {
 		m.resetCancelConfirm()
 	}
-	if (msg.String() == "ctrl+c" || msg.String() == "esc") && m.hasActivePanel() {
+	if (key == "ctrl+c" || key == "esc") && m.hasActivePanel() {
 		m.resetCancelConfirm()
 	}
 	// Don't log every keypress — extremely noisy
 	if m.tmuxMenuOpen {
-		return m.handleTmuxMenuKey(msg.String())
+		return m.handleTmuxMenuKey(key)
 	}
 	// Alt+R reverse input history search (Claude Code v2.0-style; Ctrl+R is
 	// the sidebar toggle here). While the search mode is active it owns the
@@ -63,21 +64,21 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 			return m2, cmd
 		}
 		m = m2 // search mode exited keeping the match; key flows through below
-	} else if msg.String() == "alt+r" {
+	} else if key == "alt+r" {
 		m.beginHistorySearch()
 		return m, nil
 	}
-	if msg.String() == "ctrl+x" {
+	if key == "ctrl+x" {
 		m.openTmuxMenu()
 		return m, nil
 	}
-	if msg.String() == "ctrl+r" {
+	if key == "ctrl+r" {
 		m.sidebarVisible = !m.sidebarVisible
 		m.persistSidebarPreference()
 		m.relayoutAfterSidebarChange()
 		return m, nil
 	}
-	if msg.String() == "ctrl+g" {
+	if key == "ctrl+g" {
 		effort, ok := m.cycleReasoningEffort()
 		if ok {
 			label := displayReasoningEffort(effort)
@@ -91,7 +92,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	// Ctrl+O cycles output style (concise/detailed/socratic/default)
-	if msg.String() == "ctrl+o" {
+	if key == "ctrl+o" {
 		style, ok := m.cycleOutputStyle()
 		if ok {
 			label := config.DisplayOutputStyle(style)
@@ -102,7 +103,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	// Iteration 1: Ctrl+\ toggles compact mode (hide/show sidebar)
-	if msg.String() == "ctrl+\\" {
+	if key == "ctrl+\\" {
 		m.compactMode = !m.compactMode
 		m.sidebarVisible = !m.compactMode
 		m.persistSidebarPreference()
@@ -117,36 +118,36 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	// precedence over everything else.
 	if anyPanelOpen(m) {
 		// fall through to the panel handlers below
-	} else if msg.String() == "alt+up" || msg.String() == "alt+k" {
+	} else if key == "alt+up" || key == "alt+k" {
 		return m, m.cycleSession(-1)
-	} else if msg.String() == "alt+down" || msg.String() == "alt+j" {
+	} else if key == "alt+down" || key == "alt+j" {
 		return m, m.cycleSession(1)
 	}
 	// Iteration 3: Ctrl+Shift+C copies last assistant response to clipboard
-	if msg.String() == "ctrl+shift+c" {
+	if key == "ctrl+shift+c" {
 		m.copyLastAssistantResponse()
 		return m, nil
 	}
 	// Ctrl+L clears the screen (starts a new session), matching universal
 	// terminal convention. Equivalent to /clear.
-	if msg.String() == "ctrl+l" {
+	if key == "ctrl+l" {
 		m.handleClearChat()
 		return m, nil
 	}
 	// Ctrl+C: if sub-agent follow panel is open, close it (same as Esc).
 	// This prevents Ctrl+C from穿透ing to the exit-confirm path when the
 	// user just wants to exit the follow panel.
-	if msg.String() == "ctrl+c" && m.subAgentFollow.isActive() {
+	if key == "ctrl+c" && m.subAgentFollow.isActive() {
 		m.subAgentFollow.deactivate()
 		return m, nil
 	}
 
-	if msg.String() == "ctrl+c" && len(m.langOptions) == 0 && m.closeActivePanel() {
+	if key == "ctrl+c" && len(m.langOptions) == 0 && m.closeActivePanel() {
 		return m, nil
 	}
 
 	// Toggle config save scope (global ↔ instance) in any panel.
-	if msg.String() == "ctrl+t" {
+	if key == "ctrl+t" {
 		_ = m.toggleConfigSaveScope()
 		return m, nil
 	}
@@ -271,7 +272,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	if m.pendingPairingChallenge() != nil {
-		switch msg.String() {
+		switch key {
 		case "esc":
 			return m, m.rejectPendingPairing()
 		case "ctrl+c":
@@ -301,7 +302,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	if len(m.langOptions) > 0 {
-		switch msg.String() {
+		switch key {
 		case "up", "k":
 			m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
 			return m, nil
@@ -348,7 +349,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	// Handle approval mode (selection list)
 	if m.pendingApproval != nil {
-		switch msg.String() {
+		switch key {
 		case "up", "k":
 			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
 			return m, nil
@@ -381,7 +382,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	// Handle diff confirmation mode (selection list)
 	if m.pendingDiffConfirm != nil {
-		switch msg.String() {
+		switch key {
 		case "up", "k":
 			m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
 			return m, nil
@@ -409,7 +410,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 
 	// Esc priority: exit shell/chat mode before canceling agent.
 	// When in shell or chat mode, Esc should exit the mode, not interrupt the agent.
-	if msg.String() == "esc" && (m.shellMode || m.chatMode) {
+	if key == "esc" && (m.shellMode || m.chatMode) {
 		if m.autoCompleteActive {
 			m.autoCompleteActive = false
 			m.autoCompleteItems = nil
@@ -427,7 +428,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		}
 	}
 
-	if m.loading && (msg.String() == "ctrl+c" || msg.String() == "esc") && !m.subAgentFollow.isActive() {
+	if m.loading && (key == "ctrl+c" || key == "esc") && !m.subAgentFollow.isActive() {
 		m.resetExitConfirm()
 		if m.cancelConfirmPending {
 			m.cancelActiveRun()
@@ -437,7 +438,7 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	switch msg.String() {
+	switch key {
 	case "ctrl+n":
 		// Follow mode: toggle panel on/off
 		if len(m.subAgentFollow.slots) > 0 {
@@ -819,7 +820,8 @@ func setValueAtCursor(ta *textarea.Model, value string, row, col int) {
 
 // handleInitPromptKey handles keyboard input for the startup "Create AGENTS.md?" prompt.
 func (m Model) handleInitPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	key := msg.String()
+	switch key {
 	case "y", "Y", "enter":
 		m.initPromptActive = false
 		return m, m.handleInitCommand()
