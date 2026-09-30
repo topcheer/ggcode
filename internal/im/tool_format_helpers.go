@@ -49,520 +49,278 @@ func imCodeBlock(content string) string {
 }
 
 // imLabel returns a localized label string for IM tool display.
+// imLabelEn maps IM tool display keys to English labels.
+var imLabelEn = map[string]string{
+	"run_command":            "Run command",
+	"read":                   "Reading",
+	"read_file":              "Reading file",
+	"edit_file":              "Edit file",
+	"write_file":             "Write file",
+	"find_files":             "Find files",
+	"search":                 "Search",
+	"list_directory":         "List directory",
+	"fetch":                  "Fetch",
+	"update_todos":           "Update todos",
+	"load_skill":             "Load skill",
+	"pages":                  "pages",
+	"lines_extracted":        "lines extracted",
+	"files":                  "files",
+	"showing_first":          "showing first",
+	"lines":                  "lines",
+	"from_line":              "from line",
+	"first_lines":            "lines",
+	"no_output":              "no output",
+	"no_matches":             "no matches",
+	"matches":                "matches",
+	"no_active_commands":     "no active commands",
+	"no_active_agents":       "no active agents",
+	"bg_command_started":     "Background command started",
+	"bg_command":             "Background command",
+	"command_stopped":        "Command stopped",
+	"stop_command":           "Stop command",
+	"read_output":            "Read output",
+	"no_new_output":          "no new output",
+	"wait_command":           "Wait command",
+	"command_done":           "Command completed",
+	"command_failed":         "Command failed",
+	"input_sent":             "Input sent",
+	"send_input":             "Send input",
+	"active_commands":        "Active commands",
+	"sub_task":               "Sub-task",
+	"sub_task_started":       "Sub-task started",
+	"sub_task_done":          "Sub-task completed",
+	"sub_task_list":          "Sub-task list",
+	"no_active_subtasks":     "no active sub-tasks",
+	"mcp_service":            "MCP service",
+	"mcp_service_list":       "MCP service list",
+	"mcp_prompt":             "MCP Prompt",
+	"resource_read":          "Resource read",
+	"resource_content":       "Resource content",
+	"skill_loaded":           "Skill loaded",
+	"skill_load":             "Skill load",
+	"memory_saved":           "Memory saved",
+	"memory_save":            "Memory save",
+	"memory_deleted":         "Memory deleted",
+	"memory_delete":          "Memory delete",
+	"delete_memory":          "Delete memory",
+	"reply_received":         "Reply received",
+	"todos":                  "Todos",
+	"results":                "results",
+	"team_create":            "Create team",
+	"team_delete":            "Delete team",
+	"teammate_spawn":         "Spawn teammate",
+	"teammate_shutdown":      "Shutdown teammate",
+	"send_message":           "Send message",
+	"teammate_results":       "Collect team results",
+	"swarm_task_create":      "Create task",
+	"swarm_task_complete":    "Complete task",
+	"a2a_remote":             "Remote call",
+	"a2a_send_task":          "Send task",
+	"team_created":           "Team created",
+	"team_deleted":           "Team deleted",
+	"teammate_created":       "Teammate created",
+	"teammate_shutdown_done": "Teammate shut down",
+	"message_sent":           "Message sent",
+	"task_created":           "Task created",
+	"task_completed":         "Task completed",
+	"task_sent":              "Task sent",
+	"read_multi":             "Read multiple files",
+	"edit_multi":             "Edit multiple files",
+	"write_multi":            "Write multiple files",
+	"git_stage":              "Stage files",
+	"git_commit":             "Commit",
+	"git_show":               "Git show",
+	"git_blame":              "Git blame",
+	"git_branch_list":        "List branches",
+	"git_staged":             "Files staged",
+	"git_committed":          "Committed",
+	"switch_mode":            "Switch mode",
+	"mode_switched":          "Mode switched",
+	"browser":                "Browser",
+	"edit_notebook":          "Edit notebook",
+	"delegate":               "Delegate",
+	"delegated_to":           "Delegated to",
+	"cron_update":            "Update cron job",
+	"cron_pause":             "Pause cron job",
+	"cron_resume":            "Resume cron job",
+	"cron_get":               "Get cron job",
+	"cron_update_done":       "Cron job updated",
+	"cron_paused":            "Cron job paused",
+	"cron_resumed":           "Cron job resumed",
+	"spawn_agent":            "Spawn agent",
+	"wait_agent":             "Wait for agent",
+	"save_memory":            "Save memory",
+	"config":                 "Config",
+	"mobile_device":          "Mobile device",
+	"im_manage":              "IM adapter",
+	"git_diff":               "Git diff",
+	"git_status":             "Git status",
+	"git_log":                "Git log",
+	"git_remote":             "Git remote",
+	"git_stash":              "Git stash",
+	"git_stash_list":         "Git stash list",
+	"ask_user":               "Ask user",
+	"command_manage":         "Manage command",
+	"command_input":          "Send input",
+	"files_edited":           "files edited",
+	"files_written":          "files written",
+	"files_failed":           "files failed",
+	"edits":                  "edits",
+	"failed":                 "failed",
+	"errors":                 "errors",
+	"cancel_agent":           "Cancelling agent",
+	"task_create":            "Task created",
+	"task_stopped":           "Task stopped",
+	"lsp_definition":         "Go to definition",
+	"lsp_references":         "Find references",
+	"lsp_hover":              "Type info",
+	"lsp_diagnostics":        "Diagnostics",
+	"lsp_rename":             "Rename symbol",
+	"lsp_symbols":            "Symbols",
+	"lsp_implementation":     "Find implementations",
+	"lsp_code_actions":       "Code actions",
+}
+
+// imLabelZh maps IM tool display keys to Simplified Chinese labels.
+var imLabelZh = map[string]string{
+	"run_command":            "执行命令",
+	"read":                   "读取",
+	"read_file":              "读取文件",
+	"edit_file":              "编辑文件",
+	"write_file":             "写入文件",
+	"find_files":             "查找文件",
+	"search":                 "搜索",
+	"list_directory":         "列出目录",
+	"fetch":                  "抓取",
+	"update_todos":           "更新待办列表",
+	"load_skill":             "加载技能",
+	"pages":                  "页",
+	"lines_extracted":        "行",
+	"files":                  "个文件",
+	"showing_first":          "展示前",
+	"lines":                  "行",
+	"from_line":              "从行",
+	"first_lines":            "前 %d 行",
+	"no_output":              "无输出",
+	"no_matches":             "无匹配",
+	"matches":                "处匹配",
+	"no_active_commands":     "无活动命令",
+	"no_active_agents":       "无活动子任务",
+	"bg_command_started":     "后台命令已启动",
+	"bg_command":             "后台命令",
+	"command_stopped":        "命令已停止",
+	"stop_command":           "停止命令",
+	"read_output":            "读取输出",
+	"no_new_output":          "无新输出",
+	"wait_command":           "等待命令",
+	"command_done":           "命令完成",
+	"command_failed":         "命令失败",
+	"input_sent":             "输入已发送",
+	"send_input":             "输入发送",
+	"active_commands":        "活动命令",
+	"sub_task":               "子任务",
+	"sub_task_started":       "子任务已启动",
+	"sub_task_done":          "子任务完成",
+	"sub_task_list":          "子任务列表",
+	"no_active_subtasks":     "无活动子任务",
+	"mcp_service":            "MCP 服务",
+	"mcp_service_list":       "MCP 服务列表",
+	"mcp_prompt":             "MCP Prompt",
+	"resource_read":          "资源读取",
+	"resource_content":       "资源内容",
+	"skill_loaded":           "技能已加载",
+	"skill_load":             "技能加载",
+	"memory_saved":           "记忆已保存",
+	"memory_save":            "记忆保存",
+	"reply_received":         "收到回复",
+	"todos":                  "待办",
+	"results":                "条结果",
+	"team_create":            "创建团队",
+	"team_delete":            "删除团队",
+	"teammate_spawn":         "创建队友",
+	"teammate_shutdown":      "关闭队友",
+	"send_message":           "发送消息",
+	"teammate_results":       "收集团队结果",
+	"swarm_task_create":      "创建任务",
+	"swarm_task_complete":    "完成任务",
+	"a2a_remote":             "远程调用",
+	"a2a_send_task":          "发送任务",
+	"team_created":           "团队已创建",
+	"team_deleted":           "团队已删除",
+	"teammate_created":       "队友已创建",
+	"teammate_shutdown_done": "队友已关闭",
+	"message_sent":           "消息已发送",
+	"task_created":           "任务已创建",
+	"task_completed":         "任务已完成",
+	"task_sent":              "任务已发送",
+	"read_multi":             "读取多文件",
+	"edit_multi":             "编辑多文件",
+	"write_multi":            "写入多文件",
+	"git_stage":              "暂存文件",
+	"git_commit":             "提交",
+	"git_show":               "Git show",
+	"git_blame":              "Git blame",
+	"git_branch_list":        "列出分支",
+	"git_staged":             "文件已暂存",
+	"git_committed":          "已提交",
+	"switch_mode":            "切换模式",
+	"mode_switched":          "模式已切换",
+	"browser":                "浏览器",
+	"edit_notebook":          "编辑笔记本",
+	"delegate":               "委托",
+	"delegated_to":           "委托给",
+	"cron_update":            "更新定时任务",
+	"cron_pause":             "暂停定时任务",
+	"cron_resume":            "恢复定时任务",
+	"cron_get":               "查看定时任务",
+	"cron_update_done":       "定时任务已更新",
+	"cron_paused":            "定时任务已暂停",
+	"cron_resumed":           "定时任务已恢复",
+	"spawn_agent":            "创建子代理",
+	"wait_agent":             "等待子代理",
+	"save_memory":            "保存记忆",
+	"config":                 "配置",
+	"mobile_device":          "移动设备",
+	"im_manage":              "IM 适配器",
+	"git_diff":               "查看差异",
+	"git_status":             "查看状态",
+	"git_log":                "查看日志",
+	"git_remote":             "查看远程",
+	"git_stash":              "储藏",
+	"git_stash_list":         "储藏列表",
+	"ask_user":               "询问用户",
+	"command_manage":         "管理命令",
+	"command_input":          "发送输入",
+	"files_edited":           "个文件已编辑",
+	"files_written":          "个文件已写入",
+	"files_failed":           "个文件失败",
+	"edits":                  "处修改",
+	"failed":                 "个失败",
+	"errors":                 "个错误",
+	"cancel_agent":           "取消子代理",
+	"task_create":            "任务已创建",
+	"task_stopped":           "任务已停止",
+	"lsp_definition":         "跳转定义",
+	"lsp_references":         "查找引用",
+	"lsp_hover":              "类型信息",
+	"lsp_diagnostics":        "诊断",
+	"lsp_rename":             "重命名符号",
+	"lsp_symbols":            "符号",
+	"lsp_implementation":     "查找实现",
+	"lsp_code_actions":       "代码操作",
+}
+
+// imLabel returns a localized label string for IM tool display. A key
+// missing from the selected language table falls back to the key itself.
 func imLabel(lang ToolLanguage, key string) string {
-	switch lang {
-	case ToolLangEn:
-		switch key {
-		case "run_command":
-			return "Run command"
-		case "read":
-			return "Reading"
-		case "read_file":
-			return "Reading file"
-		case "edit_file":
-			return "Edit file"
-		case "write_file":
-			return "Write file"
-		case "find_files":
-			return "Find files"
-		case "search":
-			return "Search"
-		case "list_directory":
-			return "List directory"
-		case "fetch":
-			return "Fetch"
-		case "update_todos":
-			return "Update todos"
-		case "load_skill":
-			return "Load skill"
-		case "pages":
-			return "pages"
-		case "lines_extracted":
-			return "lines extracted"
-		case "files":
-			return "files"
-		case "showing_first":
-			return "showing first"
-		case "lines":
-			return "lines"
-		case "from_line":
-			return "from line"
-		case "first_lines":
-			return "lines"
-		case "no_output":
-			return "no output"
-		case "no_matches":
-			return "no matches"
-		case "matches":
-			return "matches"
-		case "no_active_commands":
-			return "no active commands"
-		case "no_active_agents":
-			return "no active agents"
-		case "bg_command_started":
-			return "Background command started"
-		case "bg_command":
-			return "Background command"
-		case "command_stopped":
-			return "Command stopped"
-		case "stop_command":
-			return "Stop command"
-		case "read_output":
-			return "Read output"
-		case "no_new_output":
-			return "no new output"
-		case "wait_command":
-			return "Wait command"
-		case "command_done":
-			return "Command completed"
-		case "command_failed":
-			return "Command failed"
-		case "input_sent":
-			return "Input sent"
-		case "send_input":
-			return "Send input"
-		case "active_commands":
-			return "Active commands"
-		case "sub_task":
-			return "Sub-task"
-		case "sub_task_started":
-			return "Sub-task started"
-		case "sub_task_done":
-			return "Sub-task completed"
-		case "sub_task_list":
-			return "Sub-task list"
-		case "no_active_subtasks":
-			return "no active sub-tasks"
-		case "mcp_service":
-			return "MCP service"
-		case "mcp_service_list":
-			return "MCP service list"
-		case "mcp_prompt":
-			return "MCP Prompt"
-		case "resource_read":
-			return "Resource read"
-		case "resource_content":
-			return "Resource content"
-		case "skill_loaded":
-			return "Skill loaded"
-		case "skill_load":
-			return "Skill load"
-		case "memory_saved":
-			return "Memory saved"
-		case "memory_save":
-			return "Memory save"
-		case "memory_deleted":
-			return "Memory deleted"
-		case "memory_delete":
-			return "Memory delete"
-		case "delete_memory":
-			return "Delete memory"
-		case "reply_received":
-			return "Reply received"
-		case "todos":
-			return "Todos"
-		case "results":
-			return "results"
-		case "team_create":
-			return "Create team"
-		case "team_delete":
-			return "Delete team"
-		case "teammate_spawn":
-			return "Spawn teammate"
-		case "teammate_shutdown":
-			return "Shutdown teammate"
-		case "send_message":
-			return "Send message"
-		case "teammate_results":
-			return "Collect team results"
-		case "swarm_task_create":
-			return "Create task"
-		case "swarm_task_complete":
-			return "Complete task"
-		case "a2a_remote":
-			return "Remote call"
-		case "a2a_send_task":
-			return "Send task"
-		case "team_created":
-			return "Team created"
-		case "team_deleted":
-			return "Team deleted"
-		case "teammate_created":
-			return "Teammate created"
-		case "teammate_shutdown_done":
-			return "Teammate shut down"
-		case "message_sent":
-			return "Message sent"
-		case "task_created":
-			return "Task created"
-		case "task_completed":
-			return "Task completed"
-		case "task_sent":
-			return "Task sent"
-		case "read_multi":
-			return "Read multiple files"
-		case "edit_multi":
-			return "Edit multiple files"
-		case "write_multi":
-			return "Write multiple files"
-		case "git_stage":
-			return "Stage files"
-		case "git_commit":
-			return "Commit"
-		case "git_show":
-			return "Git show"
-		case "git_blame":
-			return "Git blame"
-		case "git_branch_list":
-			return "List branches"
-		case "git_staged":
-			return "Files staged"
-		case "git_committed":
-			return "Committed"
-		case "switch_mode":
-			return "Switch mode"
-		case "mode_switched":
-			return "Mode switched"
-		case "browser":
-			return "Browser"
-		case "edit_notebook":
-			return "Edit notebook"
-		case "delegate":
-			return "Delegate"
-		case "delegated_to":
-			return "Delegated to"
-		case "cron_update":
-			return "Update cron job"
-		case "cron_pause":
-			return "Pause cron job"
-		case "cron_resume":
-			return "Resume cron job"
-		case "cron_get":
-			return "Get cron job"
-		case "cron_update_done":
-			return "Cron job updated"
-		case "cron_paused":
-			return "Cron job paused"
-		case "cron_resumed":
-			return "Cron job resumed"
-		case "spawn_agent":
-			return "Spawn agent"
-		case "wait_agent":
-			return "Wait for agent"
-		case "save_memory":
-			return "Save memory"
-		case "config":
-			return "Config"
-		case "mobile_device":
-			return "Mobile device"
-		case "im_manage":
-			return "IM adapter"
-		case "git_diff":
-			return "Git diff"
-		case "git_status":
-			return "Git status"
-		case "git_log":
-			return "Git log"
-		case "git_remote":
-			return "Git remote"
-		case "git_stash":
-			return "Git stash"
-		case "git_stash_list":
-			return "Git stash list"
-		case "ask_user":
-			return "Ask user"
-		case "command_manage":
-			return "Manage command"
-		case "command_input":
-			return "Send input"
-		case "files_edited":
-			return "files edited"
-		case "files_written":
-			return "files written"
-		case "files_failed":
-			return "files failed"
-		case "edits":
-			return "edits"
-		case "failed":
-			return "failed"
-		case "errors":
-			return "errors"
-		case "cancel_agent":
-			return "Cancelling agent"
-		case "task_create":
-			return "Task created"
-		case "task_stopped":
-			return "Task stopped"
-		case "lsp_definition":
-			return "Go to definition"
-		case "lsp_references":
-			return "Find references"
-		case "lsp_hover":
-			return "Type info"
-		case "lsp_diagnostics":
-			return "Diagnostics"
-		case "lsp_rename":
-			return "Rename symbol"
-		case "lsp_symbols":
-			return "Symbols"
-		case "lsp_implementation":
-			return "Find implementations"
-		case "lsp_code_actions":
-			return "Code actions"
+	if lang == ToolLangEn {
+		if s, ok := imLabelEn[key]; ok {
+			return s
 		}
-	default: // zh-CN
-		switch key {
-		case "run_command":
-			return "执行命令"
-		case "read":
-			return "读取"
-		case "read_file":
-			return "读取文件"
-		case "edit_file":
-			return "编辑文件"
-		case "write_file":
-			return "写入文件"
-		case "find_files":
-			return "查找文件"
-		case "search":
-			return "搜索"
-		case "list_directory":
-			return "列出目录"
-		case "fetch":
-			return "抓取"
-		case "update_todos":
-			return "更新待办列表"
-		case "load_skill":
-			return "加载技能"
-		case "pages":
-			return "页"
-		case "lines_extracted":
-			return "行"
-		case "files":
-			return "个文件"
-		case "showing_first":
-			return "展示前"
-		case "lines":
-			return "行"
-		case "from_line":
-			return "从行"
-		case "first_lines":
-			return "前 %d 行"
-		case "no_output":
-			return "无输出"
-		case "no_matches":
-			return "无匹配"
-		case "matches":
-			return "处匹配"
-		case "no_active_commands":
-			return "无活动命令"
-		case "no_active_agents":
-			return "无活动子任务"
-		case "bg_command_started":
-			return "后台命令已启动"
-		case "bg_command":
-			return "后台命令"
-		case "command_stopped":
-			return "命令已停止"
-		case "stop_command":
-			return "停止命令"
-		case "read_output":
-			return "读取输出"
-		case "no_new_output":
-			return "无新输出"
-		case "wait_command":
-			return "等待命令"
-		case "command_done":
-			return "命令完成"
-		case "command_failed":
-			return "命令失败"
-		case "input_sent":
-			return "输入已发送"
-		case "send_input":
-			return "输入发送"
-		case "active_commands":
-			return "活动命令"
-		case "sub_task":
-			return "子任务"
-		case "sub_task_started":
-			return "子任务已启动"
-		case "sub_task_done":
-			return "子任务完成"
-		case "sub_task_list":
-			return "子任务列表"
-		case "no_active_subtasks":
-			return "无活动子任务"
-		case "mcp_service":
-			return "MCP 服务"
-		case "mcp_service_list":
-			return "MCP 服务列表"
-		case "mcp_prompt":
-			return "MCP Prompt"
-		case "resource_read":
-			return "资源读取"
-		case "resource_content":
-			return "资源内容"
-		case "skill_loaded":
-			return "技能已加载"
-		case "skill_load":
-			return "技能加载"
-		case "memory_saved":
-			return "记忆已保存"
-		case "memory_save":
-			return "记忆保存"
-		case "reply_received":
-			return "收到回复"
-		case "todos":
-			return "待办"
-		case "results":
-			return "条结果"
-		case "team_create":
-			return "创建团队"
-		case "team_delete":
-			return "删除团队"
-		case "teammate_spawn":
-			return "创建队友"
-		case "teammate_shutdown":
-			return "关闭队友"
-		case "send_message":
-			return "发送消息"
-		case "teammate_results":
-			return "收集团队结果"
-		case "swarm_task_create":
-			return "创建任务"
-		case "swarm_task_complete":
-			return "完成任务"
-		case "a2a_remote":
-			return "远程调用"
-		case "a2a_send_task":
-			return "发送任务"
-		case "team_created":
-			return "团队已创建"
-		case "team_deleted":
-			return "团队已删除"
-		case "teammate_created":
-			return "队友已创建"
-		case "teammate_shutdown_done":
-			return "队友已关闭"
-		case "message_sent":
-			return "消息已发送"
-		case "task_created":
-			return "任务已创建"
-		case "task_completed":
-			return "任务已完成"
-		case "task_sent":
-			return "任务已发送"
-		case "read_multi":
-			return "读取多文件"
-		case "edit_multi":
-			return "编辑多文件"
-		case "write_multi":
-			return "写入多文件"
-		case "git_stage":
-			return "暂存文件"
-		case "git_commit":
-			return "提交"
-		case "git_show":
-			return "Git show"
-		case "git_blame":
-			return "Git blame"
-		case "git_branch_list":
-			return "列出分支"
-		case "git_staged":
-			return "文件已暂存"
-		case "git_committed":
-			return "已提交"
-		case "switch_mode":
-			return "切换模式"
-		case "mode_switched":
-			return "模式已切换"
-		case "browser":
-			return "浏览器"
-		case "edit_notebook":
-			return "编辑笔记本"
-		case "delegate":
-			return "委托"
-		case "delegated_to":
-			return "委托给"
-		case "cron_update":
-			return "更新定时任务"
-		case "cron_pause":
-			return "暂停定时任务"
-		case "cron_resume":
-			return "恢复定时任务"
-		case "cron_get":
-			return "查看定时任务"
-		case "cron_update_done":
-			return "定时任务已更新"
-		case "cron_paused":
-			return "定时任务已暂停"
-		case "cron_resumed":
-			return "定时任务已恢复"
-		case "spawn_agent":
-			return "创建子代理"
-		case "wait_agent":
-			return "等待子代理"
-		case "save_memory":
-			return "保存记忆"
-		case "config":
-			return "配置"
-		case "mobile_device":
-			return "移动设备"
-		case "im_manage":
-			return "IM 适配器"
-		case "git_diff":
-			return "查看差异"
-		case "git_status":
-			return "查看状态"
-		case "git_log":
-			return "查看日志"
-		case "git_remote":
-			return "查看远程"
-		case "git_stash":
-			return "储藏"
-		case "git_stash_list":
-			return "储藏列表"
-		case "ask_user":
-			return "询问用户"
-		case "command_manage":
-			return "管理命令"
-		case "command_input":
-			return "发送输入"
-		case "files_edited":
-			return "个文件已编辑"
-		case "files_written":
-			return "个文件已写入"
-		case "files_failed":
-			return "个文件失败"
-		case "edits":
-			return "处修改"
-		case "failed":
-			return "个失败"
-		case "errors":
-			return "个错误"
-		case "cancel_agent":
-			return "取消子代理"
-		case "task_create":
-			return "任务已创建"
-		case "task_stopped":
-			return "任务已停止"
-		case "lsp_definition":
-			return "跳转定义"
-		case "lsp_references":
-			return "查找引用"
-		case "lsp_hover":
-			return "类型信息"
-		case "lsp_diagnostics":
-			return "诊断"
-		case "lsp_rename":
-			return "重命名符号"
-		case "lsp_symbols":
-			return "符号"
-		case "lsp_implementation":
-			return "查找实现"
-		case "lsp_code_actions":
-			return "代码操作"
-		}
+		return key
+	}
+	if s, ok := imLabelZh[key]; ok {
+		return s
 	}
 	return key
 }
