@@ -1193,7 +1193,12 @@ func (m *MCPManager) Refresh(name string) (found bool, outcome RefreshOutcome, c
 }
 
 func (m *MCPManager) Install(ctx context.Context, server config.MCPServerConfig) error {
-	plugin := NewMCPPlugin(server)
+	// #2779: build via newPluginFromConfig so the manager's sampling and
+	// elicitation handlers propagate - a bare NewMCPPlugin left runtime-
+	// installed servers permanently without reverse-request support
+	// (-32601 method not supported) while the same server loaded via
+	// Reload worked.
+	plugin := m.newPluginFromConfig(server)
 
 	var previous *MCPPlugin
 	m.mu.Lock()
