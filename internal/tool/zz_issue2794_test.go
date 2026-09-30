@@ -21,10 +21,13 @@ func completeInput(teamID, taskID string) []byte {
 	return b
 }
 
-// A pending (unclaimed) task must NOT be completable: completing unclaimed
-// work would fabricate output nobody produced. The CAS rejects it because
-// the status is pending, not in_progress.
-func TestIssue2794CompletePendingTaskRejected(t *testing.T) {
+// Per #1705 semantics, a pending (unclaimed/assigned) task MAY be
+// completed directly - the tool layer has no caller identity, ownership
+// enforcement lives with the claim path. What the #2794 CAS adds is
+// atomicity: the complete pins the observed status, so a racing status
+// write between Get and Update fails inside the lock instead of silently
+// flipping a completed task back.
+func TestIssue2794PendingCompleteAllowedPer1705(t *testing.T) {
 	mgr := swarmTestManager(t)
 	team := mgr.CreateTeam("t2794-pending", "leader")
 
@@ -43,11 +46,15 @@ func TestIssue2794CompletePendingTaskRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.IsError {
-		t.Fatalf("completing a pending (unclaimed) task should fail via ExpectedStatus CAS, got success: %s", result.Content)
+	if result.IsError {
+		t.Fatalf("first complete of a pending task must succeed per #1705 semantics, got: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "expected") {
-		t.Fatalf("error should surface the status mismatch, got: %s", result.Content)
+	// The completed task must now reject a second complete via the Get
+	// guard (observable idempotence) - the CAS is the lock-internal
+	// backstop for the race window.
+	second, _ := tool.Execute(context.Background(), completeInput(team.ID, created.ID))
+	if !second.IsError {
+		t.Fatalf("second complete must be rejected, got success: %s", second.Content)
 	}
 }
 
