@@ -97,6 +97,14 @@ func TestIssue2744PublishStateConcurrentBotUsername(t *testing.T) {
 	}
 	wg.Wait()
 
+	// The 500 racing publishes may have read any intermediate username (the
+	// writer goroutine is not synchronized with the publish loop) -- under
+	// CI load the last racing publish can observe bot388 while the writer
+	// only later reaches bot499, leaving a stale recorded state (flaky on
+	// #2949/#2950 CI). With the writer DONE (wg.Wait above), one more
+	// publish deterministically reads the final bot499.
+	a.publishState(true, "connected", "")
+
 	mgr.mu.RLock()
 	st, ok := mgr.adapters["probe"]
 	mgr.mu.RUnlock()
