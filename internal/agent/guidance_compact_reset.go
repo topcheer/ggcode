@@ -216,7 +216,7 @@ var guidanceCounterResets = []func(*Agent){
 	// tool_thermal (no mutex; agent-loop single-goroutine access)
 	func(a *Agent) {
 		if a.toolThermal != nil {
-			a.toolThermal.warned = false
+			a.toolThermal.reset()
 		}
 	},
 	// strategy_fixation (no mutex; agent-loop single-goroutine access)

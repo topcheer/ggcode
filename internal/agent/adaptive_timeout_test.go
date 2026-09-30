@@ -25,6 +25,10 @@ func TestClassifyTool(t *testing.T) {
 		{"lsp_definition", catLSP},
 		{"lsp_hover", catLSP},
 		{"code_health", catLSP},
+		// Exact-match map entry must take precedence over the lsp_ prefix rule.
+		{"lsp_rename", catEdit},
+		// Read-only lsp_ tools without exact entries fall through to the prefix rule.
+		{"lsp_code_actions", catLSP},
 		{"web_search", catWeb},
 		{"web_fetch", catWeb},
 		{"git_status", catGit},
