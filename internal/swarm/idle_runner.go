@@ -607,7 +607,8 @@ func executeTask(
 }
 
 // allBlockersComplete returns true if every task listed in tk.BlockedBy has
-// status "completed". Tasks with no BlockedBy entries return true.
+// status "completed" (genuine completion - not parking, see below).
+// Tasks with no BlockedBy entries return true.
 func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 	if len(tk.BlockedBy) == 0 {
 		return true
@@ -619,6 +620,17 @@ func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 			return false
 		}
 		if blocker.Status != task.StatusCompleted {
+			return false
+		}
+		// #2786: "completed" carries a second meaning - PARKING. The
+		// permanent-failure paths (quota/auth, and the #1295 max-retries
+		// cap) mark a task completed with a permanent_error metadata key
+		// so it is never re-claimed, but no output was produced. Treating
+		// such a blocker as complete silently unlocked dependents to run
+		// on nonexistent outputs, burning full LLM runs and cascading
+		// hallucinated "completed" results downstream. A parked blocker
+		// keeps its dependents blocked until a human intervenes.
+		if _, parked := blocker.Metadata["permanent_error"]; parked {
 			return false
 		}
 	}
