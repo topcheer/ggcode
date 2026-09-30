@@ -246,6 +246,14 @@ func (t *UDPTransport) processDatagram(data []byte, remoteAddr *net.UDPAddr, sou
 		return
 	}
 
+	// Single-datagram messages wrap the original (possibly compressed)
+	// envelope bytes as a base64 JSON string (splitFragments) - restore the
+	// inner envelope before dispatch, mirroring handleFragment's reassembly
+	// (#2765: the hub unmarshals Payload as a JSON object, so the raw base64
+	// string failed every case's json.Unmarshal and messages were silently
+	// dropped while the ACK still reported delivery).
+	t.restoreSingleDatagram(&env)
+
 	// Normal message — dispatch to hub
 	t.hub.handleUDPEnvelope(env, remoteAddr)
 
@@ -586,6 +594,42 @@ func (t *UDPTransport) handleFragment(env udpEnvelope, remoteAddr *net.UDPAddr, 
 	// Process the complete message
 	completeEnv.APIKey = env.APIKey // preserve auth
 	t.hub.handleUDPEnvelope(completeEnv, remoteAddr)
+}
+
+// restoreSingleDatagram reverses the single-datagram wrapping applied by
+// splitFragments: small envelopes travel as one non-fragment datagram whose
+// Payload is a base64 JSON string of the original (possibly compressed)
+// envelope bytes. Before #2765 the base64 string was passed straight to the
+// hub, where every json.Unmarshal (string into a struct) failed and the
+// message was silently dropped while the unconditional ACK still told the
+// sender it was delivered, suppressing the multicast fallback retry. This
+// mirrors handleFragment's restoration: base64 decode -> decompress if
+// gzipped (capped by maxUDPDecompressed) -> re-unmarshal the inner
+// envelope. Empty or JSON-object payloads (acks, legacy peers) pass
+// through untouched; foreign formats log and pass through so the hub's
+// type switch retains its existing behavior for them.
+func (t *UDPTransport) restoreSingleDatagram(env *udpEnvelope) {
+	if len(env.Payload) == 0 || env.Payload[0] == '{' {
+		return
+	}
+	var b64 string
+	if err := json.Unmarshal(env.Payload, &b64); err != nil {
+		debug.Log("lanchat-udp", "single-datagram payload not a JSON string: %v", err)
+		return
+	}
+	inner, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		debug.Log("lanchat-udp", "single-datagram base64 decode error: %v", err)
+		return
+	}
+	inner = decompressIfGzipped(inner)
+	var restored udpEnvelope
+	if err := json.Unmarshal(inner, &restored); err != nil {
+		debug.Log("lanchat-udp", "single-datagram reassembly parse error: %v", err)
+		return
+	}
+	restored.APIKey = env.APIKey // preserve auth (same as fragment path)
+	*env = restored
 }
 
 // cleanupExpiredFragments removes fragment assemblies that have timed out.
