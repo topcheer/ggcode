@@ -46,6 +46,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -302,7 +303,7 @@ func (s *solutionFixationState) checkAndWarn() string {
 		return ""
 	}
 
-	var worstFile string
+	var worstFiles []string
 	worstCount := 0
 	for f, c := range s.failedByFile {
 		if s.firedFor[f] {
@@ -310,7 +311,14 @@ func (s *solutionFixationState) checkAndWarn() string {
 		}
 		if c > worstCount {
 			worstCount = c
-			worstFile = f
+			worstFiles = []string{f}
+		} else if c == worstCount && worstCount > 0 {
+			// #2956 followup: a failed file_ops move attributes BOTH endpoints
+			// (source+destination) - ties at the max count must ALL be listed,
+			// not whichever the map iterator happens to yield first (the old
+			// single-pick made the warning nondeterministic and the move-source
+			// probe flaky on CI).
+			worstFiles = append(worstFiles, f)
 		}
 	}
 
@@ -318,10 +326,19 @@ func (s *solutionFixationState) checkAndWarn() string {
 		return ""
 	}
 
-	s.firedFor[worstFile] = true
+	sort.Strings(worstFiles)
+	for _, f := range worstFiles {
+		s.firedFor[f] = true
+	}
 	s.warningCount++
 
-	msg := "[Solution Fixation Alert] %d failed edit attempts have targeted %q. " +
+	quoted := make([]string, len(worstFiles))
+	for i, f := range worstFiles {
+		quoted[i] = fmt.Sprintf("%q", f)
+	}
+	targetList := strings.Join(quoted, ", ")
+
+	msg := "[Solution Fixation Alert] %d failed edit attempts have targeted %s. " +
 		"You appear anchored on the hypothesis that the root cause is in this file, " +
 		"but repeated failures strongly suggest the diagnosis is wrong. " +
 		"STEP BACK: reconsider the root-cause analysis from scratch. " +
@@ -332,5 +349,5 @@ func (s *solutionFixationState) checkAndWarn() string {
 		"re-read the file and refresh your edit anchor instead of abandoning the hypothesis. " +
 		"Do not make another edit to %s until you have gathered new evidence."
 
-	return fmt.Sprintf(msg, worstCount, worstFile, worstFile)
+	return fmt.Sprintf(msg, worstCount, targetList, strings.Join(worstFiles, " or "))
 }
