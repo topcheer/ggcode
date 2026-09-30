@@ -137,6 +137,16 @@ func extractFilePathsFromEditArgs(args string) []string {
 		Files    []struct {
 			Path string `json:"path"`
 		} `json:"files"`
+		// #2956: file_ops passes its targets as operations[].source /
+		// operations[].destination, not as a top-level path. Without this
+		// field the extractor returned nil for every file_ops call, so failed
+		// deletes/moves never incremented failedByFile and the #1704 case-5
+		// file_ops inclusion in agentMutationEditTools was a half-fix.
+		Operations []struct {
+			Action      string `json:"action"`
+			Source      string `json:"source"`
+			Destination string `json:"destination"`
+		} `json:"operations"`
 	}
 
 	var paths []string
@@ -153,6 +163,13 @@ func extractFilePathsFromEditArgs(args string) []string {
 		add(parsed.Notebook)
 		for _, f := range parsed.Files {
 			add(f.Path)
+		}
+		// #2956: attribute file_ops targets - source for delete/move/mkdir,
+		// destination for move/mkdir (both endpoints of a failed move are
+		// fixation-relevant targets).
+		for _, op := range parsed.Operations {
+			add(op.Source)
+			add(op.Destination)
 		}
 		if len(paths) > 0 {
 			return dedupePathsFixation(paths)
