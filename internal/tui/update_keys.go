@@ -151,123 +151,9 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
-	// Handle approval mode (selection list)
-	if m.modelPanel != nil {
-		return m.handleModelPanelKey(msg)
-	}
-
-	if m.providerPanel != nil {
-		return m.handleProviderPanelKey(msg)
-	}
-
-	// QR overlay takes priority over all IM panels — Esc/q returns to the panel behind it.
-	if m.qrOverlay != nil {
-		return m.handleQROverlayKey(msg)
-	}
-
-	if m.qqPanel != nil {
-		return m.handleQQPanelKey(msg)
-	}
-
-	if m.tgPanel != nil {
-		return m.handleTGPanelKey(msg)
-	}
-
-	if m.pcPanel != nil {
-		return m.handlePCPanelKey(msg)
-	}
-
-	if m.discordPanel != nil {
-		return m.handleDiscordPanelKey(msg)
-	}
-
-	if m.feishuPanel != nil {
-		return m.handleFeishuPanelKey(msg)
-	}
-
-	if m.slackPanel != nil {
-		return m.handleSlackPanelKey(msg)
-	}
-
-	if m.dingtalkPanel != nil {
-		return m.handleDingtalkPanelKey(msg)
-	}
-
-	if m.wechatPanel != nil {
-		return m.handleWechatPanelKey(msg)
-	}
-	if m.wecomPanel != nil {
-		return m.handleWeComPanelKey(msg)
-	}
-	if m.mattermostPanel != nil {
-		return m.handleMattermostPanelKey(msg)
-	}
-	if m.matrixPanel != nil {
-		return m.handleMatrixPanelKey(msg)
-	}
-	if m.signalPanel != nil {
-		return m.handleSignalPanelKey(msg)
-	}
-	if m.ircPanel != nil {
-		return m.handleIRCPanelKey(msg)
-	}
-	if m.nostrPanel != nil {
-		return m.handleNostrPanelKey(msg)
-	}
-	if m.twitchPanel != nil {
-		return m.handleTwitchPanelKey(msg)
-	}
-
-	if m.whatsappPanel != nil {
-		return m.handleWhatsAppPanelKey(msg)
-	}
-
-	if m.imPanel != nil {
-		return m.handleIMPanelKey(msg)
-	}
-
-	if m.mcpPanel != nil {
-		return m.handleMCPPanelKey(msg)
-	}
-
-	if m.streamPanel != nil {
-		return m.updateStreamPanel(msg)
-	}
-
-	if m.knightPanel != nil {
-		return m.updateKnightPanel(msg)
-	}
-
-	if m.impersonatePanel != nil {
-		return m.handleImpersonatePanelKey(msg)
-	}
-
-	if m.skillsPanel != nil {
-		return m.handleSkillsPanelKey(msg)
-	}
-
-	if m.statsPanel != nil {
-		return m.handleStatsPanelKey(msg)
-	}
-
-	if m.usagePanel != nil {
-		return m.handleUsagePanelKey(msg)
-	}
-
-	if m.hooksPanel != nil {
-		return m.handleHooksPanelKey(msg)
-	}
-
-	if m.inspectorPanel != nil {
-		return m.handleInspectorPanelKey(msg)
-	}
-
-	if m.initPromptActive {
-		return m.handleInitPromptKey(msg)
-	}
-
-	if m.lanChatPanel != nil {
-		return m.handleLanChatKey(msg)
+	// Modal/panel dispatch chain: the first active panel owns the key.
+	if m2, cmd, handled := m.dispatchPanelKeys(msg); handled {
+		return m2, cmd
 	}
 
 	if m.pendingPairingChallenge() != nil {
@@ -301,110 +187,17 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 	}
 
 	if len(m.langOptions) > 0 {
-		switch msg.String() {
-		case "up", "k":
-			m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
-			return m, nil
-		case "down", "j", "tab":
-			m.langCursor = (m.langCursor + 1) % len(m.langOptions)
-			return m, nil
-		case "shift+tab":
-			m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
-			return m, nil
-		case "enter", "right":
-			return m, m.applyLanguageSelection(m.langOptions[m.langCursor].lang)
-		case "e", "E":
-			return m, m.applyLanguageSelection(LangEnglish)
-		case "z", "Z":
-			return m, m.applyLanguageSelection(LangZhCN)
-		case "2":
-			return m, m.applyLanguageSelection(LangJa)
-		case "3":
-			return m, m.applyLanguageSelection(LangKo)
-		case "4":
-			return m, m.applyLanguageSelection(LangEs)
-		case "5":
-			return m, m.applyLanguageSelection(LangFr)
-		case "6":
-			return m, m.applyLanguageSelection(LangDe)
-		case "7":
-			return m, m.applyLanguageSelection(LangRu)
-		case "8":
-			return m, m.applyLanguageSelection(LangPt)
-		case "9":
-			return m, m.applyLanguageSelection(LangVi)
-		case "esc":
-			if m.languagePromptRequired {
-				return m, nil
-			}
-			m.langOptions = nil
-			return m, nil
-		case "ctrl+c":
-			m.promptExitConfirm()
-			return m, nil
-		}
-		return m, nil
+		return m.handleLangSelectorKey(msg)
 	}
 
 	// Handle approval mode (selection list)
 	if m.pendingApproval != nil {
-		switch msg.String() {
-		case "up", "k":
-			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
-			return m, nil
-		case "down", "j":
-			m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
-			return m, nil
-		case "tab":
-			m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
-			return m, nil
-		case "shift+tab":
-			m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
-			return m, nil
-		case "enter", "right":
-			opt := m.approvalOptions[m.approvalCursor]
-			if opt.shortcut == "a" {
-				return m, m.handleApprovalAllowAlways()
-			}
-			return m, m.handleApproval(opt.decision)
-		case "y", "Y":
-			return m, m.handleApproval(permission.Allow)
-		case "n", "N":
-			return m, m.handleApproval(permission.Deny)
-		case "a", "A":
-			return m, m.handleApprovalAllowAlways()
-		case "esc", "ctrl+c":
-			return m, m.handleApproval(permission.Deny)
-		}
-		return m, nil
+		return m.handleApprovalListKey(msg)
 	}
 
 	// Handle diff confirmation mode (selection list)
 	if m.pendingDiffConfirm != nil {
-		switch msg.String() {
-		case "up", "k":
-			m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
-			return m, nil
-		case "down", "j":
-			m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
-			return m, nil
-		case "tab":
-			m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
-			return m, nil
-		case "shift+tab":
-			m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
-			return m, nil
-		case "enter", "right":
-			opt := m.diffOptions[m.diffCursor]
-			return m, m.handleDiffConfirm(opt.decision == permission.Allow)
-		case "y", "Y":
-			return m, m.handleDiffConfirm(true)
-		case "n", "N":
-			return m, m.handleDiffConfirm(false)
-		case "esc", "ctrl+c":
-			return m, m.handleDiffConfirm(false)
-		}
-		return m, nil
+		return m.handleDiffConfirmListKey(msg)
 	}
 
 	// Esc priority: exit shell/chat mode before canceling agent.
@@ -826,6 +619,190 @@ func (m Model) handleInitPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "n", "N", "esc":
 		m.initPromptActive = false
 		return m, nil
+	}
+	return m, nil
+}
+
+// dispatchPanelKeys routes a keypress to the first active modal panel.
+// Each panel owns the key while open; the order here is the historical
+// order from handleKeyPress (r287); stream/knight/lanChat have divergent
+// signatures and dispatch after the table. Returns
+// handled=false when no panel is active and the caller must continue
+// with the normal key flow.
+func (m Model) dispatchPanelKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	if m.modelPanel != nil {
+		m2, cmd := m.handleModelPanelKey(msg)
+		return m2, cmd, true
+	}
+	if m.providerPanel != nil {
+		m2, cmd := m.handleProviderPanelKey(msg)
+		return m2, cmd, true
+	}
+	// QR overlay takes priority over all IM panels — Esc/q returns to the panel behind it.
+	if m.qrOverlay != nil {
+		m2, cmd := m.handleQROverlayKey(msg)
+		return m2, cmd, true
+	}
+	for _, h := range []struct {
+		active bool
+		handle func(tea.KeyPressMsg) (Model, tea.Cmd)
+	}{
+		{m.qqPanel != nil, m.handleQQPanelKey},
+		{m.tgPanel != nil, m.handleTGPanelKey},
+		{m.pcPanel != nil, m.handlePCPanelKey},
+		{m.discordPanel != nil, m.handleDiscordPanelKey},
+		{m.feishuPanel != nil, m.handleFeishuPanelKey},
+		{m.slackPanel != nil, m.handleSlackPanelKey},
+		{m.dingtalkPanel != nil, m.handleDingtalkPanelKey},
+		{m.wechatPanel != nil, m.handleWechatPanelKey},
+		{m.wecomPanel != nil, m.handleWeComPanelKey},
+		{m.mattermostPanel != nil, m.handleMattermostPanelKey},
+		{m.matrixPanel != nil, m.handleMatrixPanelKey},
+		{m.signalPanel != nil, m.handleSignalPanelKey},
+		{m.ircPanel != nil, m.handleIRCPanelKey},
+		{m.nostrPanel != nil, m.handleNostrPanelKey},
+		{m.twitchPanel != nil, m.handleTwitchPanelKey},
+		{m.whatsappPanel != nil, m.handleWhatsAppPanelKey},
+		{m.imPanel != nil, m.handleIMPanelKey},
+		{m.mcpPanel != nil, m.handleMCPPanelKey},
+		{m.impersonatePanel != nil, m.handleImpersonatePanelKey},
+		{m.skillsPanel != nil, m.handleSkillsPanelKey},
+		{m.statsPanel != nil, m.handleStatsPanelKey},
+		{m.usagePanel != nil, m.handleUsagePanelKey},
+		{m.hooksPanel != nil, m.handleHooksPanelKey},
+		{m.inspectorPanel != nil, m.handleInspectorPanelKey},
+	} {
+		if h.active {
+			m2, cmd := h.handle(msg)
+			return m2, cmd, true
+		}
+	}
+	if m.streamPanel != nil {
+		m2, cmd := m.updateStreamPanel(msg)
+		return m2, cmd, true
+	}
+	if m.knightPanel != nil {
+		m2, cmd := m.updateKnightPanel(msg)
+		return m2, cmd, true
+	}
+	if m.lanChatPanel != nil {
+		m2, cmd := m.handleLanChatKey(msg)
+		return m2, cmd, true
+	}
+	if m.initPromptActive {
+		m2, cmd := m.handleInitPromptKey(msg)
+		return m2, cmd, true
+	}
+	return m, nil, false
+}
+
+// handleLangSelectorKey handles the first-launch language selection list.
+// Extracted verbatim from handleKeyPress (r287).
+func (m Model) handleLangSelectorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
+		return m, nil
+	case "down", "j", "tab":
+		m.langCursor = (m.langCursor + 1) % len(m.langOptions)
+		return m, nil
+	case "shift+tab":
+		m.langCursor = (m.langCursor - 1 + len(m.langOptions)) % len(m.langOptions)
+		return m, nil
+	case "enter", "right":
+		return m, m.applyLanguageSelection(m.langOptions[m.langCursor].lang)
+	case "e", "E":
+		return m, m.applyLanguageSelection(LangEnglish)
+	case "z", "Z":
+		return m, m.applyLanguageSelection(LangZhCN)
+	case "2":
+		return m, m.applyLanguageSelection(LangJa)
+	case "3":
+		return m, m.applyLanguageSelection(LangKo)
+	case "4":
+		return m, m.applyLanguageSelection(LangEs)
+	case "5":
+		return m, m.applyLanguageSelection(LangFr)
+	case "6":
+		return m, m.applyLanguageSelection(LangDe)
+	case "7":
+		return m, m.applyLanguageSelection(LangRu)
+	case "8":
+		return m, m.applyLanguageSelection(LangPt)
+	case "9":
+		return m, m.applyLanguageSelection(LangVi)
+	case "esc":
+		if m.languagePromptRequired {
+			return m, nil
+		}
+		m.langOptions = nil
+		return m, nil
+	case "ctrl+c":
+		m.promptExitConfirm()
+		return m, nil
+	}
+	return m, nil
+}
+
+// handleApprovalListKey handles the approval selection list keypresses.
+// Extracted verbatim from handleKeyPress (r287).
+func (m Model) handleApprovalListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
+		return m, nil
+	case "down", "j":
+		m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
+		return m, nil
+	case "tab":
+		m.approvalCursor = (m.approvalCursor + 1) % len(m.approvalOptions)
+		return m, nil
+	case "shift+tab":
+		m.approvalCursor = (m.approvalCursor - 1 + len(m.approvalOptions)) % len(m.approvalOptions)
+		return m, nil
+	case "enter", "right":
+		opt := m.approvalOptions[m.approvalCursor]
+		if opt.shortcut == "a" {
+			return m, m.handleApprovalAllowAlways()
+		}
+		return m, m.handleApproval(opt.decision)
+	case "y", "Y":
+		return m, m.handleApproval(permission.Allow)
+	case "n", "N":
+		return m, m.handleApproval(permission.Deny)
+	case "a", "A":
+		return m, m.handleApprovalAllowAlways()
+	case "esc", "ctrl+c":
+		return m, m.handleApproval(permission.Deny)
+	}
+	return m, nil
+}
+
+// handleDiffConfirmListKey handles the diff-confirmation selection list.
+// Extracted verbatim from handleKeyPress (r287).
+func (m Model) handleDiffConfirmListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
+		return m, nil
+	case "down", "j":
+		m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
+		return m, nil
+	case "tab":
+		m.diffCursor = (m.diffCursor + 1) % len(m.diffOptions)
+		return m, nil
+	case "shift+tab":
+		m.diffCursor = (m.diffCursor - 1 + len(m.diffOptions)) % len(m.diffOptions)
+		return m, nil
+	case "enter", "right":
+		opt := m.diffOptions[m.diffCursor]
+		return m, m.handleDiffConfirm(opt.decision == permission.Allow)
+	case "y", "Y":
+		return m, m.handleDiffConfirm(true)
+	case "n", "N":
+		return m, m.handleDiffConfirm(false)
+	case "esc", "ctrl+c":
+		return m, m.handleDiffConfirm(false)
 	}
 	return m, nil
 }
