@@ -1573,12 +1573,9 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 		toolParams := make([]anthropic.ToolUnionParam, len(tools))
 		lastCacheable := -1
 		for i, t := range tools {
-			inputSchema := anthropic.ToolInputSchemaParam{
-				Type: "object",
-			}
-			if json.Unmarshal(t.Parameters, &inputSchema) == nil {
-				// populates Properties/Required/Type directly
-			}
+			// Memoized unmarshal (schemas are byte-stable per registration);
+			// the shared ExtraFields map must not be mutated in place.
+			inputSchema, _ := anthropicToolInputSchema(t.Name, t.Parameters)
 			desc := anthropic.String(t.Description)
 			toolParams[i] = anthropic.ToolUnionParamOfTool(inputSchema, t.Name)
 			if toolParams[i].OfTool != nil {
@@ -1592,11 +1589,15 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 				// (Recursive schema injection is applied on the OpenAI path,
 				// which serializes schemas as raw JSON.)
 				if p.strictTools[t.Name] {
-					if _, ok := PrepareStrictToolSchema(t.Name, t.Parameters); ok {
+					if _, ok := prepareStrictToolSchemaCached(t.Name, t.Parameters); ok {
 						toolParams[i].OfTool.Strict = param.NewOpt(true)
-						extra := toolParams[i].OfTool.InputSchema.ExtraFields
-						if extra == nil {
-							extra = make(map[string]any, 1)
+						// Copy-on-write: the memoized ExtraFields map is shared
+						// across requests, so build a fresh map for the strict
+						// additionalProperties=false extra.
+						base := toolParams[i].OfTool.InputSchema.ExtraFields
+						extra := make(map[string]any, len(base)+1)
+						for k, v := range base {
+							extra[k] = v
 						}
 						extra["additionalProperties"] = false
 						toolParams[i].OfTool.InputSchema.ExtraFields = extra

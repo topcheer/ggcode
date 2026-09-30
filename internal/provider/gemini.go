@@ -814,12 +814,10 @@ func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
 			Name:        t.Name,
 			Description: t.Description,
 		}
-		if len(t.Parameters) > 0 {
-			schema := &genai.Schema{}
-			if json.Unmarshal(t.Parameters, schema) == nil {
-				fd.Parameters = schema
-			}
-		}
+		// Memoized unmarshal: schemas are byte-stable per registration.
+		// nil (absent or non-unmarshable) leaves the declaration without
+		// parameters, exactly as before.
+		fd.Parameters = geminiToolSchema(t.Name, t.Parameters)
 		functionDecls = append(functionDecls, fd)
 	}
 

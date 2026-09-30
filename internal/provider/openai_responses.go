@@ -461,10 +461,9 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 	// sa-81: processing-tier hint; omitempty drops it when unset.
 	req.ServiceTier = p.serviceTier
 	for _, t := range tools {
-		params := t.Parameters
-		if len(params) == 0 {
-			params = json.RawMessage(`{"type":"object","properties":{}}`)
-		}
+		// Memoized validity check: absent or invalid JSON falls back to an
+		// empty object schema instead of failing request serialization.
+		params := validatedToolParams(t.Name, t.Parameters)
 		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: params})
 	}
 	// Hosted (server-side) tools (sa-62): appended after the declared

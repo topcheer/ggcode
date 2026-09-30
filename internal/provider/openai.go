@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -216,7 +215,7 @@ func (p *OpenAIProvider) applySampling(req *openai.ChatCompletionRequest) {
 // effectiveMaxTokens returns the max output tokens to send on the next
 // request: the adaptive cap when set (learned from rejections/truncations),
 // otherwise the configured maxTokens. Mirrors anthropic.go's
-// effectiveMaxTokens (#561-A: this was previously never consumed — requests
+// effectiveMaxTokens (#561-A: this was previously never consumed - requests
 // went out without max_tokens and the backend's small default truncated
 // them into a finish_reason=length continue-loop).
 func (p *OpenAIProvider) effectiveMaxTokens() int {
@@ -383,7 +382,7 @@ func NewOpenAIProviderWithConfig(config openai.ClientConfig, apiKey, model strin
 		headers:    extraHeaders,
 		rateLimits: newRateLimitTracker(),
 	}
-	// #561(G): preserve the original client's Timeout/Jar/CheckRedirect —
+	// #561(G): preserve the original client's Timeout/Jar/CheckRedirect -
 	// replacing the whole client dropped them (a 1ns-timeout caller config was
 	// silently ignored). Shallow-copy and swap only the Transport.
 	newClient := &http.Client{
@@ -420,7 +419,7 @@ func (p *OpenAIProvider) Name() string {
 }
 
 // UpdateRuntimeHeaders updates the injected headers at runtime.
-// GGCode-SessionID is session-lifecycle state owned by SetSessionID —
+// GGCode-SessionID is session-lifecycle state owned by SetSessionID -
 // callers that replace the whole header set (e.g. the impersonation
 // panel) must not silently drop it, so it is carried over (#sa-142).
 func (p *OpenAIProvider) UpdateRuntimeHeaders(headers http.Header) {
@@ -537,7 +536,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 
 	choice := resp.Choices[0]
-	// #455: non-streaming path must feed the adaptive cap on truncation —
+	// #455: non-streaming path must feed the adaptive cap on truncation -
 	// anthropic/gemini and this file's own streaming path all report
 	// finish_reason=length via OnTruncated; without it the cap never lowers
 	// and requests stay truncated.
@@ -652,7 +651,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// Notify user about retry
 					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
 					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-						// #722: budget exhausted — stop retrying now; wrap with the
+						// #722: budget exhausted - stop retrying now; wrap with the
 						// sentinel so the failover layer switches immediately.
 						if sleepErr == errRetryBudgetExhausted {
 							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
@@ -664,7 +663,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// Retry the connection on the next attempt instead of
 					// falling through to the CONNECT FATAL path. Without
 					// this, the sleep above runs but the goroutine then
-					// returns a fatal error — the retry loop is dead code
+					// returns a fatal error - the retry loop is dead code
 					// and every transient 502/503/504/429 kills the run.
 					continue
 				}
@@ -724,7 +723,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					resp, recvErr := localStreamer.Recv()
 					if recvErr != nil {
 						// #302: context cancellation must surface as an error event
-						// (anthropic.go parity), NOT as a normal end — treating it as
+						// (anthropic.go parity), NOT as a normal end - treating it as
 						// "ended normally" finalized partial output as a complete
 						// assistant message and repaired+flushed unfinished tool calls.
 						if errors.Is(recvErr, context.Canceled) {
@@ -745,7 +744,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							delay := retryDelay(recvErr, attempt)
 							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
 							if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-								// #722: budget exhausted — stop retrying now; wrap with
+								// #722: budget exhausted - stop retrying now; wrap with
 								// the sentinel so the failover layer switches immediately.
 								if sleepErr == errRetryBudgetExhausted {
 									sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, recvErr)
@@ -828,7 +827,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						} else if len(delta.ToolCalls) == 1 {
 							// #722: the official API and mainstream relays always send
 							// index, but minimal relays omit it. A single call in the
-							// delta has nothing to disambiguate — default to 0 instead
+							// delta has nothing to disambiguate - default to 0 instead
 							// of silently discarding the whole turn's tool call.
 							idx = 0
 						} else {
@@ -1245,7 +1244,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				// tool blocks and silently dropped the text. Emitting the text
 				// as a separate user message BETWEEN the assistant tool_calls
 				// and the tool messages violates the ordering contract (strict
-				// backends 400) — instead prepend it to the FIRST tool
+				// backends 400) - instead prepend it to the FIRST tool
 				// message's content, which every backend accepts.
 				var guidanceText []string
 				for _, b := range m.Content {
@@ -1412,22 +1411,21 @@ func appendToolResultMessages(dst []openai.ChatCompletionMessage, blocks []Conte
 func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {
 	result := make([]openai.Tool, 0, len(tools))
 	for _, t := range tools {
-		params := t.Parameters
-		// Validate the schema is well-formed JSON. MCP servers and plugins
+		// Validate the schema is well-formed JSON (MCP servers and plugins
 		// may return invalid JSON schemas that crash the entire request
-		// serialization (json.RawMessage.MarshalJSON panics on invalid content).
-		// Fall back to an empty object schema instead of failing all 191 tools.
-		if len(bytes.TrimSpace(params)) == 0 || !json.Valid(params) {
-			debug.Log("openai", "WARNING: tool %q has invalid JSON schema (%d bytes), using empty object fallback", t.Name, len(params))
-			params = json.RawMessage(`{"type":"object","properties":{}}`)
-		}
+		// serialization: json.RawMessage.MarshalJSON panics on invalid
+		// content). Fall back to an empty object schema instead of failing
+		// all 191 tools. Memoized per tool - schemas are byte-stable for the
+		// life of their registration, so this (and the strict preparation
+		// below) is recomputed only when the bytes change.
+		params := validatedToolParams(t.Name, t.Parameters)
 		// Strict tool use (structured outputs): only allowlisted tools get
 		// `strict: true`, and only when their schema is strict-compatible.
 		// go-openai serializes Strict with omitempty, so a plain false never
 		// reaches the wire - unchanged payloads for every other tool.
 		strict := t.Strict || p.strictTools[t.Name]
 		if strict {
-			prepared, ok := PrepareStrictToolSchema(t.Name, params)
+			prepared, ok := prepareStrictToolSchemaCached(t.Name, params)
 			if ok {
 				params = prepared
 			} else {
