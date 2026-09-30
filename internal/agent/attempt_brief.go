@@ -4,6 +4,7 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -156,8 +157,26 @@ func (s *attemptBriefState) maybeBrief(iter int) string {
 	sb.WriteString(fmt.Sprintf("%d failed tool call(s) across %d distinct operations", len(failures), len(distinct)))
 	sb.WriteString(". Prior approaches that did NOT work:\n")
 
+	// Deterministic order: largest groups first, ties broken by (tool, label)
+	// so the brief text is stable across runs instead of depending on Go's
+	// randomized map iteration.
+	keys := make([]groupKey, 0, len(groups))
+	for k := range groups {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(groups[keys[i]]) != len(groups[keys[j]]) {
+			return len(groups[keys[i]]) > len(groups[keys[j]])
+		}
+		if keys[i].tool != keys[j].tool {
+			return keys[i].tool < keys[j].tool
+		}
+		return keys[i].label < keys[j].label
+	})
+
 	gIdx := 0
-	for k, targets := range groups {
+	for _, k := range keys {
+		targets := groups[k]
 		if gIdx >= 6 { // cap detail
 			sb.WriteString("  ...\n")
 			break
