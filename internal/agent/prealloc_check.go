@@ -226,16 +226,18 @@ func addValueSpecSliceDecls(vs *ast.ValueSpec, decls map[string]*zeroCapSliceDec
 			// var x []T - check if type is a slice.
 			if _, isSlice := vs.Type.(*ast.ArrayType); isSlice {
 				if i < len(vs.Values) {
-					decls[name.Name] = analyzeInitExpr(name.Name, name.Pos(), vs.Values[i])
-				} else {
-					decls[name.Name] = &zeroCapSliceDecl{
-						name: name.Name, pos: name.Pos(), hasMakeCapacity: false,
+					if d := analyzeInitExpr(name.Name, name.Pos(), vs.Values[i]); d != nil {
+						recordDeclRespectingConflicts(decls, d)
 					}
+				} else {
+					recordDeclRespectingConflicts(decls, &zeroCapSliceDecl{
+						name: name.Name, pos: name.Pos(), hasMakeCapacity: false,
+					})
 				}
 			}
 		} else if i < len(vs.Values) {
 			if d := analyzeInitExpr(name.Name, name.Pos(), vs.Values[i]); d != nil {
-				decls[name.Name] = d
+				recordDeclRespectingConflicts(decls, d)
 			}
 		}
 	}
@@ -272,12 +274,32 @@ func collectFuncSliceDecls(body *ast.BlockStmt, decls map[string]*zeroCapSliceDe
 					continue
 				}
 				if d := analyzeInitExpr(ident.Name, ident.Pos(), node.Rhs[i]); d != nil {
-					decls[ident.Name] = d
+					recordDeclRespectingConflicts(decls, d)
 				}
 			}
 		}
 		return true
 	})
+}
+
+// recordDeclRespectingConflicts merges d into decls, aware that the map is
+// name-keyed while Go declarations are lexically scoped (#2920). Two
+// same-name declarations in different blocks may coexist in one unit
+// (shadowing is legal); last-write-wins would let a nested shadow whose
+// capability flag differs from the outer declaration flip the entry either
+// way - false positive on correctly preallocated loops (Trigger A) or
+// missed detection on genuinely zero-cap ones (Trigger B). Conservative
+// resolution: a name with conflicting declarations is treated as having
+// capacity, which suppresses the advisory (advisory cost asymmetry: a
+// false positive wastes agent iterations, a miss merely under-reports).
+func recordDeclRespectingConflicts(decls map[string]*zeroCapSliceDecl, d *zeroCapSliceDecl) {
+	if prev, ok := decls[d.name]; ok && prev.hasMakeCapacity != d.hasMakeCapacity {
+		merged := *d
+		merged.hasMakeCapacity = true
+		decls[d.name] = &merged
+		return
+	}
+	decls[d.name] = d
 }
 
 // aSTInspectLoops invokes fn for every for/range loop lexically inside body,
