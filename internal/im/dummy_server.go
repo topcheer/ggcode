@@ -22,6 +22,11 @@ type httpServer struct {
 	adapter       *dummyAdapter
 	sseBroker     *sseBroker
 	shutdownToken string
+	// cancel is set by start() (derived ctx) and fired by handleShutdown
+	// once the bearer token verifies (#2959) - the endpoint used to be a
+	// no-op that returned 200 without any shutdown side effect, leaving the
+	// token chain (generate -> portFile -> eval script -> POST) dead code.
+	cancel context.CancelFunc
 }
 
 type sseBroker struct {
@@ -173,6 +178,10 @@ func (s *httpServer) handler() http.Handler {
 
 // start starts the HTTP server on the given address.
 func (s *httpServer) start(ctx context.Context, listenAddr, portFile string) {
+	// #2959: derive a cancellable child so POST /shutdown can trigger the
+	// graceful stop path (srv.Close + listener.Close below) instead of only
+	// the caller's external signal.
+	ctx, s.cancel = context.WithCancel(ctx)
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		debug.Log("dummy", "listen failed: %v", err)
@@ -352,7 +361,12 @@ func (s *httpServer) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "shutting_down"})
-	// Context cancellation is handled by the caller (daemon) checking for shutdown signals
+	// #2959: fire the derived cancel - the stop goroutine in start()
+	// observes ctx.Done() and closes srv+listener (graceful path). Guarded
+	// for the pathological case of a request racing ahead of start().
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func generateShutdownToken() string {
