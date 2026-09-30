@@ -66,6 +66,14 @@ type Session struct {
 	CheckpointMessageCount int                `json:"-"`
 	TunnelEvents           []TunnelEvent      `json:"tunnel_events,omitempty"`
 	TunnelEventsComplete   bool               `json:"tunnel_events_complete,omitempty"`
+	// TunnelEventsMu serializes TunnelEvents access between tunnel event
+	// recorder goroutines (TunnelHost.recordEvent writer, TUI ledger reset)
+	// and frontend readers (desktop history merge, TUI replay tail).
+	// #2917: recordEvent appends from broker publisher goroutines while the
+	// desktop polls session history mid-stream on the same *Session pointer;
+	// the unsynchronized append could tear the slice header under a reader.
+	// Leaf lock: never hold it while acquiring other locks.
+	TunnelEventsMu sync.Mutex `json:"-"`
 	// Cost data stored as opaque JSON to avoid circular dependency with cost package.
 	CostJSON []byte `json:"cost,omitempty"`
 	// PermissionMode stores the session-scoped permission mode (e.g. "auto", "bypass").
@@ -230,6 +238,22 @@ const sessionMaintenanceInterval = 30 * time.Second
 // for full replay history. Keeping only the most recent events bounds
 // memory usage and prevents session files from growing unboundedly
 // (a long session can accumulate 200K+ events = 100MB+).
+// SnapshotTunnelEvents returns a copy of the in-memory tunnel events taken
+// under TunnelEventsMu. Reader goroutines that may run concurrently with
+// event recording (desktop history merge, TUI replay tail) must use this
+// instead of reading TunnelEvents directly (#2917). Nil-safe.
+func (s *Session) SnapshotTunnelEvents() []TunnelEvent {
+	if s == nil {
+		return nil
+	}
+	s.TunnelEventsMu.Lock()
+	defer s.TunnelEventsMu.Unlock()
+	if s.TunnelEvents == nil {
+		return nil
+	}
+	return append([]TunnelEvent(nil), s.TunnelEvents...)
+}
+
 const MaxTunnelEvents = 2000
 
 // MaxContextMessages caps the number of messages loaded into the agent's LLM

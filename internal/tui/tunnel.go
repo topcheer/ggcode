@@ -1830,12 +1830,18 @@ func tunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
 
 func (m *Model) currentIncompleteTunnelHistoryTail() []tunnel.HistoryEntry {
 	m.sessionMutex().Lock()
-	if m.session == nil || m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
+	if m.session == nil || m.session.TunnelEventsComplete {
 		m.sessionMutex().Unlock()
 		return nil
 	}
-	events := append([]session.TunnelEvent(nil), m.session.TunnelEvents...)
+	ses := m.session
 	m.sessionMutex().Unlock()
+	// #2917: recordEvent appends from publisher goroutines without holding
+	// the TUI sessionMutex — snapshot under the session leaf lock instead.
+	events := ses.SnapshotTunnelEvents()
+	if len(events) == 0 {
+		return nil
+	}
 	return tunnelEventsToHistory(events)
 }
 
@@ -1875,13 +1881,18 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	// Replay reading the full old ledger, and new events dropped by the
 	// #666 epoch rule, with zero user signal. The old events are now
 	// captured and RESTORED on failure.
-	prevEvents := m.session.TunnelEvents
-	prevComplete := m.session.TunnelEventsComplete
-	m.session.TunnelEvents = nil
-	m.session.TunnelEventsComplete = false
 	ses := m.session
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
+
+	// #2917: clear under the session-scoped leaf lock — recordEvent may
+	// append from publisher goroutines concurrently with this reset.
+	ses.TunnelEventsMu.Lock()
+	prevEvents := ses.TunnelEvents
+	prevComplete := ses.TunnelEventsComplete
+	ses.TunnelEvents = nil
+	ses.TunnelEventsComplete = false
+	ses.TunnelEventsMu.Unlock()
 
 	// Tunnel events are no longer persisted to session JSONL.
 	// Only cut authority in the projection store to reset the ledger.
@@ -1897,11 +1908,16 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 			// #1422-B: restore the cleared events so the TUI view matches
 			// the still-old on-disk ledger (no three-way split).
 			m.sessionMutex().Lock()
-			if m.session != nil && m.session.ID == ses.ID {
-				m.session.TunnelEvents = prevEvents
-				m.session.TunnelEventsComplete = prevComplete
-			}
+			cur := m.session
 			m.sessionMutex().Unlock()
+			if cur != nil && cur.ID == ses.ID {
+				// #2917: restore under the session leaf lock (same protocol
+				// as the clear above).
+				cur.TunnelEventsMu.Lock()
+				cur.TunnelEvents = prevEvents
+				cur.TunnelEventsComplete = prevComplete
+				cur.TunnelEventsMu.Unlock()
+			}
 		} else {
 			if m.tunnelEventBroker() != nil {
 				m.tunnelEventBroker().SetAuthorityEpoch(epoch)

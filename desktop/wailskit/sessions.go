@@ -576,7 +576,7 @@ func loadSessionForExport(sessionID string) ([]SessionMessage, string, error) {
 	// the live-history path (#242, chat.go:652) — build first, then merge.
 	msgs := mergeTunnelUserMessages(
 		buildSessionHistoryFromMessages(ses.Messages),
-		ses.TunnelEvents,
+		ses.SnapshotTunnelEvents(),
 	)
 	return msgs, ses.Title, nil
 }
