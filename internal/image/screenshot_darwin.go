@@ -72,11 +72,12 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 
 // ListDisplays returns information about available displays on macOS.
 func ListDisplays() ([]DisplayInfo, error) {
-	// #2999: prefer NSScreen bounds, which are already in the logical
-	// coordinate system screencapture -R expects. The system_profiler path
-	// mixes VSA logical origins with _spdisplays_resolution pixel sizes
-	// (2x on Retina) and is kept only as a fallback for environments where
-	// the Swift runtime is unavailable.
+	// #2999: prefer NSScreen bounds in logical points, which is the unit
+	// screencapture -R expects. The Y origin is converted in the Swift
+	// snippet (AppKit bottom-left -> CG top-left) so the output is directly
+	// feedable to -R. The system_profiler path mixes VSA logical origins with
+	// _spdisplays_resolution pixel sizes (2x on Retina) and is kept only as a
+	// fallback for environments where the Swift runtime is unavailable.
 	if displays, err := listDisplaysNSScreen(); err == nil && len(displays) > 0 {
 		return displays, nil
 	}
@@ -93,11 +94,17 @@ func ListDisplays() ([]DisplayInfo, error) {
 func listDisplaysNSScreen() ([]DisplayInfo, error) {
 	swiftCode := `
 import Cocoa
+let mainMaxY = NSScreen.screens.first?.frame.maxY ?? 0
 for (i, s) in NSScreen.screens.enumerated() {
     let f = s.frame
-    let main = (s == NSScreen.main) ? 1 : 0
+    // Convert AppKit global Y (origin at primary screen bottom-left, up)
+    // to CG top-left Y (what screencapture -R and CGDisplayBounds use):
+    // yTop = primaryMaxY - (minY + height). Primary screen maps to 0.
+    let yTop = Int(mainMaxY - (f.minY + f.height))
+    var main = (s == NSScreen.main) ? 1 : 0
+    if NSScreen.main == nil && i == 0 { main = 1 }
     let name = s.localizedName
-    print("\(i + 1)\t\(main)\t\(Int(f.minX))\t\(Int(f.minY))\t\(Int(f.width))\t\(Int(f.height))\t\(name)")
+    print("\(i + 1)\t\(main)\t\(Int(f.minX))\t\(yTop)\t\(Int(f.width))\t\(Int(f.height))\t\(name)")
 }
 `
 	cmd := exec.Command("swift", "-e", swiftCode)
