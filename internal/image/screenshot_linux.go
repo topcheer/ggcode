@@ -142,9 +142,49 @@ func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOpt
 		if region, err := linuxDisplayBounds(opts.Display); err == nil {
 			opts.Region = &region
 		}
+	} else if opts.Window == "" && opts.Region == nil && opts.Display == 0 {
+		// #3003 follow-up: 0=primary (the documented default) still fell
+		// through to grim's all-outputs composite after the >=1 fix. Resolve
+		// the primary output explicitly so a plain capture (no Display set)
+		// on a multi-monitor setup captures the primary screen, not a
+		// panorama. Resolution failure keeps the best-effort fallback (#555).
+		if region, err := linuxDisplayRegionForFn(0); err == nil {
+			opts.Region = &region
+		}
 	}
 	return opts, nil
 }
+
+// primaryDisplayIndex returns the 1-based index of the primary output in
+// displays, falling back to the first display when none is flagged primary
+// (single-head setups and some wlr-randr versions) (#3003).
+func primaryDisplayIndex(displays []DisplayInfo) int {
+	for i, d := range displays {
+		if d.IsPrimary {
+			return i + 1
+		}
+	}
+	return 1
+}
+
+// linuxDisplayRegionFor resolves the capture region for display index 0
+// (the primary output). Index >= 1 keeps going through linuxDisplayBounds
+// directly (#3003).
+func linuxDisplayRegionFor(_ int) (ScreenshotRegion, error) {
+	displays, err := ListDisplays()
+	if err != nil {
+		return ScreenshotRegion{}, err
+	}
+	if len(displays) == 0 {
+		return ScreenshotRegion{}, fmt.Errorf("no displays reported")
+	}
+	return linuxDisplayBounds(primaryDisplayIndex(displays))
+}
+
+// linuxDisplayRegionForFn is the test seam for prepareLinuxCaptureOpts
+// (#3003): probes stub the primary-output resolver instead of shelling
+// out to xrandr/wlr-randr.
+var linuxDisplayRegionForFn = linuxDisplayRegionFor
 
 func detectLinuxScreenshotTool() string {
 	if tools := candidateLinuxScreenshotTools(); len(tools) > 0 {
