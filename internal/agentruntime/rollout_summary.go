@@ -84,7 +84,7 @@ func SummarizeTrajectory(entries []TrajectoryEntry) RolloutSummary {
 		kind := strings.ToLower(e.Kind)
 
 		switch {
-		case kind == "error" || hasSignal(lower, failureSignalsKeys()):
+		case kind == "error" || hasSignal(lower, failureSignalsKeys):
 			anyFailure = true
 			s.addFailure(compactLine(text, 200))
 		case kind == "result" || kind == "note" || hasAny(lower, progressSignals):
@@ -128,14 +128,17 @@ func appendCapped(dst *[]string, v string) {
 	*dst = append(*dst, v)
 }
 
-func failureSignalsKeys() []string {
+// failureSignalsKeys is the pre-sorted key set of failureSignals, hoisted out
+// of the per-entry classification loop (it was previously rebuilt and
+// re-sorted on every entry).
+var failureSignalsKeys = func() []string {
 	keys := make([]string, 0, len(failureSignals))
 	for k := range failureSignals {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	return keys
-}
+}()
 
 func hasSignal(lower string, keys []string) bool { return hasAny(lower, keys) }
 
