@@ -96,14 +96,14 @@ func TestIssue3016_SignatureNormalizationStability(t *testing.T) {
 		{toolInp: "x", errMsg: "open /home/user/work/config.yaml: no such file or directory"},
 		{toolInp: "x", errMsg: "Open /tmp/x/config.yaml: no such file or directory"},
 	}
-	want := failureSignature(base)
+	want := failureFingerprint(base)
 	for i, v := range variants {
-		if got := failureSignature(v); got != want {
+		if got := failureFingerprint(v); got != want {
 			t.Fatalf("variant %d signature %q != base %q", i, got, want)
 		}
 	}
 	// A genuinely different message must differ.
-	if got := failureSignature(failure{toolInp: "x", errMsg: "permission denied: /etc/shadow"}); got == want {
+	if got := failureFingerprint(failure{toolInp: "x", errMsg: "permission denied: /etc/shadow"}); got == want {
 		t.Fatal("different error class must produce a different signature")
 	}
 }
