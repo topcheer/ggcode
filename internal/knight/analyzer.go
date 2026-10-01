@@ -801,6 +801,11 @@ type candidateAggregate struct {
 	hits      int
 	scoreSum  float64
 	sessions  map[string]struct{}
+	// sig records the failure signature used in the aggregation key
+	// ("" for name-only keys) so finalizeCandidates can disambiguate
+	// Name when one base name forked into multiple signature buckets
+	// (#3016 review follow-up).
+	sig string
 }
 
 // failureSignature derives a coarse error-class signature from a failure
@@ -853,6 +858,10 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 		key += "|" + failureSignature(candidate.Evidence[0])
 	}
 	agg, ok := aggregated[key]
+	sig := ""
+	if candidate.Category == "failure-fix" && len(candidate.Evidence) > 0 {
+		sig = failureSignature(candidate.Evidence[0])
+	}
 	if !ok {
 		aggregated[key] = &candidateAggregate{
 			candidate: candidate,
@@ -861,6 +870,7 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 			sessions: map[string]struct{}{
 				sessionID: {},
 			},
+			sig: sig,
 		}
 		return
 	}
@@ -881,8 +891,23 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 
 func finalizeCandidates(aggregated map[string]*candidateAggregate) []SkillCandidate {
 	candidates := make([]SkillCandidate, 0, len(aggregated))
+	// #3016 review follow-up: when one base name forked into multiple
+	// signature buckets, downstream state keyed by Scope+Name (queue
+	// dedup/Remove, stagingFailCount, evalCooldown, isKnownCandidate)
+	// would cross-wire the forks - a known/stale fork could Remove its
+	// sibling from the queue. Disambiguate Name with the signature suffix
+	// whenever a base name has more than one bucket; the single-bucket
+	// case keeps the original name for backward compatibility with
+	// already-staged skills.
+	baseNameCount := map[string]int{}
+	for _, agg := range aggregated {
+		baseNameCount[strings.ToLower(strings.TrimSpace(agg.candidate.Name))]++
+	}
 	for _, agg := range aggregated {
 		candidate := agg.candidate
+		if agg.sig != "" && baseNameCount[strings.ToLower(strings.TrimSpace(candidate.Name))] > 1 {
+			candidate.Name = candidate.Name + "-" + agg.sig
+		}
 		candidate.EvidenceCount = len(agg.sessions)
 		candidate.SourceSessions = make([]string, 0, len(agg.sessions))
 		for sessionID := range agg.sessions {

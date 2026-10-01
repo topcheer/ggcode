@@ -27,6 +27,20 @@ func TestIssue3016_FailureSignatureSplitsAggregation(t *testing.T) {
 	if got := len(agg); got != 2 {
 		t.Fatalf("#3016: keyword-collided failures must aggregate separately, got %d key(s), want 2", got)
 	}
+	// Review follow-up: the two forks must also carry distinct finalized
+	// Names so downstream Scope+Name keyed state (queue/staging/cooldown)
+	// cannot cross-wire them.
+	finalized := finalizeCandidates(agg)
+	names := map[string]bool{}
+	for _, c := range finalized {
+		if names[c.Name] {
+			t.Fatalf("#3016: duplicate finalized Name %q across signature forks", c.Name)
+		}
+		names[c.Name] = true
+	}
+	if !names["test-failure-recovery-timeout"] || !names["test-failure-recovery-not-found"] {
+		t.Fatalf("#3016: expected signature-suffixed names, got %v", names)
+	}
 	// Same error class from two sessions still converges (real signal).
 	agg2 := map[string]*candidateAggregate{}
 	aggregateCandidate(agg2, mk("go test: timed out waiting for build"), "sess-a")
