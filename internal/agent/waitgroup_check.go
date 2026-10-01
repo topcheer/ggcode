@@ -158,6 +158,17 @@ func wgParamType(fn *ast.FuncDecl) bool {
 				}
 			}
 		}
+		// #2987: the *Server suffix gate was an incomplete fix for the same
+		// case - the FP mechanism is SHAPE, not the type name: any worker
+		// method whose wg calls go through the receiver's own struct field
+		// (`p.wg.Done()`) has its Add() in the spawner, which function-
+		// granularity analysis cannot see, whatever the receiver type is
+		// (*Pool/*Manager/*Worker - the most common Go worker names). A
+		// method using a LOCAL wg variable still gets checked: the field
+		// scan below finds nothing and the general path applies.
+		if recvFieldWGDone(fn) {
+			return true
+		}
 	}
 	if fn.Type == nil || fn.Type.Params == nil {
 		return false
@@ -177,6 +188,48 @@ func wgParamType(fn *ast.FuncDecl) bool {
 		}
 	}
 	return false
+}
+
+// recvFieldWGDone reports whether fn is a method whose WaitGroup calls go
+// through the RECEIVER'S OWN struct field (`p.wg.Done()` / `defer r.wg.Done()`)
+// (#2987). That shape pins the wg to the enclosing struct: Add() necessarily
+// lives in the spawner method of the same type, invisible to function-
+// granularity analysis - flagging it yields the misleading "call Add first"
+// advice that #1527 case A proved agents follow into a deadlock.
+func recvFieldWGDone(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || fn.Body == nil {
+		return false
+	}
+	recvNames := make(map[string]bool)
+	for _, p := range fn.Recv.List {
+		for _, n := range p.Names {
+			recvNames[n.Name] = true
+		}
+	}
+	if len(recvNames) == 0 {
+		return false
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Done" {
+			return true
+		}
+		field, ok := sel.X.(*ast.SelectorExpr) // recv.field
+		if !ok {
+			return true
+		}
+		if id, ok := field.X.(*ast.Ident); ok && recvNames[id.Name] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // analyzeWGFunc checks a single function for WaitGroup misuse patterns.
