@@ -127,6 +127,8 @@ func (s *serialReadState) reset() {
 	s.consecutiveSingleReads = 0
 	s.currentTurnReadOnly = 0
 	s.currentTurnHasMutation = false
+	s.lspStreak = 0
+	s.currentTurnTool = ""
 	s.fired = false
 }
 
