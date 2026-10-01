@@ -30,7 +30,7 @@ func Test1817StreamBracketSurvivesPanic(t *testing.T) {
 		t.Skipf("read agent.go: %v", err)
 	}
 	src := string(srcBytes)
-	if !strings.Contains(src, "defer func() {\n\t\t\t\tif samplingApplied >= 0") {
+	if !strings.Contains(src, "defer func() {\n\t\t\t\tif effortApplied != \"\"") {
 		t.Fatal("stream bracket must defer restores inside the closure (#1817 case 2)")
 	}
 	if strings.Contains(src, "\t\tif effortApplied != \"\" {\n\t\ta.restoreEffort(effortPrev)\n\t\t}\n\t\tif err != nil {") {
