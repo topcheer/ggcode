@@ -2870,6 +2870,33 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 					continue
 				}
+				// r357 final-turn evidence gate: behavior-triggered (edited
+				// source this run x zero build/test execution x build system
+				// present) - block the stop once and demand a verification
+				// receipt. Unlike the lexical claimsSupervision detector
+				// below, this is on by default (narrow false-positive surface).
+				a.mu.Lock()
+				gateMsg := finalTurnEvidenceGate(
+					a.postEditVerify.sourceEditsThisRun,
+					a.postEditVerify.lastSourceFileThisRun,
+					a.postEditVerify.buildOrTestRunThisRun,
+					a.postEditVerify.finalGateFiredThisRun,
+					a.workingDir)
+				if gateMsg != "" {
+					a.postEditVerify.finalGateFiredThisRun = true
+				}
+				a.mu.Unlock()
+				if gateMsg != "" {
+					debug.Log("agent", "Iteration %d: final-turn evidence gate fired, demanding verification before stop", i+1)
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: gateMsg,
+						}},
+					})
+					continue
+				}
 				// Unverified success claim detection: before returning, check if
 				// the agent's response claims verification results ("tests pass",
 				// "build succeeds") without having actually run verification

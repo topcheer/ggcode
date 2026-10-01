@@ -27,6 +27,13 @@ type postEditVerifyState struct {
 	buildCmd             string // cached build command (detected lazily, empty = not yet checked)
 	buildCmdChecked      bool   // whether we've attempted detection
 	lastBuildFailed      bool   // true if the agent's last build command failed
+
+	// r357 final-turn evidence gate state (run lifetime; behavior-triggered,
+	// unlike the lexical claimsSupervision family, so on by default).
+	sourceEditsThisRun    int    // total source edits this run (never reset by hints)
+	lastSourceFileThisRun string // most recent source file edited this run (for targeted verify)
+	buildOrTestRunThisRun bool   // a build/test/verify command actually executed this run
+	finalGateFiredThisRun bool   // hard-block fired at most once per run
 }
 
 // postEditVerifyInterval is how many source-code edits between hints.
@@ -721,6 +728,8 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 	defer a.mu.Unlock()
 
 	a.postEditVerify.sourceEditsSinceHint++
+	a.postEditVerify.sourceEditsThisRun++
+	a.postEditVerify.lastSourceFileThisRun = filePath
 
 	if a.postEditVerify.sourceEditsSinceHint < postEditVerifyInterval {
 		return ""
@@ -917,6 +926,7 @@ func (a *Agent) maybeResetVerifyOnCommand(toolName string, args json.RawMessage,
 	defer a.mu.Unlock()
 
 	a.postEditVerify.sourceEditsSinceHint = 0
+	a.postEditVerify.buildOrTestRunThisRun = true
 	// #1841 case 3: only a REAL test/build execution may update the
 	// failure flag. `make help`, `task --list`, `gofmt -l` (all exit 0)
 	// used to unconditionally clear lastBuildFailed after a FAILED go
