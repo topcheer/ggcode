@@ -390,6 +390,16 @@ func (v *toolSequenceValidator) checkRepeatedSequence() string {
 					match = false
 					break
 				}
+				// #3050: the fingerprint must repeat the same TARGETS, not
+				// just the same tool names - a normal cross-file
+				// read -> edit -> verify loop is three different jobs, not
+				// one SOP re-issued by hand. Compare filePath when the tail
+				// entry carries one; entries without a path (e.g. plain
+				// run_command) match on tool name alone, as before.
+				if tail[j].filePath != "" && v.history[i+j].filePath != tail[j].filePath {
+					match = false
+					break
+				}
 			}
 			if match {
 				count++
