@@ -102,46 +102,57 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 	img := Image{Data: data, MIME: mime}
 
 	decoded, err := decodeImageData(data)
-	if err == nil {
-		img.Width = decoded.Bounds().Dx()
-		img.Height = decoded.Bounds().Dy()
+	if err != nil {
+		// #2998: screencapture produced bytes we cannot decode  -  the user's
+		// Format/MaxWidth/Quality options would silently no-op and the
+		// returned Image would have zero dimensions. Fail explicitly instead
+		// of silently degrading (same principle as #975).
+		return Image{}, fmt.Errorf("decoding screenshot bytes: %w", err)
+	}
+	img.Width = decoded.Bounds().Dx()
+	img.Height = decoded.Bounds().Dy()
 
-		maxW := opts.MaxWidth
-		if maxW == 0 {
-			maxW = 1920
-		}
+	maxW := opts.MaxWidth
+	if maxW == 0 {
+		maxW = 1920
+	}
 
-		target := decoded
-		if img.Width > maxW {
-			target = resizeImage(decoded, maxW)
-			img.Width = target.Bounds().Dx()
-			img.Height = target.Bounds().Dy()
-		}
+	target := decoded
+	if img.Width > maxW {
+		target = resizeImage(decoded, maxW)
+		img.Width = target.Bounds().Dx()
+		img.Height = target.Bounds().Dy()
+	}
 
-		// Re-encode if format conversion or resize is needed.
-		format := strings.ToLower(opts.Format)
-		if format == "" {
-			format = "png"
-		}
+	// Re-encode if format conversion or resize is needed.
+	format := strings.ToLower(opts.Format)
+	if format == "" {
+		format = "png"
+	}
 
-		if format == "jpeg" {
-			q := opts.Quality
-			if q == 0 {
-				q = 85
-			}
-			buf, err := encodeJPEGBytes(target, q)
-			if err == nil {
-				img.Data = buf
-				img.MIME = MIMEJPEG
-			}
-		} else if img.Width > maxW || target != decoded {
-			// Re-encode PNG after resize.
-			buf, err := encodePNGBytes(target)
-			if err == nil {
-				img.Data = buf
-				img.MIME = MIMEPNG
-			}
+	if format == "jpeg" {
+		q := opts.Quality
+		if q == 0 {
+			q = 85
 		}
+		buf, jerr := encodeJPEGBytes(target, q)
+		if jerr != nil {
+			// #2998: on encode failure Data still holds the pre-resize
+			// bytes while Width/Height describe the resized image  -  a
+			// metadata/data mismatch. Fail instead of returning the pair.
+			return Image{}, fmt.Errorf("encoding jpeg screenshot: %w", jerr)
+		}
+		img.Data = buf
+		img.MIME = MIMEJPEG
+	} else if img.Width > maxW || target != decoded {
+		// Re-encode PNG after resize.
+		buf, perr := encodePNGBytes(target)
+		if perr != nil {
+			// #2998: same mismatch risk as the jpeg path above.
+			return Image{}, fmt.Errorf("encoding png screenshot: %w", perr)
+		}
+		img.Data = buf
+		img.MIME = MIMEPNG
 	}
 
 	// When output_path is set, the raw screenshot was written directly to
@@ -275,7 +286,7 @@ func wmctrlTitleOffset(line string) int {
 //	1920x1080 px, 60.000000 Hz (preferred, current)
 //
 // The old parser looked for lines starting with "Mode:", which never matches
-// ("Modes:" has an "s"), leaving Width/Height at 0 — so linuxDisplayBounds
+// ("Modes:" has an "s"), leaving Width/Height at 0  -  so linuxDisplayBounds
 // always failed with "geometry unknown" and multi-display selection on
 // Wayland silently fell back to a full-screen capture (#975). Mode lines are
 // now recognized by their shape; the (current) mode wins, falling back to
@@ -293,12 +304,12 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 		idx++
 		current.Index = idx
 		// #1258: wlr-randr's "Position" is the global-layout LOGICAL
-		// coordinate, but the Modes "WxH px" is PHYSICAL pixels — the scale
+		// coordinate, but the Modes "WxH px" is PHYSICAL pixels  -  the scale
 		// factor only shows up as the ratio between them (wlr-randr does not
 		// convert). The physical W/H used to go straight into DisplayInfo
 		// next to the logical X/Y, and that mixed box was handed to `grim -g`,
 		// which expects logical coordinates: with two 3840x2160 scale=2
-		// outputs the second screen produced "1920,0,3840x2160" — double the
+		// outputs the second screen produced "1920,0,3840x2160"  -  double the
 		// logical extent, capturing the wrong area with no error. Convert
 		// physical mode size to logical by dividing by the parsed Scale.
 		if scale > 0 && scale != 1 {
@@ -338,7 +349,7 @@ func parseWlrrandrOutput(out string) []DisplayInfo {
 			}
 			continue
 		}
-		// #1258: "  Scale: 2.000000" — physical-to-logical divisor for this
+		// #1258: "  Scale: 2.000000"  -  physical-to-logical divisor for this
 		// output; applied to the picked mode in flush().
 		if strings.HasPrefix(line, "Scale:") {
 			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "Scale:")), 64); err == nil && v > 0 {
