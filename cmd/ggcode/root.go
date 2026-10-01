@@ -670,7 +670,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	ag.SetHookConfig(cfg.Hooks)
 	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
-	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
 	trace.Mark("setup agent")

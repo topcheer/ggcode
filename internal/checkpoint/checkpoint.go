@@ -75,6 +75,12 @@ type Manager struct {
 	// corrections records user-initiated undos so the agent can be told its
 	// previous approach was rejected. Cleared at the start of each new run.
 	corrections []Correction
+
+	// journal persists every mutation to an append-only JSONL file so undo
+	// history survives a process restart (see journal.go). nil for plain
+	// NewManager Managers — journalAppendLocked is then a no-op, making the
+	// journal strictly opt-in. Only touched while holding mu.
+	journal *journalWriter
 }
 
 // NewManager creates a new checkpoint manager with the given max limit.
@@ -92,6 +98,7 @@ func (m *Manager) StartRun(runID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.currentRunID = runID
+	m.journalAppendLocked(journalEvent{Type: evStartRun, RunID: runID})
 }
 
 // Save records a checkpoint before a file edit.
@@ -123,6 +130,17 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 		RunID:      m.currentRunID,
 	}
 
+	m.applySaveLocked(cp)
+	m.journalAppendLocked(journalEvent{Type: evSave, Cp: &cp})
+	return cp
+}
+
+// applySaveLocked applies one recorded checkpoint to Manager state: append,
+// first-existence tracking (#1539 case D), FIFO eviction (#517), and redo
+// invalidation. Split out of SaveWithExistence so journal replay rebuilds
+// the identical state from an evSave event without regenerating IDs.
+// Must hold m.mu.
+func (m *Manager) applySaveLocked(cp Checkpoint) {
 	m.checkpoints = append(m.checkpoints, cp)
 
 	// Record each file's first-known Existed before eviction can remove the
@@ -130,8 +148,8 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 	if m.fileExisted == nil {
 		m.fileExisted = make(map[string]bool)
 	}
-	if _, seen := m.fileExisted[filePath]; !seen {
-		m.fileExisted[filePath] = existed
+	if _, seen := m.fileExisted[cp.FilePath]; !seen {
+		m.fileExisted[cp.FilePath] = cp.Existed
 	}
 
 	// Evict oldest if over limit. Prefer evicting entries that do NOT
@@ -142,8 +160,8 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 	// silently rolling back to a mid-run state.
 	for len(m.checkpoints) > m.maxCheckpoints {
 		evictIdx := 0
-		for i, cp := range m.checkpoints {
-			if cp.RunID != m.currentRunID {
+		for i, c := range m.checkpoints {
+			if c.RunID != m.currentRunID {
 				evictIdx = i
 				break
 			}
@@ -160,8 +178,6 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 
 	// New edit invalidates redo history
 	m.redoStack = nil
-
-	return cp
 }
 
 // Undo rolls back the most recent checkpoint by writing OldContent back to the file.
@@ -190,13 +206,16 @@ func (m *Manager) Undo(source string) (*Checkpoint, error) {
 	m.redoStack = append(m.redoStack, cp)
 
 	// Record the correction so the agent can learn from the rejection.
+	now := time.Now()
 	m.corrections = append(m.corrections, Correction{
 		Files:    []string{cp.FilePath},
 		ToolCall: cp.ToolCall,
 		RunID:    cp.RunID,
-		Time:     time.Now(),
+		Time:     now,
 		Source:   source,
 	})
+
+	m.journalAppendLocked(journalEvent{Type: evUndo, Source: source, Time: now})
 
 	return &cp, nil
 }
@@ -334,6 +353,8 @@ func (m *Manager) revertWithFiles(id, source string) (*Checkpoint, []string, err
 		Time:     time.Now(),
 		Source:   source, // #1708: caller-declared (#1449-A) - was hardcoded "user"
 	})
+
+	m.journalAppendLocked(journalEvent{Type: evRevert, ID: id, Files: files, Source: source})
 
 	return &cp, files, nil
 }
@@ -486,6 +507,8 @@ func (m *Manager) UndoRun() ([]Checkpoint, error) {
 
 	m.recordRunCorrection(reverted, runID)
 
+	m.journalAppendLocked(journalEvent{Type: evUndoRun, RunID: runID})
+
 	return reverted, nil
 }
 
@@ -545,6 +568,17 @@ func (m *Manager) writeBaselines(runIndices []int, baselines map[string]baseline
 		if bl, ok := baselines[cp.FilePath]; ok {
 			if err := restoreCheckpointState(cp.FilePath, bl.content, bl.existed); err != nil {
 				m.removeRunCheckpointsFor(reverted, runID)
+				// Persist the partial-failure cleanup so a restart replays it
+				// instead of resurrecting the already-reverted files' entries.
+				dropped := make([]string, 0, len(reverted))
+				seenFile := make(map[string]bool, len(reverted))
+				for _, r := range reverted {
+					if !seenFile[r.FilePath] {
+						seenFile[r.FilePath] = true
+						dropped = append(dropped, r.FilePath)
+					}
+				}
+				m.journalAppendLocked(journalEvent{Type: evDropRunFiles, RunID: runID, Files: dropped})
 				return reverted, fmt.Errorf("failed to revert %s: %w", cp.FilePath, err)
 			}
 		}
@@ -631,6 +665,9 @@ func (m *Manager) Redo() (*Checkpoint, error) {
 
 	m.redoStack = m.redoStack[:len(m.redoStack)-1]
 	m.checkpoints = append(m.checkpoints, cp)
+
+	m.journalAppendLocked(journalEvent{Type: evRedo})
+
 	return &cp, nil
 }
 
@@ -655,6 +692,8 @@ func (m *Manager) Clear() {
 	// session's values, misreporting IsNew for every re-touched file and
 	// growing the map unboundedly.
 	m.fileExisted = nil
+
+	m.journalAppendLocked(journalEvent{Type: evClear})
 }
 
 // RecentCorrections returns corrections recorded since the last run start.
@@ -676,6 +715,7 @@ func (m *Manager) ClearCorrections() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.corrections = nil
+	m.journalAppendLocked(journalEvent{Type: evClearCorrections})
 }
 
 func generateID() string {
