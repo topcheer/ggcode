@@ -170,18 +170,19 @@ func TestServerLaunchEnv(t *testing.T) {
 // unsupported note WITH the file it involves, and the note is retrievable.
 func TestParseWorkspaceEditUnsupportedKindNote(t *testing.T) {
 	raw := []byte(`{"documentChanges":[{"kind":"rename","oldUri":"file:///a/old.go","newUri":"file:///a/new.go"}]}`)
-	edits := parseWorkspaceEdit(raw)
+	edits, note := parseWorkspaceEdit(raw)
 	if len(edits) != 0 {
 		t.Fatalf("rename-kind change must not produce edits, got %d", len(edits))
 	}
-	note := TakeUnsupportedNote()
 	if note == "" {
 		t.Fatal("unsupported note must be recorded")
 	}
 	if !strings.Contains(note, "rename") || !strings.Contains(note, "new.go") {
 		t.Fatalf("note must name kind+uri, got %q", note)
 	}
-	if again := TakeUnsupportedNote(); again != "" {
-		t.Fatalf("note must clear on read, got %q", again)
+	// #3037: the note is a plain return value; a fresh parse with no
+	// unsupported kinds yields an empty note (nothing global left behind).
+	if _, again := parseWorkspaceEdit([]byte(`{"documentChanges":[{"textDocument":{"uri":"file:///a/a.go"},"edits":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}},"newText":"x"}]}]}`)); again != "" {
+		t.Fatalf("a clean parse must yield no note, got %q", again)
 	}
 }
