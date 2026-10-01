@@ -87,6 +87,17 @@ func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
+	// #3029: pathMu only serializes writers within THIS process. The storage
+	// path is per-workspace shared (daemon/TUI/A2A multi-instance is the
+	// norm here), so two processes doing read-modify-write on the same file
+	// silently dropped the first writer's entry (atomic rename prevents
+	// tearing, not loss - see the same incident class in
+	// appendSkillScenario). Guard the whole read-modify-write with the
+	// cross-process file lock; degrade gracefully when the lock cannot be
+	// acquired (same contract as auth/store.go, playbook.go).
+	if unlock, err := util.FileLock(s.path + ".lock"); err == nil {
+		defer unlock()
+	}
 	entries, readErr := readSemanticMemoryEntries(s.path)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		// #769: on a real read failure (IO error, bufio.ErrTooLong) the old
