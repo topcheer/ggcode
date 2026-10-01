@@ -29,8 +29,8 @@ func TestIssue3005_CompoundTestCommandIsReal(t *testing.T) {
 
 func TestIssue3005_MakeNoopTargetsDoNotCount(t *testing.T) {
 	for _, cmd := range []string{
-		"make clean", "make fmt", "make format", "make lint", "make tidy",
-		"make deploy", "make build", "make check", "make info",
+		"make clean", "make fmt", "make format", "make tidy",
+		"make deploy", "make info",
 		"make help", "make list", "make install", "make -C dir target",
 	} {
 		if isRealTestExecution(cmd) {
@@ -42,7 +42,7 @@ func TestIssue3005_MakeNoopTargetsDoNotCount(t *testing.T) {
 func TestIssue3005_MakeTestishTargetsStillCount(t *testing.T) {
 	for _, cmd := range []string{
 		"make test", "make ci", "make e2e", "make verify", "just test",
-		"task test", "make verify-ci",
+		"task test", "make verify-ci", "task build", "make build", "make lint", "make check",
 	} {
 		if !isRealTestExecution(cmd) {
 			t.Fatalf("#3005: %q (verification-ish target) must still count", cmd)
@@ -96,14 +96,14 @@ func TestIssue3006_CanonicalMapStillPinnedAtNine(t *testing.T) {
 // only the lastBuildFailed side; `make clean` still reset the counter).
 func TestIssue3011_VerifyCommandSegmentExcludesNoopTargets(t *testing.T) {
 	for _, cmd := range []string{
-		"make clean", "make fmt", "make lint", "make tidy", "make deploy",
-		"make build", "make check", "make help", "just fmt", "task clean",
+		"make clean", "make fmt", "make tidy", "make deploy",
+		"make help", "just fmt", "task clean",
 	} {
 		if isVerifyCommand(cmd) {
 			t.Fatalf("#3011: %q must not count as a verify command (counter reset)", cmd)
 		}
 	}
-	for _, cmd := range []string{"make test", "make ci", "make verify-ci", "just test", "make"} {
+	for _, cmd := range []string{"make test", "make ci", "make verify-ci", "just test", "make", "task build", "make build", "make lint", "make check"} {
 		if !isVerifyCommand(cmd) {
 			t.Fatalf("#3011 regression: %q must stay a verify command", cmd)
 		}

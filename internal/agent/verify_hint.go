@@ -1062,10 +1062,14 @@ func isRealTestExecution(cmd string) bool {
 // running them must not reset the post-edit verify counter or clear the
 // lastBuildFailed flag (#3005: `make clean` used to count as verification,
 // silencing the verify hint for subsequent source edits - #1841 case 3).
+// NOTE: build/test-adjacent targets (build, test, ci, check, lint) are
+// deliberately NOT here - a successful build IS compilation verification
+// (verify_hint_issue950_test.go pins `task build` = true) and a failed one
+// must set lastBuildFailed.
 var makeRunnerNoopTargets = map[string]bool{
 	"help": true, "list": true, "clean": true, "install": true,
-	"fmt": true, "format": true, "lint": true, "tidy": true,
-	"deploy": true, "build": true, "check": true, "info": true,
+	"fmt": true, "format": true, "tidy": true,
+	"deploy": true, "info": true,
 }
 
 // isRealTestSegment classifies one shell segment (already lowercased,
