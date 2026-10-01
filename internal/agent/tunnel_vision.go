@@ -57,6 +57,11 @@ const (
 )
 
 type tunnelVisionState struct {
+	// baseDir anchors relative paths so an absolute read and a relative
+	// grep hit on the same file land on one map key (#2976 companion
+	// finding). Empty means no anchoring (unit tests use bare paths).
+	baseDir string
+
 	// filesTouched tracks unique normalized file paths read or edited.
 	filesTouched map[string]bool
 
@@ -107,12 +112,20 @@ func extractSearchResultPaths(content string) []string {
 	return paths
 }
 
+// normalize anchors the path to baseDir before keying (#2976 companion
+// finding): an absolute read ("/repo/a.go") and a relative grep hit
+// ("a.go") previously split into two keys, undercounting even the union.
+// Mirrors unreadEditState.normalize semantics via normalizeCompanionPath.
+func (s *tunnelVisionState) normalize(path string) string {
+	return normalizeCompanionPath(s.baseDir, strings.TrimSpace(path))
+}
+
 // recordFile marks a file as touched (read or edited) during this run.
 func (s *tunnelVisionState) recordFile(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	if !strings.HasSuffix(n, "_test.go") && !strings.HasSuffix(n, ".md") {
 		s.filesTouched[n] = true
 	}
@@ -129,7 +142,7 @@ func (s *tunnelVisionState) recordSearched(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	if strings.HasSuffix(n, ".md") {
 		return // docs never indicate code exploration breadth
 	}

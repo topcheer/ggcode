@@ -1212,6 +1212,11 @@ func (a *Agent) SetWorkingDir(dir string) {
 	if a.expiredRead != nil {
 		a.expiredRead.baseDir = dir
 	}
+	// #2976: tunnel_vision keys files by path too - anchor so an absolute
+	// read and a relative grep hit on the same file share one map key.
+	if a.tunnelVision != nil {
+		a.tunnelVision.baseDir = dir
+	}
 	// #1491-A layer 3: search-invalidation keys share the same anchor.
 	if a.searchInvalidation != nil {
 		a.searchInvalidation.setBaseDir(dir)
