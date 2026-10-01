@@ -803,10 +803,54 @@ type candidateAggregate struct {
 	sessions  map[string]struct{}
 }
 
+// failureSignature derives a coarse error-class signature from a failure
+// message so aggregation keys don't merge unrelated failures that merely
+// share a keyword (#3016: "go build timeout" and "npm test path error"
+// both matched the "test"/"build" keywords and were aggregated under the
+// same name, inflating EvidenceCount into a fake "converged across N
+// sessions" signal that staged unrelated fixes).
+//
+// Coarse classes first (so distinct details still converge on the same
+// class); the normalized first line of the error is the fallback so two
+// different errors never share a key.
+func failureSignature(errMsg string) string {
+	first := errMsg
+	if i := strings.IndexAny(errMsg, "\n\r"); i >= 0 {
+		first = errMsg[:i]
+	}
+	first = strings.ToLower(strings.TrimSpace(first))
+
+	classes := []struct{ marker, class string }{
+		{"timed out", "timeout"}, {"timeout", "timeout"},
+		{"deadline exceeded", "timeout"},
+		{"undefined", "undefined-symbol"},
+		{"cannot find", "not-found"}, {"not found", "not-found"}, {"no such file", "not-found"}, {"enoent", "not-found"},
+		{"permission denied", "permission"}, {"eacces", "permission"},
+		{"already exists", "already-exists"},
+		{"conflict", "conflict"},
+		{"compile", "compile-error"}, {"syntax error", "compile-error"},
+		{"connection refused", "network"}, {"eof", "network"}, {"reset by peer", "network"},
+	}
+	for _, c := range classes {
+		if strings.Contains(first, c.marker) {
+			return c.class
+		}
+	}
+	// Normalize whitespace so trivially-different phrasings don't fork keys.
+	return strings.Join(strings.Fields(first), " ")
+}
+
 func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate SkillCandidate, sessionID string) {
 	key := strings.ToLower(strings.TrimSpace(candidate.Name))
 	if key == "" {
 		return
+	}
+	// #3016: failure-fix candidates aggregate by name AND error signature -
+	// the keyword-based name alone is too broad. Correction/convention
+	// candidates keep name-only keys (their Evidence[0] is not an error
+	// message and name collision is not the failure mode there).
+	if candidate.Category == "failure-fix" && len(candidate.Evidence) > 0 {
+		key += "|" + failureSignature(candidate.Evidence[0])
 	}
 	agg, ok := aggregated[key]
 	if !ok {
