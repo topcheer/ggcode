@@ -62,6 +62,23 @@ var progressSignals = []string{
 	"pass", "succeed", "ok:", "no error", "built", "committed", "created", "verified",
 }
 
+// negationSignals are explicitly positive statements whose text still
+// contains a bare failure substring ("no error" contains "error")  -  the
+// failure-substring switch case used to swallow them, making the
+// progressSignals "no error" entry unreachable dead code (#2997).
+var negationSignals = []string{
+	"no error", "no errors", "0 errors", "0 error",
+	"no failures", "0 failures", "without error",
+}
+
+// resolutionSignals mark past-tense fix confirmations: "fixed the error"
+// describes a success whose text contains a failure substring (#2997).
+// The "fail" exclusion keeps "fix failed"/"failed to fix" classified as
+// failure ("failed" never appears in a pure resolution phrase).
+var resolutionSignals = []string{
+	"fixed", "resolved", "now passes", "now pass", "already fixed",
+}
+
 // hypothesisSignals mark an entry as an approach/hypothesis worth carrying.
 var hypothesisSignals = []string{
 	"plan:", "approach:", "attempt", "try", "hypothesis", "strategy", "fix:",
@@ -83,12 +100,18 @@ func SummarizeTrajectory(entries []TrajectoryEntry) RolloutSummary {
 		lower := strings.ToLower(text)
 		kind := strings.ToLower(e.Kind)
 
+		// #2997: explicit negations/resolutions must win over bare failure
+		// substrings  -  "go build: no error, all packages compile" and
+		// "fixed the error; test now passes" are progress, not failure.
+		// kind=="error" stays structural failure regardless of wording.
+		positive := kind != "error" && positiveStatement(lower)
+
 		switch {
-		case kind == "error" || hasSignal(lower, failureSignalsKeys):
+		case !positive && (kind == "error" || hasSignal(lower, failureSignalsKeys)):
 			anyFailure = true
 			s.addFailure(compactLine(text, 200))
 		case kind == "result" || kind == "note" || hasAny(lower, progressSignals):
-			if looksLikeFailure(lower) {
+			if !positive && looksLikeFailure(lower) {
 				anyFailure = true
 				s.addFailure(compactLine(text, 200))
 				continue
@@ -149,6 +172,17 @@ func hasAny(lower string, signals []string) bool {
 		}
 	}
 	return false
+}
+
+// positiveStatement reports whether lower is an explicitly positive
+// statement that the bare failure substrings would misread as failure
+// (#2997): an explicit negation ("no error") or a resolution phrase
+// ("fixed the error") without a live failure word.
+func positiveStatement(lower string) bool {
+	if hasAny(lower, negationSignals) {
+		return true
+	}
+	return hasAny(lower, resolutionSignals) && !strings.Contains(lower, "fail")
 }
 
 // looksLikeFailure guards against progress-keyword false positives such as
@@ -253,9 +287,9 @@ func DistillIntoPrompt(prior []RolloutSummary) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("## Prior attempts (distilled trajectories — reuse progress, avoid failure modes)\n")
+	b.WriteString("## Prior attempts (distilled trajectories  -  reuse progress, avoid failure modes)\n")
 	for i, s := range prior {
-		fmt.Fprintf(&b, "### Attempt %d — %s\n", i+1, s.Verdict)
+		fmt.Fprintf(&b, "### Attempt %d  -  %s\n", i+1, s.Verdict)
 		writeSection(&b, "Hypotheses", s.Hypotheses)
 		writeSection(&b, "Progress", s.Progress)
 		writeSection(&b, "Failures", s.Failures)

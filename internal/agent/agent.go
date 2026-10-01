@@ -271,6 +271,7 @@ type Agent struct {
 	editCoverage              *editCoverageState         // verification coverage gap detection (edits across packages but partial verification)
 	toolEff                   *toolEffTracker            // per-tool effectiveness tracking (success rate + alternative-approach guidance)
 	prematureSuccess          *prematureSuccessState     // premature success claim detection (edits without verification followed by success declaration)
+	bgVerifyJobs              *bgVerifyRegistry          // background verify-job registry for debt clearing (#2992 case 2)
 	recklessExec              *recklessExecState         // reckless execution detection (edits to unexplored files in early iterations)
 	irrevGate                 *irrevGateState            // irreversibility-weighted calibration gate (caution scales with action reversibility)
 	verifyDebt                *verifyDebtState           // verification debt accumulator (edits since last green build)
@@ -490,6 +491,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		editCoverage:           newEditCoverageState(),
 		toolEff:                newToolEffTracker(),
 		prematureSuccess:       newPrematureSuccessState(),
+		bgVerifyJobs:           newBgVerifyRegistry(),
 		strategyFixation:       newStrategyFixationState(),
 		errorRush:              newErrorRushState(),
 		attentionFragment:      newAttentionFragmentState(),
@@ -1640,6 +1642,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetTodoStaleness()
 	a.resetTodoDrop()
 	a.resetScopeDrift()
+	a.bgVerifyJobs = newBgVerifyRegistry()
 	a.resetDriftRecurrence()
 	// Per-user-turn reset of the attention-fragment directory window: the
 	// sliding window is per-turn semantics per its own doc comment — leaving
@@ -3362,7 +3365,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// file, and without invalidation the next read could be served
 			// from the memoize/speculator/command caches describing the
 			// pre-undo state. See mutatesSourceTree in verify_hint.go.
-			if mutatesSourceTree(tc.Name) && !result.IsError {
+			wroteDespiteError := partialEditWroteDespiteError(tc.Name, result.Content, result.IsError)
+			if mutatesSourceTree(tc.Name) && (!result.IsError || wroteDespiteError) {
 				a.speculator.invalidateCache()
 				// Git whole-tree operations (checkout, reset, revert) change
 				// potentially all files at once. They need nuclear invalidation:
@@ -4053,8 +4057,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// below and the #495/#953 pattern at 4067 - failed edits (old_text
 			// mismatch, denied) never changed anything and must not inflate
 			// productiveCount/editFiles/editedDirs.
+			// #2992 case 3: extractFileHint returned only the FIRST path, so a
+			// successful multi-file edit under-counted productiveCount/
+			// editFiles/editedDirs (#1480 case C established extractFileHints).
+			// #1762 case 1: on partial_success prefer written_paths - the files
+			// that ARE on disk - over argument intent.
 			if !result.IsError {
-				a.scopeDriftRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments))
+				driftPaths := extractFileHints(tc.Name, tc.Arguments)
+				if written := extractWrittenPaths(result.Content); len(written) > 0 {
+					driftPaths = written
+				}
+				for _, fh := range driftPaths {
+					a.scopeDriftRecord(tc.Name, fh)
+				}
 			}
 			// Drift recurrence: track edits and verifications relative to any drift warning.
 			a.driftRecurrenceRecord(tc.Name, extractFileHint(tc.Name, tc.Arguments), string(tc.Arguments), !result.IsError)
@@ -4078,8 +4093,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.lastGoodCheckpointRecordEdit(tc.Name, extractFileHint(tc.Name, tc.Arguments))
 			}
 			// Monorepo scoper: track which packages are being edited.
-			if fh := extractFileHint(tc.Name, tc.Arguments); fh != "" {
-				a.monorepoScoper.recordEdit(fh)
+			// #2992 case 4: gate on success like every sibling tracker, and use
+			// written_paths when present (#1762 case 1) - failed edits inflated
+			// package heat with files that were never touched.
+			if !result.IsError {
+				monoPaths := extractFileHints(tc.Name, tc.Arguments)
+				if written := extractWrittenPaths(result.Content); len(written) > 0 {
+					monoPaths = written
+				}
+				for _, fh := range monoPaths {
+					a.monorepoScoper.recordEdit(fh)
+				}
 			}
 			if scopeGuidance := a.scopeDriftCheck(); scopeGuidance != "" {
 				// Mark that a drift warning fired, so drift recurrence can track behavior.
@@ -4157,16 +4181,30 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// File churn detection: track repeated edits to the same file.
 			// Each re-edit signals an invalidated assumption about the file.
-			if isEditTool(tc.Name) {
-				a.fileChurn.recordEdit(extractEditedPaths(tc))
-				for _, p := range extractEditedPaths(tc) {
+			// #2992 case 1: gate on success like the sibling trackers
+			// (#1581-B/#1491/#953) - a failed edit (bad old_text, denied)
+			// never touched disk, so recording it fabricated churn warnings and
+			// consumed prematureCommit's one-shot first-edit state on an
+			// evidence-free failed attempt. #1762 case 1: partial_success sets
+			// IsError=true yet written_paths files ARE on disk - record those.
+			editPaths := extractEditedPaths(tc)
+			if result.IsError {
+				if written := extractWrittenPaths(result.Content); len(written) > 0 {
+					editPaths = written
+				} else {
+					editPaths = nil
+				}
+			}
+			if isEditTool(tc.Name) && len(editPaths) > 0 {
+				a.fileChurn.recordEdit(editPaths)
+				for _, p := range editPaths {
 					a.tunnelVision.recordFile(p)
 				}
 				// Premature commitment detection: check evidence sufficiency
 				// at the first edit. ECLoop (arXiv:2607.28815) shows that
 				// editing before gathering sufficient context (callers, tests,
 				// related code) leads to incorrect patches in 20-27% of cases.
-				pcMsg := a.prematureCommit.checkFirstEdit(extractEditedPaths(tc))
+				pcMsg := a.prematureCommit.checkFirstEdit(editPaths)
 				if pcMsg != "" {
 					a.appendGuidance(&result, pcMsg)
 				}
@@ -4221,6 +4259,36 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// the detector was permanently silent.
 			if tc.Name == "run_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
 				a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
+			}
+			// #2992 case 2: the long-test workflow runs builds/tests via
+			// start_command + wait_command / read_command_output (#595/#1152/
+			// #1153) - those completions never cleared verifyDebt /
+			// editPropagation / fileChurn, so background-test runs accumulated
+			// fake "unverified edits" warnings. Mirror prematureSuccess's
+			// registry/grading shape: register on successful start, consume-once
+			// on a terminal outcome, grade from the rendered job Status.
+			if tc.Name == "start_command" && !result.IsError {
+				a.bgVerifyJobs.register(psExtractJobID(result.Content), extractCommandFromArgs(tc.Arguments))
+			}
+			if tc.Name == "wait_command" || tc.Name == "read_command_output" {
+				if cmd, ok := a.bgVerifyJobs.peek(bgVerifyExtractJobID(tc.Arguments)); ok && isVerifyCommand(cmd) {
+					// Consume only on a TERMINAL status: the first poll usually
+					// sees Status: running - removing the registration there
+					// would orphan the job before its outcome poll arrives (#1153
+					// alignment).
+					if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal {
+						a.bgVerifyJobs.remove(bgVerifyExtractJobID(tc.Arguments))
+						if passed {
+							a.verifyDebt.recordVerifyCommand(cmd, false)
+							a.editPropagation.recordGreenBuild()
+							// #1460-C scoping applies here too: only failure-aware
+							// verification (test/build/vet-class) may clear churn.
+							if isStrictVerifyCommand(cmd) {
+								a.fileChurn.recordVerifySuccess(cmd)
+							}
+						}
+					}
+				}
 			}
 			// #487: gate on command CONTENT — the unconditional raw setter made
 			// the first read_file count as a build/test and silenced the
