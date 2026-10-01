@@ -395,8 +395,14 @@ func (m *Manager) ListTeamBoards() []TeamBoardSnapshot {
 }
 
 // EmitBoardUpdated notifies UI subscribers that a team's shared task board changed.
+// It is also the single funnel every board mutation flows through (create/claim/
+// complete in tool/swarm_task_tools.go), so it doubles as the durability hook:
+// the board is snapshotted to disk after the UI event fires.
 func (m *Manager) EmitBoardUpdated(teamID string) {
 	m.emit(Event{Type: "team_board_updated", TeamID: teamID, Timestamp: time.Now()})
+	if tm := m.GetTaskManager(teamID); tm != nil {
+		persistTeamBoardAsync(teamID, tm)
+	}
 }
 
 // currentProvider returns the live provider if providerGetter is set,
@@ -696,7 +702,9 @@ func (m *Manager) EnsureTaskManager(teamID string) (*task.Manager, error) {
 	team.mu.Lock()
 	defer team.mu.Unlock()
 	if team.Tasks == nil {
-		team.Tasks = task.NewManager()
+		// Durable boards: restore from disk if this team had a board in a
+		// previous process (in_progress claims are rolled back to pending).
+		team.Tasks = loadTeamBoard(teamID)
 	}
 	return team.Tasks, nil
 }
