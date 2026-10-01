@@ -27,11 +27,21 @@ func TestSkillWorthyRun(t *testing.T) {
 		t.Fatal("clean 10-call 4-tool run with edits should be skill-worthy")
 	}
 
-	// errors disqualify
+	// #353 contrastive induction: errors WITH artifacts = recovered run,
+	// its pitfall knowledge is exactly what a distilled skill should carry.
 	s := skillWorthyStats()
+	s.ErrorCount = 2
+	if !skillWorthyRun(s) {
+		t.Fatal("run that recovered from errors and still produced edits should be skill-worthy")
+	}
+
+	// errors with NO artifacts = failed outright, nothing to distill
+	s = skillWorthyStats()
 	s.ErrorCount = 1
+	s.FilesEdited = nil
+	s.SuccessfulCommands = nil
 	if skillWorthyRun(s) {
-		t.Fatal("run with errors must not be skill-worthy")
+		t.Fatal("run with errors and no artifacts must not be skill-worthy")
 	}
 
 	// too few total calls
@@ -126,10 +136,13 @@ func TestSuggestSkillFromRunGatesOnRepeated(t *testing.T) {
 		t.Fatalf("suggestion content unexpected: %q", got)
 	}
 
-	// repeated but NOT worthy (errors) -> no new write beyond what exists
+	// repeated but NOT worthy (errors with no artifacts = failed outright,
+	// #353: recovered runs with artifacts now DO pass) -> no new write
 	before, _ := memLoadSkillKey(dir)
 	s := skillWorthyStats()
 	s.ErrorCount = 3
+	s.FilesEdited = nil
+	s.SuccessfulCommands = nil
 	suggestSkillFromRun(dir, s, true)
 	after, _ := memLoadSkillKey(dir)
 	if before != after {
@@ -143,4 +156,20 @@ func memLoadSkillKey(dir string) (string, error) {
 		return "", fmt.Errorf("no store")
 	}
 	return m.LoadKey(skillSuggestMemoryKey)
+}
+
+// #353: recovered runs must carry the pitfall-avoidance hint in their
+// suggestion line so the eventual distilled skill includes it.
+func TestSkillSuggestionTextFlagsRecovered(t *testing.T) {
+	s := skillWorthyStats()
+	s.ErrorCount = 2
+	line := skillSuggestionText(s)
+	if !strings.Contains(line, "recovered from 2 error(s)") || !strings.Contains(line, "pitfall avoidance") {
+		t.Fatalf("recovered-run suggestion should flag pitfall avoidance, got: %s", line)
+	}
+	// clean runs keep the original tail, no recovery noise
+	clean := skillSuggestionText(skillWorthyStats())
+	if strings.Contains(clean, "recovered") {
+		t.Fatalf("clean run should not carry recovery flag, got: %s", clean)
+	}
 }

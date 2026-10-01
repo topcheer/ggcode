@@ -30,13 +30,16 @@ const skillSuggestMemoryKey = "skill-suggestions"
 const skillSuggestCap = 20
 
 // skillWorthyRun reports whether this run's shape looks like a repeatable
-// workflow worth a skill: clean, substantial (>=8 calls), multi-tool (>=3
-// distinct), and producing artifacts (edits or verified commands). Pure
-// function; unit-testable without an agent.
+// workflow worth a skill: substantial (>=8 calls), multi-tool (>=3 distinct),
+// and producing artifacts (edits or verified commands). Pure function;
+// unit-testable without an agent.
+//
+// #353 (SkillGen arXiv:2605.10999 contrastive induction): a run that hit
+// errors but still produced artifacts is a RECOVERED run — the failure and
+// its recovery are exactly the pitfall knowledge a distilled skill should
+// carry, so it passes the gate too. Only error runs with no artifacts
+// (failed outright) are excluded.
 func skillWorthyRun(stats agent.RunStats) bool {
-	if stats.ErrorCount > 0 {
-		return false
-	}
 	total := 0
 	distinct := 0
 	for _, n := range stats.ToolCalls {
@@ -48,7 +51,11 @@ func skillWorthyRun(stats agent.RunStats) bool {
 	if total < 8 || distinct < 3 {
 		return false
 	}
-	return len(stats.FilesEdited) > 0 || len(stats.SuccessfulCommands) >= 2
+	artifacts := len(stats.FilesEdited) > 0 || len(stats.SuccessfulCommands) >= 2
+	if stats.ErrorCount > 0 && !artifacts {
+		return false // failed outright, nothing recovered to distill
+	}
+	return artifacts
 }
 
 // skillSuggestionText renders one suggestion line for a run.
@@ -63,6 +70,12 @@ func skillSuggestionText(stats agent.RunStats) string {
 	fmt.Fprintf(&b, "- [%s] %s", time.Now().UTC().Format("2006-01-02"), task)
 	if tools != "" {
 		fmt.Fprintf(&b, " (tools: %s)", tools)
+	}
+	if stats.ErrorCount > 0 {
+		// #353 contrastive induction: flag recovered runs so the eventual
+		// skill captures the pitfall avoidance, not just the happy path.
+		fmt.Fprintf(&b, " — recurring workflow recovered from %d error(s); consider create_skill and include the pitfall avoidance", stats.ErrorCount)
+		return b.String()
 	}
 	b.WriteString(" — recurring workflow; consider create_skill to persist it as an invocable skill")
 	return b.String()
