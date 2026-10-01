@@ -9,7 +9,6 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/subagent"
-	"github.com/topcheer/ggcode/internal/task"
 )
 
 func TestSpawnAgentInvalidInput(t *testing.T) {
@@ -225,13 +224,5 @@ func TestSpawnAgentTaskParameterDocumentsContract(t *testing.T) {
 	desc := WaitAgentTool{}.Description()
 	if !strings.Contains(desc, "acceptance criteria") {
 		t.Fatalf("wait_agent description must remind acceptance-criteria verification, got: %s", desc)
-	}
-}
-
-func TestFormatTaskPromptRemindsAcceptance(t *testing.T) {
-	tk := task.Task{Subject: "s", Description: "d"}
-	p := formatTaskPrompt(tk)
-	if !strings.Contains(p, "acceptance criteria") {
-		t.Fatalf("inbox task prompt must remind acceptance verification, got: %s", p)
 	}
 }

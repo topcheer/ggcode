@@ -116,6 +116,8 @@ func TestFormatTaskPromptEmphasizesCollaborationRules(t *testing.T) {
 		"avoid duplicate effort",
 		"one clear handoff task",
 		"teammate runner will update the task board",
+		// #351: inbox prompt must carry the acceptance-criteria reminder.
+		"acceptance criteria",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to contain %q, got %q", want, prompt)
@@ -398,6 +400,10 @@ func TestSwarmTaskToolDescriptionsClarifyAssignmentFlow(t *testing.T) {
 	createParams := string(SwarmTaskCreateTool{}.Parameters())
 	if !strings.Contains(createParams, "direct-delivered") || !strings.Contains(createParams, "do not also call swarm_task_claim") {
 		t.Fatalf("swarm_task_create assignee schema should warn about direct delivery: %s", createParams)
+	}
+	// #351: the description parameter must guide a task contract.
+	if !strings.Contains(createParams, "acceptance criteria") {
+		t.Fatalf("swarm_task_create description schema should guide acceptance criteria: %s", createParams)
 	}
 
 	claimDesc := SwarmTaskClaimTool{}.Description()
