@@ -2835,117 +2835,123 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 					continue
 				}
-				// Plan drift gate: before returning, check if plan items (from
-				// exit_plan_mode) were actually addressed by the agent's work.
-				// Zero-LLM-cost heuristic inspired by Kiro/GitHub Spec Kit.
-				if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
-					debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", i+1)
-					// #1452-C: plan_drift fires must arm the recurrence
-					// detector too - markWarning's doc says 'scope_drift,
-					// plan_drift, or similar' but only scope_drift wired it,
-					// so plan-dimension recurrence never activated.
-					a.driftRecurrenceMarkWarn(runStats.Iterations)
+			}
+			// #3048: the todo-reminder budget (todoCheckCount < 2) gates ONLY the
+			// todo reminder above. It used to wrap the six gates below too, so two
+			// exhausted reminders permanently silenced plan drift, fulfillment,
+			// evidence, claims, companion and specGaming. Each of those has its own
+			// throttling (finalGateFiredThisRun, claimsSupervision default-off,
+			// per-run fire-once flags).
+			// Plan drift gate: before returning, check if plan items (from
+			// exit_plan_mode) were actually addressed by the agent's work.
+			// Zero-LLM-cost heuristic inspired by Kiro/GitHub Spec Kit.
+			if driftMsg := a.planDrift.checkPlanDrift(runStats, textBuf); driftMsg != "" {
+				debug.Log("agent", "Iteration %d: plan drift detected, injecting reminder", i+1)
+				// #1452-C: plan_drift fires must arm the recurrence
+				// detector too - markWarning's doc says 'scope_drift,
+				// plan_drift, or similar' but only scope_drift wired it,
+				// so plan-dimension recurrence never activated.
+				a.driftRecurrenceMarkWarn(runStats.Iterations)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: driftMsg,
+					}},
+				})
+				continue
+			}
+			// Request fulfillment gate: before returning, verify that the
+			// agent's actual work matches the user's request. This catches
+			// silent partial completion when no todo list was created.
+			// Zero-LLM-cost heuristic inspired by Claude Code/Cursor/Aider
+			// completion verification patterns.
+			if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
+				debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: fulfillmentMsg,
+					}},
+				})
+				continue
+			}
+			// r357 final-turn evidence gate: behavior-triggered (edited
+			// source this run x zero build/test execution x build system
+			// present) - block the stop once and demand a verification
+			// receipt. Unlike the lexical claimsSupervision detector
+			// below, this is on by default (narrow false-positive surface).
+			a.mu.Lock()
+			gateMsg := finalTurnEvidenceGate(
+				a.postEditVerify.sourceEditsThisRun,
+				a.postEditVerify.lastSourceFileThisRun,
+				a.postEditVerify.realBuildOrTestRunThisRun,
+				a.postEditVerify.finalGateFiredThisRun,
+				a.workingDir)
+			if gateMsg != "" {
+				a.postEditVerify.finalGateFiredThisRun = true
+			}
+			a.mu.Unlock()
+			if gateMsg != "" {
+				debug.Log("agent", "Iteration %d: final-turn evidence gate fired, demanding verification before stop", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: gateMsg,
+					}},
+				})
+				continue
+			}
+			// Unverified success claim detection: before returning, check if
+			// the agent's response claims verification results ("tests pass",
+			// "build succeeds") without having actually run verification
+			// commands. Zero-LLM-cost heuristic.
+			// Unverified success claim detection: gated behind claimsSupervision
+			// (default off, see field comment) - lexical claim-vs-command cross-
+			// reference over intermediate states is noise for current models.
+			if a.claimsSupervision {
+				if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
+					debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
 					a.contextManager.Add(provider.Message{
 						Role: "user",
 						Content: []provider.ContentBlock{{
 							Type: "text",
-							Text: driftMsg,
+							Text: claimMsg,
 						}},
 					})
 					continue
 				}
-				// Request fulfillment gate: before returning, verify that the
-				// agent's actual work matches the user's request. This catches
-				// silent partial completion when no todo list was created.
-				// Zero-LLM-cost heuristic inspired by Claude Code/Cursor/Aider
-				// completion verification patterns.
-				if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
-					debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: fulfillmentMsg,
-						}},
-					})
-					continue
-				}
-				// r357 final-turn evidence gate: behavior-triggered (edited
-				// source this run x zero build/test execution x build system
-				// present) - block the stop once and demand a verification
-				// receipt. Unlike the lexical claimsSupervision detector
-				// below, this is on by default (narrow false-positive surface).
-				a.mu.Lock()
-				gateMsg := finalTurnEvidenceGate(
-					a.postEditVerify.sourceEditsThisRun,
-					a.postEditVerify.lastSourceFileThisRun,
-					a.postEditVerify.realBuildOrTestRunThisRun,
-					a.postEditVerify.finalGateFiredThisRun,
-					a.workingDir)
-				if gateMsg != "" {
-					a.postEditVerify.finalGateFiredThisRun = true
-				}
-				a.mu.Unlock()
-				if gateMsg != "" {
-					debug.Log("agent", "Iteration %d: final-turn evidence gate fired, demanding verification before stop", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: gateMsg,
-						}},
-					})
-					continue
-				}
-				// Unverified success claim detection: before returning, check if
-				// the agent's response claims verification results ("tests pass",
-				// "build succeeds") without having actually run verification
-				// commands. Zero-LLM-cost heuristic.
-				// Unverified success claim detection: gated behind claimsSupervision
-				// (default off, see field comment) - lexical claim-vs-command cross-
-				// reference over intermediate states is noise for current models.
-				if a.claimsSupervision {
-					if claimMsg := a.checkUnverifiedClaim(textBuf, runStats); claimMsg != "" {
-						debug.Log("agent", "Iteration %d: unverified success claim detected, injecting reminder", i+1)
-						a.contextManager.Add(provider.Message{
-							Role: "user",
-							Content: []provider.ContentBlock{{
-								Type: "text",
-								Text: claimMsg,
-							}},
-						})
-						continue
-					}
-				}
-				// Companion file guard: before returning, check if the agent
-				// edited source files that have existing test companions but
-				// did not update those tests. Zero-LLM-cost heuristic.
-				if companionMsg := a.companionGuard.checkCompanionFiles(runStats, a.WorkingDir()); companionMsg != "" {
-					debug.Log("agent", "Iteration %d: companion file guard detected unedited test companions", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: companionMsg,
-						}},
-					})
-					continue
-				}
-				// Specification gaming detection: before returning, check if
-				// the agent is gaming verification (editing tests instead of
-				// source, adding skip markers, tampering with CI config) rather
-				// than fixing the actual problem. Zero-LLM-cost heuristic.
-				if specGamingMsg := a.checkSpecGaming(runStats, userPromptForStats); specGamingMsg != "" {
-					debug.Log("agent", "Iteration %d: specification gaming detected, injecting warning", i+1)
-					a.contextManager.Add(provider.Message{
-						Role: "user",
-						Content: []provider.ContentBlock{{
-							Type: "text",
-							Text: specGamingMsg,
-						}},
-					})
-					continue
-				}
+			}
+			// Companion file guard: before returning, check if the agent
+			// edited source files that have existing test companions but
+			// did not update those tests. Zero-LLM-cost heuristic.
+			if companionMsg := a.companionGuard.checkCompanionFiles(runStats, a.WorkingDir()); companionMsg != "" {
+				debug.Log("agent", "Iteration %d: companion file guard detected unedited test companions", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: companionMsg,
+					}},
+				})
+				continue
+			}
+			// Specification gaming detection: before returning, check if
+			// the agent is gaming verification (editing tests instead of
+			// source, adding skip markers, tampering with CI config) rather
+			// than fixing the actual problem. Zero-LLM-cost heuristic.
+			if specGamingMsg := a.checkSpecGaming(runStats, userPromptForStats); specGamingMsg != "" {
+				debug.Log("agent", "Iteration %d: specification gaming detected, injecting warning", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: specGamingMsg,
+					}},
+				})
+				continue
 			}
 			// Synchronous verification with auto-repair.
 			// Before returning, verify the build if code was changed. If it
