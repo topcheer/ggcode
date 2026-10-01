@@ -85,7 +85,10 @@ func (t ExitPlanModeTool) Name() string { return "exit_plan_mode" }
 func (t ExitPlanModeTool) Description() string {
 	return "Exit plan mode and return to normal coding mode. Provide the plan content generated during exploration. " +
 		"After exiting, break the plan into structured tasks using task_create with dependencies (addBlocks/addBlockedBy) " +
-		"to track progress, then execute each task step by step."
+		"to track progress, then execute each task step by step. " +
+		"For non-trivial plans, include a Pre-Mortem section: assume the plan already failed, list the top 3-5 failure " +
+		"modes, mark any irreversible steps, and give each high-risk item a checkpoint or rollback path - then watch " +
+		"for those failure modes while executing (Gary Klein pre-mortem, ~30% better failure prediction)."
 }
 func (t ExitPlanModeTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{
@@ -133,5 +136,5 @@ func (t ExitPlanModeTool) Execute(_ context.Context, input json.RawMessage) (Res
 
 	t.Switcher.SetMode(mode)
 
-	return Result{Content: fmt.Sprintf("Exited plan mode. Resumed in %s mode.\n\nPlan:\n%s\n\nUse task_create to break this plan into structured tasks with dependencies, then execute step by step.\n", mode, args.Plan)}, nil
+	return Result{Content: fmt.Sprintf("Exited plan mode. Resumed in %s mode.\n\nPlan:\n%s\n\nUse task_create to break this plan into structured tasks with dependencies, then execute step by step. If the plan has a Pre-Mortem section, keep its failure-mode list visible and check each risk item as you reach it.\n", mode, args.Plan)}, nil
 }

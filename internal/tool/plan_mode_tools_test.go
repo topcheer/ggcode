@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/permission"
@@ -236,4 +237,16 @@ func containsHelper(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// #350: exit_plan_mode is the only plan→execution gate; its description must
+// carry the pre-mortem protocol (prospective hindsight) so non-trivial plans
+// enumerate failure modes before any irreversible step runs.
+func TestExitPlanModeDescriptionDocumentsPreMortem(t *testing.T) {
+	desc := ExitPlanModeTool{}.Description()
+	for _, want := range []string{"Pre-Mortem", "failure", "irreversible", "rollback"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("exit_plan_mode description should mention %q for the pre-mortem contract, got %q", want, desc)
+		}
+	}
 }
