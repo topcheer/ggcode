@@ -101,47 +101,58 @@ func finalizeImage(rawPath string, opts ScreenshotOptions) (Image, error) {
 
 	img := Image{Data: data, MIME: mime}
 
+	// #2998: undecodable screenshot bytes are a FAILURE, not a silent
+	// fallback - the old `if err == nil` shape silently ignored the user's
+	// Format/MaxWidth/Quality options and returned (raw, nil), the exact
+	// silent-degraded-result pattern #975 removed from this file.
 	decoded, err := decodeImageData(data)
-	if err == nil {
-		img.Width = decoded.Bounds().Dx()
-		img.Height = decoded.Bounds().Dy()
+	if err != nil {
+		return Image{}, fmt.Errorf("decoding screenshot bytes (mime %s): %w", mime, err)
+	}
+	img.Width = decoded.Bounds().Dx()
+	img.Height = decoded.Bounds().Dy()
 
-		maxW := opts.MaxWidth
-		if maxW == 0 {
-			maxW = 1920
-		}
+	maxW := opts.MaxWidth
+	if maxW == 0 {
+		maxW = 1920
+	}
 
-		target := decoded
-		if img.Width > maxW {
-			target = resizeImage(decoded, maxW)
-			img.Width = target.Bounds().Dx()
-			img.Height = target.Bounds().Dy()
-		}
+	target := decoded
+	if img.Width > maxW {
+		target = resizeImage(decoded, maxW)
+		img.Width = target.Bounds().Dx()
+		img.Height = target.Bounds().Dy()
+	}
 
-		// Re-encode if format conversion or resize is needed.
-		format := strings.ToLower(opts.Format)
-		if format == "" {
-			format = "png"
-		}
+	// Re-encode if format conversion or resize is needed.
+	format := strings.ToLower(opts.Format)
+	if format == "" {
+		format = "png"
+	}
 
-		if format == "jpeg" {
-			q := opts.Quality
-			if q == 0 {
-				q = 85
-			}
-			buf, err := encodeJPEGBytes(target, q)
-			if err == nil {
-				img.Data = buf
-				img.MIME = MIMEJPEG
-			}
-		} else if img.Width > maxW || target != decoded {
-			// Re-encode PNG after resize.
-			buf, err := encodePNGBytes(target)
-			if err == nil {
-				img.Data = buf
-				img.MIME = MIMEPNG
-			}
+	if format == "jpeg" {
+		q := opts.Quality
+		if q == 0 {
+			q = 85
 		}
+		buf, err := encodeJPEGBytes(target, q)
+		if err != nil {
+			// #2998: Width/Height were already updated to the resized dims -
+			// returning raw Data with those dims (the old silent skip) ships
+			// metadata that does not match the pixels.
+			return Image{}, fmt.Errorf("encoding screenshot to jpeg: %w", err)
+		}
+		img.Data = buf
+		img.MIME = MIMEJPEG
+	} else if img.Width > maxW || target != decoded {
+		// Re-encode PNG after resize.
+		buf, err := encodePNGBytes(target)
+		if err != nil {
+			// #2998: same mismatch as above - raw bytes with resized metadata.
+			return Image{}, fmt.Errorf("encoding screenshot to png: %w", err)
+		}
+		img.Data = buf
+		img.MIME = MIMEPNG
 	}
 
 	// When output_path is set, the raw screenshot was written directly to
