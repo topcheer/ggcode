@@ -8,10 +8,11 @@ import (
 )
 
 // TestIssue2999_ParseNSScreenOutput pins the logical-coordinate NSScreen
-// parser: coordinates arrive verbatim (NO pixel/logical scaling) because
-// NSScreen bounds are already in the coordinate system screencapture -R
-// expects (#2999: the system_profiler path mixed VSA logical origins with
-// _spdisplays_resolution pixel sizes).
+// parser: coordinates arrive verbatim (NO pixel/logical scaling) because the
+// Swift snippet already converts to the top-left-origin logical coordinate
+// system screencapture -R expects (#2999: the system_profiler path mixed VSA
+// logical origins with _spdisplays_resolution pixel sizes; Y-axis origin
+// conversion happens Swift-side: yTop = primaryMaxY - (minY + height)).
 func TestIssue2999_ParseNSScreenOutput(t *testing.T) {
 	out := strings.Join([]string{
 		"1\t1\t0\t0\t1512\t982\tBuilt-in Retina Display",
