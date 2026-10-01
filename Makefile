@@ -42,6 +42,11 @@ sync-model-caps:
 knight-eval:
 	./scripts/dev/knight-eval.sh
 
+# r358: deterministic eval-harness integrity gate (task templates + scoring
+# formula smoke). Zero-LLM, CI-safe; the real LLM eval stays on knight-eval.
+eval-check:
+	python3 scripts/eval/validate_tasks.py
+
 install:
 	go install -tags "$(TAGS)" $(PKG)
 
