@@ -160,11 +160,20 @@ var gitWholeTreeTools = map[string]bool{
 // exact 9-tool membership is pinned by the #737/#153 sync assertions;
 // cache gating only needs "may touch the tree", which this predicate owns.
 // Notebook edits flow through the canonical superset.
+//
+// #3006: apply_patch (os.WriteFile, apply_patch.go) and scaffold_project
+// (20+ file skeleton via tryWriteFile, scaffold_project.go) are the same
+// shape - registered disk-mutating tools whose mutation semantics must gate
+// cache invalidation, redundant-reverify classification, parallel
+// scheduling, and mutate-outcome inference (all four consumers call this
+// predicate). Same #1104 ruling: extend here, not the pinned canonical set.
 func mutatesSourceTree(toolName string) bool {
 	if fileEditingTools[toolName] || gitFileModifyingTools[toolName] || gitWholeTreeTools[toolName] {
 		return true
 	}
-	return toolName == "undo_edit"
+	return toolName == "undo_edit" ||
+		// #3006: registered disk-mutating tools outside the pinned canonical set.
+		toolName == "apply_patch" || toolName == "scaffold_project"
 }
 
 // partialEditWroteDespiteError reports whether an ERRORED result still put
