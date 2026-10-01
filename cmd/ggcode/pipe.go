@@ -145,7 +145,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Use a PID-based pseudo ID so todos work during pipe execution and are
 	// cleaned up automatically when the run ends (agent defer ClearTodos).
 	ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
-	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
 	saveMemoryTool.SetAfterSave(func() {
