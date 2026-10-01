@@ -50,18 +50,10 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 		sim := jaccardSimilarity(newTokens, existingTokens)
 
 		if sim > best.Similarity {
-			existingContent := ""
-			path := filepath.Join(am.dir, m.Key+".md")
-			if data, err := os.ReadFile(path); err == nil {
-				existingContent = string(data)
-				if len(existingContent) > 200 {
-					existingContent = existingContent[:200] + "..."
-				}
-			}
 			best = DuplicateCheck{
 				SimilarTo:       m.Key,
 				Similarity:      sim,
-				ExistingContent: existingContent,
+				ExistingContent: readExistingSnippet(am.dir, m.Key),
 			}
 		}
 
@@ -72,10 +64,14 @@ func (am *AutoMemory) CheckDuplicate(key, content string) DuplicateCheck {
 		// reported the 1.0 duplicate it was (#2520, same fix shape as the
 		// contradiction_check self-update comparison #1280).
 		if m.Key == disambiguateKey(key, sanitizeKey(key)) {
+			// #3049-C3: read THIS entry's content - the old code reused
+			// best.ExistingContent, which belongs to whichever DIFFERENT entry
+			// (e.g. "cmd-build" when saving "build-cmd") last won the
+			// similarity loop (1.0 > 1.0 never replaces an earlier 1.0 twin).
 			return DuplicateCheck{
 				SimilarTo:       m.Key,
 				Similarity:      1.0,
-				ExistingContent: best.ExistingContent,
+				ExistingContent: readExistingSnippet(am.dir, m.Key),
 			}
 		}
 	}
@@ -136,4 +132,20 @@ func (dc DuplicateCheck) FormatDuplicateWarning(newKey string) string {
 	}
 	return fmt.Sprintf("Warning: memory %q is very similar to existing %q (similarity: %.0f%%). Consider updating the existing entry or using a more distinct key.",
 		newKey, dc.SimilarTo, dc.Similarity*100)
+}
+
+// readExistingSnippet loads the first 200 runes of an existing memory
+// entry (#3049): rune-safe truncation (the old byte cut split CJK runes
+// mid-sequence) and the exact-match path reads its OWN key's file instead
+// of a similarity-loop leftover.
+func readExistingSnippet(dir, key string) string {
+	data, err := os.ReadFile(filepath.Join(dir, key+".md"))
+	if err != nil {
+		return ""
+	}
+	s := string(data)
+	if len([]rune(s)) > 200 {
+		return string([]rune(s)[:200]) + "..."
+	}
+	return s
 }

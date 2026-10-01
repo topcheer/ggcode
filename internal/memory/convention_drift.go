@@ -54,7 +54,12 @@ func ScanConventionDrift(content, workingDir string) []string {
 	}
 
 	targets := makefileTargets(filepath.Join(workingDir, "Makefile"))
-	hasMakefile := targets != nil
+	// #3049-C2: an include-only Makefile (just "include foo.mk" - the
+	// mobile/flutter shape) parses to a NON-nil EMPTY target map; treating
+	// "map exists" as "Makefile defines targets" flagged every fenced-block
+	// make invocation as referencing an undefined target. Only a Makefile
+	// that actually defines targets constrains the drift scan.
+	hasMakefile := len(targets) > 0
 
 	for _, block := range fencedBlocks(content) {
 		for _, line := range strings.Split(block, "\n") {
