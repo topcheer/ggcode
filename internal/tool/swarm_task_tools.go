@@ -37,7 +37,7 @@ func (t SwarmTaskCreateTool) Parameters() json.RawMessage {
 		},
 		"description": {
 			"type": "string",
-			"description": "Detailed requirements"
+			"description": "Detailed requirements, structured as a task contract: input boundaries (files/scope), constraints, acceptance criteria (verifiable Done checks), and the evidence to return"
 		},
 		"assignee": {
 			"type": "string",
@@ -142,6 +142,7 @@ func formatTaskPrompt(tk task.Task) string {
 		sb.WriteString(fmt.Sprintf("Description: %s\n", tk.Description))
 	}
 	sb.WriteString("\nComplete this task now.")
+	sb.WriteString("\nBefore finishing, verify your result against the task's acceptance criteria and state the evidence (tests run, files changed).")
 	sb.WriteString("\nIf this task reached you by direct assignment, start it directly and do not re-claim it from the board first.")
 	sb.WriteString("\nBefore creating any new follow-up task, check whether related work is already tracked so you avoid duplicate effort.")
 	sb.WriteString("\nIf you need help or discover specialized follow-up work, send one targeted request or create one clear handoff task with enough context.")

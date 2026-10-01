@@ -9,6 +9,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/task"
 )
 
 func TestSpawnAgentInvalidInput(t *testing.T) {
@@ -210,5 +211,27 @@ func TestSpawnAgentDescriptionDocumentsLimit(t *testing.T) {
 	// cost so it only fans out genuinely independent tasks.
 	if !strings.Contains(desc, "genuinely independent") {
 		t.Errorf("spawn_agent description must document the delegation economics contract, got: %s", desc)
+	}
+}
+
+// #351: delegation must be contract-based - the task parameter guides the
+// LLM to define acceptance criteria and evidence, and wait_agent reminds it
+// to verify results against those criteria.
+func TestSpawnAgentTaskParameterDocumentsContract(t *testing.T) {
+	params := string(SpawnAgentTool{}.Parameters())
+	if !strings.Contains(params, "acceptance criteria") {
+		t.Fatalf("spawn_agent task parameter must guide a task contract (acceptance criteria), got: %s", params)
+	}
+	desc := WaitAgentTool{}.Description()
+	if !strings.Contains(desc, "acceptance criteria") {
+		t.Fatalf("wait_agent description must remind acceptance-criteria verification, got: %s", desc)
+	}
+}
+
+func TestFormatTaskPromptRemindsAcceptance(t *testing.T) {
+	tk := task.Task{Subject: "s", Description: "d"}
+	p := formatTaskPrompt(tk)
+	if !strings.Contains(p, "acceptance criteria") {
+		t.Fatalf("inbox task prompt must remind acceptance verification, got: %s", p)
 	}
 }

@@ -74,7 +74,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 	"properties": {
 		"task": {
 			"type": "string",
-			"description": "The complete task description for the one-shot sub-agent run. Include all context the sub-agent will need."
+			"description": "The complete task description for the one-shot sub-agent run. Structure it as a task contract: objective, input boundaries (files/scope), constraints, acceptance criteria (verifiable Done checks), and the evidence to return (test results / diff summary). Include all context the sub-agent will need."
 		},
 		"tools": {
 			"type": "array",
