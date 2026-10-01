@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +95,34 @@ func (b *sseBroker) subscribe() (chan sseEntry, int64) {
 	ch := make(chan sseEntry, 256)
 	b.subs[ch] = struct{}{}
 	return ch, b.seq
+}
+
+// replaySince returns buffered entries with seq strictly greater than
+// since, oldest first (#2973). The ring holds at most the last bufSize
+// entries: a since older than the window start still gets the full window
+// (bounded at-least-once, matching hello's last_seq contract). Callers must
+// subscribe BEFORE snapshotting so the live channel covers the gap after
+// the snapshot; overlap is deduped by seq downstream.
+func (b *sseBroker) replaySince(since int64) []sseEntry {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	count := b.seq - since
+	if count <= 0 {
+		return nil
+	}
+	if count > int64(b.bufSize) {
+		count = int64(b.bufSize)
+	}
+	start := (b.head - int(count) + b.bufSize) % b.bufSize
+	out := make([]sseEntry, 0, count)
+	for i := 0; i < int(count); i++ {
+		idx := (start + i) % b.bufSize
+		if b.buffer[idx].seq > since {
+			out = append(out, b.buffer[idx])
+		}
+	}
+	return out
 }
 
 func (b *sseBroker) unsubscribe(ch chan sseEntry) {
@@ -299,6 +328,36 @@ func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: hello\ndata: %s\n\n", helloData)
 	flusher.Flush()
 
+	// #2973: replay-on-reconnect. The SSE-standard Last-Event-ID header (or
+	// ?since= query fallback) names the last event the client saw; entries
+	// with seq > since are replayed from the ring buffer before the live
+	// loop. subscribe() above already registered this connection, so no event
+	// is lost between snapshot and live; entries arriving on BOTH paths are
+	// deduped by seq (lastSent).
+	since := lastSeq
+	if h := strings.TrimSpace(r.Header.Get("Last-Event-ID")); h != "" {
+		if v, err := strconv.ParseInt(h, 10, 64); err == nil {
+			since = v
+		}
+	} else if q := strings.TrimSpace(r.URL.Query().Get("since")); q != "" {
+		if v, err := strconv.ParseInt(q, 10, 64); err == nil {
+			since = v
+		}
+	}
+	var lastSent int64 = lastSeq
+	if since < lastSeq {
+		replayed := s.sseBroker.replaySince(since)
+		for _, entry := range replayed {
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", entry.event, entry.data)
+			if entry.seq > lastSent {
+				lastSent = entry.seq
+			}
+		}
+		if len(replayed) > 0 {
+			flusher.Flush()
+		}
+	}
+
 	// Heartbeat ticker
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -306,6 +365,10 @@ func (s *httpServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case entry := <-ch:
+			if entry.seq <= lastSent {
+				continue // already replayed from the snapshot (#2973)
+			}
+			lastSent = entry.seq
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", entry.event, entry.data)
 			flusher.Flush()
 		case <-heartbeat.C:
