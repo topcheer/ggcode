@@ -1,6 +1,7 @@
 package knight
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/provider"
@@ -98,19 +99,24 @@ func TestBuildCorrectionSkillName(t *testing.T) {
 }
 
 func TestBuildFailureFixName(t *testing.T) {
+	// #3016: keyword names carry a failure-signature fingerprint so only
+	// genuinely similar failures aggregate; expectations are prefixes now.
 	tests := []struct {
 		f        failure
 		expected string
 	}{
-		{failure{toolInp: `{"command":"go build ./..."}`, errMsg: "undefined: x"}, "build-failure-recovery"},
-		{failure{toolInp: `{"command":"go test ./..."}`, errMsg: "FAIL"}, "test-failure-recovery"},
-		{failure{toolInp: `{"file_path":"internal/config/config.go"}`, errMsg: "no such file"}, "missing-file-recovery"},
-		{failure{toolName: "edit_file"}, "fix-edit-file"},
+		{failure{toolInp: `{"command":"go build ./..."}`, errMsg: "undefined: x"}, "build-failure-recovery-"},
+		{failure{toolInp: `{"command":"go test ./..."}`, errMsg: "FAIL"}, "test-failure-recovery-"},
+		{failure{toolInp: `{"file_path":"internal/config/config.go"}`, errMsg: "no such file"}, "missing-file-recovery-"},
+		{failure{toolName: "edit_file"}, "fix-edit-file-"},
 	}
 	for _, tt := range tests {
 		got := buildFailureFixName(tt.f)
-		if got != tt.expected {
-			t.Errorf("buildFailureFixName(%+v) = %q, want %q", tt.f, got, tt.expected)
+		if !strings.HasPrefix(got, tt.expected) {
+			t.Errorf("buildFailureFixName(%+v) = %q, want prefix %q", tt.f, got, tt.expected)
+		}
+		if fp := got[len(tt.expected):]; len(fp) != 8 || !isHex(fp) {
+			t.Errorf("buildFailureFixName(%+v) suffix %q is not an 8-hex fingerprint", tt.f, fp)
 		}
 	}
 }
