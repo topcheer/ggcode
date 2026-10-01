@@ -171,9 +171,6 @@ type Hub struct {
 
 	// peerHealthMap tracks TCP/UDP availability per peer nodeID
 	peerHealthMap map[string]*peerHealth
-
-	// ackTracker tracks received ACKs for unicast UDP messages
-	ackTracker sync.Map // msgID → bool (received)
 }
 
 // PendingAgentMsg is an incoming @agent direct message awaiting host approval.
@@ -1791,9 +1788,11 @@ func (h *Hub) NotifyAgentNotCompleted(messageID string) {
 
 // handleUDPEnvelope processes incoming UDP messages (called by UDPTransport).
 func (h *Hub) handleUDPEnvelope(env udpEnvelope, remoteAddr net.Addr) {
-	// Handle ACK
+	// Handle ACK: reliable unicast delivery is driven by udp_transport.go's
+	// bounded acks channel map (registerACK/signalACK/unregisterACK). The
+	// envelope is swallowed here; the old ackTracker sync.Map (#3033) was
+	// written but never read and grew without bound - removed.
 	if env.Type == "ack" && env.ACKID != "" {
-		h.ackTracker.Store(env.ACKID, true)
 		return
 	}
 
