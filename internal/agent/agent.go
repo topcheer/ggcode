@@ -241,7 +241,6 @@ type Agent struct {
 	unverifiedClaim           *unverifiedClaimState      // unverified success claim detection (text claims vs actual verification)
 	convergenceLock           *convergenceLockState      // post-verification unnecessary edit drift detection
 	userSentiment             *userSentimentState        // negative user feedback detection (frustration/rejection course correction)
-	adaptiveSampling          *adaptiveSamplingState     // per-turn temperature adaptation (phase-aware sampling control)
 	effortAdapter             *adaptiveEffortState       // per-turn reasoning effort adaptation (Opus 5 effort toggle pattern)
 	branchGuard               *branchGuardState          // protected branch edit warning (main/master/develop awareness)
 	destructiveGuard          *gitDestructiveState       // destructive git operation detection (reset --hard, force push, etc.)
@@ -451,7 +450,6 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		latencyTracker:         NewLatencyTracker(),
 		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
-		adaptiveSampling:       newAdaptiveSamplingState(),
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
@@ -2123,15 +2121,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
-		// Adaptive sampling: DISABLED. Some models (e.g. Kimi k3-256k) reject
-		// any temperature value other than 1, causing 400 errors. The benefit
-		// of micro-adjusting temperature per task phase does not justify the
-		// risk of breaking model compatibility. Temperature is left at the
-		// provider default unless the user explicitly sets it.
-		var samplingApplied float64 = -1
-		var samplingPrev float64 = 0
-		_ = samplingApplied
-		_ = samplingPrev
+		// No adaptive sampling: removed. Some models (e.g. Kimi k3-256k) reject
+		// any temperature value other than 1, causing 400 errors; temperature is
+		// left at the provider default unless the user explicitly sets it.
 		// No tool filtering or description trimming: dynamic pruning was
 		// removed (it destabilized the tool list mid-run and misfired on CJK
 		// contexts), and description truncation misleads the model into
@@ -2168,9 +2160,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// defer restores on every exit including panic-unwind.
 		resp, textBuf, toolCalls, truncated, policyBlocked, err := func() (*provider.ChatResponse, string, []provider.ToolCallDelta, bool, bool, error) {
 			defer func() {
-				if samplingApplied >= 0 {
-					a.restoreSampling(samplingPrev)
-				}
 				if effortApplied != "" {
 					a.restoreEffort(effortPrev)
 				}
@@ -3947,12 +3936,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if a.effortAdapter != nil {
 				a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
-			// Record tool result for adaptive sampling classification.
-			// #2636: pass errText so sampling applies the same
-			// error-recovery filtering as the effort adapter above.
-			if a.adaptiveSampling != nil {
-				a.adaptiveSampling.recordToolResultErr(tc.Name, result.IsError, result.Content)
-			}
 			// Strategy stagnation detector: tracks same-tool+target retries
 			// after failure. When 2+ consecutive failures with identical
 			// approach occur, inject guidance to pivot strategy.
@@ -4284,9 +4267,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Error compounding risk: track all error signals across the run.
 			// Computes geometric compounding probability to detect systemic risk.
-			if hadError := a.errorCompound.recordResult(tc.Name, result.IsError, i+1); true {
-				a.errorCompound.recordStep(hadError)
-			}
+			a.errorCompound.recordStep(a.errorCompound.recordResult(tc.Name, result.IsError, i+1))
 			// Fix amnesia: track errors observed and check new content for recurrence.
 			if result.IsError {
 				if cat, file := classifyToolError(tc.Name, result.Content); cat != "" {

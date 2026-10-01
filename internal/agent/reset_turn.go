@@ -54,9 +54,6 @@ func (a *Agent) resetTurnDetectors() {
 	if a.effortAdapter != nil {
 		a.effortAdapter.reset()
 	}
-	if a.adaptiveSampling != nil {
-		a.adaptiveSampling.reset()
-	}
 	if a.iterPressure != nil {
 		a.iterPressure.reset(a.maxIter)
 	}
