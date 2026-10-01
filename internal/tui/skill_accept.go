@@ -10,6 +10,8 @@ import (
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/memory"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // /skill — human-in-the-loop accept surface for recorded skill suggestions
@@ -29,15 +31,19 @@ import (
 // generated body is a scaffold (task + observed tools), the distillation
 // itself stays the user's/agent's judgment (r319 conservative-gate decision).
 
-func (m *Model) handleSkillCommand(parts []string) {
+func (m *Model) handleSkillCommand(parts []string) tea.Cmd {
 	switch {
 	case len(parts) == 1 || parts[1] == "suggest" || parts[1] == "suggestions":
 		m.listSkillSuggestions()
 	case parts[1] == "accept" && len(parts) >= 3:
+		if len(parts) >= 4 && parts[3] == "draft" {
+			return m.draftSkillSuggestion(parts[2], parts[4:])
+		}
 		m.acceptSkillSuggestion(parts[2], len(parts) >= 4 && parts[3] == "confirm", parts[4:])
 	default:
-		m.chatWriteSystem(nextSystemID(), "Usage: /skill suggest | /skill accept <idx> [confirm] [name]")
+		m.chatWriteSystem(nextSystemID(), "Usage: /skill suggest | /skill accept <idx> [confirm|draft] [name]")
 	}
+	return nil
 }
 
 // loadSkillSuggestions returns the non-empty suggestion lines from the
@@ -157,6 +163,54 @@ func (m *Model) acceptSkillSuggestion(idxArg string, confirmed bool, nameArgs []
 		}
 	}
 	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Skill %q written to %s. It loads on next session (or /skills panel).", name, skillPath))
+}
+
+// draftSkillSuggestion (r363 / r353 residual 3) hands distillation to the
+// CURRENT session's agent: it injects a /init-style prompt carrying the
+// recorded evidence line, the agent drafts the SKILL.md (it has full session
+// context), writes it, and consumes the suggestion. The user watches the
+// draft stream in the TUI - a stronger HITL surface than the static confirm
+// scaffold, which remains as the offline fallback.
+func (m *Model) draftSkillSuggestion(idxArg string, nameArgs []string) tea.Cmd {
+	idx, err := strconv.Atoi(idxArg)
+	if err != nil || idx < 1 {
+		m.chatWriteSystem(nextSystemID(), "Invalid index: "+idxArg)
+		return nil
+	}
+	workDir, _ := os.Getwd()
+	lines := loadSkillSuggestions(workDir)
+	if idx > len(lines) {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Index out of range: %d (have %d suggestions)", idx, len(lines)))
+		return nil
+	}
+	name := skillNameFromArgs(nameArgs)
+	if name == "" {
+		name = slugifySkillName(suggestionTaskKey(lines[idx-1]))
+	}
+	if name == "" {
+		m.chatWriteSystem(nextSystemID(), "Could not derive a skill name; pass one: /skill accept <idx> draft <name>")
+		return nil
+	}
+	return m.submitHiddenText(skillDraftPrompt(lines[idx-1], idx, name))
+}
+
+// skillDraftPrompt is a pure function so tests can pin the contract: the
+// agent must see the evidence, the pitfall instruction for recovered runs,
+// the exact skill path, and the consume step.
+func skillDraftPrompt(line string, idx int, name string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Distill the following recurring workflow into a reusable skill draft.\n\n")
+	fmt.Fprintf(&b, "Evidence (from the skill-suggestions memory, entry #%d):\n%s\n\n", idx, line)
+	if strings.Contains(line, "recovered from") {
+		fmt.Fprintf(&b, "This workflow recovered from errors: include a pitfall-avoidance step in Steps derived from the recovery.\n\n")
+	}
+	fmt.Fprintf(&b, "Steps:\n"+
+		"1. If the evidence line is thin, ask me for the fuller session context before drafting.\n"+
+		"2. Draft a SKILL.md with YAML frontmatter (name: %s, description:, scope: project) and sections: When to Use, Steps (numbered, concrete), When Not to Use.\n"+
+		"3. Write it to .ggcode/skills/%s/SKILL.md (create_skill tool or write_file).\n"+
+		"4. Consume the suggestion: rewrite the 'skill-suggestions' project memory (save_memory, project scope) without entry #%d.\n", name, name, idx)
+	fmt.Fprintf(&b, "Keep it concise and grounded in the evidence - do not invent steps that are not supported by it.")
+	return b.String()
 }
 
 // skillNameFromArgs returns an explicit name passed after `confirm`.

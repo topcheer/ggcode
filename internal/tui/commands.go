@@ -477,8 +477,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			m.openSkillsPanel()
 			return nil
 		case "/skill":
-			m.handleSkillCommand(parts)
-			return nil
+			return m.handleSkillCommand(parts)
 		case "/pin":
 			return m.handlePinCommand(parts)
 		case "/mode":

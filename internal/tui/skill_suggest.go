@@ -69,7 +69,11 @@ func skillSuggestionText(stats agent.RunStats) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "- [%s] %s", time.Now().UTC().Format("2006-01-02"), task)
 	if tools != "" {
-		fmt.Fprintf(&b, " (tools: %s)", tools)
+		fmt.Fprintf(&b, " (tools: %s%s)", tools, suggestionEvidenceTail(stats))
+	} else {
+		if tail := suggestionEvidenceTail(stats); tail != "" {
+			fmt.Fprintf(&b, " (tools: -%s)", tail)
+		}
 	}
 	if stats.ErrorCount > 0 {
 		// #353 contrastive induction: flag recovered runs so the eventual
@@ -79,6 +83,39 @@ func skillSuggestionText(stats agent.RunStats) string {
 	}
 	b.WriteString(" — recurring workflow; consider create_skill to persist it as an invocable skill")
 	return b.String()
+}
+
+// suggestionEvidenceTail (r363/r353-residual-3) appends distillation raw
+// material to a suggestion line: the files edited and verified commands the
+// run actually produced, capped for line length. Sits INSIDE the
+// " (tools: ...)" parenthesis so suggestionTaskKey's " (tools:" truncation
+// still yields the same stable identity for dedup.
+func suggestionEvidenceTail(stats agent.RunStats) string {
+	var parts []string
+	if n := len(stats.FilesEdited); n > 0 {
+		files := make([]string, 0, 3)
+		for _, f := range stats.FilesEdited {
+			if i := strings.LastIndex(f, "/"); i >= 0 {
+				f = f[i+1:]
+			}
+			files = append(files, f)
+			if len(files) == 3 {
+				break
+			}
+		}
+		parts = append(parts, "files: "+strings.Join(files, ","))
+	}
+	if n := len(stats.SuccessfulCommands); n > 0 {
+		cmds := make([]string, 0, 2)
+		for _, c := range stats.SuccessfulCommands {
+			cmds = append(cmds, truncateSuggestion(strings.TrimSpace(c), 60))
+			if len(cmds) == 2 {
+				break
+			}
+		}
+		parts = append(parts, "cmds: "+strings.Join(cmds, " | "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // truncateSuggestion clamps a suggestion task line to max runes.
