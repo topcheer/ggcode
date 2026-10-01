@@ -667,6 +667,9 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 	// resources/updated subscription notifications drop the per-URI entry.
 	if v, ok := c.listingCache.get(cacheResourceRead, uri); ok {
 		res := v.(ReadResourceResult)
+		// #3041: like the tools/prompts paths, clone the Contents backing
+		// array so a caller mutating its copy cannot pollute the cache entry.
+		res.Contents = cloneCachedSlice(res.Contents)
 		return &res, nil
 	}
 	params := ReadResourceParams{URI: uri}
