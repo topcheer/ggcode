@@ -551,9 +551,10 @@ func registerAllChecks() {
 		{Name: "logging-intel", Langs: []Language{LangGo, LangJSTS}, Severity: SeverityCritical, Run: sliceCheck(checkLoggingIntel)},
 
 		// --- Security: supply chain (#330) ---
-		{Name: "dep-major-bump", Severity: SeverityCritical, Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
-		{Name: "dependency-vuln", Severity: SeverityCritical, Run: stringCheck(checkDependencyVulnsAsString)},  // all langs: self-filters by manifest filename
-		{Name: "typosquat", Severity: SeverityCritical, Run: stringCheck(checkTyposquattingAsString)},          // all langs: self-filters by manifest filename (#567)
+		{Name: "dep-major-bump", Severity: SeverityCritical, Run: stringCheck(checkBreakingChangeDepAsString)},  // all langs: self-filters by manifest filename
+		{Name: "dependency-vuln", Severity: SeverityCritical, Run: stringCheck(checkDependencyVulnsAsString)},   // all langs: self-filters by manifest filename
+		{Name: "typosquat", Severity: SeverityCritical, Run: stringCheck(checkTyposquattingAsString)},           // all langs: self-filters by manifest filename (#567)
+		{Name: "new-dep-verify", Severity: SeverityDefault, Run: stringCheck(checkNewDependencyVerifyAsString)}, // r356: slopsquatting - any non-well-known NEW dep gets a registry-verification notice
 
 		// --- Go correctness: API misuse / logic smells (#328/#330) ---
 		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},
