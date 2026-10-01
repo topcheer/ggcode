@@ -91,6 +91,12 @@ func (s *rejectFeedbackStore) Append(entry rejectFeedbackEntry) error {
 	if entry.Time.IsZero() {
 		entry.Time = time.Now()
 	}
+	// #3025: normalize an unset scope to "project" (same default as
+	// skill_validator) so an empty-scope staging entry cannot wildcard-match
+	// every scope in LastFor lookups.
+	if strings.TrimSpace(entry.Scope) == "" {
+		entry.Scope = "project"
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
 		return err
 	}
@@ -141,7 +147,8 @@ func (s *rejectFeedbackStore) trimOld(now time.Time) {
 
 // LastFor returns the most recent feedback entry for a (scope, name) pair, if
 // any. Lookup is case-insensitive on name; scope must match exactly when
-// non-empty.
+// non-empty (#3025: a non-empty lookup scope no longer matches entries with
+// an unset scope — write-side Append normalizes empty scopes to "project").
 func (s *rejectFeedbackStore) LastFor(scope, name string) (rejectFeedbackEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,7 +161,7 @@ func (s *rejectFeedbackStore) LastFor(scope, name string) (rejectFeedbackEntry, 
 		if strings.ToLower(strings.TrimSpace(e.Name)) != name {
 			continue
 		}
-		if scope != "" && e.Scope != "" && e.Scope != scope {
+		if scope != "" && e.Scope != scope {
 			continue
 		}
 		if !found || e.Time.After(latest.Time) {
