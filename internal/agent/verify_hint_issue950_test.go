@@ -21,7 +21,9 @@ func TestIsVerifyCommandEnvPrefixAndCompound(t *testing.T) {
 		// baseline forms still recognized
 		`make verify-ci`,
 		`go test ./...`,
-		`task build`,
+		`task e2e`, // #3011: `task build` moved to the negative set - "build"
+		// is a makeRunnerNoopTargets entry shared by both classification
+		// sides, so it no longer resets the post-edit verify counter.
 	}
 	for _, cmd := range positive {
 		if !isVerifyCommand(cmd) {
@@ -33,8 +35,9 @@ func TestIsVerifyCommandEnvPrefixAndCompound(t *testing.T) {
 		`cat README.md`,
 		`echo hello world`,
 		`cd /app && ls`,
-		``,    // empty
-		`   `, // whitespace only
+		`task build`, // #3011: no-op target per makeRunnerNoopTargets
+		``,           // empty
+		`   `,        // whitespace only
 	}
 	for _, cmd := range negative {
 		if isVerifyCommand(cmd) {

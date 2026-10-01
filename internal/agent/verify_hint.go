@@ -1000,6 +1000,13 @@ func isVerifyCommandSegment(seg string) bool {
 	if seg == "" {
 		return false
 	}
+	// #3011: the no-op target exclusion must run BEFORE the verifyCommands
+	// prefix table: the table carries a bare "make" entry, so `make clean`
+	// matched the prefix loop first and reset the post-edit verify counter
+	// even after the runner branch below learned about no-op targets.
+	if runnerInvokesNoopTarget(seg) {
+		return false
+	}
 	for prefix := range verifyCommands {
 		if strings.HasPrefix(seg, prefix+" ") || seg == prefix {
 			return true
@@ -1057,6 +1064,26 @@ var makeRunnerNoopTargets = map[string]bool{
 	"deploy": true, "build": true, "check": true, "info": true,
 }
 
+// runnerInvokesNoopTarget reports whether a shell segment (lowercased,
+// trimmed, env-stripped) invokes a make/just/task runner with a known no-op
+// target (or a runner flag like -C/--file that runs nothing). It is the
+// single shared consumer of makeRunnerNoopTargets so the verify-counter
+// reset (isVerifyCommandSegment) and the lastBuildFailed update
+// (isRealTestSegment) cannot drift apart again (#3011: the table used to be
+// applied on only one side, letting `make clean` reset the post-edit verify
+// counter while the comment above promised both).
+func runnerInvokesNoopTarget(seg string) bool {
+	words := strings.Fields(seg)
+	if len(words) < 2 {
+		return false
+	}
+	if words[0] != "make" && words[0] != "just" && words[0] != "task" {
+		return false
+	}
+	t := words[1]
+	return strings.HasPrefix(t, "-") || makeRunnerNoopTargets[t]
+}
+
 // isRealTestSegment classifies one shell segment (already lowercased,
 // trimmed, env-stripped).
 func isRealTestSegment(seg string) bool {
@@ -1071,13 +1098,12 @@ func isRealTestSegment(seg string) bool {
 	}
 	words := strings.Fields(seg)
 	if len(words) >= 2 && (words[0] == "make" || words[0] == "just" || words[0] == "task") {
-		// #3005: only verification-ish targets count. The old code accepted
-		// ANY target, so `make fmt`/`make deploy` reset the counter and
-		// faked "verified" state. Known no-op targets are excluded; unknown
+		// #3005/#3011: only verification-ish targets count. The old code
+		// accepted ANY target, so `make fmt`/`make deploy` reset the counter
+		// and faked "verified" state. Known no-op targets are excluded; unknown
 		// targets default to counting (a custom `make ci`/`make e2e` may run
 		// real tests, and under-counting verify hints is the worse failure).
-		t := words[1]
-		if strings.HasPrefix(t, "-") || makeRunnerNoopTargets[t] {
+		if runnerInvokesNoopTarget(seg) {
 			return false
 		}
 		return true
