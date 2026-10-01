@@ -3362,7 +3362,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// file, and without invalidation the next read could be served
 			// from the memoize/speculator/command caches describing the
 			// pre-undo state. See mutatesSourceTree in verify_hint.go.
-			if mutatesSourceTree(tc.Name) && !result.IsError {
+			wroteDespiteError := partialEditWroteDespiteError(tc.Name, result.Content, result.IsError)
+			if mutatesSourceTree(tc.Name) && (!result.IsError || wroteDespiteError) {
 				a.speculator.invalidateCache()
 				// Git whole-tree operations (checkout, reset, revert) change
 				// potentially all files at once. They need nuclear invalidation:

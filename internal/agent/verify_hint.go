@@ -167,6 +167,21 @@ func mutatesSourceTree(toolName string) bool {
 	return toolName == "undo_edit"
 }
 
+// partialEditWroteDespiteError reports whether an ERRORED result still put
+// files on disk (#2991): multi_file_edit partial_success carries
+// IsError=true (mixed outcomes) while its written_paths files were
+// atomically written. The post-exec invalidation block must run for such
+// results - toolMemo TTL entries (grep/LSP/git) and commandCache (worst
+// case: a pre-edit PASS serving a fake green light) have no self-healing,
+// unlike speculator's mtime re-check. #1028 principle: side effects already
+// happened. multi_file_write's partial_success intentionally does NOT set
+// IsError (zz_issue2145_test), so this helper only ever fires for
+// multi_file_edit.
+func partialEditWroteDespiteError(toolName, resultContent string, isError bool) bool {
+	return isError && toolName == "multi_file_edit" &&
+		len(extractWrittenPaths(resultContent)) > 0
+}
+
 // sourceCodeExtensions maps file extensions to whether they're compiled/interpreted code.
 var sourceCodeExtensions = map[string]bool{
 	".go":    true,
