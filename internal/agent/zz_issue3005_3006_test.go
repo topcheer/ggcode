@@ -90,3 +90,22 @@ func TestIssue3006_CanonicalMapStillPinnedAtNine(t *testing.T) {
 		t.Fatal("#3006: new tools must not enter the #737-pinned canonical map")
 	}
 }
+
+// TestIssue3011_VerifyCommandSegmentExcludesNoopTargets: the counter-reset
+// side must share the makeRunnerNoopTargets exclusion (#3011 - #3005 fixed
+// only the lastBuildFailed side; `make clean` still reset the counter).
+func TestIssue3011_VerifyCommandSegmentExcludesNoopTargets(t *testing.T) {
+	for _, cmd := range []string{
+		"make clean", "make fmt", "make lint", "make tidy", "make deploy",
+		"make build", "make check", "make help", "just fmt", "task clean",
+	} {
+		if isVerifyCommand(cmd) {
+			t.Fatalf("#3011: %q must not count as a verify command (counter reset)", cmd)
+		}
+	}
+	for _, cmd := range []string{"make test", "make ci", "make verify-ci", "just test", "make"} {
+		if !isVerifyCommand(cmd) {
+			t.Fatalf("#3011 regression: %q must stay a verify command", cmd)
+		}
+	}
+}

@@ -818,17 +818,21 @@ func (a *Agent) postEditVerifyHint(toolName string, args json.RawMessage) string
 // command. Used by maybeResetVerifyOnCommand to detect when the agent has
 // proactively run verification (so the hint counter can be reset).
 var verifyCommands = map[string]bool{
-	"go build":      true,
-	"go test":       true,
-	"go vet":        true,
-	"make":          true,
+	"go build": true,
+	"go test":  true,
+	"go vet":   true,
+	// #3011: bare "make"/"just"/"task" entries removed - they prefix-matched
+	// ANY target (make clean, make lint, make deploy) and early-returned
+	// before the runner branch in isVerifyCommandSegment could apply the
+	// makeRunnerNoopTargets exclusion. Runner invocations now fall through
+	// to that branch, which accepts bare `make` (len(words)<2) and real
+	// targets while rejecting no-op targets, matching isRealTestSegment
+	// (#3005) on both the counter-reset and lastBuildFailed sides.
 	"cargo build":   true,
 	"cargo test":    true,
 	"npm run build": true,
 	"npm test":      true,
 	"npm run test":  true,
-	"just":          true,
-	"task":          true,
 	"pytest":        true,
 	"flutter test":  true,
 	"cmake":         true,
@@ -1008,6 +1012,13 @@ func isVerifyCommandSegment(seg string) bool {
 	words := strings.Fields(seg)
 	if len(words) > 0 {
 		if words[0] == "make" || words[0] == "just" || words[0] == "task" {
+			// #3011: no-op targets must not count as verification on
+			// EITHER side - the counter reset (this gate) and the
+			// lastBuildFailed update (isRealTestSegment) share the
+			// single makeRunnerNoopTargets exclusion table.
+			if len(words) >= 2 && makeRunnerNoopTargets[words[1]] {
+				return false
+			}
 			return true
 		}
 	}

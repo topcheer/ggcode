@@ -418,7 +418,12 @@ func (p *wlrModePick) offer(w, h int, isCurrent, isPreferred bool) {
 // existing window-capture treatment instead of silently capturing the full
 // screen (#975).
 func gnomeScreenshotUnsupportedOpts(opts ScreenshotOptions) error {
-	if opts.Display > 1 {
+	// #3013: Display is 1-based (0=primary). The gate must match the region
+	// translation gate in prepareLinuxCaptureOpts (`>= 1`, #3003) - the old
+	// `> 1` let Display==1 through, gnome-screenshot composited every
+	// output into a panorama, and its exit-0 blocked the fallback loop that
+	// would have reached a region-capable tool (scrot/import).
+	if opts.Display >= 1 {
 		return fmt.Errorf("gnome-screenshot cannot select a display by index; use grim (Wayland) or scrot/import (X11) for per-display capture")
 	}
 	if opts.Region != nil {
