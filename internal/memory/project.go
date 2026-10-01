@@ -44,7 +44,22 @@ func LoadProjectMemory(workingDir string) (content string, files []string, err e
 		absDir = workingDir
 	}
 	paths := append(globalProjectMemoryFiles(), currentDirProjectMemoryFiles(absDir)...)
-	return ReadProjectMemoryFiles(paths)
+	content, files, err = ReadProjectMemoryFiles(paths)
+	if err != nil {
+		return content, files, err
+	}
+	// r354: deterministic convention-drift check — make targets and script
+	// paths claimed in fenced blocks are verified against the working dir;
+	// failures ride the same content channel so the agent (and user) sees
+	// that a claim has rotted instead of following it into a failure.
+	if drift := ScanConventionDrift(content, absDir); len(drift) > 0 {
+		content += "\n\n[convention-drift] WARNING: some build/test claims in the project memory files are stale:\n"
+		for _, d := range drift {
+			content += "- " + d + "\n"
+		}
+		content += "Verify before following the stale instructions."
+	}
+	return content, files, nil
 }
 
 // currentDirProjectMemoryFiles returns project memory files that exist in the
