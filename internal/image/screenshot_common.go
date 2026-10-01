@@ -168,11 +168,23 @@ func resizeImage(src image.Image, maxW int) image.Image {
 	bounds := src.Bounds()
 	oldW := bounds.Dx()
 	oldH := bounds.Dy()
+	if maxW < 1 {
+		maxW = 1
+	}
 	if oldW <= maxW {
 		return src
 	}
 	newW := maxW
 	newH := oldH * newW / oldW
+	// #2995: extreme aspect ratios (e.g. 5000x1 down to maxW) truncate
+	// newH to 0 via integer division - an empty dst Rect makes png.Encode
+	// fail ("invalid image size"), which the screenshot path then swallows,
+	// leaving Data/Height=0 metadata inconsistent. Clamp to 1px: the
+	// caller-side newH clamp in downscale.go was dead code (only newW is
+	// passed here).
+	if newH < 1 {
+		newH = 1
+	}
 	dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, bounds, xdraw.Over, nil)
 	return dst

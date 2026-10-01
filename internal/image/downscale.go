@@ -30,13 +30,12 @@ func DownscaleByPixels(img Image, maxPixels int64) Image {
 	// Preserve aspect ratio; target the largest dimensions that fit.
 	scale := math.Sqrt(float64(maxPixels) / float64(w*h))
 	newW := int64(float64(w) * scale)
-	newH := int64(float64(h) * scale)
 	if newW < 1 {
 		newW = 1
 	}
-	if newH < 1 {
-		newH = 1
-	}
+	// #2995: no newH here - resizeImage recomputes the height from the
+	// width it is given and clamps it to >=1 itself; the former caller-side
+	// newH clamp was dead code (only newW is passed through).
 	target := resizeImage(decoded, int(newW))
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, target); err != nil {
