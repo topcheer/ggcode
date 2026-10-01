@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -263,6 +264,12 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		}
 	}
 	if t.blocked {
+		// #3039-B1: gate() may have designated this call as the half-open
+		// probe; a read-only block says nothing about server health, so
+		// release the probe instead of leaking probing=true forever.
+		if t.breaker != nil {
+			t.breaker.abandonProbe()
+		}
 		return tool.Result{
 			Content: fmt.Sprintf("MCP server '%s' is in read-only mode, tool '%s' is not allowed", t.srvName, t.toolName),
 			IsError: true,
@@ -271,6 +278,11 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 	var args map[string]interface{}
 	if input != nil && string(input) != "" {
 		if err := json.Unmarshal(input, &args); err != nil {
+			// #3039-B1: invalid arguments are a caller-side problem - the
+			// half-open probe must be released, not leaked.
+			if t.breaker != nil {
+				t.breaker.abandonProbe()
+			}
 			return tool.Result{Content: fmt.Sprintf("mcp[%s]: parsing tool arguments: %v", t.srvName, err), IsError: true}, nil
 		}
 	}
@@ -291,7 +303,15 @@ func (t *mcpTool) Execute(ctx context.Context, input json.RawMessage) (tool.Resu
 		// Classify before surfacing: only transport-level failures feed the
 		// breaker. Semantic errors (server answered) never trip it.
 		if t.breaker != nil {
-			if isInfraError(err) {
+			if errors.Is(err, context.Canceled) {
+				// #3039-B2: the CALLER cancelled (user Esc / agent abort) -
+				// this says nothing about server health. recordSuccess would
+				// close the breaker and pronounce a dead server recovered
+				// (every later call burning a full transport timeout);
+				// recordFailure would punish the server for our own cancel.
+				// Release the probe (half-open) and otherwise count nothing.
+				t.breaker.abandonProbe()
+			} else if isInfraError(err) {
 				t.breaker.recordFailure(err)
 			} else {
 				t.breaker.recordSuccess()
