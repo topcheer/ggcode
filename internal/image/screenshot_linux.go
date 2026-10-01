@@ -132,7 +132,13 @@ func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOpt
 		}
 	}
 
-	if opts.Window == "" && opts.Region == nil && opts.Display > 1 {
+	// #3003: Display is a 1-based monitor index (screenshot_common.go:
+	// "1-based monitor index, 0=primary"), matching darwin/windows. The old
+	// `> 1` gate left Display==1 without a region, and grim without -g
+	// composites ALL outputs - a 3-monitor setup returned a panoramic shot
+	// when the primary screen was requested. linuxDisplayBounds accepts
+	// index 1 (it only rejects <1), so >= 1 is the correct gate.
+	if opts.Window == "" && opts.Region == nil && opts.Display >= 1 {
 		if region, err := linuxDisplayBounds(opts.Display); err == nil {
 			opts.Region = &region
 		}
