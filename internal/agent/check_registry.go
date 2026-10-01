@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -245,7 +246,12 @@ func formatWarnings(warnings []string) string {
 	}
 
 	if len(warnings) > maxIntegrityWarnings {
+		suppressed := len(warnings) - maxIntegrityWarnings
 		warnings = warnings[:maxIntegrityWarnings]
+		// The cap intentionally keeps context small, but silently dropping
+		// findings hides signal: tell the model how many more exist so it
+		// can decide to inspect (all are in the debug log).
+		warnings = append(warnings, fmt.Sprintf("... and %d more integrity warning(s) suppressed (see debug log: integrity)", suppressed))
 	}
 
 	var b strings.Builder

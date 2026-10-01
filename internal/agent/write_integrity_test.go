@@ -147,8 +147,26 @@ func TestCheckWriteIntegrity_WarningCap(t *testing.T) {
 	lines := strings.Split(warning, "\n")
 	// First line is header, rest are warnings (capped at maxIntegrityWarnings)
 	warningLines := lines[1:] // skip header
-	if len(warningLines) > maxIntegrityWarnings {
-		t.Errorf("expected at most %d warnings, got %d: %v", maxIntegrityWarnings, len(warningLines), warningLines)
+	// Allow maxIntegrityWarnings substantive warnings plus a single
+	// "... and N more suppressed" indicator line.
+	indicator := 0
+	for _, l := range warningLines {
+		if strings.Contains(l, "more integrity warning(s) suppressed") {
+			indicator++
+		}
+	}
+	if indicator > 1 {
+		t.Errorf("expected at most 1 suppression indicator, got %d", indicator)
+	}
+	if len(warningLines) > maxIntegrityWarnings+indicator {
+		t.Errorf("expected at most %d warnings (plus indicator), got %d: %v", maxIntegrityWarnings, len(warningLines), warningLines)
+	}
+	if len(warningLines) == maxIntegrityWarnings+indicator && indicator == 1 {
+		// When capped, the indicator must be present and count must be accurate.
+		last := warningLines[len(warningLines)-1]
+		if !strings.Contains(last, "2 more integrity warning(s) suppressed") {
+			t.Errorf("indicator should report 2 suppressed warnings, got: %s", last)
+		}
 	}
 }
 
