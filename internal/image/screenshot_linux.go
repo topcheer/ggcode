@@ -33,6 +33,31 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	// the next usable tool takes over. Normalize options per tool: translate
 	// unsupported modes (window, multi-display) into what the tool can do,
 	// or skip that tool (#555, #975).
+	toolSucceeded, lastErr := runLinuxToolCandidates(tools, rawPath, opts)
+	// #3002: when every candidate failed (lastErr != nil, no success), a
+	// pre-existing file at rawPath (e.g. a stale capture from a previous run
+	// at the same OutputPath) must NOT be mistaken for this round's output:
+	// return the tool error instead of serving stale bytes as success (#1259).
+	if !toolSucceeded && lastErr != nil {
+		return ScreenshotResult{}, lastErr
+	}
+
+	img, err := finalizeImage(rawPath, opts)
+	if err != nil {
+		return ScreenshotResult{}, err
+	}
+
+	result := ScreenshotResult{Image: img}
+	if opts.OutputPath != "" {
+		result.SavedPath = opts.OutputPath
+	}
+	return result, nil
+}
+
+// runLinuxToolCandidates tries each candidate tool in order and returns
+// whether one of them succeeded (exited 0 and wrote rawPath) this round.
+// lastErr keeps the most recent failure for callers to report (#1571-A, #3002).
+func runLinuxToolCandidates(tools []string, rawPath string, opts ScreenshotOptions) (bool, error) {
 	var lastErr error
 	for _, tool := range tools {
 		toolOpts, err := prepareLinuxCaptureOpts(tool, opts)
@@ -67,22 +92,9 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 			continue
 		}
 		// Found a working tool - finalize below re-reads the file.
-		break
+		return true, nil
 	}
-	if lastErr != nil && !fileExists(rawPath) {
-		return ScreenshotResult{}, lastErr
-	}
-
-	img, err := finalizeImage(rawPath, opts)
-	if err != nil {
-		return ScreenshotResult{}, err
-	}
-
-	result := ScreenshotResult{Image: img}
-	if opts.OutputPath != "" {
-		result.SavedPath = opts.OutputPath
-	}
-	return result, nil
+	return false, lastErr
 }
 
 // prepareLinuxCaptureOpts normalizes opts for the detected tool:
@@ -410,9 +422,3 @@ func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
 
 // Guard against unused import warnings on some build paths.
 var _ = filepath.Join
-
-// fileExists reports whether the given path exists (#1571-A capture loop).
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
