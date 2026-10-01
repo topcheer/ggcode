@@ -406,7 +406,13 @@ func coverageExtractVerifyScopes(cmd string) []string {
 			// gap this detector exists to surface.
 			scopes = append(scopes, r)
 		} else if isRel {
-			return []string{"ALL"} // "./" alone
+			// #2984: bare "./" tests the CURRENT DIRECTORY package only
+			// (recursive is "./..."), semantically identical to bare
+			// "go test" — collect "." so the caller applies the same
+			// cwd/lastEditedPkg scoping instead of marking every edited
+			// package VERIFIED. ALL inflated exactly the cross-package
+			// coverage gap this detector exists to surface (#550 B1 class).
+			scopes = append(scopes, ".")
 		}
 	}
 	if len(scopes) > 0 {
