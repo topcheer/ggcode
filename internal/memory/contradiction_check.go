@@ -323,6 +323,17 @@ func claimsConflict(a, b string) bool {
 	// Require moderate overlap (same domain) but not near-identity (that's
 	// a duplicate, handled elsewhere).
 	overlap := tokenOverlap(a, b)
+	// #3049-C1: '+'-joined LIST ENRICHMENT is complementary, not
+	// contradictory - "language: go" vs "language: go+typescript" tokenizes
+	// to jaccard 2/3 (the old band middle) and used to delete/mark the
+	// earlier memory as contradicted. Splitting both values on '+' into
+	// item sets keeps this narrow: only a proper item-subset (one list
+	// fully contained in the other, sizes differing) is exempted - a
+	// rephrased build command that merely happens to share tokens still
+	// conflicts (pinned by TestContradictionCheck_BuildCommandConflict).
+	if plusListSubset(a, b) {
+		return false
+	}
 	if overlap >= 0.3 && overlap < 0.85 {
 		return true
 	}
@@ -438,9 +449,41 @@ func tokenOverlap(a, b string) float64 {
 	return jaccardSimilarity(tokenize(a), tokenize(b))
 }
 
+// plusListSubset reports whether values a and b are '+'-joined item lists
+// where one list's items are a PROPER subset of the other's (#3049-C1):
+// "go" vs "go+typescript" is enrichment (compatible), while values without
+// '+' grouping never take this path.
+func plusListSubset(a, b string) bool {
+	ia, ib := strings.Split(a, "+"), strings.Split(b, "+")
+	if len(ia) == len(ib) {
+		return false
+	}
+	small, large := ia, ib
+	if len(ia) > len(ib) {
+		small, large = ib, ia
+	}
+	seen := make(map[string]bool, len(large))
+	for _, item := range large {
+		seen[strings.TrimSpace(strings.ToLower(item))] = true
+	}
+	for _, item := range small {
+		if !seen[strings.TrimSpace(strings.ToLower(item))] {
+			return false
+		}
+	}
+	return true
+}
+
+// truncate is rune-safe (#3049-C4): the old byte-slice cut could split a
+// multi-byte UTF-8 rune mid-sequence and produce mojibake in CJK memory
+// values.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max-3]) + "..."
 }
