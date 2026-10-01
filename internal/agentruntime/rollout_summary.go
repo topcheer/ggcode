@@ -62,6 +62,19 @@ var progressSignals = []string{
 	"pass", "succeed", "ok:", "no error", "built", "committed", "created", "verified",
 }
 
+// failureOverrides are negation/repair phrases that neutralize bare failure
+// substrings in the SAME text (#2997): "no error, all packages compile"
+// contains "error"; "fixed the error ...; test now passes" contains "error";
+// "previously failed test now passes" contains "failed" - positive
+// statements the bare-substring failure branch misclassified, flipping
+// successful rollouts to "partial" and double-penalizing them in score().
+// Co-occurrence WITHOUT negation ("tests pass check failed", pinned by
+// TestSummarizeTrajectory_Classification) stays a failure.
+var failureOverrides = []string{
+	"no error", "no errors", "error fixed", "fixed the error",
+	"now passes", "passes now", "still passes",
+}
+
 // hypothesisSignals mark an entry as an approach/hypothesis worth carrying.
 var hypothesisSignals = []string{
 	"plan:", "approach:", "attempt", "try", "hypothesis", "strategy", "fix:",
@@ -84,11 +97,25 @@ func SummarizeTrajectory(entries []TrajectoryEntry) RolloutSummary {
 		kind := strings.ToLower(e.Kind)
 
 		switch {
-		case kind == "error" || hasSignal(lower, failureSignalsKeys()):
+		// #2997: the failure-branch substring test previously matched
+		// FIRST, so any text merely CONTAINING "error"/"failed" - including
+		// positive statements ("no error, all packages compile", "previously
+		// failed test now passes") and the explicit progressSignals entry
+		// "no error" (dead code: its text always contains "error") - was
+		// counted as a failure, flipping successful rollouts to "partial"
+		// and double-penalizing them in score(). The failureOverrides
+		// negation/repair phrases neutralize those; co-occurrence WITHOUT
+		// negation ("tests pass check failed", pinned by
+		// TestSummarizeTrajectory_Classification) stays a failure.
+		// kind=="error" (a structured error entry) still dominates.
+		case kind == "error" || (hasSignal(lower, failureSignalsKeys()) && !hasAny(lower, failureOverrides)):
 			anyFailure = true
 			s.addFailure(compactLine(text, 200))
 		case kind == "result" || kind == "note" || hasAny(lower, progressSignals):
-			if looksLikeFailure(lower) {
+			// #2997 third layer: looksLikeFailure is another bare error/fail
+			// substring - exempt the same negation/repair phrases or it
+			// re-classifies the very texts the outer fix let through.
+			if looksLikeFailure(lower) && !hasAny(lower, failureOverrides) {
 				anyFailure = true
 				s.addFailure(compactLine(text, 200))
 				continue
