@@ -426,3 +426,30 @@ func TestTryFuzzyLineMatch_NoMatch(t *testing.T) {
 		t.Errorf("expected no match for completely different text; got %q", result)
 	}
 }
+
+func TestLenientRecount_RstripOnlyIndentSignificant(t *testing.T) {
+	// #821 semantics: trailing-whitespace-tolerant counting ignores only
+	// TRAILING whitespace; leading indentation stays significant. A second
+	// block differing purely in indent must not inflate the count.
+	content := "fn a() {\n\t\tinner()\n\t}\n\nfn a() {\ninner()\n}\n"
+	old := "fn a() {\ninner()\n}\n"
+	n, lines := LenientRecount(content, old, "trailing-whitespace-tolerant")
+	if n != 1 {
+		t.Fatalf("rstrip-only recount should ignore the indent-differing block; got count %d (lines %v)", n, lines)
+	}
+	// The fully-trim fuzzy form collapses both blocks, so its recount is 2.
+	n2, _ := LenientRecount(content, old, "fuzzy-trim")
+	if n2 != 2 {
+		t.Fatalf("fully-trimmed recount should count both blocks; got %d", n2)
+	}
+}
+
+func TestLenientRecount_CRLFConverted(t *testing.T) {
+	// crlf-converted recount must count against the file's CRLF bytes, not
+	// the LF probe (an LF probe would count 0 and fail-open).
+	content := "fn a() {}\r\nfn a() {}\r\n"
+	n, _ := LenientRecount(content, "fn a() {}\n", "crlf-converted")
+	if n != 2 {
+		t.Fatalf("crlf-converted recount must convert the LF probe to CRLF; got %d", n)
+	}
+}
