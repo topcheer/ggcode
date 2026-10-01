@@ -105,15 +105,29 @@ func checkBreakingChangeDep(filePath, oldContent, newContent string) []string {
 			// (N>=2) suffix and re-check oldDeps against the base path to
 			// detect the major bump across the pair.
 			if base, suffix := goModuleBase(depName); suffix {
-				if prevVer, was := oldDeps[base]; was {
-					oldMajor := extractMajorVersion(prevVer)
-					newMajor := extractMajorVersion(depVer)
-					if oldMajor >= 0 && newMajor > oldMajor {
-						warnings = append(warnings, fmt.Sprintf(
-							"[Major Version Bump] %s upgraded v%d -> v%d (module path changed to %s) in %s. "+
-								"Breaking changes likely under SemVer. Update all import paths from %s to %s.",
-							depName, oldMajor, newMajor, depName, base, base, depName,
-						))
+				newMajor := extractMajorVersion(depVer)
+				if newMajor >= 2 {
+					// #3046 B1: the previous major may itself be a /vM key (v2->v3,
+					// v3->v4, ...), so probe the bare base (v1) and every
+					// intermediate /vM segment below the new major, not just the base.
+					for m := 1; m < newMajor; m++ {
+						prevKey := base
+						if m > 1 {
+							prevKey = fmt.Sprintf("%s/v%d", base, m)
+						}
+						prevVer, was := oldDeps[prevKey]
+						if !was {
+							continue
+						}
+						oldMajor := extractMajorVersion(prevVer)
+						if oldMajor >= 0 && newMajor > oldMajor {
+							warnings = append(warnings, fmt.Sprintf(
+								"[Major Version Bump] %s upgraded v%d -> v%d (module path changed to %s) in %s. "+
+									"Breaking changes likely under SemVer. Update all import paths from %s to %s.",
+								depName, oldMajor, newMajor, depName, base, prevKey, depName,
+							))
+						}
+						break
 					}
 				}
 			}

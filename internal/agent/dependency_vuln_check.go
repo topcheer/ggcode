@@ -140,6 +140,10 @@ func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 	// Check each changed dependency against the vulnerability database.
 	var warnings []string
 	matchedPkgs := make(map[string]bool)
+	// #3046 B2: a package that matched the vuln DB but is already at a safe
+	// version has just been (correctly) upgraded; the generic "consider
+	// running <scanner>" reminder right after that upgrade is noise.
+	vulnMatched := false
 
 	for _, ch := range changes {
 		normalized := strings.ToLower(ch.name)
@@ -147,6 +151,7 @@ func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 			if vuln.ecosystem != ecosystem || vuln.pkg != normalized {
 				continue
 			}
+			vulnMatched = true
 			if matchedPkgs[normalized] {
 				continue
 			}
@@ -161,7 +166,7 @@ func checkDependencyVulns(filePath, oldContent, newContent string) []string {
 	}
 
 	// If no known vulns matched but dependencies changed, remind about scanning.
-	if len(warnings) == 0 {
+	if len(warnings) == 0 && !vulnMatched {
 		warnings = append(warnings, fmt.Sprintf(
 			"[Dependency Change] %d dependency(ies) %s in %s - consider running %s to check for known vulnerabilities.",
 			len(changes), changeAction(changes), base, scannerName(ecosystem),
