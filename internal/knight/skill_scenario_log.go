@@ -205,21 +205,49 @@ func (k *Knight) skillScenarioLogPath() string {
 // formatRecentSemanticMemoryForEval renders recent semantic memory entries for
 // inclusion in Knight evaluator prompts so past lessons influence new gating
 // decisions. Returns "" when no memory exists.
+//
+// #3030: kind=="self-reflection" entries are written unconditionally by the
+// nightly maintenance pass, so without filtering they would eventually fill
+// the entire window and evict the real lessons this context exists for. At
+// most the single newest self-reflection line is kept (as a freshness
+// signal); everything else in the window must be a real lesson.
 func (k *Knight) formatRecentSemanticMemoryForEval(limit int) string {
-	entries, err := k.RecentSemanticMemory(limit)
+	if limit <= 0 {
+		return ""
+	}
+	// Over-fetch so filtering out self-reflection noise cannot shrink the
+	// real-lesson window below `limit`.
+	entries, err := k.RecentSemanticMemory(limit * 2)
 	if err != nil || len(entries) == 0 {
 		return ""
 	}
-	lines := make([]string, 0, len(entries))
+	lines := make([]string, 0, limit)
+	keptSelfReflection := false
 	for _, e := range entries {
-		summary := truncateRunes(e.Summary, 220)
-		when := ""
-		if !e.Time.IsZero() {
-			when = e.Time.Format("2006-01-02") + " "
+		if e.Kind == "self-reflection" {
+			if keptSelfReflection {
+				continue
+			}
+			keptSelfReflection = true
 		}
-		lines = append(lines, fmt.Sprintf("- %s[%s] %s", when, e.Kind, summary))
+		lines = append(lines, renderSemanticMemoryLine(e))
+		if len(lines) >= limit {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+func renderSemanticMemoryLine(e SemanticMemoryEntry) string {
+	summary := truncateRunes(e.Summary, 220)
+	when := ""
+	if !e.Time.IsZero() {
+		when = e.Time.Format("2006-01-02") + " "
+	}
+	return fmt.Sprintf("- %s[%s] %s", when, e.Kind, summary)
 }
 
 func readSkillScenarios(path string) ([]SkillScenarioLogEntry, error) {

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/util"
 )
 
@@ -31,6 +32,12 @@ type SemanticMemoryEntry struct {
 const (
 	maxSemanticMemoryEntries = 500
 	maxSemanticSummaryRunes  = 1200
+	// semanticMemoryRotateBytes bounds the on-disk jsonl: past this size the
+	// write path rotates the file down to the newest maxSemanticMemoryEntries
+	// (#3029, mirroring skillScenarioRotateBytes / #1270). With the 500-entry
+	// cap and ~1.5KB max summaries, 1.5MB comfortably exceeds the worst-case
+	// single-entry size.
+	semanticMemoryRotateBytes = 1536 * 1024
 )
 
 type semanticMemoryStore struct {
@@ -80,33 +87,58 @@ func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
 	}
 	entry.Summary = truncateSanitized(entry.Summary, maxSemanticSummaryRunes)
 
-	// #982: single lock (pathMu) — see semanticMemoryPathMu comment.
+	// #3029: append a single line instead of read-modify-write rewriting
+	// the whole file. The per-path mutex only serializes within this process;
+	// daemon/TUI/A2A instances sharing the same workspace previously lost
+	// entries to last-writer-wins rewrites (the same failure mode
+	// skill_scenario_log fixed with O_APPEND). The entry cap is enforced on
+	// read by readSemanticMemoryEntries; write-side rotation bounds the file.
 	pathMu := semanticMemoryPathLock(s.path)
 	pathMu.Lock()
 	defer pathMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
-	entries, readErr := readSemanticMemoryEntries(s.path)
-	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		// #769: on a real read failure (IO error, bufio.ErrTooLong) the old
-		// code proceeded with nil and the rewrite below wiped all history.
-		return fmt.Errorf("semantic memory: read %s: %w", s.path, readErr)
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return err
 	}
-	entries = append(entries, entry)
-	if len(entries) > maxSemanticMemoryEntries {
-		entries = entries[len(entries)-maxSemanticMemoryEntries:]
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
 	}
-	var b strings.Builder
-	for _, e := range entries {
-		raw, err := json.Marshal(e)
-		if err != nil {
-			return err
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// Rotation mirrors skill_scenario_log #1270: past the rotate threshold,
+	// rewrite the file to the newest window (readSemanticMemoryEntries applies
+	// the same cap, so the rewrite is idempotent with the read view). A
+	// concurrent appender racing the rewrite can lose its line -- acceptable
+	// for an advisory lesson log, bounded to a couple of entries per rotation.
+	if info, err := os.Stat(s.path); err == nil && info.Size() > semanticMemoryRotateBytes {
+		entries, readErr := readSemanticMemoryEntries(s.path)
+		if readErr != nil {
+			debug.Log("knight", "semantic memory rotation read failed: %v", readErr)
+			return nil
 		}
-		b.Write(raw)
-		b.WriteByte('\n')
+		var b strings.Builder
+		for _, e := range entries {
+			raw, err := json.Marshal(e)
+			if err != nil {
+				continue
+			}
+			b.Write(raw)
+			b.WriteByte('\n')
+		}
+		if err := util.AtomicWriteFile(s.path, []byte(b.String()), 0o600); err != nil {
+			debug.Log("knight", "semantic memory rotation write failed: %v", err)
+		}
 	}
-	return util.AtomicWriteFile(s.path, []byte(b.String()), 0o600)
+	return nil
 }
 
 // Recent returns at most limit most-recent entries (newest first).
@@ -167,6 +199,11 @@ func readSemanticMemoryEntries(path string) ([]SemanticMemoryEntry, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	// #3029: the cap now lives on the read side (Append no longer rewrites
+	// the file per write). Keep the newest window, chronological order.
+	if len(out) > maxSemanticMemoryEntries {
+		out = out[len(out)-maxSemanticMemoryEntries:]
 	}
 	return out, nil
 }
