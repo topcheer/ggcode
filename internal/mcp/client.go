@@ -680,7 +680,16 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 		// agent can act on.
 		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, annotateResourceReadError(err, uri))
 	}
-	c.storeListingsCache(cacheResourceRead, uri, result, []CacheableResult{result.CacheableResult})
+	// #3042: the cache must own its own Contents copy. The cache-hit path
+	// clones on read (#3041/09c72cf28) but the MISS path stored the very
+	// slice the returned &result aliases - a caller mutating the first
+	// (miss) result (sort, dedupe, element rewrite) polluted every later
+	// TTL hit. Note: assigning result.Contents = clone(...) FIRST would not
+	// help (store and return would then alias the clone); the cached value
+	// gets a separate copy while the caller keeps the decoded original.
+	cached := result
+	cached.Contents = cloneCachedSlice(result.Contents)
+	c.storeListingsCache(cacheResourceRead, uri, cached, []CacheableResult{result.CacheableResult})
 	return &result, nil
 }
 
