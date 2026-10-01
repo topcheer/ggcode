@@ -72,11 +72,79 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 
 // ListDisplays returns information about available displays on macOS.
 func ListDisplays() ([]DisplayInfo, error) {
+	// #2999: prefer NSScreen bounds, which are already in the logical
+	// coordinate system screencapture -R expects. The system_profiler path
+	// mixes VSA logical origins with _spdisplays_resolution pixel sizes
+	// (2x on Retina) and is kept only as a fallback for environments where
+	// the Swift runtime is unavailable.
+	if displays, err := listDisplaysNSScreen(); err == nil && len(displays) > 0 {
+		return displays, nil
+	}
 	out, err := exec.Command("system_profiler", "SPDisplaysDataType", "-json").Output()
 	if err != nil {
 		return nil, fmt.Errorf("system_profiler failed: %w", err)
 	}
 	return parseSPDisplaysJSON(out)
+}
+
+// listDisplaysNSScreen enumerates displays via NSScreen (Core Graphics
+// logical coordinates) using a Swift snippet, mirroring the ListWindows
+// helper. Each line: index\tmain\tX\tY\tW\tH\tname.
+func listDisplaysNSScreen() ([]DisplayInfo, error) {
+	swiftCode := `
+import Cocoa
+for (i, s) in NSScreen.screens.enumerated() {
+    let f = s.frame
+    let main = (s == NSScreen.main) ? 1 : 0
+    let name = s.localizedName
+    print("\(i + 1)\t\(main)\t\(Int(f.minX))\t\(Int(f.minY))\t\(Int(f.width))\t\(Int(f.height))\t\(name)")
+}
+`
+	cmd := exec.Command("swift", "-e", swiftCode)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("listing displays via NSScreen: %w", err)
+	}
+	displays := parseNSScreenOutput(string(out))
+	if len(displays) == 0 {
+		return nil, fmt.Errorf("NSScreen returned no displays")
+	}
+	return displays, nil
+}
+
+// parseNSScreenOutput parses the tab-separated NSScreen enumeration lines
+// into DisplayInfo entries. All coordinates are logical points.
+func parseNSScreenOutput(out string) []DisplayInfo {
+	var displays []DisplayInfo
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 7 {
+			continue
+		}
+		index, err := strconv.Atoi(fields[0])
+		if err != nil || index < 1 {
+			continue
+		}
+		main := fields[1] == "1"
+		x, _ := strconv.Atoi(fields[2])
+		y, _ := strconv.Atoi(fields[3])
+		w, _ := strconv.Atoi(fields[4])
+		h, _ := strconv.Atoi(fields[5])
+		displays = append(displays, DisplayInfo{
+			Index:     index,
+			IsPrimary: main,
+			X:         x,
+			Y:         y,
+			Width:     w,
+			Height:    h,
+			Name:      strings.TrimSpace(fields[6]),
+		})
+	}
+	return displays
 }
 
 // macDisplayEntry is one flattened display unit from SPDisplaysDataType JSON.
