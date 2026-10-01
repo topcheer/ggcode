@@ -341,7 +341,13 @@ func (a *Agent) applyToolResultGuidance(
 	// the per-result cap), and its detection input must not contain our own
 	// [guidance-coalesced] suppression summaries — those quote suppressed
 	// tag names and can re-enter as pseudo-conflicts.
-	if ch := detectGuidanceConflict(stripCoalescedSummaries(injected)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
+	// Mirror of #1840 case 4 for this direction: the scan must also include
+	// the turn's already-delivered hints (allowDeduped records every
+	// injected hint into guidanceBudget.delivered). A conflict between a
+	// hint delivered on an earlier tool result and one delivered now was
+	// previously invisible - only intra-result conflicts were detected.
+	scan := append(append([]string{}, a.guidanceBudget.delivered...), injected...)
+	if ch := detectGuidanceConflict(stripCoalescedSummaries(scan)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
 		injected = append([]string{ch}, injected...)
 	}
 

@@ -125,6 +125,15 @@ func (g *guidanceBudget) allow(text string) bool {
 		g.suppressed++
 		return false
 	}
+	// #607 B3: the [guidance-conflict] arbitration meta-hint bypasses the
+	// per-turn advisory COUNTER (still bound by the byte pool above, and
+	// rate-limited to one delivery per turn by allowDeduped's tag dedup).
+	// Charging it against the counter is self-defeating: the two
+	// contradictory directives themselves consume the budget, so the
+	// arbitration hint is dropped exactly when the contradiction stands.
+	if strings.ToLower(extractHintTag(text)) == "guidance-conflict" {
+		return true
+	}
 	if g.injected < guidanceBudgetPerTurn {
 		g.injected++
 		return true
@@ -239,7 +248,12 @@ func (a *Agent) injectGuidance(text string) bool {
 	// detectGuidanceConflict previously ran only over one tool result's
 	// retained hints; this path's injections (errorRush "ACT NOW" etc.)
 	// could contradict them unimpeded.
-	if ch := detectGuidanceConflict(append(append([]string{}, a.guidanceBudget.delivered...), text)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
+	// The delivered history must be stripped of [guidance-coalesced]
+	// suppression summaries first: allowDeduped records them into
+	// g.delivered, and they quote suppressed tag names that would
+	// re-enter the scan as pseudo-conflicts (same hazard #607 B3 fixed
+	// for the per-result scan).
+	if ch := detectGuidanceConflict(stripCoalescedSummaries(append(append([]string{}, a.guidanceBudget.delivered...), text))); ch != "" && a.guidanceBudget.allowDeduped(ch) {
 		a.contextManager.Add(provider.Message{
 			Role: "user",
 			Content: []provider.ContentBlock{{
