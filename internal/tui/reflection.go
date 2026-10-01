@@ -32,7 +32,14 @@ func setupReflection(a *agent.Agent) {
 		// (task/approach/outcome) in the project experience store. Runs
 		// independently of the rolling run-insights blob below so a case is
 		// recorded even when insight generation yields nothing.
-		recordExperienceCase(a, stats)
+		// repeatedTask is true when this run UPDATED an existing case — the
+		// same task shape succeeded before (strongest repetition signal).
+		repeatedTask := recordExperienceCase(a, stats)
+
+		// Skill suggestion (r319 P1 gap, skillcam/SkillRL lineage): a workflow
+		// that just succeeded for the second+ time is worth persisting as an
+		// invocable skill; record a conservative suggestion (no auto-write).
+		suggestSkillFromRun(a.WorkingDir(), stats, repeatedTask)
 
 		// Trajectory→asset distillation (SE-Agent / ACE): persist the
 		// run's verified commands as reusable cmd_snippet entries.
@@ -87,16 +94,18 @@ func setupReflection(a *agent.Agent) {
 
 // recordExperienceCase distills a completed run into the project experience
 // store as a per-task case: task (the user prompt), approach (what the agent
-// actually did — turns, tools, files, commands), and outcome. Failures are
-// debug-logged only; experience capture must never disturb the session.
-func recordExperienceCase(a *agent.Agent, stats agent.RunStats) {
+// actually did - turns, tools, files, commands), and outcome. Returns true
+// when this run UPDATED an existing case (same task shape seen before).
+// Failures are debug-logged only; experience capture must never disturb the
+// session.
+func recordExperienceCase(a *agent.Agent, stats agent.RunStats) (repeatedTask bool) {
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
-		return
+		return false
 	}
 	store := memory.NewProjectExperienceStore(workingDir)
 	if store == nil {
-		return
+		return false
 	}
 
 	outcome := "partial"
@@ -123,9 +132,12 @@ func recordExperienceCase(a *agent.Agent, stats agent.RunStats) {
 		fmt.Fprintf(&b, " First error: %s.", strings.Join(strings.Fields(stats.Errors[0]), " "))
 	}
 
-	if _, _, err := store.Record(stats.UserPrompt, b.String(), outcome, stats.FilesEdited); err != nil {
+	_, updated, err := store.Record(stats.UserPrompt, b.String(), outcome, stats.FilesEdited)
+	if err != nil {
 		debug.Log("tui", "experience: record failed: %v", err)
+		return false
 	}
+	return updated
 }
 
 // captureUserPreferences distills high-confidence durable preference
