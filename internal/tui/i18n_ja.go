@@ -1071,6 +1071,10 @@ func jaCatalog(key string) string {
 		return "ブランチするアクティブセッションがありません。"
 	case "branch.empty":
 		return "セッションにブランチするメッセージがありません。"
+	case "branch.bad_arg":
+		return "使い方: /branch [N]。N は非負の整数（破棄する対話ターン数）。"
+	case "branch.back_too_far":
+		return "そこまで遡って分岐できません：すべての対話ターンが破棄されます。"
 	case "branch.save_failed":
 		return "ブランチセッションの作成に失敗しました: %v"
 	case "branch.success":

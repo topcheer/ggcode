@@ -1197,6 +1197,10 @@ func enCatalog(key string) string {
 		return "No active session to branch."
 	case "branch.empty":
 		return "Session has no messages to branch."
+	case "branch.bad_arg":
+		return "Usage: /branch [N] where N >= 0 is the number of user turns to drop."
+	case "branch.back_too_far":
+		return "Cannot fork that far back: it would drop every user turn."
 	case "branch.save_failed":
 		return "Failed to create branched session: %v"
 	case "branch.success":

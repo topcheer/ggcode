@@ -1026,6 +1026,10 @@ func frCatalog(key string) string {
 		return "Aucune session active a bifurquér."
 	case "branch.empty":
 		return "La session n'a pas de messâges a bifurquér."
+	case "branch.bad_arg":
+		return "Usage : /branch [N], N est un entier non négatif (nombre de tours à abandonner)."
+	case "branch.back_too_far":
+		return "Impossible de forker aussi loin : cela supprimerait tous les tours de conversation."
 	case "branch.save_failed":
 		return "Erreur lors de la creation de la session bifurquée: %v"
 	case "branch.success":

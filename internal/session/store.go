@@ -85,6 +85,11 @@ type Session struct {
 	// It is never written to the config file — only persisted with the session.
 	// Uses *bool to distinguish "never set" (nil) from "explicitly hidden" (false).
 	SidebarVisible *bool `json:"sidebar_visible,omitempty"`
+	// Branch lineage (#346-style session trees): the session this one was
+	// forked from, and how many messages were inherited at the fork point.
+	// Zero values mean "not a branch" — fully backward compatible.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	ForkPoint       int    `json:"fork_point,omitempty"`
 	// Pinned marks the session as user-bookmarked. Pinned sessions are
 	// skipped by CleanupOlderThan (never aged out) and listed first by
 	// List(). Persisted via meta records; the latest meta record wins.
@@ -401,6 +406,27 @@ func lastDialogueIndex(msgs []provider.Message) int {
 		}
 	}
 	return -1
+}
+
+// ComputeBranchCutoff returns the exclusive end index for a fork that drops
+// the last dropRounds complete user turns. dropRounds <= 0 keeps everything
+// (tail fork). The boolean is false when the request would drop every user
+// turn (or the message list has no user turns at all), i.e. the fork point
+// does not exist.
+func ComputeBranchCutoff(msgs []provider.Message, dropRounds int) (int, bool) {
+	if dropRounds <= 0 {
+		return len(msgs), true
+	}
+	var userIdx []int
+	for i, m := range msgs {
+		if m.Role == "user" {
+			userIdx = append(userIdx, i)
+		}
+	}
+	if len(userIdx) <= dropRounds {
+		return 0, false
+	}
+	return userIdx[len(userIdx)-dropRounds], true
 }
 
 // quickIsDialogueRole reports whether a raw message record line carries a

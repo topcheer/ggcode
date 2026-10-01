@@ -1026,6 +1026,10 @@ func esCatalog(key string) string {
 		return "Sin sesión activa para bifurcar."
 	case "branch.empty":
 		return "La sesión no tiene mensajes para bifurcar."
+	case "branch.bad_arg":
+		return "Uso: /branch [N], N es un entero no negativo (rondas a descartar)."
+	case "branch.back_too_far":
+		return "No se puede bifurcar hasta ahí: se eliminarían todas las rondas de conversación."
 	case "branch.save_failed":
 		return "Error al crear sesión bifurcada: %v"
 	case "branch.success":

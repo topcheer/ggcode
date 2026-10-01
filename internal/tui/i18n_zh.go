@@ -1210,6 +1210,10 @@ func zhCatalog(key string) string {
 		return "没有可分叉的活跃会话。"
 	case "branch.empty":
 		return "会话中没有消息可分叉。"
+	case "branch.bad_arg":
+		return "用法：/branch [N]，N 为非负整数（要丢弃的对话轮数）。"
+	case "branch.back_too_far":
+		return "无法分叉到该点：将丢弃全部对话轮。"
 	case "branch.save_failed":
 		return "创建分叉会话失败：%v"
 	case "branch.success":

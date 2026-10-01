@@ -1126,6 +1126,10 @@ func deCatalog(key string) string {
 		return "Keine aktive Sitzung zum Abzweigen."
 	case "branch.empty":
 		return "Sitzung hat keine Nachrichten zum Abzweigen."
+	case "branch.bad_arg":
+		return "Verwendung: /branch [N], N ist eine nicht-negative Zahl (abzuwerfende Gesprächsrunden)."
+	case "branch.back_too_far":
+		return "So weit kann nicht verzweigt werden: es würden alle Gesprächsrunden entfernt."
 	case "branch.save_failed":
 		return "Abgezweigte Sitzung konnte nicht erstellt werden: %v"
 	case "branch.success":

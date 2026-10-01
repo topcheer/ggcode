@@ -101,7 +101,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage) |
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
-| `/branch` / `/fork` | Branch/fork current session |
+| `/branch [N]` / `/fork [N]` | Branch/fork current session; N drops the last N user turns to fork from an earlier point |
 | `/pin-session` / `/unpin-session` | Pin/unpin session (pinned sessions are never removed by cleanup and list first in `/sessions`; distinct from `/pin`, which pins context items) |
 | `/tag <tag>...` | Add tags to the session (deduplicated case-insensitively) |
 | `/untag <tag>...` | Remove tags from the session |

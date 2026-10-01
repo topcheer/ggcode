@@ -1032,6 +1032,10 @@ func koCatalog(key string) string {
 		return "분기할 활성 세션이 없습니다."
 	case "branch.empty":
 		return "분기할 메시지가 없습니다."
+	case "branch.bad_arg":
+		return "사용법: /branch [N]. N은 음이 아닌 정수(버릴 대화 턴 수)입니다."
+	case "branch.back_too_far":
+		return "그 지점까지는 분기할 수 없습니다: 모든 대화 턴이 버려집니다."
 	case "branch.save_failed":
 		return "분기 세션 생성 실패: %v"
 	case "branch.success":

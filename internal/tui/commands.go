@@ -555,7 +555,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/regenerate", "/regen":
 			return m.handleRegenerateCommand()
 		case "/branch", "/fork":
-			return m.handleBranchCommand()
+			return m.handleBranchCommand(parts)
 		case "/tools":
 			return m.handleToolsCommand()
 		case "/style":
