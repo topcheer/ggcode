@@ -41,8 +41,9 @@ require (
 }
 
 func TestCheckDependencyVulns_GoModSafeVersion(t *testing.T) {
-	// Adding a safe version should NOT trigger a CVE warning, but should
-	// show the general "consider scanning" reminder.
+	// Adding a safe version should NOT trigger a CVE warning. Since the
+	// package matched the vuln DB and is already patched, the generic
+	// "consider scanning" reminder is suppressed too (#3046 B2).
 	oldGoMod := `module example.com/test
 
 go 1.21
@@ -59,10 +60,12 @@ require golang.org/x/crypto v0.31.0
 		if strings.Contains(w, "CVE-2024-45337") {
 			t.Fatalf("should not flag patched version, got: %s", w)
 		}
+		if strings.Contains(w, "consider running") {
+			t.Fatalf("safe upgrade matched the vuln DB; scan reminder would be noise (#3046 B2), got: %s", w)
+		}
 	}
-	// Should have the general reminder
-	if len(warnings) == 0 {
-		t.Fatal("expected dependency change reminder even for safe versions")
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings for a patched version, got: %v", warnings)
 	}
 }
 
