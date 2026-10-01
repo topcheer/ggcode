@@ -4270,14 +4270,21 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.bgVerifyJobs.register(psExtractJobID(result.Content), extractCommandFromArgs(tc.Arguments))
 			}
 			if tc.Name == "wait_command" || tc.Name == "read_command_output" {
-				if cmd, ok := a.bgVerifyJobs.take(bgVerifyExtractJobID(tc.Arguments)); ok && isVerifyCommand(cmd) {
-					if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal && passed {
-						a.verifyDebt.recordVerifyCommand(cmd, false)
-						a.editPropagation.recordGreenBuild()
-						// #1460-C scoping applies here too: only failure-aware
-						// verification (test/build/vet-class) may clear churn.
-						if isStrictVerifyCommand(cmd) {
-							a.fileChurn.recordVerifySuccess(cmd)
+				if cmd, ok := a.bgVerifyJobs.peek(bgVerifyExtractJobID(tc.Arguments)); ok && isVerifyCommand(cmd) {
+					// Consume only on a TERMINAL status: the first poll usually
+					// sees Status: running - removing the registration there
+					// would orphan the job before its outcome poll arrives (#1153
+					// alignment).
+					if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal {
+						a.bgVerifyJobs.remove(bgVerifyExtractJobID(tc.Arguments))
+						if passed {
+							a.verifyDebt.recordVerifyCommand(cmd, false)
+							a.editPropagation.recordGreenBuild()
+							// #1460-C scoping applies here too: only failure-aware
+							// verification (test/build/vet-class) may clear churn.
+							if isStrictVerifyCommand(cmd) {
+								a.fileChurn.recordVerifySuccess(cmd)
+							}
 						}
 					}
 				}

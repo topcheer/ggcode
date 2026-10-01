@@ -43,19 +43,30 @@ func (r *bgVerifyRegistry) register(jobID, cmd string) {
 	r.jobs[jobID] = cmd
 }
 
-// take removes and returns the command for jobID (consumed-once so repeated
-// waits/polls do not re-clear debt for the same finished job).
-func (r *bgVerifyRegistry) take(jobID string) (string, bool) {
+// peek returns the command registered for jobID without consuming it.
+// Poll-then-consume semantics (#1153 alignment): wait_command's first poll
+// usually sees Status: running - a take() there would eat the registration
+// before the terminal poll could ever attribute the outcome.
+func (r *bgVerifyRegistry) peek(jobID string) (string, bool) {
 	if r == nil || jobID == "" {
 		return "", false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cmd, ok := r.jobs[jobID]
-	if ok {
-		delete(r.jobs, jobID)
-	}
 	return cmd, ok
+}
+
+// remove drops the registration. Called once the job reached a TERMINAL
+// status (passed or failed) so repeated waits do not re-clear debt; running
+// polls keep the entry alive for the next poll.
+func (r *bgVerifyRegistry) remove(jobID string) {
+	if r == nil || jobID == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.jobs, jobID)
 }
 
 // bgVerifyExtractJobID pulls "job_id" (falling back to "task_id", mirroring
