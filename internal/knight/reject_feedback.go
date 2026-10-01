@@ -50,6 +50,16 @@ func newRejectFeedbackStore(path string) *rejectFeedbackStore {
 	return &rejectFeedbackStore{path: path}
 }
 
+// normalizeRejectEntryScope lowercases/trims the scope and defaults empty
+// scopes to "project" (skill_validator.go's default) so a scope-less entry
+// can never act as an every-scope wildcard in LastFor (#3025).
+func normalizeRejectEntryScope(entry *rejectFeedbackEntry) {
+	entry.Scope = strings.ToLower(strings.TrimSpace(entry.Scope))
+	if entry.Scope == "" {
+		entry.Scope = "project"
+	}
+}
+
 func (s *rejectFeedbackStore) load() {
 	if s.loaded {
 		return
@@ -75,6 +85,7 @@ func (s *rejectFeedbackStore) load() {
 			debug.Log("knight", "reject feedback %s: skipping corrupt line: %v", filepath.Base(s.path), err)
 			continue
 		}
+		normalizeRejectEntryScope(&entry) // #3025: legacy empty-scope entries fence
 		s.entries = append(s.entries, entry)
 	}
 	if err := sc.Err(); err != nil {
@@ -91,6 +102,10 @@ func (s *rejectFeedbackStore) Append(entry rejectFeedbackEntry) error {
 	if entry.Time.IsZero() {
 		entry.Time = time.Now()
 	}
+	// #3025: normalize empty scopes to "project" on write (same default as
+	// skill_validator.go) so no entry can wildcard every scope at lookup
+	// time; legacy entries are normalized at load via the same helper.
+	normalizeRejectEntryScope(&entry)
 	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
 		return err
 	}
@@ -142,6 +157,11 @@ func (s *rejectFeedbackStore) trimOld(now time.Time) {
 // LastFor returns the most recent feedback entry for a (scope, name) pair, if
 // any. Lookup is case-insensitive on name; scope must match exactly when
 // non-empty.
+//
+// #3025: the old gate also skipped the comparison when a stored entry had
+// an EMPTY scope, so a single empty-scope entry (written before write-side
+// normalization) matched lookups in every scope - one rejection cooled the
+// same skill name in both "project" and "global". Exact match both ways.
 func (s *rejectFeedbackStore) LastFor(scope, name string) (rejectFeedbackEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,7 +174,7 @@ func (s *rejectFeedbackStore) LastFor(scope, name string) (rejectFeedbackEntry, 
 		if strings.ToLower(strings.TrimSpace(e.Name)) != name {
 			continue
 		}
-		if scope != "" && e.Scope != "" && e.Scope != scope {
+		if scope != "" && e.Scope != scope {
 			continue
 		}
 		if !found || e.Time.After(latest.Time) {
