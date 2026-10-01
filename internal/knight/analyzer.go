@@ -149,9 +149,16 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 	}
 
 	// Priority sort: sessions with correction/failure signals first.
+	// Precompute each session's signal score ONCE: the comparator runs
+	// O(n log n) times and each score scan walks every message while
+	// concatenating text, so recomputing inside it is quadratic-ish work
+	// on large session stores.
+	scores := make(map[string]int, len(eligible))
+	for _, ses := range eligible {
+		scores[ses.ID] = sa.sessionSignalScore(ses)
+	}
 	sort.SliceStable(eligible, func(i, j int) bool {
-		si := sa.sessionSignalScore(eligible[i])
-		sj := sa.sessionSignalScore(eligible[j])
+		si, sj := scores[eligible[i].ID], scores[eligible[j].ID]
 		if si != sj {
 			return si > sj
 		}
@@ -876,7 +883,7 @@ type candidateAggregate struct {
 	sig string
 }
 
-// failureSignature derives a coarse error-class signature from a failure
+// failureClass derives a coarse error-class signature from a failure
 // message so aggregation keys don't merge unrelated failures that merely
 // share a keyword (#3016: "go build timeout" and "npm test path error"
 // both matched the "test"/"build" keywords and were aggregated under the
@@ -886,7 +893,7 @@ type candidateAggregate struct {
 // Coarse classes first (so distinct details still converge on the same
 // class); the normalized first line of the error is the fallback so two
 // different errors never share a key.
-func failureSignature(errMsg string) string {
+func failureClass(errMsg string) string {
 	first := errMsg
 	if i := strings.IndexAny(errMsg, "\n\r"); i >= 0 {
 		first = errMsg[:i]
@@ -922,14 +929,12 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 	// the keyword-based name alone is too broad. Correction/convention
 	// candidates keep name-only keys (their Evidence[0] is not an error
 	// message and name collision is not the failure mode there).
-	if candidate.Category == "failure-fix" && len(candidate.Evidence) > 0 {
-		key += "|" + failureSignature(candidate.Evidence[0])
-	}
-	agg, ok := aggregated[key]
 	sig := ""
 	if candidate.Category == "failure-fix" && len(candidate.Evidence) > 0 {
-		sig = failureSignature(candidate.Evidence[0])
+		sig = failureClass(candidate.Evidence[0])
+		key += "|" + sig
 	}
+	agg, ok := aggregated[key]
 	if !ok {
 		aggregated[key] = &candidateAggregate{
 			candidate: candidate,
