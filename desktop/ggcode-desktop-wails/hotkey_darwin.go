@@ -37,8 +37,19 @@ static OSStatus gcRegisterGlobalHotkey() {
         keyID.id = 1;
 
         // kVK_ANSI_G = 0x05, modifiers: cmdKey | optionKey
-        return RegisterEventHotKey(0x05, cmdKey | optionKey, keyID,
-                                   GetApplicationEventTarget(), 0, &gcHotkeyRef);
+        st = RegisterEventHotKey(0x05, cmdKey | optionKey, keyID,
+                                 GetApplicationEventTarget(), 0, &gcHotkeyRef);
+        // #3008: if hotkey registration fails (e.g. -9866 key combo owned by
+        // another app), roll back the handler we just installed - otherwise
+        // the static gcHotkeyHandler ref gets overwritten on the next retry
+        // and the leaked handler can never be removed.
+        if (st != noErr) {
+            if (gcHotkeyHandler) {
+                RemoveEventHandler(gcHotkeyHandler);
+                gcHotkeyHandler = NULL;
+            }
+        }
+        return st;
     }
 }
 

@@ -160,11 +160,22 @@ var gitWholeTreeTools = map[string]bool{
 // exact 9-tool membership is pinned by the #737/#153 sync assertions;
 // cache gating only needs "may touch the tree", which this predicate owns.
 // Notebook edits flow through the canonical superset.
+// mutatesSourceTree reports whether the tool changes the source tree on
+// disk (#153/#154). Beyond the canonical sourceMutatingTools set (pinned at
+// 9 members by #737/#1104 - extending THAT map belongs here instead), this
+// also covers tools that persist edits outside it (#3006):
+//   - apply_patch (Responses API style patching, os.WriteFile on disk)
+//   - scaffold_project (generates a whole project skeleton, 20+ files)
+//   - undo_edit (reverts file edits, mutates state without being an edit tool)
 func mutatesSourceTree(toolName string) bool {
 	if fileEditingTools[toolName] || gitFileModifyingTools[toolName] || gitWholeTreeTools[toolName] {
 		return true
 	}
-	return toolName == "undo_edit"
+	switch toolName {
+	case "undo_edit", "apply_patch", "scaffold_project":
+		return true
+	}
+	return false
 }
 
 // sourceCodeExtensions maps file extensions to whether they're compiled/interpreted code.
@@ -1008,8 +1019,32 @@ var realTestCommands = map[string]bool{
 
 // isRealTestExecution reports whether the command runs a real test/build
 // target (not a listing/format/no-op invocation of a test-capable runner).
+// #3005: matches per segment of compound commands (cd pkg && go test ./),
+// keeping the classification in sync with isVerifyCommand and
+// isStrictVerifyCommand (#1462-C) - the whole-string prefix match used to
+// split the verify-counter reset from the lastBuildFailed update.
 func isRealTestExecution(cmd string) bool {
-	seg := strings.ToLower(strings.TrimSpace(stripEnvAssignments(cmd)))
+	for _, seg := range splitCompoundCommand(stripEnvAssignments(cmd)) {
+		if isRealTestSegment(strings.ToLower(strings.TrimSpace(seg))) {
+			return true
+		}
+	}
+	return false
+}
+
+// makeRunnerNoopTargets are runner targets that neither build nor test;
+// running them must not reset the post-edit verify counter or clear the
+// lastBuildFailed flag (#3005: `make clean` used to count as verification,
+// silencing the verify hint for subsequent source edits - #1841 case 3).
+var makeRunnerNoopTargets = map[string]bool{
+	"help": true, "list": true, "clean": true, "install": true,
+	"fmt": true, "format": true, "lint": true, "tidy": true,
+	"deploy": true, "build": true, "check": true, "info": true,
+}
+
+// isRealTestSegment classifies one shell segment (already lowercased,
+// trimmed, env-stripped).
+func isRealTestSegment(seg string) bool {
 	if strings.Contains(seg, "--help") || strings.Contains(seg, " --list") ||
 		strings.Contains(seg, "help") && strings.HasPrefix(seg, "make ") {
 		return false
@@ -1021,13 +1056,16 @@ func isRealTestExecution(cmd string) bool {
 	}
 	words := strings.Fields(seg)
 	if len(words) >= 2 && (words[0] == "make" || words[0] == "just" || words[0] == "task") {
-		// make <target> runs a target (make help / make list do not).
+		// #3005: only verification-ish targets count. The old code accepted
+		// ANY target, so `make fmt`/`make deploy` reset the counter and
+		// faked "verified" state. Known no-op targets are excluded; unknown
+		// targets default to counting (a custom `make ci`/`make e2e` may run
+		// real tests, and under-counting verify hints is the worse failure).
 		t := words[1]
-		// #2123 (#1841 residue): clean/install are not test/build
-		// executions either - passing them used to CLEAR the
-		// lastBuildFailed urgency flag so the "(which FAILED)" hint
-		// never fired after a plain `make clean`.
-		return t != "help" && t != "list" && t != "clean" && t != "install" && !strings.HasPrefix(t, "-")
+		if strings.HasPrefix(t, "-") || makeRunnerNoopTargets[t] {
+			return false
+		}
+		return true
 	}
 	return false
 }
