@@ -10,16 +10,20 @@ import (
 	"testing"
 )
 
-func TestIssue2992BgVerifyRegistryConsumeOnce(t *testing.T) {
+func TestIssue2992BgVerifyRegistryPollThenConsume(t *testing.T) {
 	r := newBgVerifyRegistry()
 	r.register("job-1", "go test ./...")
-	cmd, ok := r.take("job-1")
-	if !ok || cmd != "go test ./..." {
-		t.Fatalf("take #1: ok=%v cmd=%q", ok, cmd)
+	// First poll sees Status: running - the registration MUST survive.
+	if cmd, ok := r.peek("job-1"); !ok || cmd != "go test ./..." {
+		t.Fatalf("peek(running): ok=%v cmd=%q", ok, cmd)
 	}
-	// Consume-once: a repeated wait_command poll must not re-clear debt.
-	if _, ok := r.take("job-1"); ok {
-		t.Fatal("take #2 should miss: registry is consumed-once")
+	// Terminal poll consumes; a repeated wait must miss (no double clear).
+	if _, ok := r.peek("job-1"); !ok {
+		t.Fatal("entry must survive until terminal status")
+	}
+	r.remove("job-1")
+	if _, ok := r.peek("job-1"); ok {
+		t.Fatal("post-terminal peek should miss: consumed once")
 	}
 }
 
@@ -39,13 +43,14 @@ func TestIssue2992BgVerifyRegistryBounded(t *testing.T) {
 func TestIssue2992BgVerifyRegistryEmptyInputs(t *testing.T) {
 	var r *bgVerifyRegistry
 	r.register("j", "c") // nil-safe, must not panic
-	if _, ok := r.take("j"); ok {
-		t.Fatal("nil registry take should miss")
+	if _, ok := r.peek("j"); ok {
+		t.Fatal("nil registry peek should miss")
 	}
+	r.remove("j") // nil-safe, must not panic
 	ok := newBgVerifyRegistry()
 	ok.register("", "c")
 	ok.register("j", "")
-	if _, found := ok.take("j"); found {
+	if _, found := ok.peek("j"); found {
 		t.Fatal("empty jobID or cmd must not register")
 	}
 }
