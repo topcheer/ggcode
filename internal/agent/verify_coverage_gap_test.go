@@ -248,3 +248,30 @@ func jsonStr(t *testing.T, v interface{}) string {
 	}
 	return string(b)
 }
+
+// #2984: `go test ./` tests the CURRENT DIRECTORY package only (recursive is
+// ./...). It must NOT be treated as ALL-scope coverage — that marked every
+// edited package VERIFIED and masked the exact cross-package coverage gap
+// this detector exists to surface (#550 B1 inflation class).
+func TestCoverageBareDotSlashIsCwdNotAll(t *testing.T) {
+	s := newEditCoverageState()
+	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/agent/foo.go"}))
+	s.recordToolCall("edit_file", jsonStr(t, map[string]string{"file_path": "/workspace/internal/config/bar.go"}))
+
+	// Bare ./ behaves like bare `go test`: cwd-package scoping, so the
+	// non-cwd edited package stays unverified and the gap warning fires.
+	warn := s.recordToolCall("run_command", jsonStr(t, map[string]string{"command": "go test ./"}))
+	if warn == "" {
+		t.Fatal("expected coverage-gap warning for `go test ./` with 2 edited packages (cwd-only scope)")
+	}
+	if !strings.Contains(warn, "internal/config") && !strings.Contains(warn, "internal/agent") {
+		t.Fatalf("warning should name the unverified package, got: %s", warn)
+	}
+}
+
+// Direct unit lock on the scope extraction: `./` yields "." (cwd), not ALL.
+func TestCoverageExtractBareDotSlashScope(t *testing.T) {
+	if got := coverageExtractVerifyScope("go test ./"); got != "." {
+		t.Fatalf("coverageExtractVerifyScope(`go test ./`) = %q, want \".\"", got)
+	}
+}
