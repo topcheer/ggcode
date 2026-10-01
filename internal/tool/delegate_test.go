@@ -120,6 +120,9 @@ func TestDelegateToolDescription(t *testing.T) {
 	if !strings.Contains(desc, "Avoid this for quick shell commands") {
 		t.Error("description should discourage trivial local-tool work")
 	}
+	if !strings.Contains(desc, "3-5x the tokens and latency") {
+		t.Error("description should document the delegation cost multiplier (#349)")
+	}
 }
 
 func TestDelegateToolParameters(t *testing.T) {

@@ -206,4 +206,9 @@ func TestSpawnAgentDescriptionDocumentsLimit(t *testing.T) {
 	if !strings.Contains(desc, "16 sub-agents") {
 		t.Errorf("spawn_agent description must document the 16-concurrent limit, got: %s", desc)
 	}
+	// Delegation economics contract (#349): the LLM must see the context-copy
+	// cost so it only fans out genuinely independent tasks.
+	if !strings.Contains(desc, "genuinely independent") {
+		t.Errorf("spawn_agent description must document the delegation economics contract, got: %s", desc)
+	}
 }

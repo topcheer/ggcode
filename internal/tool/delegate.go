@@ -161,7 +161,7 @@ Use this when:
 - You want a second opinion from a different AI model
 - You want to leverage agent-specific capabilities
 
-Avoid this for quick shell commands, direct file edits, or simple repository inspection that the current agent can do with local tools. Include all context the delegate needs in the prompt.`, strings.Join(descs, "\n"))
+Avoid this for quick shell commands, direct file edits, or simple repository inspection that the current agent can do with local tools - external delegation typically costs 3-5x the tokens and latency of doing it locally. Include all context the delegate needs in the prompt.`, strings.Join(descs, "\n"))
 }
 
 func (t DelegateTool) Parameters() json.RawMessage {
