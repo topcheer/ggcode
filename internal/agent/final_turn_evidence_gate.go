@@ -19,8 +19,8 @@ import "fmt"
 // finalTurnEvidenceGate decides whether the agent's stop should be gated.
 // Pure function over the run state; returns the message to inject (empty
 // string = allow the stop).
-func finalTurnEvidenceGate(editsThisRun int, lastSourceFile string, buildOrTestRun, gateAlreadyFired bool, workingDir string) string {
-	if gateAlreadyFired || editsThisRun == 0 || buildOrTestRun {
+func finalTurnEvidenceGate(editsThisRun int, lastSourceFile string, realBuildOrTestRun, gateAlreadyFired bool, workingDir string) string {
+	if gateAlreadyFired || editsThisRun == 0 || realBuildOrTestRun {
 		return ""
 	}
 	if detectBuildSystem(workingDir) == "" {

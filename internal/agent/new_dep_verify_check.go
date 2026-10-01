@@ -22,6 +22,17 @@ import (
 // maxNewDepNoticePackages bounds how many package names are listed.
 const maxNewDepNoticePackages = 5
 
+// isVCSModulePath reports whether a Go module path starts with a
+// dotted-domain first segment (github.com/..., gopkg.in/...) - i.e. it
+// resolves to a real VCS URL rather than a registry-style short name.
+func isVCSModulePath(modulePath string) bool {
+	first := modulePath
+	if i := strings.Index(modulePath, "/"); i >= 0 {
+		first = modulePath[:i]
+	}
+	return strings.Contains(first, ".")
+}
+
 // checkNewDependencyVerify returns one aggregated notice for newly added
 // dependencies that are neither exact well-known packages (those are
 // near-certainly real) nor typosquat-suspect (covered by checkTyposquatting
@@ -50,6 +61,14 @@ func checkNewDependencyVerify(filePath, oldContent, newContent string) []string 
 		}
 		pkgName := extractPackageName(ecosystem, name)
 		if len(pkgName) < minPackageLenForCheck {
+			continue
+		}
+		// #3045 B2: Go module paths with a dotted-domain first segment
+		// (github.com/..., gopkg.in/...) are VCS-resolvable - the name maps
+		// to a real git URL, so there is no registry-squatting surface the
+		// way npm/pypi short names have. Only registry-style short names
+		// carry the slopsquatting risk this check targets.
+		if ecosystem == "go" && isVCSModulePath(name) {
 			continue
 		}
 		// Exact well-known match: the real, extremely popular package -

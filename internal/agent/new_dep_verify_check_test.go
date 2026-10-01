@@ -31,11 +31,13 @@ func TestNewDepVerify_UnchangedDependenciesSilent(t *testing.T) {
 }
 
 func TestNewDepVerify_GoModPath(t *testing.T) {
+	// #3045 B2: dotted-domain VCS paths are exempt; a REGISTRY-style
+	// (non-VCS) Go module path - the actual hallucination surface - warns.
 	w := checkNewDependencyVerify("go.mod",
 		"module x\n\ngo 1.27\n",
-		"module x\n\ngo 1.27\n\nrequire github.com/someone/totally-unknown-lib v0.0.1\n")
+		"module x\n\ngo 1.27\n\nrequire totally-unknown-lib v0.0.1\n")
 	if len(w) != 1 || !strings.Contains(w[0], "totally-unknown-lib") {
-		t.Fatalf("new unknown Go dependency must be noticed, got %v", w)
+		t.Fatalf("new registry-style Go dependency must be noticed, got %v", w)
 	}
 }
 

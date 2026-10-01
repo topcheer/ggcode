@@ -2879,7 +2879,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				gateMsg := finalTurnEvidenceGate(
 					a.postEditVerify.sourceEditsThisRun,
 					a.postEditVerify.lastSourceFileThisRun,
-					a.postEditVerify.buildOrTestRunThisRun,
+					a.postEditVerify.realBuildOrTestRunThisRun,
 					a.postEditVerify.finalGateFiredThisRun,
 					a.workingDir)
 				if gateMsg != "" {
