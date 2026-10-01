@@ -67,9 +67,9 @@ type tunnelVisionState struct {
 
 	// searchedFiles tracks files seen via search tools (#476).
 	searchedFiles map[string]bool
-	// testFilesTouched reports whether any _test.go file was touched —
-	// a test-fix task legitimately revolves around test files (#476).
-	testFilesTouched map[bool]bool
+	// sawTestFiles reports whether any _test.go file was touched — a
+	// test-fix task legitimately revolves around test files (#476).
+	sawTestFiles bool
 
 	// warned indicates the detector has fired this run.
 	warned bool
@@ -77,16 +77,15 @@ type tunnelVisionState struct {
 
 func newTunnelVisionState() *tunnelVisionState {
 	return &tunnelVisionState{
-		filesTouched:     make(map[string]bool),
-		searchedFiles:    make(map[string]bool),
-		testFilesTouched: make(map[bool]bool),
+		filesTouched:  make(map[string]bool),
+		searchedFiles: make(map[string]bool),
 	}
 }
 
 func (s *tunnelVisionState) reset() {
 	s.filesTouched = make(map[string]bool)
 	s.searchedFiles = make(map[string]bool)
-	s.testFilesTouched = make(map[bool]bool)
+	s.sawTestFiles = false
 	s.warned = false
 }
 
@@ -126,10 +125,12 @@ func (s *tunnelVisionState) recordFile(path string) {
 		return
 	}
 	n := s.normalize(path)
-	if !strings.HasSuffix(n, "_test.go") && !strings.HasSuffix(n, ".md") {
+	isTest := strings.HasSuffix(n, "_test.go")
+	if isTest {
+		s.sawTestFiles = true
+	} else if !strings.HasSuffix(n, ".md") {
 		s.filesTouched[n] = true
 	}
-	s.testFilesTouched[strings.HasSuffix(n, "_test.go")] = s.testFilesTouched[strings.HasSuffix(n, "_test.go")] || strings.HasSuffix(n, "_test.go")
 }
 
 // recordSearched marks a file as SEEN via search-tool output (#476) —
@@ -148,7 +149,7 @@ func (s *tunnelVisionState) recordSearched(path string) {
 	}
 	s.searchedFiles[n] = true
 	if strings.HasSuffix(n, "_test.go") {
-		s.testFilesTouched[true] = true
+		s.sawTestFiles = true
 	}
 }
 
@@ -190,7 +191,7 @@ func (s *tunnelVisionState) check(iterations int) string {
 
 	// #476: a test-fix task (agent actively editing/reading _test.go files)
 	// legitimately revolves around few files — ratio alone must not fire.
-	if s.testFilesTouched[true] && fileCount > 0 && iterations < tvMinIterations*2 {
+	if s.sawTestFiles && fileCount > 0 && iterations < tvMinIterations*2 {
 		return ""
 	}
 
