@@ -765,9 +765,74 @@ type failure struct {
 	index    int
 }
 
+// failureSignature derives a stable short fingerprint from the failure's
+// error text (#3016): first non-empty error line, lowercased, with paths and
+// numbers stripped so the same error class hashes identically across
+// sessions while unrelated failures stay distinct.
+func failureSignature(f failure) string {
+	first := ""
+	for _, ln := range strings.Split(f.errMsg, "\n") {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed != "" {
+			first = trimmed
+			break
+		}
+	}
+	if first == "" {
+		first = f.toolInp
+	}
+	first = strings.ToLower(first)
+	// Strip runs containing a path separator and digit runs: paths, line
+	// numbers, counters and hex addresses vary between sessions/machines.
+	fields := strings.Fields(first)
+	for i, w := range fields {
+		if strings.ContainsAny(w, "/\\") || strings.Contains(w, ":") && strings.Count(w, "") > 2 && isMostlyNonAlpha(w) {
+			fields[i] = "<path>"
+			continue
+		}
+		fields[i] = stripDigits(w)
+	}
+	normalized := strings.Join(fields, " ")
+	if len(normalized) > 120 {
+		normalized = normalized[:120]
+	}
+	h := fnv.New32a()
+	h.Write([]byte(normalized))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+func isMostlyNonAlpha(w string) bool {
+	alpha := 0
+	for _, r := range w {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			alpha++
+		}
+	}
+	return alpha*2 < len(w)
+}
+
+func stripDigits(w string) string {
+	var b strings.Builder
+	for _, r := range w {
+		if r < '0' || r > '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func buildFailureFixName(f failure) string {
-	// Build a descriptive name from the error context
+	// Build a descriptive name from the error context.
+	//
+	// #3016: keyword names alone were far too coarse - "test"/"build"
+	// Contains-match almost any command, so unrelated failures (a go build
+	// timeout and an npm test path error) aggregated under one key and
+	// inflated EvidenceCount into fake cross-session convergence. Keyword
+	// names now carry the failure signature fingerprint so aggregation only
+	// converges genuinely similar failures; identical errors hash
+	// identically across sessions (true convergence survives).
 	inputLower := strings.ToLower(f.toolInp)
+	fp := failureSignature(f)
 
 	type matcher struct {
 		keyword string
@@ -787,11 +852,11 @@ func buildFailureFixName(f failure) string {
 
 	for _, m := range matchers {
 		if strings.Contains(inputLower, m.keyword) || strings.Contains(strings.ToLower(f.errMsg), m.keyword) {
-			return m.name
+			return m.name + "-" + fp
 		}
 	}
 
-	return "fix-" + sanitizeName(f.toolName)
+	return "fix-" + sanitizeName(f.toolName) + "-" + fp
 }
 
 // --- Aggregation ---
