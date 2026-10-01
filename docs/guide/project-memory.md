@@ -159,6 +159,16 @@ If a persistent entry exceeds the per-entry limit, it falls back to the
 title-only index. This keeps the system prompt small while ensuring the most
 valuable knowledge is always in context.
 
+## Skill Suggestions (Recurring-Workflow Detection)
+
+When the same task shape succeeds a second time (the experience store's
+reconsolidation signal) with a clean, multi-tool run, the reflection pass
+records one line into the `skill-suggestions` memory key — recurring
+workflows surface as invocable-skill candidates (`create_skill`) instead of
+being redone by hand every session. Conservative by design: nothing is
+auto-written to the skill library; the suggestion only rides the existing
+memory injection channel.
+
 ## Experience Case Bank (Case-Based Memory)
 
 Beyond the rolling run-insights blob, ggcode keeps a **case-based experience
