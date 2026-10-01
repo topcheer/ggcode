@@ -765,11 +765,14 @@ type failure struct {
 	index    int
 }
 
-// failureSignature derives a stable short fingerprint from the failure's
+// failureFingerprint derives a stable short fingerprint from the failure's
 // error text (#3016): first non-empty error line, lowercased, with paths and
 // numbers stripped so the same error class hashes identically across
-// sessions while unrelated failures stay distinct.
-func failureSignature(f failure) string {
+// sessions while unrelated failures stay distinct. It embeds in the
+// candidate NAME; the coarse failureSignature(errMsg) below is the separate
+// aggregate-KEY classifier - the ec8a285cc merge briefly redeclared both
+// under one name and broke the build.
+func failureFingerprint(f failure) string {
 	first := ""
 	for _, ln := range strings.Split(f.errMsg, "\n") {
 		trimmed := strings.TrimSpace(ln)
@@ -832,7 +835,7 @@ func buildFailureFixName(f failure) string {
 	// converges genuinely similar failures; identical errors hash
 	// identically across sessions (true convergence survives).
 	inputLower := strings.ToLower(f.toolInp)
-	fp := failureSignature(f)
+	fp := failureFingerprint(f)
 
 	type matcher struct {
 		keyword string
