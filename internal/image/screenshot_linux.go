@@ -103,7 +103,8 @@ func runLinuxToolCandidates(tools []string, rawPath string, opts ScreenshotOptio
 //     into a Region; tools that cannot target a window by title fail with an
 //     explicit, actionable error instead of returning the wrong image.
 //   - gnome-screenshot limits (#975): no CLI region capture and no per-output
-//     selection, so Display>1/Region fail explicitly (same treatment).
+//     selection, so Display>=1/Region fail explicitly (same treatment; the
+//     gate is kept in sync with the Region-translation gate, #3013).
 //   - Best-effort display selection (#555): most tools cannot select an
 //     output by index, so translate the 1-based display index into a region
 //     covering that output (geometry from xrandr/wlr-randr). Region and
