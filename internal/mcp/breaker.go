@@ -277,6 +277,16 @@ func isInfraError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// #3044-V1: a JSON-RPC error response is a SEMANTIC error authored by
+	// the server (decorateSpecError keeps it reachable via errors.As). Its
+	// message text is server-written and may legitimately contain infra
+	// substrings ("-32603 Internal error: upstream server error", "tool
+	// timed out: context deadline exceeded") - substring matching would
+	// misclassify protocol-level responses as outages and let three
+	// semantic errors open the breaker on a healthy server.
+	if _, ok := jsonRPCErrorOf(err); ok {
+		return false
+	}
 	msg := strings.ToLower(err.Error())
 	for _, p := range infraErrorPatterns {
 		if strings.Contains(msg, p) {

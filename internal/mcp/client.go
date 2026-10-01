@@ -762,6 +762,9 @@ func (c *Client) Close() error {
 	waitDone := c.procWaitDone
 	oauthHandler := c.oauthHandler
 	c.oauthHandler = nil
+	// #3044-V2: retire pending URL-elicitation bookkeeping — no completion
+	// notification can arrive after the transport is gone.
+	c.pendingURLElicitations = nil
 	c.mu.Unlock()
 
 	// Cancel the standalone GET SSE stream first so its body read unblocks
@@ -2798,12 +2801,27 @@ func (c *Client) handleElicitation(req *Request) error {
 	return c.writeResultResponse(req.ID, result)
 }
 
+// pendingURLElicitationsCap bounds the pending URL-elicitation set. The
+// set exists to match LATER completion notifications (out-of-band flow),
+// so entries cannot be dropped when the elicitation handler returns —
+// but a faulty/malicious server that floods elicitation/create and never
+// sends complete would otherwise grow the set without bound (#3044-V2).
+// At the cap the oldest accounting is sacrificed: complete notifications
+// for dropped IDs are ignored per spec (unknown IDs), which is the same
+// observable behavior as having seen them.
+const pendingURLElicitationsCap = 128
+
 // trackURLElicitation records an in-flight URL mode elicitation ID (MCP
 // 2025-11-25) so the completion notification can be matched.
 func (c *Client) trackURLElicitation(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.pendingURLElicitations == nil {
+		c.pendingURLElicitations = make(map[string]struct{})
+	}
+	if len(c.pendingURLElicitations) >= pendingURLElicitationsCap {
+		// Reset rather than grow: bookkeeping only, dropping the ability to
+		// match completes for a flooded batch beats unbounded memory.
 		c.pendingURLElicitations = make(map[string]struct{})
 	}
 	c.pendingURLElicitations[id] = struct{}{}

@@ -90,14 +90,22 @@ func ParseMessage(data []byte) (interface{}, error) {
 		return nil, fmt.Errorf("parsing JSON-RPC message: %w", err)
 	}
 
-	if _, ok := raw["result"]; ok {
+	// #3044-V3: result and error are mutually exclusive per spec — a
+	// message carrying both is malformed, and silently taking the result
+	// branch would drop the error. Reject instead.
+	_, hasResult := raw["result"]
+	_, hasError := raw["error"]
+	if hasResult && hasError {
+		return nil, fmt.Errorf("malformed JSON-RPC message: both result and error present")
+	}
+	if hasResult {
 		var resp Response
 		if err := json.Unmarshal(data, &resp); err != nil {
 			return nil, err
 		}
 		return &resp, nil
 	}
-	if _, ok := raw["error"]; ok {
+	if hasError {
 		var resp Response
 		if err := json.Unmarshal(data, &resp); err != nil {
 			return nil, err
@@ -105,8 +113,10 @@ func ParseMessage(data []byte) (interface{}, error) {
 		return &resp, nil
 	}
 
-	// Has ID -> Request, no ID -> Notification
-	if _, ok := raw["id"]; ok {
+	// Has a non-null ID -> Request; no ID (or JSON null ID, which carries
+	// no correlation value) -> Notification (#3044-V3: presence-only
+	// checking misclassified "id":null as a Request).
+	if v, ok := raw["id"]; ok && !isNullJSON(v) {
 		var req Request
 		if err := json.Unmarshal(data, &req); err != nil {
 			return nil, err
@@ -114,9 +124,17 @@ func ParseMessage(data []byte) (interface{}, error) {
 		return &req, nil
 	}
 
+	// null-valued IDs (and absent IDs) fall through as Notifications.
 	var notif Notification
 	if err := json.Unmarshal(data, &notif); err != nil {
 		return nil, err
 	}
 	return &notif, nil
+}
+
+// isNullJSON reports whether a raw JSON value is the null literal
+// (json.RawMessage is never nil for a present key — null arrives as
+// the bytes "null").
+func isNullJSON(v json.RawMessage) bool {
+	return string(bytes.TrimSpace(v)) == "null"
 }
