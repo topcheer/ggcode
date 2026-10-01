@@ -157,7 +157,20 @@ func (s *tunnelVisionState) check(iterations int) string {
 	// #476: search-driven breadth counts toward the exploration ceiling.
 	// If the agent has SEEN enough unique files across read+search, it is
 	// not tunnel-visioned regardless of the read-only ratio.
-	uniqueSeen := fileCount + len(s.searchedFiles)
+	// #2976: UNION, not sum - a file that was read (filesTouched) AND shows
+	// up in search hits (searchedFiles) is one file seen, not two. Summing
+	// double-counted the overlap, and grep hitting files the agent is
+	// actively editing is the NORM, not an edge case: an agent reading 3
+	// files with iterations ratio ~5 and a grep whose hits are exactly those
+	// 3 files summed to 6 >= tvMinFilesForWarning and suppressed the warning
+	// this detector exists to fire.
+	searchOnly := 0
+	for p := range s.searchedFiles {
+		if !s.filesTouched[p] {
+			searchOnly++
+		}
+	}
+	uniqueSeen := fileCount + searchOnly
 	if uniqueSeen >= tvMinFilesForWarning {
 		return ""
 	}
