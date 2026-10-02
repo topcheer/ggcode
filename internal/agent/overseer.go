@@ -77,6 +77,12 @@ type overseerState struct {
 	// and drift are significantly higher, and research tools (web_search,
 	// code_search, code_execution) count as productive work.
 	researchMode bool
+
+	// r365 research-report gate state: cumulative web_search/web_fetch calls
+	// this run (the multi-hop signal) and the fire-once flag.
+	searchCalls     int
+	fetchCalls      int
+	reportGateFired bool
 }
 
 type trajectoryEntry struct {
@@ -211,6 +217,18 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 		isError:  isError,
 		fileHint: fileHint,
 	})
+
+	// r365: count retrieval calls for the research-report gate (successful
+	// searches/fetches are the multi-hop signal; errors would double-count
+	// retries against the same source).
+	if !isError {
+		switch toolName {
+		case "web_search":
+			o.searchCalls++
+		case "web_fetch":
+			o.fetchCalls++
+		}
+	}
 
 	// A tool call is productive if it's a productive tool AND it succeeded.
 	// Failed run_command calls (e.g. failed builds) are NOT productive —

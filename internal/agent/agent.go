@@ -2904,6 +2904,31 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				continue
 			}
+			// r365 research-report gate: research mode x >=4 successful
+			// search/fetch calls x first stop - demand a structured
+			// synthesis pass (findings/evidence/conflicts/gaps) instead of
+			// raw link summaries. Fire-once, non-research runs untouched.
+			a.mu.Lock()
+			researchMsg := researchReportGate(
+				a.overseer.researchMode,
+				a.overseer.searchCalls+a.overseer.fetchCalls,
+				researchReportGateMinCalls,
+				a.overseer.reportGateFired)
+			if researchMsg != "" {
+				a.overseer.reportGateFired = true
+			}
+			a.mu.Unlock()
+			if researchMsg != "" {
+				debug.Log("agent", "Iteration %d: research-report gate fired, demanding structured synthesis before stop", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: researchMsg,
+					}},
+				})
+				continue
+			}
 			// Unverified success claim detection: before returning, check if
 			// the agent's response claims verification results ("tests pass",
 			// "build succeeds") without having actually run verification
