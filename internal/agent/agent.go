@@ -211,6 +211,7 @@ type Agent struct {
 	hubPackageGuard              *hubPackageState           // per-edit blast-radius awareness for high fan-in packages
 	artifactGuard                *generatedArtifactState    // generated artifact / lock file edit warning
 	fulfillmentGate              *fulfillmentGateState      // pre-completion coverage verification (request-vs-work match)
+	constraintAudit              *constraintAuditState      // per-item requirement audit for listed multi-part tasks (r392)
 	ambiguityPoint               *ambiguityPointState       // pre-run intent disambiguation (ambiguity detection in user request)
 	companionGuard               *companionGuardState       // companion test file coverage check (unedited paired tests)
 	specGaming                   *specGamingState           // specification gaming detection (reward hacking / verification tampering)
@@ -437,6 +438,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		taintInfluence:         newTaintInfluenceState(),
 		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
+		constraintAudit:        newConstraintAuditState(),
 		ambiguityPoint:         newAmbiguityPointState(),
 		planDrift:              newPlanDriftState(),
 		unverifiedClaim:        newUnverifiedClaimState(),
@@ -1757,6 +1759,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.branchGuard.reset()
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
+	a.constraintAudit.reset()
 	a.ambiguityPoint.reset()
 	a.planDrift.reset()
 	a.unverifiedClaim.reset()
@@ -2930,6 +2933,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// silent partial completion when no todo list was created.
 			// Zero-LLM-cost heuristic inspired by Claude Code/Cursor/Aider
 			// completion verification patterns.
+			// r392 constraint audit (AREX): capture the task's explicit
+			// requirement list (if any) for the per-item audit below.
+			a.constraintAudit.observe(userPromptForStats)
 			if fulfillmentMsg := a.checkFulfillmentGate(userPromptForStats, runStats, textBuf); fulfillmentMsg != "" {
 				debug.Log("agent", "Iteration %d: fulfillment gate detected gap, injecting reminder", i+1)
 				a.contextManager.Add(provider.Message{
@@ -2937,6 +2943,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: fulfillmentMsg,
+					}},
+				})
+				continue
+			}
+			// r392 (AREX constraint-wise audit): listed multi-requirement
+			// tasks get a per-item [done]/[not done] verdict before the run
+			// finishes - aggregate heuristics cannot catch "3 items, 2 done".
+			if auditMsg := a.constraintAudit.checkAndInject(); auditMsg != "" {
+				debug.Log("agent", "Iteration %d: constraint audit injected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: auditMsg,
 					}},
 				})
 				continue
