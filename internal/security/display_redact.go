@@ -47,6 +47,12 @@ var displaySecretPatterns = []struct {
 	// layer (secretdetect) matched it via its optional group: detection and
 	// display drifted apart for the 4th time. `*` allows the empty prefix.
 	{"private_key", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----.*?-----END (?:[A-Z ]*)PRIVATE KEY-----)`), []string{"-----BEGIN"}},
+	// #3081: detection layer (secretdetect) flags a bare BEGIN header —
+	// streaming/truncated content may only carry the header line. Mask from
+	// a lone header to end-of-text so a truncated key body never leaks.
+	// Ordered AFTER the complete-block pattern, so full blocks are already
+	// replaced and this only fires on the truncated remainder.
+	{"private_key_truncated", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----.*)`), []string{"-----BEGIN"}},
 	{"openai_key", regexp.MustCompile(`\b(sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,})\b`), []string{"sk-"}},
 	{"anthropic_key", regexp.MustCompile(`\b(sk-ant-[A-Za-z0-9\-_]{70,})\b`), []string{"sk-ant-"}},
 	{"jwt", regexp.MustCompile(`\b(eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b`), []string{"eyJ"}},

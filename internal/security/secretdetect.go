@@ -184,7 +184,11 @@ var secretPatterns = []SecretPattern{
 // these to avoid noise.
 var fileAllowlistPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`_test\.go$`),
-	regexp.MustCompile(`\.test\.`),
+	// #3081: bare `\.test\.` swallowed real files like api.test.env and
+	// prod.test.conf. Narrowed to fixture-style suffixes: compiled Go test
+	// binaries (foo.test) and common test-fixture resource extensions.
+	regexp.MustCompile(`\.test$`),
+	regexp.MustCompile(`\.test\.(json|txt|golden|yaml|yml|md)$`),
 	regexp.MustCompile(`testdata[/\\]`), // both Unix and Windows path separators
 	regexp.MustCompile(`_fixture`),
 	regexp.MustCompile(`(?i)\.example$`),
