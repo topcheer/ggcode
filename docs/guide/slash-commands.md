@@ -62,6 +62,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/status` | Show current status |
 | `/files` | Open file browser |
 | `/inspector [filter]` | Open inspector panel (view tool calls, results, logs) |
+| `/interventions [clear]` | Show where you historically took over mid-run; `clear` wipes that history (the agent uses it to briefly state intent before steps you repeatedly interrupt) |
 | `/diff [file]` | Show git diff in chat |
 | `/edit` | Edit last user message and resubmit |
 | `/retry` | Retry last agent turn |

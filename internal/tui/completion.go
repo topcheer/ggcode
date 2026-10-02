@@ -436,6 +436,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/checkpoints":   "List checkpoints",
 	"/plugins":       "List loaded plugins",
 	"/inspector":     "Open inspector panel (sessions|checkpoints|memory|plugins|config|status)",
+	"/interventions": "Show user-takeover history (/interventions clear wipes it)",
 	"/chat":          "Open LAN chat panel",
 	"/nick":          "Set LAN chat nickname, role, and team",
 	"/image":         "Attach an image",
