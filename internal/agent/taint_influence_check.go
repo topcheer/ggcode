@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/memory"
 )
 
 // Tainted Data Influence Detector (Information-Flow Control).
@@ -165,7 +166,7 @@ func extractTaintFingerprints(content string) []string {
 	seen := make(map[string]bool)
 	lowered := strings.ToLower(content)
 
-	for _, pattern := range injectionPatterns {
+	for _, pattern := range memory.InjectionPatterns {
 		if len(fingerprints) >= maxTaintFingerprints {
 			break
 		}

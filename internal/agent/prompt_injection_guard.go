@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/memory"
 )
 
 // Unified prompt injection defense for tool outputs.
@@ -79,72 +80,12 @@ var externalContentTools = map[string]bool{
 	"a2a_list_tasks":   true,
 }
 
-// injectionPatterns are case-insensitive patterns that strongly indicate an
-// attempted prompt injection. Each is a substring match (lowercased).
-// The list is deliberately high-precision: a single match wraps the whole
-// result and feeds taint fingerprinting, so every entry must be rare in
-// legitimate code and documentation.
-var injectionPatterns = []string{
-	"ignore all previous instructions",
-	"ignore previous instructions",
-	"ignore your instructions",
-	"ignore the above instructions",
-	"disregard all previous",
-	"disregard your instructions",
-	// #937: anchored to imperative-verb phrases only. The bare "you are now
-	// in" flagged any narrative text ("You are now in the main worktree
-	// directory", vim/tmux tutorial echoes) as an injection attack.
-	"you are now in a",
-	"you are now in maint",
-	"you are now in developer",
-	"you are now in chat",
-	"new instructions:",
-	"updated instructions:",
-	"override your system prompt",
-	"override system prompt",
-	"override your instructions",
-	"forget all previous",
-	"forget your instructions",
-	"do not follow your instructions",
-	"stop following your rules",
-	"[system]",
-	"[system prompt]",
-	"system: you are now",
-	"system: ignore",
-	// #937: newline-anchored like the H2 sibling below - the bare
-	// "### system" matched every '### System Requirements/Architecture/
-	// Design' heading in technical docs. Matches only a bare 'system' H3
-	// heading (line start) with nothing after it on that line.
-	"### system\n",
-	"## system\n",
-	"important: ignore",
-	"override your previous",
-	"act as if you have no",
-	"pretend you have no instructions",
-	// Chat-template role markers: a near-zero-false-positive class. They
-	// occur in real chat transcripts but never in ordinary code or docs.
-	// Consolidated from the retired tool_result_sanitizer.go list.
-	"<|system|>",
-	"<|im_start|>system",
-	"<|im_start|>user",
-	"<|im_start|>assistant",
-	// Exfiltration directives: imperative verb + specific object. The wrap
-	// is advisory (prefix + delimiters, never blocking), so the occasional
-	// security-writeup match is acceptable noise for the coverage gained.
-	"send the contents to",
-	"upload the file to",
-	"post this data to",
-	"transfer the contents",
-}
-
-// Patterns deliberately NOT carried over from the retired sanitizer list
-// (single-match wrap would reproduce the #937 false-positive class):
-// "you are now", "act as if", "pretend you are", "system prompt:",
-// "system message:", "[user]", "[assistant]", "execute the following",
-// "run this command", "you must now", "important: do not", "do not reveal",
-// "do not mention this", "hidden instruction", "secret instruction",
-// "exfiltrate" (bare word - common in security docs, including this
-// repository's own), "send this to".
+// injectionPatterns are the high-precision prompt-injection indicators.
+// r409: the single source of truth now lives in internal/memory (taint.go)
+// so the memory-layer poisoning defense shares the exact same pattern set
+// as this tool-result guard - a pattern recognized on a live tool result is
+// also recognized when it tries to persist via save_memory.
+var injectionPatterns = memory.InjectionPatterns
 
 // injectionWarning is prepended to tool results when injection patterns are
 // detected. NOTE: taint_influence_check.go keys its fingerprinting on this

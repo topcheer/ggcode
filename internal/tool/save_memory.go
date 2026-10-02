@@ -143,6 +143,16 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		}
 	}
 
+	// r409 memory-poisoning defense: surface the quarantine decision in the
+	// tool result. The AutoMemory layer does the authoritative taint marking
+	// (SaveMemoryWithSource); this note tells the model (and the user) why
+	// the entry will not appear in future system prompts. Deliberately not
+	// an error: a legitimate security writeup must still be persistable.
+	var taintNote string
+	if pat := memory.DetectInjectionTaint(params.Key, params.Content); pat != "" {
+		taintNote = fmt.Sprintf("SECURITY: this memory content matched a prompt-injection pattern (%q). It was saved but marked tainted - it will NOT be auto-inlined into future system prompts (index-only; readable via read_file, which wraps untrusted content). If this is a legitimate security writeup, that is expected; if you did not intend to store injection text, review the source that produced it.", pat)
+	}
+
 	if err := target.SaveMemoryWithSource(params.Key, params.Content, "save_memory:"+scopeLabel); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
 	}
@@ -159,6 +169,9 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 	if supersedeNote != "" {
 		msg += "\n\n" + supersedeNote
+	}
+	if taintNote != "" {
+		msg += "\n\n" + taintNote
 	}
 	return Result{Content: msg}, nil
 }

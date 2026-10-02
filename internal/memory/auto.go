@@ -123,6 +123,23 @@ func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 		return err
 	}
 	am.RecordProvenance(safe, source)
+
+	// r409 memory-poisoning defense (MINJA arXiv 2601.05504, sleeper
+	// poisoning arXiv 2605.15338): a poisoned entry persisted here would be
+	// inlined raw into EVERY future system prompt via loadForPrompt - one
+	// successful injection buys a persistent, unreviewed channel. Scan at the
+	// AutoMemory layer so every writer (save_memory tool, run-reflection,
+	// preference distill) is covered. Never blocks the save (a legitimate
+	// security writeup must still persist) - it marks a quarantine sidecar
+	// that loadForPrompt demotes to index-only. A clean re-save of the same
+	// key clears the flag so a fixed entry recovers.
+	if pat := DetectInjectionTaint(key, content); pat != "" {
+		if err := am.MarkTainted(safe, pat); err != nil {
+			debug.Log("memory", "taint sidecar write failed for %q: %v", safe, err)
+		}
+	} else {
+		am.ClearTaint(safe)
+	}
 	return nil
 }
 
@@ -358,6 +375,16 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 
 	totalInline := 0
 	for _, m := range active {
+		// r409: quarantined entries (injection-pattern match at write time)
+		// are never auto-inlined into the system prompt - the persistent
+		// channel MINJA demonstrated. They stay index-only so the model can
+		// still retrieve them via read_file, which runs through the
+		// externalContentTools wrap (agent guard) - closed loop.
+		if pat, tainted := am.TaintOf(m.Key); tainted {
+			indexOnly = append(indexOnly, m.Key+" [tainted: "+pat+"]")
+			debug.Log("memory", "skipping inline of tainted entry %q (pattern %q)", m.Key, pat)
+			continue
+		}
 		path := filepath.Join(am.dir, m.Key+".md")
 		data, readErr := os.ReadFile(path)
 		content := ""
