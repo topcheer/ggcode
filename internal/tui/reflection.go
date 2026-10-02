@@ -41,6 +41,12 @@ func setupReflection(a *agent.Agent) {
 		// invocable skill; record a conservative suggestion (no auto-write).
 		suggestSkillFromRun(a.WorkingDir(), stats, repeatedTask)
 
+		// Missed-skill detection (r398, SAGE lineage): an installed skill
+		// whose topic the user named in the prompt was never invoked - the
+		// routing failure SAGE identifies as skill libraries' universal
+		// weakness. Records a next-session notice; never blocks.
+		detectMissedSkills(a.WorkingDir(), stats)
+
 		// Trajectory→asset distillation (SE-Agent / ACE): persist the
 		// run's verified commands as reusable cmd_snippet entries.
 		distillSnippetsFromRun(a, stats)
