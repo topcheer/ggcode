@@ -600,3 +600,65 @@ class ErrorData {
         code: d["code"] as String? ?? "",
       );
 }
+
+/// ─── Mobile File Transfer (V1: agent → mobile, any format) ───
+/// See docs/design/mobile-file-transfer.md. filename is display metadata
+/// only; the client MUST NOT resolve paths from it.
+
+class FileOfferData {
+  final String fileId;
+  final String filename;
+  final String mime;
+  final int size;
+  final String sha256;
+  final int chunks;
+  final String caption;
+
+  FileOfferData({
+    required this.fileId,
+    required this.filename,
+    required this.mime,
+    required this.size,
+    required this.sha256,
+    required this.chunks,
+    this.caption = '',
+  });
+
+  factory FileOfferData.fromJson(Map<String, dynamic> d) => FileOfferData(
+        fileId: d['file_id'] as String? ?? '',
+        filename: d['filename'] as String? ?? 'file',
+        mime: d['mime'] as String? ?? 'application/octet-stream',
+        size: (d['size'] as num?)?.toInt() ?? 0,
+        sha256: d['sha256'] as String? ?? '',
+        chunks: (d['chunks'] as num?)?.toInt() ?? 0,
+        caption: d['caption'] as String? ?? '',
+      );
+}
+
+class FileChunkData {
+  final String fileId;
+  final int index;
+  final String data; // base64(raw chunk)
+
+  FileChunkData({
+    required this.fileId,
+    required this.index,
+    required this.data,
+  });
+
+  factory FileChunkData.fromJson(Map<String, dynamic> d) => FileChunkData(
+        fileId: d['file_id'] as String? ?? '',
+        index: (d['index'] as num?)?.toInt() ?? 0,
+        data: d['data'] as String? ?? '',
+      );
+}
+
+class FileDoneData {
+  final String fileId;
+
+  FileDoneData({required this.fileId});
+
+  factory FileDoneData.fromJson(Map<String, dynamic> d) => FileDoneData(
+        fileId: d['file_id'] as String? ?? '',
+      );
+}

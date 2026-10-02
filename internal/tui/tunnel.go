@@ -190,6 +190,7 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.closeQROverlay()
 	m.tunnelSession = nil
 	m.tunnelBroker = nil
+	m.clearMobileFileSender()
 
 	// Detach online broker from unified TunnelHost
 	if m.tunnelHost != nil {
@@ -345,6 +346,10 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	// leaving the broker nil for the whole share whenever the replay raced.
 	m.tunnelBroker = msg.broker
 	m.tunnelSpawned = make(map[string]bool)
+	// Wire the mobile file-transfer tool to this broker (same injection
+	// pattern as SetIMManager): look the tool up, inject the adapter,
+	// re-register. Mobile file transfer V1 (docs/design/mobile-file-transfer.md).
+	m.injectMobileFileSender(msg.broker)
 	// #1825 case 1: replay a connected event that raced StartShare. Only the
 	// QR flow is skipped - the client is already connected, so a QR would be
 	// noise (the replayed handler also closes any open overlay).

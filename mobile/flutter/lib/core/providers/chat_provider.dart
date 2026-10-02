@@ -47,6 +47,7 @@ class ChatMessage {
   final bool reasoningCollapsed;
   final DateTime time;
   final MessageStatus status; // ack tracking for user messages
+  final String? fileTransferId; // outbound file card (mobile transfer V1)
 
   ChatMessage({
     required this.id,
@@ -70,6 +71,7 @@ class ChatMessage {
     this.reasoningCollapsed = false,
     required this.time,
     this.status = MessageStatus.acknowledged, // default for server-originated
+    this.fileTransferId,
   });
 
   ChatMessage copyWith({
@@ -304,6 +306,21 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         id: messageId ?? 'remote-system-${_msgCounter++}',
         kind: kind,
         text: text,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  /// Mobile file transfer V1: surface a file card keyed by transfer id;
+  /// the bubble reads progress/state from FileTransferNotifier.
+  void addFileMessage(String fileId) {
+    finalizePendingReasoning(sourceId: null, collapse: true);
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'file-$fileId',
+        text: '',
+        fileTransferId: fileId,
         time: DateTime.now(),
       ),
     ];
