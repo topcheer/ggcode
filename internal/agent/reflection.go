@@ -69,6 +69,12 @@ type RunStats struct {
 	// Includes both auto-compact and reactive compact.
 	CompactionCount int
 
+	// TotalTokens accumulates input+output tokens across all LLM calls this
+	// run (r394: cost dimension of the perf baseline). Prompt bloat, fallback
+	// chains switching to pricier models, and cache misses show up here
+	// before they show in duration.
+	TotalTokens int
+
 	// startTime is used internally to compute Duration.
 	startTime time.Time
 
@@ -165,6 +171,12 @@ func (s *RunStats) recordToolError(toolName, errMsg string) {
 	}
 	msg := fmt.Sprintf("%s: %s", toolName, errMsg)
 	s.Errors = append(s.Errors, truncatePrompt(msg, 500))
+}
+
+// recordTokens accumulates total input+output tokens for the run (r394
+// perf-baseline cost dimension).
+func (s *RunStats) recordTokens(input, output int) {
+	s.TotalTokens += input + output
 }
 
 // recordContextUsage tracks peak token usage across iterations.

@@ -93,6 +93,16 @@ type perfBaselineEntry struct {
 	Success     bool   `json:"ok"`
 	Timestamp   int64  `json:"ts"`
 
+	// Tokens is this run's total input+output LLM tokens (r394: cost
+	// dimension of the reliability baseline - resource consistency from
+	// "Towards a Science of AI Agent Reliability" (arXiv 2602.16666)
+	// adapted to a single-run harness: per-run token spend vs the rolling
+	// baseline catches prompt bloat, fallback chains landing on pricier
+	// models, and cache misses before they show in duration. 0 for
+	// baselines recorded before this field existed; the regression check
+	// only fires when the baseline carries a value.
+	Tokens int `json:"tok,omitempty"`
+
 	// TopTools holds this run's most-invoked tools as "name:count" entries
 	// (top 3, count desc then name asc). It feeds the regression advisory a
 	// where-did-the-time-go breakdown: an advisory stating only "duration
@@ -210,6 +220,7 @@ func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
 		DurationSec: medianInt(collectDurations(valid)),
 		Compactions: medianInt(collectCompactions(valid)),
 		ContextPeak: medianInt(collectContextPeak(valid)),
+		Tokens:      medianInt(collectTokens(valid)),
 		TopTools:    modalTopTools(valid),
 	}
 }
@@ -353,6 +364,14 @@ func collectContextPeak(runs []perfBaselineEntry) []int {
 	return out
 }
 
+func collectTokens(runs []perfBaselineEntry) []int {
+	out := make([]int, len(runs))
+	for i, r := range runs {
+		out[i] = r.Tokens
+	}
+	return out
+}
+
 // medianInt returns the median value of a slice of ints.
 func medianInt(vals []int) int {
 	if len(vals) == 0 {
@@ -398,6 +417,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		ContextPeak: stats.ContextPeakTokens,
 		Success:     stats.Success,
 		Timestamp:   time.Now().Unix(),
+		Tokens:      stats.TotalTokens,
 		TopTools:    topToolMix(stats.ToolCalls, perfTopToolsCount),
 	}
 
@@ -534,6 +554,12 @@ func collectRunRegressionMetrics(run, baseline perfBaselineEntry) []string {
 			hits = append(hits, "error_rate")
 		}
 	}
+	// Token-spend regression (r394): run consumed 2x baseline tokens.
+	// Guarded by a 10k floor so tiny-baseline noise cannot fire; entries
+	// recorded before the field existed read as 0 and never fire.
+	if baseline.Tokens >= 10000 && run.Tokens > baseline.Tokens*2 {
+		hits = append(hits, "tokens")
+	}
 	// Context peak regression: context is growing 1.5x baseline
 	if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
 		hits = append(hits, "context_usage")
@@ -560,7 +586,7 @@ const perfRegressionConsensusRuns = 2
 // perfMetricOrder lists regression metrics in the evaluation priority used by
 // checkSingleRunRegression, keeping worst-metric selection deterministic
 // when multiple metrics reach consensus (#1143).
-var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction", "tool_mix"}
+var perfMetricOrder = []string{"iterations", "duration", "error_rate", "tokens", "context_usage", "compaction", "tool_mix"}
 
 // pickConsensusPerfMetric returns a metric whose hit count reaches
 // perfRegressionConsensusRuns across recent runs, preferring metrics earlier
@@ -647,6 +673,10 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 		return formatPerfRegressionLine("error rate",
 			baseline.Errors, latest.Errors,
 			"High error rates suggest misjudging tool arguments. Double-check parameters before calling tools.")
+	case "tokens":
+		return formatPerfRegressionLine("total LLM tokens",
+			baseline.Tokens, latest.Tokens,
+			"Token spend jumped vs baseline: suspect prompt/context bloat, a fallback chain landing on a pricier model, or lost prompt caching. Prefer targeted reads and reuse established context.")
 	case "context_usage":
 		return formatPerfRegressionLine("peak context tokens",
 			baseline.ContextPeak, latest.ContextPeak,

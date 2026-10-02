@@ -200,6 +200,40 @@ func TestFormatPerfRegressionWarning(t *testing.T) {
 	}
 }
 
+// r394: token-spend regression dimension.
+func TestTokenRegression(t *testing.T) {
+	base := perfBaselineEntry{Success: true, Iterations: 5, Tokens: 50000}
+	run := perfBaselineEntry{Success: true, Iterations: 5, Tokens: 120000}
+	hits := collectRunRegressionMetrics(run, base)
+	found := false
+	for _, h := range hits {
+		if h == "tokens" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("2.4x token spend must hit tokens metric, got %v", hits)
+	}
+
+	// Old baselines (Tokens=0, field predates) must never fire.
+	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 999999}, perfBaselineEntry{Tokens: 0}); len(hits) != 0 {
+		t.Errorf("zero-token baseline must not fire tokens regression, got %v", hits)
+	}
+	// Sub-floor baseline must not fire (noise guard).
+	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 9999}, perfBaselineEntry{Tokens: 100}); len(hits) != 0 {
+		t.Errorf("sub-10k baseline must not fire tokens regression, got %v", hits)
+	}
+	// Within 2x must not fire.
+	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 99999}, base); len(hits) != 0 {
+		t.Errorf("2x-epsilon token spend must not fire, got %v", hits)
+	}
+
+	msg := formatPerfRegressionWarning("tokens", base, run)
+	if !strings.Contains(msg, "total LLM tokens") {
+		t.Errorf("warning must name the metric: %s", msg)
+	}
+}
+
 func TestPerfBaselinePath(t *testing.T) {
 	p := perfBaselinePath("/foo/bar")
 	expected := filepath.Join("/foo/bar", ".ggcode", "perf-baseline.json")
