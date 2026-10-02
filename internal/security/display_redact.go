@@ -53,7 +53,10 @@ var displaySecretPatterns = []struct {
 	// the 4th detection/display drift: the header (and any partial key body
 	// behind it) rendered raw. Runs AFTER the complete-block pattern, so
 	// only genuinely unterminated headers reach it; masks to end of buffer.
-	{"private_key_truncated", regexp.MustCompile(`(?s)-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----.+`), []string{"-----BEGIN"}},
+	// #3084: gated on a base64-looking body right after the header, so
+	// prose that merely MENTIONS the literal header (docs / teaching text)
+	// is no longer masked to end-of-buffer.
+	{"private_key_truncated", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----[\r\n]+[A-Za-z0-9+/=]{20,}.*)`), []string{"-----BEGIN"}},
 	{"openai_key", regexp.MustCompile(`\b(sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,})\b`), []string{"sk-"}},
 	{"anthropic_key", regexp.MustCompile(`\b(sk-ant-[A-Za-z0-9\-_]{70,})\b`), []string{"sk-ant-"}},
 	{"jwt", regexp.MustCompile(`\b(eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b`), []string{"eyJ"}},
