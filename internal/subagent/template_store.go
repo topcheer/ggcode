@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // NamedAgentTemplate is a persisted subagent configuration that defines
@@ -31,6 +34,16 @@ type NamedAgentTemplate struct {
 // TemplateStore manages named agent templates on disk, scoped per workspace.
 type TemplateStore struct {
 	dir string
+	// mu serializes Save/Delete against each other (single-process domain).
+	// #3100 V2: Save's Load→collision-check→write and Delete's
+	// check-then-remove were TOCTOU-unsynchronized — two in-process callers
+	// could both pass the collision check and interleave writes, and Delete
+	// could remove a template a concurrent Save had just replaced. Cross-
+	// PROCESS sharing (~/.ggcode on a multi-instance LAN host) is out of
+	// scope: same-instance locking plus atomic rename keeps any single
+	// writer's file internally consistent; last-writer-wins across processes
+	// is the documented boundary.
+	mu sync.Mutex
 }
 
 // NewTemplateStore creates a store for the given workspace.
@@ -52,6 +65,8 @@ func (s *TemplateStore) TemplateDir() string {
 
 // Save creates or updates a template by name.
 func (s *TemplateStore) Save(t NamedAgentTemplate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return fmt.Errorf("create subagent dir: %w", err)
 	}
@@ -61,7 +76,7 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 	// names like "Code Reviewer" and "code_reviewer"; Load now enforces the
 	// name match, so a colliding different-name file returns ErrNotFound and
 	// we refuse to overwrite it below (#230).
-	if existing, err := s.Load(t.Name); err == nil && !existing.CreatedAt.IsZero() {
+	if existing, err := s.loadByName(t.Name); err == nil && !existing.CreatedAt.IsZero() {
 		t.CreatedAt = existing.CreatedAt
 	} else if t.CreatedAt.IsZero() {
 		t.CreatedAt = now
@@ -80,12 +95,30 @@ func (s *TemplateStore) Save(t NamedAgentTemplate) error {
 		// #280: use the same normalized comparison as Load (below) —
 		// case/whitespace-only renames of the same template must be
 		// allowed as updates, not rejected as collisions.
-		if jerr := json.Unmarshal(raw, &onDisk); jerr == nil && onDisk.Name != "" &&
-			strings.TrimSpace(strings.ToLower(onDisk.Name)) != strings.TrimSpace(strings.ToLower(t.Name)) {
-			return fmt.Errorf("template name %q collides with existing %q (same sanitized filename); choose a different name", t.Name, onDisk.Name)
+		if jerr := json.Unmarshal(raw, &onDisk); jerr == nil {
+			if onDisk.Name != "" &&
+				strings.TrimSpace(strings.ToLower(onDisk.Name)) != strings.TrimSpace(strings.ToLower(t.Name)) {
+				return fmt.Errorf("template name %q collides with existing %q (same sanitized filename); choose a different name", t.Name, onDisk.Name)
+			}
+		} else {
+			// #3100: an unparseable file used to fall through to a SILENT
+			// overwrite that skipped the collision check entirely — the
+			// on-disk template was lost with no warning. Overwriting is the
+			// right recovery (the file is corrupt), but never silently.
+			debug.Log("subagent", "Save: template file %s is unparseable (%v); overwriting to rebuild it", path, jerr)
 		}
 	}
-	return os.WriteFile(path, data, 0644)
+	// #3100 V1: write via the shared atomic-write contract — os.WriteFile
+	// truncates first, so a crash or full disk mid-write left a half-written
+	// JSON that then silently vanished from List and bypassed the collision
+	// check above on the next Save. AtomicWriteFile (tmp file in the same
+	// dir + fsync + rename, #1359 symlink semantics) matches the 25+ other
+	// state-store writers; the same fix was independently prepared on the
+	// r132-frontier audit branch.
+	if err := util.AtomicWriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write template: %w", err)
+	}
+	return nil
 }
 
 // LoadExisting checks if a template exists and returns it with a boolean
@@ -100,6 +133,13 @@ func (s *TemplateStore) LoadExisting(name string) (NamedAgentTemplate, bool) {
 
 // Load reads a template by name. Returns error if not found.
 func (s *TemplateStore) Load(name string) (NamedAgentTemplate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadByName(name)
+}
+
+// loadByName is the lock-free core of Load — callers hold s.mu.
+func (s *TemplateStore) loadByName(name string) (NamedAgentTemplate, error) {
 	path := filepath.Join(s.dir, sanitizeName(name)+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -134,12 +174,21 @@ func (s *TemplateStore) List() ([]NamedAgentTemplate, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
 		if err != nil {
+			// #3100: a transient read failure silently dropped the template
+			// from the listing — surface it instead (List itself still
+			// succeeds; one unreadable file must not hide the rest).
+			debug.Log("subagent", "List: skipping unreadable template file %s: %v", entry.Name(), err)
 			continue
 		}
 		var t NamedAgentTemplate
-		if json.Unmarshal(data, &t) == nil {
-			result = append(result, t)
+		if jerr := json.Unmarshal(data, &t); jerr != nil {
+			// #3100: ditto for an unparseable (e.g. half-written by an old
+			// non-atomic Save) file — log it instead of making the template
+			// vanish without a trace.
+			debug.Log("subagent", "List: skipping unparseable template file %s: %v", entry.Name(), jerr)
+			continue
 		}
+		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name < result[j].Name
@@ -149,6 +198,8 @@ func (s *TemplateStore) List() ([]NamedAgentTemplate, error) {
 
 // Delete removes a template by name.
 func (s *TemplateStore) Delete(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// #812: mirror Load's collision guard — 'Code Reviewer' and
 	// 'code_reviewer' sanitize to the same file; deleting the wrong casing
 	// permanently destroyed the other template and reported success.
