@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -210,7 +211,40 @@ func (am *AutoMemory) saveSuperseded(idx supersedeIndex) error {
 	if err := os.MkdirAll(am.dir, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(am.dir, supersedeSidecarFile), data, 0644)
+	// #3055-C1: temp+rename under the shared writeMu (saveUsage pattern) -
+	// the old plain WriteFile let a concurrent reader loadSuperseded see a
+	// torn JSON, silently degrade to an empty index, resurrect RETIRED
+	// memories into the prompt filter, and the next ApplySupersession
+	// rewrote the sidecar from that empty index - permanently losing the
+	// retirement records.
+	path := filepath.Join(am.dir, supersedeSidecarFile)
+	tmp, err := os.CreateTemp(am.dir, supersedeSidecarFile+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0644); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	muAny, _ := writeMu.LoadOrStore(path, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // SupersededSet returns the set of retired keys for prompt-injection

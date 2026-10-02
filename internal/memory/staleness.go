@@ -135,7 +135,11 @@ func findBrokenPaths(content, workingDir string) []string {
 		}
 
 		full := filepath.Join(workingDir, p)
-		if _, err := os.Stat(full); os.IsNotExist(err) {
+		// #3055-C2: any Stat failure means the path cannot be verified as
+		// present - the old IsNotExist-only check treated EACCES/EPERM (an
+		// un-enterable parent dir) as "exists" and silently dropped the
+		// broken-path finding.
+		if _, err := os.Stat(full); err != nil {
 			broken = append(broken, p)
 		}
 	}
