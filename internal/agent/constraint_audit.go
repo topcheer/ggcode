@@ -56,8 +56,12 @@ func (c *constraintAuditState) reset() {
 }
 
 var (
-	// Numbered list item: "1." / "1、" / "1)" / "步骤1" style line starts.
-	constraintNumberedRe = regexp.MustCompile(`^\s*(\d{1,3}[.)、]|[(（]\d{1,3}[)）])\s*(.{3,200})$`)
+	// Numbered list item: "1." / "1、" / "1)" / "(1)" line starts, plus the
+	// Chinese ordinal forms the comment has always claimed (#3093):
+	// "步骤1：" and "一、/二、/十、" ordinals. Ordinal branches REQUIRE a
+	// separator so prose like "一定要修复…" is not misread as a list item.
+	// The spacing class tolerates full-width spaces.
+	constraintNumberedRe = regexp.MustCompile(`^\s*(步骤\s*\d{1,3}[、.．:：]|[一二三四五六七八九十]{1,3}[、.．:：]|\d{1,3}[.)、]|[(（]\d{1,3}[)）])[\s　]*(.{3,200})$`)
 	// Bulleted list item: "- " / "* " / "• ".
 	constraintBulletRe = regexp.MustCompile(`^\s*[-*•]\s+(.{3,200})$`)
 )
