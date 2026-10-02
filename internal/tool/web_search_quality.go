@@ -75,6 +75,14 @@ type scoredResult struct {
 // constraint (single-domain site: filters queries to 2 results and wastes
 // the 3x prefetch the caller deliberately did to compensate for filtering).
 func assessSearchResults(query string, results []searchResult, allowedDomains []string) []searchResult {
+	out, _ := assessSearchResultsScored(query, results, allowedDomains)
+	return out
+}
+
+// assessSearchResultsScored additionally returns the best relevance score
+// (0 when no results survive) so the caller can surface a weak-result hint
+// (#r364 / r343 evaluator slice: the Agentic-RAG low-confidence loop).
+func assessSearchResultsScored(query string, results []searchResult, allowedDomains []string) ([]searchResult, int) {
 	// #1406-B: the exemption set used a weaker normalization than
 	// filterByDomain (no scheme/path/trailing-dot stripping), so an agent
 	// passing "https://example.com" or "example.com." passed the filter but
@@ -86,7 +94,7 @@ func assessSearchResults(query string, results []searchResult, allowedDomains []
 		allowed[d] = true
 	}
 	if len(results) == 0 {
-		return results
+		return results, 0
 	}
 
 	queryTerms := tokenizeQuery(query)
@@ -136,6 +144,12 @@ func assessSearchResults(query string, results []searchResult, allowedDomains []
 	sort.SliceStable(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
 	})
+	best := 0
+	for _, s := range scored {
+		if s.score > best {
+			best = s.score
+		}
+	}
 	scored = deduplicateByDomain(scored, allowed)
 
 	// Convert back to searchResult with type tag in title
@@ -151,7 +165,7 @@ func assessSearchResults(query string, results []searchResult, allowedDomains []
 			out[idx] = sr.searchResult
 		}
 	}
-	return out
+	return out, best
 }
 
 // tokenizeQuery splits a search query into lowercase terms for scoring.

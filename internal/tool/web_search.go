@@ -124,7 +124,7 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 
 	// Apply quality assessment: spam filtering, type classification,
 	// relevance scoring, domain deduplication.
-	results = assessSearchResults(args.Query, results, args.AllowedDomains)
+	results, bestScore := assessSearchResultsScored(args.Query, results, args.AllowedDomains)
 
 	// Trim to requested max after filtering
 	total := len(results)
@@ -148,8 +148,21 @@ func (t WebSearch) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if total > len(results) {
 		sb.WriteString(fmt.Sprintf("... [showing %d of %d filtered results — refine allowed_domains or raise max_results to see the rest]\n", len(results), total))
 	}
+	// r364 (r343 evaluator slice, Agentic-RAG low-confidence loop): when even
+	// the best result matches under 30% of the query terms, the results are
+	// vocabulary-mismatched - say so instead of letting the agent iterate
+	// blindly on the same wording. CJK/no-token queries never fire (flat 50
+	// fallback trusts the upstream ranker we cannot tokenize).
+	if bestScore < weakSearchBestScore {
+		sb.WriteString(fmt.Sprintf("[search-quality] best result matches only %d%% of query terms - results look weak. Consider rephrasing with vocabulary the target docs actually use, or narrowing via allowed_domains.\n", bestScore))
+	}
 	return Result{Content: sb.String()}, nil
 }
+
+// weakSearchBestScore is the r364 weak-result threshold: below it, the
+// tool appends a rephrase hint. 30 = the top result matched under a third
+// of the query's meaningful terms.
+const weakSearchBestScore = 30
 
 // filterByDomain applies allowed_domains and blocked_domains filters.
 func filterByDomain(results []searchResult, allowedDomains, blockedDomains []string) []searchResult {
