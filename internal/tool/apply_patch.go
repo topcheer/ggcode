@@ -303,7 +303,12 @@ func applyV4ASection(root string, sec v4aSection) (string, error) {
 		}
 		if target != root {
 			if err := os.Remove(root); err != nil {
-				return "", fmt.Errorf("move: removing old %s: %v", sec.path, err)
+				// #3110: the new content IS on disk at target - only the old-file
+				// removal failed (Windows lock/AV/EPERM). A bare "removing old
+				// failed" hides the half-migrated state and misleads the model into
+				// treating it as a conflict (delete+add hits the existing target)
+				// and retrying into the same error. State the actual disk state.
+				return "", fmt.Errorf("move: removing old %s: %v (partial migration: new content already written to %s; resolve the file lock or remove %s manually, then treat the update as applied)", sec.path, err, target, root)
 			}
 			return fmt.Sprintf("Moved %s -> %s (%d hunks applied)", sec.path, sec.moveTo, len(hunks)), nil
 		}
