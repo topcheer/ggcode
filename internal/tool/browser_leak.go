@@ -117,6 +117,13 @@ func singletonLockPID(profileDir string) int {
 	return pid
 }
 
+// lockfilePath returns the Chromium 'lockfile' path inside a user-data-dir
+// (the Windows counterpart of the unix SingletonLock). Cross-platform pure
+// helper: only the Windows build acts on it (#3114).
+func lockfilePath(profileDir string) string {
+	return filepath.Join(profileDir, "lockfile")
+}
+
 // gcStaleBrowserProfiles removes profile directories whose Chrome owner is
 // dead and whose mtime exceeds the TTL. Live Chromes are detected via the
 // SingletonLock pid and never touched; dirs without a lock are treated as
@@ -157,11 +164,33 @@ func (b *Browser) gcStaleBrowserProfiles() {
 		if err != nil {
 			continue
 		}
+		if e.Name() == "system" {
+			// #3114: 'system' is the cross-process persistent profile by
+			// design (browser.go: login state persisted across ggcode
+			// sessions, shared by every instance on the machine). The unix
+			// liveness guard below is SingletonLock-based and Windows Chrome
+			// creates no SingletonLock (it uses a lockfile), so on Windows the
+			// ONLY guard is the TTL - and an idle-but-live Chrome can hold a
+			// user-data-dir whose top-level mtime is older than that, letting
+			// GC RemoveAll a LIVE browser's profile (cookies/sessions/
+			// extensions destroyed). Exempt persistent-by-design profiles
+			// everywhere: worst case is disk accumulation (the pre-GC status
+			// quo), never data loss.
+			continue
+		}
 		if time.Since(info.ModTime()) < ttl {
 			continue
 		}
 		if pid := singletonLockPID(dir); pid != 0 && processAlive(pid) {
 			continue // another live Chrome owns it
+		}
+		// #3114 defense-in-depth for the remaining named profiles on
+		// Windows: a live Chromium holds a 'lockfile' in the user-data-dir
+		// (its SingletonLock equivalent). Presence means a Chrome may own
+		// the dir - skip. False positives (crash residue) only leak disk,
+		// the same tradeoff the unix SingletonLock check already makes.
+		if windowsProfileLockHeld(dir) {
+			continue
 		}
 		// #2091 review: the pre-loop `live` snapshot released b.mu before
 		// iteration began, but getProfile adopts an existing on-disk dir by
