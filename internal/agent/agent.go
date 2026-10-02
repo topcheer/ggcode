@@ -3991,7 +3991,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Pivot/Refine meta-decision (AutoResearchClaw 2026): consecutive
 			// failures of one command family must surface an explicit
 			// REPAIR-vs-PIVOT decision instead of silent incremental retries.
-			a.pivotDecision.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
+			a.pivotDecision.recordToolCall(tc.Name, string(tc.Arguments), result.IsError, result.Content)
 			// #1486 case E: a FAILED edit_file/write_file changed nothing on
 			// disk - counting it as editsSince wrongly told the reverify
 			// detector "sources changed since your last verify" and

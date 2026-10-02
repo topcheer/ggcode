@@ -21,12 +21,12 @@ func pivotArgs(t *testing.T, cmd string) string {
 func TestPivotDecisionFirstPrompt(t *testing.T) {
 	p := newPivotDecisionTracker()
 	for i := 0; i < 2; i++ {
-		p.recordToolCall("run_command", pivotArgs(t, "go test ./internal/agent/ -run X"), true)
+		p.recordToolCall("run_command", pivotArgs(t, "go test ./internal/agent/ -run X"), true, "exit status 1")
 		if h := p.checkAndWarn(); h != "" {
 			t.Fatalf("fired early at %d failures", i+1)
 		}
 	}
-	p.recordToolCall("run_command", pivotArgs(t, "go test ./internal/tool/ -run Y"), true) // same family "go test"
+	p.recordToolCall("run_command", pivotArgs(t, "go test ./internal/tool/ -run Y"), true, "exit status 1") // same family "go test"
 	h := p.checkAndWarn()
 	if h == "" {
 		t.Fatal("expected first decision prompt at 3 consecutive failures")
@@ -46,21 +46,21 @@ func TestPivotDecisionFirstPrompt(t *testing.T) {
 func TestPivotDecisionForcedPivot(t *testing.T) {
 	p := newPivotDecisionTracker()
 	for i := 0; i < 6; i++ {
-		p.recordToolCall("run_command", pivotArgs(t, "make verify-ci"), true)
+		p.recordToolCall("run_command", pivotArgs(t, "make verify-ci"), true, "exit status 1")
 	}
 	first := p.checkAndWarn()
 	if !strings.Contains(first, "REPAIR") {
 		t.Fatalf("first prompt must be the decision form, got: %s", first)
 	}
 	// Fails 7 and 8 after the first prompt: escalates to forced PIVOT.
-	p.recordToolCall("run_command", pivotArgs(t, "make lint"), true)
-	p.recordToolCall("run_command", pivotArgs(t, "make verify"), true)
+	p.recordToolCall("run_command", pivotArgs(t, "make lint"), true, "exit status 1")
+	p.recordToolCall("run_command", pivotArgs(t, "make verify"), true, "exit status 1")
 	forced := p.checkAndWarn()
 	if !strings.Contains(forced, "PIVOT") || !strings.Contains(forced, "no longer credible") {
 		t.Errorf("expected forced-pivot escalation, got: %s", forced)
 	}
 	// Max 2 emissions per key per run.
-	p.recordToolCall("run_command", pivotArgs(t, "make build"), true)
+	p.recordToolCall("run_command", pivotArgs(t, "make build"), true, "exit status 1")
 	if p.checkAndWarn() != "" {
 		t.Error("must cap at 2 prompts per command family")
 	}
@@ -69,13 +69,13 @@ func TestPivotDecisionForcedPivot(t *testing.T) {
 func TestPivotDecisionSuccessResets(t *testing.T) {
 	p := newPivotDecisionTracker()
 	for i := 0; i < 3; i++ {
-		p.recordToolCall("run_command", pivotArgs(t, "npm run build"), true)
+		p.recordToolCall("run_command", pivotArgs(t, "npm run build"), true, "exit status 1")
 	}
 	if p.checkAndWarn() == "" {
 		t.Fatal("expected prompt at 3 failures")
 	}
-	p.recordToolCall("run_command", pivotArgs(t, "npm run build"), false) // success clears
-	p.recordToolCall("run_command", pivotArgs(t, "npm run build"), true)
+	p.recordToolCall("run_command", pivotArgs(t, "npm run build"), false, "") // success clears
+	p.recordToolCall("run_command", pivotArgs(t, "npm run build"), true, "exit status 1")
 	if h := p.checkAndWarn(); h != "" {
 		t.Errorf("streak must restart after success, got prompt: %s", h)
 	}
@@ -101,7 +101,7 @@ func TestPivotDecisionKeyExtraction(t *testing.T) {
 func TestPivotDecisionReset(t *testing.T) {
 	p := newPivotDecisionTracker()
 	for i := 0; i < 3; i++ {
-		p.recordToolCall("run_command", pivotArgs(t, "go build ./..."), true)
+		p.recordToolCall("run_command", pivotArgs(t, "go build ./..."), true, "exit status 1")
 	}
 	p.reset()
 	if h := p.checkAndWarn(); h != "" {
