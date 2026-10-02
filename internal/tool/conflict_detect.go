@@ -70,7 +70,13 @@ func DetectMergeConflicts(content string) []ConflictRegion {
 		lineNum++
 		trimmed := strings.TrimRight(line, "\r")
 
-		if strings.HasPrefix(trimmed, conflictMarkerStart) {
+		// #3126: exactness guard like the mid marker - a bare prefix match
+		// let " "<<<<<<<" (8 markers) or a literal documentation/fixture
+		// example line open a phantom region. The marker is exactly 7
+		// chars; accept only the bare marker or one followed by a space
+		// (the standard "<<<<<<< HEAD" / "<<<<<<< label" forms).
+		if strings.HasPrefix(trimmed, conflictMarkerStart) &&
+			(len(trimmed) == len(conflictMarkerStart) || trimmed[len(conflictMarkerStart)] == ' ') {
 			// Start of a new conflict region
 			if current != nil {
 				// Previous conflict was not properly closed — record it as-is
