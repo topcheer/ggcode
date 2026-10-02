@@ -647,6 +647,8 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 		return entry.DurationSec
 	case "error_rate":
 		return entry.Errors
+	case "tokens":
+		return entry.Tokens
 	case "context_usage":
 		return entry.ContextPeak
 	case "compaction":

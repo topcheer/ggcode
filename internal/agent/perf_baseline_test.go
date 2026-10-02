@@ -459,3 +459,17 @@ func TestFormatPerfRegressionWarningToolMix(t *testing.T) {
 		t.Errorf("warning does not name the shape shift: %q", msg)
 	}
 }
+
+// #3102 V1: perfMetricValue must expose the tokens dimension so
+// selectWorstPerfHit picks the highest-spend hit run, not the first.
+func TestPerfMetricValueTokens(t *testing.T) {
+	e := perfBaselineEntry{Tokens: 12345}
+	if got := perfMetricValue(e, "tokens"); got != 12345 {
+		t.Fatalf("perfMetricValue(tokens) = %d, want 12345", got)
+	}
+	worst := perfBaselineEntry{Tokens: 10}
+	other := perfBaselineEntry{Tokens: 99999}
+	if perfMetricValue(worst, "tokens") >= perfMetricValue(other, "tokens") {
+		t.Fatal("token values must order correctly for worst-run selection")
+	}
+}

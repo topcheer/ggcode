@@ -2317,6 +2317,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// for subsequent iterations.
 		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
 		// r394: accumulate LLM tokens for the perf-baseline cost dimension.
+		// Known blind spots (#3102): main-loop successful streams only -
+		// usage consumed by failed retry attempts (the error path above
+		// returns before this line) and by sub-agents (independent Agent
+		// instances with their own runStats) is not counted, so heavily
+		// delegated runs under-report token spend.
 		runStats.recordTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens)
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
