@@ -138,23 +138,27 @@ func (t *FileWatchTrigger) poll() {
 		case len(changed) == 0:
 			t.pending[i] = nil
 		case pending != nil && sameSet(pending, changed):
-			// Stable across two ticks: fire. The baseline is only advanced
-			// HERE - refreshing it in the pending branch would erase the
-			// pending change from the next diff and the fire would never
-			// happen.
-			t.pending[i] = nil
-			t.snapshots[i] = current
+			// Stable across two ticks. The baseline and pending set are only
+			// consumed when the change actually FIRES: advancing the baseline
+			// while the cooldown is active would silently swallow the event
+			// (the next diff against the advanced baseline is empty, so an
+			// independent edit settling inside the cooldown window would be
+			// dropped forever). Keeping them intact makes the change settle
+			// again and fire once the cooldown expires, while the cooldown
+			// timer still caps the fire rate (#3064).
 			if !now.Before(t.cooldownUntil[i]) {
 				cd := trig.CooldownSec
 				if cd <= 0 {
 					cd = int(DefaultWatchCooldown / time.Second)
 				}
 				t.cooldownUntil[i] = now.Add(time.Duration(cd) * time.Second)
+				t.pending[i] = nil
+				t.snapshots[i] = current
 				t.mu.Unlock()
 				t.fire(trig, changed)
 				t.mu.Lock()
 			} else {
-				debug.Log("watch", "[watch] trigger %d change settled but cooldown active, dropping", i)
+				debug.Log("watch", "[watch] trigger %d change settled but cooldown active, deferring until cooldown ends", i)
 			}
 		default:
 			// Storm still in flight: remember the latest change set and wait
@@ -219,11 +223,19 @@ func (t *FileWatchTrigger) fire(trig config.WatchTriggerConfig, changed map[stri
 	t.emit(prompt, trig.QueueIfBusy)
 }
 
-// diffChanged returns paths whose fingerprint differs or that are new.
+// diffChanged returns paths whose fingerprint differs, that are new, or
+// that vanished since the baseline. A deletion is a change: log-rotation
+// and artifact-cleanup watch scenarios must fire, so baseline-only paths
+// are detected via a reverse sweep (#3064).
 func diffChanged(baseline, current map[string]fileFingerprint) map[string]bool {
 	changed := make(map[string]bool)
 	for p, fp := range current {
 		if old, ok := baseline[p]; !ok || old != fp {
+			changed[p] = true
+		}
+	}
+	for p := range baseline {
+		if _, ok := current[p]; !ok {
 			changed[p] = true
 		}
 	}
