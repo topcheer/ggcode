@@ -126,7 +126,10 @@ func (r HealthReport) FormatHealthReport() string {
 
 	// Age
 	if r.OldestDays > 0 {
-		sb.WriteString(fmt.Sprintf("  Age range: %d-%d days (oldest-newest)\n", r.NewestDays, r.OldestDays))
+		// #3053-C1: the label says oldest-newest, so the FIRST value must be
+		// OldestDays - the old argument order printed the range reversed
+		// ("3-45" read as "the oldest entry is 3 days old").
+		sb.WriteString(fmt.Sprintf("  Age range: %d-%d days (oldest-newest)\n", r.OldestDays, r.NewestDays))
 	}
 
 	// Usage feedback (sa-85 provenance-aware memory)
