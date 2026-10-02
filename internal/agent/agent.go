@@ -1769,6 +1769,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
 	a.oversightTriage.reset()
+	// #3111: emit the novel-decision digest on ANY run exit, not just the
+	// natural no-tool-calls convergence. Error / cancel / iteration-limit
+	// exits previously dropped accumulated novel decisions silently - and a
+	// user interrupt is precisely when human review attention matters most.
+	// digest() is idempotent (emitted gate), so this defer is a no-op when
+	// the loop already emitted on the convergence path.
+	defer func() {
+		if d := a.oversightTriage.digest(); d != "" {
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
+		}
+	}()
 	a.constraintAudit.reset()
 	a.ambiguityPoint.reset()
 	a.planDrift.reset()
