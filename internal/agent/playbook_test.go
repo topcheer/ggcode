@@ -503,3 +503,66 @@ func TestPlaybookHintsForPromptIntentBoost(t *testing.T) {
 		t.Errorf("empty prompt should keep global ranking, first line: %q", first)
 	}
 }
+
+// r389 (AutoRefine repository maintenance): failed runs degrade the success
+// rate of a matching fingerprint but never create entries; entries whose
+// success rate collapses after enough evidence are pruned; young entries
+// are protected from a single early failure.
+func TestPlaybookFailureAwareRecording(t *testing.T) {
+	tmp := t.TempDir()
+	pb := NewPlaybook(tmp)
+	if pb == nil {
+		t.Fatal("NewPlaybook returned nil")
+	}
+	stats := func(success bool, iters int) *RunStats {
+		s := &RunStats{Success: success, Iterations: iters, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
+		return s
+	}
+
+	// Success creates the entry.
+	pb.Record(stats(true, 5))
+	if len(pb.entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(pb.entries))
+	}
+
+	// Failure with a matching fingerprint degrades the rate.
+	pb.Record(stats(false, 8))
+	e := pb.entries[0]
+	if e.Uses != 2 {
+		t.Errorf("Uses = %d, want 2", e.Uses)
+	}
+	if want := 0.5; e.SuccessRate != want {
+		t.Errorf("SuccessRate = %v, want %v", e.SuccessRate, want)
+	}
+
+	// Failure with NO matching fingerprint creates nothing.
+	odd := stats(false, 3)
+	odd.ToolCalls = map[string]int{"browser": 4} // different fingerprint
+	pb.Record(odd)
+	if len(pb.entries) != 1 {
+		t.Errorf("failure must not create entries, got %d", len(pb.entries))
+	}
+}
+
+func TestPlaybookPruneDegraded(t *testing.T) {
+	tmp := t.TempDir()
+	pb := NewPlaybook(tmp)
+	if pb == nil {
+		t.Fatal("NewPlaybook returned nil")
+	}
+	stats := func(success bool) *RunStats {
+		return &RunStats{Success: success, Iterations: 6, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
+	}
+
+	pb.Record(stats(true))  // uses=1 rate=1.0
+	pb.Record(stats(false)) // uses=2 rate=0.5
+	pb.Record(stats(false)) // uses=3 rate=0.33
+	pb.Record(stats(false)) // uses=4 rate=0.25 - young, protected (uses<5)
+	if len(pb.entries) != 1 {
+		t.Fatalf("young degraded entry must be protected, got %d entries", len(pb.entries))
+	}
+	pb.Record(stats(false)) // uses=5 rate=0.2 - pruned
+	if len(pb.entries) != 0 {
+		t.Errorf("degraded entry (uses=5, rate=0.2) must be pruned, got %d entries", len(pb.entries))
+	}
+}

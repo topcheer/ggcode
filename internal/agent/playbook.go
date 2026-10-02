@@ -221,10 +221,15 @@ func extractFileTypes(filesEdited []string) string {
 	return strings.Join(sorted, "+")
 }
 
-// Record extracts a strategy pattern from a successful run and updates the playbook.
-// Called from maybeReflect after a successful agent run.
+// Record extracts a strategy pattern from a run and updates the playbook.
+// Called from maybeReflect after an agent run. Successful runs create new
+// entries; failed runs only degrade the SuccessRate of an existing matching
+// fingerprint (r389, AutoRefine: patterns must originate from success, but
+// without negative evidence SuccessRate is meaningless and the repository
+// degrades as stale strategies accumulate). Cancellation never reaches here
+// (maybeReflect is skipped on isCancelled), so failures are genuine.
 func (pb *Playbook) Record(stats *RunStats) {
-	if pb == nil || stats == nil || !stats.Success {
+	if pb == nil || stats == nil {
 		return
 	}
 
@@ -268,7 +273,9 @@ func (pb *Playbook) Record(stats *RunStats) {
 	// Pattern fingerprint: taskType + toolSeq + fileTypes
 	fingerprint := taskType + "|" + toolSeq + "|" + fileTypes
 
-	// Try to find an existing entry with the same fingerprint
+	// Try to find an existing entry with the same fingerprint.
+	// Failures only update a matching entry's success rate; they never
+	// create entries (see Record doc).
 	for i := range pb.entries {
 		e := &pb.entries[i]
 		ep := e.TaskType + "|" + e.ToolSequence + "|" + e.FileTypes
@@ -276,10 +283,14 @@ func (pb *Playbook) Record(stats *RunStats) {
 			// Update existing entry with incremental average (ACE principle:
 			// "structured, incremental updates that preserve detailed knowledge")
 			pb.updateEntry(e, stats)
+			pb.prune()
 			pb.save()
 			debug.Log("playbook", "updated entry %s (uses=%d, success=%.1f%%)", e.TaskType, e.Uses, e.SuccessRate*100)
 			return
 		}
+	}
+	if !stats.Success {
+		return // failed run with no matching pattern: nothing to learn
 	}
 
 	// Create new entry
@@ -298,6 +309,10 @@ func (pb *Playbook) Record(stats *RunStats) {
 	}
 	pb.entries = append(pb.entries, entry)
 
+	// Anti-degradation (r389, AutoRefine maintenance): drop entries whose
+	// empirical record has collapsed before falling back to LRU eviction.
+	pb.prune()
+
 	// Evict if over capacity (keep most recently used)
 	if len(pb.entries) > pb.maxEntries {
 		pb.evict()
@@ -307,15 +322,47 @@ func (pb *Playbook) Record(stats *RunStats) {
 	debug.Log("playbook", "recorded new %s strategy: %s (files=%s)", taskType, toolSeq, fileTypes)
 }
 
-// updateEntry merges a new observation into an existing entry using incremental averaging.
+// updateEntry merges a new observation into an existing entry using
+// incremental averaging. SuccessRate is an incremental mean over ALL
+// observations of the fingerprint (r389): successes pull it up, failures
+// pull it down. Historical on-disk entries recorded only successes, so
+// their Uses counts as successes for the mean - correct under the old
+// recording policy.
 func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
 	n := float64(e.Uses)
 	e.AvgIter = (e.AvgIter*n + float64(stats.Iterations)) / (n + 1)
 	e.AvgDurationS = (e.AvgDurationS*n + stats.Duration.Seconds()) / (n + 1)
+	outcome := 0.0
+	if stats.Success {
+		outcome = 1.0
+	}
+	e.SuccessRate = (e.SuccessRate*n + outcome) / (n + 1)
 	e.Uses++
-	e.SuccessRate = 1.0 // only successful runs are recorded, so rate stays 1.0
-	// Note: if we later record failures too, SuccessRate would decrease
 	e.LastSeen = time.Now()
+}
+
+// prune removes entries whose strategy has empirically collapsed
+// (r389, AutoRefine repository-maintenance: score, prune, merge - without
+// it a stale strategy survives on historical frequency alone). An entry is
+// pruned only after enough evidence (Uses >= pruneMinUses) AND a collapsed
+// success rate (< pruneSuccessFloor); young entries are protected so a
+// single early failure cannot kill a new pattern.
+const (
+	pruneMinUses      = 5
+	pruneSuccessFloor = 0.3
+)
+
+func (pb *Playbook) prune() {
+	kept := pb.entries[:0]
+	for _, e := range pb.entries {
+		if e.Uses >= pruneMinUses && e.SuccessRate < pruneSuccessFloor {
+			debug.Log("playbook", "pruned degraded %s strategy: %s (uses=%d, success=%.1f%%)",
+				e.TaskType, e.ToolSequence, e.Uses, e.SuccessRate*100)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	pb.entries = kept
 }
 
 // evict removes the least recently used entries to stay within capacity.
