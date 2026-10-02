@@ -78,6 +78,11 @@ type causalEditStep struct {
 type causalAttributionState struct {
 	edits    []causalEditStep
 	warnings int
+
+	// lastSuspect is the file path of the most recent top suspect (r405:
+	// consumed by the attribution-experiment state machine to arm a
+	// Dov-style intervention validation of the attribution).
+	lastSuspect string
 }
 
 func newCausalAttributionState() *causalAttributionState {
@@ -515,6 +520,7 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	}
 
 	s.warnings++
+	s.lastSuspect = best.step.filePath // r405: hypothesis for the experiment arm
 
 	// Format guidance
 	var sb strings.Builder

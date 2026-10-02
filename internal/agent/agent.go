@@ -352,6 +352,7 @@ type Agent struct {
 	infoScent                *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
 	foresightCalib           *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
 	causalAttribution        *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
+	attrExperiment           *attributionExperimentState           // r405: Dov-style intervention validation of causal attributions
 	attemptBrief             *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	crossDetectorConsensus   *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
 	taintInfluence           *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
@@ -493,6 +494,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		reasoningRedund:        newReasoningRedundancyState(),
 		queryConverge:          newQueryConvergeState(),
 		causalAttribution:      newCausalAttributionState(),
+		attrExperiment:         newAttributionExperimentState(),
 		errorCompound:          newErrorCompoundState(),
 		fixAmnesia:             newFixAmnesiaState(),
 		correctionSpiral:       newCorrectionSpiralState(),
@@ -1832,6 +1834,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.strategyStagnation.reset()
 	a.infoScent.reset()
 	a.causalAttribution.reset()
+	a.attrExperiment.reset()
 	a.reversibility.reset()
 	a.constraintViolation.reset()
 	a.inputUnderspec.reset()
@@ -4363,6 +4366,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// not in wait_command. Without it the detector stayed silent
 			// on the most common background-test failure path.
 			if tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell" || tc.Name == "start_command" || tc.Name == "wait_command" || tc.Name == "read_command_output" {
+				// r405: observe EVERY command-channel execution for the
+				// attribution experiment (interventions succeed quietly;
+				// rerun read-outs can be passes) - before the failure path
+				// below arms a new hypothesis on this same result.
+				if expGuidance := a.attrExperiment.observeCommand(tc.Name, causalCmdForGate(tc, result.Content), result.IsError, result.Content); expGuidance != "" {
+					a.appendGuidance(&result, expGuidance)
+				}
 				if result.IsError || looksLikeFailure(result.Content) {
 					// #1528 case C: pass the command text and exit status - a
 					// succeeded grep/cat of logs carrying "FAIL" must not be
@@ -4370,6 +4380,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// layer-1 tool-name filter).
 					if causalHint := a.causalAttribution.attributeFailureCmd(result.Content, causalCmdForGate(tc, result.Content), result.IsError); causalHint != "" {
 						a.appendGuidance(&result, causalHint)
+						// r405: arm the Dov-style validation experiment on
+						// the fresh attribution (suspect + this verify cmd).
+						if armGuidance := a.attrExperiment.arm(a.causalAttribution.lastSuspect, causalCmdForGate(tc, result.Content)); armGuidance != "" {
+							a.appendGuidance(&result, armGuidance)
+						}
 					}
 				}
 			}
