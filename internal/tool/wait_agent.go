@@ -94,9 +94,14 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
-		return Result{Content: annotateWorktree(snap.Result, snap)}, nil
+		return Result{Content: annotateWorktree(snap.Result+acceptanceReminder(snap.Task, snap.Result), snap)}, nil
 	}
-	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap), snap)}, nil
+	var reminder string
+	if snap.Status == subagent.StatusCompleted {
+		// r384: validator-side reminder - only on completed runs.
+		reminder = acceptanceReminder(snap.Task, snap.Result)
+	}
+	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap)+reminder, snap)}, nil
 }
 
 // annotateWorktree appends the isolation worktree path to a wait_agent
