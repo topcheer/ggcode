@@ -985,6 +985,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	cronScheduler := agentruntime.NewSessionCronScheduler(cronSessionID, workingDir, nil) // enqueue callback wired by SetCronScheduler
 	repl.SetCronScheduler(cronScheduler, registry)
+	// Ambient file-watch triggers (r372): fire-on-change prompts sharing
+	// the cron scheduler's enqueue channel (no-op until the repl wires it).
+	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
+	fileWatch.Start()
+	defer fileWatch.Stop()
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)
 	repl.SetTaskOutputTool(subMgr, registry)

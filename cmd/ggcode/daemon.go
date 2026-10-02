@@ -638,6 +638,11 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	agentruntime.RegisterCronTools(registry, cronScheduler)
 
+	// Ambient file-watch triggers (r372) share the cron enqueue bridge.
+	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
+	fileWatch.Start()
+	defer fileWatch.Stop()
+
 	// Sub-agent manager
 	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()

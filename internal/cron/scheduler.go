@@ -712,6 +712,19 @@ func (s *Scheduler) SetEnqueue(fn func(prompt string, queueIfBusy bool)) {
 	}
 }
 
+// Emit fires an immediate prompt through the enqueue callback. Ambient
+// file-watch triggers (r372) use this so they share the scheduler's
+// wiring lifecycle and busy handling without owning a separate channel.
+// No-op semantics come from the constructor's nil default.
+func (s *Scheduler) Emit(prompt string, queueIfBusy bool) {
+	s.mu.Lock()
+	fn := s.enqueue
+	s.mu.Unlock()
+	if fn != nil {
+		fn(prompt, queueIfBusy)
+	}
+}
+
 // scheduleJob registers a timer for the job's NextFire time.
 // It acquires the lock and delegates to scheduleJobLocked to ensure
 // the timer is created and stored atomically, preventing a race where

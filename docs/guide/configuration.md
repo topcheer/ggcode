@@ -301,6 +301,30 @@ Cron jobs support a `queue_if_busy` parameter (default: `false`):
 Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json` (grouped by workspace).
 One-shot reminders are in-memory only and will be lost if the process exits before they fire.
 
+## File-Watch Triggers (Ambient Agents)
+
+Cron fires on a schedule; `watch` fires **on change**. Each trigger watches
+a set of glob patterns and enqueues a prompt when a modification settles
+(editor save-storms are coalesced by requiring the change set to stay
+identical for one poll interval, plus a per-trigger cooldown).
+
+```yaml
+watch:
+  - globs: ["internal/permission/*_test.go", "internal/agent/*.go"]
+    prompt: "Watched files changed ({files}) — run the affected tests and report."
+    queue_if_busy: false   # default; true queues the prompt instead of skipping
+    cooldown_sec: 10       # default minimum re-fire interval
+```
+
+- `{files}` in the prompt is replaced with the changed paths (capped at 10);
+  without it, the file list is appended.
+- Globs are relative to the working directory and use `filepath.Glob`
+  semantics (no `**` recursion — list directory-scoped patterns instead).
+- Detection is polling-based (2s interval, no fsnotify dependency), so it
+  behaves identically on macOS/Linux/Windows.
+- Triggers are configuration-driven (not persisted like cron jobs) and are
+  active in both the interactive TUI and daemon sessions.
+
 ## A2A (Agent-to-Agent)
 
 Configure the A2A server for cross-instance communication:

@@ -327,6 +327,17 @@ Antinoise rules: prefer DMs over broadcasts. No acknowledgments ("got it", "than
 `
 
 // Config is the top-level configuration.
+// WatchTriggerConfig is one ambient fire-on-change rule (r372): when any
+// file matching Globs changes (and the change settles for one poll
+// interval), Prompt is enqueued on the session like a cron firing.
+// {files} in Prompt is replaced with the changed paths.
+type WatchTriggerConfig struct {
+	Globs       []string `yaml:"globs" json:"globs"`
+	Prompt      string   `yaml:"prompt" json:"prompt"`
+	QueueIfBusy bool     `yaml:"queue_if_busy,omitempty" json:"queue_if_busy,omitempty"`
+	CooldownSec int      `yaml:"cooldown_sec,omitempty" json:"cooldown_sec,omitempty"`
+}
+
 type Config struct {
 	Vendor   string `yaml:"vendor" json:"vendor"`
 	Endpoint string `yaml:"endpoint" json:"endpoint"`
@@ -376,6 +387,7 @@ type Config struct {
 	Verify         VerifyConfig               `yaml:"verify,omitempty" json:"verify,omitempty"`
 	A2A            A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
 	LanChat        LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
+	Watch          []WatchTriggerConfig       `yaml:"watch,omitempty" json:"watch,omitempty"`
 	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
 	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
 	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`

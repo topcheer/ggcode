@@ -7,7 +7,7 @@ vendor: zai
 endpoint: cn-coding-openai
 model: glm-5-turbo
 
-# Fallback provider — automatically switches when the primary fails
+# Fallback provider - automatically switches when the primary fails
 # with quota exhaustion, auth errors, or sustained transient failures.
 # The fallback vendor/endpoint must be configured in the vendors section above.
 # fallback:
@@ -20,10 +20,10 @@ model: glm-5-turbo
 language: en
 
 # Output style controls agent response verbosity:
-#   default   — standard balanced responses
-#   concise   — terse, minimal output
-#   detailed  — include reasoning and context
-#   socratic  — guided learning with questions
+#   default   - standard balanced responses
+#   concise   - terse, minimal output
+#   detailed  - include reasoning and context
+#   socratic  - guided learning with questions
 # output_style: default
 
 # Runtime mode: supervised, plan, auto, bypass, or autopilot
@@ -462,9 +462,9 @@ im:
 
   # Output mode: controls how tool results are delivered to IM channels.
   # Can also be changed at runtime via IM panel (v/q/s keys) or daemon follow (v/q/s hotkeys).
-  #   verbose  — every tool result sent individually (default)
-  #   quiet    — aggregated tool summary at round end; errors sent immediately
-  #   summary  — only final LLM response text + tool count summary
+  #   verbose  - every tool result sent individually (default)
+  #   quiet    - aggregated tool summary at round end; errors sent immediately
+  #   summary  - only final LLM response text + tool count summary
   output_mode: verbose
 
   # Speech-to-text for voice messages (optional)
@@ -479,7 +479,7 @@ im:
   #   local_model: /path/to/ggml-base.en-q5_1.bin
 
   adapters:
-    # QQ — requires a running QQ bot gateway
+    # QQ - requires a running QQ bot gateway
     qq:
       enabled: true
       platform: qq
@@ -488,7 +488,7 @@ im:
         app_id: "your-qq-app-id"
         token: "your-qq-bot-token"
 
-    # Telegram — uses long-polling or webhook
+    # Telegram - uses long-polling or webhook
     telegram:
       enabled: true
       platform: telegram
@@ -496,14 +496,14 @@ im:
       extra:
         bot_token: ${TELEGRAM_BOT_TOKEN}
 
-    # Discord — uses Discord Gateway
+    # Discord - uses Discord Gateway
     discord:
       enabled: true
       platform: discord
       extra:
         bot_token: ${DISCORD_BOT_TOKEN}
 
-    # Feishu / Lark — uses Feishu SDK WebSocket long connection.
+    # Feishu / Lark - uses Feishu SDK WebSocket long connection.
     #
     # Prerequisites in Feishu Developer Console (开发者后台):
     #   1. Under "Events & Callbacks" (事件与回调), ensure the connection mode
@@ -522,7 +522,7 @@ im:
         app_id: "your-feishu-app-id"
         app_secret: ${FEISHU_APP_SECRET}
 
-    # DingTalk — uses DingTalk Stream mode
+    # DingTalk - uses DingTalk Stream mode
     dingtalk:
       enabled: true
       platform: dingtalk
@@ -530,7 +530,7 @@ im:
         client_id: "your-dingtalk-client-id"
         client_secret: ${DINGTALK_CLIENT_SECRET}
 
-    # Slack — uses Slack Socket Mode
+    # Slack - uses Slack Socket Mode
     slack:
       enabled: true
       platform: slack
@@ -579,7 +579,7 @@ tool_permissions:
   git_diff: allow
   git_log: allow
 
-# Knight — background auto-evolution agent
+# Knight - background auto-evolution agent
 # Knight analyzes sessions, creates/validates skills, generates tests,
 # and maintains project health during idle time.
 # Enabled by default; set enabled: false to disable.
@@ -592,10 +592,10 @@ knight:
   # daily_token_budget: 5000000
   # Idle delay before Knight starts tasks (default 300 seconds)
   # idle_delay_sec: 300
-  # Quiet hours — no tasks or notifications during these ranges
+  # Quiet hours - no tasks or notifications during these ranges
   # quiet_hours:
   #   - "23:00-07:00"
-  # Capabilities — which tasks Knight is allowed to perform
+  # Capabilities - which tasks Knight is allowed to perform
   # capabilities:
   #   - skill_creation
   #   - skill_validation
@@ -629,15 +629,15 @@ mcp_servers:
 # Hooks: run shell commands or HTTP webhooks on agent lifecycle events.
 #
 # Events (5):
-#   on_user_message  — before LLM call (sync, can block)
-#   pre_tool_use     — before tool execution (sync, can block)
-#   post_tool_use    — after tool execution (sync, can inject output)
-#   on_agent_stop    — agent loop ends (async fire-and-forget)
-#   on_stream_stop   — LLM stream completes (async fire-and-forget)
+#   on_user_message  - before LLM call (sync, can block)
+#   pre_tool_use     - before tool execution (sync, can block)
+#   post_tool_use    - after tool execution (sync, can inject output)
+#   on_agent_stop    - agent loop ends (async fire-and-forget)
+#   on_stream_stop   - LLM stream completes (async fire-and-forget)
 #
 # Hook types:
-#   command (default) — local shell command
-#   http              — HTTP POST webhook
+#   command (default) - local shell command
+#   http              - HTTP POST webhook
 #
 # Blocking semantics:
 #   command: exit code 2 = block (stderr → agent as block reason)
@@ -649,34 +649,46 @@ mcp_servers:
 #   See docs/guide/hooks.md for full schema.
 #
 # Match patterns (for tool events):
-#   "write_file"              — exact tool name
-#   "write_*"                 — glob
-#   "write_file|edit_file"    — pipe (OR)
-#   "run_command(git commit*)"— tool name + argument substring
-#   "*"                       — match all (for non-tool events)
+#   "write_file"              - exact tool name
+#   "write_*"                 - glob
+#   "write_file|edit_file"    - pipe (OR)
+#   "run_command(git commit*)"- tool name + argument substring
+#   "*"                       - match all (for non-tool events)
 #
 # Environment variables (all hooks):
-#   GGCODE_HOOK_PAYLOAD  — full JSON payload (see docs/guide/hooks.md)
-#   GGCODE_HOOK_EVENT    — event name
-#   GGCODE_TOOL_NAME     — tool name (tool events only)
-#   GGCODE_RAW_INPUT     — raw JSON tool arguments
-#   GGCODE_TOOL_SUCCESS  — "true"/"false" (post_tool_use only)
-#   GGCODE_TOOL_ERROR    — error message (post_tool_use only)
-#   GGCODE_TOOL_RESULT   — tool output, 4KB max (post_tool_use only)
-#   GGCODE_TOOL_DURATION — execution duration (post_tool_use only)
+#   GGCODE_HOOK_PAYLOAD  - full JSON payload (see docs/guide/hooks.md)
+#   GGCODE_HOOK_EVENT    - event name
+#   GGCODE_TOOL_NAME     - tool name (tool events only)
+#   GGCODE_RAW_INPUT     - raw JSON tool arguments
+#   GGCODE_TOOL_SUCCESS  - "true"/"false" (post_tool_use only)
+#   GGCODE_TOOL_ERROR    - error message (post_tool_use only)
+#   GGCODE_TOOL_RESULT   - tool output, 4KB max (post_tool_use only)
+#   GGCODE_TOOL_DURATION - execution duration (post_tool_use only)
 #
 # Template variables (use ${VAR} in command string):
 #   ${TOOL_NAME}, ${FILE_PATH}, ${WORKING_DIR}, ${RAW_INPUT}, ${EVENT}
 #   ${TOOL_SUCCESS}, ${TOOL_ERROR}, ${TOOL_RESULT}, ${TOOL_DURATION}, ${PAYLOAD}
+# Ambient file-watch triggers (fire-on-change, not on schedule):
+# when a file matching any glob settles after a change, the prompt is
+# enqueued on the session like a cron firing. {files} is replaced with
+# the changed paths. Polling-based (2s detection window); globs use
+# filepath.Glob semantics (no ** recursion - use directory-scoped
+# patterns). Changes during the cooldown (default 10s) are dropped.
+watch:
+  - globs: ["internal/permission/*_test.go"]
+    prompt: "Permission tests changed ({files}) - run `go test -tags goolm ./internal/permission/` and fix any failures."
+    queue_if_busy: false   # skip if agent busy (default); true = queue
+    cooldown_sec: 10       # min seconds between fires (default 10)
+
 hooks:
-  # Before user message reaches the LLM — sync, can block.
+  # Before user message reaches the LLM - sync, can block.
   on_user_message:
     - match: "*"
       type: http
       url: "https://audit.example.com/message"
       secret: "my-hmac-key"  # HMAC-SHA256 signature in X-GGCode-Signature header
 
-  # Before tool execution — sync, can block (exit 2 / HTTP 403).
+  # Before tool execution - sync, can block (exit 2 / HTTP 403).
   pre_tool_use:
     # Block destructive shell commands (command type)
     - match: "run_command(rm -rf *)"
@@ -688,7 +700,7 @@ hooks:
       url: "https://security.example.com/scan"
       timeout: "5s"
 
-  # After tool execution — sync, can inject output.
+  # After tool execution - sync, can inject output.
   post_tool_use:
     # Auto-format Go files after writing
     - match: "write_file|edit_file"
@@ -699,13 +711,13 @@ hooks:
       type: http
       url: "https://hooks.slack.com/services/..."
 
-  # Agent loop ends — async fire-and-forget.
+  # Agent loop ends - async fire-and-forget.
   on_agent_stop:
     - match: "*"
       type: http
       url: "https://ci.example.com/agent-done"
 
-  # LLM stream completes — async fire-and-forget.
+  # LLM stream completes - async fire-and-forget.
   on_stream_stop:
     - match: "*"
       command: "echo 'stream complete' >> /tmp/ggcode-streams.log"
@@ -724,7 +736,7 @@ plugins:
         execute: npm
         args: ["run", "lint"]
 
-  # gRPC plugin — independent process, any language (Go, Python, Node.js, etc.)
+  # gRPC plugin - independent process, any language (Go, Python, Node.js, etc.)
   # Zero version coupling with the host. The plugin exposes tools via gRPC.
   # See docs/guide/grpc-plugins.md for the full development guide.
   #
@@ -735,7 +747,7 @@ plugins:
   #     JIRA_URL: "https://company.atlassian.net"
   #     JIRA_TOKEN: "${JIRA_API_TOKEN}"     # ${VAR} syntax for env var expansion
 
-# A2A protocol server — expose this ggcode instance as an A2A agent
+# A2A protocol server - expose this ggcode instance as an A2A agent
 # so other ggcode instances (or any A2A client) can discover and collaborate.
 # Enabled by default on port 0 (auto-assign). Set disabled: true to opt out.
 #
@@ -757,14 +769,14 @@ plugins:
 #                               # and discovers other instances automatically. This powers
 #                               # the LAN Chat feature and A2A peer discovery.
 #
-#   # mDNS discovery is always on — no configuration needed.
+#   # mDNS discovery is always on - no configuration needed.
 #   # ggcode uses a built-in community key (ggcode-lan-a2a-v1) that lets
 #   # any ggcode instance on the same network connect automatically.
 #   # NOTE: the community key only works while NO custom api_key is set.
 #   # Setting your own api_key disables community-key access entirely;
 #   # all team members must then share the custom key (#986).
 #
-#   # Authentication — multiple schemes can be enabled simultaneously.
+#   # Authentication - multiple schemes can be enabled simultaneously.
 #   # Server advertises enabled schemes in the agent card; clients auto-negotiate.
 #   # Host is always 0.0.0.0 (LAN accessible) since mDNS discovery is always on.
 #   # Loopback addresses are overridden to 0.0.0.0 to ensure LAN Chat and peer
@@ -783,7 +795,7 @@ plugins:
 #     # Use "provider" for built-in presets (github, google, auth0, azure)
 #     # or "issuer_url" for any custom OIDC-compliant IdP.
 #     oauth2:
-#       provider: "github"              # built-in preset — zero config
+#       provider: "github"              # built-in preset - zero config
 #       # client_id: "my-app"           # override preset (optional)
 #       # client_secret: "xxx"          # required for confidential clients
 #       # flow: "pkce"                  # "pkce" (default) or "device"
@@ -796,7 +808,7 @@ plugins:
 #     #   client_id: "xxx"
 #     #   client_secret: "xxx"
 #
-#     # --- mTLS (mutual TLS — no tokens, strongest transport auth) ---
+#     # --- mTLS (mutual TLS - no tokens, strongest transport auth) ---
 #     # mtls:
 #     #   cert_file: ".ggcode/certs/server.pem"
 #     #   key_file: ".ggcode/certs/server.key"
