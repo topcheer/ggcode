@@ -98,6 +98,12 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 	if ce := p.contextEditing.Load(); ce != nil {
 		clone.contextEditing.Store(ce)
 	}
+	// #3066: samplingOverride is the same atomic.Pointer trap - a struct
+	// literal (or simply forgetting the field) copies the zero state and the
+	// clone silently loses MaxTokens/StopSequences/Temperature overrides.
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
 	// Inherit the endpoint capability latch (an endpoint that rejected
 	// output_config stays off), but reset the per-conversation stability
 	// window: the clone re-learns effort stabilization for its own cache

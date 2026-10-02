@@ -27,9 +27,13 @@ import (
 //   - lifts Anthropic's 5 MB base64 inline cap (Files API allows 500 MB), so
 //     huge screenshots no longer hard-fail the request with a 400.
 //
-// The uploader is per-provider and in-memory: file_ids are valid for the
-// lifetime of the file on Anthropic storage, so a session-scoped cache keyed
-// by content hash uploads each unique image exactly once. Failures degrade
+// The uploader is per-provider and in-memory: file_ids are cached by
+// content hash so each unique image uploads exactly once. Anthropic
+// retains stored files only for a limited window, so cache entries carry
+// an upload timestamp and expire after filesCacheTTL - a stale file_id
+// fails every /v1/messages request with a 400 that noteFailure never
+// sees (it only classifies upload errors), so expired entries are
+// evicted and re-uploaded instead of trusted forever. Failures degrade
 // gracefully to inline base64 — the feature is strictly additive.
 
 const (
@@ -47,10 +51,17 @@ type fileUploader struct {
 	enabled bool
 
 	mu             sync.Mutex
-	cache          map[string]string    // sha256 hex -> file_id
-	failed         map[string]time.Time // sha256 hex -> transient failure time; retried after filesRetryTTL
-	endpointBroken bool                 // endpoint answered non-retryably: stop trying entirely
+	cache          map[string]filesCacheEntry // sha256 hex -> uploaded file_id + upload time
+	failed         map[string]time.Time       // sha256 hex -> transient failure time; retried after filesRetryTTL
+	endpointBroken bool                       // endpoint answered non-retryably: stop trying entirely
 	uploads        int
+}
+
+// filesCacheEntry pairs a cached file_id with its upload time so entries
+// can expire (#3066).
+type filesCacheEntry struct {
+	fileID     string
+	uploadedAt time.Time
 }
 
 // filesRetryTTL is how long a transient upload failure (429/5xx/network)
@@ -60,11 +71,21 @@ type fileUploader struct {
 // shorten it.
 var filesRetryTTL = 2 * time.Minute
 
+// filesCacheTTL bounds how long a cached file_id is trusted before it is
+// re-uploaded (#3066). Anthropic deletes stored files after a retention
+// window; an expired file_id hard-fails /v1/messages with a 400 that the
+// upload-side noteFailure classifier never sees, so the cache must not be
+// forever. 24h is deliberately conservative (well below any plausible
+// retention), trading one duplicate upload per long-lived session for the
+// elimination of unattributable persistent 400s. Package-level var so
+// tests can shorten it.
+var filesCacheTTL = 24 * time.Hour
+
 func newFileUploader(client *anthropic.Client, baseURL string) *fileUploader {
 	return &fileUploader{
 		client:  client,
 		enabled: filesAPIAllowed(baseURL),
-		cache:   map[string]string{},
+		cache:   map[string]filesCacheEntry{},
 		failed:  map[string]time.Time{},
 	}
 }
@@ -95,16 +116,28 @@ func filesAPIAllowed(baseURL string) bool {
 // resolve returns the file_id for the given image bytes, uploading them on
 // first sight. ok=false means the caller should fall back to inline base64.
 func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (fileID string, ok bool) {
-	if u == nil || u.client == nil || !u.enabled || u.endpointBroken || len(data) == 0 {
+	// client/enabled are immutable after construction - safe to read
+	// outside the lock. endpointBroken is mutated under mu; checked inside.
+	if u == nil || u.client == nil || !u.enabled || len(data) == 0 {
 		return "", false
 	}
 	sum := sha256.Sum256(data)
 	key := hex.EncodeToString(sum[:])
 
 	u.mu.Lock()
-	if id, hit := u.cache[key]; hit {
+	if u.endpointBroken {
 		u.mu.Unlock()
-		return id, true
+		return "", false
+	}
+	if e, hit := u.cache[key]; hit {
+		if time.Since(e.uploadedAt) < filesCacheTTL {
+			u.mu.Unlock()
+			return e.fileID, true
+		}
+		// Expired: the stored file may have been deleted server-side; a
+		// stale file_id would 400 every messages request with no eviction
+		// path. Drop it and fall through to a fresh upload (#3066).
+		delete(u.cache, key)
 	}
 	if t, hit := u.failed[key]; hit {
 		if time.Since(t) < filesRetryTTL {
@@ -124,7 +157,7 @@ func (u *fileUploader) resolve(ctx context.Context, mime string, data []byte) (f
 	}
 
 	u.mu.Lock()
-	u.cache[key] = id
+	u.cache[key] = filesCacheEntry{fileID: id, uploadedAt: time.Now()}
 	delete(u.failed, key) // stale transient marker, if any, must not survive a success
 	u.uploads++
 	u.mu.Unlock()
@@ -145,27 +178,34 @@ func (u *fileUploader) upload(ctx context.Context, mime string, data []byte, key
 	return up.ID, nil
 }
 
-// noteFailure classifies an upload error. Non-retryable 4xx (except 429)
-// means the endpoint does not implement the Files API — disable the uploader
-// for the provider lifetime instead of re-attempting every turn. Transient
-// failures (network, 429, 5xx) poison only this content hash for
-// filesRetryTTL; once the TTL elapses, resolve retries with a fresh attempt
-// (#2568 — the old never-expiring marker made "may retry later" unreachable).
+// noteFailure classifies an upload error (#3066 narrowed the permanent
+// set). Permanent (disable for provider lifetime) is reserved for signals
+// that the ENDPOINT will never serve /v1/files: 404/403
+// (capability/permission) or a 400 on the very first upload (gateway that
+// does not implement the route - once any upload has succeeded, later 400s
+// are content-level). Per-image problems - 413 payload too large,
+// content-level 400s - poison only this content hash for filesRetryTTL
+// (#2568), so one oversized image never disables Files API for every
+// subsequent image.
 func (u *fileUploader) noteFailure(key string, err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	// Classification runs under the lock: the first-upload heuristic reads
+	// u.uploads, which is mu-guarded.
 	permanent := false
 	var apiErr *anthropic.Error
 	if errors.As(err, &apiErr) {
 		switch sc := apiErr.StatusCode; {
-		case sc == 429:
-			// rate limited: transient
-		case sc >= 500:
-			// server side: transient
-		default:
+		case sc == 404 || sc == 403:
+			// capability/permission: this endpoint or key will not serve
+			// /v1/files, ever.
+			permanent = true
+		case sc == 400 && u.uploads == 0:
+			// 400 before any success: endpoint-level mismatch (proxy without
+			// /v1/files). After a success, 400s are content-level.
 			permanent = true
 		}
 	}
-	u.mu.Lock()
-	defer u.mu.Unlock()
 	if permanent {
 		u.endpointBroken = true
 		debug.Log("anthropic-files", "Files API unavailable on this endpoint (%v); disabling for provider lifetime", err)

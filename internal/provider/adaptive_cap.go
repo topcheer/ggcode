@@ -122,10 +122,12 @@ func (c *adaptiveCap) OnRejected(parsedLimit int) {
 		next = 1
 	}
 	if next >= cur {
-		next = cur - 1 // ensure progress
-		if next < 1 {
-			next = 1
-		}
+		// The floor clamp already pinned next at cur (lo==cur with
+		// parsedLimit<=0): stepping below it would break the documented
+		// cur >= lo invariant. Hold cur instead - the invariant outranks
+		// guaranteed progress, and the next OnTruncated re-raises cur
+		// anyway (#3066).
+		next = cur
 	}
 	c.cur.Store(next)
 	debug.Log("adaptive_cap", "%s REJECTED: %d → %d (lo=%d hi=%d, parsed=%d)", c.key, cur, next, c.lo, c.hi, parsedLimit)
