@@ -1234,11 +1234,15 @@ func daemonSessionTurnIndex(ses *session.Session) int {
 		return 0
 	}
 	last := 0
-	if n := len(ses.UsageHistory); n > 0 && ses.UsageHistory[n-1].TurnIndex > last {
-		last = ses.UsageHistory[n-1].TurnIndex
+	// #3091: read through the #3086/#3087 lock-guarded snapshot accessors -
+	// the bare slice reads raced the append callbacks on the same slices.
+	// Construction-time-only caller keeps the window near zero (low), but
+	// the accessor comments name exactly this cross-goroutine use.
+	if hist := ses.UsageHistorySnapshot(); len(hist) > 0 && hist[len(hist)-1].TurnIndex > last {
+		last = hist[len(hist)-1].TurnIndex
 	}
-	if n := len(ses.Metrics); n > 0 && ses.Metrics[n-1].TurnIndex > last {
-		last = ses.Metrics[n-1].TurnIndex
+	if mets := ses.MetricsSnapshot(); len(mets) > 0 && mets[len(mets)-1].TurnIndex > last {
+		last = mets[len(mets)-1].TurnIndex
 	}
 	return last
 }
