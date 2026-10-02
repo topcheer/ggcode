@@ -234,7 +234,14 @@ func (a *Agent) guidanceEmit(msg string, msgs []provider.Message) []provider.Mes
 }
 
 func (a *Agent) injectGuidance(text string) bool {
-	if !a.guidanceBudget.allow(text) {
+	// r402: single-funnel observability - every detector's guidance passes
+	// here, so one hook records the full fire/suppress profile (recorded
+	// AFTER the allow() verdict to avoid double-counting one message).
+	allowed := a.guidanceBudget.allow(text)
+	if a.guidanceStats != nil {
+		a.guidanceStats.record(guidanceTag(text), allowed)
+	}
+	if !allowed {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
 			a.guidanceBudget.suppressed)
 		return false

@@ -262,6 +262,7 @@ type Agent struct {
 	orphanFile                   *orphanFileState           // orphaned new file integration detection (new source files never wired into existing code)
 	cfDep                        *cfDepState                // counterfactual dependency detection (dependent tool calls in same batch)
 	guidanceBudget               guidanceBudget             // per-turn guidance injection limiter (caps context pollution from detector alerts)
+	guidanceStats                guidanceRunStats           // r402: per-run detector guidance fire/suppress counts (observability for harness tuning)
 	reasoningRedund              *reasoningRedundancyState  // reasoning redundancy detection (consecutive text-only overthinking)
 	queryConverge                *queryConvergeState        // query convergence failure detection (repeated similar searches without action)
 	serialRead                   *serialReadState           // sequential read serialization detection (cross-turn single-read batching opportunity)
@@ -454,6 +455,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
 		oversightTriage:        newOversightTriageState(),
+		guidanceStats:          guidanceRunStats{}, // r402: also reset per-run in runPrompt
 		commitHint:             newCommitHintState(),
 		verifyRegression:       newVerifyRegressionState(),
 		selfCorrectionGate:     newSelfCorrectionGateState(),
@@ -1769,6 +1771,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
 	a.oversightTriage.reset()
+	a.guidanceStats = guidanceRunStats{} // r402: fresh fire counts per run
 	// #3111: emit the novel-decision digest on ANY run exit, not just the
 	// natural no-tool-calls convergence. Error / cancel / iteration-limit
 	// exits previously dropped accumulated novel decisions silently - and a
@@ -1780,6 +1783,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
 		}
 	}()
+	// r402: flush detector-guidance fire counts on ANY exit (same any-exit
+	// rationale as the digest defer above) - suppressed-by-budget evidence
+	// is most interesting exactly on runs that ended early/aborted.
+	defer a.flushGuidanceStats()
 	a.constraintAudit.reset()
 	a.ambiguityPoint.reset()
 	a.planDrift.reset()
