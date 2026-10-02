@@ -392,3 +392,14 @@ func TestTotalToolCalls(t *testing.T) {
 		t.Errorf("expected 0 for empty, got %d", total)
 	}
 }
+
+// r394: token accumulation for the perf-baseline cost dimension.
+func TestRunStatsRecordTokens(t *testing.T) {
+	var s RunStats
+	s.recordTokens(1000, 500)
+	s.recordTokens(2000, 0)
+	s.recordTokens(0, 300)
+	if s.TotalTokens != 3800 {
+		t.Fatalf("TotalTokens = %d, want 3800", s.TotalTokens)
+	}
+}
