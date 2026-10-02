@@ -47,6 +47,13 @@ var displaySecretPatterns = []struct {
 	// layer (secretdetect) matched it via its optional group: detection and
 	// display drifted apart for the 4th time. `*` allows the empty prefix.
 	{"private_key", regexp.MustCompile(`(?s)(-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----.*?-----END (?:[A-Z ]*)PRIVATE KEY-----)`), []string{"-----BEGIN"}},
+	// #3081: a TRUNCATED stream or clipped log can carry the bare header
+	// without the END line - the DETECTION layer (secretdetect) matches on
+	// BEGIN alone, so the display layer masking only complete blocks was
+	// the 4th detection/display drift: the header (and any partial key body
+	// behind it) rendered raw. Runs AFTER the complete-block pattern, so
+	// only genuinely unterminated headers reach it; masks to end of buffer.
+	{"private_key_truncated", regexp.MustCompile(`(?s)-----BEGIN (?:[A-Z ]*)PRIVATE KEY-----.+`), []string{"-----BEGIN"}},
 	{"openai_key", regexp.MustCompile(`\b(sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,})\b`), []string{"sk-"}},
 	{"anthropic_key", regexp.MustCompile(`\b(sk-ant-[A-Za-z0-9\-_]{70,})\b`), []string{"sk-ant-"}},
 	{"jwt", regexp.MustCompile(`\b(eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b`), []string{"eyJ"}},
