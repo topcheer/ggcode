@@ -270,6 +270,14 @@ func (o *overseerState) reset() {
 	o.driftLevel = 0
 	o.fired = make(map[string]bool)
 	o.lastAnalysisIter = 0
+	// #3057: the r365 research-gate fields are declared "this run" state
+	// and live on the cross-run overseer instance - reset() must clear
+	// them too, or the gate fired once per Agent LIFETIME and the search/
+	// fetch counters accumulated across runs (later research runs tripped
+	// on stale counts and the message lied about "calls this run").
+	o.searchCalls = 0
+	o.fetchCalls = 0
+	o.reportGateFired = false
 }
 
 // analyze checks the trajectory for pathological patterns. Returns a
