@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/commands"
+	"github.com/topcheer/ggcode/internal/util"
 
 	"gopkg.in/yaml.v3"
 )
@@ -62,7 +63,7 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 			"requires_tools": {
 				"type": "array",
 				"items": {"type": "string"},
-				"description": "External CLI tools that must be on PATH for this skill to work (e.g. ["docker", "kubectl"]). Validated at load time."
+				"description": "External CLI tools that must be on PATH for this skill to work (e.g. ['docker', 'kubectl']). Validated at load time."
 			},
 			"dependencies": {
 				"type": "array",
@@ -78,15 +79,17 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 				"type": "string",
 				"enum": ["inline", "fork"],
 				"description": "Execution mode: 'inline' (default, injects into current conversation) or 'fork' (runs as sub-agent)."
-			},
-			"description_label": {
-				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI."
 			}
 		},
-		"required": ["name", "description", "content", "description_label"]
+		"required": ["name", "description", "content"]
 	}`)
 }
+
+// #3128 V1 note: "description_label" used to be declared required in the
+// Parameters schema above, but the args struct never received it
+// (json.Unmarshal silently dropped it) and no consumer reads such a
+// frontmatter field. Removed to make the schema truthful; description
+// is the label.
 
 func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
@@ -134,7 +137,11 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil
 	}
-	if err := os.WriteFile(skillFile, []byte(markdown), 0o644); err != nil {
+	// #3128 V2: atomic tmp+rename write (same helper as #3100) - a direct
+	// os.WriteFile could leave a truncated SKILL.md on crash/full disk,
+	// which #822's malformed-frontmatter skip path then silently swallows
+	// (skill unusable AND blocked from re-creation by the disk check above).
+	if err := util.AtomicWriteFile(skillFile, []byte(markdown), 0o644); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot write skill file: %v", err)}, nil
 	}
 
