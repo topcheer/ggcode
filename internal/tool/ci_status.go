@@ -95,20 +95,36 @@ func (t CIStatusTool) Execute(ctx context.Context, input json.RawMessage) (Resul
 		return Result{IsError: true, Content: fmt.Sprintf("Not a GitHub repository or gh not authenticated: %v", err)}, nil
 	}
 
-	branch := args.Branch
-	if branch == "" {
-		branch, err = currentBranch(ctx, dir)
-		if err != nil {
-			return Result{IsError: true, Content: fmt.Sprintf("Could not determine current branch: %v", err)}, nil
+	// #3118: resolve the branch ONLY for the actions that need it. The old
+	// unconditional resolution ran before the switch, so under a detached
+	// HEAD (CI checkouts, worktrees) even action=list failed with "could
+	// not determine current branch" - although listRuns never uses the
+	// branch at all.
+	resolveBranch := func() (string, error) {
+		if args.Branch != "" {
+			return args.Branch, nil
 		}
+		b, err := currentBranch(ctx, dir)
+		if err != nil {
+			return "", fmt.Errorf("could not determine current branch (pass --branch or run on a branch): %w", err)
+		}
+		return b, nil
 	}
 
 	switch args.Action {
 	case "status":
+		branch, err := resolveBranch()
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
 		return t.getStatus(ctx, dir, repoInfo, branch)
 	case "list":
-		return t.listRuns(ctx, dir, repoInfo)
+		return t.listRuns(ctx, dir, repoInfo) // #3118: no branch dependency
 	case "logs":
+		branch, err := resolveBranch()
+		if err != nil {
+			return Result{IsError: true, Content: err.Error()}, nil
+		}
 		return t.getFailedLogs(ctx, dir, repoInfo, branch)
 	default:
 		return Result{IsError: true, Content: fmt.Sprintf("Unknown action: %s. Use 'status', 'list', or 'logs'.", args.Action)}, nil
