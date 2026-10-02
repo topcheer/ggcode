@@ -93,3 +93,19 @@ func TestIdleMaintainer_Defaults(t *testing.T) {
 		t.Errorf("default after = %v, want 10m", m.after)
 	}
 }
+
+// Companion (r373): SetIdleMaintainer/currentIdleMaintainer round-trip and
+// nil guards - the run loop relies on currentIdleMaintainer returning nil
+// when no maintainer is wired.
+func TestAgent_IdleMaintainerSetterRoundTrip(t *testing.T) {
+	ag := &Agent{}
+	if m := ag.currentIdleMaintainer(); m != nil {
+		t.Fatalf("unwired agent returned maintainer %v, want nil", m)
+	}
+	ag.SetIdleMaintainer(nil) // nil no-op, must not panic
+	m := NewIdleMaintainer(time.Minute, 0.5, nil, nil)
+	ag.SetIdleMaintainer(m)
+	if got := ag.currentIdleMaintainer(); got != m {
+		t.Fatalf("round-trip failed: got %p want %p", got, m)
+	}
+}

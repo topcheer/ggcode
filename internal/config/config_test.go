@@ -1946,3 +1946,38 @@ func TestLoad_WatchSection(t *testing.T) {
 		t.Errorf("trigger fields wrong: %+v", w)
 	}
 }
+
+// Companion (r373): the idle: section parses into IdleConfig.
+func TestLoad_IdleSection(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	yaml := "idle:\n" +
+		"  enabled: true\n" +
+		"  after_min: 15\n" +
+		"  precompact_ratio: 0.7\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Idle.Enabled || cfg.Idle.AfterMin != 15 || cfg.Idle.PrecompactRatio != 0.7 {
+		t.Errorf("idle section not parsed: %+v", cfg.Idle)
+	}
+
+	// Defaults when absent: disabled, zero values (ApplyIdleMaintenance
+	// substitutes 10min/0.6).
+	path2 := filepath.Join(dir, "empty.yaml")
+	if err := os.WriteFile(path2, []byte("extra_prompt: \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Idle.Enabled || cfg2.Idle.AfterMin != 0 || cfg2.Idle.PrecompactRatio != 0 {
+		t.Errorf("idle defaults wrong: %+v", cfg2.Idle)
+	}
+}
