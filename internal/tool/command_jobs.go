@@ -303,6 +303,13 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 		cancel()
 		job := m.newJob(command, timeout, cancel)
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to resolve shell: %v", err))
+		// #3126: a failed job is terminal - register it for eviction like
+		// waitForJob does, or it stays in m.jobs forever (evictFinished
+		// only drains finishedOrder, and this path never appended).
+		m.mu.Lock()
+		m.recordFinishLocked(job)
+		m.evictFinishedLocked()
+		m.mu.Unlock()
 		snapshot := m.snapshot(job)
 		return &snapshot, nil
 	}
@@ -329,6 +336,12 @@ func (m *CommandJobManager) Start(ctx context.Context, command string, detach bo
 			cancel()
 			job := m.newJob(command, timeout, cancel)
 			job.finish(CommandJobFailed, wrapErr.Error())
+			// #3126: ditto - terminal failed job must enter the eviction
+			// ledger or it leaks a map slot per failed start.
+			m.mu.Lock()
+			m.recordFinishLocked(job)
+			m.evictFinishedLocked()
+			m.mu.Unlock()
 			snapshot := m.snapshot(job)
 			return &snapshot, nil
 		}
@@ -394,6 +407,10 @@ func (m *CommandJobManager) startExisting(ctx context.Context, command string, t
 	if err != nil {
 		cancel()
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to open command stdin: %v", err))
+		m.mu.Lock()
+		m.recordFinishLocked(job)
+		m.evictFinishedLocked()
+		m.mu.Unlock()
 		snapshot := m.snapshot(job)
 		return job, &snapshot, nil
 	}
@@ -403,6 +420,12 @@ func (m *CommandJobManager) startExisting(ctx context.Context, command string, t
 		_ = stdin.Close()
 		cancel()
 		job.finish(CommandJobFailed, fmt.Sprintf("failed to start command: %v", err))
+		// #3126: terminal failed job - enter the eviction ledger (this is
+		// the path a NUL-byte or otherwise unspawnable command takes).
+		m.mu.Lock()
+		m.recordFinishLocked(job)
+		m.evictFinishedLocked()
+		m.mu.Unlock()
 		snapshot := m.snapshot(job)
 		return job, &snapshot, nil
 	}

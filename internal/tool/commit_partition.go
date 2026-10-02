@@ -80,6 +80,9 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	currentAdd := 0
 	currentDel := 0
 	newLineNum := 0
+	// #3126: b/ path from the most recent "diff --git a/x b/x" header -
+	// the only path source for pure mode-change hunks (analyzer pattern).
+	lastGitPath := ""
 	// Last "--- a/path" header seen; a following "+++ /dev/null" means
 	// the file was DELETED - the only place its path survives in the diff
 	// (#1319: deleted files dropped out of partition plans entirely).
@@ -112,9 +115,56 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	}
 
 	for _, line := range strings.Split(diffOutput, "\n") {
+		// #3126: track the b/ path from "diff --git a/x b/x" lines - the
+		// only anchor for pure mode-change hunks (same pattern as
+		// parseDiffStats in commit_analyzer.go).
+		if m := diffGitHeader.FindStringSubmatch(line); m != nil && len(m) > 1 {
+			lastGitPath = m[1]
+		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+			// #3126: a rename+edit hunk emits "rename to x" AND a
+			// "+++ b/x" header for the same path - keep counting into the
+			// entry the rename branch opened instead of flushing a
+			// duplicate 0/0 record.
+			if m[1] != currentFile {
+				flush()
+				currentFile = m[1]
+			}
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		// #3126: pure rename hunk - git emits "rename from/to" + similarity
+		// and NO +++
+		// line, so the file never matched diffFileHeader and silently
+		// dropped out of the partition plan (staged "git mv" changes were
+		// left uncommitted by the generated plan). The "rename to" path is
+		// the file's new identity.
+		if m := diffRenameTo.FindStringSubmatch(line); m != nil {
 			flush()
 			currentFile = m[1]
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		// #3126: binary change - no hunks, no +/- lines, no +++ header;
+		// the b/ path comes from the "Binary files a/x and b/x differ" line.
+		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
+			flush()
+			currentFile = m[2]
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		// #3126: pure mode change - no hunks; the preceding diff --git
+		// header is the only path source. Register on the mode marker so
+		// mode-only changes stop vanishing from partition plans.
+		if diffModeChange.MatchString(line) && lastGitPath != "" {
+			// old-mode AND new-mode lines both match - register once.
+			if currentFile != lastGitPath {
+				flush()
+				currentFile = lastGitPath
+			}
 			lastOldFile = ""
 			newLineNum = 0
 			continue
