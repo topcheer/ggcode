@@ -12,6 +12,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
@@ -73,6 +74,19 @@ func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 	// stable hash for keys whose sanitization collides.
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
+
+	// r401 GAP-B: cross-process write safety. writeMu below only serializes
+	// writers within ONE process; two ggcode instances (a seat process plus a
+	// subagent process, or a daemon reflecting while a session saves) share
+	// this dir and raced last-write-wins, with .usage.json sidecar updates
+	// interleaving between the two. util.FileLock (flock / LockFileEx, shared
+	// with auth store and knight) serializes across processes; on lock
+	// failure we degrade to the previous single-process behavior rather than
+	// blocking memory writes on lock-infrastructure faults (knight
+	// semantic_memory.go precedent).
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	}
 
 	// #1752 case 2: atomic write - temp file in the same directory, then
 	// rename (atomic on POSIX and Windows-NT). Concurrent readers see
