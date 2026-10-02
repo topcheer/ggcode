@@ -187,6 +187,17 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 	prompt += "- Provide a concise result when the task is complete.\n"
 	prompt += "- Do not use emoji with Variation Selector-16 (VS16, U+FE0F) in your output.\n"
 
+	// r388 (FastContext, Kim et al. 2026): exploration output must be a
+	// structured region list, not free-form notes - the parent consumes the
+	// selected regions directly as targeted reads instead of re-scanning
+	// prose for paths (+5.5 SWE-Bench, 60% fewer tokens in the paper).
+	if strings.EqualFold(agentType, "Explore") {
+		prompt += "\n## Output Contract (Explore)\n"
+		prompt += "End your result with a `## Regions` section listing every code region that matters for this task, one per line, in this exact format:\n"
+		prompt += "path:startLine-endLine - why this region is relevant\n"
+		prompt += "Use workspace-relative paths with real line ranges (from your reads). These lines are parsed so the parent agent can issue targeted reads; free text alone is not enough.\n"
+	}
+
 	// Append the task
 	prompt += "\n\n## Task\nComplete the following task independently:\n" + task
 

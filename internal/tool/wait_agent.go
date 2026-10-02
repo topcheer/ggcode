@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -94,12 +97,12 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
-		return Result{Content: annotateWorktree(snap.Result+acceptanceReminder(snap.Task, snap.Result), snap)}, nil
+		return Result{Content: annotateWorktree(snap.Result+formatExploreRegions(snap.Result)+acceptanceReminder(snap.Task, snap.Result), snap)}, nil
 	}
 	var reminder string
 	if snap.Status == subagent.StatusCompleted {
 		// r384: validator-side reminder - only on completed runs.
-		reminder = acceptanceReminder(snap.Task, snap.Result)
+		reminder = acceptanceReminder(snap.Task, snap.Result) + formatExploreRegions(snap.Result)
 	}
 	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap)+reminder, snap)}, nil
 }
@@ -111,4 +114,39 @@ func annotateWorktree(content string, snap subagent.Snapshot) string {
 		return content
 	}
 	return content + fmt.Sprintf("\n\nIsolated worktree: %s (branch: %s)", snap.Worktree, filepath.Base(snap.Worktree))
+}
+
+// exploreRegionRe matches the "path:startLine-endLine" contract lines an
+// Explore sub-agent must emit under its "## Regions" section (r388,
+// FastContext Kim et al. 2026: structured region handoff beats free-form
+// notes; the parent consumes regions directly as targeted reads).
+var exploreRegionRe = regexp.MustCompile(`(?m)^\s*(\S+?):(\d+)-(\d+)\b`)
+
+// formatExploreRegions turns the region list into an explicit targeted-read
+// block (path + offset + limit) so the parent can issue offset/limit reads
+// without re-scanning the free-text result for paths. Returns "" when the
+// "## Regions" marker is absent - non-Explore runs pass through unchanged,
+// and results whose region section failed to parse also stay untouched.
+func formatExploreRegions(result string) string {
+	idx := strings.Index(result, "## Regions")
+	if idx < 0 {
+		return ""
+	}
+	matches := exploreRegionRe.FindAllStringSubmatch(result[idx:], 8)
+	if len(matches) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(matches))
+	for _, m := range matches {
+		start, err1 := strconv.Atoi(m[2])
+		end, err2 := strconv.Atoi(m[3])
+		if err1 != nil || err2 != nil || start < 1 || end < start {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- read_file %s (offset %d, limit %d)", m[1], start, end-start+1))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nTargeted reads (structured handoff from the Explore sub-agent):\n" + strings.Join(lines, "\n")
 }
