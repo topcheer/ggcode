@@ -2308,6 +2308,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// possible, so the strategist detection is active
 		// for subsequent iterations.
 		a.maybeSetAutopilotGoalFromLLMOutput(textBuf)
+		// r394: accumulate LLM tokens for the perf-baseline cost dimension.
+		runStats.recordTokens(resp.Usage.InputTokens, resp.Usage.OutputTokens)
 		a.syncContextManagerUsage(resp.Usage)
 		a.emitUsage(resp.Usage)
 		// #1494 case A: session token budget consumption - setter/getter/
