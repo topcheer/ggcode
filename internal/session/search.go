@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -24,7 +25,7 @@ type SearchResult struct {
 
 // SearchSessions scans the message content of all sessions and returns hits
 // matching the query (case-insensitive substring). Each session is scanned at
-// most once, and only message-type JSONL records are inspected — usage,
+// most once, and only message-type JSONL records are inspected - usage,
 // metric, and meta records are skipped for speed.
 //
 // The search is optimized for the common case (tens to low-hundreds of
@@ -45,7 +46,7 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 	}
 
 	// Sort by UpdatedAt descending so the most recently active sessions are
-	// scanned first — a scan-order tiebreak only, since results are globally
+	// scanned first - a scan-order tiebreak only, since results are globally
 	// sorted by message timestamp before truncation below.
 	sort.Slice(idx, func(i, j int) bool {
 		return idx[i].UpdatedAt.After(idx[j].UpdatedAt)
@@ -54,7 +55,7 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 	// #536: collect ALL hits first, then sort by message timestamp, then
 	// truncate. Previously the scan stopped once maxResults hits were
 	// accumulated, so older hits from early-scanned (recently-updated)
-	// sessions evicted newer hits from later-scanned sessions — the final
+	// sessions evicted newer hits from later-scanned sessions - the final
 	// result was not "the N most recent matches".
 	var results []SearchResult
 	for _, e := range idx {
@@ -80,7 +81,7 @@ func (s *JSONLStore) SearchSessions(query string, maxResults int) ([]SearchResul
 // whose text content contains the (already lowercased) needle.
 //
 // #478: uses bufio.Reader (not Scanner) so a single over-long JSONL line
-// (e.g. a multi-MB base64 image blob — same class as #291) only discards
+// (e.g. a multi-MB base64 image blob - same class as #291) only discards
 // THAT line: previously bufio.Scanner's 10MB cap aborted the whole scan,
 // and the caller's error-continue silently dropped every hit already
 // collected plus everything after, with no log.
@@ -109,7 +110,7 @@ func searchInSessionFile(path, title, needle string) ([]SearchResult, error) {
 			}
 		}
 		if rerr != nil {
-			// io.EOF (or a real I/O error): keep what we have — partial
+			// io.EOF (or a real I/O error): keep what we have - partial
 			// results beat none (#478).
 			break
 		}
@@ -164,7 +165,7 @@ func searchJSONLLine(line, path, title, needle string) (SearchResult, bool) {
 		if block.Type != "text" {
 			continue
 		}
-		idx := strings.Index(strings.ToLower(block.Text), needle)
+		idx := indexFoldText(block.Text, needle)
 		if idx < 0 {
 			continue
 		}
@@ -177,6 +178,42 @@ func searchJSONLLine(line, path, title, needle string) (SearchResult, bool) {
 		}, true
 	}
 	return SearchResult{}, false
+}
+
+// indexFoldText finds the first case-insensitive occurrence of needle (already
+// lowercased by the caller) in text and returns its byte offset in the
+// ORIGINAL text. strings.ToLower can lengthen some runes (e.g. U+0130 "İ"
+// folds to the 3-byte "i̇"), so offsets into a lowered copy do not align with
+// text - snippet slicing would be shifted or cut mid-rune (#3088). Folding
+// incrementally rune-by-rune keeps every offset in text space.
+func indexFoldText(text, needle string) int {
+	if needle == "" {
+		return 0
+	}
+	for pos := 0; pos < len(text); {
+		tp, np := pos, 0
+		for np < len(needle) && tp < len(text) {
+			r, size := utf8.DecodeRuneInString(text[tp:])
+			if r == utf8.RuneError && size <= 1 {
+				break // invalid UTF-8 in text: no fold match possible here
+			}
+			lr := strings.ToLower(string(r))
+			if np+len(lr) > len(needle) || needle[np:np+len(lr)] != lr {
+				break
+			}
+			tp += size
+			np += len(lr)
+			if np == len(needle) {
+				return pos
+			}
+		}
+		_, size := utf8.DecodeRuneInString(text[pos:])
+		if size <= 0 {
+			break
+		}
+		pos += size
+	}
+	return -1
 }
 
 // makeSnippet extracts up to 200 characters of context centered on the match.
@@ -211,8 +248,8 @@ func makeSnippet(text string, matchIdx int, needle string) string {
 }
 
 // extractSessionID derives the session ID from a JSONL file path.
-// #558 G: handle both '/' and '\\' separators — paths built on or sourced
-// from Windows must not fall through to LastIndex("/") — and strip only the
+// #558 G: handle both '/' and '\\' separators - paths built on or sourced
+// from Windows must not fall through to LastIndex("/") - and strip only the
 // trailing extension of the BASENAME via filepath.Ext semantics. The old
 // LastIndex(base, ".") hack misfired on dots inside directory names (e.g.
 // Windows usernames like zhan.ju), producing garbage session IDs.
