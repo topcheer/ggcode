@@ -674,7 +674,24 @@ func (m *Manager) BroadcastToTeam(teamID string, msg MailMessage) []string {
 	var sent []string
 	var dropped []string
 	for _, tm := range team.listTeammates() {
-		if tm.getStatus() == TeammateIdle || tm.getStatus() == TeammateWorking {
+		// #3104: mirror the #2788 SendToTeammate shutdown guard. The old
+		// check (via the lock-free getStatus) plus an unlocked push raced a
+		// concurrent ShutdownTeammate: the teammate could be cancelled and
+		// removed after the status read, and the broadcast still counted a
+		// fake delivery into a dead inbox. ShutdownTeammate flips the
+		// status under tm.mu, so holding tm.mu across BOTH the check and
+		// the non-blocking push closes that window: either the flip
+		// already happened (we drop) or it cannot happen until we release
+		// (the message lands in a live inbox). A root-level cancel that is
+		// still propagating is caught by the ctx.Err() probe.
+		tm.mu.Lock()
+		if tm.Status == TeammateShuttingDown || (tm.ctx != nil && tm.ctx.Err() != nil) {
+			tm.mu.Unlock()
+			dropped = append(dropped, tm.ID)
+			debug.Log("swarm", "broadcast skipped teammate %s (shutting down)", tm.ID)
+			continue
+		}
+		if tm.Status == TeammateIdle || tm.Status == TeammateWorking {
 			select {
 			case tm.Inbox <- msg:
 				sent = append(sent, tm.ID)
@@ -682,9 +699,12 @@ func (m *Manager) BroadcastToTeam(teamID string, msg MailMessage) []string {
 				dropped = append(dropped, tm.ID)
 			}
 		}
+		tm.mu.Unlock()
 	}
 	if len(dropped) > 0 {
-		debug.Log("swarm", "broadcast dropped %d messages for teammates %v (inbox full)", len(dropped), dropped)
+		// #3104: dropped now covers both inbox-full and shutting-down skips
+		// (each skip is individually logged with its reason above).
+		debug.Log("swarm", "broadcast dropped %d messages for teammates %v (inbox full or shutting down)", len(dropped), dropped)
 	}
 	return sent
 }
