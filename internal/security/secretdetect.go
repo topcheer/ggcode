@@ -184,7 +184,13 @@ var secretPatterns = []SecretPattern{
 // these to avoid noise.
 var fileAllowlistPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`_test\.go$`),
-	regexp.MustCompile(`\.test\.`),
+	// #3081: the bare `\.test\.` infix allowlisted REAL configs
+	// (api.test.env, prod.test.conf) out of scanning entirely. Narrowed to
+	// known test-resource filename shapes; `api.test.env` scans again.
+	regexp.MustCompile(`\.test\.go$`),
+	regexp.MustCompile(`\.test\.py$`),
+	regexp.MustCompile(`\.test\.(js|ts|mjs|jsx|tsx)$`),
+	regexp.MustCompile(`\.test\.(json|ya?ml|golden|txt|input|output)$`),
 	regexp.MustCompile(`testdata[/\\]`), // both Unix and Windows path separators
 	regexp.MustCompile(`_fixture`),
 	regexp.MustCompile(`(?i)\.example$`),

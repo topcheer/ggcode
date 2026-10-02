@@ -3,6 +3,7 @@ package security
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Display-time terminal escape sanitization (egress hardening).
@@ -47,21 +48,19 @@ var (
 	// OSC (ESC ]), DCS (ESC P), PM (ESC ^), APC (ESC _). Payload runs to
 	// BEL, ST (ESC \), or the 8-bit ST (0x9c). Unterminated payloads are
 	// handled by the bare-ESC fallback in rawShortEscape.
+	//
+	// #3081: the 8-bit C1 cousin of this pattern used to live here as a
+	// byte-level regex - see stripRawC1Sequences for why it became a
+	// rune-aware scanner instead.
 	rawStringSeq = regexp.MustCompile(`\x1b\][^\x07\x1b\x9c]*(?:\x07|\x1b\\)` +
 		`|\x1b[P^_][^\x07\x1b\x9c]*(?:\x1b\\|\x9c)`)
 
-	// rawStringSeqC1 strips the 8-bit C1 encodings of the same string
-	// sequences: DCS/SOS/OSC/PM/APC introducers (0x90/0x98/0x9d/0x9e/0x9f)
-	// terminated by C1 ST (0x9c) or BEL. Terminals that accept the C1 form
-	// execute these exactly like their 7-bit counterparts.
-	rawStringSeqC1 = regexp.MustCompile(`[\x90\x98\x9d\x9e\x9f][^\x07\x9c]*(?:\x9c|\x07)`)
-
-	// rawCSI strips CSI sequences, 7-bit (ESC [) and 8-bit C1 (0x9b),
-	// wholesale — including benign SGR color. Display surfaces apply their
-	// own styling; any foreign escape, even a lone color code, can leave
-	// the frame in a state the surrounding renderer did not author.
-	rawCSI = regexp.MustCompile(`\x1b\[[0-9;:<=>?]*[ -/]*[@-~]` +
-		`|\x9b[0-9;:<=>?]*[ -/]*[@-~]`)
+	// rawCSI strips 7-bit CSI sequences (ESC [) wholesale - including
+	// benign SGR color. Display surfaces apply their own styling; any
+	// foreign escape, even a lone color code, can leave the frame in a
+	// state the surrounding renderer did not author. The 8-bit C1 CSI
+	// (0x9b) is handled by stripRawC1Sequences (#3081).
+	rawCSI = regexp.MustCompile(`\x1b\[[0-9;:<=>?]*[ -/]*[@-~]`)
 
 	// rawShortEscape strips remaining short escape functions: charset
 	// designation (ESC ( B, ESC ) 0, ESC # 8), line-size (ESC % G), single
@@ -104,11 +103,117 @@ func SanitizeTerminalForDisplay(content string) string {
 		return content
 	}
 	out := rawStringSeq.ReplaceAllString(content, "")
-	out = rawStringSeqC1.ReplaceAllString(out, "")
+	// #3081: the 8-bit C1 forms (0x9b CSI, 0x90/0x98/0x9d/0x9e/0x9f string
+	// sequences) are handled by a rune-aware scanner, not a regex: the
+	// bytes 0x90-0x9f are also UTF-8 continuation bytes, so a byte-level
+	// pattern matched INSIDE multi-byte runes and corrupted them (Cyrillic
+	// "Лa" = D0 9B 61 lost its continuation byte plus the following ASCII
+	// char to the \x9b CSI pattern; four-byte emoji hit it twice).
+	out = stripRawC1Sequences(out)
 	out = rawCSI.ReplaceAllString(out, "")
 	out = rawShortEscape.ReplaceAllString(out, "")
 	out = literalDangerousEscape.ReplaceAllString(out, ansiFilteredMarker)
 	return dropControlRunes(out)
+}
+
+// stripRawC1Sequences removes 8-bit C1 control sequences in BOTH forms
+// they arrive in: STANDALONE invalid single bytes (raw 0x9b etc. in a
+// non-UTF-8 stream) and PROPERLY DECODED UTF-8 runes (U+009B = C2 9B).
+// CSI (0x9b/U+009B + params + final) and string sequences
+// (0x90/0x98/0x9d/0x9e/0x9f introducers, payload to 0x9c/U+009C ST or
+// 0x07 BEL) are consumed whole.
+//
+// A C1-range byte that is merely a CONTINUATION byte of a VALID multi-byte
+// rune (Cyrillic "Л" = D0 9B, emoji F0 9F 98 80) is never treated as an
+// introducer: DecodeRune consumes the whole rune and only actual C1
+// control values (or standalone invalid bytes in the introducer range)
+// enter the sequence logic (#3081). The old byte-level regexes matched
+// inside multi-byte runes and corrupted them.
+//
+// Match semantics mirror the former regexes: an introducer without its
+// required final byte / terminator is NOT consumed (the introducer itself
+// survives to the rune-dropper, as before), and other C1 bytes outside
+// the introducer set are none of this scanner's business.
+func stripRawC1Sequences(s string) string {
+	// Fast path: skip the scan unless a byte in the C1 range appears at
+	// all (continuation bytes trigger this too - the rune walk then proves
+	// them harmless).
+	hasC1Candidate := false
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 0x90 && c <= 0x9f {
+			hasC1Candidate = true
+			break
+		}
+	}
+	if !hasC1Candidate {
+		return s
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		intro := r // decoded rune value; standalone bytes decode to RuneError
+		if size == 1 && r == utf8.RuneError {
+			intro = rune(s[i]) // treat the standalone byte by its value
+		}
+		switch intro {
+		case 0x9b: // CSI: parameter bytes, intermediate bytes, final byte
+			j := i + size
+			for j < len(s) && isCSIParamByte(s[j]) {
+				j++
+			}
+			for j < len(s) && s[j] >= 0x20 && s[j] <= 0x2f { // intermediates [ -/]
+				j++
+			}
+			if j < len(s) && s[j] >= 0x40 && s[j] <= 0x7e { // final [@-~]
+				i = j + 1 // consume the whole sequence, introducer included
+				continue
+			}
+			// No final byte: not a CSI match - leave the introducer bytes.
+			b.WriteString(s[i : i+size])
+			i += size
+		case 0x90, 0x98, 0x9d, 0x9e, 0x9f: // string sequences to ST/BEL
+			j := i + size
+			terminated := false
+			for j < len(s) {
+				r2, sz2 := utf8.DecodeRuneInString(s[j:])
+				if size1Standalone(r2, sz2, s[j]) == 0x9c || r2 == 0x9c || r2 == 0x07 {
+					j += sz2 // consume the terminator
+					terminated = true
+					break
+				}
+				j += sz2
+			}
+			if terminated {
+				i = j // payload + terminator consumed, introducer included
+				continue
+			}
+			// Unterminated: not a match - leave the introducer bytes.
+			b.WriteString(s[i : i+size])
+			i += size
+		default:
+			// Not an introducer: any other rune (including one whose
+			// ENCODING contains C1-range continuation bytes) passes through.
+			b.WriteString(s[i : i+size])
+			i += size
+		}
+	}
+	return b.String()
+}
+
+// size1Standalone returns the byte value when the decode produced a
+// standalone invalid byte (size 1, RuneError), else -1. Used to detect a
+// RAW 0x9c terminator byte in malformed input.
+func size1Standalone(r rune, size int, raw byte) rune {
+	if size == 1 && r == utf8.RuneError {
+		return rune(raw)
+	}
+	return -1
+}
+
+func isCSIParamByte(c byte) bool {
+	return (c >= '0' && c <= '9') || c == ';' || c == ':' || c == '<' || c == '=' || c == '>' || c == '?'
 }
 
 // mayContainEscape is the fast-path scan: any 7-bit ESC byte, any C0/C1
