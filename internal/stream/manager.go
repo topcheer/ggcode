@@ -380,18 +380,20 @@ func (m *Manager) fanOutBroadcaster() {
 	broadcastCount := 0
 
 	// Collect target channels under lock to prevent concurrent map write (StopTarget)
-	var targets []chan []byte
+	var chans []chan []byte
+	var tgts []*Target
 	m.mu.Lock()
 	for _, t := range m.targets {
 		ch := make(chan []byte, 64)
 		t.broadcastCh = ch
-		targets = append(targets, ch)
+		chans = append(chans, ch)
+		tgts = append(tgts, t)
 		safego.Go("stream.targetWriter", func() { m.targetWriter(t, ch) })
 	}
 	m.mu.Unlock()
 
 	defer func() {
-		for _, ch := range targets {
+		for _, ch := range chans {
 			close(ch)
 		}
 	}()
@@ -408,6 +410,12 @@ func (m *Manager) fanOutBroadcaster() {
 		m.encoderMu.RUnlock()
 		if enc == nil {
 			debug.Log("stream", "broadcaster: encoder is nil, exiting")
+			// #3094: nobody else owns the targets on this exit path -
+			// Manager.Stop may never run (start-failure rollback raced past).
+			// Stop is idempotent, so a later Manager.Stop is a no-op.
+			for _, t := range tgts {
+				t.Stop()
+			}
 			return
 		}
 
@@ -420,7 +428,7 @@ func (m *Manager) fanOutBroadcaster() {
 
 			// Don't log byte counts — extremely noisy
 
-			for _, ch := range targets {
+			for _, ch := range chans {
 				select {
 				case ch <- data:
 				default:
@@ -439,6 +447,11 @@ func (m *Manager) fanOutBroadcaster() {
 
 // targetWriter reads from broadcast channel and writes to a single RTMP target.
 func (m *Manager) targetWriter(target *Target, ch chan []byte) {
+	// #3094: this goroutine owns the target's lifecycle once started - a
+	// write failure (or channel close) must stop the ffmpeg pusher child and
+	// release its connection instead of leaking until Manager.Stop. Stop is
+	// idempotent, so Manager.Stop later is a no-op.
+	defer target.Stop()
 	total := 0
 	for data := range ch {
 		n, err := target.Write(data)
