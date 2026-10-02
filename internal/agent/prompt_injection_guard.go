@@ -58,6 +58,14 @@ var externalContentTools = map[string]bool{
 	"git_show":            true,
 	"task_output":         true,
 	"read_mcp_resource":   true,
+	// r406 (arXiv 2609.22949 mechanism (a)): inter-agent message channels
+	// are injection vectors invisible to perimeter defenses - a compromised
+	// peer agent authors content that flows back to THIS model as tool
+	// results (lanchat history / send_message inbox / a2a_remote responses).
+	"lanchat":       true,
+	"send_message":  true,
+	"a2a_remote":    true,
+	"a2a_send_task": true,
 }
 
 // injectionPatterns are case-insensitive patterns that strongly indicate an

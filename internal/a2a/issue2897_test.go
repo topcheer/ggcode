@@ -34,8 +34,14 @@ func TestBuildTranscriptPromptSingle(t *testing.T) {
 		{Role: "user", Parts: []Part{{Kind: "text", Text: "review internal/bar.go"}}},
 	}
 	got := buildTranscriptPrompt(msgs)
-	if got != "review internal/bar.go" {
-		t.Errorf("single message should be bare request, got %q", got)
+	// r406: single-message histories keep the payload verbatim (no
+	// conversation scaffolding) but are still wrapped as untrusted peer
+	// content - a lone peer message is exactly as untrusted as a transcript.
+	if !strings.Contains(got, "review internal/bar.go") {
+		t.Errorf("payload lost: %q", got)
+	}
+	if !strings.Contains(got, "<untrusted_peer_transcript>") {
+		t.Errorf("single peer message must still be spotlighted, got %q", got)
 	}
 }
 
