@@ -222,6 +222,7 @@ type Agent struct {
 	permDenyStreak               *permDenyStreakState       // consecutive permission-deny mode guard (#1210)
 	diffSummary                  *diffSummaryState          // pre-completion holistic change summary for self-review
 	oversightTriage              *oversightTriageState      // r397: novel-vs-routine triage for human review attention
+	autonomyDial                 *autonomyDialState         // r407: advisory progressive-autonomy dial
 	commitHint                   *commitHintState           // post-completion commit reminder for uncommitted changes
 	verifyRegression             *verifyRegressionState     // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate           *selfCorrectionGateState   // EIR/ECR stability gate: detects net-negative self-correction loops
@@ -456,6 +457,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
 		oversightTriage:        newOversightTriageState(),
+		autonomyDial:           newAutonomyDialState(),
 		guidanceStats:          guidanceRunStats{}, // r402: also reset per-run in runPrompt
 		commitHint:             newCommitHintState(),
 		verifyRegression:       newVerifyRegressionState(),
@@ -652,6 +654,12 @@ func (a *Agent) SetPermissionPolicy(policy permission.PermissionPolicy) {
 	newMode := permission.SupervisedMode
 	if mp, ok := policy.(modeAwarePolicy); ok {
 		newMode = mp.Mode()
+	}
+	// r407: any mode transition re-opens the autonomy-dial observation
+	// window - reliability evidence must not survive a mode change (same
+	// anti-contamination semantics as approval-memory's EnsureModeScope).
+	if newMode != oldMode {
+		a.autonomyDial.reset()
 	}
 	// Entering autopilot: reset goal collection state.
 	if newMode == permission.AutopilotMode && oldMode != permission.AutopilotMode {
@@ -1773,7 +1781,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
 	a.oversightTriage.reset()
-	a.guidanceStats = guidanceRunStats{} // r402: fresh fire counts per run
+	a.autonomyDial.reset() // r407: fresh observation window per run
 	// #3111: emit the novel-decision digest on ANY run exit, not just the
 	// natural no-tool-calls convergence. Error / cancel / iteration-limit
 	// exits previously dropped accumulated novel decisions silently - and a
@@ -1782,6 +1790,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// the loop already emitted on the convergence path.
 	defer func() {
 		if d := a.oversightTriage.digest(); d != "" {
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
+		}
+		// r407: advisory autonomy-dial suggestion on any exit (one-shot gates).
+		if d := a.autonomyDial.suggest(); d != "" {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
 		}
 	}()
@@ -3223,6 +3235,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if d := a.oversightTriage.digest(); d != "" {
 				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
 			}
+			// r407: advisory autonomy-dial suggestion on the convergence path too
+			// (suggest() has one-shot gates; the any-exit defer is a no-op then).
+			if d := a.autonomyDial.suggest(); d != "" {
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
+			}
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}
@@ -3839,6 +3856,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// r397: classify for the end-of-run oversight digest.
 			a.oversightTriage.record(tc)
+			// r407: observe reliability for the advisory autonomy dial.
+			a.autonomyDial.record(result.IsError, result.Content)
 			// r395: track the tool behind this result for intervention
 			// attribution, and surface a defer hint when this tool has a
 			// repeated user-takeover history (non-blocking, result-appended).
