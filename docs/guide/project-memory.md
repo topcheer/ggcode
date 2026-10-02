@@ -191,6 +191,14 @@ Treat these as hints about what worked before — verify against current code, n
 
 Key properties:
 
+- **Decision-time recall**: besides the run-start block, the case bank is
+  queried once more *at the moment a failing-strategy pattern is confirmed
+  mid-run* (error strategy loop detector). Up-to-2 cases matching task +
+  error excerpt are injected as `## Past Experience for This Failure`, so
+  the agent sees "how this was solved last time" exactly when a strategy
+  change is needed — run-start recall cannot see the error yet. One shot
+  per run; silent on cold or non-matching stores.
+
 - **Reconsolidation**: re-running the same logical task (normalized text
   match) updates the existing case instead of duplicating it — fresh outcome
   and approach, original creation date preserved.
