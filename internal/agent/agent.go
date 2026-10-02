@@ -221,6 +221,7 @@ type Agent struct {
 	claimVerify                  *claimVerifyState          // tool output misinterpretation detection (AgentRx-inspired)
 	permDenyStreak               *permDenyStreakState       // consecutive permission-deny mode guard (#1210)
 	diffSummary                  *diffSummaryState          // pre-completion holistic change summary for self-review
+	oversightTriage              *oversightTriageState      // r397: novel-vs-routine triage for human review attention
 	commitHint                   *commitHintState           // post-completion commit reminder for uncommitted changes
 	verifyRegression             *verifyRegressionState     // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate           *selfCorrectionGateState   // EIR/ECR stability gate: detects net-negative self-correction loops
@@ -452,6 +453,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		claimVerify:            newClaimVerifyState(),
 		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
+		oversightTriage:        newOversightTriageState(),
 		commitHint:             newCommitHintState(),
 		verifyRegression:       newVerifyRegressionState(),
 		selfCorrectionGate:     newSelfCorrectionGateState(),
@@ -1766,6 +1768,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.branchGuard.reset()
 	a.destructiveGuard.reset()
 	a.fulfillmentGate.reset()
+	a.oversightTriage.reset()
 	a.constraintAudit.reset()
 	a.ambiguityPoint.reset()
 	a.planDrift.reset()
@@ -3193,6 +3196,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				continue
 			}
+			// r397: route human review attention - after all gates pass, emit
+			// the novel-decision digest directly to the user (silent when the
+			// run made only routine decisions).
+			if d := a.oversightTriage.digest(); d != "" {
+				onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
+			}
 			debug.Log("agent", "Iteration %d: no tool calls, returning", i+1)
 			return nil
 		}
@@ -3807,6 +3816,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if seqHint := a.toolSequence.record(tc, i+1); seqHint != "" {
 				a.appendGuidance(&result, seqHint)
 			}
+			// r397: classify for the end-of-run oversight digest.
+			a.oversightTriage.record(tc)
 			// r395: track the tool behind this result for intervention
 			// attribution, and surface a defer hint when this tool has a
 			// repeated user-takeover history (non-blocking, result-appended).
