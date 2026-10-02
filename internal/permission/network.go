@@ -100,7 +100,11 @@ var networkPatterns = []networkPattern{
 	// at all.
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\b(nc|ncat|netcat)\b.*<\s*\S`), "netcat piping a local file to a remote host"},
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bncat\b.*<\s`), "ncat piping a local file to a remote host"},
-	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bsocat\b.*`), "socat can relay data to external endpoints"},
+	// #3062: socat with a REMOTE/dangerous channel relays data outward;
+	// pure-local IPC (UNIX-CONNECT/UNIX-LISTEN/UNIX-SENDTO - agent socket
+	// debugging) used to match `socat.*` and force manual approval even in
+	// bypass/auto, repeatedly (BlocksAutoApprove excludes approval memory).
+	{NetworkExfiltrate, regexp.MustCompile(`(?i)\bsocat\b.*(TCP|UDP|OPENSSL|EXEC|SYSTEM|fork)[^|]*:`), "socat can relay data to external endpoints"},
 
 	// base64/xxd encode piped to network commands (stealth exfiltration)
 	{NetworkExfiltrate, regexp.MustCompile(`(?i)\b(base64|xxd|od)\b.*\|\s*(curl|wget|nc|ncat)\b`), "encoding local data and piping to a network command (potential exfiltration)"},

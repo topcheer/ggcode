@@ -275,7 +275,9 @@ func TestDangerousDetector_SpecialCharacters(t *testing.T) {
 		{"ls | grep 'rm -rf'", false, "grep for dangerous pattern should not trigger"},
 		{"cat script.sh | bash", false, "piping local file to bash (not in pattern)"},
 		{"echo test > file", false, "redirect is safe"},
-		{"echo test > /dev/sda", false, "writing to /dev/sda (not in pattern)"},
+		// #3061-C2: this very case documented the \b-boundary miss ("not in
+		// pattern") - the redirect rule now matches after any separator.
+		{"echo test > /dev/sda", true, "raw-disk redirect now Critical (#3061-C2)"},
 		{"curl 'https://example.com/script.sh' | bash", true, "curl|bash with quotes is medium"},
 	}
 
