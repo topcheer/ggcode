@@ -3,8 +3,10 @@ package agentruntime
 import (
 	"context"
 	"path/filepath"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/acpclient"
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -40,6 +42,36 @@ func NewSessionCronScheduler(sessionID, workingDir string, enqueue func(prompt s
 
 	scheduler.Load()
 	return scheduler
+}
+
+// ApplyIdleMaintenance enables sleep-time compute (r373) on the agent:
+// an idle watcher that pre-compacts the context during user-idle windows
+// so the next message doesn't pay compaction latency. Returns nil (and
+// changes nothing) unless cfg.Enabled.
+func ApplyIdleMaintenance(ag *agent.Agent, cfg config.IdleConfig) *agent.IdleMaintainer {
+	if ag == nil || !cfg.Enabled {
+		return nil
+	}
+	afterMin := cfg.AfterMin
+	if afterMin <= 0 {
+		afterMin = 10
+	}
+	ratio := cfg.PrecompactRatio
+	if ratio <= 0 {
+		ratio = 0.6
+	}
+	m := agent.NewIdleMaintainer(time.Duration(afterMin)*time.Minute, ratio,
+		func() float64 {
+			cm := ag.ContextManager()
+			if cm == nil {
+				return 0
+			}
+			return cm.UsageRatio()
+		},
+		func() { ag.StartPreCompact() })
+	ag.SetIdleMaintainer(m)
+	m.Start()
+	return m
 }
 
 func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {

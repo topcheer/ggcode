@@ -680,6 +680,15 @@ watch:
     queue_if_busy: false   # skip if agent busy (default); true = queue
     cooldown_sec: 10       # min seconds between fires (default 10)
 
+# Sleep-time compute (idle maintenance): when the session has been idle
+# for after_min minutes, ggcode uses the window to pre-compact the
+# context (if usage >= precompact_ratio) so the next message doesn't pay
+# the compaction latency. Disabled unless enabled: true.
+idle:
+  enabled: false
+  after_min: 10          # idle window before maintenance fires (default 10)
+  precompact_ratio: 0.6  # only pre-compact when usage is at/above this (default 0.6)
+
 hooks:
   # Before user message reaches the LLM - sync, can block.
   on_user_message:

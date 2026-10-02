@@ -990,6 +990,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
+	// Sleep-time compute (r373): pre-compact during idle windows.
+	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	defer idleMaint.Stop()
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)
 	repl.SetTaskOutputTool(subMgr, registry)

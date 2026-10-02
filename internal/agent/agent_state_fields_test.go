@@ -43,6 +43,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"onToolProgress":       "optional callback, injected via setter",
 		"onApproval":           "optional approval callback, injected via SetApprovalFunc",
 		"onCheckpoint":         "optional callback, injected via setter",
+		"idleMaint":            "optional sleep-time-compute watcher (r373), injected via SetIdleMaintainer; nil = idle maintenance disabled (default)",
 		"onInterrupt":          "optional interruption handler, injected via setter",
 		"onMetric":             "optional metrics callback, injected via setter",
 		"onRunHealth":          "optional callback, injected via setter",

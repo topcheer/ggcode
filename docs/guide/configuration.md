@@ -67,7 +67,7 @@ See [Providers](./providers.md) for the full list of built-in vendor presets.
 
 ## API Key Security
 
-API keys are stored in `~/.ggcode/keys.env` — **never** in the YAML file. This keeps secrets out of version control.
+API keys are stored in `~/.ggcode/keys.env` - **never** in the YAML file. This keeps secrets out of version control.
 
 ```bash
 # keys.env (auto-managed by ggcode)
@@ -118,7 +118,7 @@ After every file edit (`edit_file`, `write_file`, `multi_edit`, `multi_file_writ
 
 1. Before the edit, a pre-edit diagnostic snapshot is captured (150ms timeout)
 2. After the edit, post-edit diagnostics are compared against the snapshot
-3. Only **newly introduced** issues are shown — pre-existing warnings are suppressed
+3. Only **newly introduced** issues are shown - pre-existing warnings are suppressed
 4. If the edit **resolved** pre-existing issues, you get positive feedback
 
 This keeps the signal focused on what the agent's change actually caused. See [design doc](../design/diagnostic-baseline-diffing.md) for details.
@@ -183,7 +183,7 @@ tool_permissions:
 
 The `default_mode` setting only applies to **new sessions**. When you switch
 modes mid-session (via `/mode`, Tab key, or the `switch_mode` tool), the mode
-is saved to the session's metadata — not to this config file. This means:
+is saved to the session's metadata - not to this config file. This means:
 
 - Switching to `bypass` in one session doesn't affect other sessions
 - Resuming a session restores the mode that was active when it was last used
@@ -256,9 +256,9 @@ fallback:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | bool | false | Enable automatic provider failover |
-| `vendor` | string | — | Fallback vendor name (must exist in `vendors`) |
+| `vendor` | string | - | Fallback vendor name (must exist in `vendors`) |
 | `endpoint` | string | `default` | Fallback endpoint name |
-| `model` | string | — | Fallback model name |
+| `model` | string | - | Fallback model name |
 
 ### Swarm Teams
 
@@ -295,8 +295,8 @@ knight:
 
 Cron jobs support a `queue_if_busy` parameter (default: `false`):
 
-- `queue_if_busy: false` — If the agent is busy when the job fires, the prompt is **skipped**. Use for non-critical periodic checks.
-- `queue_if_busy: true` — The prompt is **queued** and runs after the current task finishes. Use for important tasks that must run.
+- `queue_if_busy: false` - If the agent is busy when the job fires, the prompt is **skipped**. Use for non-critical periodic checks.
+- `queue_if_busy: true` - The prompt is **queued** and runs after the current task finishes. Use for important tasks that must run.
 
 Only recurring jobs are persisted to `~/.ggcode/cron-jobs.json` (grouped by workspace).
 One-shot reminders are in-memory only and will be lost if the process exits before they fire.
@@ -311,7 +311,7 @@ identical for one poll interval, plus a per-trigger cooldown).
 ```yaml
 watch:
   - globs: ["internal/permission/*_test.go", "internal/agent/*.go"]
-    prompt: "Watched files changed ({files}) — run the affected tests and report."
+    prompt: "Watched files changed ({files}) - run the affected tests and report."
     queue_if_busy: false   # default; true queues the prompt instead of skipping
     cooldown_sec: 10       # default minimum re-fire interval
 ```
@@ -319,11 +319,32 @@ watch:
 - `{files}` in the prompt is replaced with the changed paths (capped at 10);
   without it, the file list is appended.
 - Globs are relative to the working directory and use `filepath.Glob`
-  semantics (no `**` recursion — list directory-scoped patterns instead).
+  semantics (no `**` recursion - list directory-scoped patterns instead).
 - Detection is polling-based (2s interval, no fsnotify dependency), so it
   behaves identically on macOS/Linux/Windows.
 - Triggers are configuration-driven (not persisted like cron jobs) and are
   active in both the interactive TUI and daemon sessions.
+
+## Idle Maintenance (Sleep-Time Compute)
+
+Cron and watch triggers fire prompts; idle maintenance does the opposite -
+it exploits the ABSENCE of activity. When the session has been idle for
+`after_min` minutes (default 10) and no agent run is in flight, ggcode uses
+the window to pre-compact the context if usage is at/above
+`precompact_ratio` (default 0.6). The compaction LLM call happens while you
+are away instead of adding latency to your next message.
+
+```yaml
+idle:
+  enabled: true
+  after_min: 10
+  precompact_ratio: 0.6
+```
+
+- Fires at most once per idle period; any user activity or agent run re-arms it.
+- Reuses the existing snapshot-based pre-compact machinery (safe at run
+  boundaries, reentry-guarded, cooldown-respected).
+- Disabled by default; no behavior change without the `idle:` section.
 
 ## A2A (Agent-to-Agent)
 
@@ -368,4 +389,4 @@ IM adapters (QQ, Telegram, Discord, Slack, DingTalk, Feishu, etc.) are configure
 | `GGCODE_DEBUG` | Enable debug logging (`1` to enable) |
 | `${ENV_VAR}` | Expansion syntax used throughout YAML config |
 
-> API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML — they are never stored directly in `ggcode.yaml`.
+> API keys in `keys.env` are referenced via `${VAR}` expansion in the YAML - they are never stored directly in `ggcode.yaml`.

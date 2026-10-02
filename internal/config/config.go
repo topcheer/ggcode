@@ -338,6 +338,16 @@ type WatchTriggerConfig struct {
 	CooldownSec int      `yaml:"cooldown_sec,omitempty" json:"cooldown_sec,omitempty"`
 }
 
+// IdleConfig opts into sleep-time compute (r373): when the session has
+// been idle for after_min minutes, ggcode uses the window to pre-compact
+// the context (if usage is at/above precompact_ratio) so the next message
+// doesn't pay the compaction latency.
+type IdleConfig struct {
+	Enabled         bool    `yaml:"enabled" json:"enabled"`
+	AfterMin        int     `yaml:"after_min,omitempty" json:"after_min,omitempty"`               // default 10
+	PrecompactRatio float64 `yaml:"precompact_ratio,omitempty" json:"precompact_ratio,omitempty"` // default 0.6
+}
+
 type Config struct {
 	Vendor   string `yaml:"vendor" json:"vendor"`
 	Endpoint string `yaml:"endpoint" json:"endpoint"`
@@ -388,6 +398,7 @@ type Config struct {
 	A2A            A2AConfig                  `yaml:"a2a,omitempty" json:"a2a,omitempty"`
 	LanChat        LanChatConfig              `yaml:"lanchat,omitempty" json:"lanchat,omitempty"`
 	Watch          []WatchTriggerConfig       `yaml:"watch,omitempty" json:"watch,omitempty"`
+	Idle           IdleConfig                 `yaml:"idle,omitempty" json:"idle,omitempty"`
 	Stream         stream.StreamConfig        `yaml:"stream,omitempty" json:"stream,omitempty"`
 	LSPServers     map[string]LSPServerConfig `yaml:"lsp_servers,omitempty" json:"lsp_servers,omitempty"`
 	ProbeContext   bool                       `yaml:"probe_context,omitempty" json:"probe_context,omitempty"`

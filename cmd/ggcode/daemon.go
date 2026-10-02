@@ -642,6 +642,9 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
 	fileWatch.Start()
 	defer fileWatch.Stop()
+	// Sleep-time compute (r373): pre-compact during idle windows.
+	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	defer idleMaint.Stop()
 
 	// Sub-agent manager
 	subMgr = subagent.NewManager(cfg.SubAgents)

@@ -156,7 +156,8 @@ type Agent struct {
 	supportsVision            bool
 	lastTool                  string // tracks previous tool for execution graph composition patterns (sa-116)
 	precompact                *precompactState
-	precompactCooldownUntil   time.Time // earliest next precompact; guarded by mu
+	precompactCooldownUntil   time.Time       // earliest next precompact; guarded by mu
+	idleMaint                 *IdleMaintainer // sleep-time compute watcher (r373); guarded by mu
 	shutdownCtx               context.Context
 	shutdownCancel            context.CancelFunc         // cancels on Close()
 	probeKey                  string                     // "vendor|baseURL|model" for context window auto-detection
@@ -1275,6 +1276,25 @@ func (a *Agent) RunStream(ctx context.Context, userMsg string, onEvent func(prov
 	return a.RunStreamWithContent(ctx, []provider.ContentBlock{{Type: "text", Text: userMsg}}, onEvent)
 }
 
+// SetIdleMaintainer wires the sleep-time-compute watcher (r373). The
+// run loop calls RunBegin/RunEnd on it so idle windows are only ever
+// detected BETWEEN runs. Call before the first run (wiring time).
+func (a *Agent) SetIdleMaintainer(m *IdleMaintainer) {
+	if a == nil || m == nil {
+		return
+	}
+	a.mu.Lock()
+	a.idleMaint = m
+	a.mu.Unlock()
+}
+
+func (a *Agent) currentIdleMaintainer() *IdleMaintainer {
+	a.mu.Lock()
+	m := a.idleMaint
+	a.mu.Unlock()
+	return m
+}
+
 // userPromptForStatsSafe extracts text from content blocks for journaling.
 func userPromptForStatsSafe(content []provider.ContentBlock) string {
 	var sb strings.Builder
@@ -1303,6 +1323,12 @@ func estimateToolDefinitionOverhead(defs []provider.ToolDefinition) int {
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+	// Sleep-time compute (r373): a run is activity; idle maintenance only
+	// fires between runs. defer registers RunEnd on the same goroutine.
+	if im := a.currentIdleMaintainer(); im != nil {
+		im.RunBegin()
+		defer im.RunEnd()
+	}
 	// Main-goroutine panic containment (1b of the v1.3.224 crash follow-up).
 	// Registered FIRST so it unwinds LAST (defer LIFO): the function's other
 	// defers (journal MarkCompleted, stats finalize, session persistence) all
