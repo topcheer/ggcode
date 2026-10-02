@@ -28,7 +28,7 @@ func TestResearchReportGate(t *testing.T) {
 // successful searches/fetches accumulate; errors (retries against the same
 // source) must not inflate the multi-hop signal; other tools stay at zero.
 func TestOverseerRetrievalCounters(t *testing.T) {
-	o := &overseerState{}
+	o := newOverseerState()
 	o.recordToolCall("web_search", false, "")
 	o.recordToolCall("web_search", true, "") // failed retry: not counted
 	o.recordToolCall("web_fetch", false, "")
