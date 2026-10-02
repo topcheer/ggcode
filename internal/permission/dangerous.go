@@ -79,14 +79,18 @@ func NewDangerousDetector() *DangerousDetector {
 		// scored only Medium and ran with zero confirmation under
 		// bypass/autopilot (config_policy blocks >=Critical only). Same
 		// for $HOME expanding to the root of everything the user owns.
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']/["']\s*$`), "rm -rf quoted-root would delete the entire filesystem"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']/["']{1,2}\s*$`), "rm -rf quoted-root would delete the entire filesystem"},
 		// #3061-C1: the old \s*$ anchor missed `rm -rf $HOME/` and
 		// `rm -rf $HOME/projects` (trailing path), leaving whole-home deletions
 		// below the Critical bar that bypass/autopilot enforces.
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']?\$HOME["']?(/.*)?\s*$`), "rm -rf $HOME would delete the user's entire home directory"},
+		// r371 adversarial: {0,2} instead of ? - a nested form like
+		// sh -c 'rm -rf "$HOME"' has BOTH the inner double quote and the
+		// outer wrapping single quote after the target, and the single
+		// optional quote let it slip to Medium (zero-confirm under bypass).
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']?\$HOME["']{0,2}(/.*)?\s*$`), "rm -rf $HOME would delete the user's entire home directory"},
 		// #3061-C1: `~` is the same target and had NO Critical rule at all
 		// (bare `rm -r ~` without -f matched nothing).
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*r[a-zA-Z]*\s+)?["']?~["']?(/.*)?\s*$`), "rm -r ~ would delete the user's entire home directory"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*r[a-zA-Z]*\s+)?["']?~["']{0,2}(/.*)?\s*$`), "rm -r ~ would delete the user's entire home directory"},
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
 		// --no-preserve-root alone turns `rm -rf /` from a guarded refusal
 		// into a real filesystem wipe; Critical wherever it appears.
