@@ -16,10 +16,14 @@ on:
     branches: [main]
     paths:
       - "internal/util/process*.go"
+      - "internal/runfile/*.go"
+      - "internal/restart/*.go"
       - ".github/workflows/windows-process.yml"
   pull_request:
     paths:
       - "internal/util/process*.go"
+      - "internal/runfile/*.go"
+      - "internal/restart/*.go"
       - ".github/workflows/windows-process.yml"
   workflow_dispatch:
 
@@ -40,3 +44,12 @@ jobs:
       - name: Process liveness tests
         shell: pwsh
         run: go test -tags goolm -count=1 -v -run "IsProcessAlive" ./internal/util/
+      - name: Runfile/restart Windows suites (#3079)
+        # Same real-machine policy as above: processExists wait-state semantics
+        # (#3079/#1290) and the restart script generator only behave as written
+        # on a real Windows kernel. Full package suites - the windows-tagged
+        # probes (exit-code-259 child, creation-time token, cd warning) were
+        # previously never executed anywhere (ci.yml Test is ubuntu-only and
+        # this workflow's paths only matched internal/util).
+        shell: pwsh
+        run: go test -tags goolm -count=1 ./internal/runfile/ ./internal/restart/

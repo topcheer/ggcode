@@ -46,8 +46,12 @@ echo [ggcode restart] process %PARENT_PID% exited
 REM 2. Brief pause
 ping -n 1 127.0.0.1 >nul
 
-REM 3. cd to original working directory
+REM 3. cd to original working directory. #3079: warn on failure instead of
+REM silently launching from the wrong cwd when the work dir was deleted
+REM during the restart wait - the user sees why the binary path resolved
+REM differently instead of an unexplained launch failure.
 cd /d "%WORK_DIR%" 2>nul
+if errorlevel 1 echo [ggcode restart] WARNING: could not cd to "%WORK_DIR%" - launching from "%CD%"
 
 REM 4. Self-delete: the classic 'start /b del' races the parent cmd's open
 REM file handle and loses 100% of the time (#798). The (goto) 2>nul idiom
