@@ -228,6 +228,15 @@ from gi.repository import Atspi
 
 max_depth = int(sys.argv[1]) if len(sys.argv) > 1 else 8
 
+def safe_child_count(node):
+    # #3130: a dying app's DBus objects vanish under us - every accessor
+    # on a defunct node raises GLib.Error. Count failures mean "no
+    # children to walk", not "abort the whole probe".
+    try:
+        return node.get_child_count()
+    except Exception:
+        return 0
+
 def walk(node, depth):
     if node is None or depth > max_depth:
         return
@@ -241,19 +250,29 @@ def walk(node, depth):
             }), flush=True)
     except Exception:
         pass
-    for i in range(node.get_child_count()):
-        walk(node.get_child_at_index(i), depth + 1)
+    for i in range(safe_child_count(node)):
+        try:
+            child = node.get_child_at_index(i)
+        except Exception:
+            continue
+        walk(child, depth + 1)
 
 desk = Atspi.get_desktop(0)
 active = None
-for a in range(desk.get_child_count()):
-    app = desk.get_child_at_index(a)
-    for w in range(app.get_child_count()):
-        win = app.get_child_at_index(w)
-        st = win.get_state_set()
-        if st.contains(Atspi.StateType.ACTIVE):
-            active = win
-            break
+for a in range(safe_child_count(desk)):
+    try:
+        app = desk.get_child_at_index(a)
+    except Exception:
+        continue
+    for w in range(safe_child_count(app)):
+        try:
+            win = app.get_child_at_index(w)
+            st = win.get_state_set()
+            if st.contains(Atspi.StateType.ACTIVE):
+                active = win
+                break
+        except Exception:
+            continue
     if active:
         break
 if active is None:
