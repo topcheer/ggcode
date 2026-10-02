@@ -39,6 +39,18 @@ func (f *fakeSnaps) Snapshot(id string) (subagent.Snapshot, bool) {
 
 func (f *fakeSnaps) RunningCount() int { return f.running }
 
+// fakeCancSnaps adds the optional CandidateCanceller capability and records
+// which IDs the orchestrator asked to roll back (#3070).
+type fakeCancSnaps struct {
+	fakeSnaps
+	cancelled []string
+}
+
+func (f *fakeCancSnaps) Cancel(id string) bool {
+	f.cancelled = append(f.cancelled, id)
+	return true
+}
+
 func doneSnap(id, result string, fail bool) subagent.Snapshot {
 	st := subagent.StatusCompleted
 	evs := []subagent.AgentEvent{
@@ -132,13 +144,47 @@ func TestRunBestOfN_RejectsSubTwo(t *testing.T) {
 
 func TestRunBestOfN_LaunchFailureAbortsCleanly(t *testing.T) {
 	sp := &fakeSpawner{failAt: 2}
-	sn := &fakeSnaps{}
+	sn := &fakeSnaps{} // no Cancel capability: IDs must still be exposed
 	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 2})
 	if rep.Err == "" || !strings.Contains(rep.Err, "candidate 2/2") {
 		t.Fatalf("expected launch-failure abort naming the candidate, got: %q", rep.Err)
 	}
 	if !strings.Contains(rep.Report, "Aborted after 1/2") {
 		t.Fatalf("report should state partial fan-out, got: %q", rep.Report)
+	}
+	// #3070: even without a canceller, the launched candidate must be
+	// exposed (id + worktree) so the parent can clean up, not leaked.
+	if len(rep.Candidates) != 1 {
+		t.Fatalf("expected 1 exposed candidate, got %d", len(rep.Candidates))
+	}
+	if c := rep.Candidates[0]; c.ID != "cand-1" || c.Status != "orphaned" || c.Worktree != "/tmp/wt-1" {
+		t.Fatalf("exposed candidate wrong: %+v", c)
+	}
+	if !strings.Contains(rep.Report, "cand-1") {
+		t.Fatalf("report must surface the orphaned id, got: %q", rep.Report)
+	}
+}
+
+// TestRunBestOfN_LaunchFailureCancelsLaunchedCandidates: when the snapshot
+// source supports cancellation, a mid-fan-out launch failure rolls back
+// every already-launched candidate instead of leaking goroutines/worktrees.
+func TestRunBestOfN_LaunchFailureCancelsLaunchedCandidates(t *testing.T) {
+	sp := &fakeSpawner{failAt: 3} // candidates 1,2 launch; 3 fails
+	sn := &fakeCancSnaps{fakeSnaps: fakeSnaps{}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 3})
+	if rep.Err == "" || !strings.Contains(rep.Err, "candidate 3/3") {
+		t.Fatalf("expected abort on candidate 3, got: %q", rep.Err)
+	}
+	if len(sn.cancelled) != 2 || sn.cancelled[0] != "cand-1" || sn.cancelled[1] != "cand-2" {
+		t.Fatalf("candidates 1,2 must be cancelled, got: %v", sn.cancelled)
+	}
+	for _, c := range rep.Candidates {
+		if c.Status != string(subagent.StatusCancelled) {
+			t.Fatalf("candidate %s should be recorded cancelled, got %q", c.ID, c.Status)
+		}
+	}
+	if !strings.Contains(rep.Report, "cancelled") {
+		t.Fatalf("report should mention cancelled candidates, got: %q", rep.Report)
 	}
 }
 

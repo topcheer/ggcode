@@ -137,16 +137,15 @@ func TestRepairJSON_SmartQuotes(t *testing.T) {
 	}
 }
 
-func TestRepairJSON_TruncatedString(t *testing.T) {
-	// Stream truncated inside a string value — closing " is missing
+func TestRepairJSON_TruncatedStringRefused(t *testing.T) {
+	// #3069: stream truncated inside a string value. The old behavior
+	// closed the quote and "succeeded", producing a valid-but-mutilated
+	// old_text that edit_file would silently run on. Repair must now be
+	// refused so the caller retries instead of executing partial args.
 	input := `{"name":"edit_file","arguments":{"file_path":"/tmp/test.go","old_text":"func main() {`
 	result, repaired := RepairJSON([]byte(input))
-	if !repaired {
-		t.Fatalf("expected repair to succeed for truncated string")
-	}
-	var m map[string]any
-	if err := json.Unmarshal(result, &m); err != nil {
-		t.Fatalf("repaired result should be valid JSON: %v\nresult: %s", err, string(result))
+	if repaired {
+		t.Fatalf("expected repair to be REFUSED for string-mid truncation, got: %s", string(result))
 	}
 }
 
@@ -177,20 +176,15 @@ func TestRepairJSON_Unrepairable(t *testing.T) {
 	}
 }
 
-func TestRepairJSON_RealWorldTruncatedArgs(t *testing.T) {
-	// Real-world example: vLLM streaming truncation where the model
-	// started generating tool args but the SSE stream ended early.
+func TestRepairJSON_RealWorldTruncatedArgsRefused(t *testing.T) {
+	// #3069 real-world example: vLLM streaming truncation mid new_text.
+	// The old repair closed the string and returned a valid object whose
+	// new_text was silently cut in half — edit_file would apply a partial
+	// edit. Refusal forces the provider loop to regenerate the call.
 	input := `{"file_path":"/Volumes/new/ggai/ggcode/internal/agent/agent.go","old_text":"func (a *Agent) runIteration() {","new_text":"func (a *Agent) runIteration(ctx context.Context) {`
 	result, repaired := RepairJSON([]byte(input))
-	if !repaired {
-		t.Fatalf("expected repair to succeed for real-world truncated args")
-	}
-	var m map[string]any
-	if err := json.Unmarshal(result, &m); err != nil {
-		t.Fatalf("repaired result should be valid JSON: %v\nresult: %s", err, string(result))
-	}
-	if m["file_path"] != "/Volumes/new/ggai/ggcode/internal/agent/agent.go" {
-		t.Errorf("expected file_path to match, got %v", m["file_path"])
+	if repaired {
+		t.Fatalf("expected repair to be REFUSED for mid-value truncation, got: %s", string(result))
 	}
 }
 
@@ -241,26 +235,43 @@ func TestStripCodeFences(t *testing.T) {
 func TestCloseUnclosed_BalancedInput(t *testing.T) {
 	// Already balanced — should be unchanged
 	input := `{"a":[1,2,3]}`
-	got := closeUnclosed(input)
-	if got != input {
-		t.Errorf("closeUnclosed on balanced input should be no-op, got: %s", got)
+	got, ok := closeUnclosed(input)
+	if !ok || got != input {
+		t.Errorf("closeUnclosed on balanced input should be no-op, got: %s (ok=%v)", got, ok)
 	}
 }
 
 func TestCloseUnclosed_MissingOneBrace(t *testing.T) {
 	input := `{"a":1`
-	got := closeUnclosed(input)
-	if got != `{"a":1}` {
-		t.Errorf("closeUnclosed({\"a\":1) = %s, want {\"a\":1}", got)
+	got, ok := closeUnclosed(input)
+	if !ok || got != `{"a":1}` {
+		t.Errorf("closeUnclosed({\"a\":1) = %s (ok=%v), want {\"a\":1}", got, ok)
 	}
 }
 
 func TestCloseUnclosed_MissingMultiple(t *testing.T) {
 	input := `{"a":[{"b":1`
-	got := closeUnclosed(input)
+	got, ok := closeUnclosed(input)
+	if !ok {
+		t.Fatalf("balanced-tail truncation should be closable, got: %s", got)
+	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(got), &m); err != nil {
 		t.Errorf("closeUnclosed result should be valid JSON: %v (got: %s)", err, got)
+	}
+}
+
+func TestCloseUnclosed_MidStringRefused(t *testing.T) {
+	// #3069: ending inside a string is unrepairable: closing the quote
+	// would fabricate a truncated-but-valid value.
+	for _, input := range []string{
+		`{"old_text":"func main() {`,
+		`{"a":"b","key":"partial value with`,
+	} {
+		got, ok := closeUnclosed(input)
+		if ok {
+			t.Errorf("closeUnclosed(%q) should refuse mid-string input, got: %s", input, got)
+		}
 	}
 }
 

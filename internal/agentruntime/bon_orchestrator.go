@@ -49,6 +49,14 @@ type SnapshotSource interface {
 	RunningCount() int
 }
 
+// CandidateCanceller rolls back one running candidate. Production
+// *subagent.Manager implements it (Manager.Cancel); it is an optional
+// capability of SnapshotSource so test fakes can omit it; when absent the
+// abort path still exposes every launched ID so the parent can clean up.
+type CandidateCanceller interface {
+	Cancel(id string) bool
+}
+
 // BestOfNOptions configures one best-of-N run.
 type BestOfNOptions struct {
 	Task      string   // the shared task contract
@@ -146,7 +154,26 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 		})
 		if err != nil {
 			rep.Err = fmt.Sprintf("best_of_n: candidate %d/%d failed to launch: %v", i, n, err)
-			rep.Report = fmt.Sprintf("Aborted after %d/%d candidates launched. %s", len(ids), n, rep.Err)
+			// #3070: candidates already in flight must not become orphans.
+			// Roll them back via Manager.Cancel when the snapshot source
+			// supports it, and ALWAYS record them in rep.Candidates with
+			// their IDs/worktrees so the report exposes what is still live
+			// (or was cancelled) for parent-side cleanup.
+			cl, _ := snaps.(CandidateCanceller)
+			for j, l := range ids {
+				status := "orphaned"
+				if cl != nil && cl.Cancel(l.id) {
+					status = string(subagent.StatusCancelled)
+				}
+				rep.Candidates = append(rep.Candidates, CandidateOutcome{
+					Name:     fmt.Sprintf("%s candidate %d/%d", name, j+1, n),
+					ID:       l.id,
+					Status:   status,
+					Worktree: l.worktree,
+					Error:    "aborted: a later candidate failed to launch",
+				})
+			}
+			rep.Report = fmt.Sprintf("Aborted after %d/%d candidates launched. %s\nLaunched candidates (cancelled or exposed for cleanup):\n%s", len(ids), n, rep.Err, formatCandidateLines(rep.Candidates))
 			return rep
 		}
 		ids = append(ids, launched{id: id, worktree: wt})

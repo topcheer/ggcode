@@ -64,10 +64,17 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 	}
 
 	// Step 5: Close unclosed braces and brackets (stream truncation fix).
-	repaired = closeUnclosed(repaired)
-	if json.Valid([]byte(repaired)) {
+	// A stream that ends INSIDE a string is refused (#3069): fabricating the
+	// closing quote turns a truncated value into valid-but-mutilated JSON
+	// (e.g. edit_file silently running on partial old_text). Refusal lets
+	// the caller retry instead of executing wrong arguments.
+	repaired, closable := closeUnclosed(repaired)
+	if closable && json.Valid([]byte(repaired)) {
 		debug.Log("jsonrepair", "repaired by closing unclosed delimiters: %s -> %s", truncateForLog(original), truncateForLog(repaired))
 		return []byte(repaired), true
+	}
+	if !closable {
+		debug.Log("jsonrepair", "refused repair: stream ends inside an unterminated string (truncated value): %s", truncateForLog(original))
 	}
 
 	// Repair failed — return original.
@@ -161,11 +168,15 @@ func removeTrailingCommas(s string) string {
 	return b.String()
 }
 
-// closeUnclosed balances unclosed '{', '[', and '"' delimiters by
-// appending the appropriate closing characters. This is the primary
-// fix for stream-truncated JSON where the model's output was cut off
-// mid-argument.
-func closeUnclosed(s string) string {
+// closeUnclosed balances unclosed '{' and '[' delimiters by appending the
+// appropriate closing characters. This is the primary fix for
+// stream-truncated JSON where the model's output was cut off mid-argument.
+//
+// Returns (repaired, false) when the input ends inside an unterminated
+// string: there is no way to know how much of the value was lost, and
+// closing the quote would fabricate a semantically truncated-but-valid
+// value (#3069). The caller must treat that as unrepairable and retry.
+func closeUnclosed(s string) (string, bool) {
 	var stack []byte
 	inString := false
 	escaped := false
@@ -200,9 +211,12 @@ func closeUnclosed(s string) string {
 		}
 	}
 
-	// If we're inside an unterminated string, close it first.
+	// Stream ends inside an unterminated string: unrepairable. Closing the
+	// quote here would silently truncate the value (valid-but-mutilated
+	// JSON); refuse so the caller retries instead of acting on partial
+	// data (#3069).
 	if inString {
-		s += `"`
+		return s, false
 	}
 
 	// Remove trailing comma if present (common before truncation point).
@@ -213,7 +227,7 @@ func closeUnclosed(s string) string {
 		s += string(stack[i])
 	}
 
-	return s
+	return s, true
 }
 
 // truncateForLog truncates a string for debug logging (avoids huge log lines).
