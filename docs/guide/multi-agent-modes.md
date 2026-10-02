@@ -92,9 +92,14 @@ For tasks where a single attempt frequently fails (tricky refactor, elusive bug,
 - **Selection**: per-rollout distilled summaries (attempted/progress/failures/verdict) are ranked by consensus; ties or a failed "best-of-a-bad-lot" degrade to a **sequential-retry conditioning hint** distilled from ALL rollouts (RTV escalation from "Scaling Test-time Compute for LLM Agents", arXiv 2506.12928).
 - **Economics**: N runs cost N x sub-agent tokens - only justified for tasks where one attempt frequently fails. The orchestrator needs N free sub-agent slots (16-session budget) and refuses cleanly otherwise.
 - **Cancellation**: cancelling the tool call does NOT kill the candidates; a partial report with live IDs comes back and they keep running (poll via `wait_agent`/`list_agents`).
+- **Cross-model ensemble** (heterogeneous candidates): pass `models` (2-4 model names, each available on the current endpoint) instead of `n` — one candidate runs per model, e.g. mixing a cheap model with flagships. Decorrelating candidate errors gives the consensus ranking genuinely independent votes instead of N copies of one model's failure modes (Mixture-of-Models-style ensembles, 2026); the per-candidate model appears in the report lines.
 
 ```json
 {"task": "Fix the flaky test in internal/session by ..., verify with go test -run TestSession ./internal/session/", "n": 3, "isolation": "worktree", "description": "并行修 flaky 测试"}
+```
+
+```json
+{"task": "...same contract...", "models": ["glm-5.3-flash", "glm-5.2"], "description": "异构双模型并行取证"}
 ```
 
 ---

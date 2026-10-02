@@ -246,8 +246,50 @@ func TestBestOfNRunnerForBridgesToolShell(t *testing.T) {
 		"cand-2": doneSnap("cand-2", "", true),
 	}}
 	run := BestOfNRunnerFor(sp, sn)
-	got := run(context.Background(), "task", 2, nil, "worktree", "lbl")
+	got := run(context.Background(), tool.BestOfNRequest{Task: "task", N: 2, Isolation: "worktree", Name: "lbl"})
 	if !strings.Contains(got, "Winner") && !strings.Contains(got, "Sequential-retry conditioning") {
 		t.Fatalf("runner must return the report text, got: %q", got)
+	}
+}
+
+// r380: per-candidate model mapping - each candidate gets its assigned
+// model; with no Models configured every candidate inherits (Model="").
+func TestRunBestOfN_PerCandidateModels(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "ok: tests pass", false),
+		"cand-2": doneSnap("cand-2", "ok: tests pass", false),
+		"cand-3": doneSnap("cand-3", "", true),
+	}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{
+		Task: "t", N: 3, Models: []string{"cheap-air", "flagship"},
+	})
+	if rep.Err != "" {
+		t.Fatalf("unexpected err: %s", rep.Err)
+	}
+	want := []string{"cheap-air", "flagship", "cheap-air"} // cycles when models < n
+	for i, call := range sp.calls {
+		if call.Model != want[i] {
+			t.Errorf("candidate %d: Model=%q, want %q", i+1, call.Model, want[i])
+		}
+	}
+}
+
+// r380: same-model default is preserved - no Models means every Launch
+// carries Model="" (parent runtime model inheritance downstream).
+func TestRunBestOfN_NoModelsInheritsParent(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "ok", false),
+		"cand-2": doneSnap("cand-2", "ok", false),
+	}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 2})
+	if rep.Err != "" {
+		t.Fatalf("unexpected err: %s", rep.Err)
+	}
+	for i, call := range sp.calls {
+		if call.Model != "" {
+			t.Errorf("candidate %d: Model=%q, want empty (inherit)", i+1, call.Model)
+		}
 	}
 }

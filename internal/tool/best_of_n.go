@@ -23,7 +23,23 @@ import (
 // the Run field.
 type BestOfNTool struct {
 	Manager *subagent.Manager
-	Run     func(ctx context.Context, task string, n int, tools []string, isolation, name string) string
+	Run     func(ctx context.Context, req BestOfNRequest) string
+	// AvailableModels resolves the current endpoint's model list for
+	// per-candidate model validation (r380); nil disables validation.
+	AvailableModels func() []string
+}
+
+// BestOfNRequest is the validated input for one best-of-N orchestration.
+type BestOfNRequest struct {
+	Task      string
+	N         int
+	Tools     []string
+	Isolation string
+	Name      string
+	// Models optionally overrides the model per candidate (r380
+	// cross-model ensemble). Empty = every candidate inherits the parent
+	// runtime model (same-model sampling).
+	Models []string
 }
 
 func (t BestOfNTool) Name() string { return "best_of_n" }
@@ -42,7 +58,14 @@ func (t BestOfNTool) Parameters() json.RawMessage {
 		},
 		"n": {
 			"type": "integer",
-			"description": "Number of parallel candidates. Clamped to 2..4 (default 3). Requires n free sub-agent slots (16-session budget shared with other runs)."
+			"description": "Number of parallel candidates. Clamped to 2..4 (default 3). Requires n free sub-agent slots (16-session budget shared with other runs). Ignored when models is set: one candidate runs per model."
+		},
+		"models": {
+			"type": "array",
+			"items": { "type": "string" },
+			"minItems": 2,
+			"maxItems": 4,
+			"description": "Optional heterogeneous per-candidate models (2-4), each available on the current endpoint. One candidate per model, in order. Mixing model tiers (cheap + flagship) decorrelates candidate errors so consensus ranking gets independent votes instead of N copies of one model's failure modes; a small-model ensemble can match a single frontier model at lower cost. When omitted, all candidates run the parent's current model."
 		},
 		"tools": {
 			"type": "array",
@@ -73,6 +96,7 @@ func (t BestOfNTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	var args struct {
 		Task        string   `json:"task"`
 		N           int      `json:"n"`
+		Models      []string `json:"models"`
 		Tools       []string `json:"tools"`
 		Isolation   string   `json:"isolation"`
 		Description string   `json:"description"`
@@ -87,18 +111,61 @@ func (t BestOfNTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	if isolation != "" && isolation != "worktree" && isolation != "none" {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid isolation %q: supported values are \"worktree\" (each candidate in its own worktree) and \"none\" (shared cwd, read-only tasks only)", isolation)}, nil
 	}
+	// r380: a heterogeneous ensemble runs one candidate per model; the
+	// explicit model list is the source of truth for n (mixing n+models with
+	// mismatched lengths would silently drop candidates). Validated against
+	// the RAW args.N so an explicit conflicting n is refused while an omitted
+	// n never collides with the default.
 	n := args.N
-	if n == 0 {
+	if len(args.Models) > 0 {
+		var modelsErr string
+		n, modelsErr = validateBestOfNModels(args.Models, args.N, t.AvailableModels)
+		if modelsErr != "" {
+			return Result{IsError: true, Content: modelsErr}, nil
+		}
+	} else if n == 0 {
 		n = 3
 	}
 	if n < 2 || n > 4 {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid n=%d: candidates must be between 2 and 4", n)}, nil
 	}
-	report := t.Run(ctx, args.Task, n, args.Tools, isolation, args.Description)
+	report := t.Run(ctx, BestOfNRequest{Task: args.Task, N: n, Tools: args.Tools, Isolation: isolation, Name: args.Description, Models: args.Models})
 	return Result{Content: report}, nil
+}
+
+// validateBestOfNModels checks the optional per-candidate model list and
+// returns the effective candidate count. Empty models leaves n untouched.
+// A non-empty error string means the request must be refused.
+func validateBestOfNModels(models []string, n int, availableModels func() []string) (int, string) {
+	if len(models) == 0 {
+		return n, ""
+	}
+	if len(models) < 2 || len(models) > 4 {
+		return n, fmt.Sprintf("invalid models: provide 2-4 per-candidate models (got %d)", len(models))
+	}
+	if n != 0 && n != len(models) {
+		return n, fmt.Sprintf("n=%d conflicts with models (got %d models): when models is set, one candidate runs per model; omit n", n, len(models))
+	}
+	if availableModels != nil {
+		if available := availableModels(); len(available) > 0 {
+			for _, m := range models {
+				found := false
+				for _, a := range available {
+					if a == m {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return n, fmt.Sprintf("model %q is not available on the current endpoint. Available models: %s", m, strings.Join(available, ", "))
+				}
+			}
+		}
+	}
+	return len(models), ""
 }
 
 // Clone shares Manager and the injected orchestrator across agents.
 func (t BestOfNTool) Clone() Tool {
-	return BestOfNTool{Manager: t.Manager, Run: t.Run}
+	return BestOfNTool{Manager: t.Manager, Run: t.Run, AvailableModels: t.AvailableModels}
 }

@@ -65,6 +65,21 @@ type BestOfNOptions struct {
 	Isolation string   // "worktree" (recommended) or "none"
 	Name      string   // activity label base shown in the UI
 	Poll      time.Duration
+	Models    []string // optional per-candidate model override (r380 cross-model ensemble)
+}
+
+// modelFor returns the model for the 1-based candidate index i. With no
+// Models configured every candidate inherits the parent runtime model
+// (the r377 same-model behavior). When set, models map to candidates in
+// order and cycle when fewer models than candidates are given — a
+// heterogeneous ensemble (Mixture-of-Models, 2026) decorrelates candidate
+// errors so distilled-summary consensus has genuinely independent votes
+// to rank instead of N copies of the same model's failure modes.
+func (o BestOfNOptions) modelFor(i int) string {
+	if len(o.Models) == 0 {
+		return ""
+	}
+	return o.Models[(i-1)%len(o.Models)]
 }
 
 // CandidateOutcome is one candidate's distilled result.
@@ -74,6 +89,7 @@ type CandidateOutcome struct {
 	Status   string
 	Verdict  string // from RolloutSummary: succeeded | partial | failed (or "unknown")
 	Worktree string
+	Model    string // per-candidate model (r380); "" = inherited parent model
 	Result   string // final result text (truncated in Report)
 	Error    string
 }
@@ -141,15 +157,18 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 	type launched struct {
 		id       string
 		worktree string
+		model    string
 	}
 	var ids []launched
 	taskText := opts.Task + fmt.Sprintf(candidateTaskSuffix, n)
 	for i := 1; i <= n; i++ {
+		model := opts.modelFor(i)
 		id, wt, err := spawner.Launch(ctx, tool.LaunchOptions{
 			Name:        fmt.Sprintf("%s candidate %d/%d", name, i, n),
 			Task:        taskText,
 			DisplayTask: fmt.Sprintf("%s candidate %d/%d", name, i, n),
 			Tools:       opts.Tools,
+			Model:       model,
 			Isolation:   isolation,
 		})
 		if err != nil {
@@ -170,13 +189,14 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 					ID:       l.id,
 					Status:   status,
 					Worktree: l.worktree,
+					Model:    l.model,
 					Error:    "aborted: a later candidate failed to launch",
 				})
 			}
 			rep.Report = fmt.Sprintf("Aborted after %d/%d candidates launched. %s\nLaunched candidates (cancelled or exposed for cleanup):\n%s", len(ids), n, rep.Err, formatCandidateLines(rep.Candidates))
 			return rep
 		}
-		ids = append(ids, launched{id: id, worktree: wt})
+		ids = append(ids, launched{id: id, worktree: wt, model: model})
 	}
 
 	// Poll all candidates to terminal state. ctx cancellation yields a
@@ -219,7 +239,7 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 					st = string(snapsFinal[i].Status)
 				}
 				rep.Candidates = append(rep.Candidates, CandidateOutcome{
-					Name: fmt.Sprintf("%s candidate %d/%d", name, i+1, n), ID: l.id, Status: st, Verdict: "unknown", Worktree: l.worktree,
+					Name: fmt.Sprintf("%s candidate %d/%d", name, i+1, n), ID: l.id, Status: st, Verdict: "unknown", Worktree: l.worktree, Model: l.model,
 				})
 			}
 			rep.Report = fmt.Sprintf("best_of_n: caller context expired before all %d candidates finished (partial). Candidates keep running; poll with wait_agent/list_agents:\n%s",
@@ -237,6 +257,7 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 			ID:       s.ID,
 			Status:   string(s.Status),
 			Worktree: ids[i].worktree,
+			Model:    ids[i].model,
 			Result:   s.Result,
 			Error:    s.Error,
 		})
@@ -338,6 +359,9 @@ func formatCandidateLines(cs []CandidateOutcome) string {
 	var b strings.Builder
 	for _, c := range cs {
 		line := fmt.Sprintf("- %s [%s] id=%s", c.Name, c.Status, c.ID)
+		if c.Model != "" {
+			line += fmt.Sprintf(" model=%s", c.Model)
+		}
 		if c.Worktree != "" {
 			line += fmt.Sprintf(" worktree=%s", c.Worktree)
 		}
@@ -350,14 +374,15 @@ func formatCandidateLines(cs []CandidateOutcome) string {
 // closure injected into tool.BestOfNTool at registration. This is the
 // cycle-breaker: internal/tool cannot import internal/agentruntime, so the
 // registration sites (agentruntime/subsystems.go, tui/repl.go) wire it.
-func BestOfNRunnerFor(sp CandidateSpawner, snaps SnapshotSource) func(context.Context, string, int, []string, string, string) string {
-	return func(ctx context.Context, task string, n int, tools []string, isolation, name string) string {
+func BestOfNRunnerFor(sp CandidateSpawner, snaps SnapshotSource) func(context.Context, tool.BestOfNRequest) string {
+	return func(ctx context.Context, req tool.BestOfNRequest) string {
 		rep := RunBestOfN(ctx, sp, snaps, BestOfNOptions{
-			Task:      task,
-			N:         n,
-			Tools:     tools,
-			Isolation: isolation,
-			Name:      name,
+			Task:      req.Task,
+			N:         req.N,
+			Tools:     req.Tools,
+			Isolation: req.Isolation,
+			Name:      req.Name,
+			Models:    req.Models,
 		})
 		return rep.Report
 	}

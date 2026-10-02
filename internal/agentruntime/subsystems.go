@@ -145,9 +145,12 @@ func NewSubAgentManager(
 	}
 	_ = registry.Register(spawnTool)
 	// r377: trajectory-level best-of-N sampling on top of the spawn pipeline.
+	// r380: AvailableModels enables per-candidate model validation for
+	// heterogeneous ensembles (models=[...] on best_of_n).
 	_ = registry.Register(tool.BestOfNTool{
-		Manager: mgr,
-		Run:     BestOfNRunnerFor(spawnTool, mgr),
+		Manager:         mgr,
+		Run:             BestOfNRunnerFor(spawnTool, mgr),
+		AvailableModels: availableModels,
 	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	parentModel := tool.ParentModelFromProviderGetter(providerGetter)
