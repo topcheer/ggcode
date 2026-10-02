@@ -622,7 +622,12 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	})
 
 	if len(files) == 0 {
-		return Result{Content: "No matches found."}, nil
+		// r403 (ACI consistency): the Go-fallback path previously returned
+		// a bare "No matches found." while the ripgrep path formats the same
+		// outcome with actionable suggestions (-i, spelling, type widening).
+		// Two feedback qualities for one outcome made agent behavior drift
+		// depending on which engine happened to run; reuse the formatter.
+		return formatGrepOutput("", args)
 	}
 
 	// Parallel search
