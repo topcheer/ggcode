@@ -54,7 +54,7 @@ func TestTemporalLineFormat(t *testing.T) {
 
 func TestMaybeInjectDynamicSystemPromptIncludesTemporal(t *testing.T) {
 	a := NewAgent(nil, nil, "You are a coding assistant.", 1)
-	a.maybeInjectDynamicSystemPrompt()
+	a.maybeInjectDynamicSystemPrompt("")
 	// The injection path updates the context manager; verify via lastInjected cache.
 	if !strings.Contains(a.lastInjectedSystemPrompt, "Current date/time: ") {
 		t.Fatalf("temporal header missing from injected prompt: %q", a.lastInjectedSystemPrompt)

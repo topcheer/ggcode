@@ -1658,7 +1658,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		})
 	}
 	a.maybeInjectPerfRegression()
-	a.maybeInjectDynamicSystemPrompt()
+	a.maybeInjectDynamicSystemPrompt(userPromptForStats)
 	a.maybeInjectRatchetRules()
 	transientCompactWarned := false
 	toolDefs := a.tools.ToDefinitions()

@@ -342,7 +342,15 @@ func (pb *Playbook) evict() {
 //
 // This ensures that a pattern observed 3 times at ~5 iterations ranks higher
 // than one observed 5 times at ~50 iterations.
-func (pb *Playbook) HintsForPrompt(maxHints int) string {
+// HintsForPrompt generates brief strategy hints for the system prompt.
+// r387 (SimpleMem intent-aware retrieval, ICML 2026): the current run's
+// prompt is classified with the same task-type taxonomy used at record time,
+// and entries matching that task type are boosted in ranking so injected
+// hints follow the current task's intent instead of pure global frequency.
+// An empty or unclassifiable prompt keeps the original global ranking, and
+// matching entries only get a boost (never a hard filter), so rare task
+// types never starve the hint budget.
+func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 	if pb == nil {
 		return ""
 	}
@@ -359,9 +367,21 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 	//   frequency = min(uses, 10) — cap at 10 to prevent over-weighting
 	//   efficiency = 10 / avgIter — fewer iterations = higher score
 	// This rewards patterns that are both well-observed AND efficient.
+	// Intent-aware ranking (r387): matching entries form the primary tier,
+	// non-matching entries fill the remaining budget - SimpleMem's
+	// intent-centroid retrieval semantics (retrieve for the task at hand,
+	// fall back to global) without starving rare task types.
+	intent := classifyTaskType(runPrompt)
+	intentMatch := func(e PlaybookEntry) bool {
+		return intent != "" && intent != "other" && e.TaskType == intent
+	}
 	sorted := make([]PlaybookEntry, len(pb.entries))
 	copy(sorted, pb.entries)
 	sort.Slice(sorted, func(i, j int) bool {
+		mi, mj := intentMatch(sorted[i]), intentMatch(sorted[j])
+		if mi != mj {
+			return mi // matching tier first
+		}
 		return playbookScore(sorted[i]) > playbookScore(sorted[j])
 	})
 
