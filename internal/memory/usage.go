@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Usage & provenance tracking for the memory store (sa-85).
@@ -130,6 +131,12 @@ func (am *AutoMemory) saveUsage(idx usageIndex) error {
 // save paths; the first registration wins and later overwrites of the
 // same key keep the original source (provenance traces creation, not
 // the latest edit).
+//
+// #3120 lock contract: callers must hold the am.dir cross-process file
+// lock (the auto.go SaveMemory path does - it acquires util.FileLock
+// before calling this). That is what serializes this read-modify-write
+// against cross-process RecordUse writers; do NOT call this from an
+// unlocked path.
 func (am *AutoMemory) RecordProvenance(key, source string) {
 	if source == "" {
 		source = usageProvenanceUnknown
@@ -175,6 +182,18 @@ func (am *AutoMemory) RecordUse(keys []string, source string) {
 		return
 	}
 
+	// #3120: cross-process serialization for the sidecar read-modify-write,
+	// same lock file and lock order (FileLock outer, am.mu inner) as the
+	// SaveMemory path in auto.go. r401 GAP-B locked only the .md save path;
+	// RecordUse (main agent, index/inject time) raced RecordProvenance
+	// (subagent saving a memory) last-write-wins on the SAME .usage.json,
+	// silently losing use counts and provenance updates. Fail-open with a
+	// log - same degradation contract as auto.go, but observable.
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("memory", "automemory sidecar filelock failed, degraded to unlocked write: %v", err)
+	}
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	idx := am.loadUsage()

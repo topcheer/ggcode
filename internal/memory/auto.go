@@ -86,6 +86,10 @@ func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 	// semantic_memory.go precedent).
 	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
 		defer unlock()
+	} else {
+		// #3120 V4: fail-open is deliberate (memory writes must not block
+		// on lock-infrastructure faults) but must be observable.
+		debug.Log("memory", "automemory filelock failed, degraded to unlocked write: %v", err)
 	}
 
 	// #1752 case 2: atomic write - temp file in the same directory, then
