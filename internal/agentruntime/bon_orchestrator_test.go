@@ -1,0 +1,207 @@
+package agentruntime
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/topcheer/ggcode/internal/subagent"
+	"github.com/topcheer/ggcode/internal/tool"
+)
+
+// --- fakes ---
+
+type fakeSpawner struct {
+	calls   []tool.LaunchOptions
+	failAt  int // 1-based launch index that returns an error (0 = never)
+	nextErr error
+}
+
+func (f *fakeSpawner) Launch(ctx context.Context, opts tool.LaunchOptions) (string, string, error) {
+	f.calls = append(f.calls, opts)
+	if f.failAt > 0 && len(f.calls) == f.failAt {
+		return "", "", fmt.Errorf("git worktree boom")
+	}
+	return fmt.Sprintf("cand-%d", len(f.calls)), fmt.Sprintf("/tmp/wt-%d", len(f.calls)), nil
+}
+
+type fakeSnaps struct {
+	m       map[string]subagent.Snapshot
+	running int
+}
+
+func (f *fakeSnaps) Snapshot(id string) (subagent.Snapshot, bool) {
+	s, ok := f.m[id]
+	return s, ok
+}
+
+func (f *fakeSnaps) RunningCount() int { return f.running }
+
+func doneSnap(id, result string, fail bool) subagent.Snapshot {
+	st := subagent.StatusCompleted
+	evs := []subagent.AgentEvent{
+		{Type: subagent.AgentEventToolCall, ToolName: "read_file", ToolArgs: `{"path":"a.go"}`},
+	}
+	if fail {
+		st = subagent.StatusFailed
+		evs = append(evs,
+			subagent.AgentEvent{Type: subagent.AgentEventToolResult, ToolName: "edit_file", Result: "anchor not found", IsError: true},
+		)
+		return subagent.Snapshot{ID: id, Status: st, Error: "edit failed: anchor not found", Events: evs}
+	}
+	evs = append(evs,
+		subagent.AgentEvent{Type: subagent.AgentEventToolResult, ToolName: "edit_file", Result: "ok"},
+	)
+	return subagent.Snapshot{ID: id, Status: st, Result: "ok: edit applied, tests pass", Events: evs}
+}
+
+// --- tests ---
+
+func TestRunBestOfN_PicksConsensusWinner(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "ok: edit applied, tests pass", false),
+		"cand-2": doneSnap("cand-2", "", true),
+		"cand-3": doneSnap("cand-3", "ok: edit applied, tests pass", false),
+	}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "fix bug X", N: 3, Name: "test-bo-n", Poll: time.Millisecond})
+	if rep.Err != "" {
+		t.Fatalf("unexpected orchestration error: %s", rep.Err)
+	}
+	if len(sp.calls) != 3 {
+		t.Fatalf("expected 3 launches, got %d", len(sp.calls))
+	}
+	if rep.WinnerIndex < 0 {
+		t.Fatalf("expected a winner, got none (Degraded=%v)", rep.Degraded)
+	}
+	if got := rep.Candidates[rep.WinnerIndex].Verdict; got != "succeeded" {
+		t.Fatalf("winner verdict = %q, want succeeded", got)
+	}
+	if rep.Degraded {
+		t.Fatal("consensus case must not degrade")
+	}
+	if !strings.Contains(rep.Report, "Winner") || !strings.Contains(rep.Report, "/tmp/wt-") {
+		t.Fatalf("report should surface the winner and its worktree, got:\n%s", rep.Report)
+	}
+	// Every candidate got the independence + verify-yourself suffix.
+	for _, c := range sp.calls {
+		if !strings.Contains(c.Task, "INDEPENDENT parallel candidates") {
+			t.Fatalf("candidate task missing suffix: %q", c.Task)
+		}
+	}
+}
+
+func TestRunBestOfN_ClampsToFour(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{}}
+	for i := 1; i <= 4; i++ {
+		sn.m[fmt.Sprintf("cand-%d", i)] = doneSnap(fmt.Sprintf("cand-%d", i), "ok: tests pass", false)
+	}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 9, Poll: time.Millisecond})
+	if rep.N != 4 || len(sp.calls) != 4 {
+		t.Fatalf("expected clamp to 4, got N=%d launches=%d", rep.N, len(sp.calls))
+	}
+}
+
+func TestRunBestOfN_SlotGateRefuses(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{running: 14}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 4})
+	if rep.Err == "" || !strings.Contains(rep.Err, "free sub-agent slots") {
+		t.Fatalf("expected slot-gate refusal, got: %q", rep.Err)
+	}
+	if len(sp.calls) != 0 {
+		t.Fatalf("gate must refuse before launching, launched %d", len(sp.calls))
+	}
+}
+
+func TestRunBestOfN_RejectsSubTwo(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 1})
+	if rep.Err == "" {
+		t.Fatal("n=1 must be rejected")
+	}
+	rep = RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "  "})
+	if rep.Err == "" {
+		t.Fatal("empty task must be rejected")
+	}
+}
+
+func TestRunBestOfN_LaunchFailureAbortsCleanly(t *testing.T) {
+	sp := &fakeSpawner{failAt: 2}
+	sn := &fakeSnaps{}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 2})
+	if rep.Err == "" || !strings.Contains(rep.Err, "candidate 2/2") {
+		t.Fatalf("expected launch-failure abort naming the candidate, got: %q", rep.Err)
+	}
+	if !strings.Contains(rep.Report, "Aborted after 1/2") {
+		t.Fatalf("report should state partial fan-out, got: %q", rep.Report)
+	}
+}
+
+func TestRunBestOfN_PartialOnCallerCancel(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": {ID: "cand-1", Status: subagent.StatusRunning},
+		"cand-2": {ID: "cand-2", Status: subagent.StatusRunning},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+	rep := RunBestOfN(ctx, sp, sn, BestOfNOptions{Task: "t", N: 2, Poll: 5 * time.Millisecond})
+	if !rep.Partial {
+		t.Fatal("caller cancel must produce a partial report")
+	}
+	if rep.WinnerIndex >= 0 {
+		t.Fatal("partial report must not pick a winner")
+	}
+	if !strings.Contains(rep.Report, "wait_agent") {
+		t.Fatalf("partial report should point at wait_agent, got: %q", rep.Report)
+	}
+	for _, c := range rep.Candidates {
+		if c.Status != "running" {
+			t.Fatalf("candidates must be reported as still running, got %q", c.Status)
+		}
+	}
+}
+
+func TestRunBestOfN_DegradedWhenNoConsensus(t *testing.T) {
+	sp := &fakeSpawner{}
+	// Two candidates failing DIFFERENT ways: no majority winner.
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "", true),
+		"cand-2": {ID: "cand-2", Status: subagent.StatusFailed, Error: "build timeout",
+			Events: []subagent.AgentEvent{{Type: subagent.AgentEventError, Text: "build timeout"}}},
+	}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "t", N: 2, Poll: time.Millisecond})
+	if rep.Err != "" {
+		t.Fatalf("unexpected error: %s", rep.Err)
+	}
+	if !rep.Degraded || rep.WinnerIndex >= 0 {
+		t.Fatalf("two distinct failures must degrade, got Degraded=%v WinnerIndex=%d", rep.Degraded, rep.WinnerIndex)
+	}
+	if rep.ConditioningHint == "" {
+		t.Fatal("degraded path must distill a conditioning hint")
+	}
+	if !strings.Contains(rep.Report, "Sequential-retry conditioning") {
+		t.Fatalf("report should explain the degradation, got: %q", rep.Report)
+	}
+}
+
+func TestBestOfNRunnerForBridgesToolShell(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "ok: tests pass", false),
+		"cand-2": doneSnap("cand-2", "", true),
+	}}
+	run := BestOfNRunnerFor(sp, sn)
+	got := run(context.Background(), "task", 2, nil, "worktree", "lbl")
+	if !strings.Contains(got, "Winner") && !strings.Contains(got, "Sequential-retry conditioning") {
+		t.Fatalf("runner must return the report text, got: %q", got)
+	}
+}

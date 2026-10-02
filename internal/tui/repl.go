@@ -833,7 +833,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		}
 		return ""
 	}
-	tools.Register(tool.SpawnAgentTool{
+	spawnTool := tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
 		ProviderGetter:      providerGetter,
@@ -843,6 +843,11 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		WorkingDir:          r.model.agent.WorkingDir(),
 		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
 		SystemPromptBuilder: r.systemPromptBuilder,
+	}
+	tools.Register(spawnTool)
+	tools.Register(tool.BestOfNTool{
+		Manager: mgr,
+		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),
 	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	tools.Register(tool.WaitAgentTool{

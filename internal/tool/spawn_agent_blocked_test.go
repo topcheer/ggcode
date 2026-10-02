@@ -7,8 +7,10 @@ import (
 // TestSubAgentBlockedTools verifies the blocklist contains all expected entries.
 func TestSubAgentBlockedTools(t *testing.T) {
 	expected := map[string]bool{
-		"ask_user":          true,
-		"spawn_agent":       true,
+		"ask_user":    true,
+		"spawn_agent": true,
+		// r377: nested best-of-N fan-out from candidates is blocked too.
+		"best_of_n":         true,
 		"wait_agent":        true,
 		"list_agents":       true,
 		"cancel_agent":      true,

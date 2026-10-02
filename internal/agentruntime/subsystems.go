@@ -132,7 +132,7 @@ func NewSubAgentManager(
 	if registry == nil || prov == nil || agentFactory == nil {
 		return mgr
 	}
-	_ = registry.Register(tool.SpawnAgentTool{
+	spawnTool := tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
 		ProviderGetter:      providerGetter,
@@ -142,6 +142,12 @@ func NewSubAgentManager(
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
 		SystemPromptBuilder: systemPromptBuilder,
+	}
+	_ = registry.Register(spawnTool)
+	// r377: trajectory-level best-of-N sampling on top of the spawn pipeline.
+	_ = registry.Register(tool.BestOfNTool{
+		Manager: mgr,
+		Run:     BestOfNRunnerFor(spawnTool, mgr),
 	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	parentModel := tool.ParentModelFromProviderGetter(providerGetter)
