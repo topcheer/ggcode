@@ -2,6 +2,7 @@ package permission
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -78,13 +79,16 @@ func TestMakeKey_CommandTool(t *testing.T) {
 }
 
 func TestMakeKey_NoPath(t *testing.T) {
+	// #3059: query-only tools (code_search etc.) must NOT degrade to the
+	// bare tool name - three approvals then auto-approved ANY query. The
+	// key now pins the hash of the query text.
 	input := mustJSON(t, map[string]interface{}{"query": "something"})
 	key, ok := MakeKey("code_search", input)
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
-	if key != "code_search" {
-		t.Errorf("MakeKey = %q, want %q", key, "code_search")
+	if !strings.HasPrefix(key, "code_search:") {
+		t.Errorf("MakeKey = %q, want signed key with %q prefix", key, "code_search:")
 	}
 }
 
