@@ -567,13 +567,17 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 	// logs lost their middle with no re-read pointer - unlike web_fetch/grep
 	// results, which get a spill-file reference. Route the omitted middle
 	// through the shared offloader so the truncation marker carries one too.
-	if rcTool, ok := tools.Get("run_command"); ok {
-		if rc, ok := rcTool.(*tool.RunCommand); ok {
-			rc.OmittedOutputSpiller = func(source, omitted string) string {
-				if path := a.outputOffload.spill("run_command", omitted); path != "" {
-					return spillNotice(path, len(omitted))
+	// Guard: several tests construct agents with a nil tool registry; the
+	// hook stays unwired there (Registry.Get would deref a nil receiver).
+	if tools != nil {
+		if rcTool, ok := tools.Get("run_command"); ok {
+			if rc, ok := rcTool.(*tool.RunCommand); ok {
+				rc.OmittedOutputSpiller = func(source, omitted string) string {
+					if path := a.outputOffload.spill("run_command", omitted); path != "" {
+						return spillNotice(path, len(omitted))
+					}
+					return ""
 				}
-				return ""
 			}
 		}
 	}
