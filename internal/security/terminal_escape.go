@@ -210,25 +210,20 @@ func isDecodedC1Introducer(r rune) bool {
 }
 
 // c1SequenceEnd returns the index just past the C1 sequence starting at i.
-// CSI (0x9b): params [0-9;:<=>?]*, intermediates [ -/]*, final [@-~].
-// String sequences: payload runs to C1 ST (0x9c) or BEL (0x07), inclusive;
-// unterminated sequences drop just the introducer byte (parity with the
+// Unterminated sequences drop just the introducer byte (parity with the
 // previous regex behavior, which also required a terminator).
 func c1SequenceEnd(s string, i int) int {
-	if s[i] != 0x9b {
-		for j := i + 1; j < len(s); j++ {
-			if s[j] == 0x9c || s[j] == 0x07 {
-				return j + 1
-			}
-			if s[j] == 0x1b { // 7-bit ESC: ST or a fresh sequence
-				return j
-			}
-		}
-		return i + 1
+	if s[i] == 0x9b {
+		return c1CSIEnd(s, i)
 	}
+	return c1StringSeqEnd(s, i)
+}
+
+// c1CSIEnd consumes an 8-bit CSI sequence: params [0-9;:<=>?]*,
+// intermediates [ -/]*, final [@-~].
+func c1CSIEnd(s string, i int) int {
 	j := i + 1
-	for j < len(s) && ((s[j] >= '0' && s[j] <= '9') || s[j] == ';' ||
-		s[j] == ':' || s[j] == '<' || s[j] == '=' || s[j] == '>' || s[j] == '?') {
+	for j < len(s) && isCSIParamByte(s[j]) {
 		j++
 	}
 	for j < len(s) && s[j] >= ' ' && s[j] <= '/' {
@@ -236,6 +231,25 @@ func c1SequenceEnd(s string, i int) int {
 	}
 	if j < len(s) && s[j] >= '@' && s[j] <= '~' {
 		return j + 1
+	}
+	return i + 1
+}
+
+func isCSIParamByte(c byte) bool {
+	return (c >= '0' && c <= '9') || c == ';' || c == ':' ||
+		c == '<' || c == '=' || c == '>' || c == '?'
+}
+
+// c1StringSeqEnd consumes an 8-bit DCS/SOS/PM/APC string sequence: payload
+// runs to C1 ST (0x9c) or BEL (0x07), inclusive.
+func c1StringSeqEnd(s string, i int) int {
+	for j := i + 1; j < len(s); j++ {
+		if s[j] == 0x9c || s[j] == 0x07 {
+			return j + 1
+		}
+		if s[j] == 0x1b { // 7-bit ESC: ST or a fresh sequence
+			return j
+		}
 	}
 	return i + 1
 }
