@@ -40,6 +40,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -209,8 +210,97 @@ func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
 		DurationSec: medianInt(collectDurations(valid)),
 		Compactions: medianInt(collectCompactions(valid)),
 		ContextPeak: medianInt(collectContextPeak(valid)),
+		TopTools:    modalTopTools(valid),
 	}
 }
+
+// modalTopTools builds the baseline tool set for the tool-mix drift check
+// (r386, ASI tool-usage-pattern stability from arXiv 2601.04170): names that
+// appear in at least half of the successful runs' top-3 tool sets, top 3 by
+// frequency. Stored in the same "name:count" shape as run entries, where
+// count here is the number of historical runs containing the tool. Empty
+// when the recorded history predates TopTools persistence.
+func modalTopTools(runs []perfBaselineEntry) []string {
+	freq := make(map[string]int)
+	withTools := 0
+	for _, r := range runs {
+		names := perfTopToolNames(r)
+		if len(names) == 0 {
+			continue
+		}
+		withTools++
+		for _, n := range names {
+			freq[n]++
+		}
+	}
+	if withTools < 3 {
+		return nil // not enough tool-shape history to define a modal set
+	}
+	type nameFreq struct {
+		name string
+		n    int
+	}
+	var cands []nameFreq
+	half := (withTools + 1) / 2
+	for n, c := range freq {
+		if c >= half {
+			cands = append(cands, nameFreq{n, c})
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].n != cands[j].n {
+			return cands[i].n > cands[j].n
+		}
+		return cands[i].name < cands[j].name
+	})
+	if len(cands) > perfTopToolsCount {
+		cands = cands[:perfTopToolsCount]
+	}
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, fmt.Sprintf("%s:%d", c.name, c.n))
+	}
+	return out
+}
+
+// perfTopToolNames extracts the bare tool names from a "name:count" TopTools
+// entry slice.
+func perfTopToolNames(e perfBaselineEntry) []string {
+	if len(e.TopTools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(e.TopTools))
+	for _, s := range e.TopTools {
+		if i := strings.LastIndex(s, ":"); i > 0 {
+			names = append(names, s[:i])
+		}
+	}
+	return names
+}
+
+// jaccardToolSets returns the Jaccard similarity of two tool-name sets
+// (|A∩B| / |A∪B|); 1.0 when identical, 0.0 when disjoint.
+func jaccardToolSets(a, b []string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 1 // nothing comparable - treat as consistent, not drifted
+	}
+	setA := make(map[string]bool, len(a))
+	for _, n := range a {
+		setA[n] = true
+	}
+	inter := 0
+	for _, n := range b {
+		if setA[n] {
+			inter++
+		}
+	}
+	union := len(setA) + len(b) - inter
+	return float64(inter) / float64(union)
+}
+
+// perfToolMixDriftFloor is the Jaccard similarity below which a run's
+// top-tool set counts as drifted from the baseline modal set (r386).
+const perfToolMixDriftFloor = 0.5
 
 // collectX helpers extract a single field into a slice for median computation.
 func collectIterations(runs []perfBaselineEntry) []int {
@@ -452,6 +542,14 @@ func collectRunRegressionMetrics(run, baseline perfBaselineEntry) []string {
 	if baseline.Compactions == 0 && run.Compactions >= 3 {
 		hits = append(hits, "compaction")
 	}
+	// Tool-mix drift (r386): the run's dominant tool set diverges from the
+	// historical modal set - e.g. a workflow historically shaped
+	// read_file+grep now dominated by run_command retries. Behavioral-drift
+	// signal from ASI's tool-usage-pattern stability dimension
+	// (arXiv 2601.04170); only comparable when both sides carry TopTools.
+	if jaccardToolSets(perfTopToolNames(run), perfTopToolNames(baseline)) < perfToolMixDriftFloor {
+		hits = append(hits, "tool_mix")
+	}
 	return hits
 }
 
@@ -462,7 +560,7 @@ const perfRegressionConsensusRuns = 2
 // perfMetricOrder lists regression metrics in the evaluation priority used by
 // checkSingleRunRegression, keeping worst-metric selection deterministic
 // when multiple metrics reach consensus (#1143).
-var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction"}
+var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction", "tool_mix"}
 
 // pickConsensusPerfMetric returns a metric whose hit count reaches
 // perfRegressionConsensusRuns across recent runs, preferring metrics earlier
@@ -497,7 +595,15 @@ func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, me
 		if !hit {
 			continue
 		}
-		if v := perfMetricValue(r, metric); v > bestVal {
+		var v int
+		if metric == "tool_mix" {
+			// Divergence from baseline (100 - similarity%): perfMetricValue
+			// has no baseline param, so tool_mix distance is computed here.
+			v = 100 - int(jaccardToolSets(perfTopToolNames(r), perfTopToolNames(baseline))*100)
+		} else {
+			v = perfMetricValue(r, metric)
+		}
+		if v > bestVal {
 			bestVal = v
 			worst = r
 		}
@@ -549,6 +655,13 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 		return formatPerfRegressionLine("compaction events",
 			baseline.Compactions, latest.Compactions,
 			"Frequent compaction means context is too large. Prefer narrow, targeted searches over broad exploration.")
+	case "tool_mix":
+		// r386 behavioral drift: no scalar pair to compare, so format the
+		// shape shift directly - modal baseline set vs this run's dominant
+		// tools.
+		return fmt.Sprintf("Performance regression notice: dominant tool mix drifted from the project baseline. Baseline modal tools: [%s]; this run: [%s]. The workflow this project historically used has shifted - if this is not a deliberate change of approach, return to the established tool pattern (targeted reads/searches before broad commands).",
+			strings.Join(perfTopToolNames(baseline), ", "),
+			strings.Join(perfTopToolNames(latest), ", "))
 	default:
 		return ""
 	}
