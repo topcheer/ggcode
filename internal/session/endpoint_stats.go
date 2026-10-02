@@ -61,6 +61,14 @@ func (s *Session) AppendMetricEvent(ev metrics.MetricEvent) {
 	s.endpointStatsMu.Unlock()
 }
 
+// UsageHistorySnapshot returns a copy of UsageHistory taken under the
+// same lock the appends hold. Exported for TUI/desktop read paths that
+// run off the session goroutine (cost snapshot per frame, /cost export)
+// - #3086.
+func (s *Session) UsageHistorySnapshot() []UsageEntry {
+	return s.usageHistorySnapshot()
+}
+
 // usageHistorySnapshot returns a copy of UsageHistory taken under the
 // same lock the appends hold (#3086).
 func (s *Session) usageHistorySnapshot() []UsageEntry {
@@ -68,6 +76,13 @@ func (s *Session) usageHistorySnapshot() []UsageEntry {
 	snap := append([]UsageEntry(nil), s.UsageHistory...)
 	s.endpointStatsMu.RUnlock()
 	return snap
+}
+
+// MetricsSnapshot returns a copy of Metrics taken under the same lock
+// the appends hold. Exported for TUI read paths that capture the slice
+// in closures crossing goroutines (/trace export) - #3086.
+func (s *Session) MetricsSnapshot() []metrics.MetricEvent {
+	return s.metricsSnapshot()
 }
 
 // metricsSnapshot returns a copy of Metrics taken under the same lock the

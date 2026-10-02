@@ -244,7 +244,10 @@ func (m *Model) exportTraceSession(id string, otelFormat bool) tea.Cmd {
 		endpoint = m.session.Endpoint
 		model = m.session.Model
 		createdAt = m.session.CreatedAt
-		events = m.session.Metrics
+		// #3086: copy under the append lock - the bare slice reference
+		// captured here crossed into the command goroutine while agent
+		// callbacks appended it.
+		events = m.session.MetricsSnapshot()
 	}
 	store := m.sessionStore
 	tr := m.t
