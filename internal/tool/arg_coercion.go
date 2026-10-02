@@ -221,6 +221,15 @@ func coerceNumber(val json.RawMessage) (json.RawMessage, bool) {
 	if err != nil {
 		return val, false
 	}
+	// #3109: ParseFloat accepts "inf"/"Infinity"/"nan" (case-insensitive)
+	// with a nil error; FormatFloat would then emit "+Inf"/"NaN" - not
+	// legal JSON tokens - into the RawMessage, and downstream json.Unmarshal
+	// fails with an opaque parse error that never names the offending field.
+	// Reject non-finite values so the caller keeps the original value and
+	// reports a clear type error, mirroring the coerceInteger NaN guard.
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return val, false
+	}
 	return json.RawMessage(strconv.FormatFloat(f, 'f', -1, 64)), true
 }
 
