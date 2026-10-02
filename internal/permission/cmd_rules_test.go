@@ -2,6 +2,7 @@ package permission
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -210,5 +211,32 @@ func TestConfigPolicy_CommandRulesOnlyForCommandTools(t *testing.T) {
 	d, _ := policy.Check("edit_file", input)
 	if d != Ask {
 		t.Errorf("command rules should not affect non-command tools, got %v", d)
+	}
+}
+
+// TestCommandRuleSetSaveAtomicRoundtrip pins #3060-C2: Save must persist a
+// complete JSON file via temp+rename - no leftover .tmp sibling, and the
+// file parses back with both allow and deny intact (a truncated write would
+// previously leave deny rules silently lost on the next load).
+func TestCommandRuleSetSaveAtomicRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/cmd_rules.json"
+	rs := NewCommandRuleSetFromLists([]string{"git status"}, []string{"rm -rf *"})
+	if err := rs.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got commandRuleFile
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("saved file not valid JSON (truncated?): %v", err)
+	}
+	if len(got.Deny) != 1 || got.Deny[0] != "rm -rf *" {
+		t.Fatalf("deny rules lost: %+v", got)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatalf("temp file leaked: %d entries", len(entries))
 	}
 }
