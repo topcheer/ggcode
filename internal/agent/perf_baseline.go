@@ -651,6 +651,10 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 		return entry.ContextPeak
 	case "compaction":
 		return entry.Compactions
+	case "tokens":
+		// #3102: r394 cost dimension was missing here - worst-hit selection
+		// degraded to first-hit (all candidates scored 0).
+		return entry.Tokens
 	default:
 		return 0
 	}
