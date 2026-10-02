@@ -283,5 +283,8 @@ func isOutsideWorkingDir(absPath, workingDir string) bool {
 	if err != nil {
 		return true
 	}
-	return strings.HasPrefix(rel, "..")
+	// #3053-C2: only a true parent escape is outside - a legal same-level
+	// basename like "..foo.md" also HasPrefix("..") and used to lose its
+	// relative-path hint label.
+	return rel == ".." || strings.HasPrefix(rel, "../")
 }
