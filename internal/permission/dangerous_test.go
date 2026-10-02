@@ -280,6 +280,10 @@ func TestDangerousDetector_IsExtremelyDangerous(t *testing.T) {
 		// #1804 case 1: quoted root and $HOME forms must stay Critical.
 		{`rm -rf "/"`, true},
 		{"rm -rf $HOME", true},
+		// r371: nested-quote shape - the tail needs to absorb both the
+		// inner double quote and the outer wrapping single quote.
+		{`sh -c 'rm -rf "$HOME"'`, true},
+		{`sudo sh -c 'rm -rf ~'`, true},
 	}
 
 	for _, tt := range tests {
