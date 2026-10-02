@@ -1092,7 +1092,10 @@ func (m *Model) recordSessionUsage(usage provider.TokenUsage, source string) {
 	// Keep in-memory UsageHistory in sync with disk. AppendUsageEntry
 	// only writes to the JSONL file; without this append, /cost reads
 	// stale data that only reflects what was loaded at startup.
-	ses.UsageHistory = append(ses.UsageHistory, entry)
+	// #3086: append via the lock-guarded method - a bare slice append
+	// here raced the endpoint-stats rebuild readers ranging the same
+	// slice from the UI render path.
+	ses.AddUsageHistoryEntry(entry)
 	mu.Unlock()
 
 	// Disk I/O is async — the TUI event loop must not block on fsync.
@@ -1132,7 +1135,7 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		ev.Vendor = m.session.Vendor
 		ev.Endpoint = m.session.Endpoint
 	}
-	m.session.Metrics = append(m.session.Metrics, ev)
+	m.session.AppendMetricEvent(ev) // #3086: lock-guarded append (was a bare slice append)
 	m.session.AppendMetricForEndpoint(m.session.Vendor, m.session.Endpoint, ev)
 	m.session.UpdatedAt = time.Now()
 	ses := m.session
