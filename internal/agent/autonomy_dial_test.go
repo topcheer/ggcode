@@ -5,6 +5,9 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"github.com/topcheer/ggcode/internal/permission"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func TestAutonomyDial_PromotionSuggestion(t *testing.T) {
@@ -106,5 +109,29 @@ func TestAutonomyDial_ErrorInterruptsStreak(t *testing.T) {
 	// Streak must rebuild from zero: one more success is not enough.
 	if got := s.suggest(); got != "" {
 		t.Fatalf("broken streak must not suggest promotion, got %q", got)
+	}
+}
+
+// Wiring probe: a permission-mode transition through SetPermissionPolicy
+// must re-open the autonomy-dial observation window (r407 anti-contamination
+// semantics, mirroring approval-memory's EnsureModeScope).
+func TestAutonomyDial_ModeTransitionResetsWindow(t *testing.T) {
+	mp := &mockProvider{}
+	a := NewAgent(mp, tool.NewRegistry(), "", 1)
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.AutoMode))
+
+	// Simulate an in-flight observation window (as if the run loop had
+	// recorded these results).
+	for i := 0; i < autonomyPromoteStreak; i++ {
+		a.autonomyDial.record(false, "ok")
+	}
+	if a.autonomyDial.consecutiveOK != autonomyPromoteStreak {
+		t.Fatalf("setup: streak not recorded, got %d", a.autonomyDial.consecutiveOK)
+	}
+
+	// Switching the mode must clear the window.
+	a.SetPermissionPolicy(permission.NewConfigPolicyWithMode(nil, []string{"."}, permission.SupervisedMode))
+	if a.autonomyDial.consecutiveOK != 0 || a.autonomyDial.suggestedUp {
+		t.Fatalf("mode transition must reset the dial window: %+v", a.autonomyDial)
 	}
 }
