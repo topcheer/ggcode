@@ -114,6 +114,16 @@ The agent can remove outdated or incorrect memories via the `delete_memory` tool
 delete_memory(key="old-build-process", scope="project")
 ```
 
+### Recalling Past Experience
+
+Completed runs are distilled into an experience store automatically (task / approach / outcome / files). The store surfaces on its own at run start and on the first matching failure; the read-only `recall_experience` tool lets the agent consult it at ANY decision moment — approach selection, mid-run debugging, unfamiliar errors:
+
+```
+recall_experience(query="flaky login test wall time", max=3)
+```
+
+Returns the most relevant past cases (empty result = no relevant experience, not an error). Read-only; cases are recorded at run completion, never by this tool.
+
 This gives the agent full lifecycle control: save, read, and delete. Only
 auto-saved memory entries can be deleted - project bootstrap files (GGCODE.md,
 AGENTS.md, etc.) are not affected.

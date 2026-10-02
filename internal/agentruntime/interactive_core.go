@@ -89,6 +89,13 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	deleteMemoryTool := tool.NewDeleteMemoryTool(autoMem, projectAutoMem)
 	_ = registry.Register(deleteMemoryTool)
 
+	// r381 (memory-as-tool): the write side has save/delete tools but the
+	// experience store's recall API was only reachable through the automatic
+	// gates (run start + first failure). This read-only tool lets the agent
+	// consult past cases at ANY decision moment (AgeMem arXiv 2601.01885,
+	// Hindsight arXiv 2512.12818).
+	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
+
 	// Config tool — unified config management across all config files
 	cfgAccess := NewConfigAccess(cfg, workingDir)
 	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
