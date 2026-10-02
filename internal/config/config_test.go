@@ -1917,3 +1917,32 @@ func TestResolveEndpointLogprobsPassThrough(t *testing.T) {
 		t.Fatal("expected Logprobs=false by default")
 	}
 }
+
+// r372: the watch: section parses into WatchTriggerConfig.
+func TestLoad_WatchSection(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	yaml := "watch:\n" +
+		"  - globs: [\"internal/permission/*_test.go\", \"cmd/*.go\"]\n" +
+		"    prompt: \"run tests for {files}\"\n" +
+		"    queue_if_busy: true\n" +
+		"    cooldown_sec: 30\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Watch) != 1 {
+		t.Fatalf("expected 1 watch trigger, got %d", len(cfg.Watch))
+	}
+	w := cfg.Watch[0]
+	if len(w.Globs) != 2 || w.Globs[0] != "internal/permission/*_test.go" {
+		t.Errorf("globs not parsed: %v", w.Globs)
+	}
+	if w.Prompt != "run tests for {files}" || !w.QueueIfBusy || w.CooldownSec != 30 {
+		t.Errorf("trigger fields wrong: %+v", w)
+	}
+}

@@ -494,3 +494,28 @@ func TestSaveMergesForeignJobs(t *testing.T) {
 		}
 	}
 }
+
+// r372: Emit fires an immediate prompt through the enqueue callback -
+// ambient file-watch triggers share this channel. Nil default stays a
+// no-op, and SetEnqueue wiring later is honored.
+func TestEmit_ImmediateThroughEnqueue(t *testing.T) {
+	var got atomic.Value
+	s := NewScheduler(func(prompt string, queueIfBusy bool) {
+		got.Store([]string{prompt, boolStr(queueIfBusy)})
+	}, "")
+	s.Emit("watch fired", true)
+	v, _ := got.Load().([]string)
+	if len(v) != 2 || v[0] != "watch fired" || v[1] != "true" {
+		t.Errorf("Emit did not reach enqueue: %v", v)
+	}
+
+	nilSched := NewScheduler(nil, "")
+	nilSched.Emit("safe no-op", false) // must not panic
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
