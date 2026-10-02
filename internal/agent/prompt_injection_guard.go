@@ -66,6 +66,17 @@ var externalContentTools = map[string]bool{
 	"send_message":  true,
 	"a2a_remote":    true,
 	"a2a_send_task": true,
+	// #3132 (r406 follow-up): the same peer-authored-content vector covers
+	// more retrieval-side tools than the initial r406 set - external CLI
+	// agents (delegate), swarm teammates (teammate_results), sub-agent
+	// results (wait_agent; task_output was already covered), and A2A task
+	// fetch (a2a_get_task/a2a_list_tasks - a2a_send_task was covered but
+	// the injection payload arrives on the retrieval side).
+	"delegate":         true,
+	"teammate_results": true,
+	"wait_agent":       true,
+	"a2a_get_task":     true,
+	"a2a_list_tasks":   true,
 }
 
 // injectionPatterns are case-insensitive patterns that strongly indicate an
