@@ -193,6 +193,7 @@ type Agent struct {
 	experienceFailureRecallFired bool                       // one-shot gate: decision-time experience recall fired this run (r379)
 	experienceInjectedCaseIDs    []string                   // case IDs injected at run-start; decision-time recall excludes them (#3072)
 	solutionFixation             *solutionFixationState     // solution fixation: diagnosis anchoring on failed edit clusters
+	pivotDecision                *pivotDecisionTracker      // pivot/refine meta-decision on consecutive command-family failures (r391)
 	fixCascade                   *fixCascadeState           // failed fix cascade (wrong-hypothesis lock-in) detection
 	errRegression                *errRegressionState        // error count regression (negative progress) detection
 	stalledConvergence           *stalledConvergenceState   // stalled convergence detection (diminishing returns pattern)
@@ -508,6 +509,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		phantomVerify:          newPhantomVerifyState(),
 		redundantReverify:      newRedundantReverifyState(),
 		solutionFixation:       newSolutionFixationState(),
+		pivotDecision:          newPivotDecisionTracker(),
 		reproducerLifecycle:    newReproducerLifecycleState(),
 		truncClaim:             newTruncClaimState(),
 		outputOffload:          newOutputOffloader(),
@@ -1746,6 +1748,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// after the first 2) and firedFor / recentCalls / failedByFile state
 	// leaked across runs.
 	a.solutionFixation.reset()
+	a.pivotDecision.reset()
 	a.redundantReverify.reset()
 	// Reset the export guard so each run starts with a clean checked set.
 	a.exportGuard.reset()
@@ -3965,6 +3968,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// "12 tool calls", not "12 edits"); only failed mutation edits
 			// feed the per-file counts (handled inside recordToolCall).
 			a.solutionFixation.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
+			// Pivot/Refine meta-decision (AutoResearchClaw 2026): consecutive
+			// failures of one command family must surface an explicit
+			// REPAIR-vs-PIVOT decision instead of silent incremental retries.
+			a.pivotDecision.recordToolCall(tc.Name, string(tc.Arguments), result.IsError)
 			// #1486 case E: a FAILED edit_file/write_file changed nothing on
 			// disk - counting it as editsSince wrongly told the reverify
 			// detector "sources changed since your last verify" and
@@ -3975,6 +3982,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if fixationHint := a.solutionFixation.checkAndWarn(); fixationHint != "" {
 				debug.Log("agent", "Iteration %d: solution fixation detector triggered", i+1)
 				a.injectGuidance(fixationHint)
+			}
+			if pivotHint := a.pivotDecision.checkAndWarn(); pivotHint != "" {
+				debug.Log("agent", "Iteration %d: pivot-decision detector triggered", i+1)
+				a.injectGuidance(pivotHint)
 			}
 			// Unverified self-diagnosis: record tool results to track errors
 			// and verification calls for correlated failure detection.
