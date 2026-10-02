@@ -14,8 +14,12 @@ const experienceRecallTopK = 3
 // recallExperience retrieves the most relevant past experience cases for a
 // task query (lexical IDF scoring over the project's case bank) and returns
 // a formatted index block, or "" when the store is unavailable, empty, or
-// nothing matches — callers skip injection entirely so cold projects pay
+// nothing matches - callers skip injection entirely so cold projects pay
 // nothing.
+//
+// #3072: injected case IDs are recorded on the agent so the decision-time
+// recall can exclude them (a re-query at failure time overlaps heavily with
+// the run-start query and would duplicate the same cases mid-run).
 func (a *Agent) recallExperience(task string) string {
 	workingDir := a.WorkingDir()
 	if workingDir == "" {
@@ -25,9 +29,13 @@ func (a *Agent) recallExperience(task string) string {
 	if store == nil {
 		return ""
 	}
-	// FormatIndex returns "" when nothing is relevant; the empty result is
-	// the caller's skip-injection signal (no error channel needed).
-	return store.FormatIndex(task, experienceRecallTopK)
+	// FormatIndexTracked returns "" when nothing is relevant; the empty
+	// result is the caller's skip-injection signal (no error channel needed).
+	idx, ids := store.FormatIndexTracked(task, experienceRecallTopK)
+	if len(ids) > 0 {
+		a.experienceInjectedCaseIDs = append(a.experienceInjectedCaseIDs, ids...)
+	}
+	return idx
 }
 
 // experienceFailureRecallTopK stays leaner than the run-start 3: the
@@ -35,9 +43,26 @@ func (a *Agent) recallExperience(task string) string {
 // on-point cases are all the guidance a failing agent can absorb.
 const experienceFailureRecallTopK = 2
 
-// experienceFailureQueryMaxRunes caps how much error text feeds the query —
-// error dumps are long and mostly stack noise past the first lines.
-const experienceFailureQueryMaxRunes = 240
+// experienceFailureQueryMaxRunes caps how much error text feeds the query.
+// Go build/test output front-loads package paths and === RUN noise while the
+// actionable error sits at the END, so the budget is split: a small head
+// slice for the failing command line plus a larger tail slice for the real
+// error lines (#3072 - head-only truncation biased retrieval to noise).
+const (
+	experienceFailureQueryHeadRunes = 80
+	experienceFailureQueryTailRunes = 160
+)
+
+// truncateErrorForQuery keeps the head and tail of long error output within
+// the combined budget, preferring the tail (where Go errors concentrate).
+func truncateErrorForQuery(s string) string {
+	r := []rune(s)
+	total := experienceFailureQueryHeadRunes + experienceFailureQueryTailRunes
+	if len(r) <= total {
+		return s
+	}
+	return string(r[:experienceFailureQueryHeadRunes]) + "\n...\n" + string(r[len(r)-experienceFailureQueryTailRunes:])
+}
 
 // maybeRecallExperienceOnFailure is the decision-time half of experience
 // recall ("consolidation at decision time", agent-memory survey
@@ -59,17 +84,30 @@ func (a *Agent) maybeRecallExperienceOnFailure(task, errContent string) string {
 	if store == nil {
 		return ""
 	}
-	if r := []rune(errContent); len(r) > experienceFailureQueryMaxRunes {
-		errContent = string(r[:experienceFailureQueryMaxRunes])
-	}
+	errContent = truncateErrorForQuery(errContent)
 	query := task
 	if strings.TrimSpace(errContent) != "" {
 		query = task + "\n" + errContent
 	}
-	idx := store.FormatIndex(query, experienceFailureRecallTopK)
+	// #3072 V2: exclude cases already injected at run-start - the query
+	// prefixes the full task, so without exclusion the lexical retrieval
+	// would mostly re-surface the same top hits a second time in the same
+	// run.
+	var exclude map[string]bool
+	if len(a.experienceInjectedCaseIDs) > 0 {
+		exclude = make(map[string]bool, len(a.experienceInjectedCaseIDs))
+		for _, id := range a.experienceInjectedCaseIDs {
+			exclude[id] = true
+		}
+	}
+	idx := store.FormatIndexExcluding(query, experienceFailureRecallTopK, exclude)
 	if idx == "" {
 		return ""
 	}
 	a.experienceFailureRecallFired = true
-	return "## Past Experience for This Failure (decision-time recall)\nA similar failure pattern was seen in this project before. How it was resolved last time:\n" + idx
+	// #3072 V1: the retrieval is lexical over task+error text - a hit is a
+	// keyword match, NOT a confirmed "same failure pattern". Word it
+	// conditionally so the model verifies relevance instead of trusting the
+	// assertion and misdirecting error recovery.
+	return "## Possibly Related Past Experience (decision-time recall)\nRetrieved by task/error keyword match - a similar failure pattern MAY have been seen in this project before. Check whether it actually applies to the current failure:\n" + idx
 }

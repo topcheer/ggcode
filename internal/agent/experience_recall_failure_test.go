@@ -29,7 +29,7 @@ func TestMaybeRecallExperienceOnFailure(t *testing.T) {
 	if got == "" {
 		t.Fatal("expected decision-time recall for matching failure")
 	}
-	if !strings.Contains(got, "Past Experience for This Failure") || !strings.Contains(got, "clock") {
+	if !strings.Contains(got, "Possibly Related Past Experience") || !strings.Contains(got, "clock") {
 		t.Fatalf("recall block missing context or case detail: %q", got)
 	}
 

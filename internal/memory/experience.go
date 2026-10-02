@@ -130,6 +130,14 @@ func (es *ExperienceStore) Record(task, approach, outcome string, files []string
 // Retrieve scores stored cases against query (lexical IDF overlap) and
 // returns up to max matches above the relevance floor, best first.
 func (es *ExperienceStore) Retrieve(query string, max int) ([]ScoredExperience, error) {
+	return es.RetrieveExcluding(query, max, nil)
+}
+
+// RetrieveExcluding is Retrieve with an ID exclusion set: cases whose ID is
+// in excludeIDs are dropped BEFORE ranking and the max cut, so an excluded
+// top hit cannot shadow a fresh relevant one (#3072 decision-time recall
+// dedup vs the run-start injection).
+func (es *ExperienceStore) RetrieveExcluding(query string, max int, excludeIDs map[string]bool) ([]ScoredExperience, error) {
 	if es == nil || es.dir == "" || max <= 0 {
 		return nil, nil
 	}
@@ -145,10 +153,10 @@ func (es *ExperienceStore) Retrieve(query string, max int) ([]ScoredExperience, 
 	// Document frequency over the case set, for IDF weighting.
 	qSet := tokenSet(qTokens)
 	df := make(map[string]int)
-	caseTokens := make([]map[string]int, len(cases))
-	for i, c := range cases {
+	caseTokens := make([]map[string]int, 0, len(cases))
+	for _, c := range cases {
 		toks := tokenSet(expTokenize(c.Task + " " + strings.Join(c.Files, " ") + " " + c.Approach))
-		caseTokens[i] = toks
+		caseTokens = append(caseTokens, toks)
 		for t := range toks {
 			df[t]++
 		}
@@ -161,6 +169,9 @@ func (es *ExperienceStore) Retrieve(query string, max int) ([]ScoredExperience, 
 	}
 	var scored []ScoredExperience
 	for i, c := range cases {
+		if excludeIDs[c.ID] {
+			continue
+		}
 		toks := caseTokens[i]
 		distinct := 0
 		var score float64
@@ -218,10 +229,37 @@ func (es *ExperienceStore) List() ([]Experience, error) {
 // compact procedural guidance. Returns "" when nothing is relevant, so
 // callers can skip injection entirely (no prompt noise for cold stores).
 func (es *ExperienceStore) FormatIndex(query string, max int) string {
+	idx, _ := es.FormatIndexTracked(query, max)
+	return idx
+}
+
+// FormatIndexTracked is FormatIndex that also reports the IDs of the cases
+// it rendered, so callers can dedup later injections against them (#3072).
+func (es *ExperienceStore) FormatIndexTracked(query string, max int) (string, []string) {
 	scored, err := es.Retrieve(query, max)
+	if err != nil || len(scored) == 0 {
+		return "", nil
+	}
+	ids := make([]string, 0, len(scored))
+	for _, s := range scored {
+		ids = append(ids, s.ID)
+	}
+	return formatScoredExperiences(scored), ids
+}
+
+// FormatIndexExcluding renders like FormatIndex but drops the given case
+// IDs before ranking and the max cut (#3072 decision-time dedup).
+func (es *ExperienceStore) FormatIndexExcluding(query string, max int, excludeIDs map[string]bool) string {
+	scored, err := es.RetrieveExcluding(query, max, excludeIDs)
 	if err != nil || len(scored) == 0 {
 		return ""
 	}
+	return formatScoredExperiences(scored)
+}
+
+// formatScoredExperiences renders scored cases as the retrieval prompt
+// section shared by every FormatIndex* variant.
+func formatScoredExperiences(scored []ScoredExperience) string {
 	var b strings.Builder
 	b.WriteString("Past experience with similar tasks in this project (case-based memory):\n")
 	for _, s := range scored {
