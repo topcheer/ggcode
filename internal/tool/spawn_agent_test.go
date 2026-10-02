@@ -226,3 +226,34 @@ func TestSpawnAgentTaskParameterDocumentsContract(t *testing.T) {
 		t.Fatalf("wait_agent description must remind acceptance-criteria verification, got: %s", desc)
 	}
 }
+
+// TestSpawnAgentLaunchDirectCompanion covers the exported Launch method
+// (extracted from Execute for the best_of_n orchestrator, r377): it must
+// register the run with the manager and return the id, without going
+// through JSON argument parsing.
+func TestSpawnAgentLaunchDirectCompanion(t *testing.T) {
+	mgr := subagent.NewManager(config.SubAgentConfig{
+		MaxConcurrent: 2,
+		Timeout:       5 * time.Second,
+	})
+	defer mgr.Shutdown()
+
+	s := SpawnAgentTool{Manager: mgr, Provider: nil}
+	id, worktree, err := s.Launch(context.Background(), LaunchOptions{
+		Task:      "launch companion task",
+		Name:      "direct launch",
+		Isolation: "", // shared cwd: no worktree expected
+	})
+	if err != nil {
+		t.Fatalf("Launch error: %v", err)
+	}
+	if id == "" {
+		t.Fatal("Launch must return a non-empty sub-agent id")
+	}
+	if worktree != "" {
+		t.Fatalf("shared-cwd launch must not report a worktree, got %q", worktree)
+	}
+	if _, ok := mgr.Snapshot(id); !ok {
+		t.Fatal("launched run must be visible via mgr.Snapshot(id)")
+	}
+}
