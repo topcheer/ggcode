@@ -259,6 +259,41 @@ func summarizeGoTestOutput(output string) string {
 // Pattern for Go compile errors: "path/file.go:line:col: error message"
 var goCompileErrorRe = regexp.MustCompile(`([^\s:]+\.go):(\d+)(?::\d+)?:\s+(.*)`)
 
+// goCompileErrorKeywords are the line substrings that mark a
+// structurally-matching line as a real compile error. #3116: the old
+// inline whitelist silently dropped real Go compile errors whose wording
+// shares no keyword with the list - 'imported and not used' (≠ 'declared
+// and not used'), 'redeclared in this block', 'missing return',
+// 'duplicate declaration' all matched goCompileErrorRe and then vanished
+// from the summary.
+var goCompileErrorKeywords = []string{
+	"error",
+	"undefined",
+	"declared and not used",
+	"imported and not used",    // #3116
+	"redeclared in this block", // #3116
+	"missing return",           // #3116
+	"duplicate declaration",    // #3116
+	"cannot use",
+	"mismatched types",
+	// #806: go vet diagnostics match goCompileErrorRe structurally
+	// ('foo.go:12:3: printf: non-constant format string') but carry
+	// none of the compile keywords -- keep vet analyzer lines.
+	"printf:",
+	"vet:",
+}
+
+// isGoCompileErrorLine reports whether a lowercased, structurally-matching
+// line carries any compile-error keyword (#3116).
+func isGoCompileErrorLine(lower string) bool {
+	for _, kw := range goCompileErrorKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // summarizeGoBuildOutput parses Go build/vet output and extracts compile errors.
 func summarizeGoBuildOutput(output string) string {
 	lines := strings.Split(output, "\n")
@@ -277,16 +312,7 @@ func summarizeGoBuildOutput(output string) string {
 		if m := goCompileErrorRe.FindStringSubmatch(trimmed); m != nil {
 			// Only capture actual errors, not info lines
 			lower := strings.ToLower(trimmed)
-			if !strings.Contains(lower, "error") && !strings.Contains(lower, "undefined") &&
-				!strings.Contains(lower, "declared and not used") &&
-				!strings.Contains(lower, "cannot use") &&
-				!strings.Contains(lower, "mismatched types") &&
-				// #806: go vet diagnostics match goCompileErrorRe structurally
-				// ('foo.go:12:3: printf: non-constant format string') but carry
-				// none of the compile keywords — vet results were silently
-				// summarized away. Keep vet analyzer lines.
-				!strings.Contains(lower, "printf:") &&
-				!strings.Contains(lower, "vet:") {
+			if !isGoCompileErrorLine(lower) {
 				continue
 			}
 			errors = append(errors, compileError{
