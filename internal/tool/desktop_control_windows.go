@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -363,10 +364,20 @@ type winWindowInfo struct {
 	pid    int
 }
 
-// enumVisibleWindows lists top-level visible windows with non-empty titles.
-func enumVisibleWindows() ([]winWindowInfo, error) {
-	var out []winWindowInfo
-	cb := syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
+// enumCBOnce caches the EnumWindows callback across calls (#3133):
+// syscall.NewCallback slots are NEVER recycled and the runtime panics
+// past ~2000 per process ("too many callbacks"). Every desktop_control
+// call (list_windows, find-window actions, quit_app) used to allocate a
+// fresh slot for what is a stateless callback - a long-lived IM-driven
+// session could exhaust the budget and crash. The per-call result is
+// passed via the LPARAM pointer instead of closure capture.
+var enumCBOnce sync.Once
+
+var enumCB uintptr
+
+func initEnumCB() {
+	enumCB = syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
+		out := (*[]winWindowInfo)(unsafe.Pointer(lparam))
 		vis, _, _ := pIsWindowVisible.Call(hwnd)
 		if vis == 0 {
 			return 1 // continue
@@ -377,7 +388,7 @@ func enumVisibleWindows() ([]winWindowInfo, error) {
 		}
 		var pid uint32
 		pGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-		out = append(out, winWindowInfo{
+		*out = append(*out, winWindowInfo{
 			handle: hwnd,
 			title:  title,
 			class:  className(hwnd),
@@ -385,7 +396,13 @@ func enumVisibleWindows() ([]winWindowInfo, error) {
 		})
 		return 1
 	})
-	r, _, err := pEnumWindows.Call(uintptr(cb), 0)
+}
+
+// enumVisibleWindows lists top-level visible windows with non-empty titles.
+func enumVisibleWindows() ([]winWindowInfo, error) {
+	enumCBOnce.Do(initEnumCB)
+	var out []winWindowInfo
+	r, _, err := pEnumWindows.Call(enumCB, uintptr(unsafe.Pointer(&out)))
 	if r == 0 {
 		return nil, fmt.Errorf("EnumWindows failed: %v", err)
 	}

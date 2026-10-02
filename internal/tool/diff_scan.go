@@ -101,7 +101,14 @@ var testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt
 // in unified diff output to track the current file.
 var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+b/(.+)`)
 var diffOldFileHeader = regexp.MustCompile(`^---\s+a/(.+)`)
-var diffHunkHeader = regexp.MustCompile(`^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@`)
+
+// #3133: accept BOTH plain hunks (@@ -a,b +c,d @@) and combined-diff
+// hunks (@@@ -a,b -c,d +e,f @@@ - emitted for unmerged paths during
+// cherry-pick/rebase conflicts). The capture is the start line of the
+// LAST + section (the new-file line numbers the scan must report);
+// without this, combined headers missed the match and newLineNum kept
+// the previous hunk's residue, misplacing every reported issue line.
+var diffHunkHeader = regexp.MustCompile(`^@{2,3}\s+(?:-\d+(?:,\d+)?\s+)+\+(\d+)(?:,\d+)?\s+@{2,3}`)
 
 // ScanStagedDiffForIssues analyzes a unified diff (e.g. from "git diff --cached")
 // and returns quality issues found in ADDED lines only. This provides a
