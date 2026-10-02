@@ -584,6 +584,22 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}, nil
 }
 
+// sendEvent delivers ev to ch unless ctx is done, reporting cancellation.
+// #3071: the 14 former bare `ch <- StreamEvent{...}` sends parked the
+// producer goroutine forever once a cancelling consumer stopped reading
+// (buffer of 64 fills, nobody ever returns) - the same trap #3068 fixed in
+// gemini.go; the fallback wrapper layer (#2570/#602) never covered the
+// no-fallback production path. Every send in the ChatStream producer
+// goroutine must go through here.
+func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	chatMsgs := p.convertMessages(messages)
 	req := openai.ChatCompletionRequest{
@@ -650,14 +666,18 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					delay := retryDelay(err, attempt)
 					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
 					// Notify user about retry
-					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
+						return
+					}
 					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 						// #722: budget exhausted — stop retrying now; wrap with the
 						// sentinel so the failover layer switches immediately.
 						if sleepErr == errRetryBudgetExhausted {
 							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 						}
-						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr}) {
+							return
+						}
 						streamError = true
 						return
 					}
@@ -669,7 +689,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					continue
 				}
 				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}) {
+					return
+				}
 				return
 			}
 
@@ -716,7 +738,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						debug.Log("openai", "flush residual tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
 						outputChars += len(tc.Name) + len(tc.Arguments)
 						emitted = true
-						ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}) {
+							return
+						}
 						delete(toolCalls, idx)
 					}
 				}()
@@ -729,7 +753,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						// assistant message and repaired+flushed unfinished tool calls.
 						if errors.Is(recvErr, context.Canceled) {
 							debug.Log("openai", "stream cancelled: %v emitted=%v", recvErr, emitted)
-							ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: recvErr}) {
+								return
+							}
 							streamError = true
 							return
 						}
@@ -743,14 +769,18 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						// Retry if no content emitted yet and error is retryable
 						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < p.policy.attempts()-1 {
 							delay := retryDelay(recvErr, attempt)
-							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
+								return
+							}
 							if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 								// #722: budget exhausted — stop retrying now; wrap with
 								// the sentinel so the failover layer switches immediately.
 								if sleepErr == errRetryBudgetExhausted {
 									sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, recvErr)
 								}
-								ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+								if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr}) {
+									return
+								}
 								// Mark the stream as errored so the tail does
 								// not emit a usage-bearing Done after the
 								// terminal Error (mirrors the connect-phase
@@ -761,7 +791,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							retry = true
 							return
 						}
-						ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: recvErr}) {
+							return
+						}
 						streamError = true
 						return
 					}
@@ -799,14 +831,18 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					if delta.ReasoningContent != "" {
 						reasoningBuf.WriteString(delta.ReasoningContent)
 						emitted = true
-						ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}) {
+							return
+						}
 					}
 
 					// Text content
 					if delta.Content != "" {
 						outputChars += len(delta.Content)
 						emitted = true
-						ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventText, Text: delta.Content}) {
+							return
+						}
 					}
 
 					// Confidence telemetry (sa-74): accumulate per-token logprobs
@@ -874,7 +910,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 							outputChars += len(tc.Name) + len(tc.Arguments)
 							emitted = true
-							ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}) {
+								return
+							}
 							delete(toolCalls, idx)
 						}
 						if isLengthFinishReason(finishReason) {
@@ -885,7 +923,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 							truncated = true
 						} else if finishErr := finishReasonError(finishReason); finishErr != nil {
-							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: finishErr}) {
+								return
+							}
 							streamError = true
 							return
 						}
@@ -914,12 +954,16 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					avg := logprobSum / float64(logprobN)
 					confidence = &avg
 				}
-				ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated, Confidence: confidence}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated, Confidence: confidence}) {
+					return
+				}
 			}
 			return
 		}
 		// All retry attempts exhausted without success.
-		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", p.policy.attempts())}
+		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", p.policy.attempts())}) {
+			return
+		}
 	})
 
 	return ch, nil
@@ -1124,9 +1168,16 @@ func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, stri
 				result = append(result, merged)
 				i = j + 1
 			} else {
-				// No tool_result found - keep messages as-is
-				result = append(result, messages[i+1])
-				i = i + 2
+				// No tool_result found - keep messages as-is. #3071: the
+				// scan advanced j past EVERY consecutive text-only user, so
+				// all of messages[i+1..j-1] must be preserved - the old
+				// `append(i+1); i += 2` silently dropped i+2..j-1 (their
+				// texts were collected into guidanceTexts but never used on
+				// this path), deleting guidance from the conversation.
+				for k := i + 1; k < j; k++ {
+					result = append(result, messages[k])
+				}
+				i = j
 			}
 		} else {
 			result = append(result, messages[i])
