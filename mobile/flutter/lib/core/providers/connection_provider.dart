@@ -13,6 +13,7 @@ import '../models/protocol.dart' as proto;
 import '../theme/app_theme.dart';
 
 import 'chat_provider.dart';
+import 'file_transfer_provider.dart';
 import 'connection_store.dart';
 import 'background_connection_manager.dart';
 import 'ui_providers.dart';
@@ -725,6 +726,9 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         )) {
           break;
         }
+        // Mobile file transfer V1: no resume across reconnect — discard all
+        // partial transfers before rebuilding the projection.
+        ref.read(fileTransferProvider.notifier).core.reset();
         _clearUiProjection();
         _lastAppliedEventId = '';
         _recentEventIds.clear();
@@ -948,6 +952,42 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         break;
 
       case 'stream_start':
+        break;
+
+      // Mobile file transfer V1: unrecorded bulk frames — no projection ack
+      // semantics; state lives in FileTransferNotifier only.
+      case 'file_offer':
+        if (msg.data != null) {
+          final offer = proto.FileOfferData.fromJson(msg.data!);
+          ref.read(fileTransferProvider.notifier).core.handleOffer(offer);
+          // Surface the card once per file id (re-offer replaces state, not
+          // the bubble entry).
+          final chats = ref.read(chatProvider.notifier);
+          final alreadyShown = ref
+              .read(chatProvider)
+              .any((m) => m.fileTransferId == offer.fileId);
+          if (!alreadyShown) {
+            chats.addFileMessage(offer.fileId);
+          }
+        }
+        break;
+
+      case 'file_chunk':
+        if (msg.data != null) {
+          ref
+              .read(fileTransferProvider.notifier)
+              .core
+              .handleChunk(proto.FileChunkData.fromJson(msg.data!));
+        }
+        break;
+
+      case 'file_done':
+        if (msg.data != null) {
+          ref
+              .read(fileTransferProvider.notifier)
+              .core
+              .handleDone(proto.FileDoneData.fromJson(msg.data!));
+        }
         break;
 
       case 'stream_end':

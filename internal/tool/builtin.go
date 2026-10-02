@@ -135,6 +135,10 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// IM (manager injected post-registration via SetManager)
 		IMTool{},
 
+		// Mobile file transfer (broker adapter injected post-registration
+		// by the TUI when a mobile share starts)
+		MobileFileTool{},
+
 		// Runtime status (provider injected post-registration via SetRuntimeStatusProvider)
 		RuntimeTool{},
 
