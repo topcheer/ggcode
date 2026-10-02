@@ -1,14 +1,18 @@
 package tmux
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Environment describes the current tmux attachment.
@@ -156,7 +160,17 @@ func (c *Client) Split(ctx context.Context, req SplitRequest) (*Pane, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Pane{ID: strings.TrimSpace(out), Purpose: req.Purpose, Command: cmd, Workspace: req.Workspace, Alive: true, Horizontal: req.Horizontal, Size: req.Size, CreatedAt: time.Now()}, nil
+	// #3107: -P -F prints the pane id to stdout, but output() used to
+	// CombinedOutput the streams -- a benign stderr warning (server
+	// first-start probe, config diagnostics) polluted the id and every
+	// later Capture/Kill/PaneExists targeted a garbage string, leaving the
+	// pane uncontrollable. Validate the %N shape and take the first match
+	// instead of trusting the whole trimmed output.
+	paneID, err := extractPaneID(out)
+	if err != nil {
+		return nil, fmt.Errorf("tmux split-window: %w", err)
+	}
+	return &Pane{ID: paneID, Purpose: req.Purpose, Command: cmd, Workspace: req.Workspace, Alive: true, Horizontal: req.Horizontal, Size: req.Size, CreatedAt: time.Now()}, nil
 }
 
 func (c *Client) Popup(ctx context.Context, req PopupRequest) error {
@@ -234,16 +248,43 @@ func (c *Client) ListPaneIDs(ctx context.Context) (map[string]struct{}, error) {
 	return ids, nil
 }
 
+// paneIDPattern matches tmux pane ids: a literal '%' followed by digits.
+var paneIDPattern = regexp.MustCompile(`(?m)^%\d+$`)
+
+// extractPaneID scans command output for the first line shaped like a tmux
+// pane id (%N) and returns it. Any stderr noise mixed in (or unexpected
+// multi-line stdout) is rejected rather than silently becoming the id
+// (#3107).
+func extractPaneID(out string) (string, error) {
+	m := paneIDPattern.FindString(out)
+	if m == "" {
+		return "", fmt.Errorf("no %%N pane id in output: %q", strings.TrimSpace(out))
+	}
+	return m, nil
+}
+
 func (c *Client) output(ctx context.Context, args ...string) (string, error) {
 	if c == nil {
 		c = NewClient()
 	}
 	cmd := exec.CommandContext(ctx, c.bin, args...)
-	out, err := cmd.CombinedOutput()
+	// #3107: separate the streams. CombinedOutput merged stderr warnings
+	// into callers' parse input -- pane creation returned a polluted id,
+	// Capture could return warning text as pane content, and ListPaneIDs
+	// collected garbage entries. Only stdout is parse input now; stderr is
+	// diagnostic (logged on success, folded into the error on failure).
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("tmux %s: %w: %s %s", strings.Join(args, " "), err,
+			strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	}
-	return string(out), nil
+	if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		debug.Log("tmux", "command %q succeeded with stderr output: %s", strings.Join(args, " "), msg)
+	}
+	return stdout.String(), nil
 }
 
 func shellCommand(cmd string) string {
