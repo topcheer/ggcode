@@ -191,6 +191,7 @@ type Agent struct {
 	recurringError               *recurringErrorState       // recurring build/test error fingerprint detection across edit cycles
 	errStrategyLoop              *errStrategyState          // error strategy loop detection (procedural memory failure)
 	experienceFailureRecallFired bool                       // one-shot gate: decision-time experience recall fired this run (r379)
+	experienceInjectedCaseIDs    []string                   // case IDs injected at run-start; decision-time recall excludes them (#3072)
 	solutionFixation             *solutionFixationState     // solution fixation: diagnosis anchoring on failed edit clusters
 	fixCascade                   *fixCascadeState           // failed fix cascade (wrong-hypothesis lock-in) detection
 	errRegression                *errRegressionState        // error count regression (negative progress) detection
@@ -1441,6 +1442,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	if a.contextManager != nil {
 		// r379: reset the decision-time recall one-shot gate for the new run.
 		a.experienceFailureRecallFired = false
+		// #3072: reset the run-start injected-case set so the decision-time
+		// recall of THIS run never excludes last run's injections.
+		a.experienceInjectedCaseIDs = nil
 		if idx := a.recallExperience(userPromptForStats); idx != "" {
 			a.contextManager.Add(provider.Message{
 				Role:    "system",
