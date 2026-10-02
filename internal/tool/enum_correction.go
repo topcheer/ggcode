@@ -133,14 +133,31 @@ func findBestEnumMatch(provided string, enum []json.RawMessage) string {
 		}
 	}
 
-	// Layer 2: closest match within edit distance 2.
-	// Collect all candidates within distance 2.
+	// Layer 2: closest match within edit distance 2, gated by a
+	// length-proportional cap (#3135): a fixed distance of 2 is a typo for
+	// long values but a semantic FLIP for short ones - "on" is distance 2
+	// from "no" (two substitutions), "dist-syd" distance 1 from "dist-sha",
+	// and correcting either silently executes the opposite of what the
+	// model asked for. For candidates <= 3 chars, require distance <= 1
+	// AND a shared first character ("off"->"of" passes; "on"->"no" does
+	// not). For longer candidates, cap at max(1, len/4).
 	var closeCandidates []string
 	minDist := 3 // only accept distance <= 2
 	for _, e := range enum {
 		candidate := strings.TrimSpace(strings.Trim(string(e), `"`))
-		dist := levenshtein(provided, strings.ToLower(candidate))
-		if dist <= 2 && dist < minDist {
+		lower := strings.ToLower(candidate)
+		dist := levenshtein(provided, lower)
+		maxDist := max(1, len(lower)/4)
+		if len(lower) <= 3 {
+			// Short values: same first rune + distance 1 is the only
+			// unambiguous typo shape (e.g. "off" -> "of").
+			if dist != 1 || len(provided) == 0 || lower[0] != provided[0] {
+				continue
+			}
+		} else if dist > maxDist {
+			continue
+		}
+		if dist < minDist {
 			minDist = dist
 			closeCandidates = []string{candidate}
 		} else if dist == minDist && dist <= 2 {
