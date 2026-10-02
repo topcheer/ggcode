@@ -214,7 +214,13 @@ func UserFacingErrorLang(err error, lang string) string {
 	}
 
 	// ---- Connection refused / DNS ----
-	if strings.Contains(raw, "connection refused") || strings.Contains(raw, "no such host") {
+	// #3077: compare against the LOWERCASED raw - relay/proxy wrappers
+	// capitalize ("Connection refused"), and this branch sits before the
+	// lower computation below, so the literal match used to miss and fall
+	// through to the blind-spot fallback, losing the network/Base URL hint.
+	// `lower` is hoisted here and reused by the finish_reason section.
+	lower := strings.ToLower(raw)
+	if strings.Contains(lower, "connection refused") || strings.Contains(lower, "no such host") {
 		if zh {
 			return "无法连接到 API 服务器，请检查网络和 Base URL 设置"
 		}
@@ -222,7 +228,6 @@ func UserFacingErrorLang(err error, lang string) string {
 	}
 
 	// ---- Stream finish_reason / stop_reason errors ----
-	lower := strings.ToLower(raw)
 	if strings.Contains(lower, "finish_reason=length") || strings.Contains(lower, "stop_reason=max_tokens") || strings.Contains(lower, "finish_reason=max_tokens") {
 		if zh {
 			return "回复被截断（超出最大输出长度）。可尝试增加 max_tokens 或缩短问题"
@@ -293,6 +298,11 @@ func UserFacingErrorLang(err error, lang string) string {
 		}
 	}
 	if msg != "" && msg != raw {
+		// #3077: sanitize here too - the stripped remainder of a gateway
+		// error can still embed credential-looking pairs (e.g. a Gemini
+		// key-in-URL 403 body). #1720's redaction previously covered ONLY
+		// the blind-spot branch (truncateRawError -> sanitizeRawError);\t	// no outer caller re-sanitizes.
+		msg = sanitizeRawError(msg)
 		if zh {
 			return "请求失败：" + msg
 		}
