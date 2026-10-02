@@ -117,7 +117,10 @@ var secretPatterns = []SecretPattern{
 		ID:       "private_key_block",
 		Name:     "Private Key (PEM)",
 		Severity: "high",
-		Pattern:  regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
+		// #3084: ENCRYPTED (openssl pkcs8 -topk8 passphrase form) added to
+		// the prefix alternation so the detection layer stops trailing the
+		// display layer's [A-Z ]* prefix class for this variant.
+		Pattern: regexp.MustCompile(`-----BEGIN (?:ENCRYPTED |RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
 	},
 	{
 		ID:       "ssh_private_key",
