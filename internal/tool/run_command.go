@@ -37,6 +37,15 @@ type RunCommand struct {
 	OutputTee io.Writer
 	// OnPreExec, if non-nil, is called just before the command starts.
 	OnPreExec func(command, description string)
+
+	// OmittedOutputSpiller, if non-nil, receives the middle section that
+	// truncateMiddle is about to drop from oversized stdout/stderr and may
+	// return a notice line (e.g. a spill-file reference) to embed in the
+	// truncation marker. The agent wires this to its shared output
+	// offloader so the omitted middle stays recoverable from disk instead
+	// of being silently discarded before the central agent-loop spill point
+	// ever sees the result (r382 Offload-valve gap).
+	OmittedOutputSpiller func(source, omitted string) string
 	// OnPostExec, if non-nil, is called after the command finishes.
 	OnPostExec func(exitCode int, err error)
 	// Sandbox, if non-nil and Enabled, wraps every agent-driven shell spawn
@@ -410,8 +419,8 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	// Truncate output if too large — keep both head and tail.
 	// For most commands (tests, builds, lints), the important info is at the
 	// end (error messages, test results). Keeping only the head would lose it.
-	output = truncateMiddle(output, maxOutputSize, "output")
-	errOutput = truncateMiddle(errOutput, maxOutputSize, "stderr")
+	output = truncateMiddleSpill(output, maxOutputSize, "output", t.OmittedOutputSpiller)
+	errOutput = truncateMiddleSpill(errOutput, maxOutputSize, "stderr", t.OmittedOutputSpiller)
 
 	var sb strings.Builder
 	if output != "" {
@@ -465,6 +474,14 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 // nearest newline so the output doesn't contain partial lines. This makes
 // the truncated output much easier for the agent to parse.
 func truncateMiddle(s string, maxLen int, label string) string {
+	return truncateMiddleSpill(s, maxLen, label, nil)
+}
+
+// truncateMiddleSpill is truncateMiddle with an optional spiller hook: when
+// non-nil it receives the omitted middle and its return value (if non-empty)
+// is appended to the truncation marker so the dropped section stays
+// recoverable (see RunCommand.OmittedOutputSpiller).
+func truncateMiddleSpill(s string, maxLen int, label string, spiller func(source, omitted string) string) string {
 	if len(s) <= maxLen {
 		return s
 	}
@@ -496,7 +513,14 @@ func truncateMiddle(s string, maxLen int, label string) string {
 	omittedText := s[headEnd:tailStart]
 	omittedLines := strings.Count(omittedText, "\n")
 
-	return head + fmt.Sprintf("\n... [%d lines omitted — %s truncated, showing tail] ...\n", omittedLines, label) + tail
+	marker := fmt.Sprintf("\n... [%d lines omitted — %s truncated, showing tail] ...\n", omittedLines, label)
+	if spiller != nil && len(omittedText) > 0 {
+		if notice := spiller(label, omittedText); notice != "" {
+			marker += notice
+		}
+	}
+
+	return head + marker + tail
 }
 
 // executeWithAutoBackground starts a command as a managed job and waits up to

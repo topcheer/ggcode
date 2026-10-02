@@ -560,6 +560,23 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 	// config `memory_tool: true`), since the model is the sole caller. See
 	// internal/agent/memory_tool.go.
 	a.memoryTool = newMemoryToolState()
+
+	// r382 Offload-valve gap: run_command's tool-side truncateMiddle drops
+	// the middle of oversized output BEFORE the central spill point in the
+	// agent loop (guardToolOutput) ever sees the result, so long build/test
+	// logs lost their middle with no re-read pointer - unlike web_fetch/grep
+	// results, which get a spill-file reference. Route the omitted middle
+	// through the shared offloader so the truncation marker carries one too.
+	if rcTool, ok := tools.Get("run_command"); ok {
+		if rc, ok := rcTool.(*tool.RunCommand); ok {
+			rc.OmittedOutputSpiller = func(source, omitted string) string {
+				if path := a.outputOffload.spill("run_command", omitted); path != "" {
+					return spillNotice(path, len(omitted))
+				}
+				return ""
+			}
+		}
+	}
 	a.syncContextManagerProviderLocked()
 	a.syncContextManagerUsageHandlerLocked()
 	a.syncContextManagerTodoPathLocked()
