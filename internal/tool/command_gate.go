@@ -309,10 +309,11 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	// noise... simplest correct approach: match BOTH the raw and the
 	// quote-stripped-interior form; if the quote-stripped form blocks, the
 	// user's real intent still contains the destructive combination.
-	matchCmd := cmd
-	if norm := stripQuotedSeparators(cmd); norm != cmd {
-		matchCmd = cmd + "\n" + norm
-	}
+	// #3125: gateMatchViews additionally unwraps quotes around simple
+	// (space-free) tokens so quote-wrapped flags (`rm "-rf" x`) match the
+	// same rules as their bare forms.
+	matchViews := gateMatchViews(cmd)
+	matchCmd := strings.Join(matchViews, "\n")
 	inertCmd := blankQuotedAndHeredocs(cmd)
 	for _, rule := range g.blockRules {
 		target := matchCmd
@@ -334,8 +335,21 @@ func (g *CommandGate) Check(cmd string) GateResult {
 	// ---- Layer 2: Ask rules (destructive/suspicious, needs confirmation) ----
 	var askReasons []string
 	for _, rule := range g.askRules {
-		if rule.pattern.MatchString(cmd) {
-			askReasons = append(askReasons, rule.desc)
+		// #3125: ask rules previously matched ONLY the raw cmd - the same
+		// quote-wrapped-flag bypass as the Block layer (`rm "-rf" x` was
+		// Allow). Match the same normalized views; quotedInert rules keep
+		// their inert view (quoted argument TEXT must not fire them).
+		if rule.quotedInert {
+			if rule.pattern.MatchString(inertCmd) {
+				askReasons = append(askReasons, rule.desc)
+			}
+			continue
+		}
+		for _, v := range matchViews {
+			if rule.pattern.MatchString(v) {
+				askReasons = append(askReasons, rule.desc)
+				break
+			}
 		}
 	}
 
@@ -449,6 +463,63 @@ func blankQuotes(line string) string {
 		}
 	}
 	return b.String()
+}
+
+// unwrapSimpleQuotedTokens removes quotes around space-free simple tokens
+// (#3125). Shell argv equivalence: `rm "-rf" x` passes rm the exact same
+// argv as `rm -rf x` - the quotes are parser noise a human drops, but our
+// \b/flag-anchored rules never see through them (`"` breaks \brm\s+-r and
+// every flag-shape regex), which made quote-wrapped flags a universal
+// Block+Ask bypass left open by #436's separator-only normalization.
+// Quotes around tokens CONTAINING spaces stay (`echo "rm -rf demo"` keeps
+// its quotes - the payload is argument TEXT, not a flag), so the echo
+// false-positive class cannot fire. Heredoc bodies are skipped verbatim
+// (literal data, mirrors blankQuotedAndHeredocs's heredoc handling).
+func unwrapSimpleQuotedTokens(cmd string) string {
+	lines := strings.Split(cmd, "\n")
+	out := make([]string, 0, len(lines))
+	heredoc := ""
+	for _, line := range lines {
+		if heredoc != "" {
+			if strings.TrimSpace(line) == heredoc {
+				heredoc = ""
+			}
+			out = append(out, line)
+			continue
+		}
+		// The heredoc delimiter's quotes carry meaning (quoted = no
+		// expansion in body) - shield opener quotes from unwrapping.
+		shielded := heredocOpenerRe.ReplaceAllStringFunc(line, func(m string) string {
+			return strings.NewReplacer(`"`, "\x01", "'", "\x02").Replace(m)
+		})
+		shielded = simpleQuotedTokenRe.ReplaceAllString(shielded, "$1$2")
+		out = append(out, strings.NewReplacer("\x01", `"`, "\x02", "'").Replace(shielded))
+		if m := heredocOpenerRe.FindStringSubmatch(line); m != nil && len(m) > 1 {
+			heredoc = m[1]
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+var simpleQuotedTokenRe = regexp.MustCompile(`"([^"\s]+)"|'([^'\s]+)'`)
+
+// gateMatchViews returns every normalized view the Block/Ask pattern layers
+// must match against (#436 separator view + #3125 unwrapped-flag view).
+// Duplicate views collapse; order is raw-first.
+func gateMatchViews(cmd string) []string {
+	views := []string{cmd}
+	seen := map[string]bool{cmd: true}
+	add := func(v string) {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			views = append(views, v)
+		}
+	}
+	norm := stripQuotedSeparators(cmd)
+	add(norm)
+	add(unwrapSimpleQuotedTokens(cmd))
+	add(unwrapSimpleQuotedTokens(norm))
+	return views
 }
 
 // preChecks runs Claude Code-style pre-validation that catches parser
@@ -979,15 +1050,22 @@ func infiniteCommandSuggestion(bin string) string {
 // #444: ask rules are included — the gate classifies 'rm -rf <relative>',
 // 'git reset --hard', 'terraform destroy' etc. as ask-level destructive,
 // and the doc contract (and any danger-assessing caller) must see them.
+// #3125: matches the same multi-view normalization as Check — previously
+// it matched only the raw cmd, so quote-wrapped flags bypassed it too.
 func (g *CommandGate) IsDestructive(cmd string) bool {
+	views := gateMatchViews(cmd)
 	for _, rule := range g.blockRules {
-		if rule.pattern.MatchString(cmd) {
-			return true
+		for _, v := range views {
+			if rule.pattern.MatchString(v) {
+				return true
+			}
 		}
 	}
 	for _, rule := range g.askRules {
-		if rule.pattern.MatchString(cmd) {
-			return true
+		for _, v := range views {
+			if rule.pattern.MatchString(v) {
+				return true
+			}
 		}
 	}
 	return false
