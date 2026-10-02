@@ -573,8 +573,15 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		if rcTool, ok := tools.Get("run_command"); ok {
 			if rc, ok := rcTool.(*tool.RunCommand); ok {
 				rc.OmittedOutputSpiller = func(source, omitted string) string {
+					// #3076: do NOT reuse spillNotice here - that wording
+					// promises the FULL output, but this spill file holds
+					// only the omitted middle (head+tail are already shown
+					// inline). Say exactly what was persisted.
 					if path := a.outputOffload.spill("run_command", omitted); path != "" {
-						return spillNotice(path, len(omitted))
+						return fmt.Sprintf(
+							"\n[Omitted middle section (%s) saved to: %s - head and tail are shown above; use read_file with offset/limit or grep on that path to recover the omitted lines.]",
+							formatBytes(len(omitted)), path,
+						)
 					}
 					return ""
 				}
