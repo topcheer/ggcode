@@ -34,6 +34,7 @@ type CodeIndexManager struct {
 	ready        bool
 	building     bool
 	started      bool             // true after StartBackgroundIndex has been called
+	degraded     bool             // #3124: true when another instance held the cross-process lock at startup
 	disabled     bool             // true when indexing is structurally inappropriate for this working dir (e.g. the user's home directory) - all build/scan paths are no-ops
 	lastActivity time.Time        // last time Search() or MarkDirty() was called; used for idle release
 	dirtyFiles   map[string]int64 // path → known mtime at last index
@@ -221,9 +222,28 @@ func (m *CodeIndexManager) StartBackgroundIndex() {
 		// already building, we skip - the other instance will write
 		// the index, and we'll pick it up on the next dirty-check cycle.
 		if !m.tryLock() {
-			debug.Log("codeindex", "another instance is building the index, skipping")
+			debug.Log("codeindex", "another instance is building the index, degrading to read-only reload loop")
 			// Still try to load the existing disk cache.
 			m.loadDiskCache()
+			// #3124: previously we returned here WITHOUT starting any
+			// loop - `started` was already true, so MarkDirty kept
+			// signalling rebuildCh into a void while this instance
+			// served its startup snapshot forever, and the idle-release
+			// monitor never ran (leaking the in-memory index). Mark
+			// degraded and start the SAME backgroundLoop: its periodic
+			// tick reloads the disk cache the lock holder refreshes
+			// (see periodicCheck), its debounced/periodic rebuilds
+			// self-heal via rebuildDirty's per-cycle tryLock, and idle
+			// release keeps working. Consume the pending signal from a
+			// pre-loop MarkDirty so it cannot sit stale in the buffer.
+			select {
+			case <-m.rebuildCh:
+			default:
+			}
+			m.mu.Lock()
+			m.degraded = true
+			m.mu.Unlock()
+			safego.Go("codeindex.dirtycheck", m.backgroundLoop)
 			return
 		}
 		defer m.unlock()
@@ -750,6 +770,24 @@ func (m *CodeIndexManager) backgroundLoop() {
 // periodicCheck handles the 5-minute periodic tick: idle release and
 // dirty-file rebuild.
 func (m *CodeIndexManager) periodicCheck() {
+	// #3124: degraded (another instance held the lock at startup) -
+	// pull the snapshot the lock holder keeps persisting so search
+	// results track the shared workspace instead of the startup image.
+	// scanForExternalChanges + rebuildDirty below still let this
+	// instance self-heal into the writer role whenever the lock frees
+	// up (rebuildDirty clears `degraded` on a successful lock).
+	m.mu.RLock()
+	degraded := m.degraded
+	stillReady := m.ready
+	m.mu.RUnlock()
+	if degraded && stillReady {
+		// Only reload while the index is resident: after an idle release
+		// (m.index == nil, ready == false) reloading here would undo the
+		// release every 5 minutes - lazyLoad on the next Search is the
+		// designated re-entry path.
+		m.loadDiskCache()
+	}
+
 	// Check for idle release first.
 	m.mu.RLock()
 	idle := time.Since(m.lastActivity)
@@ -916,6 +954,16 @@ func (m *CodeIndexManager) rebuildDirty(reason string) {
 		// instance serving stale code_search results for up to 60min.
 		// Keeping the set means the next debounce/periodic cycle retries.
 		return
+	}
+	// #3124: we hold the cross-process lock and are about to write - a
+	// degraded instance that reaches this point has self-healed into
+	// the writer role.
+	m.mu.Lock()
+	wasDegraded := m.degraded
+	m.degraded = false
+	m.mu.Unlock()
+	if wasDegraded {
+		debug.Log("codeindex", "degraded instance acquired the lock, promoted to writer")
 	}
 
 	// Snapshot dirty files under lock, then clear.
