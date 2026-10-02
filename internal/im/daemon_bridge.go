@@ -1197,7 +1197,7 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 		ev.Model = ses.Model
 		ev.Vendor = ses.Vendor
 		ev.Endpoint = ses.Endpoint
-		ses.Metrics = append(ses.Metrics, ev)
+		ses.AppendMetricEvent(ev) // #3086: lock-guarded append (was a bare slice append)
 		ses.AppendMetricForEndpoint(ses.Vendor, ses.Endpoint, ev)
 	}
 	b.mu.Unlock()

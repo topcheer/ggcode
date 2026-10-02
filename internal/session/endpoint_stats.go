@@ -33,20 +33,82 @@ func (s *Session) ensureEndpointStatsLocked() {
 	}
 }
 
+// AddUsageHistoryEntry appends to UsageHistory under endpointStatsMu.
+// #3086: cross-goroutine callback appends (`ses.UsageHistory = append(...)`
+// in TUI/IM/desktop bridges) raced the endpoint-stats rebuild readers that
+// range the same slice - `slice = append(slice, x)` updates len and pointer
+// in separate steps, so a concurrent range can see a torn view or panic on
+// the stale-array/new-len window. Appends and reads of the source slices
+// now all pass through this mutex. Safe under higher-level session/bridge
+// locks (the mutex is nested, never the other way around).
+func (s *Session) AddUsageHistoryEntry(entry UsageEntry) {
+	if s == nil {
+		return
+	}
+	s.endpointStatsMu.Lock()
+	s.UsageHistory = append(s.UsageHistory, entry)
+	s.endpointStatsMu.Unlock()
+}
+
+// AppendMetricEvent appends to Metrics under endpointStatsMu - the
+// Metrics-side twin of AddUsageHistoryEntry (#3086).
+func (s *Session) AppendMetricEvent(ev metrics.MetricEvent) {
+	if s == nil {
+		return
+	}
+	s.endpointStatsMu.Lock()
+	s.Metrics = append(s.Metrics, ev)
+	s.endpointStatsMu.Unlock()
+}
+
+// UsageHistorySnapshot returns a copy of UsageHistory taken under the
+// same lock the appends hold. Exported for TUI/desktop read paths that
+// run off the session goroutine (cost snapshot per frame, /cost export)
+// - #3086.
+func (s *Session) UsageHistorySnapshot() []UsageEntry {
+	return s.usageHistorySnapshot()
+}
+
+// usageHistorySnapshot returns a copy of UsageHistory taken under the
+// same lock the appends hold (#3086).
+func (s *Session) usageHistorySnapshot() []UsageEntry {
+	s.endpointStatsMu.RLock()
+	snap := append([]UsageEntry(nil), s.UsageHistory...)
+	s.endpointStatsMu.RUnlock()
+	return snap
+}
+
+// MetricsSnapshot returns a copy of Metrics taken under the same lock
+// the appends hold. Exported for TUI read paths that capture the slice
+// in closures crossing goroutines (/trace export) - #3086.
+func (s *Session) MetricsSnapshot() []metrics.MetricEvent {
+	return s.metricsSnapshot()
+}
+
+// metricsSnapshot returns a copy of Metrics taken under the same lock the
+// appends hold (#3086).
+func (s *Session) metricsSnapshot() []metrics.MetricEvent {
+	s.endpointStatsMu.RLock()
+	snap := append([]metrics.MetricEvent(nil), s.Metrics...)
+	s.endpointStatsMu.RUnlock()
+	return snap
+}
+
 func (s *Session) RebuildEndpointStats() {
 	if s == nil {
 		return
 	}
 	usageByEndpoint := make(map[string]provider.TokenUsage)
 	metricsByEndpoint := make(map[string][]metrics.MetricEvent)
-	for _, entry := range s.UsageHistory {
+	usageHistory := s.usageHistorySnapshot() // #3086: read under the append lock
+	for _, entry := range usageHistory {
 		key := EndpointStatsKey(entry.Vendor, entry.Endpoint)
 		if key == "" {
 			continue
 		}
 		usageByEndpoint[key] = usageByEndpoint[key].Add(entry.Usage)
 	}
-	for _, ev := range s.Metrics {
+	for _, ev := range s.metricsSnapshot() { // #3086: read under the append lock
 		key := EndpointStatsKey(ev.Vendor, ev.Endpoint)
 		if key == "" {
 			continue
@@ -108,9 +170,10 @@ func (s *Session) UsageForEndpoint(vendor, endpoint string) provider.TokenUsage 
 	s.endpointStatsMu.RLock()
 	usage, ok := s.EndpointUsage[key]
 	hasBuckets := len(s.EndpointUsage) > 0
+	hasHistory := len(s.UsageHistory) > 0
 	s.endpointStatsMu.RUnlock()
 	if key == "" {
-		if !hasBuckets && len(s.UsageHistory) == 0 {
+		if !hasBuckets && !hasHistory {
 			return s.TokenUsage
 		}
 		return provider.TokenUsage{}
@@ -118,7 +181,7 @@ func (s *Session) UsageForEndpoint(vendor, endpoint string) provider.TokenUsage 
 	if ok {
 		return usage
 	}
-	if !hasBuckets && len(s.UsageHistory) > 0 {
+	if !hasBuckets && hasHistory {
 		s.RebuildEndpointStats()
 		s.endpointStatsMu.RLock()
 		usage, ok = s.EndpointUsage[key]
@@ -127,8 +190,11 @@ func (s *Session) UsageForEndpoint(vendor, endpoint string) provider.TokenUsage 
 			return usage
 		}
 	}
+	// #3086: hasHistory was read under the lock at the top of this
+	// function; appends since then only shrink the empty-history window,
+	// never reopen it.
 	sessionKey := EndpointStatsKey(s.Vendor, s.Endpoint)
-	if len(s.UsageHistory) == 0 && (sessionKey == key || sessionKey == "") {
+	if !hasHistory && (sessionKey == key || sessionKey == "") {
 		return s.TokenUsage
 	}
 	return provider.TokenUsage{}
@@ -142,18 +208,19 @@ func (s *Session) MetricsForEndpoint(vendor, endpoint string) []metrics.MetricEv
 	s.endpointStatsMu.RLock()
 	events, ok := s.EndpointMetrics[key]
 	hasBuckets := len(s.EndpointMetrics) > 0
+	metricsSrc := append([]metrics.MetricEvent(nil), s.Metrics...) // #3086: read under the append lock
 	s.endpointStatsMu.RUnlock()
 	if key == "" {
 		if !hasBuckets {
 			hasMetadata := false
-			for _, ev := range s.Metrics {
+			for _, ev := range metricsSrc {
 				if strings.TrimSpace(ev.Vendor) != "" || strings.TrimSpace(ev.Endpoint) != "" {
 					hasMetadata = true
 					break
 				}
 			}
 			if !hasMetadata {
-				return append([]metrics.MetricEvent(nil), s.Metrics...)
+				return metricsSrc
 			}
 		}
 		return nil
@@ -161,7 +228,7 @@ func (s *Session) MetricsForEndpoint(vendor, endpoint string) []metrics.MetricEv
 	if ok {
 		return append([]metrics.MetricEvent(nil), events...)
 	}
-	if !hasBuckets && len(s.Metrics) > 0 {
+	if !hasBuckets && len(metricsSrc) > 0 {
 		s.RebuildEndpointStats()
 		s.endpointStatsMu.RLock()
 		events, ok = s.EndpointMetrics[key]
@@ -175,7 +242,7 @@ func (s *Session) MetricsForEndpoint(vendor, endpoint string) []metrics.MetricEv
 		}
 	}
 	hasMetadata := false
-	for _, ev := range s.Metrics {
+	for _, ev := range metricsSrc {
 		if strings.TrimSpace(ev.Vendor) != "" || strings.TrimSpace(ev.Endpoint) != "" {
 			hasMetadata = true
 			break
@@ -186,7 +253,7 @@ func (s *Session) MetricsForEndpoint(vendor, endpoint string) []metrics.MetricEv
 	}
 	sessionKey := EndpointStatsKey(s.Vendor, s.Endpoint)
 	if sessionKey == key || sessionKey == "" {
-		return append([]metrics.MetricEvent(nil), s.Metrics...)
+		return metricsSrc
 	}
 	return nil
 }
