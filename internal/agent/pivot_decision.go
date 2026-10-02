@@ -71,13 +71,19 @@ type pivotCommandArgs struct {
 // recordToolCall observes every tool result. Only run_command participates:
 // verify/build failures are the canonical "experiment failed" signal; other
 // tools (edits, reads) have their own detectors.
-func (p *pivotDecisionTracker) recordToolCall(toolName, args string, isError bool) {
+// #3089 V2: environmental failures (timeout, OOM/signal kill) say nothing
+// about the strategy itself - they are neutral and do not touch the streak
+// in either direction.
+func (p *pivotDecisionTracker) recordToolCall(toolName, args string, isError bool, resultContent string) {
 	if p == nil {
 		return
 	}
 	key := pivotCommandKey(toolName, args)
 	if key == "" {
 		return
+	}
+	if isError && pivotEnvironmentalFailure(resultContent) {
+		return // environment noise: neither counts as failure nor as success
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -126,10 +132,14 @@ func (p *pivotDecisionTracker) checkAndWarn() string {
 }
 
 // pivotCommandKey extracts a stable "command family" key from a run_command
-// invocation: the first two whitespace-separated tokens of the first
-// non-comment line (e.g. "go test", "make verify", "npm run"). Argument
-// churn (paths, flags) does not fragment the family. Returns "" for other
-// tools or empty commands.
+// invocation: the first two whitespace-separated tokens of the main command
+// (e.g. "go test", "make verify", "npm run"). Argument churn (paths, flags)
+// does not fragment the family. Returns "" for other tools or empty commands.
+//
+// #3089 V1: shell plumbing must not become the family key. `set -e` lines,
+// leading `cd x &&` segments, `sudo`/`env` wrappers and `VAR=value`
+// assignments are stripped so `cd /x && go test` buckets with `go test`,
+// and `set -e` scripts no longer all collapse into one bogus family.
 func pivotCommandKey(toolName, args string) string {
 	if toolName != "run_command" {
 		return ""
@@ -143,15 +153,85 @@ func pivotCommandKey(toolName, args string) string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) >= 2 {
-			return fields[0] + " " + fields[1]
-		}
-		if len(fields) == 1 {
-			return fields[0]
+		if key := pivotMainSegment(line); key != "" {
+			return key
 		}
 	}
 	return ""
+}
+
+// pivotMainSegment walks a command line (possibly `cd x && payload` or with
+// `sudo`/`env`/`VAR=` prefixes) and returns the two-token family key of the
+// first segment that is real payload rather than shell plumbing.
+func pivotMainSegment(line string) string {
+	for _, seg := range strings.Split(line, "&&") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		fields := strings.Fields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		// Drop leading wrapper tokens: sudo / env / VAR=value assignments.
+		i := 0
+		for i < len(fields) && (fields[i] == "sudo" || fields[i] == "env" || pivotIsEnvAssign(fields[i])) {
+			i++
+		}
+		fields = fields[i:]
+		if len(fields) == 0 {
+			continue
+		}
+		// `cd x` and `set -e` are plumbing, not the payload: skip the segment.
+		if fields[0] == "cd" || fields[0] == "set" {
+			continue
+		}
+		if len(fields) >= 2 {
+			return fields[0] + " " + fields[1]
+		}
+		return fields[0]
+	}
+	return ""
+}
+
+// pivotIsEnvAssign reports whether tok is a `NAME=value` shell assignment
+// (flags like `--foo=bar` are not).
+func pivotIsEnvAssign(tok string) bool {
+	i := strings.Index(tok, "=")
+	if i <= 0 {
+		return false
+	}
+	for _, c := range tok[:i] {
+		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// pivotEnvironmentalFailure reports whether a failed run_command result was
+// caused by the environment rather than the command's own strategy (#3089 V2).
+func pivotEnvironmentalFailure(content string) bool {
+	if content == "" {
+		return false
+	}
+	env := []string{
+		"signal: killed",
+		"signal: terminated",
+		"context deadline exceeded",
+		"command timed out",
+		"i/o timeout",
+		"exit status 137",
+		"exit status 124",
+		"exit code 137",
+		"exit code 124",
+	}
+	for _, m := range env {
+		if strings.Contains(content, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // itoaPivot avoids importing strconv for a single call site.
