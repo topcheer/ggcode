@@ -255,7 +255,7 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin", "/runreport":
+		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin", "/runreport", "/interventions":
 		return true
 	}
 	return false
@@ -463,6 +463,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handlePluginsCommand()
 		case "/inspector":
 			return m.handleInspectorCommand(parts)
+		case "/interventions":
+			return m.handleInterventionsCommand(parts)
 		case "/chat":
 			m.openLanChatPanel()
 			return nil

@@ -242,6 +242,8 @@ type Agent struct {
 	toolThermal                  *thermalState              // cross-tool usage balance monitor (explore/modify/verify distribution)
 	latencyTracker               *LatencyTracker            // per-tool latency baseline & slow-tool outlier detection
 	toolSequence                 *toolSequenceValidator     // cross-iteration tool call anti-pattern detection
+	interventionLedger           *interventionLedger        // r395: user-takeover history → proactive defer hints
+	lastExecutedTool             string                     // r395: tool behind the most recent tool result (guarded by mu)
 	planDrift                    *planDriftState            // plan drift detection (exit_plan_mode item tracking)
 	unverifiedClaim              *unverifiedClaimState      // unverified success claim detection (text claims vs actual verification)
 	convergenceLock              *convergenceLockState      // post-verification unnecessary edit drift detection
@@ -457,6 +459,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		latencyTracker:         NewLatencyTracker(),
 		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
+		interventionLedger:     newInterventionLedger(""), // re-anchored in SetWorkingDir
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
@@ -1240,6 +1243,10 @@ func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workingDir = dir
+	// r395: re-anchor the intervention ledger to the real workspace.
+	if a.interventionLedger == nil || a.interventionLedger.workingDir != dir {
+		a.interventionLedger = newInterventionLedger(dir)
+	}
 	// #1559-C: the read/edit guard states key files by path - anchor
 	// them to the workspace root so relative reads and absolute edits
 	// hit the same map entry.
@@ -1937,6 +1944,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			runStats.recordCompaction()
 		}
 		if a.injectPendingInterruptions() {
+			a.recordIntervention(i + 1)
 			continue
 		}
 		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
@@ -2783,6 +2791,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.injectGuidance(gdHint)
 			}
 			if a.injectPendingInterruptions() {
+				a.recordIntervention(i + 1)
 				continue
 			}
 			// Autopilot strategist: when in autopilot mode with a confirmed
@@ -3792,6 +3801,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// pattern type fires at most once per run.
 			if seqHint := a.toolSequence.record(tc, i+1); seqHint != "" {
 				a.appendGuidance(&result, seqHint)
+			}
+			// r395: track the tool behind this result for intervention
+			// attribution, and surface a defer hint when this tool has a
+			// repeated user-takeover history (non-blocking, result-appended).
+			a.mu.Lock()
+			a.lastExecutedTool = tc.Name
+			a.mu.Unlock()
+			if ivHint := a.interventionLedger.hint(tc.Name); ivHint != "" {
+				a.appendGuidance(&result, ivHint)
 			}
 			// Orphaned background command tracking: record start_command jobs
 			// and mark output checks. Detects forgotten background processes.
