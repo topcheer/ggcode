@@ -105,7 +105,7 @@ func (t ListMCPCapabilitiesTool) Execute(ctx context.Context, input json.RawMess
 		sb.WriteString(fmt.Sprintf("  prompts: %s\n", joinOrNone(snap.PromptNames)))
 		sb.WriteString(fmt.Sprintf("  resources: %s\n", joinOrNone(snap.ResourceNames)))
 		if len(snap.ResourceTemplateNames) > 0 {
-			sb.WriteString(fmt.Sprintf("  resource templates (expand via read_mcp_resource): %s\n", strings.Join(snap.ResourceTemplateNames, ", ")))
+			sb.WriteString(fmt.Sprintf("  resource templates (expand via read_mcp_resource): %s\n", joinCapped(snap.ResourceTemplateNames, maxListOutputBytes)))
 		}
 	}
 	if count == 0 {
@@ -283,11 +283,42 @@ func (t ReadMCPResourceTool) Execute(ctx context.Context, input json.RawMessage)
 	return Result{Content: out}, nil
 }
 
+// joinOrNone joins names with ", ", or "(none)" when empty. #3177: the
+// list is capped by joinCapped (4KB) so a huge server enumeration cannot
+// flood the context in one call - same intent as the 50KB caps the
+// prompt/resource CONTENT paths already enforce.
 func joinOrNone(values []string) string {
 	if len(values) == 0 {
 		return "(none)"
 	}
-	return strings.Join(values, ", ")
+	return joinCapped(values, maxListOutputBytes)
+}
+
+// maxListOutputBytes caps a joined name list (per list) so listing a
+// marketplace-aggregate MCP server stays context-cheap (#3177).
+const maxListOutputBytes = 4096
+
+// joinCapped joins values with ", " until the budget is spent, then
+// summarizes the remainder as "+N more" instead of streaming it.
+func joinCapped(values []string, maxBytes int) string {
+	var sb strings.Builder
+	shown := 0
+	for i, v := range values {
+		sep := ""
+		if i > 0 {
+			sep = ", "
+		}
+		if sb.Len()+len(sep)+len(v) > maxBytes && shown > 0 {
+			break
+		}
+		sb.WriteString(sep)
+		sb.WriteString(v)
+		shown++
+	}
+	if shown < len(values) {
+		fmt.Fprintf(&sb, " + %d more (of %d total)", len(values)-shown, len(values))
+	}
+	return sb.String()
 }
 
 func firstNonEmptyString(values ...string) string {

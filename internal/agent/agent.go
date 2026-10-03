@@ -841,6 +841,14 @@ func (a *Agent) Close() {
 		}
 	}
 	a.CancelPreCompact()
+	// #3178: the session budget stores are package-level sync.Maps keyed
+	// by *Agent (issue #543's setter-body confinement pattern) - without a
+	// Delete here the map pins the Agent and its whole reference graph
+	// forever, so daemon/desktop processes that create agents per request
+	// leak both. Close is the lifecycle end; both dimensions (time +
+	// token) release together.
+	agentSessionTimeBudgets.Delete(a)
+	agentSessionTokenBudgets.Delete(a)
 	if a.shutdownCancel != nil {
 		a.shutdownCancel()
 	}
