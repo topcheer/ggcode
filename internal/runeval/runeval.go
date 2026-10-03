@@ -2,7 +2,7 @@
 // a completed (or in-progress) agent run.
 //
 // Frontier agent-evaluation practice (Langfuse "AI agent evaluation", 2025-26)
-// scores agents on the trajectory — the path of steps — in addition to the
+// scores agents on the trajectory - the path of steps - in addition to the
 // final outcome, because tool-use failures and redundant calls are often
 // invisible in the final answer: the agent recovers, but the retry burned
 // tokens the user pays for. Trajectory-level signals include step count,
@@ -14,7 +14,7 @@
 // memory). What was missing is the quantitative offline scorecard: given the
 // session's full message log, quantify duplicate calls, failed calls, and the
 // context tax they impose, then emit a transparent efficiency score plus
-// actionable findings. runeval is that scorecard — pure analysis, no LLM
+// actionable findings. runeval is that scorecard - pure analysis, no LLM
 // calls, no runtime steering (it is not a detector; the user invokes it via
 // the /runreport slash command).
 package runeval
@@ -69,7 +69,7 @@ type Report struct {
 	WastedRepeatCalls int
 
 	// WastedResultBytes sums the output bytes of those no-information
-	// results — text that gets re-ingested into every subsequent request's
+	// results - text that gets re-ingested into every subsequent request's
 	// context without changing what the model knows.
 	WastedResultBytes int
 
@@ -80,6 +80,24 @@ type Report struct {
 	// non-"agent" source (compaction, strategist, verify, ...).
 	OverheadTokens int
 	TotalTokens    int
+
+	// Interaction-quality dimensions (human-centered coding agents,
+	// arXiv:2608.12355): the report surfaces not just what the agent did but
+	// how the human had to engage with it.
+
+	// SteeringEvents counts mid-run user text messages - user input that
+	// arrived after the agent's first reply, i.e. course corrections rather
+	// than the initial task. Tool-result user messages are not steering.
+	SteeringEvents int
+
+	// AskUserCalls counts ask_user invocations - the agent deferring a
+	// decision back to the human instead of guessing.
+	AskUserCalls int
+
+	// CorrectionSignals counts mid-run user messages matching a conservative
+	// correction lexicon ("不对", "错了", "revert", ...): explicit negative
+	// feedback on work already done.
+	CorrectionSignals int
 
 	// EfficiencyScore is 100 minus transparent penalties (see Evaluate).
 	// 0-100; 100 = clean trajectory.
@@ -123,6 +141,16 @@ const (
 	// minToolsForOverheadPenalty guards the overhead-share penalty against
 	// small-sample noise (a 2-call session has no meaningful overhead).
 	minToolsForOverheadPenalty = 5
+
+	// steeringFindingsThreshold is the mid-run steer count at which the
+	// interaction-quality finding fires (r432): one or two nudges are normal
+	// collaboration, three or more suggests task-alignment drift worth
+	// surfacing (arXiv:2608.12355's steerability dimension).
+	steeringFindingsThreshold = 3
+
+	// correctionFindingsThreshold is the explicit-correction count that fires
+	// the finding even when total steering stays below the threshold above.
+	correctionFindingsThreshold = 2
 )
 
 // readOnlyTools is the conservative whitelist of tools whose repeated
@@ -204,7 +232,7 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 			case "tool_result":
 				key := byID[b.ToolID]
 				if key == nil {
-					continue // unpaired result (e.g. truncated log) — skip
+					continue // unpaired result (e.g. truncated log) - skip
 				}
 				rec := records[*key]
 				if rec == nil {
@@ -219,6 +247,39 @@ func Evaluate(msgs []provider.Message, usage []UsageSample) Report {
 					isError: b.IsError,
 					outLen:  len(b.Output),
 				})
+			}
+		}
+	}
+
+	// Interaction-quality walk (r432, arXiv:2608.12355): mid-run user text
+	// = steering; ask_user deferrals; explicit correction lexicon hits.
+	// Runs before the loops below mutate nothing; pure counts, no LLM.
+	seenAssistant := false
+	for i := range msgs {
+		switch msgs[i].Role {
+		case "assistant":
+			seenAssistant = true
+			for _, b := range msgs[i].Content {
+				if b.Type == "tool_use" && b.ToolName == "ask_user" {
+					r.AskUserCalls++
+				}
+			}
+		case "user":
+			if !seenAssistant {
+				continue // initial prompt(s), not steering
+			}
+			hasText := false
+			for _, b := range msgs[i].Content {
+				if b.Type != "text" || strings.TrimSpace(b.Text) == "" {
+					continue
+				}
+				hasText = true
+				if isCorrectionSignal(b.Text) {
+					r.CorrectionSignals++
+				}
+			}
+			if hasText {
+				r.SteeringEvents++
 			}
 		}
 	}
@@ -342,11 +403,11 @@ func findings(r Report) []string {
 		}
 		if g.Identical && g.ReadOnly {
 			f = append(f, fmt.Sprintf(
-				"%d repeated %s %s(%s) returned identical results — the answer was already in context",
+				"%d repeated %s %s(%s) returned identical results - the answer was already in context",
 				g.Repeats, noun, g.Tool, g.Input))
 		} else {
 			f = append(f, fmt.Sprintf(
-				"%d repeated %s %s(%s) — hit the same inputs %d×; check why earlier results were insufficient",
+				"%d repeated %s %s(%s) - hit the same inputs %d×; check why earlier results were insufficient",
 				g.Repeats, noun, g.Tool, g.Input, g.Count))
 		}
 		shown++
@@ -354,7 +415,7 @@ func findings(r Report) []string {
 
 	if r.ToolErrors > 0 {
 		f = append(f, fmt.Sprintf(
-			"%d of %d tool calls failed — each failure costs a retry turn plus the error text re-ingested into context",
+			"%d of %d tool calls failed - each failure costs a retry turn plus the error text re-ingested into context",
 			r.ToolErrors, r.ToolCalls))
 	}
 
@@ -362,7 +423,7 @@ func findings(r Report) []string {
 		share := 100 * float64(r.OverheadTokens) / float64(r.TotalTokens)
 		if share >= 15 {
 			f = append(f, fmt.Sprintf(
-				"%.0f%% of tokens came from non-agent machinery (compaction/strategist/verify…) — weigh the cost-quality tradeoff of that overhead",
+				"%.0f%% of tokens came from non-agent machinery (compaction/strategist/verify…) - weigh the cost-quality tradeoff of that overhead",
 				share))
 		}
 	}
@@ -373,7 +434,28 @@ func findings(r Report) []string {
 			comma(r.WastedTokenEstimate), comma(r.WastedResultBytes)))
 	}
 
+	// Interaction-quality findings (r432, arXiv:2608.12355): surface how the
+	// human had to engage, not just what the agent did. Thresholds are
+	// conservative to keep one-off nudges out of the findings list.
+	if r.SteeringEvents >= steeringFindingsThreshold {
+		f = append(f, fmt.Sprintf(
+			"%d mid-run user steer%s after work started (incl. %d explicit correction%s) - frequent takeover may signal task-alignment drift; front-load ambiguity resolution instead",
+			r.SteeringEvents, plural(r.SteeringEvents), r.CorrectionSignals, plural(r.CorrectionSignals)))
+	} else if r.CorrectionSignals >= correctionFindingsThreshold {
+		f = append(f, fmt.Sprintf(
+			"%d explicit user correction%s of work already done - check whether the initial plan matched the request before executing",
+			r.CorrectionSignals, plural(r.CorrectionSignals)))
+	}
+
 	return f
+}
+
+// plural returns "" for 1 and "s" otherwise, for finding text.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // Render formats the report as a compact scorecard for chat display.
@@ -386,11 +468,13 @@ func Render(r Report) string {
 	case r.EfficiencyScore < 60:
 		grade = "needs work"
 	}
-	fmt.Fprintf(&b, "Run report — trajectory scorecard (efficiency %d/100, %s)\n", r.EfficiencyScore, grade)
+	fmt.Fprintf(&b, "Run report - trajectory scorecard (efficiency %d/100, %s)\n", r.EfficiencyScore, grade)
 	fmt.Fprintf(&b, "  Steps: %d turns with tool calls · %d tool calls · %d distinct tools\n",
 		r.TurnCount, r.ToolCalls, r.DistinctTools)
 	fmt.Fprintf(&b, "  Failures: %d/%d tool calls errored · wasted repeats: %d\n",
 		r.ToolErrors, r.ToolCalls, r.WastedRepeatCalls)
+	fmt.Fprintf(&b, "  Interaction: %d mid-run steers · %d ask_user deferrals · %d corrections\n",
+		r.SteeringEvents, r.AskUserCalls, r.CorrectionSignals)
 	if r.TotalTokens > 0 {
 		share := 100 * float64(r.OverheadTokens) / float64(r.TotalTokens)
 		fmt.Fprintf(&b, "  Tokens: %s total · %.0f%% overhead machinery · ~%s wasted context tax (est.)\n",
@@ -409,6 +493,28 @@ func Render(r Report) string {
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// correctionLexicon is the conservative bilingual marker set for explicit
+// negative feedback on work already done. Deliberately small: false
+// positives (ordinary requests containing "revert" in a neutral sense)
+// are costlier than misses, because the finding text accuses the run.
+var correctionLexicon = []string{
+	"不对", "错了", "不是这", "取消", "撤销", "回滚", "别用", "重来",
+	"wrong", "not what i", "not what I", "instead of that", "cancel that",
+	"undo that", "undo it", "revert that", "don't use", "do not use",
+}
+
+// isCorrectionSignal reports whether a mid-run user text matches the
+// correction lexicon (case-insensitive for the ASCII markers).
+func isCorrectionSignal(text string) bool {
+	lower := strings.ToLower(text)
+	for _, m := range correctionLexicon {
+		if strings.Contains(lower, strings.ToLower(m)) {
+			return true
+		}
+	}
+	return false
 }
 
 // canonicalJSON normalizes raw input JSON so semantically identical inputs
