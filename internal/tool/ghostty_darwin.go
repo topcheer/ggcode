@@ -312,6 +312,18 @@ tell application "Ghostty"
 	input text "cd '%s' && %s" to term
 	return id of term
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
+	} else if wd != "" {
+		// #3140: #2589's cd-only contract applies to tab/window too -
+		// working_dir without a command must still cd (schema: it is an
+		// independent parameter, not a modifier of command). The old bare
+		// else silently opened the tab in Ghostty's default directory.
+		script = fmt.Sprintf(`
+tell application "Ghostty"
+	set newTab to new tab in window 1
+	set term to focused terminal of newTab
+	input text "cd '%s'" to term
+	return id of term
+end tell`, escapeAS(escapeShellSingleQuote(wd)))
 	} else {
 		script = `
 tell application "Ghostty"
@@ -345,6 +357,15 @@ tell application "Ghostty"
 	input text "cd '%s' && %s" to term
 	return id of term
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
+	} else if wd != "" {
+		// #3140: symmetric cd-only branch for new_window (see new_tab).
+		script = fmt.Sprintf(`
+tell application "Ghostty"
+	set newWindow to new window
+	set term to focused terminal of selected tab of newWindow
+	input text "cd '%s'" to term
+	return id of term
+end tell`, escapeAS(escapeShellSingleQuote(wd)))
 	} else {
 		script = `
 tell application "Ghostty"
