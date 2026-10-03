@@ -64,13 +64,65 @@ func TestR405_RerunWithoutIntervention_NoVerdict(t *testing.T) {
 	}
 }
 
-func TestR405_UndoEditCountsAsIntervention(t *testing.T) {
+// #3150 V1: undo_edit carries no path signal in its args, so it can no
+// longer count as an intervention. Missing the real undo only leaves the
+// experiment inconclusive; counting it blindly risked a false CONFIRMED
+// when the undo actually reverted an unrelated edit.
+func TestR405_UndoEditNoLongerCountsAsIntervention(t *testing.T) {
 	s := r405Arm(t)
 	if g := s.observeCommand("undo_edit", `{"checkpoint_id":"cp1"}`, false, "reverted"); g != "" {
 		t.Fatalf("undo_edit observation must be silent, got %q", g)
 	}
-	if g := s.observeCommand("run_command", r405Verify+" 2>&1", false, "ok"); !strings.Contains(g, "CONFIRMED") {
-		t.Fatalf("undo_edit should count as intervention; got %q", g)
+	if g := s.observeCommand("run_command", r405Verify+" 2>&1", false, "ok"); g != "" {
+		t.Fatalf("undo_edit must not mark intervened; verify pass should stay silent, got %q", g)
+	}
+	// The experiment stays armed: a later suspect-scoped revert still concludes.
+	s.observeCommand("run_command", "git restore "+r405Suspect, false, "")
+	if g := s.observeCommand("run_command", r405Verify, false, "ok"); !strings.Contains(g, "CONFIRMED") {
+		t.Fatalf("suspect-scoped restore after non-intervention should conclude, got %q", g)
+	}
+}
+
+// #3150 V1 regression: reverting an UNRELATED file must not mark the
+// experiment intervened; the subsequent passing rerun must NOT emit a
+// false CONFIRMED pointing at the suspect.
+func TestR405_UnrelatedRevertIsNotIntervention(t *testing.T) {
+	s := r405Arm(t)
+	for _, cmd := range []string{
+		"git restore internal/other/y.go",
+		"git checkout -- internal/other/y.go",
+		"git stash push -- internal/other/y.go",
+		"git stash push -m wip -- internal/other/y.go",
+	} {
+		s2 := r405Arm(t)
+		if g := s2.observeCommand("run_command", cmd, false, ""); g != "" {
+			t.Fatalf("%s observation must be silent, got %q", cmd, g)
+		}
+		if g := s2.observeCommand("run_command", r405Verify, false, "ok"); g != "" {
+			t.Fatalf("%s must not mark intervened (no verdict on rerun), got %q", cmd, g)
+		}
+	}
+	_ = s
+}
+
+// #3150 V1 positive path: suspect-scoped reverts (full path, basename,
+// bare stash) still conclude correctly.
+func TestR405_SuspectScopedRevertsStillIntervene(t *testing.T) {
+	for _, cmd := range []string{
+		"git restore " + r405Suspect,
+		"git checkout -- " + r405Suspect,
+		"git stash push -- " + r405Suspect,
+		"git stash push -m wip -- " + r405Suspect,
+		"git restore grep.go", // basename form (cd-prefixed shell)
+		"git stash",           // bare stash: stashes everything
+	} {
+		s2 := r405Arm(t)
+		if g := s2.observeCommand("run_command", cmd, false, ""); g != "" {
+			t.Fatalf("%s observation must be silent, got %q", cmd, g)
+		}
+		if g := s2.observeCommand("run_command", r405Verify, false, "ok"); !strings.Contains(g, "CONFIRMED") {
+			t.Fatalf("%s should count as intervention (CONFIRMED on rerun), got %q", cmd, g)
+		}
 	}
 }
 

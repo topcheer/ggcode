@@ -512,10 +512,13 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		return ""
 	}
 
-	// Find top suspect
+	// Find top suspect. `>=` on ties keeps the LATEST edit: results are in
+	// chronological order (oldest first) and the design (L28 recency bias
+	// in causality) says a tied score should resolve to the more recent
+	// edit. Strict `>` kept the oldest, contradicting that design (#3150 V2).
 	best := results[0]
 	for _, r := range results[1:] {
-		if r.score > best.score {
+		if r.score >= best.score {
 			best = r
 		}
 	}

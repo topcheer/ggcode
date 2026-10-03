@@ -38,6 +38,7 @@ package agent
 
 import (
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -125,7 +126,7 @@ func (s *attributionExperimentState) observeCommand(toolName, cmd string, errore
 		s.restored = true
 		return ""
 	}
-	if !s.intervened && isRevertIntervention(toolName, cmd) {
+	if !s.intervened && isRevertIntervention(toolName, cmd, s.suspect) {
 		s.intervened = true
 		return ""
 	}
@@ -164,9 +165,19 @@ func (s *attributionExperimentState) readOut(errored bool, content string) strin
 // isRevertIntervention reports whether the tool execution removes the
 // suspect's change from the working tree: a stash push (bare `git stash`
 // included), git restore, git checkout --, or the undo_edit tool.
-func isRevertIntervention(toolName, cmd string) bool {
+// #3150 V1: the intervention must be suspect-scoped. A revert of an
+// UNRELATED file (e.g. `git restore other.go`, or `git stash push --
+// other.go`) previously flipped `intervened` and a subsequent verify
+// rerun pass emitted a false CONFIRMED pointing at the wrong file.
+// Rules: restore/checkout require the suspect path in the command;
+// `git stash push -- <paths>` requires the suspect among the pathspecs
+// (a bare stash still counts - it stashes everything, suspect included);
+// undo_edit carries no path signal in its args (checkpoint_id only), so it
+// can no longer count: a missed detection only leaves the experiment
+// inconclusive, while a false CONFIRMED actively misdirects the fix.
+func isRevertIntervention(toolName, cmd, suspect string) bool {
 	if toolName == "undo_edit" {
-		return true
+		return false // #3150: no path signal - cannot scope to the suspect
 	}
 	c := strings.ToLower(cmd)
 	if strings.Contains(c, "git stash") {
@@ -175,10 +186,39 @@ func isRevertIntervention(toolName, cmd string) bool {
 				return false // stash-management, not a push
 			}
 		}
+		// `git stash push -- <paths>` (or -m msg -- paths) scopes the stash
+		// to the pathspecs; the suspect must be among them. A bare push
+		// (no pathspec) stashes everything - suspect included - and counts.
+		if i := strings.LastIndex(c, "--"); i >= 0 {
+			return cmdMentionsPath(c[i:], suspect)
+		}
 		return true
 	}
-	return strings.Contains(c, "git restore ") ||
-		strings.Contains(c, "git checkout --")
+	if strings.Contains(c, "git restore ") || strings.Contains(c, "git checkout --") {
+		return cmdMentionsPath(c, suspect)
+	}
+	return false
+}
+
+// cmdMentionsPath reports whether the command text references the suspect
+// path. Full-path containment covers repo-root invocations; basename
+// containment covers cd-prefixed/shell-cwd-relative invocations (the
+// basename alone is loose, but only pairs with an actual revert verb,
+// and the false-positive surface is same-named files elsewhere - far
+// smaller than the bug it fixes).
+
+func cmdMentionsPath(cmdLower, suspect string) bool {
+	suspect = strings.ToLower(strings.TrimSpace(suspect))
+	if suspect == "" {
+		return false
+	}
+	if strings.Contains(cmdLower, suspect) {
+		return true
+	}
+	if base := path.Base(suspect); base != suspect && base != "." && base != "/" {
+		return strings.Contains(cmdLower, base)
+	}
+	return false
 }
 
 // isRestoreIntervention reports whether the command restores a stashed/
