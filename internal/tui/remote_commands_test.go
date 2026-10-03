@@ -48,3 +48,23 @@ func TestExecuteRemoteSlashCommand_Unknown(t *testing.T) {
 		t.Fatalf("expected /help hint, got %q", resp)
 	}
 }
+
+// TestExecuteRemoteSlashCommand_NickWithoutHub pins the IM-inbound /nick
+// path when no LAN hub is attached: the registry entry routes to
+// tuiSlashDeps.SetLanIdentity, which must answer with a precise
+// "not available" error rather than falling to Unknown command.
+func TestExecuteRemoteSlashCommand_NickWithoutHub(t *testing.T) {
+	m := NewModel(nil, nil)
+	m.SetConfig(config.DefaultConfig())
+
+	resp, handled := m.ExecuteRemoteSlashCommand("/nick alice@dev@ggcode")
+	if !handled {
+		t.Fatal("expected /nick to be handled by the registry")
+	}
+	if strings.Contains(resp, "Unknown command") {
+		t.Fatalf("/nick fell through to unknown: %q", resp)
+	}
+	if !strings.Contains(resp, "not available") {
+		t.Fatalf("expected not-available hint without hub, got %q", resp)
+	}
+}
