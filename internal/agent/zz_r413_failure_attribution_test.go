@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Record aggregates by (taskType, suspectFile) and persists.
@@ -150,10 +151,14 @@ func TestR413_TerminalHookGates(t *testing.T) {
 }
 
 // Prune caps the store at maxFailureEntries, evicting lowest occurrences.
+// (#3146: entries carry fresh LastSeen - the TTL would otherwise evict
+// them before the capacity comparison gets exercised.)
 func TestR413_PruneCapsEntries(t *testing.T) {
+	now := time.Now()
 	entries := make([]PlaybookFailureEntry, maxFailureEntries+5)
 	for i := range entries {
 		entries[i].Occurrences = i // increasing value; the first 5 are weakest
+		entries[i].LastSeen = now
 	}
 	got := pruneFailureEntries(entries)
 	if len(got) != maxFailureEntries {
