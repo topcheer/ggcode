@@ -87,6 +87,7 @@ class _InputBarState extends ConsumerState<InputBar>
 
   @override
   Widget build(BuildContext context) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     final status = ref.watch(displayedAgentStatusProvider);
     final isRunning = status == 'busy';
     final canSend = ref.watch(canSendMessagesProvider);

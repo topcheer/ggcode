@@ -18,6 +18,7 @@ class SubagentPanel extends ConsumerStatefulWidget {
 class _SubagentPanelState extends ConsumerState<SubagentPanel> {
   @override
   Widget build(BuildContext context) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     final agents = ref.watch(subagentProvider);
     // #1874 case 1: expansion lives in subagentExpandedProvider so the
     // connection layer's cleanup timer can defer removal while open.

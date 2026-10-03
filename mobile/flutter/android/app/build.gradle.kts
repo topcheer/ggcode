@@ -48,12 +48,22 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    androidResources {
+        // Keep only zh/en locales; cuts dependency locale tables (~30MB on
+        // the fat APK) so the arm64 APK fits mobile-share's 50MiB cap.
+        localeFilters += listOf("zh", "en")
     }
 }
 

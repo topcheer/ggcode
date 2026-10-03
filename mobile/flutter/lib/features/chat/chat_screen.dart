@@ -136,6 +136,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   @override
   Widget build(BuildContext context) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     ref.listen<ApprovalInfo?>(approvalProvider, (prev, next) {
       if (next != null && prev == null) {
         FocusManager.instance.primaryFocus?.unfocus();

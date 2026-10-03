@@ -31,6 +31,7 @@ class _AskUserScreenState extends ConsumerState<AskUserScreen> {
 
   @override
   Widget build(BuildContext context) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
     final maxHeight = MediaQuery.sizeOf(context).height * 0.85;
     ref.listen<AskUserInfo?>(askUserProvider, (prev, next) {
