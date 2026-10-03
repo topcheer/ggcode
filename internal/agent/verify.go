@@ -477,7 +477,10 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 				Command: command,
 				Passed:  true,
 				Skipped: true, // #3242: amnesty, not a verified pass
-				Output:  "verification skipped: tool not available on this system",
+				// #3242: exit 5 (pytest "no tests collected") and 127 (binary
+				// vanished) land here together - say what actually happened
+				// instead of the copy-pasted "tool not available".
+				Output: fmt.Sprintf("verification skipped: non-failure exit %d (tool unavailable or no tests collected)", exitErr.ExitCode()),
 			}
 		}
 		result.Passed = false
