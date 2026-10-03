@@ -112,10 +112,25 @@ var selfDefenseReadTargets = map[string]bool{
 	"taint_influence_check_test.go":  true,
 }
 
+// selfDefenseReadTargetFields are the arg fields that name a READ TARGET
+// (a file or directory being read/searched). Only values under these
+// fields qualify for the self-defense exemption. Content fields — grep
+// `pattern`, code_search `query` — describe WHAT to look for, not where;
+// #3155: a pattern literally equal to a detector filename must not wrap
+// the entire result set in the exemption, or grep results from arbitrary
+// files (including injected text) enter the context unscanned.
+var selfDefenseReadTargetFields = map[string]bool{
+	"path":      true, // read_file, grep, code_search, search_files
+	"files":     true, // multi_file_read files[].path
+	"directory": true, // search_files, code_search, glob
+	"glob":      true, // grep file filter (a filename pattern, a target)
+}
+
 // isSelfDefenseRead reports whether a local-read tool call targets one of
-// the defense system's own files (by scanning every string value in the
-// args JSON - covers read_file path, multi_file_read files[].path, grep
-// path/glob, search_files directory).
+// the defense system's own files (by scanning the READ-TARGET fields of
+// the args JSON - read_file path, multi_file_read files[].path, grep
+// path/glob, search_files directory). Content fields (pattern, query)
+// never qualify.
 func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
 	switch toolName {
 	case "read_file", "multi_file_read", "grep", "search_files", "code_search":
@@ -127,27 +142,34 @@ func isSelfDefenseRead(toolName string, args json.RawMessage) bool {
 		return false
 	}
 	found := false
-	var walk func(v interface{})
-	walk = func(v interface{}) {
+	// field is the arg name the current value lives under ("" only for
+	// the root object itself, whose direct children always carry a key).
+	var walk func(v interface{}, field string)
+	walk = func(v interface{}, field string) {
 		if found {
 			return
 		}
 		switch x := v.(type) {
 		case string:
-			if selfDefenseReadTargets[filepath.Base(strings.TrimSpace(x))] {
+			// #3155: only read-target fields qualify. A `pattern` or
+			// `query` equal to a detector basename is a content
+			// coincidence, not a self-defense read.
+			if selfDefenseReadTargetFields[field] &&
+				selfDefenseReadTargets[filepath.Base(strings.TrimSpace(x))] {
 				found = true
 			}
 		case map[string]interface{}:
-			for _, vv := range x {
-				walk(vv)
+			for k, vv := range x {
+				walk(vv, k)
 			}
 		case []interface{}:
+			// Array elements inherit the parent field name (files[]).
 			for _, vv := range x {
-				walk(vv)
+				walk(vv, field)
 			}
 		}
 	}
-	walk(m)
+	walk(m, "")
 	return found
 }
 
