@@ -77,11 +77,6 @@ const (
 	errShareTimeout   = shareCtrlErr("share control reply timed out")
 )
 
-// injectShareController wires the start_share/stop_share tools to this Model
-// using the same registry dance as injectMobileFileSender / SetIMManager:
-// look the tool up, set the controller, re-register under the same name.
-// Called once after the agent is constructed - the tools are then live for
-// the whole session (ShareActive gates the per-call behavior).
 // injectShareController (REPL-level) wires the start_share/stop_share tools
 // using the same Unregister+Register dance as SetIMManager. The adapter's
 // send closure captures r, resolving r.programSend/r.program lazily at call
