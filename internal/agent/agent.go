@@ -1540,6 +1540,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			(err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.Canceled))
 		if !isCancelled {
 			a.maybeReflect(runStats)
+			// r413: persist the failed run's terminal causal suspect
+			// (task-level credit assignment across sessions).
+			a.recordFailureAttribution(runStats)
 		} else {
 			debug.Log("agent", "skipping reflection/ratchet on cancellation")
 		}

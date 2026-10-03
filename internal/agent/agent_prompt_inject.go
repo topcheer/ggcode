@@ -99,6 +99,12 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 				debug.Log("agent", "Injected playbook strategy hints into system prompt")
 			}
 		}
+		// r413: persisted failure attribution memory - which file/tool was
+		// the causal suspect in past failed runs of this task type.
+		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
+			dynamicParts = append(dynamicParts, ft)
+			debug.Log("agent", "Injected failure attribution memory into system prompt")
+		}
 	}
 
 	// Skip entirely when there is no system prompt and no dynamic content.
