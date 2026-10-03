@@ -389,6 +389,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             state[i],
       ];
     } else {
+      // Session switch replays the recorded projection; some recorded text
+      // frames carry an EMPTY chunk (done-only / heartbeat frames). With no
+      // guard each one materialized a text:'' message - the stack of blank
+      // bubbles after switching sessions. handleReasoningChunk already
+      // guards the same way ("if (chunk.isEmpty) return;").
+      if (data.chunk.isEmpty) {
+        return;
+      }
       state = [
         ...state,
         ChatMessage(
