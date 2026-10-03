@@ -112,7 +112,8 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 	}
 
 	// Verification failed — ratchet: record errors for future rule generation.
-	rs := NewRuleStore(workingDir)
+	// #3227: shared singleton - per-run instances lost updates.
+	rs := a.getRuleStore()
 	if rs != nil {
 		matched, unmatched := rs.MatchErrors(result.Errors)
 		debug.Log("verify", "ratchet: %d matched, %d unmatched", len(matched), len(unmatched))
@@ -721,7 +722,8 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 	a.lastGoodCheckpointRecordFail()
 
 	// Ratchet: learn rules from the errors (same as async path).
-	rs := NewRuleStore(workingDir)
+	// #3227: shared singleton - per-run instances lost updates.
+	rs := a.getRuleStore()
 	if rs != nil {
 		matched, unmatched := rs.MatchErrors(result.Errors)
 		debug.Log("verify", "sync ratchet: %d matched, %d unmatched", len(matched), len(unmatched))
