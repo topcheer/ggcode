@@ -141,7 +141,30 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	// os.WriteFile could leave a truncated SKILL.md on crash/full disk,
 	// which #822's malformed-frontmatter skip path then silently swallows
 	// (skill unusable AND blocked from re-creation by the disk check above).
+	//
+	// #3163: the Stat check above and this write are a classic check-then-act
+	// TOCTOU - two agents creating the same-named skill concurrently both
+	// pass Stat and the second AtomicWriteFile rename silently clobbers the
+	// first, defeating #822's guard (instances are registered per-process in
+	// cmd/ggcode and desktop, so an in-process mutex is not enough). An
+	// O_CREATE|O_EXCL placeholder is the atomic cross-process gate: the
+	// loser gets EEXIST (placeholder visible even at 0 bytes, mid-race) and
+	// is rejected; the winner's rename then atomically replaces its own
+	// placeholder. Go maps O_EXCL to CREATE_NEW on Windows, so this needs
+	// no platform split.
+	ph, err := os.OpenFile(skillFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if os.IsExist(err) {
+		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk (or is concurrently being created). Use a different name or delete the existing skill first.", name)}, nil
+	}
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill file: %v", err)}, nil
+	}
+	ph.Close()
 	if err := util.AtomicWriteFile(skillFile, []byte(markdown), 0o644); err != nil {
+		// Best-effort cleanup: a leftover 0-byte placeholder would block
+		// re-creation until manually removed. Concurrent creators see the
+		// placeholder and are rejected (correct); we only remove our own.
+		os.Remove(skillFile)
 		return Result{IsError: true, Content: fmt.Sprintf("cannot write skill file: %v", err)}, nil
 	}
 
