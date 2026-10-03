@@ -80,13 +80,12 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	}
 
 	// Layer 3: proactive ratchet rules.
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if rs := NewRuleStore(workingDir); rs != nil {
-			rulesText := rs.TopRulesForPrompt(5)
-			if rulesText != "" {
-				dynamicParts = append(dynamicParts, rulesText)
-				debug.Log("agent", "Injected learned ratchet rules into system prompt")
-			}
+	// #3227: shared singleton - per-run instances lost updates.
+	if rs := a.getRuleStore(); rs != nil {
+		rulesText := rs.TopRulesForPrompt(5)
+		if rulesText != "" {
+			dynamicParts = append(dynamicParts, rulesText)
+			debug.Log("agent", "Injected learned ratchet rules into system prompt")
 		}
 	}
 

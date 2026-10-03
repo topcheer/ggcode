@@ -72,19 +72,44 @@ func NewRuleStore(workingDir string) *RuleStore {
 	}
 }
 
-// getRuleStore returns a cached RuleStore for the agent's working directory.
-// The store is created once and reused across all tool calls to avoid
-// repeated disk reads and regex compilation on the hot path.
+// getRuleStore returns THE single cached RuleStore for the agent's
+// working directory. The store is created once and reused across ALL
+// consumers (hot-path rule injection, runRatchet, generalizeErrorsWithRetry,
+// asyncVerify, prompt injection) so there is exactly one in-memory truth
+// per agent.
+//
+// #3227: previously runRatchet/generalizeErrorsWithRetry/asyncVerify each
+// built their own NewRuleStore; every instance load()s ONCE and save()
+// overwrites the file with that frozen snapshot, so a long-lived cached
+// instance (held by the user-edit observer) silently erased everything the
+// per-run instances learned - a classic cross-instance lost-update. A
+// single shared instance makes rs.mu cover every read/write by
+// construction.
+//
+// The cache write is guarded by a.mu because asyncVerify reaches this from
+// a background goroutine. Note the single-instance trade-off, deliberate:
+// rules are loaded once per agent session and accumulate in memory;
+// hand-edits to agent-rules.json mid-session are no longer re-read per run
+// (per-run reload was exactly the lost-update vector).
 func (a *Agent) getRuleStore() *RuleStore {
+	// a.mu (RWMutex) guards the cache because asyncVerify reaches this
+	// from a background goroutine. Read a.workingDir UNDER the lock -
+	// calling a.WorkingDir() here would self-deadlock (it takes a.mu.RLock,
+	// and Go mutexes are not reentrant).
+	a.mu.Lock()
 	if a.ruleStore != nil {
-		return a.ruleStore
+		rs := a.ruleStore
+		a.mu.Unlock()
+		return rs
 	}
-	workingDir := a.WorkingDir()
+	workingDir := a.workingDir
 	if workingDir == "" {
+		a.mu.Unlock()
 		return nil
 	}
 	rs := NewRuleStore(workingDir)
 	a.ruleStore = rs // cache for future calls
+	a.mu.Unlock()
 	return rs
 }
 
@@ -669,11 +694,7 @@ func (a *Agent) runRatchet(stats *RunStats) {
 	if len(stats.Errors) == 0 {
 		return
 	}
-	workingDir := a.WorkingDir()
-	if workingDir == "" {
-		return
-	}
-	rs := NewRuleStore(workingDir)
+	rs := a.getRuleStore() // #3227: shared singleton - per-run instances lost updates
 	if rs == nil {
 		return
 	}
@@ -713,7 +734,7 @@ func truncStr(s string, maxLen int) string {
 // Returns whatever rules were successfully generalized.
 func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, verifyCmd string) []Rule {
 	const maxRetries = 2
-	rs := NewRuleStore(a.WorkingDir())
+	rs := a.getRuleStore() // #3227: shared singleton - per-run instances lost updates
 	existingRules := []Rule{}
 	if rs != nil {
 		existingRules = rs.Rules()
