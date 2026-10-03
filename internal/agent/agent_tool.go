@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	runtimedebug "runtime/debug"
@@ -260,9 +261,66 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if suppressed := a.dedupLedger().suppressDuplicate(tc.Name, string(tc.Arguments)); suppressed != nil {
 		return *suppressed
 	}
+	// r454: declarative invariants (deterministic, file-declared) run at
+	// this choke point BEFORE execution. block-mode violations reject the
+	// call outright (sealed into the audit ledger as invalid); warn-mode
+	// violations proceed and append a notice to the result.
+	if e := a.invariantEngineLazy(); e != nil {
+		if v := e.check(tc.Name, tc.Arguments); v != nil {
+			if v.Inv.Mode == "block" {
+				msg := fmt.Sprintf("[invariant:%s BLOCKED] %s (target: %q op: %s). The call was rejected by a declared behavior invariant; adjust the target or the invariant file.",
+					v.Inv.ID, v.Inv.Message, v.Target, v.Op)
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusInvalid, msg, 0, v.Inv.ID)
+				debug.Log("agent", "[invariants] BLOCK %s on %s target=%q", v.Inv.ID, tc.Name, v.Target)
+				return tool.Result{Content: msg, IsError: true}
+			}
+			res := a.executeToolInner(ctx, tc)
+			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
+			auditInvariantWarn(tc.Name, v.Inv.ID)
+			return res
+		}
+	}
 	res := a.executeToolInner(ctx, tc)
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+	// r454: register successful write-class products for the
+	// created_by_run predicate ("only delete what this run created").
+	if e := a.invariantEngineLazy(); e != nil && !res.IsError {
+		if op := invariantOpOf(tc.Name, tc.Arguments); op == "write" || op == "mkdir" || op == "move" {
+			e.recordProduct(invariantTargetPath(tc.Name, tc.Arguments))
+		}
+	}
 	return res
+}
+
+// invariantEngineLazy builds the engine on first use, anchored to the
+// agent's working dir (reads <dir>/.ggcode/invariants.json merged over
+// ~/.ggcode/invariants.json). nil when inert (no working dir).
+func (a *Agent) invariantEngineLazy() *invariantEngine {
+	a.mu.RLock()
+	e := a.invEngine
+	wd := a.workingDir
+	a.mu.RUnlock()
+	if e != nil {
+		return e
+	}
+	if wd == "" {
+		return nil
+	}
+	newE := &invariantEngine{loadDir: filepath.Join(wd, ".ggcode")}
+	a.mu.Lock()
+	if a.invEngine == nil {
+		a.invEngine = newE
+	}
+	a.mu.Unlock()
+	return a.invEngine
+}
+
+// auditInvariantWarn logs a warn-mode match (block-mode goes through the
+// full audit event path; warn-mode calls execute normally, so there is no
+// separate audit event - a debug line preserves observability).
+func auditInvariantWarn(toolName, id string) {
+	debug.Log("agent", "[invariants] WARN %s on %s", id, toolName)
 }
 
 // executeToolInner is the original executeTool body; see executeTool.
