@@ -102,8 +102,12 @@ type BestOfNReport struct {
 	Degraded         bool
 	ConditioningHint string // RTV sequential-retry conditioning when Degraded
 	Partial          bool   // true when the caller ctx expired before all terminal
-	Report           string
-	Err              string // orchestration-level error (gate failure, launch failure)
+	// r439 execution tie-break: true when the winner was picked by an
+	// execution-based discriminator sub-agent (not text consensus).
+	Discriminated bool
+	Evidence      string // discriminator report (present when Discriminated)
+	Report        string
+	Err           string // orchestration-level error (gate failure, launch failure)
 }
 
 // candidateTaskSuffix standardizes what each candidate's final message must
@@ -284,6 +288,13 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 				break
 			}
 		}
+	} else if idx, ev, dok := discriminateTie(ctx, spawner, snaps, rep.Candidates, opts.Task, poll); dok {
+		// r439: text consensus could not separate the candidates — try an
+		// execution-based tie-break (discriminator sub-agent runs the same
+		// discriminating checks in both top worktrees) before degrading.
+		rep.WinnerIndex = idx
+		rep.Discriminated = true
+		rep.Evidence = ev
 	} else {
 		// No distinguishable winner: degrade to the sequential-retry path —
 		// distill ALL rollouts into one conditioning block (RTV escalation).
@@ -398,7 +409,14 @@ func formatBestOfNReport(rep BestOfNReport, winnerVerdict string) string {
 	switch {
 	case rep.WinnerIndex >= 0:
 		w := rep.Candidates[rep.WinnerIndex]
-		fmt.Fprintf(&b, "\nWinner: %s (id=%s, verdict=%q).\n", w.Name, w.ID, winnerVerdict)
+		if rep.Discriminated {
+			fmt.Fprintf(&b, "\nWinner: %s (id=%s, verdict=execution-discriminated: picked by checks the other candidate failed).\n", w.Name, w.ID)
+			if rep.Evidence != "" {
+				fmt.Fprintf(&b, "\nDiscriminator evidence:\n%s\n", clip(rep.Evidence, 1500))
+			}
+		} else {
+			fmt.Fprintf(&b, "\nWinner: %s (id=%s, verdict=%q).\n", w.Name, w.ID, winnerVerdict)
+		}
 		if w.Worktree != "" {
 			fmt.Fprintf(&b, "Winner's isolated worktree: %s — inspect and merge from there; the other worktrees are disposable.\n", w.Worktree)
 		}
