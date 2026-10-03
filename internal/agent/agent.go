@@ -4223,7 +4223,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			} else if userWriteTools[tc.Name] {
 				// r444: successful writes make the file agent-authored this
 				// turn; the user-edit observer tracks it for turn-gap detection.
-				if p := extractUserEditPath(tc.Name, tc.Arguments); p != "" {
+				// #3214: extractUserEditPaths returns EVERY authored path -
+				// file_ops moves fan out per destination, multi_file_edit
+				// covers all its files.
+				for _, p := range extractUserEditPaths(tc.Name, tc.Arguments) {
 					a.getUserEditObserver().NoteAgentWrite(p)
 				}
 			}

@@ -153,7 +153,9 @@ func TestUserEditRuleSourceBackwardCompat(t *testing.T) {
 	}
 }
 
-// TestExtractUserEditPath: argument shapes for the four write tools.
+// TestExtractUserEditPath: argument shapes for the write tools. #3214
+// renamed the extractor to a multi-path API; single-file tools keep
+// first-path semantics (want=="" means empty slice).
 func TestExtractUserEditPath(t *testing.T) {
 	cases := []struct {
 		name, args, want string
@@ -162,12 +164,19 @@ func TestExtractUserEditPath(t *testing.T) {
 		{"write_file", `{"path":"/a/c.go","content":"y"}`, "/a/c.go"},
 		{"multi_file_edit", `{"files":[{"path":"/a/d.go"}],"mode":"atomic"}`, "/a/d.go"},
 		{"multi_edit_file", `{"file_path":"/a/e.go","edits":[]}`, "/a/e.go"},
+		{"file_ops", `{"operations":[{"action":"move","source":"/a/f.go","destination":"/a/g.go"}]}`, "/a/g.go"},
+		{"file_ops", `{"operations":[{"action":"mkdir","source":"/a/newdir"}]}`, ""},
 		{"bad_json", `{not json`, ""},
 		{"empty", `{}`, ""},
 	}
 	for _, c := range cases {
-		if got := extractUserEditPath(c.name, []byte(c.args)); got != c.want {
-			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		got := extractUserEditPaths(c.name, []byte(c.args))
+		var first string
+		if len(got) > 0 {
+			first = got[0]
+		}
+		if first != c.want {
+			t.Errorf("%s: got %q (all=%v), want %q", c.name, first, got, c.want)
 		}
 	}
 }
