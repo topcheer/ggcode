@@ -332,6 +332,16 @@ func CheckContinuation(sessionID string) string {
 			debug.Log("run_journal", "CheckContinuation: consume write failed: %v", werr)
 		}
 	}
+	// #3220: Success=true means the run COMPLETED - an Interrupted snapshot
+	// riding on it is the cancel-during-finalize race (err==nil but the ctx
+	// was already cancelled when isCancelled was evaluated), not a real
+	// mid-flight interruption. There is nothing to resume; offering
+	// "continue where it left off" would mislead the model into redoing
+	// finished work. The consume above already cleared the contradictory
+	// snapshot so it cannot replay later.
+	if entry.Success {
+		return ""
+	}
 	if time.Since(snap.Timestamp) > continuationFreshWindow {
 		return ""
 	}
