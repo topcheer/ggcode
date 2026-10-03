@@ -231,10 +231,14 @@ func tryClaimPendingTask(
 		return
 	}
 
-	// Find a pending task.
+	// Find eligible tasks (pending, unassigned-to-others, unblocked), then
+	// claim in effective-priority order (r456: priority metadata + aging —
+	// previously the walk was creation-order FIFO and priority had no
+	// runtime effect). Ties keep list order, so boards without priority
+	// metadata behave exactly as before.
 	pending := task.StatusPending
 	inProgress := task.StatusInProgress
-
+	eligible := make([]task.Task, 0, 8)
 	for _, tk := range tmMgr.List() {
 		if tk.Status != pending {
 			continue
@@ -250,6 +254,18 @@ func tryClaimPendingTask(
 		if !allBlockersComplete(tmMgr, tk) {
 			continue
 		}
+		eligible = append(eligible, tk)
+	}
+	if len(eligible) == 0 {
+		return
+	}
+	now := time.Now()
+	for _, tk := range eligible {
+		markStarved(tmMgr, tk, now)
+	}
+	sortClaimable(eligible, now)
+
+	for _, tk := range eligible {
 
 		// Atomically claim: only succeeds if status is still pending.
 		owner := tm.ID
