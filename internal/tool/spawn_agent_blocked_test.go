@@ -32,8 +32,11 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"teammate_list":       true,
 		"send_message":        true,
 		"lanchat":             true,
-		"a2a_remote":          true,
-		"a2a_send_task":       true,
+		// r436: nested workflows inside sub-agents would multiply spawn
+		// slots unboundedly; one nesting level only.
+		"workflow_run":  true,
+		"a2a_remote":    true,
+		"a2a_send_task": true,
 	}
 	for _, name := range subAgentBlockedTools {
 		if !expected[name] {

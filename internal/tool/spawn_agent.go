@@ -22,6 +22,10 @@ var subAgentBlockedTools = []string{
 	"compact_context",
 	"spawn_agent",
 	"best_of_n",
+	// r436: a workflow is a fan-out of sub-agents; nested workflows inside
+	// sub-agents would multiply spawn slots unboundedly (16-slot session
+	// budget). One level of workflow nesting only, enforced here.
+	"workflow_run",
 	"wait_agent",
 	"list_agents",
 	"cancel_agent",
