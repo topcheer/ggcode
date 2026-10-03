@@ -41,6 +41,17 @@ const (
 	maxFailureEntries = 20
 	// maxFailureHintChars bounds the injected hint block.
 	maxFailureHintChars = 400
+	// failureEntryTTL is how long an attribution entry survives without
+	// recurrence (#3146): a suspect that has not been re-attributed for
+	// this long is presumed fixed and evicted at the next prune (write
+	// time). Without it the memory is a monotonic false-positive
+	// amplifier - a fixed file keeps occupying hint budget forever.
+	failureEntryTTL = 30 * 24 * time.Hour
+	// failureHintStaleAfter is the render-side guard (#3146): prune runs
+	// only on writes, so an entry can sit between TTL expiry and the next
+	// write. Entries unseen for this long are skipped at injection time
+	// (strictly earlier than the TTL so the two never disagree).
+	failureHintStaleAfter = 14 * 24 * time.Hour
 )
 
 // PlaybookFailureEntry records an aggregated terminal failure attribution.
@@ -126,9 +137,21 @@ func RecordFailureAttribution(workingDir, userPrompt, suspectTool, suspectFile s
 	debug.Log("failure-attribution", "recorded entry %s%s (crs=%d)", taskType, suspectFile, crs)
 }
 
-// pruneFailureEntries caps the list, evicting the least valuable entries
-// (lowest occurrences first, then oldest).
+// pruneFailureEntries caps the list and enforces the memory TTL
+// (#3146). Time-first: entries whose LastSeen predates the TTL are
+// evicted as presumably-fixed (a stale false positive must not survive
+// just because the store is not full); the remaining entries are capped
+// at maxFailureEntries evicting the least valuable ones (lowest
+// occurrences first, then oldest).
 func pruneFailureEntries(entries []PlaybookFailureEntry) []PlaybookFailureEntry {
+	cutoff := time.Now().Add(-failureEntryTTL)
+	kept := entries[:0]
+	for _, e := range entries {
+		if e.LastSeen.After(cutoff) {
+			kept = append(kept, e)
+		}
+	}
+	entries = kept
 	if len(entries) <= maxFailureEntries {
 		return entries
 	}
@@ -190,6 +213,21 @@ func FailureHintsForPrompt(workingDir, runPrompt string, maxHints int) string {
 	if len(entries) == 0 {
 		return ""
 	}
+	// #3146 render-side staleness guard: prune runs only on writes, so an
+	// entry can sit between TTL expiry and the next record. Skip anything
+	// not re-attributed within failureHintStaleAfter - a fixed file must
+	// not keep occupying the hint budget in that window.
+	staleCutoff := time.Now().Add(-failureHintStaleAfter)
+	fresh := entries[:0]
+	for _, e := range entries {
+		if e.LastSeen.After(staleCutoff) {
+			fresh = append(fresh, e)
+		}
+	}
+	entries = fresh
+	if len(entries) == 0 {
+		return ""
+	}
 
 	intent := classifyTaskType(runPrompt)
 	intentMatch := func(e PlaybookFailureEntry) bool {
@@ -232,7 +270,17 @@ func FailureHintsForPrompt(workingDir, runPrompt string, maxHints int) string {
 	}
 	out := strings.Join(lines, "\n")
 	if len(out) > maxFailureHintChars {
-		out = out[:maxFailureHintChars]
+		// #3142 review follow-up: truncate at a line boundary, never
+		// mid-rune (the hint block is user-visible and may contain CJK).
+		cut := maxFailureHintChars
+		for cut > 0 && out[cut-1] != '\n' {
+			cut--
+		}
+		if cut > 0 {
+			out = out[:cut]
+		} else {
+			out = out[:maxFailureHintChars]
+		}
 	}
 	return out
 }
