@@ -129,6 +129,12 @@ func (t Grep) Parameters() json.RawMessage {
 // head_limit is given. Matches glob's maxGlobResults convention.
 const maxFilesWithMatches = 500
 
+// maxContentHeadLimit is the documented default head_limit for content
+// mode (schema: "Defaults: 250 in content mode"). #3170: the cap sites
+// only applied an explicit head_limit, so an omitted one streamed
+// unbounded content on broad patterns - the docs promised 250.
+const maxContentHeadLimit = 250
+
 type grepArgs struct {
 	Pattern        string `json:"pattern"`
 	Path           string `json:"path"`
@@ -360,6 +366,10 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 
 	if args.HeadLimit > 0 && args.OutputMode == "content" {
 		rgArgs = append(rgArgs, "--max-count", fmt.Sprintf("%d", args.HeadLimit+args.Offset))
+	} else if args.OutputMode == "content" {
+		// #3170: schema-documented default - omitted head_limit still caps
+		// rg emission (per file) at offset+250 instead of streaming unbounded.
+		rgArgs = append(rgArgs, "--max-count", fmt.Sprintf("%d", maxContentHeadLimit+args.Offset))
 	}
 
 	rgArgs = append(rgArgs, "--", args.Pattern, args.Path)
@@ -444,6 +454,8 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		end := total
 		if args.HeadLimit > 0 && start+args.HeadLimit < end {
 			end = start + args.HeadLimit
+		} else if args.HeadLimit <= 0 && start+maxContentHeadLimit < end {
+			end = start + maxContentHeadLimit // #3170: documented default cap
 		}
 		lines = lines[start:end]
 
@@ -504,9 +516,11 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		// files_with_matches: sort by path depth (shorter paths first = closer to root)
 		sortedLines := make([]string, len(lines))
 		copy(sortedLines, lines)
-		sort.SliceStable(sortedLines, func(i, j int) bool {
-			return pathDepth(sortedLines[i]) < pathDepth(sortedLines[j])
-		})
+		// #3145/#3171: (pathDepth, lexicographic) TOTAL order, shared with
+		// the fallback via sortPathsDepthThenLex - a stable sort that kept
+		// rg's within-depth emission order made the same offset/head_limit
+		// window differ between rg and no-rg machines. Determinism wins.
+		sortPathsDepthThenLex(sortedLines)
 		// Pagination parity with content mode: rg previously ignored offset
 		// here (the Go fallback supports it), so paging on rg-equipped
 		// machines always returned the first page. Honor offset before the
@@ -541,6 +555,22 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 }
 
 // pathDepth returns the number of path separators in a string.
+// sortPathsDepthThenLex orders paths shallow-first with a lexicographic
+// tie-break - a total order shared by BOTH grep backends so the same
+// offset/head_limit window shows identical files with or without
+// ripgrep (#3171; the content-mode sibling of this contract was #3145).
+// The tie-break deliberately trades rg's within-depth emission order (a
+// relevance heuristic) for cross-backend determinism.
+func sortPathsDepthThenLex(paths []string) {
+	sort.Slice(paths, func(i, j int) bool {
+		di, dj := pathDepth(paths[i]), pathDepth(paths[j])
+		if di != dj {
+			return di < dj
+		}
+		return paths[i] < paths[j]
+	})
+}
+
 // Used for relevance ranking: files closer to the project root (fewer
 // path segments) are likely more relevant to the current task.
 func pathDepth(path string) int {
@@ -798,7 +828,7 @@ func formatFilesWithMatches(matchedFiles map[string]bool, args grepArgs) Result 
 	for p := range matchedFiles {
 		paths = append(paths, p)
 	}
-	sort.Strings(paths)
+	sortPathsDepthThenLex(paths) // #3171: same (depth, lex) order as the rg backend
 
 	total := len(paths)
 	start := args.Offset
@@ -947,6 +977,8 @@ func formatContentMatches(matches []fileMatch, args grepArgs) Result {
 	end := total
 	if args.HeadLimit > 0 && start+args.HeadLimit < end {
 		end = start + args.HeadLimit
+	} else if args.HeadLimit <= 0 && start+maxContentHeadLimit < end {
+		end = start + maxContentHeadLimit // #3170: documented default cap
 	}
 	matches = matches[start:end]
 
