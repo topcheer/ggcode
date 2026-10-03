@@ -65,6 +65,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"auxResolved":               "task-tier model routing config, injected via SetAuxModel; nil = routing disabled (default)",
 		"auxProvider":               "aux provider built lazily by auxProviderFor() on first auxiliary call",
 		"metadata":                  "dead field — no read/write sites outside declaration",
+		"invEngine":                 "r454 declarative invariants engine, built lazily by invariantEngineLazy once workingDir is known (guarded; nil = no invariants file, inert)",
 	}
 
 	// Dereference via the pointer (ValueOf(a).Elem()) instead of copying

@@ -65,6 +65,9 @@ type Event struct {
 	DurationMS int64  // wall time of the action in milliseconds
 	Err        string // short error/result summary, already truncated by the caller
 	Session    string // optional per-event session override (falls back to the ledger's)
+	// InvariantID (r454) names the declared behavior invariant that caused
+	// a rejection; empty for normal actions.
+	InvariantID string
 }
 
 // Entry is a sealed ledger record: the event plus chain bookkeeping.
@@ -77,8 +80,11 @@ type Entry struct {
 	InputHash  string `json:"input_hash"`
 	DurationMS int64  `json:"duration_ms"`
 	Err        string `json:"err,omitempty"`
-	PrevHash   string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
-	Hash       string `json:"hash"`      // SHA-256 over all fields above
+	// InvariantID tags rejections caused by a declared behavior invariant
+	// (r454); empty for normal actions. Backward-compatible (omitempty).
+	InvariantID string `json:"invariant_id,omitempty"`
+	PrevHash    string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
+	Hash        string `json:"hash"`      // SHA-256 over all fields above
 }
 
 // hashEntry computes the chain hash over every field of e except Hash
@@ -232,15 +238,16 @@ func (l *Ledger) Append(e Event) (Entry, error) {
 		session = e.Session
 	}
 	entry := Entry{
-		Seq:        l.seq + 1,
-		Time:       time.Now().UTC().Format(time.RFC3339Nano),
-		Session:    session,
-		Tool:       e.Tool,
-		Status:     e.Status,
-		InputHash:  e.InputHash,
-		DurationMS: e.DurationMS,
-		Err:        e.Err,
-		PrevHash:   l.prev,
+		Seq:         l.seq + 1,
+		Time:        time.Now().UTC().Format(time.RFC3339Nano),
+		Session:     session,
+		Tool:        e.Tool,
+		Status:      e.Status,
+		InputHash:   e.InputHash,
+		DurationMS:  e.DurationMS,
+		Err:         e.Err,
+		InvariantID: e.InvariantID,
+		PrevHash:    l.prev,
 	}
 	entry.Hash = hashEntry(entry)
 	line, err := json.Marshal(entry)

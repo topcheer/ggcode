@@ -80,7 +80,10 @@ func newAuditLedgerState() *auditLedgerState {
 // auditToolResult seals a completed (or cancelled, or rejected) tool action
 // into the ledger. status is one of the audit.Status* values; errMsg is an
 // already-short summary of why the action did not succeed cleanly.
-func (a *Agent) auditToolResult(name string, args json.RawMessage, status, errMsg string, dur time.Duration) {
+// auditToolResult seals a completed (or cancelled, or rejected) tool action.
+// The optional invariantID (r454) tags the event with the declarative
+// invariant that caused the rejection - omitted for normal actions.
+func (a *Agent) auditToolResult(name string, args json.RawMessage, status, errMsg string, dur time.Duration, invariantID ...string) {
 	st := a.auditLedger
 	if st == nil || st.ledger == nil {
 		return
@@ -94,6 +97,9 @@ func (a *Agent) auditToolResult(name string, args json.RawMessage, status, errMs
 		InputHash:  toolreplay.HashInput(args),
 		DurationMS: dur.Milliseconds(),
 		Err:        errMsg,
+	}
+	if len(invariantID) > 0 {
+		ev.InvariantID = invariantID[0]
 	}
 	if a != nil {
 		ev.Session = a.SessionID()
