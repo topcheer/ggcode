@@ -512,10 +512,14 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		return ""
 	}
 
-	// Find top suspect
+	// Find top suspect. Ties break to the MORE RECENT edit: results are
+	// appended oldest-first (rank = append index, most recent last), and
+	// the recency design ("Higher for more recent edits") means an equal
+	// score must resolve to the later step. Compare rank (loop order),
+	// not wall-clock - parallel tool calls share timestamps. (#3150)
 	best := results[0]
 	for _, r := range results[1:] {
-		if r.score > best.score {
+		if r.score > best.score || (r.score == best.score && r.rank > best.rank) {
 			best = r
 		}
 	}

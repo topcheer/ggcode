@@ -125,7 +125,7 @@ func (s *attributionExperimentState) observeCommand(toolName, cmd string, errore
 		s.restored = true
 		return ""
 	}
-	if !s.intervened && isRevertIntervention(toolName, cmd) {
+	if !s.intervened && isRevertIntervention(toolName, cmd, s.suspect) {
 		s.intervened = true
 		return ""
 	}
@@ -164,21 +164,53 @@ func (s *attributionExperimentState) readOut(errored bool, content string) strin
 // isRevertIntervention reports whether the tool execution removes the
 // suspect's change from the working tree: a stash push (bare `git stash`
 // included), git restore, git checkout --, or the undo_edit tool.
-func isRevertIntervention(toolName, cmd string) bool {
-	if toolName == "undo_edit" {
-		return true
-	}
+//
+// #3150: the revert must actually touch the SUSPECT. A revert of an
+// unrelated file (git restore other.go, git stash push -- other.go) must
+// not flip the experiment to intervened, or a passing rerun would inject
+// a false CONFIRMED verdict on an innocent change. Pathspec-limited
+// reverts count only when the suspect path appears in the command; a
+// bare stash push (no pathspec after --) reverts everything, suspect
+// included. undo_edit cannot name its target from cmd alone, so it too
+// counts only when the suspect path is present (the command-channel gate
+// does not route undo_edit here today - this is the defensive branch if
+// that ever changes; a missed true intervention just lets the experiment
+// give up, while a false one actively misleads).
+func isRevertIntervention(toolName, cmd, suspect string) bool {
 	c := strings.ToLower(cmd)
+	suspectHit := func() bool {
+		sl := strings.ToLower(strings.TrimSpace(suspect))
+		return sl != "" && strings.Contains(c, sl)
+	}
+	if toolName == "undo_edit" {
+		return suspectHit()
+	}
 	if strings.Contains(c, "git stash") {
 		for _, drop := range []string{"pop", "apply", "list", "show", "drop", "clear"} {
 			if strings.Contains(c, "git stash "+drop) {
 				return false // stash-management, not a push
 			}
 		}
-		return true
+		if strings.TrimSpace(lastPathspec(c)) != "" {
+			return suspectHit() // pathspec-limited stash: suspect must be named
+		}
+		return true // bare stash push reverts everything, suspect included
 	}
-	return strings.Contains(c, "git restore ") ||
-		strings.Contains(c, "git checkout --")
+	if strings.Contains(c, "git restore ") || strings.Contains(c, "git checkout --") {
+		return suspectHit()
+	}
+	return false
+}
+
+// lastPathspec returns whatever follows the last "--" separator in a
+// (lowercased) git command line: git limits the operation to those
+// pathspecs. Empty when there is no separator or nothing after it.
+func lastPathspec(c string) string {
+	idx := strings.LastIndex(c, "--")
+	if idx < 0 {
+		return ""
+	}
+	return c[idx+2:]
 }
 
 // isRestoreIntervention reports whether the command restores a stashed/
