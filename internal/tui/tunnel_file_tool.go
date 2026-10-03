@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -48,8 +49,13 @@ func (m *Model) injectMobileFileSender(b *tunnel.Broker) {
 		return
 	}
 	mft.Sender = mobileFileSenderAdapter{broker: b}
+	// Registry.Register rejects duplicate names, so re-registering requires
+	// unregister first (fix: the old _ = reg.Register silently no-op'd and
+	// the sender was never wired).
 	reg.Unregister(mft.Name())
-	reg.Register(mft)
+	if err := reg.Register(mft); err != nil {
+		debug.Log("tui", "injectMobileFileSender: re-register failed: %v", err)
+	}
 }
 
 // clearMobileFileSender resets the tool to its no-connection description
