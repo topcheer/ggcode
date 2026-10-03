@@ -273,3 +273,11 @@ func CheckCrashRecovery(sessionID string) string {
 	info := agent.CheckCrashedRun(sessionID)
 	return agent.FormatCrashRecoveryMessage(info)
 }
+
+// CheckContinuation returns a model-facing continuation-point message
+// when the session's previous run was user-interrupted (r445). Unlike
+// CheckCrashRecovery this covers same-session Ctrl+C; the snapshot is
+// consumed on read. Empty string means nothing to resume.
+func CheckContinuation(sessionID string) string {
+	return agent.CheckContinuation(sessionID)
+}
