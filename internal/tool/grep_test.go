@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -419,4 +420,34 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// TestGrep_LongLineNotSilentlySkipped pins #3190: lines beyond the old
+// 64KB bufio.Scanner default used to abort the whole scan unchecked
+// (ErrTooLong swallowed by Scan() returning false), blanking every
+// match in the rest of the file. The scanners now buffer up to
+// grepMaxLineLen, so a >64KB no-match line followed by matching lines
+// must yield those later matches.
+func TestGrep_LongLineNotSilentlySkipped(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle.js")
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("a", 100_000)) // >64KB, no needle
+	sb.WriteString("\nconst zqneedle = 42\n")
+	sb.WriteString("zqneedle again\n")
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	re := regexp.MustCompile(`zqneedle`)
+	if !grepFileHasMatch(path, re) {
+		t.Fatal("hasMatch: matches after a >64KB line were silently missed")
+	}
+	if got := grepFileCount(path, re); got != 2 {
+		t.Fatalf("count: got %d, want 2", got)
+	}
+	matches := grepFileContent(path, re, grepArgs{})
+	if len(matches) != 2 {
+		t.Fatalf("content: got %d matches, want 2", len(matches))
+	}
 }
