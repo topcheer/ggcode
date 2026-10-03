@@ -214,13 +214,30 @@ func userEditRule(path string, turns int) Rule {
 
 // getUserEditObserver lazily builds the observer on the agent's rule store
 // (nil-safe when there is no working dir / rule store).
+// #3233: guarded by a.mu (double-checked) - same discipline as getRuleStore.
+// resetRuleStoreLocked clears this cache under the same lock, so a
+// working-dir change drops both together and the next call rebuilds
+// against the re-anchored store. NOTE: getRuleStore takes a.mu itself and
+// Go mutexes are not reentrant, so the store is built BEFORE re-acquiring
+// the lock; the second check keeps concurrent callers on one observer.
 func (a *Agent) getUserEditObserver() *UserEditObserver {
-	if a.userEditObs != nil {
-		return a.userEditObs
+	a.mu.RLock()
+	o := a.userEditObs
+	a.mu.RUnlock()
+	if o != nil {
+		return o
 	}
-	o := newUserEditObserver(a.getRuleStore())
-	a.userEditObs = o
-	return o
+	rs := a.getRuleStore() // takes and releases a.mu internally
+	o = newUserEditObserver(rs)
+	a.mu.Lock()
+	if a.userEditObs == nil {
+		a.userEditObs = o
+		a.mu.Unlock()
+		return o
+	}
+	existing := a.userEditObs
+	a.mu.Unlock()
+	return existing
 }
 
 // extractUserEditPaths pulls every agent-authored file path out of a
