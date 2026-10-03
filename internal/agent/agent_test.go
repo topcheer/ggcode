@@ -175,8 +175,13 @@ type delayedSummaryProvider struct {
 	mu              sync.Mutex
 	releaseSummary  chan struct{}
 	summaryReturned chan struct{}
-	streamCalls     int
-	streamMessages  [][]provider.Message
+	// summaryOnce guards the summaryReturned close: PCC (parallel context
+	// compaction) fans the summary payload out to multiple concurrent Chat
+	// calls, each of which signals completion — closing on every call would
+	// panic on the second close. PCC-agnostic: single-call path closes once too.
+	summaryOnce    sync.Once
+	streamCalls    int
+	streamMessages [][]provider.Message
 }
 
 func newDelayedSummaryProvider() *delayedSummaryProvider {
@@ -194,7 +199,7 @@ func (m *delayedSummaryProvider) Chat(ctx context.Context, messages []provider.M
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	defer close(m.summaryReturned)
+	defer m.summaryOnce.Do(func() { close(m.summaryReturned) })
 	return &provider.ChatResponse{
 		Message: provider.Message{
 			Role:    "assistant",
