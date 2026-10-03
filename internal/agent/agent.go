@@ -185,6 +185,7 @@ type Agent struct {
 	memoryTool                   *memoryToolState           // client-side executor for the API-declared Anthropic Memory Tool (memory_20250818)
 	serverToolSearch             bool                       // provider-side Tool Search Tool owns discovery (Anthropic beta); client meta-tool disabled
 	postEditVerify               postEditVerifyState        // tracks source-code edits to inject periodic verification hints
+	retraceGate                  retraceGateState           // r440: bidirectional (backward-reconstruct) stop gate, once per run
 	planner                      *planState                 // agent-side auto task decomposition (Devin/Claude Code-inspired)
 	todoStaleness                *todoStalenessState        // mid-run stale todo detection (plan abandonment awareness)
 	todoDrop                     *todoDropState             // mid-run todo contract drop detection (silent commitment removal)
@@ -3074,6 +3075,27 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}},
 				})
 				continue
+			}
+			// r440 RETRACE gate: with edits AND a real verification receipt in
+			// hand, one bidirectional check that the diff addresses the TASK -
+			// backward reconstruction sees the diff WITHOUT the task (no
+			// anchoring), then reconciles against it. Fires at most once per
+			// run; any failure passes through (non-interference).
+			if retraceShouldCheck(a.postEditVerify, a.overseer.researchMode, a.retraceGate.firedThisRun) {
+				a.retraceGate.firedThisRun = true
+				if diff := uncommittedDiff(a.workingDir); strings.TrimSpace(diff) != "" {
+					if msg := a.runRetraceVerification(ctx, userPromptForStats, diff); msg != "" {
+						debug.Log("agent", "Iteration %d: retrace gate verdict non-aligned, injecting revision guidance", i+1)
+						a.contextManager.Add(provider.Message{
+							Role: "user",
+							Content: []provider.ContentBlock{{
+								Type: "text",
+								Text: msg,
+							}},
+						})
+						continue
+					}
+				}
 			}
 			// r365 research-report gate: research mode x >=4 successful
 			// search/fetch calls x first stop - demand a structured
