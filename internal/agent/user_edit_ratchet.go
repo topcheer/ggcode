@@ -120,6 +120,31 @@ func (o *UserEditObserver) NoteAgentWrite(path string) {
 // both directions (r447).
 const negSignalRecycle = 2
 
+// RestampBaseline re-samples mtimes for all tracked files (#3241, r455).
+// The agent's own shell formatters (gofmt -w, make fmt, sed -i via
+// run_command) move mtimes the same way a user edit does; without a
+// restamp the next turn boundary reads the delta as "the user manually
+// adjusted foo.go" and, two turns later, promotes a false user-preference
+// rule. Called from the #750 shell-mutation hook after any run_command
+// flagged by shellMutatesSources (success or failure - #1028: side
+// effects already happened). Entries whose file no longer exists keep
+// their old baseline: the deletion race is NoteAgentWrite's business,
+// and a stale entry promotes nothing while the file is gone.
+func (o *UserEditObserver) RestampBaseline() {
+	if o == nil || o.store == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for path := range o.wrote {
+		mt, err := mtimeOf(path)
+		if err != nil {
+			continue
+		}
+		o.wrote[path] = mt
+	}
+}
+
 // NoteNegativeSignal (r447): the user undid the agent's edit to path.
 // One signal cancels any pending positive observation for that file - the
 // "user rewrites this file" reading was a misread; the user was rejecting
