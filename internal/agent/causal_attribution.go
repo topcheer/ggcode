@@ -83,6 +83,12 @@ type causalAttributionState struct {
 	// consumed by the attribution-experiment state machine to arm a
 	// Dov-style intervention validation of the attribution).
 	lastSuspect string
+
+	// lastSuspectStep/lastSuspectCRS capture the full final suspect (r413:
+	// persisted failure attribution). takeFinalSuspect consumes them so a
+	// stale suspect can never leak into a later turn's terminal record.
+	lastSuspectStep *causalEditStep
+	lastSuspectCRS  int
 }
 
 func newCausalAttributionState() *causalAttributionState {
@@ -521,6 +527,9 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 
 	s.warnings++
 	s.lastSuspect = best.step.filePath // r405: hypothesis for the experiment arm
+	stepCopy := best.step              // r413: full suspect for persisted attribution
+	s.lastSuspectStep = &stepCopy
+	s.lastSuspectCRS = best.score
 
 	// Format guidance
 	var sb strings.Builder
@@ -558,4 +567,17 @@ func looksLikeFailure(output string) bool {
 func (s *causalAttributionState) reset() {
 	s.edits = s.edits[:0]
 	s.warnings = 0
+	s.lastSuspectStep = nil
+	s.lastSuspectCRS = 0
+}
+
+// takeFinalSuspect returns the current full suspect (if any) and clears
+// it, so the terminal record hook (r413 recordFailureAttribution) reads
+// each suspect exactly once.
+func (s *causalAttributionState) takeFinalSuspect() (*causalEditStep, int) {
+	step := s.lastSuspectStep
+	s.lastSuspectStep = nil
+	crs := s.lastSuspectCRS
+	s.lastSuspectCRS = 0
+	return step, crs
 }
