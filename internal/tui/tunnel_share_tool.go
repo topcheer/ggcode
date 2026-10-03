@@ -3,6 +3,7 @@ package tui
 import (
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
@@ -77,23 +78,49 @@ const (
 // the whole session (ShareActive gates the per-call behavior).
 func (m *Model) injectShareController() {
 	if m.agent == nil {
+		debug.Log("tui", "injectShareController: SKIPPED (agent nil)")
 		return
 	}
 	reg := m.agent.ToolRegistry()
 	if reg == nil {
+		debug.Log("tui", "injectShareController: SKIPPED (registry nil)")
 		return
 	}
 	adapter := tunnelShareControlAdapter{m: m}
+	injected := 0
 	if t, ok := reg.Get(tool.StartShareTool{}.Name()); ok {
 		if st, ok := t.(tool.StartShareTool); ok {
 			st.Controller = adapter
-			_ = reg.Register(st)
+			// Registry.Register rejects duplicate names; unregister first
+			// (root cause of "not available in this frontend": the original
+			// Register call returned already-registered and the controller
+			// was never wired).
+			reg.Unregister(st.Name())
+			if err := reg.Register(st); err == nil {
+				injected++
+			} else {
+				debug.Log("tui", "injectShareController: start_share re-register failed: %v", err)
+			}
+		} else {
+			debug.Log("tui", "injectShareController: start_share type mismatch %T", t)
 		}
+	} else {
+		debug.Log("tui", "injectShareController: start_share NOT FOUND in registry")
 	}
 	if t, ok := reg.Get(tool.StopShareTool{}.Name()); ok {
 		if st, ok := t.(tool.StopShareTool); ok {
 			st.Controller = adapter
-			_ = reg.Register(st)
+			reg.Unregister(st.Name())
+			if err := reg.Register(st); err == nil {
+				injected++
+			} else {
+				debug.Log("tui", "injectShareController: stop_share re-register failed: %v", err)
+			}
+		} else {
+			debug.Log("tui", "injectShareController: stop_share type mismatch %T", t)
 		}
+	} else {
+		debug.Log("tui", "injectShareController: stop_share NOT FOUND in registry")
 	}
+	debug.Log("tui", "injectShareController: done injected=%d", injected)
 }
