@@ -55,6 +55,9 @@ func NewRootCmd() *cobra.Command {
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
+	// r415 per-run budget overrides (see the RunE mutation site).
+	var tokenBudgetFlag int64
+	var timeBudgetFlag time.Duration
 	var helperManifest string
 
 	cmd := &cobra.Command{
@@ -99,6 +102,17 @@ func NewRootCmd() *cobra.Command {
 			cfg, err := config.LoadWithInstance(cfgFile, workingDirForConfig)
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
+			}
+			// r415: per-run budget override. Flags beat the config file for
+			// this invocation only (nothing is persisted); 0/unset keeps the
+			// configured value. Applies to both pipe mode and the TUI below,
+			// since both consume this same cfg through the agentruntime
+			// Apply* propagation.
+			if tokenBudgetFlag > 0 {
+				cfg.SessionTokenBudget = tokenBudgetFlag
+			}
+			if timeBudgetFlag > 0 {
+				cfg.SessionTimeBudget = timeBudgetFlag
 			}
 			if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
 				return fmt.Errorf("persisting Claude MCP servers: %w", err)
@@ -182,6 +196,10 @@ func NewRootCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
+	// r415: per-run budget overrides (this invocation only, not persisted).
+	// The time ladder steers (80%/95%/100%) like the token budget.
+	cmd.Flags().Int64Var(&tokenBudgetFlag, "token-budget", 0, "per-run session token budget override (input+output tokens; 0 = use config)")
+	cmd.Flags().DurationVar(&timeBudgetFlag, "time-budget", 0, "per-run wall-clock soft budget override (e.g. 10m, 1h; 0 = use config)")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",

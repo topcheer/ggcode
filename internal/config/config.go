@@ -366,6 +366,7 @@ type Config struct {
 	MaxIterations      int                       `yaml:"max_iterations" json:"max_iterations"`
 	SessionTimeout     time.Duration             `yaml:"session_timeout,omitempty" json:"session_timeout,omitempty"`
 	SessionTokenBudget int64                     `yaml:"session_token_budget,omitempty" json:"session_token_budget,omitempty"`
+	SessionTimeBudget  time.Duration             `yaml:"session_time_budget,omitempty" json:"session_time_budget,omitempty"`
 	ToolCallBudget     int                       `yaml:"tool_call_budget,omitempty" json:"tool_call_budget,omitempty"`
 	ToolPerms          map[string]ToolPermission `yaml:"tool_permissions" json:"tool_permissions"`
 	Plugins            []PluginConfigEntry       `yaml:"plugins" json:"plugins"`
@@ -1713,6 +1714,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SessionTokenBudget < 0 {
 		return fmt.Errorf("session_token_budget must not be negative")
+	}
+	if c.SessionTimeBudget < 0 {
+		return fmt.Errorf("session_time_budget must not be negative")
 	}
 	if c.DefaultMode != "" {
 		switch strings.ToLower(c.DefaultMode) {

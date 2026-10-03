@@ -132,6 +132,19 @@ func ApplySessionTokenBudget(agentInst *agent.Agent, cfg *config.Config) {
 	agentInst.SetSessionTokenBudget(cfg.SessionTokenBudget)
 }
 
+// ApplySessionTimeBudget propagates the configured session-level wall-clock
+// soft budget to the agent (r415 time-dimension ladder). Call this after
+// agent creation or config reload.
+func ApplySessionTimeBudget(agentInst *agent.Agent, cfg *config.Config) {
+	if agentInst == nil || cfg == nil {
+		return
+	}
+	// Always propagate, including 0 — same always-call semantics as
+	// ApplySessionTokenBudget (#1494): a reload that removes
+	// session_time_budget must reset any previously applied budget.
+	agentInst.SetSessionTimeBudget(cfg.SessionTimeBudget)
+}
+
 // ApplyToolCallBudget propagates the configured tool call budget to the agent.
 // Call this after agent creation or config reload. When unset (0), the agent
 // auto-derives a default from maxIterations.

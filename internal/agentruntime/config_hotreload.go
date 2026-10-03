@@ -189,6 +189,7 @@ func (w *ConfigHotReload) applyFreshConfig(fresh *config.Config) {
 	// Re-apply turn-scoped budgets so the next turn picks them up.
 	if a.agentInst != nil {
 		ApplySessionTokenBudget(a.agentInst, old)
+		ApplySessionTimeBudget(a.agentInst, old)
 		ApplyToolCallBudget(a.agentInst, old)
 		ApplySessionTimeout(a.agentInst, old, false)
 	}
