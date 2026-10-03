@@ -10,7 +10,10 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"ask_user":    true,
 		"spawn_agent": true,
 		// r377: nested best-of-N fan-out from candidates is blocked too.
-		"best_of_n":         true,
+		"best_of_n": true,
+		// compact_context (CAT) compacts the OWNING agent's conversation;
+		// a one-shot sub-agent must not compact its parent.
+		"compact_context":   true,
 		"wait_agent":        true,
 		"list_agents":       true,
 		"cancel_agent":      true,
