@@ -3713,6 +3713,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// CAN produce new information - keep the reverify detector in
 					// agreement with the caches we just invalidated.
 					a.redundantReverify.recordShellSourceMutation()
+					// #3241 (r455): the same shell very likely just reformatted
+					// files the agent wrote earlier (gofmt -w / make fmt / sed -i).
+					// Re-stamp the user-edit baselines so the next turn boundary
+					// does not read the formatter's mtime delta as a manual user
+					// edit and promote a false preference rule.
+					a.getUserEditObserver().RestampBaseline()
 					debug.Log("agent", "shell source mutation %q (failed cmd included): invalidated command/speculator/memo caches", cmd)
 				}
 			}
