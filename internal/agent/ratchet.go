@@ -261,7 +261,15 @@ func (rs *RuleStore) AddRule(r Rule) {
 	r.Category = normalizeRuleCategory(r.Category)
 
 	// Check for semantic duplicates before adding.
+	// #3229: user_edit rules generated from a fixed template tokenize to
+	// near-identical token sets for ANY two files (Jaccard >= 0.75 always),
+	// but their identity IS the target file. Similarity merge must never
+	// collapse two distinct files - that silently discards every rule after
+	// the first file, degrading r444 to single-file mode.
 	for i := range rs.rules {
+		if userEditIdentityDistinct(rs.rules[i], r) {
+			continue
+		}
 		if ruleSimilarity(rs.rules[i], r) >= 0.75 {
 			// Merge into existing rule: bump hit count and update LastSeen
 			rs.rules[i].HitCount += r.HitCount
@@ -294,6 +302,11 @@ func ruleSimilarity(a, b Rule) float64 {
 	if len(tokensA) == 0 || len(tokensB) == 0 {
 		return 0
 	}
+	// #3229 guard: two user_edit rules bound to DIFFERENT files are never
+	// semantic duplicates regardless of token overlap - see AddRule.
+	if userEditIdentityDistinct(a, b) {
+		return 0
+	}
 	// Jaccard similarity: intersection / union
 	intersection := 0
 	for t := range tokensA {
@@ -311,6 +324,18 @@ func ruleSimilarity(a, b Rule) float64 {
 		base += 0.3
 	}
 	return base
+}
+
+// userEditIdentityDistinct reports whether a and b are both user_edit
+// rules (r444) bound to DIFFERENT target files. user_edit rules come from
+// a fixed template whose only variable is the file base name, so any two
+// of them tokenize to near-identical sets (Jaccard 0.8+ for ANY file pair)
+// while carrying distinct identities in ToolPattern. Similarity-based
+// dedup must skip them (#3229): merging silently discarded every rule
+// after the first file and mis-accumulated HitCount onto it.
+func userEditIdentityDistinct(a, b Rule) bool {
+	return a.Source == ruleSourceUserEdit && b.Source == ruleSourceUserEdit &&
+		a.ToolPattern != b.ToolPattern
 }
 
 // tokenizeRule extracts normalized lowercase word tokens from a rule,
