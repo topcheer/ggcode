@@ -185,6 +185,32 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 // AddRule adds a new rule, enforcing the max limit with LRU eviction.
 // If a semantically similar rule already exists, it merges hit counts
 // instead of creating a duplicate.
+// RemoveUserEditRules deletes user_edit-sourced rules whose ToolPattern
+// targets base (r447 negative-signal recycling). Returns how many were
+// removed. Error-sourced and LLM rules are never touched.
+func (rs *RuleStore) RemoveUserEditRules(base string) int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+	pattern := regexp.QuoteMeta(base)
+	kept := make([]Rule, 0, len(rs.rules))
+	removed := 0
+	for _, r := range rs.rules {
+		if r.Source == ruleSourceUserEdit && r.ToolPattern == pattern {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed > 0 {
+		rs.rules = kept
+		if err := rs.save(); err != nil {
+			debug.Log("ratchet", "failed to save rules after removing %d user_edit rule(s) for %s: %v", removed, base, err)
+		}
+	}
+	return removed
+}
+
 func (rs *RuleStore) AddRule(r Rule) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()

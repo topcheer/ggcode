@@ -3831,6 +3831,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// later misreported as stale.
 					if tc.Name == "undo_edit" && !result.IsError {
 						a.expiredRead.recordUndo(p)
+						// r447: an undo is a negative teaching signal - it cancels
+						// pending user-edit observations for this file and, on
+						// repetition, retires promoted user-edit rules.
+						a.getUserEditObserver().NoteNegativeSignal(p)
 					}
 					// Export guard: detect breaking changes to exported Go symbols
 					// (removed functions, changed signatures) by comparing against

@@ -69,6 +69,8 @@ type UserEditObserver struct {
 	store   *RuleStore
 	wrote   map[string]time.Time // file -> mtime right after agent's write (this turn)
 	pending map[string]*userEditObservation
+	// negHits tracks undo signals per file (r447 negative channel).
+	negHits map[string]*userEditObservation
 }
 
 func newUserEditObserver(store *RuleStore) *UserEditObserver {
@@ -76,6 +78,7 @@ func newUserEditObserver(store *RuleStore) *UserEditObserver {
 		store:   store,
 		wrote:   make(map[string]time.Time),
 		pending: make(map[string]*userEditObservation),
+		negHits: make(map[string]*userEditObservation),
 	}
 }
 
@@ -110,6 +113,40 @@ func (o *UserEditObserver) NoteAgentWrite(path string) {
 		}
 	}
 	o.wrote[path] = mt
+}
+
+// negSignalRecycle: undo signals required to retire a promoted user-edit
+// rule. Mirrors userEditPromoteTurns - repetition is the truth filter in
+// both directions (r447).
+const negSignalRecycle = 2
+
+// NoteNegativeSignal (r447): the user undid the agent's edit to path.
+// One signal cancels any pending positive observation for that file - the
+// "user rewrites this file" reading was a misread; the user was rejecting
+// the edit, not adjusting it. At negSignalRecycle signals an
+// already-promoted user_edit rule for the file is retired: repeated undos
+// mean the rule's advice is pointing the wrong direction.
+func (o *UserEditObserver) NoteNegativeSignal(path string) {
+	if o == nil || o.store == nil || path == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	delete(o.pending, path)
+	delete(o.wrote, path)
+	neg := o.negHits[path]
+	if neg == nil {
+		neg = &userEditObservation{}
+		o.negHits[path] = neg
+	}
+	neg.turns++
+	neg.lastSeen = time.Now()
+	if neg.turns >= negSignalRecycle {
+		if n := o.store.RemoveUserEditRules(filepath.Base(path)); n > 0 {
+			debug.Log("userEditRatchet", "retired %d user-edit rule(s) for %s after %d undo signals", n, filepath.Base(path), neg.turns)
+		}
+		delete(o.negHits, path)
+	}
 }
 
 // CheckTurnBoundary is called when a new user message arrives. Files the
@@ -149,6 +186,11 @@ func (o *UserEditObserver) CheckTurnBoundary() {
 	for path, obs := range o.pending {
 		if now.Sub(obs.lastSeen) > userEditObsTTL {
 			delete(o.pending, path)
+		}
+	}
+	for path, obs := range o.negHits {
+		if now.Sub(obs.lastSeen) > userEditObsTTL {
+			delete(o.negHits, path)
 		}
 	}
 	if len(promoted) > 0 {
