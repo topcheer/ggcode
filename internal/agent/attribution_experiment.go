@@ -179,8 +179,7 @@ func (s *attributionExperimentState) readOut(errored bool, content string) strin
 func isRevertIntervention(toolName, cmd, suspect string) bool {
 	c := strings.ToLower(cmd)
 	suspectHit := func() bool {
-		sl := strings.ToLower(strings.TrimSpace(suspect))
-		return sl != "" && strings.Contains(c, sl)
+		return suspectNamedIn(c, suspect)
 	}
 	if toolName == "undo_edit" {
 		return suspectHit()
@@ -194,12 +193,87 @@ func isRevertIntervention(toolName, cmd, suspect string) bool {
 		if strings.TrimSpace(lastPathspec(c)) != "" {
 			return suspectHit() // pathspec-limited stash: suspect must be named
 		}
+		if len(stashPushPathspecs(c)) > 0 {
+			return suspectHit() // #3161: git allows `git stash push <path>` without `--`
+		}
 		return true // bare stash push reverts everything, suspect included
 	}
 	if strings.Contains(c, "git restore ") || strings.Contains(c, "git checkout --") {
 		return suspectHit()
 	}
 	return false
+}
+
+// suspectNamedIn reports whether the suspect path is named in the command
+// with path boundaries: a whitespace-separated token equals the suspect path
+// or equals it after stripping a leading "./" (cwd-relative spelling of the
+// same file). #3161: substring (or slash-suffix) matching would let suspect
+// "util/files.go" match the unrelated longer path "cmd/util/files.go" -
+// a different file - and flip the verdict.
+func suspectNamedIn(c, suspect string) bool {
+	sl := strings.ToLower(strings.TrimSpace(suspect))
+	if sl == "" {
+		return false
+	}
+	for _, tok := range strings.Fields(c) {
+		tok = strings.TrimSuffix(tok, ",")
+		if tok == sl || strings.TrimPrefix(tok, "./") == sl {
+			return true
+		}
+		// JSON-embedded args (undo_edit `{"file":"<path>"}`): the suspect
+		// path delimited by quotes carries its own boundary.
+		if strings.Contains(tok, `"`+sl+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// stashPushPathspecs extracts pathspec tokens from a `git stash push`
+// command line (lowercased): non-flag arguments that follow "push",
+// skipping flags (-u, -a, -p, -k, -q, --include-untracked, ...) and the
+// message value consumed by -m/--message/-- <msg is never a pathspec>.
+// #3161: git accepts `git stash push <path>` without the `--` separator,
+// which must be treated as pathspec-limited, not bare.
+func stashPushPathspecs(c string) []string {
+	fields := strings.Fields(c)
+	start := -1
+	for i, f := range fields {
+		if f == "push" {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return nil // bare `git stash` (implicit push) has no pathspec
+	}
+	var specs []string
+	skipValue := false // next token is the value of -m/--message
+	inMsg := false     // inside a space-spanning quoted message value
+	for _, f := range fields[start:] {
+		if inMsg {
+			if strings.HasSuffix(f, `"`) {
+				inMsg = false
+			}
+			continue
+		}
+		if skipValue {
+			skipValue = false
+			if strings.HasPrefix(f, `"`) && !strings.HasSuffix(f, `"`) {
+				inMsg = true // message opened with a quote, spans tokens
+			}
+			continue
+		}
+		switch {
+		case f == "-m" || f == "--message":
+			skipValue = true
+		case strings.HasPrefix(f, "-"):
+			// -u/-a/-p/-k/-q/--include-untracked/etc: flags, not pathspecs
+		default:
+			specs = append(specs, f)
+		}
+	}
+	return specs
 }
 
 // lastPathspec returns whatever follows the last "--" separator in a
