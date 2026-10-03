@@ -2402,6 +2402,16 @@ Omit entirely:
 			},
 		}
 
+		// PCC (arXiv 2605.23296): large payloads fan out into parallel
+		// per-block summaries to cut the blocking wall time; ANY block
+		// failure or emptiness falls back to the sequential path below,
+		// so parallel compaction is never worse than the baseline.
+		if blocks := splitPayloadBlocks(payload, pccMinPayloadTokens); len(blocks) > 1 {
+			if summaryText, ok := summarizeParallel(ctx, prov, blocks, summaryTokenLimit, onUsage); ok {
+				return summaryText, nil
+			}
+		}
+
 		resp, err := prov.Chat(ctx, summaryMsgs, nil)
 		if err != nil {
 			if !isPromptTooLongError(err) || attempt == maxPTLRetries {
