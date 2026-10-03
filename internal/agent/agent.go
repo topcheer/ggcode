@@ -1274,6 +1274,7 @@ func (a *Agent) SetPersistHandler(fn func(msg provider.Message)) {
 func (a *Agent) SetWorkingDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	dirChanged := a.workingDir != dir
 	a.workingDir = dir
 	// r395: re-anchor the intervention ledger to the real workspace.
 	if a.interventionLedger == nil || a.interventionLedger.workingDir != dir {
@@ -1296,6 +1297,14 @@ func (a *Agent) SetWorkingDir(dir string) {
 	// #1491-A layer 3: search-invalidation keys share the same anchor.
 	if a.searchInvalidation != nil {
 		a.searchInvalidation.setBaseDir(dir)
+	}
+	// #3233: the RuleStore singleton is directory-anchored at first build
+	// (see getRuleStore); re-anchor on an actual dir change so rules learned
+	// in a worktree stay in that worktree instead of polluting the main
+	// tree's persistent rule file. Same-dir calls (hooks re-anchoring) must
+	// NOT rebuild - that would drop in-memory accumulated rules.
+	if dirChanged && a.ruleStore != nil {
+		a.resetRuleStoreLocked()
 	}
 }
 func (a *Agent) WorkingDir() string {
@@ -4957,6 +4966,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.mu.Lock()
 				oldDir := a.workingDir
 				a.workingDir = result.SuggestedWorkingDir
+				// #3233: re-anchor the directory-bound RuleStore singleton
+				// (and its user-edit observer) so worktree-learned rules
+				// persist inside the worktree, not the main tree.
+				if a.ruleStore != nil {
+					a.resetRuleStoreLocked()
+				}
 				a.mu.Unlock()
 				debug.Log("agent", "working dir changed: %s -> %s (suggested by %s)", oldDir, result.SuggestedWorkingDir, tc.Name)
 			}

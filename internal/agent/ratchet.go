@@ -113,6 +113,22 @@ func (a *Agent) getRuleStore() *RuleStore {
 	return rs
 }
 
+// resetRuleStoreLocked drops the cached RuleStore singleton (and the
+// user-edit observer bound to it) so the next getRuleStore call lazily
+// re-anchors to the CURRENT working directory.
+// #3233: the #3227 singleton froze the store at first-build; when the
+// working dir changes mid-session (enter_worktree adoption, SetWorkingDir)
+// rules learned inside a worktree were persisted back into the MAIN
+// tree's agent-rules.json - cross-branch pollution of persistent
+// guidance. Callers must hold a.mu.
+func (a *Agent) resetRuleStoreLocked() {
+	a.ruleStore = nil
+	// The observer holds a direct reference to the old store; without
+	// clearing it too, user-edit tracking would keep writing to the
+	// abandoned directory.
+	a.userEditObs = nil
+}
+
 // compilePattern returns a cached compiled regex for the given pattern.
 // This avoids re-compiling the same patterns on every tool call.
 func (rs *RuleStore) compilePattern(pattern string) (*regexp.Regexp, error) {
