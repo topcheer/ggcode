@@ -152,6 +152,12 @@ func NewSubAgentManager(
 		Run:             BestOfNRunnerFor(spawnTool, mgr),
 		AvailableModels: availableModels,
 	})
+	// r436: dynamic workflow orchestration (externalized task graph:
+	// decompose -> parallel workers -> adversarial verify -> synthesize).
+	_ = registry.Register(tool.WorkflowRunTool{
+		Manager: mgr,
+		Run:     WorkflowRunnerFor(spawnTool, mgr),
+	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	parentModel := tool.ParentModelFromProviderGetter(providerGetter)
 	_ = registry.Register(tool.WaitAgentTool{

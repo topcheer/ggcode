@@ -853,6 +853,11 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		Manager: mgr,
 		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),
 	})
+	// r436: dynamic workflow orchestration (externalized task graph).
+	tools.Register(tool.WorkflowRunTool{
+		Manager: mgr,
+		Run:     agentruntime.WorkflowRunnerFor(spawnTool, mgr),
+	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	tools.Register(tool.WaitAgentTool{
 		Manager:      mgr,
