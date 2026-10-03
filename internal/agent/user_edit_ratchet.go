@@ -81,12 +81,15 @@ func newUserEditObserver(store *RuleStore) *UserEditObserver {
 
 // userWriteTools: the tools whose successful calls count as "the agent
 // authored this file this turn". file_ops moves are tracked too because a
-// move makes the destination agent-authored.
+// move makes the destination agent-authored (#3214: only action=="move"
+// destinations count - mkdir creates no file content, delete has no
+// destination, and recursive moves fan out per-operation destination).
 var userWriteTools = map[string]bool{
 	"edit_file":       true,
 	"multi_edit_file": true,
 	"write_file":      true,
 	"multi_file_edit": true,
+	"file_ops":        true,
 }
 
 // NoteAgentWrite records a file the agent just wrote successfully. mtime
@@ -178,11 +181,16 @@ func (a *Agent) getUserEditObserver() *UserEditObserver {
 	return o
 }
 
-// extractUserEditPath pulls the primary file path out of a successful
-// write-tool call's JSON arguments (raw JSON bytes). multi_file_edit tracks only the first
-// edit's file (the observer is per-file; multi-file fanout would need a
-// list API - deliberately deferred, one file still catches the signal).
-func extractUserEditPath(toolName string, rawArgs []byte) string {
+// extractUserEditPaths pulls every agent-authored file path out of a
+// successful write-tool call's JSON arguments (raw JSON bytes). Returns
+// the paths in argument order; an empty slice means nothing to track.
+//
+// #3214: file_ops move operations contribute their destination (a move
+// makes the destination agent-authored); other file_ops actions (mkdir/
+// delete) contribute nothing. multi_file_edit now returns ALL files'
+// paths - the per-file observer is fanned out per path, closing the
+// "deliberately deferred" gap the single-path API used to have.
+func extractUserEditPaths(toolName string, rawArgs []byte) []string {
 	var parsed struct {
 		FilePath string `json:"file_path"`
 		Path     string `json:"path"`
@@ -192,23 +200,44 @@ func extractUserEditPath(toolName string, rawArgs []byte) string {
 		Edits []struct {
 			Path string `json:"path"`
 		} `json:"edits"`
+		Operations []struct {
+			Action      string `json:"action"`
+			Destination string `json:"destination"`
+		} `json:"operations"`
 	}
 	if err := json.Unmarshal(rawArgs, &parsed); err != nil {
-		return ""
+		return nil
 	}
-	if parsed.FilePath != "" {
-		return parsed.FilePath
+	var out []string
+	add := func(p string) {
+		if p != "" {
+			out = append(out, p)
+		}
 	}
-	if parsed.Path != "" {
-		return parsed.Path
+	switch toolName {
+	case "file_ops":
+		for _, op := range parsed.Operations {
+			if op.Action == "move" {
+				add(op.Destination)
+			}
+		}
+		return out
+	case "multi_file_edit":
+		for _, f := range parsed.Files {
+			add(f.Path)
+		}
+		return out
 	}
-	if len(parsed.Files) > 0 && parsed.Files[0].Path != "" {
-		return parsed.Files[0].Path
+	// Single-file tools: first populated field wins (legacy semantics).
+	add(parsed.FilePath)
+	add(parsed.Path)
+	if len(out) == 0 && len(parsed.Files) > 0 {
+		add(parsed.Files[0].Path)
 	}
-	if len(parsed.Edits) > 0 && parsed.Edits[0].Path != "" {
-		return parsed.Edits[0].Path
+	if len(out) == 0 && len(parsed.Edits) > 0 {
+		add(parsed.Edits[0].Path)
 	}
-	return ""
+	return out
 }
 
 // mtimeOf isolates os.Stat for testability.
