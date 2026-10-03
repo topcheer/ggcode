@@ -64,13 +64,23 @@ func TestR405_RerunWithoutIntervention_NoVerdict(t *testing.T) {
 	}
 }
 
-func TestR405_UndoEditCountsAsIntervention(t *testing.T) {
+func TestR405_UndoEditWithoutSuspectPath_NotIntervention(t *testing.T) {
+	// #3150: undo_edit cannot name its target file from cmd alone, so it
+	// no longer counts unconditionally - an undo of an UNRELATED edit must
+	// not arm a false CONFIRMED on the suspect.
 	s := r405Arm(t)
 	if g := s.observeCommand("undo_edit", `{"checkpoint_id":"cp1"}`, false, "reverted"); g != "" {
 		t.Fatalf("undo_edit observation must be silent, got %q", g)
 	}
-	if g := s.observeCommand("run_command", r405Verify+" 2>&1", false, "ok"); !strings.Contains(g, "CONFIRMED") {
-		t.Fatalf("undo_edit should count as intervention; got %q", g)
+	if g := s.observeCommand("run_command", r405Verify+" 2>&1", false, "ok"); g != "" {
+		t.Fatalf("unverified undo_edit must not count as intervention, got %q", g)
+	}
+	// Defensive arm: if a future caller routes undo_edit with the suspect
+	// path in its args, it counts.
+	s2 := r405Arm(t)
+	s2.observeCommand("undo_edit", `{"file":"`+r405Suspect+`"}`, false, "reverted")
+	if g := s2.observeCommand("run_command", r405Verify, false, "ok"); !strings.Contains(g, "CONFIRMED") {
+		t.Fatalf("undo_edit naming the suspect should count as intervention; got %q", g)
 	}
 }
 
