@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	runtimedebug "runtime/debug"
 	"strconv"
@@ -212,6 +213,15 @@ func tryClaimPendingTask(
 ) {
 	// No agent → nothing to do.
 	if agent == nil {
+		return
+	}
+
+	// r455: failure-storm bulkhead - a teammate with an open circuit
+	// does not claim board tasks (its failures keep starving the team;
+	// healthy teammates pick the tasks up instead). Direct inbox task
+	// delivery is the parent's explicit routing decision and stays
+	// unaffected.
+	if !teammateClaimAllowed(tm.ID) {
 		return
 	}
 
@@ -603,6 +613,9 @@ func executeTask(
 	}
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
+	// r455: breaker accounting. Cancellation (shutdown/team teardown)
+	// is not a teammate failure; deadline/other errors are.
+	recordTeammateTaskResult(tm.ID, err != nil && !errors.Is(subCtx.Err(), context.Canceled))
 	return output.String(), err
 }
 
