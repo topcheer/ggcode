@@ -87,6 +87,11 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	// the file was DELETED - the only place its path survives in the diff
 	// (#1319: deleted files dropped out of partition plans entirely).
 	lastOldFile := ""
+	// #3164: true when the previous line was consumed as a minus-side
+	// file header ("--- a/x" at the oldFileHeader branch, or the
+	// "--- /dev/null" literal below). The very next line being
+	// "+++"-prefixed is then a residual header, not content.
+	prevWasOldHeader := false
 
 	flush := func() {
 		// Reset counters even on the empty-file early return (#1319: the
@@ -115,6 +120,10 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	}
 
 	for _, line := range strings.Split(diffOutput, "\n") {
+		// #3164: capture-and-clear the header-adjacency flag for THIS line
+		// before any branch consumes it.
+		afterOld := prevWasOldHeader
+		prevWasOldHeader = false
 		// #3126: track the b/ path from "diff --git a/x b/x" lines - the
 		// only anchor for pure mode-change hunks (same pattern as
 		// parseDiffStats in commit_analyzer.go).
@@ -182,6 +191,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		}
 		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
 			lastOldFile = m[1]
+			prevWasOldHeader = true
 			continue
 		}
 		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {
@@ -191,9 +201,28 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		if len(line) == 0 {
 			continue
 		}
-		if line[0] == '+' && !strings.HasPrefix(line, "+++") {
+		if line[0] == '+' {
+			// #3164: real "+++ b/x" and "+++ /dev/null" headers were already
+			// consumed by the regexes above. A "+++"-prefixed line here is
+			// header-shaped content (source line starts with "++": nested
+			// diff examples, "++" markers) UNLESS it immediately follows a
+			// consumed minus-side header - adjacency is the only remaining
+			// discriminator (covers new-file "+++ b/x" after "--- /dev/null"
+			// when the a/-regex did not match its old side).
+			if strings.HasPrefix(line, "+++") && afterOld {
+				continue
+			}
 			currentAdd++
-		} else if line[0] == '-' && !strings.HasPrefix(line, "---") {
+		} else if line[0] == '-' {
+			// #3164: the only real header reaching here is the new-file old
+			// side "--- /dev/null" (the a/-form was consumed above); flag it
+			// so the "+++ b/x" that follows is header-adjacent. Every other
+			// "---"-shaped line is diff CONTENT (markdown hr "----", "--"
+			// strikethrough markers) and must be counted, not skipped.
+			if strings.HasPrefix(line, "--- /dev/null") {
+				prevWasOldHeader = true
+				continue
+			}
 			currentDel++
 		}
 	}
