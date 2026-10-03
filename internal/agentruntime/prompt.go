@@ -340,6 +340,15 @@ type memSource struct {
 // This implements the "hill climbing" loop: every session's learnings
 // compound into automatically available context for future sessions.
 func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
+	// r438 memory repair loop (after TEPA arXiv:2604.07429-style pollution
+	// revocation, human-in-the-loop variant): surface unresolved sleep-time
+	// consolidation findings so the agent can supersede/rewrite the stale or
+	// contradictory entries explicitly. Independent of curated content - even
+	// an otherwise empty store may need repairs.
+	repair := memoryRepairBlock(globalAutoMem, projectAutoMem)
+	if repair != "" {
+		prompt += "\n\n## Memory Repair\n" + repair
+	}
 	sources := collectMemSources(globalAutoMem, projectAutoMem)
 	if len(sources) == 0 {
 		return prompt
@@ -361,6 +370,21 @@ func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoM
 	}
 
 	return strings.TrimSpace(prompt)
+}
+
+// memoryRepairBlock merges repair suggestions from both scopes (global
+// first, then project; each block is already capped and self-describing).
+func memoryRepairBlock(globalAutoMem, projectAutoMem *memory.AutoMemory) string {
+	var parts []string
+	for _, am := range []*memory.AutoMemory{globalAutoMem, projectAutoMem} {
+		if am == nil {
+			continue
+		}
+		if s := am.RepairSuggestions(); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // collectMemSources loads curated entries from both global and project memory,

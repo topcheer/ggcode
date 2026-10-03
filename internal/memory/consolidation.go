@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -319,4 +320,61 @@ func truncateForReport(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// repairSuggestionMinAgeDays gates conflict suggestions: a contradiction
+// younger than this is likely transient churn (a memory being rewritten);
+// older ones are genuine pollution that deserves a human-in-the-loop fix.
+const repairSuggestionMinAgeDays = 7
+
+// repairSuggestionMaxLen bounds the injected block; it rides in every
+// system prompt until resolved, so it must stay cheap.
+const repairSuggestionMaxLen = 600
+
+// RepairSuggestions formats unresolved consolidation findings (stale entries
+// and aged contradictions) as a compact repair-prompt block for the next
+// session's system prompt — the "actionable repair loop" half of sleep-time
+// consolidation (r438, after TEPA arXiv:2608.07429 memory-pollution
+// revocation). Non-destructive by construction: it only SUGGESTS; the agent
+// must explicitly supersede/rewrite via save_memory with the user in the
+// loop. Returns "" when there is nothing worth surfacing.
+func (am *AutoMemory) RepairSuggestions() string {
+	state := am.loadConsolidationState()
+	if state == nil {
+		return ""
+	}
+	now := time.Now()
+	var lines []string
+	// Stale entries (broken paths / oversized): fix immediately valuable.
+	for key, reasons := range state.Stale {
+		if len(reasons) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- stale %q (%s): verify or rewrite this memory", key, reasons[0]))
+		if len(lines) >= 2 {
+			break
+		}
+	}
+	// Aged contradictions: both sides still active, newer evidence should win.
+	conflicts := 0
+	for _, c := range state.Conflicts {
+		seen, err := time.Parse(time.RFC3339, c.FirstSeen)
+		if err != nil || now.Sub(seen).Hours()/24 < repairSuggestionMinAgeDays {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- contradiction on %q (%s vs %s, first seen %d days ago): supersede the outdated side via save_memory", c.Subject, c.A, c.B, int(now.Sub(seen).Hours()/24)))
+		conflicts++
+		if conflicts >= 2 {
+			break
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	sort.Strings(lines)
+	block := "Memory repair suggestions (from sleep-time consolidation; fix with save_memory/supersede, user in the loop):\n" + strings.Join(lines, "\n")
+	if len(block) > repairSuggestionMaxLen {
+		block = block[:repairSuggestionMaxLen]
+	}
+	return block
 }
