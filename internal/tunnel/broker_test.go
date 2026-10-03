@@ -346,6 +346,52 @@ func TestBrokerPushTextDoneEmptyBuffer(t *testing.T) {
 	}
 }
 
+// TestBrokerFlushAllTextsSkipsEmptyEntries pins the ticker-path guard that
+// mirrors flushText's: an entry created by PushText(id, "") must NOT be
+// flushed as an EventText with an empty Chunk. Mobile replays such frames
+// as blank chat bubbles after a session switch (user-visible bug). The
+// guard must stay surgical: real content on the same id still flushes.
+func TestBrokerFlushAllTextsSkipsEmptyEntries(t *testing.T) {
+	b, d := newBrokerForTest()
+	defer b.Stop()
+
+	b.PushText("msg-blank", "") // creates an empty buffered entry
+	// Wait past the text flush ticker (300ms) so flushAllTexts runs.
+	time.Sleep(500 * time.Millisecond)
+	for _, m := range d.drain() {
+		if m.Type != EventText {
+			continue
+		}
+		var td TextData
+		if err := json.Unmarshal(m.Data, &td); err != nil {
+			t.Fatal(err)
+		}
+		if td.ID == "msg-blank" && td.Chunk == "" {
+			t.Fatal("ticker flushed an empty text frame (blank-bubble regression)")
+		}
+	}
+
+	// Surgical: real content on the same id still reaches the wire.
+	b.PushText("msg-blank", "real")
+	time.Sleep(500 * time.Millisecond)
+	found := false
+	for _, m := range d.drain() {
+		if m.Type != EventText {
+			continue
+		}
+		var td TextData
+		if err := json.Unmarshal(m.Data, &td); err != nil {
+			t.Fatal(err)
+		}
+		if td.ID == "msg-blank" && td.Chunk == "real" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected the real chunk to flush after the empty-frame skip")
+	}
+}
+
 func TestBrokerPushReasoningDone(t *testing.T) {
 	b, d := newBrokerForTest()
 	defer b.Stop()

@@ -448,6 +448,13 @@ func (b *Broker) flushAllText() {
 	b.textMu.Unlock()
 
 	for msgID, entry := range bufs {
+		// Mirror flushText's guard: an entry created by an empty chunk
+		// (PushText("") et al) must not enqueue an EventText with an empty
+		// Chunk - mobile replays such frames as blank bubbles after a
+		// session switch, and an empty frame carries nothing of value.
+		if entry.text == "" {
+			continue
+		}
 		if entry.agentID != "" {
 			b.enqueueWithStream(EventSubagentText, msgID, SubagentTextData{AgentID: entry.agentID, ID: msgID, Chunk: entry.text})
 		} else {
