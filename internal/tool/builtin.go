@@ -139,6 +139,11 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		// by the TUI when a mobile share starts)
 		MobileFileTool{},
 
+		// Mobile share lifecycle (controller adapter injected post-registration
+		// by the TUI at startup; the phone still completes pairing via QR/URL)
+		StartShareTool{},
+		StopShareTool{},
+
 		// Runtime status (provider injected post-registration via SetRuntimeStatusProvider)
 		RuntimeTool{},
 

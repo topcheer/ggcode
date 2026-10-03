@@ -230,6 +230,7 @@ func init() {
 	regUpdatePlain(func(m Model, msg mcpServersMsg) (tea.Model, tea.Cmd) { return m.handleMcpServersMsg(msg) })
 	regUpdatePlain(func(m Model, msg mcpInstallResultMsg) (tea.Model, tea.Cmd) { return m.handleMcpInstallResultMsg(msg) })
 	regUpdatePlain(func(m Model, msg tunnelStartMsg) (tea.Model, tea.Cmd) { return m.handleTunnelStartMsg(msg) })
+	regUpdatePlain(func(m Model, msg agentShareRequestMsg) (tea.Model, tea.Cmd) { return m.handleAgentShareRequest(msg) })
 	regUpdatePlain(func(m Model, msg tunnelRefreshMsg) (tea.Model, tea.Cmd) { return m.handleTunnelRefreshMsg(msg) })
 	regUpdatePlain(func(m Model, msg tunnelShareBootstrapMsg) (tea.Model, tea.Cmd) {
 		return m.handleTunnelShareBootstrapMsg(msg)
