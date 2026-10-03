@@ -196,6 +196,14 @@ final themeProvider = NotifierProvider<_ThemeNotifier, String>(
   _ThemeNotifier.new,
 );
 
+/// Call at the top of every widget build that reads the AppColors static
+/// getters. AppColors reads the global `_current` palette with no context,
+/// so widgets using it carry NO reactive dependency - without this watch a
+/// theme switch updates `_current` but nothing rebuilds, and the new colors
+/// only appear after some unrelated state change (the "not instant" bug).
+/// Watching here re-runs that build, picking up the new palette immediately.
+void watchAppTheme(WidgetRef ref) => ref.watch(themeProvider);
+
 class _ThemeNotifier extends Notifier<String> {
   @override
   String build() => 'midnight';
