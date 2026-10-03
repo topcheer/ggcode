@@ -194,7 +194,7 @@ func (g *GhosttyTool) executeSplit(ctx context.Context, terminalID, direction st
 // copy is behind a build tag): wrap in single quotes with embedded
 // quotes escaped via the '"'"' dance.
 func escapeShellSingleQuoteLinux(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'''`) + "'"
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ghosttyLinuxCommandArgv builds the -e argv for the new-window-command
