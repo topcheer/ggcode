@@ -106,6 +106,15 @@ func hashEntry(e Entry) string {
 	writeField(e.InputHash)
 	writeField(fmt.Sprintf("%d", e.DurationMS))
 	writeField(e.Err)
+	// #3240: InvariantID is sealed into the chain hash too - it is the
+	// sole attribution field for invariant rejections, so a post-hoc edit
+	// (rewriting which rule fired, erasing the fact, or framing a normal
+	// action) must trip Verify. Conditional append: an empty InvariantID
+	// writes zero bytes, so pre-r454 entries hash identically under old
+	// and new code (chain compatibility - old chains still Verify).
+	if e.InvariantID != "" {
+		writeField(e.InvariantID)
+	}
 	writeField(e.PrevHash)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
