@@ -96,7 +96,7 @@ func (t Grep) Parameters() json.RawMessage {
 		},
 		"head_limit": {
 			"type": "integer",
-			"description": "Limit output to first N entries. Defaults: 250 in content mode, 500 in files_with_matches/count modes (a trailing summary shows how many were withheld). Use a large value deliberately if you truly need more.",
+			"description": "Limit output to first N entries. Defaults: 250 in content mode, 500 in files_with_matches/count modes (a trailing summary shows how many were withheld). Use a large value deliberately if you truly need more. With ripgrep installed, entries are capped per file at offset+N matches (deep pagination into one hot file reveals more as the window grows).",
 			"minimum": 0
 		},
 		"offset": {
