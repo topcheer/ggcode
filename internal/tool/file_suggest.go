@@ -132,6 +132,13 @@ func collectCandidates(parentDir, base string, maxDepth int) []string {
 	}
 
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	// #3138: dotfile query guard HERE too (the #1684 fix covered the
+	// outer suggest path, but collectCandidates re-derives the stem from
+	// base - for ".env" it collapses to "" and every isLikelyMatch
+	// HasPrefix(x, "") below is true, leaking all dotfiles through).
+	if stem == "" && strings.HasPrefix(base, ".") {
+		stem = base
+	}
 
 	// #836: the ancestor-fallback walk runs from the first existing
 	// ancestor — on a typo'd deep path that can be the volume root, and an
@@ -167,6 +174,15 @@ func collectCandidates(parentDir, base string, maxDepth int) []string {
 		// Skip files with very different names.
 		fileName := info.Name()
 		fileStem := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+		// #3138: symmetric #1684 case-3 guard on the CANDIDATE side - for
+		// dotfiles Ext==fileName and the stem collapses to "", which made
+		// every HasPrefix(x, "") true and let ALL dotfiles through the
+		// quick filter (candidate bloat), while a dotfile QUERY could never
+		// match (comparing against the empty string). The query-side guard
+		// (above) fixed only half the pair.
+		if fileStem == "" && strings.HasPrefix(fileName, ".") {
+			fileStem = fileName
+		}
 
 		// Quick filter: the stems must share at least 2 chars or have
 		// Levenshtein distance <= maxLevenshteinDist.
