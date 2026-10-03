@@ -376,3 +376,62 @@ func TestTrimSummary(t *testing.T) {
 		t.Fatalf("trimSummary produced %q (len %d)", got, len(got))
 	}
 }
+
+// TestPickWinnerUnusableOutranksUsable pins the #3224 score-inversion fact the
+// Kept guard in formatTrialReport defends against: an UNUSABLE trial (no
+// commits, no verify pass) can outscore a usable one - clean+completed+10
+// files = 25 beats committed-but-timed-out-and-dirty = 20 - so a
+// partially-usable run can still select an unkept winner whose worktree
+// cleanupWorktrees already deleted.
+func TestPickWinnerUnusableOutranksUsable(t *testing.T) {
+	unusable := trialResult{Status: "completed", Commits: 0, Files: 10, Dirty: false}            // 25
+	usable := trialResult{Status: "timeout", Commits: 1, Files: 0, Dirty: true, VerifyRun: true} // 20
+	if scoreTrial(unusable) <= scoreTrial(usable) {
+		t.Fatalf("test premise broken: unusable %d must outrank usable %d for the guard to matter", scoreTrial(unusable), scoreTrial(usable))
+	}
+	results := []trialResult{usable, unusable}
+	if got := pickWinner(results); got != 1 {
+		t.Fatalf("winner index = %d, want 1 (unusable outranks low-scoring usable)", got)
+	}
+}
+
+// TestTrialReportUncommittedWarningOnlyForKept pins the #3224 Kept guard: the
+// "passed verify but committed nothing" warning (which references a
+// kept-worktree pointer and a git-apply hint) must only fire for a winner the
+// keep gate actually kept. For an unkept 0-commit winner both the warning and
+// the kept-worktree line must be absent - the worktree was force-deleted.
+func TestTrialReportUncommittedWarningOnlyForKept(t *testing.T) {
+	results := []trialResult{
+		{Index: 1, Branch: "trial/a", Status: "timeout", Commits: 1, Dirty: true},
+		{Index: 2, Branch: "trial/b", Status: "completed", Commits: 0, Files: 10},
+	}
+	// Unkept 0-commit winner: no kept-worktree pointer, no uncommitted warning.
+	unkept := formatTrialReport("base1234", "", withIndexes(results), 1)
+	for _, banned := range []string{"kept worktree", "committed nothing"} {
+		if strings.Contains(unkept, banned) {
+			t.Fatalf("unkept winner report must not contain %q:\n%s", banned, unkept)
+		}
+	}
+	// Kept 0-commit winner (verify-passed, uncommitted worktree survives):
+	// the warning fires and points at the real kept worktree.
+	kept := results
+	kept[1].Kept = true
+	kept[1].Worktree = "/tmp/kept-wt"
+	kept[1].VerifyRun, kept[1].VerifyPass = true, true
+	out := formatTrialReport("base1234", "", withIndexes(kept), 1)
+	if !strings.Contains(out, "committed nothing") {
+		t.Fatalf("kept 0-commit winner must carry the uncommitted-work warning:\n%s", out)
+	}
+	if !strings.Contains(out, "/tmp/kept-wt") {
+		t.Fatalf("kept winner must reference its surviving worktree:\n%s", out)
+	}
+}
+
+// withIndexes renumbers Index fields to match slice positions, mirroring what
+// Execute does for real runs.
+func withIndexes(rs []trialResult) []trialResult {
+	for i := range rs {
+		rs[i].Index = i + 1
+	}
+	return rs
+}
