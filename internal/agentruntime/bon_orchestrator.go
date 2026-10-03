@@ -19,6 +19,7 @@ package agentruntime
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,6 +67,35 @@ type BestOfNOptions struct {
 	Name      string   // activity label base shown in the UI
 	Poll      time.Duration
 	Models    []string // optional per-candidate model override (r380 cross-model ensemble)
+
+	// r441 auction yield: when true, once the first candidate reaches
+	// StatusCompleted, still-running candidates whose observed tool-call
+	// spend exceeds bestOfNYieldFactor x the leader's spend are cancelled
+	// so their remaining budget returns to the pool (contract-net style
+	// early close). Default false: full-diversity behavior unchanged.
+	YieldOnFirstSuccess bool
+}
+
+// bestOfNYieldFactor: a laggard that has already burned this multiple of
+// the first-successful candidate's tool-call spend is judged a lost cause;
+// the auction closes and its remaining budget returns to the pool.
+const bestOfNYieldFactor = 1.5
+
+// yieldLaggards is the first-success auction close: given the leader's
+// observed tool-call spend and the still-running candidates' spends, it
+// returns the IDs that should be cancelled. Pure and deterministic.
+func yieldLaggards(leaderSpend int, laggards map[string]int) []string {
+	if leaderSpend <= 0 || len(laggards) == 0 {
+		return nil
+	}
+	var out []string
+	for id, spend := range laggards {
+		if float64(spend) > bestOfNYieldFactor*float64(leaderSpend) {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // modelFor returns the model for the 1-based candidate index i. With no
@@ -207,6 +237,8 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 	// Partial report; candidates are NOT cancelled (parent can wait_agent).
 	terminal := make([]bool, n)
 	var snapsFinal []subagent.Snapshot
+	canceller, _ := snaps.(CandidateCanceller) // r441 auction-close support
+	yieldClosed := false                       // at most one close per run
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
@@ -232,6 +264,32 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 		}
 		if allDone {
 			break
+		}
+		// r441 opt-in auction close: once one candidate has completed,
+		// laggards that already burned >1.5x the leader's tool-call spend
+		// are unlikely to finish cheaper - cancel them and reclaim the
+		// budget (no-op unless YieldOnFirstSuccess; at most one close per
+		// run so a fresh success after the close does not re-trigger).
+		if opts.YieldOnFirstSuccess && canceller != nil && !yieldClosed {
+			var leaderSpend = -1
+			laggards := make(map[string]int)
+			for i, s := range snapsFinal {
+				if terminal[i] {
+					if s.Status == subagent.StatusCompleted && (leaderSpend < 0 || s.ToolCallCount < leaderSpend) {
+						leaderSpend = s.ToolCallCount
+					}
+				} else {
+					laggards[ids[i].id] = s.ToolCallCount
+				}
+			}
+			if leaderSpend >= 0 {
+				for _, id := range yieldLaggards(leaderSpend, laggards) {
+					if canceller.Cancel(id) {
+						rep.Evidence += fmt.Sprintf("[auction-close] candidate %s yielded (spend > %.1fx leader); budget reclaimed\n", id, bestOfNYieldFactor)
+					}
+				}
+				yieldClosed = true
+			}
 		}
 		select {
 		case <-ctx.Done():
