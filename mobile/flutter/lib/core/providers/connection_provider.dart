@@ -127,6 +127,31 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
   set _clientId(String v) => _ctx.clientId = v;
   String get _sessionId => _ctx.sessionId;
   set _sessionId(String v) => _ctx.sessionId = v;
+
+  /// Which session the GLOBAL sessionInfoProvider currently belongs to.
+  /// sessionInfoProvider is connection-wide state; without this provenance
+  /// tag, a session switch seeds the NEW session's workspace-cache record
+  /// with the PREVIOUS session's title (the workspaces sheet showed the old
+  /// session's name on the LIVE row). Only the owning session may consume
+  /// the global info.
+  String _sessionInfoSessionId = '';
+
+  /// Global session info, but only when it provably belongs to [sessionId].
+  /// Returns null (caller keeps existing record state) on mismatch.
+  proto.SessionInfoData? _sessionInfoFor(String sessionId) {
+    if (sessionId.isEmpty || _sessionInfoSessionId != sessionId) {
+      return null;
+    }
+    return ref.read(sessionInfoProvider);
+  }
+
+  /// Set the global session info AND tag it with its owning session.
+  void _setSessionInfo(proto.SessionInfoData? info,
+      {required String sessionId}) {
+    ref.read(sessionInfoProvider.notifier).set(info);
+    _sessionInfoSessionId =
+        (info != null && sessionId.isNotEmpty) ? sessionId : '';
+  }
   String get _lastAppliedEventId => _ctx.lastAppliedEventId;
   set _lastAppliedEventId(String v) => _ctx.lastAppliedEventId = v;
   String get _lastDurableEventId => _ctx.lastDurableEventId;
@@ -646,7 +671,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         // session_info event (encrypted, from host) will register it.
         final sessionInfo = _sessionInfoFromActiveSession(msg.data);
         if (sessionInfo != null) {
-          ref.read(sessionInfoProvider.notifier).set(sessionInfo);
+          _setSessionInfo(sessionInfo, sessionId: sessionId);
           debugPrint('[connection] active_session sessionId=$sessionId workspace=${sessionInfo.workspace}');
           unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
               sessionId, sessionInfo,
@@ -693,7 +718,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         // already-cached events via ordinal dedup.
         _restoreSessionProjectionIfAvailable(sessionId);
         unawaited(ref.read(workspaceCacheProvider.notifier).registerLiveSession(
-            sessionId, ref.read(sessionInfoProvider),
+            sessionId, _sessionInfoFor(sessionId),
             lastEventId: _lastAppliedEventId,
             authorityEpoch: _relayAuthorityEpoch));
         _restoreCachedAgentStatus(sessionId: sessionId);
@@ -794,7 +819,10 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
         }
         final data = proto.SessionInfoData.fromJson(msg.data!);
         debugPrint('[session_info] title="${data.title}" workspace="${data.workspace}" sessionId=${msg.sessionId} eventID=${msg.eventId}');
-        ref.read(sessionInfoProvider.notifier).set(data);
+        _setSessionInfo(
+            data,
+            sessionId:
+                _sessionId.isNotEmpty ? _sessionId : (msg.sessionId ?? ''));
         ref.read(currentModeProvider.notifier).set(data.mode);
         // Sync language from desktop
         if (data.language.isNotEmpty) {
@@ -1359,7 +1387,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     ref.read(subagentProvider.notifier).clear();
     ref.read(approvalProvider.notifier).set(null);
     ref.read(askUserProvider.notifier).set(null);
-    ref.read(sessionInfoProvider.notifier).set(null);
+    _setSessionInfo(null, sessionId: '');
     ref.read(currentModeProvider.notifier).set('supervised');
     _setAgentStatus('idle', '');
     _setAgentActivity('');
@@ -1517,7 +1545,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
       unawaited(ref.read(workspaceCacheProvider.notifier).observeLiveSession(
             sessionId,
             previousSessionId: previousSessionId,
-            sessionInfo: ref.read(sessionInfoProvider),
+            sessionInfo: _sessionInfoFor(sessionId),
             authorityEpoch: authorityEpoch,
           ));
     }
@@ -1768,7 +1796,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     ref.read(subagentProvider.notifier).set(
           historicalSnapshotSubagents(snapshot),
         );
-    ref.read(sessionInfoProvider.notifier).set(snapshot.sessionInfo);
+    _setSessionInfo(snapshot.sessionInfo, sessionId: _sessionId);
     if (snapshot.sessionInfo != null && snapshot.sessionInfo!.mode.isNotEmpty) {
       ref.read(currentModeProvider.notifier).set(snapshot.sessionInfo!.mode);
     }
@@ -1964,7 +1992,7 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     unawaited(ref.read(workspaceCacheProvider.notifier).captureLiveProjection(
           messages: ref.read(chatProvider),
           subagents: ref.read(subagentProvider),
-          sessionInfo: ref.read(sessionInfoProvider),
+          sessionInfo: _sessionInfoFor(_sessionId),
           agentStatus: ref.read(agentStatusProvider),
           agentStatusMessage: ref.read(agentStatusMessageProvider),
           lastEventId: _lastAppliedEventId,
