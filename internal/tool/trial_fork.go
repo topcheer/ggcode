@@ -247,7 +247,7 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			anyUsable = true
 		}
 	}
-	report := formatTrialReport(base, in.VerifyCmd, results, winner)
+	report := formatTrialReport(base, in.VerifyCmd, results, winner, anyUsable)
 	return Result{IsError: !anyUsable, Content: report}, nil
 }
 
@@ -442,7 +442,7 @@ func trimSummary(s string, max int) string {
 	return cut + "…"
 }
 
-func formatTrialReport(base, verifyCmd string, results []trialResult, winner int) string {
+func formatTrialReport(base, verifyCmd string, results []trialResult, winner int, usable bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Trial fork complete: %d trials forked from %s\n", len(results), abbrevSHA(base))
 	if verifyCmd != "" {
@@ -473,7 +473,13 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 			fmt.Fprintf(&sb, "summary: %s\n", r.Summary)
 		}
 	}
-	if winner < 0 {
+	// #3224: a pickWinner index exists even when EVERY trial failed to
+	// produce committed or verify-passed work (pure score ranking). The
+	// IsError flag alone does not stop an LLM caller from following the
+	// report body: a WINNER block plus pointers to already-deleted
+	// worktrees is active misinformation. Gate the winner block on the
+	// caller's anyUsable verdict instead.
+	if winner < 0 || !usable {
 		sb.WriteString("\nNo usable trial: every attempt failed to produce committed work.\n")
 	} else {
 		w := results[winner]
@@ -481,7 +487,11 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 		if w.Kept {
 			fmt.Fprintf(&sb, "winner worktree kept for inspection: %s\n", w.Worktree)
 		}
-		if w.Commits == 0 {
+		if w.Commits == 0 && w.Kept {
+			// #3224: only when the winner actually passed verify (Kept is set
+			// exactly then) is "passed verify but committed nothing" true and
+			// the kept-worktree pointer real. Without the Kept guard this
+			// warning references an already-deleted worktree.
 			sb.WriteString("warning: winner passed verify but committed nothing; the work lives uncommitted in the kept worktree above - the branch diff and the git-apply hint below are EMPTY. Commit inside that worktree first, then adopt.\n")
 		}
 		fmt.Fprintf(&sb, "adopt (non-destructive, from your checkout): git diff %s..%s | git apply\n",
