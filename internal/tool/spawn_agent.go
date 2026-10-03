@@ -189,6 +189,12 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	if args.Context != "" {
 		args.Task = args.Context + "\n\n" + args.Task
 	}
+	// r453 read-back handshake: when the task carries acceptance criteria,
+	// instruct the sub-agent to restate them (own words, per criterion)
+	// before doing any work. The restatement is checked at wait time
+	// (readBackReminder) - closes the front-end gap of the delegation
+	// contract; r384 acceptance covers the back end.
+	args.Task += readBackNudge(args.Task)
 
 	id, worktreePath, err := t.Launch(ctx, LaunchOptions{
 		Name:        name,
