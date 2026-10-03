@@ -545,6 +545,11 @@ max_iterations: 0
 # Progressive warnings at 80% and 95%, hard stop at 100%.
 # session_token_budget: 0
 
+# Per-run wall-clock soft budget (e.g. 10m, 1h; 0 = unlimited). Unlike
+# session_timeout (a hard deadline), this steers: convergence guidance at
+# 80%, finalize pressure at 95%, wind-down at 100%.
+# session_time_budget: 0
+
 # Maximum total tool calls per agent run (0 = auto-derive from max_iterations)
 # When auto-derived: max_iterations * 8 (or 500 for unlimited iterations).
 # Warnings at 80% and 95%, hard stop at 100%.

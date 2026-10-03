@@ -1208,6 +1208,14 @@ func (a *Agent) SetSessionTokenBudget(budget int64) {
 	setAgentSessionTokenBudget(a, budget)
 }
 
+// SetSessionTimeBudget sets the per-run wall-clock soft budget (r415).
+// Unlike SetSessionTimeout (hard ctx deadline), this steers: 80%/95%
+// convergence guidance and a 100% wind-down, evaluated after each LLM
+// call from session_time_budget.go. 0 disables.
+func (a *Agent) SetSessionTimeBudget(budget time.Duration) {
+	setAgentSessionTimeBudget(a, budget)
+}
+
 // SetToolCallBudget sets the maximum total tool calls allowed for a single
 // agent run. 0 disables explicit enforcement (auto-derivation from maxIter
 // may still apply).
@@ -1757,6 +1765,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// tier flags stay latched from the previous run (stopGiven=true makes
 	// Record permanently silent for every later run in this process).
 	a.resetSessionTokenUsage()
+	// r415: same reset discipline for the time ladder - re-arms the
+	// run-start timestamp and clears the tier flags.
+	a.resetSessionTimeUsage()
 
 	// Reset the unread-file edit tracker so each run starts fresh.
 	a.unreadEdit.reset()
@@ -2377,6 +2388,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				onEvent(provider.StreamEvent{
 					Type: provider.StreamEventSystem,
 					Text: "[Session token budget fully consumed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
+				})
+			}
+		}
+		// r415: time-dimension soft ladder, evaluated at the same site as
+		// the token budget. Zero cost when unset (budget <= 0 short-circuits).
+		if msg, stop := a.RecordSessionTimeUsage(); msg != "" {
+			a.crossDetectorConsensus.recordFiring("Session Time Budget", i+1)
+			a.injectGuidance(msg)
+			debug.Log("session-time-budget", "threshold crossed at iteration %d stop=%v", i+1, stop)
+			if stop {
+				onEvent(provider.StreamEvent{
+					Type: provider.StreamEventSystem,
+					Text: "[Session time budget fully elapsed — winding down. Summarize the state so the user can resume with a fresh budget.] ",
 				})
 			}
 		}
