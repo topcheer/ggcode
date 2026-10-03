@@ -392,6 +392,23 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 			content = strings.TrimSpace(string(data))
 		}
 
+		// #3137: read-time content backstop for legacy stock and bypass
+		// writes. The write-time scan (SaveMemoryWithSource) only covers
+		// entries that went through THIS process's save path; entries
+		// persisted before r409, or written by another instance / a plain
+		// os.WriteFile, carry no .taint sidecar and would be inlined raw.
+		// One pattern scan per inline candidate is negligible next to the
+		// file read itself; a hit backfills the sidecar so the next startup
+		// takes the fast TaintOf path.
+		if pat := DetectInjectionTaint(m.Key, content); pat != "" {
+			indexOnly = append(indexOnly, m.Key+" [tainted: "+pat+"]")
+			debug.Log("memory", "read-time backstop tainted entry %q (pattern %q)", m.Key, pat)
+			if err := am.MarkTainted(m.Key, pat); err != nil {
+				debug.Log("memory", "backfill sidecar failed for %q: %v (guarded this startup only)", m.Key, err)
+			}
+			continue
+		}
+
 		// Inline persistent entries that are small enough and within budget.
 		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= maxTotalInlineBytes {
 			inline = append(inline, MemoryEntry{
