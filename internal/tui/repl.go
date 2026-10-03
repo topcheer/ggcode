@@ -323,7 +323,7 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 	// Wire the start_share/stop_share tools to this session (same injection
 	// pattern as SetIMManager / injectMobileFileSender). The tools then live
 	// for the whole session; ShareActive gates per-call behavior.
-	r.model.injectShareController()
+	r.injectShareController()
 
 	// Wire the code index manager from the tool registry to the agent so
 	// that @ fuzzy file search (CompleteMention) can use it.

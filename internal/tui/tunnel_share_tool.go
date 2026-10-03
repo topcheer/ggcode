@@ -3,6 +3,7 @@ package tui
 import (
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -15,6 +16,11 @@ import (
 // the connect URL back to the agent).
 type tunnelShareControlAdapter struct {
 	m *Model
+	// send routes agentShareRequestMsg into the Bubble Tea Update loop via
+	// REPL.sendTUI (programSend/program fallback). Reading Model.program
+	// directly from this goroutine is wrong: the Update loop works on model
+	// copies, so the field is only authoritative inside Update.
+	send func(tea.Msg)
 }
 
 // shareControlReplyTimeout covers the slowest transition: StartShare itself
@@ -22,11 +28,11 @@ type tunnelShareControlAdapter struct {
 const shareControlReplyTimeout = 45 * time.Second
 
 func (a tunnelShareControlAdapter) StartAgentShare() (tool.ShareStartResult, error) {
-	if a.m.program == nil {
+	if a.send == nil {
 		return tool.ShareStartResult{}, errShareNoProgram
 	}
 	reply := make(chan agentShareReply, 1)
-	a.m.program.Send(agentShareRequestMsg{reply: reply})
+	a.send(agentShareRequestMsg{reply: reply})
 	select {
 	case r := <-reply:
 		if r.err != nil {
@@ -39,11 +45,11 @@ func (a tunnelShareControlAdapter) StartAgentShare() (tool.ShareStartResult, err
 }
 
 func (a tunnelShareControlAdapter) StopAgentShare() error {
-	if a.m.program == nil {
+	if a.send == nil {
 		return errShareNoProgram
 	}
 	reply := make(chan agentShareReply, 1)
-	a.m.program.Send(agentShareRequestMsg{stop: true, reply: reply})
+	a.send(agentShareRequestMsg{stop: true, reply: reply})
 	select {
 	case <-reply:
 		return nil
@@ -76,17 +82,24 @@ const (
 // look the tool up, set the controller, re-register under the same name.
 // Called once after the agent is constructed - the tools are then live for
 // the whole session (ShareActive gates the per-call behavior).
-func (m *Model) injectShareController() {
-	if m.agent == nil {
+// injectShareController (REPL-level) wires the start_share/stop_share tools
+// using the same Unregister+Register dance as SetIMManager. The adapter's
+// send closure captures r, resolving r.programSend/r.program lazily at call
+// time (both are nil during SetCore, before repl.Run wires the program).
+func (r *REPL) injectShareController() {
+	if r.agent == nil {
 		debug.Log("tui", "injectShareController: SKIPPED (agent nil)")
 		return
 	}
-	reg := m.agent.ToolRegistry()
+	reg := r.agent.ToolRegistry()
 	if reg == nil {
 		debug.Log("tui", "injectShareController: SKIPPED (registry nil)")
 		return
 	}
-	adapter := tunnelShareControlAdapter{m: m}
+	adapter := tunnelShareControlAdapter{
+		m:    &r.model,
+		send: func(msg tea.Msg) { r.sendTUI(msg) },
+	}
 	injected := 0
 	if t, ok := reg.Get(tool.StartShareTool{}.Name()); ok {
 		if st, ok := t.(tool.StartShareTool); ok {
