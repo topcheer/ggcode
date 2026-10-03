@@ -19,7 +19,13 @@ import (
 
 // VerifyResult is the outcome of an auto-verification check.
 type VerifyResult struct {
-	Passed  bool     `json:"passed"`
+	Passed bool `json:"passed"`
+	// Skipped marks a "pass by amnesty" result (binary absent, exit 127,
+	// pytest no-tests exit 5): nothing was actually verified. Kept out of
+	// last-known-good checkpoint blessing (#3242) - an unverified tree must
+	// not be recorded as a verified baseline that later revert guidance
+	// points to.
+	Skipped bool     `json:"skipped,omitempty"`
 	Errors  []string `json:"errors,omitempty"`
 	Command string   `json:"command"`
 	Output  string   `json:"output,omitempty"`
@@ -101,7 +107,14 @@ func (a *Agent) asyncVerify(ctx context.Context, runStats *RunStats) {
 
 	if result.Passed {
 		debug.Log("verify", "PASSED: %s", cmd)
-		a.lastGoodCheckpointRecordPass()
+		if result.Skipped {
+			// #3242: skip-amnesty must not bless a last-known-good baseline -
+			// nothing was verified, and revert guidance would point at an
+			// unverified snapshot as if it were ground truth.
+			debug.Log("verify", "async: skipped result not recorded as last-good")
+		} else {
+			a.lastGoodCheckpointRecordPass()
+		}
 		// Build/test passed — run lint as advisory secondary check.
 		a.verifyProgress("Running lint check…")
 		lintStart := time.Now()
@@ -424,6 +437,7 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 		return &VerifyResult{
 			Command: command,
 			Passed:  true, // treat as pass (skip) to avoid error injection
+			Skipped: true, // #3242: amnesty, not a verified pass
 			Output:  "verification skipped: tool not available on this system",
 		}
 	}
@@ -462,6 +476,7 @@ func (a *Agent) executeVerifyCommand(ctx context.Context, command string) *Verif
 			return &VerifyResult{
 				Command: command,
 				Passed:  true,
+				Skipped: true, // #3242: amnesty, not a verified pass
 				Output:  "verification skipped: tool not available on this system",
 			}
 		}
@@ -706,7 +721,12 @@ func (a *Agent) syncVerifyAndGate(ctx context.Context, runStats *RunStats, retry
 
 	if result.Passed {
 		debug.Log("verify", "sync: PASSED")
-		a.lastGoodCheckpointRecordPass()
+		if result.Skipped {
+			// #3242: skip-amnesty must not bless a last-known-good baseline.
+			debug.Log("verify", "sync: skipped result not recorded as last-good")
+		} else {
+			a.lastGoodCheckpointRecordPass()
+		}
 		// Build/test passed -- run lint as advisory secondary check.
 		// Warnings are injected into context for the agent to fix.
 		a.verifyProgress("Running lint check…")
