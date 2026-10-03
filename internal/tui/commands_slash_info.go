@@ -947,6 +947,138 @@ func resolveRate(vendor, endpoint, model string) cost.ModelRate {
 	return cost.ModelRate{}
 }
 
+// handleForecastCommand predicts the token/cost band for the task in the
+// composer BEFORE running it (r434). Based on the K most similar past
+// runs in this workspace (first-prompt similarity), pure statistics - no
+// LLM call. Stanford Digital Economy study shows task token consumption
+// is predictable from task shape; ggcode already records every run's
+// usage, so the forecast is free.
+func (m *Model) handleForecastCommand(args []string) tea.Cmd {
+	if m.sessionStore == nil {
+		m.chatWriteSystem(nextSystemID(), "No session store available for forecasting.")
+		return nil
+	}
+
+	// The forecast target: the drafted task if present, else the current
+	// session's first prompt ("how much do runs like this one cost").
+	prompt := strings.TrimSpace(m.input.Value())
+	if prompt == "" && m.session != nil {
+		for _, msg := range m.session.Messages {
+			if msg.Role != "user" {
+				continue
+			}
+			for _, b := range msg.Content {
+				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+					prompt = b.Text
+					break
+				}
+			}
+			if prompt != "" {
+				break
+			}
+		}
+	}
+	if prompt == "" {
+		m.chatWriteSystem(nextSystemID(), "Type a task in the composer first (or run inside a session to forecast similar past runs).")
+		return nil
+	}
+
+	workspace := m.currentWorkspacePath()
+	if workspace == "" {
+		m.chatWriteSystem(nextSystemID(), "No workspace path available for history lookup.")
+		return nil
+	}
+	sessions, err := m.sessionStore.ListForWorkspace(workspace)
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), "Failed to load session history: "+err.Error())
+		return nil
+	}
+
+	// Build (first-prompt, total-tokens) samples from past runs. The
+	// current session is excluded: its tokens are not yet spent. Sessions
+	// from ListForWorkspace are disk-loaded snapshots; only the active
+	// session receives concurrent UsageHistory appends, and it is skipped.
+	var samples []cost.RunSample
+	for _, ses := range sessions {
+		if m.session != nil && ses.ID == m.session.ID {
+			continue
+		}
+		total := 0
+		for _, e := range ses.UsageHistory {
+			total += e.Usage.Total()
+		}
+		if total == 0 {
+			continue
+		}
+		fp := ""
+		for _, msg := range ses.Messages {
+			if msg.Role != "user" {
+				continue
+			}
+			for _, b := range msg.Content {
+				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+					fp = b.Text
+				}
+			}
+			if fp != "" {
+				break
+			}
+		}
+		if fp == "" {
+			continue
+		}
+		samples = append(samples, cost.RunSample{FirstPrompt: fp, Tokens: total})
+	}
+
+	fc := cost.ForecastTokens(samples, prompt)
+	if fc.Neighbors == 0 {
+		m.chatWriteSystem(nextSystemID(), "No past runs with recorded usage in this workspace yet - nothing to forecast from.")
+		return nil
+	}
+
+	var sb strings.Builder
+	shown := prompt
+	if len(shown) > 60 {
+		shown = shown[:60] + "..."
+	}
+	sb.WriteString(fmt.Sprintf("Cost forecast (before running):\n"))
+	sb.WriteString(fmt.Sprintf("  Task: %q\n", shown))
+	if fc.Degraded {
+		sb.WriteString(fmt.Sprintf("  (few similar runs - range covers all %d runs in this workspace)\n", fc.Neighbors))
+	} else {
+		sb.WriteString(fmt.Sprintf("  Based on %d most-similar past runs:\n", fc.Neighbors))
+	}
+	sb.WriteString(fmt.Sprintf("  Likely range: %s - %s tokens (median %s)\n",
+		humanizeTokenCount(fc.Low), humanizeTokenCount(fc.High), humanizeTokenCount(fc.Median)))
+
+	// Cost band via the active model's rate, blended input/output. Coding
+	// plans and subscriptions have no per-token price - say so instead of
+	// inventing one.
+	vendor, endpoint, model := "", "", ""
+	if m.session != nil {
+		m.sessionMutex().Lock()
+		vendor, endpoint, model = m.session.Vendor, m.session.Endpoint, m.session.Model
+		m.sessionMutex().Unlock()
+	}
+	rate := resolveRate(vendor, endpoint, model)
+	switch rate.Type {
+	case cost.PricingSubscription:
+		sb.WriteString(fmt.Sprintf("  Cost: covered by %s (no per-token charge)\n", rate.Plan))
+	case cost.PricingPerToken:
+		blended := (rate.InputPerM + rate.OutputPerM) / 2
+		if blended > 0 {
+			sb.WriteString(fmt.Sprintf("  Est. cost: %s - %s (blended in/out rate, %s)\n",
+				cost.FormatCost(float64(fc.Low)/1e6*blended),
+				cost.FormatCost(float64(fc.High)/1e6*blended), model))
+		}
+	default:
+		sb.WriteString("  Cost: unknown rate for current model - tokens above, price not estimated\n")
+	}
+	sb.WriteString("  Forecast only - actual usage varies with agent behavior.")
+	m.chatWriteSystem(nextSystemID(), sb.String())
+	return nil
+}
+
 // handleReviewCommand runs a code review on the current working tree changes.
 // It gathers the git diff and sends it to the agent with a structured review prompt.
 // Supports: /review, /review --cached, /review --staged
