@@ -89,6 +89,11 @@ func (p *pivotDecisionTracker) recordToolCall(toolName, args string, isError boo
 	defer p.mu.Unlock()
 	if !isError {
 		delete(p.fails, key) // same-family success: path works again
+		// #3153: success also proves the family is viable again - a stale
+		// warned flag must not survive into the next failure streak, or the
+		// warning branch (== 0) and the forced branch (< threshold) both
+		// skip and recurrent failures go silent until forced threshold.
+		delete(p.warned, key)
 		return
 	}
 	p.fails[key]++
