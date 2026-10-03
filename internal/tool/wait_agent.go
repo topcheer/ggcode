@@ -97,14 +97,19 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
-		return Result{Content: annotateWorktree(snap.Result+formatExploreRegions(snap.Result)+readBackReminder(snap.Task, snap.Result)+acceptanceReminder(snap.Task, snap.Result), snap)}, nil
+		// #3237: snap.Task carries the nudge spawn appended; strip it so
+		// both reminders extract the ORIGINAL acceptance criteria.
+		task := stripReadBackNudge(snap.Task)
+		return Result{Content: annotateWorktree(snap.Result+formatExploreRegions(snap.Result)+readBackReminder(task, snap.Result)+acceptanceReminder(task, snap.Result), snap)}, nil
 	}
 	var reminder string
 	if snap.Status == subagent.StatusCompleted {
 		// r453: front-end handshake report first (did the sub-agent
 		// restate the criteria before starting?), then the r384
 		// validator-side reminder - both on completed runs only.
-		reminder = readBackReminder(snap.Task, snap.Result) + acceptanceReminder(snap.Task, snap.Result) + formatExploreRegions(snap.Result)
+		// #3237: same strip as above - reminders see the original task.
+		task := stripReadBackNudge(snap.Task)
+		reminder = readBackReminder(task, snap.Result) + acceptanceReminder(task, snap.Result) + formatExploreRegions(snap.Result)
 	}
 	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap)+reminder, snap)}, nil
 }

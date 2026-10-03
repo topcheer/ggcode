@@ -21,6 +21,23 @@ import (
 
 const readBackMarker = "=== DoD READ-BACK ==="
 
+// stripReadBackNudge removes a previously appended read-back nudge block
+// from a stored task (#3237). spawn_agent appends readBackNudge(task) to
+// the task before storing it; wait-side extraction must operate on the
+// ORIGINAL criteria, not on the nudge's restatement template lines, or
+// every rule-following sub-agent gets 5+ phantom MISSING verdicts. The
+// nudge is always appended at the end, so Cut strips it wholesale; a
+// marker echoed in the sub-agent's RESULT is untouched (only the task
+// side is cut). Idempotent and allocation-free when no marker is present.
+func stripReadBackNudge(task string) string {
+	if clean, _, ok := strings.Cut(task, readBackMarker); ok {
+		// TrimRight drops the blank separator the nudge prefixed before the
+		// marker; trailing whitespace has no extraction significance.
+		return strings.TrimRight(clean, " \t\n")
+	}
+	return task
+}
+
 // maxReadBackNudges mirrors the inline-tool-call nudge cap: the handshake
 // instruction is appended at spawn time only (once per task), so this
 // guards against a task text that already embeds the marker (re-spawn of

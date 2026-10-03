@@ -76,7 +76,10 @@ func extractAcceptanceCriteria(task string) []string {
 		if line == "" {
 			continue // blank lines between bullets are tolerated
 		}
-		if strings.HasPrefix(line, "#") {
+		// #3237 defensive: decorated section markers ("=== ... ===") close
+		// the criteria section just like "#" headings do - otherwise the
+		// catch-all below swallows following prose as criteria.
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "=== ") {
 			break
 		}
 		next := nextHeadingKeyword(lower)
