@@ -58,6 +58,14 @@ type RunStats struct {
 	// UserPrompt is the first 200 chars of the user's input, for context.
 	UserPrompt string
 
+	// UserPromptFull is the complete, untruncated user input (r414). It is
+	// NOT serialized to the run journal (the 200-char form is the persisted
+	// context record). Consumers that must not lose late-position content -
+	// e.g. preference distillation, where a durable "from now on ..."
+	// statement routinely follows a pasted log or code block - read this
+	// field instead of UserPrompt.
+	UserPromptFull string `json:"-"`
+
 	// ContextPeakTokens is the highest token count observed during the run.
 	// Tracked per-iteration from contextManager.TokenCount().
 	ContextPeakTokens int
@@ -86,10 +94,11 @@ type RunStats struct {
 // newRunStats creates a fresh RunStats with the start time set.
 func newRunStats(userPrompt string) *RunStats {
 	return &RunStats{
-		ToolCalls:  make(map[string]int),
-		UserPrompt: truncatePrompt(userPrompt, 200),
-		startTime:  time.Now(),
-		runID:      generateRunID(),
+		ToolCalls:      make(map[string]int),
+		UserPrompt:     truncatePrompt(userPrompt, 200),
+		UserPromptFull: userPrompt,
+		startTime:      time.Now(),
+		runID:          generateRunID(),
 	}
 }
 
