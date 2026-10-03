@@ -32,6 +32,20 @@ import (
 
 const (
 	journalFileName = "run_journal.json"
+
+	// crashLivePIDTrustWindow (#3222): a live-PID "concurrent access" verdict
+	// is only trusted for journals younger than this. Beyond it, PID reuse
+	// (crash + reboot reallocates low PIDs to unrelated long-lived processes)
+	// is far more likely than a same-PID run alive for hours with zero
+	// journal updates, so the entry is reported as a crash suspect.
+	crashLivePIDTrustWindow = 4 * time.Hour
+
+	// runningJournalHardDelete (#3222): running/corrupt journals are exempt
+	// from the normal CleanupOldJournals maxAge so CheckCrashedRun can still
+	// report them on /resume; past this much longer window a report is no
+	// longer actionable and the files are removed to prevent unbounded
+	// accumulation.
+	runningJournalHardDelete = 7 * 24 * time.Hour
 )
 
 // journalDirFunc is the directory resolver. Overridable for testing.
@@ -220,10 +234,21 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 		return nil
 	}
 
-	// State is "running": check if the PID is still alive
-	if entry.PID > 0 && isProcessAlive(entry.PID) {
+	// State is "running": check if the PID is still alive.
+	// #3222: a live PID alone must not be trusted on old journals - after a
+	// crash + reboot, PIDs are reallocated from the low range and an
+	// unrelated long-lived process can hold the old PID forever, silently
+	// turning every real crash into "concurrent access". For journals older
+	// than crashLivePIDTrustWindow, PID reuse is far more likely than a
+	// same-PID run being alive for hours with zero journal updates, so the
+	// entry is reported as a crash suspect regardless of isProcessAlive.
+	journalAge := time.Since(entry.StartTime)
+	if entry.PID > 0 && isProcessAlive(entry.PID) && journalAge < crashLivePIDTrustWindow {
 		// The process is still running: not a crash, just concurrent access
 		return nil
+	}
+	if entry.PID > 0 && isProcessAlive(entry.PID) {
+		debug.Log("run_journal", "CheckCrashedRun: running journal age=%.1fh exceeds trust window despite live PID %d - treating as PID-reuse crash suspect", journalAge.Hours(), entry.PID)
 	}
 
 	// Stale "running" entry with dead PID: this is a crash
@@ -373,6 +398,13 @@ func formatContinuationMessage(entry *RunJournalEntry, snap *InterruptSnapshot) 
 
 // CleanupOldJournals removes journal files older than maxAge. Called at
 // startup to prevent unbounded journal accumulation.
+//
+// #3222: "running"-state journals are NOT removed at maxAge - deleting
+// them silently would destroy crash evidence before CheckCrashedRun ever
+// gets to report it (the only report path is /resume). They are kept until
+// runningJournalHardDelete, a much longer window past which a report is no
+// longer actionable. Corrupt journals (#1666 evidence) get the same grace:
+// unparseable state is treated as running for retention purposes.
 func CleanupOldJournals(maxAge time.Duration) {
 	dir := journalDir()
 	matches, err := filepath.Glob(filepath.Join(dir, "*_"+journalFileName))
@@ -380,21 +412,44 @@ func CleanupOldJournals(maxAge time.Duration) {
 		return
 	}
 
-	cutoff := time.Now().Add(-maxAge)
+	now := time.Now()
+	cutoff := now.Add(-maxAge)
+	hardCutoff := now.Add(-runningJournalHardDelete)
 	removed := 0
 	for _, path := range matches {
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
-		if info.ModTime().Before(cutoff) {
-			os.Remove(path)
-			removed++
+		if info.ModTime().After(cutoff) {
+			continue // young enough: keep regardless of state
 		}
+		if info.ModTime().After(hardCutoff) && journalStateUncertain(path) {
+			// running/corrupt: retain for CheckCrashedRun crash reporting
+			// until the hard-delete window expires
+			continue
+		}
+		os.Remove(path)
+		removed++
 	}
 	if removed > 0 {
 		debug.Log("run_journal", "CleanupOldJournals: removed %d stale journals", removed)
 	}
+}
+
+// journalStateUncertain reports whether the journal at path is in a state
+// whose deletion would destroy unreported crash evidence: "running" or
+// unparseable (#1666 torn writes are themselves crash-suspect evidence).
+func journalStateUncertain(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false // unreadable: fall back to age-based removal
+	}
+	var entry RunJournalEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return true // corrupt = evidence, retain
+	}
+	return entry.State == "running"
 }
 
 // isProcessAlive checks if a process with the given PID is running.
