@@ -190,12 +190,41 @@ func (g *GhosttyTool) executeSplit(ctx context.Context, terminalID, direction st
 	return Result{Content: fmt.Sprintf("ghostty split created: direction=%s%s", dir, sizeNote)}
 }
 
+// escapeShellSingleQuoteLinux mirrors the darwin implementation (that
+// copy is behind a build tag): wrap in single quotes with embedded
+// quotes escaped via the '"'"' dance.
+func escapeShellSingleQuoteLinux(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ghosttyLinuxCommandArgv builds the -e argv for the new-window-command
+// DBus action (#3140): ghostty's -e is execvp semantics (no shell), so a
+// bare %q of the command made "make test" a single argv element and
+// execvp looked for a FILE literally named "make test" (ENOENT). Route
+// through sh -c, prefixing the working_dir cd when set (matching the
+// macOS implementations' cd-and-run behavior; working_dir is an
+// independent schema parameter, not a command modifier).
+func ghosttyLinuxCommandArgv(command, wd string) []string {
+	shellCmd := command
+	if wd = strings.TrimSpace(wd); wd != "" {
+		shellCmd = fmt.Sprintf("cd %s && %s", escapeShellSingleQuoteLinux(wd), command)
+	}
+	return []string{"sh", "-c", shellCmd}
+}
+
 func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir string) Result {
 	// new-window-command is the only tab/window action available via DBus.
 	// There's no explicit "new-tab" DBus action — we use new-window as fallback.
 	if strings.TrimSpace(command) != "" {
+		// #3140: sh -c so argumented commands survive execvp semantics.
 		// gdbus format for new-window-command: array of string args
-		params := fmt.Sprintf("[<[\"-e\", %q]>]", command)
+		argv := ghosttyLinuxCommandArgv(command, workingDir)
+		q := make([]string, 0, len(argv)+1)
+		q = append(q, "\"-e\"")
+		for _, a := range argv {
+			q = append(q, fmt.Sprintf("%q", a))
+		}
+		params := "[<[" + strings.Join(q, ", ") + "]>]"
 		_, err := gdbusCall(ctx, "new-window-command", params)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("ghostty new_tab failed: %v", err)}
@@ -212,7 +241,14 @@ func (g *GhosttyTool) executeNewTab(ctx context.Context, command, workingDir str
 
 func (g *GhosttyTool) executeNewWindow(ctx context.Context, command, workingDir string) Result {
 	if strings.TrimSpace(command) != "" {
-		params := fmt.Sprintf("[<[\"-e\", %q]>]", command)
+		// #3140: ditto (see executeNewTab).
+		argv := ghosttyLinuxCommandArgv(command, workingDir)
+		q := make([]string, 0, len(argv)+1)
+		q = append(q, "\"-e\"")
+		for _, a := range argv {
+			q = append(q, fmt.Sprintf("%q", a))
+		}
+		params := "[<[" + strings.Join(q, ", ") + "]>]"
 		_, err := gdbusCall(ctx, "new-window-command", params)
 		if err != nil {
 			return Result{IsError: true, Content: fmt.Sprintf("ghostty new_window failed: %v", err)}
