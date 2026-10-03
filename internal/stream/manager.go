@@ -446,6 +446,13 @@ func (m *Manager) fanOutBroadcaster() {
 			if err != io.EOF {
 				debug.Log("stream", "broadcaster read error: %v", err)
 			}
+			// #3154: the read-error exit is the third internal exit path and
+			// must honor the #3094 contract - without this Stop, every
+			// target's ffmpeg pusher child and upstream RTMP connection
+			// dangles until the outer Manager.Stop() (which may never come
+			// for a long-lived manager), and with no data flowing the
+			// targetWriter write-error self-stop can never fire.
+			stopAllTargets()
 			return
 		}
 	}
