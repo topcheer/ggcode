@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -61,6 +62,24 @@ type RunJournalEntry struct {
 	Iterations  int       `json:"iterations,omitempty"`
 	FilesEdited int       `json:"files_edited,omitempty"`
 	Success     bool      `json:"success,omitempty"`
+	// Interrupted holds the r445 continuation snapshot when the run was
+	// user-interrupted (Ctrl+C) rather than crashed. Nil on clean runs.
+	// Consumed (cleared) by CheckContinuation on the next resume.
+	Interrupted *InterruptSnapshot `json:"interrupted,omitempty"`
+}
+
+// InterruptSnapshot is the structured continuation point captured when a
+// run is interrupted mid-flight (r445). Unlike the crash path (#1123),
+// which only fires on dead-PID journals, this covers same-session
+// Ctrl+C: the run defer marks the journal completed and stamps the
+// snapshot, so the next resume can tell the model WHERE it was - not
+// just that "operation cancelled" placeholders exist.
+type InterruptSnapshot struct {
+	Timestamp    time.Time `json:"timestamp"`
+	LastTool     string    `json:"last_tool,omitempty"`
+	Iterations   int       `json:"iterations,omitempty"`
+	FilesTouched int       `json:"files_touched,omitempty"`
+	UserPrompt   string    `json:"user_prompt,omitempty"`
 }
 
 func journalPath(sessionID string) string {
@@ -245,6 +264,101 @@ func FormatCrashRecoveryMessage(info *CrashRecoveryInfo) string {
 			"Review any uncommitted file changes with git status or git diff before continuing, "+
 			"as some edits from the interrupted run may be incomplete.",
 		ageStr, info.UserPrompt)
+}
+
+// MarkInterrupted stamps a continuation snapshot onto the session journal
+// (r445). Called from the run's cancellation path: MarkCompleted has
+// already flipped State to "completed" (or will - read-modify-write here
+// preserves either), and this adds the WHERE-was-I payload. No-op if the
+// journal does not exist (run never got far enough to MarkRunning).
+func MarkInterrupted(sessionID string, snap InterruptSnapshot) {
+	if sessionID == "" {
+		return
+	}
+	path := journalPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var entry RunJournalEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		// Same #1666 discipline as MarkCompleted: corrupt journal is
+		// evidence, never overwrite it.
+		return
+	}
+	if snap.Timestamp.IsZero() {
+		snap.Timestamp = time.Now()
+	}
+	entry.Interrupted = &snap
+	updated, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	if err := atomicWriteJournal(path, updated); err != nil {
+		debug.Log("run_journal", "MarkInterrupted: write failed: %v", err)
+	}
+}
+
+// continuationFreshWindow: how long an interrupt snapshot stays meaningful.
+// A Ctrl+C from yesterday is stale context, not a continuation point.
+const continuationFreshWindow = 2 * time.Hour
+
+// CheckContinuation returns a model-facing continuation message if the
+// session's last run was user-interrupted within the fresh window. The
+// snapshot is consumed on read (one-shot, mirroring CheckCrashedRun) so
+// it never replays twice. Returns "" when there is nothing to resume.
+func CheckContinuation(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	path := journalPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var entry RunJournalEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return ""
+	}
+	snap := entry.Interrupted
+	if snap == nil {
+		return ""
+	}
+	// Consume the snapshot regardless of freshness (stale = discard, not
+	// re-offer), then decide whether it merits a message.
+	entry.Interrupted = nil
+	if updated, merr := json.Marshal(entry); merr == nil {
+		if werr := atomicWriteJournal(path, updated); werr != nil {
+			debug.Log("run_journal", "CheckContinuation: consume write failed: %v", werr)
+		}
+	}
+	if time.Since(snap.Timestamp) > continuationFreshWindow {
+		return ""
+	}
+	return formatContinuationMessage(&entry, snap)
+}
+
+// formatContinuationMessage renders the continuation point for both the
+// model (via AddMessage on resume) and the user (chat system item).
+// Wording deliberately says "interrupted" - never "crashed" (#1123: do
+// not assert a cause the evidence does not support).
+func formatContinuationMessage(entry *RunJournalEntry, snap *InterruptSnapshot) string {
+	var b strings.Builder
+	b.WriteString("Continuation point: the previous run in this session was interrupted mid-flight")
+	if snap.Iterations > 0 {
+		fmt.Fprintf(&b, " after %d iteration(s)", snap.Iterations)
+	}
+	if snap.LastTool != "" {
+		fmt.Fprintf(&b, "; last tool in flight: %s", snap.LastTool)
+	}
+	if snap.FilesTouched > 0 {
+		fmt.Fprintf(&b, "; %d file(s) already touched", snap.FilesTouched)
+	}
+	b.WriteString(". Tool results for cancelled calls show as placeholders - re-check the touched files' current state before continuing, then resume the task where it left off rather than restarting from scratch.")
+	if entry.UserPrompt != "" {
+		fmt.Fprintf(&b, "\nOriginal task: %s", entry.UserPrompt)
+	}
+	return b.String()
 }
 
 // CleanupOldJournals removes journal files older than maxAge. Called at

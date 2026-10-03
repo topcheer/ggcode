@@ -1567,6 +1567,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.recordFailureAttribution(runStats)
 		} else {
 			debug.Log("agent", "skipping reflection/ratchet on cancellation")
+			// r445: user-interrupted run - stamp the continuation snapshot so
+			// the next resume can tell the model where it was (tool in flight,
+			// iteration count, files touched) instead of leaving it to guess
+			// from "operation cancelled" placeholders.
+			MarkInterrupted(sid, InterruptSnapshot{
+				Timestamp:    time.Now(),
+				LastTool:     a.lastTool,
+				Iterations:   runStats.Iterations,
+				FilesTouched: len(runStats.FilesEdited),
+			})
 		}
 		// Post-run trajectory intelligence extraction (arXiv:2603.10600).
 		// Extracts strategy/recovery/optimization learnings from the

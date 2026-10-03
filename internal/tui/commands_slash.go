@@ -136,6 +136,16 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
 	}
+	// r445: user-interrupted (Ctrl+C) runs get a structured continuation
+	// point - shown to the user AND injected into the agent's context so
+	// the model knows where it was instead of guessing from cancelled-call
+	// placeholders. One-shot: the snapshot is consumed by the check.
+	if contMsg := agentruntime.CheckContinuation(ses.ID); contMsg != "" {
+		m.chatWrite(chat.NewSystemItem("continuation", contMsg, m.chatStyles))
+		if m.agent != nil {
+			m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: contMsg}}})
+		}
+	}
 
 	m.SetSession(ses, m.sessionStore)
 
