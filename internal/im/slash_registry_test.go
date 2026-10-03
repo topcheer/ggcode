@@ -136,3 +136,48 @@ func TestIMSlashHelpLines_TUISummary(t *testing.T) {
 		t.Fatalf("interactive commands must collapse into a TUI-only summary line: %q", help)
 	}
 }
+
+// lanIdentityDeps is a stubDeps that also implements the optional
+// SetLanIdentity capability consumed by the /nick registry entry.
+type lanIdentityDeps struct {
+	stubDeps
+	setNick, setRole, setTeam string
+}
+
+func (d *lanIdentityDeps) SetLanIdentity(nick, role, team string) (string, error) {
+	if nick == "" {
+		return "Current: existing (role: dev, team: ggcode)", nil
+	}
+	d.setNick, d.setRole, d.setTeam = nick, role, team
+	return "Set: " + nick, nil
+}
+
+func TestExecuteRegistrySlashCommand_Nick(t *testing.T) {
+	t.Run("capability absent falls to precise error", func(t *testing.T) {
+		d := &stubDeps{}
+		resp, handled := ExecuteRegistrySlashCommand(d, "/nick bob")
+		if !handled {
+			t.Fatal("/nick must be handled (registered)")
+		}
+		if !strings.Contains(resp, "not available") {
+			t.Fatalf("expected unavailable hint, got %q", resp)
+		}
+	})
+	t.Run("no args shows current identity", func(t *testing.T) {
+		d := &lanIdentityDeps{}
+		resp, handled := ExecuteRegistrySlashCommand(d, "/nick")
+		if !handled || !strings.Contains(resp, "Current:") {
+			t.Fatalf("handled=%v resp=%q", handled, resp)
+		}
+	})
+	t.Run("sets parsed nick role team", func(t *testing.T) {
+		d := &lanIdentityDeps{}
+		resp, handled := ExecuteRegistrySlashCommand(d, "/nick alice@reviewer@ggcode")
+		if !handled || !strings.Contains(resp, "alice") {
+			t.Fatalf("handled=%v resp=%q", handled, resp)
+		}
+		if d.setNick != "alice" || d.setRole != "reviewer" || d.setTeam != "ggcode" {
+			t.Fatalf("identity not applied: %+v", d)
+		}
+	})
+}
