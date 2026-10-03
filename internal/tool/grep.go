@@ -429,6 +429,14 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 
 	// Apply offset + head_limit for content mode
 	if args.OutputMode == "content" {
+		// #3145: rg's multi-threaded output order is NOT stable, so an
+		// offset slice could skip or duplicate lines between two paginated
+		// calls. Sort by (path, lineNum) first - the same deterministic
+		// order formatContentMatches applies on the Go fallback path - so
+		// pagination semantics are isomorphic across backends. Lines that
+		// do not parse as path:line:content (continuation lines) keep
+		// their relative position (stable sort) after their anchor line.
+		sortRgContentLines(lines)
 		start := args.Offset
 		if start > total {
 			start = total
@@ -848,6 +856,78 @@ func formatCount(fileCounts map[string]int, args grepArgs) Result {
 	}
 	fmt.Fprintf(&sb, "\n%d file(s), %d match(es) total", total, totalMatches)
 	return Result{Content: sb.String()}
+}
+
+// sortRgContentLines orders rg content lines by (path, lineNum) so the
+// offset/head_limit window is deterministic across calls (#3145) and
+// matches the fallback scanner's formatContentMatches ordering. Lines
+// without a parseable "path:lineNum:" prefix sort last, keeping their
+// relative order (continuation lines stay attached to their anchor).
+func sortRgContentLines(lines []string) {
+	// Pre-scan: unparseable lines (multi-line match continuations)
+	// inherit the key of the nearest preceding parseable line, so they
+	// stay attached to their anchor through the stable sort.
+	type rgLinePair struct {
+		k rgLineKey
+		s string
+	}
+	pairs := make([]rgLinePair, len(lines))
+	last := rgLineKey{}
+	for i, l := range lines {
+		k := rgContentKey(l)
+		if k.ok {
+			last = k
+		} else {
+			k = rgLineKey{path: last.path, line: last.line, ok: true, cont: true}
+		}
+		pairs[i] = rgLinePair{k: k, s: l}
+	}
+	// Sort the (key, line) pairs so keys travel with their lines; write
+	// the ordered lines back (a bare keys[] snapshot desyncs from the
+	// slice-stable swaps).
+	sort.SliceStable(pairs, func(i, j int) bool {
+		ki, kj := pairs[i].k, pairs[j].k
+		if ki.path != kj.path {
+			return ki.path < kj.path
+		}
+		if ki.line != kj.line {
+			return ki.line < kj.line
+		}
+		// Same anchor: the anchor line itself precedes its continuations.
+		return !ki.cont && kj.cont
+	})
+	for i := range pairs {
+		lines[i] = pairs[i].s
+	}
+}
+
+type rgLineKey struct {
+	path string
+	line int
+	ok   bool
+	cont bool // inherited key (continuation line)
+}
+
+func rgContentKey(l string) rgLineKey {
+	// rg content format: path:lineNum:content (or path-lineNum-content for
+	// context lines; treat both).
+	for i := 0; i < len(l); i++ {
+		if l[i] == ':' || l[i] == '-' {
+			rest := l[i+1:]
+			n := 0
+			for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
+				n++
+			}
+			if n > 0 && n < len(rest) && (rest[n] == ':' || rest[n] == '-') {
+				line := 0
+				for _, c := range rest[:n] {
+					line = line*10 + int(c-'0')
+				}
+				return rgLineKey{path: l[:i], line: line, ok: true}
+			}
+		}
+	}
+	return rgLineKey{}
 }
 
 func formatContentMatches(matches []fileMatch, args grepArgs) Result {
