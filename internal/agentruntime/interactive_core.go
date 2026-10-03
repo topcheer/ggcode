@@ -96,6 +96,12 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	// Hindsight arXiv 2512.12818).
 	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
 
+	// r449 (workflow memory): cross-session tool sequence mining as a
+	// read-only tool, same consumption shape as recall_experience above -
+	// the agent consults recurring workflows (prefix -> dominant next step)
+	// at planning moments instead of re-deriving tool order every run.
+	_ = registry.Register(tool.NewRecallToolFlowTool())
+
 	// Config tool — unified config management across all config files
 	cfgAccess := NewConfigAccess(cfg, workingDir)
 	_ = registry.Register(tool.ConfigTool{Access: cfgAccess})
