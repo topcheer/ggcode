@@ -247,7 +247,16 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			anyUsable = true
 		}
 	}
-	report := formatTrialReport(base, in.VerifyCmd, results, winner)
+	// #3224: when no trial produced usable work (no commits, no verify pass),
+	// the scored "winner" has neither a kept worktree nor anything to adopt.
+	// Reporting it as WINNER would contradict the IsError flag and point the
+	// caller at a directory cleanupWorktrees already force-deleted. Route the
+	// report to the "No usable trial" branch instead.
+	reportWinner := winner
+	if !anyUsable {
+		reportWinner = -1
+	}
+	report := formatTrialReport(base, in.VerifyCmd, results, reportWinner)
 	return Result{IsError: !anyUsable, Content: report}, nil
 }
 

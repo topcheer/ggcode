@@ -315,6 +315,17 @@ func TestTrialForkRunAllFailed(t *testing.T) {
 	if !strings.Contains(res.Content, "status: failed") {
 		t.Fatalf("expected failed statuses in report:\n%s", res.Content)
 	}
+	// #3224: with no usable trial (no commits, no verify pass) the report must
+	// take the No-usable branch - no WINNER block, no kept-worktree reference,
+	// no adopt hint pointing at worktrees cleanup already force-deleted.
+	if !strings.Contains(res.Content, "No usable trial") {
+		t.Fatalf("expected 'No usable trial' summary:\n%s", res.Content)
+	}
+	for _, banned := range []string{"WINNER", "kept worktree", "git apply"} {
+		if strings.Contains(res.Content, banned) {
+			t.Fatalf("all-failed report must not contain %q:\n%s", banned, res.Content)
+		}
+	}
 	// No trial produced work: all worktrees must be cleaned up.
 	out, _ := exec.Command("git", "-C", root, "worktree", "list", "--porcelain").CombinedOutput()
 	if n := strings.Count(string(out), "worktree "); n != 1 {
