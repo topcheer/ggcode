@@ -175,6 +175,11 @@ func (t RunCommand) Parameters() json.RawMessage {
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		},
+		"dry_run": {
+			"type": "boolean",
+			"description": "Rehearse instead of execute: returns a lexical preview of write targets (create/overwrite/delete) and destructive segments without running anything. Use for high-risk commands before the real call.",
+			"default": false
 		}
 	},
 	"required": [
@@ -200,6 +205,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		WorkingDir  string `json:"working_dir"`
 		Timeout     int    `json:"timeout"`
 		Description string `json:"description"`
+		// DryRun rehearses instead of executing (r451 command rehearsal):
+		// a lexical preview of write targets / destructive segments is
+		// returned. Zero execution - the command is never spawned.
+		DryRun bool `json:"dry_run"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -207,6 +216,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	if msg := CheckRequired("command", args.Command); msg != "" {
 		return Result{IsError: true, Content: "Error: " + msg}, nil
+	}
+
+	if args.DryRun {
+		return t.dryRunPreview(args.Command), nil
 	}
 
 	if args.Description != "" {
