@@ -57,6 +57,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"perfBaseline":              "loaded lazily from disk on first access (guarded)",
 		"guidancePromoter":          "loaded lazily from rule store (guarded)",
 		"ruleStore":                 "loaded lazily via SetRuleStore (guarded)",
+		"userEditObs":               "r444 user-edit observer, built lazily on the rule store via getUserEditObserver (guarded)",
 		"ruleInjectCount":           "lazily initialized at first use (verify.go)",
 		"checkpoints":               "checkpoint manager, injected via setter (guarded)",
 		"codeIndex":                 "code index manager, injected via setter (guarded)",

@@ -31,6 +31,12 @@ type Rule struct {
 	HitCount     int       `json:"hit_count"`
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
+	// Source records where the rule was learned from. Empty (pre-r444)
+	// and "error" mean the classic error-driven ratchet path;
+	// "user_edit" (r444) means it was promoted from repeated user
+	// rewrites of agent output. omitempty keeps old agent-rules.json
+	// byte-compatible on rewrite.
+	Source string `json:"source,omitempty"`
 }
 
 const defaultMaxRules = 60

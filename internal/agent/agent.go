@@ -299,6 +299,7 @@ type Agent struct {
 	toolRedundancy               *toolRedundancyState       // scattered duplicate tool call detection (non-consecutive redundancy)
 	toolEquivDetect              *toolEquivDetectState      // semantic-equivalent tool call detection (reordered keys, volatile fields)
 	ruleStore                    *RuleStore                 // cached rule store for hot-path rule injection (avoids per-tool disk I/O)
+	userEditObs                  *UserEditObserver          // r444: learns rules from user rewrites of agent output (turn-gap mtime detection)
 	ruleInjectCount              map[string]int             // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory               *permission.ApprovalMemory // session-level learned approval patterns (auto-approve after N repeats)
 	fileChurn                    *churnState                // file churn detection (invalidated assumption awareness)
@@ -1395,6 +1396,10 @@ func estimateToolDefinitionOverhead(defs []provider.ToolDefinition) int {
 // RunStreamWithContent runs the agent loop and emits UI events for complete model turns.
 func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.ContentBlock, onEvent func(provider.StreamEvent)) (err error) {
 	debug.Log("agent", "RunStreamWithContent START content_blocks=%d", len(content))
+	// r444 user-edit ratchet: the idle gap before this new user message is
+	// where user rewrites of agent-written files happen. Check now, before
+	// the turn's own tool writes muddy the mtimes.
+	a.getUserEditObserver().CheckTurnBoundary()
 	// Sleep-time compute (r373): a run is activity; idle maintenance only
 	// fires between runs. defer registers RunEnd on the same goroutine.
 	if im := a.currentIdleMaintainer(); im != nil {
@@ -4205,6 +4210,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Record tool errors for reflection/ratchet rule extraction.
 			if result.IsError {
 				runStats.recordToolError(tc.Name, result.Content)
+			} else if userWriteTools[tc.Name] {
+				// r444: successful writes make the file agent-authored this
+				// turn; the user-edit observer tracks it for turn-gap detection.
+				if p := extractUserEditPath(tc.Name, tc.Arguments); p != "" {
+					a.getUserEditObserver().NoteAgentWrite(p)
+				}
 			}
 			// Silent error advancement detection: track when errors go unaddressed.
 			if result.IsError {
