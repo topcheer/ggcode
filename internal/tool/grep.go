@@ -736,6 +736,12 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	}
 }
 
+// grepMaxLineLen caps the per-line buffer for the file scanners (#3190).
+// Lines longer than this are treated as unmatchable instead of killing
+// the whole scan; 10MB covers minified JS/bundles/lockfiles comfortably
+// while bounding memory per line.
+const grepMaxLineLen = 10 * 1024 * 1024
+
 func grepFileHasMatch(path string, re *regexp.Regexp) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -744,6 +750,11 @@ func grepFileHasMatch(path string, re *regexp.Regexp) bool {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	// #3190: default 64KB token limit makes >64KB lines hit ErrTooLong,
+	// which Scan() surfaces as a silent stop - matches in the rest of the
+	// file are missed. Raise the cap; lines beyond it are skipped with the
+	// error surfaced via scanner.Err() below.
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	for scanner.Scan() {
 		if re.MatchString(scanner.Text()) {
 			return true
@@ -761,6 +772,7 @@ func grepFileCount(path string, re *regexp.Regexp) int {
 
 	count := 0
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen) // #3190: see grepFileHasMatch
 	for scanner.Scan() {
 		if re.MatchString(scanner.Text()) {
 			count++
@@ -779,6 +791,7 @@ func grepFileContent(path string, re *regexp.Regexp, args grepArgs) []fileMatch 
 	// Read all lines for context support
 	var lines []string
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen) // #3190: see grepFileHasMatch
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
