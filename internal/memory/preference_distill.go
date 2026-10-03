@@ -3,6 +3,8 @@ package memory
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // Preference distillation - the "Gather" seam of memory consolidation
@@ -26,6 +28,7 @@ import (
 var preferenceMarkers = []string{
 	// English durable-intent markers.
 	"from now on",
+	"from here on",
 	"going forward",
 	"always use",
 	"always run",
@@ -39,6 +42,8 @@ var preferenceMarkers = []string{
 	// Chinese durable-intent markers.
 	"以后都",
 	"以后请",
+	"以后用",
+	"以后改用",
 	"以后不要",
 	"以后不再",
 	"以后一律",
@@ -102,6 +107,43 @@ func isPreferenceSentence(sent string) bool {
 		}
 	}
 	return false
+}
+
+// CapturePreferences distills durable preference statements from text and
+// merges them into the "user-preferences" project memory key (Auto Dream
+// Gather seam). It is the shared run-terminal hook for every entry point
+// (TUI reflection, pipe, daemon), so a preference stated in ANY session
+// shape outlives it. Failures are debug-logged only; capture must never
+// disturb the caller's flow. Returns how many new entries were added.
+func CapturePreferences(workingDir, text string) int {
+	prefs := DistillUserPreferences(text)
+	if len(prefs) == 0 {
+		return 0
+	}
+	if workingDir == "" {
+		return 0
+	}
+	autoMem := NewProjectAutoMemory(workingDir)
+	if autoMem == nil {
+		return 0
+	}
+	const key = "user-preferences"
+	// #1388 discipline: single-key load, merge, save - never blind overwrite.
+	existing, err := autoMem.LoadKey(key)
+	if err != nil {
+		debug.Log("preferences", "failed to load existing, skipping save: %v", err)
+		return 0
+	}
+	merged, added := MergePreferenceMemory(existing, prefs)
+	if added == 0 {
+		return 0
+	}
+	if err := autoMem.SaveMemory(key, merged); err != nil {
+		debug.Log("preferences", "save failed: %v", err)
+		return 0
+	}
+	debug.Log("preferences", "captured %d new user preference(s)", added)
+	return added
 }
 
 // splitPreferenceSentences splits on CJK/EN sentence terminators and

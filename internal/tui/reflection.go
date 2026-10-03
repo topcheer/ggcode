@@ -147,38 +147,18 @@ func recordExperienceCase(a *agent.Agent, stats agent.RunStats) (repeatedTask bo
 }
 
 // captureUserPreferences distills high-confidence durable preference
-// statements from the run's user prompt into the "user-preferences"
+// statements from the run's user input into the "user-preferences"
 // project memory (Auto Dream Gather seam; deterministic, no LLM call).
-// Failures are debug-logged only; capture must never disturb the session.
+// r414: the load->merge->save logic lives in memory.CapturePreferences so
+// pipe/daemon entry points share the exact same path, and reads
+// UserPromptFull so a preference stated after 200 chars (e.g. trailing a
+// pasted log) is not silently truncated away.
 func captureUserPreferences(a *agent.Agent, stats agent.RunStats) {
-	prefs := memory.DistillUserPreferences(stats.UserPrompt)
-	if len(prefs) == 0 {
-		return
+	full := stats.UserPromptFull
+	if full == "" {
+		full = stats.UserPrompt // older callers / tests without the field
 	}
-	workingDir := a.WorkingDir()
-	if workingDir == "" {
-		return
-	}
-	autoMem := memory.NewProjectAutoMemory(workingDir)
-	if autoMem == nil {
-		return
-	}
-	const key = "user-preferences"
-	// #1388 discipline: single-key load, merge, save - never blind overwrite.
-	existing, err := autoMem.LoadKey(key)
-	if err != nil {
-		debug.Log("tui", "preferences: failed to load existing, skipping save: %v", err)
-		return
-	}
-	merged, added := memory.MergePreferenceMemory(existing, prefs)
-	if added == 0 {
-		return
-	}
-	if err := autoMem.SaveMemory(key, merged); err != nil {
-		debug.Log("tui", "preferences: save failed: %v", err)
-		return
-	}
-	debug.Log("tui", "preferences: captured %d new user preference(s)", added)
+	memory.CapturePreferences(a.WorkingDir(), full)
 }
 
 // topToolCalls renders the n most-used tools as "name(count)" pairs.

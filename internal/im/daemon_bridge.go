@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/daemon"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -1134,6 +1135,16 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			}
 		}
 	})
+
+	// r414: preference capture aligned with the TUI/pipe paths. IM is the
+	// highest-frequency surface for durable corrections ("以后都用 pnpm"
+	// typed from a phone); without this hook they die with the session.
+	// Non-cancelled runs only, mirroring the TUI reflection guard; failures
+	// are debug-logged inside memory.CapturePreferences and never disturb
+	// the return path.
+	if ctx.Err() == nil {
+		memory.CapturePreferences(b.agent.WorkingDir(), extractText(content))
+	}
 	return err
 }
 

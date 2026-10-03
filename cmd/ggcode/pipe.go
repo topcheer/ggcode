@@ -247,6 +247,14 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		})
 	}
 
+	// r414: preference capture aligned with the TUI reflection path
+	// (run/RunPipe behavioral-parity convention). Same memory.CapturePreferences
+	// sink, keyed to the pipe working dir; skipped on cancellation to mirror
+	// the TUI's non-cancelled guard. Must never disturb the exit-code path.
+	if ctx.Err() == nil {
+		memory.CapturePreferences(workingDir, fullPrompt)
+	}
+
 	if agentErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", agentErr)
 		return 1
