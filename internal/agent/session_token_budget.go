@@ -46,7 +46,7 @@ const (
 // agentSessionTokenBudgets stores per-agent session token budget state,
 // keyed by agent pointer. See the file comment for why this is not an
 // Agent struct field.
-var agentSessionTokenBudgets sync.Map // map[*Agent]*sessionTokenBudgetState
+var agentSessionTokenBudgets sync.Map // map[*Agent]*sessionTokenBudgetState // #3178: released by Agent.Close
 
 // sessionTokenBudgetState tracks cumulative token usage against a
 // configurable per-run budget (input + output tokens).
