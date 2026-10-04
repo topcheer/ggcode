@@ -37,6 +37,14 @@ type Rule struct {
 	// rewrites of agent output. omitempty keeps old agent-rules.json
 	// byte-compatible on rewrite.
 	Source string `json:"source,omitempty"`
+	// TaskType (intent filter) records the classifyTaskType label of the
+	// run that learned this rule (bugfix/test/build/refactor/review/
+	// feature). Empty (legacy or unclassified) rules stay always-eligible
+	// via the global fallback in TopRulesForPromptFiltered. Mirrors the
+	// playbook-side matchesIntent read-path gating (#3266 research P1:
+	// unfiltered top-N injection polluted bugfix runs with release/test
+	// lessons and left the two memory systems inconsistent).
+	TaskType string `json:"task_type,omitempty"`
 }
 
 const defaultMaxRules = 60
@@ -57,6 +65,10 @@ type RuleStore struct {
 	loaded     bool
 	maxRules   int
 	regexCache map[string]*regexp.Regexp // pre-compiled patterns to avoid repeated compilation
+	// runIntent is the classifyTaskType label of the current run, set
+	// from prompt injection each run and inherited by newly added rules
+	// whose TaskType is empty (guarded by mu).
+	runIntent string
 }
 
 // NewRuleStore creates a RuleStore for the given working directory.
@@ -265,6 +277,11 @@ func (rs *RuleStore) AddRule(r Rule) {
 	if r.HitCount == 0 {
 		r.HitCount = 1
 	}
+	// Inherit the current run's intent so future injections can filter
+	// by task type (legacy rules with empty TaskType stay global).
+	if r.TaskType == "" && rs.runIntent != "" && rs.runIntent != "other" {
+		r.TaskType = rs.runIntent
+	}
 	// #1008: Category comes straight from LLM JSON output, where the
 	// prompt's enum (build/test/git/convention/security) is only a soft
 	// constraint - variants like "Build", "lint" or " build " slip through.
@@ -455,6 +472,34 @@ func (rs *RuleStore) Rules() []Rule {
 // matches. The recency weighting follows arXiv:2603.07670 which emphasizes
 // that production memory systems must account for staleness.
 func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
+	return rs.topRulesForPrompt(maxRules, "")
+}
+
+// SetRunIntent records the classifyTaskType label of the current run so
+// newly added rules inherit it (TaskType tagging) and prompt injection
+// can filter by relevance. Called once per run from prompt assembly.
+func (rs *RuleStore) SetRunIntent(intent string) {
+	rs.mu.Lock()
+	rs.runIntent = intent
+	rs.mu.Unlock()
+}
+
+// TopRulesForPromptFiltered returns the top rules for prompt injection,
+// restricted to rules learned in runs of the same task type when that
+// subset is rich enough (>= 2 entries). This mirrors the playbook-side
+// matchesIntent gating: a bugfix run should not spend its 5 injection
+// slots on release/test lessons, and vice versa. Falls back to the
+// global top-N when the intent subset is too thin (anti-starvation;
+// legacy rules with empty TaskType also live in the global pool).
+func (rs *RuleStore) TopRulesForPromptFiltered(maxRules int, intent string) string {
+	return rs.topRulesForPrompt(maxRules, intent)
+}
+
+// topRulesForPrompt is the shared implementation. filterIntent, when
+// non-empty and not "other", prefers rules whose TaskType matches; the
+// filtered view is used only if it holds at least 2 entries, otherwise
+// the unfiltered ranking applies.
+func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.load()
@@ -469,18 +514,31 @@ func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 		hint  string
 		score float64
 	}
-	var active []ruleScore
+	var active, intentActive []ruleScore
+	useIntent := filterIntent != "" && filterIntent != "other"
 	for _, r := range rs.rules {
-		if r.HitCount > 0 {
-			active = append(active, ruleScore{
-				rule:  r.Rule,
-				hint:  r.FixHint,
-				score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
-			})
+		if r.HitCount <= 0 {
+			continue
+		}
+		sc := ruleScore{
+			rule:  r.Rule,
+			hint:  r.FixHint,
+			score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
+		}
+		active = append(active, sc)
+		if useIntent && r.TaskType == filterIntent {
+			intentActive = append(intentActive, sc)
 		}
 	}
 	if len(active) == 0 {
 		return ""
+	}
+
+	// Intent view is only adopted when the same-type subset is rich
+	// enough to fill a meaningful prompt slice; otherwise fall back to
+	// the global ranking so thin stores keep injecting their best rules.
+	if useIntent && len(intentActive) >= 2 {
+		active = intentActive
 	}
 
 	// Sort by combined score descending (small N, insertion sort)
