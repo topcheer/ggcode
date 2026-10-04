@@ -16,7 +16,7 @@ import (
 //
 // r461's outcome loop (InjectedRuns/AfterSuccess/AfterFail) measures the
 // injection arm only: "success rate after injection was high" is
-// correlation, not causation — the runs might have succeeded regardless
+// correlation, not causation - the runs might have succeeded regardless
 // of the injected insight. r462 adds the missing control arm: for each
 // category exactly one candidate insight is silently held out (skipped
 // at prompt-render time) per day. Its runs' outcomes feed the holdout
@@ -25,13 +25,13 @@ import (
 //	Δ = injectArmRate − holdoutArmRate
 //	Δ <= 0   → no positive contribution; stored Confidence decays one
 //	           trajConfidenceStep through the r459 channel (below the
-//	           injection floor the existing r459/r461 gates retire it —
+//	           injection floor the existing r459/r461 gates retire it -
 //	           no new eviction logic here).
 //	Δ >= 10pp → the insight demonstrably helps; release the holdout so
 //	           it resumes injecting.
 //
 // Selection is deterministic: slot = hashStable(day, category) over the
-// category's candidates sorted by key — epoch is the natural day, so the
+// category's candidates sorted by key - epoch is the natural day, so the
 // held insight rotates without random jitter, and repeated renders
 // within one run agree. The ledger is workspace-shared, guarded by the
 // same #1512 cross-process flock discipline as the learning store.
@@ -50,6 +50,12 @@ const (
 	trajHoldoutMinInjected = 3
 	// trajHoldoutDecayFloor is the lower clamp for the verdict decay.
 	trajHoldoutDecayFloor = 0.05
+	// trajHoldoutReleaseWindow (#3275): how long a released key is
+	// suppressed from holdout re-claim before it may re-enter rotation.
+	// One week balances "let the verdict breathe" against never
+	// re-measuring; decayed entries usually fall below the injection
+	// confidence floor anyway.
+	trajHoldoutReleaseWindow = 7 * 24 * time.Hour
 )
 
 // trajHoldoutDay is the epoch-granularity clock (days). Var so tests can
@@ -58,7 +64,7 @@ var trajHoldoutDay = func() int64 { return time.Now().UTC().Unix() / 86400 }
 
 // trajHoldoutEnabled gates the control arm globally. Production default
 // on; r461-era injection-arm tests disable it because their fixtures seed
-// a single candidate per category, which the holdout would always claim —
+// a single candidate per category, which the holdout would always claim -
 // those tests assert injection-arm behavior that is orthogonal to (and
 // must not be coupled to) the control arm.
 var trajHoldoutEnabled = true
@@ -73,6 +79,11 @@ type trajHoldoutEntry struct {
 	HeldSince        time.Time `json:"held_since"`
 	HoldoutRuns      int       `json:"holdout_runs"`
 	HoldoutSuccesses int       `json:"holdout_successes"`
+	// ReleasedUntil (#3275): after a verdict releases this key, the entry
+	// stays in the ledger marked with a suppression window instead of
+	// being deleted - deleting let the next trajHoldoutSelect rebuild the
+	// row by slot and re-claim the same key, making release a no-op.
+	ReleasedUntil time.Time `json:"released_until,omitempty"`
 }
 
 func trajHoldoutPath(workingDir string) string {
@@ -93,7 +104,7 @@ func loadHoldoutLedger(path string) ([]trajHoldoutEntry, error) {
 // trajHoldoutSelect computes the set of keys to hold out this day and
 // persists the rotation to the ledger under the cross-process lock.
 // Same-key streaks across days keep their counters; a rotation resets
-// them. Best effort: on any lock/IO error it returns nil (fail open —
+// them. Best effort: on any lock/IO error it returns nil (fail open -
 // injection behavior is never blocked by the control arm).
 func trajHoldoutSelect(workingDir string, entries []trajectoryLearning) map[trajKey]bool {
 	if !trajHoldoutEnabled || workingDir == "" || len(entries) == 0 {
@@ -103,12 +114,22 @@ func trajHoldoutSelect(workingDir string, entries []trajectoryLearning) map[traj
 	// injection arm would actually use (confidence gate + not retired by
 	// the r461 effectiveness gate) enter rotation: holding out an entry
 	// that never injects measures nothing.
+	//
+	// #3275 fix: entries with InjectedRuns == 0 are excluded - a holdout
+	// verdict needs >= trajHoldoutMinInjected injection-arm samples to
+	// compare against, so claiming a never-injected insight freezes its
+	// InjectedRuns at 0 and deadlocks the verdict forever. New insights
+	// must pass through the injection arm first.
 	byCat := map[string][]trajKey{}
+	injectedOnce := map[trajKey]bool{}
 	for _, l := range entries {
 		if l.EffectiveConfidence() < trajPromptMinConfidence || effectivenessGated(l) {
 			continue
 		}
 		k := trajKeyOf(l)
+		if l.InjectedRuns > 0 {
+			injectedOnce[k] = true
+		}
 		if _, seen := containsKey(byCat[k.cat], k); !seen {
 			byCat[k.cat] = append(byCat[k.cat], k)
 		}
@@ -138,12 +159,37 @@ func trajHoldoutSelect(workingDir string, entries []trajectoryLearning) map[traj
 	var out []trajHoldoutEntry
 	for _, cat := range sortedKeys(byCat) {
 		keys := byCat[cat]
+		// #3275 fix (a): keep only keys that already have injection-arm
+		// samples - never hold out a never-injected insight (verdict
+		// deadlock) ...
+		var eligible []trajKey
+		for _, k := range keys {
+			if injectedOnce[k] {
+				eligible = append(eligible, k)
+			}
+		}
+		// ... and (b) a lone candidate has no rotation and no counterfactual
+		// meaning: holdout measures "this insight withheld vs present", and
+		// with exactly one candidate per category (the production norm -
+		// consolidation merges (cat,typ) pairs 1:1) the slot is always 0 and
+		// the sole insight is claimed forever. Skip such categories entirely.
+		if len(eligible) <= 1 {
+			continue
+		}
+		keys = eligible
 		sort.Slice(keys, func(i, j int) bool { return trajHoldoutKeyString(keys[i]) < trajHoldoutKeyString(keys[j]) })
 		target := keys[day%int64(len(keys))]
-		held[target] = true
 		prev, ok := byCatLedger[cat]
+		// #3275 fix (c): honor the release suppression window. A released
+		// key that rotates back in before its window expires must not be
+		// re-claimed (release was a no-op before this check existed).
+		if ok && prev.InsightKey == trajHoldoutKeyString(target) && prev.ReleasedUntil.After(now) {
+			continue // category pauses holdout today; full injection resumes
+		}
+		held[target] = true
 		if ok && prev.InsightKey == trajHoldoutKeyString(target) {
 			prev.HeldSince = now // streak continues, counters preserved
+			prev.ReleasedUntil = time.Time{}
 			out = append(out, prev)
 			continue
 		}
@@ -174,7 +220,7 @@ func (s *trajIntelState) recordHoldoutLocked(l trajectoryLearning) {
 // HoldoutSuccesses++ on success), then each matured entry (>= min runs)
 // faces the counterfactual verdict against the r461 injection counters.
 // Non-positive delta decays stored Confidence via the shared
-// rewriteAllLocked channel (touching ONLY Confidence — never the r461
+// rewriteAllLocked channel (touching ONLY Confidence - never the r461
 // counter fields); a >=10pp delta or a completed negative verdict
 // releases the holdout. Best effort, never blocks the run.
 func (s *trajIntelState) recordHoldoutOutcome(workingDir string, success bool) {
@@ -206,7 +252,6 @@ func (s *trajIntelState) recordHoldoutOutcome(workingDir string, success bool) {
 	if ls, err := s.loadFromFile(); err == nil {
 		learnings = ls
 	}
-	released := map[string]bool{}
 	decayed := map[trajKey]bool{}
 	var out []trajHoldoutEntry
 	for _, e := range ledger {
@@ -230,11 +275,17 @@ func (s *trajIntelState) recordHoldoutOutcome(workingDir string, success bool) {
 					float64(e.HoldoutSuccesses)/float64(e.HoldoutRuns)
 				if delta <= 0 {
 					decayed[k] = true // decay, then release
-					released[e.InsightKey] = true
+					// #3275: release = suppression window, NOT deletion. The
+					// ledger row must persist (with counters) so the next
+					// select cannot blindly re-claim the same key by slot.
+					e.ReleasedUntil = time.Now().UTC().Add(trajHoldoutReleaseWindow)
+					out = append(out, e)
 					continue
 				}
 				if delta >= trajHoldoutReleaseDelta {
-					released[e.InsightKey] = true
+					// #3275: same suppression-window release as above.
+					e.ReleasedUntil = time.Now().UTC().Add(trajHoldoutReleaseWindow)
+					out = append(out, e)
 					continue
 				}
 			}
