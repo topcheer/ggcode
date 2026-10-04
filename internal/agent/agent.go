@@ -1607,6 +1607,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// every injected entry.
 			if !isCancelled {
 				a.trajIntel.recordInjectionOutcome(a.WorkingDir(), runStats.Success)
+				// r462 control arm: learnings held out of this run's prompt
+				// feed the counterfactual ledger (never touches the r461
+				// injection counters).
+				a.trajIntel.recordHoldoutOutcome(a.WorkingDir(), runStats.Success)
 			}
 			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
 		}
