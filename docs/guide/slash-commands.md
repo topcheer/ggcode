@@ -63,6 +63,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/files` | Open file browser |
 | `/inspector [filter]` | Open inspector panel (view tool calls, results, logs) |
 | `/interventions [clear]` | Show where you historically took over mid-run; `clear` wipes that history (the agent uses it to briefly state intent before steps you repeatedly interrupt) |
+| `/tape start [path] \| replay <path> \| stop \| status` | Control the deterministic tool record/replay harness: `start` records every tool call to a tape file (default `~/.ggcode/tapes/session-<ts>.tape.json`), `replay` serves tool results from a recorded tape with no real side effects, `stop` disarms, `status` shows the live mode/entry count. Changes take effect after `/restart` (the env var is read once at agent startup) |
 | `/diff [file]` | Show git diff in chat |
 | `/edit` | Edit last user message and resubmit |
 | `/retry` | Retry last agent turn |

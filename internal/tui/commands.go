@@ -465,6 +465,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleInspectorCommand(parts)
 		case "/interventions":
 			return m.handleInterventionsCommand(parts)
+		case "/tape":
+			return m.handleTapeCommand(parts)
 		case "/chat":
 			m.openLanChatPanel()
 			return nil

@@ -62,6 +62,33 @@ type toolTapeState struct {
 	path string
 }
 
+// ToolTapeStatus reports the session's tape state for the /tape status
+// command: the mode (off|record|replay), the tape file path, and the number
+// of recorded entries. The mode is the constructor-time snapshot: the env
+// var is read once in NewAgent, so a /tape start|stop takes effect after
+// /restart (which rebuilds the agent).
+func (a *Agent) ToolTapeStatus() (mode string, path string, entries int) {
+	st := a.toolTape
+	if st == nil {
+		return "off", "", 0
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	switch st.mode {
+	case toolTapeRecord:
+		mode = "record"
+	case toolTapeReplay:
+		mode = "replay"
+	default:
+		mode = "off"
+	}
+	path = st.path
+	if st.tape != nil {
+		entries = st.tape.Len()
+	}
+	return mode, path, entries
+}
+
 // parseToolTapeEnv parses the GGCODE_TOOL_TAPE value. Accepted forms:
 //
 //	record:<path>   | RECORD:<path>   (case-insensitive prefix)
