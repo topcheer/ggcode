@@ -2408,7 +2408,9 @@ Omit entirely:
 		// so parallel compaction is never worse than the baseline.
 		if blocks := splitPayloadBlocks(payload, pccMinPayloadTokens); len(blocks) > 1 {
 			if summaryText, ok := summarizeParallel(ctx, prov, blocks, summaryTokenLimit, onUsage); ok {
-				return summaryText, nil
+				// sa-237 fact retention: deterministically re-attach dropped
+				// constraints and recurring paths on every summary path.
+				return applyFactRetention(summaryText, payload), nil
 			}
 		}
 
@@ -2439,7 +2441,7 @@ Omit entirely:
 		}
 		debug.Log("ctx", "summarizeMessages: summary len=%d chars estimated=%d tokens limit=%d usage=%+v",
 			len(summaryText), EstimateTokens(summaryText), summaryTokenLimit, resp.Usage)
-		return summaryText, nil
+		return applyFactRetention(summaryText, payload), nil
 	}
 	return "", fmt.Errorf("summarization returned empty text")
 }
