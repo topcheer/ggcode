@@ -55,6 +55,7 @@ func NewRootCmd() *cobra.Command {
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
+	var outputSchemaPath string
 	// r415 per-run budget overrides (see the RunE mutation site).
 	var tokenBudgetFlag int64
 	var timeBudgetFlag time.Duration
@@ -120,7 +121,7 @@ func NewRootCmd() *cobra.Command {
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, outputSchemaPath)
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -196,6 +197,7 @@ func NewRootCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
+	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
 	// r415: per-run budget overrides (this invocation only, not persisted).
 	// The time ladder steers (80%/95%/100%) like the token budget.
 	cmd.Flags().Int64Var(&tokenBudgetFlag, "token-budget", 0, "per-run session token budget override (input+output tokens; 0 = use config)")
