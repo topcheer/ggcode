@@ -40,8 +40,6 @@ import (
 //   - fulfillment_gate: checks work matches request at completion
 //   - This detector: checks the REQUEST itself for inherent ambiguity
 
-const maxAmbiguityWarnings = 1
-
 // ambiguityPointState tracks whether the detector has already fired.
 type ambiguityPointState struct {
 	mu    sync.Mutex

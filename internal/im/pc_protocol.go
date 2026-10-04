@@ -67,10 +67,6 @@ type pcProviderRenewSession struct {
 
 // Relay → Provider messages
 
-type pcRelayProviderReady struct {
-	Type string `json:"type"`
-}
-
 type pcRelaySessionCreated struct {
 	Type      string `json:"type"`
 	RequestID string `json:"requestId"`
