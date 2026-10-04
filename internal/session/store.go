@@ -1090,6 +1090,26 @@ func capContextTail(msgs []provider.Message) []provider.Message {
 	}}, msgs[start:]...)
 }
 
+// appendPostCheckpointExtras appends post-checkpoint "extra" message records
+// from entries into ses.ContextMessages in file order.
+//
+// When summaryMsgID is non-empty (the extraStart-hit path), the current
+// summary message (by ID) and stale summary notes from earlier compactions
+// that can sit between last_msg_id and EOF under async precompact ordering
+// are skipped — their content is already folded into the current summary.
+// The fallback / no-last_msg_id paths pass "" to keep every message.
+func appendPostCheckpointExtras(ses *Session, entries []localLightweightEntry, summaryMsgID string) {
+	for _, entry := range entries {
+		if entry.recType != "message" || entry.record.Message == nil {
+			continue
+		}
+		if summaryMsgID != "" && (entry.record.Message.ID == summaryMsgID || isSummaryNoteMessage(entry.record.Message)) {
+			continue
+		}
+		ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
+	}
+}
+
 func (s *JSONLStore) loadSession(id string) (*Session, error) {
 	path := s.sessionPath(id)
 
@@ -1419,19 +1439,7 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					// messages (>500 msgs / >24h sessions), which made
 					// allMessages[extraStart:] panic (bounds out of range) or
 					// silently restore the wrong context slice.
-					for _, entry := range postCPEntries[extraStart:] {
-						if entry.recType != "message" || entry.record.Message == nil {
-							continue
-						}
-						// Skip the current summary (by ID) and stale summary notes
-						// from earlier compactions that can sit between last_msg_id
-						// and EOF under async precompact ordering — their content is
-						// already folded into the current summary.
-						if entry.record.Message.ID == lastCpSummaryMsgID || isSummaryNoteMessage(entry.record.Message) {
-							continue
-						}
-						ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
-					}
+					appendPostCheckpointExtras(ses, postCPEntries[extraStart:], lastCpSummaryMsgID)
 				} else {
 					// Fallback: checkpoint last_msg_id not found in allMessages.
 					// This happens when dedup removed a duplicate message, or
@@ -1442,20 +1450,12 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 					// same as the no-last_msg_id path below.
 					afterSummary := len(postCPEntries) - summaryMsgIdx - 1
 					debug.Log("session", "loadSession %s: checkpoint last_msg_id %q not found in postCPEntries, using post-summary fallback (%d entries after summary)", id, lastCpLastMsgID, afterSummary)
-					for _, entry := range postCPEntries[summaryMsgIdx+1:] {
-						if entry.recType == "message" && entry.record.Message != nil {
-							ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
-						}
-					}
+					appendPostCheckpointExtras(ses, postCPEntries[summaryMsgIdx+1:], "")
 				}
 			} else {
 				// No last_msg_id (migrated checkpoint): load all messages
 				// after the summary as extra messages.
-				for _, entry := range postCPEntries[summaryMsgIdx+1:] {
-					if entry.recType == "message" && entry.record.Message != nil {
-						ses.ContextMessages = append(ses.ContextMessages, *entry.record.Message)
-					}
-				}
+				appendPostCheckpointExtras(ses, postCPEntries[summaryMsgIdx+1:], "")
 			}
 			ses.CheckpointTokens = lastCpTokens
 			ses.CheckpointMessageCount = len(ses.ContextMessages)
