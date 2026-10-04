@@ -98,6 +98,15 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 				debug.Log("agent", "Injected playbook strategy hints into system prompt")
 			}
 		}
+		// r458: past-run trajectory learnings re-injection - the third leg
+		// of the extract->persist->re-inject distillation loop. Includes
+		// teammate experience folded in by r457's ingest.
+		if a.trajIntel != nil {
+			if sec := a.trajIntel.RenderPromptSection(workingDir); sec != "" {
+				dynamicParts = append(dynamicParts, sec)
+				debug.Log("agent", "Injected past-run trajectory learnings into system prompt")
+			}
+		}
 		// r413: persisted failure attribution memory - which file/tool was
 		// the causal suspect in past failed runs of this task type.
 		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
