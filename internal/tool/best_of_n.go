@@ -40,6 +40,13 @@ type BestOfNRequest struct {
 	// cross-model ensemble). Empty = every candidate inherits the parent
 	// runtime model (same-model sampling).
 	Models []string
+	// VerifierModels optionally routes the r439 tie-break discriminator
+	// to a model different from the tied candidates (heterogeneous
+	// verification, arXiv:2512.02304: cross-family verification beats
+	// self-verification, and the benefit shrinks as solver and verifier
+	// converge). The first entry not used by either tied candidate is
+	// picked. Empty = discriminator inherits the parent model (r439).
+	VerifierModels []string
 }
 
 func (t BestOfNTool) Name() string { return "best_of_n" }
@@ -66,6 +73,13 @@ func (t BestOfNTool) Parameters() json.RawMessage {
 			"minItems": 2,
 			"maxItems": 4,
 			"description": "Optional heterogeneous per-candidate models (2-4), each available on the current endpoint. One candidate per model, in order. Mixing model tiers (cheap + flagship) decorrelates candidate errors so consensus ranking gets independent votes instead of N copies of one model's failure modes; a small-model ensemble can match a single frontier model at lower cost. When omitted, all candidates run the parent's current model."
+		},
+		"verifier_models": {
+			"type": "array",
+			"items": { "type": "string" },
+			"minItems": 1,
+			"maxItems": 4,
+			"description": "Optional model(s) for the execution tie-break discriminator used when candidates rank too close to separate by consensus (1-4, each available on the current endpoint). The first model not used by either tied candidate is picked, so the verdict comes from an independent model family - cross-family verification measurably beats same-model self-verification (arXiv:2512.02304). When omitted, the discriminator inherits the parent model."
 		},
 		"tools": {
 			"type": "array",
@@ -94,12 +108,13 @@ func (t BestOfNTool) Execute(ctx context.Context, input json.RawMessage) (Result
 		return Result{IsError: true, Content: "best_of_n: orchestrator not wired"}, nil
 	}
 	var args struct {
-		Task        string   `json:"task"`
-		N           int      `json:"n"`
-		Models      []string `json:"models"`
-		Tools       []string `json:"tools"`
-		Isolation   string   `json:"isolation"`
-		Description string   `json:"description"`
+		Task           string   `json:"task"`
+		N              int      `json:"n"`
+		Models         []string `json:"models"`
+		VerifierModels []string `json:"verifier_models"`
+		Tools          []string `json:"tools"`
+		Isolation      string   `json:"isolation"`
+		Description    string   `json:"description"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -129,8 +144,40 @@ func (t BestOfNTool) Execute(ctx context.Context, input json.RawMessage) (Result
 	if n < 2 || n > 4 {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid n=%d: candidates must be between 2 and 4", n)}, nil
 	}
-	report := t.Run(ctx, BestOfNRequest{Task: args.Task, N: n, Tools: args.Tools, Isolation: isolation, Name: args.Description, Models: args.Models})
+	if vErr := validateVerifierModels(args.VerifierModels, t.AvailableModels); vErr != "" {
+		return Result{IsError: true, Content: vErr}, nil
+	}
+	report := t.Run(ctx, BestOfNRequest{Task: args.Task, N: n, Tools: args.Tools, Isolation: isolation, Name: args.Description, Models: args.Models, VerifierModels: args.VerifierModels})
 	return Result{Content: report}, nil
+}
+
+// validateVerifierModels checks the optional discriminator model list
+// (1-4 entries, each available on the current endpoint). Unlike the
+// candidate list there is no count coupling with n.
+func validateVerifierModels(models []string, availableModels func() []string) string {
+	if len(models) == 0 {
+		return ""
+	}
+	if len(models) > 4 {
+		return fmt.Sprintf("invalid verifier_models: provide 1-4 discriminator models (got %d)", len(models))
+	}
+	if availableModels != nil {
+		if available := availableModels(); len(available) > 0 {
+			for _, m := range models {
+				found := false
+				for _, a := range available {
+					if a == m {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Sprintf("verifier model %q is not available on the current endpoint. Available models: %s", m, strings.Join(available, ", "))
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // validateBestOfNModels checks the optional per-candidate model list and

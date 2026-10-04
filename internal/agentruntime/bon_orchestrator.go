@@ -1,7 +1,7 @@
 // Package agentruntime: best-of-N trajectory-level parallel sampling (r377).
 //
 // Research basis: "Scaling Test-time Compute for LLM Agents" (arXiv
-// 2506.12928) — parallel Best-of-N sampling with verifier/consensus
+// 2506.12928) - parallel Best-of-N sampling with verifier/consensus
 // selection, sequential revision fallback (RTV), and Codex CLI rollout
 // practice (rollout summary + retry): short-output BoN picks a winner;
 // long agent trajectories need distilled per-rollout summaries before they
@@ -27,7 +27,7 @@ import (
 	"github.com/topcheer/ggcode/internal/tool"
 )
 
-// BestOfN limits: candidates are hard-capped at 4 — beyond the paper's
+// BestOfN limits: candidates are hard-capped at 4 - beyond the paper's
 // useful parallel band, and each candidate occupies a concurrency slot that
 // the parent's own tool calls also need (16-slot budget shared session-wide).
 const (
@@ -67,6 +67,14 @@ type BestOfNOptions struct {
 	Name      string   // activity label base shown in the UI
 	Poll      time.Duration
 	Models    []string // optional per-candidate model override (r380 cross-model ensemble)
+	// VerifierModels optionally routes the r439 tie-break discriminator to
+	// a model DIFFERENT from the tied candidates. Research: verification
+	// across model families beats self-verification, and the benefit
+	// shrinks as solver and verifier converge (arXiv:2512.02304) - the
+	// discriminator judging two same-model candidates is the exact
+	// same-family verification the paper flags as weakest. Empty = inherit
+	// the parent model (the r439 behavior).
+	VerifierModels []string
 
 	// r441 auction yield: when true, once the first candidate reaches
 	// StatusCompleted, still-running candidates whose observed tool-call
@@ -101,7 +109,7 @@ func yieldLaggards(leaderSpend int, laggards map[string]int) []string {
 // modelFor returns the model for the 1-based candidate index i. With no
 // Models configured every candidate inherits the parent runtime model
 // (the r377 same-model behavior). When set, models map to candidates in
-// order and cycle when fewer models than candidates are given — a
+// order and cycle when fewer models than candidates are given - a
 // heterogeneous ensemble (Mixture-of-Models, 2026) decorrelates candidate
 // errors so distilled-summary consensus has genuinely independent votes
 // to rank instead of N copies of the same model's failure modes.
@@ -110,6 +118,24 @@ func (o BestOfNOptions) modelFor(i int) string {
 		return ""
 	}
 	return o.Models[(i-1)%len(o.Models)]
+}
+
+// verifierModelFor picks the discriminator's model from VerifierModels,
+// preferring one that differs from BOTH tied candidates' models so the
+// tie-break verdict comes from an independent model family (2512.02304).
+// Explicit user configuration wins: if every listed verifier model equals
+// a candidate model, the first entry is still used. Empty list = ""
+// (inherit parent model, unchanged r439 behavior).
+func (o BestOfNOptions) verifierModelFor(a, b CandidateOutcome) string {
+	if len(o.VerifierModels) == 0 {
+		return ""
+	}
+	for _, m := range o.VerifierModels {
+		if m != a.Model && m != b.Model {
+			return m
+		}
+	}
+	return o.VerifierModels[0]
 }
 
 // CandidateOutcome is one candidate's distilled result.
@@ -346,15 +372,15 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 				break
 			}
 		}
-	} else if idx, ev, dok := discriminateTie(ctx, spawner, snaps, rep.Candidates, opts.Task, poll); dok {
-		// r439: text consensus could not separate the candidates — try an
+	} else if idx, ev, dok := discriminateTie(ctx, spawner, snaps, rep.Candidates, opts); dok {
+		// r439: text consensus could not separate the candidates - try an
 		// execution-based tie-break (discriminator sub-agent runs the same
 		// discriminating checks in both top worktrees) before degrading.
 		rep.WinnerIndex = idx
 		rep.Discriminated = true
 		rep.Evidence = ev
 	} else {
-		// No distinguishable winner: degrade to the sequential-retry path —
+		// No distinguishable winner: degrade to the sequential-retry path -
 		// distill ALL rollouts into one conditioning block (RTV escalation).
 		rep.Degraded = true
 		sums := make([]RolloutSummary, 0, n)
@@ -446,12 +472,13 @@ func formatCandidateLines(cs []CandidateOutcome) string {
 func BestOfNRunnerFor(sp CandidateSpawner, snaps SnapshotSource) func(context.Context, tool.BestOfNRequest) string {
 	return func(ctx context.Context, req tool.BestOfNRequest) string {
 		rep := RunBestOfN(ctx, sp, snaps, BestOfNOptions{
-			Task:      req.Task,
-			N:         req.N,
-			Tools:     req.Tools,
-			Isolation: req.Isolation,
-			Name:      req.Name,
-			Models:    req.Models,
+			Task:           req.Task,
+			N:              req.N,
+			Tools:          req.Tools,
+			Isolation:      req.Isolation,
+			Name:           req.Name,
+			Models:         req.Models,
+			VerifierModels: req.VerifierModels,
 		})
 		return rep.Report
 	}
@@ -476,7 +503,7 @@ func formatBestOfNReport(rep BestOfNReport, winnerVerdict string) string {
 			fmt.Fprintf(&b, "\nWinner: %s (id=%s, verdict=%q).\n", w.Name, w.ID, winnerVerdict)
 		}
 		if w.Worktree != "" {
-			fmt.Fprintf(&b, "Winner's isolated worktree: %s — inspect and merge from there; the other worktrees are disposable.\n", w.Worktree)
+			fmt.Fprintf(&b, "Winner's isolated worktree: %s - inspect and merge from there; the other worktrees are disposable.\n", w.Worktree)
 		}
 		if w.Result != "" {
 			fmt.Fprintf(&b, "\nWinner's result:\n%s\n", clip(w.Result, 2000))

@@ -89,7 +89,7 @@ func pickTiePair(cands []CandidateOutcome) (int, int, bool) {
 // candidates. Returns (winnerIndex, evidence, true) when a candidate was
 // demonstrably better; ok=false means inconclusive — caller must fall back
 // to the unchanged Degraded path.
-func discriminateTie(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSource, cands []CandidateOutcome, task string, poll time.Duration) (int, string, bool) {
+func discriminateTie(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSource, cands []CandidateOutcome, opts BestOfNOptions) (int, string, bool) {
 	a, b, ok := pickTiePair(cands)
 	if !ok {
 		return 0, "", false
@@ -97,6 +97,7 @@ func discriminateTie(ctx context.Context, spawner CandidateSpawner, snaps Snapsh
 	dctx, cancel := context.WithTimeout(ctx, discriminationTimeout)
 	defer cancel()
 
+	task := opts.Task
 	taskText := fmt.Sprintf(`You are a discrimination verifier for two candidate solutions that ranked too close to separate by text consensus (execution-based tie-break).
 
 Original task:
@@ -120,22 +121,35 @@ You must NOT edit either worktree. End your final message with exactly one line:
 		Task:        taskText,
 		DisplayTask: "best_of_n execution tie-break",
 		Tools:       discriminatorTools,
+		Model:       opts.verifierModelFor(cands[a], cands[b]),
 	})
 	if err != nil {
 		return 0, "", false
 	}
-	snap, done := waitOne(dctx, snaps, id, poll)
+	snap, done := waitOne(dctx, snaps, id, opts.Poll)
 	if !done || snap.Status != subagent.StatusCompleted {
 		return 0, "", false
 	}
 	pick := parseDiscrimination(snap.Result)
+	// Provenance tag: which model judged the tie ("" = inherited parent
+	// model, the r439 default). Cross-family verification beats
+	// same-family (arXiv:2512.02304), so the report must show whether the
+	// verdict was actually independent.
+	tag := fmt.Sprintf("[verifier=%s] ", vmOrInherited(opts.verifierModelFor(cands[a], cands[b])))
 	switch pick {
 	case "A":
-		return a, clip(snap.Result, 2000), true
+		return a, tag + clip(snap.Result, 2000), true
 	case "B":
-		return b, clip(snap.Result, 2000), true
+		return b, tag + clip(snap.Result, 2000), true
 	}
 	return 0, "", false // inconclusive or unparsed
+}
+
+func vmOrInherited(m string) string {
+	if m == "" {
+		return "inherited"
+	}
+	return m
 }
 
 // parseDiscrimination extracts the winner from the marker line. Scans the
