@@ -277,6 +277,59 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 	return metas, nil
 }
 
+// MemoryEntryInfo is the read-only projection returned by ListDetailed:
+// enough for the agent to decide which entries to re-save, supersede, or
+// delete, without loading full contents.
+type MemoryEntryInfo struct {
+	Key       string
+	SizeBytes int64
+	Uses      int
+	LastUsed  time.Time
+	Preview   string // first content line, markdown stripped, capped
+}
+
+// ListDetailed returns key/size/usage/preview for every stored entry
+// (including expired/deduped ones — visibility first, the agent judges).
+// This is the read side of the memory lifecycle: save_memory writes,
+// delete_memory removes, but until now the agent had no way to SEE what
+// is stored, so outdated entries persisted silently (SelfMem gap: agent
+// as memory curator needs an inventory view).
+func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
+	metas, err := am.collectMetas()
+	if err != nil {
+		return nil, err
+	}
+	var out []MemoryEntryInfo
+	for _, m := range metas {
+		info := MemoryEntryInfo{Key: m.Key, Uses: m.Uses, LastUsed: m.LastUsedAt}
+		if st, err := os.Stat(filepath.Join(am.dir, m.Key+".md")); err == nil {
+			info.SizeBytes = st.Size()
+		}
+		if data, err := os.ReadFile(filepath.Join(am.dir, m.Key+".md")); err == nil {
+			info.Preview = previewLine(string(data), 160)
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// previewLine returns the first non-heading, non-empty line of a memory
+// body, capped to max runes.
+func previewLine(body string, max int) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue // skip blank and markdown heading lines
+		}
+		runes := []rune(line)
+		if len(runes) > max {
+			runes = runes[:max]
+		}
+		return string(runes)
+	}
+	return ""
+}
+
 // Clear removes all memory files.
 func (am *AutoMemory) Clear() error {
 	entries, err := os.ReadDir(am.dir)
