@@ -31,8 +31,10 @@ func TestConsolidateLearnings_MergesAndReinforces(t *testing.T) {
 	if out[0].Reinforced != 1 || out[0].Confidence <= 0.5 {
 		t.Fatalf("reinforcement must bump confidence: %+v", out[0])
 	}
-	if out[0].Insight != "old insight" {
-		t.Fatalf("oldest text wins arbitration: %q", out[0].Insight)
+	// #3266(J): newest text wins arbitration - keeping the oldest froze
+	// the merged row at the stalest digest while confidence only rose.
+	if out[0].Insight != "repeat" {
+		t.Fatalf("newest text wins arbitration: %q", out[0].Insight)
 	}
 }
 
@@ -114,6 +116,7 @@ func TestRenderPromptSection_ReinforcedOlderBeatsFreshNoise(t *testing.T) {
 }
 
 func TestPersistConsolidatesDuplicateRows(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
 	dir := t.TempDir()
 	now := time.Now()
 	// Simulate a store with duplicates: persist twice with same category.
@@ -138,6 +141,9 @@ func TestPersistConsolidatesDuplicateRows(t *testing.T) {
 }
 
 func TestTrajListAndClear_UserSurface(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	trajHoldoutEnabled = false    // r462 holdout claims single-candidate fixtures
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{

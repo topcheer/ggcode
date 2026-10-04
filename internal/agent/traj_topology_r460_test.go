@@ -25,6 +25,7 @@ func writeR460Store(t *testing.T, path string, entries []trajectoryLearning) {
 }
 
 func TestTrajMergeInto_DedupesAndIsIdempotent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	main := t.TempDir()
@@ -67,6 +68,7 @@ func TestTrajMergeInto_AbsentSourceNoop(t *testing.T) {
 }
 
 func TestTrajExportImportRoundtrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	ws := t.TempDir()
@@ -92,6 +94,7 @@ func TestTrajExportImportRoundtrip(t *testing.T) {
 }
 
 func TestTrajBackflowFromWorktree(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	mainDir := t.TempDir()
@@ -113,6 +116,7 @@ func TestTrajBackflowFromWorktree(t *testing.T) {
 }
 
 func TestTrajBackflow_NoStoreOrSameDirNoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
 	trajHoldoutEnabled = false
 	t.Cleanup(func() { trajHoldoutEnabled = true })
 	mainDir := t.TempDir()

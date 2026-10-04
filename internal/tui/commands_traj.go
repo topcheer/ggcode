@@ -48,6 +48,9 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 				// r462 control arm: held out of injection, delta vs holdout.
 				marker = "h"
 				suffix = fmt.Sprintf(" (Δ%+.0fpp/%d)", v.DeltaPP, v.HoldRuns)
+			case v.Injects && v.General:
+				marker = "g" // #3266(H): global-tier entry that injects
+				injecting++
 			case v.Injects:
 				marker = ">"
 				injecting++
