@@ -397,3 +397,72 @@ func f(items []int) []int {
 		t.Errorf("conditional append must be exempt, got: %v", got)
 	}
 }
+
+// #3355: `var x []T` later granted capacity via plain assignment
+// (x = make([]T, 0, N)) is correctly preallocated and must NOT be flagged.
+// Mirrors the map check's excludeShadowedBinds (#1103) conservatism.
+func TestPreallocAssignMakeCapacityExempt(t *testing.T) {
+	// Plain delayed-init form (real trigger: change_reconcile.go shape).
+	code := `package main
+func collect(lines []string) []string {
+	var files []string
+	files = make([]string, 0, len(lines))
+	for _, l := range lines {
+		files = append(files, l)
+	}
+	return files
+}
+`
+	if got := checkMissingPrealloc("test.go", "", code); len(got) != 0 {
+		t.Errorf("var decl later granted capacity via = make(0,N) must be exempt, got: %v", got)
+	}
+
+	// Branch-selected capacities count too.
+	code2 := `package main
+func g(n int, big bool) []int {
+	var out []int
+	if big {
+		out = make([]int, 0, n*2)
+	} else {
+		out = make([]int, 0, n)
+	}
+	for i := 0; i < n; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test.go", "", code2); len(got) != 0 {
+		t.Errorf("branch-selected capacity via = make(0,N) must be exempt, got: %v", got)
+	}
+
+	// make with no capacity (x = make([]T, 0)) still warns - the fix must
+	// not silently exempt genuinely unsized delayed inits.
+	code3 := `package main
+func h(n int) []int {
+	var out []int
+	out = make([]int, 0)
+	for i := 0; i < n; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test.go", "", code3); len(got) == 0 {
+		t.Errorf("= make(0) without capacity must still warn")
+	}
+
+	// True positive control: bare var with no sized assignment still warns.
+	code4 := `package main
+func k(items []int) []int {
+	var out []int
+	for _, x := range items {
+		out = append(out, x)
+	}
+	return out
+}
+`
+	if got := checkMissingPrealloc("test.go", "", code4); len(got) == 0 {
+		t.Errorf("bare var decl without capacity grant must still warn")
+	}
+}
