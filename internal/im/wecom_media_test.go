@@ -228,6 +228,55 @@ func TestWecomUploadInitRejected(t *testing.T) {
 	}
 }
 
+// TestWecomUploadFileTypedAndSend (#3325) verifies the file-media upload
+// path end-to-end: a payload ABOVE the 10MB image cap but below the 20MB
+// file cap must ride the full init/chunk/finish protocol with body
+// type=file, then a msgtype=file frame carries the returned media_id.
+func TestWecomUploadFileTypedAndSend(t *testing.T) {
+	f := newFakeWeComServer(t)
+	defer f.srv.Close()
+	a := newWecomMediaAdapter(t, f)
+
+	// 11MB: would be rejected by the image cap, must pass the file cap.
+	data := make([]byte, 11<<20)
+	mediaID, err := a.wecomUploadMediaTyped(t.Context(), data, "report.pdf", "file", wecomMaxFileBytes)
+	if err != nil {
+		t.Fatalf("wecomUploadMediaTyped(file): %v", err)
+	}
+	if mediaID != "MEDIA123" {
+		t.Fatalf("media_id = %q, want MEDIA123", mediaID)
+	}
+	if err := a.sendWecomFileMsg("chat-1", mediaID); err != nil {
+		t.Fatalf("sendWecomFileMsg: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var initType any
+	fileFrameFound := false
+	for _, fr := range f.frames {
+		switch fr["cmd"] {
+		case wecomCmdUploadInit:
+			body, _ := fr["body"].(map[string]any)
+			initType = body["type"]
+		case wecomCmdSend:
+			body, _ := fr["body"].(map[string]any)
+			if body["msgtype"] == "file" {
+				fileBody, _ := body["file"].(map[string]any)
+				if fileBody["media_id"] == "MEDIA123" && body["chatid"] == "chat-1" {
+					fileFrameFound = true
+				}
+			}
+		}
+	}
+	if initType != "file" {
+		t.Fatalf("init frame body type = %v, want \"file\"", initType)
+	}
+	if !fileFrameFound {
+		t.Fatal("no aibot_send_msg msgtype=file frame recorded")
+	}
+}
+
 // TestWecomResolveImageLocalPath verifies local files feed the upload.
 func TestWecomResolveImageLocalPath(t *testing.T) {
 	a := &wecomAdapter{}
