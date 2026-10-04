@@ -365,6 +365,8 @@ func localizeSlashDescription(lang Language, cmd string) string {
 		return tr(lang, "slash.context")
 	case "/runreport":
 		return tr(lang, "slash.runreport")
+	case "/traj":
+		return tr(lang, "slash.traj")
 	case "/inspector":
 		return tr(lang, "slash.inspector")
 	case "/chat":

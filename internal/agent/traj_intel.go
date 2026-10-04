@@ -82,12 +82,19 @@ const (
 // trajectoryLearning represents one extracted insight from a completed run.
 type trajectoryLearning struct {
 	Timestamp time.Time      `json:"timestamp"`
-	Type      string         `json:"type"` // "strategy", "recovery", "optimization"
+	Type      string         `json:"type"` // "strategy", "recovery", "optimization", "teammate"
 	Task      string         `json:"task"` // first 120 chars of user prompt
 	Success   bool           `json:"success"`
 	Insight   string         `json:"insight"`
 	Metrics   map[string]int `json:"metrics,omitempty"`
 	Category  string         `json:"category"` // coarse classification
+
+	// r459 memory consolidation (Voyager-style success counting + decay).
+	// Zero values on legacy entries read as baseline confidence 0.5 via
+	// EffectiveConfidence(), so the schema is backward compatible.
+	Confidence     float64   `json:"confidence,omitempty"`      // [0,1], reinforcement-updated
+	Reinforced     int       `json:"reinforced,omitempty"`      // merge hits (same category+type)
+	LastReinforced time.Time `json:"last_reinforced,omitempty"` // last merge time
 }
 
 // trajIntelState manages post-run trajectory intelligence extraction.
@@ -282,9 +289,30 @@ func (s *trajIntelState) persistLocked() error {
 
 	all := append(existing, s.learnings...)
 
-	// Trim to most recent N entries.
+	// r459 memory consolidation: instead of appending N duplicate rows
+	// for a recurring pattern, merge same Category+Type entries into one
+	// reinforced row (Voyager-style success counting). A Success=true
+	// reinforcement raises confidence; Success=false lowers it (weak
+	// arbitration: the insight TEXT keeps the historical winner, but a
+	// failing streak erodes its injection priority instead of a silent
+	// newest-wins overwrite).
+	all = consolidateLearnings(all)
+
+	// Trim to most recent N entries - but evict lowest-confidence first
+	// among ties so repeatedly-reinforced old insights outlive one-off
+	// noise (pure tail FIFO was the pre-r459 behavior).
 	if len(all) > trajIntelMaxEntries {
-		all = all[len(all)-trajIntelMaxEntries:]
+		sort.SliceStable(all, func(i, j int) bool {
+			ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
+			if ci != cj {
+				return ci > cj
+			}
+			return all[i].Timestamp.After(all[j].Timestamp)
+		})
+		all = all[:trajIntelMaxEntries]
+		sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
+			return all[i].Timestamp.Before(all[j].Timestamp)
+		})
 	}
 
 	// Write atomically.
@@ -378,8 +406,14 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	if err != nil || len(entries) == 0 {
 		return ""
 	}
-	// Newest-first, stable on equal timestamps (load order breaks ties).
+	// Sort by effective confidence (decayed) then recency; the newest
+	// entry alone no longer silences a repeatedly-reinforced older
+	// insight. Below-threshold entries never inject (r459).
 	sort.SliceStable(entries, func(i, j int) bool {
+		ci, cj := entries[i].EffectiveConfidence(), entries[j].EffectiveConfidence()
+		if ci != cj {
+			return ci > cj
+		}
 		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
 	// Dedupe per Category, keep newest; Type counter caps variety.
@@ -390,6 +424,9 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	for _, l := range entries {
 		if total >= trajPromptMaxEntries {
 			break
+		}
+		if l.EffectiveConfidence() < trajPromptMinConfidence {
+			continue
 		}
 		key := l.Category
 		if key == "" {
@@ -417,6 +454,65 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	return section
 }
 
+// TrajLearningView is the user-facing projection of one learning (for
+// the /traj TUI command). r459: injected learnings were invisible and
+// unkillable - a polluted store kept whispering into the system prompt
+// with no surface to audit or purge it.
+type TrajLearningView struct {
+	Type       string
+	Category   string
+	Insight    string
+	Confidence float64
+	Reinforced int
+	Timestamp  time.Time
+	Injects    bool // would RenderPromptSection include it?
+}
+
+// TrajListLearnings returns the store projected for display, sorted by
+// effective confidence (same order the prompt renderer would pick in).
+func TrajListLearnings(workingDir string) []TrajLearningView {
+	s := newTrajIntelState()
+	s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.loadFromFile()
+	if err != nil {
+		return nil
+	}
+	views := make([]TrajLearningView, 0, len(entries))
+	for _, l := range entries {
+		conf := l.EffectiveConfidence()
+		views = append(views, TrajLearningView{
+			Type: l.Type, Category: l.Category, Insight: l.Insight,
+			Confidence: conf, Reinforced: l.Reinforced, Timestamp: l.Timestamp,
+			Injects: conf >= trajPromptMinConfidence,
+		})
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		if views[i].Confidence != views[j].Confidence {
+			return views[i].Confidence > views[j].Confidence
+		}
+		return views[i].Timestamp.After(views[j].Timestamp)
+	})
+	return views
+}
+
+// TrajClearLearnings removes the learning store (user-invoked purge).
+// Uses the same cross-process lock discipline as persistLocked.
+func TrajClearLearnings(workingDir string) error {
+	path := filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	unlock, err := lockTrajFile(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rmErr := os.Remove(path)
+	if rmErr != nil && !os.IsNotExist(rmErr) {
+		return rmErr
+	}
+	return nil
+}
+
 // teammateExperienceEntry mirrors internal/swarm's ledger record (kept as
 // a local struct to avoid an agent->swarm import edge).
 type teammateExperienceEntry struct {
@@ -424,6 +520,100 @@ type teammateExperienceEntry struct {
 	TeamID   string    `json:"team_id"`
 	Teammate string    `json:"teammate"`
 	Digest   string    `json:"digest"`
+}
+
+// r459 consolidation knobs.
+const (
+	// trajPromptMinConfidence gates prompt injection: eroded insights stop
+	// consuming the 8-slot budget.
+	trajPromptMinConfidence = 0.3
+
+	// trajConfidenceHalfLife: unreinforced insights decay to ~half weight
+	// over 30 days (computed at read time, never written back).
+	trajConfidenceHalfLife = 30 * 24 * time.Hour
+
+	// trajConfidenceStep is the per-reinforcement delta (success raises,
+	// failure lowers). Bounded to [0.05, 0.95].
+	trajConfidenceStep = 0.1
+)
+
+// EffectiveConfidence returns the read-time confidence of a learning:
+// legacy zero-value entries read as the 0.5 baseline, everything else is
+// the stored value decayed exponentially by time since last
+// reinforcement. Pure function - never mutates the entry.
+func (l trajectoryLearning) EffectiveConfidence() float64 {
+	if l.Confidence == 0 && l.Reinforced == 0 && l.LastReinforced.IsZero() {
+		return 0.5
+	}
+	ref := l.LastReinforced
+	if ref.IsZero() {
+		ref = l.Timestamp
+	}
+	age := time.Since(ref)
+	if age <= 0 {
+		return l.Confidence
+	}
+	// Weight = 0.5^n for n elapsed half-lives; n=0 (fresh) keeps full
+	// weight. Capped iterations floor very old entries instead of
+	// floating-point dust.
+	decay := 1.0
+	if halfLives := int64(age / trajConfidenceHalfLife); halfLives > 0 {
+		for i := int64(0); i < halfLives && i < 8; i++ {
+			decay *= 0.5
+		}
+	}
+	// Scale stored confidence toward the 0.5 midpoint by the decay weight.
+	return 0.5 + (l.Confidence-0.5)*decay
+}
+
+// consolidateLearnings merges same Category+Type entries into a single
+// reinforced row. The FIRST (oldest) entry keeps its insight text; each
+// matching later entry bumps Reinforced and moves confidence up
+// (Success=true) or down (Success=false) by trajConfidenceStep, clamped
+// to [0.05, 0.95]. LastReinforced tracks the newest merge.
+func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
+	// Fast path: nothing to merge.
+	type key struct{ cat, typ string }
+	idx := map[key]int{}
+	var out []trajectoryLearning
+	for _, l := range all {
+		// Only classified observations (non-empty Category) participate in
+		// reinforcement merging. Unclassified entries (empty Category -
+		// e.g. raw concurrent writes with no extraction) are distinct
+		// observations: merging them would silently drop rows and regress
+		// the #1512 no-lost-update guarantee.
+		if l.Category == "" {
+			out = append(out, l)
+			continue
+		}
+		k := key{l.Category, l.Type}
+		if i, ok := idx[k]; ok {
+			c := out[i].Confidence
+			if c == 0 && out[i].Reinforced == 0 {
+				c = 0.5 // legacy baseline
+			}
+			if l.Success {
+				c += trajConfidenceStep
+			} else {
+				c -= trajConfidenceStep
+			}
+			if c < 0.05 {
+				c = 0.05
+			}
+			if c > 0.95 {
+				c = 0.95
+			}
+			out[i].Confidence = c
+			out[i].Reinforced++
+			if l.Timestamp.After(out[i].LastReinforced) {
+				out[i].LastReinforced = l.Timestamp
+			}
+			continue
+		}
+		idx[k] = len(out)
+		out = append(out, l)
+	}
+	return out
 }
 
 // ingestTeammateExperience (r457) folds the swarm teammate-experience
