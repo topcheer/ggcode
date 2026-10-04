@@ -9,7 +9,6 @@ import (
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/im"
 	"github.com/topcheer/ggcode/internal/provider"
-	"github.com/topcheer/ggcode/internal/session"
 	"github.com/topcheer/ggcode/internal/tool"
 	"github.com/topcheer/ggcode/internal/tunnel"
 )
@@ -87,82 +86,6 @@ func newDaemonTunnelShareController(broker daemonTunnelBroker, bridge *im.Daemon
 		status:      status,
 		tunnelHost:  tunnelHost,
 	}
-}
-
-func (c *daemonTunnelShareController) PrepareBroker(broker *tunnel.Broker, target daemonTunnelCommandTarget, ses *session.Session) {
-	if c == nil || broker == nil || target == nil {
-		return
-	}
-
-	// Attach online broker to unified TunnelHost so PushStreamEvent forwards events
-	if c.tunnelHost != nil {
-		c.tunnelHost.AttachOnlineBroker(broker)
-	}
-
-	broker.OnCommand(func(cmd tunnel.GatewayMessage) {
-		c.HandleCommand(target, cmd)
-	})
-	broker.SetSnapshotProvider(func() tunnel.BrokerSnapshot {
-		return c.Snapshot()
-	})
-
-	sessionID := ""
-	var replay []tunnel.GatewayMessage
-	if ses != nil {
-		sessionID = ses.ID
-	}
-	if sessionID != "" {
-		// Use TunnelHost's projection store for replay if available
-		if c.tunnelHost != nil {
-			if events := c.tunnelHost.TunnelEvents(); events != nil {
-				replay = events
-				broker.SetAuthorityEpoch(c.tunnelHost.AuthorityEpoch())
-			}
-			// Recording is handled by TunnelHost's BindSession event recorder,
-			// forwarded to online broker via AttachOnlineBroker above.
-			// Cache session info and run canonical share bootstrap.
-			c.tunnelHost.SetSessionInfo(c.sessionInfo)
-			c.tunnelHost.PrepareOnlineShare(broker)
-		} else {
-			// Legacy fallback: create local projection store
-			if store, err := tunnel.NewDefaultProjectionStore(); err == nil {
-				broker.SetReplayProvider(func() []tunnel.GatewayMessage {
-					events, err := agentruntime.ProjectionReplay(store, sessionID)
-					if err != nil {
-						return nil
-					}
-					return events
-				})
-				broker.SetEventRecorder(func(ev tunnel.GatewayMessage) {
-					_ = agentruntime.AppendProjectionEvent(store, ev)
-				})
-				if epoch, events, err := agentruntime.PrepareProjectionReplay(store, ses); err == nil {
-					broker.SetAuthorityEpoch(epoch)
-					replay = events
-				}
-			}
-		}
-	} else {
-		// Legacy path (no TunnelHost): use PublishShareState for broker setup.
-		agentruntime.PublishShareState(broker, sessionID, c.Snapshot(), replay, true)
-	}
-}
-
-func (c *daemonTunnelShareController) Snapshot() tunnel.BrokerSnapshot {
-	snapshot := tunnel.BrokerSnapshot{
-		SessionInfo: c.sessionInfo,
-		Status:      c.currentStatus(),
-	}
-	if c.bridge != nil {
-		history := daemonTunnelMessagesToHistory(c.bridge.Messages())
-		if tail := c.currentIncompleteHistoryTail(); len(tail) > 0 {
-			history = append(history, tail...)
-		}
-		if len(history) > 0 {
-			snapshot.History = history
-		}
-	}
-	return snapshot
 }
 
 // daemonSnapshot builds a BrokerSnapshot from daemon bridge state for StartShare.
@@ -267,12 +190,6 @@ func (c *daemonTunnelShareController) HandleStreamEvent(ev provider.StreamEvent)
 	}
 }
 
-func (c *daemonTunnelShareController) currentStatus() tunnel.StatusData {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.status
-}
-
 func (c *daemonTunnelShareController) consumeUserMessageOverride() tunnel.MessageData {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -282,12 +199,6 @@ func (c *daemonTunnelShareController) consumeUserMessageOverride() tunnel.Messag
 	data := c.userOverrides[0]
 	c.userOverrides = c.userOverrides[1:]
 	return data
-}
-
-func (c *daemonTunnelShareController) currentIncompleteHistoryTail() []tunnel.HistoryEntry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return daemonTunnelHistoryTail(c.reasoningTail, c.textTail)
 }
 
 func (c *daemonTunnelShareController) setStatus(status, message string) {
@@ -329,17 +240,6 @@ func (c *daemonTunnelShareController) rolloverMainStream(force bool) {
 		return
 	}
 	c.broker.PushTextDone(msgID)
-}
-
-func daemonTunnelHistoryTail(reasoning, text string) []tunnel.HistoryEntry {
-	var history []tunnel.HistoryEntry
-	if reasoning = strings.TrimSpace(reasoning); reasoning != "" {
-		history = append(history, tunnel.HistoryEntry{Role: "reasoning", Content: reasoning})
-	}
-	if text = strings.TrimSpace(text); text != "" {
-		history = append(history, tunnel.HistoryEntry{Role: "assistant", Content: text})
-	}
-	return history
 }
 
 func daemonTunnelMessageDataFromContent(content []provider.ContentBlock) tunnel.MessageData {

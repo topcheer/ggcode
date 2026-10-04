@@ -45,7 +45,6 @@ func frOnboardTexts() map[string]string {
 		"im_more":          "Plus de canaux disponibles dans TUI",
 		"hint_nav":         "↑↓ naviguer · Entrée sélectionner · Tab changer · Esc retour · Ctrl+C quitter",
 		"hint_filter":      "Appuyez sur / pour filtrer",
-		"skip":             "ignorer",
 		"on":               "activé",
 		"off":              "désactivé",
 	}

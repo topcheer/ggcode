@@ -45,7 +45,6 @@ func viOnboardTexts() map[string]string {
 		"im_more":          "Thêm kênh có sẵn trong TUI",
 		"hint_nav":         "↑↓ điều hướng · Enter chọn · Tab chuyển · Esc quay lại · Ctrl+C thoát",
 		"hint_filter":      "Nhấn / để lọc",
-		"skip":             "bỏ qua",
 		"on":               "bật",
 		"off":              "tắt",
 	}

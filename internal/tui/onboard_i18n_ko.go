@@ -45,7 +45,6 @@ func koOnboardTexts() map[string]string {
 		"im_more":          "더 많은 채널은 TUI에서 설정 가능",
 		"hint_nav":         "↑↓ 탐색 · Enter 선택 · Tab 전환 · Esc 뒤로 · Ctrl+C 종료",
 		"hint_filter":      "/ 키로 필터",
-		"skip":             "건너뛰기",
 		"on":               "켜짐",
 		"off":              "꺼짐",
 	}
