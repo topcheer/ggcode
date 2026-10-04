@@ -243,3 +243,56 @@ func sha256Hash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])[:16]
 }
+
+// SubagentsRoot returns ~/.ggcode/subagents - the directory holding one
+// workspace-hash subdirectory per workspace that ever used named agents.
+func SubagentsRoot() string {
+	return filepath.Join(config.HomeDir(), ".ggcode", "subagents")
+}
+
+// SweepStaleWorkspaceDirs removes workspace-hash directories under
+// ~/.ggcode/subagents that have not been touched for olderThan, keeping the
+// current workspace's own directory (and anything newer than the cutoff).
+//
+// #3341 (sa-245 audit): every distinct workspace path creates a sha256-named
+// directory and NOTHING ever removed them - a real profile held 3445 of them,
+// most containing a single test artifact. The hash is not reversible, so
+// users cannot even tell which directory belongs to which workspace.
+// Directory mtime is the liveness signal: Save/Delete/Clean rewrite files
+// inside, which updates the parent dir mtime on file create/remove. A
+// conservative 90d cutoff matches the session retention default (#3337).
+func SweepStaleWorkspaceDirs(currentWorkspace string, olderThan time.Duration) int {
+	root := SubagentsRoot()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0 // no subagents dir yet - nothing to sweep
+	}
+	keep := ""
+	if normalized := normalizeWorkspacePath(currentWorkspace); normalized != "" {
+		keep = sha256Hash(normalized)
+	}
+	cutoff := time.Now().Add(-olderThan)
+	removed := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == keep {
+			continue // never age out the workspace we are running in
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue // unreadable or recently active - keep
+		}
+		if err := os.RemoveAll(filepath.Join(root, name)); err != nil {
+			debug.Log("subagent", "sweep: removing stale workspace dir %s: %v", name, err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		debug.Log("subagent", "sweep: removed %d stale subagent workspace dir(s) older than %s", removed, olderThan)
+	}
+	return removed
+}

@@ -746,6 +746,16 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		}
 	})
 
+	// #3341 (sa-245 audit): every workspace that ever used named agents
+	// leaves a sha256-named dir under ~/.ggcode/subagents forever (3445
+	// observed, most holding a single artifact; the hash is not reversible
+	// so users cannot even identify them). Same async best-effort pattern;
+	// 90d matches the session retention default.
+	safego.Go("startup.subagentSweep", func() {
+		wd, _ := os.Getwd()
+		subagent.SweepStaleWorkspaceDirs(wd, 90*24*time.Hour)
+	})
+
 	var replPendingSessionLock *session.SessionLock
 
 	if resumeID == "picker" {
