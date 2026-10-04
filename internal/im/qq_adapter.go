@@ -272,6 +272,23 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	// every outbound request within one Send must consume a unique seq, else
 	// QQ silently drops it as a duplicate (#966).
 	seq := replySeq
+	// #3319: reserve all seq slots for this Send atomically in the binding
+	// store (cross-process file lock) so a concurrent ggcode instance (TUI +
+	// daemon both serving the same QQ adapter) can't allocate the same
+	// msg_seq. Falls back to the snapshot-based counter when the store lacks
+	// the capability (single-instance semantics, unchanged).
+	reserved := false
+	if replyTo != "" && a.manager != nil {
+		n := len(images) + qqChunkCount(a.markdownSupport, remainingText)
+		if n > 0 {
+			if start, err := a.manager.ReservePassiveSeqs(binding.Workspace, replyTo, n); err == nil {
+				seq = start
+				reserved = true
+			} else if err != ErrNoChannelBound {
+				debug.Log("qq", "adapter=%s reserve passive seqs failed (fallback to snapshot): %v", a.name, err)
+			}
+		}
+	}
 	consumedSeqs := 0
 	for i, img := range images {
 		b64, err := a.resolveImageSource(ctx, img)
@@ -287,7 +304,9 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
-		a.recordPassiveReplies(binding, replyTo, 1)
+		if !reserved {
+			a.recordPassiveReplies(binding, replyTo, 1)
+		}
 		seq++
 		consumedSeqs++
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
@@ -331,7 +350,9 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 				return err
 			}
 			// #3317: per-send incremental recording (see the image loop).
-			a.recordPassiveReplies(binding, replyTo, 1)
+			if !reserved {
+				a.recordPassiveReplies(binding, replyTo, 1)
+			}
 			seq++
 			consumedSeqs++
 		}
@@ -1282,6 +1303,20 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 		return err
 	}
 	return nil
+}
+
+// qqChunkCount mirrors the chunk splitting used for the remaining text so
+// the #3319 pre-reservation sizes the seq allocation exactly like the send
+// loop below will consume it.
+func qqChunkCount(markdown bool, text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	if markdown {
+		return len(SplitMarkdown(text, PlatformLimits[PlatformQQ]))
+	}
+	return len(SplitMessageForPlatform(text, PlatformQQ))
 }
 
 func (a *qqAdapter) resolveReplyMode(binding ChannelBinding) (string, int) {
