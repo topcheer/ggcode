@@ -796,12 +796,22 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 		debug.Log("run_command", "BLOCKED: %s", gateResult.Reason)
 		return "", "", gateResult.Reason
 	}
+	var askEsc string
 	if gateResult.NeedsConfirmation() {
 		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
 		// These modes assume the user trusts the agent — the command is
 		// still logged as a warning for audit purposes.
 		if t.isBypassMode() {
 			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+			// #3282: the downgraded-allow is itself a denial the security
+			// ledger must see — a prober repeatedly triggering bypass-
+			// downgraded asks is the same sandbox-probing fingerprint as
+			// repeated blocks, and this third Record source has been
+			// promised by the SecLedger field comment since sa-216.
+			t.SecLedger.Record("gate", "ask-allowed", command)
+			if esc := t.SecLedger.Escalation(); esc != "" {
+				askEsc = esc + "\n\n"
+			}
 		} else {
 			debug.Log("run_command", "ASK: %s", gateResult.Reason)
 			// Caller returns this verbatim — the agent loop interprets the
@@ -817,6 +827,10 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 	if interactive := gate.InteractiveCommandWarning(command); interactive != "" {
 		preWarning = "[Interactive command warning] " + interactive + "\n\n"
 	}
+	// Escalation rides the preWarning prefix: a bypass-downgraded command
+	// still produces a (possibly successful) result, so this is the only
+	// channel through which the probing-pattern notice reaches the agent.
+	preWarning += askEsc
 	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != command {
 		debug.Log("run_command", "cleaned command: %s → %s", command, gateResult.CleanedCmd)
 		cleanedCmd = gateResult.CleanedCmd
