@@ -5431,7 +5431,15 @@ func (a *Agent) streamChatResponse(ctx context.Context, msgs []provider.Message,
 				}
 			}
 			// Fire LLM metric
-			a.emitMetric(turnMetrics.emit(usage))
+			ev := turnMetrics.emit(usage)
+			// #3295: stamp this event with THIS agent's actual model before
+			// handing it to the collector. Sub-agents may run a different
+			// model than the parent session (spawn_agent model override /
+			// best_of_n heterogeneous candidates); collectors downstream
+			// fill-if-empty with the session model, so true per-model cost
+			// attribution must originate here, not at the collector.
+			stampMetricModel(a.provider, &ev)
+			a.emitMetric(ev)
 			onEvent(event)
 			// Proactive rate-limit check: if the provider exposes rate-limit
 			// info and quotas are critical, emit a system warning event so

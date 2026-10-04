@@ -3316,9 +3316,15 @@ func (b *ChatBridge) recordMetric(ev interface{}) {
 	b.mu.Lock()
 	me.TurnIndex = b.usageTurnIndex
 	if b.currentSes != nil {
-		me.Model = b.currentSes.Model
-		me.Vendor = b.currentSes.Vendor
-		me.Endpoint = b.currentSes.Endpoint
+		// #3295: fill-if-empty. Events already carrying a Model (stamped at
+		// emit time by the agent that produced them - e.g. sub-agents with a
+		// model override) keep their own attribution; blanket overwriting
+		// with the session model corrupts per-model cost reporting.
+		if me.Model == "" {
+			me.Model = b.currentSes.Model
+			me.Vendor = b.currentSes.Vendor
+			me.Endpoint = b.currentSes.Endpoint
+		}
 		b.currentSes.AppendMetricEvent(me) // #3086: lock-guarded append (was a bare slice append)
 		b.currentSes.AppendMetricForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, me)
 	}

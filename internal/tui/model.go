@@ -1126,10 +1126,16 @@ func (m *Model) recordSessionMetric(ev metrics.MetricEvent) {
 		return
 	}
 	ev.TurnIndex = m.usageTurnIndex
-	// Use activeModel (actual running model) instead of potentially stale ses.Model
-	ev.Model = m.activeModel
-	ev.Vendor = m.activeVendor
-	ev.Endpoint = m.activeEndpoint
+	// #3295: fill-if-empty. Events already carrying a Model (stamped at emit
+	// time by the agent that produced them - e.g. sub-agents running a model
+	// override) keep their own attribution; overwriting them with the parent
+	// session's model corrupts per-model cost/performance reporting.
+	if ev.Model == "" {
+		// Use activeModel (actual running model) instead of potentially stale ses.Model
+		ev.Model = m.activeModel
+		ev.Vendor = m.activeVendor
+		ev.Endpoint = m.activeEndpoint
+	}
 	if ev.Model == "" {
 		ev.Model = m.session.Model
 		ev.Vendor = m.session.Vendor
