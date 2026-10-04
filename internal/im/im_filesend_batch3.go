@@ -296,7 +296,7 @@ func (a *signalAdapter) SendFile(ctx context.Context, binding ChannelBinding, fi
 		filename = "file"
 	}
 
-	att := "data:" + mimeType + ";filename=" + filename + ";base64," + base64.StdEncoding.EncodeToString(file.Data)
+	att := "data:" + mimeType + ";filename=" + sanitizeSignalAttachmentName(filename) + ";base64," + base64.StdEncoding.EncodeToString(file.Data)
 	payload := map[string]any{
 		"number":             a.account,
 		"message":            strings.TrimSpace(caption),
