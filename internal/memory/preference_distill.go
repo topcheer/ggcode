@@ -2,6 +2,7 @@ package memory
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -76,13 +77,36 @@ var correctiveMarkers = []string{
 	"改用",
 }
 
-// correctiveActionWords are the action verbs that turn a correction into a
-// durable preference: the user is specifying WHAT to use/do instead, not
-// just complaining about a result.
+// correctiveActionWords are the ENGLISH action verbs that turn a
+// correction into a durable preference: the user is specifying WHAT to
+// use/do instead, not just complaining. Matched with word boundaries
+// (#3311): a bare substring match hit "because"/"cause"/"refuse" via
+// "use" and let complaint sentences into the store.
 var correctiveActionWords = []string{
-	"use", "run", "go with", "prefer", "switch",
-	"用", "换", "跑", "执行", "安装",
+	"use", "run", "go with", "prefer", "switch", "install",
 }
+
+// selfSufficientCorrectiveMarkers are Chinese corrective markers in
+// verb+object form (别用 X / 改用 X / 换成 X): the marker itself IS the
+// action, so no separate action word is required (#3311).
+var selfSufficientCorrectiveMarkers = []string{
+	"别用", "改用", "换成",
+}
+
+// correctiveActionWordsZH are MULTI-CHARACTER Chinese action verbs
+// required to co-occur with a bare corrective marker (不对，...).
+// Single-character verbs (用/换/跑) were removed: they live inside
+// ordinary words (应用/作用/用户/更换/转换/跑单) and misfired on plain
+// bug reports - the exact precision failure #3311 documents (#3311).
+var correctiveActionWordsZH = []string{
+	"使用", "运行", "执行", "安装", "换掉",
+}
+
+// correctiveZHVerbObjectChars: single-character Chinese action verbs that
+// count ONLY in verb+object form - immediately followed by a space or an
+// ASCII token (用 pnpm / 换 docker). Inside CJK words (应用/更换/跑单)
+// the same characters are ordinary morphemes and must not match (#3311).
+var correctiveZHVerbObjectChars = []rune{'用', '换', '跑', '装'}
 
 const (
 	// maxPreferencesPerRun caps captures per run to bound noise.
@@ -136,14 +160,89 @@ func isPreferenceSentence(sent string) bool {
 			return true
 		}
 	}
+	// #3311: the corrective gate must not fire on plain complaints.
+	// Three tiers: verb+object Chinese markers are self-sufficient;
+	// bare Chinese correction markers need a multi-char action verb;
+	// English markers need a word-boundary action verb.
 	for _, c := range correctiveMarkers {
-		if strings.Contains(lower, strings.ToLower(c)) {
-			for _, a := range correctiveActionWords {
-				if strings.Contains(lower, a) {
+		if !strings.Contains(lower, strings.ToLower(c)) {
+			continue
+		}
+		for _, s := range selfSufficientCorrectiveMarkers {
+			if strings.Contains(lower, s) {
+				return true
+			}
+		}
+		for _, a := range correctiveActionWordsZH {
+			if strings.Contains(lower, a) {
+				return true
+			}
+		}
+		if containsZHVerbObject(lower) {
+			return true
+		}
+		if containsWordBoundary(lower, correctiveActionWords) {
+			return true
+		}
+		return false
+	}
+	return false
+}
+
+// containsZHVerbObject reports whether any single-character Chinese
+// action verb appears in verb+object form: immediately followed by a
+// space or an ASCII letter/digit (the object is a latin token, 用
+// pnpm). The same character inside a CJK word (应用) is followed by
+// another CJK rune and does not count (#3311).
+func containsZHVerbObject(s string) bool {
+	for _, c := range correctiveZHVerbObjectChars {
+		start := 0
+		for {
+			i := strings.IndexRune(s[start:], c)
+			if i < 0 {
+				break
+			}
+			pos := start + i
+			tail := s[pos+utf8.RuneLen(c):]
+			if tail != "" {
+				r, _ := utf8.DecodeRuneInString(tail)
+				if r == ' ' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 					return true
 				}
 			}
-			return false
+			start = pos + utf8.RuneLen(c)
+			if start >= len(s) {
+				break
+			}
+		}
+	}
+	return false
+}
+
+// containsWordBoundary reports whether s contains any word as a whole
+// word: both neighbors must be non-letter (or the string edge). English
+// action verbs matched as bare substrings hit because/cause/refuse
+// (#3311), so "use" in "because" must NOT count while "use" in
+// "no, use pnpm" must.
+func containsWordBoundary(s string, words []string) bool {
+	for _, w := range words {
+		start := 0
+		for {
+			i := strings.Index(s[start:], w)
+			if i < 0 {
+				break
+			}
+			pos := start + i
+			end := pos + len(w)
+			beforeOK := pos == 0 || !unicode.IsLetter(rune(s[pos-1]))
+			afterOK := end == len(s) || !unicode.IsLetter(rune(s[end]))
+			if beforeOK && afterOK {
+				return true
+			}
+			start = pos + 1
+			if start >= len(s) {
+				break
+			}
 		}
 	}
 	return false
