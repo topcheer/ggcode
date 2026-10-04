@@ -93,6 +93,7 @@ For tasks where a single attempt frequently fails (tricky refactor, elusive bug,
 - **Economics**: N runs cost N x sub-agent tokens - only justified for tasks where one attempt frequently fails. The orchestrator needs N free sub-agent slots (16-session budget) and refuses cleanly otherwise.
 - **Cancellation**: cancelling the tool call does NOT kill the candidates; a partial report with live IDs comes back and they keep running (poll via `wait_agent`/`list_agents`).
 - **Cross-model ensemble** (heterogeneous candidates): pass `models` (2-4 model names, each available on the current endpoint) instead of `n` — one candidate runs per model, e.g. mixing a cheap model with flagships. Decorrelating candidate errors gives the consensus ranking genuinely independent votes instead of N copies of one model's failure modes (Mixture-of-Models-style ensembles, 2026); the per-candidate model appears in the report lines.
+- **Heterogeneous verifier** (verdict independence): pass `verifier_models` (1-4 model names) to route the execution tie-break discriminator - used when candidates rank too close to separate by consensus - to a model different from the tied candidates. The first entry not used by either candidate is picked, and the discriminator evidence is tagged `[verifier=<model>]`. Same-family verification is measurably weaker than cross-family (arXiv:2512.02304): a judge sharing the candidates' model inherits their blind spots, so this decorrelates the verdict too. Omitted = discriminator inherits the parent model.
 
 ```json
 {"task": "Fix the flaky test in internal/session by ..., verify with go test -run TestSession ./internal/session/", "n": 3, "isolation": "worktree", "description": "并行修 flaky 测试"}
@@ -100,6 +101,10 @@ For tasks where a single attempt frequently fails (tricky refactor, elusive bug,
 
 ```json
 {"task": "...same contract...", "models": ["glm-5.3-flash", "glm-5.2"], "description": "异构双模型并行取证"}
+```
+
+```json
+{"task": "...same contract...", "models": ["glm-5.3", "glm-5.2"], "verifier_models": ["glm-5.3-flash"], "description": "异构候选 + 独立判别者"}
 ```
 
 ---

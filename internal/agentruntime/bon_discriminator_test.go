@@ -75,7 +75,7 @@ func TestDiscriminateTiePicksWinner(t *testing.T) {
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": discSnap("cand-1", "DISCRIMINATION: winner=B"),
 	}}
-	idx, ev, ok := discriminateTie(context.Background(), sp, sn, tieCands(), "do the thing", 10*time.Millisecond)
+	idx, ev, ok := discriminateTie(context.Background(), sp, sn, tieCands(), BestOfNOptions{Task: "do the thing", Poll: 10 * time.Millisecond})
 	if !ok {
 		t.Fatal("expected a discriminated winner")
 	}
@@ -116,7 +116,7 @@ func TestDiscriminateTieInconclusiveNoWinner(t *testing.T) {
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": discSnap("cand-1", "DISCRIMINATION: winner=inconclusive"),
 	}}
-	if _, _, ok := discriminateTie(context.Background(), sp, sn, tieCands(), "task", 10*time.Millisecond); ok {
+	if _, _, ok := discriminateTie(context.Background(), sp, sn, tieCands(), BestOfNOptions{Task: "task", Poll: 10 * time.Millisecond}); ok {
 		t.Fatal("inconclusive verdict must not produce a winner")
 	}
 }
@@ -127,14 +127,14 @@ func TestDiscriminateTieUnparseableAndFailedFallback(t *testing.T) {
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": discSnap("cand-1", "I ran out of patience."),
 	}}
-	if _, _, ok := discriminateTie(context.Background(), sp, sn, tieCands(), "task", 10*time.Millisecond); ok {
+	if _, _, ok := discriminateTie(context.Background(), sp, sn, tieCands(), BestOfNOptions{Task: "task", Poll: 10 * time.Millisecond}); ok {
 		t.Fatal("unparseable output must not produce a winner")
 	}
 	// Discriminator itself failed.
 	sn2 := &fakeSnaps{m: map[string]subagent.Snapshot{
 		"cand-1": {ID: "cand-1", Status: subagent.StatusFailed, Error: "boom"},
 	}}
-	if _, _, ok := discriminateTie(context.Background(), sp, sn2, tieCands(), "task", 10*time.Millisecond); ok {
+	if _, _, ok := discriminateTie(context.Background(), sp, sn2, tieCands(), BestOfNOptions{Task: "task", Poll: 10 * time.Millisecond}); ok {
 		t.Fatal("failed discriminator must not produce a winner")
 	}
 }
@@ -143,7 +143,7 @@ func TestDiscriminateTieNoPairNoLaunch(t *testing.T) {
 	sp := &fakeSpawner{}
 	sn := &fakeSnaps{m: map[string]subagent.Snapshot{}}
 	noWT := []CandidateOutcome{{Name: "only", Verdict: "succeeded", Result: "ok"}}
-	if _, _, ok := discriminateTie(context.Background(), sp, sn, noWT, "task", 10*time.Millisecond); ok {
+	if _, _, ok := discriminateTie(context.Background(), sp, sn, noWT, BestOfNOptions{Task: "task", Poll: 10 * time.Millisecond}); ok {
 		t.Fatal("no pair must not discriminate")
 	}
 	if len(sp.calls) != 0 {
