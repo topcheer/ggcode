@@ -120,6 +120,21 @@ func (o *UserEditObserver) NoteAgentWrite(path string) {
 // both directions (r447).
 const negSignalRecycle = 2
 
+// NoteAgentUndo (#3249): the AGENT itself undid its own edit to path via the
+// undo_edit tool. This is a normal self-correction, NOT a user rejection -
+// it must not count toward the negative-signal recycle path. The only thing
+// it must do is forget the tracked write so the undo's own mtime bump is
+// not later misread by CheckTurnBoundary as a user rewrite (self-pollution
+// neutralization - the one part of the old wiring that was correct).
+func (o *UserEditObserver) NoteAgentUndo(path string) {
+	if o == nil || o.store == nil || path == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	delete(o.wrote, path)
+}
+
 // RestampBaseline re-samples mtimes for all tracked files (#3241, r455).
 // The agent's own shell formatters (gofmt -w, make fmt, sed -i via
 // run_command) move mtimes the same way a user edit does; without a
@@ -263,6 +278,16 @@ func (a *Agent) getUserEditObserver() *UserEditObserver {
 	existing := a.userEditObs
 	a.mu.Unlock()
 	return existing
+}
+
+// RecordUserUndo (#3249) is the exported bridge for USER-initiated undo
+// paths (TUI /undo -> checkpoint restore, desktop equivalent): the user
+// rejected the agent's output, which is a true negative teaching signal.
+// Unlike the agent's own undo_edit (NoteAgentUndo - self-correction only),
+// this cancels pending positive observations and, on repetition, retires
+// promoted user_edit rules.
+func (a *Agent) RecordUserUndo(path string) {
+	a.getUserEditObserver().NoteNegativeSignal(path)
 }
 
 // extractUserEditPaths pulls every agent-authored file path out of a
