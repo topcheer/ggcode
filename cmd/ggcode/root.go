@@ -462,6 +462,12 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
 		debug.Log("root", "swept %d stale atomic-write temp file(s) in config dir", n)
 	}
+	// #3346 (sa-247 audit): session todo files accumulate at HOME level with
+	// no deletion path; 30d retention sweep, same best-effort startup pattern.
+	safego.Go("startup.todoSweep", func() {
+		tool.SweepStaleTodoFiles(30 * 24 * time.Hour)
+	})
+
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")

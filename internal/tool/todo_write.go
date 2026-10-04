@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // maxTodoItems limits the number of todo items in a single todo_write call.
@@ -28,6 +30,43 @@ type Todo struct {
 // ~/.ggcode/todos/
 func todosDir() string {
 	return filepath.Join(config.HomeDir(), ".ggcode", "todos")
+}
+
+// SweepStaleTodoFiles removes session todo files under ~/.ggcode/todos that
+// have not been modified for olderThan.
+//
+// #3346 (sa-247 audit): todo files are written at HOME level (one JSON per
+// session, global across workspaces) and nothing ever deleted them - same
+// unbounded-growth shape as the sessions dir before #3337. Session-scoped
+// todo lists lose all value once the session is long gone; 30d retention
+// keeps them well beyond any plausible resume window while bounding the
+// directory. mtime is the liveness signal: todo_write rewrites the whole
+// file on every update.
+func SweepStaleTodoFiles(olderThan time.Duration) int {
+	entries, err := os.ReadDir(todosDir())
+	if err != nil {
+		return 0 // no todos dir yet - nothing to sweep
+	}
+	cutoff := time.Now().Add(-olderThan)
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue // unreadable or recently touched - keep
+		}
+		if err := os.Remove(filepath.Join(todosDir(), entry.Name())); err != nil {
+			debug.Log("todo-write", "sweep: removing stale todo file %s: %v", entry.Name(), err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		debug.Log("todo-write", "sweep: removed %d stale todo file(s) older than %s", removed, olderThan)
+	}
+	return removed
 }
 
 // TodoFilePath returns the path to the todo file for a given session ID.
