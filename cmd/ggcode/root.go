@@ -731,6 +731,21 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// it actually is, alongside the lock cleanup.
 	agent.CleanupOldJournals(24 * time.Hour)
 
+	// #3337 (sa-243 audit): CleanupOlderThan is the same never-wired
+	// defect as #1490-E, at GB scale - ~/.ggcode/sessions had 3.5GB / 120
+	// sessions (largest 593MB) because retention existed since the #1490
+	// era but no production caller ever ran it. Async + best-effort:
+	// deletion latency on a big backlog must not block startup. Pinned
+	// sessions are skipped by CleanupOlderThan itself; 90d keeps this
+	// conservative (conversation data, not logs).
+	safego.Go("startup.sessionRetention", func() {
+		if n, err := store.CleanupOlderThan(time.Now().AddDate(0, 0, -90)); err != nil {
+			debug.Log("session", "retention sweep failed: %v", err)
+		} else if n > 0 {
+			debug.Log("session", "retention sweep removed %d session(s) older than 90d", n)
+		}
+	})
+
 	var replPendingSessionLock *session.SessionLock
 
 	if resumeID == "picker" {
