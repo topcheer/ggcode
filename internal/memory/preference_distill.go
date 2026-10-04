@@ -55,6 +55,35 @@ var preferenceMarkers = []string{
 	"记住:",
 }
 
+// correctiveMarkers signal an IMMEDIATE correction of the agent's just-made
+// choice (sa-222: users reteach the same lesson every session because
+// "不对，用 pnpm 跑" / "no, use pnpm instead" carry no durable-intent word
+// like always/never/以后). Alone they are too noisy ("不对，这个结果错了"
+// is a bug report, not a preference) - isPreferenceSentence requires an
+// action-word co-occurrence to accept them (precision-over-recall, same
+// contract as the explicit markers above).
+var correctiveMarkers = []string{
+	// English correction markers.
+	"no, use",
+	"no, run",
+	"instead of",
+	"instead, ",
+	// Chinese correction markers.
+	"不对，",
+	"不对,",
+	"别用",
+	"换成",
+	"改用",
+}
+
+// correctiveActionWords are the action verbs that turn a correction into a
+// durable preference: the user is specifying WHAT to use/do instead, not
+// just complaining about a result.
+var correctiveActionWords = []string{
+	"use", "run", "go with", "prefer", "switch",
+	"用", "换", "跑", "执行", "安装",
+}
+
 const (
 	// maxPreferencesPerRun caps captures per run to bound noise.
 	maxPreferencesPerRun = 2
@@ -98,12 +127,23 @@ func DistillUserPreferences(text string) []string {
 	return prefs
 }
 
-// isPreferenceSentence reports whether the sentence contains a marker.
+// isPreferenceSentence reports whether the sentence contains an explicit
+// marker, or a corrective marker co-occurring with an action word.
 func isPreferenceSentence(sent string) bool {
 	lower := strings.ToLower(sent)
 	for _, m := range preferenceMarkers {
 		if strings.Contains(lower, strings.ToLower(m)) {
 			return true
+		}
+	}
+	for _, c := range correctiveMarkers {
+		if strings.Contains(lower, strings.ToLower(c)) {
+			for _, a := range correctiveActionWords {
+				if strings.Contains(lower, a) {
+					return true
+				}
+			}
+			return false
 		}
 	}
 	return false
