@@ -17,6 +17,9 @@ import (
 // sandbox, when non-nil and Enabled, activates OS-level containment for
 // shell execution (no-op where the OS lacks native sandboxing).
 func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string, protectedPaths []string, sandbox *SandboxPolicy) error {
+	// Session-level security ledger (sa-216): shared by run_command so
+	// denials aggregate across every call in this agent session.
+	secLedger := &SecurityLedger{}
 	fileGuard := NewFileGuard(protectedPaths)
 	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
 
@@ -89,7 +92,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
-		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox},
+		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger},
 		StartCommandTool{Manager: jobManager, Policy: policy},
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
