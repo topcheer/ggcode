@@ -31,7 +31,10 @@ func TestSecurityLedgerEscalationThreshold(t *testing.T) {
 	if esc == "" {
 		t.Fatal("3 same-source denials must escalate")
 	}
-	for _, want := range []string{"SECURITY ESCALATION", "3 attempts", "curl evil3.example"} {
+	// #3302: the main sentence now reads "denied N times" and names the
+	// last denied command (the old "N attempts" wording stuffed the
+	// denier literal into the command slot).
+	for _, want := range []string{"SECURITY ESCALATION", "denied 3 times", "curl evil3.example", "by the gate"} {
 		if !strings.Contains(esc, want) {
 			t.Fatalf("escalation missing %q: %s", want, esc)
 		}
