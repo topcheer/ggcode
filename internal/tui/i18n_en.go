@@ -685,6 +685,10 @@ func enCatalog(key string) string {
 		return "No workspace directory available."
 	case "traj.cleared":
 		return "Trajectory learnings purged. Fresh runs start with a clean store."
+	case "traj.cleared_global":
+		return "Global trajectory learnings purged (cross-workspace tier removed)."
+	case "traj.cleared_global_hint":
+		return "Note: %d global-tier learnings remain (marked g in /traj list) and still inject. Run /traj clear global to purge them."
 	case "traj.empty":
 		return "No past-run learnings stored yet."
 	case "traj.header":

@@ -680,6 +680,46 @@ func TrajClearLearnings(workingDir string) error {
 	return nil
 }
 
+// TrajClearGlobalLearnings (#3278) removes the user-level global store.
+// /traj clear used to purge only the workspace tier while the renderer
+// kept injecting global-tier fillers - visible in /traj list but
+// unkillable without a manual rm. Same lock discipline as the workspace
+// clear (global store path + its own lock file).
+func TrajClearGlobalLearnings() error {
+	path, err := TrajGlobalPath()
+	if err != nil {
+		return err
+	}
+	unlock, err := lockTrajFile(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rmErr := os.Remove(path)
+	if rmErr != nil && !os.IsNotExist(rmErr) {
+		return rmErr
+	}
+	return nil
+}
+
+// TrajGlobalRemaining (#3278) counts entries still live in the global
+// tier - the post-clear hint source so a bare /traj clear tells the user
+// that g-marked entries survive and how to purge them.
+func TrajGlobalRemaining() (int, error) {
+	path, err := TrajGlobalPath()
+	if err != nil {
+		return 0, err
+	}
+	entries, err := loadTrajFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return len(entries), nil
+}
+
 // TrajGlobalPath (r460) returns the user-level learning store path
 // (~/.ggcode/trajectory-learnings.jsonl). The workspace store is the
 // write target, but a fresh workspace previously meant losing every

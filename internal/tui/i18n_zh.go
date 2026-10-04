@@ -696,6 +696,10 @@ func zhCatalog(key string) string {
 		return "无可用的工作区目录。"
 	case "traj.cleared":
 		return "轨迹学习库已清空，后续运行将从空库开始。"
+	case "traj.cleared_global":
+		return "全局轨迹学习库已清空（跨工作区层已移除）。"
+	case "traj.cleared_global_hint":
+		return "注意：全局层仍有 %d 条学习（/traj list 中标记 g）且仍在注入。执行 /traj clear global 可清除。"
 	case "traj.empty":
 		return "尚无历史运行学习条目。"
 	case "traj.header":

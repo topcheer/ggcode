@@ -26,11 +26,28 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 	}
 	switch sub {
 	case "clear", "purge":
+		// #3278: /traj clear global purges the user-level global tier
+		// (bare clear only removes the workspace file - global fillers
+		// kept injecting and were previously unkillable without rm).
+		if len(parts) >= 2 && parts[1] == "global" {
+			if err := agent.TrajClearGlobalLearnings(); err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("/traj clear global: %v", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), m.t("traj.cleared_global"))
+			return nil
+		}
 		if err := agent.TrajClearLearnings(wd); err != nil {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("/traj clear: %v", err))
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), m.t("traj.cleared"))
+		// #3278: say it when the global tier still holds entries - a
+		// silent partial purge left g-marked items whispering into every
+		// future prompt with no visible remedy.
+		if n, gErr := agent.TrajGlobalRemaining(); gErr == nil && n > 0 {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("traj.cleared_global_hint"), n))
+		}
 		return nil
 	case "list", "":
 		views := agent.TrajListLearnings(wd)
