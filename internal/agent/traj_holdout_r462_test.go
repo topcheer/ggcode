@@ -39,13 +39,17 @@ func holdoutLearning(cat, typ string, conf float64) trajectoryLearning {
 
 // 1. Rotation determinism: same day + same candidates -> same held key,
 // across independent calls; a changed day rotates within the category.
+// #3275: candidates now need injection-arm history (InjectedRuns > 0) and
+// multi-candidate categories - single-candidate / never-injected shapes
+// moved to traj_holdout_3275_test.go as regression probes.
 func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 	dir := t.TempDir()
 	entries := []trajectoryLearning{
-		holdoutLearning("build", "pattern", 0.8),
-		holdoutLearning("build", "failure", 0.7),
-		holdoutLearning("build", "hint", 0.9),
-		holdoutLearning("test", "pattern", 0.6),
+		hold3275Learning("build", "pattern", 0.8, 3),
+		hold3275Learning("build", "failure", 0.7, 3),
+		hold3275Learning("build", "hint", 0.9, 3),
+		hold3275Learning("test", "pattern", 0.6, 3),
+		hold3275Learning("test", "failure", 0.6, 3),
 	}
 	trajHoldoutDay = func() int64 { return 100 }
 	t.Cleanup(func() { trajHoldoutDay = func() int64 { return time.Now().UTC().Unix() / 86400 } })
@@ -61,15 +65,27 @@ func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 		}
 	}
 	// Streak preservation: same day re-select keeps counters (written below).
+	// Day-100 slot in the two-key "test" category selects a deterministic
+	// key; record against whatever WAS held, then verify its run count.
+	heldTestKey := a[trajKey{cat: "test", typ: "pattern"}] || a[trajKey{cat: "test", typ: "failure"}]
+	if !heldTestKey {
+		t.Fatalf("expected a test-category hold, got %v", a)
+	}
 	s := holdoutTestState(t, dir)
-	s.recordHoldoutLocked(holdoutLearning("test", "pattern", 0.6))
+	var heldKey trajKey
+	for k := range a {
+		if k.cat == "test" {
+			heldKey = k
+		}
+	}
+	s.recordHoldoutLocked(trajectoryLearning{Category: heldKey.cat, Type: heldKey.typ})
 	s.recordHoldoutOutcome(dir, true)
 	led, err := loadHoldoutLedger(trajHoldoutPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range led {
-		if e.Category == "test" && e.HoldoutRuns != 1 {
+		if e.Category == "test" && e.InsightKey == trajHoldoutKeyString(heldKey) && e.HoldoutRuns != 1 {
 			t.Fatalf("holdout run not recorded: %+v", e)
 		}
 	}
@@ -85,15 +101,23 @@ func TestHoldoutSelect_DeterministicRotation(t *testing.T) {
 // holdout ledger — the r461 injection counters stay untouched (decoupling).
 func TestHoldout_RenderSkipAndCounterDecoupling(t *testing.T) {
 	dir := t.TempDir()
-	entries := []trajectoryLearning{holdoutLearning("build", "pattern", 0.9)}
+	// #3275: two eligible candidates so the category actually rotates
+	// (single-candidate categories are exempt from the holdout now).
+	entries := []trajectoryLearning{
+		hold3275Learning("build", "pattern", 0.9, 3),
+		hold3275Learning("build", "failure", 0.7, 3),
+	}
 	s := holdoutTestState(t, dir, entries...)
 	trajHoldoutDay = func() int64 { return 100 }
 	t.Cleanup(func() { trajHoldoutDay = func() int64 { return time.Now().UTC().Unix() / 86400 } })
 
 	s.RenderPromptSection(dir)
-	target := trajKey{cat: "build", typ: "pattern"}
-	if !s.holdoutThisRun[target] {
-		t.Fatalf("expected the seeded candidate held out, got %v", s.holdoutThisRun)
+	if len(s.holdoutThisRun) != 1 {
+		t.Fatalf("expected exactly one seeded candidate held out, got %v", s.holdoutThisRun)
+	}
+	var target trajKey
+	for k := range s.holdoutThisRun {
+		target = k
 	}
 	if s.injectedThisRun[target] {
 		t.Fatal("held entry must NOT be counted as injected")
@@ -102,14 +126,17 @@ func TestHoldout_RenderSkipAndCounterDecoupling(t *testing.T) {
 	if len(s.holdoutThisRun) != 0 {
 		t.Fatal("outcome write-back must consume the per-run set")
 	}
-	// r461 counters untouched on disk.
+	// r461 counters of the HELD entry untouched on disk; the non-held
+	// sibling was genuinely injected and may advance its counters normally.
 	ls, err := s.loadFromFile()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, l := range ls {
-		if l.InjectedRuns != 0 || l.AfterSuccess != 0 {
-			t.Fatalf("control arm leaked into injection counters: %+v", l)
+		if trajKeyOf(l) == target {
+			if l.InjectedRuns != 3 || l.AfterSuccess != 3 {
+				t.Fatalf("control arm leaked into held entry's counters: %+v", l)
+			}
 		}
 	}
 }
@@ -139,8 +166,9 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 		if got := ls[0].Confidence; got >= 0.9 {
 			t.Fatalf("confidence not decayed: %v", got)
 		}
-		if led, _ := loadHoldoutLedger(trajHoldoutPath(dir)); len(led) != 0 {
-			t.Fatalf("verdict must release the holdout entry, got %+v", led)
+		if led, _ := loadHoldoutLedger(trajHoldoutPath(dir)); len(led) != 1 || !led[0].ReleasedUntil.After(time.Now()) {
+			// #3275: release = persisted row + suppression window (not deletion).
+			t.Fatalf("verdict must release via suppression window, got %+v", led)
 		}
 	})
 	t.Run("positive-delta releases without decay", func(t *testing.T) {
@@ -160,8 +188,9 @@ func TestHoldout_VerdictBoundaries(t *testing.T) {
 		if ls[0].Confidence != 0.9 {
 			t.Fatalf("helpful insight must not decay: %v", ls[0].Confidence)
 		}
-		if led, _ := loadHoldoutLedger(trajHoldoutPath(dir)); len(led) != 0 {
-			t.Fatalf("helpful verdict must release, got %+v", led)
+		if led, _ := loadHoldoutLedger(trajHoldoutPath(dir)); len(led) != 1 || !led[0].ReleasedUntil.After(time.Now()) {
+			// #3275: release = persisted row + suppression window (not deletion).
+			t.Fatalf("helpful verdict must release via suppression window, got %+v", led)
 		}
 	})
 	t.Run("immature injection arm stays held unjudged", func(t *testing.T) {
