@@ -84,10 +84,26 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	// Extract progress callback from context (if available) for live streaming.
+	// Structured protocol (sa-217): the wait window gives exact percent/ETA,
+	// which the legacy bare-string pipe could never express. EmitProgress
+	// falls back to the legacy ToolProgressKey automatically.
 	var progressFn subagent.SnapshotProgressFunc
-	if tpf, ok := ctx.Value(ToolProgressKey{}).(ToolProgressFunc); ok {
+	if ctx.Value(ToolProgressKey{}) != nil || ctx.Value(ProgressEmitterKey{}) != nil {
+		start := time.Now()
 		progressFn = func(summary string) {
-			tpf("", "wait_agent", summary)
+			ev := ProgressEvent{ToolName: "wait_agent", Phase: PhaseWaiting, Message: summary}
+			if wait > 0 {
+				elapsed := time.Since(start)
+				p := float64(elapsed) / float64(wait) * 100
+				if p > 99 {
+					p = 99
+				}
+				ev.Percent = ProgressPercent(p)
+				if remain := wait - elapsed; remain > 0 {
+					ev.ETA = ProgressETA(remain)
+				}
+			}
+			EmitProgress(ctx, ev)
 		}
 	}
 
