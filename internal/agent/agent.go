@@ -1598,6 +1598,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// r457: fold swarm teammate-experience ledger into the store
 			// BEFORE extraction so the same persist pass writes both.
 			a.trajIntel.ingestTeammateExperience(a.WorkingDir())
+			// r461: outcome write-back for learnings injected into this
+			// run's system prompt (InjectedRuns/AfterSuccess/AfterFail).
+			// Runs before extraction/consolidation so counters land even
+			// if this run also adds new rows. Cancelled runs are skipped:
+			// their terminal state reflects the user's interrupt, not the
+			// insight's effectiveness, and counting them would penalize
+			// every injected entry.
+			if !isCancelled {
+				a.trajIntel.recordInjectionOutcome(a.WorkingDir(), runStats.Success)
+			}
 			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
 		}
 		// Record run metrics for cross-session regression detection.
