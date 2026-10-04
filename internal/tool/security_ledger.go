@@ -93,15 +93,14 @@ func (l *SecurityLedger) Escalation() string {
 	if worstN < denialEscalationThreshold {
 		return ""
 	}
+	// #3302: events are appended chronologically, so scanning from the
+	// head yields the EARLIEST matches - "Recent" must be the newest:
+	// walk in reverse and keep the last three (newest first).
 	var recent []string
-	shown := 0
-	for _, e := range l.events {
+	for i := len(l.events) - 1; i >= 0 && len(recent) < 3; i-- {
+		e := l.events[i]
 		if e.Denier == worst.denier && e.RuleKind == worst.kind {
 			recent = append(recent, e.Command)
-			shown++
-			if shown == 3 {
-				break
-			}
 		}
 	}
 	return fmt.Sprintf(
