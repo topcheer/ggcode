@@ -7,8 +7,12 @@ import (
 	"time"
 )
 
-// r447 negative-signal probes: undo cancels pending observations, repeated
-// undos retire promoted user_edit rules, other rules are never touched.
+// r447/#3249 negative-signal probes. #3249 split the channels: a USER undo
+// (NoteNegativeSignal, fed by Agent.NoteUserUndo from /undo) cancels pending
+// observations and, repeated, retires promoted user_edit rules; the AGENT's
+// own undo_edit (NoteAgentSelfUndo) only forgets its own wrote anchor and
+// must not touch pending observations or the recycle counter. Other rules
+// are never touched.
 
 // seedPending simulates one prior positive observation for path.
 func seedPending(o *UserEditObserver, path string, mt time.Time) {
@@ -117,4 +121,41 @@ func TestNegativeHitsDecayWithTTL(t *testing.T) {
 	if still {
 		t.Fatal("stale negHit must decay at turn boundary")
 	}
+}
+
+// TestAgentSelfUndoOnlyNeutralizesAnchor (#3249): the agent's own undo_edit
+// must forget its wrote anchor (the undo write moved the mtime) but keep
+// pending user-edit observations from earlier turn gaps and keep the
+// recycle counter at zero - model self-correction is not user rejection.
+func TestAgentSelfUndoOnlyNeutralizesAnchor(t *testing.T) {
+	o, dir := newTestObserver(t)
+	f := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(f, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedPending(o, f, time.Now().Add(-time.Minute))
+
+	o.NoteAgentSelfUndo(f)
+
+	o.mu.Lock()
+	_, hasPending := o.pending[f]
+	_, hasWrote := o.wrote[f]
+	_, hasNeg := o.negHits[f]
+	o.mu.Unlock()
+	if hasWrote {
+		t.Fatal("agent self-undo must clear its own wrote anchor")
+	}
+	if !hasPending {
+		t.Fatal("agent self-undo must NOT cancel pending user-edit observations")
+	}
+	if hasNeg {
+		t.Fatal("agent self-undo must NOT feed the negative-recycle counter")
+	}
+}
+
+// TestNoteUserUndoNilSafety (#3249): Agent.NoteUserUndo must be nil-safe
+// before the observer/store exist, mirroring TestNegativeSignalRequiresStore.
+func TestNoteUserUndoNilSafety(t *testing.T) {
+	a := &Agent{}
+	a.NoteUserUndo("/x/y.go") // must not panic (no rule store yet)
 }

@@ -3850,10 +3850,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// later misreported as stale.
 					if tc.Name == "undo_edit" && !result.IsError {
 						a.expiredRead.recordUndo(p)
-						// r447: an undo is a negative teaching signal - it cancels
-						// pending user-edit observations for this file and, on
-						// repetition, retires promoted user-edit rules.
-						a.getUserEditObserver().NoteNegativeSignal(p)
+						// #3249: the agent's own undo_edit is self-correction,
+						// not user rejection - only neutralize our own wrote
+						// anchor (the undo write moves the mtime); the negative
+						// signal channel belongs to USER undos (NoteUserUndo).
+						a.getUserEditObserver().NoteAgentSelfUndo(p)
 					}
 					// Export guard: detect breaking changes to exported Go symbols
 					// (removed functions, changed signatures) by comparing against

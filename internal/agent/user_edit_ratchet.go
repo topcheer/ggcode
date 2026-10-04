@@ -145,12 +145,32 @@ func (o *UserEditObserver) RestampBaseline() {
 	}
 }
 
-// NoteNegativeSignal (r447): the user undid the agent's edit to path.
-// One signal cancels any pending positive observation for that file - the
-// "user rewrites this file" reading was a misread; the user was rejecting
-// the edit, not adjusting it. At negSignalRecycle signals an
-// already-promoted user_edit rule for the file is retired: repeated undos
-// mean the rule's advice is pointing the wrong direction.
+// NoteAgentSelfUndo (#3249): the AGENT undid its own edit to path via the
+// undo_edit tool - routine self-correction, not user rejection. It must
+// forget the agent's own wrote anchor only: undo_edit rewrites the file, so
+// the mtime moves exactly like an external edit, and without this the next
+// CheckTurnBoundary would misread the agent's own undo as "the user
+// manually adjusted this file" (a false positive observation). It must NOT
+// cancel pending observations (those came from real user edits in earlier
+// turn gaps) and must NOT feed the negative-recycle counter (#3249: r447
+// had this path wired to NoteNegativeSignal, so two rounds of ordinary
+// model self-correction silently retired a user-edit rule).
+func (o *UserEditObserver) NoteAgentSelfUndo(path string) {
+	if o == nil || o.store == nil || path == "" {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	delete(o.wrote, path)
+}
+
+// NoteNegativeSignal (#3249): the USER undid the agent's edit to path - the
+// sole legitimate source is a user-initiated undo (TUI /undo via
+// Agent.NoteUserUndo). One signal cancels any pending positive observation
+// for that file - the "user rewrites this file" reading was a misread; the
+// user was rejecting the edit, not adjusting it. At negSignalRecycle signals
+// an already-promoted user_edit rule for the file is retired: repeated user
+// undos mean the rule's advice is pointing the wrong direction.
 func (o *UserEditObserver) NoteNegativeSignal(path string) {
 	if o == nil || o.store == nil || path == "" {
 		return
@@ -235,6 +255,16 @@ func userEditRule(path string, turns int) Rule {
 		FixHint:     "Read " + base + " first; diff your plan against the user's edits.",
 		Source:      ruleSourceUserEdit,
 	}
+}
+
+// NoteUserUndo (#3249): record a user-initiated undo (TUI /undo → checkpoint
+// restore). This is the real negative teaching signal r447 intended: the
+// user rejected the agent's edit. Wired from commands_slash_admin.go after
+// cpMgr.Undo("user") succeeds - that path bypasses the agent tool loop, so
+// without this hook a user undo was invisible to the ratchet (and its file
+// rewrite even counted as a POSITIVE mtime observation).
+func (a *Agent) NoteUserUndo(path string) {
+	a.getUserEditObserver().NoteNegativeSignal(path)
 }
 
 // getUserEditObserver lazily builds the observer on the agent's rule store

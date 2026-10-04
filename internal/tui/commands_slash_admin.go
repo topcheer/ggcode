@@ -176,6 +176,10 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		// are cleared; mtime-based entries (read_file) are safe because the
 		// file's mtime changed during the undo write.
 		m.agent.InvalidateToolCaches()
+		// #3249: a user /undo is the genuine rejection signal for the
+		// user-edit ratchet - without this, the restore's own mtime bump
+		// fed a POSITIVE observation (inverted polarity).
+		m.agent.NoteUserUndo(cp.FilePath)
 		// Show diff (new -> old)
 		diffText := diff.UnifiedDiff(cp.NewContent, cp.OldContent, 3)
 		var b strings.Builder
