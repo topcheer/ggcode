@@ -93,7 +93,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// Execution
 		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger},
-		StartCommandTool{Manager: jobManager, Policy: policy},
+		StartCommandTool{Manager: jobManager, Policy: policy, SecLedger: secLedger}, // #3294: background starts join the session denial ledger
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
 		StopCommandTool{Manager: jobManager},

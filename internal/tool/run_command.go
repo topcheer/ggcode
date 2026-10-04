@@ -638,6 +638,11 @@ func (t RunCommand) Clone() Tool {
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
 		Sandbox:    t.Sandbox,
+		// #3293: the session-level security ledger must survive the clone.
+		// Sub-agent registries clone every tool (spawn_agent / trial_fork /
+		// skill / swarm / desktop); dropping the pointer silently blinded
+		// sandbox-probe detection for every sub-agent's run_command calls.
+		SecLedger: t.SecLedger,
 	}
 }
 

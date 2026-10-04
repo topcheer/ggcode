@@ -20,6 +20,11 @@ type StartCommandTool struct {
 	OutputTee  io.Writer
 	OnPreExec  func(command, description string)
 	OnPostExec func(exitCode int, err error)
+	// SecLedger (#3294): background commands pass the same command gate as
+	// run_command, so their denials (block, bypass-downgraded ask,
+	// supervised ask-as-block) are part of the same sandbox-probing
+	// fingerprint. Nil-safe: unwired = no detection.
+	SecLedger *SecurityLedger
 }
 
 func (t StartCommandTool) Name() string { return "start_command" }
@@ -83,14 +88,32 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	gate := NewCommandGate()
 	gateResult := gate.Check(args.Command)
 	if gateResult.IsBlocked() {
-		return Result{IsError: true, Content: gateResult.Reason}, nil
+		// #3294: same denial sources as run_command's gate - background
+		// starts are equally probeable.
+		t.SecLedger.Record("gate", "block", args.Command)
+		content := gateResult.Reason
+		if esc := t.SecLedger.Escalation(); esc != "" {
+			content += "\n\n" + esc
+		}
+		return Result{IsError: true, Content: content}, nil
 	}
 	if gateResult.NeedsConfirmation() {
 		if t.isBypassMode() {
 			debug.Log("command-gate", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+			// #3294: bypass-downgraded ask is a denial the ledger must see
+			// (same "ask-allowed" kind as run_command's #3283 hook, so the
+			// escalation threshold aggregates across both tools).
+			t.SecLedger.Record("gate", "ask-allowed", args.Command)
 		} else {
 			// In non-bypass mode, treat Ask as Block for background jobs.
-			return Result{IsError: true, Content: "Command requires confirmation: " + gateResult.Reason}, nil
+			// #3294: that IS a denial (the command never starts) - record it
+			// under its own kind so supervised-mode probing stays visible.
+			t.SecLedger.Record("gate", "ask-blocked", args.Command)
+			content := "Command requires confirmation: " + gateResult.Reason
+			if esc := t.SecLedger.Escalation(); esc != "" {
+				content += "\n\n" + esc
+			}
+			return Result{IsError: true, Content: content}, nil
 		}
 	}
 	if len(gateResult.Warnings) > 0 {
