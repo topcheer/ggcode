@@ -22,6 +22,7 @@ echo "fix typo" | ggcode  # Read from stdin
 Additional pipe-mode flags:
 - `--allowedTools <name>` — restrict tools (repeatable)
 - `--output <path>` — write output to file (default: stdout)
+- `--output-schema <path>` — constrain the final response to a JSON Schema file (structured outputs; supported endpoints use constrained decoding, others fall back to prompt guidance + a JSON-validity exit-code check)
 
 ### Resume Session
 
@@ -261,6 +262,7 @@ ggcode version                         # Print version, commit, and build date
 | `-p, --prompt <prompt>` | Non-interactive pipe mode |
 | `--allowedTools <name>` | Restrict tools in pipe mode (repeatable) |
 | `--output <path>` | Output file path (default: stdout) |
+| `--output-schema <path>` | JSON Schema the final response must conform to (pipe mode) |
 | `--resume [id]` | Resume a session |
 | `--resume-picker` | Open session picker |
 | `--new-session` | Skip auto-resume, always start a new session |

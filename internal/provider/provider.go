@@ -318,6 +318,17 @@ type ToolChoiceProvider interface {
 	ToolChoice() string
 }
 
+// ResponseSchemaSetter is implemented by providers that can constrain the
+// FINAL assistant response to a JSON Schema via constrained decoding
+// (OpenAI structured outputs, response_format=json_schema strict). Pipe
+// mode (--output-schema) asserts this capability; providers that do not
+// implement it fall back to prompt-level guidance + post-hoc JSON
+// repair, so the feature degrades gracefully across endpoints.
+type ResponseSchemaSetter interface {
+	SetResponseSchema(schema json.RawMessage)
+	ResponseSchema() json.RawMessage
+}
+
 // SamplingOverride is the per-call MCP sampling override snapshot
 // (#2248): the sampling handler swaps ONE atomic pointer for the whole
 // mutate->chat->restore window, so the main agent's concurrent Chat

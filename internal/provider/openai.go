@@ -37,11 +37,17 @@ type OpenAIProvider struct {
 	temperature      float64
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
 	topP             float64
-	name             string
-	baseURL          string                    // endpoint URL, for logging
-	transport        *headerInjectingTransport // kept for runtime header updates
-	logprobs         bool                      // sa-74: request token logprobs for confidence telemetry
-	policy           callPolicy                // sa-78: per-call deadline + retry budget
+	// responseSchema constrains the FINAL assistant response to a JSON
+	// Schema (OpenAI structured outputs, response_format=json_schema,
+	// strict). Empty = unconstrained. Anthropic/Gemini providers do not
+	// implement ResponseSchemaSetter and fall back to prompt-level
+	// guidance + jsonrepair.
+	responseSchema json.RawMessage
+	name           string
+	baseURL        string                    // endpoint URL, for logging
+	transport      *headerInjectingTransport // kept for runtime header updates
+	logprobs       bool                      // sa-74: request token logprobs for confidence telemetry
+	policy         callPolicy                // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name, implementing ModelNameProvider.
@@ -132,6 +138,32 @@ func (p *OpenAIProvider) ToolChoice() string { return p.toolChoice }
 // Non-allowlisted tools are serialized exactly as before.
 func (p *OpenAIProvider) SetStrictTools(allow map[string]bool) {
 	p.strictTools = allow
+}
+
+// SetResponseSchema installs a JSON Schema that constrains the final
+// assistant response (OpenAI structured outputs). nil/empty disables.
+// Implemented per the same bare-field pattern as SetToolChoice.
+func (p *OpenAIProvider) SetResponseSchema(schema json.RawMessage) {
+	p.responseSchema = schema
+}
+
+// ResponseSchema returns the installed response schema (nil = none).
+func (p *OpenAIProvider) ResponseSchema() json.RawMessage { return p.responseSchema }
+
+// applyResponseSchema injects response_format=json_schema (strict) when a
+// schema is installed. The schema is passed through verbatim as a JSON
+// object (json.RawMessage implements json.Marshaler).
+func (p *OpenAIProvider) applyResponseSchema(req *openai.ChatCompletionRequest) {
+	if len(p.responseSchema) == 0 {
+		return
+	}
+	req.ResponseFormat = &openai.ChatCompletionResponseFormat{
+		JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+			Name:   "final_answer",
+			Schema: p.responseSchema,
+			Strict: true,
+		},
+	}
 }
 
 // probeChat sends a single chat request without retry, adaptive cap
@@ -514,6 +546,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		req.Tools = p.convertTools(tools)
 	}
 	p.applyToolChoice(&req)
+	p.applyResponseSchema(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
 	p.applyLogprobs(&req)
@@ -615,6 +648,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		req.Tools = p.convertTools(tools)
 	}
 	p.applyToolChoice(&req)
+	p.applyResponseSchema(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
 	p.applyLogprobs(&req)

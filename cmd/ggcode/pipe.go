@@ -29,11 +29,35 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputSchemaPath string) int {
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
+	}
+
+	// --output-schema: constrain the final response to a JSON Schema
+	// (structured outputs). Providers implementing ResponseSchemaSetter
+	// get constrained decoding; others fall back to prompt guidance +
+	// JSON-validity check at the end of the run.
+	var outputSchema json.RawMessage
+	if outputSchemaPath != "" {
+		raw, readErr := os.ReadFile(outputSchemaPath)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "reading --output-schema: %v\n", readErr)
+			return 1
+		}
+		if !json.Valid(raw) {
+			fmt.Fprintf(os.Stderr, "--output-schema: %s is not valid JSON\n", outputSchemaPath)
+			return 1
+		}
+		outputSchema = raw
+		if s, ok := prov.(provider.ResponseSchemaSetter); ok {
+			s.SetResponseSchema(raw)
+		} else {
+			fmt.Fprintf(os.Stderr, "note: %s does not support constrained decoding; falling back to prompt guidance + JSON check\n", resolved.VendorID)
+			prompt = prompt + "\n\nRespond with a single JSON object that conforms to this JSON Schema (no prose, no markdown fences):\n" + string(raw)
+		}
 	}
 
 	workingDir, err := os.Getwd()
@@ -204,7 +228,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Fprint errors now set writeErr and feed the exit code; the output
 	// file is Close-checked too (NFS commit/flush).
 	var writeErr error
+	// --output-schema: accumulate the streamed response text so the JSON
+	// validity check can run after the stream completes.
+	var schemaOut strings.Builder
 	writeText := func(text string) {
+		if outputSchema != nil {
+			schemaOut.WriteString(text)
+		}
 		if _, err := fmt.Fprint(w, text); err != nil && writeErr == nil {
 			writeErr = err
 			fmt.Fprintf(os.Stderr, "warning: writing output failed: %v\n", err)
@@ -263,6 +293,14 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	if hasError {
 		return 1
 	}
+	// --output-schema contract: the final response must be parseable JSON
+	// (after markdown-fence stripping for the fallback path). Structured-
+	// output endpoints guarantee this server-side; the check catches
+	// fallback-path drift and gives CI a trustworthy exit code.
+	if outputSchema != nil && !pipeOutputIsValidJSON(schemaOut.String()) {
+		fmt.Fprintln(os.Stderr, "ggcode pipe: --output-schema set but the final response is not valid JSON (after fence stripping)")
+		return 1
+	}
 	// #1531: Fprint to *os.File lands in the page cache and returns nil -
 	// ENOSPC/NFS-async-commit/FUSE-flush errors only surface at Close.
 	// The comment above has promised Close-checking since #1444-B; do it
@@ -304,6 +342,26 @@ func effectivePipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string, al
 		return dedupeStrings(allowedDirs)
 	}
 	return pipeAllowedDirs(cfg, cfgPath, workingDir)
+}
+
+// pipeOutputIsValidJSON reports whether the final response body is valid
+// JSON, tolerating a single markdown-fenced block (the fallback path asks
+// for raw JSON but models sometimes wrap it).
+func pipeOutputIsValidJSON(s string) bool {
+	if json.Valid([]byte(s)) {
+		return true
+	}
+	if i := strings.Index(s, "```"); i >= 0 {
+		rest := s[i+3:]
+		if j := strings.Index(rest, "\n"); j >= 0 {
+			rest = rest[j+1:]
+		}
+		if k := strings.LastIndex(rest, "```"); k >= 0 {
+			rest = rest[:k]
+		}
+		return json.Valid([]byte(strings.TrimSpace(rest)))
+	}
+	return false
 }
 
 func pipePermissionMode(bypass bool, defaultMode string) permission.PermissionMode {
