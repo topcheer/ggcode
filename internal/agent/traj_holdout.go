@@ -222,6 +222,26 @@ func trajHoldoutSelect(workingDir string, entries []trajectoryLearning) map[traj
 			}
 		}
 	}
+	// #3300 (G): safety-net merge for the three row-dropping paths above -
+	// (1) len(eligible) <= 1 skips the whole category body, (2) the pause
+	// path continues past the sibling-preservation loop, (3) a category
+	// whose keys all fell below the confidence gate (decay) or were
+	// effectiveness-gated never enters byCat at all. `out` is a full
+	// ledger rewrite, so any row not re-appended here is silently deleted:
+	// that resets sibling counters (#3284 regression) and voids release
+	// windows (blind re-claim on the next rotation). Merge every ledger
+	// row not already present in out, keyed by (Category, InsightKey).
+	outSeen := map[string]bool{}
+	for _, e := range out {
+		outSeen[e.Category+"\x00"+e.InsightKey] = true
+	}
+	for cat, rows := range byCatLedger {
+		for k, e := range rows {
+			if !outSeen[cat+"\x00"+k] {
+				out = append(out, e)
+			}
+		}
+	}
 	if err := writeHoldoutLedger(path, out); err != nil {
 		return nil
 	}
@@ -284,6 +304,19 @@ func (s *trajIntelState) recordHoldoutOutcome(workingDir string, success bool) {
 			if success {
 				e.HoldoutSuccesses++
 			}
+		}
+		// #3300 (B): never re-verdict a row still inside its release
+		// window. The verdict block below used to run for every mature
+		// row on every recordHoldoutOutcome call (even when this run held
+		// a different key), so a released row took one decay step per run
+		// (instead of the designed one step per verdict) and had its
+		// ReleasedUntil pushed out to now+7d on every pass - the window
+		// never expired and the key was force-retired to the confidence
+		// floor within a week. Counters above are unaffected: a released
+		// row is never claimed by select, so keys[k] is false for it.
+		if e.ReleasedUntil.After(time.Now().UTC()) {
+			out = append(out, e)
+			continue
 		}
 		if e.HoldoutRuns >= trajHoldoutMinRuns && e.HoldoutRuns > 0 {
 			var inj *trajectoryLearning
