@@ -187,13 +187,6 @@ func linuxDisplayRegionFor(_ int) (ScreenshotRegion, error) {
 // out to xrandr/wlr-randr.
 var linuxDisplayRegionForFn = linuxDisplayRegionFor
 
-func detectLinuxScreenshotTool() string {
-	if tools := candidateLinuxScreenshotTools(); len(tools) > 0 {
-		return tools[0]
-	}
-	return ""
-}
-
 // candidateLinuxScreenshotTools returns installed screenshot tools ordered
 // for the current session type (#1571-A): on X11, an incidental grim
 // (pulled in by distro deps) was tried first and its guaranteed failure
