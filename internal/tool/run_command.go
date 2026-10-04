@@ -52,6 +52,11 @@ type RunCommand struct {
 	// in an OS-level containment sandbox (Seatbelt on macOS). See
 	// shell_sandbox.go for the policy model.
 	Sandbox *SandboxPolicy
+	// SecLedger (research round sa-216) records every denial (gate block,
+	// bypass-downgraded ask, sandbox EPERM) and surfaces an escalation
+	// warning when one denial source fires repeatedly - the behavioral
+	// fingerprint of sandbox probing. Nil-safe: unwired = no detection.
+	SecLedger *SecurityLedger
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -236,6 +241,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	var cleanedCmd, preWarn string
 	cleanedCmd, preWarn, blocked := t.applyCommandGate(gate, args.Command)
 	if blocked != "" {
+		t.SecLedger.Record("gate", "block", args.Command)
+		if esc := t.SecLedger.Escalation(); esc != "" {
+			blocked = blocked + "\n\n" + esc
+		}
 		return Result{IsError: true, Content: blocked}, nil
 	}
 	if cleanedCmd != "" {
@@ -419,7 +428,11 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
 	// config knob so the agent adapts instead of retrying blindly.
 	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
+		t.SecLedger.Record("sandbox", "eperm", args.Command)
 		result.Content += sandboxEPERMHint
+		if esc := t.SecLedger.Escalation(); esc != "" {
+			result.Content += "\n" + esc
+		}
 	}
 	return result, nil
 }
