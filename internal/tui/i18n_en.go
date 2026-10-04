@@ -681,6 +681,16 @@ func enCatalog(key string) string {
 		return "\nUse /undo to revert the most recent, /redo to re-apply.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory not initialized.\n\n"
+	case "traj.no_workspace":
+		return "No workspace directory available."
+	case "traj.cleared":
+		return "Trajectory learnings purged. Fresh runs start with a clean store."
+	case "traj.empty":
+		return "No past-run learnings stored yet."
+	case "traj.header":
+		return "Past-run learnings (%d stored, %d injecting into your prompt; > = injected):"
+	case "traj.usage":
+		return "Usage: /traj [list|clear]"
 	case "memory.list_failed":
 		return "Error listing memories: %v\n\n"
 	case "memory.none":
@@ -1019,6 +1029,8 @@ func enCatalog(key string) string {
 		return "Show context window usage breakdown (tokens, messages, capacity)"
 	case "slash.runreport":
 		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
+	case "slash.traj":
+		return "List (/traj) or purge (/traj clear) the past-run learnings injected into your system prompt"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":

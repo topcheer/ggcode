@@ -692,6 +692,16 @@ func zhCatalog(key string) string {
 		return "\n使用 /undo 回滚最近一次修改，/redo 重做。\n\n"
 	case "memory.auto_unavailable":
 		return "自动记忆未初始化。\n\n"
+	case "traj.no_workspace":
+		return "无可用的工作区目录。"
+	case "traj.cleared":
+		return "轨迹学习库已清空，后续运行将从空库开始。"
+	case "traj.empty":
+		return "尚无历史运行学习条目。"
+	case "traj.header":
+		return "历史运行学习库（共存 %d 条，其中 %d 条会注入提示词；> = 会注入）："
+	case "traj.usage":
+		return "用法：/traj [list|clear]"
 	case "memory.list_failed":
 		return "列出记忆失败：%v\n\n"
 	case "memory.none":
@@ -1034,6 +1044,8 @@ func zhCatalog(key string) string {
 		return "显示上下文窗口使用情况（token、消息、容量）"
 	case "slash.runreport":
 		return "评估本次会话轨迹，离线输出效率评分卡"
+	case "slash.traj":
+		return "查看（/traj）或清空（/traj clear）注入系统提示的历史经验学习库"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":
