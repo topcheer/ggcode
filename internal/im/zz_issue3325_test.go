@@ -222,6 +222,39 @@ func TestIssue3325_SendFileGuards(t *testing.T) {
 	}
 }
 
+func TestIssue3332_SignalFilenameSemicolonNeutralized(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	a := &signalAdapter{name: "sig", account: "+10000000000", baseURL: srv.URL, conn: srv.Client()}
+	binding := ChannelBinding{Adapter: "sig", ChannelID: "+15550001111"}
+	// #3332 repro: the raw name would make the server-side ';'-split parse
+	// FileName="a" and silently drop ";b.pdf" (extension lost).
+	file := OutboundFile{Filename: "a;b.pdf", MIME: "application/pdf", Data: []byte("%PDF")}
+	if err := a.SendFile(context.Background(), binding, file, ""); err != nil {
+		t.Fatalf("SendFile failed: %v", err)
+	}
+	atts, _ := gotBody["base64_attachments"].([]any)
+	if len(atts) != 1 {
+		t.Fatalf("base64_attachments missing: %v", gotBody["base64_attachments"])
+	}
+	att, _ := atts[0].(string)
+	// The metadata section before ";base64," must contain exactly one
+	// filename segment ending in the preserved extension.
+	head := att[:strings.LastIndex(att, ";base64,")]
+	if !strings.HasSuffix(head, "filename=a_b.pdf") {
+		t.Fatalf("filename must be neutralized with extension kept, got %q", head)
+	}
+	if strings.Count(strings.TrimPrefix(head, "data:application/pdf;"), ";") != 0 {
+		t.Fatalf("raw ';' inside filename segment would be truncated server-side: %q", head)
+	}
+}
+
 func TestIssue3325_WecomFileCapDistinctFromImageCap(t *testing.T) {
 	a := &wecomAdapter{name: "wc"}
 	// Between the image cap (10MB) and the file cap (20MB): must pass the
