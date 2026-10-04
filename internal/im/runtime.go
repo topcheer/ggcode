@@ -1223,6 +1223,32 @@ func (m *Manager) SendDirect(ctx context.Context, binding ChannelBinding, event 
 	return sendWithTimeout(ctx, sink, binding, event)
 }
 
+// ErrFileUploadUnsupported is returned by SendFileDirect when the adapter
+// does not implement FileSender - callers fall back to the legacy
+// path-as-text delivery (#3316).
+var ErrFileUploadUnsupported = errors.New("adapter does not support file upload")
+
+// SendFileDirect (#3316) delivers one arbitrary file to the adapter's bound
+// channel via the optional FileSender interface. Mirrors SendDirect's
+// binding/running checks; unsupported adapters return
+// ErrFileUploadUnsupported so the tool layer can fall back.
+func (m *Manager) SendFileDirect(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error {
+	m.mu.RLock()
+	sink := m.sinks[binding.Adapter]
+	m.mu.RUnlock()
+	if strings.TrimSpace(binding.ChannelID) == "" {
+		return ErrNoChannelBound
+	}
+	if sink == nil {
+		return fmt.Errorf("IM adapter %q is not running", binding.Adapter)
+	}
+	fs, ok := sink.(FileSender)
+	if !ok {
+		return ErrFileUploadUnsupported
+	}
+	return fs.SendFile(ctx, binding, file, caption)
+}
+
 // SendInteractive sends an interactive message to all bound adapters that
 // support it. Returns a map of adapter name → platform message ID for
 // callback correlation. Adapters that don't support interactive messages

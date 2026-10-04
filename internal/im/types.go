@@ -266,6 +266,25 @@ type Sink interface {
 	Send(context.Context, ChannelBinding, OutboundEvent) error
 }
 
+// OutboundFile (#3316) is one arbitrary file to deliver as a real file
+// message (document/media upload), not path text. Data is pre-read and
+// size-checked by the tool layer; adapters decide photo-vs-document per
+// their platform's semantics.
+type OutboundFile struct {
+	Path     string
+	Filename string
+	MIME     string
+	Data     []byte
+}
+
+// FileSender (#3316): optional interface for adapters that can upload
+// ARBITRARY files (documents, archives, logs - not just images) as real
+// file messages. Adapters that don't implement it keep the legacy
+// behavior (file path delivered as text).
+type FileSender interface {
+	SendFile(ctx context.Context, binding ChannelBinding, file OutboundFile, caption string) error
+}
+
 type ShareLinkProvider interface {
 	GenerateShareLink(context.Context, string) (string, error)
 }
