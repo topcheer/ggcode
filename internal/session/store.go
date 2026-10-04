@@ -1885,6 +1885,16 @@ func (s *JSONLStore) Delete(id string) error {
 		// caller knows the file survived, but the store stays consistent.
 		return fmt.Errorf("removing session file after index update: %w", err)
 	}
+	// #3337: also drop the .flock sidecar. Delete() used to remove only
+	// the .jsonl, leaving orphan <id>.jsonl.flock files behind forever
+	// (~35 observed in a real profile; the graceful Release path deletes
+	// its lock, but a deleted session never went through Release).
+	// IsNotExist is fine: most sessions have no sidecar (lock never taken
+	// or already released). A concurrently-held lock is advisory only -
+	// removing the file is safe; the holder keeps its fd.
+	if err := os.Remove(path + ".flock"); err != nil && !os.IsNotExist(err) {
+		debug.Log("session", "removing flock sidecar for %s: %v", id, err)
+	}
 	return nil
 }
 
