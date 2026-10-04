@@ -96,6 +96,15 @@ type trajectoryLearning struct {
 	Confidence     float64   `json:"confidence,omitempty"`      // [0,1], reinforcement-updated
 	Reinforced     int       `json:"reinforced,omitempty"`      // merge hits (same category+type)
 	LastReinforced time.Time `json:"last_reinforced,omitempty"` // last merge time
+
+	// r461 outcome feedback loop: causal accounting for what each
+	// injected insight actually did to run outcomes. InjectedRuns counts
+	// runs whose system prompt contained this entry; AfterSuccess/
+	// AfterFail count those runs' terminal states. Zero values (legacy
+	// entries) mean "never measured" and never trigger the gate.
+	InjectedRuns int `json:"injected_runs,omitempty"`
+	AfterSuccess int `json:"after_success,omitempty"`
+	AfterFail    int `json:"after_fail,omitempty"`
 }
 
 // trajIntelState manages post-run trajectory intelligence extraction.
@@ -104,6 +113,10 @@ type trajIntelState struct {
 	learnings []trajectoryLearning // in-memory cache
 	filePath  string               // persistence path
 	loaded    bool
+
+	// r461: identities injected into the current run's system prompt,
+	// consumed (cleared) by the run-end recordInjectionOutcome write-back.
+	injectedThisRun map[trajKey]bool
 }
 
 func newTrajIntelState() *trajIntelState {
@@ -268,9 +281,60 @@ func (s *trajIntelState) maybeExtractAndPersist(workingDir string, stats *RunSta
 	}
 }
 
-// persistLocked appends new learnings to the JSONL file and trims to max entries.
-// Caller must hold s.mu.
+// persistLocked appends new learnings to the JSONL file and trims to max
+// entries. Caller must hold s.mu. Since r461 the load→append→rewrite runs
+// inside rewriteAllLocked's cross-process critical section.
 func (s *trajIntelState) persistLocked() error {
+	writeErr := s.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
+		if loadErr != nil && !os.IsNotExist(loadErr) {
+			return nil, fmt.Errorf("load: %w", loadErr)
+		}
+
+		all := consolidateLearnings(append(existing, s.learnings...))
+
+		// Trim to most recent N entries - but evict lowest-confidence first
+		// among ties so repeatedly-reinforced old insights outlive one-off
+		// noise (pure tail FIFO was the pre-r459 behavior).
+		if len(all) > trajIntelMaxEntries {
+			sort.SliceStable(all, func(i, j int) bool {
+				ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
+				if ci != cj {
+					return ci > cj
+				}
+				return all[i].Timestamp.After(all[j].Timestamp)
+			})
+			all = all[:trajIntelMaxEntries]
+			sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
+				return all[i].Timestamp.Before(all[j].Timestamp)
+			})
+		}
+		return all, nil
+	})
+	if writeErr != nil {
+		return writeErr
+	}
+
+	// Clear the pending buffer after successful write.
+	s.learnings = nil
+	s.loaded = true
+	return nil
+}
+
+// rewriteAllLocked (r461, extracted from persistLocked) runs one
+// load→transform→atomic-write cycle over the store, entirely under the
+// cross-process file lock.
+// #1512 case C: the whole load→rewrite must run under a cross-PROCESS
+// file lock — s.mu is per-Agent-instance, but the file is
+// workspace-shared: two concurrently finishing agents each loaded the
+// same baseline, appended their own learnings, and the LAST rename won,
+// silently erasing the other's entries (a lost update directly against
+// the "accumulated self-improvement" purpose). The tmp name is also
+// unique: two writers sharing a fixed ".tmp" path interleaved content
+// into one file.
+// fn receives the on-disk entries plus the load error (callers decide
+// how IsNotExist is handled) and returns the full entry list to
+// persist; (nil, nil) is a no-op. Caller must hold s.mu.
+func (s *trajIntelState) rewriteAllLocked(fn func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error)) error {
 	dir := filepath.Dir(s.filePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
@@ -282,49 +346,16 @@ func (s *trajIntelState) persistLocked() error {
 	}
 	defer unlock()
 
-	// Read existing entries to maintain rolling window.
 	existing, loadErr := s.loadFromFile()
-	if loadErr != nil && !os.IsNotExist(loadErr) {
-		return fmt.Errorf("load: %w", loadErr)
+	all, err := fn(existing, loadErr)
+	if err != nil {
+		return err
 	}
-
-	all := append(existing, s.learnings...)
-
-	// r459 memory consolidation: instead of appending N duplicate rows
-	// for a recurring pattern, merge same Category+Type entries into one
-	// reinforced row (Voyager-style success counting). A Success=true
-	// reinforcement raises confidence; Success=false lowers it (weak
-	// arbitration: the insight TEXT keeps the historical winner, but a
-	// failing streak erodes its injection priority instead of a silent
-	// newest-wins overwrite).
-	all = consolidateLearnings(all)
-
-	// Trim to most recent N entries - but evict lowest-confidence first
-	// among ties so repeatedly-reinforced old insights outlive one-off
-	// noise (pure tail FIFO was the pre-r459 behavior).
-	if len(all) > trajIntelMaxEntries {
-		sort.SliceStable(all, func(i, j int) bool {
-			ci, cj := all[i].EffectiveConfidence(), all[j].EffectiveConfidence()
-			if ci != cj {
-				return ci > cj
-			}
-			return all[i].Timestamp.After(all[j].Timestamp)
-		})
-		all = all[:trajIntelMaxEntries]
-		sort.SliceStable(all, func(i, j int) bool { // restore chronological order for the file
-			return all[i].Timestamp.Before(all[j].Timestamp)
-		})
+	if all == nil {
+		return nil
 	}
 
 	// Write atomically.
-	// #1512 case C: the whole load→append→rewrite must run under a
-	// cross-PROCESS file lock — s.mu is per-Agent-instance, but the file
-	// is workspace-shared: two concurrently finishing agents each loaded
-	// the same baseline, appended their own learnings, and the LAST
-	// rename won, silently erasing the other's entries (a lost update
-	// directly against the "accumulated self-improvement" purpose). The
-	// tmp name is also unique now: two writers sharing the fixed
-	// ".tmp" path interleaved content into one file.
 	tmpF, err := os.CreateTemp(filepath.Dir(s.filePath), ".traj-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create tmp: %w", err)
@@ -347,10 +378,6 @@ func (s *trajIntelState) persistLocked() error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename: %w", renameErr)
 	}
-
-	// Clear the pending buffer after successful write.
-	s.learnings = nil
-	s.loaded = true
 	return nil
 }
 
@@ -451,6 +478,11 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		if l.EffectiveConfidence() < trajPromptMinConfidence {
 			continue
 		}
+		// r461 effectiveness gate: retired entries (enough measured
+		// injections, too few successful runs) stop consuming slots.
+		if effectivenessGated(l) {
+			continue
+		}
 		key := l.Category
 		if key == "" {
 			key = l.Type
@@ -463,6 +495,7 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		}
 		seenCat[key] = true
 		counts[l.Type]++
+		s.recordInjectedLocked(l)
 		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, l.Insight))
 		total++
 	}
@@ -512,7 +545,7 @@ func TrajListLearnings(workingDir string) []TrajLearningView {
 		views = append(views, TrajLearningView{
 			Type: l.Type, Category: l.Category, Insight: l.Insight,
 			Confidence: conf, Reinforced: l.Reinforced, Timestamp: l.Timestamp,
-			Injects: conf >= trajPromptMinConfidence,
+			Injects: conf >= trajPromptMinConfidence && !effectivenessGated(l),
 		})
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -740,6 +773,16 @@ const (
 	// trajConfidenceStep is the per-reinforcement delta (success raises,
 	// failure lowers). Bounded to [0.05, 0.95].
 	trajConfidenceStep = 0.1
+
+	// r461 effectiveness gate: retire an entry from injection once it has
+	// at least trajEffectMinSamples outcome-measured injections whose runs
+	// succeeded less than trajEffectMinSuccess of the time. The 3-sample
+	// floor avoids gating on noise (one bad run must not retire an
+	// insight); 0.4 sits below the 0.5 baseline that legacy/unmeasured
+	// entries read as (EffectiveConfidence), matching the conservative
+	// band of trajPromptMinConfidence-tier pruning from r459.
+	trajEffectMinSamples = 3
+	trajEffectMinSuccess = 0.4
 )
 
 // EffectiveConfidence returns the read-time confidence of a learning:
@@ -769,6 +812,13 @@ func (l trajectoryLearning) EffectiveConfidence() float64 {
 	}
 	// Scale stored confidence toward the 0.5 midpoint by the decay weight.
 	return 0.5 + (l.Confidence-0.5)*decay
+}
+
+// effectivenessGated reports whether the r461 outcome gate retires this
+// entry from injection. Zero counters (legacy / never measured) never gate.
+func effectivenessGated(l trajectoryLearning) bool {
+	return l.InjectedRuns >= trajEffectMinSamples &&
+		float64(l.AfterSuccess)/float64(l.InjectedRuns) < trajEffectMinSuccess
 }
 
 // consolidateLearnings merges same Category+Type entries into a single
@@ -810,6 +860,13 @@ func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
 			}
 			out[i].Confidence = c
 			out[i].Reinforced++
+			// r461: outcome counters survive consolidation — the merged-away
+			// row's injection history belongs to the same insight identity
+			// (Category+Type), so dropping it would reset the effectiveness
+			// gate every time two observations of one pattern met.
+			out[i].InjectedRuns += l.InjectedRuns
+			out[i].AfterSuccess += l.AfterSuccess
+			out[i].AfterFail += l.AfterFail
 			if l.Timestamp.After(out[i].LastReinforced) {
 				out[i].LastReinforced = l.Timestamp
 			}
@@ -886,6 +943,81 @@ func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
 	s.learnings = append(s.learnings, fresh...)
 	s.mu.Unlock()
 	debug.Log("traj-intel", "ingested %d teammate experience entries", len(fresh))
+}
+
+// trajKey identifies the row an injection maps to: the same Category+Type
+// identity consolidation merges on (Category falls back to Type, matching
+// RenderPromptSection's dedupe key). Keying by row rather than insight
+// text keeps write-back stable across consolidation rewrites.
+type trajKey struct{ cat, typ string }
+
+func trajKeyOf(l trajectoryLearning) trajKey {
+	if l.Category != "" {
+		return trajKey{cat: l.Category, typ: l.Type}
+	}
+	return trajKey{cat: l.Type, typ: l.Type}
+}
+
+// recordInjectedLocked notes that this entry was injected into the current
+// run's system prompt, for the run-end outcome write-back. Caller must
+// hold s.mu. RenderPromptSection runs once per agent iteration; recording
+// the same keys repeatedly is idempotent (set semantics).
+func (s *trajIntelState) recordInjectedLocked(l trajectoryLearning) {
+	if s.injectedThisRun == nil {
+		s.injectedThisRun = make(map[trajKey]bool)
+	}
+	s.injectedThisRun[trajKeyOf(l)] = true
+}
+
+// recordInjectionOutcome (r461) closes the injection→outcome feedback
+// loop that r458's re-inject leg lacked: for every entry injected into
+// this run's system prompt, record the run's terminal state
+// (InjectedRuns++ plus AfterSuccess/AfterFail++) and write the store back
+// under the same #1512 lock discipline as persistLocked. Consumes the
+// per-run injected-key set, so calling it twice without an intervening
+// RenderPromptSection is a no-op (per-run idempotence). Order relative
+// to maybeExtractAndPersist does not matter: consolidation merges into
+// the surviving row and preserves these counters. Best effort, never
+// blocks the run.
+func (s *trajIntelState) recordInjectionOutcome(workingDir string, success bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.injectedThisRun) == 0 {
+		return
+	}
+	keys := s.injectedThisRun
+	s.injectedThisRun = nil
+	if s.filePath == "" && workingDir != "" {
+		s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	}
+	if s.filePath == "" {
+		return
+	}
+	err := s.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
+		if loadErr != nil && !os.IsNotExist(loadErr) {
+			return nil, fmt.Errorf("load: %w", loadErr)
+		}
+		changed := false
+		for i := range existing {
+			if !keys[trajKeyOf(existing[i])] {
+				continue
+			}
+			existing[i].InjectedRuns++
+			if success {
+				existing[i].AfterSuccess++
+			} else {
+				existing[i].AfterFail++
+			}
+			changed = true
+		}
+		if !changed {
+			return nil, nil
+		}
+		return existing, nil
+	})
+	if err != nil {
+		debug.Log("traj-intel", "outcome write-back failed: %v", err)
+	}
 }
 
 // --- Helpers ---
