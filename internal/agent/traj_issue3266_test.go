@@ -103,6 +103,8 @@ func TestIssue3266_PanelInjectsSimulatesAllLayers(t *testing.T) {
 	ws := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	trajHoldoutEnabled = false // r462 holdout claims single-candidate fixtures
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	now := time.Now().UTC()
 	// Same Type exceeding the per-Type quota + low-confidence entry +
 	// a global-only category that must be visible and flagged General.

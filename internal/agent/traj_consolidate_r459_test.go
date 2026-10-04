@@ -142,6 +142,8 @@ func TestPersistConsolidatesDuplicateRows(t *testing.T) {
 
 func TestTrajListAndClear_UserSurface(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // isolate TrajGlobalPath (#3266(H): list now reads the global tier)
+	trajHoldoutEnabled = false    // r462 holdout claims single-candidate fixtures
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{
