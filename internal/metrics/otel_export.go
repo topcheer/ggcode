@@ -115,6 +115,12 @@ func otlpSpan(sn SpanNode, traceID, sessionID, system string) map[string]any {
 			otlpAttr("gen_ai.operation.name", "chat"),
 			otlpAttr("gen_ai.conversation.id", sessionID),
 		)
+		// sa-218: attribute sub-agent LLM spans (OTel GenAI nested-agent
+		// convention) so multi-agent sessions stay distinguishable in the
+		// exported trace.
+		if agentID, _ := sn.Attributes["agent_id"].(string); agentID != "" {
+			attrs = append(attrs, otlpAttr("gen_ai.agent.name", "ggcode:subagent:"+agentID))
+		}
 		if system != "" {
 			attrs = append(attrs, otlpAttr("gen_ai.system", system))
 		}
@@ -145,6 +151,9 @@ func otlpSpan(sn SpanNode, traceID, sessionID, system string) map[string]any {
 			otlpAttr("gen_ai.operation.name", "execute_tool"),
 			otlpAttr("gen_ai.tool.name", toolName),
 		)
+		if agentID, _ := sn.Attributes["agent_id"].(string); agentID != "" {
+			attrs = append(attrs, otlpAttr("gen_ai.agent.name", "ggcode:subagent:"+agentID))
+		}
 		success, _ := sn.Attributes["success"].(bool)
 		errMsg, _ := sn.Attributes["error"].(string)
 		if !success || errMsg != "" {

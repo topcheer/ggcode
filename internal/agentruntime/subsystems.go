@@ -9,6 +9,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -125,6 +126,7 @@ func NewSubAgentManager(
 	availableModels func() []string,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
+	onMetric func(metrics.MetricEvent), // sa-218: sub-agent telemetry into the parent collector
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	systemPromptBuilder func(task, agentType string) string,
 ) *subagent.Manager {
@@ -141,6 +143,7 @@ func NewSubAgentManager(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
+		OnMetric:            onMetric,
 		SystemPromptBuilder: systemPromptBuilder,
 		// r460: worktree-isolated sub-agent experience backflow (injected
 		// here to keep the tool package free of an agent import).

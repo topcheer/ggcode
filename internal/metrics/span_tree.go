@@ -170,6 +170,9 @@ func buildLeafSpan(parentID string, turnIdx, seqIdx int, ev MetricEvent) SpanNod
 
 	var name, kind string
 	attrs := make(map[string]interface{})
+	if ev.AgentID != "" {
+		attrs["agent_id"] = ev.AgentID // sa-218: sub-agent attribution
+	}
 
 	switch ev.Type {
 	case "llm":

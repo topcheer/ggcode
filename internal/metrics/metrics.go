@@ -31,4 +31,9 @@ type MetricEvent struct {
 	Model    string `json:"model,omitempty"`
 	Vendor   string `json:"vendor,omitempty"`
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// AgentID attributes this event to a sub-agent when non-empty (sa-218:
+	// sub-agent LLM/tool activity must reach the same telemetry channels as
+	// the parent, stamped so OTLP can carry gen_ai.agent.name).
+	AgentID string `json:"agent_id,omitempty"`
 }
