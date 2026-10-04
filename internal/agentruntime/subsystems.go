@@ -142,6 +142,9 @@ func NewSubAgentManager(
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
 		SystemPromptBuilder: systemPromptBuilder,
+		// r460: worktree-isolated sub-agent experience backflow (injected
+		// here to keep the tool package free of an agent import).
+		TrajBackflow: agent.TrajBackflowFromWorktree,
 	}
 	_ = registry.Register(spawnTool)
 	// r377: trajectory-level best-of-N sampling on top of the spawn pipeline.

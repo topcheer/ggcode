@@ -59,6 +59,10 @@ type SpawnAgentTool struct {
 	WorkingDir          string // working directory to propagate to sub-agent
 	OnUsage             func(provider.TokenUsage)
 	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
+	// TrajBackflow (r460, injected by the agent side to avoid a tool->agent
+	// import cycle) folds a worktree-isolated sub-agent's extracted
+	// learnings back into the main workspace store after its run.
+	TrajBackflow func(mainWorkingDir, worktreePath string)
 }
 
 // currentProvider returns the live provider if ProviderGetter is set, otherwise
@@ -278,6 +282,16 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 
 	prov := t.currentProvider()
 	safego.Go("tool.spawnAgent.subagent", func() {
+		// r460: fold any learnings the isolated sub-agent extracted back
+		// into the main workspace store before its run context ends.
+		// Without this, worktree-isolated experience died with the
+		// transient worktree (sub-agent WorkingDir = worktreePath, so its
+		// post-run persist landed in .ggcode/worktrees/<id>/). Best effort.
+		if worktreePath != "" && t.TrajBackflow != nil {
+			backflow := t.TrajBackflow
+			mainWD := t.WorkingDir
+			defer func() { backflow(mainWD, worktreePath) }()
+		}
 		subagent.Run(runCtx, subagent.RunnerConfig{
 			Provider:            prov,
 			AllTools:            allToolInfo,
@@ -349,6 +363,7 @@ func (t SpawnAgentTool) Clone() Tool {
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
 		SystemPromptBuilder: t.SystemPromptBuilder,
+		TrajBackflow:        t.TrajBackflow,
 	}
 }
 

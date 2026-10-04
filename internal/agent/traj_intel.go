@@ -403,7 +403,29 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	defer s.mu.Unlock()
 	s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
 	entries, err := s.loadFromFile()
-	if err != nil || len(entries) == 0 {
+	if err != nil {
+		entries = nil
+	}
+	// r460 cross-workspace tier: top up from the user-level global store,
+	// categories the workspace has not learned locally (marked so the
+	// model can weight local over general). Workspace entries win their
+	// categories; global only fills gaps.
+	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
+		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			localCats := map[string]bool{}
+			for _, l := range entries {
+				localCats[l.Category] = true
+			}
+			for _, l := range gEntries {
+				if l.Category == "" || localCats[l.Category] {
+					continue
+				}
+				l.Insight = l.Insight + " (general, other projects)"
+				entries = append(entries, l)
+			}
+		}
+	}
+	if len(entries) == 0 {
 		return ""
 	}
 	// Sort by effective confidence (decayed) then recency; the newest
@@ -511,6 +533,184 @@ func TrajClearLearnings(workingDir string) error {
 		return rmErr
 	}
 	return nil
+}
+
+// TrajGlobalPath (r460) returns the user-level learning store path
+// (~/.ggcode/trajectory-learnings.jsonl). The workspace store is the
+// write target, but a fresh workspace previously meant losing every
+// accumulated insight; the global store is the cross-workspace tier.
+func TrajGlobalPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".ggcode", "trajectory-learnings.jsonl"), nil
+}
+
+// TrajMergeInto (r460) folds learnings from srcPath into the workspace
+// store at dstWorkingDir (deduped by Category+Type+Insight, so repeat
+// merges are idempotent). Used by /traj import and by the sub-agent
+// worktree backflow. Same cross-process lock discipline as persistLocked.
+func TrajMergeInto(dstWorkingDir, srcPath string) (int, error) {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return 0, err
+	}
+	var src []trajectoryLearning
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var l trajectoryLearning
+		if json.Unmarshal([]byte(line), &l) == nil && l.Insight != "" {
+			src = append(src, l)
+		}
+	}
+	if len(src) == 0 {
+		return 0, nil
+	}
+	dstPath := filepath.Join(dstWorkingDir, ".ggcode", "trajectory-learnings.jsonl")
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return 0, err
+	}
+	unlock, lockErr := lockTrajFile(dstPath + ".lock")
+	if lockErr != nil {
+		return 0, lockErr
+	}
+	defer unlock()
+
+	existing, loadErr := loadTrajFile(dstPath)
+	if loadErr != nil && !os.IsNotExist(loadErr) {
+		return 0, loadErr
+	}
+	have := map[string]bool{}
+	for _, l := range existing {
+		have[trajDedupeKey(l)] = true
+	}
+	merged := existing
+	added := 0
+	for _, l := range src {
+		k := trajDedupeKey(l)
+		if have[k] {
+			continue
+		}
+		have[k] = true
+		merged = append(merged, l)
+		added++
+	}
+	if added == 0 {
+		return 0, nil
+	}
+	merged = consolidateLearnings(merged)
+	if len(merged) > trajIntelMaxEntries {
+		merged = merged[len(merged)-trajIntelMaxEntries:]
+	}
+	if err := writeTrajFile(dstPath, merged); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+func trajDedupeKey(l trajectoryLearning) string {
+	return l.Category + "|" + l.Type + "|" + l.Insight
+}
+
+// loadTrajFile / writeTrajFile are path-parameterized variants so
+// TrajMergeInto can operate on arbitrary stores (import source, worktree
+// residue) without touching trajIntelState's cached filePath.
+func loadTrajFile(path string) ([]trajectoryLearning, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []trajectoryLearning
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var l trajectoryLearning
+		if json.Unmarshal([]byte(line), &l) == nil {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func writeTrajFile(path string, entries []trajectoryLearning) error {
+	tmpF, err := os.CreateTemp(filepath.Dir(path), ".traj-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpF.Name()
+	enc := json.NewEncoder(tmpF)
+	for _, l := range entries {
+		if encErr := enc.Encode(l); encErr != nil {
+			tmpF.Close()
+			os.Remove(tmpPath)
+			return encErr
+		}
+	}
+	if closeErr := tmpF.Close(); closeErr != nil {
+		os.Remove(tmpPath)
+		return closeErr
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// TrajExportLearnings (r460) copies the workspace store to outPath
+// (atomic tmp+rename). This is the migration/portability surface: users
+// moving machines or sharing distilled experience across projects.
+func TrajExportLearnings(workingDir, outPath string) (int, error) {
+	src := filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	entries, err := loadTrajFile(src)
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return 0, err
+	}
+	if err := writeTrajFile(outPath, entries); err != nil {
+		return 0, err
+	}
+	return len(entries), nil
+}
+
+// TrajGlobalStorePath returns the global store path for TUI use (or an
+// empty string when the home directory cannot be resolved).
+func TrajGlobalStorePath() string {
+	p, err := TrajGlobalPath()
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// TrajBackflowFromWorktree (r460) folds a sub-agent worktree's learning
+// store back into the main workspace store. Isolation-mode sub-agents ran
+// with WorkingDir=worktreePath, so their post-run extraction landed in the
+// transient worktree and died with its cleanup. Best-effort: callers
+// treat errors as debug-log only, never blocking worktree removal.
+func TrajBackflowFromWorktree(mainWorkingDir, worktreePath string) {
+	if mainWorkingDir == "" || worktreePath == "" || mainWorkingDir == worktreePath {
+		return
+	}
+	src := filepath.Join(worktreePath, ".ggcode", "trajectory-learnings.jsonl")
+	if _, err := os.Stat(src); err != nil {
+		return // nothing learned in isolation
+	}
+	added, err := TrajMergeInto(mainWorkingDir, src)
+	if err != nil {
+		debug.Log("traj-intel", "worktree backflow failed: %v", err)
+		return
+	}
+	if added > 0 {
+		debug.Log("traj-intel", "worktree backflow folded %d learnings into main store", added)
+	}
 }
 
 // teammateExperienceEntry mirrors internal/swarm's ledger record (kept as

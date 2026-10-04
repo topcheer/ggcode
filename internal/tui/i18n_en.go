@@ -690,7 +690,13 @@ func enCatalog(key string) string {
 	case "traj.header":
 		return "Past-run learnings (%d stored, %d injecting into your prompt; > = injected):"
 	case "traj.usage":
-		return "Usage: /traj [list|clear]"
+		return "Usage: /traj [list|clear|export|import [path]]"
+	case "traj.no_home":
+		return "Cannot resolve home directory for the global store."
+	case "traj.exported":
+		return "Exported %d learnings to %s"
+	case "traj.imported":
+		return "Imported %d new learnings (duplicates skipped)"
 	case "memory.list_failed":
 		return "Error listing memories: %v\n\n"
 	case "memory.none":

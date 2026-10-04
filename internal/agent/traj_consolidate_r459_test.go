@@ -77,6 +77,7 @@ func TestEffectiveConfidence_LegacyBaselineAndDecay(t *testing.T) {
 }
 
 func TestRenderPromptSection_LowConfidenceGated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{
@@ -94,6 +95,7 @@ func TestRenderPromptSection_LowConfidenceGated(t *testing.T) {
 }
 
 func TestRenderPromptSection_ReinforcedOlderBeatsFreshNoise(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{
