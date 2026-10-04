@@ -127,7 +127,10 @@ func userGGCodeDir() string {
 	return filepath.Join(home, ".ggcode")
 }
 
-// check evaluates all invariants against one tool call. Returns the FIRST
+// check evaluates all invariants against one tool call. Batch tools
+// (file_ops) are evaluated at OPERATION granularity: every mutation in the
+// batch is checked, so a block rule cannot be bypassed by placing the
+// offending operation after a benign one (#3254). Returns the FIRST
 // violation (block-mode rules are checked first so the strongest action
 // wins) or nil.
 func (e *invariantEngine) check(toolName string, args json.RawMessage) *Violation {
@@ -137,35 +140,35 @@ func (e *invariantEngine) check(toolName string, args json.RawMessage) *Violatio
 	if len(e.invariants) == 0 {
 		return nil
 	}
-	op := invariantOpOf(toolName, args)
-	target := invariantTargetPath(toolName, args)
 	var warnHit *Violation
-	for i := range e.invariants {
-		inv := e.invariants[i]
-		if !invariantToolMatches(inv.OnTools, toolName) {
-			continue
-		}
-		if inv.Op != "" && inv.Op != op {
-			continue
-		}
-		if inv.PathGlob != "" && !invariantGlobMatch(inv.PathGlob, target) {
-			continue
-		}
-		if inv.CreatedByRun != nil {
-			_, created := e.runProducts.Load(absInvariantPath(target))
-			// created_by_run is a REQUIREMENT predicate, not a conjunctive
-			// match: the invariant holds when the target's created-state
-			// equals the declared requirement. A mismatch IS the violation.
-			if *inv.CreatedByRun == created {
-				continue // requirement satisfied, no violation
+	for _, ot := range invariantOpTargets(toolName, args) {
+		for i := range e.invariants {
+			inv := e.invariants[i]
+			if !invariantToolMatches(inv.OnTools, toolName) {
+				continue
 			}
-		}
-		v := &Violation{Inv: inv, Target: target, Op: op}
-		if inv.Mode == "block" {
-			return v
-		}
-		if warnHit == nil {
-			warnHit = v
+			if inv.Op != "" && inv.Op != ot.Op {
+				continue
+			}
+			if inv.PathGlob != "" && !invariantGlobMatch(inv.PathGlob, ot.Target) {
+				continue
+			}
+			if inv.CreatedByRun != nil {
+				_, created := e.runProducts.Load(absInvariantPath(ot.Target))
+				// created_by_run is a REQUIREMENT predicate, not a conjunctive
+				// match: the invariant holds when the target's created-state
+				// equals the declared requirement. A mismatch IS the violation.
+				if *inv.CreatedByRun == created {
+					continue // requirement satisfied, no violation
+				}
+			}
+			v := &Violation{Inv: inv, Target: ot.Target, Op: ot.Op}
+			if inv.Mode == "block" {
+				return v
+			}
+			if warnHit == nil {
+				warnHit = v
+			}
 		}
 	}
 	return warnHit
@@ -210,6 +213,52 @@ func invariantToolMatches(on []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// invariantOpTarget is one (operation class, target path) evaluation unit.
+// A single tool call yields one unit for simple tools and one unit PER
+// mutation operation for batch tools (file_ops) - the tool's semantic unit
+// is the operation, not the call (#3254).
+type invariantOpTarget struct {
+	Op     string
+	Target string
+}
+
+// invariantOpTargets expands a tool call into the (op, target) pairs the
+// invariant engine evaluates. For non-batch tools this is the single
+// (invariantOpOf, invariantTargetPath) classification. For file_ops every
+// mutation operation contributes its own pair - mkdir's target is its
+// SOURCE field (matching the tool's os.MkdirAll(source) semantics; the old
+// Destination read never matched, #3254 defect 2) and a blocked op cannot
+// hide behind a benign first entry (#3254 defect 1). A file_ops payload
+// that fails to parse degrades to the legacy single empty pair, mirroring
+// the old classifier's output for the same input.
+func invariantOpTargets(name string, args json.RawMessage) []invariantOpTarget {
+	if name != "file_ops" {
+		return []invariantOpTarget{{Op: invariantOpOf(name, args), Target: invariantTargetPath(name, args)}}
+	}
+	var a struct {
+		Operations []struct {
+			Action      string `json:"action"`
+			Source      string `json:"source"`
+			Destination string `json:"destination"`
+		} `json:"operations"`
+	}
+	if json.Unmarshal(args, &a) != nil {
+		return []invariantOpTarget{{Op: "", Target: ""}}
+	}
+	var out []invariantOpTarget
+	for _, op := range a.Operations {
+		switch strings.ToLower(op.Action) {
+		case "delete":
+			out = append(out, invariantOpTarget{Op: "delete", Target: op.Source})
+		case "mkdir":
+			out = append(out, invariantOpTarget{Op: "mkdir", Target: op.Source})
+		case "move":
+			out = append(out, invariantOpTarget{Op: "move", Target: op.Destination}) // moving INTO a path is the mutation
+		}
+	}
+	return out
 }
 
 // invariantOpOf classifies the operation class of a tool call:

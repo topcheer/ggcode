@@ -285,9 +285,13 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
 	// r454: register successful write-class products for the
 	// created_by_run predicate ("only delete what this run created").
+	// Operation granularity (#3254): a batch file_ops call registers every
+	// write-class target it produced, not just the first classified op.
 	if e := a.invariantEngineLazy(); e != nil && !res.IsError {
-		if op := invariantOpOf(tc.Name, tc.Arguments); op == "write" || op == "mkdir" || op == "move" {
-			e.recordProduct(invariantTargetPath(tc.Name, tc.Arguments))
+		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+				e.recordProduct(ot.Target)
+			}
 		}
 	}
 	return res
