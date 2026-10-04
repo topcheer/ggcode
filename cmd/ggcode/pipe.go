@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -30,6 +31,13 @@ import (
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
 func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputSchemaPath string) int {
+	// Crash-leftover sweep (mirrors root.run; sa-242 runtime audit).
+	if wd, wdErr := os.Getwd(); wdErr == nil {
+		if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(wd, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
+			debug.Log("pipe", "swept %d stale atomic-write temp file(s)", n)
+		}
+	}
+
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)

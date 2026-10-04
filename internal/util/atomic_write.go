@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // AtomicWriteFile writes data to path via a temp file in the same directory,
@@ -69,4 +70,46 @@ func AtomicWriteFile(path string, data []byte, defaultMode os.FileMode) error {
 		return fmt.Errorf("renaming temp file into place: %w", err)
 	}
 	return nil
+}
+
+// SweepStaleTempFiles removes leftover ".ggcode-tmp-*" files in dir whose
+// modification time is older than maxAge. AtomicWriteFile cleans its temp
+// file on every error return, but a process killed between CreateTemp and
+// Rename (SIGKILL, OOM, power loss) leaves the temp behind forever - the
+// error branches never run. High-frequency atomic writers (e.g. the knight
+// skill-usage tracker) make that crash window a real, accumulating leak
+// (a 3-month-old leftover was found in this repo's own .ggcode/).
+// Live temps are renamed within milliseconds, so maxAge well below any
+// plausible write duration makes removal safe. Best-effort: unreadable
+// dirs and individual removal failures are logged, not fatal.
+func SweepStaleTempFiles(dir string, maxAge time.Duration) (int, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, ".ggcode-tmp-*"))
+	if err != nil {
+		return 0, fmt.Errorf("globbing temp files in %s: %w", dir, err)
+	}
+	if len(matches) == 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for _, m := range matches {
+		info, statErr := os.Stat(m)
+		if statErr != nil {
+			continue // raced away or unreadable: not ours to judge
+		}
+		if info.IsDir() || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if rmErr := os.Remove(m); rmErr != nil {
+			if debugLogFn != nil {
+				debugLogFn("util", "sweep: removing stale temp %s: %v", m, rmErr)
+			}
+			continue
+		}
+		removed++
+		if debugLogFn != nil {
+			debugLogFn("util", "swept stale atomic-write temp: %s", m)
+		}
+	}
+	return removed, nil
 }
