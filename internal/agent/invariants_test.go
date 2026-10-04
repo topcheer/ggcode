@@ -59,8 +59,10 @@ func TestInvariants_DeleteEnvBlocked(t *testing.T) {
 	if v.Op != "delete" {
 		t.Errorf("op = %q, want delete", v.Op)
 	}
-	// mkdir on the same path: op mismatch, no violation.
-	mkdir := argsJSON(t, map[string]any{"operations": []any{map[string]string{"action": "mkdir", "destination": "/x/.env"}}})
+	// mkdir on the same path: op mismatch, no violation. (Source field:
+	// mkdir's target is its source since #3254, matching the tool's
+	// os.MkdirAll(source) semantics.)
+	mkdir := argsJSON(t, map[string]any{"operations": []any{map[string]string{"action": "mkdir", "source": "/x/.env"}}})
 	if v := e.check("file_ops", mkdir); v != nil {
 		t.Errorf("mkdir tripped a delete rule: %+v", v)
 	}
