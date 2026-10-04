@@ -62,10 +62,6 @@ type mapPreallocWarning struct {
 	sourceLen string // expression whose len() should be used as hint
 }
 
-func (w mapPreallocWarning) String() string {
-	return fmt.Sprintf("map %q populated in loop without size hint", w.varName)
-}
-
 // checkMapPrealloc detects maps created without a size hint that are then
 // populated from a known-size source inside a for/range loop.
 func checkMapPrealloc(filePath, oldContent, newContent string) []string {

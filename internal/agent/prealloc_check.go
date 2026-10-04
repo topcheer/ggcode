@@ -47,10 +47,6 @@ type preallocWarning struct {
 	loopLine int
 }
 
-func (w preallocWarning) String() string {
-	return fmt.Sprintf("slice %q appended in loop without preallocation", w.varName)
-}
-
 // checkMissingPrealloc detects slices that are appended to inside loops
 // without being preallocated with make([]T, 0, capacity).
 func checkMissingPrealloc(filePath, oldContent, newContent string) []string {

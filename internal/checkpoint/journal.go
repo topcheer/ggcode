@@ -116,14 +116,6 @@ func (w *journalWriter) disableLocked(err error) {
 	w.f = nil
 }
 
-func (w *journalWriter) disable(err error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if !w.disabled {
-		w.disableLocked(err)
-	}
-}
-
 // loadJournal reads and parses the journal at path, returning the events in
 // append order. A torn final line (crash mid-append) is truncated away; a
 // corrupt line in the middle is skipped with a log. It also reports whether
