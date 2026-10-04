@@ -207,6 +207,17 @@ func contentWordSet(s string) map[string]bool {
 	for _, f := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}) {
+		// CJK text has no spaces: FieldsFunc yields whole sentences as
+		// single tokens, so overlap degenerates to exact-match 0.0/1.0
+		// and any faithful paraphrase of a Chinese criterion scored
+		// MISSING - directly contradicting the protocol's own "restate
+		// in your own words" instruction (#3261). Split CJK runs into
+		// character bigrams ("测试必须" -> 测试 试必 必须) so overlap
+		// regains a continuous value range.
+		if hasCJKRun(f) {
+			addCJKBigrams(words, f)
+			continue
+		}
 		if len(f) <= 2 || stop[f] {
 			continue
 		}
@@ -221,4 +232,48 @@ func contentWordSet(s string) map[string]bool {
 		}
 	}
 	return words
+}
+
+// hasCJKRun reports whether the token contains at least one Han, Hiragana,
+// Katakana, or Hangul character.
+func hasCJKRun(tok string) bool {
+	for _, r := range tok {
+		if unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// addCJKBigrams registers character unigrams AND bigrams for each
+// contiguous CJK run in tok (a run of exactly one character registers just
+// that character). Non-CJK bytes within a mixed token break the runs.
+// Unigrams are included alongside bigrams because faithful Chinese
+// paraphrases routinely keep every content character while reshuffling
+// word order - bigrams alone still under-score those, which is what
+// short-criteria denominators punish most (#3261).
+func addCJKBigrams(words map[string]bool, tok string) {
+	var run []rune
+	flush := func() {
+		for _, r := range run {
+			words[string(r)] = true
+		}
+		for i := 0; i+1 < len(run); i++ {
+			words[string(run[i:i+2])] = true
+		}
+		run = run[:0]
+	}
+	isCJK := func(r rune) bool {
+		return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) ||
+			unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r)
+	}
+	for _, r := range tok {
+		if isCJK(r) {
+			run = append(run, r)
+			continue
+		}
+		flush()
+	}
+	flush()
 }
