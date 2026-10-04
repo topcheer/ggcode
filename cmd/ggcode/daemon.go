@@ -221,7 +221,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return a, nil
 	}
 
-	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil, nil)
+	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil, nil, nil)
 	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
 		_ = registry.Register(&tool.TrialForkTool{
 			Provider:     prov,

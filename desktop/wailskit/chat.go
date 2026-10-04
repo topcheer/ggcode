@@ -1736,7 +1736,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	b.mu.Lock()
 	b.subAgentMgr = subAgents
 	b.mu.Unlock()
-	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, subAgentPromptBuilder))
+	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, b.skillOnMetric, subAgentPromptBuilder))
 	_ = b.registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: b.workingDir})
 	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager {
 		b.mu.Lock()
@@ -3308,6 +3308,14 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 // ─── Metrics ──────────────────────────────────────────────────────────
 
 // recordMetric stores a metric event for turn digest generation.
+// skillOnMetric forwards skill sub-agent telemetry to the shared collector
+// (#3296); events arrive pre-stamped with the sub-agent's own model.
+func (b *ChatBridge) skillOnMetric(ev metrics.MetricEvent) {
+	if b.metricCollector != nil {
+		b.metricCollector.Emit(ev)
+	}
+}
+
 func (b *ChatBridge) recordMetric(ev interface{}) {
 	me, ok := ev.(metrics.MetricEvent)
 	if !ok {

@@ -96,7 +96,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
-	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil, nil))
+	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil, nil, nil))
 	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
 		_ = registry.Register(&tool.TrialForkTool{
 			Provider:     prov,

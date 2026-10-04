@@ -14,6 +14,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	grpcplugin "github.com/topcheer/ggcode/internal/plugin/grpc"
 
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -239,6 +240,7 @@ func NewSkillTool(
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
+	onMetric func(metrics.MetricEvent), // #3296: forwarded to skill sub-agents
 	systemPromptBuilder func(task, agentType string) string,
 ) tool.SkillTool {
 	return tool.SkillTool{
@@ -250,6 +252,7 @@ func NewSkillTool(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
+		OnMetric:            onMetric,
 		SystemPromptBuilder: systemPromptBuilder,
 	}
 }

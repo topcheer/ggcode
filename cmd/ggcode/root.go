@@ -500,7 +500,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if skillUsageHandler != nil {
 			skillUsageHandler(usage)
 		}
-	}, nil) // SystemPromptBuilder set below after buildCurrentSystemPrompt is defined
+	}, nil, nil) // SystemPromptBuilder set below after buildCurrentSystemPrompt is defined
 	skillTool.OnSkillUsed = func(ref string) {
 		if knightAgent != nil {
 			knightAgent.RecordSkillUse(ref)

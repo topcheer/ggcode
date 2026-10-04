@@ -192,6 +192,7 @@ func NewSubAgentManager(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
+		OnMetric:            onMetric, // #3296: named-agent forks stop being OTLP black boxes
 		SystemPromptBuilder: systemPromptBuilder,
 	})
 	return mgr
