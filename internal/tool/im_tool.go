@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,11 @@ type IMManager interface {
 	IsBindingDisabled(adapterName string) bool
 	Emit(ctx context.Context, event IMOutboundEvent) error
 	SendDirect(ctx context.Context, adapter string, event IMOutboundEvent) error
+	// SendFileDirect (#3316): uploads an arbitrary file as a real file
+	// message on adapters that support it. Returns supported=false when
+	// the adapter lacks the capability so the caller falls back to
+	// path-as-text delivery.
+	SendFileDirect(ctx context.Context, adapter string, file IMOutboundFile, caption string) (supported bool, err error)
 	OtherInstancesHaveActiveChannels() bool
 }
 
@@ -57,6 +63,14 @@ type IMAdapterState struct {
 type IMOutboundEvent struct {
 	Kind string
 	Text string
+}
+
+// IMOutboundFile (#3316) is one arbitrary file for upload delivery.
+type IMOutboundFile struct {
+	Path     string
+	Filename string
+	MIME     string
+	Data     []byte
 }
 
 // IMTool lets the LLM manage IM adapters and send messages.
@@ -497,6 +511,45 @@ func (t IMTool) sendAndReport(ctx context.Context, adapter, channelID, message s
 // LLM an immediate, actionable error instead of an adapter-side failure.
 const sendFileMaxBytes = 20 * 1024 * 1024
 
+// sendFileMIME (#3316): extension table first (authoritative for common
+// types), content sniffing as the fallback for unknown extensions.
+func sendFileMIME(ext string, data []byte) string {
+	switch ext {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".pdf":
+		return "application/pdf"
+	case ".txt", ".log", ".md":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".zip":
+		return "application/zip"
+	case ".gz":
+		return "application/gzip"
+	case ".tar":
+		return "application/x-tar"
+	case ".mp4":
+		return "video/mp4"
+	case ".mp3":
+		return "audio/mpeg"
+	}
+	sniff := data
+	if len(sniff) > 512 {
+		sniff = sniff[:512]
+	}
+	if m := http.DetectContentType(sniff); m != "" && m != "application/octet-stream" {
+		return m
+	}
+	return "application/octet-stream"
+}
+
 // sendFileImageExts lists extensions that every media-capable adapter
 // (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost/signal/wecom/
 // wechat) can upload as rich media today. Other extensions are delivered as
@@ -550,6 +603,40 @@ func (t IMTool) doSendFile(ctx context.Context, adapter, path, caption string, a
 	delivery := "file path (this adapter has no media upload)"
 	if sendFileImageExts[ext] {
 		delivery = "image media upload"
+	}
+
+	// #3316: adapters implementing the FileSender interface get the real
+	// bytes - arbitrary files arrive as downloadable file messages
+	// (documents), images keep their preview semantics per platform. The
+	// adapter is only attempted when it is actually running and healthy;
+	// muted/disabled/unhealthy adapters keep the legacy path-text route.
+	isMuted := t.Manager.IsBindingMuted(adapter)
+	isDisabled := t.Manager.IsBindingDisabled(adapter)
+	snap := t.Manager.Snapshot()
+	if !isMuted && !isDisabled && isAdapterHealthy(snap, adapter) && info.Size() <= sendFileMaxBytes {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("reading file: %v", readErr)}, nil
+		}
+		mimeType := sendFileMIME(ext, data)
+		file := IMOutboundFile{
+			Path:     path,
+			Filename: filepath.Base(path),
+			MIME:     mimeType,
+			Data:     data,
+		}
+		supported, sendErr := t.Manager.SendFileDirect(ctx, adapter, file, strings.TrimSpace(caption))
+		if sendErr != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("failed to upload file via %q: %v", adapter, sendErr)}, nil
+		}
+		if supported {
+			kind := "file"
+			if strings.HasPrefix(mimeType, "image/") {
+				kind = "image"
+			}
+			return Result{Content: fmt.Sprintf("File %s (%s, %d bytes) uploaded via %s as %s.", filepath.Base(path), mimeType, info.Size(), adapter, kind)}, nil
+		}
+		// Unsupported: fall through to the legacy path-text delivery.
 	}
 
 	// Caption first, path on its own line: the extractor matches paths that
