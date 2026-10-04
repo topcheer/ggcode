@@ -59,6 +59,8 @@ func TestTeammateBreaker_HalfOpenSingleProbe(t *testing.T) {
 	if !teammateClaimAllowed(id) {
 		t.Fatal("first claim after cooldown must be released as probe")
 	}
+	// #3245: the gate only ARMS the allowance; a REAL claim spends it.
+	teammateConsumeProbe(id)
 	if teammateClaimAllowed(id) {
 		t.Fatal("second concurrent claim while HALF-OPEN must be barred")
 	}
@@ -85,10 +87,11 @@ func TestTeammateBreaker_ProbeFailureReopens(t *testing.T) {
 		b.record(true)
 	}
 	time.Sleep(2 * time.Millisecond)
-	if !teammateClaimAllowed(id) { // consume probe
+	if !teammateClaimAllowed(id) { // gate releases the armed allowance
 		t.Fatal("probe must be released after cooldown")
 	}
-	b.record(true) // probe fails
+	teammateConsumeProbe(id) // #3245: a REAL claim spends the slot
+	b.record(true)           // probe fails
 	if b.stateSnapshot() != teammateBreakerOpen {
 		t.Fatalf("probe failure must re-open: %v", b.stateSnapshot())
 	}

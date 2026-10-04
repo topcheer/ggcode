@@ -60,6 +60,12 @@ type teammateBreaker struct {
 // board tasks right now. The CLOSED→HALF-OPEN transition itself releases
 // the single probe claim; while HALF-OPEN every further claim is barred
 // until the probe's result arrives (record closes or re-opens).
+// #3245: cooldown expiry only ARMS the probe allowance - it does NOT
+// consume it. The slot is spent exclusively by consumeProbe() after a
+// REAL board claim succeeds. A gate pass that strands (empty board, lost
+// claim race, no task manager) leaves the circuit OPEN+expired, so the
+// next tick re-arms: a polled-but-empty board can no longer strand the
+// teammate in HALF_OPEN forever (record is HALF_OPEN's only exit).
 func (b *teammateBreaker) tripped() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -67,14 +73,37 @@ func (b *teammateBreaker) tripped() bool {
 	case teammateBreakerClosed:
 		return false
 	case teammateBreakerOpen:
-		if time.Since(b.openedAt) >= teammateBreakerCooldown {
-			b.state = teammateBreakerHalfOpen
-			return false // this claim IS the probe
+		return time.Since(b.openedAt) < teammateBreakerCooldown
+	default: // teammateBreakerHalfOpen: a real probe is in flight
+		// #3245 defensive: a probe whose result never arrives (agent
+		// crash mid-task, lost result path) must not strand HALF_OPEN
+		// either - after a second full cooldown without a verdict, fall
+		// back to OPEN with a fresh timer (the next expiry re-arms another
+		// probe). At most the ALLOWANCE expires; no second task runs.
+		if time.Since(b.openedAt) >= 2*teammateBreakerCooldown {
+			b.state = teammateBreakerOpen
+			b.openedAt = time.Now()
 		}
 		return true
-	default: // teammateBreakerHalfOpen: probe already in flight
-		return true
 	}
+}
+
+// consumeProbe transitions an OPEN+expired circuit into HALF_OPEN. It is
+// called ONLY after a real board claim succeeded (#3245): the probe slot
+// is spent on an actual task, whose result closes or re-opens the circuit
+// via record(). Returns true when the slot was actually spent.
+func (b *teammateBreaker) consumeProbe() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state != teammateBreakerOpen {
+		return false
+	}
+	if time.Since(b.openedAt) < teammateBreakerCooldown {
+		return false // cooldown still running: no allowance armed
+	}
+	b.state = teammateBreakerHalfOpen
+	b.openedAt = time.Now() // marks probe start (tripped's fallback window)
+	return true
 }
 
 // record accounts a task outcome. Success closes the circuit from any
@@ -136,8 +165,9 @@ func teammateBreakerFor(id string) *teammateBreaker {
 }
 
 // teammateClaimAllowed is the claim gate: false = this teammate's circuit
-// is OPEN and it must not claim board tasks (a HALF-OPEN circuit allows
-// exactly one probe).
+// is OPEN and it must not claim board tasks. An expired OPEN merely ARMS
+// the single probe allowance; the slot is consumed only after a real
+// claim succeeds via teammateConsumeProbe (#3245).
 func teammateClaimAllowed(teammateID string) bool {
 	b := teammateBreakerFor(teammateID)
 	if b == nil {
@@ -148,6 +178,19 @@ func teammateClaimAllowed(teammateID string) bool {
 		debug.Log("swarm", "[teammate-breaker] %s barred from claiming (circuit open)", teammateID)
 	}
 	return allowed
+}
+
+// teammateConsumeProbe spends the armed probe slot after a successful
+// board claim (#3245). No-op unless the circuit is OPEN and the cooldown
+// has expired - only then does this claim become THE probe task.
+func teammateConsumeProbe(teammateID string) {
+	b := teammateBreakerFor(teammateID)
+	if b == nil {
+		return
+	}
+	if b.consumeProbe() {
+		debug.Log("swarm", "[teammate-breaker] %s probe task claimed (half-open)", teammateID)
+	}
 }
 
 // recordTeammateTaskResult accounts a completed task run. cancelled

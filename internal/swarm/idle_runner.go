@@ -278,6 +278,11 @@ func tryClaimPendingTask(
 			// Another teammate beat us — continue to next task.
 			continue
 		}
+		// #3245: the claim is REAL now - spend the armed probe slot (if
+		// any) exactly here. Gate passes that never reached a claim left
+		// the circuit OPEN+expired so a later tick can still probe; only
+		// an actually-owned task becomes the probe.
+		teammateConsumeProbe(tm.ID)
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 		}
