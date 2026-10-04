@@ -171,6 +171,12 @@ func (m *Model) handleUndoCommand() tea.Cmd {
 		if err != nil {
 			return streamMsg(m.t("checkpoint.undo_failed", err))
 		}
+		// #3249: the user just rejected the agent's edit - a true negative
+		// teaching signal for the user-edit ratchet (cancels pending positive
+		// observations; repetition retires promoted rules). The undo also
+		// bumps the file's mtime, which CheckTurnBoundary would otherwise
+		// misread as a positive "user adjusted this file" observation.
+		m.agent.RecordUserUndo(cp.FilePath)
 		// Invalidate tool caches so the agent doesn't serve stale results
 		// from before the undo. The speculator cache and memoize TTL entries
 		// are cleared; mtime-based entries (read_file) are safe because the
@@ -222,6 +228,11 @@ func (m *Model) handleUndoRunCommand() tea.Cmd {
 		reverted, err := cpMgr.UndoRun()
 		if err != nil {
 			return streamMsg(fmt.Sprintf("Undo-run failed: %v", err))
+		}
+		// #3249: batch user rejection - every reverted file is one negative
+		// teaching signal (same semantics as /undo above).
+		for _, cp := range reverted {
+			m.agent.RecordUserUndo(cp.FilePath)
 		}
 		if len(reverted) == 0 {
 			return streamMsg("No file changes to revert in this run.")
