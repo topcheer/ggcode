@@ -40,6 +40,8 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
 			debug.Log("pipe", "swept %d stale atomic-write temp file(s) in config dir", n)
 		}
+		// #3346: HOME-level todo files share the same unbounded growth (see root.run).
+		tool.SweepStaleTodoFiles(30 * 24 * time.Hour)
 	}
 
 	prov, resolved, err := ResolveProvider(cfg)
