@@ -1,6 +1,11 @@
 package agentruntime
 
-import "testing"
+import (
+	"context"
+	"github.com/topcheer/ggcode/internal/subagent"
+	"testing"
+	"time"
+)
 
 // Verifier model selection (heterogeneous verification, arXiv:2512.02304).
 func TestVerifierModelFor(t *testing.T) {
@@ -57,5 +62,25 @@ func TestVmOrInherited(t *testing.T) {
 	}
 	if vmOrInherited("glm-5.3") != "glm-5.3" {
 		t.Fatal("non-empty model must pass through")
+	}
+}
+
+// r443 final-review regression: the tool bridge builds BestOfNOptions
+// without Poll; a zero Poll must fall back to the default instead of
+// time.After(0) busy-spinning waitOne.
+func TestDiscriminateTieZeroPollFallsBack(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{}}
+	// Inconclusive path exercises the poll loop with Poll=0; it must
+	// return (not spin) well within the discrimination timeout.
+	done := make(chan struct{})
+	go func() {
+		discriminateTie(context.Background(), sp, sn, tieCands(), BestOfNOptions{Task: "t"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Poll=0 must fall back to default poll, not busy-spin")
 	}
 }

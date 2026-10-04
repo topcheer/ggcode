@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -28,5 +27,4 @@ func TestValidateVerifierModels(t *testing.T) {
 			}
 		})
 	}
-	_ = fmt.Sprint
 }

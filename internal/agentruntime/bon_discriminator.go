@@ -90,6 +90,13 @@ func pickTiePair(cands []CandidateOutcome) (int, int, bool) {
 // demonstrably better; ok=false means inconclusive — caller must fall back
 // to the unchanged Degraded path.
 func discriminateTie(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSource, cands []CandidateOutcome, opts BestOfNOptions) (int, string, bool) {
+	poll := opts.Poll
+	if poll <= 0 {
+		// The tool bridge (BestOfNRunnerFor) builds BestOfNOptions without
+		// Poll; without this clamp waitOne would time.After(0)-spin at full
+		// CPU for the whole discrimination timeout (final-review r443).
+		poll = bestOfNDefaultPoll
+	}
 	a, b, ok := pickTiePair(cands)
 	if !ok {
 		return 0, "", false
@@ -126,7 +133,7 @@ You must NOT edit either worktree. End your final message with exactly one line:
 	if err != nil {
 		return 0, "", false
 	}
-	snap, done := waitOne(dctx, snaps, id, opts.Poll)
+	snap, done := waitOne(dctx, snaps, id, poll)
 	if !done || snap.Status != subagent.StatusCompleted {
 		return 0, "", false
 	}
