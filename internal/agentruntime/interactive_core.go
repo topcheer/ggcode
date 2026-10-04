@@ -89,6 +89,11 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	deleteMemoryTool := tool.NewDeleteMemoryTool(autoMem, projectAutoMem)
 	_ = registry.Register(deleteMemoryTool)
 
+	// memory visibility (SelfMem curator gap): read-side inventory so the
+	// agent can see, update (save_memory same-key), and prune stored
+	// memories instead of operating blind.
+	_ = registry.Register(tool.NewListMemoryTool(autoMem, projectAutoMem))
+
 	// r381 (memory-as-tool): the write side has save/delete tools but the
 	// experience store's recall API was only reachable through the automatic
 	// gates (run start + first failure). This read-only tool lets the agent
