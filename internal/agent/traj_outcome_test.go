@@ -109,6 +109,8 @@ func TestEffectivenessGatedThreshold(t *testing.T) {
 // a second close without an intervening render is a no-op, and a fresh
 // render + failed run bumps the fail counter.
 func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	trajOutcomeIsolationHome(t)
 	dir := t.TempDir()
 	now := time.Now()
@@ -175,6 +177,8 @@ func TestInjectionOutcomeCountingIdempotent(t *testing.T) {
 // same store multiple times within one run (system prompt is rebuilt per
 // iteration) counts each entry at most once at run close (set semantics).
 func TestInjectionOutcomeRenderRepeatNoDoubleCount(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	trajOutcomeIsolationHome(t)
 	dir := t.TempDir()
 	writeTrajOutcomeFile(t, dir,
@@ -203,6 +207,8 @@ func TestInjectionOutcomeRenderRepeatNoDoubleCount(t *testing.T) {
 // entries still consume slots. Categories differ so category dedupe does not
 // interfere with the gate under test.
 func TestLowSuccessRateFiltering(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	trajOutcomeIsolationHome(t)
 	dir := t.TempDir()
 	now := time.Now()
@@ -232,6 +238,8 @@ func TestLowSuccessRateFiltering(t *testing.T) {
 // TestRenderNoDataNoFiltering verifies that when no entry has outcome data,
 // nothing is filtered.
 func TestRenderNoDataNoFiltering(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	trajOutcomeIsolationHome(t)
 	dir := t.TempDir()
 	now := time.Now()
@@ -252,6 +260,8 @@ func TestRenderNoDataNoFiltering(t *testing.T) {
 // persist (pending buffer -> consolidation -> JSONL with omitempty tags) and
 // reload, the healthy entry still renders, and the retired one does not.
 func TestRenderHighSuccessRetainedAfterWriteBack(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	trajOutcomeIsolationHome(t)
 	dir := t.TempDir()
 

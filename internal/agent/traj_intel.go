@@ -117,6 +117,12 @@ type trajIntelState struct {
 	// r461: identities injected into the current run's system prompt,
 	// consumed (cleared) by the run-end recordInjectionOutcome write-back.
 	injectedThisRun map[trajKey]bool
+
+	// r462: identities held OUT of the current run's prompt by the
+	// shadow-holdout control arm, consumed (cleared) by the run-end
+	// recordHoldoutOutcome write-back. Disjoint from injectedThisRun by
+	// construction (a key is either rendered or skipped, never both).
+	holdoutThisRun map[trajKey]bool
 }
 
 func newTrajIntelState() *trajIntelState {
@@ -467,6 +473,11 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
 	// Dedupe per Category, keep newest; Type counter caps variety.
+	// r462 shadow holdout (control arm): one injection-eligible entry per
+	// category is deterministically held out of the prompt; its runs feed
+	// the counterfactual ledger instead of the injection counters. Fail
+	// open — an unreadable ledger never blocks injection.
+	held := trajHoldoutSelect(workingDir, entries)
 	var lines []string
 	counts := map[string]int{}
 	seenCat := map[string]bool{}
@@ -481,6 +492,12 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		// r461 effectiveness gate: retired entries (enough measured
 		// injections, too few successful runs) stop consuming slots.
 		if effectivenessGated(l) {
+			continue
+		}
+		// r462 control arm: held-out entries skip rendering entirely and
+		// are recorded as holdout runs instead of injections.
+		if held[trajKeyOf(l)] {
+			s.recordHoldoutLocked(l)
 			continue
 		}
 		key := l.Category
@@ -527,15 +544,26 @@ type TrajLearningView struct {
 	Timestamp  time.Time
 	Injects    bool // full simulation of RenderPromptSection's five filter layers
 	General    bool // r460 global-tier entry (injects but is not in the local file)
+
+	// r462 shadow-holdout control arm (read-only projection for /traj):
+	// Holdout marks the entry currently held out of injection; DeltaPP is
+	// Δ(injection-arm success rate − holdout-arm rate) in percentage points
+	// once both arms are measured (0 otherwise); Runs is the control-arm
+	// sample count.
+	Holdout  bool
+	DeltaPP  float64
+	HoldRuns int
 }
 
 // trajSimulateInjected replays RenderPromptSection's five filter layers
 // (total budget, confidence gate, r461 effectiveness gate, category
-// dedupe, per-Type quota) over the renderer-sorted entry list and returns
-// which entries would inject (#3266(H): the panel previously modeled
-// only 2 of the 5 conditions, both over- and under-reporting). Pure
-// decision replay - identical order and predicates as the renderer.
-func trajSimulateInjected(sorted []trajectoryLearning) map[int]bool {
+// dedupe, per-Type quota, plus the r462 holdout skip) over the
+// renderer-sorted entry list and returns which entries would inject
+// (#3266(H): the panel previously modeled only 2 of the 5 conditions,
+// both over- and under-reporting). Pure decision replay - identical
+// order and predicates as the renderer.
+func trajSimulateInjected(workingDir string, sorted []trajectoryLearning) map[int]bool {
+	held := trajHoldoutSelect(workingDir, sorted)
 	out := map[int]bool{}
 	counts := map[string]int{}
 	seenCat := map[string]bool{}
@@ -559,6 +587,9 @@ func trajSimulateInjected(sorted []trajectoryLearning) map[int]bool {
 		}
 		if counts[l.Type] >= trajPromptPerType {
 			continue
+		}
+		if held[trajKeyOf(l)] {
+			continue // r462 control arm: silently held out
 		}
 		seenCat[key] = true
 		counts[l.Type]++
@@ -607,16 +638,28 @@ func TrajListLearnings(workingDir string) []TrajLearningView {
 		}
 		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
-	wouldInject := trajSimulateInjected(entries)
+	wouldInject := trajSimulateInjected(workingDir, entries)
+	snap := trajHoldoutSnapshot(workingDir)
 	views := make([]TrajLearningView, 0, len(entries))
 	for i, l := range entries {
 		conf := l.EffectiveConfidence()
-		views = append(views, TrajLearningView{
+		v := TrajLearningView{
 			Type: l.Type, Category: l.Category, Insight: l.Insight,
 			Confidence: conf, Reinforced: l.Reinforced, Timestamp: l.Timestamp,
 			Injects: wouldInject[i],
 			General: strings.HasSuffix(l.Insight, "(general, other projects)"),
-		})
+		}
+		// r462: pair with the control-arm ledger when this entry is the
+		// one currently held out for its category.
+		k := trajKeyOf(l)
+		if e, ok := snap[k]; ok && e.InsightKey == trajHoldoutKeyString(k) {
+			v.Holdout = true
+			v.HoldRuns = e.HoldoutRuns
+			if d, dok := trajHoldoutDelta(l, e); dok {
+				v.DeltaPP = d * 100
+			}
+		}
+		views = append(views, v)
 	}
 	return views
 }
