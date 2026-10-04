@@ -450,6 +450,11 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	workingDir, _ := os.Getwd()
 	trace.Mark("working directory")
+	// Crash-leftover sweep: AtomicWriteFile temps orphaned by SIGKILL/OOM
+	// accumulate in .ggcode/ forever without this (sa-242 runtime audit).
+	if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(workingDir, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
+		debug.Log("root", "swept %d stale atomic-write temp file(s)", n)
+	}
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")
