@@ -18,6 +18,9 @@ import (
 
 type mockProvider struct {
 	chatCalls int
+	// reply overrides the fixed Chat response when non-empty (fact
+	// retention wiring test needs a summary that drops a constraint).
+	reply string
 }
 
 func (m *mockProvider) Name() string { return "mock" }
@@ -27,7 +30,12 @@ func (m *mockProvider) Chat(ctx context.Context, msgs []provider.Message, tools 
 		Message: provider.Message{
 			Role: "assistant",
 			Content: []provider.ContentBlock{
-				{Type: "text", Text: "Summary: User asked about testing. Assistant responded with helpful information."},
+				{Type: "text", Text: func() string {
+					if m.reply != "" {
+						return m.reply
+					}
+					return "Summary: User asked about testing. Assistant responded with helpful information."
+				}()},
 			},
 		},
 		Usage: provider.TokenUsage{InputTokens: 100, OutputTokens: 50},
@@ -784,6 +792,28 @@ func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *t
 	}
 	if summary == "" {
 		t.Fatal("expected non-empty summary after retry")
+	}
+}
+
+// TestContextManager_Summarize_AppliesFactRetention guards the wiring (not
+// the function itself - that has fact_retention_test.go): every summary
+// return path must pass through applyFactRetention, so a summarizer that
+// drops a user constraint gets it re-attached on the way out.
+func TestContextManager_Summarize_AppliesFactRetention(t *testing.T) {
+	ctx := context.Background()
+	prov := &mockProvider{reply: "## Task\nAdd feature.\n## Done\nAdded."}
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "add the feature"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "working"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "don't modify the existing tests"}}},
+	}
+	summary, err := summarizeMessages(ctx, prov, msgs, nil, 10000, "")
+	if err != nil {
+		t.Fatalf("summarizeMessages failed: %v", err)
+	}
+	if !strings.Contains(summary, "## Auto-preserved Facts") ||
+		!strings.Contains(summary, "don't modify the existing tests") {
+		t.Fatalf("sequential path must re-attach dropped constraints, got:\n%s", summary)
 	}
 }
 
