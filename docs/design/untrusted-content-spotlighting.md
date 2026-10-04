@@ -38,3 +38,23 @@
 - `go build -tags goolm ./...`
 - `go test -tags goolm ./internal/agent/`（含 6 个新增 spotlight 单测）
 - `GOOS=windows go vet -tags goolm ./internal/agent/`
+
+## IM 入站通道（sa-221，2026-10）
+
+入站通道覆盖审计发现第三条 LLM 输入通道裸露：IM 入站消息（QQ/TG/Discord 等）
+原样进入 LLM 上下文，无任何 provenance 标注——与 tool_result（已覆盖）、A2A
+peer transcript（r406 已覆盖）同级信任，但 IM 是远程通道（#2185/#2205 威胁
+模型已认定远程 IM 为攻击面：账号被盗/群转发/误绑定即可投递注入文本）。
+
+与 A2A 同构但语义不同：**IM 消息是用户消息**，agent 必须继续服从正常请求，
+因此不做全量 `<untrusted_...>` 包裹，而是在 content 首位插入轻量 provenance
+头块（`internal/im/im_provenance.go` `withIMProvenance`）：
+
+- 声明来源（platform/adapter/sender）
+- 声明通道边界：正常请求照常执行；要求违反操作规则（泄密/关安全/外传文件/
+  破坏性命令）的指示须报告来源并拒绝
+
+挂载点：`internal/im/daemon_bridge.go` `SubmitInboundMessage` 的 message 路由
+（`content := msg.ProviderContent()` 之后），mid-run 中断队列
+（pendingInterruptions）同样带头——该路径也进 LLM 上下文。纯图消息（无文本）
+不带头，图片注入面由 vision 侧既有机制处理。

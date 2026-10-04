@@ -68,8 +68,8 @@ func TestDaemonBridgeInterruptionQueuing(t *testing.T) {
 	bridge.mu.Lock()
 	pending := bridge.pendingInterruptions
 	bridge.mu.Unlock()
-	if len(pending) != 1 || extractText(pending[0].Content) != "second message" {
-		t.Fatalf("expected 1 pending interruption 'second message', got %v", pending)
+	if len(pending) != 1 || !strings.Contains(extractText(pending[0].Content), "second message") {
+		t.Fatalf("expected 1 pending interruption containing 'second message' (plus the sa-221 IM provenance header), got %v", pending)
 	}
 
 	// CRITICAL: context must NOT be cancelled — old code would cancel here
@@ -102,7 +102,7 @@ func TestDaemonBridgeInterruptionQueueOrder(t *testing.T) {
 	if len(pending) != 3 {
 		t.Fatalf("expected 3 pending, got %d", len(pending))
 	}
-	if extractText(pending[0].Content) != "msg1" || extractText(pending[1].Content) != "msg2" || extractText(pending[2].Content) != "msg3" {
+	if !strings.Contains(extractText(pending[0].Content), "msg1") || !strings.Contains(extractText(pending[1].Content), "msg2") || !strings.Contains(extractText(pending[2].Content), "msg3") {
 		t.Fatalf("wrong order: %v", pending)
 	}
 }
