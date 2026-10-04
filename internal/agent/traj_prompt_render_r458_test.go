@@ -31,6 +31,8 @@ func mkLearning(ts time.Time, typ, cat, insight string) trajectoryLearning {
 }
 
 func TestRenderPromptSection_EmptyAndAbsent(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
 	dir := t.TempDir()
 	s := newTrajIntelState()
@@ -45,6 +47,8 @@ func TestRenderPromptSection_EmptyAndAbsent(t *testing.T) {
 }
 
 func TestRenderPromptSection_RendersAndDedupes(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
 	dir := t.TempDir()
 	base := time.Now().Add(-time.Hour)
@@ -70,6 +74,8 @@ func TestRenderPromptSection_RendersAndDedupes(t *testing.T) {
 }
 
 func TestRenderPromptSection_Budgets(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
 	dir := t.TempDir()
 	base := time.Now()
@@ -92,6 +98,8 @@ func TestRenderPromptSection_Budgets(t *testing.T) {
 }
 
 func TestRenderPromptSection_TeammateEntriesIncluded(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	t.Setenv("HOME", t.TempDir()) // r460: isolate from any real global store
 	dir := t.TempDir()
 	base := time.Now().Add(-time.Hour)

@@ -42,12 +42,18 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 		injecting := 0
 		for i, v := range views {
 			marker := " "
-			if v.Injects {
+			suffix := ""
+			switch {
+			case v.Holdout:
+				// r462 control arm: held out of injection, delta vs holdout.
+				marker = "h"
+				suffix = fmt.Sprintf(" (Δ%+.0fpp/%d)", v.DeltaPP, v.HoldRuns)
+			case v.Injects:
 				marker = ">"
 				injecting++
 			}
-			fmt.Fprintf(&b, "%s %2d. [%s] %s (conf %.2f, x%d)\n",
-				marker, i+1, v.Type, truncateForDisplay(v.Insight, 80), v.Confidence, v.Reinforced+1)
+			fmt.Fprintf(&b, "%s %2d. [%s] %s (conf %.2f, x%d)%s\n",
+				marker, i+1, v.Type, truncateForDisplay(v.Insight, 80), v.Confidence, v.Reinforced+1, suffix)
 		}
 		m.chatWriteSystem(nextSystemID(),
 			fmt.Sprintf(m.t("traj.header"), len(views), injecting)+"\n"+b.String())

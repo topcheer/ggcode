@@ -16,6 +16,8 @@ import (
 )
 
 func TestIssue3257_TruncateTaskCJKNoInvalidUTF8(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	// The issue's exact reproducer shape: ASCII prefix + CJK overflow.
 	s := "a" + strings.Repeat("请", 130)
 	for _, max := range []int{120, 100, 37, 36, 4, 3, 2, 1} {
@@ -34,6 +36,8 @@ func TestIssue3257_TruncateTaskCJKNoInvalidUTF8(t *testing.T) {
 }
 
 func TestIssue3257_SummarizeErrorsCJKSafe(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	long := strings.Repeat("错", 80) // 240 bytes > 100
 	got := summarizeErrors([]string{long})
 	if !utf8.ValidString(got) {
@@ -45,6 +49,8 @@ func TestIssue3257_SummarizeErrorsCJKSafe(t *testing.T) {
 }
 
 func TestIssue3257_RenderSectionBudgetHonoredAndCJKSafe(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	dir := t.TempDir()
 	base := time.Now()
 	var ls []trajectoryLearning
@@ -72,6 +78,8 @@ func TestIssue3257_RenderSectionBudgetHonoredAndCJKSafe(t *testing.T) {
 }
 
 func TestIssue3257_TruncateRunesUTF8Boundaries(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	if got := truncateRunesUTF8("abc", 5); got != "abc" {
 		t.Fatalf("under budget passthrough: %q", got)
 	}

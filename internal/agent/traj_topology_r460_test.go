@@ -25,6 +25,8 @@ func writeR460Store(t *testing.T, path string, entries []trajectoryLearning) {
 }
 
 func TestTrajMergeInto_DedupesAndIsIdempotent(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	main := t.TempDir()
 	src := filepath.Join(t.TempDir(), "src.jsonl")
 	now := time.Now()
@@ -55,6 +57,8 @@ func TestTrajMergeInto_DedupesAndIsIdempotent(t *testing.T) {
 }
 
 func TestTrajMergeInto_AbsentSourceNoop(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	main := t.TempDir()
 	added, err := TrajMergeInto(main, filepath.Join(main, "nope.jsonl"))
 	if err == nil || added != 0 {
@@ -63,6 +67,8 @@ func TestTrajMergeInto_AbsentSourceNoop(t *testing.T) {
 }
 
 func TestTrajExportImportRoundtrip(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	ws := t.TempDir()
 	now := time.Now()
 	writeR460Store(t, filepath.Join(ws, ".ggcode", "trajectory-learnings.jsonl"), []trajectoryLearning{
@@ -86,6 +92,8 @@ func TestTrajExportImportRoundtrip(t *testing.T) {
 }
 
 func TestTrajBackflowFromWorktree(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	mainDir := t.TempDir()
 	wt := t.TempDir() // stands in for the transient worktree
 	now := time.Now()
@@ -105,6 +113,8 @@ func TestTrajBackflowFromWorktree(t *testing.T) {
 }
 
 func TestTrajBackflow_NoStoreOrSameDirNoop(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	mainDir := t.TempDir()
 	emptyWT := t.TempDir() // no learning store inside
 	TrajBackflowFromWorktree(mainDir, emptyWT)
@@ -118,6 +128,8 @@ func TestTrajBackflow_NoStoreOrSameDirNoop(t *testing.T) {
 }
 
 func TestRenderPromptSection_GlobalTierTopsUp(t *testing.T) {
+	trajHoldoutEnabled = false
+	t.Cleanup(func() { trajHoldoutEnabled = true })
 	ws := t.TempDir()
 	now := time.Now()
 	// Workspace knows category "local"; global knows "local" + "general".
