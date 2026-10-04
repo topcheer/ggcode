@@ -846,6 +846,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
 		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
+		OnMetric:            r.metricCollector.Emit,
 		SystemPromptBuilder: r.systemPromptBuilder,
 	}
 	tools.Register(spawnTool)

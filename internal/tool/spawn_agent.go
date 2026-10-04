@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -58,6 +59,7 @@ type SpawnAgentTool struct {
 	AgentFactory        subagent.AgentFactory
 	WorkingDir          string // working directory to propagate to sub-agent
 	OnUsage             func(provider.TokenUsage)
+	OnMetric            func(metrics.MetricEvent)           // forwarded to the sub-agent's Agent so its LLM/tool telemetry reaches the parent collector (sa-218)
 	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
 	// TrajBackflow (r460, injected by the agent side to avoid a tool->agent
 	// import cycle) folds a worktree-isolated sub-agent's extracted
@@ -304,6 +306,7 @@ func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string,
 			AgentType:           opts.AgentType,
 			WorkingDir:          runWorkDir,
 			OnUsage:             t.OnUsage,
+			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each sub-agent gets its own tool
@@ -362,6 +365,7 @@ func (t SpawnAgentTool) Clone() Tool {
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
+		OnMetric:            t.OnMetric,
 		SystemPromptBuilder: t.SystemPromptBuilder,
 		TrajBackflow:        t.TrajBackflow,
 	}

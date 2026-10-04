@@ -1731,7 +1731,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 			}
 		}
 		return nil
-	}, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, agentFactory, subAgentPromptBuilder)
+	}, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, b.metricCollector.Emit, agentFactory, subAgentPromptBuilder)
 	// Guarded one-time store: readers on other goroutines lock b.mu.
 	b.mu.Lock()
 	b.subAgentMgr = subAgents
