@@ -105,6 +105,38 @@ func TestIssue3249AgentUndoNeutralizesMtimeBump(t *testing.T) {
 	}
 }
 
+// TestIssue3249RecordUserUndoDelegates: the exported TUI/desktop bridge must
+// reach the observer's true negative-signal path (user rejection semantics).
+func TestIssue3249RecordUserUndoDelegates(t *testing.T) {
+	o, dir := newTestObserver(t)
+	a := &Agent{}
+	a.mu.Lock()
+	a.userEditObs = o
+	a.mu.Unlock()
+	f := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(f, []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedPending(o, f, time.Now().Add(-time.Minute))
+
+	a.RecordUserUndo(f)
+
+	o.mu.Lock()
+	_, hasPending := o.pending[f]
+	_, hasWrote := o.wrote[f]
+	hits := 0
+	if o.negHits[f] != nil {
+		hits = o.negHits[f].turns
+	}
+	o.mu.Unlock()
+	if hasPending || hasWrote {
+		t.Fatalf("user undo must clear pending+wrote, pending=%v wrote=%v", hasPending, hasWrote)
+	}
+	if hits != 1 {
+		t.Fatalf("user undo must feed the negative channel, negHits=%d", hits)
+	}
+}
+
 // TestIssue3249WiringSourcePin: agent.go's undo_edit branch must route to
 // NoteAgentUndo, never NoteNegativeSignal (source-level regression pin,
 // same discipline as the #1644 scheduler pin).

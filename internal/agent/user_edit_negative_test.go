@@ -7,8 +7,11 @@ import (
 	"time"
 )
 
-// r447 negative-signal probes: undo cancels pending observations, repeated
-// undos retire promoted user_edit rules, other rules are never touched.
+// r447 negative-signal probes: USER-initiated undo (RecordUserUndo from the
+// TUI /undo checkpoint path - #3249 corrected the attribution; the agent's
+// own undo_edit is a self-correction wired to NoteAgentUndo instead) cancels
+// pending observations, repeated user undos retire promoted user_edit rules,
+// other rules are never touched.
 
 // seedPending simulates one prior positive observation for path.
 func seedPending(o *UserEditObserver, path string, mt time.Time) {
