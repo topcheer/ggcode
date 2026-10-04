@@ -1106,15 +1106,20 @@ func (s *trajIntelState) recordInjectedLocked(l trajectoryLearning) {
 	s.injectedThisRun[trajKeyOf(l)] = true
 }
 
-// clearInjectedRun (#3271-B): cancelled runs must not leave their
+// clearInjectedRun (#3271-B, #3277): cancelled runs must not leave their
 // injected-key set behind - recordInjectionOutcome is skipped for them
 // (their terminal state reflects the user's interrupt), and without this
 // the stale keys leak into the NEXT run's accounting. Called from the
 // same defer's cancelled branch.
+// #3277: the holdout set needs the same treatment - recordHoldoutOutcome
+// is likewise skipped on cancel, and a stale holdoutThisRun would inflate
+// the next completed run's HoldoutRuns for keys it actually injected
+// (double-arm counting corrupts the verdict delta).
 func (s *trajIntelState) clearInjectedRun() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.injectedThisRun = nil
+	s.holdoutThisRun = nil
 }
 
 // recordInjectionOutcome (r461) closes the injection→outcome feedback

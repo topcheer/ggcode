@@ -156,3 +156,23 @@ func TestHoldout3275_ArmIsolationUnderNewRules(t *testing.T) {
 		}
 	}
 }
+
+// #3277: a cancelled run must clear BOTH per-run sets - a stale
+// holdoutThisRun would inflate the next completed run's HoldoutRuns for
+// keys that run actually injected (double-arm counting).
+func TestHoldout3277_CancelClearsHoldoutSet(t *testing.T) {
+	dir := t.TempDir()
+	s := holdoutTestState(t, dir)
+	s.recordHoldoutLocked(holdoutLearning("build", "pattern", 0.8))
+	s.recordInjectedLocked(holdoutLearning("build", "failure", 0.8))
+	if len(s.holdoutThisRun) != 1 || len(s.injectedThisRun) != 1 {
+		t.Fatalf("seed failed: hold=%v inj=%v", s.holdoutThisRun, s.injectedThisRun)
+	}
+	s.clearInjectedRun()
+	s.mu.Lock()
+	hl, il := len(s.holdoutThisRun), len(s.injectedThisRun)
+	s.mu.Unlock()
+	if hl != 0 || il != 0 {
+		t.Fatalf("cancel must clear both sets, got holdout=%d injected=%d", hl, il)
+	}
+}
