@@ -31,6 +31,17 @@ type BindingStore interface {
 	UpdateSessionID(workspace, adapter, sessionID string) error
 }
 
+// PassiveSeqReserver is an optional BindingStore capability (#3319):
+// atomically advancing PassiveReplyCount by n and returning the first
+// reserved seq (newCount-n+1) with the whole read-modify-write under the
+// store's cross-process lock. Two ggcode instances (e.g. TUI + daemon)
+// can then never reserve the same (msg_id, msg_seq) pair and have the QQ
+// server deduplicate one of the sends away. Stores that do not implement
+// this (test mocks) fall back to in-process reservation in the Manager.
+type PassiveSeqReserver interface {
+	ReservePassiveSeqs(workspace, messageID string, n int) (int, error)
+}
+
 // compositeKey builds a map key from workspace and adapter name.
 func compositeKey(workspace, adapter string) string {
 	return normalizeWorkspace(workspace) + "\x00" + adapter
@@ -125,6 +136,31 @@ func (s *MemoryBindingStore) BindExclusive(binding ChannelBinding) error {
 	return nil
 }
 
+// ReservePassiveSeqs implements PassiveSeqReserver. In-memory
+// store: the mutex already makes read-modify-write atomic within the
+// process (tests use this store; production multi-instance uses the JSON
+// file store whose file lock spans processes).
+func (s *MemoryBindingStore) ReservePassiveSeqs(workspace, messageID string, n int) (int, error) {
+	if n < 1 {
+		return 0, fmt.Errorf("reserving %d passive seqs: n must be >= 1", n)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ws := normalizeWorkspace(workspace)
+	for key, b := range s.bindings {
+		if b.Workspace != ws || strings.TrimSpace(b.LastInboundMessageID) != messageID {
+			continue
+		}
+		if b.PassiveReplyStartedAt.IsZero() {
+			b.PassiveReplyStartedAt = time.Now()
+		}
+		b.PassiveReplyCount += n
+		s.bindings[key] = b
+		return b.PassiveReplyCount - n + 1, nil
+	}
+	return 0, ErrNoChannelBound
+}
+
 func (s *MemoryBindingStore) UpdateSessionID(workspace, adapter, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -181,6 +217,42 @@ func (s *JSONFileBindingStore) Save(binding ChannelBinding) error {
 	}
 	all[key] = binding
 	return s.writeAllLocked(all)
+}
+
+// ReservePassiveSeqs implements PassiveSeqReserver. The whole
+// read-modify-write cycle runs under the cross-process bindings file lock,
+// so concurrent instances serialize here instead of racing in memory (#3319).
+func (s *JSONFileBindingStore) ReservePassiveSeqs(workspace, messageID string, n int) (int, error) {
+	if n < 1 {
+		return 0, fmt.Errorf("reserving %d passive seqs: n must be >= 1", n)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := lockBindingsFile(s.path)
+	if err != nil {
+		return 0, fmt.Errorf("acquiring IM bindings lock: %w", err)
+	}
+	defer unlock()
+	all, err := s.readAllLocked()
+	if err != nil {
+		return 0, err
+	}
+	ws := normalizeWorkspace(workspace)
+	for key, b := range all {
+		if b.Workspace != ws || strings.TrimSpace(b.LastInboundMessageID) != messageID {
+			continue
+		}
+		if b.PassiveReplyStartedAt.IsZero() {
+			b.PassiveReplyStartedAt = time.Now()
+		}
+		b.PassiveReplyCount += n
+		all[key] = b
+		if err := s.writeAllLocked(all); err != nil {
+			return 0, err
+		}
+		return b.PassiveReplyCount - n + 1, nil
+	}
+	return 0, ErrNoChannelBound
 }
 
 func (s *JSONFileBindingStore) Delete(workspace, adapter string) error {
