@@ -423,6 +423,56 @@ const (
 //   - hard char budget with truncation marker
 //   - deterministic output (no timestamps) so the section is stable
 //     across runs within a session and cache-friendly
+//
+// selectForPrompt applies the prompt renderer's FULL selection semantics
+// (#3266): confidence gate, effectiveness gate, per-Category dedupe (keep
+// newest), per-Type cap, overall cap - in that exact order, on the same
+// confidence-then-recency ordering. Pure: no injection recording, no
+// mutation of the caller's slice. RenderPromptSection formats its result;
+// TrajListLearnings uses it to make Injects predict the renderer exactly
+// instead of approximating two of its five layers.
+func selectForPrompt(entries []trajectoryLearning) []trajectoryLearning {
+	sorted := make([]trajectoryLearning, len(entries))
+	copy(sorted, entries)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ci, cj := sorted[i].EffectiveConfidence(), sorted[j].EffectiveConfidence()
+		if ci != cj {
+			return ci > cj
+		}
+		return sorted[i].Timestamp.After(sorted[j].Timestamp)
+	})
+	chosen := make([]trajectoryLearning, 0, trajPromptMaxEntries)
+	counts := map[string]int{}
+	seenCat := map[string]bool{}
+	for _, l := range sorted {
+		if len(chosen) >= trajPromptMaxEntries {
+			break
+		}
+		if l.EffectiveConfidence() < trajPromptMinConfidence {
+			continue
+		}
+		// r461 effectiveness gate: retired entries (enough measured
+		// injections, too few successful runs) stop consuming slots.
+		if effectivenessGated(l) {
+			continue
+		}
+		key := l.Category
+		if key == "" {
+			key = l.Type
+		}
+		if seenCat[key] {
+			continue
+		}
+		if counts[l.Type] >= trajPromptPerType {
+			continue
+		}
+		seenCat[key] = true
+		counts[l.Type]++
+		chosen = append(chosen, l)
+	}
+	return chosen
+}
+
 func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	if workingDir == "" {
 		return ""
@@ -466,38 +516,13 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		}
 		return entries[i].Timestamp.After(entries[j].Timestamp)
 	})
-	// Dedupe per Category, keep newest; Type counter caps variety.
+	// Selection (gates + dedupe + caps) lives in selectForPrompt so
+	// TrajListLearnings predicts the exact same set (#3266).
+	chosen := selectForPrompt(entries)
 	var lines []string
-	counts := map[string]int{}
-	seenCat := map[string]bool{}
-	total := 0
-	for _, l := range entries {
-		if total >= trajPromptMaxEntries {
-			break
-		}
-		if l.EffectiveConfidence() < trajPromptMinConfidence {
-			continue
-		}
-		// r461 effectiveness gate: retired entries (enough measured
-		// injections, too few successful runs) stop consuming slots.
-		if effectivenessGated(l) {
-			continue
-		}
-		key := l.Category
-		if key == "" {
-			key = l.Type
-		}
-		if seenCat[key] {
-			continue
-		}
-		if counts[l.Type] >= trajPromptPerType {
-			continue
-		}
-		seenCat[key] = true
-		counts[l.Type]++
+	for _, l := range chosen {
 		s.recordInjectedLocked(l)
 		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, l.Insight))
-		total++
 	}
 	if len(lines) == 0 {
 		return ""
@@ -539,13 +564,41 @@ func TrajListLearnings(workingDir string) []TrajLearningView {
 	if err != nil {
 		return nil
 	}
+	// #3266: the renderer tops up from the user-level global store; the
+	// panel must show the same universe or it under-reports what actually
+	// injects. Same merge rules as RenderPromptSection (global only fills
+	// categories the workspace lacks, marked so the user can tell tiers
+	// apart).
+	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
+		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			localCats := map[string]bool{}
+			for _, l := range entries {
+				localCats[l.Category] = true
+			}
+			for _, l := range gEntries {
+				if l.Category == "" || localCats[l.Category] {
+					continue
+				}
+				l.Insight = l.Insight + " (general, other projects)"
+				entries = append(entries, l)
+			}
+		}
+	}
+	// #3266: Injects must predict the renderer's FULL selection (confidence
+	// gate, effectiveness gate, category dedupe, per-Type cap, overall cap),
+	// not just two of its five layers - same shared selector, no drift.
+	chosen := selectForPrompt(entries)
+	injectSet := make(map[string]bool, len(chosen))
+	for _, l := range chosen {
+		injectSet[l.Type+"|"+l.Category+"|"+l.Insight+"|"+l.Timestamp.Format(time.RFC3339Nano)] = true
+	}
 	views := make([]TrajLearningView, 0, len(entries))
 	for _, l := range entries {
 		conf := l.EffectiveConfidence()
 		views = append(views, TrajLearningView{
 			Type: l.Type, Category: l.Category, Insight: l.Insight,
 			Confidence: conf, Reinforced: l.Reinforced, Timestamp: l.Timestamp,
-			Injects: conf >= trajPromptMinConfidence && !effectivenessGated(l),
+			Injects: injectSet[l.Type+"|"+l.Category+"|"+l.Insight+"|"+l.Timestamp.Format(time.RFC3339Nano)],
 		})
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -905,8 +958,21 @@ func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
 	var newest time.Time
 	if existing, err := s.loadFromFile(); err == nil {
 		for _, l := range existing {
-			if l.Type == "teammate" && l.Timestamp.After(newest) {
-				newest = l.Timestamp
+			if l.Type != "teammate" {
+				continue
+			}
+			// #3266: consolidation keeps the OLDEST row's Timestamp and
+			// moves recency into LastReinforced. Watermarking on Timestamp
+			// alone regressed past merged rows every run, re-ingesting the
+			// same ledger entries forever (Reinforced/Confidence climbing,
+			// the freshest digests permanently invisible). Use the newest
+			// of both timestamps.
+			ts := l.Timestamp
+			if l.LastReinforced.After(ts) {
+				ts = l.LastReinforced
+			}
+			if ts.After(newest) {
+				newest = ts
 			}
 		}
 	}

@@ -110,6 +110,10 @@ func TestRenderPromptSection_ReinforcedOlderBeatsFreshNoise(t *testing.T) {
 }
 
 func TestPersistConsolidatesDuplicateRows(t *testing.T) {
+	// #3266: TrajListLearnings now tops up from the user-level global
+	// store; redirect HOME so the test stays hermetic against the real
+	// developer-machine store (r460 Setenv convention).
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	now := time.Now()
 	// Simulate a store with duplicates: persist twice with same category.
@@ -134,6 +138,9 @@ func TestPersistConsolidatesDuplicateRows(t *testing.T) {
 }
 
 func TestTrajListAndClear_UserSurface(t *testing.T) {
+	// #3266: same HOME isolation as above - the panel reads the global
+	// tier now.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	now := time.Now()
 	writeLearnings(t, dir, []trajectoryLearning{
