@@ -455,6 +455,13 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(workingDir, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
 		debug.Log("root", "swept %d stale atomic-write temp file(s)", n)
 	}
+	// #3343 (sa-246 audit): the config root is the busiest AtomicWriteFile
+	// target (vendors.yaml, api keys, agent-rules.json...) yet was NOT in
+	// sweep scope - 7 crash-orphaned .ggcode-tmp-* temps (all 6952B) sat in
+	// ~/.ggcode forever. Same 1h staleness gate as the working-dir sweep.
+	if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
+		debug.Log("root", "swept %d stale atomic-write temp file(s) in config dir", n)
+	}
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")

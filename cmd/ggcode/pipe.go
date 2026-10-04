@@ -36,6 +36,10 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(wd, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
 			debug.Log("pipe", "swept %d stale atomic-write temp file(s)", n)
 		}
+		// #3343: config root shares the same crash-orphan exposure (see root.run).
+		if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
+			debug.Log("pipe", "swept %d stale atomic-write temp file(s) in config dir", n)
+		}
 	}
 
 	prov, resolved, err := ResolveProvider(cfg)

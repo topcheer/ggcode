@@ -818,6 +818,9 @@ func TestContextManager_Summarize_AppliesFactRetention(t *testing.T) {
 }
 
 func TestContextManager_Summarize_ReinjectsPostCompactState(t *testing.T) {
+	// #3343: TodoFilePath resolves ConfigDir at call time; without HOME
+	// isolation this test wrote a real ~/.ggcode/todos/test-compact-session.json.
+	t.Setenv("HOME", t.TempDir())
 	sessionID := "test-compact-session"
 	todoPath := toolpkg.TodoFilePath(sessionID)
 	if err := os.MkdirAll(filepath.Dir(todoPath), 0755); err != nil {
