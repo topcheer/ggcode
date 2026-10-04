@@ -334,6 +334,9 @@ type headerInjectingTransport struct {
 	mu         sync.RWMutex
 	headers    http.Header
 	rateLimits *rateLimitTracker // nil if rate-limit capture is disabled
+	// promptCacheKey (sa-231) is injected into POST JSON bodies as
+	// prompt_cache_key for cache-routing affinity; "" = disabled.
+	promptCacheKey string
 }
 
 func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -343,7 +346,11 @@ func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 			req.Header.Set(k, v)
 		}
 	}
+	cacheKey := t.promptCacheKey
 	t.mu.RUnlock()
+	if cacheKey != "" {
+		injectPromptCacheKey(req, cacheKey)
+	}
 	resp, err := t.base.RoundTrip(req)
 	if err == nil && resp != nil && t.rateLimits != nil {
 		t.rateLimits.Update(resp.Header)
