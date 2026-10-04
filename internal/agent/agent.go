@@ -225,6 +225,7 @@ type Agent struct {
 	oversightTriage              *oversightTriageState      // r397: novel-vs-routine triage for human review attention
 	autonomyDial                 *autonomyDialState         // r407: advisory progressive-autonomy dial
 	commitHint                   *commitHintState           // post-completion commit reminder for uncommitted changes
+	draftPRHint                  *draftPRHintState          // post-completion draft-PR reminder for unpushed feature branches (sa-223)
 	verifyRegression             *verifyRegressionState     // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate           *selfCorrectionGateState   // EIR/ECR stability gate: detects net-negative self-correction loops
 	lastGoodCheckpoint           *lastGoodCheckpoint        // last-known-good file snapshot: actionable revert targets for failed self-correction
@@ -466,6 +467,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		autonomyDial:           newAutonomyDialState(),
 		guidanceStats:          guidanceRunStats{}, // r402: also reset per-run in runPrompt
 		commitHint:             newCommitHintState(),
+		draftPRHint:            newDraftPRHintState(),
 		verifyRegression:       newVerifyRegressionState(),
 		selfCorrectionGate:     newSelfCorrectionGateState(),
 		lastGoodCheckpoint:     newLastGoodCheckpoint(),
@@ -1944,6 +1946,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.commitHint.reset()
+	a.draftPRHint.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		a.changeReconcile.capturePreRunState(workingDir)
 		// Inject awareness if the tree is dirty — the agent should know about
@@ -3332,6 +3335,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: commitHintMsg,
+					}},
+				})
+				continue
+			}
+			// sa-223 post-completion draft-PR hint: past the commit gate, if the
+			// agent committed work on an unpushed feature branch, remind it to
+			// push + open a draft PR. Advisory (non-blocking), one shot per run.
+			if draftPRMsg := a.checkDraftPRHintGate(runStats); draftPRMsg != "" {
+				debug.Log("agent", "Iteration %d: draft-PR hint gate injected reminder", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: draftPRMsg,
 					}},
 				})
 				continue
