@@ -14,6 +14,16 @@ import (
 // confidence), /traj clear purges it. Before this, injected learnings
 // were invisible and unkillable - a polluted store kept whispering into
 // every run's prompt.
+// trajClearArg reports whether the /traj clear invocation carries the
+// "global" argument. parts is the FULL command split (parts[0] =
+// "/traj"), so the argument lives at parts[2] - the first version of
+// #3278 checked parts[1] ("clear"), an unreachable branch inside
+// case "clear" (终裁打回：接线死分支)。Extracted so the parsing has
+// its own probe.
+func trajClearArgIsGlobal(parts []string) bool {
+	return len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "global")
+}
+
 func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 	wd := m.agent.WorkingDir()
 	if wd == "" {
@@ -26,11 +36,28 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 	}
 	switch sub {
 	case "clear", "purge":
+		// #3278: /traj clear global purges the user-level global tier
+		// (bare clear only removes the workspace file - global fillers
+		// kept injecting and were previously unkillable without rm).
+		if trajClearArgIsGlobal(parts) {
+			if err := agent.TrajClearGlobalLearnings(); err != nil {
+				m.chatWriteSystem(nextSystemID(), fmt.Sprintf("/traj clear global: %v", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), m.t("traj.cleared_global"))
+			return nil
+		}
 		if err := agent.TrajClearLearnings(wd); err != nil {
 			m.chatWriteSystem(nextSystemID(), fmt.Sprintf("/traj clear: %v", err))
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), m.t("traj.cleared"))
+		// #3278: say it when the global tier still holds entries - a
+		// silent partial purge left g-marked items whispering into every
+		// future prompt with no visible remedy.
+		if n, gErr := agent.TrajGlobalRemaining(); gErr == nil && n > 0 {
+			m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("traj.cleared_global_hint"), n))
+		}
 		return nil
 	case "list", "":
 		views := agent.TrajListLearnings(wd)
