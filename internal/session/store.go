@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1001,6 +1002,12 @@ type localLightweightEntry struct {
 // NON-consecutive, separated by assistant runs, so a consecutive-only
 // heuristic missed them entirely). Distinct texts never collide;
 // messages carrying tool_result blocks never participate.
+// #3351: image blocks join the key with a cheap identity signature
+// (MIME + data length + short prefix). Without it an image-only user
+// message (desktop paste / IM photo) keyed as "" and the main loop's
+// `key == ""` branch silently dropped it on resume - every image turn
+// vanished from history and context. Byte-identical retry re-fires
+// still collapse: their signature is identical too.
 func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
 	userKey := func(m provider.Message) (string, bool) {
 		if m.Role != "user" {
@@ -1013,6 +1020,14 @@ func dedupeUserMsgs(msgs []provider.Message) []provider.Message {
 			}
 			if b.Type == "text" {
 				sb.WriteString(b.Text)
+				continue
+			}
+			if b.Type == "image" {
+				prefix := b.ImageData
+				if len(prefix) > 32 {
+					prefix = prefix[:32]
+				}
+				sb.WriteString(" img{" + b.ImageMIME + "|" + strconv.Itoa(len(b.ImageData)) + "|" + prefix + "}")
 			}
 		}
 		return sb.String(), true
