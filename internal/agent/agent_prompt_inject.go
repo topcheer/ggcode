@@ -81,11 +81,15 @@ func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 
 	// Layer 3: proactive ratchet rules.
 	// #3227: shared singleton - per-run instances lost updates.
+	// Task-intent filter (#3266 research P1): rules learned in
+	// same-task-type runs rank first, mirroring playbook matchesIntent.
 	if rs := a.getRuleStore(); rs != nil {
-		rulesText := rs.TopRulesForPrompt(5)
+		intent := classifyTaskType(runPrompt)
+		rs.SetRunIntent(intent) // newly learned rules inherit the tag
+		rulesText := rs.TopRulesForPromptFiltered(5, intent)
 		if rulesText != "" {
 			dynamicParts = append(dynamicParts, rulesText)
-			debug.Log("agent", "Injected learned ratchet rules into system prompt")
+			debug.Log("agent", "Injected learned ratchet rules into system prompt (intent=%s)", intent)
 		}
 	}
 
