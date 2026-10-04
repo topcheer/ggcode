@@ -261,16 +261,33 @@ func collectFuncSliceDecls(body *ast.BlockStmt, decls map[string]*zeroCapSliceDe
 				}
 			}
 		case *ast.AssignStmt:
-			if node.Tok != token.DEFINE {
-				return true
-			}
 			for i, lhs := range node.Lhs {
 				ident, ok := lhs.(*ast.Ident)
 				if !ok || i >= len(node.Rhs) {
 					continue
 				}
-				if d := analyzeInitExpr(ident.Name, ident.Pos(), node.Rhs[i]); d != nil {
-					recordDeclRespectingConflicts(decls, d)
+				d := analyzeInitExpr(ident.Name, ident.Pos(), node.Rhs[i])
+				if node.Tok == token.DEFINE {
+					if d != nil {
+						recordDeclRespectingConflicts(decls, d)
+					}
+					continue
+				}
+				// #3355: a `var x []T` later granted capacity via plain
+				// assignment (x = make([]T, 0, N), including branch-selected
+				// capacities) is correctly preallocated. Mirrors the map
+				// check's excludeShadowedBinds (#1103) conservatism: the
+				// already-sized assignment means subsequent appends belong to
+				// a sized variable, so stop treating the binding as zero-cap.
+				// The entry is replaced with an upgraded copy so a shared
+				// package-level decl pointer never leaks the flip to sibling
+				// function units.
+				if d != nil && d.hasMakeCapacity {
+					if prev, ok := decls[ident.Name]; ok && !prev.hasMakeCapacity {
+						upgraded := *prev
+						upgraded.hasMakeCapacity = true
+						decls[ident.Name] = &upgraded
+					}
 				}
 			}
 		}
