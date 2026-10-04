@@ -262,14 +262,20 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 	// Poll all candidates to terminal state. ctx cancellation yields a
 	// Partial report; candidates are NOT cancelled (parent can wait_agent).
 	terminal := make([]bool, n)
-	var snapsFinal []subagent.Snapshot
+	// #3288: allocated ONCE before the poll loop. Candidates finish at
+	// staggered times (the norm in real parallel runs); re-making the slice
+	// each iteration zeroed earlier-terminal candidates' final snapshots,
+	// degrading ranking to empty trajectories, blanking winner result text,
+	// and breaking the auction-close leader baseline. Terminal slots are
+	// never rewritten, so each candidate's last snapshot survives to the
+	// ranking/report phase.
+	snapsFinal := make([]subagent.Snapshot, n)
 	canceller, _ := snaps.(CandidateCanceller) // r441 auction-close support
 	yieldClosed := false                       // at most one close per run
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
 		allDone := true
-		snapsFinal = make([]subagent.Snapshot, n)
 		for i, l := range ids {
 			if terminal[i] {
 				continue
