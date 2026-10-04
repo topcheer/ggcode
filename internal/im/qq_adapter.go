@@ -1300,6 +1300,12 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 		debug.Log("qq", "adapter=%s typing notify failed: %v", a.name, err)
 		return err
 	}
+	// #3345: the typing notify carries (msg_id, msg_seq) and burns a
+	// server-side passive slot exactly like an echo or media message - every
+	// other carrier in this file records its slot (#3317 echo, #3319
+	// pre-reservation, #3326 locked resolve). Record it, or the next Send
+	// reuses this seq and the server deduplicates it away.
+	a.recordPassiveReplies(binding, msgID, 1)
 	return nil
 }
 
