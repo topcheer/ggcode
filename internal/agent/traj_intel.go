@@ -1007,6 +1007,17 @@ func (s *trajIntelState) recordInjectedLocked(l trajectoryLearning) {
 	s.injectedThisRun[trajKeyOf(l)] = true
 }
 
+// clearInjectedRun (#3271-B): cancelled runs must not leave their
+// injected-key set behind - recordInjectionOutcome is skipped for them
+// (their terminal state reflects the user's interrupt), and without this
+// the stale keys leak into the NEXT run's accounting. Called from the
+// same defer's cancelled branch.
+func (s *trajIntelState) clearInjectedRun() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.injectedThisRun = nil
+}
+
 // recordInjectionOutcome (r461) closes the injection→outcome feedback
 // loop that r458's re-inject leg lacked: for every entry injected into
 // this run's system prompt, record the run's terminal state
@@ -1031,13 +1042,19 @@ func (s *trajIntelState) recordInjectionOutcome(workingDir string, success bool)
 	if s.filePath == "" {
 		return
 	}
-	err := s.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
-		if loadErr != nil && !os.IsNotExist(loadErr) {
-			return nil, fmt.Errorf("load: %w", loadErr)
-		}
+	// #3271: keys that do NOT match any workspace row may still match the
+	// user-level global store (RenderPromptSection tops up from it; global
+	// fillers have zero workspace matches by construction). Accounting
+	// them only against the workspace file left global rows' InjectedRuns
+	// forever 0 - the r461 retirement gate never fired for the whole
+	// global tier. Track what the workspace pass matched; leftovers go to
+	// the global file under the same lock/rewrite discipline.
+	matched := make(map[trajKey]bool)
+	bump := func(existing []trajectoryLearning) bool {
 		changed := false
 		for i := range existing {
-			if !keys[trajKeyOf(existing[i])] {
+			k := trajKeyOf(existing[i])
+			if !keys[k] {
 				continue
 			}
 			existing[i].InjectedRuns++
@@ -1046,15 +1063,48 @@ func (s *trajIntelState) recordInjectionOutcome(workingDir string, success bool)
 			} else {
 				existing[i].AfterFail++
 			}
+			matched[k] = true
 			changed = true
 		}
-		if !changed {
+		return changed
+	}
+	err := s.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
+		if loadErr != nil && !os.IsNotExist(loadErr) {
+			return nil, fmt.Errorf("load: %w", loadErr)
+		}
+		if !bump(existing) {
 			return nil, nil
 		}
 		return existing, nil
 	})
 	if err != nil {
 		debug.Log("traj-intel", "outcome write-back failed: %v", err)
+	}
+	// Global-tier pass: only keys the workspace file could not account
+	// for. A fresh state pointed at the global path reuses the same
+	// load/merge/trim/lock machinery; its own mutex is independent.
+	leftover := false
+	for k := range keys {
+		if !matched[k] {
+			leftover = true
+			break
+		}
+	}
+	if leftover {
+		if globalPath, gErr := TrajGlobalPath(); gErr == nil {
+			g := &trajIntelState{filePath: globalPath}
+			if gErr := g.rewriteAllLocked(func(existing []trajectoryLearning, loadErr error) ([]trajectoryLearning, error) {
+				if loadErr != nil && !os.IsNotExist(loadErr) {
+					return nil, fmt.Errorf("load: %w", loadErr)
+				}
+				if !bump(existing) {
+					return nil, nil
+				}
+				return existing, nil
+			}); gErr != nil {
+				debug.Log("traj-intel", "global-tier outcome write-back failed: %v", gErr)
+			}
+		}
 	}
 }
 
