@@ -48,6 +48,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -471,7 +472,11 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	section := "Past-run learnings (auto-extracted from previous sessions - apply where relevant, ignore where not):\n" +
 		strings.Join(lines, "\n")
 	if len(section) > trajPromptMaxChars {
-		section = section[:trajPromptMaxChars-20] + "\n- [...] older learnings truncated"
+		// #3257: rune-safe cut + the marker's real byte length inside the
+		// budget (the legacy code reserved 20 but appended 34, so every
+		// truncated section was actually 1214 > 1200).
+		const marker = "\n- [...] older learnings truncated"
+		section = truncateRunesUTF8(section, trajPromptMaxChars-len(marker)) + marker
 	}
 	return section
 }
@@ -887,10 +892,34 @@ func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
 
 func truncateTask(s string, max int) string {
 	s = strings.TrimSpace(s)
+	return truncateRunesUTF8(s, max)
+}
+
+// truncateRunesUTF8 caps s at max BYTES without ever splitting a UTF-8
+// rune (#3257): the three legacy byte-slice truncation sites produced
+// invalid UTF-8 on CJK text ~2/3 of the time, and json.Encoder silently
+// replaced the dangling bytes with U+FFFD - permanent corruption in the
+// persisted store and every re-injected system prompt. Walks back to the
+// last rune boundary at or before max; appends the ellipsis only when
+// truncation actually happened (and within the budget).
+func truncateRunesUTF8(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	// Leave room for the ellipsis inside the budget when it fits.
+	const ell = "..."
+	if cut >= len(ell) {
+		cut -= len(ell)
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		return s[:cut] + ell
+	}
+	return s[:cut]
 }
 
 func totalToolCallCount(m map[string]int) int {
@@ -947,11 +976,9 @@ func summarizeErrors(errors []string) string {
 	if len(errors) == 0 {
 		return "none"
 	}
-	// Take the first error, truncated.
+	// Take the first error, truncated (#3257: rune-safe for CJK errors).
 	first := errors[0]
-	if len(first) > 100 {
-		first = first[:100] + "..."
-	}
+	first = truncateRunesUTF8(first, 100)
 	if len(errors) == 1 {
 		return first
 	}
