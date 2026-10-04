@@ -27,9 +27,12 @@ type GeminiProvider struct {
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248
 	serverTools      []ServerToolConfig               // Gemini built-in tools (google_search/url_context), executed in-API
 	topP             float64                          // 0 = provider default
-	transport        *headerInjectingTransport        // kept for runtime header updates
-	logprobs         bool                             // sa-74: request token logprobs for confidence telemetry
-	policy           callPolicy                       // sa-78: per-call deadline + retry budget
+	// responseSchema constrains the final response (Gemini responseSchema,
+	// sa-229 follow-up to #3312). Empty = unconstrained.
+	responseSchema json.RawMessage
+	transport      *headerInjectingTransport // kept for runtime header updates
+	logprobs       bool                      // sa-74: request token logprobs for confidence telemetry
+	policy         callPolicy                // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name used by this provider.
@@ -271,6 +274,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
 	p.applyLogprobs(config)
+	p.applyResponseSchema(config)
 
 	var resp *genai.GenerateContentResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -348,6 +352,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
 	p.applyLogprobs(config)
+	p.applyResponseSchema(config)
 
 	ch := make(chan StreamEvent, 64)
 
