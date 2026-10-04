@@ -393,13 +393,11 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 		if !sent || a.manager == nil || strings.TrimSpace(replyTo) == "" {
 			return
 		}
-		for _, b := range a.manager.currentBindings {
-			if strings.TrimSpace(b.LastInboundMessageID) == strings.TrimSpace(replyTo) {
-				if err := a.manager.RecordPassiveReply(b.Workspace, replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
-					debug.Log("qq", "adapter=%s echo passive-reply record failed: %v", a.name, err)
-				}
-				return
-			}
+		// #3326: resolve-and-record under the manager lock - the previous
+		// bare range over currentBindings raced the binding watcher's
+		// locked deletes.
+		if err := a.manager.RecordPassiveReplyByMessage(replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
+			debug.Log("qq", "adapter=%s echo passive-reply record failed: %v", a.name, err)
 		}
 	}
 	sentContent := content
