@@ -802,6 +802,13 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 		// still logged as a warning for audit purposes.
 		if t.isBypassMode() {
 			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+			// #3282: a bypass-downgraded ask IS a denial signal - repeated
+			// triggers are the core probing fingerprint the security ledger
+			// exists to surface (#3281 final review ruling).
+			t.SecLedger.Record("gate", "ask-allowed", command)
+			if esc := t.SecLedger.Escalation(); esc != "" {
+				preWarning = preWarning + "\n" + esc
+			}
 		} else {
 			debug.Log("run_command", "ASK: %s", gateResult.Reason)
 			// Caller returns this verbatim — the agent loop interprets the
