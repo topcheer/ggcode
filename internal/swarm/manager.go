@@ -869,6 +869,9 @@ func (m *Manager) emit(ev Event) {
 				m.mu.Lock()
 				m.storeResultLocked(ev.TeammateID, ev.Result)
 				m.mu.Unlock()
+				// r457: distill the experience into the rolling ledger that
+				// traj_intel ingests - latest-only results otherwise lose it.
+				appendTeammateExperience(m.workingDirForExp(), ev.TeamID, ev.TeammateID, ev.TeammateName, ev.Result)
 			} else {
 				debug.Log("swarm", "emit: dropping late result for ungoverned %s", ev.TeammateID)
 			}

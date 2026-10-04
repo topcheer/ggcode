@@ -346,6 +346,82 @@ func (s *trajIntelState) loadFromFile() ([]trajectoryLearning, error) {
 	return result, nil
 }
 
+// teammateExperienceEntry mirrors internal/swarm's ledger record (kept as
+// a local struct to avoid an agent->swarm import edge).
+type teammateExperienceEntry struct {
+	Ts       time.Time `json:"ts"`
+	TeamID   string    `json:"team_id"`
+	Teammate string    `json:"teammate"`
+	Digest   string    `json:"digest"`
+}
+
+// ingestTeammateExperience (r457) folds the swarm teammate-experience
+// ledger into the main learning store. The ledger is written by
+// internal/swarm on every completed teammate task; without this ingest
+// the accumulation stays siloed (teammate_results is latest-only and the
+// teammate's experience dies with its shutdown). Entries become
+// Type="teammate" learnings, deduped by timestamp so re-ingest is
+// idempotent. Runs in the post-run defer path - best effort, never
+// blocks the run.
+func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
+	if workingDir == "" {
+		return
+	}
+	if s.filePath == "" {
+		s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	}
+	ledger := filepath.Join(workingDir, ".ggcode", "teammate-experience.jsonl")
+	data, err := os.ReadFile(ledger)
+	if err != nil || len(data) == 0 {
+		return // absent ledger is normal (no swarm activity yet)
+	}
+	// Already-ingested high-water mark: newest teammate-ts in the MAIN
+	// store (the file, not the pending buffer - persistLocked clears the
+	// buffer after each write, so the buffer is not a durable mark).
+	// Idempotence by monotonic ts, not content hashing.
+	var newest time.Time
+	if existing, err := s.loadFromFile(); err == nil {
+		for _, l := range existing {
+			if l.Type == "teammate" && l.Timestamp.After(newest) {
+				newest = l.Timestamp
+			}
+		}
+	}
+
+	var fresh []trajectoryLearning
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var e teammateExperienceEntry
+		if json.Unmarshal([]byte(line), &e) != nil || e.Digest == "" {
+			continue
+		}
+		if !e.Ts.After(newest) {
+			continue // already ingested
+		}
+		fresh = append(fresh, trajectoryLearning{
+			Timestamp: e.Ts,
+			Type:      "teammate",
+			Task:      truncateTask("swarm/"+e.Teammate, 120),
+			Success:   true, // completed results only; failures die in the breaker
+			Insight:   "teammate experience: " + truncateTask(e.Digest, 300),
+			Category:  "teammate_experience",
+		})
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	// Reuse the persist path's dedupe/trim/lock discipline by feeding the
+	// pending buffer; maybeExtractAndPersist->persistLocked will fold it
+	// into the main store on this run's persist.
+	s.mu.Lock()
+	s.learnings = append(s.learnings, fresh...)
+	s.mu.Unlock()
+	debug.Log("traj-intel", "ingested %d teammate experience entries", len(fresh))
+}
+
 // --- Helpers ---
 
 func truncateTask(s string, max int) string {
