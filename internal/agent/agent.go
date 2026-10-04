@@ -1611,6 +1611,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// feed the counterfactual ledger (never touches the r461
 				// injection counters).
 				a.trajIntel.recordHoldoutOutcome(a.WorkingDir(), runStats.Success)
+			} else {
+				// #3271-B: a cancelled run neither counts nor carries - drop
+				// its injected-key set so it cannot leak into the next run's
+				// outcome accounting.
+				a.trajIntel.clearInjectedRun()
 			}
 			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
 		}
