@@ -69,6 +69,18 @@ func appendTeammateExperience(workingDir, teamID, tmID, tmName, result string) {
 		return
 	}
 	// Absent ledger (first write) or unreadable both mean: start fresh.
+	// #3260: the whole read→rewrite→rename window runs under the
+	// cross-process lock - two ggcode instances sharing this workspace
+	// previously both loaded the same baseline and the LAST rename won,
+	// silently erasing the other's entry (same lost-update class #1512-C
+	// fixed for traj_intel). Ledger stays best-effort: on lock timeout we
+	// skip rather than block the event loop.
+	unlock, lockErr := lockTeammateExpFile(path + ".lock")
+	if lockErr != nil {
+		debug.Log("swarm", "teammate-exp: lock timeout, skipping append: %v", lockErr)
+		return
+	}
+	defer unlock()
 	data, _ := os.ReadFile(path)
 	payload := append(data, append(line, '\n')...)
 	if len(payload) == 0 {
@@ -84,12 +96,28 @@ func appendTeammateExperience(workingDir, teamID, tmID, tmName, result string) {
 			payload = append(payload, '\n')
 		}
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+	// #3260: unique temp file (os.CreateTemp) - the fixed ".tmp" path let
+	// two concurrent writers interleave content into the same file, and
+	// the reader's splitJSONL then dropped the corrupted lines.
+	tmpF, err := os.CreateTemp(filepath.Dir(path), ".tmexp-*.tmp")
+	if err != nil {
+		debug.Log("swarm", "teammate-exp: write failed: %v", err)
+		return
+	}
+	tmp := tmpF.Name()
+	if _, err := tmpF.Write(payload); err != nil {
+		tmpF.Close()
+		os.Remove(tmp)
+		debug.Log("swarm", "teammate-exp: write failed: %v", err)
+		return
+	}
+	if err := tmpF.Close(); err != nil {
+		os.Remove(tmp)
 		debug.Log("swarm", "teammate-exp: write failed: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		debug.Log("swarm", "teammate-exp: rename failed: %v", err)
 	}
 }
