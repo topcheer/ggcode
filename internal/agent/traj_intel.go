@@ -578,6 +578,9 @@ func trajSimulateInjected(workingDir string, sorted []trajectoryLearning) map[in
 		if effectivenessGated(l) {
 			continue
 		}
+		if held[trajKeyOf(l)] {
+			continue // r462 control arm: held-out entries skip without consuming dedupe/quota slots
+		}
 		key := l.Category
 		if key == "" {
 			key = l.Type
@@ -587,9 +590,6 @@ func trajSimulateInjected(workingDir string, sorted []trajectoryLearning) map[in
 		}
 		if counts[l.Type] >= trajPromptPerType {
 			continue
-		}
-		if held[trajKeyOf(l)] {
-			continue // r462 control arm: silently held out
 		}
 		seenCat[key] = true
 		counts[l.Type]++
