@@ -280,24 +280,25 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			continue
 		}
 		// Each successfully sent image consumes one seq slot; failures do not
-		// (the server never saw them).
-		// #1230: rate limit across ALL outbound messages. QQ's 5 msg/s limit
-		// counts every send regardless of msg_type, so a delivered image must
-		// also be followed by the inter-message delay - back-to-back multi-image
-		// replies and the image->text transition otherwise burst past the cap
-		// and the server silently drops them.
+		// (the server never saw them). #3317: the slot is recorded IMMEDIATELY
+		// per send - the old batch-at-the-end recording left a whole-loop crash
+		// window where a restart after a successful send reused the burned seq.
 		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, seq); err != nil {
 			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
+		a.recordPassiveReplies(binding, replyTo, 1)
 		seq++
 		consumedSeqs++
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
+		// #1230: rate limit across ALL outbound messages - every delivered
+		// image is followed by the inter-message delay so back-to-back
+		// multi-image replies and the image->text transition stay under the
+		// 5 msg/s cap.
 		select {
 		case <-time.After(qqInterMessageDelay):
 		case <-ctx.Done():
-			a.recordPassiveReplies(binding, replyTo, consumedSeqs)
-			return ctx.Err()
+			return ctx.Err() // slots already recorded incrementally above
 		}
 	}
 
@@ -321,22 +322,21 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 				select {
 				case <-time.After(qqInterMessageDelay):
 				case <-ctx.Done():
-					a.recordPassiveReplies(binding, replyTo, consumedSeqs)
-					return ctx.Err()
+					return ctx.Err() // slots already recorded incrementally
 				}
 			}
 			// Chunks continue the shared seq cursor (NOT the chunk index) so they
 			// never reuse a seq burned by an image or an earlier chunk (#966).
 			if _, err := a.sendTextMessage(ctx, path, chatType, chunk, replyTo, seq); err != nil {
-				a.recordPassiveReplies(binding, replyTo, consumedSeqs)
 				return err
 			}
+			// #3317: per-send incremental recording (see the image loop).
+			a.recordPassiveReplies(binding, replyTo, 1)
 			seq++
 			consumedSeqs++
 		}
 	}
 
-	a.recordPassiveReplies(binding, replyTo, consumedSeqs)
 	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s images=%d seqs_consumed=%d", a.name, event.Kind, channelID, len(images), consumedSeqs)
 	return nil
 }
@@ -361,6 +361,26 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 	if strings.TrimSpace(replyTo) != "" {
 		replySeq = 1
 	}
+	// #3317: this echo path CONSUMES the server-side (msg_id, 1) slot but
+	// historically never recorded it - the next regular Send starts at
+	// PassiveReplyCount+1 = 1 and collides head-on with the echo, and the
+	// server deduplicates it away. Record the consumed slot on success.
+	// The echo sites carry a channel/message id, not a binding - resolve
+	// the workspace by matching the inbound message id so the counter
+	// lands on the right binding.
+	recordEcho := func(sent bool) {
+		if !sent || a.manager == nil || strings.TrimSpace(replyTo) == "" {
+			return
+		}
+		for _, b := range a.manager.currentBindings {
+			if strings.TrimSpace(b.LastInboundMessageID) == strings.TrimSpace(replyTo) {
+				if err := a.manager.RecordPassiveReply(b.Workspace, replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
+					debug.Log("qq", "adapter=%s echo passive-reply record failed: %v", a.name, err)
+				}
+				return
+			}
+		}
+	}
 	sentContent := content
 	if !useMarkdown {
 		sentContent = stripMarkdown(content)
@@ -370,11 +390,15 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 		if useMarkdown && isQQMarkdownRejected(err) {
 			plainContent := stripMarkdown(content)
 			body = a.buildTextBodyWithMode(plainContent, chatType, replyTo, replySeq, false)
-			_, retryErr := a.apiRequest(ctx, http.MethodPost, path, body, nil)
-			return retryErr
+			if _, retryErr := a.apiRequest(ctx, http.MethodPost, path, body, nil); retryErr != nil {
+				return retryErr
+			}
+			recordEcho(true)
+			return nil
 		}
 		return err
 	}
+	recordEcho(true)
 	return nil
 }
 
