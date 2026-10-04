@@ -93,20 +93,25 @@ func (l *SecurityLedger) Escalation() string {
 	if worstN < denialEscalationThreshold {
 		return ""
 	}
+	// #3302: events are appended chronologically, so scanning from the
+	// head yields the EARLIEST matches - "Recent" must be the newest:
+	// walk in reverse and keep the last three (newest first).
 	var recent []string
-	shown := 0
-	for _, e := range l.events {
+	for i := len(l.events) - 1; i >= 0 && len(recent) < 3; i-- {
+		e := l.events[i]
 		if e.Denier == worst.denier && e.RuleKind == worst.kind {
 			recent = append(recent, e.Command)
-			shown++
-			if shown == 3 {
-				break
-			}
 		}
 	}
 	return fmt.Sprintf(
-		"SECURITY ESCALATION: the command %s has denied %d attempts in this session (rule %q via %s). Recent denied commands: %s. Repeated attempts to bypass a denial are a sandbox-probing pattern - stop varying the command, explain what you need to the user, or choose a permitted approach.",
-		"gate/sandbox", worstN, worst.kind, worst.denier, clipCommandList(recent))
+		// #3302: the main sentence names the LAST DENIED COMMAND and the
+		// denial source (the old format stuffed the literal "gate/sandbox"
+		// into the command slot, reading as if a command named
+		// "gate/sandbox" were doing the denying, while the real commands
+		// only appeared in the recent list - lastCmd was collected but
+		// never read).
+		"SECURITY ESCALATION: %q was denied %d times this session by the %s (rule %q via %s). Recent denied commands: %s. Repeated attempts to bypass a denial are a sandbox-probing pattern - stop varying the command, explain what you need to the user, or choose a permitted approach.",
+		lastCmd[worst], worstN, worst.denier, worst.kind, worst.denier, clipCommandList(recent))
 }
 
 // Events returns a copy of the recorded denials (newest last) for /security
