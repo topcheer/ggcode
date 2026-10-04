@@ -151,9 +151,19 @@ func trajHoldoutSelect(workingDir string, entries []trajectoryLearning) map[traj
 	defer unlock()
 
 	ledger, _ := loadHoldoutLedger(path)
-	byCatLedger := map[string]trajHoldoutEntry{}
+	// #3284: the ledger is multi-row per category (keyed by insight key).
+	// The pre-fix single-row-per-category map silently discarded rows on
+	// the L202 full rewrite, which (a) killed the #3275 released-key
+	// suppression window on the first subsequent select (the pause path
+	// dropped the row, the next rotation re-claimed the key blind) and
+	// (b) reset control-arm counters on every rotation day, so sparse
+	// workspaces could never reach HoldoutRuns >= trajHoldoutMinRuns.
+	byCatLedger := map[string]map[string]trajHoldoutEntry{}
 	for _, e := range ledger {
-		byCatLedger[e.Category] = e
+		if byCatLedger[e.Category] == nil {
+			byCatLedger[e.Category] = map[string]trajHoldoutEntry{}
+		}
+		byCatLedger[e.Category][e.InsightKey] = e
 	}
 	now := time.Now().UTC()
 	var out []trajHoldoutEntry
@@ -179,25 +189,38 @@ func trajHoldoutSelect(workingDir string, entries []trajectoryLearning) map[traj
 		keys = eligible
 		sort.Slice(keys, func(i, j int) bool { return trajHoldoutKeyString(keys[i]) < trajHoldoutKeyString(keys[j]) })
 		target := keys[day%int64(len(keys))]
-		prev, ok := byCatLedger[cat]
+		tks := trajHoldoutKeyString(target)
+		prev, ok := byCatLedger[cat][tks]
 		// #3275 fix (c): honor the release suppression window. A released
 		// key that rotates back in before its window expires must not be
 		// re-claimed (release was a no-op before this check existed).
-		if ok && prev.InsightKey == trajHoldoutKeyString(target) && prev.ReleasedUntil.After(now) {
-			continue // category pauses holdout today; full injection resumes
+		// #3284: the released row SURVIVES the rewrite - the pause path
+		// appends prev so the window keeps working on every subsequent
+		// select until it expires.
+		if ok && prev.ReleasedUntil.After(now) {
+			out = append(out, prev) // category pauses holdout today; full injection resumes
+			continue
 		}
 		held[target] = true
-		if ok && prev.InsightKey == trajHoldoutKeyString(target) {
+		if ok {
 			prev.HeldSince = now // streak continues, counters preserved
 			prev.ReleasedUntil = time.Time{}
 			out = append(out, prev)
-			continue
+		} else {
+			out = append(out, trajHoldoutEntry{
+				InsightKey: tks,
+				Category:   cat, Type: target.typ,
+				HeldSince: now,
+			})
 		}
-		out = append(out, trajHoldoutEntry{
-			InsightKey: trajHoldoutKeyString(target),
-			Category:   cat, Type: target.typ,
-			HeldSince: now,
-		})
+		// #3284: preserve every other row of this category (counters of
+		// keys not currently held, and rows still inside their release
+		// window) - cross-day counter accumulation now survives rotation.
+		for k, e := range byCatLedger[cat] {
+			if k != tks {
+				out = append(out, e)
+			}
+		}
 	}
 	if err := writeHoldoutLedger(path, out); err != nil {
 		return nil
