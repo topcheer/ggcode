@@ -196,12 +196,6 @@ type ChannelBinding struct {
 	LastSessionID         string    // Session that last claimed this binding; empty = unclaimed (workspace-level)
 }
 
-type AdapterDescriptor struct {
-	Name         string
-	Platform     Platform
-	Capabilities []string
-}
-
 type AdapterState struct {
 	Name       string
 	Platform   Platform

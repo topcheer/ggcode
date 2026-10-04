@@ -33,10 +33,6 @@ type pcResultMsg struct {
 	showQR    bool
 }
 
-type pcSessionListMsg struct {
-	sessions []im.PCSessionInfo
-}
-
 // shortSessionID truncates a remote-supplied session ID for display.
 // #908: IDs come from the a2a peer with no protocol length guarantee —
 // naive [:12] panicked the render loop on short IDs.

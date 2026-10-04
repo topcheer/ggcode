@@ -13,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/stream"
 )
 
-const streamPanelLeftWidth = 28
-
 type streamPanelState struct {
 	focus         int // 0=platform list, 1=config area
 	selectedIndex int
