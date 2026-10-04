@@ -79,7 +79,12 @@ func (a *discordAdapter) SendFile(ctx context.Context, binding ChannelBinding, f
 	if channelID == "" {
 		return ErrNoChannelBound
 	}
-	if !a.connected {
+	// #3353: read connected under the lock like Send/SendInteractive do -
+	// the gateway goroutine writes it on READY/RESUME/Close.
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if !connected {
 		return fmt.Errorf("discord adapter not connected")
 	}
 	filename := file.Filename
@@ -99,7 +104,12 @@ func (a *slackAdapter) SendFile(ctx context.Context, binding ChannelBinding, fil
 	if channelID == "" {
 		return ErrNoChannelBound
 	}
-	if !a.connected {
+	// #3353: read connected under the lock like Send does - the connect
+	// loop writes it on connect/close.
+	a.mu.RLock()
+	connected := a.connected
+	a.mu.RUnlock()
+	if !connected {
 		return fmt.Errorf("slack adapter not connected")
 	}
 	filename := file.Filename
