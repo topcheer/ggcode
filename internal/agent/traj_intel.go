@@ -346,6 +346,77 @@ func (s *trajIntelState) loadFromFile() ([]trajectoryLearning, error) {
 	return result, nil
 }
 
+// trajPromptMaxEntries / trajPromptMaxChars bound the injected section:
+// past-run learnings are advisory context, never worth crowding out real
+// conversation space.
+const (
+	trajPromptMaxEntries = 8
+	trajPromptMaxChars   = 1200
+	trajPromptPerType    = 3
+)
+
+// RenderPromptSection (r458) renders the persisted learning store as a
+// deterministic system-prompt section, closing the distillation loop:
+// extract -> persist -> RE-INJECT (the third leg of the Trajectory-
+// Informed Memory loop this file implements; until now the store was
+// write-only). Rules:
+//   - same Category dedupes to the newest entry (recurring patterns
+//     must not echo N times)
+//   - per Type (strategy/recovery/optimization/teammate) take the
+//     trajPromptPerType most recent, overall cap trajPromptMaxEntries
+//   - hard char budget with truncation marker
+//   - deterministic output (no timestamps) so the section is stable
+//     across runs within a session and cache-friendly
+func (s *trajIntelState) RenderPromptSection(workingDir string) string {
+	if workingDir == "" {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
+	entries, err := s.loadFromFile()
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	// Newest-first, stable on equal timestamps (load order breaks ties).
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].Timestamp.After(entries[j].Timestamp)
+	})
+	// Dedupe per Category, keep newest; Type counter caps variety.
+	var lines []string
+	counts := map[string]int{}
+	seenCat := map[string]bool{}
+	total := 0
+	for _, l := range entries {
+		if total >= trajPromptMaxEntries {
+			break
+		}
+		key := l.Category
+		if key == "" {
+			key = l.Type
+		}
+		if seenCat[key] {
+			continue
+		}
+		if counts[l.Type] >= trajPromptPerType {
+			continue
+		}
+		seenCat[key] = true
+		counts[l.Type]++
+		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, l.Insight))
+		total++
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	section := "Past-run learnings (auto-extracted from previous sessions - apply where relevant, ignore where not):\n" +
+		strings.Join(lines, "\n")
+	if len(section) > trajPromptMaxChars {
+		section = section[:trajPromptMaxChars-20] + "\n- [...] older learnings truncated"
+	}
+	return section
+}
+
 // teammateExperienceEntry mirrors internal/swarm's ledger record (kept as
 // a local struct to avoid an agent->swarm import edge).
 type teammateExperienceEntry struct {
