@@ -525,11 +525,54 @@ type TrajLearningView struct {
 	Confidence float64
 	Reinforced int
 	Timestamp  time.Time
-	Injects    bool // would RenderPromptSection include it?
+	Injects    bool // full simulation of RenderPromptSection's five filter layers
+	General    bool // r460 global-tier entry (injects but is not in the local file)
+}
+
+// trajSimulateInjected replays RenderPromptSection's five filter layers
+// (total budget, confidence gate, r461 effectiveness gate, category
+// dedupe, per-Type quota) over the renderer-sorted entry list and returns
+// which entries would inject (#3266(H): the panel previously modeled
+// only 2 of the 5 conditions, both over- and under-reporting). Pure
+// decision replay - identical order and predicates as the renderer.
+func trajSimulateInjected(sorted []trajectoryLearning) map[int]bool {
+	out := map[int]bool{}
+	counts := map[string]int{}
+	seenCat := map[string]bool{}
+	total := 0
+	for i, l := range sorted {
+		if total >= trajPromptMaxEntries {
+			break
+		}
+		if l.EffectiveConfidence() < trajPromptMinConfidence {
+			continue
+		}
+		if effectivenessGated(l) {
+			continue
+		}
+		key := l.Category
+		if key == "" {
+			key = l.Type
+		}
+		if seenCat[key] {
+			continue
+		}
+		if counts[l.Type] >= trajPromptPerType {
+			continue
+		}
+		seenCat[key] = true
+		counts[l.Type]++
+		out[i] = true
+		total++
+	}
+	return out
 }
 
 // TrajListLearnings returns the store projected for display, sorted by
 // effective confidence (same order the prompt renderer would pick in).
+// #3266(H): global-tier entries (categories the workspace has not
+// learned locally) inject too but were invisible here - now listed with
+// General=true so /traj reflects what actually enters the prompt.
 func TrajListLearnings(workingDir string) []TrajLearningView {
 	s := newTrajIntelState()
 	s.filePath = filepath.Join(workingDir, ".ggcode", "trajectory-learnings.jsonl")
@@ -537,23 +580,44 @@ func TrajListLearnings(workingDir string) []TrajLearningView {
 	defer s.mu.Unlock()
 	entries, err := s.loadFromFile()
 	if err != nil {
+		entries = nil
+	}
+	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
+		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			localCats := map[string]bool{}
+			for _, l := range entries {
+				localCats[l.Category] = true
+			}
+			for _, l := range gEntries {
+				if l.Category == "" || localCats[l.Category] {
+					continue
+				}
+				l.Insight = l.Insight + " (general, other projects)"
+				entries = append(entries, l)
+			}
+		}
+	}
+	if len(entries) == 0 {
 		return nil
 	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		ci, cj := entries[i].EffectiveConfidence(), entries[j].EffectiveConfidence()
+		if ci != cj {
+			return ci > cj
+		}
+		return entries[i].Timestamp.After(entries[j].Timestamp)
+	})
+	wouldInject := trajSimulateInjected(entries)
 	views := make([]TrajLearningView, 0, len(entries))
-	for _, l := range entries {
+	for i, l := range entries {
 		conf := l.EffectiveConfidence()
 		views = append(views, TrajLearningView{
 			Type: l.Type, Category: l.Category, Insight: l.Insight,
 			Confidence: conf, Reinforced: l.Reinforced, Timestamp: l.Timestamp,
-			Injects: conf >= trajPromptMinConfidence && !effectivenessGated(l),
+			Injects: wouldInject[i],
+			General: strings.HasSuffix(l.Insight, "(general, other projects)"),
 		})
 	}
-	sort.SliceStable(views, func(i, j int) bool {
-		if views[i].Confidence != views[j].Confidence {
-			return views[i].Confidence > views[j].Confidence
-		}
-		return views[i].Timestamp.After(views[j].Timestamp)
-	})
 	return views
 }
 
@@ -785,13 +849,22 @@ const (
 	trajEffectMinSuccess = 0.4
 )
 
+// trajConfidenceDecayPoint is the convergence point of the exponential
+// decay. It sits BELOW the injection floor so that decay can actually
+// cross the gate and retire old entries (#3266(I)): with a 0.5 midpoint
+// no effective confidence could ever drop below 0.3, and entries below
+// the point (failed-retired, 0.2) rose back above the gate after ~30d.
+const trajConfidenceDecayPoint = 0.25
+
 // EffectiveConfidence returns the read-time confidence of a learning:
-// legacy zero-value entries read as the 0.5 baseline, everything else is
-// the stored value decayed exponentially by time since last
-// reinforcement. Pure function - never mutates the entry.
+// legacy zero-value entries read as the 0.5 baseline (#3266(I): now also
+// time-anchored - never-reinforced one-shot entries age out instead of
+// pinning at 0.5 forever), everything else is the stored value decayed
+// exponentially toward the decay point. Pure function - never mutates.
 func (l trajectoryLearning) EffectiveConfidence() float64 {
+	conf := l.Confidence
 	if l.Confidence == 0 && l.Reinforced == 0 && l.LastReinforced.IsZero() {
-		return 0.5
+		conf = 0.5 // zero-value baseline; still decays via Timestamp below
 	}
 	ref := l.LastReinforced
 	if ref.IsZero() {
@@ -799,7 +872,7 @@ func (l trajectoryLearning) EffectiveConfidence() float64 {
 	}
 	age := time.Since(ref)
 	if age <= 0 {
-		return l.Confidence
+		return conf
 	}
 	// Weight = 0.5^n for n elapsed half-lives; n=0 (fresh) keeps full
 	// weight. Capped iterations floor very old entries instead of
@@ -810,8 +883,10 @@ func (l trajectoryLearning) EffectiveConfidence() float64 {
 			decay *= 0.5
 		}
 	}
-	// Scale stored confidence toward the 0.5 midpoint by the decay weight.
-	return 0.5 + (l.Confidence-0.5)*decay
+	// Scale stored confidence toward the decay point (#3266(I)): it lies
+	// below the 0.3 injection floor, so staleness can retire an entry, and
+	// a failed-retired entry converging upward stays under the gate.
+	return trajConfidenceDecayPoint + (conf-trajConfidenceDecayPoint)*decay
 }
 
 // effectivenessGated reports whether the r461 outcome gate retires this
@@ -870,6 +945,14 @@ func consolidateLearnings(all []trajectoryLearning) []trajectoryLearning {
 			if l.Timestamp.After(out[i].LastReinforced) {
 				out[i].LastReinforced = l.Timestamp
 			}
+			// #3266(J): the merged row keeps the NEWEST observation's
+			// insight text. Keeping the oldest froze the row at digest(t1)
+			// forever - later digests became permanently invisible while
+			// the stalest experience injected at the highest confidence.
+			if l.Timestamp.After(out[i].Timestamp) {
+				out[i].Insight = l.Insight
+				out[i].Timestamp = l.Timestamp
+			}
 			continue
 		}
 		idx[k] = len(out)
@@ -905,8 +988,19 @@ func (s *trajIntelState) ingestTeammateExperience(workingDir string) {
 	var newest time.Time
 	if existing, err := s.loadFromFile(); err == nil {
 		for _, l := range existing {
-			if l.Type == "teammate" && l.Timestamp.After(newest) {
-				newest = l.Timestamp
+			if l.Type != "teammate" {
+				continue
+			}
+			// #3266(J): consolidateLearnings keeps the OLDEST Timestamp on the
+			// merged row (recency moves to LastReinforced), so scanning
+			// Timestamp alone made every post-merge run re-ingest t2..tN as
+			// fresh - Reinforced inflating unbounded while the merged Insight
+			// stayed frozen at the oldest digest. The watermark must read
+			// recency from BOTH fields.
+			for _, ts := range []time.Time{l.Timestamp, l.LastReinforced} {
+				if ts.After(newest) {
+					newest = ts
+				}
 			}
 		}
 	}

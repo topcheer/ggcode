@@ -42,7 +42,11 @@ func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 		injecting := 0
 		for i, v := range views {
 			marker := " "
-			if v.Injects {
+			switch {
+			case v.Injects && v.General:
+				marker = "g" // #3266(H): global-tier entry that injects
+				injecting++
+			case v.Injects:
 				marker = ">"
 				injecting++
 			}
