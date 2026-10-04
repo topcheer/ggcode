@@ -696,6 +696,17 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if len(content) == 0 {
 		return nil
 	}
+	// sa-221 / r406 prompt-side equivalent for IM: every inbound IM text
+	// gets a provenance header block. The IM channel is REMOTE (#2185/
+	// #2205 threat model): the operator usually talks through it, but a
+	// stolen or mistyped binding turns any IM contact into a prompt-
+	// injection source. A lightweight header (not a full untrusted wrap —
+	// IM messages ARE user messages and must stay obeyable) declares the
+	// channel boundary so embedded hostile directives that contradict the
+	// operating rules are reportable instead of silently obeyed.
+	if text != "" {
+		content = withIMProvenance(content, msg.Envelope)
+	}
 
 	// Turn-scoped vision fallback, mirroring the TUI path: switch to a
 	// vision model for this turn when images are present and the active
