@@ -701,7 +701,13 @@ func zhCatalog(key string) string {
 	case "traj.header":
 		return "历史运行学习库（共存 %d 条，其中 %d 条会注入提示词；> = 会注入）："
 	case "traj.usage":
-		return "用法：/traj [list|clear]"
+		return "用法：/traj [list|clear|export|import [路径]]"
+	case "traj.no_home":
+		return "无法解析主目录，全局学习库不可用。"
+	case "traj.exported":
+		return "已导出 %d 条学习到 %s"
+	case "traj.imported":
+		return "已导入 %d 条新学习（重复已跳过）"
 	case "memory.list_failed":
 		return "列出记忆失败：%v\n\n"
 	case "memory.none":
