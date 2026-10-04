@@ -13,6 +13,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -58,6 +59,7 @@ type SkillTool struct {
 	AgentFactory        subagent.AgentFactory
 	WorkingDir          string // working directory to propagate to sub-agent
 	OnUsage             func(provider.TokenUsage)
+	OnMetric            func(metrics.MetricEvent)           // sub-agent telemetry forwarding (#3296); runner stamps SubAgentID
 	OnSkillUsed         func(ref string)                    // optional callback when a skill is loaded by the agent
 	OnSkillCompleted    func(event SkillExecutionEvent)     // optional callback when execution finishes
 	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
@@ -244,6 +246,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			AgentFactory:        t.AgentFactory,
 			WorkingDir:          t.WorkingDir,
 			OnUsage:             t.OnUsage,
+			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each skill sub-agent gets its own tool
@@ -397,6 +400,7 @@ func (t SkillTool) Clone() Tool {
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
+		OnMetric:            t.OnMetric,
 		OnSkillUsed:         t.OnSkillUsed,
 		OnSkillCompleted:    t.OnSkillCompleted,
 		SystemPromptBuilder: t.SystemPromptBuilder,

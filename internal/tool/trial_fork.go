@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -31,6 +32,10 @@ type TrialForkTool struct {
 	AgentFactory subagent.AgentFactory
 	WorkingDir   string
 	OnUsage      func(provider.TokenUsage)
+	// OnMetric forwards sub-agent telemetry to the parent collector;
+	// the runner stamps events with SubAgentID (#3296). best_of_n's trial
+	// fan-out is the heaviest token path and was a full OTLP black box.
+	OnMetric func(metrics.MetricEvent)
 }
 
 const (
@@ -181,6 +186,7 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			SubAgentID:   ids[i],
 			AgentFactory: t.AgentFactory,
 			WorkingDir:   dirs[i],
+			OnMetric:     t.OnMetric,
 			OnUsage: func(u provider.TokenUsage) {
 				res.Tokens += u.Total()
 				if t.OnUsage != nil {
