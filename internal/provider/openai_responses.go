@@ -161,8 +161,6 @@ func (p *OpenAIResponsesProvider) CountTokens(ctx context.Context, messages []Me
 	return estimateTokensForMessages(messages), nil
 }
 
-type sseEventHandler struct{}
-
 // normalizeResponsesEffort maps the shared effort vocabulary (minimal/low/
 // medium/high/xhigh/max/turbo) onto the Responses API values. Unknown levels
 // are passed through untouched so future API levels keep working.

@@ -64,15 +64,6 @@ func WithClientMetadata(kind, version string) SessionOption {
 	}
 }
 
-func WithClientCapabilities(capabilities ...string) SessionOption {
-	return func(s *Session) {
-		if s.meta.Capabilities == nil {
-			s.meta = defaultRelayClientMetadata("", "")
-		}
-		s.meta.Capabilities = append([]string(nil), capabilities...)
-	}
-}
-
 // NewSession creates a new relay session.
 func NewSession(relayURL string, opts ...SessionOption) *Session {
 	sess := &Session{
