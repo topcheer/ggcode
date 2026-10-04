@@ -1595,6 +1595,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Extracts strategy/recovery/optimization learnings from the
 		// completed run and persists them for future improvement.
 		if a.trajIntel != nil {
+			// r457: fold swarm teammate-experience ledger into the store
+			// BEFORE extraction so the same persist pass writes both.
+			a.trajIntel.ingestTeammateExperience(a.WorkingDir())
 			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
 		}
 		// Record run metrics for cross-session regression detection.
