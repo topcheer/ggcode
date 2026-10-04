@@ -349,6 +349,15 @@ func (s *Scheduler) save() error {
 		if err := os.Remove(s.storePath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove cron store %s: %w", s.storePath, err)
 		}
+		// #3341 (sa-245 audit): drop the flock sidecar too - same leak as
+		// #3338 on the session side. The lock is held until the deferred
+		// unlock, but unlinking an open file is safe: this process keeps
+		// its fd, and any racing process that re-creates the store will
+		// re-create the lock alongside it. Real-world trace: 16 orphan
+		// <store>.json.flock files accumulated in ~/.ggcode/cron-jobs/.
+		if err := os.Remove(s.storePath + ".flock"); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove cron store lock %s: %w", s.storePath+".flock", err)
+		}
 		return nil
 	}
 
