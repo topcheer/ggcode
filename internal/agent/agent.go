@@ -1335,6 +1335,12 @@ func (a *Agent) SetSessionID(id string) {
 	a.sessionID = id
 	a.syncContextManagerTodoPathLocked()
 	a.mu.Unlock()
+	// sa-231: providers with prompt-cache routing support get a stable
+	// per-session affinity key so multi-turn traffic keeps hitting the
+	// same warm cache. Providers without the capability skip the hint.
+	if pcs, ok := a.provider.(provider.PromptCacheKeySetter); ok {
+		pcs.SetPromptCacheKey("ggcode-" + id)
+	}
 	// Initialize guidance promoter now that workingDir and sessionID are both known.
 	// Update the TodoWrite tool's session binding outside agent.mu.
 	// tools.Get acquires registry.mu and tw.SetSessionID acquires TodoWrite.mu;
