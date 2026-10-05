@@ -1247,7 +1247,7 @@ func (m *Model) refreshProviderModelsForVendor(vendor string) tea.Cmd {
 	if strings.TrimSpace(endpoint.BaseURL) == "" {
 		return nil
 	}
-	if endpoint.Protocol != "openai" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
+	if endpoint.Protocol != "openai" && endpoint.Protocol != "openai-responses" && endpoint.Protocol != "anthropic" && endpoint.Protocol != "gemini" && endpoint.Protocol != "copilot" {
 		return nil
 	}
 	// Note: we intentionally do NOT call ResolveEndpoint here because it

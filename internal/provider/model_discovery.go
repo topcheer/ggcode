@@ -62,7 +62,7 @@ func DiscoverModels(ctx context.Context, resolved *config.ResolvedEndpoint) ([]s
 	if strings.TrimSpace(resolved.BaseURL) == "" {
 		return nil, fmt.Errorf("endpoint %q has no base URL configured", resolved.EndpointID)
 	}
-	if resolved.Protocol != "openai" && resolved.Protocol != "anthropic" && resolved.Protocol != "gemini" && resolved.Protocol != "copilot" {
+	if resolved.Protocol != "openai" && resolved.Protocol != "openai-responses" && resolved.Protocol != "anthropic" && resolved.Protocol != "gemini" && resolved.Protocol != "copilot" {
 		return nil, fmt.Errorf("protocol %q does not support model discovery", resolved.Protocol)
 	}
 	cacheKey := modelDiscoveryCacheKey(resolved)

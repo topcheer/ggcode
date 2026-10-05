@@ -78,6 +78,38 @@ func TestSA142_DiscoverModelsFromURL(t *testing.T) {
 	}
 }
 
+// #3429: openai-responses endpoints must discover models too - the
+// Responses API exposes the same GET /v1/models {"data":[...]} shape, and
+// the protocol falls into the default (Bearer) header branch. The two
+// discovery gates (provider model_discovery.go + TUI provider_panel.go)
+// previously whitelisted only openai/anthropic/gemini/copilot, so the
+// wizard let users CREATE an openai-responses endpoint and then silently
+// skipped auto-discovery (TUI gate: bare return nil, zero explanation).
+func TestSA142_DiscoverModelsFromURL_ResponsesProtocol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Mirror the openai-protocol test: serve the discovery payload on
+		// every path - the helper probes candidate URLs itself.
+		if got := r.Header.Get("Authorization"); got != "Bearer k" {
+			t.Errorf("Authorization = %q, want Bearer k (default/openai header branch)", got)
+		}
+		fmt.Fprint(w, `{"data":[{"id":"gpt-x"},{"id":"gpt-y"}]}`)
+	}))
+	defer server.Close()
+
+	resolved := &config.ResolvedEndpoint{Protocol: "openai-responses", BaseURL: server.URL, APIKey: "k"}
+	models, err := discoverModelsFromURL(context.Background(), server.Client(), server.URL, resolved)
+	if err != nil {
+		t.Fatalf("discoverModelsFromURL(openai-responses): %v", err)
+	}
+	joined := strings.Join(models, ",")
+	for _, want := range []string{"gpt-x", "gpt-y"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("models %v missing %q", models, want)
+		}
+	}
+}
+
 // ---- Anthropic stream error event -------------------------------------------
 
 func TestSA142_AnthropicStreamErrorEvent(t *testing.T) {
