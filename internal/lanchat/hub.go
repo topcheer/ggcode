@@ -135,6 +135,11 @@ type Hub struct {
 
 	// approval policies: key = peer's human_nick (stable across restarts)
 	approvalPolicies map[string]string // "always" | "never" | ""(ask)
+	// trustedPeers is the web-of-trust node endorsement set keyed by peer
+	// node_id (stable device identity, unlike nicks). Trusted peer agents
+	// bypass the requireAgentApproval gate (PANDA arXiv:2609.38482).
+	trustedPeers       map[string]bool
+	trustedPeersLoaded bool
 
 	// approvalPoliciesLoaded records whether approval-policies.json was
 	// loaded successfully (missing file counts as loaded — empty is a valid
@@ -206,6 +211,12 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		policies = map[string]string{}
 		debug.Log("lanchat", "approval policies in %s not loaded (refusing to overwrite on save): %v", store.dir, err)
 	}
+	trusted, trustErr := LoadTrustedPeers(store.dir)
+	trustedLoaded := trustErr == nil
+	if trustErr != nil {
+		trusted = map[string]bool{}
+		debug.Log("lanchat", "trusted peers in %s not loaded (refusing to overwrite on save): %v", store.dir, trustErr)
+	}
 
 	return &Hub{
 		nodeID:                 nodeID,
@@ -227,6 +238,8 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		store:                  store,
 		approvalPolicies:       policies,
 		approvalPoliciesLoaded: policiesLoaded,
+		trustedPeers:           trusted,
+		trustedPeersLoaded:     trustedLoaded,
 		notifiedNicks:          make(map[string]bool),
 		peerHealthMap:          make(map[string]*peerHealth),
 		seenMsgIDs:             make(map[string]bool),
@@ -1407,7 +1420,12 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 // explicitly set an "always" policy for the sender (#986). Daemon mode no
 // longer auto-approves human DMs. Must be called with h.mu held.
 func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected bool) {
-	if msg.FromRole == RoleAgent && !h.requireAgentApproval {
+	// Web-of-trust exemption (PANDA arXiv:2609.38482): when the strict
+	// requireAgentApproval mode is on, agent DMs from explicitly trusted
+	// peer NODES (operator endorsement, persisted in trusted-peers.json)
+	// still auto-approve — trust constrains agent-to-agent interactions to
+	// established relationships instead of the all-or-nothing LAN default.
+	if msg.FromRole == RoleAgent && (!h.requireAgentApproval || h.trustedPeers[msg.FromNodeID]) {
 		// Agent-to-agent messages are auto-approved — no human intervention
 		// needed — unless lanchat.require_approval_for_agents opts out (#986).
 		return true, false
@@ -1704,6 +1722,64 @@ func (h *Hub) GetApprovalPolicies() map[string]string {
 	defer h.mu.RUnlock()
 	result := make(map[string]string, len(h.approvalPolicies))
 	for k, v := range h.approvalPolicies {
+		result[k] = v
+	}
+	return result
+}
+
+// SetTrustedPeer endorses (or revokes) a peer NODE as trusted and persists
+// the change to trusted-peers.json. Unlike approval policies (keyed by nick,
+// which peers can change), trust is keyed by node_id — the stable device
+// identity. Trusted peers bypass the requireAgentApproval gate for
+// agent-to-agent DMs.
+func (h *Hub) SetTrustedPeer(nodeID string, trusted bool) {
+	h.mu.Lock()
+	if h.trustedPeers == nil {
+		h.trustedPeers = make(map[string]bool)
+	}
+	if trusted {
+		h.trustedPeers[nodeID] = true
+	} else {
+		delete(h.trustedPeers, nodeID)
+	}
+	dir := ""
+	if h.store != nil {
+		dir = h.store.dir
+	}
+	h.mu.Unlock()
+
+	// Persist outside the lock; refuse write-back when the on-disk file was
+	// never loaded successfully so a corrupt file is never silently wiped
+	// (same rule as SetApprovalPolicy, #990).
+	if dir != "" {
+		h.mu.RLock()
+		loaded := h.trustedPeersLoaded
+		peers := make(map[string]bool, len(h.trustedPeers))
+		for k, v := range h.trustedPeers {
+			peers[k] = v
+		}
+		h.mu.RUnlock()
+		if !loaded {
+			debug.Log("lanchat", "trusted peers not persisted: %s was never loaded successfully, refusing to overwrite", dir)
+			return
+		}
+		_ = SaveTrustedPeers(dir, peers)
+	}
+}
+
+// IsTrustedPeer reports whether a peer node_id is locally endorsed.
+func (h *Hub) IsTrustedPeer(nodeID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.trustedPeers[nodeID]
+}
+
+// GetTrustedPeers returns a copy of the trusted node_id set.
+func (h *Hub) GetTrustedPeers() map[string]bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make(map[string]bool, len(h.trustedPeers))
+	for k, v := range h.trustedPeers {
 		result[k] = v
 	}
 	return result
