@@ -335,7 +335,11 @@ type Agent struct {
 	// invEngine (r454) enforces user/project-declared behavior invariants
 	// (.ggcode/invariants.json, AgentSpec-style) at the executeTool choke
 	// point; nil-safe lazy init, inert with no file.
-	invEngine                *invariantEngine
+	invEngine *invariantEngine
+	// wfEngine (r26, Lean4Agent-inspired): stateful per-workflow step
+	// ordering + artifact grounding from .ggcode/workflow-spec.json;
+	// nil-safe lazy init, inert with no file.
+	wfEngine                 *workflowEngine
 	outcomeMisattrib         *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
 	trajectoryHealth         *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
 	tokenWasteBudget         *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
@@ -3095,6 +3099,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}},
 				})
 				continue
+			}
+			// r26 (Lean4Agent-inspired): with a declared workflow spec, audit
+			// declared steps against their grounded artifacts before the run
+			// finishes - "steps 1-4 done" is checked, not trusted.
+			if wf := a.workflowEngineLazy(); wf != nil {
+				if wfMsg := wf.outstandingMessage(); wfMsg != "" {
+					a.contextManager.Add(provider.Message{
+						Role: "user",
+						Content: []provider.ContentBlock{{
+							Type: "text",
+							Text: wfMsg,
+						}},
+					})
+				}
 			}
 			// r392 (AREX constraint-wise audit): listed multi-requirement
 			// tasks get a per-item [done]/[not done] verdict before the run
