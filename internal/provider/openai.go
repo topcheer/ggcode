@@ -704,22 +704,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					p.cap.OnRejected(parsed)
 				}
 				if isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
-					delay := retryDelay(err, attempt)
-					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
-					// Notify user about retry
-					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
-						return
-					}
-					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-						// #722: budget exhausted — stop retrying now; wrap with the
-						// sentinel so the failover layer switches immediately.
-						if sleepErr == errRetryBudgetExhausted {
-							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), retryDelay(err, attempt), err, err)
+					slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
+					if !slept {
+						if sErr != nil {
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sErr}) {
+								return
+							}
+							streamError = true
 						}
-						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr}) {
-							return
-						}
-						streamError = true
 						return
 					}
 					// Retry the connection on the next attempt instead of
@@ -755,34 +748,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// may carry complete tool call data from a prior stream).
 					// Never flush on retry (would double-execute) or hard
 					// error (broken conversation, can't trust partial args).
-					shouldFlush := normalEnd && !retry // #302: cancel no longer flushes half-made tool calls
-					if !shouldFlush {
-						return
-					}
-					for idx, tc := range toolCalls {
-						if tc.Name == "" || tc.ID == "" {
-							continue
-						}
-						// Validate arguments look like complete JSON.
-						// If invalid, attempt JSON repair before skipping -
-						// stream truncation and weak models frequently produce
-						// nearly-valid JSON that can be salvaged.
-						if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
-							if repaired, ok := RepairJSON(tc.Arguments); ok {
-								debug.Log("openai", "flush tool_call id=%s name=%s: JSON repaired %d→%d bytes", tc.ID, tc.Name, len(tc.Arguments), len(repaired))
-								tc.Arguments = repaired
-							} else {
-								debug.Log("openai", "skip flush incomplete tool_call id=%s name=%s (invalid JSON args, repair failed)", tc.ID, tc.Name)
-								continue
-							}
-						}
-						debug.Log("openai", "flush residual tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
-						outputChars += len(tc.Name) + len(tc.Arguments)
+					flushChars, flushEmitted, _ := p.flushResidualToolCalls(ctx, ch, toolCalls, normalEnd, retry)
+					outputChars += flushChars
+					if flushEmitted {
 						emitted = true
-						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}) {
-							return
-						}
-						delete(toolCalls, idx)
 					}
 				}()
 				for {
@@ -809,24 +778,18 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
 						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < p.policy.attempts()-1 {
-							delay := retryDelay(recvErr, attempt)
-							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
-								return
-							}
-							if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-								// #722: budget exhausted — stop retrying now; wrap with
-								// the sentinel so the failover layer switches immediately.
-								if sleepErr == errRetryBudgetExhausted {
-									sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, recvErr)
+							slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, recvErr, attempt)
+							if !slept {
+								if sErr != nil {
+									if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sErr}) {
+										return
+									}
+									// Mark the stream as errored so the tail does
+									// not emit a usage-bearing Done after the
+									// terminal Error (mirrors the connect-phase
+									// branch above and anthropic.go).
+									streamError = true
 								}
-								if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr}) {
-									return
-								}
-								// Mark the stream as errored so the tail does
-								// not emit a usage-bearing Done after the
-								// terminal Error (mirrors the connect-phase
-								// branch above and anthropic.go).
-								streamError = true
 								return
 							}
 							retry = true
