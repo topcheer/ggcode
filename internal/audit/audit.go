@@ -75,6 +75,12 @@ type Event struct {
 	// InvariantID (r454) names the declared behavior invariant that caused
 	// a rejection; empty for normal actions.
 	InvariantID string
+	// Peer and TaskID attribute the event to a REMOTE A2A handoff (r33):
+	// tasks submitted by a peer agent that execute locally. Peer identifies
+	// the calling agent when known (auth-derived); TaskID ties the entry to
+	// the A2A task lifecycle (received -> terminal).
+	Peer   string
+	TaskID string
 }
 
 // Entry is a sealed ledger record: the event plus chain bookkeeping.
@@ -90,8 +96,12 @@ type Entry struct {
 	// InvariantID tags rejections caused by a declared behavior invariant
 	// (r454); empty for normal actions. Backward-compatible (omitempty).
 	InvariantID string `json:"invariant_id,omitempty"`
-	PrevHash    string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
-	Hash        string `json:"hash"`      // SHA-256 over all fields above
+	// Peer/TaskID attribute the entry to a remote A2A handoff (r33);
+	// empty for purely local actions. Backward-compatible (omitempty).
+	Peer     string `json:"peer,omitempty"`
+	TaskID   string `json:"task_id,omitempty"`
+	PrevHash string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
+	Hash     string `json:"hash"`      // SHA-256 over all fields above
 }
 
 // hashEntry computes the chain hash over every field of e except Hash
@@ -121,6 +131,17 @@ func hashEntry(e Entry) string {
 	// and new code (chain compatibility - old chains still Verify).
 	if e.InvariantID != "" {
 		writeField(e.InvariantID)
+	}
+	// r33: A2A handoff attribution is sealed into the chain hash too - a
+	// governance ledger must not allow post-hoc anonymous-izing a remote
+	// submission. Same conditional-append pattern as InvariantID: empty
+	// fields write zero bytes, so pre-r33 entries hash identically under
+	// old and new code (chain compatibility).
+	if e.Peer != "" {
+		writeField(e.Peer)
+	}
+	if e.TaskID != "" {
+		writeField(e.TaskID)
 	}
 	writeField(e.PrevHash)
 	sum := sha256.Sum256([]byte(b.String()))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/agent"
+	"github.com/topcheer/ggcode/internal/audit"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
@@ -25,6 +26,11 @@ const (
 	SkillCodeReview  = "code-review"
 	SkillFullTask    = "full-task"
 )
+
+// auditErrMax caps the error summary sealed into audit ledger events (the
+// agent-side ledger keeps the same discipline: prove what ran without
+// duplicating potentially sensitive payloads).
+const auditErrMax = 200
 
 // DefaultSkills returns the fixed set of skills every ggcode instance advertises.
 func DefaultSkills() []Skill {
@@ -68,6 +74,12 @@ type TaskHandler struct {
 	// Push notification callback: server injects this to fire HTTP callbacks
 	// to registered push configs when a task status changes.
 	pushNotifier func(taskID string, payload StreamResponse)
+
+	// auditSink, when non-nil, seals inbound remote A2A handoffs into the
+	// governance audit ledger (r33): tasks submitted by peer agents that
+	// execute locally must leave a non-repudiable record. Never-blocks
+	// discipline mirrors internal/agent/audit_ledger.go.
+	auditSink func(audit.Event)
 }
 
 // TaskEventMessage describes an A2A task lifecycle event.
@@ -90,6 +102,15 @@ func WithMaxTasks(n int) HandlerOption {
 // WithTimeout sets the per-task timeout.
 func WithTimeout(d time.Duration) HandlerOption {
 	return func(h *TaskHandler) { h.timeout = d }
+}
+
+// WithAuditSink injects a governance-ledger sink for inbound remote A2A
+// handoffs (r33). The sink receives one event at task reception
+// (Tool="a2a.task.received", Status=StatusOK) and one at terminal state
+// (Tool="a2a.task.completed"/"a2a.task.failed"/"a2a.task.canceled"). Sink
+// failures are logged and never block task execution.
+func WithAuditSink(sink func(audit.Event)) HandlerOption {
+	return func(h *TaskHandler) { h.auditSink = sink }
 }
 
 // SetOnTaskEvent sets the callback at runtime.
@@ -333,6 +354,7 @@ func (h *TaskHandler) continueTask(ctx context.Context, taskID string, input Mes
 
 func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermission, installedGen uint64) {
 	h.updateStatus(t, TaskStateWorking, "")
+	h.auditTaskEvent(t, "a2a.task.received", audit.StatusOK, "")
 
 	// Recover from panics to avoid leaking the task in Working state.
 	// Without this, safego.Recover silently swallows panics and the task
@@ -341,6 +363,7 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 		if r := recover(); r != nil {
 			debug.Log("a2a", "execute goroutine panic: %v", r)
 			h.updateStatus(t, TaskStateFailed, fmt.Sprintf("internal error: %v", r))
+			h.auditTaskEvent(t, "a2a.task.failed", audit.StatusError, fmt.Sprintf("panic: %v", r))
 			h.mu.Lock()
 			if t.done != nil {
 				close(t.done)
@@ -408,6 +431,7 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 				return
 			}
 			h.updateStatus(t, TaskStateCanceled, "canceled by client")
+			h.auditTaskEvent(t, "a2a.task.canceled", audit.StatusCancelled, "canceled by client")
 			h.cleanupCancelIf(t.ID, installedGen)
 		}
 		return
@@ -415,6 +439,7 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 
 	if err != nil {
 		h.updateStatus(t, TaskStateFailed, err.Error())
+		h.auditTaskEvent(t, "a2a.task.failed", audit.StatusError, err.Error())
 		h.cleanupCancelIf(t.ID, installedGen)
 		return
 	}
@@ -443,6 +468,30 @@ func (h *TaskHandler) execute(ctx context.Context, t *Task, perm *SkillPermissio
 	}}
 	h.mu.Unlock()
 	h.updateStatus(t, TaskStateCompleted, "")
+	h.auditTaskEvent(t, "a2a.task.completed", audit.StatusOK, "")
+}
+
+// auditTaskEvent seals an inbound remote A2A handoff lifecycle event into
+// the governance audit ledger (r33). Remote-peer tasks execute locally with
+// the caller's tool permissions; without this record the handoff leaves no
+// non-repudiable trace. Never-blocks: sink failures are logged, execution
+// proceeds (mirrors the agent-side ledger discipline).
+func (h *TaskHandler) auditTaskEvent(t *Task, action, status, errMsg string) {
+	if h.auditSink == nil {
+		return
+	}
+	if len(errMsg) > auditErrMax {
+		errMsg = errMsg[:auditErrMax]
+	}
+	h.auditSink(audit.Event{
+		Tool:    action,
+		Status:  status,
+		Err:     errMsg,
+		Session: t.ID, // tie ledger session to the A2A task lifecycle
+		TaskID:  t.ID,
+		// Peer attribution: filled by the auth layer when a caller identity
+		// is propagated to the handler (future r33 follow-up); empty for now.
+	})
 }
 
 // executeDirectTool runs a tool directly without spinning up a full agent loop.
