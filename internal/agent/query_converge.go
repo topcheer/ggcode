@@ -115,6 +115,15 @@ func (q *queryConvergeState) recordToolCall(toolName, args string, iteration int
 	}
 }
 
+func (q *queryConvergeState) markUndelivered() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.warned = false
+	if q.warnCount > 0 {
+		q.warnCount--
+	}
+}
+
 // maybeWarn checks if the agent is stuck in a convergence failure loop.
 // Fires when 3+ search queries in the recent window are highly similar to
 // each other (>40% avg pairwise Jaccard) and no code action has followed.

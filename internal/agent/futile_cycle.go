@@ -68,6 +68,10 @@ type futileCycleState struct {
 	// warningsFired: how many times we've warned this run.
 	warningsFired int
 
+	// #3380: snapshot for markUndelivered (guidance-budget rollback).
+	prevWarnedEpoch int
+	canRevert       bool
+
 	// lastWarnedEpoch: prevent re-warning for the same pair of epochs.
 	lastWarnedEpoch int
 }
@@ -113,6 +117,19 @@ func (f *futileCycleState) recordWrite() {
 	f.currentEpoch = make(map[string]bool)
 }
 
+// markUndelivered (#3380) rolls back the quota + epoch marker consumed
+// by maybeWarn when the guidance budget suppressed the message, so the
+// futile-cycle warning re-fires on a later, less saturated iteration
+// (mirrors errorCompound #681). No-op if there is no revertible fire.
+func (f *futileCycleState) markUndelivered() {
+	if !f.canRevert || f.warningsFired == 0 {
+		return
+	}
+	f.canRevert = false
+	f.warningsFired--
+	f.lastWarnedEpoch = f.prevWarnedEpoch
+}
+
 // maybeWarn checks if the current read-set overlaps a previous epoch enough
 // to constitute a futile cycle. Returns guidance if so.
 func (f *futileCycleState) maybeWarn(iteration int) string {
@@ -138,6 +155,10 @@ func (f *futileCycleState) maybeWarn(iteration int) string {
 				continue
 			}
 			f.warningsFired++
+			// #3380: snapshot the epoch marker so markUndelivered can
+			// restore the pre-fire state on guidance-budget suppression.
+			f.prevWarnedEpoch = f.lastWarnedEpoch
+			f.canRevert = true
 			f.lastWarnedEpoch = i
 
 			overlapFiles := futileIntersection(f.currentEpoch, past)
