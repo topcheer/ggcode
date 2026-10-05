@@ -33,6 +33,19 @@ var CompatibilitySubdirRules = []string{
 
 const DefaultProjectMemoryFilename = "AGENTS.md"
 
+// MaxInlineProjectMemoryChars caps how many RUNES of a single project memory
+// file may be inlined verbatim. Oversized files (r462: full flat injection
+// had no index tier) degrade to a path+preview index line; the model reads
+// the full file via read_file when relevant.
+const MaxInlineProjectMemoryChars = 2000
+
+// projectMemoryIndexPreviewLines is how many leading non-empty lines an
+// oversized file contributes to its index preview.
+const projectMemoryIndexPreviewLines = 5
+
+// projectMemoryIndexPreviewChars caps the preview text length in runes.
+const projectMemoryIndexPreviewChars = 300
+
 // LoadProjectMemory reads supported project bootstrap documents from the
 // global config dir (~/.ggcode/) and the current working directory only.
 // No parent directory traversal is performed — this prevents loading memory
@@ -154,11 +167,48 @@ func ReadProjectMemoryFiles(paths []string) (content string, files []string, err
 		seen[p] = true
 		data, err := readFileSafe(p)
 		if err == nil && data != "" {
-			content += data + "\n"
+			if len([]rune(data)) <= MaxInlineProjectMemoryChars {
+				content += data + "\n"
+			} else {
+				content += projectMemoryIndexLine(p, data) + "\n"
+			}
 			files = append(files, p)
 		}
 	}
 	return strings.TrimSpace(content), files, nil
+}
+
+// projectMemoryIndexLine renders the index-tier entry for an oversized
+// project memory file: path + rune-safe preview of the first non-empty
+// lines + explicit read_file instruction, mirroring the wording of
+// agentruntime's renderIndexMemories index tier.
+func projectMemoryIndexLine(path, data string) string {
+	var lines []string
+	for _, ln := range strings.Split(data, "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" {
+			continue
+		}
+		lines = append(lines, t)
+		if len(lines) >= projectMemoryIndexPreviewLines {
+			break
+		}
+	}
+	preview := truncateProjectMemoryRunes(strings.Join(lines, " / "), projectMemoryIndexPreviewChars)
+	return fmt.Sprintf("[project-memory-index] %s — oversized (%d chars, inline omitted). "+
+		"Reference context only, not full instructions; use read_file on this path to load the full content. Preview: %s",
+		path, len([]rune(data)), preview)
+}
+
+// truncateProjectMemoryRunes truncates s to at most n runes without ever
+// slicing a multi-byte UTF-8 sequence (#1155 CJK mojibake lesson; agent's
+// truncateRunes is unexported and memory must not import agent).
+func truncateProjectMemoryRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "…"
 }
 
 func readFileSafe(p string) (string, error) {
