@@ -25,6 +25,10 @@ type StartCommandTool struct {
 	// supervised ask-as-block) are part of the same sandbox-probing
 	// fingerprint. Nil-safe: unwired = no detection.
 	SecLedger *SecurityLedger
+	// RiskLedger (r28): the allowed-side dual shared with run_command -
+	// gate-passed dangerous-classified background starts accumulate the
+	// same session risk score. Nil-safe.
+	RiskLedger *AllowedRiskLedger
 }
 
 func (t StartCommandTool) Name() string { return "start_command" }
@@ -127,6 +131,13 @@ func (t StartCommandTool) Execute(ctx context.Context, input json.RawMessage) (R
 	var preWarning string
 	if interactive := gate.InteractiveCommandWarning(args.Command); interactive != "" {
 		preWarning = "[Interactive command warning] " + interactive + "\n\n"
+	}
+	// r28: gate PASSED (block/ask-blocked branches returned above) - the
+	// allowed-side dual of the SecLedger.Record calls up there. Bypass
+	// downgrades (ask-allowed) land here too: the command really runs.
+	t.RiskLedger.Accumulate(args.Command)
+	if esc := t.RiskLedger.Escalation(); esc != "" {
+		preWarning += esc + "\n\n"
 	}
 
 	if t.OnPreExec != nil {

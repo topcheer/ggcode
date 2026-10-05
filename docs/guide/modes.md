@@ -123,6 +123,18 @@ echo "fix the typo" | ggcode -p            # supervised mode (asks confirmation)
 echo "fix the typo" | ggcode -p --bypass   # bypass mode (auto-approve)
 ```
 
+## Allowed-Risk Accumulation (r28)
+
+The mode table above shows dangerous commands are **Allowed silently** in auto/bypass. Each single allowance is a deliberate design choice - but a session full of individually-permitted risky steps (one chmod here, one `curl | bash` there, one non-critical `rm` after another) can drift the system toward a hazardous state with no single step ever raising a flag. Frontier research (DreamGuard, arXiv:2608.05695) names this blind spot: guardrails judge steps, not trajectories.
+
+ggcode keeps an **allowed-risk ledger** as the dual of the denial ledger (which records what was *blocked* - but a blocked action cannot accumulate danger; only allowed ones can):
+
+- Every gate-passed command the dangerous-pattern table classifies (medium/high/critical) scores on a session-level ledger (1 / 3 / 4 points), shared across `run_command` and `start_command`
+- Crossing a cumulative threshold (score 8, or 5 same-class commands) appends a `RISK ACCUMULATION` notice to the tool result - naming the pattern, the count, and recent commands - prompting the agent (and you) to reassess whether the cumulative effect was intended
+- At most 2 escalations per session; unclassified commands never score; the ledger is memory-capped and inert when unwired
+
+This is advisory, not blocking: it does not second-guess individual allowances, it only surfaces the trajectory they add up to.
+
 ## Recommendations
 
 | Scenario | Mode |
