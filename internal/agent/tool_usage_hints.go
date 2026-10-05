@@ -31,8 +31,14 @@ import (
 //   - only errors with parameter/schema semantics are distilled
 //   - messages are normalized to templates (paths, numbers, quoted
 //     values stripped) so hints generalize instead of memorizing
-//   - success decays: a hint dies after its tool succeeds, so stale
-//     hints never pollute a fixed workflow
+//   - success decays per-hint (#3405): each success decrements every
+//     hint's FailCount for the tool; a hint dies only when its count
+//     reaches zero. One-off mistakes still clear on the first success
+//     (same-run correction stays cheap), but a repeated failure pattern
+//     needs proportionally more evidence it is gone, so an unrelated
+//     success from a high-frequency tool cannot wipe the whole set and
+//     void the persist-across-sessions contract. TTL is the only
+//     time-based eviction.
 //   - capped: <=5 hints/tool, <=400 bytes/tool, 7-day TTL
 //   - stored at <project>/.ggcode/tool-usage-hints.json; corrupt file
 //     degrades to empty (invariants.go precedent), never bricks a run
@@ -171,18 +177,36 @@ func (s *toolUsageHintStore) recordFailure(tool, errText string) {
 	s.persistLocked()
 }
 
-// recordSuccess decays: once the tool works, its hints are stale and
-// would only bloat future descriptions (description-budget lesson).
+// recordSuccess decays per-hint (#3405): each success decrements every
+// hint's FailCount for the tool; a hint is removed only when its count
+// reaches zero. A one-off mistake (FailCount=1) still clears on the first
+// success, but a repeated failure pattern survives isolated successes -
+// an unrelated success from a high-frequency tool (read_file/grep/...)
+// no longer wipes strong-evidence hints and voids the
+// persist-across-sessions contract. TTL remains the only time-based
+// eviction (description-budget lesson still holds via the byte cap).
 func (s *toolUsageHintStore) recordSuccess(tool string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.hints[tool]; !ok {
+	list := s.hints[tool]
+	if len(list) == 0 {
 		return
 	}
-	delete(s.hints, tool)
+	kept := make([]usageHint, 0, len(list))
+	for _, h := range list {
+		h.FailCount--
+		if h.FailCount > 0 {
+			kept = append(kept, h)
+		}
+	}
+	if len(kept) == 0 {
+		delete(s.hints, tool)
+	} else {
+		s.hints[tool] = kept
+	}
 	s.persistLocked()
 }
 

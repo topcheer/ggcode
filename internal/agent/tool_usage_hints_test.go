@@ -66,15 +66,25 @@ func TestUsageHintStoreLifecycle(t *testing.T) {
 		t.Fatal("hint did not persist across stores")
 	}
 
-	// Success decays the hint and persists the removal.
+	// Success decays per-hint (#3405): FailCount=2 here, so one success
+	// decrements to 1 and the hint survives; a second success clears it.
 	s2.recordSuccess("edit_file")
-	if s2.OverlayFor("edit_file") != "" {
-		t.Fatal("success must decay the hint")
+	if s2.OverlayFor("edit_file") == "" {
+		t.Fatal("single success must not wipe a repeated-failure hint (FailCount was 2)")
 	}
 	s3 := newToolUsageHintStore()
 	s3.attach(dir)
+	if s3.OverlayFor("edit_file") == "" {
+		t.Fatal("decayed-but-alive hint must persist across stores")
+	}
+	s3.recordSuccess("edit_file")
 	if s3.OverlayFor("edit_file") != "" {
-		t.Fatal("decayed hint must not reload")
+		t.Fatal("success down to zero must decay the hint away")
+	}
+	s4 := newToolUsageHintStore()
+	s4.attach(dir)
+	if s4.OverlayFor("edit_file") != "" {
+		t.Fatal("fully decayed hint must not reload")
 	}
 }
 
