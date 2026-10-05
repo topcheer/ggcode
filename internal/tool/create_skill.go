@@ -102,6 +102,11 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		Dependencies  []string `json:"dependencies"`
 		Scope         string   `json:"scope"`
 		Context       string   `json:"context"`
+		// NLAH-style contracts + failure taxonomy (r466).
+		Precondition  string `json:"precondition"`
+		Postcondition string `json:"postcondition"`
+		StateContract string `json:"state_contract"`
+		FailureModes  string `json:"failure_modes"` // JSON array [{"name","detect","recover"}]
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -133,7 +138,20 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if _, err := os.Stat(skillFile); err == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk. Use a different name or delete the existing skill first.", name)}, nil
 	}
-	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, body)
+	contract := skillContract{
+		Precondition:  strings.TrimSpace(args.Precondition),
+		Postcondition: strings.TrimSpace(args.Postcondition),
+		StateContract: strings.TrimSpace(args.StateContract),
+	}
+	if raw := strings.TrimSpace(args.FailureModes); raw != "" {
+		var modes []commands.SkillFailureMode
+		if err := json.Unmarshal([]byte(raw), &modes); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid failure_modes JSON (expect [{\"name\",\"detect\",\"recover\"}]): %v", err)}, nil
+		}
+		contract.FailureModes = modes
+	}
+
+	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, contract, body)
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil
 	}
@@ -276,16 +294,29 @@ func validateSkillName(name string) error {
 }
 
 // buildSkillMarkdown creates the SKILL.md file content with YAML frontmatter.
-func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, dependencies []string, execMode, body string) string {
+// skillContract carries a skill's NLAH-style declarations through
+// buildSkillMarkdown (r466).
+type skillContract struct {
+	Precondition  string
+	Postcondition string
+	StateContract string
+	FailureModes  []commands.SkillFailureMode
+}
+
+func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, dependencies []string, execMode string, contract skillContract, body string) string {
 	type frontmatter struct {
-		Name                   string   `yaml:"name"`
-		Description            string   `yaml:"description"`
-		WhenToUse              string   `yaml:"when_to_use,omitempty"`
-		AllowedTools           []string `yaml:"allowed-tools,omitempty"`
-		RequiresTools          []string `yaml:"requires-tools,omitempty"`
-		Dependencies           []string `yaml:"dependencies,omitempty"`
-		Context                string   `yaml:"context,omitempty"`
-		DisableModelInvocation bool     `yaml:"disable-model-invocation,omitempty"`
+		Name                   string                      `yaml:"name"`
+		Description            string                      `yaml:"description"`
+		WhenToUse              string                      `yaml:"when_to_use,omitempty"`
+		AllowedTools           []string                    `yaml:"allowed-tools,omitempty"`
+		RequiresTools          []string                    `yaml:"requires-tools,omitempty"`
+		Dependencies           []string                    `yaml:"dependencies,omitempty"`
+		Context                string                      `yaml:"context,omitempty"`
+		DisableModelInvocation bool                        `yaml:"disable-model-invocation,omitempty"`
+		Precondition           string                      `yaml:"precondition,omitempty"`
+		Postcondition          string                      `yaml:"postcondition,omitempty"`
+		StateContract          string                      `yaml:"state-contract,omitempty"`
+		FailureModes           []commands.SkillFailureMode `yaml:"failure-modes,omitempty"`
 	}
 
 	fm := frontmatter{
@@ -306,6 +337,18 @@ func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requi
 	}
 	if mode := strings.TrimSpace(execMode); mode == "fork" || mode == "inline" {
 		fm.Context = mode
+	}
+	if contract.Precondition != "" {
+		fm.Precondition = contract.Precondition
+	}
+	if contract.Postcondition != "" {
+		fm.Postcondition = contract.Postcondition
+	}
+	if contract.StateContract != "" {
+		fm.StateContract = contract.StateContract
+	}
+	if len(contract.FailureModes) > 0 {
+		fm.FailureModes = contract.FailureModes
 	}
 
 	fmBytes, err := yaml.Marshal(fm)

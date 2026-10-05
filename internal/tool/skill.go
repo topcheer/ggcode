@@ -161,6 +161,14 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		content = depHint + "\n\n" + content
 	}
 
+	// NLAH-style contracts and failure taxonomy (r466): surface the skill's
+	// declared precondition/postcondition/state semantics and recovery paths
+	// so mid-workflow failures consult the author's recovery plan instead of
+	// falling straight through to the generic error classifier.
+	if contractHint := buildContractHint(cmd); contractHint != "" {
+		content = contractHint + "\n\n" + content
+	}
+
 	// Return a brief confirmation + inject skill content as follow-up user message.
 	// This forces the model to process and act on the skill instructions,
 	// matching Claude Code's inline skill behavior.
@@ -554,6 +562,43 @@ func checkRequiredTools(tools []string) []string {
 		}
 	}
 	return missing
+}
+
+// buildContractHint renders a skill's NLAH-style declarations (precondition,
+// postcondition, state contract, failure taxonomy) as a compact advisory
+// preamble. Returns "" when the skill declares none.
+func buildContractHint(cmd *commands.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	var lines []string
+	if v := strings.TrimSpace(cmd.Precondition); v != "" {
+		lines = append(lines, "Precondition (verify before starting): "+v)
+	}
+	if v := strings.TrimSpace(cmd.Postcondition); v != "" {
+		lines = append(lines, "Postcondition (verify before declaring done): "+v)
+	}
+	if v := strings.TrimSpace(cmd.StateContract); v != "" {
+		lines = append(lines, "State contract (cross-stage semantics): "+v)
+	}
+	for _, fm := range cmd.FailureModes {
+		name := strings.TrimSpace(fm.Name)
+		if name == "" {
+			continue
+		}
+		entry := "Failure mode \"" + name + "\""
+		if d := strings.TrimSpace(fm.Detect); d != "" {
+			entry += " | detect: " + d
+		}
+		if r := strings.TrimSpace(fm.Recover); r != "" {
+			entry += " | recover: " + r
+		}
+		lines = append(lines, entry)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "[skill contract] " + strings.Join(lines, "\n[skill contract] ")
 }
 
 // buildDependencyHint returns a short advisory message if the skill declares
