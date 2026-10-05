@@ -754,6 +754,13 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 // (checked / selected / aria-expanded / aria-checked). Empty string means
 // none present (or evaluation failed - conservative). Extracted so doClick
 // can capture the same reading before AND after the click (#3407).
+// stateProbeFailed is the sentinel evaluateClickState returns when the
+// CDP probe itself errors: distinct from "" (no state attribute) so
+// clickEffectNote can refuse to CONFIRM on a failed baseline read - the
+// state-branch mirror of the urlBefore!="" hardening from the #3398
+// review (a probe failure must never masquerade as evidence).
+const stateProbeFailed = "\x00probe-failed"
+
 func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string) string {
 	// #3407 mirror defect: the JS chain `e.checked||e.selected||...` returns
 	// a BOOLEAN true on a successfully checked checkbox/radio/option; the
@@ -766,9 +773,14 @@ func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string
 	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
 		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
 	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &raw)); err != nil {
-		return ""
+		return stateProbeFailed
 	}
-	return stateFromRaw(raw)
+	if v := stateFromRaw(raw); v != "" {
+		return v
+	}
+	// No state attribute at all is indistinguishable from a probe that
+	// returned an empty string - treat as no signal, not as failure.
+	return ""
 }
 
 // stateFromRaw dispatches the raw CDP JSON value of the state expression.
@@ -809,7 +821,7 @@ func clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter string) string
 	// even when the click changed nothing - unconfirmed by zero evidence,
 	// the exact inversion of the #3398 discipline. Comparing against
 	// stateBefore also keeps legitimate collapses (true->false) confirmed.
-	if stateAfter != "" && stateAfter != stateBefore {
+	if stateAfter != "" && stateAfter != stateProbeFailed && stateBefore != stateProbeFailed && stateAfter != stateBefore {
 		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateAfter)
 	}
 	return "\n⚠ no observable effect: URL unchanged and selector state unchanged — " +
