@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -160,25 +161,45 @@ func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 		// freshness is unprovable - conservatively do not ground.
 		return false
 	}
+	// #3425: pattern language MUST be invariantGlobMatch - the same one the
+	// write path (recordCompletion) uses. The previous filepath.Glob probe
+	// had no ** superglob: "**/coverage.out" matched neither a top-level
+	// coverage.out nor a/b/coverage.out, so exec-produced artifacts with
+	// superglob specs never grounded and the block safety net (groundIfFresh)
+	// failed the same way - both guards dead at once. Walk the working dir
+	// and match RELATIVE paths, exactly the shape invariantGlobMatch expects.
+	// Only .git is pruned (write-path products inside .git are covered by
+	// recordCompletion; exec artifacts do not materialize there).
 	base := filepath.Dir(e.loadDir) // == working dir
-	p := pattern
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(base, p)
-	}
-	matches, err := filepath.Glob(p)
-	if err != nil {
-		return false
-	}
-	for _, m := range matches {
-		info, err := os.Stat(m)
+	found := false
+	_ = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			if d != nil && d.IsDir() {
+				return fs.SkipDir // unreadable subtree: skip, keep scanning
+			}
+			return nil
 		}
-		if !info.IsDir() && !info.ModTime().Before(e.startedAt) {
-			return true
+		if found {
+			return fs.SkipAll
 		}
-	}
-	return false
+		if d.IsDir() {
+			if p != base && d.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, relErr := filepath.Rel(base, p)
+		if relErr != nil || !invariantGlobMatch(pattern, filepath.ToSlash(rel)) {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr == nil && !info.IsDir() && !info.ModTime().Before(e.startedAt) {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // probeArtifactsOnDisk grounds every incomplete step whose artifact_glob
