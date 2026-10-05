@@ -564,3 +564,21 @@ func TestAnchorThenMoreAppendsStaysClean(t *testing.T) {
 		t.Error("expected HeadAnchored = true")
 	}
 }
+
+// ATR-2026-00118 / ESCALATE.md: approval decisions are first-class auditable
+// events. The three approval statuses must append and verify like any other.
+func TestApprovalStatusesAppendAndVerify(t *testing.T) {
+	l, path := mkLedger(t)
+	for _, st := range []string{StatusUserApproved, StatusUserDenied, StatusAskTimeout} {
+		if _, err := l.Append(Event{Tool: "run_command", Status: st, InputHash: "h"}); err != nil {
+			t.Fatalf("append %s: %v", st, err)
+		}
+	}
+	rep, err := Verify(path)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !rep.OK() {
+		t.Fatal("chain broken by approval statuses")
+	}
+}

@@ -93,17 +93,35 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				break
 			}
 			if onApproval != nil {
+				// Approval-fatigue circuit breaker (ATR-2026-00118 pattern 1):
+				// the same key already denied twice within the window is denied
+				// WITHOUT re-prompting - the Nth identical popup only harvests a
+				// reflexive approve.
+				if a.askThrottle.ShouldSuppress(tc.Name, tc.Arguments) {
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "suppressed by ask throttle (repeated denial)", 0, "")
+					debug.Log("approval-throttle", "suppressed re-ask for %s (denied twice recently)", tc.Name)
+					return tool.Result{
+						Content: fmt.Sprintf("Permission denied for tool %q without prompting: this exact request was denied twice within the last minute. Re-asking is blocked to avoid nagging the user. Change your approach (different tool, different target, or abandon this step) instead of repeating the request.", tc.Name),
+						IsError: true,
+					}
+				}
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
+					// ATR-2026-00118: denial is a first-class auditable event
+					// (who denied what when), not just a downstream error.
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate", 0, "")
 					if a.approvalMemory != nil {
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
 					}
+					a.askThrottle.RecordDenial(tc.Name, tc.Arguments)
 					return tool.Result{
 						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
 						IsError: true,
 					}
 				}
-				// User approved - record for future auto-approval.
+				// User approved - record for future auto-approval and audit the
+				// approval decision (ATR-2026-00118 / ESCALATE.md trail).
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserApproved, "", 0, "")
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
