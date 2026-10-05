@@ -214,7 +214,13 @@ type JSONLStore struct {
 	// O_APPEND writers can interleave inside a single JSONL line (>4KB writes
 	// are not atomic) and the index load/modify/save races silently lose
 	// updates from the loser. See locks.md S3.
-	mu                 sync.Mutex
+	mu sync.Mutex
+	// indexDirtyMu guards indexDirty only. It must NEVER nest with s.mu in
+	// the reverse direction (helpers below touch no other state), so no
+	// deadlock cycle is possible. Needed because runMaintenance touches
+	// indexDirty outside s.mu (startup-latency fix: maintenance no longer
+	// holds s.mu for its full scan).
+	indexDirtyMu       sync.Mutex
 	indexDirty         bool // set when updateIndex fails; triggers a later reconciliation pass
 	maintenanceRunning bool
 	lastMaintenance    time.Time
@@ -662,7 +668,7 @@ func (s *JSONLStore) loadIndexImpl(canRepair bool) ([]indexEntry, error) {
 	if err := json.Unmarshal(data, &idx); err != nil {
 		// Corrupt index — rebuild from disk to avoid losing entries.
 		debug.Log("session", "loadIndex: corrupt session index, rebuilding from disk: %v", err)
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		if !canRepair {
 			// Caller holds the flock — cannot repair here (would deadlock).
 			// Return nil; the next unlocked loadIndex call will repair.
@@ -755,7 +761,7 @@ func lockWithBackoff(lockFn func() (func(), error), op string, kind string) (fun
 func (s *JSONLStore) updateIndex(ses *Session) error {
 	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockIndexFile(s.indexPath()) }, "updateIndex", "index")
 	if lockErr != nil {
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return lockErr
 	}
 	defer func() {
@@ -766,10 +772,10 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 
 	idx, err := s.loadIndexNoRepair()
 	if err != nil {
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return err
 	}
-	if idx == nil && s.indexDirty {
+	if idx == nil && s.getIndexDirty() {
 		// Index is corrupt (not just empty — loadIndexNoRepair set the
 		// dirty flag). Don't write a single-entry index that overwrites
 		// real entries. Keep dirty flag for runMaintenance to rebuild.
@@ -796,10 +802,10 @@ func (s *JSONLStore) updateIndex(ses *Session) error {
 		idx = append(idx, sessionToIndexEntry(ses))
 	}
 	if err := s.saveIndex(idx); err != nil {
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return err
 	}
-	s.indexDirty = false
+	s.setIndexDirty(false)
 	return nil
 }
 
@@ -807,7 +813,7 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 	// Matches updateIndex.
 	unlock, lockErr := lockWithBackoff(func() (func(), error) { return lockIndexFile(s.indexPath()) }, "removeFromIndex", "index")
 	if lockErr != nil {
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return lockErr
 	}
 	defer func() {
@@ -818,10 +824,10 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 
 	idx, err := s.loadIndexNoRepair()
 	if err != nil {
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return err
 	}
-	if idx == nil && s.indexDirty {
+	if idx == nil && s.getIndexDirty() {
 		// Index is corrupt (not just empty — loadIndexNoRepair set the
 		// dirty flag). Don't write an empty index that would hide
 		// real entries from List(). Keep dirty flag for runMaintenance to rebuild.
@@ -1642,11 +1648,27 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	return result, nil
 }
 
+// setIndexDirty / getIndexDirty guard the indexDirty flag with its own
+// dedicated mutex so runMaintenance can touch it without holding s.mu
+// (startup-latency fix). These helpers must never acquire s.mu or any other
+// lock, keeping the lock graph acyclic.
+func (s *JSONLStore) setIndexDirty(v bool) {
+	s.indexDirtyMu.Lock()
+	s.indexDirty = v
+	s.indexDirtyMu.Unlock()
+}
+
+func (s *JSONLStore) getIndexDirty() bool {
+	s.indexDirtyMu.Lock()
+	defer s.indexDirtyMu.Unlock()
+	return s.indexDirty
+}
+
 func (s *JSONLStore) scheduleMaintenanceLocked() {
 	if s.maintenanceRunning {
 		return
 	}
-	if !s.indexDirty && !s.lastMaintenance.IsZero() && time.Since(s.lastMaintenance) < sessionMaintenanceInterval {
+	if !s.getIndexDirty() && !s.lastMaintenance.IsZero() && time.Since(s.lastMaintenance) < sessionMaintenanceInterval {
 		return
 	}
 
@@ -1655,11 +1677,20 @@ func (s *JSONLStore) scheduleMaintenanceLocked() {
 }
 
 func (s *JSONLStore) runMaintenance() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Startup-latency regression fix: runMaintenance used to hold s.mu for
+	// its entire duration while pruneInvalidIndexEntries fully parsed EVERY
+	// session file (multi-second large sessions; ~48s across a real store).
+	// The repl's Load(resumeID) then queued on s.mu behind it and the TUI
+	// sat on a blank screen for most of a minute. All work here is
+	// file-scoped and self-serialized (index flock in repairIndex/saveIndex,
+	// lock-free clone stores in the prune path), and same-process concurrency
+	// is already capped by maintenanceRunning — so no store-wide lock is
+	// needed. Only the completion bookkeeping takes a short s.mu hold.
 	defer func() {
+		s.mu.Lock()
 		s.lastMaintenance = time.Now()
 		s.maintenanceRunning = false
+		s.mu.Unlock()
 	}()
 
 	idx, err := s.loadIndex()
@@ -1679,7 +1710,7 @@ func (s *JSONLStore) runMaintenance() {
 
 	validIdx, cleaned := s.pruneInvalidIndexEntries(idx)
 	if !cleaned {
-		s.indexDirty = false
+		s.setIndexDirty(false)
 		return
 	}
 	// Acquire cross-process lock before saving — pruneInvalidIndexEntries
@@ -1689,7 +1720,7 @@ func (s *JSONLStore) runMaintenance() {
 	unlock, lockErr := lockIndexFile(s.indexPath())
 	if lockErr != nil {
 		debug.Log("session", "runMaintenance: failed to acquire index lock: %v", lockErr)
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return
 	}
 	defer unlock()
@@ -1697,7 +1728,7 @@ func (s *JSONLStore) runMaintenance() {
 	currentIdx, err := s.loadIndexNoRepair()
 	if err != nil {
 		debug.Log("session", "runMaintenance: failed to reload index under lock: %v", err)
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return
 	}
 	// Merge: keep entries that survived pruning (validIdx) plus entries
@@ -1730,28 +1761,43 @@ func (s *JSONLStore) runMaintenance() {
 		}
 	}
 	if err := s.saveIndex(merged); err != nil {
-		s.indexDirty = true
+		s.setIndexDirty(true)
 		return
 	}
-	s.indexDirty = false
+	s.setIndexDirty(false)
 }
 
 func (s *JSONLStore) pruneInvalidIndexEntries(idx []indexEntry) ([]indexEntry, bool) {
 	cleaned := false
 	validIdx := make([]indexEntry, 0, len(idx))
 	for _, e := range idx {
-		ses, loadErr := s.loadSessionFull(e.ID)
-		if loadErr != nil {
+		// Startup-latency regression fix: this loop used loadSessionFull (full
+		// JSONL parse of every message just to answer "has a user turn?").
+		// HasUserInteractionOnDisk streams the file and returns at the FIRST
+		// user text block, so live sessions cost one partial scan instead of a
+		// full parse. Semantics preserved vs loadSessionFull (#291/#709):
+		// any inability to read (including ENOENT, which loadSessionFull also
+		// surfaced as a load error) → keep; only a fully-scanned file with no
+		// user interaction is pruned. HasUserInteractionOnDisk alone would map
+		// ENOENT to (false, nil) and evict dangling entries here — that is
+		// repairIndex's job, not the prune's.
+		if _, statErr := os.Stat(s.sessionPath(e.ID)); statErr != nil {
+			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite stat error: %v", e.ID, statErr)
+			validIdx = append(validIdx, e)
+			continue
+		}
+		interacted, hasErr := s.HasUserInteractionOnDisk(e.ID)
+		if hasErr != nil {
 			// Transient I/O errors (network filesystem, permission, lock) must
 			// NOT cause permanent file deletion. Keep the entry in the index so
 			// the session does not flicker out of List() until the next repair
 			// pass — only a confirmed no-user-interaction session is pruned
 			// (#709 hardening).
-			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite load error: %v", e.ID, loadErr)
+			debug.Log("session", "pruneInvalidIndexEntries: keeping %s despite on-disk check error: %v", e.ID, hasErr)
 			validIdx = append(validIdx, e)
 			continue
 		}
-		if !ses.HasUserInteraction() {
+		if !interacted {
 			// #1307 E3: a failed Remove (permission, read-only mount, Windows
 			// file-in-use) must NOT evict the index entry - otherwise the
 			// on-disk file becomes an orphan that List() hides forever. Keep
@@ -1825,7 +1871,7 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		diskIDs[id] = true
 	}
 
-	changed := s.indexDirty
+	changed := s.getIndexDirty()
 	newIdx := make([]indexEntry, 0, len(idx))
 
 	for _, e := range idx {
@@ -1871,7 +1917,7 @@ func (s *JSONLStore) repairIndex(idx []indexEntry) (bool, error) {
 		if err := s.saveIndex(newIdx); err != nil {
 			return false, err
 		}
-		s.indexDirty = false
+		s.setIndexDirty(false)
 	}
 	return changed, nil
 }
