@@ -392,7 +392,10 @@ func isVulnerableVersion(version string, vuln vulnEntry) bool {
 // (commit pin): either no base tag (v0.0.0-timestamp-hash) or a base-tag
 // pin (vX.Y.Z-<N>.timestamp.hash). The distinguishing mark is the
 // 14-digit UTC timestamp segment.
-var goPseudoTimestampRe = regexp.MustCompile(`-\d{0,3}\.?\d{14}-`)
+// #3363: N (commits since the base tag) has NO upper bound in the
+// pseudo-version spec - the previous \d{0,3} cap let N>=1000 pins fall
+// through to semver comparison and resurrect the #3360 false-Critical.
+var goPseudoTimestampRe = regexp.MustCompile(`-\d*\.?\d{14}-`)
 
 func isGoPseudoVersion(version string) bool {
 	return goPseudoTimestampRe.MatchString(version)
