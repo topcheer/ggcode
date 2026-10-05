@@ -185,18 +185,6 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 	}, nil
 }
 
-func (s *Service) LaunchHelper(prepared PreparedUpdate) error {
-	cmd := s.helperCommand(prepared)
-
-	// On Windows, if the target dir needs elevation, relaunch the helper
-	// with UAC (ShellExecute "runas" verb).
-	if s.needsElevation && runtime.GOOS == "windows" {
-		return launchElevated(cmd)
-	}
-
-	return cmd.Start()
-}
-
 // ApplyBinary replaces the binary files directly without spawning a helper
 // process or starting a new instance. This is used on Unix where the running
 // binary can be overwritten in place. After ApplyBinary returns, the caller

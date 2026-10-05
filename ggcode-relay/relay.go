@@ -110,7 +110,6 @@ type room struct {
 	serverReady     bool
 	expired         bool // #2898: set by expireRoom under mu; aborts in-flight registrations
 	history         []roomEvent
-	bootstrap       map[string]roomEvent
 	server          *peer
 	clients         map[*peer]struct{}
 	clientsByID     map[string]*peer
@@ -127,7 +126,6 @@ type room struct {
 func newRoom(token string) *room {
 	return &room{
 		token:       token,
-		bootstrap:   make(map[string]roomEvent),
 		clients:     make(map[*peer]struct{}),
 		clientsByID: make(map[string]*peer),
 	}
@@ -159,7 +157,6 @@ func (r *room) appendEvent(ev roomEvent) bool {
 
 func (r *room) clearHistoryLocked() {
 	r.history = nil
-	r.bootstrap = make(map[string]roomEvent)
 	r.lastEventAt = time.Time{}
 }
 
@@ -176,37 +173,10 @@ func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
 	r.providerName = state.providerName
 	r.modelName = state.modelName
 	r.history = append([]roomEvent(nil), state.history...)
-	r.bootstrap = make(map[string]roomEvent)
-	for _, ev := range r.history {
-		r.rememberBootstrap(ev)
-	}
 	if len(r.history) > 0 {
 		r.lastEventAt = time.Now()
 	}
 	return true, len(r.history)
-}
-
-func (r *room) rememberBootstrap(ev roomEvent) {
-	if ev.typ == "" || len(ev.raw) == 0 {
-		return
-	}
-	r.bootstrap[ev.typ] = ev
-}
-
-func (r *room) bootstrapEvents(sessionID string) []roomEvent {
-	order := []string{"session_info", "status", "activity"}
-	out := make([]roomEvent, 0, len(order))
-	for _, typ := range order {
-		ev, ok := r.bootstrap[typ]
-		if !ok {
-			continue
-		}
-		if sessionID != "" && ev.sessionID != "" && ev.sessionID != sessionID {
-			continue
-		}
-		out = append(out, ev)
-	}
-	return out
 }
 
 func (r *room) projectionHashLocked(limit int) string {
@@ -643,14 +613,6 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	}
 
 	p.room.mu.Lock()
-	switch msg.Type {
-	case "session_info", "status", "activity":
-		p.room.rememberBootstrap(roomEvent{
-			sessionID: msg.SessionID,
-			typ:       msg.Type,
-			raw:       append([]byte(nil), wire...),
-		})
-	}
 	ev := roomEvent{
 		sessionID: msg.SessionID,
 		eventID:   msg.EventID,

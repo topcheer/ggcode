@@ -1423,10 +1423,6 @@ func (m *Model) SetUpdateService(svc *update.Service) {
 	m.updateSvc = svc
 }
 
-func (m *Model) SetCustomCommands(cmds map[string]*commands.Command) {
-	m.customCmds = cmds
-}
-
 func (m *Model) SetCommandsManager(mgr *commands.Manager) {
 	m.commandMgr = mgr
 	if mgr != nil {

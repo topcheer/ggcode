@@ -983,25 +983,6 @@ func (a *WechatAdapter) publishState(healthy bool, status, lastErr string) {
 	})
 }
 
-// GetAdapterState returns the current adapter state for the TUI panel.
-func (a *WechatAdapter) GetState() AdapterState {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	connected := a.connected
-	token := a.botToken
-	status := "disconnected"
-	if token == "" {
-		status = "waiting_for_auth"
-	} else if connected {
-		status = "connected"
-	}
-	return AdapterState{
-		Name:    a.name,
-		Healthy: connected,
-		Status:  status,
-	}
-}
-
 // generateWechatClientID generates a unique client ID for message sending.
 // Matches SDK pattern: random hex suffix.
 func generateWechatClientID() string {
