@@ -667,7 +667,11 @@ func (m *Model) renderSubAgentFollowStrip() string {
 			b.WriteString(chip)
 		}
 
-		if i < maxShow-1 {
+		// #3431: i is a GLOBAL slot index, but the last rendered position
+		// is the last slot inside the sliding window (start+maxShow-1), not
+		// maxShow-1 - with start>0 the old absolute test dropped separators
+		// from the window's tail and chips ran together.
+		if i < start+maxShow-1 && i < len(m.subAgentFollow.slots)-1 {
 			b.WriteString("  │  ")
 		}
 	}
