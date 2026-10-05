@@ -76,6 +76,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	// Create sub-context with timeout
 	timeout := cfg.Manager.Timeout()
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
+	// r29 actor-aware memory provenance: the sub-agent's identity rides
+	// the ctx so memory writes (and future per-actor tool semantics) are
+	// attributable. Empty id keeps the ctx untouched.
+	subCtx = util.WithActor(subCtx, cfg.SubAgentID)
 	defer cancel()
 	if !cfg.Manager.SetCancel(cfg.SubAgentID, cancel) {
 		// SetCancel returned false: the sub-agent was cancelled while it

@@ -68,6 +68,16 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 // overwrites, so every prompt-injected memory can be traced to its origin
 // (arXiv:2608.29606 provenance-aware memory).
 func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
+	return am.SaveMemoryWithSourceActor(key, content, source, "")
+}
+
+// SaveMemoryWithSourceActor (r29) is SaveMemoryWithSource with the WRITER
+// identity recorded alongside the source label (actor-aware provenance,
+// completing the arXiv:2608.29606 actor dimension: sub-agents and swarm
+// teammates share this AutoMemory, and without an actor field a
+// sub-agent's overwrite of a main-agent memory left zero trace of who
+// wrote it). Empty actor = legacy callers, byte-identical behavior.
+func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor string) error {
 	// #775: sanitizeKey is not injective ("a/b"/"a.b"/"a b" all -> "a-b";
 	// pure-CJK keys -> "" -> untitled.md, so ALL Chinese memories shared one
 	// file and silently overwrote each other). disambiguateKey appends a short
@@ -122,7 +132,7 @@ func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 		os.Remove(tmpName)
 		return err
 	}
-	am.RecordProvenance(safe, source)
+	am.RecordProvenanceActor(safe, source, actor)
 
 	// r409 memory-poisoning defense (MINJA arXiv 2601.05504, sleeper
 	// poisoning arXiv 2605.15338): a poisoned entry persisted here would be

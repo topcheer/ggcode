@@ -513,6 +513,9 @@ func executeTask(
 	} else {
 		subCtx, cancel = context.WithCancel(ctx)
 	}
+	// r29 actor-aware memory provenance: attribute this teammate's tool
+	// writes (tm-* id) in the memory sidecar, same as sub-agents.
+	subCtx = util.WithActor(subCtx, tm.ID)
 	defer cancel()
 
 	prompt := msg.Content
