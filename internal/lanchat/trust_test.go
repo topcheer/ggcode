@@ -33,6 +33,10 @@ func TestStrictModeTrustedPeerAgentDMAutoApproved(t *testing.T) {
 	if !h.IsTrustedPeer("friend-node") {
 		t.Fatal("SetTrustedPeer(true) should endorse the node")
 	}
+	// #3399: the strict-mode exemption is dual-factor - operator trust AND a
+	// discovery-layer presence record. A genuinely trusted peer in an
+	// established relationship has exchanged presence, so establish it here.
+	h.HandlePresence(Participant{NodeID: "friend-node", HumanNick: "Friend", AgentNick: "FriendAgent"})
 	h.HandleIncomingMessage(Message{
 		ID:         "m2",
 		FromNodeID: "friend-node",

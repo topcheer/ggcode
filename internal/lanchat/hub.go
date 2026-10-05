@@ -1425,7 +1425,17 @@ func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected 
 	// peer NODES (operator endorsement, persisted in trusted-peers.json)
 	// still auto-approve — trust constrains agent-to-agent interactions to
 	// established relationships instead of the all-or-nothing LAN default.
-	if msg.FromRole == RoleAgent && (!h.requireAgentApproval || h.trustedPeers[msg.FromNodeID]) {
+	//
+	// #3399 hardening: the strict-mode exemption is NOT granted on the
+	// operator endorsement alone. msg.FromNodeID is a self-reported body
+	// field with no authentication (community key is shared symmetric), so
+	// a forged sender could otherwise reach submitLanChatAgentText without
+	// any approval under bypass/autopilot. The exemption now requires a
+	// second factor from the discovery layer: the node must also be present
+	// in h.peers, which is only populated by HandlePresence from actual
+	// presence exchanges with a reachable endpoint. Forged from_node_ids
+	// with no presence trail fail closed into the manual approval gate.
+	if msg.FromRole == RoleAgent && (!h.requireAgentApproval || h.trustedExemptionLocked(msg)) {
 		// Agent-to-agent messages are auto-approved — no human intervention
 		// needed — unless lanchat.require_approval_for_agents opts out (#986).
 		return true, false
@@ -1438,6 +1448,26 @@ func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected 
 		return false, true
 	}
 	return false, false
+}
+
+// trustedExemptionLocked reports whether the strict-mode (#3386) trusted-peer
+// auto-approval exemption applies to this message's sender. #3399: the trust
+// endorsement (trusted-peers.json) is keyed by node_id, but the message's
+// FromNodeID is unauthenticated self-reported data - so endorsement alone
+// must not grant a silent auto-approve. The sender must ALSO be a
+// discovery-verified live participant (present in h.peers via HandlePresence
+// presence exchange). Absence of a presence trail downgrades the message to
+// the normal manual approval gate instead of blocking it. Must be called
+// with h.mu held.
+func (h *Hub) trustedExemptionLocked(msg Message) bool {
+	if !h.trustedPeers[msg.FromNodeID] {
+		return false
+	}
+	if _, verified := h.peers[msg.FromNodeID]; !verified {
+		debug.Log("lanchat", "#3399 strict-mode trusted-peer exemption downgraded to manual approval: %s has operator trust but no discovery-presence record", msg.FromNodeID)
+		return false
+	}
+	return true
 }
 
 // dispatchInboundReceipts performs every post-unlock side effect of an
