@@ -2199,7 +2199,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Query convergence failure: detect repeated similar search queries
 		// across iterations without progressing to code action.
 		if qcMsg := a.queryConverge.maybeWarn(i + 1); qcMsg != "" {
-			msgs = a.guidanceEmit(qcMsg, msgs)
+			// #681/#3380: quota consumed by maybeWarn must only stick on delivery.
+			if a.injectGuidance(qcMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.queryConverge.markUndelivered()
+			}
 		}
 		if bgOrphanMsg := a.maybeWarnBgOrphan(i + 1); bgOrphanMsg != "" {
 			msgs = a.guidanceEmit(bgOrphanMsg, msgs)
@@ -2209,7 +2214,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Nudge the agent to stop deliberating and act.
 		if rrMsg := a.reasoningRedund.maybeWarn(i+1, a.maxIter); rrMsg != "" {
 			debug.Log("reasoning-redund", "Iteration %d: reasoning redundancy detected -- consecutive text-only overthinking", i+1)
-			msgs = a.guidanceEmit(rrMsg, msgs)
+			// #3380: as above - only a delivered warning keeps its quota.
+			if a.injectGuidance(rrMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.reasoningRedund.markUndelivered()
+			}
 		}
 		// Iteration pressure degradation: detect verify/edit ratio drop
 		// near the iteration budget limit (metacognitive monitoring).
@@ -2219,7 +2229,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Unverified mutation streak: detect consecutive edits without any
 		// verification (build/test/run) to encourage tight feedback loops.
 		if bsMsg := a.bareEditStreak.maybeWarn(i + 1); bsMsg != "" {
-			msgs = a.guidanceEmit(bsMsg, msgs)
+			// #3380: as above - only a delivered warning keeps its quota.
+			if a.injectGuidance(bsMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.bareEditStreak.markUndelivered()
+			}
 		}
 		// Verification coverage gap: handled in tool-execution loop below.
 		// Strategy fixation: detect when the agent has edited the same file
@@ -2250,7 +2265,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Futile cycle: detect when the agent re-reads the same set of files
 		// that it explored earlier without making any edits in between.
 		if fcMsg := a.futileCycle.maybeWarn(i + 1); fcMsg != "" {
-			msgs = a.guidanceEmit(fcMsg, msgs)
+			// #3380: as above - only a delivered warning keeps its quota.
+			if a.injectGuidance(fcMsg) {
+				msgs = a.contextManager.Messages()
+			} else {
+				a.futileCycle.markUndelivered()
+			}
 		}
 		// Constraint amnesia: remind the agent of user-specified constraints
 		// that may have scrolled out of effective attention after many iterations.

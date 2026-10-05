@@ -136,6 +136,15 @@ func (s *reasoningRedundancyState) recordReasoning(text string, toolCalled bool)
 	}
 }
 
+func (s *reasoningRedundancyState) markUndelivered() {
+	if s.warnCount > 0 {
+		s.warnCount--
+	}
+	if s.totalFire > 0 {
+		s.totalFire--
+	}
+}
+
 // maybeWarn checks if the current window exhibits redundant overthinking.
 // Returns a guidance message if the pattern is detected, "" otherwise.
 func (s *reasoningRedundancyState) maybeWarn(iter, maxIter int) string {
