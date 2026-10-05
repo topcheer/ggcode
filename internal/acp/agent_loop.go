@@ -126,7 +126,10 @@ func NewAgentLoop(
 			return permission.Allow
 		}
 		// Deny or Ask → ask the Client (or respect Deny)
-		if decision == permission.Deny {
+		if decision != permission.Allow && decision != permission.Ask {
+			// #3370: Deny and the non-user deny variants (timeout/displaced)
+			// all pass through as deny-like; the Ask case below is the only
+			// branch that consults the client.
 			return permission.Deny
 		}
 

@@ -1166,7 +1166,8 @@ func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			return permission.Deny
+			// #3370: expired/cancelled gate is not a user rejection.
+			return permission.DenyTimeout
 		}
 	})
 }
@@ -1562,7 +1563,8 @@ func (r *REPL) Run() error {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			return permission.Deny
+			// #3370: expired/cancelled gate is not a user rejection.
+			return permission.DenyTimeout
 		}
 	})
 	traceMark("wire approval handler")

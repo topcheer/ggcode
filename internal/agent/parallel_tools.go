@@ -240,15 +240,29 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 					}
 				}
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
-				if resp == permission.Deny {
-					// ATR-2026-00118: denial is a first-class auditable event.
-					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate (parallel)", 0, "")
-					if a.approvalMemory != nil {
-						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
+				if resp != permission.Allow {
+					if resp == permission.Deny {
+						// ATR-2026-00118: denial is a first-class auditable event.
+						a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate (parallel)", 0, "")
+						if a.approvalMemory != nil {
+							a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
+						}
+						a.askThrottle.RecordDenial(tc.Name, tc.Arguments)
+						return tool.Result{
+							Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
+							IsError: true,
+						}
 					}
-					a.askThrottle.RecordDenial(tc.Name, tc.Arguments)
+					// #3370: timeout/disconnect/displaced - not a user
+					// decision; deny execution, honest audit, no memory or
+					// throttle pollution (mirror of the serial path).
+					reason := "approval gate expired or was cancelled"
+					if resp == permission.DenyDisplaced {
+						reason = "approval request displaced by a newer one"
+					}
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusAskTimeout, reason+" (parallel)", 0, "")
 					return tool.Result{
-						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
+						Content: fmt.Sprintf("Permission request for tool %q was not answered (%s); the call was not executed.", tc.Name, reason),
 						IsError: true,
 					}
 				}

@@ -958,7 +958,9 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 			b.mu.Unlock()
 			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
 		}
-		return permission.Deny
+		// #3370: the gate expired - not a user rejection. Deny-like outcome,
+		// honest attribution downstream.
+		return permission.DenyTimeout
 	}
 }
 

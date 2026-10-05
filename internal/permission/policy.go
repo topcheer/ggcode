@@ -9,6 +9,15 @@ const (
 	Allow Decision = iota
 	Deny
 	Ask
+	// DenyTimeout (#3370): the approval gate expired, the run context was
+	// cancelled, or the client disconnected BEFORE any user decision.
+	// Execution outcome equals Deny, but it is NOT a user rejection -
+	// audit, approval memory, and the ask throttle must not attribute it
+	// to the user.
+	DenyTimeout
+	// DenyDisplaced (#3370): a newer approval request displaced this one
+	// (single-slot UI), so the user never saw a prompt for it.
+	DenyDisplaced
 )
 
 func (d Decision) String() string {
@@ -17,6 +26,10 @@ func (d Decision) String() string {
 		return "allow"
 	case Deny:
 		return "deny"
+	case DenyTimeout:
+		return "deny_timeout"
+	case DenyDisplaced:
+		return "deny_displaced"
 	default:
 		return "ask"
 	}
