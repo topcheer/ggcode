@@ -91,6 +91,32 @@ func TestSessionStartSourceStartupVsResume(t *testing.T) {
 	}
 }
 
+// TestSessionStartSourceSystemPromptPreInjectionIsStartup covers #3385: the
+// TUI rebuilds the system prompt (submit.go startAgent) and desktop refreshes
+// it (SetPermissionMode) BEFORE the first run, so a fresh context manager
+// already holds one system message. Source must stay "startup" - only prior
+// non-system conversation history means "resume".
+func TestSessionStartSourceSystemPromptPreInjectionIsStartup(t *testing.T) {
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "src")
+	a := newSessionHookAgent(t)
+	// Mirror the TUI pre-run path: system prompt injected before first turn.
+	a.UpdateSystemPrompt("you are a coding agent")
+	a.SetHookConfig(hooks.HookConfig{
+		OnSessionStart: []hooks.Hook{{Match: "*", Command: "echo $GGCODE_SESSION_SOURCE >> " + srcFile}},
+	})
+	if err := runSessionHookTurn(t, a); err != nil {
+		t.Fatalf("run with pre-injected system prompt: %v", err)
+	}
+	data, err := os.ReadFile(srcFile)
+	if err != nil {
+		t.Fatalf("hook never ran: %v", err)
+	}
+	if lines := strings.Fields(string(data)); len(lines) != 1 || lines[0] != "startup" {
+		t.Fatalf("source with pre-injected system message = %v, want [startup]", lines)
+	}
+}
+
 func TestSessionStartHookCanBlock(t *testing.T) {
 	a := newSessionHookAgent(t)
 	a.SetHookConfig(hooks.HookConfig{

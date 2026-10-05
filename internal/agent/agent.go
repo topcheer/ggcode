@@ -1488,9 +1488,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.sessionStartFired = true
 		a.mu.Unlock()
 		if firstTurn {
+			// #3385: source must reflect whether there is prior
+			// CONVERSATION history, not merely any message. The TUI
+			// rebuilds the system prompt (and desktop refreshes it on
+			// SetPermissionMode) before the first run, so a fresh
+			// context manager already holds a system message - counting
+			// it made every TUI session's first turn report "resume"
+			// and the "startup" branch unreachable. Only non-system
+			// messages (injected by the resume restore path) indicate a
+			// resumed session.
 			source := "startup"
-			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok && len(cm.Messages()) > 0 {
-				source = "resume"
+			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+				for _, m := range cm.Messages() {
+					if m.Role != "system" {
+						source = "resume"
+						break
+					}
+				}
 			}
 			ssRes := hooks.RunSessionStartHooks(startHookCfg, hooks.HookEnv{
 				Event:         hooks.EventOnSessionStart,
