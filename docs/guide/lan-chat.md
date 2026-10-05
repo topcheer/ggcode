@@ -255,6 +255,24 @@ Human-role @agent DMs always require manual approval unless the sender has an
 explicit "always" approval policy. Daemon mode no longer auto-approves
 human-role @agent DMs (#986).
 
+### Message signatures and trusted peers
+
+Every outbound message carries an Ed25519 signature over the sender's
+static node key (#3402). In strict approval mode, an endorsed (trusted)
+peer is only exempted from manual approval when the message is
+signature-verified AND the signing key matches the fingerprint recorded
+at endorsement time (`trusted-peers.json` stores fingerprints). Two
+operational notes:
+
+- After re-installing ggcode or moving to a new machine, a peer's node
+  key changes: delete that node's entry from `node-key-pins.json` (in
+  your lanchat data directory) on YOUR side, then re-endorse the peer so
+  the new key gets bound. A pinned node presenting a different key is
+  treated as unverified, never silently swapped.
+- Endorsements recorded before #3402 (plain boolean entries) carry no
+  key fingerprint and never reach the exemption — re-endorse the peer
+  after it has sent at least one signed message.
+
 ## Anti-Noise Guidelines
 
 To keep LAN Chat productive and avoid cascading noise:
