@@ -202,6 +202,59 @@ func LoadTeam(dir string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// LoadTrustedPeers reads the persisted web-of-trust peer list from
+// <dir>/trusted-peers.json. Missing file returns an empty map + nil error;
+// a corrupt file returns the parse error so callers can block write-back
+// (same discipline as approval-policies.json, #990).
+func LoadTrustedPeers(dir string) (map[string]bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "trusted-peers.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	var peers map[string]bool
+	if err := json.Unmarshal(data, &peers); err != nil {
+		debug.Log("lanchat", "trusted-peers.json in %s is corrupt: %v", dir, err)
+		return nil, err
+	}
+	return peers, nil
+}
+
+// SaveTrustedPeers persists the trusted-peer set to <dir>/trusted-peers.json
+// with a tmp+rename atomic write (crash-safe, mirrors SaveApprovalPolicies).
+func SaveTrustedPeers(dir string, peers map[string]bool) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(peers, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "trusted-peers.json")
+	tmpPath := path + ".tmp"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
 // LoadApprovalPolicies reads persisted approval policies from <dir>/approval-policies.json.
 // Returns map[peerNodeID]policy. Missing file returns empty map + nil error.
 // A corrupt file returns the parse error so callers can distinguish "no
