@@ -1605,11 +1605,24 @@ func (m *Model) openSearchPanel(query string) {
 		return
 	}
 	kind := inspectorPanelSearch
+	// #3383: same R248 seq discipline as startSessionItemsLoad - each
+	// search bumps loadSeq and carries it, so a slower EARLIER query cannot
+	// pass the consumer's seq guard and overwrite a newer result (the
+	// pre-fix seq=0 == loadSeq 0 coincidence let both generations land).
+	// The generation counter is inherited from the previous panel state:
+	// openSearchPanel rebuilds the state from scratch, so a per-state zero
+	// reset would hand every query seq=1 and re-open the race.
+	base := 0
+	if m.inspectorPanel != nil {
+		base = m.inspectorPanel.loadSeq
+	}
 	m.inspectorPanel = &inspectorPanelState{
 		kind:        kind,
 		itemsLoaded: true,
 		loading:     true,
+		loadSeq:     base + 1,
 	}
+	seq := m.inspectorPanel.loadSeq
 
 	store := m.sessionStore
 	lang := m.currentLanguage()
@@ -1617,7 +1630,7 @@ func (m *Model) openSearchPanel(query string) {
 		go func() {
 			defer safego.Recover("tui.inspector.search")
 			items := executeSessionSearch(store, query, lang)
-			m.program.Send(inspectorItemsLoadedMsg{kind: kind, items: items})
+			m.program.Send(inspectorItemsLoadedMsg{kind: kind, seq: seq, items: items})
 		}()
 	} else {
 		// Synchronous fallback for test/headless mode
