@@ -1489,8 +1489,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		a.mu.Unlock()
 		if firstTurn {
 			source := "startup"
-			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok && len(cm.Messages()) > 0 {
-				source = "resume"
+			// #3385: "resume" means the run inherits prior CONVERSATION
+			// history. The TUI (system-prompt rebuilder on every submit)
+			// and desktop (SetPermissionMode injection) both land a system
+			// message BEFORE the first turn of a brand-new session, so a
+			// plain len(Messages()) > 0 misreports every fresh session as
+			// "resume". Count non-system messages only.
+			if cm, ok := a.contextManager.(*ctxpkg.Manager); ok {
+				for _, msg := range cm.Messages() {
+					if msg.Role != "system" {
+						source = "resume"
+						break
+					}
+				}
 			}
 			ssRes := hooks.RunSessionStartHooks(startHookCfg, hooks.HookEnv{
 				Event:         hooks.EventOnSessionStart,

@@ -68,7 +68,12 @@ func TestSessionStartSourceStartupVsResume(t *testing.T) {
 		OnSessionStart: []hooks.Hook{{Match: "*", Command: "echo $GGCODE_SESSION_SOURCE >> " + srcFile}},
 	}
 
+	// #3385: a system message alone (the TUI rebuilder / desktop
+	// SetPermissionMode both inject one before a brand-new session's first
+	// turn) must NOT flip the source to "resume" - only prior conversation
+	// history does.
 	fresh := newSessionHookAgent(t)
+	fresh.AddMessage(provider.Message{Role: "system", Content: []provider.ContentBlock{{Type: "text", Text: "system prompt"}}})
 	fresh.SetHookConfig(hookCfg)
 	if err := runSessionHookTurn(t, fresh); err != nil {
 		t.Fatalf("fresh run: %v", err)
