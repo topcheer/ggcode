@@ -116,6 +116,43 @@ func (am *AutoMemory) ScanStaleness(workingDir string) StaleReport {
 	return report
 }
 
+// maxStaleInlineAnnotations caps how many inline entries may receive a
+// [memory-stale] annotation per prompt rebuild, mirroring maxRecallConflicts
+// flooding protection in recall arbitration.
+const maxStaleInlineAnnotations = 5
+
+// annotateStaleInline appends a [memory-stale] note to every inline entry
+// whose content references paths that no longer exist under the project
+// root (STALE / Implicit Conflict, arXiv:2605.06527). This is the
+// injection-time counterpart of ScanStaleness: the offline repair loop only
+// fixes entries after the fact, while a single stale entry with no live
+// contradicting sibling bypasses ArbitrateInline entirely and would be
+// injected as an unflagged false premise. Annotation-only (entries are never
+// dropped), deterministic, and a no-op for global memory or non-project
+// roots. Entries are mutated in place.
+func (am *AutoMemory) annotateStaleInline(inline []MemoryEntry) {
+	if am.projectRoot == "" || len(inline) == 0 {
+		return
+	}
+	annotated := 0
+	for idx := range inline {
+		if annotated >= maxStaleInlineAnnotations {
+			return
+		}
+		broken := findBrokenPaths(inline[idx].Content, am.projectRoot)
+		if len(broken) == 0 {
+			continue
+		}
+		detail := strings.Join(broken, ", ")
+		if len(detail) > 120 {
+			detail = detail[:120] + "..."
+		}
+		inline[idx].Content += "\n> [memory-stale] This entry references paths that no longer exist: " +
+			detail + ". Treat these references as outdated and verify against the current workspace."
+		annotated++
+	}
+}
+
 // findBrokenPaths extracts file and directory path references from memory
 // content and returns those that don't exist relative to workingDir.
 func findBrokenPaths(content, workingDir string) []string {

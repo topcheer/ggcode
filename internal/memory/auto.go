@@ -18,6 +18,12 @@ import (
 // AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
 type AutoMemory struct {
 	dir string
+	// projectRoot is set only for project-scoped instances (NewProjectAutoMemory).
+	// It anchors injection-time staleness checks (annotateStaleInline) so that
+	// relative paths inside memory entries are resolved against the right
+	// workspace. Global memory leaves it empty and the check degrades to a no-op
+	// (HOME would be a meaningless anchor for repo-style paths).
+	projectRoot string
 	// #1752 case 2: Load/Merge/Save read-modify-write cycles from concurrent
 	// goroutines (reflection, /reflect, daemon) raced and the later write
 	// silently dropped the earlier one; a bare WriteFile also let a reader
@@ -54,7 +60,7 @@ func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	}
 	dir := filepath.Join(workingDir, ".ggcode", "memory")
 	_ = os.MkdirAll(dir, 0755)
-	return &AutoMemory{dir: dir}
+	return &AutoMemory{dir: dir, projectRoot: workingDir}
 }
 
 // SaveMemory saves a memory entry to ~/.ggcode/memory/{key}.md.
@@ -495,6 +501,14 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 		arb.Annotate(inline)
 		debug.Log("memory", "recall arbitration: %d conflict(s) among %d inline entries", len(arb.Conflicts), len(inline))
 	}
+
+	// Injection-time staleness annotation (STALE, arXiv:2605.06527 "Implicit
+	// Conflict"): ArbitrateInline only fires when two conflicting entries are
+	// inline simultaneously; a single entry whose referenced paths have since
+	// disappeared (broken-path) would otherwise be injected as an unflagged
+	// false premise. ScanStaleness feeds only the offline repair loop, so this
+	// is the inline-side front line: deterministic, annotation-only, capped.
+	am.annotateStaleInline(inline)
 
 	if record {
 		inlineKeys := make([]string, 0, len(inline))
