@@ -146,7 +146,10 @@ func NewCommandGate() *CommandGate {
 		{kind: "catastrophic", desc: "fork bomb",
 			pattern: regexp.MustCompile(`(?i)(:\(\)\{\s*:\|:\&\s*\}|fork\s+bomb)`)},
 		{kind: "catastrophic", desc: "filesystem wipe via chmod",
-			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?000\s+/`)},
+			// #3425: the trailing \s+/ matched ANY absolute path (chmod 000
+			// /some/deep/dir), not just the filesystem root. Anchor the target
+			// to '/' itself: the slash must be followed by a delimiter or EOL.
+			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?000\s+/($|[\s;"'&|])`)},
 		// --- Windows filesystem destruction ---
 		{kind: "catastrophic", desc: "Windows recursive delete (rd/rmdir /s /q on system drive)",
 			pattern: regexp.MustCompile(`(?i)\b(rd|rmdir)\s+.*(/[a-z]*s[a-z]*q[a-z]*|/s\s*/q|/q\s*/s)\s+"?([Cc]:\\"?\s*$|[Cc]:\\(Windows|Users|Program))`)},
@@ -191,7 +194,11 @@ func NewCommandGate() *CommandGate {
 		{kind: "catastrophic", desc: "overwrite SSH authorized_keys",
 			pattern: regexp.MustCompile(`(?i)>\s*~/\.ssh/authorized_keys\b`)},
 		{kind: "catastrophic", desc: "recursive chown on root",
-			pattern: regexp.MustCompile(`(?i)\bchown\s+-R\s+\S+\s+/`)},
+			// #3425: '\s+/' matched any absolute path, so 'chown -R opendkim:opendkim
+			// /etc/opendkim/keys' hard-Blocked as 'chown on root'. The target must
+			// be the root itself: slash followed by delimiter/EOL. Subdirectory
+			// targets fall through to the ASK tier (recursive permission change).
+			pattern: regexp.MustCompile(`(?i)\bchown\s+-R\s+\S+\s+/($|[\s;"'&|])`)},
 	}
 
 	// ================================================================
@@ -262,6 +269,14 @@ func NewCommandGate() *CommandGate {
 		// --- Permission modifications ---
 		{kind: "security", desc: "chmod on system directories",
 			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?[0-7]+\s+/(etc|var|usr|System)\b`)},
+		// #3425: recursive chown/chmod below the root is no longer
+		// catastrophic (the Block tier now anchors to '/' itself), but a
+		// recursive ownership/permission change on an absolute path still
+		// deserves confirmation before it runs.
+		{kind: "security", desc: "recursive chown on absolute path",
+			pattern: regexp.MustCompile(`(?i)\bchown\s+-R\s+\S+\s+/`)},
+		{kind: "security", desc: "recursive chmod 000 on absolute path",
+			pattern: regexp.MustCompile(`(?i)\bchmod\s+(-R\s+)?000\s+/`)},
 
 		// --- Destructive cron ---
 		{kind: "destructive", desc: "destructive cron job",
