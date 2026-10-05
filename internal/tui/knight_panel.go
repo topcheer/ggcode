@@ -38,6 +38,13 @@ type knightPanelState struct {
 	detailScroll  int
 	message       string
 	messageTime   time.Time
+	// #3391: global-scope promotion arm state. The command path forces
+	// --confirm-global (#1363: a warning followed by immediate effect in the
+	// same keypress is not a confirmation gate); the panel mirrors it with
+	// arm-then-confirm - first [a] warns and arms, a second [a] within the
+	// window promotes.
+	globalConfirmPath string
+	globalConfirmAt   time.Time
 }
 
 func newKnightPanel() *knightPanelState {
@@ -185,6 +192,19 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 		ref := knight.FormatSkillRefForDisplay(s.Scope, s.Name)
 		switch action {
 		case "approve":
+			// #3391 / #1363: global promotion needs an explicit second
+			// keypress - same principle as the command path's --confirm-global.
+			if s.Scope == "global" {
+				armed := kp.globalConfirmPath == s.Path && time.Since(kp.globalConfirmAt) < 10*time.Second
+				if !armed {
+					kp.globalConfirmPath = s.Path
+					kp.globalConfirmAt = time.Now()
+					kp.message = fmt.Sprintf("⚠️ '%s' is GLOBAL scope - it will affect every project on this machine. Press [a] again to confirm.", ref)
+					kp.messageTime = time.Now()
+					return m, nil
+				}
+			}
+			kp.globalConfirmPath = ""
 			if err := m.knight.PromoteStagingByPath(s.Path); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
