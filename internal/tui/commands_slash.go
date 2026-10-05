@@ -135,6 +135,11 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	// If so, display a recovery message to the user via the chat list.
 	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
+		// Crash-restore idempotency window: pre-crash successful mutating
+		// calls are re-seeded into the dedup ledger so the recovery-prompted
+		// replay (double push / double IM send) is suppressed with an
+		// advisory instead of re-executing the side effect.
+		agentruntime.SeedCrashDedupWindow(m.agent, ses.ID)
 	}
 	// r445: user-interrupted (Ctrl+C) runs get a structured continuation
 	// point - shown to the user AND injected into the agent's context so

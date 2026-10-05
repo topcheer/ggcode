@@ -128,6 +128,10 @@ func MarkRunning(sessionID, userPrompt string, pid int) {
 	}
 
 	path := journalPath(sessionID)
+	// A fresh run invalidates any crash-window sidecar from an older run
+	// (tool_dedup_crash.go): the crash window opens only when the PREVIOUS
+	// run crashed, and MarkRunning starts a new run.
+	_ = os.Remove(crashSidecarPath(sessionID))
 	if err := atomicWriteJournal(path, data); err != nil {
 		debug.Log("run_journal", "MarkRunning: write failed: %v", err)
 	}
@@ -153,6 +157,10 @@ func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) 
 	if sessionID == "" {
 		return
 	}
+	// Clean run: the crash sidecar is no longer needed - MarkCompleted is
+	// reached only when the run unwound normally (not via SIGKILL). Runs even
+	// when the journal is missing (no run / already consumed).
+	_ = os.Remove(crashSidecarPath(sessionID))
 	path := journalPath(sessionID)
 
 	data, err := os.ReadFile(path)

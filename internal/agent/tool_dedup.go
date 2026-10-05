@@ -122,12 +122,16 @@ type toolDedupLedger struct {
 	epoch uint64
 	count int
 	table map[string]toolDedupEntry
+	// crashTable holds pre-crash fingerprints seeded at resume time
+	// (tool_dedup_crash.go); epoch-free so a fresh process still matches.
+	crashTable map[string]time.Time
 }
 
 func newToolDedupLedger() *toolDedupLedger {
 	return &toolDedupLedger{
-		ttl:   toolDedupTTL,
-		table: make(map[string]toolDedupEntry, 8),
+		ttl:        toolDedupTTL,
+		table:      make(map[string]toolDedupEntry, 8),
+		crashTable: make(map[string]time.Time),
 	}
 }
 
@@ -166,6 +170,21 @@ func (l *toolDedupLedger) suppressDuplicate(name, args string) *tool.Result {
 	l.pruneLocked(time.Now())
 	e, ok := l.table[fp]
 	if !ok {
+		// Crash-restore window (tool_dedup_crash.go): a pre-crash successful
+		// call re-issued after resume is suppressed with an advisory - the
+		// pre-crash result body was not persisted, so nothing is replayed;
+		// the model is pointed at verifying the side effect's real state.
+		cfp := crashFingerprint(name, args)
+		if at, cok := l.crashTable[cfp]; cok {
+			if time.Since(at) > crashDedupTTL {
+				delete(l.crashTable, cfp)
+				return nil
+			}
+			debug.Log("agent", "tool-dedup: suppressed crash-window replay of %s (%.0fmin old)", name, time.Since(at).Minutes())
+			return &tool.Result{Content: fmt.Sprintf(
+				"[crash-window dedup] An identical mutating call %q succeeded %.0f minutes ago, before the previous run crashed; it was NOT re-executed to avoid duplicating the side effect. The pre-crash output was not persisted - verify the actual state (e.g. git log / message history) before deciding whether a genuine re-run is needed. Vary the arguments if you intentionally want to execute it again.\n\n",
+				name, time.Since(at).Minutes()), IsError: false}
+		}
 		return nil
 	}
 	notice := fmt.Sprintf(
