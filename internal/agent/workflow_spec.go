@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -64,8 +65,9 @@ type workflowEngine struct {
 	steps     map[string]WorkflowStep
 	order     []string // declaration order for deterministic iteration
 	loaded    bool
-	loadDir   string   // dir whose .ggcode/workflow-spec.json to read
-	completed sync.Map // step ID -> struct{} (grounded by artifact this run)
+	loadDir   string    // dir whose .ggcode/workflow-spec.json to read
+	startedAt time.Time // #3414: freshness anchor for on-disk artifact probing
+	completed sync.Map  // step ID -> struct{} (grounded by artifact this run)
 }
 
 const workflowSpecFileName = "workflow-spec.json"
@@ -148,6 +150,86 @@ func (e *workflowEngine) recordCompletion(path string) {
 	}
 }
 
+// globFreshOnDisk reports whether pattern resolves to at least one file
+// on disk whose mtime is at or after the engine's freshness anchor (#3414).
+// Patterns are interpreted relative to the working dir (the parent of
+// loadDir); absolute patterns are used as-is.
+func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
+	if pattern == "" || e.startedAt.IsZero() {
+		// Zero anchor (engine built outside workflowEngineLazy, e.g. tests):
+		// freshness is unprovable - conservatively do not ground.
+		return false
+	}
+	base := filepath.Dir(e.loadDir) // == working dir
+	p := pattern
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+	matches, err := filepath.Glob(p)
+	if err != nil {
+		return false
+	}
+	for _, m := range matches {
+		info, err := os.Stat(m)
+		if err != nil {
+			continue
+		}
+		if !info.IsDir() && !info.ModTime().Before(e.startedAt) {
+			return true
+		}
+	}
+	return false
+}
+
+// probeArtifactsOnDisk grounds every incomplete step whose artifact_glob
+// now matches a file produced since the engine anchor (#3414). Called
+// after successful run_command calls: exec products (go test
+// -coverprofile=..., make bin/*) never flow through invariantOpTargets,
+// so without this probe the flagship spec shape deadlocked block mode on
+// steps that had actually completed. Grounding still requires a REAL,
+// FRESH artifact on disk - no trust-me completion flag.
+func (e *workflowEngine) probeArtifactsOnDisk() {
+	e.loadWorkflowSpec()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, id := range e.order {
+		st := e.steps[id]
+		if st.ArtifactGlob == "" {
+			continue
+		}
+		if _, done := e.completed.Load(id); done {
+			continue
+		}
+		if e.globFreshOnDisk(st.ArtifactGlob) {
+			e.completed.Store(id, struct{}{})
+			debug.Log("agent", "[workflow-spec] step %s complete (artifact %q observed on disk after command)", id, st.ArtifactGlob)
+		}
+	}
+}
+
+// groundIfFresh is the targeted, block-path self-heal (#3414 option 3 as
+// a safety net): before a run_command is rejected for an unmet
+// prerequisite, the engine re-checks the disk for that step's artifact.
+// Returns true when the requirement got grounded by the check.
+func (e *workflowEngine) groundIfFresh(id string) bool {
+	if id == "" {
+		return false
+	}
+	if _, done := e.completed.Load(id); done {
+		return true
+	}
+	st, ok := e.steps[id]
+	if !ok || st.ArtifactGlob == "" {
+		return false
+	}
+	if !e.globFreshOnDisk(st.ArtifactGlob) {
+		return false
+	}
+	e.completed.Store(id, struct{}{})
+	debug.Log("agent", "[workflow-spec] step %s complete (artifact %q observed on disk during precondition check)", id, st.ArtifactGlob)
+	return true
+}
+
 // commandMatches reports whether cmd matches any OnCommands glob of the
 // step. Globs use the same semantics as invariant tool matching: a leading
 // or trailing "*" (prefix/suffix match); a bare "*" matches everything.
@@ -216,6 +298,14 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 			if e.isComplete(req) {
 				continue
 			}
+			// #3414 safety net: before rejecting, re-check the disk for
+			// the prerequisite's artifact - a successful command may have
+			// produced it without a write-class tool call (exec products
+			// never flow through invariantOpTargets). Fresh file on disk
+			// grounds the requirement instead of blocking.
+			if e.groundIfFresh(req) {
+				continue
+			}
 			want := ""
 			if rs, ok := e.steps[req]; ok {
 				want = rs.ArtifactGlob
@@ -280,7 +370,7 @@ func (a *Agent) workflowEngineLazy() *workflowEngine {
 	if wd == "" {
 		return nil
 	}
-	newE := &workflowEngine{loadDir: filepath.Join(wd, ".ggcode")}
+	newE := &workflowEngine{loadDir: filepath.Join(wd, ".ggcode"), startedAt: time.Now()}
 	a.mu.Lock()
 	if a.wfEngine == nil {
 		a.wfEngine = newE
