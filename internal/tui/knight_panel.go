@@ -35,13 +35,19 @@ type knightPanelState struct {
 	selectedIndex int
 	detailIndex   int // selected item in right column
 	scrollOffset  int
-	detailScroll  int
 	message       string
 	messageTime   time.Time
+	// pendingGlobalApprove (#3391): staging index awaiting the SECOND
+	// confirming keypress for a global-scope promote. -1 = none. A single
+	// [a] on a global staging skill must not take immediate effect - the
+	// command path enforces --confirm-global for the same reason
+	// (knight_commands.go: "a warning that is followed by immediate effect
+	// in the same keypress is not a confirmation gate").
+	pendingGlobalApprove int
 }
 
 func newKnightPanel() *knightPanelState {
-	return &knightPanelState{}
+	return &knightPanelState{pendingGlobalApprove: -1}
 }
 
 // ---- open / close ----
@@ -81,7 +87,6 @@ func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if kp.focus == 0 {
 			kp.focus = 1
 			kp.detailIndex = 0
-			kp.detailScroll = 0
 		} else {
 			kp.focus = 0
 		}
@@ -110,7 +115,6 @@ func (m *Model) updateKnightPanelLeft(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 	case "enter":
 		kp.focus = 1
 		kp.detailIndex = 0
-		kp.detailScroll = 0
 	}
 	return m, nil
 }
@@ -122,14 +126,17 @@ func (m *Model) updateKnightPanelRight(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 
 	switch msg.String() {
 	case "up", "k":
+		kp.pendingGlobalApprove = -1 // #3391: navigation cancels the armed confirm
 		if kp.detailIndex > 0 {
 			kp.detailIndex--
 		}
 	case "down", "j":
+		kp.pendingGlobalApprove = -1 // #3391: navigation cancels the armed confirm
 		if kp.detailIndex < maxItems-1 {
 			kp.detailIndex++
 		}
 	case "enter":
+		kp.pendingGlobalApprove = -1 // #3391: section switch cancels the armed confirm
 		return m.knightPanelAction(section, kp.detailIndex, "default")
 	case "a":
 		return m.knightPanelAction(section, kp.detailIndex, "approve")
@@ -144,6 +151,12 @@ func (m *Model) updateKnightPanelRight(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	}
 	return m, nil
 }
+
+// knightPanelListLimit (#3389): the single source for both the navigation
+// domain (knightPanelItemCount) and the render fetches - the pre-fix count
+// fetched 50 while the renderers fetched 20, so the down key walked the
+// cursor into items the panel never showed.
+const knightPanelListLimit = 20
 
 func (m *Model) knightPanelItemCount(section string) int {
 	if m.knight == nil {
@@ -160,10 +173,10 @@ func (m *Model) knightPanelItemCount(section string) int {
 		staging, _ := m.knight.Index().StagingSkills()
 		return len(staging)
 	case "proposals":
-		proposals, _ := m.knight.RecentProjectImprovementProposals(50)
+		proposals, _ := m.knight.RecentProjectImprovementProposals(knightPanelListLimit)
 		return len(proposals)
 	case "memory":
-		entries, _ := m.knight.RecentSemanticMemory(50)
+		entries, _ := m.knight.RecentSemanticMemory(knightPanelListLimit)
 		return len(entries)
 	case "policies":
 		return len(m.knight.AutoPolicies())
@@ -185,6 +198,16 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 		ref := knight.FormatSkillRefForDisplay(s.Scope, s.Name)
 		switch action {
 		case "approve":
+			// #3391: global-scope promote needs a second confirming keypress,
+			// mirroring the command path's --confirm-global gate. Project
+			// scope (and any non-global value) stays single-key.
+			if s.Scope == "global" && kp.pendingGlobalApprove != idx {
+				kp.pendingGlobalApprove = idx
+				kp.message = "⚠ global scope: press [a] again to confirm promote (injects into EVERY project's system prompt)"
+				kp.messageTime = time.Now()
+				return m, nil
+			}
+			kp.pendingGlobalApprove = -1
 			if err := m.knight.PromoteStagingByPath(s.Path); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
@@ -200,7 +223,7 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 		kp.messageTime = time.Now()
 
 	case "proposals":
-		proposals, _ := m.knight.RecentProjectImprovementProposals(50)
+		proposals, _ := m.knight.RecentProjectImprovementProposals(knightPanelListLimit)
 		if idx < 0 || idx >= len(proposals) {
 			return m, nil
 		}
@@ -542,7 +565,7 @@ func (m *Model) renderKnightProposals(w int) string {
 	if m.knight == nil {
 		return "Knight not available"
 	}
-	proposals, err := m.knight.RecentProjectImprovementProposals(20)
+	proposals, err := m.knight.RecentProjectImprovementProposals(knightPanelListLimit)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
@@ -577,7 +600,7 @@ func (m *Model) renderKnightMemory(w int) string {
 	if m.knight == nil {
 		return "Knight not available"
 	}
-	entries, err := m.knight.RecentSemanticMemory(20)
+	entries, err := m.knight.RecentSemanticMemory(knightPanelListLimit)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
@@ -629,5 +652,9 @@ func (m *Model) renderKnightPolicies(w int) string {
 			}
 		}
 	}
-	return m.renderContextBox("/knight", sb.String(), lipgloss.Color("13"))
+	// #3389: like the other seven sections, return the bare string - the
+	// outer renderKnightPanelRight wraps everything in one renderContextBox;
+	// the pre-fix double wrap (inner mainColumnWidth vs outer viewWidth-30)
+	// drew mismatched borders.
+	return sb.String()
 }
