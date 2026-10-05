@@ -769,67 +769,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					switch event.Type {
 					case "content_block_start":
-						cb := event.ContentBlock
-						switch cb.Type {
-						case "tool_use":
-							idx := int(event.Index)
-							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
-							if tu := cb.AsToolUse(); tu.JSON.Caller.Valid() {
-								tc.Caller = callerRawOf(tu.Caller) // PTC echo-back
-							}
-							toolCalls[idx] = tc
-							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
-						case "server_tool_use":
-							// Anthropic server-side tool invocation (executed in-API).
-							// Input arrives via input_json_delta like a client tool_use,
-							// but the block must NOT be surfaced as a client tool call —
-							// it is emitted verbatim at content_block_stop.
-							idx := int(event.Index)
-							toolCalls[idx] = &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name, ServerTool: true}
-						case "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
-							// Result blocks arrive complete (no deltas). Keep the raw
-							// JSON verbatim for echo-back on the next request. For the
-							// Tool Search Tool this preserves the tool_reference
-							// expansions so the API does not treat them as deferred.
+						if handleContentBlockStart(ch, toolCalls, event) {
 							emitted = true
-							ch <- StreamEvent{
-								Type:  StreamEventServerTool,
-								Block: ContentBlock{Type: cb.Type, Raw: json.RawMessage(cb.RawJSON())},
-							}
-						case "code_execution_tool_result":
-							// PTC: code execution result, executed in-API inside the
-							// container. Arrives complete; echo verbatim like the web
-							// server-tool results above.
-							emitted = true
-							ch <- StreamEvent{
-								Type:  StreamEventServerTool,
-								Block: ContentBlock{Type: cb.Type, Raw: json.RawMessage(cb.RawJSON())},
-							}
-						case "thinking":
-							debug.Log("anthropic", "content_block_start thinking idx=%d sig_len=%d", event.Index, len(cb.Signature))
-							toolCalls[int(event.Index)] = &ToolCallDelta{
-								Index: int(event.Index),
-								ID:    cb.Signature, // carries signature for echo-back
-							}
-							// Emit reasoning event with signature so agent can store it
-							emitted = true
-							ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: cb.Signature}
-						case "redacted_thinking":
-							debug.Log("anthropic", "content_block_start redacted_thinking idx=%d data_len=%d", event.Index, len(cb.Data))
-							// Register with empty Name (like the thinking branch)
-							// so content_block_stop's `tc.Name != ""` check skips
-							// it — redacted thinking is reasoning data, not a
-							// tool call. Echo-back happens via the reasoning
-							// event below (#224).
-							toolCalls[int(event.Index)] = &ToolCallDelta{
-								Index: int(event.Index),
-								ID:    cb.Data, // carries redacted data for echo-back
-							}
-							// Emit reasoning event with redacted data for echo-back
-							emitted = true
-							ch <- StreamEvent{Type: StreamEventReasoning, Text: "__redacted_thinking__", ThinkingSignature: cb.Data}
 						}
-
 					case "content_block_delta":
 						delta := event.Delta
 						switch delta.Type {
@@ -850,47 +792,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 
 					case "content_block_stop":
-						idx := int(event.Index)
-						if tc, ok := toolCalls[idx]; ok && tc.ServerTool {
-							debug.Log("anthropic", "content_block_stop server_tool_use id=%s name=%s", tc.ID, tc.Name)
+						dc, de := handleContentBlockStop(ch, toolCalls, int(event.Index))
+						outputChars += dc
+						if de {
 							emitted = true
-							if tc.Name == "code_execution" {
-								// PTC: the code execution call streams as a regular
-								// tool_use block executed in-API. Store the FULL tool_use
-								// block fields so the next request echoes back a valid
-								// tool_use (type+caller), not a bare server_tool_use.
-								ch <- StreamEvent{
-									Type: StreamEventServerTool,
-									Block: ContentBlock{
-										Type:      "tool_use",
-										ToolID:    tc.ID,
-										ToolName:  tc.Name,
-										Input:     tc.Arguments,
-										CallerRaw: tc.Caller,
-									},
-								}
-							} else {
-								ch <- StreamEvent{
-									Type: StreamEventServerTool,
-									Block: ContentBlock{
-										Type: "server_tool_use",
-										ID:   tc.ID,
-										Raw:  serverToolUseRaw(tc.ID, tc.Name, tc.Arguments),
-									},
-								}
-							}
-							delete(toolCalls, idx)
-						} else if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
-							debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
-							outputChars += len(tc.Name) + len(tc.Arguments)
-							emitted = true
-							ch <- StreamEvent{
-								Type: StreamEventToolCallDone,
-								Tool: *tc,
-							}
-							delete(toolCalls, idx)
 						}
-
 					case "message_delta":
 						// #2129: symmetric zero-guard with the input/cache tokens
 						// below (#722/#1168): the SSE protocol allows MULTIPLE
@@ -995,17 +901,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
 					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
-						// Notify user about retry
-						delay := retryDelay(err, attempt)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
-						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-							// #722: budget exhausted — stop retrying now; wrap with the
-							// sentinel so the failover layer switches immediately.
-							if sleepErr == errRetryBudgetExhausted {
-								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+						slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
+						if !slept {
+							if sErr != nil {
+								ch <- StreamEvent{Type: StreamEventError, Error: sErr}
+								streamError = true
 							}
-							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
-							streamError = true
 							return
 						}
 						retry = true
