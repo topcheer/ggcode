@@ -41,7 +41,14 @@ type Command struct {
 	UserInvocable          bool
 	DisableModelInvocation bool
 	Context                string
-	Enabled                bool // false = skill is disabled and won't be invoked by the agent
+	// NLAH-style harness externalization (r466): skills can declare explicit
+	// contracts and a failure taxonomy instead of relying only on the generic
+	// error classifier when something goes wrong mid-workflow.
+	Precondition  string             // what must hold before the skill starts
+	Postcondition string             // what must hold before the skill's work is accepted as done
+	StateContract string             // cross-stage state semantics (natural-language declaration)
+	FailureModes  []SkillFailureMode // named failure modes with detection signals and recovery paths
+	Enabled       bool               // false = skill is disabled and won't be invoked by the agent
 }
 
 // Expand replaces template variables in the command template.
