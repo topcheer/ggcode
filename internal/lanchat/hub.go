@@ -141,6 +141,16 @@ type Hub struct {
 	trustedPeers       map[string]bool
 	trustedPeersLoaded bool
 
+	// #3402 (TUFU): static identity key + first-sight identity pins
+	// (node_id -> key fingerprint) + the fingerprint bound at trust time.
+	// Legacy bool trust entries load with an empty fingerprint and do not
+	// reach the strict-mode exemption until re-endorsed.
+	nodeKey      *NodeKey
+	keyPins      map[string]string
+	trustedKeys  map[string]string
+	pinsLoaded   bool
+	nodeKeyReady bool
+
 	// approvalPoliciesLoaded records whether approval-policies.json was
 	// loaded successfully (missing file counts as loaded — empty is a valid
 	// state). When false the file exists but is corrupt/unreadable, so
@@ -211,11 +221,35 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		policies = map[string]string{}
 		debug.Log("lanchat", "approval policies in %s not loaded (refusing to overwrite on save): %v", store.dir, err)
 	}
-	trusted, trustErr := LoadTrustedPeers(store.dir)
+	// #3402: trusted-peers.json values are fingerprints ("fp:<hex>"); a
+	// legacy bool true entry loads as "" - endorsement still shows in the
+	// panel, but the strict-mode exemption needs re-endorsement to bind the
+	// key fingerprint.
+	trustedFPs, trustErr := LoadTrustedPeers(store.dir)
 	trustedLoaded := trustErr == nil
 	if trustErr != nil {
-		trusted = map[string]bool{}
+		trustedFPs = map[string]string{}
 		debug.Log("lanchat", "trusted peers in %s not loaded (refusing to overwrite on save): %v", store.dir, trustErr)
+	}
+	trusted := map[string]bool{}
+	trustedKeys := map[string]string{}
+	for id, fp := range trustedFPs {
+		trusted[id] = true
+		if fp != "" {
+			trustedKeys[id] = fp
+		}
+	}
+	pins, pinsErr := LoadKeyPins(store.dir)
+	pinsLoaded := pinsErr == nil
+	if pinsErr != nil {
+		pins = map[string]string{}
+		debug.Log("lanchat", "key pins in %s not loaded: %v", store.dir, pinsErr)
+	}
+	nodeKey, keyErr := LoadOrCreateNodeKey(store.dir)
+	nodeKeyReady := keyErr == nil
+	if keyErr != nil {
+		nodeKey = nil
+		debug.Log("lanchat", "node identity key unavailable, messages will be unsigned: %v", keyErr)
 	}
 
 	return &Hub{
@@ -240,6 +274,11 @@ func NewHub(nodeID, mode, endpoint, apiKey string, store *Store, ws WorkspaceMet
 		approvalPoliciesLoaded: policiesLoaded,
 		trustedPeers:           trusted,
 		trustedPeersLoaded:     trustedLoaded,
+		nodeKey:                nodeKey,
+		keyPins:                pins,
+		trustedKeys:            trustedKeys,
+		pinsLoaded:             pinsLoaded,
+		nodeKeyReady:           nodeKeyReady,
 		notifiedNicks:          make(map[string]bool),
 		peerHealthMap:          make(map[string]*peerHealth),
 		seenMsgIDs:             make(map[string]bool),
@@ -1073,7 +1112,7 @@ func (h *Hub) newMessage(fromRole, fromNick, toNodeID, toRole, content string, a
 			SetAttachmentURL(ep, &attachments[i])
 		}
 	}
-	return Message{
+	m := Message{
 		ID:          uuid.NewString(),
 		FromNodeID:  h.nodeID,
 		FromRole:    fromRole,
@@ -1084,6 +1123,10 @@ func (h *Hub) newMessage(fromRole, fromNick, toNodeID, toRole, content string, a
 		Attachments: attachments,
 		Timestamp:   time.Now().UnixMilli(),
 	}
+	// #3402 (TUFU): every outbound message carries the node's public key
+	// plus a signature over the canonical payload.
+	signMessage(&m, h.nodeKey)
+	return m
 }
 
 func (h *Hub) deliverMessage(ctx context.Context, msg Message, broadcast bool) error {
@@ -1347,6 +1390,26 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	}
 	h.markSeenLocked(msg.ID)
 
+	// #3402 (TUFU): verify the signature and enforce the first-sight
+	// identity pin. Forged from_node_id claims (plain body fields) verify
+	// false; a pinned node_id presenting a DIFFERENT key is unverified and
+	// flagged, never silently accepted. Unsigned pre-#3402 messages stay
+	// routed but unverified - callers gate policy on msg.Verified.
+	if ok, fp, err := verifyMessage(&msg); ok {
+		if pin, seen := h.keyPins[msg.FromNodeID]; seen && pin != fp {
+			debug.Log("lanchat", "identity pin conflict for %s: pinned %s, now presenting %s - treating as unverified", msg.FromNodeID, pin, fp)
+		} else {
+			msg.Verified = true
+			msg.SignerFP = fp
+			if !seen {
+				h.keyPins[msg.FromNodeID] = fp
+				h.persistPinsLocked()
+			}
+		}
+	} else if err != nil && err != errNoSignature {
+		debug.Log("lanchat", "message from %s failed signature verification: %v", msg.FromNodeID, err)
+	}
+
 	// Check if this is an @agent direct message
 	needsApproval := msg.IsDirectToAgent() && msg.ToNodeID == h.nodeID
 
@@ -1425,7 +1488,7 @@ func (h *Hub) decideAutoApprovalLocked(msg Message) (autoApproved, autoRejected 
 	// peer NODES (operator endorsement, persisted in trusted-peers.json)
 	// still auto-approve — trust constrains agent-to-agent interactions to
 	// established relationships instead of the all-or-nothing LAN default.
-	if msg.FromRole == RoleAgent && (!h.requireAgentApproval || h.trustedPeers[msg.FromNodeID]) {
+	if msg.FromRole == RoleAgent && (!h.requireAgentApproval || h.trustedExemptLocked(&msg)) {
 		// Agent-to-agent messages are auto-approved — no human intervention
 		// needed — unless lanchat.require_approval_for_agents opts out (#986).
 		return true, false
@@ -1727,6 +1790,40 @@ func (h *Hub) GetApprovalPolicies() map[string]string {
 	return result
 }
 
+// trustedExemptLocked reports whether a strict-mode agent DM reaches the
+// web-of-trust exemption (#3402): the node must be endorsed, the message
+// signature-verified, and the signer fingerprint must match the one bound
+// at endorsement time. Legacy endorsements (pre-#3402 bool entries) carry
+// no fingerprint and do not exempt until re-endorsed. Must hold h.mu.
+func (h *Hub) trustedExemptLocked(msg *Message) bool {
+	if !h.trustedPeers[msg.FromNodeID] {
+		return false
+	}
+	want, ok := h.trustedKeys[msg.FromNodeID]
+	if !ok || want == "" {
+		return false // legacy endorsement: not key-bound yet
+	}
+	return msg.Verified && msg.SignerFP == want
+}
+
+// persistPinsLocked writes the identity-pin table without blocking the
+// hub lock on disk I/O (#991 discipline): marshal under the lock, write out.
+func (h *Hub) persistPinsLocked() {
+	if h.store == nil || !h.pinsLoaded {
+		return
+	}
+	pins := make(map[string]string, len(h.keyPins))
+	for k, v := range h.keyPins {
+		pins[k] = v
+	}
+	dir := h.store.dir
+	go func() {
+		if err := SaveKeyPins(dir, pins); err != nil {
+			debug.Log("lanchat", "persist key pins: %v", err)
+		}
+	}()
+}
+
 // SetTrustedPeer endorses (or revokes) a peer NODE as trusted and persists
 // the change to trusted-peers.json. Unlike approval policies (keyed by nick,
 // which peers can change), trust is keyed by node_id — the stable device
@@ -1739,8 +1836,21 @@ func (h *Hub) SetTrustedPeer(nodeID string, trusted bool) {
 	}
 	if trusted {
 		h.trustedPeers[nodeID] = true
+		// #3402: bind the endorsed node's pinned key fingerprint so the
+		// strict-mode exemption only fires for signature-verified messages
+		// from that exact key. No pin yet (node never seen) leaves the
+		// endorsement without an exemption until seen + re-endorsed.
+		if h.trustedKeys == nil {
+			h.trustedKeys = map[string]string{}
+		}
+		if fp := h.keyPins[nodeID]; fp != "" {
+			h.trustedKeys[nodeID] = fp
+		} else {
+			delete(h.trustedKeys, nodeID)
+		}
 	} else {
 		delete(h.trustedPeers, nodeID)
+		delete(h.trustedKeys, nodeID)
 	}
 	dir := ""
 	if h.store != nil {
@@ -1754,9 +1864,9 @@ func (h *Hub) SetTrustedPeer(nodeID string, trusted bool) {
 	if dir != "" {
 		h.mu.RLock()
 		loaded := h.trustedPeersLoaded
-		peers := make(map[string]bool, len(h.trustedPeers))
-		for k, v := range h.trustedPeers {
-			peers[k] = v
+		peers := make(map[string]string, len(h.trustedPeers))
+		for k := range h.trustedPeers {
+			peers[k] = h.trustedKeys[k] // "" for legacy endorsements
 		}
 		h.mu.RUnlock()
 		if !loaded {
