@@ -722,6 +722,14 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
+	// r34 post-action effect verification: CDP click "success" only means
+	// the event dispatched — overlays, JS interception, or stale nodes all
+	// return ok with zero effect, the #1 source of cascading agent errors in
+	// 2026 computer-use postmortems. Capture state BEFORE clicking so the
+	// after-check has a baseline.
+	var urlBefore string
+	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlBefore))
+
 	actions := []chromedp.Action{
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 		chromedp.Click(selector, chromedp.ByQuery),
@@ -736,7 +744,28 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 
 	var urlAfter string
 	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlAfter))
-	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s", selector, urlAfter)}, nil
+	note := b.clickEffectNote(timeoutCtx, selector, urlBefore, urlAfter)
+	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s%s", selector, urlAfter, note)}, nil
+}
+
+// clickEffectNote verifies the click produced an observable effect (r34):
+// navigation, or a state-bearing attribute on the selector (checked /
+// aria-expanded / disabled). Absent both, it appends follow-up guidance so
+// the agent re-extracts instead of assuming the click landed. Guidance, not
+// error — SPA clicks legitimately change nothing addressable from here.
+func (b *Browser) clickEffectNote(timeoutCtx context.Context, selector, urlBefore, urlAfter string) string {
+	if urlAfter != urlBefore && urlAfter != "" {
+		return fmt.Sprintf("\neffect: confirmed (navigation to %s)", urlAfter)
+	}
+	var stateExpr string
+	// Query the node's state-bearing attributes; empty string means none.
+	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
+		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &stateExpr)); err == nil && stateExpr != "" {
+		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateExpr)
+	}
+	return "\n⚠ no observable effect: URL unchanged and selector carries no state attributes — " +
+		"follow up with action 'extract'/'screenshot' to confirm the click landed before building on it"
 }
 
 // doType clears an input field and types text into it.
@@ -1368,7 +1397,19 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 		return Result{IsError: true, Content: fmt.Sprintf("upload failed: %v", err)}, nil
 	}
 
-	return Result{Content: fmt.Sprintf("Uploaded file: %s into %s", absPath, selector)}, nil
+	// r34 post-action effect verification: SetUploadFiles "ok" does not mean
+	// the file landed — React controlled inputs and shadow DOM routinely clear
+	// .files right after. Read back the node state; zero files is a hard error.
+	var fileCount int
+	countExpr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);return e&&e.files?e.files.length:-1;})()`, selector)
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(countExpr, &fileCount)); err == nil && fileCount == 0 {
+		return Result{IsError: true, Content: fmt.Sprintf("upload had no effect: %s reports 0 selected files (controlled input cleared it?) — retry via a visible file chooser or verify the selector", selector)}, nil
+	}
+	countNote := ""
+	if fileCount > 0 {
+		countNote = fmt.Sprintf("\neffect: confirmed (%d file(s) selected)", fileCount)
+	}
+	return Result{Content: fmt.Sprintf("Uploaded file: %s into %s%s", absPath, selector, countNote)}, nil
 }
 
 // doCookies manages browser cookies. With no args, gets all cookies.
