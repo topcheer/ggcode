@@ -1844,6 +1844,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// it across turns let the first analyze of a new turn fire on the last
 	// turn's directory switches (#378).
 	a.attentionFragment.reset()
+	// #3403: spiral hallucination detector states its own per-run contract
+	// ("fires at most once per run / resets on new user turn") but reset()
+	// was never wired into this batch - warnings quota and topic registry
+	// accumulated for the whole Agent lifetime (TUI/desktop/IM agents are
+	// long-lived, one RunStream per user turn), causing cross-run stale
+	// topic false positives AND permanently spending the warnings=1 quota
+	// so later genuine spirals stayed silent. Compaction's partial reopen
+	// (guidance_compact_reset.go) remains valid mid-run.
+	if a.spiralState != nil {
+		a.spiralState.reset()
+	}
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.errStrategyLoop.reset()
