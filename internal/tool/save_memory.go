@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -153,7 +154,12 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		taintNote = fmt.Sprintf("SECURITY: this memory content matched a prompt-injection pattern (%q). It was saved but marked tainted - it will NOT be auto-inlined into future system prompts (index-only; readable via read_file, which wraps untrusted content). If this is a legitimate security writeup, that is expected; if you did not intend to store injection text, review the source that produced it.", pat)
 	}
 
-	if err := target.SaveMemoryWithSource(params.Key, params.Content, "save_memory:"+scopeLabel); err != nil {
+	// r29 actor-aware provenance: the WRITER identity rides ctx (injected
+	// at the loop boundary that knows it - sub-agent runs, swarm
+	// teammates). Empty = main agent / unwired path: source label stays
+	// exactly as before (byte-identical legacy behavior).
+	actor := util.ActorFromContext(ctx)
+	if err := target.SaveMemoryWithSourceActor(params.Key, params.Content, "save_memory:"+scopeLabel, actor); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
 	}
 	if t.afterSave != nil {
@@ -161,6 +167,13 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	msg := fmt.Sprintf("%s memory saved: %s", scopeLabel, params.Key)
+	if actor != "" {
+		// r29: make the provenance visible to the model too, not just the
+		// sidecar - a sub-agent that knows its writes are attributed
+		// writes more carefully, and the main agent sees the attribution
+		// when it reads this result.
+		msg += fmt.Sprintf("\n(provenance: recorded as %s)", actor)
+	}
 	if dupWarning != "" {
 		msg += "\n\n" + dupWarning
 	}
