@@ -62,7 +62,7 @@ func asModel(v any) (Model, bool) {
 }
 
 func TestIssue3391_GlobalApproveNeedsSecondKeypress(t *testing.T) {
-	m, _ := new3391Model(t)
+	m, skillPath := new3391Model(t)
 
 	// First [a]: arms the confirm, does NOT promote.
 	out, _ := m.knightPanelAction("staging", 0, "approve")
@@ -73,8 +73,8 @@ func TestIssue3391_GlobalApproveNeedsSecondKeypress(t *testing.T) {
 	if stagingCount(t, m1) != 1 {
 		t.Fatal("first [a] on a global staging skill must NOT promote")
 	}
-	if !strings.Contains(m1.knightPanel.message, "global") || m1.knightPanel.pendingGlobalApprove != 0 {
-		t.Fatalf("first [a] must arm the confirm: msg=%q pending=%d", m1.knightPanel.message, m1.knightPanel.pendingGlobalApprove)
+	if !strings.Contains(m1.knightPanel.message, "global") || m1.knightPanel.pendingGlobalApprovePath != skillPath {
+		t.Fatalf("first [a] must arm the confirm: msg=%q pending=%q", m1.knightPanel.message, m1.knightPanel.pendingGlobalApprovePath)
 	}
 
 	// Second [a] at the same index: executes.
@@ -86,13 +86,13 @@ func TestIssue3391_GlobalApproveNeedsSecondKeypress(t *testing.T) {
 	if stagingCount(t, m2) != 0 {
 		t.Fatal("second [a] must promote the global staging skill")
 	}
-	if m2.knightPanel.pendingGlobalApprove != -1 {
-		t.Fatalf("pending must reset after execution, got %d", m2.knightPanel.pendingGlobalApprove)
+	if m2.knightPanel.pendingGlobalApprovePath != "" {
+		t.Fatalf("pending must reset after execution, got %q", m2.knightPanel.pendingGlobalApprovePath)
 	}
 }
 
 func TestIssue3391_NavigationCancelsArmedConfirm(t *testing.T) {
-	m, _ := new3391Model(t)
+	m, skillPath := new3391Model(t)
 	m.knightPanel.focus = 1
 	// knightSections order: status, budget, queue, skills, staging, ...
 	m.knightPanel.selectedIndex = 4
@@ -101,13 +101,13 @@ func TestIssue3391_NavigationCancelsArmedConfirm(t *testing.T) {
 	// the same visible index re-arms instead of executing.
 	outArm, _ := m.knightPanelAction("staging", 0, "approve")
 	mArm, ok := asModel(outArm)
-	if !ok || mArm.knightPanel.pendingGlobalApprove != 0 {
+	if !ok || mArm.knightPanel.pendingGlobalApprovePath != skillPath {
 		t.Fatal("arm failed")
 	}
-	m.knightPanel.pendingGlobalApprove = 0
+	m.knightPanel.pendingGlobalApprovePath = skillPath
 	navModel, _ := m.updateKnightPanelRight(tea.KeyPressMsg{Code: tea.KeyDown})
 	nav, ok := asModel(navModel)
-	if !ok || nav.knightPanel.pendingGlobalApprove != -1 {
+	if !ok || nav.knightPanel.pendingGlobalApprovePath != "" {
 		t.Fatal("navigation must cancel the armed global confirm")
 	}
 

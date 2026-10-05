@@ -37,17 +37,21 @@ type knightPanelState struct {
 	scrollOffset  int
 	message       string
 	messageTime   time.Time
-	// pendingGlobalApprove (#3391): staging index awaiting the SECOND
-	// confirming keypress for a global-scope promote. -1 = none. A single
-	// [a] on a global staging skill must not take immediate effect - the
-	// command path enforces --confirm-global for the same reason
+	// pendingGlobalApprovePath (#3391, #3408): staging skill PATH awaiting
+	// the SECOND confirming keypress for a global-scope promote. "" = none.
+	// A single [a] on a global staging skill must not take immediate effect -
+	// the command path enforces --confirm-global for the same reason
 	// (knight_commands.go: "a warning that is followed by immediate effect
 	// in the same keypress is not a confirmation gate").
-	pendingGlobalApprove int
+	// #3408: keyed by skill Path, NOT index - the staging list is re-read on
+	// every keypress, so a stored index can silently point at a different
+	// skill after reject/promote by another surface; a Path match only
+	// confirms the exact skill the user saw when arming.
+	pendingGlobalApprovePath string
 }
 
 func newKnightPanel() *knightPanelState {
-	return &knightPanelState{pendingGlobalApprove: -1}
+	return &knightPanelState{}
 }
 
 // ---- open / close ----
@@ -77,6 +81,8 @@ func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "q", "esc":
+		// #3408: leaving the confirm context cancels the armed state.
+		kp.pendingGlobalApprovePath = ""
 		if kp.focus == 1 {
 			kp.focus = 0
 			return m, nil
@@ -84,6 +90,8 @@ func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.closeKnightPanel()
 		return m, nil
 	case "tab":
+		// #3408: focus switch interrupts the confirm context.
+		kp.pendingGlobalApprovePath = ""
 		if kp.focus == 0 {
 			kp.focus = 1
 			kp.detailIndex = 0
@@ -101,6 +109,9 @@ func (m *Model) updateKnightPanel(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) updateKnightPanelLeft(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	kp := m.knightPanel
+	// #3408: any left-panel interaction (navigation or section switch) is a
+	// context change - the armed global confirm must not survive it.
+	kp.pendingGlobalApprovePath = ""
 	total := len(knightSections)
 
 	switch msg.String() {
@@ -126,27 +137,33 @@ func (m *Model) updateKnightPanelRight(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 
 	switch msg.String() {
 	case "up", "k":
-		kp.pendingGlobalApprove = -1 // #3391: navigation cancels the armed confirm
+		kp.pendingGlobalApprovePath = "" // #3391: navigation cancels the armed confirm
 		if kp.detailIndex > 0 {
 			kp.detailIndex--
 		}
 	case "down", "j":
-		kp.pendingGlobalApprove = -1 // #3391: navigation cancels the armed confirm
+		kp.pendingGlobalApprovePath = "" // #3391: navigation cancels the armed confirm
 		if kp.detailIndex < maxItems-1 {
 			kp.detailIndex++
 		}
 	case "enter":
-		kp.pendingGlobalApprove = -1 // #3391: section switch cancels the armed confirm
+		kp.pendingGlobalApprovePath = "" // #3391: section switch cancels the armed confirm
 		return m.knightPanelAction(section, kp.detailIndex, "default")
 	case "a":
 		return m.knightPanelAction(section, kp.detailIndex, "approve")
 	case "r":
+		// #3408: reject mutates the staging list - the armed confirm must not
+		// survive into the re-indexed list.
+		kp.pendingGlobalApprovePath = ""
 		return m.knightPanelAction(section, kp.detailIndex, "reject")
 	case "f":
+		kp.pendingGlobalApprovePath = "" // #3408: non-confirm keypress cancels
 		return m.knightPanelAction(section, kp.detailIndex, "freeze")
 	case "u":
+		kp.pendingGlobalApprovePath = "" // #3408: non-confirm keypress cancels
 		return m.knightPanelAction(section, kp.detailIndex, "unfreeze")
 	case "d":
+		kp.pendingGlobalApprovePath = "" // #3408: non-confirm keypress cancels
 		return m.knightPanelAction(section, kp.detailIndex, "delete")
 	}
 	return m, nil
@@ -201,19 +218,25 @@ func (m *Model) knightPanelAction(section string, idx int, action string) (tea.M
 			// #3391: global-scope promote needs a second confirming keypress,
 			// mirroring the command path's --confirm-global gate. Project
 			// scope (and any non-global value) stays single-key.
-			if s.Scope == "global" && kp.pendingGlobalApprove != idx {
-				kp.pendingGlobalApprove = idx
+			// #3408: match by skill Path - the index into the re-read list
+			// is not stable across keypresses.
+			if s.Scope == "global" && kp.pendingGlobalApprovePath != s.Path {
+				kp.pendingGlobalApprovePath = s.Path
 				kp.message = "⚠ global scope: press [a] again to confirm promote (injects into EVERY project's system prompt)"
 				kp.messageTime = time.Now()
 				return m, nil
 			}
-			kp.pendingGlobalApprove = -1
+			kp.pendingGlobalApprovePath = ""
 			if err := m.knight.PromoteStagingByPath(s.Path); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
 				kp.message = fmt.Sprintf("✅ Approved staging skill: %s", ref)
 			}
 		case "reject":
+			// #3408: rejecting a (possibly different) skill invalidates the
+			// armed confirm - it was armed against a list state that no
+			// longer holds.
+			kp.pendingGlobalApprovePath = ""
 			if err := m.knight.RejectStagingByPath(s.Path); err != nil {
 				kp.message = fmt.Sprintf("Error: %v", err)
 			} else {
