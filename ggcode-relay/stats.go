@@ -139,13 +139,6 @@ func (s *relayStats) recordPersistResult(ok bool) {
 	atomic.AddUint64(&s.persistErrors, 1)
 }
 
-func (s *relayStats) recordClientBroadcast(deliveries int) {
-	if deliveries <= 0 {
-		return
-	}
-	atomic.AddUint64(&s.clientBroadcastDeliveries, uint64(deliveries))
-}
-
 func (s *relayStats) recordForwardToServer() {
 	atomic.AddUint64(&s.serverForwards, 1)
 }
@@ -173,14 +166,6 @@ func (s *relayStats) recordActiveSession(changed bool, hydratedEvents int) {
 		atomic.AddUint64(&s.activeSessionHydrates, 1)
 		atomic.AddUint64(&s.hydratedEvents, uint64(hydratedEvents))
 	}
-}
-
-func (s *relayStats) recordRoomStoreResult(hit bool) {
-	if hit {
-		atomic.AddUint64(&s.roomStoreHits, 1)
-		return
-	}
-	atomic.AddUint64(&s.roomStoreMisses, 1)
 }
 
 func (s *relayStats) recordRoomDestroy() {
