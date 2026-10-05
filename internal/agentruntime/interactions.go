@@ -215,7 +215,12 @@ func (b *InteractionBroker) CancelAll() ([]ApprovalRequest, []AskUserRequest) {
 	for _, waiter := range approvals {
 		approvalRequests = append(approvalRequests, waiter.request)
 		select {
-		case waiter.resp <- permission.Deny:
+		// #3376: a stopped/cancelled run is NOT a user rejection. CancelAll
+		// fires on desktop stop / run interruption - push the #3370/#3372
+		// non-decision variant so audit records ask_timeout and the approval
+		// memory + ask throttle stay clean (the askUser path below already
+		// carries an explicit cancellation response).
+		case waiter.resp <- permission.Cancelled:
 		default:
 		}
 	}
