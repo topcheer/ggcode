@@ -375,24 +375,46 @@ func parseCargoToml(content string) map[string]string {
 // isVulnerableVersion checks if a version string falls below the first
 // patched version (maxSafeV). Anything strictly less than maxSafeV is vulnerable.
 func isVulnerableVersion(version string, vuln vulnEntry) bool {
+	// #3360: pseudo-versions (commit pins like v0.0.0-20250101120000-abcdef123456
+	// or base-tag pins like v0.30.0-0.20241220...-hash) cannot be judged by
+	// semver: the commit may already contain the fix regardless of the base tag,
+	// and v0.0.0- pseudo-versions previously truncated to "0.0.0" and ALWAYS
+	// reported a known Critical CVE. Skip them - a pinned commit is auditable
+	// by hash, not by version comparison.
+	if isGoPseudoVersion(version) {
+		return false
+	}
 	cleanVer := stripVersionPrefix(version)
 	return compareVersions(cleanVer, vuln.maxSafeV) < 0
 }
 
-// stripVersionPrefix removes "v" prefix, commit hashes, and other decorations.
+// isGoPseudoVersion reports whether a go.mod version is a pseudo-version
+// (commit pin): either no base tag (v0.0.0-timestamp-hash) or a base-tag
+// pin (vX.Y.Z-<N>.timestamp.hash). The distinguishing mark is the
+// 14-digit UTC timestamp segment.
+var goPseudoTimestampRe = regexp.MustCompile(`-\d{0,3}\.?\d{14}-`)
+
+func isGoPseudoVersion(version string) bool {
+	return goPseudoTimestampRe.MatchString(version)
+}
+
+// stripVersionPrefix removes the leading "v" decoration only. Prerelease
+// suffixes (-rc1, -beta) are semantic and stay - compareVersions orders
+// them (#3360).
 func stripVersionPrefix(version string) string {
-	version = strings.TrimPrefix(version, "v")
-	if idx := strings.Index(version, "-"); idx > 0 {
-		version = version[:idx]
-	}
-	return version
+	return strings.TrimPrefix(version, "v")
 }
 
 // compareVersions compares two semver-like version strings.
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.
+// #3360: semver prerelease ordering - a prerelease sorts BEFORE its release
+// (0.31.0-rc1 < 0.31.0), so an rc of an unpatched line is NOT "safe".
 func compareVersions(a, b string) int {
-	partsA := strings.Split(a, ".")
-	partsB := strings.Split(b, ".")
+	baseA, preA := splitPrerelease(a)
+	baseB, preB := splitPrerelease(b)
+
+	partsA := strings.Split(baseA, ".")
+	partsB := strings.Split(baseB, ".")
 
 	maxLen := len(partsA)
 	if len(partsB) > maxLen {
@@ -414,7 +436,32 @@ func compareVersions(a, b string) int {
 			return 1
 		}
 	}
+	// #3360: numeric bases equal - semver orders the plain release ABOVE any
+	// prerelease of it (0.31.0 > 0.31.0-rc1), and two prereleases compare
+	// lexically. Without this, v0.31.0-rc1 truncated to "0.31.0" and read as
+	// already-patched (false negative).
+	switch {
+	case preA == "" && preB == "":
+		return 0
+	case preA == "":
+		return 1
+	case preB == "":
+		return -1
+	case preA < preB:
+		return -1
+	case preA > preB:
+		return 1
+	}
 	return 0
+}
+
+// splitPrerelease splits a semver-like string into its numeric base and
+// prerelease suffix ("0.31.0-rc1" -> "0.31.0", "rc1").
+func splitPrerelease(s string) (base, pre string) {
+	if idx := strings.Index(s, "-"); idx >= 0 {
+		return s[:idx], s[idx+1:]
+	}
+	return s, ""
 }
 
 // parseVersionPart extracts the numeric portion of a version component.
