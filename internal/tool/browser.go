@@ -729,6 +729,7 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	// after-check has a baseline.
 	var urlBefore string
 	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlBefore))
+	stateBefore := b.evaluateClickState(timeoutCtx, selector)
 
 	actions := []chromedp.Action{
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
@@ -744,16 +745,32 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 
 	var urlAfter string
 	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlAfter))
-	note := b.clickEffectNote(timeoutCtx, selector, urlBefore, urlAfter)
+	stateAfter := b.evaluateClickState(timeoutCtx, selector)
+	note := clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter)
 	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s%s", selector, urlAfter, note)}, nil
 }
 
+// evaluateClickState reads the selector's state-bearing attributes
+// (checked / selected / aria-expanded / aria-checked). Empty string means
+// none present (or evaluation failed - conservative). Extracted so doClick
+// can capture the same reading before AND after the click (#3407).
+func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string) string {
+	var stateExpr string
+	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
+		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &stateExpr)); err != nil {
+		return ""
+	}
+	return stateExpr
+}
+
 // clickEffectNote verifies the click produced an observable effect (r34):
-// navigation, or a state-bearing attribute on the selector (checked /
-// aria-expanded / disabled). Absent both, it appends follow-up guidance so
-// the agent re-extracts instead of assuming the click landed. Guidance, not
-// error — SPA clicks legitimately change nothing addressable from here.
-func (b *Browser) clickEffectNote(timeoutCtx context.Context, selector, urlBefore, urlAfter string) string {
+// navigation, or a CHANGE in the selector's state-bearing attributes
+// (checked / aria-expanded / aria-checked) versus the pre-click baseline
+// (#3407). Absent both, it appends follow-up guidance so the agent
+// re-extracts instead of assuming the click landed. Guidance, not error —
+// SPA clicks legitimately change nothing addressable from here.
+func clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter string) string {
 	// r34 hardening (#3398 review, verdict 5990361368): an empty baseline
 	// (Location failed before the click) must never count as navigation -
 	// urlBefore=="" && urlAfter!="" would falsely emit "effect: confirmed"
@@ -761,14 +778,16 @@ func (b *Browser) clickEffectNote(timeoutCtx context.Context, selector, urlBefor
 	if urlBefore != "" && urlAfter != urlBefore && urlAfter != "" {
 		return fmt.Sprintf("\neffect: confirmed (navigation to %s)", urlAfter)
 	}
-	var stateExpr string
-	// Query the node's state-bearing attributes; empty string means none.
-	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
-		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
-	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &stateExpr)); err == nil && stateExpr != "" {
-		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateExpr)
+	// #3407: state confirmation requires a CHANGE versus the baseline, not
+	// mere attribute presence. aria-expanded="false" is a truthy non-empty
+	// STRING in the JS || chain, so a collapsed menu reported "confirmed"
+	// even when the click changed nothing - unconfirmed by zero evidence,
+	// the exact inversion of the #3398 discipline. Comparing against
+	// stateBefore also keeps legitimate collapses (true->false) confirmed.
+	if stateAfter != "" && stateAfter != stateBefore {
+		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateAfter)
 	}
-	return "\n⚠ no observable effect: URL unchanged and selector carries no state attributes — " +
+	return "\n⚠ no observable effect: URL unchanged and selector state unchanged — " +
 		"follow up with action 'extract'/'screenshot' to confirm the click landed before building on it"
 }
 
