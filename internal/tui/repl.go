@@ -1166,7 +1166,8 @@ func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			return permission.Deny
+			// #3370: run cancelled while awaiting the user - not a denial.
+			return permission.DecisionFromContext(ctx.Err())
 		}
 	})
 }
@@ -1562,7 +1563,8 @@ func (r *REPL) Run() error {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			return permission.Deny
+			// #3370: TUI exit / run cancel while awaiting the user - not a denial.
+			return permission.DecisionFromContext(ctx.Err())
 		}
 	})
 	traceMark("wire approval handler")

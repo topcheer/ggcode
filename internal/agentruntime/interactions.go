@@ -57,7 +57,10 @@ func (b *InteractionBroker) AwaitApproval(ctx context.Context, req ApprovalReque
 			return decision
 		default:
 		}
-		return permission.Deny
+		// #3370: run cancelled/expired without a user decision - report the
+		// non-decision outcome instead of a bare Deny so downstream audit,
+		// approval memory and the ask throttle do not blame the user.
+		return permission.DecisionFromContext(ctx.Err())
 	}
 }
 

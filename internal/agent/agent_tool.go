@@ -119,6 +119,23 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 						IsError: true,
 					}
 				}
+				if resp.IsNonDecision() {
+					// #3370: timeout/cancellation - fail-closed, but the user made
+					// NO decision: audit as ask_timeout, skip approval-memory (a
+					// non-decision must not enter the learning sample) and skip the
+					// ask throttle (two timeouts must not suppress later asks with
+					// a false "denied twice" message).
+					note := "approval timed out (no user response)"
+					if resp == permission.Cancelled {
+						note = "approval cancelled (run interrupted or request displaced)"
+					}
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusAskTimeout, note, 0, "")
+					debug.Log("approval-gate", "ask ended without user decision for %s (%v)", tc.Name, resp)
+					return tool.Result{
+						Content: fmt.Sprintf("Approval for tool %q ended without a user decision (%s). The tool was not executed. If this step is still needed, ask again when the user is available; do not treat this as a rejection of the approach.", tc.Name, resp),
+						IsError: true,
+					}
+				}
 				// User approved - record for future auto-approval and audit the
 				// approval decision (ATR-2026-00118 / ESCALATE.md trail).
 				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserApproved, "", 0, "")

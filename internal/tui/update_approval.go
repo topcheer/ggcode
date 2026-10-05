@@ -35,7 +35,9 @@ func (m Model) handleApprovalMsg(msg ApprovalMsg) (Model, tea.Cmd) {
 			m.tunnelPendingApprovalID = ""
 		}
 		safego.Go("tui.model.displaceApproval", func() {
-			stale.Response <- permission.Deny
+			// #3370: displaced by a newer approval request - the user never
+			// decided on this one, so report a cancellation, not a denial.
+			stale.Response <- permission.Cancelled
 		})
 	}
 	if m.mode == permission.AutopilotMode {
