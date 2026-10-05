@@ -45,6 +45,13 @@ const (
 	StatusError     = "error"
 	StatusCancelled = "cancelled"
 	StatusInvalid   = "invalid" // rejected before execution (e.g. preflight)
+	// Approval-decision statuses (ATR-2026-00118 / ESCALATE.md): the human
+	// gate itself is auditable - who approved what when. The local CLI has a
+	// single approver (the interactive user), so approver identity is the
+	// session's user; timeout covers an Ask that expired without an answer.
+	StatusUserApproved = "approved"
+	StatusUserDenied   = "user_denied"
+	StatusAskTimeout   = "ask_timeout"
 )
 
 // GenesisPrevHash is the prev_hash of the first entry in a chain.

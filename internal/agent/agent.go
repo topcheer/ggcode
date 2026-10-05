@@ -303,6 +303,7 @@ type Agent struct {
 	userEditObs                  *UserEditObserver          // r444: learns rules from user rewrites of agent output (turn-gap mtime detection)
 	ruleInjectCount              map[string]int             // per-rule injection counter for dedup (caps repetitive hints)
 	approvalMemory               *permission.ApprovalMemory // session-level learned approval patterns (auto-approve after N repeats)
+	askThrottle                  *permission.AskThrottle    // approval-fatigue circuit breaker (ATR-2026-00118 pattern 1)
 	fileChurn                    *churnState                // file churn detection (invalidated assumption awareness)
 	editOscillation              *oscillationState          // edit oscillation detection (semantic back-and-forth awareness)
 	silentError                  *silentErrorState          // silent error advancement detection (unaddressed error proceeding)
@@ -447,6 +448,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		shellNativeHint:        newShellNativeHintState(),
 		monorepoScoper:         newMonorepoScoperState(),
 		approvalMemory:         permission.NewApprovalMemory(),
+		askThrottle:            permission.NewAskThrottle(),
 		crossDetectorConsensus: newConsensusState(),
 		taintInfluence:         newTaintInfluenceState(),
 		perfBaseline:           newPerfBaselineState(),
