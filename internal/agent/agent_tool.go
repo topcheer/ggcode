@@ -276,6 +276,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res := a.executeToolInner(ctx, tc)
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
 			auditInvariantWarn(tc.Name, v.Inv.ID)
 			return res
@@ -283,6 +284,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	}
 	res := a.executeToolInner(ctx, tc)
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+	a.appendCrashSidecar(tc.Name, string(tc.Arguments))
 	// r454: register successful write-class products for the
 	// created_by_run predicate ("only delete what this run created").
 	// Operation granularity (#3254): a batch file_ops call registers every
