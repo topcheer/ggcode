@@ -667,7 +667,11 @@ func (m *Model) renderSubAgentFollowStrip() string {
 			b.WriteString(chip)
 		}
 
-		if i < maxShow-1 {
+		// #3431: i is the GLOBAL slot index; the last RENDERED position is
+		// start+maxShow-1 once the window slides (start>0). Comparing against
+		// maxShow-1 alone only matched the head window (start=0), leaving the
+		// tail chips of a slid window glued together.
+		if i < start+maxShow-1 {
 			b.WriteString("  │  ")
 		}
 	}
