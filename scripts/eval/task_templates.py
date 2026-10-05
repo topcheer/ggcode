@@ -7,6 +7,18 @@ Task types:
   - code_edit: agent writes/modifies code
   - test_debug: agent fixes bugs found by tests
   - docs: agent writes/fixes documentation
+
+Fail-closed verification (arXiv:2610.02142): a task may declare an optional
+`verify` block; when present, run_eval.py additionally requires it to pass
+before success is recorded. Supported assertions (combinable):
+  "verify": {
+      "artifact": "relative/path",          # file must exist
+      "content_contains": ["substr", ...],  # requires "artifact"
+      "command": ["bash", "-c", "..."],     # must exit 0 (60s timeout)
+  }
+Tasks without a verify block are graded "text_only" and explicitly flagged
+as such in the CSV (verify_status column) - they never silently masquerade
+as artifact-verified success.
 """
 
 TASKS = [
