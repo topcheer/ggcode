@@ -31,10 +31,6 @@ const (
 
 var ErrAlreadyUpToDate = errors.New("already up to date")
 
-// ErrNeedsElevation indicates the target directory requires elevated
-// privileges. On Windows the caller should relaunch the helper with UAC.
-var ErrNeedsElevation = errors.New("update requires elevation")
-
 type Service struct {
 	CurrentVersion string
 	ExecPath       string
@@ -43,7 +39,6 @@ type Service struct {
 	WrapperKind    string
 	CheckTTL       time.Duration
 	HTTPClient     *http.Client
-	needsElevation bool // set by checkWritable; helper should launch elevated
 }
 
 type CheckResult struct {
@@ -129,11 +124,10 @@ func (s *Service) Prepare(ctx context.Context, resumeID string) (PreparedUpdate,
 	// Pre-flight: verify write permissions BEFORE downloading.
 	// On Windows, the target binary dir and the helper staging dir must
 	// both be writable, otherwise the update will fail after a large download.
-	needsElevation, err := s.checkWritable()
+	_, err = s.checkWritable()
 	if err != nil {
 		return PreparedUpdate{}, err
 	}
-	s.needsElevation = needsElevation
 
 	downloaded, err := install.DownloadBinary(ctx, install.Options{
 		Version:    check.LatestVersion,
@@ -351,18 +345,6 @@ func RunHelper(manifestPath string) error {
 
 	cmd := restartCommand(manifest)
 	return cmd.Start()
-}
-
-func (s *Service) helperCommand(prepared PreparedUpdate) *exec.Cmd {
-	cmd := exec.Command(prepared.HelperPath, "update-helper", "--manifest", prepared.ManifestPath)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// Keep the original terminal attached so the restarted TUI can reacquire it
-	// after the helper swaps binaries and spawns the fresh process.
-	cmd.Stdin = os.Stdin
-	cmd.Dir = firstNonEmpty(s.WorkDir, mustGetwd())
-	cmd.Env = os.Environ()
-	return cmd
 }
 
 func restartCommand(manifest HelperManifest) *exec.Cmd {
