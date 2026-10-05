@@ -114,6 +114,57 @@ func TestTamperMiddleDetected(t *testing.T) {
 	}
 }
 
+// r33: A2A handoff attribution (Peer/TaskID) is sealed into the chain hash -
+// post-hoc anonymous-izing a remote submission (rewriting the peer) must trip
+// Verify, and mixed chains (empty-field local entries alongside attributed
+// remote ones) must stay clean (conditional-append chain compatibility).
+func TestPeerTaskIDAttributionSealedIntoChain(t *testing.T) {
+	l, path := mkLedger(t)
+	// Local action (no attribution), then a remote A2A handoff, then local.
+	if _, err := l.Append(ev("read_file", StatusOK)); err != nil {
+		t.Fatalf("Append local: %v", err)
+	}
+	remote := ev("a2a.task.received", StatusOK)
+	remote.Peer = "peer-node-1"
+	remote.TaskID = "task-42"
+	if _, err := l.Append(remote); err != nil {
+		t.Fatalf("Append remote: %v", err)
+	}
+	if _, err := l.Append(ev("run_command", StatusOK)); err != nil {
+		t.Fatalf("Append local2: %v", err)
+	}
+
+	// Mixed chain verifies clean before tampering.
+	if rep, err := Verify(path); err != nil || !rep.OK() {
+		t.Fatalf("mixed chain should verify clean: err=%v rep=%+v", err, rep)
+	}
+
+	l.Close()
+	data, _ := os.ReadFile(path)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	// Strip the peer attribution from the remote entry (entry 2): an
+	// attacker trying to hide which agent submitted the task.
+	if !strings.Contains(lines[1], `"peer":"peer-node-1"`) {
+		t.Fatalf("entry 2 lacks peer attribution: %s", lines[1])
+	}
+	lines[1] = strings.Replace(lines[1], `"peer":"peer-node-1",`, "", 1)
+	if strings.Contains(lines[1], `"peer"`) {
+		t.Fatalf("peer field not fully stripped: %s", lines[1])
+	}
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+
+	rep, err := Verify(path)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.FirstBreak == nil {
+		t.Fatal("expected a break after stripping the peer attribution")
+	}
+	if rep.FirstBreak.Seq != 2 {
+		t.Errorf("break at seq %d, want 2", rep.FirstBreak.Seq)
+	}
+}
+
 // Reordering two entries breaks the prev-hash linkage.
 func TestReorderDetected(t *testing.T) {
 	l, path := mkLedger(t)

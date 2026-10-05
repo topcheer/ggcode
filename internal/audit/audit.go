@@ -284,6 +284,8 @@ func (l *Ledger) Append(e Event) (Entry, error) {
 		DurationMS:  e.DurationMS,
 		Err:         e.Err,
 		InvariantID: e.InvariantID,
+		Peer:        e.Peer,
+		TaskID:      e.TaskID,
 		PrevHash:    l.prev,
 	}
 	entry.Hash = hashEntry(entry)
