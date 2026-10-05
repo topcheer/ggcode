@@ -57,6 +57,12 @@ type RunCommand struct {
 	// warning when one denial source fires repeatedly - the behavioral
 	// fingerprint of sandbox probing. Nil-safe: unwired = no detection.
 	SecLedger *SecurityLedger
+	// RiskLedger (r28, DreamGuard-inspired) is the ALLOWED-side dual of
+	// SecLedger: every gate-PASSED dangerous-classified command
+	// accumulates session-level risk, and a crossing escalates a notice
+	// onto the result - individually-permitted steps drifting toward a
+	// hazardous state. Nil-safe: unwired = no detection.
+	RiskLedger *AllowedRiskLedger
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -251,6 +257,15 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		args.Command = cleanedCmd
 	}
 	preWarning := preWarn
+	// r28: the gate PASSED - the allowed-side dual of SecLedger.Record on
+	// the blocked branch above. If the command is dangerous-classified its
+	// risk accumulates on the session ledger; a threshold crossing rides
+	// the result as a prefix notice (preWarning prefixes every main-path
+	// return below).
+	t.RiskLedger.Accumulate(args.Command)
+	if esc := t.RiskLedger.Escalation(); esc != "" {
+		preWarning += esc + "\n\n"
+	}
 
 	if args.Timeout <= 0 {
 		args.Timeout = int(defaultCommandTimeout / time.Second)
@@ -643,6 +658,8 @@ func (t RunCommand) Clone() Tool {
 		// skill / swarm / desktop); dropping the pointer silently blinded
 		// sandbox-probe detection for every sub-agent's run_command calls.
 		SecLedger: t.SecLedger,
+		// r28: same survival requirement for the allowed-risk dual.
+		RiskLedger: t.RiskLedger,
 	}
 }
 

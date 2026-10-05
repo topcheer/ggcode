@@ -20,6 +20,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	// Session-level security ledger (sa-216): shared by run_command so
 	// denials aggregate across every call in this agent session.
 	secLedger := &SecurityLedger{}
+	riskLedger := NewAllowedRiskLedger() // r28: allowed-risk dual, shared by run_command + start_command
 	fileGuard := NewFileGuard(protectedPaths)
 	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
 
@@ -92,8 +93,8 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
-		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger},
-		StartCommandTool{Manager: jobManager, Policy: policy, SecLedger: secLedger}, // #3294: background starts join the session denial ledger
+		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger, RiskLedger: riskLedger},
+		StartCommandTool{Manager: jobManager, Policy: policy, SecLedger: secLedger, RiskLedger: riskLedger}, // #3294: background starts join the session denial ledger
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
 		StopCommandTool{Manager: jobManager},
