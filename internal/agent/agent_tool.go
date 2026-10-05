@@ -368,6 +368,14 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 				wf.recordCompletion(ot.Target)
 			}
 		}
+		// #3414: successful commands often produce the declared artifacts
+		// themselves (go test -coverprofile=..., make bin/*). Exec products
+		// never flow through invariantOpTargets, so block mode deadlocked
+		// the flagship spec shape on a step that had actually completed.
+		// Probe the disk for fresh artifacts after every command success.
+		if tc.Name == "run_command" {
+			wf.probeArtifactsOnDisk()
+		}
 	}
 	return res
 }
