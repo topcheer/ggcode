@@ -226,6 +226,7 @@ type Agent struct {
 	oversightTriage              *oversightTriageState      // r397: novel-vs-routine triage for human review attention
 	autonomyDial                 *autonomyDialState         // r407: advisory progressive-autonomy dial
 	commitHint                   *commitHintState           // post-completion commit reminder for uncommitted changes
+	docDrift                     *docDriftState             // r465: documentation drift advisory (code-heavy run, zero doc edits)
 	draftPRHint                  *draftPRHintState          // post-completion draft-PR reminder for unpushed feature branches (sa-223)
 	verifyRegression             *verifyRegressionState     // cross-run error diff: detects correction-induced regressions
 	selfCorrectionGate           *selfCorrectionGateState   // EIR/ECR stability gate: detects net-negative self-correction loops
@@ -468,6 +469,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		scopeNarrow:            newScopeNarrowState(),
 		complexityGate:         newComplexityGateState(),
 		changeReconcile:        newChangeReconcileState(),
+		docDrift:               newDocDriftState(),
 		claimVerify:            newClaimVerifyState(),
 		permDenyStreak:         newPermDenyStreakState(),
 		diffSummary:            newDiffSummaryState(),
@@ -1994,6 +1996,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.crossFileImpact.reset()
 	a.diffSummary.reset()
 	a.commitHint.reset()
+	a.docDrift.reset()
 	a.draftPRHint.reset()
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		a.changeReconcile.capturePreRunState(workingDir)
@@ -3417,6 +3420,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{
 						Type: "text",
 						Text: commitHintMsg,
+					}},
+				})
+				continue
+			}
+			// r465 doc-drift advisory: a code-heavy run that touched no docs
+			// gets one reminder about the documentation-update skill and the
+			// leaf-to-root ordering. Advisory, one shot per run.
+			if docDriftMsg := a.checkDocDriftGate(runStats); docDriftMsg != "" {
+				debug.Log("agent", "Iteration %d: doc-drift advisory injected", i+1)
+				a.contextManager.Add(provider.Message{
+					Role: "user",
+					Content: []provider.ContentBlock{{
+						Type: "text",
+						Text: docDriftMsg,
 					}},
 				})
 				continue
