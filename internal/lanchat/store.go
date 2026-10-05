@@ -206,25 +206,78 @@ func LoadTeam(dir string) (string, error) {
 // <dir>/trusted-peers.json. Missing file returns an empty map + nil error;
 // a corrupt file returns the parse error so callers can block write-back
 // (same discipline as approval-policies.json, #990).
-func LoadTrustedPeers(dir string) (map[string]bool, error) {
+//
+// #3402 (TUFU): values are key fingerprints ("fp:<hex>"). Legacy bool
+// entries deserialize as "" - endorsed, but not key-bound (the strict-mode
+// exemption requires re-endorsement).
+func LoadTrustedPeers(dir string) (map[string]string, error) {
 	data, err := os.ReadFile(filepath.Join(dir, "trusted-peers.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]bool{}, nil
+			return map[string]string{}, nil
 		}
 		return nil, err
 	}
-	var peers map[string]bool
-	if err := json.Unmarshal(data, &peers); err != nil {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
 		debug.Log("lanchat", "trusted-peers.json in %s is corrupt: %v", dir, err)
 		return nil, err
+	}
+	peers := make(map[string]string, len(raw))
+	for id, v := range raw {
+		var fp string
+		if err := json.Unmarshal(v, &fp); err == nil && fp != "" && fp != "true" {
+			peers[id] = fp
+			continue
+		}
+		peers[id] = "" // legacy bool endorsement
 	}
 	return peers, nil
 }
 
+// LoadKeyPins reads the TUFU first-sight identity pins from
+// <dir>/node-key-pins.json (node_id -> key fingerprint).
+func LoadKeyPins(dir string) (map[string]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "node-key-pins.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	var pins map[string]string
+	if err := json.Unmarshal(data, &pins); err != nil {
+		debug.Log("lanchat", "node-key-pins.json in %s is corrupt: %v", dir, err)
+		return nil, err
+	}
+	return pins, nil
+}
+
+// SaveKeyPins persists the identity-pin table with a tmp+rename write
+// (same atomicity as SaveTrustedPeers).
+func SaveKeyPins(dir string, pins map[string]string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(pins, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "node-key-pins.json")
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 // SaveTrustedPeers persists the trusted-peer set to <dir>/trusted-peers.json
 // with a tmp+rename atomic write (crash-safe, mirrors SaveApprovalPolicies).
-func SaveTrustedPeers(dir string, peers map[string]bool) error {
+func SaveTrustedPeers(dir string, peers map[string]string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

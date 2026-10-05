@@ -27,22 +27,29 @@ func TestStrictModeUntrustedAgentDMRequiresApproval(t *testing.T) {
 }
 
 func TestStrictModeTrustedPeerAgentDMAutoApproved(t *testing.T) {
+	// #3402 (TUFU): the r32 unsigned-endorsement flow no longer exempts -
+	// the exemption requires a signature-verified DM whose key fingerprint
+	// matches the one bound at endorsement time (see zz_issue3402_test.go
+	// for the full chain probes). This test pins the happy path.
 	h := newIssue986Hub(t, "daemon")
 	h.SetRequireAgentApproval(true)
+	key, err := LoadOrCreateNodeKey(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateNodeKey: %v", err)
+	}
+	first := Message{ID: "m1", FromNodeID: "friend-node", FromRole: RoleAgent, FromNick: "FriendAgent",
+		ToNodeID: "self-node", ToRole: RoleAgent, Content: "pin me", Timestamp: 1700000000000}
+	signMessage(&first, key)
+	h.HandleIncomingMessage(first) // first sight: pins the key
 	h.SetTrustedPeer("friend-node", true)
 	if !h.IsTrustedPeer("friend-node") {
 		t.Fatal("SetTrustedPeer(true) should endorse the node")
 	}
-	h.HandleIncomingMessage(Message{
-		ID:         "m2",
-		FromNodeID: "friend-node",
-		FromRole:   RoleAgent,
-		FromNick:   "FriendAgent",
-		ToNodeID:   "self-node",
-		ToRole:     RoleAgent,
-		Content:    "run this",
-	})
-	if pending := h.PendingApprovals(); len(pending) != 0 {
+	second := Message{ID: "m2", FromNodeID: "friend-node", FromRole: RoleAgent, FromNick: "FriendAgent",
+		ToNodeID: "self-node", ToRole: RoleAgent, Content: "run this", Timestamp: 1700000000001}
+	signMessage(&second, key)
+	h.HandleIncomingMessage(second)
+	if pending := h.PendingApprovals(); len(pending) != 1 { // m1 queued pre-endorsement
 		t.Fatalf("strict mode trusted peer agent DM should auto-approve, got %d pending", len(pending))
 	}
 }
