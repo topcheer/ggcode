@@ -206,6 +206,44 @@ func irrevClassifyTool(toolName, args string) int {
 			return irrevTierHigh
 		}
 		return irrevTierLow
+
+	// CUA tiering (appscale 2026 production architecture, layer 2 "action
+	// gating"): the three UI-control tools carry a destructive/observable
+	// sub-action in their schema "action" enum field, but had no case here,
+	// so quit_app / uninstall / evaluate fell to the default branch - the
+	// #1579-A class (sub-action encoded in a schema field, static grouping
+	// by tool name never consumes it) applied to the UI surface.
+	// Observation actions -> None (same FP-avoidance rationale as the
+	// read-only dedicated tools above, sa-28); reversible interaction
+	// (click/type/scroll...) -> Low; external side effects
+	// (evaluate/upload/install) -> Medium; no-recovery actions
+	// (quit_app drops unsaved state, uninstall removes the app) -> High.
+	case "desktop_control", "browser", "mobile_device":
+		var a struct {
+			Action string `json:"action"`
+		}
+		if json.Unmarshal([]byte(args), &a) != nil {
+			return irrevTierLow
+		}
+		switch strings.ToLower(a.Action) {
+		// Observation only (desktop AX tree reads, browser state, device
+		// introspection) - no UI state is mutated.
+		case "snapshot_ui", "find_element", "list_windows", "list_apps",
+			"active_app", "display_info", "mouse_position",
+			"extract", "screenshot", "links", "status", "content",
+			"wait", "wait_not", "devices", "snapshot", "logs":
+			return irrevTierNone
+		// No recovery path: quitting an app discards unsaved work;
+		// uninstalling removes the app from the device.
+		case "quit_app", "uninstall":
+			return irrevTierHigh
+		// External side effects: evaluate runs arbitrary JS in the page,
+		// upload pushes a local file to a remote form, install writes a
+		// new app onto the device.
+		case "evaluate", "upload", "install":
+			return irrevTierMedium
+		}
+		return irrevTierLow
 	default:
 		// #1468-B: the destructive PATTERN TABLE was designed for COMMANDS
 		// (rm -rf, mkfs) but ran over the ENTIRE argument JSON of unknown

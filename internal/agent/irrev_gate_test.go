@@ -39,6 +39,28 @@ func TestIrrevClassifyTool(t *testing.T) {
 		{"git_reset", `{"mode":"mixed"}`, irrevTierLow},
 		{"git_push", `{"force":true}`, irrevTierHigh},
 
+		// CUA tools (sa-22 / appscale 2026 layer-2 gating): the schema
+		// "action" enum decides the tier, not the tool name. Observation
+		// actions are Tier 0; quit_app/uninstall have no recovery path
+		// (High); evaluate/upload/install carry external side effects
+		// (Medium); ordinary reversible interaction stays Low.
+		{"desktop_control", `{"action":"quit_app","text":"Xcode"}`, irrevTierHigh},
+		{"desktop_control", `{"action":"snapshot_ui","max_depth":8}`, irrevTierNone},
+		{"desktop_control", `{"action":"find_element","text":"Save"}`, irrevTierNone},
+		{"desktop_control", `{"action":"click","x":100,"y":200}`, irrevTierLow},
+		{"desktop_control", `{"action":"type","text":"hello"}`, irrevTierLow},
+		{"mobile_device", `{"action":"uninstall","bundle_id":"com.example.app"}`, irrevTierHigh},
+		{"mobile_device", `{"action":"install","app":"/tmp/app.apk"}`, irrevTierMedium},
+		{"mobile_device", `{"action":"devices"}`, irrevTierNone},
+		{"mobile_device", `{"action":"tap","x":50,"y":80}`, irrevTierLow},
+		{"browser", `{"action":"evaluate","expression":"document.title"}`, irrevTierMedium},
+		{"browser", `{"action":"upload","path":"/tmp/f.png"}`, irrevTierMedium},
+		{"browser", `{"action":"navigate","url":"https://example.com"}`, irrevTierLow},
+		{"browser", `{"action":"links"}`, irrevTierNone},
+		{"browser", `{"action":"click","selector":"button.submit"}`, irrevTierLow},
+		// Malformed args keep the pre-existing default: Low, not a crash.
+		{"desktop_control", `not-json`, irrevTierLow},
+
 		// sa-28: read-only / verification shell commands = Tier 0 (parity
 		// with their dedicated-tool counterparts above). The first case is
 		// the exact first-hand FP sequence that fired the gate at session
