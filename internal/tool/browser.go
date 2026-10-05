@@ -755,13 +755,38 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 // none present (or evaluation failed - conservative). Extracted so doClick
 // can capture the same reading before AND after the click (#3407).
 func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string) string {
-	var stateExpr string
+	// #3407 mirror defect: the JS chain `e.checked||e.selected||...` returns
+	// a BOOLEAN true on a successfully checked checkbox/radio/option; the
+	// old `var stateExpr string` + Evaluate(&stateExpr) made chromedp's
+	// json.Unmarshal fail on `bool -> string` EVERY time, so a successful
+	// check was reported as no-effect 100% of the time (the false-negative
+	// mirror of the truthy-string false-positive #3410 fixed). Unmarshal to
+	// any and dispatch by concrete type.
+	var raw any
 	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
 		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
-	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &stateExpr)); err != nil {
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &raw)); err != nil {
 		return ""
 	}
-	return stateExpr
+	return stateFromRaw(raw)
+}
+
+// stateFromRaw dispatches the raw CDP JSON value of the state expression.
+// A checked checkbox/radio arrives as JSON true (#3407 mirror: unmarshaling
+// into a string failed on every such click); attribute reads arrive as
+// strings; anything else (nil, numbers) carries no state signal here.
+func stateFromRaw(raw any) string {
+	switch v := raw.(type) {
+	case bool:
+		if v {
+			return "true"
+		}
+		return ""
+	case string:
+		return v
+	default:
+		return ""
+	}
 }
 
 // clickEffectNote verifies the click produced an observable effect (r34):
