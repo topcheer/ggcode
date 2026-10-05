@@ -21,7 +21,7 @@ go 1.21
 
 require (
 	github.com/gin-gonic/gin v1.9.0
-	golang.org/x/crypto v0.0.0-20200302210943-78000ba7a073 // indirect
+	golang.org/x/crypto v0.17.0 // indirect
 )
 `
 	warnings := checkDependencyVulns("go.mod", oldGoMod, newGoMod)
@@ -220,7 +220,9 @@ func TestStripVersionPrefix(t *testing.T) {
 	}{
 		{"v1.2.3", "1.2.3"},
 		{"1.2.3", "1.2.3"},
-		{"v0.0.0-20200302210943-78000ba7a073", "0.0.0"},
+		// #3360: pseudo-versions stay whole - isVulnerableVersion skips them
+		// upstream, and truncation was the false-Critical root cause.
+		{"v0.0.0-20200302210943-78000ba7a073", "0.0.0-20200302210943-78000ba7a073"},
 		{"4.17.21", "4.17.21"},
 	}
 	for _, tt := range tests {
