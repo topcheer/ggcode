@@ -1,0 +1,290 @@
+package agent
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/topcheer/ggcode/internal/debug"
+)
+
+// r26 (Lean4Agent-inspired, arXiv:2606.06523): stateful per-workflow
+// declaration on top of the stateless per-call invariants engine (r454).
+//
+// Frontier claim: agents need machine-checkable WORKFLOW specifications -
+// step ordering (preconditions: "release requires tests-passed"), artifact
+// grounding (which file(s) prove a step happened) and end-of-run
+// postcondition audits - so "I finished, steps 1-4 done" can be checked
+// against declared artifacts instead of trusted. The invariants engine
+// (r454) already gives stateless per-call rules; this adds the missing
+// stateful layer: WHICH step a call belongs to and whether its declared
+// prerequisites produced their artifacts this run.
+//
+// Like invariants, everything is opt-in: with no workflow-spec.json (the
+// default) the engine is inert and behavior is byte-for-byte unchanged.
+// Theorem-prover-grade formal verification (Lean/TLA+) stays BACKLOG by
+// design - this is the lightweight Go-native subset.
+
+// WorkflowStep is one declared step. A step is COMPLETE this run when a
+// tool call produced a path matching ArtifactGlob (grounded completion -
+// no "trust me" completion flag). A step with OnCommands additionally
+// guards commands: executing a matching command before every step in
+// Requires is complete is a violation (block or warn).
+type WorkflowStep struct {
+	ID           string   `json:"id"`
+	ArtifactGlob string   `json:"artifact_glob,omitempty"` // product(s) proving completion
+	OnCommands   []string `json:"on_commands,omitempty"`   // command globs (prefix*/suffix*/*infix*) this step guards; empty = artifact-only node
+	Requires     []string `json:"requires,omitempty"`      // step IDs that must be complete first
+	Mode         string   `json:"mode"`                    // warn | block (default block: step ordering is usually a hard contract)
+	Message      string   `json:"message,omitempty"`
+}
+
+// WorkflowViolation reports a precondition breach with the counterexample
+// step (the Lean4Agent "debuggable violation" property: not just "denied"
+// but WHICH prerequisite is missing and what would prove it).
+type WorkflowViolation struct {
+	Step     WorkflowStep
+	Missing  string // unmet prerequisite step ID
+	WantGlob string // artifact that would have proven it
+	Command  string // the guarded command that triggered the check
+}
+
+// workflowSpecFileDoc is the user-facing contract (mirrors invariantFile).
+type workflowSpecFileDoc struct {
+	Steps []WorkflowStep `json:"steps"`
+}
+
+// workflowEngine holds merged steps + the run's completed-step registry.
+// Lazily built on first use (nil-safe via wfEngineLazy).
+type workflowEngine struct {
+	mu        sync.RWMutex
+	steps     map[string]WorkflowStep
+	order     []string // declaration order for deterministic iteration
+	loaded    bool
+	loadDir   string   // dir whose .ggcode/workflow-spec.json to read
+	completed sync.Map // step ID -> struct{} (grounded by artifact this run)
+}
+
+const workflowSpecFileName = "workflow-spec.json"
+
+// loadWorkflowSpec merges ~/.ggcode/workflow-spec.json (user scope) with
+// <dir>/.ggcode/workflow-spec.json (project scope); same-ID project steps
+// override user steps. Parse failure degrades to the other scope (same
+// fail-open policy as invariants - a guardrail, not a jail).
+func (e *workflowEngine) loadWorkflowSpec() {
+	if e.loaded {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.loaded {
+		return
+	}
+	e.loaded = true
+	e.steps = map[string]WorkflowStep{}
+	for _, scope := range []struct{ dir, label string }{
+		{userGGCodeDir(), "user"},
+		{e.loadDir, "project"},
+	} {
+		if scope.dir == "" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(scope.dir, workflowSpecFileName))
+		if err != nil {
+			continue // absent = no steps from this scope
+		}
+		var f workflowSpecFileDoc
+		if err := json.Unmarshal(data, &f); err != nil {
+			debug.Log("agent", "[workflow-spec] %s scope %s failed to parse: %v", scope.label, workflowSpecFileName, err)
+			continue
+		}
+		for _, st := range f.Steps {
+			if st.ID == "" {
+				continue
+			}
+			switch strings.ToLower(st.Mode) {
+			case "warn":
+				st.Mode = "warn"
+			default:
+				st.Mode = "block"
+			}
+			if _, dup := e.steps[st.ID]; !dup {
+				e.order = append(e.order, st.ID)
+			}
+			e.steps[st.ID] = st // project scope runs last: overrides user
+		}
+	}
+}
+
+// isComplete reports whether a step's artifacts were produced this run.
+func (e *workflowEngine) isComplete(id string) bool {
+	if id == "" {
+		return false
+	}
+	_, ok := e.completed.Load(id)
+	return ok
+}
+
+// recordCompletion grounds a step as complete when a produced path matches
+// its artifact glob (called with every write-class product of this run).
+func (e *workflowEngine) recordCompletion(path string) {
+	if path == "" {
+		return
+	}
+	e.loadWorkflowSpec()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for id, st := range e.steps {
+		if _, done := e.completed.Load(id); done {
+			continue
+		}
+		if st.ArtifactGlob != "" && invariantGlobMatch(st.ArtifactGlob, path) {
+			e.completed.Store(id, struct{}{})
+			debug.Log("agent", "[workflow-spec] step %s complete (artifact %q)", id, path)
+		}
+	}
+}
+
+// commandMatches reports whether cmd matches any OnCommands glob of the
+// step. Globs use the same semantics as invariant tool matching: a leading
+// or trailing "*" (prefix/suffix match); a bare "*" matches everything.
+func commandMatches(patterns []string, cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return false
+	}
+	for _, p := range patterns {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "*" {
+			return true
+		}
+		switch {
+		case strings.HasPrefix(p, "*") && strings.HasSuffix(p, "*"):
+			if strings.Contains(cmd, strings.Trim(p, "*")) {
+				return true
+			}
+		case strings.HasPrefix(p, "*"):
+			if strings.HasSuffix(cmd, strings.TrimPrefix(p, "*")) {
+				return true
+			}
+		case strings.HasSuffix(p, "*"):
+			if strings.HasPrefix(cmd, strings.TrimSuffix(p, "*")) {
+				return true
+			}
+		default:
+			if cmd == p {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkPreconditions evaluates a run_command call: when it matches a
+// guarded step's OnCommands, every Requires step must already be complete.
+// Returns the FIRST block-mode violation (strongest action wins), else the
+// first warn-mode one - the counterexample names the unmet prerequisite
+// and the artifact that would prove it (debuggable violation, not a bare
+// denial).
+func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessage) *WorkflowViolation {
+	if toolName != "run_command" {
+		return nil
+	}
+	e.loadWorkflowSpec()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if len(e.steps) == 0 {
+		return nil
+	}
+	command, _ := parseRunCommandArgs(args)
+	if command == "" {
+		return nil
+	}
+	var warnHit *WorkflowViolation
+	for _, id := range e.order {
+		st := e.steps[id]
+		if !commandMatches(st.OnCommands, command) {
+			continue
+		}
+		for _, req := range st.Requires {
+			if e.isComplete(req) {
+				continue
+			}
+			want := ""
+			if rs, ok := e.steps[req]; ok {
+				want = rs.ArtifactGlob
+			}
+			v := &WorkflowViolation{Step: st, Missing: req, WantGlob: want, Command: command}
+			if st.Mode == "block" {
+				return v
+			}
+			if warnHit == nil {
+				warnHit = v
+			}
+			break // first unmet prerequisite is the counterexample
+		}
+	}
+	return warnHit
+}
+
+// outstandingSteps lists declared steps not yet grounded by artifacts this
+// run (end-of-run postcondition audit input).
+func (e *workflowEngine) outstandingSteps() []WorkflowStep {
+	e.loadWorkflowSpec()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var out []WorkflowStep
+	for _, id := range e.order {
+		st := e.steps[id]
+		if st.ArtifactGlob != "" && !e.isComplete(id) {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+// outstandingMessage renders the end-of-run audit: which declared steps
+// have no grounded artifacts yet. Empty when the spec is absent or fully
+// complete (inert by default).
+func (e *workflowEngine) outstandingMessage() string {
+	if e == nil {
+		return ""
+	}
+	out := e.outstandingSteps()
+	if len(out) == 0 {
+		return ""
+	}
+	ids := make([]string, len(out))
+	for i, st := range out {
+		ids[i] = st.ID + " (expects " + st.ArtifactGlob + ")"
+	}
+	return fmt.Sprintf("[workflow-spec] Declared steps with no produced artifacts yet this run: %s. If you are about to declare the task complete, verify these steps actually happened or state which ones were skipped.", strings.Join(ids, "; "))
+}
+
+// workflowEngineLazy mirrors invariantEngineLazy: anchored to the agent's
+// working dir, nil when inert (no working dir).
+func (a *Agent) workflowEngineLazy() *workflowEngine {
+	a.mu.RLock()
+	e := a.wfEngine
+	wd := a.workingDir
+	a.mu.RUnlock()
+	if e != nil {
+		return e
+	}
+	if wd == "" {
+		return nil
+	}
+	newE := &workflowEngine{loadDir: filepath.Join(wd, ".ggcode")}
+	a.mu.Lock()
+	if a.wfEngine == nil {
+		a.wfEngine = newE
+	}
+	a.mu.Unlock()
+	return a.wfEngine
+}

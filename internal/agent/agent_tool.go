@@ -300,6 +300,28 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	// this choke point BEFORE execution. block-mode violations reject the
 	// call outright (sealed into the audit ledger as invalid); warn-mode
 	// violations proceed and append a notice to the result.
+	// r26 workflow-spec precondition gate: a guarded command whose declared
+	// prerequisites have no grounded artifacts yet is a block/warn violation
+	// with the counterexample step named (runs before the invariant engine -
+	// workflow ordering is the coarser contract).
+	if wf := a.workflowEngineLazy(); wf != nil {
+		if wv := wf.checkPreconditions(tc.Name, tc.Arguments); wv != nil {
+			msg := fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
+				wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			if wv.Step.Message != "" {
+				msg += " Note: " + wv.Step.Message
+			}
+			if wv.Step.Mode == "block" {
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusInvalid, msg, 0, "workflow:"+wv.Step.ID)
+				debug.Log("agent", "[workflow-spec] BLOCK %s before %s (missing %s)", wv.Command, wv.Step.ID, wv.Missing)
+				return tool.Result{Content: msg, IsError: true}
+			}
+			res := a.executeToolInner(ctx, tc)
+			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			res.Content += "\n\n" + msg
+			return res
+		}
+	}
 	if e := a.invariantEngineLazy(); e != nil {
 		if v := e.check(tc.Name, tc.Arguments); v != nil {
 			if v.Inv.Mode == "block" {
@@ -336,6 +358,14 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
 			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
 				e.recordProduct(ot.Target)
+			}
+		}
+	}
+	// r26: same products ground workflow-step completion (artifact_glob).
+	if wf := a.workflowEngineLazy(); wf != nil && !res.IsError {
+		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+				wf.recordCompletion(ot.Target)
 			}
 		}
 	}

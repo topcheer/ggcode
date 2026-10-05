@@ -66,6 +66,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"auxProvider":               "aux provider built lazily by auxProviderFor() on first auxiliary call",
 		"metadata":                  "dead field — no read/write sites outside declaration",
 		"invEngine":                 "r454 declarative invariants engine, built lazily by invariantEngineLazy once workingDir is known (guarded; nil = no invariants file, inert)",
+		"wfEngine":                  "r26 workflow-spec engine, built lazily by workflowEngineLazy once workingDir is known (guarded; nil = no workflow-spec.json, inert)",
 	}
 
 	// Dereference via the pointer (ValueOf(a).Elem()) instead of copying

@@ -65,3 +65,36 @@ ggcode 支持在文件中声明**行为不变式**（behavior invariants），�
 - 引擎是**确定性护栏**，不替代权限系统（permission）或对话层约束提醒（constraint_amnesia）
 - 坏 JSON 文件降级为该作用域无规则（另一作用域不受影响），不会阻断会话
 - 与 AgentSpec（arXiv 2505.04447）的声明式 spec + 确定性运行时监视器思路对齐
+
+## Workflow Spec（有状态工作流规范）
+
+不变式引擎是无状态的**单调用**规则；`workflow-spec.json` 补上**有状态的步骤层**（r26，Lean4Agent 启发）：声明步骤顺序（前置条件）、产物锚定（哪个文件证明步骤发生过）与收尾核对。
+
+```json
+{
+  "steps": [
+    {"id": "write-tests", "artifact_glob": "internal/**/*_test.go"},
+    {"id": "run-tests", "requires": ["write-tests"], "mode": "warn", "on_commands": ["go test*"]},
+    {"id": "release", "requires": ["run-tests"], "mode": "block", "on_commands": ["git push*", "git tag*"]}
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | string | 步骤标识（唯一） |
+| `artifact_glob` | string | 产物路径 glob；本 run 内任一写类调用产出匹配路径即视为**完成** |
+| `on_commands` | []string | 命令 glob（`git push*` 前缀 / `*test*` 包含 / 精确）；空 = 仅产物节点，不拦命令 |
+| `requires` | []string | 前置步骤 id 列表，须全部完成才放行 `on_commands` 匹配的命令 |
+| `mode` | string | `block`（默认，拒绝调用）或 `warn`（放行但追加反例警示） |
+| `message` | string | 违规时附加说明 |
+
+行为：
+
+- **前置门**：执行匹配某步骤 `on_commands` 的 `run_command` 时检查 `requires`；未满足则 block/warn，消息含**反例步**（"release 需要 run-tests，但尚无产物匹配 ..."）
+- **产物锚定完成**：写类调用成功后按 `artifact_glob` 自动登记完成——不信任口头"这步做完了"
+- **收尾核对**：agent 声明任务完成前，未产生产物的声明步骤会被列出并要求核实（与 fulfillment gate 同点注入）
+- 双作用域合并（`~/.ggcode/` + 项目 `.ggcode/`）、坏 JSON 降级惰性、无文件零行为变化——均与不变式一致
+- block 级拒绝以 `workflow:<step_id>` 作为 `invariant_id` 入审计链
+
+纯门控节点（无 `artifact_glob`，如上例 `run-tests`）永不单独"完成"——它只作为被依赖方时要求配 `artifact_glob`，或仅用于把警示挂在命令前。定理证明级形式验证（Lean/TLA+）不在本层范围。
