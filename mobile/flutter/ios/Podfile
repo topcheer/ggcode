@@ -37,11 +37,19 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-    # Exclude simulator architectures from release builds
     target.build_configurations.each do |config|
+      # Exclude simulator architectures from release builds
       if config.build_settings['ONLY_ACTIVE_ARCH'] == 'NO' || config.name == 'Release'
         config.build_settings['EXCLUDED_ARCHS[sdk=iphoneos*]'] = 'x86_64 i386'
         config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+      end
+      # #3417: floor every pod's deployment target to 15.0. Xcode 27's
+      # minimum supported target is 15.0, but several pods (flutter_webrtc
+      # et al.) still pin 13.0 in their podspecs - local builds on current
+      # Xcode fail while CI (older Xcode) stays green. Floor-only: targets
+      # already above 15.0 are untouched, so CI behavior is unchanged.
+      if config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.0
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       end
     end
   end
