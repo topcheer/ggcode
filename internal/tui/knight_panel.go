@@ -542,7 +542,11 @@ func (m *Model) renderKnightProposals(w int) string {
 	if m.knight == nil {
 		return "Knight not available"
 	}
-	proposals, err := m.knight.RecentProjectImprovementProposals(20)
+	// #3389: the fetch limit must come from the single source
+	// (knightPanelItemCount) that also bounds navigation and [a] actions -
+	// a smaller hardcoded render limit lets the cursor walk past the last
+	// rendered row onto invisible items.
+	proposals, err := m.knight.RecentProjectImprovementProposals(m.knightPanelItemCount("proposals"))
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
@@ -577,7 +581,8 @@ func (m *Model) renderKnightMemory(w int) string {
 	if m.knight == nil {
 		return "Knight not available"
 	}
-	entries, err := m.knight.RecentSemanticMemory(20)
+	// #3389: as renderKnightProposals above - single-source the limit.
+	entries, err := m.knight.RecentSemanticMemory(m.knightPanelItemCount("memory"))
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
