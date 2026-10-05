@@ -754,7 +754,11 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 // the agent re-extracts instead of assuming the click landed. Guidance, not
 // error — SPA clicks legitimately change nothing addressable from here.
 func (b *Browser) clickEffectNote(timeoutCtx context.Context, selector, urlBefore, urlAfter string) string {
-	if urlAfter != urlBefore && urlAfter != "" {
+	// r34 hardening (#3398 review, verdict 5990361368): an empty baseline
+	// (Location failed before the click) must never count as navigation -
+	// urlBefore=="" && urlAfter!="" would falsely emit "effect: confirmed"
+	// and unlock the spiral gate on zero evidence.
+	if urlBefore != "" && urlAfter != urlBefore && urlAfter != "" {
 		return fmt.Sprintf("\neffect: confirmed (navigation to %s)", urlAfter)
 	}
 	var stateExpr string
