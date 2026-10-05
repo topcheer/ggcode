@@ -280,15 +280,6 @@ func splitCaps(raw string) []string {
 	return out
 }
 
-func hasShareV2Capability(caps []string, clientVersion string) bool {
-	for _, capability := range caps {
-		if capability == "share_v2" || capability == "share_renew" || capability == "share_notice" {
-			return true
-		}
-	}
-	return strings.TrimSpace(clientVersion) != ""
-}
-
 func mintShareRenewToken(secret, roomID, role string, ttl time.Duration) (string, time.Time, error) {
 	exp := time.Now().UTC().Add(ttl)
 	token, err := mintShareTicket(secret, roomID, role, shareTicketKindRenew, exp)

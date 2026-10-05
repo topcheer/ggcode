@@ -121,15 +121,6 @@ func (l *relayTraceLogger) flushAgedAt(now time.Time) {
 	}
 }
 
-func (l *relayTraceLogger) FlushAll() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	for _, state := range l.states {
-		l.flushPendingLocked(state)
-	}
-}
-
 func (l *relayTraceLogger) flushPendingLocked(state *relayTraceState) {
 	if state == nil || state.pendingSeen == 0 || state.pendingTail == "" {
 		return
