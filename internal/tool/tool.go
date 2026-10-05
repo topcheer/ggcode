@@ -110,10 +110,11 @@ type SandboxSafe interface {
 
 // Registry manages the set of available tools.
 type Registry struct {
-	tools      map[string]Tool
-	codeIndex  *CodeIndexManager  // optional: shared code index for @ fuzzy search
-	jobManager *CommandJobManager // r71: shared command job manager for shutdown reaping
-	mu         sync.RWMutex
+	tools       map[string]Tool
+	codeIndex   *CodeIndexManager            // optional: shared code index for @ fuzzy search
+	jobManager  *CommandJobManager           // r71: shared command job manager for shutdown reaping
+	descAugment func(toolName string) string // r35: optional learned-hint overlay (see SetDescriptionAugmenter)
+	mu          sync.RWMutex
 }
 
 // NewRegistry creates an empty tool registry.
@@ -212,20 +213,42 @@ func (r *Registry) CloseAll() []error {
 	return errs
 }
 
+// SetDescriptionAugmenter installs a per-tool description overlay (r35,
+// JTPRO-style learned usage hints). The function receives the tool name and
+// returns a hint block to append ("" = none); it must be safe for
+// concurrent use. MCP tool descriptions pass through the same path, so
+// remote schemas get the overlay without being rewritten.
+func (r *Registry) SetDescriptionAugmenter(fn func(toolName string) string) {
+	r.mu.Lock()
+	r.descAugment = fn
+	r.mu.Unlock()
+}
+
 // ToDefinitions converts all available tools to provider.ToolDefinition for
 // the LLM. Tools implementing AvailabilityChecker with Available()==false are
 // excluded - e.g. restart before a host injects its requester (#346), so
 // hosts without restart support never advertise a guaranteed-failing tool.
+// When a description augmenter is set (r35), its per-tool hint block is
+// appended to each description.
 func (r *Registry) ToDefinitions() []provider.ToolDefinition {
+	r.mu.RLock()
+	augment := r.descAugment
+	r.mu.RUnlock()
 	tools := r.List()
 	defs := make([]provider.ToolDefinition, 0, len(tools))
 	for _, t := range tools {
 		if ac, ok := t.(AvailabilityChecker); ok && !ac.Available() {
 			continue
 		}
+		desc := t.Description()
+		if augment != nil {
+			if extra := augment(t.Name()); extra != "" {
+				desc = desc + extra
+			}
+		}
 		defs = append(defs, provider.ToolDefinition{
 			Name:        t.Name(),
-			Description: t.Description(),
+			Description: desc,
 			Parameters:  t.Parameters(),
 		})
 	}

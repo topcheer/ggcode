@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -282,6 +283,7 @@ type Agent struct {
 	bareEditStreak               *bareEditStreakState       // unverified mutation streak detection (consecutive edits without verification)
 	editCoverage                 *editCoverageState         // verification coverage gap detection (edits across packages but partial verification)
 	toolEff                      *toolEffTracker            // per-tool effectiveness tracking (success rate + alternative-approach guidance)
+	usageHints                   *toolUsageHintStore        // r35: JTPRO-style persisted per-tool usage hints distilled from parameter-usage failures
 	prematureSuccess             *prematureSuccessState     // premature success claim detection (edits without verification followed by success declaration)
 	bgVerifyJobs                 *bgVerifyRegistry          // background verify-job registry for debt clearing (#2992 case 2)
 	recklessExec                 *recklessExecState         // reckless execution detection (edits to unexplored files in early iterations)
@@ -521,6 +523,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		bareEditStreak:         newBareEditState(),
 		editCoverage:           newEditCoverageState(),
 		toolEff:                newToolEffTracker(),
+		usageHints:             newToolUsageHintStore(),
 		prematureSuccess:       newPrematureSuccessState(),
 		bgVerifyJobs:           newBgVerifyRegistry(),
 		strategyFixation:       newStrategyFixationState(),
@@ -1781,6 +1784,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.maybeInjectDynamicSystemPrompt(userPromptForStats)
 	a.maybeInjectRatchetRules()
 	transientCompactWarned := false
+	// r35: attach the persisted usage-hint store to this workspace and
+	// overlay distilled hints onto tool descriptions before they go to the
+	// provider (JTPRO co-optimization, online loop). Lazy: workingDir is
+	// only reliably known here.
+	a.mu.RLock()
+	uhDir := a.workingDir
+	a.mu.RUnlock()
+	if uhDir != "" {
+		a.usageHints.attach(filepath.Join(uhDir, ".ggcode"))
+		a.tools.SetDescriptionAugmenter(a.usageHints.OverlayFor)
+	}
 	toolDefs := a.tools.ToDefinitions()
 	a.toolSearch.init(toolDefs)
 	// Server-side Tool Search Tool handoff (Anthropic advanced-tool-use
@@ -4185,6 +4199,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Content: []provider.ContentBlock{{Type: "text", Text: effGuidance}},
 				})
 				msgs = a.contextManager.Messages()
+			}
+			// r35 usage hints (JTPRO online loop): a parameter-usage
+			// failure is distilled into a persistent per-tool hint that
+			// gets overlaid onto the tool description next run; a success
+			// decays stale hints away. Never blocks the result itself.
+			if result.IsError {
+				a.usageHints.recordFailure(tc.Name, result.Content)
+			} else {
+				a.usageHints.recordSuccess(tc.Name)
 			}
 			// Redundant re-verification: detect same verification command
 			// re-run without intervening file edits (idempotency violation).
