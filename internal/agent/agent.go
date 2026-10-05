@@ -3656,9 +3656,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				// read-only pre-execution (waiting is side-effect-free, denial
 				// merely discards the snapshot).
 				result = a.usePreExecutedWithPermission(ctx, tc, pre)
-			} else if cmdCached, hit := a.checkCommandCache(tc.Name, tc.Arguments); hit {
+			} else if cmdCached, hit := a.checkCommandCache(tc.Name, tc.Arguments); hit && a.speculativeHitAllowed(ctx, tc) {
 				// Deterministic command cache: skip re-running build/test commands
 				// when no source files have changed since the last execution.
+				// #3373: replayed output must respect policy parity like every
+				// other replay branch (#1496 speculator / #1831 memo) - a
+				// non-Allow decision abandons the hit and falls through to the
+				// gated execution below instead of leaking shell output past a
+				// tightened policy (plan mode / mid-session policy edit).
 				result = cmdCached
 			} else {
 				result = a.executeToolWithPermission(ctx, tc)
