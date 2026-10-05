@@ -5103,7 +5103,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// keyword matching fired on nearly every turn; #167 — read-only
 			// tools must not count as verification).
 			if !result.IsError {
-				a.recordSpiralVerification(tc.Name)
+				a.recordSpiralVerification(tc.Name, result.Content)
 			}
 			// Tool-overuse write bookkeeping is POST-execution (#495): only
 			// a successful edit/write makes later reads suspicious. The old

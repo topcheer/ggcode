@@ -80,7 +80,7 @@ func TestSpiralBugVerify_VerifiedTopicLosesProtection(t *testing.T) {
 		t.Fatal("sanity: topic starts unverified")
 	}
 	// Successful execution tool run (agent.go tool-loop gate) verifies it.
-	a.recordSpiralVerification("run_command")
+	a.recordSpiralVerification("run_command", "exit 0")
 	if !a.spiralState.topics[0].verified {
 		t.Fatal("sanity: run_command success must mark the topic verified")
 	}

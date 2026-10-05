@@ -102,15 +102,15 @@ var spiralCommittedRe = regexp.MustCompile(`(?i)(?:since we(?:'re| are)|because 
 
 // spiralVerificationRe detects that a verification step occurred. Kept
 // tightly scoped to explicit first-person assertion phrases ONLY as a
-// fallback — generic words like test/build/error/result appear in nearly
+// fallback - generic words like test/build/error/result appear in nearly
 // every assistant narrative and previously disabled the detector on any
 // match (#161). The primary signal is the real tool-call event recorded
 // by recordSpiralVerification from the tool execution loop.
 var spiralVerificationRe = regexp.MustCompile(`(?i)(?:i (?:have |'ve )?(?:verified|confirmed|validated)\b|i ran (?:the )?(?:test|build|lint|check)s?\b)`)
 
 // spiralExecutionTools are tools whose results can actually validate or
-// refute a hypothesis (fix #167: counting ANY successful tool — incl.
-// read_file/grep — as verification re-silenced the detector, because real
+// refute a hypothesis (fix #167: counting ANY successful tool - incl.
+// read_file/grep - as verification re-silenced the detector, because real
 // agent turns almost always contain successful read-only calls while an
 // agent in a hallucination spiral characteristically keeps running them).
 var spiralExecutionTools = map[string]bool{
@@ -124,18 +124,38 @@ var spiralExecutionTools = map[string]bool{
 	"mobile_device":       true,
 }
 
+// spiralEffectGatedTools (r34, computer-use postmortems): multi-action GUI
+// tools whose SUCCESS does not imply observable effect - a browser click
+// returns ok even when an overlay swallowed it. For these, only a result
+// carrying the "effect: confirmed" marker (emitted by post-action effect
+// verification in the tool layer) counts as verification; a bare ok must
+// NOT clear hallucination-spiral protection (the opposite direction would
+// let a stream of no-effect clicks silently disable the detector).
+var spiralEffectGatedTools = map[string]bool{
+	"browser":         true,
+	"desktop_control": true,
+}
+
+// effectConfirmedMarker is emitted by tool-layer post-action effect
+// verification (r34): browser click/upload state checks etc.
+const effectConfirmedMarker = "effect: confirmed"
+
 // recordSpiralVerification marks that an execution-type tool call with
 // observable side effects succeeded this turn (fix #161: prose keyword
 // matching silently disabled the detector; #167: read-only tools must NOT
-// count — only tools that can validate/refute an assumption break the
-// spiral chain; #493 B: protection is PER-TOPIC — all topics tracked so
+// count - only tools that can validate/refute an assumption break the
+// spiral chain; #493 B: protection is PER-TOPIC - all topics tracked so
 // far are marked verified, and unlike the old global flag this state is
-// never reset by unrelated hedging).
-func (a *Agent) recordSpiralVerification(toolName string) {
+// never reset by unrelated hedging; r34: effect-gated GUI tools need the
+// "effect: confirmed" marker, bare success is not verification).
+func (a *Agent) recordSpiralVerification(toolName, resultContent string) {
 	if a == nil || a.spiralState == nil {
 		return
 	}
 	if !spiralExecutionTools[toolName] {
+		return
+	}
+	if spiralEffectGatedTools[toolName] && !strings.Contains(resultContent, effectConfirmedMarker) {
 		return
 	}
 	for i := range a.spiralState.topics {
@@ -176,11 +196,11 @@ type spiralTrackedTopic struct {
 	word string
 	// sourceTurn is the turn where the uncertainty was expressed; used to
 	// enforce spiralMinGap (#493 A): commitment must be ≥spiralMinGap turns
-	// later to count — same-turn/gap-1 commitment is ordinary inconsistency,
+	// later to count - same-turn/gap-1 commitment is ordinary inconsistency,
 	// not a spiral.
 	sourceTurn int
 	// verified is per-topic (#493 B): once an execution-type verification
-	// succeeds after this topic's uncertainty, the topic is protected — a
+	// succeeds after this topic's uncertainty, the topic is protected - a
 	// later unrelated hedge must NOT strip that protection (the old global
 	// verified bool was reset by ANY new uncertainty, so one "I think" about
 	// anything re-armed warnings on already-verified foundations).
@@ -287,7 +307,7 @@ func detectCommittedTopics(text string, tracked []spiralTrackedTopic, curTurn in
 			continue // verification broke the spiral for this topic (#493 B)
 		}
 		if curTurn-t.sourceTurn < spiralMinGap {
-			continue // too close to the uncertainty — inconsistency, not spiral (#493 A)
+			continue // too close to the uncertainty - inconsistency, not spiral (#493 A)
 		}
 		if seen[t.word] {
 			continue
@@ -331,7 +351,7 @@ func (a *Agent) recordSpiralTurn(text string) {
 	s := a.spiralState
 	s.turn++
 
-	// Check if a verification step occurred — either a real tool call with
+	// Check if a verification step occurred - either a real tool call with
 	// observable results (recorded by recordSpiralVerification from the tool
 	// loop) or an explicit first-person verification assertion (#161:
 	// generic keyword matching on prose disabled the detector far too
@@ -353,7 +373,7 @@ func (a *Agent) recordSpiralTurn(text string) {
 		}
 		// #493 B: new uncertainty does NOT reset any per-topic verified
 		// state. Fresh topics start unverified; previously-verified topics
-		// keep their protection — the old global reset let any unrelated
+		// keep their protection - the old global reset let any unrelated
 		// "I think" re-arm warnings on already-verified foundations.
 	}
 
@@ -390,7 +410,7 @@ func (a *Agent) maybeWarnSpiralHallucination() string {
 	}
 
 	// #493 B: verified topics are already filtered per-topic inside
-	// detectCommittedTopics — every topic reaching committedCounts here is
+	// detectCommittedTopics - every topic reaching committedCounts here is
 	// genuinely unverified, so the old "3+ topics AND no verification"
 	// global mitigation (which any unrelated hedge could wipe) is obsolete.
 
