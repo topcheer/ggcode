@@ -9,7 +9,7 @@ Can be used standalone (pointing to a running daemon) or in one-shot mode
 where it starts and stops the daemon automatically.
 
 Usage:
-    # One-shot mode (recommended — starts daemon, runs eval, shuts down):
+    # One-shot mode (recommended - starts daemon, runs eval, shuts down):
     python scripts/eval/run_eval.py --auto --output .tmp/knight-eval/results.csv
 
     # Connect to already-running daemon:
@@ -328,6 +328,47 @@ def _handle_approval(llm: LLMClient, send_fn, data: dict):
 # Task runner
 # ---------------------------------------------------------------------------
 
+def run_verify(verify: dict, cwd: str | None = None, timeout: int = 60) -> tuple[str, str]:
+    """Fail-closed task verification (arXiv:2610.02142 diagnostic ladder).
+
+    Supported assertion types (all must pass when present):
+      - artifact: {"artifact": "relative/path"} - file must exist
+      - content_contains: {"artifact": ..., "content_contains": ["s", ...]}
+        - the artifact file must contain every substring
+      - command: {"command": ["bash", "-c", "..."]} - must exit 0
+
+    Returns ("pass" | "fail", detail). A verify block with neither an
+    artifact nor a command is itself a failure (fail-closed, not skipped).
+    """
+    try:
+        artifact = verify.get("artifact")
+        if artifact:
+            p = Path(artifact)
+            if not p.is_file():
+                return "fail", f"artifact missing: {artifact}"
+            needles = verify.get("content_contains")
+            if needles:
+                text = p.read_text(errors="replace")
+                for n in needles:
+                    if n not in text:
+                        return "fail", f"content missing {n!r} in {artifact}"
+        cmd = verify.get("command")
+        if cmd:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            )
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "")[-200:]
+                return "fail", f"command exit {proc.returncode}: {tail}"
+        if not artifact and not cmd:
+            return "fail", "verify block has no artifact/command assertion"
+        return "pass", "ok"
+    except subprocess.TimeoutExpired:
+        return "fail", f"verify command timeout ({timeout}s)"
+    except Exception as e:  # noqa: BLE001 - verifier must never crash the run
+        return "fail", f"verify error: {e}"
+
+
 def run_task(
     base_url: str,
     task: dict,
@@ -446,6 +487,20 @@ def run_task(
     if summary["rounds"] > 0 and summary["text_chunks"] > 0 and not summary["timed_out"]:
         success = True
 
+    # Fail-closed verification layer (arXiv:2610.02142: keyword/text-only
+    # success judgments are fail-open). When a task declares a `verify`
+    # block, success additionally requires the artifact/content/command
+    # assertion to pass; without one we degrade the judgment explicitly to
+    # "text_only" instead of silently claiming grounded success.
+    verify = task.get("verify")
+    verify_status = "text_only"
+    verify_detail = ""
+    if verify:
+        v_status, v_detail = run_verify(verify)
+        if v_status != "pass":
+            success = False
+        verify_status = "artifact_verified" if v_status == "pass" else "verify_failed"
+
     result = {
         "task_id": task_id,
         "task_type": task.get("type", ""),
@@ -460,6 +515,8 @@ def run_task(
         "knight_reports": summary["knight_reports"],
         "user_messages": metrics.get("user_messages", 1),
         "rework_count": metrics.get("rework_count", 0),
+        "verify_status": verify_status,
+        "verify_detail": verify_detail[:200],
     }
 
     status = "DONE" if success else ("TIMEOUT" if summary["timed_out"] else "PARTIAL")
@@ -593,7 +650,7 @@ def generate_config(
 ):
     """Generate a minimal ggcode config YAML for the given mode.
 
-    Only overrides vendor/endpoint/model/im — ggcode daemon merges these with
+    Only overrides vendor/endpoint/model/im - ggcode daemon merges these with
     its built-in defaults (vendor registry, system_prompt, etc.).
     All paths MUST be absolute so the daemon can find them regardless of cwd.
     """
@@ -674,6 +731,7 @@ CSV_FIELDS = [
     "success", "timed_out", "elapsed_sec", "tool_calls",
     "tool_errors", "ask_user_count", "knight_reports",
     "user_messages", "rounds", "rework_count",
+    "verify_status", "verify_detail",
 ]
 
 
@@ -760,7 +818,7 @@ def run_single_mode(
     shutdown_token = ""
 
     if auto:
-        # Generate temp config — use absolute paths so daemon can find
+        # Generate temp config - use absolute paths so daemon can find
         # port_file and metrics_path regardless of its working directory
         port_file = str((out_dir / f".{mode}-port").resolve())
         metrics_path = str((out_dir / f"{mode}-metrics.json").resolve())
@@ -888,7 +946,7 @@ def write_final_report(path: str, all_results: list, duration_hours: float):
             for r in mode_results:
                 by_task.setdefault(r["task_id"], []).append(r)
 
-            f.write(f"## Per-Task Statistics — {mode.title()}\n\n")
+            f.write(f"## Per-Task Statistics - {mode.title()}\n\n")
             f.write("| Task | Success Rate | Avg Time | Std Time | Avg Tools | Std Tools |\n")
             f.write("|------|-------------|----------|----------|-----------|----------|\n")
 
@@ -1012,7 +1070,7 @@ def main():
     mode_label = "A/B" if args.ab else args.mode
     duration_label = f"{args.duration}h" if use_duration else f"{max_rounds} rounds"
     print(f"\n{'#'*60}")
-    print(f"  Knight Evaluation — {args.templates}")
+    print(f"  Knight Evaluation - {args.templates}")
     print(f"  Tasks: {len(tasks)} | Templates: {args.templates}")
     print(f"  Workdir: {working_dir}")
     print(f"  Output: {args.output}")
