@@ -1203,7 +1203,16 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     required String sessionId,
     required String eventType,
     required Map<String, dynamic> eventData,
+    String? eventSessionId,
   }) {
+    // #3443: ownership guard - an event relayed with a foreign session tag
+    // must not touch this session's record (including its lastEventId
+    // cursor). Untagged events keep the legacy behavior.
+    if (eventSessionId != null &&
+        eventSessionId.isNotEmpty &&
+        eventSessionId != sessionId) {
+      return;
+    }
     // Find the session record to get its workspace key
     CachedSessionRecord? record;
     for (final r in state.sessions.values) {
@@ -1285,7 +1294,22 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     required String eventType,
     required Map<String, dynamic> eventData,
     String? eventId,
+    String? eventSessionId,
   }) {
+    // #3443: ownership guard. The relay can deliver a stale tail event
+    // tagged with the PREVIOUS session after the host switches the active
+    // session (SwitchSession sends active_session out-of-band, bypassing
+    // the outbound queue, so old-session events arrive after the client
+    // already adopted the new one). Callers used to write such foreign
+    // events into the local session's cache, and the #1871 ordinal guard
+    // cannot stop it: the foreign ordinal space is larger than the freshly
+    // reset local one, so the write always passes. Drop foreign-tagged
+    // events here; untagged events keep the legacy behavior.
+    if (eventSessionId != null &&
+        eventSessionId.isNotEmpty &&
+        eventSessionId != sessionId) {
+      return;
+    }
     // Find snapshot key for this session
     String? snapshotKey;
     for (final entry in state.sessions.entries) {

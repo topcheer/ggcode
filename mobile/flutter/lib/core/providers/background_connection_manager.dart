@@ -133,11 +133,13 @@ class BackgroundConnectionManager extends Notifier<void> {
       eventType: msg.type,
       eventData: Map<String, dynamic>.from(msg.data ?? {}),
       eventId: msg.eventId,
+      eventSessionId: msg.sessionId,
     );
     cache.cacheBackgroundEvent(
       sessionId: sessionId,
       eventType: msg.type,
       eventData: Map<String, dynamic>.from(msg.data ?? {}),
+      eventSessionId: msg.sessionId,
     );
   }
 

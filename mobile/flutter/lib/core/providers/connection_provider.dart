@@ -1626,11 +1626,15 @@ class ConnectionNotifier extends Notifier<TunnelConnectionState> {
     // Incremental persistence: write every message to this session's cache
     // so switching sessions or restarting the app preserves all data.
     if (_sessionId.isNotEmpty && msg.type != 'server_ack') {
+      // #3443: pass the event's own session tag so the cache can drop
+      // foreign-session events instead of persisting them into the
+      // current foreground session (skip-but-ack must not write).
       ref.read(workspaceCacheProvider.notifier).appendSessionEvent(
             sessionId: _sessionId,
             eventType: msg.type,
             eventData: Map<String, dynamic>.from(msg.data ?? {}),
             eventId: eventId,
+            eventSessionId: msg.sessionId,
           );
     }
 
