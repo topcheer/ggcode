@@ -498,7 +498,9 @@ func (m Model) estimateSessionCost() float64 {
 		rate := resolveRate(m.session.Vendor, m.session.Endpoint, m.session.Model)
 		if rate.IsKnown() && rate.IsMetered() {
 			u := m.session.TokenUsage
-			total = float64(u.InputTokens)*rate.InputPerM/1e6 +
+			// #3434: fallback path (no UsageHistory - restored/imported
+			// sessions) must normalize the same way as the #2315 main path.
+			total = float64(u.DisplayInputTokens())*rate.InputPerM/1e6 +
 				float64(u.OutputTokens)*rate.OutputPerM/1e6 +
 				float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
 				float64(u.CacheWrite)*rate.CacheWritePerM/1e6
