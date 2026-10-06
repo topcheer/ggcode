@@ -328,11 +328,104 @@ func isPreferenceWordRune(r rune) bool {
 	return false
 }
 
+// preferenceSlots maps known tool tokens to a semantic preference slot
+// (package manager, test runner, container runtime...). Two entries whose
+// sentences carry tokens of the SAME slot are statements about the SAME
+// preference domain (Hindsight arXiv:2512.12818: opinion coherence per
+// subject). Dictionary-outside tokens carry no slot and never trigger
+// supersession - precision over recall, same contract as the markers.
+var preferenceSlots = map[string]string{
+	"npm":     "pkg-manager",
+	"pnpm":    "pkg-manager",
+	"yarn":    "pkg-manager",
+	"bun":     "pkg-manager",
+	"pytest":  "test-runner",
+	"jest":    "test-runner",
+	"vitest":  "test-runner",
+	"docker":  "container-runtime",
+	"podman":  "container-runtime",
+	"bash":    "shell",
+	"zsh":     "shell",
+	"fish":    "shell",
+	"gofmt":   "go-formatter",
+	"gofumpt": "go-formatter",
+}
+
+// reversalMarkers signal that the new statement REVOKES a previous choice:
+// without supersession the store keeps "always use npm" AND "以后改用 pnpm"
+// and injects both into every future prompt - the exact evidence/inference
+// blur Hindsight flags (sa-72 PARTIAL gap). Bilingual.
+var reversalMarkers = []string{
+	// English revocation markers.
+	"never use",
+	"don't use",
+	"do not use",
+	"no, use",
+	"no, run",
+	"instead of",
+	"instead, ",
+	"switch to",
+	"switch back",
+	"rather than",
+	// Chinese revocation markers.
+	"以后不要",
+	"以后不再",
+	"别用",
+	"别再",
+	"改用",
+	"换成",
+	"改回",
+	"换回",
+	"不再用",
+	"不要用",
+}
+
+// preferenceSlotsOf returns every slot the sentence expresses an opinion on
+// (word-boundary matched, #3311 lesson: "use" inside "because" must not
+// count; here "go" inside "gofmt" must not double-fire either).
+func preferenceSlotsOf(sent string) []string {
+	lower := strings.ToLower(sent)
+	var slots []string
+	seen := map[string]bool{}
+	for tok, slot := range preferenceSlots {
+		if !containsWordBoundary(lower, []string{tok}) {
+			continue
+		}
+		if !seen[slot] {
+			seen[slot] = true
+			slots = append(slots, slot)
+		}
+	}
+	return slots
+}
+
+// hasReversalMarker reports whether the sentence revokes a prior choice.
+// A standalone "instead" (word-boundary, so "instead,"/"instead of" also
+// qualify via the substring set above) is itself a replacement signal:
+// "no, run scripts with zsh instead" names no other marker.
+func hasReversalMarker(sent string) bool {
+	lower := strings.ToLower(sent)
+	for _, m := range reversalMarkers {
+		if strings.Contains(lower, strings.ToLower(m)) {
+			return true
+		}
+	}
+	return containsWordBoundary(lower, []string{"instead"})
+}
+
 // MergePreferenceMemory merges newly distilled preference sentences into the
 // existing "user-preferences" memory body. Existing lines are preserved in
 // order; new (non-duplicate, case-insensitive) lines are appended; the total
 // is capped at maxPreferenceEntries with the OLDEST entries dropped from the
 // top. Returns the merged body and how many new lines were added.
+//
+// Supersession (sa-72 / Hindsight opinion-coherence): when a NEW entry
+// carries a reversal marker and expresses an opinion on a known slot, older
+// entries on the SAME slot are dropped instead of coexisting - the newest
+// statement wins and contradictory preferences are never injected together.
+// Conservative by design: a reversal with NO known slot deletes nothing, and
+// a plain (non-reversal) statement never deletes - a missed supersession
+// costs one stale line, a wrong one deletes a real user statement.
 func MergePreferenceMemory(existing string, prefs []string) (string, int) {
 	var lines []string
 	for _, l := range strings.Split(existing, "\n") {
@@ -353,6 +446,34 @@ func MergePreferenceMemory(existing string, prefs []string) (string, int) {
 			continue
 		}
 		seen[key] = true
+		// Supersession pass: a reversal statement on known slots drops the
+		// older same-slot entries (they describe a choice the user just
+		// revoked - keeping both would inject a contradiction).
+		if hasReversalMarker(p) {
+			newSlots := preferenceSlotsOf(p)
+			if len(newSlots) > 0 {
+				slotSet := map[string]bool{}
+				for _, s := range newSlots {
+					slotSet[s] = true
+				}
+				kept := lines[:0]
+				for _, l := range lines {
+					overlap := false
+					for _, s := range preferenceSlotsOf(l) {
+						if slotSet[s] {
+							overlap = true
+							break
+						}
+					}
+					if overlap {
+						debug.Log("preferences", "superseded by %q (same slot): %q", p, l)
+						continue
+					}
+					kept = append(kept, l)
+				}
+				lines = kept
+			}
+		}
 		lines = append(lines, p)
 		added++
 	}
