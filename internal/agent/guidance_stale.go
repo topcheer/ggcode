@@ -98,13 +98,17 @@ func analyzeStaleGuidance(path, currentModel string) {
 	}
 
 	// Per-model tag delivery, only for models with enough runs to judge.
-	deliveredPerModel := map[string]map[string]int{}
+	// #3459: the aggregate keeps Suppressed alongside Delivered - a tag with
+	// delivered:0 but suppressed>0 is budget-starved, NOT stale (it is still
+	// firing; guidance budget just suppresses delivery). Reporting it stale
+	// would mislabel live detectors as dead weight.
+	deliveredPerModel := map[string]map[string]*guidanceTagStat{}
 	for k, st := range agg {
 		if len(runSet[k.model]) >= staleMinRuns {
 			if deliveredPerModel[k.model] == nil {
-				deliveredPerModel[k.model] = map[string]int{}
+				deliveredPerModel[k.model] = map[string]*guidanceTagStat{}
 			}
-			deliveredPerModel[k.model][k.tag] = st.Delivered
+			deliveredPerModel[k.model][k.tag] = st
 		}
 	}
 
@@ -116,13 +120,15 @@ func analyzeStaleGuidance(path, currentModel string) {
 	defer f.Close()
 
 	for tag, zero := range deliveredPerModel[currentModel] {
-		if zero != 0 || reported[tagKey{currentModel, tag}] {
+		// #3459: suppressed-only tags are excluded from stale reporting
+		// (budget starvation is not staleness).
+		if zero.Delivered != 0 || zero.Suppressed > 0 || reported[tagKey{currentModel, tag}] {
 			continue
 		}
 		others := 0
 		for m, tags := range deliveredPerModel {
-			if m != currentModel && tags[tag] >= staleOtherModelDelivered {
-				others += tags[tag]
+			if m != currentModel && tags[tag].Delivered >= staleOtherModelDelivered {
+				others += tags[tag].Delivered
 			}
 		}
 		if others == 0 {

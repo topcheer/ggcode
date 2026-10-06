@@ -33,6 +33,36 @@ func statLine(ts, model, tag string, delivered int) string {
 	return `{"ts":"` + ts + `"` + m + `,"tag":"` + tag + `","delivered":` + strconv.Itoa(delivered) + `,"suppressed":0}`
 }
 
+// statLineSuppressed builds a flush record with an explicit suppressed count
+// (#3459: budget-starved tags must not be reported as stale).
+func statLineSuppressed(ts, model, tag string, delivered, suppressed int) string {
+	return `{"ts":"` + ts + `","model":"` + model + `","tag":"` + tag + `","delivered":` +
+		strconv.Itoa(delivered) + `,"suppressed":` + strconv.Itoa(suppressed) + `}`
+}
+
+// #3459: a tag that fires on the current model every run but is always
+// suppressed by the guidance budget (delivered:0, suppressed:N) is still
+// ALIVE - reporting it stale would mislabel budget starvation as dead
+// weight. Other models keep delivering, so the cross-model contrast holds,
+// yet no stale_heuristic may be written for the current model.
+func TestAnalyzeStaleGuidanceBudgetStarvedNotStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "guidance-stats.jsonl")
+	var lines []string
+	for i := 0; i < staleMinRuns; i++ {
+		lines = append(lines,
+			statLineSuppressed("2026-10-06T10:00:"+pad(i), "glm-5.2", "Target Scatter", 0, 1),
+			statLine("2026-10-06T11:00:"+pad(i), "glm-5.3", "Target Scatter", 1),
+		)
+	}
+	writeStatLines(t, path, lines...)
+
+	analyzeStaleGuidance(path, "glm-5.2")
+
+	if got := staleHeuristicSummary(path, "glm-5.2"); len(got) != 0 {
+		t.Fatalf("budget-starved tag must not be reported stale, got %v", got)
+	}
+}
+
 // Ten zero-delivery runs on glm-5.2 for tag X; glm-5.3 still delivers X =>
 // stale_heuristic reported for glm-5.2.
 func TestAnalyzeStaleGuidanceReportsCrossModelDeadWeight(t *testing.T) {
