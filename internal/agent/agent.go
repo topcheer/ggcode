@@ -365,6 +365,7 @@ type Agent struct {
 	trajIntel                *trajIntelState                       // post-run trajectory intelligence extraction
 	strategyStagnation       *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure             *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
+	termGuard                *prematureTerminationGuard            // r26: premature-termination risk (struggle density x context occupancy, pre-surrender)
 	diminishingEdit          *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	overcorrection           *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
 	giveupRevert             *giveupRevertState                    // #1823 case 2: give-up language + tree rollback pairing
@@ -565,6 +566,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		mindlessAction:         newMindlessActionState(),
 		strategyStagnation:     newStrategyStagnationState(),
 		iterPressure:           newIterPressureState(maxIter),
+		termGuard:              newPrematureTerminationGuard(),
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
 		giveupRevert:           &giveupRevertState{},
@@ -1889,6 +1891,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.errStrategyLoop.reset()
+	// r26: struggle window and fired-quota are per-run state (TUI/desktop
+	// agents are long-lived, one RunStream per user turn - same rationale
+	// as the #3403 spiralState fix above).
+	a.termGuard.reset()
 	a.fixCascade.reset()
 	a.errRegression.reset()
 	a.stalledConvergence.reset()
@@ -2293,6 +2299,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// near the iteration budget limit (metacognitive monitoring).
 		if ipMsg := a.maybeWarnIterPressure(i + 1); ipMsg != "" {
 			msgs = a.guidanceEmit(ipMsg, msgs)
+		}
+		// r26 premature termination guard: struggle density x context
+		// occupancy combined signal fires BEFORE a give-up is drafted
+		// (arXiv 2606.29718: abandonment correlates with context length and
+		// is foreshadowed by struggle-heavy trajectories).
+		if ptMsg := a.maybeWarnTermination(); ptMsg != "" {
+			msgs = a.guidanceEmit(ptMsg, msgs)
 		}
 		// Unverified mutation streak: detect consecutive edits without any
 		// verification (build/test/run) to encourage tight feedback loops.
@@ -3861,6 +3874,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// file, and without invalidation the next read could be served
 			// from the memoize/speculator/command caches describing the
 			// pre-undo state. See mutatesSourceTree in verify_hint.go.
+			// r26 premature termination guard: file this step's error flag
+			// into the struggle window (arXiv 2606.29718 struggle proxy).
+			a.termGuard.recordToolStep(result.IsError)
 			wroteDespiteError := partialEditWroteDespiteError(tc.Name, result.Content, result.IsError)
 			if mutatesSourceTree(tc.Name) && (!result.IsError || wroteDespiteError) {
 				a.speculator.invalidateCache()
