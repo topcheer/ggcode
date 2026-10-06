@@ -108,7 +108,11 @@ func (m Model) sidebarEstimatedCost(usage provider.TokenUsage) string {
 		}
 		return string(rate.Type)
 	}
-	totalCost := float64(usage.InputTokens)*rate.InputPerM/1e6 +
+	// #3434: DisplayInputTokens strips CacheRead from the superset
+	// InputTokens (openai-compat/gemini) so cached tokens are billed once
+	// at the cache-read rate - aligns the sidebar with the #2315 status
+	// bar fix. Disjoint vendors (anthropic) are a no-op.
+	totalCost := float64(usage.DisplayInputTokens())*rate.InputPerM/1e6 +
 		float64(usage.OutputTokens)*rate.OutputPerM/1e6 +
 		float64(usage.CacheRead)*rate.CacheReadPerM/1e6 +
 		float64(usage.CacheWrite)*rate.CacheWritePerM/1e6
