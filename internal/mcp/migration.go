@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -206,12 +207,50 @@ func serverSignature(cfg config.MCPServerConfig) string {
 		// Type: "HTTP" and a migrated lowercase "http" entry describe the
 		// same server and must collide for dedup (review of #1276 caught
 		// cfg.Type leaking the raw case here).
-		return normalized + ":" + strings.TrimSpace(cfg.URL)
+		//
+		// #3467: headers are part of the executed identity (Authorization
+		// etc. are really sent, client.go) and must be signed - a repo
+		// silently swapping a header would otherwise keep the grant.
+		// sig-v2 prefix: grants stored under the v1 scheme (URL-only /
+		// command-only) no longer match, forcing one re-approval.
+		sig := "sig-v2:" + normalized + ":" + strings.TrimSpace(cfg.URL)
+		if kv := canonicalKVPairs(cfg.Headers); kv != "" {
+			sig += "|" + kv
+		}
+		return sig
 	default:
+		// #3467: env participates in the executed identity (client.go
+		// flattens it straight into cmd.Env - NODE_OPTIONS/LD_PRELOAD/
+		// PATH overrides are code-execution vectors) and must be signed.
+		// sig-v2 prefix forces re-approval of every pre-existing grant.
 		parts := append([]string{strings.TrimSpace(cfg.Command)}, cfg.Args...)
 		data, _ := json.Marshal(parts)
-		return "stdio:" + string(data)
+		sig := "sig-v2:stdio:" + string(data)
+		if kv := canonicalKVPairs(cfg.Env); kv != "" {
+			sig += "|" + kv
+		}
+		return sig
 	}
+}
+
+// canonicalKVPairs renders a map for signing: keys sorted (Go map
+// iteration order is random - the SAME env must always produce the SAME
+// signature), k=v pairs joined with ';'. Empty map -> "" (no suffix, so
+// a server without env keeps the bare signature).
+func canonicalKVPairs(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, k+"="+m[k])
+	}
+	return strings.Join(pairs, ";")
 }
 
 func sameServerSet(a, b []config.MCPServerConfig) bool {

@@ -92,8 +92,8 @@ func TestMigrationWSSignatureDistinct(t *testing.T) {
 	if serverSignature(ws) == serverSignature(httpS) {
 		t.Fatalf("ws and http signatures must differ: %q", serverSignature(ws))
 	}
-	if !strings.HasPrefix(serverSignature(ws), "ws:") {
-		t.Fatalf("ws signature must be ws-prefixed, got %q", serverSignature(ws))
+	if !strings.HasPrefix(serverSignature(ws), "sig-v2:ws:") {
+		t.Fatalf("ws signature must be sig-v2 ws-prefixed (#3467 versioning), got %q", serverSignature(ws))
 	}
 }
 
