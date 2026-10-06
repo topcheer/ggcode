@@ -257,6 +257,9 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		args.Command = cleanedCmd
 	}
 	preWarning := preWarn
+	// r25 command cost hints: clock starts after the gate has passed so
+	// approval wait time never inflates the recorded duration.
+	costStart := time.Now()
 	// r28: the gate PASSED - the allowed-side dual of SecLedger.Record on
 	// the blocked branch above. If the command is dangerous-classified its
 	// risk accumulates on the session ledger; a threshold crossing rides
@@ -440,6 +443,17 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	errOutput := util.StripANSI(stderr.String())
 
 	result := t.finalizeCommandResult(args.Command, preWarning, output, errOutput, err, mtimeSnapshot)
+	// r25 command cost hints: file the observed duration and surface it
+	// (plus history-based advice) in the result, where the next planning
+	// turn reads it. arXiv 2607.27250: operational cost warnings are the
+	// one context component that measurably changes agent command choice.
+	// (Backgrounded/GUI branches return earlier with no completion time,
+	// so reaching here means the command ran synchronously to completion.)
+	elapsed := time.Since(costStart)
+	recordCommandCost(args.Command, elapsed)
+	if costLine := formatCommandCost(args.Command, elapsed); costLine != "" {
+		result.Content += "\n\n" + costLine
+	}
 	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
 	// config knob so the agent adapts instead of retrying blindly.
 	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
