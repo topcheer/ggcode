@@ -3,6 +3,8 @@ package agentruntime
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -62,6 +64,13 @@ func TestBuildInteractiveRuntimeCoreGatesProjectMCPServers(t *testing.T) {
 	}
 	if snapshotNames(core)["proj-srv"] {
 		t.Fatal("project .mcp.json server must be gated out at startup")
+	}
+	// sa-45: the gate's user-facing warning must ride StartupNotices so
+	// the TUI first frame can surface it (not debug.Log only).
+	if !slices.ContainsFunc(core.StartupNotices, func(n string) bool {
+		return strings.Contains(n, `blocked project MCP server "proj-srv"`)
+	}) {
+		t.Fatalf("gate warning missing from StartupNotices: %v", core.StartupNotices)
 	}
 
 	// Explicit per-invocation bypass (disclosed via warnings) admits it.

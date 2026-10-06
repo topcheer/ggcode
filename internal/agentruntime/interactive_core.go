@@ -80,7 +80,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	// Placeholder core so the closure below can reach the per-runtime
 	// provider field set later by SetConfigAgent (#1592-B).
 	// StartupNotices is NOT set here: the fresh literal at the tail of
-	// this function replaces the whole struct and would orphan it  - it
+	// this function replaces the whole struct and would orphan it; it
 	// is carried explicitly there instead.
 	core := &InteractiveRuntimeCore{}
 	mcpMgr := plugin.NewMCPManager(mergedServers, registry, workingDir)
