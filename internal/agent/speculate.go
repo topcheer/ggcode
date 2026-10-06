@@ -172,13 +172,17 @@ func (r *speculativeResult) freshStill() bool {
 }
 
 func newSpeculator() *speculator {
-	return &speculator{
+	s := &speculator{
 		patterns:         make(map[string]map[string]int),
 		cache:            make(map[string]*speculativeResult),
 		cacheOrder:       make([]string, 0, specMaxCacheSize),
 		ttl:              30 * time.Second,
 		adaptiveMinCount: 2, // start conservative, adapt based on hit rate
 	}
+	// r486: seed with the cross-session persisted bigram counts so the
+	// first run of a cold process already has warm predictions.
+	mergePersistedPatterns(s)
+	return s
 }
 
 // recordObservation records a tool call and updates the bigram model.

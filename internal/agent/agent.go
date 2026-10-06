@@ -1473,6 +1473,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	sid := a.sessionID
 	a.mu.RUnlock()
 	MarkRunning(sid, userPromptForStatsSafe(content), os.Getpid())
+	// r486: persist the speculative bigram model at run end (throttled).
+	// Registered before the journal/stats defers so it runs early in the
+	// LIFO unwind; it takes s.mu itself and never panics, so ordering
+	// relative to panic containment is safe either way.
+	defer maybePersistSpecPatterns(a.speculator)
 	// Start tracking messages added during this run for session persistence.
 	// persistFullSessionMessages() will use this to know which messages
 	// were added by the agent and need to be appended to the JSONL file.
