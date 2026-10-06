@@ -14,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/memory"
 )
@@ -22,6 +24,12 @@ const (
 	// toolflowHintMinCalls: prefixes are 1-2 grams; a shorter history only
 	// supports 1-gram matches which are too generic to be actionable.
 	toolflowHintMinCalls = 2
+	// toolflowCacheTTL (#3436): mining reads up to toolFlowScanSessionCap
+	// session files whole (multi-GB on heavy installs). The r484 wiring calls
+	// this before EVERY tool batch, so an uncached miss path re-scanned the
+	// store per batch. Patterns evolve only as sessions accumulate, so a
+	// process-wide TTL cache amortizes mining to once per window.
+	toolflowCacheTTL = 15 * time.Minute
 	// toolflowHintMaxPatterns caps the mining query (same default cap as
 	// the recall_toolflow tool's upper bound).
 	toolflowHintMaxPatterns = 10
@@ -31,11 +39,49 @@ const (
 	toolflowHintMinConfidence = 0.7
 )
 
+var (
+	toolflowCacheMu    sync.Mutex
+	toolflowCacheReady bool
+	toolflowCacheAt    time.Time
+	toolflowCachePats  []memory.ToolFlowPattern
+	// toolflowMine is the mining entry point as a function variable purely
+	// so tests can count/expiry-inject without touching the real store
+	// (#3436).
+	toolflowMine = memory.AnalyzeToolFlows
+)
+
+// toolflowCachedPatterns returns the mined patterns, mining at most once
+// per toolflowCacheTTL window per process (#3436). Errors and empty stores
+// also arm the cache: a failing or cold store must not be re-scanned every
+// batch for the rest of the window.
+func toolflowCachedPatterns() []memory.ToolFlowPattern {
+	toolflowCacheMu.Lock()
+	defer toolflowCacheMu.Unlock()
+	if toolflowCacheReady && time.Since(toolflowCacheAt) < toolflowCacheTTL {
+		return toolflowCachePats
+	}
+	toolflowCacheReady = true
+	toolflowCacheAt = time.Now()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		toolflowCachePats = nil
+		return nil
+	}
+	pats, err := toolflowMine(filepath.Join(home, ".ggcode", "sessions"), toolflowHintMaxPatterns)
+	if err != nil {
+		toolflowCachePats = nil
+		return nil
+	}
+	toolflowCachePats = pats
+	return pats
+}
+
 // maybeToolflowSuggestion checks the run's executed-tool sequence against
 // the mined workflow patterns and returns a single reference-level hint
 // line when the sequence tail matches a high-confidence prefix. One shot
 // per run (a.toolflowHintFired); returns "" on repeat, mining failure, or
-// no match, so the normal flow costs nothing on cold setups.
+// no match. Mining itself is process-cached (#3436): the per-batch call
+// only re-scans the session store once per TTL window.
 func (a *Agent) maybeToolflowSuggestion(recentTools []string) string {
 	if a.toolflowHintFired {
 		return ""
@@ -43,12 +89,8 @@ func (a *Agent) maybeToolflowSuggestion(recentTools []string) string {
 	if len(recentTools) < toolflowHintMinCalls {
 		return ""
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	pats, err := memory.AnalyzeToolFlows(filepath.Join(home, ".ggcode", "sessions"), toolflowHintMaxPatterns)
-	if err != nil || len(pats) == 0 {
+	pats := toolflowCachedPatterns()
+	if len(pats) == 0 {
 		return ""
 	}
 	var best *memory.ToolFlowPattern
