@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	charm "charm.land/glamour/v2"
 	"github.com/topcheer/ggcode/internal/chat"
@@ -600,6 +601,21 @@ func formatMCPToolBody(lang Lang, toolName, rawArgs, result string, isError bool
 
 // --- Helper functions ---
 
+// truncateRunesSafe cuts s to at most maxBytes bytes without splitting a
+// multi-byte rune (#3462): the cut backs off to the last rune boundary.
+// A byte-cut in the middle of a 3-byte CJK rune produced invalid UTF-8
+// tails that terminals render as mojibake.
+func truncateRunesSafe(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
 // summarizeToolResult extracts a brief summary from a tool result string.
 func summarizeToolResult(result string, maxLen int) string {
 	result = strings.TrimSpace(result)
@@ -612,7 +628,8 @@ func summarizeToolResult(result string, maxLen int) string {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			if len(line) > maxLen {
-				return line[:maxLen-3] + "..."
+				// #3462: cut at a rune boundary, not mid-rune.
+				return truncateRunesSafe(line, maxLen-3) + "..."
 			}
 			return line
 		}
@@ -654,7 +671,8 @@ func truncateForTerminal(text string, maxLen int) string {
 	if len(text) <= maxLen {
 		return text
 	}
-	return text[:maxLen-3] + "..."
+	// #3462: cut at a rune boundary so zh-CN text never ends mid-rune.
+	return truncateRunesSafe(text, maxLen-3) + "..."
 }
 
 func formatGitStatus(result string, isError bool) string {
