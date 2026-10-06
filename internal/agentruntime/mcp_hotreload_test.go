@@ -222,3 +222,32 @@ func TestMCPHotReloadNoReloadStormWithoutGlobalFile(t *testing.T) {
 		t.Fatalf("reload storm: snapshot changed across quiet ticks (%d → %d)", len(before), len(after))
 	}
 }
+
+// TestMCPHotReloadWatchesProjectGrants (#3438 follow-up): the grants file
+// must be in watchedPaths — without it `ggcode mcp approve` only takes
+// effect after a restart, because the gate re-runs exclusively on
+// watched-file reloads.
+func TestMCPHotReloadWatchesProjectGrants(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	globalDir := filepath.Join(home, ".ggcode")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	w := NewMCPHotReload(globalDir, ws, plugin.NewMCPManager(nil, tool.NewRegistry(), ""))
+
+	grantsPath := mcp.ProjectGrantsPath(ws)
+	if grantsPath == "" {
+		t.Fatal("precondition: grants path must be resolvable for a workspace")
+	}
+	found := false
+	for _, p := range w.watchedPaths() {
+		if p == grantsPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("grants file %s missing from watchedPaths: %v", grantsPath, w.watchedPaths())
+	}
+}
