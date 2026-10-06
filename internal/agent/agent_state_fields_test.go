@@ -54,6 +54,7 @@ func TestNewAgentInitializesAllStateFields(t *testing.T) {
 		"policy":                    "permission policy interface, injected via SetPermissionPolicy",
 		"lastRunStats":              "populated only after a run completes",
 		"experienceInjectedCaseIDs": "populated only by the run-start experience recall (#3072); nil = nothing injected yet",
+		"runToolNames":              "appended only as tools execute during a run (r484 toolflow hint input); nil = no tools run yet",
 		"perfBaseline":              "loaded lazily from disk on first access (guarded)",
 		"guidancePromoter":          "loaded lazily from rule store (guarded)",
 		"ruleStore":                 "loaded lazily via SetRuleStore (guarded)",

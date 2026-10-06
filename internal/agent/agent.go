@@ -194,6 +194,8 @@ type Agent struct {
 	errStrategyLoop              *errStrategyState          // error strategy loop detection (procedural memory failure)
 	experienceFailureRecallFired bool                       // one-shot gate: decision-time experience recall fired this run (r379)
 	experienceInjectedCaseIDs    []string                   // case IDs injected at run-start; decision-time recall excludes them (#3072)
+	toolflowHintFired            bool                       // one-shot gate: toolflow next-step hint fired this run (r484)
+	runToolNames                 []string                   // tool names executed this run, in order (r484 toolflow hint input)
 	solutionFixation             *solutionFixationState     // solution fixation: diagnosis anchoring on failed edit clusters
 	pivotDecision                *pivotDecisionTracker      // pivot/refine meta-decision on consecutive command-family failures (r391)
 	fixCascade                   *fixCascadeState           // failed fix cascade (wrong-hypothesis lock-in) detection
@@ -1563,6 +1565,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// #3072: reset the run-start injected-case set so the decision-time
 		// recall of THIS run never excludes last run's injections.
 		a.experienceInjectedCaseIDs = nil
+		// r484: reset the toolflow hint one-shot gate and the run's tool
+		// sequence for the new run.
+		a.toolflowHintFired = false
+		a.runToolNames = nil
 		if idx := a.recallExperience(userPromptForStats); idx != "" {
 			a.contextManager.Add(provider.Message{
 				Role:    "system",
@@ -3593,6 +3599,22 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					})
 				}
 			}
+		}
+		// r484: operational-memory hint. Before executing the next tool batch,
+		// check whether the tools run so far end with a mined high-confidence
+		// workflow prefix; if so, surface the statistically dominant next step
+		// once as reference data. Injected here - after the previous batch's
+		// tool_results are paired, before the batch executes - so it never
+		// splits a tool_call/tool_result pair.
+		if hint := a.maybeToolflowSuggestion(a.runToolNames); hint != "" {
+			debug.Log("agent", "injected toolflow next-step hint (%d chars)", len(hint))
+			a.contextManager.Add(provider.Message{
+				Role:    "user",
+				Content: []provider.ContentBlock{{Type: "text", Text: hint}},
+			})
+		}
+		for _, tc := range toolCalls {
+			a.runToolNames = append(a.runToolNames, tc.Name)
 		}
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
