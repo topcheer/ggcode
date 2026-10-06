@@ -343,7 +343,12 @@ def run_verify(verify: dict, cwd: str | None = None, timeout: int = 60) -> tuple
     try:
         artifact = verify.get("artifact")
         if artifact:
+            # #3455: artifacts are RELATIVE to the task's working_dir (the
+            # daemon cwd, per the docstring and task_templates contract);
+            # the old check ignored the cwd param entirely.
             p = Path(artifact)
+            if cwd and not p.is_absolute():
+                p = Path(cwd) / p
             if not p.is_file():
                 return "fail", f"artifact missing: {artifact}"
             needles = verify.get("content_contains")
@@ -374,6 +379,7 @@ def run_task(
     task: dict,
     llm: LLMClient | None,
     log_file: str | None = None,
+    working_dir: str | None = None,
 ) -> dict:
     """Run a single evaluation task.
 
@@ -496,7 +502,10 @@ def run_task(
     verify_status = "text_only"
     verify_detail = ""
     if verify:
-        v_status, v_detail = run_verify(verify)
+        # #3455: thread the task's working_dir (daemon cwd) into the verify
+        # layer and keep the detail - v_detail used to be dropped, so
+        # verify_detail stayed empty in the result rows.
+        v_status, verify_detail = run_verify(verify, cwd=working_dir)
         if v_status != "pass":
             success = False
         verify_status = "artifact_verified" if v_status == "pass" else "verify_failed"
@@ -847,7 +856,7 @@ def run_single_mode(
 
     for task in tasks:
         log_file = f"{log_dir}/{run_id}_{task['id']}.ndjson"
-        result = run_task(base_url, task, llm, log_file)
+        result = run_task(base_url, task, llm, log_file, working_dir=working_dir)
         result["run_id"] = run_id
         result["phase"] = mode
         result["mode"] = mode
@@ -1166,7 +1175,7 @@ def main():
 
                 for task in tasks:
                     log_file = f"{log_dir}/{args.run_id}_{task['id']}.ndjson"
-                    result = run_task(base_url, task, llm, log_file)
+                    result = run_task(base_url, task, llm, log_file, working_dir=working_dir)
                     result["run_id"] = args.run_id
                     result["phase"] = args.mode
                     result["mode"] = args.mode
