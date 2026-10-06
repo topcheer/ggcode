@@ -99,6 +99,25 @@ func TestSkillToolExecute(t *testing.T) {
 	if callback.Name != "deploy" || callback.Ref != "deploy" || callback.Mode != SkillExecutionModeInline || callback.Result.IsError {
 		t.Fatalf("unexpected callback: %+v", callback)
 	}
+	// r482: the inline follow-up message must carry the <skill-source>
+	// trust boundary, not a bare body (contextual authorization).
+	if len(result.FollowUpMessages) != 1 {
+		t.Fatalf("expected exactly 1 follow-up message, got %d", len(result.FollowUpMessages))
+	}
+	fu := result.FollowUpMessages[0]
+	if fu.Role != "user" || len(fu.Content) != 1 {
+		t.Fatalf("unexpected follow-up shape: %+v", fu)
+	}
+	injected := fu.Content[0].Text
+	if !strings.Contains(injected, `<skill-source name="deploy">`) {
+		t.Errorf("follow-up missing skill-source boundary, got:\n%s", injected)
+	}
+	if !strings.Contains(injected, "Run from") || !strings.Contains(injected, "prod") {
+		t.Errorf("expanded body must be preserved inside the boundary, got:\n%s", injected)
+	}
+	if !strings.HasSuffix(injected, "</skill-source>") {
+		t.Errorf("boundary must close at end, got tail: %q", injected[min(len(injected), 40):])
+	}
 }
 
 func TestSkillToolExecuteRejectsModelDisabledSkill(t *testing.T) {
