@@ -713,6 +713,16 @@ func (t SkillTool) handleImportSkill(rest, args string) Result {
 	if manifest.Description != "" {
 		sb.WriteString(fmt.Sprintf("Description: %s\n", manifest.Description))
 	}
+	// #r481: advisory content scan. The bundle body is injected as a USER
+	// message when this skill loads, so malicious text that survived the
+	// structural import guards must be visible at import time. Warnings do
+	// NOT block the import (false positives must not lock users out).
+	if warns := scanSkillDir(skillDir); len(warns) > 0 {
+		sb.WriteString(fmt.Sprintf("\nWarning: security scan flagged %d issue(s) - review before invoking this skill:\n", len(warns)))
+		for _, w := range warns {
+			sb.WriteString(fmt.Sprintf("  - %s\n", w))
+		}
+	}
 	sb.WriteString("\nThe skill is now available. Use the skill tool to load it.")
 	return Result{Content: sb.String()}
 }
