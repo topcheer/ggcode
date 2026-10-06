@@ -59,8 +59,11 @@ func TestIssue3463NormalizeCostKeyURLDoubleSlashIsLiteral(t *testing.T) {
 	if got := normalizeCostKey(`curl "https://example.com//double" -s // retry`); got != quoted {
 		t.Errorf("URL // followed by real comment normalized to %q, want %q", got, quoted)
 	}
-	if got := normalizeCostKey(`curl https://example.com // comment`); got != `curl https:` {
-		t.Errorf("unquoted // should start comment, got %q", got)
+	// #3472: whitespace-led "//" after a BARE url is a real comment - strip
+	// the comment, keep the url (the old assertion pinned the over-strip
+	// regression that keyed this as "curl https:").
+	if got := normalizeCostKey(`curl https://example.com // comment`); got != `curl https://example.com` {
+		t.Errorf("bare URL must survive, whitespace-led // comment must strip; got %q", got)
 	}
 }
 
