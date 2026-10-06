@@ -19,6 +19,9 @@ import (
 type StartupAssets struct {
 	AutoFiles      []string
 	CommandManager *commands.Manager
+	// ConsolidationFindings (sa-45): sleep-time memory-consolidation
+	// warnings swept in the idle window; surfaced as startup notices.
+	ConsolidationFindings []string
 }
 
 func LoadInteractiveStartupAssets(
@@ -28,6 +31,9 @@ func LoadInteractiveStartupAssets(
 	var (
 		autoFiles  []string
 		commandMgr *commands.Manager
+		// consolidationFindings is appended inside the memory goroutine and
+		// read only after wg.Wait() (sa-45 startup-notices channel).
+		consolidationFindings []string
 	)
 
 	var wg sync.WaitGroup
@@ -45,6 +51,7 @@ func LoadInteractiveStartupAssets(
 			debug.Log("memory", "startup consolidation: %s", report.String())
 			for _, w := range report.Warnings {
 				debug.Log("memory", "startup consolidation: %s", w)
+				consolidationFindings = append(consolidationFindings, w)
 			}
 		}
 		_, autoFiles, _ = autoMem.LoadIndex()
@@ -68,8 +75,9 @@ func LoadInteractiveStartupAssets(
 	}
 
 	return StartupAssets{
-		AutoFiles:      autoFiles,
-		CommandManager: commandMgr,
+		AutoFiles:             autoFiles,
+		CommandManager:        commandMgr,
+		ConsolidationFindings: consolidationFindings,
 	}
 }
 

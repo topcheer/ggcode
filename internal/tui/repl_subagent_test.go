@@ -15,7 +15,7 @@ import (
 
 func TestSubAgentCancelAllDoesNotBlockOnProgramSend(t *testing.T) {
 	prov := &testStreamProvider{}
-	repl := NewREPL(agent.NewAgent(prov, tool.NewRegistry(), "", 1), nil)
+	repl := NewREPL(agent.NewAgent(prov, tool.NewRegistry(), "", 1), nil, nil)
 	mgr := subagent.NewManager(config.SubAgentConfig{})
 	defer mgr.Shutdown()
 	repl.SetSubAgentManager(mgr, prov, tool.NewRegistry())
