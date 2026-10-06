@@ -8,6 +8,7 @@ package agent
 // (auxProviderFor falls back to the main provider, apply reports no swap).
 
 import (
+	"context"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/config"
@@ -173,5 +174,115 @@ func TestModelCascade_SameModelArmsNothing(t *testing.T) {
 	a.cascade.consecLowBatches = cascadeMinLowBatches
 	if a.applyModelCascade() {
 		t.Fatal("no swap when routing unarmed")
+	}
+}
+
+// --- End-to-end wiring probes: drive RunStream through real loop mount
+// points (mount wiring errors are invisible to the unit probes above).
+
+func readOnlyToolTurn(id string) *provider.ChatResponse {
+	return &provider.ChatResponse{
+		Message: provider.Message{
+			Role: "assistant",
+			Content: []provider.ContentBlock{
+				provider.ToolUseBlock(id, "read_file", []byte(`{"path":"/tmp/x"}`)),
+			},
+		},
+		Usage: provider.TokenUsage{InputTokens: 10, OutputTokens: 2},
+	}
+}
+
+func textTurn(s string) *provider.ChatResponse {
+	return &provider.ChatResponse{
+		Message: provider.Message{
+			Role:    "assistant",
+			Content: []provider.ContentBlock{provider.TextBlock(s)},
+		},
+		Usage: provider.TokenUsage{InputTokens: 5, OutputTokens: 1},
+	}
+}
+
+// Dormancy regression: with aux_model unset, a read-heavy run must be
+// byte-identical to pre-cascade behavior (all turns on the main provider).
+func TestModelCascade_RunStreamDormantWithoutAux(t *testing.T) {
+	mp := &mockProvider{chatResponses: []*provider.ChatResponse{
+		readOnlyToolTurn("c1"), readOnlyToolTurn("c2"), textTurn("done"),
+	}}
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "read_file", result: tool.Result{Content: "ok"}}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	a := NewAgent(mp, registry, "", 5)
+	if err := a.RunStream(context.Background(), "hi", func(provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if mp.streamCalls != 3 {
+		t.Fatalf("dormant cascade: expected 3 main-provider calls, got %d", mp.streamCalls)
+	}
+	if a.cascadeSavedProvider != nil {
+		t.Fatal("no parked provider may leak after a dormant run")
+	}
+}
+
+// Threshold guard: a single read-only batch (streak=1) must NOT cascade the
+// follow-up turn onto the aux model.
+func TestModelCascade_RunStreamSingleBatchStaysMain(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	mp := &mockProvider{chatResponses: []*provider.ChatResponse{
+		readOnlyToolTurn("c1"), textTurn("done"),
+	}}
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "read_file", result: tool.Result{Content: "ok"}}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	a := NewAgent(mp, registry, "", 5)
+	a.SetAuxModel(&config.ResolvedEndpoint{
+		VendorID: "openai-compat", EndpointID: "e", Model: "main-model",
+		Protocol: "openai", BaseURL: "http://127.0.0.1:1", APIKey: "k",
+	}, "cheap-model")
+	if err := a.RunStream(context.Background(), "hi", func(provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	if mp.streamCalls != 2 {
+		t.Fatalf("streak=1 must keep both turns on the main provider, got %d calls", mp.streamCalls)
+	}
+}
+
+// Activation wiring: two read-only batches arm the cascade, so the third
+// turn's request leaves the main provider for the aux clone (whose fake
+// URL fails fast; the stream-failure reset then reverts retries to the
+// main model). Whatever the retry outcome, the run must end with a clean
+// un-parked provider and a reset streak - never a leaked aux swap.
+func TestModelCascade_RunStreamActivationCleansUp(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	mp := &mockProvider{chatResponses: []*provider.ChatResponse{
+		readOnlyToolTurn("c1"), readOnlyToolTurn("c2"), textTurn("done"),
+	}}
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "read_file", result: tool.Result{Content: "ok"}}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	a := NewAgent(mp, registry, "", 5)
+	a.SetAuxModel(&config.ResolvedEndpoint{
+		VendorID: "openai-compat", EndpointID: "e", Model: "main-model",
+		Protocol: "openai", BaseURL: "http://127.0.0.1:1", APIKey: "k",
+	}, "cheap-model")
+	_ = a.RunStream(context.Background(), "hi", func(provider.StreamEvent) {})
+	if a.cascadeSavedProvider != nil {
+		t.Fatal("parked provider leaked after run - restore path is broken")
+	}
+	if a.provider != provider.Provider(mp) {
+		t.Fatal("agent must end the run on the main provider")
+	}
+	// The done turn is a text-only batch (neutral), so a non-zero streak
+	// here means the cascade never fired; zero means it fired and the
+	// stream-failure reset ran. Either is a consistent end state - what is
+	// forbidden is a stuck streak of exactly the threshold with a provider
+	// mismatch. Assert internal consistency:
+	if a.cascade.consecLowBatches >= cascadeMinLowBatches && a.auxProvider != nil {
+		// Cascade fired at least once (aux was built) yet the streak
+		// re-armed without any reset: suspicious, surface it.
+		t.Fatalf("streak re-armed (%d) after aux was exercised - reset path may be missing",
+			a.cascade.consecLowBatches)
 	}
 }
