@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // buildSessionFile writes a fake session JSONL under <dir>/.ggcode/sessions/
@@ -63,10 +64,21 @@ func TestMaybeToolflowSuggestion_OneShotGate(t *testing.T) {
 	}
 }
 
+func resetToolflowCacheForTest() {
+	toolflowCacheMu.Lock()
+	defer toolflowCacheMu.Unlock()
+	toolflowCacheReady = false
+	toolflowCacheAt = time.Time{}
+	toolflowCachePats = nil
+}
+
 func TestMaybeToolflowSuggestion_ColdStore(t *testing.T) {
 	// HOME pointed at a dir with no .ggcode/sessions: mining returns no
-	// patterns; the call must return "" without firing (retry stays possible
-	// later in the run once sessions exist).
+	// patterns; the call must return "" without firing. The store is
+	// re-mined at most once per TTL window per process (#3436) - a later
+	// run may pick sessions up after the window expires.
+	resetToolflowCacheForTest()
+	defer resetToolflowCacheForTest()
 	t.Setenv("HOME", t.TempDir())
 	a := &Agent{}
 	if got := a.maybeToolflowSuggestion([]string{"read_file", "edit_file", "run_command"}); got != "" {
@@ -89,6 +101,8 @@ func TestMaybeToolflowSuggestion_MatchAndWording(t *testing.T) {
 		"read_file", "edit_file", "run_command",
 		"read_file", "edit_file", "run_command")
 	t.Setenv("HOME", strings.TrimSuffix(dir, "/.ggcode/sessions"))
+	resetToolflowCacheForTest()
+	defer resetToolflowCacheForTest()
 	a := &Agent{}
 	got := a.maybeToolflowSuggestion([]string{"grep", "read_file", "edit_file"})
 	if got == "" {

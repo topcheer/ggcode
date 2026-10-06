@@ -103,6 +103,8 @@ type Agent struct {
 	auxProvider                provider.Provider        // lazily built
 	auxModelName               string                   // aux model for diagnostics
 	auxFailed                  bool                     // aux build failed once: permanent fallback to main
+	cascade                    modelCascadeState        // r485 turn-tier routing: consecutive read-only batch streak (value type, zero = dormant)
+	cascadeSavedProvider       provider.Provider        // r485: main provider parked while an exploratory turn runs on the aux model (nil = not swapped)
 	tools                      *tool.Registry
 	contextManager             ctxpkg.ContextManager
 	maxIter                    int
@@ -2393,6 +2395,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		// Adaptive effort: adjust reasoning budget per-turn based on recent
 		// tool complexity. Only activates when user hasn't explicitly set effort.
 		effortApplied, effortPrev := a.applyAdaptiveEffort()
+		// r485 turn-tier model cascade: after 2+ consecutive purely
+		// read-only, error-free tool batches the next turn is exploratory -
+		// route its LLM request to the cheaper aux model (RouteLLM-style).
+		// Dormant unless aux_model is configured; any mutation/error/stream
+		// failure reverts to the main model immediately.
+		cascadeSwapped := a.applyModelCascade()
 		// No adaptive sampling: removed. Some models (e.g. Kimi k3-256k) reject
 		// any temperature value other than 1, causing 400 errors; temperature is
 		// left at the provider default unless the user explicitly sets it.
@@ -2435,10 +2443,17 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				if effortApplied != "" {
 					a.restoreEffort(effortPrev)
 				}
+				if cascadeSwapped {
+					a.restoreModelCascade()
+				}
 			}()
 			return a.streamChatResponse(ctx, a.ensureMessagesSendable(msgs), activeToolDefs, onEvent)
 		}()
 		if err != nil {
+			// r485: a failed stream carries no trustworthy trajectory
+			// evidence - drop the cascade streak so the retry stays on the
+			// main model.
+			a.cascade.resetBatches()
 			if errors.Is(err, errStreamInterruptedForReplan) {
 				reactiveCompactRetries = 0
 				agentLLMRetries = 0
@@ -3613,8 +3628,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Content: []provider.ContentBlock{{Type: "text", Text: hint}},
 			})
 		}
+		// r485: batch boundary for turn-tier cascade classification. The
+		// planning-time loop below records every call uniformly, covering
+		// both sequential and parallel execution paths.
+		a.cascade.beginBatch()
 		for _, tc := range toolCalls {
 			a.runToolNames = append(a.runToolNames, tc.Name)
+			a.cascade.notePlanned(tc.Name)
 		}
 		for idx, tc := range toolCalls {
 			if err := ctx.Err(); err != nil {
@@ -4463,6 +4483,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if a.effortAdapter != nil {
 				a.effortAdapter.recordToolResultErr(tc.Name, result.IsError, result.Content)
 			}
+			// r485 cascade: an errored result disqualifies the open batch.
+			a.cascade.noteError(result.IsError)
 			// Strategy stagnation detector: tracks same-tool+target retries
 			// after failure. When 2+ consecutive failures with identical
 			// approach occur, inject guidance to pivot strategy.
