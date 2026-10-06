@@ -8,6 +8,7 @@ package agent
 // edges. HOME is isolated because ConfigDir() is testguarded.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/provider"
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func isolateSpecHome(t *testing.T) string {
@@ -210,3 +213,33 @@ func TestSpecPersist_ConcurrentSaves(t *testing.T) {
 
 // ConfigDir reference keeps the config import honest if assertions change.
 var _ = config.ConfigDir
+
+// Run-end save wiring (r486): the maybePersistSpecPatterns defer mounted in
+// RunStreamWithContent must fire after a real run completes. Mirrors the
+// r485 lesson - unit probes cannot see hand-located mount points - so this
+// drives an actual RunStream and asserts the model reached the disk.
+func TestSpecPersist_RunEndSaveWiring(t *testing.T) {
+	path := isolateSpecHome(t)
+	mp := &mockProvider{chatResponses: []*provider.ChatResponse{
+		readOnlyToolTurn("c1"), textTurn("done"),
+	}}
+	registry := tool.NewRegistry()
+	if err := registry.Register(mockTool{name: "read_file", result: tool.Result{Content: "ok"}}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	a := NewAgent(mp, registry, "", 5)
+	if err := a.RunStream(context.Background(), "hi", func(provider.StreamEvent) {}); err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("run end must persist the model to disk: %v", err)
+	}
+	var m map[string]map[string]int
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("persisted model must be valid JSON: %v", err)
+	}
+	// Load wiring is exercised implicitly: isolateSpecHome re-armed the
+	// one-shot load and this test's own NewAgent (via newSpeculator) ran it
+	// against the empty file; the save here writes what the run observed.
+}
