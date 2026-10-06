@@ -10,6 +10,7 @@ package lanchat
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func issue3402SignedDM(t *testing.T, key *NodeKey, id, fromNode, content string) Message {
@@ -22,7 +23,7 @@ func issue3402SignedDM(t *testing.T, key *NodeKey, id, fromNode, content string)
 		ToNodeID:   "self-node",
 		ToRole:     RoleAgent,
 		Content:    content,
-		Timestamp:  1700000000000,
+		Timestamp:  time.Now().UnixMilli(),
 	}
 	signMessage(&m, key)
 	return m

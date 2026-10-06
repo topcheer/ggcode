@@ -951,6 +951,84 @@ func TestHandleIncomingMessage_FiresOnInboundDM(t *testing.T) {
 	}
 }
 
+// TestHandleIncomingMessage_ReplayWindowDropsStaleSigned verifies the r20
+// replay-freshness gate (#3402 follow-up): a signed message whose timestamp
+// is outside the ±15min window is dropped BEFORE dedup marking, so it never
+// reaches history and never poisons the seenMsgIDs FIFO. Unsigned messages
+// bypass the gate entirely.
+func TestHandleIncomingMessage_ReplayWindowDropsStaleSigned(t *testing.T) {
+	tmp := t.TempDir()
+	store := NewStore(tmp)
+	hub := NewHub("node-self", "tui", "http://localhost:1", "", store, WorkspaceMeta{Workspace: "/tmp/test"})
+
+	var gotInbound atomic.Value // string
+	hub.SetOnInboundDM(func(fromNodeID string) { gotInbound.Store(fromNodeID) })
+
+	// Signed but stale (2 hours old) DM from node-bob.
+	stale := Message{
+		ID:         "msg-stale",
+		FromNodeID: "node-bob",
+		FromNick:   "bob_dev",
+		FromRole:   RoleAgent,
+		ToNodeID:   hub.NodeID(),
+		Content:    "replayed capture",
+		Timestamp:  time.Now().Add(-2 * time.Hour).UnixMilli(),
+		Sig:        "dummy-sig",
+	}
+	hub.HandleIncomingMessage(stale)
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if gotInbound.Load() != nil {
+			t.Fatalf("stale signed DM fired onInboundDM (replay window not enforced)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The stale message must NOT have consumed a dedup slot (gate sits
+	// before markSeenLocked): the same ID with a FRESH timestamp is still
+	// admitted.
+	fresh := stale
+	fresh.Timestamp = time.Now().UnixMilli()
+	fresh.Content = "legitimate resend"
+	hub.HandleIncomingMessage(fresh)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v := gotInbound.Load(); v != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if v := gotInbound.Load(); v == nil {
+		t.Fatal("fresh resend of the same ID was dropped - stale rejection poisoned the dedup set")
+	}
+
+	// Unsigned stale message bypasses the gate (pre-#3402 compatibility).
+	hub2 := NewHub("node-self2", "tui", "http://localhost:1", "", NewStore(t.TempDir()), WorkspaceMeta{Workspace: "/tmp/test"})
+	var gotInbound2 atomic.Value
+	hub2.SetOnInboundDM(func(fromNodeID string) { gotInbound2.Store(fromNodeID) })
+	unsignedStale := Message{
+		ID:         "msg-unsigned-stale",
+		FromNodeID: "node-carol",
+		FromRole:   RoleAgent,
+		ToNodeID:   hub2.NodeID(),
+		Content:    "legacy message",
+		Timestamp:  time.Now().Add(-3 * time.Hour).UnixMilli(),
+	}
+	hub2.HandleIncomingMessage(unsignedStale)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v := gotInbound2.Load(); v != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if v := gotInbound2.Load(); v == nil {
+		t.Fatal("unsigned legacy message was dropped by the replay window - gate must only bind signed messages")
+	}
+}
+
 // TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM verifies that
 // broadcast messages do NOT trigger the onInboundDM callback.
 func TestHandleIncomingMessage_BroadcastDoesNotFireOnInboundDM(t *testing.T) {

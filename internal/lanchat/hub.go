@@ -28,6 +28,14 @@ const (
 	// retries and TCP→UDP fallback re-deliver within seconds; a window of
 	// 512 recent IDs is far beyond what double delivery needs.
 	seenMsgCap = 512
+	// replayWindowMs is the signed-message freshness window (#3402
+	// follow-up, r20): the canonical payload (#3419) binds the message ID
+	// but an unmodified captured DM still re-verifies byte-for-byte after
+	// the in-memory dedup set is evicted (512 newer IDs) or lost to a
+	// restart. Signed messages older (or clock-skewed beyond) this window
+	// are dropped before markSeen, so stale replays cannot pass and cannot
+	// poison the dedup FIFO either. Unsigned pre-#3402 messages bypass it.
+	replayWindowMs = int64(15 * time.Minute / time.Millisecond)
 	// recentAgentMsgCap bounds the @agent message ID index consulted by
 	// NotifyAgentComplete after a manually approved agent run finishes.
 	recentAgentMsgCap = 256
@@ -1383,6 +1391,19 @@ func (h *Hub) HandleIncomingMessage(msg Message) {
 	// UDP) never covered @agent messages — a duplicate auto-approved @agent
 	// DM would be injected into the agent loop twice. Dedup every message
 	// here, at the single ingress both transports converge on.
+	//
+	// Replay freshness (r20, #3402 follow-up): checked BEFORE the dedup
+	// lookup so a rejected replay does not consume (or poison-evict) a
+	// dedup slot. Only signed messages are bound - the signature covers
+	// msg.Timestamp via the canonical payload (#3419).
+	if msg.Sig != "" {
+		if skew := time.Now().UnixMilli() - msg.Timestamp; skew > replayWindowMs || skew < -replayWindowMs {
+			h.mu.Unlock()
+			debug.Log("lanchat", "drop stale signed message %s from %s (replay window %.1fmin)",
+				msg.ID, msg.FromNodeID, float64(skew)/float64(time.Minute/time.Millisecond))
+			return
+		}
+	}
 	if h.seenMsgIDs[msg.ID] {
 		h.mu.Unlock()
 		debug.Log("lanchat", "drop duplicate message %s from %s (double delivery)", msg.ID, msg.FromNodeID)

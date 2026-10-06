@@ -3,6 +3,7 @@ package lanchat
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // R32 web-of-trust (PANDA arXiv:2609.38482): trusted peer NODES are exempt
@@ -38,7 +39,7 @@ func TestStrictModeTrustedPeerAgentDMAutoApproved(t *testing.T) {
 		t.Fatalf("LoadOrCreateNodeKey: %v", err)
 	}
 	first := Message{ID: "m1", FromNodeID: "friend-node", FromRole: RoleAgent, FromNick: "FriendAgent",
-		ToNodeID: "self-node", ToRole: RoleAgent, Content: "pin me", Timestamp: 1700000000000}
+		ToNodeID: "self-node", ToRole: RoleAgent, Content: "pin me", Timestamp: time.Now().UnixMilli()}
 	signMessage(&first, key)
 	h.HandleIncomingMessage(first) // first sight: pins the key
 	h.SetTrustedPeer("friend-node", true)
@@ -46,7 +47,7 @@ func TestStrictModeTrustedPeerAgentDMAutoApproved(t *testing.T) {
 		t.Fatal("SetTrustedPeer(true) should endorse the node")
 	}
 	second := Message{ID: "m2", FromNodeID: "friend-node", FromRole: RoleAgent, FromNick: "FriendAgent",
-		ToNodeID: "self-node", ToRole: RoleAgent, Content: "run this", Timestamp: 1700000000001}
+		ToNodeID: "self-node", ToRole: RoleAgent, Content: "run this", Timestamp: time.Now().UnixMilli()}
 	signMessage(&second, key)
 	h.HandleIncomingMessage(second)
 	if pending := h.PendingApprovals(); len(pending) != 1 { // m1 queued pre-endorsement
