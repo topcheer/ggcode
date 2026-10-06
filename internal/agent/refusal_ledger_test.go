@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/tool"
 )
 
 func newRefusalTestLedger(t *testing.T) *refusalLedger {
@@ -142,5 +144,33 @@ func TestRefusalClearAndSummary(t *testing.T) {
 	l.clear()
 	if len(l.data.Entries) != 0 {
 		t.Fatal("clear must wipe entries")
+	}
+}
+
+// Agent-level wiring (r23): the ledger is constructed with the agent,
+// re-anchored on SetWorkingDir, and fed from user text via
+// recordUserRefusals -- the same entry point agent.go calls after
+// recordConstraints.
+func TestAgentRefusalLedgerWiring(t *testing.T) {
+	a := NewAgent(&mockProvider{}, tool.NewRegistry(), "", 1)
+	if a.refusalLedger == nil {
+		t.Fatal("NewAgent must construct refusalLedger")
+	}
+	dir := t.TempDir()
+	a.SetWorkingDir(dir)
+	if a.refusalLedger == nil || a.refusalLedger.workingDir != dir {
+		t.Fatal("SetWorkingDir must re-anchor refusalLedger")
+	}
+	a.recordUserRefusals("don't touch internal/auth/core.go")
+	if len(a.refusalLedger.data.Entries) != 1 {
+		t.Fatalf("recordUserRefusals must persist, got %d entries", len(a.refusalLedger.data.Entries))
+	}
+	// The enforced path must work through the Agent's ledger instance.
+	if msg := a.refusalLedger.checkBlocked("edit_file", `{"file_path":"`+dir+`/internal/auth/core.go"}`); msg == "" {
+		t.Fatal("wired ledger must block matching write")
+	}
+	// Conversational lift through the Agent entry point releases it.
+	if n := a.ReleaseMatchingRefusals("ok, you can modify internal/auth/core.go now"); n != 1 {
+		t.Fatalf("ReleaseMatchingRefusals must lift, got %d", n)
 	}
 }
