@@ -46,6 +46,10 @@ type planDriftState struct {
 	captured bool       // whether a plan was captured this run
 	fired    bool       // whether the gate already fired
 	items    []planItem // extracted plan items
+
+	// adherence (r34) exposes the internally computed plan coverage as a
+	// continuous per-run trend; the fire-once warning above stays as-is.
+	adherence planAdherenceTrend
 }
 
 type planItem struct {
@@ -61,6 +65,7 @@ func (p *planDriftState) reset() {
 	p.captured = false
 	p.fired = false
 	p.items = nil
+	p.adherence = planAdherenceTrend{}
 }
 
 // capturePlan extracts structured items from a plan presented via exit_plan_mode.
@@ -286,25 +291,7 @@ func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 	// Restating a plan is not doing it; compare against what the tools
 	// actually touched (the todo_staleness pattern: silencing requires
 	// tool-pattern evidence, not text promises).
-	workCorpus := ""
-
-	// Add edited file paths and names
-	for _, f := range runStats.FilesEdited {
-		workCorpus += " " + strings.ToLower(f)
-		if idx := strings.LastIndex(f, "/"); idx >= 0 {
-			workCorpus += " " + strings.ToLower(f[idx+1:])
-		}
-	}
-
-	// Tool names are EXCLUDED from the corpus: plan-item keywords
-	// colliding with generic tool names (grep/search/read) counted as
-	// "work done" without any action. Per-tool call targets below carry
-	// the real evidence.
-
-	// Add commands run
-	for _, cmd := range runStats.CommandsRun {
-		workCorpus += " " + strings.ToLower(cmd)
-	}
+	workCorpus := buildPlanWorkCorpus(runStats)
 
 	// Check each plan item for keyword coverage
 	var unaddressed []string
@@ -349,6 +336,28 @@ func (p *planDriftState) checkPlanDrift(runStats *RunStats, _ string) string {
 	}
 	b.WriteString("\nReview these plan items and address any gaps before completing.")
 
+	return b.String()
+}
+
+// buildPlanWorkCorpus assembles the "work done" corpus from tool-faced
+// evidence only: edited file paths/names and commands run. Tool names are
+// EXCLUDED: plan-item keywords colliding with generic tool names
+// (grep/search/read) would count as "work done" without any action.
+// Shared by the fire-once drift warning and the continuous adherence score.
+func buildPlanWorkCorpus(runStats *RunStats) string {
+	var b strings.Builder
+	for _, f := range runStats.FilesEdited {
+		b.WriteString(" ")
+		b.WriteString(strings.ToLower(f))
+		if idx := strings.LastIndex(f, "/"); idx >= 0 {
+			b.WriteString(" ")
+			b.WriteString(strings.ToLower(f[idx+1:]))
+		}
+	}
+	for _, cmd := range runStats.CommandsRun {
+		b.WriteString(" ")
+		b.WriteString(strings.ToLower(cmd))
+	}
 	return b.String()
 }
 
