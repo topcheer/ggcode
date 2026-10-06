@@ -2024,6 +2024,13 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     );
   }
 
+  /// #2812 test seam: snapshot keys that are still dirty — including keys
+  /// retained because their session record has no writable workspaceKey
+  /// (they must survive a flush round and be retried after reconnect).
+  @visibleForTesting
+  Set<String> get debugPendingSnapshotFlush =>
+      Set<String>.unmodifiable(_dirtySnapshots);
+
   Future<void> _flushDirtyState() async {
     if (_dirtySnapshots.isEmpty &&
         _dirtySessions.isEmpty &&
@@ -2064,13 +2071,25 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
         pendingSessionRecords.add(session.copyWith(title: '$wsName · $date'));
       }
     }
-    final pendingSnapshotKeys = List<String>.from(_dirtySnapshots);
+    final candidateSnapshotKeys = List<String>.from(_dirtySnapshots);
+    final pendingSnapshotKeys = <String>[];
     final pendingSnapshotWrites = <_SnapshotWrite>[];
-    for (final key in pendingSnapshotKeys) {
+    // #2812: a snapshot whose session record is gone or lost its
+    // workspaceKey (clearReconnectTarget during a disconnect window) cannot
+    // be written this round — keep it dirty so its in-memory updates are
+    // persisted once the session is restored, instead of being silently
+    // dropped by the clear below. Snapshots absent from state have nothing
+    // left to persist (future mutations re-arm them), so they stay dropped.
+    final retainedSnapshotKeys = <String>[];
+    for (final key in candidateSnapshotKeys) {
       final snapshot = state.snapshots[key];
       if (snapshot == null) continue;
       final session = state.sessions[key];
-      if (session == null || session.workspaceKey.isEmpty) continue;
+      if (session == null || session.workspaceKey.isEmpty) {
+        retainedSnapshotKeys.add(key);
+        continue;
+      }
+      pendingSnapshotKeys.add(key);
       pendingSnapshotWrites.add(
         _SnapshotWrite(
           workspaceKey: session.workspaceKey,
@@ -2082,6 +2101,14 @@ class WorkspaceCacheNotifier extends Notifier<WorkspaceCacheState> {
     _dirtyWorkspaces.clear();
     _dirtySessions.clear();
     _dirtySnapshots.clear();
+    _dirtySnapshots.addAll(retainedSnapshotKeys);
+    if (retainedSnapshotKeys.isNotEmpty) {
+      debugPrint(
+        '[workspace_cache] #2812: retained ${retainedSnapshotKeys.length} '
+        'dirty snapshot(s) without a writable session record; '
+        'will retry after the session is restored',
+      );
+    }
     try {
       _store!.writeBatch(
         workspaces: pendingWorkspaceRecords,

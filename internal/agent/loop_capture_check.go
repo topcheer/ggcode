@@ -41,7 +41,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -224,8 +223,7 @@ func findLoopCaptureIssues(src string) []loopCaptureInstance {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, fset, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

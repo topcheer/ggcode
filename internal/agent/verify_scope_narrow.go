@@ -185,7 +185,17 @@ func extractGoTestScope(cmd string) string {
 		pkgs := goTestPkgRe.FindAllStringSubmatch(cmd, -1)
 		for _, m := range pkgs {
 			if len(m) > 1 && m[1] != "./..." {
-				parts = append(parts, "pkg:"+m[1])
+				// #2810: a .go-suffixed argument is a single-file scope (go test
+				// compiles just that file plus its implicit package), not a
+				// package token. Classifying it as pkg: fed isNarrower's exact-set
+				// comparison a path token that never equals its package directory,
+				// so package→file narrowing (the classic scope-gaming move) went
+				// undetected. pytest/npm already classify files as file:.
+				if strings.HasSuffix(m[1], ".go") {
+					parts = append(parts, "file:"+m[1])
+				} else {
+					parts = append(parts, "pkg:"+m[1])
+				}
 			}
 		}
 		if len(parts) == 0 {
@@ -410,6 +420,23 @@ func isNarrower(b, a string) bool {
 		if allSubset && len(bPkgs) < len(aPkgs) {
 			return true
 		}
+		// #2810: path-prefix containment. A file/directory token that lives
+		// under one of a's package directories IS a narrowing of that package,
+		// but the exact-set comparison above can never see it (a path never
+		// string-equals its directory, and trailing-slash spelling differs).
+		// Typical gaming chain: `go test ./internal/agent/` (fail) →
+		// `go test ./internal/agent/bar_test.go` (fail) → `+ -run TestBar`
+		// (pass) - previously silent throughout.
+		if scopeUnderAnyPrefix(bPkgs, aPkgs) {
+			return true
+		}
+	}
+	// #2810 cont.: a-side package directories vs b-side FILE tokens
+	// (pkg:./pkg/ → file:./pkg/foo_test.go is narrowing even when b has no
+	// pkg: tokens at all).
+	bFiles := extractFileList(b)
+	if len(aPkgs) > 0 && len(bFiles) > 0 && scopeUnderAnyPrefix(bFiles, aPkgs) {
+		return true
 	}
 	// Added -run filter (go) or -k filter (pytest) or --grep (npm)
 	if strings.Contains(b, "run:") && !strings.Contains(a, "run:") {
@@ -423,7 +450,12 @@ func isNarrower(b, a string) bool {
 	}
 	// Added file filter
 	if strings.Contains(b, "file:") && !strings.Contains(a, "file:") {
-		return true
+		// #2810: when the previous scope named package directories, a file
+		// token in an UNRELATED directory is a scope switch, not a
+		// narrowing - only the containment path above may fire then.
+		if len(aPkgs) == 0 {
+			return true
+		}
 	}
 	return false
 }
@@ -437,6 +469,54 @@ func extractPkgList(scope string) []string {
 		}
 	}
 	return pkgs
+}
+
+// extractFileList extracts file entries from a scope string.
+func extractFileList(scope string) []string {
+	var files []string
+	for _, part := range strings.Split(scope, "|") {
+		if strings.HasPrefix(part, "file:") {
+			files = append(files, strings.TrimPrefix(part, "file:"))
+		}
+	}
+	return files
+}
+
+// scopeUnderAnyPrefix reports whether every entry in sub lives under at
+// least one directory in dirs (path-segment-wise, trailing slashes
+// normalized). Used by isNarrower for the pkg→file/dir containment check
+// (#2810).
+func scopeUnderAnyPrefix(sub, dirs []string) bool {
+	if len(sub) == 0 || len(dirs) == 0 {
+		return false
+	}
+	for _, s := range sub {
+		under := false
+		for _, d := range dirs {
+			if pathSegmentPrefix(s, d) {
+				under = true
+				break
+			}
+		}
+		if !under {
+			return false
+		}
+	}
+	return true
+}
+
+// pathSegmentPrefix reports whether sub is equal to or lives under dir,
+// comparing whole path segments (with trailing-slash normalization) so
+// "./internal/agent/bar_test.go" is under "./internal/agent/" and
+// "./internal/agent", but "./internal/agentx/t.go" is NOT under
+// "./internal/agent".
+func pathSegmentPrefix(sub, dir string) bool {
+	s := strings.TrimSuffix(sub, "/")
+	d := strings.TrimSuffix(dir, "/")
+	if s == d {
+		return true
+	}
+	return strings.HasPrefix(s, d+"/")
 }
 
 // truncateCmdShort truncates a command string for display.

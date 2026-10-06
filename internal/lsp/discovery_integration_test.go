@@ -373,7 +373,7 @@ func TestExternalClangFixtureLSPCalls(t *testing.T) {
 	if err != nil || len(diagnostics) == 0 {
 		t.Fatalf("Diagnostics() err=%v diagnostics=%#v", err, diagnostics)
 	}
-	edits, err := RenameEdits(ctx, workspace, headerPath, Position{Line: 14, Character: 8}, "PostMessage")
+	edits, _, err := RenameEdits(ctx, workspace, headerPath, Position{Line: 14, Character: 8}, "PostMessage")
 	if err != nil || len(edits) == 0 {
 		t.Fatalf("RenameEdits() err=%v edits=%#v", err, edits)
 	}
@@ -422,7 +422,7 @@ func TestExternalSwiftFixtureLSPCalls(t *testing.T) {
 	if err != nil || len(workspaceSymbols) == 0 {
 		t.Fatalf("WorkspaceSymbols() err=%v symbols=%#v", err, workspaceSymbols)
 	}
-	edits, err := RenameEdits(ctx, workspace, boardPath, Position{Line: 4, Character: 10}, "append")
+	edits, _, err := RenameEdits(ctx, workspace, boardPath, Position{Line: 4, Character: 10}, "append")
 	if err != nil || len(edits) == 0 {
 		t.Fatalf("RenameEdits() err=%v edits=%#v", err, edits)
 	}

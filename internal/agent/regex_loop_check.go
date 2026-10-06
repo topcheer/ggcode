@@ -45,7 +45,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"go/types"
 	"path/filepath"
@@ -123,8 +122,7 @@ func checkRegexLoop(filePath, oldContent, newContent string) []string {
 		}
 	}
 
-	fset := token.NewFileSet()
-	_, err := parser.ParseFile(fset, filePath, newContent, 0)
+	_, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return []string{fmt.Sprintf(
 			"Detected %d regexp.Compile/MustCompile call(s) inside a loop in %s. "+
@@ -159,8 +157,7 @@ func findRegexInLoops(filename, src string) []regexLoopIssue {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, 0)
+	file, _, err := parseGoSource(filename, src, 0)
 	if err != nil {
 		return nil
 	}

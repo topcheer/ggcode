@@ -574,19 +574,19 @@ func enCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Failed to resolve init target: %v\n\n"
 	case "init.generate_failed":
-		return "Failed to generate GGCODE.md content: %v\n\n"
+		return "Failed to generate AGENTS.md content: %v\n\n"
 	case "init.collecting":
 		return "Collecting project knowledge..."
 	case "init.prompt.title":
 		return "Initialize project"
 	case "init.prompt.body":
-		return "No GGCODE.md found in this project. Create one to help the agent understand your codebase conventions?"
+		return "No AGENTS.md found in this project. Create one to help the agent understand your codebase conventions?"
 	case "init.prompt.yes":
 		return "Create"
 	case "init.prompt.no":
 		return "Skip"
 	case "init.prompt.hint":
-		return " y = create GGCODE.md • n/Esc = skip"
+		return " y = create AGENTS.md • n/Esc = skip"
 	case "command.model_switched":
 		return "Switched model to: %s (vendor: %s)\n\n"
 	case "command.model_failed":
@@ -681,6 +681,26 @@ func enCatalog(key string) string {
 		return "\nUse /undo to revert the most recent, /redo to re-apply.\n\n"
 	case "memory.auto_unavailable":
 		return "Auto memory not initialized.\n\n"
+	case "traj.no_workspace":
+		return "No workspace directory available."
+	case "traj.cleared":
+		return "Trajectory learnings purged. Fresh runs start with a clean store."
+	case "traj.cleared_global":
+		return "Global trajectory learnings purged (cross-workspace tier removed)."
+	case "traj.cleared_global_hint":
+		return "Note: %d global-tier learnings remain (marked g in /traj list) and still inject. Run /traj clear global to purge them."
+	case "traj.empty":
+		return "No past-run learnings stored yet."
+	case "traj.header":
+		return "Past-run learnings (%d stored, %d injecting into your prompt; > = injected):"
+	case "traj.usage":
+		return "Usage: /traj [list|clear|export|import [path]]"
+	case "traj.no_home":
+		return "Cannot resolve home directory for the global store."
+	case "traj.exported":
+		return "Exported %d learnings to %s"
+	case "traj.imported":
+		return "Imported %d new learnings (duplicates skipped)"
 	case "memory.list_failed":
 		return "Error listing memories: %v\n\n"
 	case "memory.none":
@@ -888,7 +908,7 @@ func enCatalog(key string) string {
 	case "slash.image":
 		return "Attach an image"
 	case "slash.init":
-		return "Generate project GGCODE.md"
+		return "Generate project AGENTS.md"
 	case "slash.lang":
 		return "Switch interface language"
 	case "slash.skills":
@@ -1019,6 +1039,8 @@ func enCatalog(key string) string {
 		return "Show context window usage breakdown (tokens, messages, capacity)"
 	case "slash.runreport":
 		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
+	case "slash.traj":
+		return "List (/traj) or purge (/traj clear) the past-run learnings injected into your system prompt"
 	case "slash.im":
 		return "Open unified IM channels panel"
 	case "panel.qq.directory":
@@ -1197,6 +1219,10 @@ func enCatalog(key string) string {
 		return "No active session to branch."
 	case "branch.empty":
 		return "Session has no messages to branch."
+	case "branch.bad_arg":
+		return "Usage: /branch [N] where N >= 0 is the number of user turns to drop."
+	case "branch.back_too_far":
+		return "Cannot fork that far back: it would drop every user turn."
 	case "branch.save_failed":
 		return "Failed to create branched session: %v"
 	case "branch.success":
@@ -1241,7 +1267,7 @@ Development:
   /allow [tool]      Permanently allow a tool in current mode
   /files             Open fullscreen file browser with preview
   /inspector [filt]  Open inspector panel (tool calls, context, metrics)
-  /init              Generate GGCODE.md from the current project
+  /init              Generate AGENTS.md from the current project
   /todo              View todo list
   /todo clear        Clear todo list
   /reflect           Trigger agent self-reflection on recent runs

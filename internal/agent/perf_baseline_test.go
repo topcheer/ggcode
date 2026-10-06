@@ -200,6 +200,40 @@ func TestFormatPerfRegressionWarning(t *testing.T) {
 	}
 }
 
+// r394: token-spend regression dimension.
+func TestTokenRegression(t *testing.T) {
+	base := perfBaselineEntry{Success: true, Iterations: 5, Tokens: 50000}
+	run := perfBaselineEntry{Success: true, Iterations: 5, Tokens: 120000}
+	hits := collectRunRegressionMetrics(run, base)
+	found := false
+	for _, h := range hits {
+		if h == "tokens" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("2.4x token spend must hit tokens metric, got %v", hits)
+	}
+
+	// Old baselines (Tokens=0, field predates) must never fire.
+	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 999999}, perfBaselineEntry{Tokens: 0}); len(hits) != 0 {
+		t.Errorf("zero-token baseline must not fire tokens regression, got %v", hits)
+	}
+	// Sub-floor baseline must not fire (noise guard).
+	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 9999}, perfBaselineEntry{Tokens: 100}); len(hits) != 0 {
+		t.Errorf("sub-10k baseline must not fire tokens regression, got %v", hits)
+	}
+	// Within 2x must not fire.
+	if hits := collectRunRegressionMetrics(perfBaselineEntry{Tokens: 99999}, base); len(hits) != 0 {
+		t.Errorf("2x-epsilon token spend must not fire, got %v", hits)
+	}
+
+	msg := formatPerfRegressionWarning("tokens", base, run)
+	if !strings.Contains(msg, "total LLM tokens") {
+		t.Errorf("warning must name the metric: %s", msg)
+	}
+}
+
 func TestPerfBaselinePath(t *testing.T) {
 	p := perfBaselinePath("/foo/bar")
 	expected := filepath.Join("/foo/bar", ".ggcode", "perf-baseline.json")
@@ -331,5 +365,111 @@ func TestRecordPerfBaselineCapturesTopTools(t *testing.T) {
 		if loaded[0].TopTools[i] != want[i] {
 			t.Errorf("top tool %d: got %q, want %q", i, loaded[0].TopTools[i], want[i])
 		}
+	}
+}
+
+// --- r386 tool-mix drift check (arXiv 2601.04170 tool-usage-pattern stability) ---
+
+func TestPerfTopToolNames(t *testing.T) {
+	e := perfBaselineEntry{TopTools: []string{"run_command:5", "read_file:3"}}
+	got := perfTopToolNames(e)
+	if len(got) != 2 || got[0] != "run_command" || got[1] != "read_file" {
+		t.Fatalf("got %v", got)
+	}
+	if perfTopToolNames(perfBaselineEntry{}) != nil {
+		t.Error("empty entry should yield nil")
+	}
+}
+
+func TestJaccardToolSets(t *testing.T) {
+	if s := jaccardToolSets([]string{"a", "b"}, []string{"a", "b"}); s != 1 {
+		t.Errorf("identical sets: %v", s)
+	}
+	if s := jaccardToolSets([]string{"a", "b"}, []string{"c", "d"}); s != 0 {
+		t.Errorf("disjoint sets: %v", s)
+	}
+	// {a,b} vs {a,b,c}: 2/3
+	if s := jaccardToolSets([]string{"a", "b"}, []string{"a", "b", "c"}); s < 0.66 || s > 0.67 {
+		t.Errorf("partial overlap: %v", s)
+	}
+	// Empty side: not comparable, treated as consistent (no drift signal).
+	if s := jaccardToolSets(nil, []string{"a"}); s != 1 {
+		t.Errorf("empty side: %v", s)
+	}
+}
+
+func TestModalTopTools(t *testing.T) {
+	// 4 runs: read_file+grep dominate 3 of 4; run_command only in 1.
+	runs := []perfBaselineEntry{
+		{Success: true, TopTools: []string{"read_file:5", "grep:3"}},
+		{Success: true, TopTools: []string{"read_file:4", "grep:2"}},
+		{Success: true, TopTools: []string{"read_file:6", "grep:4"}},
+		{Success: true, TopTools: []string{"run_command:9"}},
+	}
+	got := modalTopTools(runs)
+	if len(got) != 2 {
+		t.Fatalf("want 2 modal tools, got %v", got)
+	}
+	if got[0] != "grep:3" || got[1] != "read_file:3" {
+		t.Errorf("modal counts wrong: %v (want grep:3, read_file:3 - ties sort name-asc)", got)
+	}
+	// Fewer than 3 runs with TopTools: no modal set (old baselines).
+	if modalTopTools(runs[:2]) != nil {
+		t.Error("insufficient history should yield nil")
+	}
+}
+
+func TestCollectRunRegressionMetricsToolMix(t *testing.T) {
+	base := perfBaselineEntry{TopTools: []string{"read_file:5", "grep:3"}}
+	// Fully drifted workflow: run_command+browser, zero overlap.
+	drifted := perfBaselineEntry{TopTools: []string{"run_command:9", "browser:4"}}
+	hits := collectRunRegressionMetrics(drifted, base)
+	found := false
+	for _, m := range hits {
+		if m == "tool_mix" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("tool_mix drift not detected: %v", hits)
+	}
+	// Same shape: no tool_mix hit.
+	same := perfBaselineEntry{TopTools: []string{"read_file:7", "grep:5"}}
+	hits = collectRunRegressionMetrics(same, base)
+	for _, m := range hits {
+		if m == "tool_mix" {
+			t.Error("consistent tool mix falsely flagged")
+		}
+	}
+	// Legacy baseline without TopTools: never drifts (guard).
+	legacy := perfBaselineEntry{}
+	hits = collectRunRegressionMetrics(drifted, legacy)
+	for _, m := range hits {
+		if m == "tool_mix" {
+			t.Error("legacy baseline (nil TopTools) must not vote tool_mix")
+		}
+	}
+}
+
+func TestFormatPerfRegressionWarningToolMix(t *testing.T) {
+	base := perfBaselineEntry{TopTools: []string{"read_file:5", "grep:3"}}
+	latest := perfBaselineEntry{TopTools: []string{"run_command:9"}}
+	msg := formatPerfRegressionWarning("tool_mix", base, latest)
+	if !strings.Contains(msg, "read_file, grep") || !strings.Contains(msg, "run_command") {
+		t.Errorf("warning does not name the shape shift: %q", msg)
+	}
+}
+
+// #3102 V1: perfMetricValue must expose the tokens dimension so
+// selectWorstPerfHit picks the highest-spend hit run, not the first.
+func TestPerfMetricValueTokens(t *testing.T) {
+	e := perfBaselineEntry{Tokens: 12345}
+	if got := perfMetricValue(e, "tokens"); got != 12345 {
+		t.Fatalf("perfMetricValue(tokens) = %d, want 12345", got)
+	}
+	worst := perfBaselineEntry{Tokens: 10}
+	other := perfBaselineEntry{Tokens: 99999}
+	if perfMetricValue(worst, "tokens") >= perfMetricValue(other, "tokens") {
+		t.Fatal("token values must order correctly for worst-run selection")
 	}
 }

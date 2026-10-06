@@ -26,6 +26,9 @@ type bareEditStreakState struct {
 	streak       int // consecutive mutation count without any verification
 	warnCount    int // how many warnings emitted this run
 	lastWarnedAt int // streak length when last warned (avoid spamming)
+	// #3380: snapshot for markUndelivered (guidance-budget rollback).
+	prevLastWarnedAt int
+	canRevert        bool
 }
 
 const (
@@ -55,6 +58,19 @@ func (s *bareEditStreakState) recordToolCall(toolName string, toolInput string) 
 	}
 }
 
+// markUndelivered (#3380) rolls back the quota + spacing marker consumed
+// by maybeWarn when the guidance budget suppressed the message, so the
+// streak warning re-fires on a later, less saturated iteration (mirrors
+// errorCompound #681). No-op if there is no revertible fire.
+func (s *bareEditStreakState) markUndelivered() {
+	if !s.canRevert || s.warnCount == 0 {
+		return
+	}
+	s.canRevert = false
+	s.warnCount--
+	s.lastWarnedAt = s.prevLastWarnedAt
+}
+
 // maybeWarn returns guidance if the streak has crossed a warning threshold.
 func (s *bareEditStreakState) maybeWarn(_ int) string {
 	if s.warnCount >= bareEditStreakMaxWarns {
@@ -68,6 +84,10 @@ func (s *bareEditStreakState) maybeWarn(_ int) string {
 		return ""
 	}
 	s.warnCount++
+	// #3380: snapshot the spacing marker so markUndelivered can restore
+	// the pre-fire state when the guidance budget suppresses delivery.
+	s.prevLastWarnedAt = s.lastWarnedAt
+	s.canRevert = true
 	s.lastWarnedAt = s.streak
 	return fmt.Sprintf(
 		"[feedback-loop] You have made %d consecutive file edits without any "+

@@ -18,6 +18,9 @@ import (
 
 type mockProvider struct {
 	chatCalls int
+	// reply overrides the fixed Chat response when non-empty (fact
+	// retention wiring test needs a summary that drops a constraint).
+	reply string
 }
 
 func (m *mockProvider) Name() string { return "mock" }
@@ -27,7 +30,12 @@ func (m *mockProvider) Chat(ctx context.Context, msgs []provider.Message, tools 
 		Message: provider.Message{
 			Role: "assistant",
 			Content: []provider.ContentBlock{
-				{Type: "text", Text: "Summary: User asked about testing. Assistant responded with helpful information."},
+				{Type: "text", Text: func() string {
+					if m.reply != "" {
+						return m.reply
+					}
+					return "Summary: User asked about testing. Assistant responded with helpful information."
+				}()},
 			},
 		},
 		Usage: provider.TokenUsage{InputTokens: 100, OutputTokens: 50},
@@ -436,7 +444,7 @@ func TestContextManager_ApplyCompactResult_VersionMismatch_AppendAllowed(t *test
 
 	snapshot := cm.CompactSnapshot()
 
-	// Append after snapshot — version changes but first OrigLen messages unchanged.
+	// Append after snapshot - version changes but first OrigLen messages unchanged.
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q2"}}})
 	if cm.version == snapshot.Version {
 		t.Fatal("expected version to change after Add")
@@ -483,7 +491,7 @@ func TestContextManager_ApplyCompactResult_StaleSnapshot_Rejected(t *testing.T) 
 
 	applied, _ := cm.ApplyCompactResult(snapshot, result)
 	if applied {
-		t.Fatal("expected stale snapshot to be REJECTED (#651): live shrank below snapshot size after Clear — applying the lossy summary would resurrect dropped content")
+		t.Fatal("expected stale snapshot to be REJECTED (#651): live shrank below snapshot size after Clear - applying the lossy summary would resurrect dropped content")
 	}
 }
 
@@ -580,7 +588,7 @@ func TestContextManager_CompactSnapshot_CapturesVersion(t *testing.T) {
 func TestContextManager_ApplyCompactResult_StaleSnapshotStillApplied(t *testing.T) {
 	// If messages within the snapshot range are modified after the snapshot
 	// was taken, the compaction result should STILL be applied.
-	// The summary is lossy compression — a slightly stale source is acceptable.
+	// The summary is lossy compression - a slightly stale source is acceptable.
 	cm := NewManager(1000)
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "q1"}}})
 	cm.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
@@ -787,7 +795,32 @@ func TestContextManager_Summarize_RetriesPromptTooLongByDroppingOldestGroup(t *t
 	}
 }
 
+// TestContextManager_Summarize_AppliesFactRetention guards the wiring (not
+// the function itself - that has fact_retention_test.go): every summary
+// return path must pass through applyFactRetention, so a summarizer that
+// drops a user constraint gets it re-attached on the way out.
+func TestContextManager_Summarize_AppliesFactRetention(t *testing.T) {
+	ctx := context.Background()
+	prov := &mockProvider{reply: "## Task\nAdd feature.\n## Done\nAdded."}
+	msgs := []provider.Message{
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "add the feature"}}},
+		{Role: "assistant", Content: []provider.ContentBlock{{Type: "text", Text: "working"}}},
+		{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: "don't modify the existing tests"}}},
+	}
+	summary, err := summarizeMessages(ctx, prov, msgs, nil, 10000, "")
+	if err != nil {
+		t.Fatalf("summarizeMessages failed: %v", err)
+	}
+	if !strings.Contains(summary, "## Auto-preserved Facts") ||
+		!strings.Contains(summary, "don't modify the existing tests") {
+		t.Fatalf("sequential path must re-attach dropped constraints, got:\n%s", summary)
+	}
+}
+
 func TestContextManager_Summarize_ReinjectsPostCompactState(t *testing.T) {
+	// #3343: TodoFilePath resolves ConfigDir at call time; without HOME
+	// isolation this test wrote a real ~/.ggcode/todos/test-compact-session.json.
+	t.Setenv("HOME", t.TempDir())
 	sessionID := "test-compact-session"
 	todoPath := toolpkg.TodoFilePath(sessionID)
 	if err := os.MkdirAll(filepath.Dir(todoPath), 0755); err != nil {
@@ -906,7 +939,7 @@ func TestContextManager_SetCheckpointBaseline(t *testing.T) {
 		t.Fatal("expected non-zero local estimate before baseline")
 	}
 
-	// Apply checkpoint baseline — simulates session restore with known token count.
+	// Apply checkpoint baseline - simulates session restore with known token count.
 	cm.SetCheckpointBaseline(158811)
 
 	// Token count should now reflect the checkpoint, not the estimate.
@@ -945,7 +978,7 @@ func TestContextManager_SetCheckpointBaselineThenAddMessages(t *testing.T) {
 	// Set baseline AFTER checkpoint messages, BEFORE post-checkpoint messages.
 	cm.SetCheckpointBaseline(100000)
 
-	// Now add post-checkpoint messages — these should increment baselineDelta.
+	// Now add post-checkpoint messages - these should increment baselineDelta.
 	postMsg := provider.Message{
 		Role:    "user",
 		Content: []provider.ContentBlock{{Type: "text", Text: "new message after restore"}},
@@ -963,7 +996,7 @@ func TestContextManager_SetCheckpointBaselineThenAddMessages(t *testing.T) {
 		t.Fatalf("expected positive delta for post-checkpoint message, got %d", delta)
 	}
 
-	// Add another message — delta should grow.
+	// Add another message - delta should grow.
 	cm.Add(provider.Message{
 		Role:    "assistant",
 		Content: []provider.ContentBlock{{Type: "text", Text: "assistant response"}},
@@ -1086,164 +1119,6 @@ func TestRemoveLastAssistantGroup_Empty(t *testing.T) {
 	}
 }
 
-func TestClearOldToolResults_BasicClearing(t *testing.T) {
-	m := NewManager(100000)
-	// Add 4 assistant→tool_result pairs with large outputs.
-	for i := 0; i < 4; i++ {
-		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-			provider.ToolUseBlock(fmt.Sprintf("call-%d", i), "read_file", []byte(`{}`)),
-		}})
-		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-			{Type: "tool_result", ToolID: fmt.Sprintf("call-%d", i), Output: strings.Repeat("x", 1000)},
-		}})
-	}
-	beforeTokens := m.TokenCount()
-	// keepN=2: should clear the first 2 results, keep last 2.
-	freed := m.ClearOldToolResults(2)
-	if freed <= 0 {
-		t.Fatal("expected positive tokens freed")
-	}
-	if m.TokenCount() >= beforeTokens {
-		t.Error("expected token count to decrease after clearing")
-	}
-	msgs := m.Messages()
-	// Verify first 2 results are cleared
-	for i := 0; i < 2; i++ {
-		result := findToolResult(t, msgs, fmt.Sprintf("call-%d", i))
-		if !strings.HasPrefix(result.Output, "[cleared:") {
-			t.Errorf("expected call-%d output to be cleared, got %q", i, result.Output[:min(50, len(result.Output))])
-		}
-	}
-	// Verify last 2 results are intact
-	for i := 2; i < 4; i++ {
-		result := findToolResult(t, msgs, fmt.Sprintf("call-%d", i))
-		if strings.HasPrefix(result.Output, "[cleared:") {
-			t.Errorf("expected call-%d output to be intact", i)
-		}
-		if len(result.Output) != 1000 {
-			t.Errorf("expected call-%d output to be 1000 chars, got %d", i, len(result.Output))
-		}
-	}
-}
-
-func TestClearOldToolResults_Idempotent(t *testing.T) {
-	m := NewManager(100000)
-	for i := 0; i < 4; i++ {
-		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-			provider.ToolUseBlock(fmt.Sprintf("call-%d", i), "read_file", []byte(`{}`)),
-		}})
-		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-			{Type: "tool_result", ToolID: fmt.Sprintf("call-%d", i), Output: strings.Repeat("y", 1000)},
-		}})
-	}
-	// First call clears some
-	first := m.ClearOldToolResults(2)
-	if first <= 0 {
-		t.Fatal("expected tokens freed on first call")
-	}
-	// Second call should be a no-op (all clearable results already cleared)
-	second := m.ClearOldToolResults(2)
-	if second != 0 {
-		t.Errorf("expected 0 tokens freed on second call, got %d", second)
-	}
-}
-
-func TestClearOldToolResults_ErrorResultsPreserved(t *testing.T) {
-	m := NewManager(100000)
-	// Error result should NOT be cleared
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("err-call", "grep", []byte(`{}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "err-call", Output: strings.Repeat("e", 1000), IsError: true},
-	}})
-	// Normal result that should be cleared
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("ok-call", "read_file", []byte(`{}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "ok-call", Output: strings.Repeat("f", 1000)},
-	}})
-
-	freed := m.ClearOldToolResults(0) // clear everything possible
-	// Error result should be preserved
-	errResult := findToolResult(t, m.Messages(), "err-call")
-	if strings.HasPrefix(errResult.Output, "[cleared:") {
-		t.Error("error result should not be cleared")
-	}
-	// Normal result should be cleared (keepN=0, so everything clearable gets cleared)
-	okResult := findToolResult(t, m.Messages(), "ok-call")
-	if !strings.HasPrefix(okResult.Output, "[cleared:") {
-		t.Error("normal result should be cleared")
-	}
-	if freed <= 0 {
-		t.Error("expected tokens freed")
-	}
-}
-
-func TestClearOldToolResults_SmallResultsPreserved(t *testing.T) {
-	m := NewManager(100000)
-	// Small result (< 500 chars) should NOT be cleared
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("small-call", "run_command", []byte(`{}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "small-call", Output: "ok"},
-	}})
-
-	freed := m.ClearOldToolResults(0)
-	if freed != 0 {
-		t.Errorf("expected 0 tokens freed (result too small), got %d", freed)
-	}
-}
-
-func TestClearOldToolResults_TooFewResults(t *testing.T) {
-	m := NewManager(100000)
-	// Only 2 results, keepN=5 → nothing to clear
-	for i := 0; i < 2; i++ {
-		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-			provider.ToolUseBlock(fmt.Sprintf("call-%d", i), "read_file", []byte(`{}`)),
-		}})
-		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-			{Type: "tool_result", ToolID: fmt.Sprintf("call-%d", i), Output: strings.Repeat("z", 1000)},
-		}})
-	}
-	freed := m.ClearOldToolResults(5)
-	if freed != 0 {
-		t.Errorf("expected 0 freed (too few results), got %d", freed)
-	}
-}
-
-func TestClearOldToolResults_ToolUsePreserved(t *testing.T) {
-	m := NewManager(100000)
-	// Verify tool_use blocks are never modified
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("call-1", "read_file", []byte(`{"path":"/foo.go"}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("a", 1000)},
-	}})
-
-	m.ClearOldToolResults(0)
-	msgs := m.Messages()
-	// Find the assistant message with tool_use
-	for _, msg := range msgs {
-		if msg.Role != "assistant" {
-			continue
-		}
-		for _, b := range msg.Content {
-			if b.Type == "tool_use" {
-				if b.ToolName != "read_file" {
-					t.Errorf("tool_use name should be preserved, got %q", b.ToolName)
-				}
-				if string(b.Input) != `{"path":"/foo.go"}` {
-					t.Errorf("tool_use input should be preserved, got %q", string(b.Input))
-				}
-			}
-		}
-	}
-}
-
 // findToolResult finds a tool_result block by tool_id in the message list.
 func findToolResult(t *testing.T, msgs []provider.Message, toolID string) provider.ContentBlock {
 	t.Helper()
@@ -1351,8 +1226,6 @@ func TestBuildSummaryPayloadIncludesToolInputs(t *testing.T) {
 		t.Error("payload missing 'path=' key from tool input")
 	}
 }
-
-// ── ClearOldToolUseInputs tests ──
 
 func TestBuildSummaryPayload_IncludesUserRequests(t *testing.T) {
 	msgs := []provider.Message{
@@ -1500,223 +1373,6 @@ func TestExtractUserRequests_Empty(t *testing.T) {
 	}
 }
 
-func TestClearOldToolUseInputs_ClearsLargeInputAfterResultCleared(t *testing.T) {
-	m := NewManager(100000)
-	largeInput := fmt.Sprintf(`{"path":"/large/file.go","old_text":%q}`, strings.Repeat("line\n", 100))
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("call-1", "edit_file", []byte(largeInput)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("x", 1000)},
-	}})
-
-	// Step 1: clear the tool_result first
-	m.ClearOldToolResults(0)
-
-	// Step 2: now clear the tool_use input
-	freed := m.ClearOldToolUseInputs()
-	if freed <= 0 {
-		t.Fatal("ClearOldToolUseInputs should free tokens when result is already cleared and input is large")
-	}
-
-	msgs := m.Messages()
-	for _, msg := range msgs {
-		for _, b := range msg.Content {
-			if b.Type == "tool_use" && b.ToolID == "call-1" {
-				if string(b.Input) == largeInput {
-					t.Fatal("tool_use input should have been truncated")
-				}
-				if !strings.Contains(string(b.Input), "_cleared") {
-					t.Fatalf("tool_use input should contain _cleared marker, got %q", string(b.Input))
-				}
-				if b.ToolName != "edit_file" {
-					t.Errorf("tool name should be preserved, got %q", b.ToolName)
-				}
-			}
-		}
-	}
-}
-
-func TestClearOldToolUseInputs_SkipsWhenResultNotCleared(t *testing.T) {
-	m := NewManager(100000)
-	largeInput := fmt.Sprintf(`{"path":"/large/file.go","content":%q}`, strings.Repeat("x", 500))
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("call-1", "write_file", []byte(largeInput)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("result ", 200)},
-	}})
-
-	// Don't call ClearOldToolResults — result is still intact
-	freed := m.ClearOldToolUseInputs()
-	if freed != 0 {
-		t.Fatalf("ClearOldToolUseInputs should not free tokens when result is not cleared, got %d", freed)
-	}
-
-	// Verify input is unchanged
-	msgs := m.Messages()
-	for _, msg := range msgs {
-		for _, b := range msg.Content {
-			if b.Type == "tool_use" && b.ToolID == "call-1" {
-				if string(b.Input) != largeInput {
-					t.Fatal("tool_use input should be unchanged when result is not cleared")
-				}
-			}
-		}
-	}
-}
-
-func TestClearOldToolUseInputs_Idempotent(t *testing.T) {
-	m := NewManager(100000)
-	largeInput := fmt.Sprintf(`{"path":"/f.go","content":%q}`, strings.Repeat("a", 500))
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("call-1", "write_file", []byte(largeInput)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("b", 1000)},
-	}})
-
-	m.ClearOldToolResults(0)
-	first := m.ClearOldToolUseInputs()
-	if first <= 0 {
-		t.Fatal("first call should free tokens")
-	}
-	second := m.ClearOldToolUseInputs()
-	if second != 0 {
-		t.Fatalf("second call should be no-op (idempotent), freed %d", second)
-	}
-}
-
-func TestClearOldToolUseInputs_SkipsSmallInput(t *testing.T) {
-	m := NewManager(100000)
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("call-1", "read_file", []byte(`{"path":"/small.go"}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "call-1", Output: strings.Repeat("c", 1000)},
-	}})
-
-	m.ClearOldToolResults(0)
-	freed := m.ClearOldToolUseInputs()
-	if freed != 0 {
-		t.Fatalf("small input (< %d chars) should not be cleared, freed %d", toolUseInputClearMinLen, freed)
-	}
-}
-
-func TestHasSemanticImportance(t *testing.T) {
-	tests := []struct {
-		name     string
-		output   string
-		expected bool
-	}{
-		{"empty", "", false},
-		{"short", "ok", false},
-		{"normal code", strings.Repeat("package main\n", 10), false},
-		{"build error", "main.go:10:5: undefined: foo (and more context here)", true},
-		{"panic", "panic: runtime error: index out of range [0] with length 0", true},
-		{"fatal", "fatal: not a git repository (or any parent up to mount point)", true},
-		{"syntax error", "syntax error: unexpected token 'foo' at line 5 column 10", true},
-		{"python traceback", "Traceback (most recent call last):\n  File \"test.py\"", true},
-		{"type error", "TypeError: Cannot read properties of undefined (reading 'x')", true},
-		{"test failure", "FAIL: test_foo/bar [0.001s] -- expected true got false", true},
-		{"compiler error", "error: cannot find package \"foo\" in any of /go/src", true},
-		{"normal file listing", strings.Repeat("drwxr-xr-x 2 user user 4096 Jan 1 file\n", 50), false},
-		{"normal function", "func processData(input string) string {\n    return input\n}", false},
-		{"error in comment", strings.Repeat("// handle error gracefully\n", 50), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := hasSemanticImportance(tt.output)
-			if result != tt.expected {
-				t.Errorf("hasSemanticImportance(%q) = %v, want %v", truncate(tt.output, 50), result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestClearOldToolResults_SemanticImportancePreserved(t *testing.T) {
-	m := NewManager(100000)
-
-	// Result with build error output — should be preserved even with keepN=0.
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("err-build", "run_command", []byte(`{}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "err-build", Output: "exit status 1\nmain.go:10:5: error: undefined: processData"},
-	}})
-
-	// Normal large result — should be cleared.
-	m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-		provider.ToolUseBlock("ok-read", "read_file", []byte(`{}`)),
-	}})
-	m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-		{Type: "tool_result", ToolID: "ok-read", Output: strings.Repeat("line of code\n", 50)},
-	}})
-
-	freed := m.ClearOldToolResults(0) // clear everything possible
-
-	// The build error result should be preserved (semantic importance).
-	errResult := findToolResult(t, m.Messages(), "err-build")
-	if strings.HasPrefix(errResult.Output, "[cleared:") {
-		t.Error("result with build error markers should be preserved (semantic importance)")
-	}
-
-	// The normal result should be cleared.
-	okResult := findToolResult(t, m.Messages(), "ok-read")
-	if !strings.HasPrefix(okResult.Output, "[cleared:") {
-		t.Error("normal result should be cleared")
-	}
-	if freed <= 0 {
-		t.Error("expected tokens freed from normal result")
-	}
-}
-
-func TestClearOldToolResults_MixedImportance(t *testing.T) {
-	m := NewManager(100000)
-
-	// 4 results: 2 normal, 2 with error markers.
-	// With keepN=1, we should clear 1 normal (the oldest) and preserve both error results.
-	results := []struct {
-		id     string
-		output string
-	}{
-		{"r1", strings.Repeat("normal content line\n", 50)},                // clearable
-		{"r2", "panic: something went wrong\n" + strings.Repeat("x", 500)}, // important
-		{"r3", strings.Repeat("another file\n", 50)},                       // clearable
-		{"r4", "FAIL: test_bar/baz [0.003s]\n" + strings.Repeat("y", 500)}, // important
-	}
-
-	for _, r := range results {
-		m.Add(provider.Message{Role: "assistant", Content: []provider.ContentBlock{
-			provider.ToolUseBlock(r.id, "run_command", []byte(`{}`)),
-		}})
-		m.Add(provider.Message{Role: "user", Content: []provider.ContentBlock{
-			{Type: "tool_result", ToolID: r.id, Output: r.output},
-		}})
-	}
-
-	m.ClearOldToolResults(1) // keep last 1 clearable
-
-	// r2 should be preserved (has error markers).
-	r2Result := findToolResult(t, m.Messages(), "r2")
-	if strings.HasPrefix(r2Result.Output, "[cleared:") {
-		t.Error("r2 (panic output) should be preserved")
-	}
-
-	// r4 should be preserved (has error markers).
-	r4Result := findToolResult(t, m.Messages(), "r4")
-	if strings.HasPrefix(r4Result.Output, "[cleared:") {
-		t.Error("r4 (FAIL output) should be preserved")
-	}
-
-	// r1 should be cleared (oldest normal result, beyond keepN).
-	r1Result := findToolResult(t, m.Messages(), "r1")
-	if !strings.HasPrefix(r1Result.Output, "[cleared:") {
-		t.Error("r1 (normal output, oldest) should be cleared")
-	}
-}
-
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -1724,165 +1380,12 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// --- ACON-inspired observation compression tests ---
-
-func TestSummarizeClearedResult_ReadFile(t *testing.T) {
-	args := map[string]any{"path": "/Volumes/new/ggai/ggcode/internal/agent/agent.go"}
-	result := summarizeClearedResult("read_file", 2048, "some output", args)
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "read_file") {
-		t.Errorf("expected tool name in summary, got: %s", result)
-	}
-	if !strings.Contains(result, "agent.go") {
-		t.Errorf("expected file name in summary, got: %s", result)
-	}
-}
-
-func TestSummarizeClearedResult_Grep(t *testing.T) {
-	args := map[string]any{"pattern": "func.*Agent"}
-	output := "line1\nline2\nline3\n"
-	result := summarizeClearedResult("grep", 1024, output, args)
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "grep") {
-		t.Errorf("expected tool name in summary, got: %s", result)
-	}
-	if !strings.Contains(result, "func.*Agent") {
-		t.Errorf("expected pattern in summary, got: %s", result)
-	}
-	if !strings.Contains(result, "3 lines") {
-		t.Errorf("expected line count in summary, got: %s", result)
-	}
-}
-
-func TestSummarizeClearedResult_RunCommand(t *testing.T) {
-	args := map[string]any{"command": "go build -tags goolm ./...\necho done"}
-	result := summarizeClearedResult("run_command", 512, "output", args)
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "go build") {
-		t.Errorf("expected command in summary, got: %s", result)
-	}
-	// Should only show first line, not the echo
-	if strings.Contains(result, "echo done") {
-		t.Errorf("expected only first line, got: %s", result)
-	}
-}
-
-func TestSummarizeClearedResult_ListDirectory(t *testing.T) {
-	args := map[string]any{"path": "/Volumes/new/ggai/ggcode/internal/context"}
-	result := summarizeClearedResult("list_directory", 1024, "output", args)
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "context") {
-		t.Errorf("expected dir name in summary, got: %s", result)
-	}
-}
-
-func TestSummarizeClearedResult_MultiFileRead(t *testing.T) {
-	args := map[string]any{"files": []any{"a.go", "b.go", "c.go"}}
-	result := summarizeClearedResult("multi_file_read", 3072, "output", args)
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "3 files") {
-		t.Errorf("expected file count in summary, got: %s", result)
-	}
-}
-
-func TestSummarizeClearedResult_UnknownTool(t *testing.T) {
-	result := summarizeClearedResult("custom_tool", 1024, "output", map[string]any{})
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "custom_tool") {
-		t.Errorf("expected tool name in summary, got: %s", result)
-	}
-}
-
-func TestSummarizeClearedResult_EmptyTool(t *testing.T) {
-	result := summarizeClearedResult("", 1024, "output", nil)
-	if !strings.HasPrefix(result, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", result)
-	}
-	if !strings.Contains(result, "1024 chars") {
-		t.Errorf("expected char count fallback, got: %s", result)
-	}
-}
-
-func TestShortPath(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"main.go", "main.go"},
-		{"a/b.go", "a/b.go"},
-		{"a/b/c.go", "a/b/c.go"},
-		{"/x/y/z/w.go", ".../y/z/w.go"},
-	}
-	for _, tt := range tests {
-		got := shortPath(tt.input)
-		if got != tt.expected {
-			t.Errorf("shortPath(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestClearOldToolResults_ProducesToolAwareSummary(t *testing.T) {
-	m := NewManager(100000)
-
-	// Add a tool_use + tool_result pair for read_file
-	useInput := json.RawMessage(`{"path":"/Volumes/new/ggai/ggcode/main.go"}`)
-	m.Add(provider.Message{
-		Role: "assistant",
-		Content: []provider.ContentBlock{
-			provider.ToolUseBlock("tool-1", "read_file", useInput),
-		},
-	})
-	largeOutput := strings.Repeat("x", 600) // above toolResultClearMinLen
-	m.Add(provider.Message{
-		Role: "user",
-		Content: []provider.ContentBlock{
-			provider.ToolResultBlock("tool-1", largeOutput, false),
-		},
-	})
-
-	freed := m.ClearOldToolResults(0)
-	if freed <= 0 {
-		t.Fatal("expected some tokens freed")
-	}
-
-	msgs := m.Messages()
-	var clearedOutput string
-	for _, msg := range msgs {
-		for _, b := range msg.Content {
-			if b.Type == "tool_result" {
-				clearedOutput = b.Output
-			}
-		}
-	}
-	if !strings.HasPrefix(clearedOutput, "[cleared:") {
-		t.Fatalf("expected [cleared: prefix, got: %s", clearedOutput)
-	}
-	if !strings.Contains(clearedOutput, "read_file") {
-		t.Errorf("expected tool name in summary, got: %s", clearedOutput)
-	}
-	if !strings.Contains(clearedOutput, "main.go") {
-		t.Errorf("expected file name in summary, got: %s", clearedOutput)
-	}
-}
-
 // --- CompactSupersededReads tests ---
 
 func TestCompactSupersededReads_SingleRead(t *testing.T) {
 	m := NewManager(100000)
 
-	// Single read — nothing to compact.
+	// Single read - nothing to compact.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -1908,7 +1411,7 @@ func TestCompactSupersededReads_SingleRead(t *testing.T) {
 func TestCompactSupersededReads_DuplicateRead(t *testing.T) {
 	m := NewManager(100000)
 
-	// Two reads of the same file — first should be compacted.
+	// Two reads of the same file - first should be compacted.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -1965,7 +1468,7 @@ func TestCompactSupersededReads_DuplicateRead(t *testing.T) {
 func TestCompactSupersededReads_DifferentFiles(t *testing.T) {
 	m := NewManager(100000)
 
-	// Reads of different files — nothing to compact.
+	// Reads of different files - nothing to compact.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -2099,7 +1602,7 @@ func TestCompactSupersededReads_PartialMultiFileRead(t *testing.T) {
 
 	freed := m.CompactSupersededReads()
 
-	// mfr-1 should NOT be compacted — files B and C were not re-read.
+	// mfr-1 should NOT be compacted - files B and C were not re-read.
 	msgs := m.Messages()
 	for _, msg := range msgs {
 		for _, b := range msg.Content {
@@ -2203,7 +1706,7 @@ func TestCompactSupersededReads_SkipsSmallResults(t *testing.T) {
 func TestCompactSupersededReads_PathNormalization(t *testing.T) {
 	m := NewManager(100000)
 
-	// Read with "./" prefix and without — should be treated as same file.
+	// Read with "./" prefix and without - should be treated as same file.
 	m.Add(provider.Message{
 		Role: "assistant",
 		Content: []provider.ContentBlock{{
@@ -2237,14 +1740,14 @@ func TestCompactSupersededReads_PathNormalization(t *testing.T) {
 
 	freed := m.CompactSupersededReads()
 	if freed <= 0 {
-		t.Fatal("expected tokens freed — ./prefix normalization should match")
+		t.Fatal("expected tokens freed - ./prefix normalization should match")
 	}
 }
 
 func TestCompactSupersededReads_ThreeReadsSameFile(t *testing.T) {
 	m := NewManager(100000)
 
-	// Three reads of the same file — first two should be compacted.
+	// Three reads of the same file - first two should be compacted.
 	for i := 0; i < 3; i++ {
 		toolID := fmt.Sprintf("read-%d", i+1)
 		m.Add(provider.Message{
@@ -2384,5 +1887,144 @@ func TestContextManager_Summarize_RecentGroupBudgetExceeded(t *testing.T) {
 	}
 	if msgs[2].Role != "user" || !strings.Contains(msgs[2].Content[0].Text, strings.Repeat("x", 50)) {
 		t.Fatal("expected last user message kept verbatim after summary")
+	}
+}
+
+// addCommandRun appends an assistant tool_use + user tool_result pair for a
+// run_command invocation with the given command/working dir.
+func addCommandRun(m *Manager, toolID, command, workingDir, output string) {
+	input := map[string]string{"command": command}
+	if workingDir != "" {
+		input["working_dir"] = workingDir
+	}
+	raw, _ := json.Marshal(input)
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   toolID,
+			ToolName: "run_command",
+			Input:    json.RawMessage(raw),
+		}},
+	})
+	m.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{provider.ToolResultBlock(toolID, output, false)},
+	})
+}
+
+func TestCompactSupersededCommands_Rerun(t *testing.T) {
+	m := NewManager(100000)
+
+	// Same command run twice - first run's output should be compacted.
+	addCommandRun(m, "cmd-1", "go build ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go build ./...", "", strings.Repeat("b", 500))
+
+	freed := m.CompactSupersededCommands()
+	if freed <= 0 {
+		t.Fatal("expected tokens freed for superseded command run")
+	}
+
+	for _, msg := range m.Messages() {
+		for _, b := range msg.Content {
+			if b.Type != "tool_result" {
+				continue
+			}
+			switch b.ToolID {
+			case "cmd-1":
+				if !strings.HasPrefix(b.Output, "[superseded:") {
+					t.Errorf("expected [superseded: prefix for cmd-1, got: %s", b.Output[:min(50, len(b.Output))])
+				}
+			case "cmd-2":
+				if strings.HasPrefix(b.Output, "[superseded:") {
+					t.Error("cmd-2 (latest run) should NOT be compacted")
+				}
+			}
+		}
+	}
+}
+
+func TestCompactSupersededCommands_DifferentCommands(t *testing.T) {
+	m := NewManager(100000)
+
+	// Different commands / working dirs - none supersede each other.
+	addCommandRun(m, "cmd-1", "go build ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go test ./...", "", strings.Repeat("b", 500))
+	addCommandRun(m, "cmd-3", "go build ./...", "/other", strings.Repeat("c", 500))
+
+	if freed := m.CompactSupersededCommands(); freed != 0 {
+		t.Fatalf("expected 0 freed for distinct commands, got %d", freed)
+	}
+}
+
+func TestCompactSupersededCommands_SkipsSmallResults(t *testing.T) {
+	m := NewManager(100000)
+
+	// Re-run but the superseded output is tiny - not worth compacting.
+	addCommandRun(m, "cmd-1", "echo hi", "", "ok")
+	addCommandRun(m, "cmd-2", "echo hi", "", "ok")
+
+	if freed := m.CompactSupersededCommands(); freed != 0 {
+		t.Fatalf("expected 0 freed for small results, got %d", freed)
+	}
+}
+
+func TestCompactSupersededCommands_Idempotent(t *testing.T) {
+	m := NewManager(100000)
+
+	addCommandRun(m, "cmd-1", "go build ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go build ./...", "", strings.Repeat("b", 500))
+
+	if first := m.CompactSupersededCommands(); first <= 0 {
+		t.Fatalf("expected tokens freed on first pass, got %d", first)
+	}
+	if second := m.CompactSupersededCommands(); second != 0 {
+		t.Fatalf("second pass should free nothing (idempotent), got %d", second)
+	}
+}
+
+func TestCompactSupersededCommands_ThreeRunsSameCommand(t *testing.T) {
+	m := NewManager(100000)
+
+	addCommandRun(m, "cmd-1", "go test ./...", "", strings.Repeat("a", 500))
+	addCommandRun(m, "cmd-2", "go test ./...", "", strings.Repeat("b", 500))
+	addCommandRun(m, "cmd-3", "go test ./...", "", strings.Repeat("c", 500))
+
+	if freed := m.CompactSupersededCommands(); freed <= 0 {
+		t.Fatal("expected tokens freed")
+	}
+	compacted := 0
+	for _, msg := range m.Messages() {
+		for _, b := range msg.Content {
+			if b.Type == "tool_result" && strings.HasPrefix(b.Output, "[superseded:") {
+				compacted++
+			}
+		}
+	}
+	if compacted != 2 {
+		t.Errorf("expected 2 superseded runs (all but latest), got %d", compacted)
+	}
+}
+
+func TestCompactSupersededCommands_IgnoresOtherTools(t *testing.T) {
+	m := NewManager(100000)
+
+	// Non-run_command tools must never be treated as commands.
+	m.Add(provider.Message{
+		Role: "assistant",
+		Content: []provider.ContentBlock{{
+			Type:     "tool_use",
+			ToolID:   "g-1",
+			ToolName: "grep",
+			Input:    json.RawMessage(`{"command":"go build ./...","pattern":"x"}`),
+		}},
+	})
+	m.Add(provider.Message{
+		Role:    "user",
+		Content: []provider.ContentBlock{provider.ToolResultBlock("g-1", strings.Repeat("a", 500), false)},
+	})
+
+	if freed := m.CompactSupersededCommands(); freed != 0 {
+		t.Fatalf("expected 0 freed for non-run_command tools, got %d", freed)
 	}
 }

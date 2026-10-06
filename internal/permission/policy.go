@@ -1,14 +1,46 @@
 package permission
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+)
 
 // Decision represents the outcome of a permission check.
 type Decision int
+
+// DecisionFromContext maps a context error observed after ctx.Done() to
+// the matching non-decision approval outcome (#3370). A deadline means the
+// prompt expired; anything else (user interrupt, run cancelled, bridge
+// teardown) is a cancellation. Callers should only invoke this inside a
+// ctx.Done() branch.
+func DecisionFromContext(err error) Decision {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return Timeout
+	}
+	return Cancelled
+}
+
+// IsNonDecision reports whether d represents an approval that ended
+// without any user decision (timeout or cancellation) - the user must not
+// be attributed with these outcomes anywhere downstream (#3370).
+func (d Decision) IsNonDecision() bool {
+	return d == Timeout || d == Cancelled
+}
 
 const (
 	Allow Decision = iota
 	Deny
 	Ask
+	// Timeout and Cancelled are approval-OUTCOME values (#3370): they are
+	// returned by approval handlers when the user never made a decision
+	// (prompt expired / run interrupted / request displaced). policy.Check
+	// never returns them. Downstream consumers must treat them as
+	// fail-closed (tool does not run) but must NOT attribute them to the
+	// user (audit as ask_timeout, no approval-memory sample, no throttle
+	// count) - a timeout is not a denial.
+	Timeout
+	Cancelled
 )
 
 func (d Decision) String() string {
@@ -17,6 +49,10 @@ func (d Decision) String() string {
 		return "allow"
 	case Deny:
 		return "deny"
+	case Timeout:
+		return "timeout"
+	case Cancelled:
+		return "cancelled"
 	default:
 		return "ask"
 	}

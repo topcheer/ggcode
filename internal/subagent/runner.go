@@ -11,6 +11,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/util"
 )
@@ -50,6 +51,7 @@ type RunnerConfig struct {
 	WorkingDir          string                                                       // working directory for the sub-agent
 	OnStreamText        func(agentID, text string)                                   // called on each text chunk for tunnel relay
 	OnUsage             func(provider.TokenUsage)                                    // optional exact-usage callback for session accounting
+	OnMetric            func(metrics.MetricEvent)                                    // optional telemetry callback; events are stamped with SubAgentID before delivery (sa-218)
 	SystemPromptBuilder func(task, agentType string) string                          // optional: builds rich system prompt; falls back to simple prompt if nil
 }
 
@@ -74,6 +76,10 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	// Create sub-context with timeout
 	timeout := cfg.Manager.Timeout()
 	subCtx, cancel := context.WithTimeout(ctx, timeout)
+	// r29 actor-aware memory provenance: the sub-agent's identity rides
+	// the ctx so memory writes (and future per-actor tool semantics) are
+	// attributable. Empty id keeps the ctx untouched.
+	subCtx = util.WithActor(subCtx, cfg.SubAgentID)
 	defer cancel()
 	if !cfg.Manager.SetCancel(cfg.SubAgentID, cancel) {
 		// SetCancel returned false: the sub-agent was cancelled while it
@@ -161,6 +167,22 @@ func Run(ctx context.Context, cfg RunnerConfig) {
 	if cfg.OnUsage != nil {
 		if usageAware, ok := subAgent.(usageHandlerSetter); ok {
 			usageAware.SetUsageHandler(cfg.OnUsage)
+		}
+	}
+	// sa-218: sub-agent telemetry. Without this hook the sub-agent's LLM
+	// calls (TTFT, tokens, errors) and tool executions never reach the
+	// metrics collector - a spawned fan-out appears in OTLP traces as
+	// opaque long-running spawn_agent spans with a black box inside.
+	if cfg.OnMetric != nil {
+		if metricAware, ok := subAgent.(interface {
+			SetMetricHandler(func(metrics.MetricEvent))
+		}); ok {
+			id := cfg.SubAgentID
+			onMetric := cfg.OnMetric
+			metricAware.SetMetricHandler(func(m metrics.MetricEvent) {
+				m.AgentID = id
+				onMetric(m)
+			})
 		}
 	}
 

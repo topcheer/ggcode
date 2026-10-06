@@ -33,6 +33,7 @@ const (
 	wecomCmdUploadFinish = "aibot_upload_media_finish"
 
 	wecomMaxImageBytes = 10 << 20 // official image cap
+	wecomMaxFileBytes  = 20 << 20 // official file-message cap (#3325)
 	wecomChunkBytes    = 512 << 10
 
 	// #1254: chunk uploads are idempotent (official docs) - retry a failed
@@ -75,11 +76,18 @@ func (a *wecomAdapter) writeAndAwaitAckFrame(reqID string, frame map[string]any)
 // wecomUploadMedia uploads image bytes through the chunked media protocol and
 // returns the media_id.
 func (a *wecomAdapter) wecomUploadMedia(ctx context.Context, data []byte, filename string) (string, error) {
+	return a.wecomUploadMediaTyped(ctx, data, filename, "image", wecomMaxImageBytes)
+}
+
+// wecomUploadMediaTyped (#3325) is the chunked media upload parameterized by
+// body type and size cap so file-message uploads (type=file, 20MB official
+// cap) reuse the image protocol (init → chunks → finish → media_id).
+func (a *wecomAdapter) wecomUploadMediaTyped(ctx context.Context, data []byte, filename, mediaType string, maxBytes int) (string, error) {
 	if len(data) < 5 {
 		return "", fmt.Errorf("WeCom: media too small (%d bytes, minimum 5)", len(data))
 	}
-	if len(data) > wecomMaxImageBytes {
-		return "", fmt.Errorf("WeCom: image is %d bytes; limit is %d bytes", len(data), wecomMaxImageBytes)
+	if len(data) > maxBytes {
+		return "", fmt.Errorf("WeCom: %s is %d bytes; limit is %d bytes", mediaType, len(data), maxBytes)
 	}
 
 	sum := md5.Sum(data)
@@ -90,7 +98,7 @@ func (a *wecomAdapter) wecomUploadMedia(ctx context.Context, data []byte, filena
 		"cmd":     wecomCmdUploadInit,
 		"headers": map[string]any{"req_id": newWeComReqID("upload-init")},
 		"body": map[string]any{
-			"type":         "image",
+			"type":         mediaType,
 			"filename":     filename,
 			"total_size":   len(data),
 			"total_chunks": totalChunks,

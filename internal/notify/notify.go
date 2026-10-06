@@ -110,6 +110,13 @@ func fireBell() {
 	fmt.Print("\x07")
 }
 
+// appleScriptEscape makes a string safe to embed inside an AppleScript
+// double-quoted string literal: backslash first, then the quote itself.
+func appleScriptEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	return strings.ReplaceAll(s, `"`, `\"`)
+}
+
 // fireDesktop sends an OS-native desktop notification. It tries the platform
 // appropriate command and logs a debug message on failure.
 func fireDesktop(title, body string) {
@@ -118,7 +125,14 @@ func fireDesktop(title, body string) {
 	switch runtime.GOOS {
 	case "darwin":
 		// AppleScript display notification - no external dependencies.
-		script := fmt.Sprintf(`display notification %q with title %q`, body, title)
+		// #3060-C1: AppleScript string literals use backslash escapes; Go %q
+		// emits Go-syntax quoting that osascript misparses (a quote in the
+		// body closed the string early - notification silently lost, the tail
+		// parsed as script syntax). Escape backslash then quote and wrap in
+		// literal double quotes, mirroring the #1282 Windows hardening.
+		asTitle := appleScriptEscape(title)
+		asBody := appleScriptEscape(body)
+		script := fmt.Sprintf(`display notification "%s" with title "%s"`, asBody, asTitle)
 		cmd = exec.Command("osascript", "-e", script)
 	case "linux":
 		// notify-send is available on most desktop Linux distributions.

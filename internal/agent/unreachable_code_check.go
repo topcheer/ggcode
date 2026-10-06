@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -42,8 +41,7 @@ func checkUnreachableCode(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	goAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	goAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil || goAST == nil {
 		return nil
 	}

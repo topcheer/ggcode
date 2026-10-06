@@ -31,6 +31,20 @@ type Rule struct {
 	HitCount     int       `json:"hit_count"`
 	LastSeen     time.Time `json:"last_seen"`
 	CreatedAt    time.Time `json:"created_at"`
+	// Source records where the rule was learned from. Empty (pre-r444)
+	// and "error" mean the classic error-driven ratchet path;
+	// "user_edit" (r444) means it was promoted from repeated user
+	// rewrites of agent output. omitempty keeps old agent-rules.json
+	// byte-compatible on rewrite.
+	Source string `json:"source,omitempty"`
+	// TaskType (intent filter) records the classifyTaskType label of the
+	// run that learned this rule (bugfix/test/build/refactor/review/
+	// feature). Empty (legacy or unclassified) rules stay always-eligible
+	// via the global fallback in TopRulesForPromptFiltered. Mirrors the
+	// playbook-side matchesIntent read-path gating (#3266 research P1:
+	// unfiltered top-N injection polluted bugfix runs with release/test
+	// lessons and left the two memory systems inconsistent).
+	TaskType string `json:"task_type,omitempty"`
 }
 
 const defaultMaxRules = 60
@@ -51,6 +65,10 @@ type RuleStore struct {
 	loaded     bool
 	maxRules   int
 	regexCache map[string]*regexp.Regexp // pre-compiled patterns to avoid repeated compilation
+	// runIntent is the classifyTaskType label of the current run, set
+	// from prompt injection each run and inherited by newly added rules
+	// whose TaskType is empty (guarded by mu).
+	runIntent string
 }
 
 // NewRuleStore creates a RuleStore for the given working directory.
@@ -66,20 +84,61 @@ func NewRuleStore(workingDir string) *RuleStore {
 	}
 }
 
-// getRuleStore returns a cached RuleStore for the agent's working directory.
-// The store is created once and reused across all tool calls to avoid
-// repeated disk reads and regex compilation on the hot path.
+// getRuleStore returns THE single cached RuleStore for the agent's
+// working directory. The store is created once and reused across ALL
+// consumers (hot-path rule injection, runRatchet, generalizeErrorsWithRetry,
+// asyncVerify, prompt injection) so there is exactly one in-memory truth
+// per agent.
+//
+// #3227: previously runRatchet/generalizeErrorsWithRetry/asyncVerify each
+// built their own NewRuleStore; every instance load()s ONCE and save()
+// overwrites the file with that frozen snapshot, so a long-lived cached
+// instance (held by the user-edit observer) silently erased everything the
+// per-run instances learned - a classic cross-instance lost-update. A
+// single shared instance makes rs.mu cover every read/write by
+// construction.
+//
+// The cache write is guarded by a.mu because asyncVerify reaches this from
+// a background goroutine. Note the single-instance trade-off, deliberate:
+// rules are loaded once per agent session and accumulate in memory;
+// hand-edits to agent-rules.json mid-session are no longer re-read per run
+// (per-run reload was exactly the lost-update vector).
 func (a *Agent) getRuleStore() *RuleStore {
+	// a.mu (RWMutex) guards the cache because asyncVerify reaches this
+	// from a background goroutine. Read a.workingDir UNDER the lock -
+	// calling a.WorkingDir() here would self-deadlock (it takes a.mu.RLock,
+	// and Go mutexes are not reentrant).
+	a.mu.Lock()
 	if a.ruleStore != nil {
-		return a.ruleStore
+		rs := a.ruleStore
+		a.mu.Unlock()
+		return rs
 	}
-	workingDir := a.WorkingDir()
+	workingDir := a.workingDir
 	if workingDir == "" {
+		a.mu.Unlock()
 		return nil
 	}
 	rs := NewRuleStore(workingDir)
 	a.ruleStore = rs // cache for future calls
+	a.mu.Unlock()
 	return rs
+}
+
+// resetRuleStoreLocked drops the cached RuleStore singleton (and the
+// user-edit observer bound to it) so the next getRuleStore call lazily
+// re-anchors to the CURRENT working directory.
+// #3233: the #3227 singleton froze the store at first-build; when the
+// working dir changes mid-session (enter_worktree adoption, SetWorkingDir)
+// rules learned inside a worktree were persisted back into the MAIN
+// tree's agent-rules.json - cross-branch pollution of persistent
+// guidance. Callers must hold a.mu.
+func (a *Agent) resetRuleStoreLocked() {
+	a.ruleStore = nil
+	// The observer holds a direct reference to the old store; without
+	// clearing it too, user-edit tracking would keep writing to the
+	// abandoned directory.
+	a.userEditObs = nil
 }
 
 // compilePattern returns a cached compiled regex for the given pattern.
@@ -179,6 +238,32 @@ func (rs *RuleStore) MatchErrors(errors []string) (matched []string, unmatched [
 // AddRule adds a new rule, enforcing the max limit with LRU eviction.
 // If a semantically similar rule already exists, it merges hit counts
 // instead of creating a duplicate.
+// RemoveUserEditRules deletes user_edit-sourced rules whose ToolPattern
+// targets base (r447 negative-signal recycling). Returns how many were
+// removed. Error-sourced and LLM rules are never touched.
+func (rs *RuleStore) RemoveUserEditRules(base string) int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.load()
+	pattern := regexp.QuoteMeta(base)
+	kept := make([]Rule, 0, len(rs.rules))
+	removed := 0
+	for _, r := range rs.rules {
+		if r.Source == ruleSourceUserEdit && r.ToolPattern == pattern {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed > 0 {
+		rs.rules = kept
+		if err := rs.save(); err != nil {
+			debug.Log("ratchet", "failed to save rules after removing %d user_edit rule(s) for %s: %v", removed, base, err)
+		}
+	}
+	return removed
+}
+
 func (rs *RuleStore) AddRule(r Rule) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -192,6 +277,11 @@ func (rs *RuleStore) AddRule(r Rule) {
 	if r.HitCount == 0 {
 		r.HitCount = 1
 	}
+	// Inherit the current run's intent so future injections can filter
+	// by task type (legacy rules with empty TaskType stay global).
+	if r.TaskType == "" && rs.runIntent != "" && rs.runIntent != "other" {
+		r.TaskType = rs.runIntent
+	}
 	// #1008: Category comes straight from LLM JSON output, where the
 	// prompt's enum (build/test/git/convention/security) is only a soft
 	// constraint - variants like "Build", "lint" or " build " slip through.
@@ -204,7 +294,15 @@ func (rs *RuleStore) AddRule(r Rule) {
 	r.Category = normalizeRuleCategory(r.Category)
 
 	// Check for semantic duplicates before adding.
+	// #3229: user_edit rules generated from a fixed template tokenize to
+	// near-identical token sets for ANY two files (Jaccard >= 0.75 always),
+	// but their identity IS the target file. Similarity merge must never
+	// collapse two distinct files - that silently discards every rule after
+	// the first file, degrading r444 to single-file mode.
 	for i := range rs.rules {
+		if userEditIdentityDistinct(rs.rules[i], r) {
+			continue
+		}
 		if ruleSimilarity(rs.rules[i], r) >= 0.75 {
 			// Merge into existing rule: bump hit count and update LastSeen
 			rs.rules[i].HitCount += r.HitCount
@@ -237,6 +335,11 @@ func ruleSimilarity(a, b Rule) float64 {
 	if len(tokensA) == 0 || len(tokensB) == 0 {
 		return 0
 	}
+	// #3229 guard: two user_edit rules bound to DIFFERENT files are never
+	// semantic duplicates regardless of token overlap - see AddRule.
+	if userEditIdentityDistinct(a, b) {
+		return 0
+	}
 	// Jaccard similarity: intersection / union
 	intersection := 0
 	for t := range tokensA {
@@ -254,6 +357,18 @@ func ruleSimilarity(a, b Rule) float64 {
 		base += 0.3
 	}
 	return base
+}
+
+// userEditIdentityDistinct reports whether a and b are both user_edit
+// rules (r444) bound to DIFFERENT target files. user_edit rules come from
+// a fixed template whose only variable is the file base name, so any two
+// of them tokenize to near-identical sets (Jaccard 0.8+ for ANY file pair)
+// while carrying distinct identities in ToolPattern. Similarity-based
+// dedup must skip them (#3229): merging silently discarded every rule
+// after the first file and mis-accumulated HitCount onto it.
+func userEditIdentityDistinct(a, b Rule) bool {
+	return a.Source == ruleSourceUserEdit && b.Source == ruleSourceUserEdit &&
+		a.ToolPattern != b.ToolPattern
 }
 
 // tokenizeRule extracts normalized lowercase word tokens from a rule,
@@ -357,6 +472,34 @@ func (rs *RuleStore) Rules() []Rule {
 // matches. The recency weighting follows arXiv:2603.07670 which emphasizes
 // that production memory systems must account for staleness.
 func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
+	return rs.topRulesForPrompt(maxRules, "")
+}
+
+// SetRunIntent records the classifyTaskType label of the current run so
+// newly added rules inherit it (TaskType tagging) and prompt injection
+// can filter by relevance. Called once per run from prompt assembly.
+func (rs *RuleStore) SetRunIntent(intent string) {
+	rs.mu.Lock()
+	rs.runIntent = intent
+	rs.mu.Unlock()
+}
+
+// TopRulesForPromptFiltered returns the top rules for prompt injection,
+// restricted to rules learned in runs of the same task type when that
+// subset is rich enough (>= 2 entries). This mirrors the playbook-side
+// matchesIntent gating: a bugfix run should not spend its 5 injection
+// slots on release/test lessons, and vice versa. Falls back to the
+// global top-N when the intent subset is too thin (anti-starvation;
+// legacy rules with empty TaskType also live in the global pool).
+func (rs *RuleStore) TopRulesForPromptFiltered(maxRules int, intent string) string {
+	return rs.topRulesForPrompt(maxRules, intent)
+}
+
+// topRulesForPrompt is the shared implementation. filterIntent, when
+// non-empty and not "other", prefers rules whose TaskType matches; the
+// filtered view is used only if it holds at least 2 entries, otherwise
+// the unfiltered ranking applies.
+func (rs *RuleStore) topRulesForPrompt(maxRules int, filterIntent string) string {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.load()
@@ -371,18 +514,31 @@ func (rs *RuleStore) TopRulesForPrompt(maxRules int) string {
 		hint  string
 		score float64
 	}
-	var active []ruleScore
+	var active, intentActive []ruleScore
+	useIntent := filterIntent != "" && filterIntent != "other"
 	for _, r := range rs.rules {
-		if r.HitCount > 0 {
-			active = append(active, ruleScore{
-				rule:  r.Rule,
-				hint:  r.FixHint,
-				score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
-			})
+		if r.HitCount <= 0 {
+			continue
+		}
+		sc := ruleScore{
+			rule:  r.Rule,
+			hint:  r.FixHint,
+			score: recencyWeightedScore(r.HitCount, r.LastSeen, now),
+		}
+		active = append(active, sc)
+		if useIntent && r.TaskType == filterIntent {
+			intentActive = append(intentActive, sc)
 		}
 	}
 	if len(active) == 0 {
 		return ""
+	}
+
+	// Intent view is only adopted when the same-type subset is rich
+	// enough to fill a meaningful prompt slice; otherwise fall back to
+	// the global ranking so thin stores keep injecting their best rules.
+	if useIntent && len(intentActive) >= 2 {
+		active = intentActive
 	}
 
 	// Sort by combined score descending (small N, insertion sort)
@@ -637,11 +793,7 @@ func (a *Agent) runRatchet(stats *RunStats) {
 	if len(stats.Errors) == 0 {
 		return
 	}
-	workingDir := a.WorkingDir()
-	if workingDir == "" {
-		return
-	}
-	rs := NewRuleStore(workingDir)
+	rs := a.getRuleStore() // #3227: shared singleton - per-run instances lost updates
 	if rs == nil {
 		return
 	}
@@ -681,7 +833,7 @@ func truncStr(s string, maxLen int) string {
 // Returns whatever rules were successfully generalized.
 func (a *Agent) generalizeErrorsWithRetry(ctx context.Context, errors []string, verifyCmd string) []Rule {
 	const maxRetries = 2
-	rs := NewRuleStore(a.WorkingDir())
+	rs := a.getRuleStore() // #3227: shared singleton - per-run instances lost updates
 	existingRules := []Rule{}
 	if rs != nil {
 		existingRules = rs.Rules()

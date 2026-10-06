@@ -187,18 +187,62 @@ func (s *subgoalState) recordToolCall(toolName, args string) {
 		return
 	}
 	argLower := strings.ToLower(args)
-	toolLower := strings.ToLower(toolName)
 	for i := range s.subgoals {
 		if s.subgoals[i].addressed {
 			continue
 		}
 		for _, kw := range s.subgoals[i].keywords {
-			if strings.Contains(argLower, kw) || strings.Contains(toolLower, kw) {
+			// #2758: match keywords against the tool ARGUMENTS only. The old
+			// `|| strings.Contains(toolLower, kw)` matched tool NAMES - any
+			// read_file whitewashed a "file" keyword, search_files a "search"
+			// keyword - so unrelated calls marked subgoals addressed and the
+			// un-addressed-subgoal warning went silent (systematic
+			// under-reporting). Tool names are generic verbs/nouns by design
+			// and carry no evidence about WHICH subgoal was addressed.
+			//
+			// #2829: the hit itself now requires a word boundary
+			// (sgKeywordPresent) - pure substring matching let "runtime"
+			// satisfy a "run" keyword and "author.go" satisfy "auth",
+			// burning the addressed flag on unrelated calls the same way.
+			if sgKeywordPresent(argLower, kw) {
 				s.subgoals[i].addressed = true
 				break
 			}
 		}
 	}
+}
+
+// sgKeywordPresent reports whether kw occurs in lower as a standalone word
+// (#2829). Boundaries use sgKeywordWordByte - alphanumerics only, '_' is a
+// SEPARATOR: tool args are full of snake_case tokens where '_' delimits words
+// (test_suite.go legitimately satisfies "test"/"suite"), while letters glue
+// real words ("runtime" does not satisfy "run", "author.go" does not satisfy
+// "auth"). CJK keywords are unaffected - UTF-8 continuation bytes are never
+// word bytes, so every occurrence is a whole-word hit, same as Contains.
+func sgKeywordPresent(lower, kw string) bool {
+	if kw == "" {
+		return false
+	}
+	for from := 0; ; {
+		rel := strings.Index(lower[from:], kw)
+		if rel < 0 {
+			return false
+		}
+		i := from + rel
+		end := i + len(kw)
+		if (i == 0 || !sgKeywordWordByte(lower[i-1])) && (end == len(lower) || !sgKeywordWordByte(lower[end])) {
+			return true
+		}
+		from = end
+	}
+}
+
+// sgKeywordWordByte is the word class for subgoal keyword matching against
+// tool args: alphanumerics only. Unlike isWordByte (#2745, identifier
+// semantics where '_' belongs to the name) it treats '_' as a word
+// SEPARATOR, matching how '_' reads inside paths and snake_case tokens.
+func sgKeywordWordByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
 // maybeWarn checks if unaddressed subgoals warrant a warning.
@@ -213,14 +257,27 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 		return ""
 	}
 	unaddressed := 0
+	trackable := 0
 	var missing []string
 	for _, sg := range s.subgoals {
+		// #2839: subgoals whose description yielded NO trackable keywords
+		// (e.g. pure CJK plans - the extractor regex is ASCII-only) can
+		// never be marked addressed by recordToolCall, so counting them
+		// guarantees a false skip-step warning. Exclude them from both
+		// numerator and denominator.
+		if len(sg.keywords) == 0 {
+			continue
+		}
+		trackable++
 		if !sg.addressed {
 			unaddressed++
 			missing = append(missing, fmt.Sprintf("  %d. %s", sg.number, truncate(sg.text, 60)))
 		}
 	}
-	ratio := float64(unaddressed) / float64(len(s.subgoals))
+	if trackable == 0 {
+		return ""
+	}
+	ratio := float64(unaddressed) / float64(trackable)
 	if ratio < sgUnaddressedThresh {
 		return ""
 	}
@@ -231,7 +288,7 @@ func (s *subgoalState) maybeWarn(currentIter int) string {
 			"Research shows missing-step planning errors are a top agent failure cause (arXiv:2508.13143). "+
 			"Review whether these subgoals are still needed. If so, address them before declaring completion. "+
 			"If requirements changed, explicitly acknowledge which subgoals were intentionally deferred.",
-		unaddressed, len(s.subgoals), strings.Join(missing, "\n"))
+		unaddressed, trackable, strings.Join(missing, "\n"))
 }
 
 func truncate(s string, max int) string {

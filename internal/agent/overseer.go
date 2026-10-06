@@ -77,6 +77,12 @@ type overseerState struct {
 	// and drift are significantly higher, and research tools (web_search,
 	// code_search, code_execution) count as productive work.
 	researchMode bool
+
+	// r365 research-report gate state: cumulative web_search/web_fetch calls
+	// this run (the multi-hop signal) and the fire-once flag.
+	searchCalls     int
+	fetchCalls      int
+	reportGateFired bool
 }
 
 type trajectoryEntry struct {
@@ -212,6 +218,18 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 		fileHint: fileHint,
 	})
 
+	// r365: count retrieval calls for the research-report gate (successful
+	// searches/fetches are the multi-hop signal; errors would double-count
+	// retries against the same source).
+	if !isError {
+		switch toolName {
+		case "web_search":
+			o.searchCalls++
+		case "web_fetch":
+			o.fetchCalls++
+		}
+	}
+
 	// A tool call is productive if it's a productive tool AND it succeeded.
 	// Failed run_command calls (e.g. failed builds) are NOT productive —
 	// they don't represent forward progress. This prevents the drift detector
@@ -252,6 +270,14 @@ func (o *overseerState) reset() {
 	o.driftLevel = 0
 	o.fired = make(map[string]bool)
 	o.lastAnalysisIter = 0
+	// #3057: the r365 research-gate fields are declared "this run" state
+	// and live on the cross-run overseer instance - reset() must clear
+	// them too, or the gate fired once per Agent LIFETIME and the search/
+	// fetch counters accumulated across runs (later research runs tripped
+	// on stale counts and the message lied about "calls this run").
+	o.searchCalls = 0
+	o.fetchCalls = 0
+	o.reportGateFired = false
 }
 
 // analyze checks the trajectory for pathological patterns. Returns a

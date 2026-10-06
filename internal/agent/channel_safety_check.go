@@ -35,7 +35,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -119,8 +118,7 @@ func findChannelSafetyIssues(src string) []channelSafetyInstance {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, fset, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return nil
 	}
@@ -156,6 +154,13 @@ type chanOp struct {
 	// `if A {}` and the send in `else if B {}` share the OUTER if as their
 	// exclusive ancestor but have different innermost ifs.
 	ifStack []ifCtx
+	// #2776: enclosing loop positions, outermost first — used to scope
+	// break's loop-exit exclusivity to ops inside that same loop.
+	loopStack []token.Pos
+	// #2938: enclosing switch/select case contexts, outermost first —
+	// ops in sibling clauses of the same switch/select never both run
+	// (Go case bodies don't fall through; select runs exactly one case).
+	caseStack []caseCtx
 }
 
 // ifCtx records one enclosing if-statement: its collector-assigned id
@@ -165,12 +170,21 @@ type ifCtx struct {
 	side int
 }
 
-// terminatorInfo records a function-flow terminating statement (return,
-// panic) with its block depth — used to detect that ops before vs after it
-// cannot both execute (#2648).
+// caseCtx records one enclosing switch/select clause: the statement's
+// position (unique id within the file) and the clause index (#2938).
+type caseCtx struct {
+	switchPos token.Pos
+	clause    int
+}
+
+// terminatorInfo records a flow-terminating statement (return, panic) or a
+// loop-exit statement (break) with its block depth — used to detect that ops
+// before vs after it cannot both execute (#2648, #2776).
 type terminatorInfo struct {
-	pos   token.Pos
-	depth int
+	pos      token.Pos
+	depth    int
+	loopExit bool      // true for break: terminates only the enclosing loop, not the function
+	loopPos  token.Pos // for loopExit: position of the innermost enclosing loop
 }
 
 // chanOpCollector walks a function body tracking control-flow context.
@@ -179,14 +193,20 @@ type chanOpCollector struct {
 	terminators []terminatorInfo
 	depth       int
 	ifStack     []ifCtx
+	loopStack   []token.Pos
+	caseStack   []caseCtx
 	nextIfID    int
 }
 
 func (c *chanOpCollector) recordOp(op, name string, pos token.Pos, deferred bool) {
 	stack := make([]ifCtx, len(c.ifStack))
 	copy(stack, c.ifStack)
+	loops := make([]token.Pos, len(c.loopStack))
+	copy(loops, c.loopStack)
+	cases := make([]caseCtx, len(c.caseStack))
+	copy(cases, c.caseStack)
 	c.ops = append(c.ops, chanOp{op: op, name: name, pos: pos, deferred: deferred,
-		depth: c.depth, ifStack: stack})
+		depth: c.depth, ifStack: stack, loopStack: loops, caseStack: cases})
 }
 
 // inspectExprs finds close()/send ops inside a statement's expressions
@@ -238,16 +258,22 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 		}
 		c.ifStack = savedStack
 	case *ast.ForStmt:
+		c.loopStack = append(c.loopStack, s.Pos())
 		c.walkStmt(s.Body)
+		c.loopStack = c.loopStack[:len(c.loopStack)-1]
 	case *ast.RangeStmt:
+		c.loopStack = append(c.loopStack, s.Pos())
 		c.walkStmt(s.Body)
+		c.loopStack = c.loopStack[:len(c.loopStack)-1]
 	case *ast.SwitchStmt:
-		c.walkStmt(s.Body)
+		c.walkCaseClauses(s.Pos(), s.Body)
 	case *ast.TypeSwitchStmt:
-		c.walkStmt(s.Body)
+		c.walkCaseClauses(s.Pos(), s.Body)
 	case *ast.SelectStmt:
-		c.walkStmt(s.Body)
+		c.walkCaseClauses(s.Pos(), s.Body)
 	case *ast.CaseClause:
+		// Reached only when a case body is walked without clause context
+		// (defense); clause-aware walks go through walkCaseClauses.
 		c.walkStmts(s.Body)
 	case *ast.DeferStmt:
 		if ce := s.Call; isCloseCall(ce) {
@@ -258,11 +284,56 @@ func (c *chanOpCollector) walkStmt(stmt ast.Stmt) {
 	case *ast.ReturnStmt:
 		c.terminators = append(c.terminators, terminatorInfo{pos: s.Pos(), depth: c.depth})
 		c.inspectExprs(s)
+	case *ast.BranchStmt:
+		// #2776: break exits the enclosing loop, so ops after it within the
+		// loop body (or in iterations that follow) never execute. continue
+		// is deliberately NOT recorded: later iterations still run after a
+		// continue, so a send after a close+continue is a true positive.
+		if s.Tok == token.BREAK {
+			var lp token.Pos
+			if len(c.loopStack) > 0 {
+				lp = c.loopStack[len(c.loopStack)-1]
+			}
+			c.terminators = append(c.terminators, terminatorInfo{pos: s.Pos(), depth: c.depth, loopExit: true, loopPos: lp})
+		}
 	case *ast.GoStmt:
 		// goroutine body is a separate flow; only its launch is here
 	default:
 		c.inspectExprs(stmt)
 	}
+}
+
+// walkCaseClauses walks each case body of a switch/select with its own
+// clause context (#2938): only one clause of a switch/select ever runs,
+// so ops in sibling clauses are mutually exclusive. A select comm
+// (`case ch <- v:`) is itself a send op and is recorded under its clause.
+func (c *chanOpCollector) walkCaseClauses(swPos token.Pos, body *ast.BlockStmt) {
+	saved := c.caseStack
+	for i, cl := range body.List {
+		var comm ast.Stmt
+		var caseBody []ast.Stmt
+		switch cc := cl.(type) {
+		case *ast.CaseClause: // switch / type-switch clauses
+			caseBody = cc.Body
+		case *ast.CommClause: // select clauses; Comm is the case expression
+			comm = cc.Comm
+			caseBody = cc.Body
+		default:
+			continue
+		}
+		c.caseStack = append(saved, caseCtx{switchPos: swPos, clause: i})
+		if comm != nil {
+			if st, ok := comm.(*ast.SendStmt); ok {
+				if chName := channelNameFromExpr(st.Chan); chName != "" {
+					c.recordOp("send", chName, st.Pos(), false)
+				}
+			} else {
+				c.inspectExprs(comm)
+			}
+		}
+		c.walkStmts(caseBody)
+	}
+	c.caseStack = saved
 }
 
 // mutuallyExclusive reports whether op b can never execute on a path where
@@ -278,8 +349,35 @@ func (c *chanOpCollector) mutuallyExclusive(a, b chanOp) bool {
 			}
 		}
 	}
+	// #2938: sibling clauses of the same switch/select never both execute
+	// (no fallthrough; select runs exactly one case). Only applied when
+	// NEITHER op is inside a loop: a loop can re-execute the switch/select
+	// across iterations, so loop-carried close/send pairs stay checkable —
+	// conservative per #2938 (loop-side risk is detectCloseInLoops' turf).
+	if len(a.loopStack) == 0 && len(b.loopStack) == 0 {
+		for _, sa := range a.caseStack {
+			for _, sb := range b.caseStack {
+				if sa.switchPos == sb.switchPos && sa.clause != sb.clause {
+					return true
+				}
+			}
+		}
+	}
 	for _, t := range c.terminators {
 		if t.pos > a.pos && t.pos < b.pos && t.depth <= a.depth {
+			if t.loopExit {
+				// break only terminates its innermost enclosing loop: b must
+				// also be inside that loop (its loopStack contains it). A send
+				// AFTER the loop can still execute and stays checkable.
+				if t.loopPos.IsValid() {
+					for _, lp := range b.loopStack {
+						if lp == t.loopPos {
+							return true
+						}
+					}
+				}
+				continue
+			}
 			return true
 		}
 	}

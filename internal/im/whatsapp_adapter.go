@@ -350,8 +350,6 @@ func (a *whatsappAdapter) Close() error {
 	return nil
 }
 
-func (a *whatsappAdapter) ChatID() string { return "" }
-
 // ---------------------------------------------------------------------------
 // Typing indicator
 // ---------------------------------------------------------------------------
@@ -375,8 +373,6 @@ func (a *whatsappAdapter) TriggerTyping(ctx context.Context, binding ChannelBind
 	}
 	return err
 }
-
-func (a *whatsappAdapter) SupportsTyping() bool { return true }
 
 // ---------------------------------------------------------------------------
 // Start / connection lifecycle

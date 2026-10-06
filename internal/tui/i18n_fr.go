@@ -507,19 +507,19 @@ func frCatalog(key string) string {
 	case "init.resolve_failed":
 		return "Erreur de resolution de la cible d'init: %v\n\n"
 	case "init.generate_failed":
-		return "Erreur de génération du contenu GGCODE.md: %v\n\n"
+		return "Erreur de génération du contenu AGENTS.md: %v\n\n"
 	case "init.collecting":
 		return "Collecte des connaissances du projet..."
 	case "init.prompt.title":
 		return "Initialisér le projet"
 	case "init.prompt.body":
-		return "Aucun GGCODE.md trouvé dans ce projet. En créer un pour aider l'agent a comprendre les conventions de votre code?"
+		return "Aucun AGENTS.md trouvé dans ce projet. En créer un pour aider l'agent a comprendre les conventions de votre code?"
 	case "init.prompt.yes":
 		return "Créer"
 	case "init.prompt.no":
 		return "Passer"
 	case "init.prompt.hint":
-		return " y = créer GGCODE.md • n/Esc = passer"
+		return " y = créer AGENTS.md • n/Esc = passer"
 	case "command.model_switched":
 		return "Modèle change en: %s (fournisseur: %s)\n\n"
 	case "command.model_failed":
@@ -791,7 +791,7 @@ func frCatalog(key string) string {
 	case "slash.image":
 		return "Joindre une imâge"
 	case "slash.init":
-		return "Génèrer le GGCODE.md du projet"
+		return "Génèrer le AGENTS.md du projet"
 	case "slash.lang":
 		return "Changer là langue de l'interface"
 	case "slash.skills":
@@ -1026,6 +1026,10 @@ func frCatalog(key string) string {
 		return "Aucune session active a bifurquér."
 	case "branch.empty":
 		return "La session n'a pas de messâges a bifurquér."
+	case "branch.bad_arg":
+		return "Usage : /branch [N], N est un entier non négatif (nombre de tours à abandonner)."
+	case "branch.back_too_far":
+		return "Impossible de forker aussi loin : cela supprimerait tous les tours de conversation."
 	case "branch.save_failed":
 		return "Erreur lors de la creation de la session bifurquée: %v"
 	case "branch.success":
@@ -1057,7 +1061,7 @@ Developpement:
   /cost              Afficher l'utilisation de tokens et le coût estime de la session
   /context           Afficher le détail d'utilisation de la fenêtre de contexte
   /hooks             Afficher les hooks configurés
-  /init              Génèrer le GGCODE.md du projet actuel
+  /init              Génèrer le AGENTS.md du projet actuel
   /todo              Voir la liste de tâches
   /todo clear        Effacér la liste de tâches
 

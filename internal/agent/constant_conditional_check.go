@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -58,8 +57,7 @@ func checkConstantConditional(filePath, _, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, 0)
+	file, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil || file == nil {
 		return nil
 	}

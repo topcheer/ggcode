@@ -3,10 +3,13 @@ package agentruntime
 import (
 	"context"
 	"path/filepath"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/acpclient"
+	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/cron"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -40,6 +43,36 @@ func NewSessionCronScheduler(sessionID, workingDir string, enqueue func(prompt s
 
 	scheduler.Load()
 	return scheduler
+}
+
+// ApplyIdleMaintenance enables sleep-time compute (r373) on the agent:
+// an idle watcher that pre-compacts the context during user-idle windows
+// so the next message doesn't pay compaction latency. Returns nil (and
+// changes nothing) unless cfg.Enabled.
+func ApplyIdleMaintenance(ag *agent.Agent, cfg config.IdleConfig) *agent.IdleMaintainer {
+	if ag == nil || !cfg.Enabled {
+		return nil
+	}
+	afterMin := cfg.AfterMin
+	if afterMin <= 0 {
+		afterMin = 10
+	}
+	ratio := cfg.PrecompactRatio
+	if ratio <= 0 {
+		ratio = 0.6
+	}
+	m := agent.NewIdleMaintainer(time.Duration(afterMin)*time.Minute, ratio,
+		func() float64 {
+			cm := ag.ContextManager()
+			if cm == nil {
+				return 0
+			}
+			return cm.UsageRatio()
+		},
+		func() { ag.StartPreCompact() })
+	ag.SetIdleMaintainer(m)
+	m.Start()
+	return m
 }
 
 func RegisterCronTools(registry *tool.Registry, scheduler *cron.Scheduler) {
@@ -93,6 +126,7 @@ func NewSubAgentManager(
 	availableModels func() []string,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
+	onMetric func(metrics.MetricEvent), // sa-218: sub-agent telemetry into the parent collector
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	systemPromptBuilder func(task, agentType string) string,
 ) *subagent.Manager {
@@ -100,7 +134,7 @@ func NewSubAgentManager(
 	if registry == nil || prov == nil || agentFactory == nil {
 		return mgr
 	}
-	_ = registry.Register(tool.SpawnAgentTool{
+	spawnTool := tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
 		ProviderGetter:      providerGetter,
@@ -109,7 +143,26 @@ func NewSubAgentManager(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
+		OnMetric:            onMetric,
 		SystemPromptBuilder: systemPromptBuilder,
+		// r460: worktree-isolated sub-agent experience backflow (injected
+		// here to keep the tool package free of an agent import).
+		TrajBackflow: agent.TrajBackflowFromWorktree,
+	}
+	_ = registry.Register(spawnTool)
+	// r377: trajectory-level best-of-N sampling on top of the spawn pipeline.
+	// r380: AvailableModels enables per-candidate model validation for
+	// heterogeneous ensembles (models=[...] on best_of_n).
+	_ = registry.Register(tool.BestOfNTool{
+		Manager:         mgr,
+		Run:             BestOfNRunnerFor(spawnTool, mgr),
+		AvailableModels: availableModels,
+	})
+	// r436: dynamic workflow orchestration (externalized task graph:
+	// decompose -> parallel workers -> adversarial verify -> synthesize).
+	_ = registry.Register(tool.WorkflowRunTool{
+		Manager: mgr,
+		Run:     WorkflowRunnerFor(spawnTool, mgr),
 	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	parentModel := tool.ParentModelFromProviderGetter(providerGetter)
@@ -139,6 +192,7 @@ func NewSubAgentManager(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
+		OnMetric:            onMetric, // #3296: named-agent forks stop being OTLP black boxes
 		SystemPromptBuilder: systemPromptBuilder,
 	})
 	return mgr

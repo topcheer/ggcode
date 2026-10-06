@@ -81,6 +81,22 @@ func (s *strategyStagnationState) reset() {
 	s.warnings = 0
 }
 
+// stagnationToolCovered reports whether toolName is inside
+// extractStagnationTarget's switch (#3409: only the covered domain is
+// recorded - uncovered tools would all collapse onto the degenerate
+// ""-target trajectory).
+func stagnationToolCovered(toolName string) bool {
+	switch toolName {
+	case "edit_file", "write_file", "read_file", "multi_edit_file",
+		"lsp_diagnostics", "lsp_symbols", "lsp_definition",
+		"run_command", "start_command",
+		"grep", "search_files",
+		"git_add", "git_commit", "git_diff", "git_status":
+		return true
+	}
+	return false
+}
+
 // extractStagnationTarget pulls the primary target identifier from tool
 // call arguments. For file-editing tools, this is the file path. For
 // command/search tools, the command or pattern. Used to detect whether
@@ -134,6 +150,17 @@ func extractJSONStringFieldStag(jsonStr string, keys ...string) string {
 // strategy stagnation warning should fire.
 func (s *strategyStagnationState) recordAttempt(toolName, argsJSON string, success bool) bool {
 	target := extractStagnationTarget(toolName, argsJSON)
+	// #3409: tools OUTSIDE extractStagnationTarget's switch can never yield
+	// a target, and the tail-match (toolName && target) degenerates when
+	// both sides are "" - every distinct call of such a tool collapses onto
+	// ONE trajectory: failures on different real targets falsely chain
+	// into stagnation, and any success erases a genuinely-stuck chain (互消).
+	// Skip recording the uncovered domain entirely. Covered tools keep the
+	// legacy semantics even when extraction comes up empty (the #1498
+	// contract chains same-tool failures on bare/"" targets).
+	if !stagnationToolCovered(toolName) {
+		return false
+	}
 	attempt := stagnationAttempt{
 		toolName: toolName,
 		target:   target,

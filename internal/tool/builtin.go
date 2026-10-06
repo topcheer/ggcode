@@ -17,6 +17,10 @@ import (
 // sandbox, when non-nil and Enabled, activates OS-level containment for
 // shell execution (no-op where the OS lacks native sandboxing).
 func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy, workingDir string, protectedPaths []string, sandbox *SandboxPolicy) error {
+	// Session-level security ledger (sa-216): shared by run_command so
+	// denials aggregate across every call in this agent session.
+	secLedger := &SecurityLedger{}
+	riskLedger := NewAllowedRiskLedger() // r28: allowed-risk dual, shared by run_command + start_command
 	fileGuard := NewFileGuard(protectedPaths)
 	debug.Log("fileguard", "initialized with %d patterns: %v", len(fileGuard.Patterns()), fileGuard.Patterns())
 
@@ -44,6 +48,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	}
 	jobManager := NewCommandJobManager(workingDir)
 	jobManager.SetSandboxPolicy(sandbox)
+	registry.jobManager = jobManager
 	codeIndex := NewCodeIndexManager(workingDir)
 	registry.codeIndex = codeIndex
 	tools := []Tool{
@@ -59,6 +64,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		ApplyPatch{SandboxCheck: sandboxFor("apply_patch"), WorkingDir: workingDir},
 		ListDir{SandboxCheck: readSandboxFor("list_directory")},
 		EditFile{SandboxCheck: sandboxFor("edit_file"), WorkingDir: workingDir},
+		MultiEditFile{SandboxCheck: sandboxFor("multi_edit_file"), WorkingDir: workingDir},
 		MultiFileEdit{SandboxCheck: sandboxFor("multi_file_edit"), WorkingDir: workingDir},
 		BatchReplace{SandboxCheck: sandboxFor("batch_replace"), WorkingDir: workingDir},
 		FileOps{SandboxCheck: sandboxFor("file_ops"), WorkingDir: workingDir},
@@ -72,8 +78,7 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 	tools = append(tools, NewLSPTools(workingDir, readSandboxFor("read_file"), sandboxFor("edit_file"))...)
 	tools = append(tools,
 
-		// Multi-edit and notebook
-		MultiEditFile{SandboxCheck: sandboxFor("multi_edit_file"), WorkingDir: workingDir},
+		// Notebook
 		NotebookEdit{SandboxCheck: sandboxFor("notebook_edit")},
 
 		// Sleep
@@ -88,8 +93,8 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		&ListWorktree{WorkingDir: workingDir},
 
 		// Execution
-		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox},
-		StartCommandTool{Manager: jobManager, Policy: policy},
+		&RunCommand{WorkingDir: workingDir, Policy: policy, Sandbox: sandbox, SecLedger: secLedger, RiskLedger: riskLedger},
+		StartCommandTool{Manager: jobManager, Policy: policy, SecLedger: secLedger, RiskLedger: riskLedger}, // #3294: background starts join the session denial ledger
 		ReadCommandOutputTool{Manager: jobManager},
 		WaitCommandTool{Manager: jobManager},
 		StopCommandTool{Manager: jobManager},
@@ -133,6 +138,15 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 
 		// IM (manager injected post-registration via SetManager)
 		IMTool{},
+
+		// Mobile file transfer (broker adapter injected post-registration
+		// by the TUI when a mobile share starts)
+		MobileFileTool{},
+
+		// Mobile share lifecycle (controller adapter injected post-registration
+		// by the TUI at startup; the phone still completes pairing via QR/URL)
+		StartShareTool{},
+		StopShareTool{},
 
 		// Runtime status (provider injected post-registration via SetRuntimeStatusProvider)
 		RuntimeTool{},

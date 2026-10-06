@@ -7,8 +7,13 @@ import (
 // TestSubAgentBlockedTools verifies the blocklist contains all expected entries.
 func TestSubAgentBlockedTools(t *testing.T) {
 	expected := map[string]bool{
-		"ask_user":          true,
-		"spawn_agent":       true,
+		"ask_user":    true,
+		"spawn_agent": true,
+		// r377: nested best-of-N fan-out from candidates is blocked too.
+		"best_of_n": true,
+		// compact_context (CAT) compacts the OWNING agent's conversation;
+		// a one-shot sub-agent must not compact its parent.
+		"compact_context":   true,
 		"wait_agent":        true,
 		"list_agents":       true,
 		"cancel_agent":      true,
@@ -27,8 +32,11 @@ func TestSubAgentBlockedTools(t *testing.T) {
 		"teammate_list":       true,
 		"send_message":        true,
 		"lanchat":             true,
-		"a2a_remote":          true,
-		"a2a_send_task":       true,
+		// r436: nested workflows inside sub-agents would multiply spawn
+		// slots unboundedly; one nesting level only.
+		"workflow_run":  true,
+		"a2a_remote":    true,
+		"a2a_send_task": true,
 	}
 	for _, name := range subAgentBlockedTools {
 		if !expected[name] {

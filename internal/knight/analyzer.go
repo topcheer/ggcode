@@ -149,9 +149,16 @@ func (sa *SessionAnalyzer) AnalyzeRecent(ctx context.Context) (*AnalysisResult, 
 	}
 
 	// Priority sort: sessions with correction/failure signals first.
+	// Precompute each session's signal score ONCE: the comparator runs
+	// O(n log n) times and each score scan walks every message while
+	// concatenating text, so recomputing inside it is quadratic-ish work
+	// on large session stores.
+	scores := make(map[string]int, len(eligible))
+	for _, ses := range eligible {
+		scores[ses.ID] = sa.sessionSignalScore(ses)
+	}
 	sort.SliceStable(eligible, func(i, j int) bool {
-		si := sa.sessionSignalScore(eligible[i])
-		sj := sa.sessionSignalScore(eligible[j])
+		si, sj := scores[eligible[i].ID], scores[eligible[j].ID]
 		if si != sj {
 			return si > sj
 		}
@@ -765,9 +772,77 @@ type failure struct {
 	index    int
 }
 
+// failureFingerprint derives a stable short fingerprint from the failure's
+// error text (#3016): first non-empty error line, lowercased, with paths and
+// numbers stripped so the same error class hashes identically across
+// sessions while unrelated failures stay distinct. It embeds in the
+// candidate NAME; the coarse failureSignature(errMsg) below is the separate
+// aggregate-KEY classifier - the ec8a285cc merge briefly redeclared both
+// under one name and broke the build.
+func failureFingerprint(f failure) string {
+	first := ""
+	for _, ln := range strings.Split(f.errMsg, "\n") {
+		trimmed := strings.TrimSpace(ln)
+		if trimmed != "" {
+			first = trimmed
+			break
+		}
+	}
+	if first == "" {
+		first = f.toolInp
+	}
+	first = strings.ToLower(first)
+	// Strip runs containing a path separator and digit runs: paths, line
+	// numbers, counters and hex addresses vary between sessions/machines.
+	fields := strings.Fields(first)
+	for i, w := range fields {
+		if strings.ContainsAny(w, "/\\") || strings.Contains(w, ":") && strings.Count(w, "") > 2 && isMostlyNonAlpha(w) {
+			fields[i] = "<path>"
+			continue
+		}
+		fields[i] = stripDigits(w)
+	}
+	normalized := strings.Join(fields, " ")
+	if len(normalized) > 120 {
+		normalized = normalized[:120]
+	}
+	h := fnv.New32a()
+	h.Write([]byte(normalized))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
+func isMostlyNonAlpha(w string) bool {
+	alpha := 0
+	for _, r := range w {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			alpha++
+		}
+	}
+	return alpha*2 < len(w)
+}
+
+func stripDigits(w string) string {
+	var b strings.Builder
+	for _, r := range w {
+		if r < '0' || r > '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 func buildFailureFixName(f failure) string {
-	// Build a descriptive name from the error context
+	// Build a descriptive name from the error context.
+	//
+	// #3016: keyword names alone were far too coarse - "test"/"build"
+	// Contains-match almost any command, so unrelated failures (a go build
+	// timeout and an npm test path error) aggregated under one key and
+	// inflated EvidenceCount into fake cross-session convergence. Keyword
+	// names now carry the failure signature fingerprint so aggregation only
+	// converges genuinely similar failures; identical errors hash
+	// identically across sessions (true convergence survives).
 	inputLower := strings.ToLower(f.toolInp)
+	fp := failureFingerprint(f)
 
 	type matcher struct {
 		keyword string
@@ -787,11 +862,11 @@ func buildFailureFixName(f failure) string {
 
 	for _, m := range matchers {
 		if strings.Contains(inputLower, m.keyword) || strings.Contains(strings.ToLower(f.errMsg), m.keyword) {
-			return m.name
+			return m.name + "-" + fp
 		}
 	}
 
-	return "fix-" + sanitizeName(f.toolName)
+	return "fix-" + sanitizeName(f.toolName) + "-" + fp
 }
 
 // --- Aggregation ---
@@ -801,12 +876,63 @@ type candidateAggregate struct {
 	hits      int
 	scoreSum  float64
 	sessions  map[string]struct{}
+	// sig records the failure signature used in the aggregation key
+	// ("" for name-only keys) so finalizeCandidates can disambiguate
+	// Name when one base name forked into multiple signature buckets
+	// (#3016 review follow-up).
+	sig string
+}
+
+// failureClass derives a coarse error-class signature from a failure
+// message so aggregation keys don't merge unrelated failures that merely
+// share a keyword (#3016: "go build timeout" and "npm test path error"
+// both matched the "test"/"build" keywords and were aggregated under the
+// same name, inflating EvidenceCount into a fake "converged across N
+// sessions" signal that staged unrelated fixes).
+//
+// Coarse classes first (so distinct details still converge on the same
+// class); the normalized first line of the error is the fallback so two
+// different errors never share a key.
+func failureClass(errMsg string) string {
+	first := errMsg
+	if i := strings.IndexAny(errMsg, "\n\r"); i >= 0 {
+		first = errMsg[:i]
+	}
+	first = strings.ToLower(strings.TrimSpace(first))
+
+	classes := []struct{ marker, class string }{
+		{"timed out", "timeout"}, {"timeout", "timeout"},
+		{"deadline exceeded", "timeout"},
+		{"undefined", "undefined-symbol"},
+		{"cannot find", "not-found"}, {"not found", "not-found"}, {"no such file", "not-found"}, {"enoent", "not-found"},
+		{"permission denied", "permission"}, {"eacces", "permission"},
+		{"already exists", "already-exists"},
+		{"conflict", "conflict"},
+		{"compile", "compile-error"}, {"syntax error", "compile-error"},
+		{"connection refused", "network"}, {"eof", "network"}, {"reset by peer", "network"},
+	}
+	for _, c := range classes {
+		if strings.Contains(first, c.marker) {
+			return c.class
+		}
+	}
+	// Normalize whitespace so trivially-different phrasings don't fork keys.
+	return strings.Join(strings.Fields(first), " ")
 }
 
 func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate SkillCandidate, sessionID string) {
 	key := strings.ToLower(strings.TrimSpace(candidate.Name))
 	if key == "" {
 		return
+	}
+	// #3016: failure-fix candidates aggregate by name AND error signature -
+	// the keyword-based name alone is too broad. Correction/convention
+	// candidates keep name-only keys (their Evidence[0] is not an error
+	// message and name collision is not the failure mode there).
+	sig := ""
+	if candidate.Category == "failure-fix" && len(candidate.Evidence) > 0 {
+		sig = failureClass(candidate.Evidence[0])
+		key += "|" + sig
 	}
 	agg, ok := aggregated[key]
 	if !ok {
@@ -817,6 +943,7 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 			sessions: map[string]struct{}{
 				sessionID: {},
 			},
+			sig: sig,
 		}
 		return
 	}
@@ -837,8 +964,23 @@ func aggregateCandidate(aggregated map[string]*candidateAggregate, candidate Ski
 
 func finalizeCandidates(aggregated map[string]*candidateAggregate) []SkillCandidate {
 	candidates := make([]SkillCandidate, 0, len(aggregated))
+	// #3016 review follow-up: when one base name forked into multiple
+	// signature buckets, downstream state keyed by Scope+Name (queue
+	// dedup/Remove, stagingFailCount, evalCooldown, isKnownCandidate)
+	// would cross-wire the forks - a known/stale fork could Remove its
+	// sibling from the queue. Disambiguate Name with the signature suffix
+	// whenever a base name has more than one bucket; the single-bucket
+	// case keeps the original name for backward compatibility with
+	// already-staged skills.
+	baseNameCount := map[string]int{}
+	for _, agg := range aggregated {
+		baseNameCount[strings.ToLower(strings.TrimSpace(agg.candidate.Name))]++
+	}
 	for _, agg := range aggregated {
 		candidate := agg.candidate
+		if agg.sig != "" && baseNameCount[strings.ToLower(strings.TrimSpace(candidate.Name))] > 1 {
+			candidate.Name = candidate.Name + "-" + agg.sig
+		}
 		candidate.EvidenceCount = len(agg.sessions)
 		candidate.SourceSessions = make([]string, 0, len(agg.sessions))
 		for sessionID := range agg.sessions {

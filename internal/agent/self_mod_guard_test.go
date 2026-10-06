@@ -17,7 +17,7 @@ func rawMsg(t *testing.T, v map[string]interface{}) json.RawMessage {
 
 func TestSelfMod_ConfigFile(t *testing.T) {
 	s := newSelfModState()
-	args := rawMsg(t, map[string]interface{}{"path": "/project/ggcode.yaml"})
+	args := rawMsg(t, map[string]interface{}{"path": "ggcode.yaml"})
 	msg := s.checkSelfModification("write_file", args)
 	if msg == "" {
 		t.Fatal("expected warning for ggcode.yaml")
@@ -89,7 +89,7 @@ func TestSelfMod_BenignFile(t *testing.T) {
 
 func TestSelfMod_NonWriteTool(t *testing.T) {
 	s := newSelfModState()
-	args := rawMsg(t, map[string]interface{}{"path": "/project/ggcode.yaml"})
+	args := rawMsg(t, map[string]interface{}{"path": "ggcode.yaml"})
 	msg := s.checkSelfModification("read_file", args)
 	if msg != "" {
 		t.Errorf("read_file should not trigger, got: %s", msg)
@@ -112,7 +112,7 @@ func TestSelfMod_MultiFileEdit(t *testing.T) {
 
 func TestSelfMod_MaxWarnings(t *testing.T) {
 	s := newSelfModState()
-	args1 := rawMsg(t, map[string]interface{}{"path": "/project/ggcode.yaml"})
+	args1 := rawMsg(t, map[string]interface{}{"path": "ggcode.yaml"})
 	args2 := rawMsg(t, map[string]interface{}{"path": "/project/.ggcode/memory/a.md"})
 	args3 := rawMsg(t, map[string]interface{}{"path": "/project/.ggcode/hooks/b.sh"})
 	args4 := rawMsg(t, map[string]interface{}{"path": "/project/.ggcode/memory/c.md"})
@@ -132,7 +132,7 @@ func TestSelfMod_MaxWarnings(t *testing.T) {
 
 func TestSelfMod_DedupPaths(t *testing.T) {
 	s := newSelfModState()
-	args := rawMsg(t, map[string]interface{}{"path": "/project/ggcode.yaml"})
+	args := rawMsg(t, map[string]interface{}{"path": "ggcode.yaml"})
 
 	msg1 := s.checkSelfModification("write_file", args)
 	if msg1 == "" {
@@ -147,7 +147,7 @@ func TestSelfMod_DedupPaths(t *testing.T) {
 
 func TestSelfMod_Reset(t *testing.T) {
 	s := newSelfModState()
-	args := rawMsg(t, map[string]interface{}{"path": "/project/ggcode.yaml"})
+	args := rawMsg(t, map[string]interface{}{"path": "ggcode.yaml"})
 	_ = s.checkSelfModification("write_file", args)
 	if s.warningCount != 1 {
 		t.Fatalf("expected warningCount=1, got %d", s.warningCount)
@@ -165,7 +165,7 @@ func TestSelfMod_Reset(t *testing.T) {
 func TestSelfMod_BatchReplace(t *testing.T) {
 	s := newSelfModState()
 	args := rawMsg(t, map[string]interface{}{
-		"files": []interface{}{"/project/ggcode.yaml", "/project/src/main.go"},
+		"files": []interface{}{"ggcode.yaml", "/project/src/main.go"},
 	})
 	msg := s.checkSelfModification("batch_replace", args)
 	if msg == "" {
@@ -175,10 +175,10 @@ func TestSelfMod_BatchReplace(t *testing.T) {
 
 func TestSelfMod_ProjectMemoryFiles(t *testing.T) {
 	cases := []string{
-		"/project/AGENTS.md",
-		"/project/GGCODE.md",
-		"/project/CLAUDE.md",
-		"/project/COPILOT.md",
+		"AGENTS.md",
+		"GGCODE.md",
+		"CLAUDE.md",
+		"COPILOT.md",
 	}
 	for _, p := range cases {
 		s := newSelfModState()

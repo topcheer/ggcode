@@ -106,7 +106,6 @@ type ChatBridge struct {
 	metricEvents         []metrics.MetricEvent
 	usageTurnIndex       int
 	lastMetricDigestTurn int
-	pendingDigests       []provider.Message
 	desktopTurnCounter   int64
 	desktopTurnID        string
 	desktopAssistantID   string
@@ -848,13 +847,12 @@ func (b *ChatBridge) ClearCurrentSession() error {
 		// recovery point; keeping the merge keeps both paths consistent.
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	} else {
 		b.liveHistory = nil
 	}
 	b.metricEvents = nil
-	b.pendingDigests = nil
 	if b.tunnelHost != nil {
 		b.tunnelHost.ResetStreamState()
 	}
@@ -1087,7 +1085,6 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 	b.lastMetricDigestTurn = state.LastMetricDigestTurn
 	b.liveHistory = nil
 	b.metricEvents = nil
-	b.pendingDigests = nil
 	if b.currentSes != nil {
 		// Merge tunnel-recorded user messages at rebuild time so they are
 		// visible in liveHistory too (#242) — previously the merge only ran
@@ -1095,7 +1092,7 @@ func (b *ChatBridge) setSessionState(state agentruntime.SessionState) {
 		// unreachable for any session with renderable messages.
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	if b.tunnelHost != nil {
@@ -1195,6 +1192,39 @@ func (b *ChatBridge) LoadSession(id string) error {
 		}
 		return fmt.Errorf("load session: %w", err)
 	}
+	// #2741: the busy guard at the top of LoadSession is one-shot — a run
+	// started during the disk-IO window above (cleanupEphemeralSession,
+	// session-lock acquire, store load) via IM/cron auto-injection leaves
+	// b.cancel set here. Installing the loaded session now would strand the
+	// still-draining run against the wrong session: LoadSession never bumped
+	// runGeneration, so emitIfCurrent lets the old session's stream events
+	// pollute the new session's liveHistory/frontend, and run_done fires
+	// against the new turn. Mirror ClearCurrentSession (#550 E1): re-check
+	// under the lock and refuse the load while a run is active.
+	b.mu.Lock()
+	busy = b.cancel != nil
+	b.mu.Unlock()
+	if busy {
+		b.mu.Lock()
+		ours := b.sessionLock == lock
+		if ours {
+			b.sessionLock = nil
+		}
+		b.mu.Unlock()
+		if ours {
+			lock.Release()
+		}
+		return fmt.Errorf("session switch while agent is running")
+	}
+	// #489-style: bump before installing so a run that raced through the
+	// residual window (started after the re-check, before setSessionState)
+	// is superseded — its late events/run_done self-drop while its persists
+	// keep routing to the captured runSes snapshot (#270). No bump on the
+	// refuse path above: that run stays current for the session it belongs
+	// to and must keep emitting normally.
+	b.mu.Lock()
+	b.runGeneration++
+	b.mu.Unlock()
 	b.ResetAgent()
 	b.setSessionState(state)
 	if err := b.InitAgent(context.Background()); err != nil {
@@ -1701,12 +1731,12 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 			}
 		}
 		return nil
-	}, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, agentFactory, subAgentPromptBuilder)
+	}, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, b.metricCollector.Emit, agentFactory, subAgentPromptBuilder)
 	// Guarded one-time store: readers on other goroutines lock b.mu.
 	b.mu.Lock()
 	b.subAgentMgr = subAgents
 	b.mu.Unlock()
-	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, subAgentPromptBuilder))
+	_ = b.registry.Register(agentruntime.NewSkillTool(commandMgr, mcpMgr, p, b.registry, agentFactory, b.workingDir, func(usage provider.TokenUsage) { b.recordSessionUsage(usage, "subagent") }, b.skillOnMetric, subAgentPromptBuilder))
 	_ = b.registry.Register(tool.CreateSkillTool{CommandMgr: commandMgr, WorkingDir: b.workingDir})
 	agentruntime.RegisterDelegateTool(b.registry, b.acpClientMgr, func() *subagent.Manager {
 		b.mu.Lock()
@@ -1902,33 +1932,7 @@ func (b *ChatBridge) InitAgent(_ ...context.Context) error {
 	// Post-run reflection — save insights to project memory so knowledge
 	// compounds across sessions. Same logic as TUI and daemon.
 	if b.workingDir != "" {
-		wd := b.workingDir
-		a.SetReflectionFunc(func(stats agent.RunStats) {
-			if !agent.ShouldReflect(stats) {
-				return
-			}
-			insights := agent.GenerateInsights(stats)
-			if insights == "" {
-				return
-			}
-			autoMem := memory.NewProjectAutoMemory(wd)
-			if autoMem == nil {
-				return
-			}
-			key := "run-insights"
-			// #2715 (same as #1752 case 3 / #1388): LoadAll merges EVERY
-			// active memory key - writing the merge back into run-insights
-			// cross-pollutes all project memories into run-insights, which
-			// is then reinjected with every prompt and snowballs. The TUI
-			// and daemon reflection paths already use LoadKey.
-			existing, err := autoMem.LoadKey(key)
-			if err == nil && existing != "" {
-				insights = agent.MergeInsights(existing, insights)
-			}
-			if err := autoMem.SaveMemoryWithSource(key, insights, "run-reflection"); err != nil {
-				log.Printf("[reflection] failed to save insights: %v", err)
-			}
-		})
+		a.SetReflectionFunc(buildReflectionFunc(b.workingDir))
 	}
 
 	// Usage handler — accumulate token usage per session (mirrors Fyne recordSessionUsage)
@@ -2460,7 +2464,7 @@ func (b *ChatBridge) CurrentSessionHistory() []SessionMessage {
 	}
 	msgs := mergeTunnelUserMessages(
 		buildSessionHistoryFromMessages(b.currentSes.Messages),
-		b.currentSes.TunnelEvents,
+		b.currentSes.SnapshotTunnelEvents(),
 	)
 	return msgs
 }
@@ -2538,7 +2542,7 @@ func (b *ChatBridge) appendLiveUserMessage(text string) {
 		// tunnel messages don't vanish once a live event arrives (#357).
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
@@ -2558,7 +2562,7 @@ func (b *ChatBridge) appendLiveError(text string) {
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	b.liveHistory = append(b.liveHistory, SessionMessage{
@@ -2591,7 +2595,7 @@ func (b *ChatBridge) applySemanticToLiveHistory(semantic agentruntime.DesktopStr
 	if len(b.liveHistory) == 0 && b.currentSes != nil {
 		b.liveHistory = mergeTunnelUserMessages(
 			buildSessionHistoryFromMessages(b.currentSes.Messages),
-			b.currentSes.TunnelEvents,
+			b.currentSes.SnapshotTunnelEvents(),
 		)
 	}
 	switch semantic.Type {
@@ -3304,6 +3308,14 @@ func (b *ChatBridge) currentUsagePayload() map[string]interface{} {
 // ─── Metrics ──────────────────────────────────────────────────────────
 
 // recordMetric stores a metric event for turn digest generation.
+// skillOnMetric forwards skill sub-agent telemetry to the shared collector
+// (#3296); events arrive pre-stamped with the sub-agent's own model.
+func (b *ChatBridge) skillOnMetric(ev metrics.MetricEvent) {
+	if b.metricCollector != nil {
+		b.metricCollector.Emit(ev)
+	}
+}
+
 func (b *ChatBridge) recordMetric(ev interface{}) {
 	me, ok := ev.(metrics.MetricEvent)
 	if !ok {
@@ -3312,10 +3324,16 @@ func (b *ChatBridge) recordMetric(ev interface{}) {
 	b.mu.Lock()
 	me.TurnIndex = b.usageTurnIndex
 	if b.currentSes != nil {
-		me.Model = b.currentSes.Model
-		me.Vendor = b.currentSes.Vendor
-		me.Endpoint = b.currentSes.Endpoint
-		b.currentSes.Metrics = append(b.currentSes.Metrics, me)
+		// #3295: fill-if-empty. Events already carrying a Model (stamped at
+		// emit time by the agent that produced them - e.g. sub-agents with a
+		// model override) keep their own attribution; blanket overwriting
+		// with the session model corrupts per-model cost reporting.
+		if me.Model == "" {
+			me.Model = b.currentSes.Model
+			me.Vendor = b.currentSes.Vendor
+			me.Endpoint = b.currentSes.Endpoint
+		}
+		b.currentSes.AppendMetricEvent(me) // #3086: lock-guarded append (was a bare slice append)
 		b.currentSes.AppendMetricForEndpoint(b.currentSes.Vendor, b.currentSes.Endpoint, me)
 	}
 	b.metricEvents = append(b.metricEvents, me)
@@ -3342,15 +3360,15 @@ func (b *ChatBridge) emitTurnDigest() {
 	b.lastMetricDigestTurn = turnIndex
 
 	// Persist to liveHistory so CurrentSessionHistory includes it.
+	// (#2742: the old pendingDigests staging channel pointed at a
+	// saveSession() method that no longer exists — persistence is per-message
+	// JSONL at Add() time, so the staged digests were never flushed and were
+	// lost on restart. Removed. liveHistory + the frontend event below remain
+	// the only digest surfaces.)
 	b.liveHistory = append(b.liveHistory, SessionMessage{
 		Role:    "system",
 		Content: text,
 	})
-	// Stage digest for the next saveSession() — do NOT write to
-	// currentSes.Messages directly, as saveSession() replaces them
-	// with agent.Messages().
-	digestMsg := provider.Message{Role: "system", Content: []provider.ContentBlock{provider.TextBlock(text)}}
-	b.pendingDigests = append(b.pendingDigests, digestMsg)
 	b.mu.Unlock()
 
 	// Push to frontend via event stream.

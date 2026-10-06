@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -17,7 +18,15 @@ import (
 // must never interact with the user, spawn nested agents, or manage teams.
 var subAgentBlockedTools = []string{
 	"ask_user",
+	// compact_context (CAT) requests compaction of the OWNING agent's
+	// conversation; a one-shot sub-agent must not compact its parent.
+	"compact_context",
 	"spawn_agent",
+	"best_of_n",
+	// r436: a workflow is a fan-out of sub-agents; nested workflows inside
+	// sub-agents would multiply spawn slots unboundedly (16-slot session
+	// budget). One level of workflow nesting only, enforced here.
+	"workflow_run",
 	"wait_agent",
 	"list_agents",
 	"cancel_agent",
@@ -50,7 +59,12 @@ type SpawnAgentTool struct {
 	AgentFactory        subagent.AgentFactory
 	WorkingDir          string // working directory to propagate to sub-agent
 	OnUsage             func(provider.TokenUsage)
+	OnMetric            func(metrics.MetricEvent)           // forwarded to the sub-agent's Agent so its LLM/tool telemetry reaches the parent collector (sa-218)
 	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
+	// TrajBackflow (r460, injected by the agent side to avoid a tool->agent
+	// import cycle) folds a worktree-isolated sub-agent's extracted
+	// learnings back into the main workspace store after its run.
+	TrajBackflow func(mainWorkingDir, worktreePath string)
 }
 
 // currentProvider returns the live provider if ProviderGetter is set, otherwise
@@ -65,7 +79,7 @@ func (t SpawnAgentTool) currentProvider() provider.Provider {
 func (t SpawnAgentTool) Name() string { return "spawn_agent" }
 
 func (t SpawnAgentTool) Description() string {
-	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: sub_agents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete."
+	return "Spawn a one-shot sub-agent run to work on an independent task. Put the full task and needed context in the initial request; do not assume the run will accept later work via send_message. Returns an agent_id. Use wait_agent or list_agents to poll status and retrieve the eventual result. At most 16 sub-agents may run concurrently (config: subagents.max_concurrent); spawns beyond the limit are rejected until earlier runs complete. A separate lifetime budget (config: subagents.max_total, default unlimited) bounds the TOTAL number of spawns per session and is not released when agents finish - once exhausted, no new sub-agents can be spawned. Delegation economics: a sub-agent re-reads context from scratch (context-copy token cost) and adds wall-clock latency; only fan out genuinely independent tasks, and for small or trivial work do it yourself with local tools."
 }
 
 func (t SpawnAgentTool) Parameters() json.RawMessage {
@@ -74,7 +88,7 @@ func (t SpawnAgentTool) Parameters() json.RawMessage {
 	"properties": {
 		"task": {
 			"type": "string",
-			"description": "The complete task description for the one-shot sub-agent run. Include all context the sub-agent will need."
+			"description": "The complete task description for the one-shot sub-agent run. Structure it as a task contract: objective, input boundaries (files/scope), constraints, acceptance criteria (verifiable Done checks), and the evidence to return (test results / diff summary). Include all context the sub-agent will need."
 		},
 		"tools": {
 			"type": "array",
@@ -181,12 +195,57 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 	if args.Context != "" {
 		args.Task = args.Context + "\n\n" + args.Task
 	}
+	// r453 read-back handshake: when the task carries acceptance criteria,
+	// instruct the sub-agent to restate them (own words, per criterion)
+	// before doing any work. The restatement is checked at wait time
+	// (readBackReminder) - closes the front-end gap of the delegation
+	// contract; r384 acceptance covers the back end.
+	args.Task += readBackNudge(args.Task)
 
-	id := t.Manager.Spawn(name, args.Task, displayTask, args.Tools, ctx)
+	id, worktreePath, err := t.Launch(ctx, LaunchOptions{
+		Name:        name,
+		Task:        args.Task,
+		DisplayTask: displayTask,
+		Tools:       args.Tools,
+		Model:       args.Model,
+		AgentType:   args.SubagentType,
+		Isolation:   isolation,
+	})
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("%v. Fix the git state or retry with isolation=none.", err)}, nil
+	}
 
-	// Store the model name on the sub-agent for display purposes
-	// When no model override is specified, inherit the parent agent's runtime model
-	displayModel := args.Model
+	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)
+	if worktreePath != "" {
+		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
+	}
+	return Result{Content: content}, nil
+}
+
+// LaunchOptions carries the pre-validated inputs for one sub-agent launch.
+// It is the seam the best_of_n orchestrator (internal/agentruntime) uses to
+// launch parallel candidates through the exact same run path as spawn_agent.
+type LaunchOptions struct {
+	Name        string
+	Task        string
+	DisplayTask string
+	Tools       []string
+	Model       string
+	AgentType   string
+	Isolation   string
+}
+
+// Launch spawns one sub-agent and starts its run goroutine. Inputs are
+// expected to be already validated by the caller (Execute or an
+// orchestrator); Launch performs spawn, display-model resolution, optional
+// worktree isolation, and the background run launch. Returns the sub-agent
+// ID and the isolation worktree path ("" when not isolated).
+func (t SpawnAgentTool) Launch(ctx context.Context, opts LaunchOptions) (string, string, error) {
+	id := t.Manager.Spawn(opts.Name, opts.Task, opts.DisplayTask, opts.Tools, ctx)
+
+	// Store the model name on the sub-agent for display purposes.
+	// When no model override is specified, inherit the parent agent's runtime model.
+	displayModel := opts.Model
 	if displayModel == "" {
 		if prov := t.currentProvider(); prov != nil {
 			if mp, ok := prov.(provider.ModelNameProvider); ok {
@@ -200,14 +259,11 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
-	// isolation="worktree": run the sub-agent in a fresh git worktree cut
-	// from HEAD so its edits stay off the parent's working tree.
-	worktreePath, wtErr := t.setupIsolationWorktree(ctx, isolation, id)
-	if wtErr != nil {
-		return Result{IsError: true, Content: fmt.Sprintf("isolation worktree creation failed: %v. Fix the git state or retry with isolation=none.", wtErr)}, nil
+	worktreePath, err := t.setupIsolationWorktree(ctx, opts.Isolation, id)
+	if err != nil {
+		return id, "", fmt.Errorf("isolation worktree creation failed: %w", err)
 	}
 
-	// Build tool info list for sub-agent
 	var allToolInfo []subagent.ToolInfo
 	if t.Tools != nil {
 		for _, ti := range t.Tools.List() {
@@ -215,56 +271,52 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 		}
 	}
 
-	// Capture for goroutine closure
+	// Use the manager's lifecycle ctx, NOT the caller's per-call ctx, so the
+	// sub-agent survives the parent turn ending (see locks.md S6).
 	tools := t.Tools
-
-	// Use the manager's lifecycle ctx, NOT the per-tool-call ctx, otherwise
-	// the moment the parent agent's current turn ends (defer cancel() on the
-	// submit ctx) every spawned sub-agent is cancelled mid-stream and any
-	// half-applied tool side effect is left in place. See locks.md S6.
 	runCtx := t.Manager.RootContext()
-
-	// Capture model and subagent_type for the runner config
-	// #872: trim once and use the trimmed value everywhere — validation
-	// checked TrimSpace(args.Model) but RunnerConfig received the raw value,
-	// so " glm-5 " passed validation then failed at the provider.
-	model := strings.TrimSpace(args.Model)
-	subagentType := args.SubagentType
+	model := strings.TrimSpace(opts.Model)
 
 	runWorkDir := t.WorkingDir
 	if worktreePath != "" {
 		runWorkDir = worktreePath
 	}
 
-	// Launch the sub-agent in a goroutine
 	prov := t.currentProvider()
 	safego.Go("tool.spawnAgent.subagent", func() {
+		// r460: fold any learnings the isolated sub-agent extracted back
+		// into the main workspace store before its run context ends.
+		// Without this, worktree-isolated experience died with the
+		// transient worktree (sub-agent WorkingDir = worktreePath, so its
+		// post-run persist landed in .ggcode/worktrees/<id>/). Best effort.
+		if worktreePath != "" && t.TrajBackflow != nil {
+			backflow := t.TrajBackflow
+			mainWD := t.WorkingDir
+			defer func() { backflow(mainWD, worktreePath) }()
+		}
 		subagent.Run(runCtx, subagent.RunnerConfig{
 			Provider:            prov,
 			AllTools:            allToolInfo,
-			Task:                args.Task,
-			AllowedTools:        args.Tools,
+			Task:                opts.Task,
+			AllowedTools:        opts.Tools,
 			Manager:             t.Manager,
 			SubAgentID:          id,
 			AgentFactory:        t.AgentFactory,
 			Model:               model,
-			AgentType:           subagentType,
+			AgentType:           opts.AgentType,
 			WorkingDir:          runWorkDir,
 			OnUsage:             t.OnUsage,
+			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each sub-agent gets its own tool
-				// instances with independent WorkingDir fields. This prevents
-				// data races when multiple sub-agents run concurrently in
-				// different worktrees.
+				// instances with independent WorkingDir fields (data-race
+				// safety across concurrent candidates in different worktrees).
 				cloned := tools.Clone()
-				// Unconditionally remove tools that sub-agents must never use,
-				// regardless of what allowedTools requests.
 				for _, name := range subAgentBlockedTools {
 					cloned.Unregister(name)
 				}
 				if len(allowedTools) > 0 {
-					// Keep only allowed tools (minus blocked ones above)
 					all := cloned.ToolNames()
 					for _, name := range all {
 						if !sliceContains(allowedTools, name) {
@@ -276,12 +328,7 @@ func (t SpawnAgentTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			},
 		})
 	})
-
-	content := fmt.Sprintf("Sub-agent spawned with ID: %s\nUse wait_agent or list_agents to monitor progress and retrieve the result.", id)
-	if worktreePath != "" {
-		content += fmt.Sprintf("\nIsolated in git worktree: %s (branch: %s). Its edits stay off the parent working tree; inspect or merge from that path after the run completes.", worktreePath, filepath.Base(worktreePath))
-	}
-	return Result{Content: content}, nil
+	return id, worktreePath, nil
 }
 
 // setupIsolationWorktree creates the isolation worktree for a spawned
@@ -318,7 +365,9 @@ func (t SpawnAgentTool) Clone() Tool {
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
+		OnMetric:            t.OnMetric,
 		SystemPromptBuilder: t.SystemPromptBuilder,
+		TrajBackflow:        t.TrajBackflow,
 	}
 }
 

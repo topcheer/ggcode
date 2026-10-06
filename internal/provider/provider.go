@@ -318,6 +318,28 @@ type ToolChoiceProvider interface {
 	ToolChoice() string
 }
 
+// ResponseSchemaSetter is implemented by providers that can constrain the
+// FINAL assistant response to a JSON Schema via constrained decoding
+// (OpenAI structured outputs, response_format=json_schema strict). Pipe
+// mode (--output-schema) asserts this capability; providers that do not
+// implement it fall back to prompt-level guidance + post-hoc JSON
+// repair, so the feature degrades gracefully across endpoints.
+type ResponseSchemaSetter interface {
+	SetResponseSchema(schema json.RawMessage)
+	ResponseSchema() json.RawMessage
+}
+
+// PromptCacheKeySetter is implemented by providers that accept an explicit
+// prompt-cache routing hint (OpenAI prompt_cache_key). Multi-turn agent
+// traffic shares >1k-token prefixes; the key keeps repeated requests routed
+// to the same warm cache machine instead of missing across servers. The
+// agent injects a stable per-session key automatically; providers that do
+// not implement it simply skip the hint.
+type PromptCacheKeySetter interface {
+	SetPromptCacheKey(key string)
+	PromptCacheKey() string
+}
+
 // SamplingOverride is the per-call MCP sampling override snapshot
 // (#2248): the sampling handler swaps ONE atomic pointer for the whole
 // mutate->chat->restore window, so the main agent's concurrent Chat

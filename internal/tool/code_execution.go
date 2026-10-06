@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -486,6 +487,20 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 		}
 		return goja.Undefined()
 	})
+	// #3121: un-awaited rejected promises (e.g. a missing `await` before a
+	// tools.* call) never reach the try/catch above — goja routes them to
+	// HostPromiseRejectionTracker instead. Record rejections that still have
+	// no handler when the script ends so they surface as an error rather
+	// than the "executed successfully" illusion.
+	unhandledRejections := make(map[*goja.Promise]string)
+	vm.SetPromiseRejectionTracker(func(p *goja.Promise, op goja.PromiseRejectionOperation) {
+		switch op {
+		case goja.PromiseRejectionReject:
+			unhandledRejections[p] = rejectionReasonString(p)
+		case goja.PromiseRejectionHandle:
+			delete(unhandledRejections, p)
+		}
+	})
 	wrapped := "(async function() {\n" +
 		"  try {\n" + code + "\n" +
 		"  } catch(e) {\n" +
@@ -515,6 +530,21 @@ func (c CodeExecution) runCode(ctx context.Context, code string) (*execResult, e
 			stdout:    stdout.String(),
 			toolCalls: toolCalls,
 		}, fmt.Errorf("%s", asyncErr)
+	}
+	// #3121: a promise rejected with no handler means the code dropped an
+	// error (typically a missing `await` or `.catch`). Report it instead of
+	// reporting success. A later handler registration (PromiseRejectionHandle)
+	// removes the record, so awaited/caught rejections do not land here.
+	if len(unhandledRejections) > 0 {
+		msgs := make([]string, 0, len(unhandledRejections))
+		for _, m := range unhandledRejections {
+			msgs = append(msgs, m)
+		}
+		sort.Strings(msgs)
+		return &execResult{
+			stdout:    stdout.String(),
+			toolCalls: toolCalls,
+		}, fmt.Errorf("unhandled promise rejection (missing await or .catch?): %s", strings.Join(msgs, "; "))
 	}
 
 	return &execResult{
@@ -558,6 +588,28 @@ func writeConsoleOutput(stdout *strings.Builder, args []goja.Value) (overflow bo
 	}
 	stdout.WriteString("\n")
 	return stdout.Len() >= maxStdoutHardLen
+}
+
+// rejectionReasonString renders a rejected promise's reason for the
+// unhandled-rejection report (#3121). goja assigns the reason before firing
+// the tracker, so Result() is already populated at Reject time.
+func rejectionReasonString(p *goja.Promise) string {
+	if p == nil || p.State() != goja.PromiseStateRejected {
+		return "unknown reason"
+	}
+	r := p.Result()
+	if r == nil || goja.IsUndefined(r) || goja.IsNull(r) {
+		return "unknown reason"
+	}
+	s := r.ToString().String()
+	if s == "" {
+		return "unknown reason"
+	}
+	const maxReasonLen = 200
+	if len(s) > maxReasonLen {
+		s = s[:maxReasonLen] + "...(truncated)"
+	}
+	return s
 }
 
 // resolvePromise creates a resolved goja Promise with the given value.

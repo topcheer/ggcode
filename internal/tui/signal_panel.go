@@ -437,6 +437,12 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 3 {
 			return signalBindResultMsg{err: errors.New(m.t("panel.signal.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): Fields splits on whitespace - an
+		// account WITH spaces was silently truncated to its first token,
+		// then persisted as a guaranteed-to-fail credential. Reject extras.
+		if len(fields) > 3 {
+			return signalBindResultMsg{err: errors.New("extra fields after account (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		baseURL := strings.TrimSpace(fields[1])
 		account := strings.TrimSpace(fields[2])
@@ -457,11 +463,34 @@ func (m *Model) createSigAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext account - without
+						// compensation a wrong credential stays on disk forever
+						// and blocks the name on retry ("already exists"); the
+						// panel has no delete key. The rollback REMOVE is itself
+						// a map write, so it must route through configMutationMsg
+						// too (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return signalBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return signalBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureSigRuntime(); err != nil {
-						return signalBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startSigAdapterIfNeeded(name); err != nil {
-						return signalBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return signalBindResultMsg{message: m.t("panel.signal.message.added_bot", name)}
 				}
@@ -651,8 +680,9 @@ func (m Model) signalBindingEntries() []signalBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformSignal)) {
 			keys = append(keys, name)
 		}

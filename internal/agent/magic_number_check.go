@@ -25,7 +25,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -47,8 +46,7 @@ func checkMagicNumbers(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filePath, newContent, 0)
+	f, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return ""
 	}
@@ -164,8 +162,7 @@ func countMagicValues(filename, src string) map[string]int {
 		return counts
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filename, src, 0)
+	f, fset, err := parseGoSource(filename, src, 0)
 	if err != nil {
 		return counts
 	}

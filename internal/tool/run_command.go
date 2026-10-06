@@ -37,12 +37,32 @@ type RunCommand struct {
 	OutputTee io.Writer
 	// OnPreExec, if non-nil, is called just before the command starts.
 	OnPreExec func(command, description string)
+
+	// OmittedOutputSpiller, if non-nil, receives the middle section that
+	// truncateMiddle is about to drop from oversized stdout/stderr and may
+	// return a notice line (e.g. a spill-file reference) to embed in the
+	// truncation marker. The agent wires this to its shared output
+	// offloader so the omitted middle stays recoverable from disk instead
+	// of being silently discarded before the central agent-loop spill point
+	// ever sees the result (r382 Offload-valve gap).
+	OmittedOutputSpiller func(source, omitted string) string
 	// OnPostExec, if non-nil, is called after the command finishes.
 	OnPostExec func(exitCode int, err error)
 	// Sandbox, if non-nil and Enabled, wraps every agent-driven shell spawn
 	// in an OS-level containment sandbox (Seatbelt on macOS). See
 	// shell_sandbox.go for the policy model.
 	Sandbox *SandboxPolicy
+	// SecLedger (research round sa-216) records every denial (gate block,
+	// bypass-downgraded ask, sandbox EPERM) and surfaces an escalation
+	// warning when one denial source fires repeatedly - the behavioral
+	// fingerprint of sandbox probing. Nil-safe: unwired = no detection.
+	SecLedger *SecurityLedger
+	// RiskLedger (r28, DreamGuard-inspired) is the ALLOWED-side dual of
+	// SecLedger: every gate-PASSED dangerous-classified command
+	// accumulates session-level risk, and a crossing escalates a notice
+	// onto the result - individually-permitted steps drifting toward a
+	// hazardous state. Nil-safe: unwired = no detection.
+	RiskLedger *AllowedRiskLedger
 }
 
 // autoBackgroundDelay is how long a dev-server-like command runs before
@@ -166,6 +186,11 @@ func (t RunCommand) Parameters() json.RawMessage {
 		"description": {
 			"type": "string",
 			"description": "REQUIRED. Brief activity label shown in the UI. Write in the user's language (e.g. 'Searching for TODO patterns', '检查构建配置'). You MUST always provide this field."
+		},
+		"dry_run": {
+			"type": "boolean",
+			"description": "Rehearse instead of execute: returns a lexical preview of write targets (create/overwrite/delete) and destructive segments without running anything. Use for high-risk commands before the real call.",
+			"default": false
 		}
 	},
 	"required": [
@@ -191,6 +216,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 		WorkingDir  string `json:"working_dir"`
 		Timeout     int    `json:"timeout"`
 		Description string `json:"description"`
+		// DryRun rehearses instead of executing (r451 command rehearsal):
+		// a lexical preview of write targets / destructive segments is
+		// returned. Zero execution - the command is never spawned.
+		DryRun bool `json:"dry_run"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -198,6 +227,10 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 
 	if msg := CheckRequired("command", args.Command); msg != "" {
 		return Result{IsError: true, Content: "Error: " + msg}, nil
+	}
+
+	if args.DryRun {
+		return t.dryRunPreview(args.Command), nil
 	}
 
 	if args.Description != "" {
@@ -214,12 +247,25 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	var cleanedCmd, preWarn string
 	cleanedCmd, preWarn, blocked := t.applyCommandGate(gate, args.Command)
 	if blocked != "" {
+		t.SecLedger.Record("gate", "block", args.Command)
+		if esc := t.SecLedger.Escalation(); esc != "" {
+			blocked = blocked + "\n\n" + esc
+		}
 		return Result{IsError: true, Content: blocked}, nil
 	}
 	if cleanedCmd != "" {
 		args.Command = cleanedCmd
 	}
 	preWarning := preWarn
+	// r28: the gate PASSED - the allowed-side dual of SecLedger.Record on
+	// the blocked branch above. If the command is dangerous-classified its
+	// risk accumulates on the session ledger; a threshold crossing rides
+	// the result as a prefix notice (preWarning prefixes every main-path
+	// return below).
+	t.RiskLedger.Accumulate(args.Command)
+	if esc := t.RiskLedger.Escalation(); esc != "" {
+		preWarning += esc + "\n\n"
+	}
 
 	if args.Timeout <= 0 {
 		args.Timeout = int(defaultCommandTimeout / time.Second)
@@ -397,7 +443,11 @@ func (t RunCommand) Execute(ctx context.Context, input json.RawMessage) (Result,
 	// Sandbox denial hint: Surface sandbox-caused EPERM failures with the
 	// config knob so the agent adapts instead of retrying blindly.
 	if sandboxed && err != nil && sandboxDeniedOutput(output+errOutput) {
+		t.SecLedger.Record("sandbox", "eperm", args.Command)
 		result.Content += sandboxEPERMHint
+		if esc := t.SecLedger.Escalation(); esc != "" {
+			result.Content += "\n" + esc
+		}
 	}
 	return result, nil
 }
@@ -410,8 +460,8 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 	// Truncate output if too large — keep both head and tail.
 	// For most commands (tests, builds, lints), the important info is at the
 	// end (error messages, test results). Keeping only the head would lose it.
-	output = truncateMiddle(output, maxOutputSize, "output")
-	errOutput = truncateMiddle(errOutput, maxOutputSize, "stderr")
+	output = truncateMiddleSpill(output, maxOutputSize, "output", t.OmittedOutputSpiller)
+	errOutput = truncateMiddleSpill(errOutput, maxOutputSize, "stderr", t.OmittedOutputSpiller)
 
 	var sb strings.Builder
 	if output != "" {
@@ -465,6 +515,14 @@ func (t RunCommand) finalizeCommandResult(command, preWarning, output, errOutput
 // nearest newline so the output doesn't contain partial lines. This makes
 // the truncated output much easier for the agent to parse.
 func truncateMiddle(s string, maxLen int, label string) string {
+	return truncateMiddleSpill(s, maxLen, label, nil)
+}
+
+// truncateMiddleSpill is truncateMiddle with an optional spiller hook: when
+// non-nil it receives the omitted middle and its return value (if non-empty)
+// is appended to the truncation marker so the dropped section stays
+// recoverable (see RunCommand.OmittedOutputSpiller).
+func truncateMiddleSpill(s string, maxLen int, label string, spiller func(source, omitted string) string) string {
 	if len(s) <= maxLen {
 		return s
 	}
@@ -496,7 +554,14 @@ func truncateMiddle(s string, maxLen int, label string) string {
 	omittedText := s[headEnd:tailStart]
 	omittedLines := strings.Count(omittedText, "\n")
 
-	return head + fmt.Sprintf("\n... [%d lines omitted — %s truncated, showing tail] ...\n", omittedLines, label) + tail
+	marker := fmt.Sprintf("\n... [%d lines omitted — %s truncated, showing tail] ...\n", omittedLines, label)
+	if spiller != nil && len(omittedText) > 0 {
+		if notice := spiller(label, omittedText); notice != "" {
+			marker += notice
+		}
+	}
+
+	return head + marker + tail
 }
 
 // executeWithAutoBackground starts a command as a managed job and waits up to
@@ -588,6 +653,13 @@ func (t RunCommand) Clone() Tool {
 		OnPreExec:  t.OnPreExec,
 		OnPostExec: t.OnPostExec,
 		Sandbox:    t.Sandbox,
+		// #3293: the session-level security ledger must survive the clone.
+		// Sub-agent registries clone every tool (spawn_agent / trial_fork /
+		// skill / swarm / desktop); dropping the pointer silently blinded
+		// sandbox-probe detection for every sub-agent's run_command calls.
+		SecLedger: t.SecLedger,
+		// r28: same survival requirement for the allowed-risk dual.
+		RiskLedger: t.RiskLedger,
 	}
 }
 
@@ -746,12 +818,22 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 		debug.Log("run_command", "BLOCKED: %s", gateResult.Reason)
 		return "", "", gateResult.Reason
 	}
+	var askEsc string
 	if gateResult.NeedsConfirmation() {
 		// In Bypass/Autopilot mode, Ask is automatically downgraded to Allow.
 		// These modes assume the user trusts the agent — the command is
 		// still logged as a warning for audit purposes.
 		if t.isBypassMode() {
 			debug.Log("run_command", "ASK→ALLOW (bypass mode): %s", gateResult.Reason)
+			// #3282: the downgraded-allow is itself a denial the security
+			// ledger must see — a prober repeatedly triggering bypass-
+			// downgraded asks is the same sandbox-probing fingerprint as
+			// repeated blocks, and this third Record source has been
+			// promised by the SecLedger field comment since sa-216.
+			t.SecLedger.Record("gate", "ask-allowed", command)
+			if esc := t.SecLedger.Escalation(); esc != "" {
+				askEsc = esc + "\n\n"
+			}
 		} else {
 			debug.Log("run_command", "ASK: %s", gateResult.Reason)
 			// Caller returns this verbatim — the agent loop interprets the
@@ -767,6 +849,10 @@ func (t RunCommand) applyCommandGate(gate *CommandGate, command string) (cleaned
 	if interactive := gate.InteractiveCommandWarning(command); interactive != "" {
 		preWarning = "[Interactive command warning] " + interactive + "\n\n"
 	}
+	// Escalation rides the preWarning prefix: a bypass-downgraded command
+	// still produces a (possibly successful) result, so this is the only
+	// channel through which the probing-pattern notice reaches the agent.
+	preWarning += askEsc
 	if gateResult.CleanedCmd != "" && gateResult.CleanedCmd != command {
 		debug.Log("run_command", "cleaned command: %s → %s", command, gateResult.CleanedCmd)
 		cleanedCmd = gateResult.CleanedCmd

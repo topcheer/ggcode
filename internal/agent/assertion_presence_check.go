@@ -112,8 +112,7 @@ func checkAssertionPresence(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return "" // syntax errors are handled by other checks
 	}
@@ -177,6 +176,10 @@ func checkAssertionPresence(filePath, oldContent, newContent string) string {
 // to their assertion call count. Benchmark functions are excluded.
 func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int {
 	result := map[string]int{}
+	// #2881: qualify assertion-package identifiers by the file's imports so a
+	// local variable named check/should/quick/require/assert is not mistaken
+	// for an assertion package qualifier.
+	pkgQualifiers := assertionPkgQualifiers(file)
 
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -204,11 +207,40 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 			testingTName = fn.Type.Params.List[0].Names[0].Name
 		}
 
-		count := countAssertionCalls(fn.Body, testingTName)
+		count := countAssertionCalls(fn.Body, testingTName, pkgQualifiers)
 		result[name] = count
 	}
 
 	return result
+}
+
+// assertionPkgQualifiers returns the set of identifiers that actually refer
+// to an imported assertion package in this file (#2881). A selector like
+// check.Equal only counts as an assertion when "check" is the qualifier of
+// an imported package whose default or aliased name is in goAssertionPkgs;
+// a local variable or struct value named check/should/quick/require/assert
+// must not count. Explicit aliases (import check "gopkg.in/check.v1") and
+// default qualifiers (stretchr/testify/require -> require) both work.
+func assertionPkgQualifiers(file *ast.File) map[string]bool {
+	qualifiers := make(map[string]bool)
+	for _, imp := range file.Imports {
+		name := ""
+		if imp.Name != nil {
+			name = imp.Name.Name // explicit alias, dot, or blank import
+		} else {
+			// Default qualifier: last element of the import path.
+			path := strings.Trim(imp.Path.Value, "\"")
+			if i := strings.LastIndex(path, "/"); i >= 0 {
+				name = path[i+1:]
+			} else {
+				name = path
+			}
+		}
+		if goAssertionPkgs[name] {
+			qualifiers[name] = true
+		}
+	}
+	return qualifiers
 }
 
 // countAssertionCalls recursively walks the function body and counts calls that
@@ -222,7 +254,7 @@ func countAssertionsPerTest(fset *token.FileSet, file *ast.File) map[string]int 
 // re-bind the testing.T name; their parameter names are added to the active set
 // so inner assertions (t.Error inside a closure defined in a function whose
 // outer parameter is "tt") are counted.
-func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
+func countAssertionCalls(body *ast.BlockStmt, testingTName string, pkgQualifiers map[string]bool) int {
 	count := 0
 	names := map[string]bool{testingTName: true}
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -233,7 +265,7 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 				names[name] = true
 			}
 		case *ast.CallExpr:
-			if isAssertionCall(node, names) {
+			if isAssertionCall(node, names, pkgQualifiers) {
 				count++
 			}
 		}
@@ -245,7 +277,7 @@ func countAssertionCalls(body *ast.BlockStmt, testingTName string) int {
 // isAssertionCall reports whether the call expression looks like a test
 // assertion (or an assertion-delegating call). names is the active set of
 // valid *testing.T receiver identifiers (closure rebinding, #320).
-func isAssertionCall(node *ast.CallExpr, names map[string]bool) bool {
+func isAssertionCall(node *ast.CallExpr, names map[string]bool, pkgQualifiers map[string]bool) bool {
 	// Delegation: passing a testing.T identifier as an argument means
 	// assertions may live in the callee - count as non-hollow.
 	for _, arg := range node.Args {
@@ -269,9 +301,11 @@ func isAssertionCall(node *ast.CallExpr, names map[string]bool) bool {
 				return true
 			}
 		}
-		// Check for require.X, assert.X, etc.
+		// Check for require.X, assert.X, etc. - only when the identifier is
+		// the qualifier of an actually imported assertion package (#2881);
+		// local variables named check/should/quick/... are not assertions.
 		if pkgIdent, ok := sel.X.(*ast.Ident); ok {
-			if goAssertionPkgs[pkgIdent.Name] {
+			if pkgQualifiers[pkgIdent.Name] {
 				return true
 			}
 			// #2638: qualified gomega assertions (gomega.Expect(x).To(...)).

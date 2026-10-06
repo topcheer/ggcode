@@ -27,9 +27,12 @@ type GeminiProvider struct {
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248
 	serverTools      []ServerToolConfig               // Gemini built-in tools (google_search/url_context), executed in-API
 	topP             float64                          // 0 = provider default
-	transport        *headerInjectingTransport        // kept for runtime header updates
-	logprobs         bool                             // sa-74: request token logprobs for confidence telemetry
-	policy           callPolicy                       // sa-78: per-call deadline + retry budget
+	// responseSchema constrains the final response (Gemini responseSchema,
+	// sa-229 follow-up to #3312). Empty = unconstrained.
+	responseSchema json.RawMessage
+	transport      *headerInjectingTransport // kept for runtime header updates
+	logprobs       bool                      // sa-74: request token logprobs for confidence telemetry
+	policy         callPolicy                // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name used by this provider.
@@ -271,6 +274,7 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
 	p.applyLogprobs(config)
+	p.applyResponseSchema(config)
 
 	var resp *genai.GenerateContentResponse
 	err := retryWithBackoffCtx(ctx, func() error {
@@ -320,6 +324,21 @@ func (p *GeminiProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}, nil
 }
 
+// sendEvent delivers ev to ch unless ctx is done, reporting cancellation.
+// #3068: the 11 former bare `ch <- StreamEvent{...}` sends parked the
+// producer goroutine forever once a cancelling consumer stopped reading
+// (buffer of 64 fills, nobody ever returns). #2570/#602 fixed the fallback
+// wrapper layer only - this is the underlying-provider half. Every send in
+// the streamRead goroutine must go through here.
+func (p *GeminiProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	contents, systemInstruction := p.convertMessages(messages)
 
@@ -333,6 +352,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 	p.applySamplingConfig(config)
 	p.applyToolChoice(config, tools)
 	p.applyLogprobs(config)
+	p.applyResponseSchema(config)
 
 	ch := make(chan StreamEvent, 64)
 
@@ -362,20 +382,26 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
 						// Notify user about retry
 						delay := retryDelay(err, attempt)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}) {
+							return
+						}
 						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
 							// #722: budget exhausted — stop retrying now; wrap with the
 							// sentinel so failover switches immediately.
 							if sleepErr == errRetryBudgetExhausted {
 								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
 							}
-							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sleepErr}) {
+								return
+							}
 							return
 						}
 						retry = true
 						break
 					}
-					ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %w", err)}
+					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %w", err)}) {
+						return
+					}
 					return
 				}
 
@@ -440,14 +466,18 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 							reason = pf.BlockReasonMessage
 						}
 						debug.Log("gemini", "stream prompt blocked by policy: %s", reason)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Blocked by input safety filter: %s] ", reason)}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Blocked by input safety filter: %s] ", reason)}) {
+							return
+						}
 						policyBlocked = true
 						truncated = true
 					}
 					// Nothing to stream from this chunk; emit the finish notice
 					// (if any) so fully blocked responses still surface the reason.
 					if finishNotice != "" {
-						ch <- StreamEvent{Type: StreamEventSystem, Text: finishNotice}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: finishNotice}) {
+							return
+						}
 					}
 					continue
 				}
@@ -456,7 +486,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 					if part.Text != "" && !part.Thought {
 						emitted = true
 						outputChars += len(part.Text)
-						ch <- StreamEvent{Type: StreamEventText, Text: part.Text}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventText, Text: part.Text}) {
+							return
+						}
 					}
 					if part.FunctionCall != nil {
 						emitted = true
@@ -466,7 +498,7 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 						if id == "" {
 							id = part.FunctionCall.Name
 						}
-						ch <- StreamEvent{
+						if !p.sendEvent(ctx, ch, StreamEvent{
 							Type: StreamEventToolCallDone,
 							Tool: ToolCallDelta{
 								Index:            0,
@@ -475,6 +507,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 								Arguments:        args,
 								ThoughtSignature: part.ThoughtSignature, // #1610-A
 							},
+						}) {
+							return
 						}
 					}
 				}
@@ -482,7 +516,9 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				// Emit the finish notice after the chunk's parts so partial text
 				// is streamed before the warning (#232 ordering).
 				if finishNotice != "" {
-					ch <- StreamEvent{Type: StreamEventSystem, Text: finishNotice}
+					if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: finishNotice}) {
+						return
+					}
 				}
 			}
 			if retry {
@@ -504,13 +540,19 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, messages []Message, too
 				}
 			}
 			if s := grounding.summary(); s != "" {
-				ch <- StreamEvent{Type: StreamEventSystem, Text: s}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventSystem, Text: s}) {
+					return
+				}
 			}
-			ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked, Confidence: avgConf}
+			if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone, Usage: &usage, Truncated: truncated, PolicyBlocked: policyBlocked, Confidence: avgConf}) {
+				return
+			}
 			return
 		}
 		// All retry attempts exhausted without success.
-		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %d retry attempts exhausted", p.policy.attempts())}
+		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("gemini stream: %d retry attempts exhausted", p.policy.attempts())}) {
+			return
+		}
 	})
 
 	return ch, nil
@@ -689,6 +731,14 @@ func (p *GeminiProvider) applySamplingConfig(config *genai.GenerateContentConfig
 func ptrToFloat32(v float32) *float32 { return &v }
 
 func (p *GeminiProvider) convertMessages(messages []Message) ([]*genai.Content, *genai.Content) {
+	// #2819 (Gemini leg): fold detector-injected text-only "user" messages into
+	// the following tool_result message. The Gemini API requires every model
+	// functionCall turn to be immediately followed by the user turn carrying its
+	// functionResponse parts; a text-only user turn wedged between them 400s the
+	// whole agentic multi-turn request. Append after the tool_result blocks so
+	// functionResponse parts stay first in the turn (same ordering Anthropic
+	// needs); extra Text parts alongside functionResponse parts are accepted.
+	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var contents []*genai.Content
 	var systemParts []*genai.Part
 	toolNamesByID := make(map[string]string)

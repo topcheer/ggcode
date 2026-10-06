@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/memory"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 const (
@@ -128,7 +129,37 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		contraWarning = cc.FormatContradictionWarning(params.Key)
 	}
 
-	if err := target.SaveMemoryWithSource(params.Key, params.Content, "save_memory:"+scopeLabel); err != nil {
+	// Memory evolution (supersede.go): when the new content carries explicit
+	// replacement semantics AND conflicts on a shared subject, retire the old
+	// entries from prompt injection (kept on disk for history) instead of
+	// leaving the conflict live forever.
+	var supersedeNote string
+	if olds := target.DetectSupersession(params.Key, params.Content); len(olds) > 0 {
+		if err := target.ApplySupersession(params.Key, olds); err != nil {
+			// Non-fatal: the save itself must proceed; the sidecar failure is
+			// surfaced in the note instead.
+			supersedeNote = fmt.Sprintf("supersede bookkeeping failed: %v", err)
+		} else {
+			supersedeNote = memory.FormatSupersedeNote(olds)
+		}
+	}
+
+	// r409 memory-poisoning defense: surface the quarantine decision in the
+	// tool result. The AutoMemory layer does the authoritative taint marking
+	// (SaveMemoryWithSource); this note tells the model (and the user) why
+	// the entry will not appear in future system prompts. Deliberately not
+	// an error: a legitimate security writeup must still be persistable.
+	var taintNote string
+	if pat := memory.DetectInjectionTaint(params.Key, params.Content); pat != "" {
+		taintNote = fmt.Sprintf("SECURITY: this memory content matched a prompt-injection pattern (%q). It was saved but marked tainted - it will NOT be auto-inlined into future system prompts (index-only; readable via read_file, which wraps untrusted content). If this is a legitimate security writeup, that is expected; if you did not intend to store injection text, review the source that produced it.", pat)
+	}
+
+	// r29 actor-aware provenance: the WRITER identity rides ctx (injected
+	// at the loop boundary that knows it - sub-agent runs, swarm
+	// teammates). Empty = main agent / unwired path: source label stays
+	// exactly as before (byte-identical legacy behavior).
+	actor := util.ActorFromContext(ctx)
+	if err := target.SaveMemoryWithSourceActor(params.Key, params.Content, "save_memory:"+scopeLabel, actor); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to save %s memory: %v", scopeLabel, err)}, nil
 	}
 	if t.afterSave != nil {
@@ -136,11 +167,24 @@ func (t *SaveMemoryTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	}
 
 	msg := fmt.Sprintf("%s memory saved: %s", scopeLabel, params.Key)
+	if actor != "" {
+		// r29: make the provenance visible to the model too, not just the
+		// sidecar - a sub-agent that knows its writes are attributed
+		// writes more carefully, and the main agent sees the attribution
+		// when it reads this result.
+		msg += fmt.Sprintf("\n(provenance: recorded as %s)", actor)
+	}
 	if dupWarning != "" {
 		msg += "\n\n" + dupWarning
 	}
 	if contraWarning != "" {
 		msg += "\n\n" + contraWarning
+	}
+	if supersedeNote != "" {
+		msg += "\n\n" + supersedeNote
+	}
+	if taintNote != "" {
+		msg += "\n\n" + taintNote
 	}
 	return Result{Content: msg}, nil
 }

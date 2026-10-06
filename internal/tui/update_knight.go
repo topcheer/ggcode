@@ -21,6 +21,16 @@ func (m Model) handleKnightTaskResultMsg(msg knightTaskResultMsg) (tea.Model, te
 	// #902: empty case left the spinner forever and agentBusy stuck —
 	// every later submission queued behind a dead /knight run.
 	m.setLoading(false)
+	// #2815: setLoading does not touch the spinner (#902 fixed loading only,
+	// #1758 fixed the Start-side tick loss). Without Stop() the tick chain
+	// driven by model_update.go's spinner.IsActive() keeps re-rendering every
+	// frame forever, and stale statusActivity can bleed into a later task via
+	// ensureLoadingSpinner. Align with update_done.go completion paths.
+	m.spinner.Stop()
+	m.statusActivity = ""
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
 	if msg.Err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight task %s failed: %v", msg.Result.TaskName, msg.Err))
 	} else {
@@ -32,6 +42,12 @@ func (m Model) handleKnightTaskResultMsg(msg knightTaskResultMsg) (tea.Model, te
 func (m Model) handleKnightProjectProposalResultMsg(msg knightProjectProposalResultMsg) (tea.Model, tea.Cmd) {
 	// #902: same deadlock class as knightTaskResultMsg.
 	m.setLoading(false)
+	// #2815: symmetric Stop + status reset (see handleKnightTaskResultMsg).
+	m.spinner.Stop()
+	m.statusActivity = ""
+	m.statusToolName = ""
+	m.statusToolArg = ""
+	m.statusToolCount = 0
 	if msg.Err != nil {
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("knight proposal failed: %v", msg.Err))
 	} else {

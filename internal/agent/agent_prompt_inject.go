@@ -28,7 +28,7 @@ import (
 // reuse, saving 40-80% of system prompt token costs.
 //
 // This function is called once at the start of each agent Run().
-func (a *Agent) maybeInjectDynamicSystemPrompt() {
+func (a *Agent) maybeInjectDynamicSystemPrompt(runPrompt string) {
 	a.mu.Lock()
 	base := a.baseSystemPrompt
 	fn := a.systemPromptInjector
@@ -80,24 +80,42 @@ func (a *Agent) maybeInjectDynamicSystemPrompt() {
 	}
 
 	// Layer 3: proactive ratchet rules.
-	if workingDir := a.WorkingDir(); workingDir != "" {
-		if rs := NewRuleStore(workingDir); rs != nil {
-			rulesText := rs.TopRulesForPrompt(5)
-			if rulesText != "" {
-				dynamicParts = append(dynamicParts, rulesText)
-				debug.Log("agent", "Injected learned ratchet rules into system prompt")
-			}
+	// #3227: shared singleton - per-run instances lost updates.
+	// Task-intent filter (#3266 research P1): rules learned in
+	// same-task-type runs rank first, mirroring playbook matchesIntent.
+	if rs := a.getRuleStore(); rs != nil {
+		intent := classifyTaskType(runPrompt)
+		rs.SetRunIntent(intent) // newly learned rules inherit the tag
+		rulesText := rs.TopRulesForPromptFiltered(5, intent)
+		if rulesText != "" {
+			dynamicParts = append(dynamicParts, rulesText)
+			debug.Log("agent", "Injected learned ratchet rules into system prompt (intent=%s)", intent)
 		}
 	}
 
 	// Layer 4: playbook strategy hints (ACE-inspired).
 	if workingDir := a.WorkingDir(); workingDir != "" {
 		if pb := NewPlaybook(workingDir); pb != nil {
-			playbookText := pb.HintsForPrompt(3)
+			playbookText := pb.HintsForPrompt(runPrompt, 3)
 			if playbookText != "" {
 				dynamicParts = append(dynamicParts, playbookText)
 				debug.Log("agent", "Injected playbook strategy hints into system prompt")
 			}
+		}
+		// r458: past-run trajectory learnings re-injection - the third leg
+		// of the extract->persist->re-inject distillation loop. Includes
+		// teammate experience folded in by r457's ingest.
+		if a.trajIntel != nil {
+			if sec := a.trajIntel.RenderPromptSection(workingDir); sec != "" {
+				dynamicParts = append(dynamicParts, sec)
+				debug.Log("agent", "Injected past-run trajectory learnings into system prompt")
+			}
+		}
+		// r413: persisted failure attribution memory - which file/tool was
+		// the causal suspect in past failed runs of this task type.
+		if ft := FailureHintsForPrompt(workingDir, runPrompt, 2); ft != "" {
+			dynamicParts = append(dynamicParts, ft)
+			debug.Log("agent", "Injected failure attribution memory into system prompt")
 		}
 	}
 

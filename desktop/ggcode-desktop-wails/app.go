@@ -638,6 +638,12 @@ func (a *App) CompleteOnboard(vendor, endpoint, model, apiKey string) error {
 }
 
 // GetVendorPresets returns vendor presets for onboarding.
+// TrajConfidenceOverview exposes the workspace's trajectory-learning
+// confidence aggregate for the desktop UI (sa-233 confidence signaling).
+func (a *App) TrajConfidenceOverview() wailskit.TrajConfidenceOverview {
+	return a.chat.TrajConfidenceOverview()
+}
+
 func (a *App) GetVendorPresets() []wailskit.VendorPresetInfo {
 	return wailskit.GetVendorPresets()
 }

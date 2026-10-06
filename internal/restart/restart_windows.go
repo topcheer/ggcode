@@ -13,7 +13,11 @@ import (
 
 const winScriptTemplate = `@echo off
 REM ggcode self-restart helper - auto-generated, self-deleting.
-setlocal enabledelayedexpansion
+REM #2775: delayed expansion is intentionally OFF. This template never
+REM uses bang-bracket variable syntax, and with it ON every bare bang in
+REM spliced args or paths was silently eaten or expanded (winEscape only
+REM handles quote and percent) - corrupting prompts and paths that
+REM contain an exclamation mark.
 
 set PARENT_PID={{.PID}}
 set BINARY={{.BinaryWinEscaped}}
@@ -42,8 +46,12 @@ echo [ggcode restart] process %PARENT_PID% exited
 REM 2. Brief pause
 ping -n 1 127.0.0.1 >nul
 
-REM 3. cd to original working directory
+REM 3. cd to original working directory. #3079: warn on failure instead of
+REM silently launching from the wrong cwd when the work dir was deleted
+REM during the restart wait - the user sees why the binary path resolved
+REM differently instead of an unexplained launch failure.
 cd /d "%WORK_DIR%" 2>nul
+if errorlevel 1 echo [ggcode restart] WARNING: could not cd to "%WORK_DIR%" - launching from "%CD%"
 
 REM 4. Self-delete: the classic 'start /b del' races the parent cmd's open
 REM file handle and loses 100% of the time (#798). The (goto) 2>nul idiom

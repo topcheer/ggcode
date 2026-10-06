@@ -126,7 +126,7 @@ func TestParseWorkspaceEditDeduplicatesDualSources(t *testing.T) {
 			}
 		]
 	}`
-	edits := parseWorkspaceEdit(json.RawMessage(editJSON))
+	edits, _ := parseWorkspaceEdit(json.RawMessage(editJSON))
 	if len(edits) != 2 {
 		t.Fatalf("expected 2 files, got %d: %+v", len(edits), edits)
 	}

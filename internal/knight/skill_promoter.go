@@ -464,5 +464,9 @@ func mutateSkillFrontmatter(content string, mutate func(map[string]interface{}))
 	if err != nil {
 		return "", err
 	}
-	return "---\n" + strings.TrimRight(string(newFM), "\n") + "\n---" + bodyText, nil
+	// #2762: splitFrontmatter skips the newline right after the closing
+	// "---", so reassembly must put it back. Joining with "\n---" + body
+	// glued the body's first line onto the closing marker (invalid
+	// frontmatter for external tools like Claude Code / markdownlint).
+	return "---\n" + strings.TrimRight(string(newFM), "\n") + "\n---\n" + bodyText, nil
 }

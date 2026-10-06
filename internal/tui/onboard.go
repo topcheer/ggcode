@@ -65,19 +65,6 @@ type discoverResultMsg struct {
 	gen uint64
 }
 
-type onboardIMChannel struct {
-	platform    string
-	labelKey    string
-	placeholder string
-}
-
-var imChannels = [4]onboardIMChannel{
-	{"telegram", "im_telegram", "im_token_placeholder"},
-	{"discord", "im_discord", "im_token_placeholder"},
-	{"qq", "im_qq", "im_token_placeholder"},
-	{"wechat", "im_wechat", "im_token_placeholder"},
-}
-
 var modeLabels = []string{"supervised", "auto", "bypass", "autopilot"}
 var modeColors = []color.Color{
 	lipgloss.Color("11"), // yellow - supervised

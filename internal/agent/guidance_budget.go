@@ -125,6 +125,15 @@ func (g *guidanceBudget) allow(text string) bool {
 		g.suppressed++
 		return false
 	}
+	// #607 B3: the [guidance-conflict] arbitration meta-hint bypasses the
+	// per-turn advisory COUNTER (still bound by the byte pool above, and
+	// rate-limited to one delivery per turn by allowDeduped's tag dedup).
+	// Charging it against the counter is self-defeating: the two
+	// contradictory directives themselves consume the budget, so the
+	// arbitration hint is dropped exactly when the contradiction stands.
+	if strings.ToLower(extractHintTag(text)) == "guidance-conflict" {
+		return true
+	}
 	if g.injected < guidanceBudgetPerTurn {
 		g.injected++
 		return true
@@ -210,8 +219,29 @@ func isCriticalGuidance(text string) bool {
 // only consume their one chance / quota when this returns true, otherwise
 // a saturated detector turn burns the quota with ZERO guidance delivered
 // (the detector goes permanently dark - "returned != delivered").
+// guidanceEmit centralizes the run loop's repeated
+// "if msg != " { injectGuidance(msg); msgs = contextManager.Messages() }"
+// sites. Semantics are preserved exactly: a non-empty msg is injected and
+// the conversation slice re-read (even when the budget suppressed delivery,
+// since other traffic may have compacted/refreshed the slice), while an
+// empty msg is a no-op returning the slice untouched.
+func (a *Agent) guidanceEmit(msg string, msgs []provider.Message) []provider.Message {
+	if msg == "" {
+		return msgs
+	}
+	a.injectGuidance(msg)
+	return a.contextManager.Messages()
+}
+
 func (a *Agent) injectGuidance(text string) bool {
-	if !a.guidanceBudget.allow(text) {
+	// r402: single-funnel observability - every detector's guidance passes
+	// here, so one hook records the full fire/suppress profile (recorded
+	// AFTER the allow() verdict to avoid double-counting one message).
+	allowed := a.guidanceBudget.allow(text)
+	if a.guidanceStats != nil {
+		a.guidanceStats.record(guidanceTag(text), allowed)
+	}
+	if !allowed {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",
 			a.guidanceBudget.suppressed)
 		return false
@@ -225,7 +255,12 @@ func (a *Agent) injectGuidance(text string) bool {
 	// detectGuidanceConflict previously ran only over one tool result's
 	// retained hints; this path's injections (errorRush "ACT NOW" etc.)
 	// could contradict them unimpeded.
-	if ch := detectGuidanceConflict(append(append([]string{}, a.guidanceBudget.delivered...), text)); ch != "" && a.guidanceBudget.allowDeduped(ch) {
+	// The delivered history must be stripped of [guidance-coalesced]
+	// suppression summaries first: allowDeduped records them into
+	// g.delivered, and they quote suppressed tag names that would
+	// re-enter the scan as pseudo-conflicts (same hazard #607 B3 fixed
+	// for the per-result scan).
+	if ch := detectGuidanceConflict(stripCoalescedSummaries(append(append([]string{}, a.guidanceBudget.delivered...), text))); ch != "" && a.guidanceBudget.allowDeduped(ch) {
 		a.contextManager.Add(provider.Message{
 			Role: "user",
 			Content: []provider.ContentBlock{{

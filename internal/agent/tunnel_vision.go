@@ -57,14 +57,19 @@ const (
 )
 
 type tunnelVisionState struct {
+	// baseDir anchors relative paths so an absolute read and a relative
+	// grep hit on the same file land on one map key (#2976 companion
+	// finding). Empty means no anchoring (unit tests use bare paths).
+	baseDir string
+
 	// filesTouched tracks unique normalized file paths read or edited.
 	filesTouched map[string]bool
 
 	// searchedFiles tracks files seen via search tools (#476).
 	searchedFiles map[string]bool
-	// testFilesTouched reports whether any _test.go file was touched —
-	// a test-fix task legitimately revolves around test files (#476).
-	testFilesTouched map[bool]bool
+	// sawTestFiles reports whether any _test.go file was touched — a
+	// test-fix task legitimately revolves around test files (#476).
+	sawTestFiles bool
 
 	// warned indicates the detector has fired this run.
 	warned bool
@@ -72,16 +77,15 @@ type tunnelVisionState struct {
 
 func newTunnelVisionState() *tunnelVisionState {
 	return &tunnelVisionState{
-		filesTouched:     make(map[string]bool),
-		searchedFiles:    make(map[string]bool),
-		testFilesTouched: make(map[bool]bool),
+		filesTouched:  make(map[string]bool),
+		searchedFiles: make(map[string]bool),
 	}
 }
 
 func (s *tunnelVisionState) reset() {
 	s.filesTouched = make(map[string]bool)
 	s.searchedFiles = make(map[string]bool)
-	s.testFilesTouched = make(map[bool]bool)
+	s.sawTestFiles = false
 	s.warned = false
 }
 
@@ -107,16 +111,26 @@ func extractSearchResultPaths(content string) []string {
 	return paths
 }
 
+// normalize anchors the path to baseDir before keying (#2976 companion
+// finding): an absolute read ("/repo/a.go") and a relative grep hit
+// ("a.go") previously split into two keys, undercounting even the union.
+// Mirrors unreadEditState.normalize semantics via normalizeCompanionPath.
+func (s *tunnelVisionState) normalize(path string) string {
+	return normalizeCompanionPath(s.baseDir, strings.TrimSpace(path))
+}
+
 // recordFile marks a file as touched (read or edited) during this run.
 func (s *tunnelVisionState) recordFile(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
-	if !strings.HasSuffix(n, "_test.go") && !strings.HasSuffix(n, ".md") {
+	n := s.normalize(path)
+	isTest := strings.HasSuffix(n, "_test.go")
+	if isTest {
+		s.sawTestFiles = true
+	} else if !strings.HasSuffix(n, ".md") {
 		s.filesTouched[n] = true
 	}
-	s.testFilesTouched[strings.HasSuffix(n, "_test.go")] = s.testFilesTouched[strings.HasSuffix(n, "_test.go")] || strings.HasSuffix(n, "_test.go")
 }
 
 // recordSearched marks a file as SEEN via search-tool output (#476) —
@@ -129,13 +143,13 @@ func (s *tunnelVisionState) recordSearched(path string) {
 	if path == "" {
 		return
 	}
-	n := normalizePath(path)
+	n := s.normalize(path)
 	if strings.HasSuffix(n, ".md") {
 		return // docs never indicate code exploration breadth
 	}
 	s.searchedFiles[n] = true
 	if strings.HasSuffix(n, "_test.go") {
-		s.testFilesTouched[true] = true
+		s.sawTestFiles = true
 	}
 }
 
@@ -157,14 +171,27 @@ func (s *tunnelVisionState) check(iterations int) string {
 	// #476: search-driven breadth counts toward the exploration ceiling.
 	// If the agent has SEEN enough unique files across read+search, it is
 	// not tunnel-visioned regardless of the read-only ratio.
-	uniqueSeen := fileCount + len(s.searchedFiles)
+	// #2976: UNION, not sum - a file that was read (filesTouched) AND shows
+	// up in search hits (searchedFiles) is one file seen, not two. Summing
+	// double-counted the overlap, and grep hitting files the agent is
+	// actively editing is the NORM, not an edge case: an agent reading 3
+	// files with iterations ratio ~5 and a grep whose hits are exactly those
+	// 3 files summed to 6 >= tvMinFilesForWarning and suppressed the warning
+	// this detector exists to fire.
+	searchOnly := 0
+	for p := range s.searchedFiles {
+		if !s.filesTouched[p] {
+			searchOnly++
+		}
+	}
+	uniqueSeen := fileCount + searchOnly
 	if uniqueSeen >= tvMinFilesForWarning {
 		return ""
 	}
 
 	// #476: a test-fix task (agent actively editing/reading _test.go files)
 	// legitimately revolves around few files — ratio alone must not fire.
-	if s.testFilesTouched[true] && fileCount > 0 && iterations < tvMinIterations*2 {
+	if s.sawTestFiles && fileCount > 0 && iterations < tvMinIterations*2 {
 		return ""
 	}
 

@@ -15,6 +15,7 @@ import (
 	"github.com/topcheer/ggcode/internal/plugin"
 	grpcplugin "github.com/topcheer/ggcode/internal/plugin/grpc"
 
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/subagent"
 	"github.com/topcheer/ggcode/internal/tool"
@@ -96,6 +97,24 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 
 	deleteMemoryTool := tool.NewDeleteMemoryTool(autoMem, projectAutoMem)
 	_ = registry.Register(deleteMemoryTool)
+
+	// memory visibility (SelfMem curator gap): read-side inventory so the
+	// agent can see, update (save_memory same-key), and prune stored
+	// memories instead of operating blind.
+	_ = registry.Register(tool.NewListMemoryTool(autoMem, projectAutoMem))
+
+	// r381 (memory-as-tool): the write side has save/delete tools but the
+	// experience store's recall API was only reachable through the automatic
+	// gates (run start + first failure). This read-only tool lets the agent
+	// consult past cases at ANY decision moment (AgeMem arXiv 2601.01885,
+	// Hindsight arXiv 2512.12818).
+	_ = registry.Register(tool.NewRecallExperienceTool(workingDir))
+
+	// r449 (workflow memory): cross-session tool sequence mining as a
+	// read-only tool, same consumption shape as recall_experience above -
+	// the agent consults recurring workflows (prefix -> dominant next step)
+	// at planning moments instead of re-deriving tool order every run.
+	_ = registry.Register(tool.NewRecallToolFlowTool())
 
 	// Config tool — unified config management across all config files
 	cfgAccess := NewConfigAccess(cfg, workingDir)
@@ -229,6 +248,7 @@ func NewSkillTool(
 	agentFactory func(provider.Provider, interface{}, string, int) subagent.AgentRunner,
 	workingDir string,
 	onUsage func(provider.TokenUsage),
+	onMetric func(metrics.MetricEvent), // #3296: forwarded to skill sub-agents
 	systemPromptBuilder func(task, agentType string) string,
 ) tool.SkillTool {
 	return tool.SkillTool{
@@ -240,6 +260,7 @@ func NewSkillTool(
 		AgentFactory:        agentFactory,
 		WorkingDir:          workingDir,
 		OnUsage:             onUsage,
+		OnMetric:            onMetric,
 		SystemPromptBuilder: systemPromptBuilder,
 	}
 }

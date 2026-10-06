@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/lanchat"
 	"github.com/topcheer/ggcode/internal/permission"
 )
 
@@ -118,6 +119,33 @@ var imSlashRegistry = []SlashCommand{
 		Category: "query",
 		Handler: func(d SlashDeps, args []string) (string, error) {
 			return d.GitDiff(args)
+		},
+	},
+	{
+		Name:     "nick",
+		Help:     "[name[@role][@team]] Show or set LAN chat identity",
+		Category: "query",
+		// /nick is a one-shot text command in the TUI (lanchat_panel.go
+		// handleNickCommand) but was never registered here, so IM inbound
+		// fell through to "Unknown command". The LAN hub is only wired in
+		// TUI-attached paths (the daemon bridge has no hub), so the
+		// capability is an OPTIONAL interface: deps that carry a hub
+		// implement it; others get a precise unavailable hint.
+		Handler: func(d SlashDeps, args []string) (string, error) {
+			setter, ok := d.(interface {
+				SetLanIdentity(nick, role, team string) (string, error)
+			})
+			if !ok {
+				return "", fmt.Errorf("LAN chat identity is not available in this frontend (use the TUI /nick command)")
+			}
+			if len(args) == 0 {
+				return setter.SetLanIdentity("", "", "")
+			}
+			nick, role, team := lanchat.ParseNickRoleTeam(strings.Join(args, " "))
+			if strings.TrimSpace(nick) == "" {
+				return "", fmt.Errorf("nickname cannot be empty (format: /nick name[@role][@team])")
+			}
+			return setter.SetLanIdentity(nick, role, team)
 		},
 	},
 	// Interactive TUI commands: surfaced so IM users get a precise hint

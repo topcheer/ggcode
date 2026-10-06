@@ -272,6 +272,23 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 	// every outbound request within one Send must consume a unique seq, else
 	// QQ silently drops it as a duplicate (#966).
 	seq := replySeq
+	// #3319: reserve all seq slots for this Send atomically in the binding
+	// store (cross-process file lock) so a concurrent ggcode instance (TUI +
+	// daemon both serving the same QQ adapter) can't allocate the same
+	// msg_seq. Falls back to the snapshot-based counter when the store lacks
+	// the capability (single-instance semantics, unchanged).
+	reserved := false
+	if replyTo != "" && a.manager != nil {
+		n := len(images) + qqChunkCount(a.markdownSupport, remainingText)
+		if n > 0 {
+			if start, err := a.manager.ReservePassiveSeqs(binding.Workspace, replyTo, n); err == nil {
+				seq = start
+				reserved = true
+			} else if err != ErrNoChannelBound {
+				debug.Log("qq", "adapter=%s reserve passive seqs failed (fallback to snapshot): %v", a.name, err)
+			}
+		}
+	}
 	consumedSeqs := 0
 	for i, img := range images {
 		b64, err := a.resolveImageSource(ctx, img)
@@ -280,24 +297,27 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 			continue
 		}
 		// Each successfully sent image consumes one seq slot; failures do not
-		// (the server never saw them).
-		// #1230: rate limit across ALL outbound messages. QQ's 5 msg/s limit
-		// counts every send regardless of msg_type, so a delivered image must
-		// also be followed by the inter-message delay - back-to-back multi-image
-		// replies and the image->text transition otherwise burst past the cap
-		// and the server silently drops them.
+		// (the server never saw them). #3317: the slot is recorded IMMEDIATELY
+		// per send - the old batch-at-the-end recording left a whole-loop crash
+		// window where a restart after a successful send reused the burned seq.
 		if err := a.sendImageFromBase64(ctx, chatType, channelID, b64, replyTo, seq); err != nil {
 			debug.Log("qq", "adapter=%s image send failed [%d/%d]: %v", a.name, i+1, len(images), err)
 			continue
 		}
+		if !reserved {
+			a.recordPassiveReplies(binding, replyTo, 1)
+		}
 		seq++
 		consumedSeqs++
 		debug.Log("qq", "adapter=%s image sent [%d/%d]", a.name, i+1, len(images))
+		// #1230: rate limit across ALL outbound messages - every delivered
+		// image is followed by the inter-message delay so back-to-back
+		// multi-image replies and the image->text transition stay under the
+		// 5 msg/s cap.
 		select {
 		case <-time.After(qqInterMessageDelay):
 		case <-ctx.Done():
-			a.recordPassiveReplies(binding, replyTo, consumedSeqs)
-			return ctx.Err()
+			return ctx.Err() // slots already recorded incrementally above
 		}
 	}
 
@@ -321,22 +341,23 @@ func (a *qqAdapter) Send(ctx context.Context, binding ChannelBinding, event Outb
 				select {
 				case <-time.After(qqInterMessageDelay):
 				case <-ctx.Done():
-					a.recordPassiveReplies(binding, replyTo, consumedSeqs)
-					return ctx.Err()
+					return ctx.Err() // slots already recorded incrementally
 				}
 			}
 			// Chunks continue the shared seq cursor (NOT the chunk index) so they
 			// never reuse a seq burned by an image or an earlier chunk (#966).
 			if _, err := a.sendTextMessage(ctx, path, chatType, chunk, replyTo, seq); err != nil {
-				a.recordPassiveReplies(binding, replyTo, consumedSeqs)
 				return err
+			}
+			// #3317: per-send incremental recording (see the image loop).
+			if !reserved {
+				a.recordPassiveReplies(binding, replyTo, 1)
 			}
 			seq++
 			consumedSeqs++
 		}
 	}
 
-	a.recordPassiveReplies(binding, replyTo, consumedSeqs)
 	debug.Log("qq", "adapter=%s outbound delivered kind=%s channel=%s images=%d seqs_consumed=%d", a.name, event.Kind, channelID, len(images), consumedSeqs)
 	return nil
 }
@@ -361,6 +382,24 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 	if strings.TrimSpace(replyTo) != "" {
 		replySeq = 1
 	}
+	// #3317: this echo path CONSUMES the server-side (msg_id, 1) slot but
+	// historically never recorded it - the next regular Send starts at
+	// PassiveReplyCount+1 = 1 and collides head-on with the echo, and the
+	// server deduplicates it away. Record the consumed slot on success.
+	// The echo sites carry a channel/message id, not a binding - resolve
+	// the workspace by matching the inbound message id so the counter
+	// lands on the right binding.
+	recordEcho := func(sent bool) {
+		if !sent || a.manager == nil || strings.TrimSpace(replyTo) == "" {
+			return
+		}
+		// #3326: resolve-and-record under the manager lock - the previous
+		// bare range over currentBindings raced the binding watcher's
+		// locked deletes.
+		if err := a.manager.RecordPassiveReplyByMessage(replyTo, time.Now()); err != nil && err != ErrNoChannelBound {
+			debug.Log("qq", "adapter=%s echo passive-reply record failed: %v", a.name, err)
+		}
+	}
 	sentContent := content
 	if !useMarkdown {
 		sentContent = stripMarkdown(content)
@@ -370,11 +409,15 @@ func (a *qqAdapter) sendReplyText(ctx context.Context, channelID, replyTo, conte
 		if useMarkdown && isQQMarkdownRejected(err) {
 			plainContent := stripMarkdown(content)
 			body = a.buildTextBodyWithMode(plainContent, chatType, replyTo, replySeq, false)
-			_, retryErr := a.apiRequest(ctx, http.MethodPost, path, body, nil)
-			return retryErr
+			if _, retryErr := a.apiRequest(ctx, http.MethodPost, path, body, nil); retryErr != nil {
+				return retryErr
+			}
+			recordEcho(true)
+			return nil
 		}
 		return err
 	}
+	recordEcho(true)
 	return nil
 }
 
@@ -1257,7 +1300,27 @@ func (a *qqAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) e
 		debug.Log("qq", "adapter=%s typing notify failed: %v", a.name, err)
 		return err
 	}
+	// #3345: the typing notify carries (msg_id, msg_seq) and burns a
+	// server-side passive slot exactly like an echo or media message - every
+	// other carrier in this file records its slot (#3317 echo, #3319
+	// pre-reservation, #3326 locked resolve). Record it, or the next Send
+	// reuses this seq and the server deduplicates it away.
+	a.recordPassiveReplies(binding, msgID, 1)
 	return nil
+}
+
+// qqChunkCount mirrors the chunk splitting used for the remaining text so
+// the #3319 pre-reservation sizes the seq allocation exactly like the send
+// loop below will consume it.
+func qqChunkCount(markdown bool, text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	if markdown {
+		return len(SplitMarkdown(text, PlatformLimits[PlatformQQ]))
+	}
+	return len(SplitMessageForPlatform(text, PlatformQQ))
 }
 
 func (a *qqAdapter) resolveReplyMode(binding ChannelBinding) (string, int) {

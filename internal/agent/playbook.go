@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Strategy Playbook — inspired by ACE (Agentic Context Engineering,
@@ -116,20 +117,28 @@ func (pb *Playbook) save() {
 // classifyTaskType determines the task category from the user prompt.
 // Order matters: more specific categories are checked first to avoid
 // misclassification (e.g., "add test" should be "test" not "feature").
+// Keywords are matched on word boundaries (#2745): bare substring matching
+// classified "upgrade to the latest version" as test (laTEST), "refactor
+// the contest module" as test (conTEST), "address the failing build" as
+// feature (ADDRESS), and "rebuild the parser" as build (REBUILD) - the
+// misclassified type then polluted the persisted playbook fingerprint and
+// system prompt injection. Keywords written with an explicit leading or
+// trailing space (" fail", "make ", "ci ", "new ") already encode their
+// own anchoring and keep the substring behavior.
 func classifyTaskType(userPrompt string) string {
 	p := strings.ToLower(userPrompt)
 	switch {
-	case containsAny(p, "test", "spec", "coverage", "mock"):
+	case containsAnyWord(p, "test", "spec", "coverage", "mock"):
 		return "test"
-	case containsAny(p, "build", "compile", "make ", "ci ", "deploy", "release", "publish"):
+	case containsAnyWord(p, "build", "compile", "make ", "ci ", "deploy", "release", "publish"):
 		return "build"
-	case containsAny(p, "fix", "bug", "error", "crash", "broken", " fail", "panic", "traceback"):
+	case containsAnyWord(p, "fix", "bug", "error", "crash", "broken", " fail", "panic", "traceback"):
 		return "bugfix"
-	case containsAny(p, "refactor", "clean", "rename", "reorganize", "simplify", "extract"):
+	case containsAnyWord(p, "refactor", "clean", "rename", "reorganize", "simplify", "extract"):
 		return "refactor"
-	case containsAny(p, "review", "check", "audit", "inspect", "scan", "analyze"):
+	case containsAnyWord(p, "review", "check", "audit", "inspect", "scan", "analyze"):
 		return "review"
-	case containsAny(p, "add", "implement", "create", "new ", "support"):
+	case containsAnyWord(p, "add", "implement", "create", "new ", "support"):
 		return "feature"
 	default:
 		return "other"
@@ -212,10 +221,15 @@ func extractFileTypes(filesEdited []string) string {
 	return strings.Join(sorted, "+")
 }
 
-// Record extracts a strategy pattern from a successful run and updates the playbook.
-// Called from maybeReflect after a successful agent run.
+// Record extracts a strategy pattern from a run and updates the playbook.
+// Called from maybeReflect after an agent run. Successful runs create new
+// entries; failed runs only degrade the SuccessRate of an existing matching
+// fingerprint (r389, AutoRefine: patterns must originate from success, but
+// without negative evidence SuccessRate is meaningless and the repository
+// degrades as stale strategies accumulate). Cancellation never reaches here
+// (maybeReflect is skipped on isCancelled), so failures are genuine.
 func (pb *Playbook) Record(stats *RunStats) {
-	if pb == nil || stats == nil || !stats.Success {
+	if pb == nil || stats == nil {
 		return
 	}
 
@@ -230,6 +244,26 @@ func (pb *Playbook) Record(stats *RunStats) {
 
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
+
+	// #2726: recordPlaybook builds a FRESH Playbook per run, so the
+	// instance mutex serializes nothing across instances. Two ggcode
+	// processes (multi-window / multi-IM on one workspace) recording near-
+	// simultaneously both loaded the same on-disk state and the last writer
+	// erased the other's entries. Hold the cross-process file lock around
+	// the whole load->modify->save cycle; on acquisition failure proceed
+	// unlocked (fail-open, same degraded semantics as the cron/probe-cache
+	// callers) rather than blocking the reflection path. The directory must
+	// exist BEFORE the lock open, or O_CREATE fails ENOENT and every
+	// first-run Record silently takes the unlocked path.
+	if pb.path != "" {
+		_ = os.MkdirAll(filepath.Dir(pb.path), 0755)
+	}
+	if unlock, err := util.FileLock(pb.path + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("playbook", "record: failed to acquire playbook lock (proceeding unlocked): %v", err)
+	}
+
 	pb.load()
 
 	taskType := classifyTaskType(stats.UserPrompt)
@@ -239,7 +273,9 @@ func (pb *Playbook) Record(stats *RunStats) {
 	// Pattern fingerprint: taskType + toolSeq + fileTypes
 	fingerprint := taskType + "|" + toolSeq + "|" + fileTypes
 
-	// Try to find an existing entry with the same fingerprint
+	// Try to find an existing entry with the same fingerprint.
+	// Failures only update a matching entry's success rate; they never
+	// create entries (see Record doc).
 	for i := range pb.entries {
 		e := &pb.entries[i]
 		ep := e.TaskType + "|" + e.ToolSequence + "|" + e.FileTypes
@@ -247,10 +283,14 @@ func (pb *Playbook) Record(stats *RunStats) {
 			// Update existing entry with incremental average (ACE principle:
 			// "structured, incremental updates that preserve detailed knowledge")
 			pb.updateEntry(e, stats)
+			pb.prune()
 			pb.save()
 			debug.Log("playbook", "updated entry %s (uses=%d, success=%.1f%%)", e.TaskType, e.Uses, e.SuccessRate*100)
 			return
 		}
+	}
+	if !stats.Success {
+		return // failed run with no matching pattern: nothing to learn
 	}
 
 	// Create new entry
@@ -269,6 +309,10 @@ func (pb *Playbook) Record(stats *RunStats) {
 	}
 	pb.entries = append(pb.entries, entry)
 
+	// Anti-degradation (r389, AutoRefine maintenance): drop entries whose
+	// empirical record has collapsed before falling back to LRU eviction.
+	pb.prune()
+
 	// Evict if over capacity (keep most recently used)
 	if len(pb.entries) > pb.maxEntries {
 		pb.evict()
@@ -278,15 +322,47 @@ func (pb *Playbook) Record(stats *RunStats) {
 	debug.Log("playbook", "recorded new %s strategy: %s (files=%s)", taskType, toolSeq, fileTypes)
 }
 
-// updateEntry merges a new observation into an existing entry using incremental averaging.
+// updateEntry merges a new observation into an existing entry using
+// incremental averaging. SuccessRate is an incremental mean over ALL
+// observations of the fingerprint (r389): successes pull it up, failures
+// pull it down. Historical on-disk entries recorded only successes, so
+// their Uses counts as successes for the mean - correct under the old
+// recording policy.
 func (pb *Playbook) updateEntry(e *PlaybookEntry, stats *RunStats) {
 	n := float64(e.Uses)
 	e.AvgIter = (e.AvgIter*n + float64(stats.Iterations)) / (n + 1)
 	e.AvgDurationS = (e.AvgDurationS*n + stats.Duration.Seconds()) / (n + 1)
+	outcome := 0.0
+	if stats.Success {
+		outcome = 1.0
+	}
+	e.SuccessRate = (e.SuccessRate*n + outcome) / (n + 1)
 	e.Uses++
-	e.SuccessRate = 1.0 // only successful runs are recorded, so rate stays 1.0
-	// Note: if we later record failures too, SuccessRate would decrease
 	e.LastSeen = time.Now()
+}
+
+// prune removes entries whose strategy has empirically collapsed
+// (r389, AutoRefine repository-maintenance: score, prune, merge - without
+// it a stale strategy survives on historical frequency alone). An entry is
+// pruned only after enough evidence (Uses >= pruneMinUses) AND a collapsed
+// success rate (< pruneSuccessFloor); young entries are protected so a
+// single early failure cannot kill a new pattern.
+const (
+	pruneMinUses      = 5
+	pruneSuccessFloor = 0.3
+)
+
+func (pb *Playbook) prune() {
+	kept := pb.entries[:0]
+	for _, e := range pb.entries {
+		if e.Uses >= pruneMinUses && e.SuccessRate < pruneSuccessFloor {
+			debug.Log("playbook", "pruned degraded %s strategy: %s (uses=%d, success=%.1f%%)",
+				e.TaskType, e.ToolSequence, e.Uses, e.SuccessRate*100)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	pb.entries = kept
 }
 
 // evict removes the least recently used entries to stay within capacity.
@@ -313,7 +389,15 @@ func (pb *Playbook) evict() {
 //
 // This ensures that a pattern observed 3 times at ~5 iterations ranks higher
 // than one observed 5 times at ~50 iterations.
-func (pb *Playbook) HintsForPrompt(maxHints int) string {
+// HintsForPrompt generates brief strategy hints for the system prompt.
+// r387 (SimpleMem intent-aware retrieval, ICML 2026): the current run's
+// prompt is classified with the same task-type taxonomy used at record time,
+// and entries matching that task type are boosted in ranking so injected
+// hints follow the current task's intent instead of pure global frequency.
+// An empty or unclassifiable prompt keeps the original global ranking, and
+// matching entries only get a boost (never a hard filter), so rare task
+// types never starve the hint budget.
+func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 	if pb == nil {
 		return ""
 	}
@@ -330,9 +414,21 @@ func (pb *Playbook) HintsForPrompt(maxHints int) string {
 	//   frequency = min(uses, 10) — cap at 10 to prevent over-weighting
 	//   efficiency = 10 / avgIter — fewer iterations = higher score
 	// This rewards patterns that are both well-observed AND efficient.
+	// Intent-aware ranking (r387): matching entries form the primary tier,
+	// non-matching entries fill the remaining budget - SimpleMem's
+	// intent-centroid retrieval semantics (retrieve for the task at hand,
+	// fall back to global) without starving rare task types.
+	intent := classifyTaskType(runPrompt)
+	intentMatch := func(e PlaybookEntry) bool {
+		return intent != "" && intent != "other" && e.TaskType == intent
+	}
 	sorted := make([]PlaybookEntry, len(pb.entries))
 	copy(sorted, pb.entries)
 	sort.Slice(sorted, func(i, j int) bool {
+		mi, mj := intentMatch(sorted[i]), intentMatch(sorted[j])
+		if mi != mj {
+			return mi // matching tier first
+		}
 		return playbookScore(sorted[i]) > playbookScore(sorted[j])
 	})
 
@@ -405,6 +501,45 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+// containsAnyWord matches whole words only (#2745). A keyword containing
+// an explicit space (" fail", "make ", "new ") encodes its own anchoring
+// and falls back to substring matching, preserving the original intent.
+func containsAnyWord(s string, keywords ...string) bool {
+	for _, kw := range keywords {
+		if strings.ContainsAny(kw, " \t") {
+			if strings.Contains(s, kw) {
+				return true
+			}
+			continue
+		}
+		start := 0
+		for {
+			i := strings.Index(s[start:], kw)
+			if i < 0 {
+				break
+			}
+			at := start + i
+			end := at + len(kw)
+			if wordBoundaryAt(s, at) && wordBoundaryAt(s, end) {
+				return true
+			}
+			start = at + 1
+		}
+	}
+	return false
+}
+
+// wordBoundaryAt reports whether position i in s is a word boundary:
+// either string edge, or the neighboring bytes are not word bytes on both
+// sides of the boundary. Reuses isWordByte from success_declare.go
+// (identifier semantics: [a-z0-9_]).
+func wordBoundaryAt(s string, i int) bool {
+	if i <= 0 || i >= len(s) {
+		return true
+	}
+	return !isWordByte(s[i-1]) || !isWordByte(s[i])
 }
 
 func randomID() string {

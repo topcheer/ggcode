@@ -45,7 +45,6 @@ func jaOnboardTexts() map[string]string {
 		"im_more":          "その他のチャンネルは TUI で設定可能",
 		"hint_nav":         "↑↓ ナビゲート · Enter 選択 · Tab 切替 · Esc 戻る · Ctrl+C 終了",
 		"hint_filter":      "/ でフィルター",
-		"skip":             "スキップ",
 		"on":               "オン",
 		"off":              "オフ",
 	}

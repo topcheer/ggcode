@@ -370,6 +370,18 @@ func coverageExtractVerifyScopes(cmd string) []string {
 		if strings.Contains(f, "...") && (strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")) {
 			return []string{"ALL"}
 		}
+		// #2773: `go test` accepts file-list args (./pkg/a.go); the file
+		// belongs to its package directory - map the token to that dir
+		// instead of collecting the .go path itself as a "scope" (it never
+		// matched a real package, flagging the explicitly verified package
+		// UNVERIFIED). Bare a.go (cwd) falls through to the bare-Go check.
+		if strings.HasSuffix(f, ".go") {
+			if idx := strings.LastIndex(f, "/"); idx > 0 {
+				f = f[:idx] // "./pkg/a.go" -> "./pkg"
+			} else {
+				continue
+			}
+		}
 		isRel := strings.HasPrefix(f, "./") || strings.HasPrefix(f, "../")
 		if !isRel {
 			// Bare relative internal path: slash, no colon (urls), letter
@@ -394,7 +406,13 @@ func coverageExtractVerifyScopes(cmd string) []string {
 			// gap this detector exists to surface.
 			scopes = append(scopes, r)
 		} else if isRel {
-			return []string{"ALL"} // "./" alone
+			// #2984: bare "./" tests the CURRENT DIRECTORY package only
+			// (recursive is "./..."), semantically identical to bare
+			// "go test" — collect "." so the caller applies the same
+			// cwd/lastEditedPkg scoping instead of marking every edited
+			// package VERIFIED. ALL inflated exactly the cross-package
+			// coverage gap this detector exists to surface (#550 B1 class).
+			scopes = append(scopes, ".")
 		}
 	}
 	if len(scopes) > 0 {

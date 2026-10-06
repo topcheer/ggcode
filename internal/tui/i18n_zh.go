@@ -585,19 +585,19 @@ func zhCatalog(key string) string {
 	case "init.resolve_failed":
 		return "解析初始化目标失败：%v\n\n"
 	case "init.generate_failed":
-		return "生成 GGCODE.md 内容失败：%v\n\n"
+		return "生成 AGENTS.md 内容失败：%v\n\n"
 	case "init.collecting":
 		return "正在收集项目知识..."
 	case "init.prompt.title":
 		return "初始化项目"
 	case "init.prompt.body":
-		return "此项目中未找到 GGCODE.md。是否创建一个，帮助 agent 了解你的代码规范？"
+		return "此项目中未找到 AGENTS.md。是否创建一个，帮助 agent 了解你的代码规范？"
 	case "init.prompt.yes":
 		return "创建"
 	case "init.prompt.no":
 		return "跳过"
 	case "init.prompt.hint":
-		return " y = 创建 GGCODE.md • n/Esc = 跳过"
+		return " y = 创建 AGENTS.md • n/Esc = 跳过"
 	case "command.model_switched":
 		return "已切换模型为：%s（供应商：%s）\n\n"
 	case "command.model_failed":
@@ -692,6 +692,26 @@ func zhCatalog(key string) string {
 		return "\n使用 /undo 回滚最近一次修改，/redo 重做。\n\n"
 	case "memory.auto_unavailable":
 		return "自动记忆未初始化。\n\n"
+	case "traj.no_workspace":
+		return "无可用的工作区目录。"
+	case "traj.cleared":
+		return "轨迹学习库已清空，后续运行将从空库开始。"
+	case "traj.cleared_global":
+		return "全局轨迹学习库已清空（跨工作区层已移除）。"
+	case "traj.cleared_global_hint":
+		return "注意：全局层仍有 %d 条学习（/traj list 中标记 g）且仍在注入。执行 /traj clear global 可清除。"
+	case "traj.empty":
+		return "尚无历史运行学习条目。"
+	case "traj.header":
+		return "历史运行学习库（共存 %d 条，其中 %d 条会注入提示词；> = 会注入）："
+	case "traj.usage":
+		return "用法：/traj [list|clear|export|import [路径]]"
+	case "traj.no_home":
+		return "无法解析主目录，全局学习库不可用。"
+	case "traj.exported":
+		return "已导出 %d 条学习到 %s"
+	case "traj.imported":
+		return "已导入 %d 条新学习（重复已跳过）"
 	case "memory.list_failed":
 		return "列出记忆失败：%v\n\n"
 	case "memory.none":
@@ -901,7 +921,7 @@ func zhCatalog(key string) string {
 	case "slash.image":
 		return "附加图片"
 	case "slash.init":
-		return "生成项目 GGCODE.md"
+		return "生成项目 AGENTS.md"
 	case "slash.lang":
 		return "切换界面语言"
 	case "slash.skills":
@@ -1034,6 +1054,8 @@ func zhCatalog(key string) string {
 		return "显示上下文窗口使用情况（token、消息、容量）"
 	case "slash.runreport":
 		return "评估本次会话轨迹，离线输出效率评分卡"
+	case "slash.traj":
+		return "查看（/traj）或清空（/traj clear）注入系统提示的历史经验学习库"
 	case "panel.qq.directory":
 		return "目录"
 	case "panel.qq.runtime":
@@ -1210,6 +1232,10 @@ func zhCatalog(key string) string {
 		return "没有可分叉的活跃会话。"
 	case "branch.empty":
 		return "会话中没有消息可分叉。"
+	case "branch.bad_arg":
+		return "用法：/branch [N]，N 为非负整数（要丢弃的对话轮数）。"
+	case "branch.back_too_far":
+		return "无法分叉到该点：将丢弃全部对话轮。"
 	case "branch.save_failed":
 		return "创建分叉会话失败：%v"
 	case "branch.success":
@@ -1252,7 +1278,7 @@ func zhCatalog(key string) string {
   /allow [tool]      在当前模式中永久允许某个工具
   /files             打开全屏文件浏览器（含预览）
   /inspector [filt]  打开检查器面板（工具调用、上下文、指标）
-  /init              基于当前项目生成 GGCODE.md
+  /init              基于当前项目生成 AGENTS.md
   /todo              查看 todo 列表
   /todo clear        清空 todo 列表
   /reflect           触发 Agent 对近期运行的自省

@@ -34,19 +34,6 @@ func (q *PendingQueue[T]) Clear() {
 	q.items = nil
 }
 
-func (q *PendingQueue[T]) SnapshotTexts() []string {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.items) == 0 {
-		return nil
-	}
-	out := make([]string, len(q.items))
-	for i, item := range q.items {
-		out[i] = item.Text
-	}
-	return out
-}
-
 func (q *PendingQueue[T]) Snapshot() []PendingMessage[T] {
 	q.mu.Lock()
 	defer q.mu.Unlock()

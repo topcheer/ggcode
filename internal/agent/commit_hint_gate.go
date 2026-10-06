@@ -168,10 +168,14 @@ func (a *Agent) checkCommitHintGate(runStats *RunStats) string {
 	return sb.String()
 }
 
-// gitStatusPorcelain runs `git status --porcelain` and returns the raw output.
+// gitStatusPorcelain runs `git status --porcelain -uall` and returns the raw
+// output. #2887: without -uall, a fully-untracked directory folds into a single
+// "?? dir/" entry (same folding as #1451-A in change_reconcile); the agent's
+// per-file edit list then never intersects it and new-directory work silently
+// skips the commit hint. -uall lists every untracked file individually.
 func gitStatusPorcelain(workingDir string) (string, error) {
 	output, err := runGitCommandWithTimeout(
-		gitCommand(workingDir, "status", "--porcelain"),
+		gitCommand(workingDir, "status", "--porcelain", "-uall"),
 		gitDiffTimeout,
 	)
 	if err != nil {

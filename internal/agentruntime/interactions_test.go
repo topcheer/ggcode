@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/permission"
 )
@@ -119,4 +120,41 @@ func waitForAskMapLen(t *testing.T, b *InteractionBroker, want int) {
 		}
 		runtime.Gosched()
 	}
+}
+
+// #3370: with NO buffered decision, a fired ctx.Done must return the
+// matching NON-DECISION outcome (timeout/cancelled), never a bare Deny -
+// downstream audit/approval-memory/throttle must not blame the user.
+func TestAwaitApprovalCtxDoneReturnsNonDecision(t *testing.T) {
+	t.Run("deadline-expired", func(t *testing.T) {
+		b := NewInteractionBroker()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		d := b.AwaitApproval(ctx, ApprovalRequest{ID: "t1"})
+		if d != permission.Timeout {
+			t.Fatalf("deadline ctx.Done -> %v, want Timeout", d)
+		}
+		if !d.IsNonDecision() {
+			t.Fatal("Timeout must be classified as a non-decision")
+		}
+	})
+	t.Run("run-cancelled", func(t *testing.T) {
+		b := NewInteractionBroker()
+		got := make(chan permission.Decision, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { got <- b.AwaitApproval(ctx, ApprovalRequest{ID: "t2"}) }()
+		for {
+			b.mu.Lock()
+			n := len(b.approvals)
+			b.mu.Unlock()
+			if n == 1 {
+				break
+			}
+			runtime.Gosched()
+		}
+		cancel()
+		if d := <-got; d != permission.Cancelled {
+			t.Fatalf("cancelled ctx.Done -> %v, want Cancelled", d)
+		}
+	})
 }

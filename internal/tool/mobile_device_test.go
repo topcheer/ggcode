@@ -92,6 +92,12 @@ func TestSimplifyAndroidClass(t *testing.T) {
 		{"android.widget.EditText", "editText"},
 		{"android.widget.FrameLayout", "frame"},
 		{"android.widget.LinearLayout", "linear"},
+		// #839 malformed inputs
+		{"View", "view"}, {"Layout", "layout"},
+		{"android.widget.", "widget"}, {"android.widget.View", "widget"},
+		// #3194: these four panicked before the backwards-walk fix; when no
+		// segment survives trimming, the sanitized original is returned.
+		{".", "."}, {"..", ".."}, {".View", ".view"}, {".Layout", ".layout"},
 	}
 	for _, tt := range tests {
 		if got := simplifyAndroidClass(tt.input); got != tt.expected {

@@ -53,6 +53,13 @@ type TurnSummary struct {
 	OutputTokens     int
 	CacheRead        int
 	CacheWrite       int
+	// Delegated: same-turn sub-agent activity (#3295). Kept separate so the
+	// turn's own TTFT/TPS/decode stats are not polluted by faster sub-agent
+	// first packets or cross-model decode speeds.
+	DelegatedLLMCalls     int
+	DelegatedToolCalls    int
+	DelegatedInputTokens  int
+	DelegatedOutputTokens int
 	// Cumulative totals across all turns up to and including this one.
 	CumInputTokens      int
 	CumOutputTokens     int
@@ -103,6 +110,15 @@ func Summarize(events []MetricEvent) SessionSummary {
 
 		switch ev.Type {
 		case "llm":
+			// #3295: sub-agent events share the turn index but must not
+			// pollute the turn's latency stats (TTFT min, cross-model TPS
+			// averaging); count them as delegated load instead.
+			if ev.AgentID != "" {
+				turn.DelegatedLLMCalls++
+				turn.DelegatedInputTokens += ev.InputTokens
+				turn.DelegatedOutputTokens += ev.OutputTokens
+				continue
+			}
 			turn.LLMCallCount++
 			if ev.TTFT > 0 && (turn.TTFT == 0 || ev.TTFT < turn.TTFT) {
 				turn.TTFT = ev.TTFT
@@ -128,6 +144,10 @@ func Summarize(events []MetricEvent) SessionSummary {
 				}
 			}
 		case "tool":
+			if ev.AgentID != "" {
+				turn.DelegatedToolCalls++
+				continue
+			}
 			turn.ToolCallCount++
 			if !ev.ToolSuccess || ev.ToolError != "" {
 				turn.ToolFailureCount++

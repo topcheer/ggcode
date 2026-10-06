@@ -51,6 +51,50 @@ void main() {
     SecureTokenStorage.resetForTesting();
   });
 
+  test('#2814: secure write after a degraded window removes the plaintext '
+      'fallback copy', () async {
+    final mock = _MockSecureStorage();
+    final storage = SecureTokenStorage.forTesting(mock as FlutterSecureStorage);
+    storage.secureRetryAfter = Duration.zero;
+
+    // Force one degraded (fallback) write of connection JSON.
+    mock.failWrites.add('ggcode_connections_secure');
+    await storage.saveConnectionsJson('{"url":"wss://x","renew_token":"t1"}');
+    final prefs = await SharedPreferences.getInstance();
+    final legacy = prefs.getString('ggcode_connections');
+    expect(legacy, isNotNull, reason: 'degraded write must land in fallback');
+
+    // Next successful secure write carries the newest value - the obsolete
+    // plaintext copy must be removed (#2814), not left behind forever.
+    await storage.saveConnectionsJson('{"url":"wss://x","renew_token":"t2"}');
+    expect(mock.store["ggcode_connections_secure"], contains("t2"));
+    final legacyAfter = await prefs.getString('ggcode_connections');
+    expect(legacyAfter, isNull, reason: 'plaintext fallback must be scrubbed after secure write (#2814)');
+  });
+
+  test('#2814: heal path removes the plaintext fallback copy after writing '
+      'it back to Keychain', () async {
+    final mock = _MockSecureStorage();
+    final storage = SecureTokenStorage.forTesting(mock as FlutterSecureStorage);
+    storage.secureRetryAfter = Duration.zero;
+
+    // Seed: secure holds old value; a fallback write during a degraded
+    // window holds the NEWER value.
+    mock.store["ggcode_connections_secure"] = "{\"v\":1}";
+    mock.failWrites.add('ggcode_connections_secure');
+    await storage.saveConnectionsJson('{"v":2}');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('ggcode_connections'), '{"v":2}');
+
+    // A read once the cooldown expired runs the heal: fallback value goes
+    // back into the secure store AND the plaintext copy is scrubbed.
+    final raw = await storage.loadConnectionsJson();
+    expect(raw, contains('"v":2'));
+    expect(mock.store["ggcode_connections_secure"], "{\"v\":2}");
+    final legacyAfter = await prefs.getString('ggcode_connections');
+    expect(legacyAfter, isNull, reason: 'heal must scrub the plaintext copy (#2814)');
+  });
+
   test('#1872 case 2: edits during a degraded window survive cooldown expiry '
       '(the stale Keychain value must not resurrect)', () async {
     final mock = _MockSecureStorage();

@@ -166,6 +166,23 @@ func TestCausalAttribution_EmptyPath(t *testing.T) {
 	}
 }
 
+// r405: lastSuspect feeds the attribution-experiment arm. #1454-A silent-death
+// pattern: wiring exists but state stays empty - the detector never fires. If
+// the top-suspect computation path stops updating lastSuspect, the experiment
+// arms on "" and silently dies; this probe pins the supply line.
+func TestCausalAttribution_LastSuspectTracksTopSuspect(t *testing.T) {
+	s := newCausalAttributionState()
+	s.recordEdit("edit_file", "internal/tool/grep.go", 0)
+
+	out := "# /repo/internal/tool/grep.go:12:3: undefined: Foo\nFAIL\tinternal/tool [build failed]\nexit status 1"
+	if g := s.attributeFailureCmd(out, "go test ./internal/tool/", true); g == "" {
+		t.Fatal("expected attribution guidance for error-file match")
+	}
+	if s.lastSuspect != "internal/tool/grep.go" {
+		t.Fatalf("lastSuspect = %q, want the attributed file (experiment would arm on empty)", s.lastSuspect)
+	}
+}
+
 func TestLooksLikeFailure(t *testing.T) {
 	tests := []struct {
 		input string

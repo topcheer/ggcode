@@ -13,8 +13,6 @@ import (
 	"github.com/topcheer/ggcode/internal/stream"
 )
 
-const streamPanelLeftWidth = 28
-
 type streamPanelState struct {
 	focus         int // 0=platform list, 1=config area
 	selectedIndex int
@@ -101,6 +99,14 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if p.editingField != "" {
 				p.editingField = ""
+				// #2800: aborting an edit must also leave custom-add mode.
+				// Otherwise customMode lingers with residual name/url input,
+				// and a later `e` key-edit hijacks handleStreamPanelEnter into
+				// the custom "key" branch: appending a bogus target instead of
+				// editing the selected one (or failing "All fields required").
+				p.customMode = false
+				p.nameInput.SetValue("")
+				p.urlInput.SetValue("")
 				p.message = ""
 				return m, nil
 			}
@@ -126,6 +132,8 @@ func (m *Model) updateStreamPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleStreamPanelEnter()
 		case "e": // edit
 			if p.editingField == "" && p.selectedIndex < len(p.targets) {
+				// #2800 belt-and-braces: key edits are never custom adds.
+				p.customMode = false
 				p.editingField = "key"
 				p.keyInput.SetValue(p.targets[p.selectedIndex].Key)
 				p.keyInput.Focus()
@@ -222,10 +230,8 @@ func (m *Model) handleStreamPanelEnter() (tea.Model, tea.Cmd) {
 			if p.selectedIndex < len(p.targets) {
 				p.targets[p.selectedIndex].Key = p.keyInput.Value()
 			}
-		case "url":
-			if p.customMode {
-				p.urlInput.SetValue(p.urlInput.Value())
-			}
+		// (url field has no non-custom save path; its enter handling lives in
+		// the customMode progression below.)
 		case "name":
 			// For custom: name → url → key flow
 			if p.customMode && p.editingField == "name" {

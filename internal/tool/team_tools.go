@@ -123,7 +123,7 @@ type TeammateSpawnTool struct {
 
 func (t TeammateSpawnTool) Name() string { return "teammate_spawn" }
 func (t TeammateSpawnTool) Description() string {
-	return "Spawn a teammate (worker agent) in a team with a persistent idle loop consuming inbox/board tasks. Spawn for parallel work or distinct roles; prefer swarm_task_create for tracked assignments. Each team holds at most 16 teammates (config: swarm.max_teammates_per_team)."
+	return "Spawn a teammate (worker agent) in a team with a persistent idle loop consuming inbox/board tasks. Spawn for parallel work or distinct roles; prefer swarm_task_create for tracked assignments. Each team holds at most 16 teammates (config: swarm.max_teammates_per_team). Delegation economics: each teammate re-reads context from scratch and adds coordination overhead - spawn only for genuinely independent parallel work, not for small tasks you can do yourself with local tools."
 }
 func (t TeammateSpawnTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{

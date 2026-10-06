@@ -80,10 +80,18 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	currentAdd := 0
 	currentDel := 0
 	newLineNum := 0
+	// #3126: b/ path from the most recent "diff --git a/x b/x" header -
+	// the only path source for pure mode-change hunks (analyzer pattern).
+	lastGitPath := ""
 	// Last "--- a/path" header seen; a following "+++ /dev/null" means
 	// the file was DELETED - the only place its path survives in the diff
 	// (#1319: deleted files dropped out of partition plans entirely).
 	lastOldFile := ""
+	// #3164: true when the previous line was consumed as a minus-side
+	// file header ("--- a/x" at the oldFileHeader branch, or the
+	// "--- /dev/null" literal below). The very next line being
+	// "+++"-prefixed is then a residual header, not content.
+	prevWasOldHeader := false
 
 	flush := func() {
 		// Reset counters even on the empty-file early return (#1319: the
@@ -112,9 +120,60 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 	}
 
 	for _, line := range strings.Split(diffOutput, "\n") {
+		// #3164: capture-and-clear the header-adjacency flag for THIS line
+		// before any branch consumes it.
+		afterOld := prevWasOldHeader
+		prevWasOldHeader = false
+		// #3126: track the b/ path from "diff --git a/x b/x" lines - the
+		// only anchor for pure mode-change hunks (same pattern as
+		// parseDiffStats in commit_analyzer.go).
+		if m := diffGitHeader.FindStringSubmatch(line); m != nil && len(m) > 1 {
+			lastGitPath = m[1]
+		}
 		if m := diffFileHeader.FindStringSubmatch(line); m != nil {
+			// #3126: a rename+edit hunk emits "rename to x" AND a
+			// "+++ b/x" header for the same path - keep counting into the
+			// entry the rename branch opened instead of flushing a
+			// duplicate 0/0 record.
+			if m[1] != currentFile {
+				flush()
+				currentFile = m[1]
+			}
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		// #3126: pure rename hunk - git emits "rename from/to" + similarity
+		// and NO +++
+		// line, so the file never matched diffFileHeader and silently
+		// dropped out of the partition plan (staged "git mv" changes were
+		// left uncommitted by the generated plan). The "rename to" path is
+		// the file's new identity.
+		if m := diffRenameTo.FindStringSubmatch(line); m != nil {
 			flush()
 			currentFile = m[1]
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		// #3126: binary change - no hunks, no +/- lines, no +++ header;
+		// the b/ path comes from the "Binary files a/x and b/x differ" line.
+		if m := diffBinaryHeader.FindStringSubmatch(line); m != nil && len(m) > 2 {
+			flush()
+			currentFile = m[2]
+			lastOldFile = ""
+			newLineNum = 0
+			continue
+		}
+		// #3126: pure mode change - no hunks; the preceding diff --git
+		// header is the only path source. Register on the mode marker so
+		// mode-only changes stop vanishing from partition plans.
+		if diffModeChange.MatchString(line) && lastGitPath != "" {
+			// old-mode AND new-mode lines both match - register once.
+			if currentFile != lastGitPath {
+				flush()
+				currentFile = lastGitPath
+			}
 			lastOldFile = ""
 			newLineNum = 0
 			continue
@@ -132,6 +191,7 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		}
 		if m := diffOldFileHeader.FindStringSubmatch(line); m != nil {
 			lastOldFile = m[1]
+			prevWasOldHeader = true
 			continue
 		}
 		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {
@@ -141,9 +201,28 @@ func parseFileChanges(diffOutput string) []FileChangeInfo {
 		if len(line) == 0 {
 			continue
 		}
-		if line[0] == '+' && !strings.HasPrefix(line, "+++") {
+		if line[0] == '+' {
+			// #3164: real "+++ b/x" and "+++ /dev/null" headers were already
+			// consumed by the regexes above. A "+++"-prefixed line here is
+			// header-shaped content (source line starts with "++": nested
+			// diff examples, "++" markers) UNLESS it immediately follows a
+			// consumed minus-side header - adjacency is the only remaining
+			// discriminator (covers new-file "+++ b/x" after "--- /dev/null"
+			// when the a/-regex did not match its old side).
+			if strings.HasPrefix(line, "+++") && afterOld {
+				continue
+			}
 			currentAdd++
-		} else if line[0] == '-' && !strings.HasPrefix(line, "---") {
+		} else if line[0] == '-' {
+			// #3164: the only real header reaching here is the new-file old
+			// side "--- /dev/null" (the a/-form was consumed above); flag it
+			// so the "+++ b/x" that follows is header-adjacent. Every other
+			// "---"-shaped line is diff CONTENT (markdown hr "----", "--"
+			// strikethrough markers) and must be counted, not skipped.
+			if strings.HasPrefix(line, "--- /dev/null") {
+				prevWasOldHeader = true
+				continue
+			}
 			currentDel++
 		}
 	}

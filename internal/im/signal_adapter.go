@@ -584,6 +584,19 @@ func (a *signalAdapter) Send(ctx context.Context, binding ChannelBinding, event 
 	return a.sendText(ctx, chatID, signalMarkdown(remainder))
 }
 
+// sanitizeSignalAttachmentName neutralizes ';' and ',' in attachment
+// filenames before they are embedded in the data-URL metadata section.
+// signal-cli-rest-api (src/client/attachment.go AttachmentEntry
+// .extractMetaData) splits the header on ';' and prefix-matches each
+// segment, so a raw 'a;b.pdf' is parsed as filename="a" and the ';b.pdf'
+// fragment is silently dropped (#3332). Replacing with '_' keeps the name
+// readable and preserves the extension. url.PathEscape is NOT usable
+// here: the server never decodes the filename, so escaping would ship
+// percent-sequences as the literal name.
+func sanitizeSignalAttachmentName(name string) string {
+	return strings.NewReplacer(";", "_", ",", "_").Replace(name)
+}
+
 // sendExtractedImage resolves one extracted image and sends it as a Signal
 // attachment via /v2/send base64_attachments (signal-cli-rest-api accepts
 // "data:<mime>;filename=<name>;base64,<data>" entries).
@@ -592,7 +605,7 @@ func (a *signalAdapter) sendExtractedImage(ctx context.Context, chatID string, i
 	if err != nil {
 		return err
 	}
-	att := "data:" + mime + ";filename=" + filename + ";base64," + base64.StdEncoding.EncodeToString(data)
+	att := "data:" + mime + ";filename=" + sanitizeSignalAttachmentName(filename) + ";base64," + base64.StdEncoding.EncodeToString(data)
 
 	payload := map[string]any{
 		"number":             a.account,

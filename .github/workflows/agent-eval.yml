@@ -1,0 +1,78 @@
+name: agent-eval
+
+# r442: LiveBench-style continuous agent evaluation. Weekly rotation-sampled
+# Knight eval against the built binary, gated by scripts/eval/regression_gate.py
+# against the committed baseline (tests/eval-baselines/). Tuesday 04:00 UTC to
+# stay clear of Monday's model-caps-sync. RUN_ID suffix (from GITHUB_RUN_ID)
+# keeps cron and manual dispatch products from colliding, same pattern as
+# model-caps-sync.yml.
+
+on:
+  schedule:
+    - cron: "0 4 * * 2" # Tuesdays 04:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write # regression report path
+
+concurrency:
+  group: agent-eval
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build ggcode
+        run: go build -tags goolm -o bin/ggcode ./cmd/ggcode
+
+      - name: Install eval deps
+        run: pip install -r scripts/eval/requirements.txt
+
+      - name: Run rotation-sampled eval
+        env:
+          GGCODE_EVAL_LLM_KEY: ${{ secrets.GGCODE_EVAL_LLM_KEY }}
+        run: |
+          python scripts/eval/run_eval.py --auto \
+            --output .tmp/agent-eval \
+            --sample 5 --seed 42 \
+            --run-id "ci-${{ github.run_id }}" \
+            --no-llm
+
+      - name: Regression gate
+        run: |
+          python scripts/eval/regression_gate.py \
+            --trend .tmp/agent-eval/trend.jsonl \
+            --task-set eval-workbench \
+            --baseline tests/eval-baselines/eval-workbench.json
+
+      - name: Report regression
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'Weekly agent-eval gate failed. See the run log; trend/scorecard artifacts are in the run.';
+            try {
+              const trend = fs.readFileSync('.tmp/agent-eval/trend.jsonl', 'utf8').trim().split('\n');
+              body += '\n\nLatest trend entry:\n```json\n' + trend[trend.length - 1] + '\n```';
+            } catch (e) {}
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: 'agent-eval: regression gate failed (run ' + context.runId + ')',
+              body,
+              labels: ['evaluation'],
+            });

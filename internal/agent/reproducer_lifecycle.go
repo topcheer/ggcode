@@ -45,6 +45,7 @@ package agent
 //   - Fires at most once per run (advisory, non-blocking)
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -57,9 +58,11 @@ import (
 const (
 	reproLifecycleMaxWarnings = 1 // max warnings per run
 
-	// reproducerFertilityWindow: how many iterations after a reproducer run
-	// we consider the agent "in the edit phase" and expect a re-run.
-	reproducerFertilityWindow = 8
+	reproducerRerunGraceIterations = 2 // iterations to wait after edit before warning
+
+	// commandTokenMinLen: minimum length of a command token to count for
+	// overlap matching (filters out short generic words).
+	commandTokenMinLen = 3
 )
 
 // reproducerLifecycleState tracks the reproduce->edit->rerun lifecycle.
@@ -116,6 +119,16 @@ var reproducerCommandRe = regexp.MustCompile(
 	`(?:^|[\s:"])(?:python3?|node|go\s+run|ruby|cargo\s+run|bash|sh)\s+\S+\.(?:py|js|ts|go|rb|rs|sh)`,
 )
 
+// reproducerTestRunnerRe detects run_command invocations that execute a test
+// runner (go test / cargo test / make test / npm test / pytest) rather than a
+// standalone script (#2805). The "write a test to reproduce" workflow has no
+// script path for reproducerCommandRe to anchor on, so text-established
+// reproducers whose same-iteration run is test-runner-shaped used to leave
+// the snippet empty and could never discharge the re-run obligation.
+var reproducerTestRunnerRe = regexp.MustCompile(
+	`(?:^|[\s:"])(?:go\s+test|cargo\s+test|make\s+test|npm\s+test|pytest)\b`,
+)
+
 // reproducerEditToolNames identifies tools that modify source files.
 // Aliased to the canonical sourceMutatingTools superset (#738).
 var reproducerEditToolNames = sourceMutatingTools
@@ -124,6 +137,116 @@ var reproducerEditToolNames = sourceMutatingTools
 var reproducerRunToolNames = map[string]bool{
 	"run_command":   true,
 	"start_command": true,
+}
+
+// reproducerRerunMatches reports whether a run tool input qualifies as a
+// re-run of the reproducer itself (#2752). When the reproducer was
+// established via an explicit command (snippet non-empty), only a command
+// that shares a distinctive token with the recorded snippet qualifies —
+// running an UNRELATED script (e.g. `node test/unit/foo.test.js`) must not
+// discharge the re-run obligation (#2802). The loose script-shape match is
+// kept only for text-established reproducers, where no command was recorded
+// to compare against.
+func reproducerRerunMatches(inp, snippet string) bool {
+	if inp == "" {
+		return false
+	}
+	if snippet == "" {
+		return reproducerCommandRe.MatchString(inp)
+	}
+	return reproCommandTokenOverlap(inp, snippet)
+}
+
+// reproCommandTokenOverlap checks whether the two command strings share a
+// distinctive script/path token (e.g. both reference `repro.py`).
+func reproCommandTokenOverlap(a, b string) bool {
+	tokensA := reproCommandTokens(a)
+	tokensB := reproCommandTokens(b)
+	if len(tokensA) == 0 || len(tokensB) == 0 {
+		return false
+	}
+	for ta := range tokensA {
+		if tokensB[ta] {
+			return true
+		}
+	}
+	return false
+}
+
+// reproCommandTokens splits a command string into lowercase tokens suitable
+// for overlap matching. Fields are additionally split on path separators so
+// `./cmd/reprogo/main.go` and `go run ./cmd/reprogo` share `reprogo`.
+// Generic shell verbs, flags, and common directory names are dropped so
+// overlap means script/argument identity rather than generic words.
+func reproCommandTokens(s string) map[string]bool {
+	// #2827: run_command tool inputs arrive as a raw JSON envelope
+	// ("command":"python3 x.py"). The cutset below has no braces, so the
+	// first token of a space-less envelope head became the pseudo-token
+	// `{"command":"python3` -- shared by EVERY python3 command, letting any
+	// unrelated run discharge the re-run obligation (#2802 bypass). Unwrap
+	// the envelope first, mirroring reversibility_check.commandTokens.
+	if t, handled := reproUnwrapCommandEnvelope(s); handled {
+		s = t
+	}
+	generic := map[string]bool{
+		"and": true, "the": true, "run": true, "bash": true, "sh": true,
+		"python": true, "python3": true, "node": true, "ruby": true,
+		"cargo": true, "go": true, "test": true, "tests": true, "cd": true,
+		"echo": true, "make": true, "cmd": true, "src": true, "pkg": true,
+		"internal": true, "desktop": true, "main": true, "github.com": true,
+		"github": true, "www": true, "head": true, "git": true, "diff": true,
+	}
+	tokens := make(map[string]bool)
+	for _, field := range strings.Fields(strings.ToLower(s)) {
+		for _, comp := range strings.Split(field, "/") {
+			comp = strings.Trim(comp, "\"'`$();|&~.:{}[],")
+			if len(comp) < commandTokenMinLen || strings.HasPrefix(comp, "-") {
+				continue
+			}
+			if generic[comp] {
+				continue
+			}
+			tokens[comp] = true
+		}
+	}
+	return tokens
+}
+
+// reproUnwrapCommandEnvelope extracts the embedded command value when s is a
+// JSON envelope like {"command":"python3 reproduce_bug.py"} (or a JSON array
+// wrapper). Returns ("", false) when s is not an envelope (or is not
+// parseable JSON) and the raw string should be tokenized as-is. Returns
+// ("", true) for a parsed envelope carrying no usable command: argument
+// keys ("timeout", "path", ...) must never become distinctive tokens
+// (#2827 CI residual), so the caller tokenizes an empty string instead.
+func reproUnwrapCommandEnvelope(s string) (string, bool) {
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return "", false
+	}
+	var env struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
+		return "", false
+	}
+	if env.Command != "" {
+		return env.Command, true
+	}
+	// Parsed envelope without a command field: fall back to its string
+	// values only (e.g. a description/comment envelope); if none, the
+	// caller yields an empty token set rather than resurrecting keys.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &m); err != nil {
+		return "", true
+	}
+	var vals []string
+	for _, v := range m {
+		if str, ok := v.(string); ok && str != "" {
+			vals = append(vals, str)
+		}
+	}
+	return strings.Join(vals, " "), true
 }
 
 // observeToolCalls updates the lifecycle state based on the tools the agent
@@ -157,9 +280,12 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 			}
 		}
 
-		// Phase 3: detect re-run after edit.
+		// Phase 3: detect re-run of the reproducer itself after edit (#2752).
+		// A bare run_command (e.g. `git diff`, `ls`) must NOT discharge the
+		// re-run obligation: the command must either match the reproducer
+		// script shape or resemble the recorded reproducer snippet.
 		if s.editedAfterReproducer && !s.reranAfterEdit {
-			if reproducerRunToolNames[tn] {
+			if reproducerRunToolNames[tn] && reproducerRerunMatches(inp, s.reproducerSnippet) {
 				s.reranAfterEdit = true
 				debug.Log("agent", "reproducer-lifecycle: re-run after edit at iter %d", iteration)
 			}
@@ -168,13 +294,28 @@ func (s *reproducerLifecycleState) observeToolCalls(iteration int, toolNames []s
 }
 
 // observeText scans the assistant text for reproducer intent (Phase 1 alt path).
-func (s *reproducerLifecycleState) observeText(iteration int, text string, hasRunTool bool) {
+// runInput is the raw input of the iteration's first command-executing tool
+// call ("" when none ran); #2805 uses it to record a snippet for
+// test-runner-shaped reproducers so the token-overlap discharge channel works
+// and the "Re-run:" hint tail is not blank.
+func (s *reproducerLifecycleState) observeText(iteration int, text string, hasRunTool bool, runInput string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if !s.hasReproducer && reproducerIntentRe.MatchString(text) && hasRunTool {
 		s.hasReproducer = true
 		s.reproducerIteration = iteration
+		// #2805: `go test ./pkg/ -run TestX` (and friends) never match
+		// reproducerCommandRe, so the text path used to leave the snippet
+		// empty and an identical re-run after an edit was reported as
+		// "not re-run" with a blank "Re-run:" tail. Record the extracted
+		// command as the snippet so token overlap discharges an identical
+		// (or same-package) re-run while unrelated scripts still do not.
+		// Script-shaped runs keep prior behavior: they establish via the
+		// command path in observeToolCalls, which records the snippet there.
+		if cmd := extractStringField(json.RawMessage(runInput), "command"); cmd != "" && reproducerTestRunnerRe.MatchString(cmd) {
+			s.reproducerSnippet = firstLine(cmd)
+		}
 		debug.Log("agent", "reproducer-lifecycle: reproducer established via text at iter %d", iteration)
 	}
 }
@@ -189,12 +330,13 @@ func (s *reproducerLifecycleState) checkIncomplete(iteration int) string {
 	if s.warned {
 		return ""
 	}
-	// Only warn if: reproducer established, code edited after, NOT re-run,
-	// and we're past the fertility window from the edit.
+	// Only warn if: reproducer established, code edited after, and the
+	// reproducer itself has NOT been re-run. Wait a grace period after the
+	// edit so the agent has a chance to re-run it.
 	if !s.hasReproducer || !s.editedAfterReproducer || s.reranAfterEdit {
 		return ""
 	}
-	if iteration-s.editIteration < 2 {
+	if iteration-s.editIteration < reproducerRerunGraceIterations {
 		return "" // give the agent a chance to re-run
 	}
 

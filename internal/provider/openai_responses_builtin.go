@@ -34,7 +34,11 @@ const responsesIncludeFileSearchResults = "file_search_call.results"
 // and Gemini legs.
 func (p *OpenAIResponsesProvider) SetServerTools(tools []ServerToolConfig) {
 	// Union of the sa-62 hosted set (web_search family) and the sa-63
-	// built-in set; unrecognized sets leave the stored value untouched.
+	// built-in set; unrecognized declarations are filtered out, and the
+	// recognized remainder is applied unconditionally - including the empty
+	// set, which CLEARS the stored tools so removing server_tools from the
+	// config actually disables them on provider reuse (#3073). Only an
+	// unrecognized-only set keeps the previous value (fail closed).
 	kept := make([]ServerToolConfig, 0, len(tools))
 	for _, t := range tools {
 		if _, ok := responsesHostedTool(t); ok {
@@ -49,7 +53,7 @@ func (p *OpenAIResponsesProvider) SetServerTools(tools []ServerToolConfig) {
 			debug.Log("openai", "responses: ignoring unsupported server tool %q", t.Type)
 		}
 	}
-	if len(kept) > 0 {
+	if len(kept) > 0 || len(tools) == 0 {
 		p.serverTools = kept
 	}
 }

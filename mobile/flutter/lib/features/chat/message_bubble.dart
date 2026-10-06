@@ -5,8 +5,11 @@ import '../../../core/l10n/app_localizations.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_mermaid/flutter_mermaid.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../core/providers/session_provider.dart';
+import '../../core/providers/file_transfer_provider.dart';
 import '../../core/theme/app_theme.dart';
 
 const _shellCommandKind = 'shell_command';
@@ -20,6 +23,10 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Mobile file transfer V1: file card (agent → phone, any format).
+    if (message.fileTransferId != null) {
+      return _FileCardBubble(fileId: message.fileTransferId!);
+    }
     if (message.kind == _reasoningKind) {
       return _ReasoningBubble(message: message);
     }
@@ -903,4 +910,141 @@ Color _ansi256Color(int code) {
     return Color.fromARGB(0xFF, channel(r), channel(g), channel(b));
   }
   return const Color(0xFFE5E7EB);
+}
+
+/// ─── Mobile File Transfer V1: file card (agent → phone, any format) ───
+/// Renders a transfer by id: progress while chunks arrive, then a verified
+/// card with share/save once sha256 passes. See docs/design/mobile-file-transfer.md.
+class _FileCardBubble extends ConsumerWidget {
+  final String fileId;
+
+  const _FileCardBubble({required this.fileId});
+
+  static IconData _iconFor(String mime, String filename) {
+    final m = mime.toLowerCase();
+    if (m.startsWith('image/')) return Icons.image;
+    if (m.startsWith('video/')) return Icons.videocam;
+    if (m.startsWith('audio/')) return Icons.audiotrack;
+    if (m.contains('pdf')) return Icons.picture_as_pdf;
+    if (m.contains('zip') || filename.endsWith('.zip') || filename.endsWith('.tar.gz')) {
+      return Icons.folder_zip;
+    }
+    if (m.startsWith('text/')) return Icons.description;
+    return Icons.insert_drive_file;
+  }
+
+  static String _humanSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    const units = ['KB', 'MB', 'GB'];
+    var v = bytes / 1024.0;
+    var i = 0;
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return '${v.toStringAsFixed(1)} ${units[i]}';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final entry = ref.watch(fileTransferProvider)[fileId];
+    if (entry == null) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    final icon = _iconFor(entry.mime, entry.filename);
+    final title = entry.caption.isNotEmpty
+        ? '${entry.filename} - ${entry.caption}'
+        : entry.filename;
+
+    Widget trailing;
+    switch (entry.status) {
+      case FileTransferStatus.transferring:
+        trailing = Text(
+          '${entry.receivedChunks.length}/${entry.totalChunks}',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        );
+        break;
+      case FileTransferStatus.verifying:
+        trailing = const SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        );
+        break;
+      case FileTransferStatus.done:
+        trailing = IconButton(
+          tooltip: 'Share',
+          icon: const Icon(Icons.share),
+          onPressed: () => _share(context, entry),
+        );
+        break;
+      case FileTransferStatus.failed:
+        trailing = Icon(Icons.error_outline, color: theme.colorScheme.error);
+        break;
+    }
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 28, color: theme.colorScheme.primary),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      Text(
+                        entry.status == FileTransferStatus.failed
+                            ? (entry.error ?? 'Transfer failed')
+                            : _humanSize(entry.size),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                trailing,
+              ],
+            ),
+            if (entry.status == FileTransferStatus.transferring)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: LinearProgressIndicator(
+                  value: entry.totalChunks == 0
+                      ? 0
+                      : entry.receivedChunks.length / entry.totalChunks,
+                  minHeight: 3,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _share(BuildContext context, FileTransferEntry entry) {
+    if (entry.savedPath == null) return;
+    // The OS share sheet covers share + save (iOS "Save to Files", Android
+    // system savers) — no in-app execute, per the design security section.
+    SharePlus.instance.share(
+      ShareParams(files: [XFile(entry.savedPath!)], text: entry.filename),
+    );
+  }
 }

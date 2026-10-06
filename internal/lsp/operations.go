@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync/atomic"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -81,18 +80,32 @@ func WorkspaceSymbols(ctx context.Context, workspace, query string) ([]Workspace
 	return parseWorkspaceSymbols(raw), nil
 }
 
-func RenameEdits(ctx context.Context, workspace, path string, pos Position, newName string) ([]FileEdit, error) {
-	return withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) ([]FileEdit, error) {
+// renameResult carries a rename reply: the applied edits plus the
+// unsupported-kinds note from parseWorkspaceEdit (#3037: the note travels as
+// a return value; the old package-global channel raced between concurrent
+// callers, letting workspace B's Take swallow workspace A's note).
+type renameResult struct {
+	edits []FileEdit
+	note  string
+}
+
+func RenameEdits(ctx context.Context, workspace, path string, pos Position, newName string) ([]FileEdit, string, error) {
+	res, err := withOpenDocument(ctx, workspace, path, func(ctx context.Context, session *sessionClient, docURI string) (renameResult, error) {
 		var raw json.RawMessage
 		if err := session.client.call(ctx, "textDocument/rename", map[string]any{
 			"textDocument": map[string]any{"uri": docURI},
 			"position":     toLSPPosition(pos),
 			"newName":      newName,
 		}, &raw); err != nil {
-			return nil, err
+			return renameResult{}, err
 		}
-		return parseWorkspaceEdit(raw), nil
+		edits, note := parseWorkspaceEdit(raw)
+		return renameResult{edits: edits, note: note}, nil
 	})
+	if err != nil {
+		return nil, "", err
+	}
+	return res.edits, res.note, nil
 }
 
 func CodeActions(ctx context.Context, workspace, path string, rng Range) ([]CodeAction, error) {
@@ -154,10 +167,14 @@ func parseWorkspaceSymbols(raw json.RawMessage) []WorkspaceSymbol {
 	return out
 }
 
-func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
+// parseWorkspaceEdit extracts file edits from a WorkspaceEdit reply. The
+// second return carries the unsupported documentChanges kinds note (#1769);
+// it travels as a return value (#3037) so concurrent callers cannot swallow
+// each other's notes the way the old package-global channel did.
+func parseWorkspaceEdit(raw json.RawMessage) ([]FileEdit, string) {
 	var edit rawWorkspaceEdit
 	if err := json.Unmarshal(raw, &edit); err != nil {
-		return nil
+		return nil, ""
 	}
 	grouped := make(map[string][]TextEdit)
 	seen := make(map[string]struct{})
@@ -210,25 +227,12 @@ func parseWorkspaceEdit(raw json.RawMessage) []FileEdit {
 	// debug.Log alone was invisible to the agent (ring buffer; /debug only)
 	// - the TypeScript Move-to-file case still got the misleading bare
 	// "no edits returned". RenameEdits now surfaces the note to the caller.
+	note := ""
 	if len(unsupportedWorkspaceChangeKinds) > 0 {
-		lastUnsupportedNote.Store(strings.Join(unsupportedWorkspaceChangeKinds, ", "))
-		debug.Log("lsp", "workspace edit dropped unsupported documentChanges kinds: %s",
-			strings.Join(unsupportedWorkspaceChangeKinds, ", "))
+		note = strings.Join(unsupportedWorkspaceChangeKinds, ", ")
+		debug.Log("lsp", "workspace edit dropped unsupported documentChanges kinds: %s", note)
 	}
-	return out
-}
-
-// lastUnsupportedNote carries the most recent unsupported-kind note from
-// parseWorkspaceEdit to RenameEdits' caller (#1769) - single-flight per
-// call sequence, cleared on read.
-var lastUnsupportedNote atomic.Value
-
-// TakeUnsupportedNote returns and clears the note about unsupported
-// documentChanges kinds dropped by the last workspace-edit parse.
-func TakeUnsupportedNote() string {
-	v, _ := lastUnsupportedNote.Load().(string)
-	lastUnsupportedNote.Store("")
-	return v
+	return out, note
 }
 
 func firstNonEmptyStr(vals ...string) string {
@@ -268,7 +272,7 @@ func parseCodeActions(raw json.RawMessage) []CodeAction {
 			Title:   item.Title,
 			Kind:    item.Kind,
 			Command: item.Command.Command,
-			Edits:   parseWorkspaceEdit(mustRaw(item.Edit)),
+			Edits:   codeActionEdits(item.Edit),
 		})
 	}
 	return out
@@ -318,4 +322,11 @@ func toLSPRange(rng Range) map[string]any {
 func mustRaw(v any) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+// codeActionEdits adapts parseWorkspaceEdit's dual return (#3037) for the
+// CodeActions list builder, which only consumes the edits.
+func codeActionEdits(raw rawWorkspaceEdit) []FileEdit {
+	edits, _ := parseWorkspaceEdit(mustRaw(raw))
+	return edits
 }

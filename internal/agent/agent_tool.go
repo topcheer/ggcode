@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	runtimedebug "runtime/debug"
@@ -92,17 +93,52 @@ func (a *Agent) executeToolWithPermission(ctx context.Context, tc provider.ToolC
 				break
 			}
 			if onApproval != nil {
+				// Approval-fatigue circuit breaker (ATR-2026-00118 pattern 1):
+				// the same key already denied twice within the window is denied
+				// WITHOUT re-prompting - the Nth identical popup only harvests a
+				// reflexive approve.
+				if a.askThrottle.ShouldSuppress(tc.Name, tc.Arguments) {
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "suppressed by ask throttle (repeated denial)", 0, "")
+					debug.Log("approval-throttle", "suppressed re-ask for %s (denied twice recently)", tc.Name)
+					return tool.Result{
+						Content: fmt.Sprintf("Permission denied for tool %q without prompting: this exact request was denied twice within the last minute. Re-asking is blocked to avoid nagging the user. Change your approach (different tool, different target, or abandon this step) instead of repeating the request.", tc.Name),
+						IsError: true,
+					}
+				}
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
+					// ATR-2026-00118: denial is a first-class auditable event
+					// (who denied what when), not just a downstream error.
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate", 0, "")
 					if a.approvalMemory != nil {
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
 					}
+					a.askThrottle.RecordDenial(tc.Name, tc.Arguments)
 					return tool.Result{
 						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
 						IsError: true,
 					}
 				}
-				// User approved - record for future auto-approval.
+				if resp.IsNonDecision() {
+					// #3370: timeout/cancellation - fail-closed, but the user made
+					// NO decision: audit as ask_timeout, skip approval-memory (a
+					// non-decision must not enter the learning sample) and skip the
+					// ask throttle (two timeouts must not suppress later asks with
+					// a false "denied twice" message).
+					note := "approval timed out (no user response)"
+					if resp == permission.Cancelled {
+						note = "approval cancelled (run interrupted or request displaced)"
+					}
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusAskTimeout, note, 0, "")
+					debug.Log("approval-gate", "ask ended without user decision for %s (%v)", tc.Name, resp)
+					return tool.Result{
+						Content: fmt.Sprintf("Approval for tool %q ended without a user decision (%s). The tool was not executed. If this step is still needed, ask again when the user is available; do not treat this as a rejection of the approach.", tc.Name, resp),
+						IsError: true,
+					}
+				}
+				// User approved - record for future auto-approval and audit the
+				// approval decision (ATR-2026-00118 / ESCALATE.md trail).
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserApproved, "", 0, "")
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}
@@ -260,9 +296,118 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 	if suppressed := a.dedupLedger().suppressDuplicate(tc.Name, string(tc.Arguments)); suppressed != nil {
 		return *suppressed
 	}
+	// r454: declarative invariants (deterministic, file-declared) run at
+	// this choke point BEFORE execution. block-mode violations reject the
+	// call outright (sealed into the audit ledger as invalid); warn-mode
+	// violations proceed and append a notice to the result.
+	// r26 workflow-spec precondition gate: a guarded command whose declared
+	// prerequisites have no grounded artifacts yet is a block/warn violation
+	// with the counterexample step named (runs before the invariant engine -
+	// workflow ordering is the coarser contract).
+	if wf := a.workflowEngineLazy(); wf != nil {
+		if wv := wf.checkPreconditions(tc.Name, tc.Arguments); wv != nil {
+			msg := fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
+				wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			if wv.Step.Message != "" {
+				msg += " Note: " + wv.Step.Message
+			}
+			if wv.Step.Mode == "block" {
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusInvalid, msg, 0, "workflow:"+wv.Step.ID)
+				debug.Log("agent", "[workflow-spec] BLOCK %s before %s (missing %s)", wv.Command, wv.Step.ID, wv.Missing)
+				return tool.Result{Content: msg, IsError: true}
+			}
+			res := a.executeToolInner(ctx, tc)
+			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			res.Content += "\n\n" + msg
+			return res
+		}
+	}
+	if e := a.invariantEngineLazy(); e != nil {
+		if v := e.check(tc.Name, tc.Arguments); v != nil {
+			if v.Inv.Mode == "block" {
+				msg := fmt.Sprintf("[invariant:%s BLOCKED] %s (target: %q op: %s). The call was rejected by a declared behavior invariant; adjust the target or the invariant file.",
+					v.Inv.ID, v.Inv.Message, v.Target, v.Op)
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusInvalid, msg, 0, v.Inv.ID)
+				debug.Log("agent", "[invariants] BLOCK %s on %s target=%q", v.Inv.ID, tc.Name, v.Target)
+				return tool.Result{Content: msg, IsError: true}
+			}
+			res := a.executeToolInner(ctx, tc)
+			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			// #3366: failed calls are never sidecar-recorded - a post-crash
+			// restore would otherwise replay them as if they had happened,
+			// suppressing legitimate retries (mirrors record()'s IsError skip).
+			if !res.IsError {
+				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
+			}
+			res.Content += fmt.Sprintf("\n\n[invariant:%s] %s (target: %q) - warn-mode invariant matched; proceed carefully.", v.Inv.ID, v.Inv.Message, v.Target)
+			auditInvariantWarn(tc.Name, v.Inv.ID)
+			return res
+		}
+	}
 	res := a.executeToolInner(ctx, tc)
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+	// #3366: see the invariant branch above - errors never hit the sidecar.
+	if !res.IsError {
+		a.appendCrashSidecar(tc.Name, string(tc.Arguments))
+	}
+	// r454: register successful write-class products for the
+	// created_by_run predicate ("only delete what this run created").
+	// Operation granularity (#3254): a batch file_ops call registers every
+	// write-class target it produced, not just the first classified op.
+	if e := a.invariantEngineLazy(); e != nil && !res.IsError {
+		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+				e.recordProduct(ot.Target)
+			}
+		}
+	}
+	// r26: same products ground workflow-step completion (artifact_glob).
+	if wf := a.workflowEngineLazy(); wf != nil && !res.IsError {
+		for _, ot := range invariantOpTargets(tc.Name, tc.Arguments) {
+			if ot.Op == "write" || ot.Op == "mkdir" || ot.Op == "move" {
+				wf.recordCompletion(ot.Target)
+			}
+		}
+		// #3414: successful commands often produce the declared artifacts
+		// themselves (go test -coverprofile=..., make bin/*). Exec products
+		// never flow through invariantOpTargets, so block mode deadlocked
+		// the flagship spec shape on a step that had actually completed.
+		// Probe the disk for fresh artifacts after every command success.
+		if tc.Name == "run_command" {
+			wf.probeArtifactsOnDisk()
+		}
+	}
 	return res
+}
+
+// invariantEngineLazy builds the engine on first use, anchored to the
+// agent's working dir (reads <dir>/.ggcode/invariants.json merged over
+// ~/.ggcode/invariants.json). nil when inert (no working dir).
+func (a *Agent) invariantEngineLazy() *invariantEngine {
+	a.mu.RLock()
+	e := a.invEngine
+	wd := a.workingDir
+	a.mu.RUnlock()
+	if e != nil {
+		return e
+	}
+	if wd == "" {
+		return nil
+	}
+	newE := &invariantEngine{loadDir: filepath.Join(wd, ".ggcode")}
+	a.mu.Lock()
+	if a.invEngine == nil {
+		a.invEngine = newE
+	}
+	a.mu.Unlock()
+	return a.invEngine
+}
+
+// auditInvariantWarn logs a warn-mode match (block-mode goes through the
+// full audit event path; warn-mode calls execute normally, so there is no
+// separate audit event - a debug line preserves observability).
+func auditInvariantWarn(toolName, id string) {
+	debug.Log("agent", "[invariants] WARN %s on %s", id, toolName)
 }
 
 // executeToolInner is the original executeTool body; see executeTool.
@@ -324,6 +469,21 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	if repaired, ok := provider.RepairJSON(tc.Arguments); ok {
 		debug.Log("agent", "repaired malformed JSON arguments for tool %s", tc.Name)
 		tc.Arguments = repaired
+	} else if trimmed := bytes.TrimSpace(tc.Arguments); len(trimmed) > 0 && !json.Valid(trimmed) {
+		// Repair failed and the arguments remain unparsable. Returning an
+		// actionable error now is better than letting the tool fail later
+		// with a confusing low-level "invalid arguments" message: the model
+		// gets told exactly what is wrong and how to resend (dynamic
+		// fallback principle — reject what cannot be salvaged, but explain).
+		detail := describeJSONError(trimmed)
+		debug.Log("agent", "arguments for tool %s are unrecoverable JSON: %s", tc.Name, detail)
+		return tool.Result{
+			Content: fmt.Sprintf(
+				"Tool %q: arguments are not valid JSON and could not be auto-repaired (%s). "+
+					"Resend the complete arguments as valid JSON: double-quoted keys and string values, no trailing commas, no single quotes.",
+				tc.Name, detail),
+			IsError: true,
+		}
 	}
 
 	// Schema-aware argument coercion: weak models (open-weight models via
@@ -654,46 +814,24 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 		}
 	}
 	if !result.IsError && len(plans) > 0 && !isDryRun {
-		var integrityWarnings []string
-		for _, plan := range plans {
-			if writtenSet != nil && !writtenSet[plan.Path] {
-				continue // not actually written (failed/skipped in partial mode)
+		a.runPostWriteWarnings(&result, plans, func(path, oldContent, newContent string) string {
+			if writtenSet != nil && !writtenSet[path] {
+				return "" // not actually written (failed/skipped in partial mode)
 			}
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				// #2138: the multi-file tools (multi_file_write/edit,
-				// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
-				// for .go files unconditionally - passing the raw plan.NewContent
-				// here made every gofmt-touched write report a fake post-write
-				// mismatch (#2132 fixed only the single-file leg). Mirror the
-				// write-time formatting so mismatch means REAL drift here too.
-				mirrored := mirrorWriteTimeGoFormat(plan.Path, plan.NewContent)
-				if w := checkWriteIntegrity(plan.Path, plan.OldContent, mirrored); w != "" {
-					integrityWarnings = append(integrityWarnings, w)
-				}
-			}
-		}
-		for _, w := range integrityWarnings {
-			// #1864 case 2: route through appendGuidance so the shared per-turn
-			// budget applies - the direct += appends let N plans stack 3N warning
-			// blocks that neither charged the count cap nor the 2048-byte pool,
-			// breaking guidance_budget's "all paths share one pool" contract.
-			a.appendGuidance(&result, w)
-		}
+			// #2138: the multi-file tools (multi_file_write/edit,
+			// multi_edit_file, batch_replace) persist gofmt-FORMATTED bytes
+			// for .go files unconditionally - passing the raw plan.NewContent
+			// here made every gofmt-touched write report a fake post-write
+			// mismatch (#2132 fixed only the single-file leg). Mirror the
+			// write-time formatting so mismatch means REAL drift here too.
+			mirrored := mirrorWriteTimeGoFormat(path, newContent)
+			return checkWriteIntegrity(path, oldContent, mirrored)
+		})
 	}
 
 	// Post-write missing test companion detection for multi-file edits.
-	if !result.IsError && len(plans) > 0 {
-		var testCompanionWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := CheckMissingTestCompanionWithFS(plan.Path, plan.OldContent, plan.NewContent); w != "" {
-					testCompanionWarnings = append(testCompanionWarnings, w)
-				}
-			}
-		}
-		for _, w := range testCompanionWarnings {
-			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
-		}
+	if !result.IsError {
+		a.runPostWriteWarnings(&result, plans, CheckMissingTestCompanionWithFS)
 	}
 
 	// Post-write hardcoded credential detection for multi-file edits
@@ -703,18 +841,8 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	// registry copy respects the maxIntegrityWarnings cap).
 
 	// Post-write debug statement detection for multi-file edits.
-	if !result.IsError && len(plans) > 0 {
-		var debugWarnings []string
-		for _, plan := range plans {
-			if diff.HasChanges(plan.OldContent, plan.NewContent) {
-				if w := checkDebugStmts(plan.Path, plan.OldContent, plan.NewContent); w != "" {
-					debugWarnings = append(debugWarnings, w)
-				}
-			}
-		}
-		for _, w := range debugWarnings {
-			a.appendGuidance(&result, w) // #1864 case 2: budgeted path
-		}
+	if !result.IsError {
+		a.runPostWriteWarnings(&result, plans, checkDebugStmts)
 	}
 
 	postEnv := env
@@ -730,6 +858,27 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	return result
+}
+
+// runPostWriteWarnings runs checker over each changed plan and appends
+// non-empty warnings to the result via appendGuidance - the shared per-turn
+// budget path (#1864 case 2: the direct += appends let N plans stack 3N
+// warning blocks that neither charged the count cap nor the 2048-byte pool).
+func (a *Agent) runPostWriteWarnings(result *tool.Result, plans []tool.PlannedFileEdit, checker func(path, oldContent, newContent string) string) {
+	if len(plans) == 0 {
+		return
+	}
+	var warnings []string
+	for _, plan := range plans {
+		if diff.HasChanges(plan.OldContent, plan.NewContent) {
+			if w := checker(plan.Path, plan.OldContent, plan.NewContent); w != "" {
+				warnings = append(warnings, w)
+			}
+		}
+	}
+	for _, w := range warnings {
+		a.appendGuidance(result, w)
+	}
 }
 
 // safeExecute calls t.Execute with panic recovery and context-aware cancellation.
@@ -1910,4 +2059,18 @@ func truncateString(s string, maxLen int) string {
 		return string(runes[:maxLen])
 	}
 	return string(runes[:maxLen-3]) + "..."
+}
+
+// describeJSONError summarizes why tool-call arguments failed to parse as
+// JSON, for actionable error messages returned to the model.
+func describeJSONError(raw []byte) string {
+	var v any
+	err := json.Unmarshal(raw, &v)
+	if err == nil {
+		return "unknown parse error"
+	}
+	if se, ok := err.(*json.SyntaxError); ok {
+		return fmt.Sprintf("%s at byte offset %d", se.Error(), se.Offset)
+	}
+	return err.Error()
 }

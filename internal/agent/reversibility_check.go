@@ -91,9 +91,15 @@ func (r *reversibilityState) recordSafetySignal(toolName, args string) {
 			if hasCommandToken(tokens[1:], "test", "check") {
 				r.testsRan = true
 			}
-		case "test", "pytest":
-			// pytest as the command's first token IS the test command
+		case "pytest", "py.test", "vitest", "jest":
+			// Bare test-runner commands as the first token ARE test runs
 			// (#1194: `pytest -q scripts/` has no `test` token following).
+			// #2754: bare `test` is NOT in this list - it is the POSIX
+			// shell builtin (`test -f x`, `test -d dist && rm -rf dist`),
+			// a conditional, not a test run. Counting it flipped testsRan
+			// and silently disarmed the commit/push gate - the same
+			// false-verification family as #2255 ("build:" in a commit
+			// message) and #2552 (`make clean` counted as build).
 			r.testsRan = true
 		}
 	case "git_add", "git_commit":
@@ -228,6 +234,11 @@ func (r *reversibilityState) checkPreAction(toolName, args string) string {
 // the adjacent predecessor token of the subcommand.
 func isGitPush(s string) bool {
 	tokens := commandTokens(s)
+	// #2828: see through git global flags (-C <path>, --git-dir=X, -c k=v)
+	// before the bigram scan, mirroring isDestructiveGitSub (#2255 H1) --
+	// otherwise `git -C /repo push` yields the (git, -C) bigram and the
+	// pushing-without-verification gate never fires.
+	tokens = stripGitGlobalFlagTokens(tokens)
 	for i := 0; i+1 < len(tokens); i++ {
 		// Prefix keeps the #1194 conservative posture: `git pushd` and
 		// fused forms still fire; a mere mention in a comment/grep

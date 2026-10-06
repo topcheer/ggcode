@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/topcheer/ggcode/internal/acp"
@@ -92,7 +93,13 @@ func newACPCommand(cfgFile *string) *cobra.Command {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			return handler.Run(ctx)
+			// r71: reap managed background jobs when the ACP server exits so
+			// start_command children (detach=true included) do not orphan.
+			runErr := handler.Run(ctx)
+			if jm := registry.JobManager(); jm != nil {
+				jm.ShutdownAll(2 * time.Second)
+			}
+			return runErr
 		},
 	}
 

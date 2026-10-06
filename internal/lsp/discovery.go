@@ -1,6 +1,8 @@
 package lsp
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
 )
@@ -434,11 +437,37 @@ func resolveWorkspaceToolFallback(candidates []string, workspace string) (displa
 	return "", "", false
 }
 
+// externalProbeTimeout bounds the synchronous rustup/npm probing subprocesses
+// (#3035): they run on the editing tools' sync path (probeExternalToolchain <-
+// resolveManagedBinary <- Diagnostics), so a pathological npm (file lock,
+// npmrc-triggered network probe, slow Windows cmd chain) could block a single
+// edit indefinitely.
+const externalProbeTimeout = 8 * time.Second
+
+// runExternalProbe executes a probing subprocess with a bounded timeout
+// (#3035). A timeout is reported as a normal probe failure - discovery
+// moves on to the next candidate instead of hanging the editor path.
+func runExternalProbe(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), externalProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// #3035: CommandContext kills the direct child at the deadline, but a
+	// GRANDCHILD (sh -c "sleep 30") inherits the stdout pipe fd and keeps
+	// Output's internal Wait blocked until it exits on its own. WaitDelay
+	// force-closes the pipes shortly after cancellation so the probe returns
+	// near the deadline regardless of orphaned descendants.
+	cmd.WaitDelay = 2 * time.Second
+	detachConsole(cmd)
+	out, err := cmd.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, ctx.Err()
+	}
+	return out, err
+}
+
 func resolveRustAnalyzerFallback() (display string, command string, ok bool) {
 	if _, err := exec.LookPath("rustup"); err == nil {
-		rustupWhich := exec.Command("rustup", "which", "rust-analyzer")
-		detachConsole(rustupWhich)
-		out, err := rustupWhich.Output()
+		out, err := runExternalProbe("rustup", "which", "rust-analyzer")
 		if err == nil {
 			path := strings.TrimSpace(string(out))
 			if executableExists(path) {
@@ -510,9 +539,7 @@ func resolveNodeBinaryFallback(candidates []string, workspace string) (display s
 		}
 	}
 	if _, err := exec.LookPath("npm"); err == nil {
-		npmPrefix := exec.Command("npm", "config", "get", "prefix")
-		detachConsole(npmPrefix)
-		out, err := npmPrefix.Output()
+		out, err := runExternalProbe("npm", "config", "get", "prefix")
 		if err == nil {
 			prefix := strings.TrimSpace(string(out))
 			if prefix != "" && prefix != "undefined" && prefix != "null" {
@@ -568,6 +595,15 @@ func executableExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
+		return false
+	}
+	// #3035: on Unix a fallback candidate without ANY execute bit is not a
+	// usable server - reporting it as found only deferred the failure to a
+	// cryptic "permission denied" at startClient. PATH candidates already
+	// get exec-bit semantics via exec.LookPath; keep the two consistent.
+	// Windows os.Stat perms are always 0666 (no exec bit exists), so the
+	// check is Unix-only.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0111 == 0 {
 		return false
 	}
 	return true

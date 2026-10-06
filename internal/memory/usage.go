@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // Usage & provenance tracking for the memory store (sa-85).
@@ -43,6 +44,11 @@ type usageInfo struct {
 	LastUsed  time.Time `json:"last_used,omitempty"`
 	Uses      int       `json:"uses,omitempty"`
 	Source    string    `json:"source,omitempty"`
+	// Actor (r29) names the WRITER identity behind the source label -
+	// "main" agent, a sub-agent id, a swarm teammate, a daemon. Source
+	// says which subsystem wrote; Actor says who was running it. Empty =
+	// legacy entries written before r29 (backfilled on next write).
+	Actor string `json:"actor,omitempty"`
 }
 
 // usageIndex is the sidecar document. Keyed by the sanitized filename
@@ -130,7 +136,23 @@ func (am *AutoMemory) saveUsage(idx usageIndex) error {
 // save paths; the first registration wins and later overwrites of the
 // same key keep the original source (provenance traces creation, not
 // the latest edit).
+//
+// #3120 lock contract: callers must hold the am.dir cross-process file
+// lock (the auto.go SaveMemory path does - it acquires util.FileLock
+// before calling this). That is what serializes this read-modify-write
+// against cross-process RecordUse writers; do NOT call this from an
+// unlocked path.
 func (am *AutoMemory) RecordProvenance(key, source string) {
+	am.RecordProvenanceActor(key, source, "")
+}
+
+// RecordProvenanceActor (r29) is RecordProvenance with the WRITER
+// identity. First-write-wins applies per field: an existing entry keeps
+// its original Source AND Actor (provenance traces creation), while
+// legacy entries written before r29 get their empty Actor backfilled.
+// Lock contract: same as RecordProvenance (#3120 - caller holds the
+// am.dir cross-process file lock).
+func (am *AutoMemory) RecordProvenanceActor(key, source, actor string) {
 	if source == "" {
 		source = usageProvenanceUnknown
 	}
@@ -141,12 +163,15 @@ func (am *AutoMemory) RecordProvenance(key, source string) {
 		if rec.Source == "" {
 			rec.Source = source // backfill legacy entries
 		}
+		if rec.Actor == "" && actor != "" {
+			rec.Actor = actor // backfill legacy entries (r29)
+		}
 		if rec.FirstSeen.IsZero() {
 			rec.FirstSeen = time.Now()
 		}
 	} else {
 		now := time.Now()
-		idx.Entries[key] = &usageInfo{FirstSeen: now, Source: source}
+		idx.Entries[key] = &usageInfo{FirstSeen: now, Source: source, Actor: actor}
 	}
 	if err := am.saveUsage(idx); err != nil {
 		debug.Log("memory", "usage provenance persist failed for %s: %v", key, err)
@@ -175,6 +200,18 @@ func (am *AutoMemory) RecordUse(keys []string, source string) {
 		return
 	}
 
+	// #3120: cross-process serialization for the sidecar read-modify-write,
+	// same lock file and lock order (FileLock outer, am.mu inner) as the
+	// SaveMemory path in auto.go. r401 GAP-B locked only the .md save path;
+	// RecordUse (main agent, index/inject time) raced RecordProvenance
+	// (subagent saving a memory) last-write-wins on the SAME .usage.json,
+	// silently losing use counts and provenance updates. Fail-open with a
+	// log - same degradation contract as auto.go, but observable.
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("memory", "automemory sidecar filelock failed, degraded to unlocked write: %v", err)
+	}
 	am.mu.Lock()
 	defer am.mu.Unlock()
 	idx := am.loadUsage()
@@ -230,6 +267,12 @@ func (am *AutoMemory) UsageOf(key string) (usageInfo, bool) {
 func provenanceSuffix(info usageInfo) string {
 	if info.Uses <= 0 {
 		return ""
+	}
+	// r29: the writer identity rides the same marker when recorded, so a
+	// memory quietly overwritten by a sub-agent is visible in the index
+	// line itself ([uses=N src=save_memory:project actor=agent-7]).
+	if info.Actor != "" {
+		return fmt.Sprintf(" [uses=%d src=%s actor=%s]", info.Uses, info.Source, info.Actor)
 	}
 	return fmt.Sprintf(" [uses=%d src=%s]", info.Uses, info.Source)
 }

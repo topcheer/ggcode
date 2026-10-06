@@ -2,6 +2,7 @@ package swarm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	runtimedebug "runtime/debug"
 	"strconv"
@@ -215,16 +216,29 @@ func tryClaimPendingTask(
 		return
 	}
 
+	// r455: failure-storm bulkhead - a teammate with an open circuit
+	// does not claim board tasks (its failures keep starving the team;
+	// healthy teammates pick the tasks up instead). Direct inbox task
+	// delivery is the parent's explicit routing decision and stays
+	// unaffected.
+	if !teammateClaimAllowed(tm.ID) {
+		return
+	}
+
 	// Get the team's task manager (nil if no task board created yet).
 	tmMgr := mgr.GetTaskManager(team.ID)
 	if tmMgr == nil {
 		return
 	}
 
-	// Find a pending task.
+	// Find eligible tasks (pending, unassigned-to-others, unblocked), then
+	// claim in effective-priority order (r456: priority metadata + aging —
+	// previously the walk was creation-order FIFO and priority had no
+	// runtime effect). Ties keep list order, so boards without priority
+	// metadata behave exactly as before.
 	pending := task.StatusPending
 	inProgress := task.StatusInProgress
-
+	eligible := make([]task.Task, 0, 8)
 	for _, tk := range tmMgr.List() {
 		if tk.Status != pending {
 			continue
@@ -240,6 +254,18 @@ func tryClaimPendingTask(
 		if !allBlockersComplete(tmMgr, tk) {
 			continue
 		}
+		eligible = append(eligible, tk)
+	}
+	if len(eligible) == 0 {
+		return
+	}
+	now := time.Now()
+	for _, tk := range eligible {
+		markStarved(tmMgr, tk, now)
+	}
+	sortClaimable(eligible, now)
+
+	for _, tk := range eligible {
 
 		// Atomically claim: only succeeds if status is still pending.
 		owner := tm.ID
@@ -252,6 +278,11 @@ func tryClaimPendingTask(
 			// Another teammate beat us — continue to next task.
 			continue
 		}
+		// #3245: the claim is REAL now - spend the armed probe slot (if
+		// any) exactly here. Gate passes that never reached a claim left
+		// the circuit OPEN+expired so a later tick can still probe; only
+		// an actually-owned task becomes the probe.
+		teammateConsumeProbe(tm.ID)
 		if onEvent != nil {
 			onEvent(Event{Type: "team_board_updated", TeamID: team.ID, Timestamp: time.Now()})
 		}
@@ -482,6 +513,9 @@ func executeTask(
 	} else {
 		subCtx, cancel = context.WithCancel(ctx)
 	}
+	// r29 actor-aware memory provenance: attribute this teammate's tool
+	// writes (tm-* id) in the memory sidecar, same as sub-agents.
+	subCtx = util.WithActor(subCtx, tm.ID)
 	defer cancel()
 
 	prompt := msg.Content
@@ -603,11 +637,15 @@ func executeTask(
 	}
 
 	debug.Log("swarm", "teammate %s task complete output_len=%d", tm.ID, output.Len())
+	// r455: breaker accounting. Cancellation (shutdown/team teardown)
+	// is not a teammate failure; deadline/other errors are.
+	recordTeammateTaskResult(tm.ID, err != nil && !errors.Is(subCtx.Err(), context.Canceled))
 	return output.String(), err
 }
 
 // allBlockersComplete returns true if every task listed in tk.BlockedBy has
-// status "completed". Tasks with no BlockedBy entries return true.
+// status "completed" (genuine completion - not parking, see below).
+// Tasks with no BlockedBy entries return true.
 func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 	if len(tk.BlockedBy) == 0 {
 		return true
@@ -619,6 +657,17 @@ func allBlockersComplete(tmMgr *task.Manager, tk task.Task) bool {
 			return false
 		}
 		if blocker.Status != task.StatusCompleted {
+			return false
+		}
+		// #2786: "completed" carries a second meaning - PARKING. The
+		// permanent-failure paths (quota/auth, and the #1295 max-retries
+		// cap) mark a task completed with a permanent_error metadata key
+		// so it is never re-claimed, but no output was produced. Treating
+		// such a blocker as complete silently unlocked dependents to run
+		// on nonexistent outputs, burning full LLM runs and cascading
+		// hallucinated "completed" results downstream. A parked blocker
+		// keeps its dependents blocked until a human intervenes.
+		if _, parked := blocker.Metadata["permanent_error"]; parked {
 			return false
 		}
 	}

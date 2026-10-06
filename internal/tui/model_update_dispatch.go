@@ -64,6 +64,12 @@ func init() {
 	})
 	regUpdatePlain(func(m Model, msg tmuxStartupSetupMsg) (tea.Model, tea.Cmd) { return m.handleTmuxStartupSetupMsg(msg) })
 	regUpdatePlain(func(m Model, msg providerChangedMsg) (tea.Model, tea.Cmd) { return m.handleProviderChangedMsg(msg) })
+	// #2844: probe results arrive from the probe goroutine as messages and
+	// are applied on the UI goroutine (see startContextProbe).
+	regUpdatePlain(func(m Model, msg contextProbeResultMsg) (tea.Model, tea.Cmd) {
+		m.applyProbeResult(msg.result)
+		return m, nil
+	})
 	regUpdatePlain(func(m Model, msg mcpServersUpdatedMsg) (tea.Model, tea.Cmd) {
 		m.applyMCPServersUpdate(msg)
 		return m, nil
@@ -224,6 +230,7 @@ func init() {
 	regUpdatePlain(func(m Model, msg mcpServersMsg) (tea.Model, tea.Cmd) { return m.handleMcpServersMsg(msg) })
 	regUpdatePlain(func(m Model, msg mcpInstallResultMsg) (tea.Model, tea.Cmd) { return m.handleMcpInstallResultMsg(msg) })
 	regUpdatePlain(func(m Model, msg tunnelStartMsg) (tea.Model, tea.Cmd) { return m.handleTunnelStartMsg(msg) })
+	regUpdatePlain(func(m Model, msg agentShareRequestMsg) (tea.Model, tea.Cmd) { return m.handleAgentShareRequest(msg) })
 	regUpdatePlain(func(m Model, msg tunnelRefreshMsg) (tea.Model, tea.Cmd) { return m.handleTunnelRefreshMsg(msg) })
 	regUpdatePlain(func(m Model, msg tunnelShareBootstrapMsg) (tea.Model, tea.Cmd) {
 		return m.handleTunnelShareBootstrapMsg(msg)

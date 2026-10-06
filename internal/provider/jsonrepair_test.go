@@ -137,16 +137,15 @@ func TestRepairJSON_SmartQuotes(t *testing.T) {
 	}
 }
 
-func TestRepairJSON_TruncatedString(t *testing.T) {
-	// Stream truncated inside a string value — closing " is missing
+func TestRepairJSON_TruncatedStringRefused(t *testing.T) {
+	// #3069: stream truncated inside a string value. The old behavior
+	// closed the quote and "succeeded", producing a valid-but-mutilated
+	// old_text that edit_file would silently run on. Repair must now be
+	// refused so the caller retries instead of executing partial args.
 	input := `{"name":"edit_file","arguments":{"file_path":"/tmp/test.go","old_text":"func main() {`
 	result, repaired := RepairJSON([]byte(input))
-	if !repaired {
-		t.Fatalf("expected repair to succeed for truncated string")
-	}
-	var m map[string]any
-	if err := json.Unmarshal(result, &m); err != nil {
-		t.Fatalf("repaired result should be valid JSON: %v\nresult: %s", err, string(result))
+	if repaired {
+		t.Fatalf("expected repair to be REFUSED for string-mid truncation, got: %s", string(result))
 	}
 }
 
@@ -177,20 +176,15 @@ func TestRepairJSON_Unrepairable(t *testing.T) {
 	}
 }
 
-func TestRepairJSON_RealWorldTruncatedArgs(t *testing.T) {
-	// Real-world example: vLLM streaming truncation where the model
-	// started generating tool args but the SSE stream ended early.
+func TestRepairJSON_RealWorldTruncatedArgsRefused(t *testing.T) {
+	// #3069 real-world example: vLLM streaming truncation mid new_text.
+	// The old repair closed the string and returned a valid object whose
+	// new_text was silently cut in half — edit_file would apply a partial
+	// edit. Refusal forces the provider loop to regenerate the call.
 	input := `{"file_path":"/Volumes/new/ggai/ggcode/internal/agent/agent.go","old_text":"func (a *Agent) runIteration() {","new_text":"func (a *Agent) runIteration(ctx context.Context) {`
 	result, repaired := RepairJSON([]byte(input))
-	if !repaired {
-		t.Fatalf("expected repair to succeed for real-world truncated args")
-	}
-	var m map[string]any
-	if err := json.Unmarshal(result, &m); err != nil {
-		t.Fatalf("repaired result should be valid JSON: %v\nresult: %s", err, string(result))
-	}
-	if m["file_path"] != "/Volumes/new/ggai/ggcode/internal/agent/agent.go" {
-		t.Errorf("expected file_path to match, got %v", m["file_path"])
+	if repaired {
+		t.Fatalf("expected repair to be REFUSED for mid-value truncation, got: %s", string(result))
 	}
 }
 
@@ -241,26 +235,43 @@ func TestStripCodeFences(t *testing.T) {
 func TestCloseUnclosed_BalancedInput(t *testing.T) {
 	// Already balanced — should be unchanged
 	input := `{"a":[1,2,3]}`
-	got := closeUnclosed(input)
-	if got != input {
-		t.Errorf("closeUnclosed on balanced input should be no-op, got: %s", got)
+	got, ok := closeUnclosed(input)
+	if !ok || got != input {
+		t.Errorf("closeUnclosed on balanced input should be no-op, got: %s (ok=%v)", got, ok)
 	}
 }
 
 func TestCloseUnclosed_MissingOneBrace(t *testing.T) {
 	input := `{"a":1`
-	got := closeUnclosed(input)
-	if got != `{"a":1}` {
-		t.Errorf("closeUnclosed({\"a\":1) = %s, want {\"a\":1}", got)
+	got, ok := closeUnclosed(input)
+	if !ok || got != `{"a":1}` {
+		t.Errorf("closeUnclosed({\"a\":1) = %s (ok=%v), want {\"a\":1}", got, ok)
 	}
 }
 
 func TestCloseUnclosed_MissingMultiple(t *testing.T) {
 	input := `{"a":[{"b":1`
-	got := closeUnclosed(input)
+	got, ok := closeUnclosed(input)
+	if !ok {
+		t.Fatalf("balanced-tail truncation should be closable, got: %s", got)
+	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(got), &m); err != nil {
 		t.Errorf("closeUnclosed result should be valid JSON: %v (got: %s)", err, got)
+	}
+}
+
+func TestCloseUnclosed_MidStringRefused(t *testing.T) {
+	// #3069: ending inside a string is unrepairable: closing the quote
+	// would fabricate a truncated-but-valid value.
+	for _, input := range []string{
+		`{"old_text":"func main() {`,
+		`{"a":"b","key":"partial value with`,
+	} {
+		got, ok := closeUnclosed(input)
+		if ok {
+			t.Errorf("closeUnclosed(%q) should refuse mid-string input, got: %s", input, got)
+		}
 	}
 }
 
@@ -269,5 +280,123 @@ func TestNormalizeQuotes(t *testing.T) {
 	got := normalizeQuotes(input)
 	if got != `"hello"` {
 		t.Errorf("normalizeQuotes = %q, want %q", got, `"hello"`)
+	}
+}
+
+func TestRepairJSON_UnquotedKeys(t *testing.T) {
+	input := `{path: "/tmp/main.go", recursive: true}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for unquoted keys")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["path"] != "/tmp/main.go" {
+		t.Errorf("expected path=/tmp/main.go, got %v", m["path"])
+	}
+	if m["recursive"] != true {
+		t.Errorf("expected recursive=true, got %v", m["recursive"])
+	}
+}
+
+func TestRepairJSON_PythonLiterals(t *testing.T) {
+	input := `{"checkpoint_id": None, "force": True, "cached": False}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for Python literals")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if v, ok := m["checkpoint_id"]; !ok || v != nil {
+		t.Errorf("expected checkpoint_id=null, got %v", m["checkpoint_id"])
+	}
+	if m["force"] != true || m["cached"] != false {
+		t.Errorf("expected force=true cached=false, got force=%v cached=%v", m["force"], m["cached"])
+	}
+}
+
+func TestRepairJSON_PythonLiteralsInsideStringPreserved(t *testing.T) {
+	// Bare keys + Python literal inside a string value: the string content
+	// must not be rewritten.
+	input := `{msg: "it is True and None", n: 1}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["msg"] != "it is True and None" {
+		t.Errorf("string content must be preserved, got %v", m["msg"])
+	}
+}
+
+func TestRepairJSON_SingleQuotedValue(t *testing.T) {
+	input := `{path: '/tmp/main.go'}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for single-quoted value")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["path"] != "/tmp/main.go" {
+		t.Errorf("expected path=/tmp/main.go, got %v", m["path"])
+	}
+}
+
+func TestRepairJSON_SingleQuotedEmbeddedDoubleQuote(t *testing.T) {
+	input := `{content: 'say "hi" now'}`
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["content"] != `say "hi" now` {
+		t.Errorf("embedded double quote must be escaped, got %v", m["content"])
+	}
+}
+
+func TestRepairJSON_SingleQuotedAmbiguousApostrophe(t *testing.T) {
+	// Embedded apostrophe makes pairing ambiguous - must NOT be repaired.
+	input := `{content: 'don't stop'}`
+	_, repaired := RepairJSON([]byte(input))
+	if repaired {
+		t.Errorf("ambiguous single-quoted content must not be repaired")
+	}
+}
+
+func TestRepairJSON_CombinedMalformations(t *testing.T) {
+	// Real-world combo: prose wrapper + bare keys + single quotes + Python
+	// literal, all in one broken payload.
+	input := "Here are the arguments:\n{file_path: 'a.go', old_text: 'foo', all: True}\nDone."
+	result, repaired := RepairJSON([]byte(input))
+	if !repaired {
+		t.Fatalf("expected repair to succeed for combined malformations")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(result, &m); err != nil {
+		t.Fatalf("repaired result should be valid JSON: %v (result: %s)", err, string(result))
+	}
+	if m["file_path"] != "a.go" || m["old_text"] != "foo" || m["all"] != true {
+		t.Errorf("unexpected repaired content: %v", m)
+	}
+}
+
+func TestQuoteUnquotedKeys_ArrayValuesNotQuoted(t *testing.T) {
+	// Array element positions must not be treated as keys.
+	input := `[alpha, beta]`
+	got := quoteUnquotedKeys(input)
+	if got != input {
+		t.Errorf("array elements must stay untouched, got %q", got)
 	}
 }

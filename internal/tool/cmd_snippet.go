@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // CmdSnippetTool provides a persistent, project-scoped library of reusable
@@ -196,12 +198,26 @@ func (t *CmdSnippetTool) cloneLocked() *cmdSnippetStore {
 // and the second persist silently clobbered the first). fn receives the
 // authoritative store; persisting is skipped when persist is false.
 func (t *CmdSnippetTool) mutate(persist bool, fn func(store *cmdSnippetStore) error) error {
+	// t.mu first: storePath()'s lazy init writes t.filePath, which is
+	// instance-local state - it must be resolved under the instance lock
+	// before the cross-instance path mutex is taken (lock order is
+	// uniformly t.mu -> pathLock, taken only here).
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.cache == nil || !t.loaded {
-		if _, err := t.loadForMutationLocked(); err != nil {
-			return err
-		}
+	// #3117 A: serialize against OTHER CmdSnippetTool instances sharing
+	// this store file (Clone'd subagents have their own t.mu) - the
+	// per-path mutex closes the cross-instance load-mutate-persist
+	// interleaving window.
+	pathLock := storeMutexFor(t.storePath())
+	pathLock.Lock()
+	defer pathLock.Unlock()
+	// #3117 A: ALWAYS reload from disk inside the cross-instance critical
+	// section. A Clone'd instance's cache is stale the moment any other
+	// instance persisted - trusting t.loaded here made each instance's
+	// whole-store rewrite clobber the others' entries even under the path
+	// mutex. Snippet mutations are low-frequency; the reload is cheap.
+	if _, err := t.loadForMutationLocked(); err != nil {
+		return err
 	}
 	if err := fn(t.cache); err != nil {
 		return err
@@ -246,7 +262,12 @@ func (t *CmdSnippetTool) persistLocked(store *cmdSnippetStore) error {
 	}
 	t.cache = store
 	t.loaded = true
-	return os.WriteFile(path, data, 0644)
+	// #3117: write via the shared atomic-write contract. The store file is
+	// shared across EVERY CmdSnippetTool instance for the same WorkingDir
+	// (Clone hands out copies with independent t.mu), so a crash or ENOSPC
+	// mid-write used to leave a truncated JSON that the next load treated
+	// as a fresh store - every previously saved snippet silently gone.
+	return util.AtomicWriteFile(path, data, 0644)
 }
 
 // ---- Actions ----
@@ -486,5 +507,93 @@ func (t *CmdSnippetTool) doSearch(query string) (Result, error) {
 
 // Clone returns an independent copy for use by a different agent context.
 func (t *CmdSnippetTool) Clone() Tool {
-	return &CmdSnippetTool{WorkingDir: t.WorkingDir}
+	return &CmdSnippetTool{WorkingDir: t.WorkingDir, filePath: t.filePath}
+}
+
+// cmdSnippetStoreLocks serializes store mutations across CmdSnippetTool
+// INSTANCES sharing the same store file (#3117 A). Clone() hands each
+// subagent its own tool with an independent t.mu, but storePath() derives
+// from WorkingDir alone - so a parent and a spawned agent (same process:
+// spawn_agent/use_namedagent/skill all Clone from the registry) could each
+// load-mutate-persist the shared JSON and interleave whole-file rewrites,
+// silently dropping the other's entries. A per-path process-global mutex
+// closes that window; cross-PROCESS sharing (two ggcode binaries on the
+// same checkout) remains last-writer-wins and is documented as such.
+var cmdSnippetStoreLocks sync.Map // storePath -> *sync.Mutex
+
+func storeMutexFor(path string) *sync.Mutex {
+	m_any, _ := cmdSnippetStoreLocks.LoadOrStore(path, &sync.Mutex{})
+	return m_any.(*sync.Mutex)
+}
+
+// SaveAutoSnippet persists a command discovered outside the normal
+// cmd_snippet tool flow (e.g. auto-capture from the exec tool). It is
+// idempotent on the command text: saving an already-stored command only
+// bumps its UseCount and UpdatedAt, so repeated auto-captures never
+// create duplicates or evict other entries.
+func (t *CmdSnippetTool) SaveAutoSnippet(name, command, desc string, tags []string) (Result, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return Result{}, fmt.Errorf("command is required")
+	}
+	if desc == "" {
+		desc = "auto-saved"
+	}
+	if len(tags) == 0 {
+		tags = []string{"auto"}
+	}
+
+	verb := "saved"
+	var total int
+	err := t.mutate(true, func(store *cmdSnippetStore) error {
+		now := time.Now()
+		// Dedupe on exact command text: refresh the existing entry.
+		for idx := range store.Entries {
+			if store.Entries[idx].Command == command {
+				store.Entries[idx].UseCount++
+				store.Entries[idx].UpdatedAt = now
+				verb, total = "refreshed", len(store.Entries)
+				return nil
+			}
+		}
+		// #3117 B: an auto-save must never SHADOW a user-created entry with
+		// the same name - doGet returns the first Name match, so appending a
+		// second entry under an existing name hid the user's command behind
+		// an "auto" one. Disambiguate by suffixing until unique.
+		for idx := range store.Entries {
+			if store.Entries[idx].Name == name {
+				name = name + "-auto"
+				break
+			}
+		}
+		// Reuse doSave's eviction + append logic via a nested mutate is not
+		// possible (mutate is not reentrant), so replicate the append here.
+		if len(store.Entries) >= cmdSnippetMaxEntries {
+			oldest := 0
+			for idx := range store.Entries {
+				if store.Entries[idx].UpdatedAt.Before(store.Entries[oldest].UpdatedAt) {
+					oldest = idx
+				}
+			}
+			store.Entries = append(store.Entries[:oldest], store.Entries[oldest+1:]...)
+		}
+		store.Entries = append(store.Entries, cmdSnippetEntry{
+			Name:        name,
+			Command:     command,
+			Description: desc,
+			Tags:        tags,
+			UseCount:    1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		})
+		sort.SliceStable(store.Entries, func(a, b int) bool {
+			return strings.ToLower(store.Entries[a].Name) < strings.ToLower(store.Entries[b].Name)
+		})
+		total = len(store.Entries)
+		return nil
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("failed to auto-save snippet: %w", err)
+	}
+	return Result{Content: fmt.Sprintf("Snippet %q %s (%d total).", name, verb, total)}, nil
 }

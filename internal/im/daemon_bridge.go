@@ -14,6 +14,7 @@ import (
 
 	"github.com/topcheer/ggcode/internal/agent"
 	"github.com/topcheer/ggcode/internal/daemon"
+	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -695,6 +696,17 @@ func (b *DaemonBridge) SubmitInboundMessage(ctx context.Context, msg InboundMess
 	if len(content) == 0 {
 		return nil
 	}
+	// sa-221 / r406 prompt-side equivalent for IM: every inbound IM text
+	// gets a provenance header block. The IM channel is REMOTE (#2185/
+	// #2205 threat model): the operator usually talks through it, but a
+	// stolen or mistyped binding turns any IM contact into a prompt-
+	// injection source. A lightweight header (not a full untrusted wrap —
+	// IM messages ARE user messages and must stay obeyable) declares the
+	// channel boundary so embedded hostile directives that contradict the
+	// operating rules are reportable instead of silently obeyed.
+	if text != "" {
+		content = withIMProvenance(content, msg.Envelope)
+	}
 
 	// Turn-scoped vision fallback, mirroring the TUI path: switch to a
 	// vision model for this turn when images are present and the active
@@ -946,7 +958,10 @@ func (b *DaemonBridge) handleApproval(ctx context.Context, toolName string, inpu
 			b.mu.Unlock()
 			_ = b.emitter.EmitText("⏱ The approval prompt above has expired. Any reply to it now will be treated as a NEW message, not an approval.")
 		}
-		return permission.Deny
+		// #3370: no user decision was made - return the non-decision outcome
+		// (Timeout/Cancelled) so downstream audit/memory/throttle do not
+		// attribute a denial to the user.
+		return permission.DecisionFromContext(ctx.Err())
 	}
 }
 
@@ -1134,6 +1149,16 @@ func (b *DaemonBridge) runAgentStream(ctx context.Context, content []provider.Co
 			}
 		}
 	})
+
+	// r414: preference capture aligned with the TUI/pipe paths. IM is the
+	// highest-frequency surface for durable corrections ("以后都用 pnpm"
+	// typed from a phone); without this hook they die with the session.
+	// Non-cancelled runs only, mirroring the TUI reflection guard; failures
+	// are debug-logged inside memory.CapturePreferences and never disturb
+	// the return path.
+	if ctx.Err() == nil {
+		memory.CapturePreferences(b.agent.WorkingDir(), extractText(content))
+	}
 	return err
 }
 
@@ -1197,7 +1222,7 @@ func (b *DaemonBridge) recordMetric(ev metrics.MetricEvent) {
 		ev.Model = ses.Model
 		ev.Vendor = ses.Vendor
 		ev.Endpoint = ses.Endpoint
-		ses.Metrics = append(ses.Metrics, ev)
+		ses.AppendMetricEvent(ev) // #3086: lock-guarded append (was a bare slice append)
 		ses.AppendMetricForEndpoint(ses.Vendor, ses.Endpoint, ev)
 	}
 	b.mu.Unlock()
@@ -1234,11 +1259,15 @@ func daemonSessionTurnIndex(ses *session.Session) int {
 		return 0
 	}
 	last := 0
-	if n := len(ses.UsageHistory); n > 0 && ses.UsageHistory[n-1].TurnIndex > last {
-		last = ses.UsageHistory[n-1].TurnIndex
+	// #3091: read through the #3086/#3087 lock-guarded snapshot accessors -
+	// the bare slice reads raced the append callbacks on the same slices.
+	// Construction-time-only caller keeps the window near zero (low), but
+	// the accessor comments name exactly this cross-goroutine use.
+	if hist := ses.UsageHistorySnapshot(); len(hist) > 0 && hist[len(hist)-1].TurnIndex > last {
+		last = hist[len(hist)-1].TurnIndex
 	}
-	if n := len(ses.Metrics); n > 0 && ses.Metrics[n-1].TurnIndex > last {
-		last = ses.Metrics[n-1].TurnIndex
+	if mets := ses.MetricsSnapshot(); len(mets) > 0 && mets[len(mets)-1].TurnIndex > last {
+		last = mets[len(mets)-1].TurnIndex
 	}
 	return last
 }

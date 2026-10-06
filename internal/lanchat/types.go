@@ -87,6 +87,16 @@ type Message struct {
 	Content     string       `json:"content"`
 	Attachments []Attachment `json:"attachments,omitempty"`
 	Timestamp   int64        `json:"timestamp"` // unix ms
+	// #3402 (TUFU): sender's static Ed25519 public key (hex) and a
+	// signature over the canonical payload. Absent on pre-#3402 peers.
+	PubKey string `json:"pub_key,omitempty"`
+	Sig    string `json:"sig,omitempty"`
+
+	// Internal (not serialized): set by HandleIncomingMessage after
+	// signature verification + identity-pin check. Callers MUST treat
+	// FromNodeID/FromNick as unverified claims unless Verified is true.
+	Verified bool   `json:"-"`
+	SignerFP string `json:"-"` // verified signer fingerprint ("fp:<hex>")
 }
 
 // IsBroadcast returns true if this is a broadcast message (no specific recipient).

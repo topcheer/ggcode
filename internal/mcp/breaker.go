@@ -53,11 +53,12 @@ const (
 	// failures before the circuit opens. 3 balances against transient
 	// hiccups (a single dropped WS frame) and against burning retries.
 	breakerThreshold = 3
-
-	// breakerCooldown is how long an OPEN circuit waits before allowing
-	// one half-open probe call.
-	breakerCooldown = 60 * time.Second
 )
+
+// breakerCooldown is how long an OPEN circuit waits before allowing one
+// half-open probe call. Var (not const) so tests can shrink it
+// (fileLockTimeout precedent, #1834 case 2).
+var breakerCooldown = 60 * time.Second
 
 type breakerState int
 
@@ -157,6 +158,24 @@ func (b *serverBreaker) recordFailure(err error) {
 // recordSuccess registers one successful (transport-level) call. A server
 // semantic error (result.IsError) is still a SUCCESS for breaker purposes:
 // the server answered, so it is reachable.
+// abandonProbe releases an in-flight half-open probe WITHOUT recording an
+// outcome (#3039). Callers reach real transport error accounting via
+// recordSuccess/recordFailure; but three paths exit after gate() allowed a
+// probe yet before any transport attempt or with a caller-side cancellation:
+// read-only tool blocking, invalid tool arguments, and context.Canceled from
+// the user/agent aborting the call. None of those say anything about the
+// server's health, so the probe must be released (probing=false, stay
+// half-open - the next call becomes the new probe) instead of leaking
+// probing=true forever, which fast-failed every later call until restart.
+func (b *serverBreaker) abandonProbe() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state != breakerHalfOpen || !b.probing {
+		return
+	}
+	b.probing = false
+}
+
 func (b *serverBreaker) recordSuccess() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -256,6 +275,16 @@ var infraErrorPatterns = []string{
 // still match infra patterns and are correctly counted as outages.
 func isInfraError(err error) bool {
 	if err == nil {
+		return false
+	}
+	// #3044-V1: a JSON-RPC error response is a SEMANTIC error authored by
+	// the server (decorateSpecError keeps it reachable via errors.As). Its
+	// message text is server-written and may legitimately contain infra
+	// substrings ("-32603 Internal error: upstream server error", "tool
+	// timed out: context deadline exceeded") - substring matching would
+	// misclassify protocol-level responses as outages and let three
+	// semantic errors open the breaker on a healthy server.
+	if _, ok := jsonRPCErrorOf(err); ok {
 		return false
 	}
 	msg := strings.ToLower(err.Error())

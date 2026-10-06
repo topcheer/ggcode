@@ -96,7 +96,7 @@ func (t Grep) Parameters() json.RawMessage {
 		},
 		"head_limit": {
 			"type": "integer",
-			"description": "Limit output to first N entries. Defaults: 250 in content mode, 500 in files_with_matches/count modes (a trailing summary shows how many were withheld). Use a large value deliberately if you truly need more.",
+			"description": "Limit output to first N entries. Defaults: 250 in content mode, 500 in files_with_matches/count modes (a trailing summary shows how many were withheld). Use a large value deliberately if you truly need more. With ripgrep installed, entries are capped per file at offset+N matches (deep pagination into one hot file reveals more as the window grows).",
 			"minimum": 0
 		},
 		"offset": {
@@ -128,6 +128,12 @@ func (t Grep) Parameters() json.RawMessage {
 // maxFilesWithMatches caps files_with_matches/count output when no explicit
 // head_limit is given. Matches glob's maxGlobResults convention.
 const maxFilesWithMatches = 500
+
+// maxContentHeadLimit is the documented default head_limit for content
+// mode (schema: "Defaults: 250 in content mode"). #3170: the cap sites
+// only applied an explicit head_limit, so an omitted one streamed
+// unbounded content on broad patterns - the docs promised 250.
+const maxContentHeadLimit = 250
 
 type grepArgs struct {
 	Pattern        string `json:"pattern"`
@@ -360,6 +366,10 @@ func (t Grep) rgSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 
 	if args.HeadLimit > 0 && args.OutputMode == "content" {
 		rgArgs = append(rgArgs, "--max-count", fmt.Sprintf("%d", args.HeadLimit+args.Offset))
+	} else if args.OutputMode == "content" {
+		// #3170: schema-documented default - omitted head_limit still caps
+		// rg emission (per file) at offset+250 instead of streaming unbounded.
+		rgArgs = append(rgArgs, "--max-count", fmt.Sprintf("%d", maxContentHeadLimit+args.Offset))
 	}
 
 	rgArgs = append(rgArgs, "--", args.Pattern, args.Path)
@@ -429,6 +439,14 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 
 	// Apply offset + head_limit for content mode
 	if args.OutputMode == "content" {
+		// #3145: rg's multi-threaded output order is NOT stable, so an
+		// offset slice could skip or duplicate lines between two paginated
+		// calls. Sort by (path, lineNum) first - the same deterministic
+		// order formatContentMatches applies on the Go fallback path - so
+		// pagination semantics are isomorphic across backends. Lines that
+		// do not parse as path:line:content (continuation lines) keep
+		// their relative position (stable sort) after their anchor line.
+		sortRgContentLines(lines)
 		start := args.Offset
 		if start > total {
 			start = total
@@ -436,6 +454,8 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		end := total
 		if args.HeadLimit > 0 && start+args.HeadLimit < end {
 			end = start + args.HeadLimit
+		} else if args.HeadLimit <= 0 && start+maxContentHeadLimit < end {
+			end = start + maxContentHeadLimit // #3170: documented default cap
 		}
 		lines = lines[start:end]
 
@@ -496,9 +516,11 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 		// files_with_matches: sort by path depth (shorter paths first = closer to root)
 		sortedLines := make([]string, len(lines))
 		copy(sortedLines, lines)
-		sort.SliceStable(sortedLines, func(i, j int) bool {
-			return pathDepth(sortedLines[i]) < pathDepth(sortedLines[j])
-		})
+		// #3145/#3171: (pathDepth, lexicographic) TOTAL order, shared with
+		// the fallback via sortPathsDepthThenLex - a stable sort that kept
+		// rg's within-depth emission order made the same offset/head_limit
+		// window differ between rg and no-rg machines. Determinism wins.
+		sortPathsDepthThenLex(sortedLines)
 		// Pagination parity with content mode: rg previously ignored offset
 		// here (the Go fallback supports it), so paging on rg-equipped
 		// machines always returned the first page. Honor offset before the
@@ -533,6 +555,22 @@ func formatGrepOutput(output string, args grepArgs) (Result, error) {
 }
 
 // pathDepth returns the number of path separators in a string.
+// sortPathsDepthThenLex orders paths shallow-first with a lexicographic
+// tie-break - a total order shared by BOTH grep backends so the same
+// offset/head_limit window shows identical files with or without
+// ripgrep (#3171; the content-mode sibling of this contract was #3145).
+// The tie-break deliberately trades rg's within-depth emission order (a
+// relevance heuristic) for cross-backend determinism.
+func sortPathsDepthThenLex(paths []string) {
+	sort.Slice(paths, func(i, j int) bool {
+		di, dj := pathDepth(paths[i]), pathDepth(paths[j])
+		if di != dj {
+			return di < dj
+		}
+		return paths[i] < paths[j]
+	})
+}
+
 // Used for relevance ranking: files closer to the project root (fewer
 // path segments) are likely more relevant to the current task.
 func pathDepth(path string) int {
@@ -622,7 +660,12 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	})
 
 	if len(files) == 0 {
-		return Result{Content: "No matches found."}, nil
+		// r403 (ACI consistency): the Go-fallback path previously returned
+		// a bare "No matches found." while the ripgrep path formats the same
+		// outcome with actionable suggestions (-i, spelling, type widening).
+		// Two feedback qualities for one outcome made agent behavior drift
+		// depending on which engine happened to run; reuse the formatter.
+		return formatGrepOutput("", args)
 	}
 
 	// Parallel search
@@ -693,6 +736,12 @@ func (t Grep) goSearch(ctx context.Context, args grepArgs, re *regexp.Regexp) (R
 	}
 }
 
+// grepMaxLineLen caps the per-line buffer for the file scanners (#3190).
+// Lines longer than this are treated as unmatchable instead of killing
+// the whole scan; 10MB covers minified JS/bundles/lockfiles comfortably
+// while bounding memory per line.
+const grepMaxLineLen = 10 * 1024 * 1024
+
 func grepFileHasMatch(path string, re *regexp.Regexp) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -701,6 +750,11 @@ func grepFileHasMatch(path string, re *regexp.Regexp) bool {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	// #3190: default 64KB token limit makes >64KB lines hit ErrTooLong,
+	// which Scan() surfaces as a silent stop - matches in the rest of the
+	// file are missed. Raise the cap; lines beyond it are skipped with the
+	// error surfaced via scanner.Err() below.
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	for scanner.Scan() {
 		if re.MatchString(scanner.Text()) {
 			return true
@@ -718,6 +772,7 @@ func grepFileCount(path string, re *regexp.Regexp) int {
 
 	count := 0
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen) // #3190: see grepFileHasMatch
 	for scanner.Scan() {
 		if re.MatchString(scanner.Text()) {
 			count++
@@ -736,6 +791,7 @@ func grepFileContent(path string, re *regexp.Regexp, args grepArgs) []fileMatch 
 	// Read all lines for context support
 	var lines []string
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen) // #3190: see grepFileHasMatch
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
@@ -785,7 +841,7 @@ func formatFilesWithMatches(matchedFiles map[string]bool, args grepArgs) Result 
 	for p := range matchedFiles {
 		paths = append(paths, p)
 	}
-	sort.Strings(paths)
+	sortPathsDepthThenLex(paths) // #3171: same (depth, lex) order as the rg backend
 
 	total := len(paths)
 	start := args.Offset
@@ -845,6 +901,78 @@ func formatCount(fileCounts map[string]int, args grepArgs) Result {
 	return Result{Content: sb.String()}
 }
 
+// sortRgContentLines orders rg content lines by (path, lineNum) so the
+// offset/head_limit window is deterministic across calls (#3145) and
+// matches the fallback scanner's formatContentMatches ordering. Lines
+// without a parseable "path:lineNum:" prefix sort last, keeping their
+// relative order (continuation lines stay attached to their anchor).
+func sortRgContentLines(lines []string) {
+	// Pre-scan: unparseable lines (multi-line match continuations)
+	// inherit the key of the nearest preceding parseable line, so they
+	// stay attached to their anchor through the stable sort.
+	type rgLinePair struct {
+		k rgLineKey
+		s string
+	}
+	pairs := make([]rgLinePair, len(lines))
+	last := rgLineKey{}
+	for i, l := range lines {
+		k := rgContentKey(l)
+		if k.ok {
+			last = k
+		} else {
+			k = rgLineKey{path: last.path, line: last.line, ok: true, cont: true}
+		}
+		pairs[i] = rgLinePair{k: k, s: l}
+	}
+	// Sort the (key, line) pairs so keys travel with their lines; write
+	// the ordered lines back (a bare keys[] snapshot desyncs from the
+	// slice-stable swaps).
+	sort.SliceStable(pairs, func(i, j int) bool {
+		ki, kj := pairs[i].k, pairs[j].k
+		if ki.path != kj.path {
+			return ki.path < kj.path
+		}
+		if ki.line != kj.line {
+			return ki.line < kj.line
+		}
+		// Same anchor: the anchor line itself precedes its continuations.
+		return !ki.cont && kj.cont
+	})
+	for i := range pairs {
+		lines[i] = pairs[i].s
+	}
+}
+
+type rgLineKey struct {
+	path string
+	line int
+	ok   bool
+	cont bool // inherited key (continuation line)
+}
+
+func rgContentKey(l string) rgLineKey {
+	// rg content format: path:lineNum:content (or path-lineNum-content for
+	// context lines; treat both).
+	for i := 0; i < len(l); i++ {
+		if l[i] == ':' || l[i] == '-' {
+			rest := l[i+1:]
+			n := 0
+			for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
+				n++
+			}
+			if n > 0 && n < len(rest) && (rest[n] == ':' || rest[n] == '-') {
+				line := 0
+				for _, c := range rest[:n] {
+					line = line*10 + int(c-'0')
+				}
+				return rgLineKey{path: l[:i], line: line, ok: true}
+			}
+		}
+	}
+	return rgLineKey{}
+}
+
 func formatContentMatches(matches []fileMatch, args grepArgs) Result {
 	// Sort matches by path then line number
 	sort.Slice(matches, func(i, j int) bool {
@@ -862,6 +990,8 @@ func formatContentMatches(matches []fileMatch, args grepArgs) Result {
 	end := total
 	if args.HeadLimit > 0 && start+args.HeadLimit < end {
 		end = start + args.HeadLimit
+	} else if args.HeadLimit <= 0 && start+maxContentHeadLimit < end {
+		end = start + maxContentHeadLimit // #3170: documented default cap
 	}
 	matches = matches[start:end]
 

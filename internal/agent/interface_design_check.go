@@ -44,7 +44,6 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/printer"
 	"go/token"
 	"path/filepath"
@@ -622,8 +621,7 @@ func idExtractInterfaces(src string) map[string]idInterfaceInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, _, err := parseGoSource("", src, 0)
 	if err != nil {
 		return nil
 	}
@@ -658,8 +656,7 @@ func idExtractFuncReturns(src string) map[string]idFuncReturnInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, _, err := parseGoSource("", src, 0)
 	if err != nil {
 		return nil
 	}

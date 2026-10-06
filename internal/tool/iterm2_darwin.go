@@ -282,6 +282,20 @@ tell application "iTerm"
 		return id of current session of newTab
 	end tell
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
+	} else if wd != "" {
+		// #3140: #2589 cd-only contract for tab/window (same as the
+		// ghostty tab branch) - working_dir alone must still cd.
+		script = fmt.Sprintf(`
+tell application "iTerm"
+	activate
+	tell current window
+		set newTab to create tab with default profile
+		tell current session of newTab
+			write text "cd '%s'"
+		end tell
+		return id of current session of newTab
+	end tell
+end tell`, escapeAS(escapeShellSingleQuote(wd)))
 	} else {
 		script = `
 tell application "iTerm"
@@ -318,6 +332,17 @@ tell application "iTerm"
 	end tell
 	return id of current session of newWindow
 end tell`, escapeAS(escapeShellSingleQuote(wd)), escapeAS(command))
+	} else if wd != "" {
+		// #3140: symmetric cd-only branch for new_window.
+		script = fmt.Sprintf(`
+tell application "iTerm"
+	activate
+	set newWindow to create window with default profile
+	tell current session of newWindow
+		write text "cd '%s'"
+	end tell
+	return id of current session of newWindow
+end tell`, escapeAS(escapeShellSingleQuote(wd)))
 	} else {
 		script = `
 tell application "iTerm"

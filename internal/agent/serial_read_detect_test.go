@@ -102,7 +102,16 @@ func TestSerialRead_Reset(t *testing.T) {
 		s.endTurn(i)
 	}
 
+	// Leave an in-progress LSP turn so lspStreak/currentTurnTool are non-zero.
+	s.recordToolCall("lsp_hover")
+
 	s.reset()
+
+	// Reset must clear all per-run state, including the LSP streak and the
+	// in-progress turn label, so a new run cannot inherit stale labels.
+	if s.lspStreak != 0 || s.currentTurnTool != "" {
+		t.Fatalf("reset should clear lspStreak and currentTurnTool, got lspStreak=%d currentTurnTool=%q", s.lspStreak, s.currentTurnTool)
+	}
 
 	// After reset, 2 single reads should not fire (need 3)
 	for i := 1; i <= 2; i++ {

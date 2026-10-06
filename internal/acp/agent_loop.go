@@ -83,7 +83,7 @@ func NewAgentLoop(
 	a.SetHookConfig(cfg.Hooks)
 
 	// --- Checkpoint manager ---
-	a.SetCheckpointManager(checkpoint.NewManager(50))
+	a.SetCheckpointManager(checkpoint.NewPersistentManager(50, session.CWD))
 	// #1047: the pre-write checkpoint hook is registered per ExecutePrompt run
 	// (see ExecutePrompt) instead of the package global - the global was
 	// overwritten by every NewAgentLoop, so with concurrent ACP sessions the

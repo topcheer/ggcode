@@ -156,7 +156,8 @@ func TestDangerousDetector_AppleScriptHigh(t *testing.T) {
 		{`do shell script "rm -rf /tmp/test"`, true, DangerMedium},
 		{`do shell script "rm -rf *"`, true, DangerMedium},
 		{`do shell script "rm -f /tmp/test"`, true, DangerMedium}, // rm -f matches rm -rf pattern
-		{`do shell script "echo test > /dev/sda"`, true, DangerMedium},
+		// #3061-C2: raw-disk redirect promoted to Critical (dd of= parity).
+		{`do shell script "echo test > /dev/sda"`, true, DangerCritical},
 
 		// Safe AppleScript commands
 		{`do shell script "ls -la /tmp"`, false, DangerNone},
@@ -279,6 +280,10 @@ func TestDangerousDetector_IsExtremelyDangerous(t *testing.T) {
 		// #1804 case 1: quoted root and $HOME forms must stay Critical.
 		{`rm -rf "/"`, true},
 		{"rm -rf $HOME", true},
+		// r371: nested-quote shape - the tail needs to absorb both the
+		// inner double quote and the outer wrapping single quote.
+		{`sh -c 'rm -rf "$HOME"'`, true},
+		{`sudo sh -c 'rm -rf ~'`, true},
 	}
 
 	for _, tt := range tests {

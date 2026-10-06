@@ -514,10 +514,16 @@ func simplifyAndroidClass(class string) string {
 	last = strings.TrimSuffix(last, "View")
 	last = strings.TrimSuffix(last, "Layout")
 	if last == "" {
-		if len(parts) > 1 {
-			// class like 'android.widget.View' - use the package segment
+		if len(parts) > 1 && parts[len(parts)-2] != "" {
+			// class like 'android.widget.View' - use the package segment.
+			// #3194: the fallback segment itself may be empty (class="." ->
+			// ["",""]; class=".View" -> "" after trim) - only use it when
+			// non-empty, else degrade below instead of panicking on an
+			// empty rune slice at [:1].
 			last = parts[len(parts)-2]
 		} else {
+			// Degenerate input ('.', '..', '.View', ...): return the raw
+			// string lowercased rather than panicking the snapshot.
 			return strings.ToLower(strings.TrimSpace(class))
 		}
 	}

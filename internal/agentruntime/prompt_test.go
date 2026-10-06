@@ -214,3 +214,21 @@ func withTestHome(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 }
+
+// r388: Explore-type sub-agents get a structured output contract; other
+// types do not.
+func TestBuildSubAgentSystemPrompt_ExploreContract(t *testing.T) {
+	reg := tool.NewRegistry()
+	_ = tool.RegisterBuiltinTools(reg, nil, "/tmp/test-project", nil, nil)
+	ctx := SubAgentPromptContext{Cfg: &config.Config{Language: "en"}, WorkingDir: "/tmp/test-project", Registry: reg}
+
+	explore := BuildSubAgentSystemPrompt(ctx, "find the retry logic", "Explore")
+	if !strings.Contains(explore, "## Output Contract (Explore)") || !strings.Contains(explore, "## Regions") {
+		t.Error("Explore prompt missing output contract")
+	}
+
+	other := BuildSubAgentSystemPrompt(ctx, "fix the bug", "Plan")
+	if strings.Contains(other, "## Output Contract (Explore)") {
+		t.Error("non-Explore prompt must not carry the Explore contract")
+	}
+}

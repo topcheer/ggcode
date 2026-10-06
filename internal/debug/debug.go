@@ -620,6 +620,14 @@ func Close() {
 	cleanupBubbleteaTrace()
 }
 
+// staleLogMaxAge caps how long a log file can survive the stale-PID sweep
+// even when its PID checks alive: a dead ggcode's PID can be REUSED by an
+// unrelated live process (low PIDs are aggressively recycled after reboot),
+// and such collision survivors are kept forever by the liveness check alone.
+// #3339 (sa-244 audit): the sweep ran every startup yet ~/.ggcode/debug held
+// ~15 old-PID file sets - exactly the collision-survivor population.
+const staleLogMaxAge = 14 * 24 * time.Hour
+
 // cleanupStaleLogs removes log files belonging to processes that no longer exist.
 // This handles the case where ggcode was killed with SIGKILL and couldn't clean up.
 func cleanupStaleLogs() {
@@ -644,6 +652,15 @@ func cleanupStaleLogs() {
 		proc, _ := os.FindProcess(pid)
 		if !util.IsProcessAliveProc(proc) {
 			// Process doesn't exist — remove its log files
+			_ = os.Remove(filepath.Join(defaultLogDir, name))
+			continue
+		}
+		// PID-reuse backstop: the liveness check just passed, but if the PID
+		// belongs to a *different* process that recycled it, the file still
+		// belongs to a dead ggcode. Age is the only signal left - anything
+		// past staleLogMaxAge goes regardless of liveness (selfPid already
+		// skipped above, so a long-running live ggcode's own files are safe).
+		if info, statErr := entry.Info(); statErr == nil && time.Since(info.ModTime()) > staleLogMaxAge {
 			_ = os.Remove(filepath.Join(defaultLogDir, name))
 		}
 	}

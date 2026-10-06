@@ -47,7 +47,6 @@ func zhTWOnboardTexts() map[string]string {
 		"im_more":          "更多管道可在 TUI 中設定",
 		"hint_nav":         "↑↓ 導覽 · Enter 選擇 · Tab 切換 · Esc 返回 · Ctrl+C 退出",
 		"hint_filter":      "按 / 篩選",
-		"skip":             "跳過",
 		"on":               "開",
 		"off":              "關",
 	}

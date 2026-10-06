@@ -53,8 +53,7 @@ func checkContextLeak(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return ""
 	}

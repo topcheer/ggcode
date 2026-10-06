@@ -1167,8 +1167,10 @@ func TestDefaultConfigIncludesKimiCodingPlanCapabilities(t *testing.T) {
 	if ep.DefaultModel != "kimi-for-coding" {
 		t.Fatalf("expected kimi default model kimi-for-coding, got %q", ep.DefaultModel)
 	}
-	if ep.ContextWindow != 262144 {
-		t.Fatalf("expected kimi context window 262144, got %d", ep.ContextWindow)
+	if ep.ContextWindow != 1048576 {
+		// 2026-09-20 models.dev: kimi-for-coding context upgraded 256k -> 1M
+		// (k3 generation). Pinned to upstream data via sync-model-caps.
+		t.Fatalf("expected kimi context window 1048576, got %d", ep.ContextWindow)
 	}
 	if ep.MaxTokens != 32768 {
 		t.Fatalf("expected kimi max output 32768, got %d", ep.MaxTokens)
@@ -1913,5 +1915,69 @@ func TestResolveEndpointLogprobsPassThrough(t *testing.T) {
 	}
 	if resolved2.Logprobs {
 		t.Fatal("expected Logprobs=false by default")
+	}
+}
+
+// r372: the watch: section parses into WatchTriggerConfig.
+func TestLoad_WatchSection(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	yaml := "watch:\n" +
+		"  - globs: [\"internal/permission/*_test.go\", \"cmd/*.go\"]\n" +
+		"    prompt: \"run tests for {files}\"\n" +
+		"    queue_if_busy: true\n" +
+		"    cooldown_sec: 30\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Watch) != 1 {
+		t.Fatalf("expected 1 watch trigger, got %d", len(cfg.Watch))
+	}
+	w := cfg.Watch[0]
+	if len(w.Globs) != 2 || w.Globs[0] != "internal/permission/*_test.go" {
+		t.Errorf("globs not parsed: %v", w.Globs)
+	}
+	if w.Prompt != "run tests for {files}" || !w.QueueIfBusy || w.CooldownSec != 30 {
+		t.Errorf("trigger fields wrong: %+v", w)
+	}
+}
+
+// Companion (r373): the idle: section parses into IdleConfig.
+func TestLoad_IdleSection(t *testing.T) {
+	withTestHome(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ggcode.yaml")
+	yaml := "idle:\n" +
+		"  enabled: true\n" +
+		"  after_min: 15\n" +
+		"  precompact_ratio: 0.7\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Idle.Enabled || cfg.Idle.AfterMin != 15 || cfg.Idle.PrecompactRatio != 0.7 {
+		t.Errorf("idle section not parsed: %+v", cfg.Idle)
+	}
+
+	// Defaults when absent: disabled, zero values (ApplyIdleMaintenance
+	// substitutes 10min/0.6).
+	path2 := filepath.Join(dir, "empty.yaml")
+	if err := os.WriteFile(path2, []byte("extra_prompt: \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Idle.Enabled || cfg2.Idle.AfterMin != 0 || cfg2.Idle.PrecompactRatio != 0 {
+		t.Errorf("idle defaults wrong: %+v", cfg2.Idle)
 	}
 }

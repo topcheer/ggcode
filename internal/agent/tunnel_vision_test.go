@@ -133,3 +133,59 @@ func TestTunnelVision_EmptyPathIgnored(t *testing.T) {
 		t.Errorf("expected no warning with no files tracked, got: %s", msg)
 	}
 }
+
+// #2976: the breadth gate must count the UNION of read and searched files,
+// not their sum. A read+grep-overlapped file was double-counted (sum 6 >= 5)
+// and suppressed the advisory in exactly the narrow-exploration scenario the
+// detector exists to catch; the union (3 < 5) must still warn.
+func TestTunnelVision_OverlapNotDoubleCounted(t *testing.T) {
+	s := newTunnelVisionState()
+	s.recordFile("/a.go")
+	s.recordFile("/b.go")
+	s.recordFile("/c.go")
+	// grep hit the SAME three files the agent already read (full overlap)
+	for _, p := range []string{"/a.go", "/b.go", "/c.go"} {
+		s.recordSearched(p)
+	}
+	// 16 iterations / 3 files = ratio 5.33 >= 4.0; union 3 < 5 -> warn
+	if msg := s.check(16); msg == "" {
+		t.Fatal("expected warning: overlapped read+search files must not double-count toward breadth (union=3 < 5)")
+	}
+}
+
+// #2976 companion: disjoint search files still count toward breadth (the
+// union legitimately widens the gate - a 12-file grep sweep IS broad).
+func TestTunnelVision_DisjointSearchStillSuppresses(t *testing.T) {
+	s := newTunnelVisionState()
+	s.recordFile("/a.go")
+	s.recordFile("/b.go")
+	s.recordFile("/c.go")
+	for _, p := range []string{"/d.go", "/e.go"} {
+		s.recordSearched(p)
+	}
+	// union = 5 >= 5 -> no warning
+	if msg := s.check(16); msg != "" {
+		t.Fatalf("expected no warning with union=5, got: %s", msg)
+	}
+}
+
+// #2976: an absolute read and a relative grep hit on the same file must
+// share one map key once baseDir is anchored (SetWorkingDir wiring).
+func TestTunnelVision_PathAnchoringMergesKeys(t *testing.T) {
+	s := newTunnelVisionState()
+	s.baseDir = "/repo"
+	s.recordFile("/repo/internal/a.go")
+	s.recordSearched("internal/a.go") // relative grep hit, same file
+	if len(s.searchedFiles) != 1 || len(s.filesTouched) != 1 {
+		t.Fatalf("expected 1+1 keys after anchoring, got %d+%d", len(s.filesTouched), len(s.searchedFiles))
+	}
+	for k := range s.searchedFiles {
+		if _, ok := s.filesTouched[k]; !ok {
+			t.Fatalf("searched key %q not merged with filesTouched key", k)
+		}
+	}
+	// 10 iterations / 1 file = ratio 10 >= 4.0, union 1 < 5 -> warn
+	if msg := s.check(10); msg == "" {
+		t.Fatal("expected warning with anchored single file and ratio 10")
+	}
+}

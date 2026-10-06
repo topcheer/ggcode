@@ -537,7 +537,7 @@ CI alignment: `scripts/dev/verify-ci.sh` mirrors the CI pipeline and clears prov
 - **WebUI ChatBridge**: Decouples WebSocket chat from agent implementation via `ChatBridge` interface (`SendUserMessage`, `Messages`, `Subscribe`). Two implementations:
   - `DaemonBridge` (daemon mode): Injects webchat messages through `pendingInterruptions` into agent's `SetInterruptionHandler`. Broadcasts events from agent stream callback.
   - `TUIChatBridge` (TUI mode): Routes webchat messages through `program.Send(webchatUserMsg)` into bubbletea event loop. No direct agent access — TUI handles queuing/interruption identically to keyboard input.
-- **Tunnel event persistence**: Tunnel events are appended to session JSONL via `AppendTunnelEventToDisk()` without rewriting the whole file. On reconnect, `replayCanonicalEvents()` replays recorded events. `TunnelEventsComplete` flag ensures only fully-recorded event sets are used for replay; incomplete sets fall back to snapshot-based recovery.
+- **Tunnel event persistence**: Tunnel events are no longer persisted to session JSONL — the projection store (`~/.ggcode/mobile-projection/<sessionID>.json`) is the sole durable copy; `replayCanonicalEvents()` replays recorded events on reconnect, and the `TunnelEventsComplete` flag ensures only fully-recorded event sets are used for replay (incomplete sets fall back to snapshot-based recovery). The in-memory `Session.TunnelEvents` copy (desktop/TUI compatibility views) is serialized by the session-scoped `TunnelEventsMu` leaf lock (#2917): `TunnelHost.recordEvent` appends from publisher goroutines while desktop/TUI readers go through `SnapshotTunnelEvents()`.
 - **Relay backpressure**: Peer writes in `ggcode-relay` use blocking sends with a 30s write deadline instead of buffered channel drops, preventing silent data loss during slow connections.
 - **Relay event dedup**: `room.upsertHistoryEvent()` deduplicates by sessionID+eventID so replayed events don't accumulate. `snapshot_reset` (empty eventID) is not persisted to SQLite.
 - **Swarm task board**: Tasks are assigned to specific teammates via `swarm_task_create` with `assignee`, which pushes directly to the assignee's inbox. Unassigned tasks can be claimed by any idle teammate. Task completion is tracked on a shared board visible to all teammates.
@@ -686,7 +686,7 @@ Thresholds and heuristics:
 - The summary output is capped at 5% of the context window, with a hard maximum of 12,000 tokens.
 - The background precompact goroutine has a 180-second timeout and a 6-second start delay to avoid rate-limit collisions with the main LLM turn.
 - Mechanical clearing tiers are skipped if the estimated token savings are below 2% of the threshold (cache-break awareness).
-- A fallback checkpoint is forced when the conversation exceeds 500 messages even if compaction fails.
+- A fallback checkpoint is forced when the conversation exceeds 500 messages even if compaction fails. It only fires again after at least 50 further messages since the last checkpoint (anti-spam, #2905) and anchors at the real last message ID so resume positioning stays precise.
 
 ### Session Checkpoints
 

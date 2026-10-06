@@ -62,6 +62,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/status` | Show current status |
 | `/files` | Open file browser |
 | `/inspector [filter]` | Open inspector panel (view tool calls, results, logs) |
+| `/interventions [clear]` | Show where you historically took over mid-run; `clear` wipes that history (the agent uses it to briefly state intent before steps you repeatedly interrupt) |
 | `/diff [file]` | Show git diff in chat |
 | `/edit` | Edit last user message and resubmit |
 | `/retry` | Retry last agent turn |
@@ -101,7 +102,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/export-trace` | Export session execution trace as structured JSON (TTFT, tool latency, token usage) |
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
-| `/branch` / `/fork` | Branch/fork current session |
+| `/branch [N]` / `/fork [N]` | Branch/fork current session; N drops the last N user turns to fork from an earlier point |
 | `/pin-session` / `/unpin-session` | Pin/unpin session (pinned sessions are never removed by cleanup and list first in `/sessions`; distinct from `/pin`, which pins context items) |
 | `/tag <tag>...` | Add tags to the session (deduplicated case-insensitively) |
 | `/untag <tag>...` | Remove tags from the session |

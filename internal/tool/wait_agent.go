@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -25,7 +28,7 @@ type WaitAgentTool struct {
 func (t WaitAgentTool) Name() string { return "wait_agent" }
 
 func (t WaitAgentTool) Description() string {
-	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run."
+	return "Wait briefly (15-60s, default 30) for an agent run, then return its status snapshot (completed runs include their result). Keep wait_seconds short and re-poll instead of waiting the full expected runtime: runs fail or stall early. Waiting only observes - it never sends instructions to the run. When a run completes, check the result against the original task's acceptance criteria before treating it as done."
 }
 
 func (t WaitAgentTool) Parameters() json.RawMessage {
@@ -81,10 +84,26 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	// Extract progress callback from context (if available) for live streaming.
+	// Structured protocol (sa-217): the wait window gives exact percent/ETA,
+	// which the legacy bare-string pipe could never express. EmitProgress
+	// falls back to the legacy ToolProgressKey automatically.
 	var progressFn subagent.SnapshotProgressFunc
-	if tpf, ok := ctx.Value(ToolProgressKey{}).(ToolProgressFunc); ok {
+	if ctx.Value(ToolProgressKey{}) != nil || ctx.Value(ProgressEmitterKey{}) != nil {
+		start := time.Now()
 		progressFn = func(summary string) {
-			tpf("", "wait_agent", summary)
+			ev := ProgressEvent{ToolName: "wait_agent", Phase: PhaseWaiting, Message: summary}
+			if wait > 0 {
+				elapsed := time.Since(start)
+				p := float64(elapsed) / float64(wait) * 100
+				if p > 99 {
+					p = 99
+				}
+				ev.Percent = ProgressPercent(p)
+				if remain := wait - elapsed; remain > 0 {
+					ev.ETA = ProgressETA(remain)
+				}
+			}
+			EmitProgress(ctx, ev)
 		}
 	}
 
@@ -94,9 +113,21 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 	}
 
 	if snap.Status == subagent.StatusCompleted && snap.ProgressSummary == "" && snap.CurrentTool == "" && snap.Result != "" {
-		return Result{Content: annotateWorktree(snap.Result, snap)}, nil
+		// #3237: snap.Task carries the nudge spawn appended; strip it so
+		// both reminders extract the ORIGINAL acceptance criteria.
+		task := stripReadBackNudge(snap.Task)
+		return Result{Content: annotateWorktree(snap.Result+formatExploreRegions(snap.Result)+readBackReminder(task, snap.Result)+acceptanceReminder(task, snap.Result), snap)}, nil
 	}
-	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap), snap)}, nil
+	var reminder string
+	if snap.Status == subagent.StatusCompleted {
+		// r453: front-end handshake report first (did the sub-agent
+		// restate the criteria before starting?), then the r384
+		// validator-side reminder - both on completed runs only.
+		// #3237: same strip as above - reminders see the original task.
+		task := stripReadBackNudge(snap.Task)
+		reminder = readBackReminder(task, snap.Result) + acceptanceReminder(task, snap.Result) + formatExploreRegions(snap.Result)
+	}
+	return Result{Content: annotateWorktree(appendCascadeHint(t.CascadeHints, t.ParentModel, snap)+reminder, snap)}, nil
 }
 
 // annotateWorktree appends the isolation worktree path to a wait_agent
@@ -106,4 +137,39 @@ func annotateWorktree(content string, snap subagent.Snapshot) string {
 		return content
 	}
 	return content + fmt.Sprintf("\n\nIsolated worktree: %s (branch: %s)", snap.Worktree, filepath.Base(snap.Worktree))
+}
+
+// exploreRegionRe matches the "path:startLine-endLine" contract lines an
+// Explore sub-agent must emit under its "## Regions" section (r388,
+// FastContext Kim et al. 2026: structured region handoff beats free-form
+// notes; the parent consumes regions directly as targeted reads).
+var exploreRegionRe = regexp.MustCompile(`(?m)^\s*(\S+?):(\d+)-(\d+)\b`)
+
+// formatExploreRegions turns the region list into an explicit targeted-read
+// block (path + offset + limit) so the parent can issue offset/limit reads
+// without re-scanning the free-text result for paths. Returns "" when the
+// "## Regions" marker is absent - non-Explore runs pass through unchanged,
+// and results whose region section failed to parse also stay untouched.
+func formatExploreRegions(result string) string {
+	idx := strings.Index(result, "## Regions")
+	if idx < 0 {
+		return ""
+	}
+	matches := exploreRegionRe.FindAllStringSubmatch(result[idx:], 8)
+	if len(matches) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(matches))
+	for _, m := range matches {
+		start, err1 := strconv.Atoi(m[2])
+		end, err2 := strconv.Atoi(m[3])
+		if err1 != nil || err2 != nil || start < 1 || end < start {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- read_file %s (offset %d, limit %d)", m[1], start, end-start+1))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nTargeted reads (structured handoff from the Explore sub-agent):\n" + strings.Join(lines, "\n")
 }

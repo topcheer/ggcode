@@ -279,7 +279,13 @@ func SaveIMAdapter(name string, values map[string]string) error {
 func mergeExistingIntoUpdate(update, existing config.IMAdapterConfig) config.IMAdapterConfig {
 	update.OutputMode = existing.OutputMode
 	update.Targets = existing.Targets
-	samePlatform := existing.Platform == update.Platform
+	// #2869: compare case-insensitively (after trimming). Existing configs may
+	// carry non-canonical platform values (hand-written YAML, or persisted by
+	// pre-#648 desktop / pre-#2417 CLI). A case-sensitive compare misjudged
+	// "Telegram" vs canonical "telegram" as a platform switch and silently
+	// dropped Args/Env/AllowFrom and old Extra keys when the user only edited
+	// another field. #591 semantics: identity is case-insensitive.
+	samePlatform := strings.EqualFold(strings.TrimSpace(existing.Platform), strings.TrimSpace(update.Platform))
 	if samePlatform {
 		update.Args = existing.Args
 		update.Env = existing.Env

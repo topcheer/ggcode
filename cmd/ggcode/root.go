@@ -55,6 +55,10 @@ func NewRootCmd() *cobra.Command {
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
 	var outputPath string
+	var outputSchemaPath string
+	// r415 per-run budget overrides (see the RunE mutation site).
+	var tokenBudgetFlag int64
+	var timeBudgetFlag time.Duration
 	var helperManifest string
 
 	cmd := &cobra.Command{
@@ -100,13 +104,24 @@ func NewRootCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
+			// r415: per-run budget override. Flags beat the config file for
+			// this invocation only (nothing is persisted); 0/unset keeps the
+			// configured value. Applies to both pipe mode and the TUI below,
+			// since both consume this same cfg through the agentruntime
+			// Apply* propagation.
+			if tokenBudgetFlag > 0 {
+				cfg.SessionTokenBudget = tokenBudgetFlag
+			}
+			if timeBudgetFlag > 0 {
+				cfg.SessionTimeBudget = timeBudgetFlag
+			}
 			if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
 				return fmt.Errorf("persisting Claude MCP servers: %w", err)
 			}
 
 			// Pipe mode: non-interactive single execution
 			if pipePrompt != "" {
-				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs)
+				code := RunPipe(cfg, cfgFile, pipePrompt, allowedTools, allowedDirs, outputPath, bypassFlag, readOnlyAllowedDirs, outputSchemaPath)
 				if code != 0 {
 					debug.Close()
 					os.Exit(code)
@@ -182,6 +197,11 @@ func NewRootCmd() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
+	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
+	// r415: per-run budget overrides (this invocation only, not persisted).
+	// The time ladder steers (80%/95%/100%) like the token budget.
+	cmd.Flags().Int64Var(&tokenBudgetFlag, "token-budget", 0, "per-run session token budget override (input+output tokens; 0 = use config)")
+	cmd.Flags().DurationVar(&timeBudgetFlag, "time-budget", 0, "per-run wall-clock soft budget override (e.g. 10m, 1h; 0 = use config)")
 
 	helperCmd := &cobra.Command{
 		Use:    "update-helper",
@@ -430,6 +450,24 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 
 	workingDir, _ := os.Getwd()
 	trace.Mark("working directory")
+	// Crash-leftover sweep: AtomicWriteFile temps orphaned by SIGKILL/OOM
+	// accumulate in .ggcode/ forever without this (sa-242 runtime audit).
+	if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(workingDir, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
+		debug.Log("root", "swept %d stale atomic-write temp file(s)", n)
+	}
+	// #3343 (sa-246 audit): the config root is the busiest AtomicWriteFile
+	// target (vendors.yaml, api keys, agent-rules.json...) yet was NOT in
+	// sweep scope - 7 crash-orphaned .ggcode-tmp-* temps (all 6952B) sat in
+	// ~/.ggcode forever. Same 1h staleness gate as the working-dir sweep.
+	if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
+		debug.Log("root", "swept %d stale atomic-write temp file(s) in config dir", n)
+	}
+	// #3346 (sa-247 audit): session todo files accumulate at HOME level with
+	// no deletion path; 30d retention sweep, same best-effort startup pattern.
+	safego.Go("startup.todoSweep", func() {
+		tool.SweepStaleTodoFiles(30 * 24 * time.Hour)
+	})
+
 	policy := agentruntime.BuildInteractivePermissionPolicy(cfg, workingDir, bypass)
 	mode := agentruntime.InteractivePermissionMode(cfg, bypass)
 	trace.Mark("permission policy")
@@ -482,7 +520,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		if skillUsageHandler != nil {
 			skillUsageHandler(usage)
 		}
-	}, nil) // SystemPromptBuilder set below after buildCurrentSystemPrompt is defined
+	}, nil, nil) // SystemPromptBuilder set below after buildCurrentSystemPrompt is defined
 	skillTool.OnSkillUsed = func(ref string) {
 		if knightAgent != nil {
 			knightAgent.RecordSkillUse(ref)
@@ -631,6 +669,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	agentruntime.RegisterCompactContextTool(registry, ag)
 	core.SetConfigAgent(ag)
 	refreshAgentSystemPrompt := func() {
 		nextPrompt, nextRefs := buildCurrentSystemPrompt()
@@ -668,8 +707,9 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
+	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
-	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
 	trace.Mark("setup agent")
@@ -703,6 +743,31 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// design doc (run-state-journaling.md) says "called at startup"; now
 	// it actually is, alongside the lock cleanup.
 	agent.CleanupOldJournals(24 * time.Hour)
+
+	// #3337 (sa-243 audit): CleanupOlderThan is the same never-wired
+	// defect as #1490-E, at GB scale - ~/.ggcode/sessions had 3.5GB / 120
+	// sessions (largest 593MB) because retention existed since the #1490
+	// era but no production caller ever ran it. Async + best-effort:
+	// deletion latency on a big backlog must not block startup. Pinned
+	// sessions are skipped by CleanupOlderThan itself; 90d keeps this
+	// conservative (conversation data, not logs).
+	safego.Go("startup.sessionRetention", func() {
+		if n, err := store.CleanupOlderThan(time.Now().AddDate(0, 0, -90)); err != nil {
+			debug.Log("session", "retention sweep failed: %v", err)
+		} else if n > 0 {
+			debug.Log("session", "retention sweep removed %d session(s) older than 90d", n)
+		}
+	})
+
+	// #3341 (sa-245 audit): every workspace that ever used named agents
+	// leaves a sha256-named dir under ~/.ggcode/subagents forever (3445
+	// observed, most holding a single artifact; the hash is not reversible
+	// so users cannot even identify them). Same async best-effort pattern;
+	// 90d matches the session retention default.
+	safego.Go("startup.subagentSweep", func() {
+		wd, _ := os.Getwd()
+		subagent.SweepStaleWorkspaceDirs(wd, 90*24*time.Hour)
+	})
 
 	var replPendingSessionLock *session.SessionLock
 
@@ -955,6 +1020,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			RemoteAgentsInfo: func() string { return remoteAgentsInfo },
 		}, task, agentType)
 	})
+	repl.SetJobManager(registry.JobManager())
 	repl.SetSubAgentManager(subMgr, prov, registry)
 	repl.SetAskUserTool(registry)
 	repl.SetCommandPane(registry, workingDir)
@@ -972,6 +1038,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	// Register task, cron, plan mode, config, and send_message tools
 	taskMgr := task.NewManager()
 	repl.SetTaskManager(taskMgr, registry)
+	// Post-compaction task-board rehydration (r53): task tool_results are
+	// summarized away on compaction; re-inject the live board so pending
+	// tasks and their IDs survive (Claude Code plan re-injection analog).
+	ag.SetTaskBoardSnapshotter(func() string { return taskMgr.Digest(20, 1200) })
 
 	cronSessionID := resumeID
 	if cronSessionID == "__new__" {
@@ -979,6 +1049,14 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 	cronScheduler := agentruntime.NewSessionCronScheduler(cronSessionID, workingDir, nil) // enqueue callback wired by SetCronScheduler
 	repl.SetCronScheduler(cronScheduler, registry)
+	// Ambient file-watch triggers (r372): fire-on-change prompts sharing
+	// the cron scheduler's enqueue channel (no-op until the repl wires it).
+	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
+	fileWatch.Start()
+	defer fileWatch.Stop()
+	// Sleep-time compute (r373): pre-compact during idle windows.
+	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	defer idleMaint.Stop()
 	repl.SetPlanModeTools(registry)
 	repl.SetSendMessageTool(subMgr, registry)
 	repl.SetTaskOutputTool(subMgr, registry)
@@ -1424,6 +1502,14 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		if issuerURL == "" {
 			srv.Stop()
 			return nil, nil, nil, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
+		}
+		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
+		// (#1503) - without it an auth0/azure preset without a filled
+		// tenant starts the server clean and every JWKS fetch hits an
+		// NXDOMAIN placeholder host: silent per-request 401s.
+		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
+			srv.Stop()
+			return nil, nil, nil, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
 		}
 		if issuerURL != "" && clientID != "" {
 			tv, err := auth.NewTokenValidator(clientID, issuerURL,

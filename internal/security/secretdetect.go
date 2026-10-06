@@ -117,7 +117,10 @@ var secretPatterns = []SecretPattern{
 		ID:       "private_key_block",
 		Name:     "Private Key (PEM)",
 		Severity: "high",
-		Pattern:  regexp.MustCompile(`-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
+		// #3084: ENCRYPTED (openssl pkcs8 -topk8 passphrase form) added to
+		// the prefix alternation so the detection layer stops trailing the
+		// display layer's [A-Z ]* prefix class for this variant.
+		Pattern: regexp.MustCompile(`-----BEGIN (?:ENCRYPTED |RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----`),
 	},
 	{
 		ID:       "ssh_private_key",
@@ -184,7 +187,13 @@ var secretPatterns = []SecretPattern{
 // these to avoid noise.
 var fileAllowlistPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`_test\.go$`),
-	regexp.MustCompile(`\.test\.`),
+	// #3081: the bare `\.test\.` infix allowlisted REAL configs
+	// (api.test.env, prod.test.conf) out of scanning entirely. Narrowed to
+	// known test-resource filename shapes; `api.test.env` scans again.
+	regexp.MustCompile(`\.test\.go$`),
+	regexp.MustCompile(`\.test\.py$`),
+	regexp.MustCompile(`\.test\.(js|ts|mjs|jsx|tsx)$`),
+	regexp.MustCompile(`\.test\.(json|ya?ml|golden|txt|input|output)$`),
 	regexp.MustCompile(`testdata[/\\]`), // both Unix and Windows path separators
 	regexp.MustCompile(`_fixture`),
 	regexp.MustCompile(`(?i)\.example$`),

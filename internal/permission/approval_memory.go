@@ -1,6 +1,8 @@
 package permission
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/url"
 	"path/filepath"
@@ -212,6 +214,20 @@ func MakeKey(toolName string, input json.RawMessage) (string, bool) {
 		}
 	}
 
+	// #3059: free-text body tools (delegate prompt, spawn_agent task,
+	// lanchat/a2a_remote message) carry their identity in the body text -
+	// without a signature the key degraded to the bare tool name, and after
+	// three supervised approvals ANY prompt auto-approved (delegate's
+	// arbitrary prompt is an arbitrary code-execution surface).
+	for _, key := range []string{"prompt", "task", "message", "query"} {
+		if v, ok := m[key]; ok {
+			var s string
+			if json.Unmarshal(v, &s) == nil && s != "" {
+				return toolName + ":" + bodySignature(s), true
+			}
+		}
+	}
+
 	// For command tools, use the binary name.
 	for _, key := range []string{"command", "input"} {
 		if v, ok := m[key]; ok {
@@ -223,6 +239,14 @@ func MakeKey(toolName string, input json.RawMessage) (string, bool) {
 	}
 
 	return toolName, true
+}
+
+// bodySignature hashes free-text prompt bodies (#3059): unlike paths and
+// urls there is no reducible site signature, so the approval is pinned to
+// the exact text - a different prompt can never ride a learned approval.
+func bodySignature(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:8])
 }
 
 // urlSignature reduces a URL to its scheme+host+first-path-segment so

@@ -37,11 +37,17 @@ type OpenAIProvider struct {
 	temperature      float64
 	samplingOverride atomic.Pointer[SamplingOverride] // #2248: MCP sampling per-call stop sequences
 	topP             float64
-	name             string
-	baseURL          string                    // endpoint URL, for logging
-	transport        *headerInjectingTransport // kept for runtime header updates
-	logprobs         bool                      // sa-74: request token logprobs for confidence telemetry
-	policy           callPolicy                // sa-78: per-call deadline + retry budget
+	// responseSchema constrains the FINAL assistant response to a JSON
+	// Schema (OpenAI structured outputs, response_format=json_schema,
+	// strict). Empty = unconstrained. Anthropic/Gemini providers do not
+	// implement ResponseSchemaSetter and fall back to prompt-level
+	// guidance + jsonrepair.
+	responseSchema json.RawMessage
+	name           string
+	baseURL        string                    // endpoint URL, for logging
+	transport      *headerInjectingTransport // kept for runtime header updates
+	logprobs       bool                      // sa-74: request token logprobs for confidence telemetry
+	policy         callPolicy                // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name, implementing ModelNameProvider.
@@ -132,6 +138,32 @@ func (p *OpenAIProvider) ToolChoice() string { return p.toolChoice }
 // Non-allowlisted tools are serialized exactly as before.
 func (p *OpenAIProvider) SetStrictTools(allow map[string]bool) {
 	p.strictTools = allow
+}
+
+// SetResponseSchema installs a JSON Schema that constrains the final
+// assistant response (OpenAI structured outputs). nil/empty disables.
+// Implemented per the same bare-field pattern as SetToolChoice.
+func (p *OpenAIProvider) SetResponseSchema(schema json.RawMessage) {
+	p.responseSchema = schema
+}
+
+// ResponseSchema returns the installed response schema (nil = none).
+func (p *OpenAIProvider) ResponseSchema() json.RawMessage { return p.responseSchema }
+
+// applyResponseSchema injects response_format=json_schema (strict) when a
+// schema is installed. The schema is passed through verbatim as a JSON
+// object (json.RawMessage implements json.Marshaler).
+func (p *OpenAIProvider) applyResponseSchema(req *openai.ChatCompletionRequest) {
+	if len(p.responseSchema) == 0 {
+		return
+	}
+	req.ResponseFormat = &openai.ChatCompletionResponseFormat{
+		JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+			Name:   "final_answer",
+			Schema: p.responseSchema,
+			Strict: true,
+		},
+	}
 }
 
 // probeChat sends a single chat request without retry, adaptive cap
@@ -302,6 +334,9 @@ type headerInjectingTransport struct {
 	mu         sync.RWMutex
 	headers    http.Header
 	rateLimits *rateLimitTracker // nil if rate-limit capture is disabled
+	// promptCacheKey (sa-231) is injected into POST JSON bodies as
+	// prompt_cache_key for cache-routing affinity; "" = disabled.
+	promptCacheKey string
 }
 
 func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -311,7 +346,11 @@ func (t *headerInjectingTransport) RoundTrip(req *http.Request) (*http.Response,
 			req.Header.Set(k, v)
 		}
 	}
+	cacheKey := t.promptCacheKey
 	t.mu.RUnlock()
+	if cacheKey != "" {
+		injectPromptCacheKey(req, cacheKey)
+	}
 	resp, err := t.base.RoundTrip(req)
 	if err == nil && resp != nil && t.rateLimits != nil {
 		t.rateLimits.Update(resp.Header)
@@ -514,6 +553,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		req.Tools = p.convertTools(tools)
 	}
 	p.applyToolChoice(&req)
+	p.applyResponseSchema(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
 	p.applyLogprobs(&req)
@@ -584,6 +624,22 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}, nil
 }
 
+// sendEvent delivers ev to ch unless ctx is done, reporting cancellation.
+// #3071: the 14 former bare `ch <- StreamEvent{...}` sends parked the
+// producer goroutine forever once a cancelling consumer stopped reading
+// (buffer of 64 fills, nobody ever returns) - the same trap #3068 fixed in
+// gemini.go; the fallback wrapper layer (#2570/#602) never covered the
+// no-fallback production path. Every send in the ChatStream producer
+// goroutine must go through here.
+func (p *OpenAIProvider) sendEvent(ctx context.Context, ch chan<- StreamEvent, ev StreamEvent) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition) (<-chan StreamEvent, error) {
 	chatMsgs := p.convertMessages(messages)
 	req := openai.ChatCompletionRequest{
@@ -599,6 +655,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		req.Tools = p.convertTools(tools)
 	}
 	p.applyToolChoice(&req)
+	p.applyResponseSchema(&req)
 	p.applySampling(&req)
 	p.applyMaxTokens(&req)
 	p.applyLogprobs(&req)
@@ -647,18 +704,15 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					p.cap.OnRejected(parsed)
 				}
 				if isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
-					delay := retryDelay(err, attempt)
-					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), delay, err, err)
-					// Notify user about retry
-					ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
-					if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-						// #722: budget exhausted — stop retrying now; wrap with the
-						// sentinel so the failover layer switches immediately.
-						if sleepErr == errRetryBudgetExhausted {
-							sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+					debug.Log("openai", "CONNECT FAILED model=%s baseURL=%s attempt=%d/%d delay=%v: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), retryDelay(err, attempt), err, err)
+					slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
+					if !slept {
+						if sErr != nil {
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sErr}) {
+								return
+							}
+							streamError = true
 						}
-						ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
-						streamError = true
 						return
 					}
 					// Retry the connection on the next attempt instead of
@@ -669,7 +723,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					continue
 				}
 				debug.Log("openai", "CONNECT FATAL model=%s baseURL=%s attempt=%d/%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), err, err)
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %w", err)}) {
+					return
+				}
 				return
 			}
 
@@ -692,32 +748,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					// may carry complete tool call data from a prior stream).
 					// Never flush on retry (would double-execute) or hard
 					// error (broken conversation, can't trust partial args).
-					shouldFlush := normalEnd && !retry // #302: cancel no longer flushes half-made tool calls
-					if !shouldFlush {
-						return
-					}
-					for idx, tc := range toolCalls {
-						if tc.Name == "" || tc.ID == "" {
-							continue
-						}
-						// Validate arguments look like complete JSON.
-						// If invalid, attempt JSON repair before skipping -
-						// stream truncation and weak models frequently produce
-						// nearly-valid JSON that can be salvaged.
-						if len(tc.Arguments) > 0 && !json.Valid(tc.Arguments) {
-							if repaired, ok := RepairJSON(tc.Arguments); ok {
-								debug.Log("openai", "flush tool_call id=%s name=%s: JSON repaired %d→%d bytes", tc.ID, tc.Name, len(tc.Arguments), len(repaired))
-								tc.Arguments = repaired
-							} else {
-								debug.Log("openai", "skip flush incomplete tool_call id=%s name=%s (invalid JSON args, repair failed)", tc.ID, tc.Name)
-								continue
-							}
-						}
-						debug.Log("openai", "flush residual tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
-						outputChars += len(tc.Name) + len(tc.Arguments)
+					flushChars, flushEmitted, _ := p.flushResidualToolCalls(ctx, ch, toolCalls, normalEnd, retry)
+					outputChars += flushChars
+					if flushEmitted {
 						emitted = true
-						ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
-						delete(toolCalls, idx)
 					}
 				}()
 				for {
@@ -729,7 +763,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						// assistant message and repaired+flushed unfinished tool calls.
 						if errors.Is(recvErr, context.Canceled) {
 							debug.Log("openai", "stream cancelled: %v emitted=%v", recvErr, emitted)
-							ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: recvErr}) {
+								return
+							}
 							streamError = true
 							return
 						}
@@ -742,26 +778,26 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 						debug.Log("openai", "STREAM ERROR model=%s baseURL=%s attempt=%d/%d emitted=%v reasoning=%d output=%d: %T: %v", p.model, p.baseURL, attempt+1, p.policy.attempts(), emitted, reasoningBuf.Len(), outputChars, recvErr, recvErr)
 						// Retry if no content emitted yet and error is retryable
 						if !emitted && isRetryableForContext(ctx, recvErr) && attempt < p.policy.attempts()-1 {
-							delay := retryDelay(recvErr, attempt)
-							ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
-							if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-								// #722: budget exhausted — stop retrying now; wrap with
-								// the sentinel so the failover layer switches immediately.
-								if sleepErr == errRetryBudgetExhausted {
-									sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, recvErr)
+							slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, recvErr, attempt)
+							if !slept {
+								if sErr != nil {
+									if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: sErr}) {
+										return
+									}
+									// Mark the stream as errored so the tail does
+									// not emit a usage-bearing Done after the
+									// terminal Error (mirrors the connect-phase
+									// branch above and anthropic.go).
+									streamError = true
 								}
-								ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
-								// Mark the stream as errored so the tail does
-								// not emit a usage-bearing Done after the
-								// terminal Error (mirrors the connect-phase
-								// branch above and anthropic.go).
-								streamError = true
 								return
 							}
 							retry = true
 							return
 						}
-						ch <- StreamEvent{Type: StreamEventError, Error: recvErr}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: recvErr}) {
+							return
+						}
 						streamError = true
 						return
 					}
@@ -799,14 +835,18 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					if delta.ReasoningContent != "" {
 						reasoningBuf.WriteString(delta.ReasoningContent)
 						emitted = true
-						ch <- StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventReasoning, Text: delta.ReasoningContent}) {
+							return
+						}
 					}
 
 					// Text content
 					if delta.Content != "" {
 						outputChars += len(delta.Content)
 						emitted = true
-						ch <- StreamEvent{Type: StreamEventText, Text: delta.Content}
+						if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventText, Text: delta.Content}) {
+							return
+						}
 					}
 
 					// Confidence telemetry (sa-74): accumulate per-token logprobs
@@ -874,7 +914,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 							outputChars += len(tc.Name) + len(tc.Arguments)
 							emitted = true
-							ch <- StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventToolCallDone, Tool: *tc}) {
+								return
+							}
 							delete(toolCalls, idx)
 						}
 						if isLengthFinishReason(finishReason) {
@@ -885,7 +927,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 							}
 							truncated = true
 						} else if finishErr := finishReasonError(finishReason); finishErr != nil {
-							ch <- StreamEvent{Type: StreamEventError, Error: finishErr}
+							if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: finishErr}) {
+								return
+							}
 							streamError = true
 							return
 						}
@@ -914,12 +958,16 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 					avg := logprobSum / float64(logprobN)
 					confidence = &avg
 				}
-				ch <- StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated, Confidence: confidence}
+				if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventDone, Usage: usage, Truncated: truncated, Confidence: confidence}) {
+					return
+				}
 			}
 			return
 		}
 		// All retry attempts exhausted without success.
-		ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", p.policy.attempts())}
+		if !p.sendEvent(ctx, ch, StreamEvent{Type: StreamEventError, Error: fmt.Errorf("openai stream: %d retry attempts exhausted", p.policy.attempts())}) {
+			return
+		}
 	})
 
 	return ch, nil
@@ -1045,6 +1093,15 @@ func finishReasonError(finishReason string) error {
 //	assistant: [tool_use(id=1)]
 //	user:      [tool_result(id=1), text: "guidance warning\n\nresult"]
 func mergeInjectedUserMessages(messages []Message) []Message {
+	return foldInjectedUserMessages(messages, prependToToolResultContent)
+}
+
+// foldInjectedUserMessages is the provider-agnostic core of
+// mergeInjectedUserMessages. fold controls where the folded guidance text
+// lands within the tool_result message: OpenAI prepends it before the first
+// text/tool_result block, Anthropic must keep tool_result blocks as the FIRST
+// content of the user turn (#2819) so it appends after the tool_result blocks.
+func foldInjectedUserMessages(messages []Message, fold func([]ContentBlock, string) []ContentBlock) []Message {
 	if len(messages) < 3 {
 		return messages
 	}
@@ -1081,7 +1138,7 @@ func mergeInjectedUserMessages(messages []Message) []Message {
 		return messages
 	}
 
-	debug.Log("openai", "mergeInjectedUserMessages: folding text-only user messages into tool_result messages")
+	debug.Log("provider", "mergeInjectedUserMessages: folding text-only user messages into tool_result messages")
 
 	result := make([]Message, 0, len(messages))
 	i := 0
@@ -1110,14 +1167,21 @@ func mergeInjectedUserMessages(messages []Message) []Message {
 				merged := messages[j]
 				if len(guidanceTexts) > 0 {
 					prefix := strings.Join(guidanceTexts, "\n\n") + "\n\n"
-					merged.Content = prependToToolResultContent(merged.Content, prefix)
+					merged.Content = fold(merged.Content, prefix)
 				}
 				result = append(result, merged)
 				i = j + 1
 			} else {
-				// No tool_result found - keep messages as-is
-				result = append(result, messages[i+1])
-				i = i + 2
+				// No tool_result found - keep messages as-is. #3071: the
+				// scan advanced j past EVERY consecutive text-only user, so
+				// all of messages[i+1..j-1] must be preserved - the old
+				// `append(i+1); i += 2` silently dropped i+2..j-1 (their
+				// texts were collected into guidanceTexts but never used on
+				// this path), deleting guidance from the conversation.
+				for k := i + 1; k < j; k++ {
+					result = append(result, messages[k])
+				}
+				i = j
 			}
 		} else {
 			result = append(result, messages[i])
@@ -1248,57 +1312,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 				if len(guidanceText) > 0 {
 					guidancePrefix = strings.Join(guidanceText, "\n") + "\n\n"
 				}
-				firstTool := true
-				// Convert tool_result blocks to OpenAI tool messages
-				for _, b := range m.Content {
-					if b.Type == "tool_result" {
-						if len(b.Images) > 0 && !b.IsError {
-							// Multimodal tool result: images + text
-							var parts []openai.ChatMessagePart
-							for _, img := range b.Images {
-								parts = append(parts, openai.ChatMessagePart{
-									Type: openai.ChatMessagePartTypeImageURL,
-									ImageURL: &openai.ChatMessageImageURL{
-										URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
-										Detail: openai.ImageURLDetailAuto,
-									},
-								})
-							}
-							if b.Output != "" {
-								parts = append(parts, openai.ChatMessagePart{
-									Type: openai.ChatMessagePartTypeText,
-									Text: b.Output,
-								})
-							}
-							if firstTool && guidancePrefix != "" {
-								// #474: guidance travels INSIDE the first
-								// tool message — ordering contract intact.
-								parts = append([]openai.ChatMessagePart{{
-									Type: openai.ChatMessagePartTypeText,
-									Text: guidancePrefix,
-								}}, parts...)
-							}
-							result = append(result, openai.ChatCompletionMessage{
-								Role:         openai.ChatMessageRoleTool,
-								ToolCallID:   b.ToolID,
-								MultiContent: parts,
-							})
-						} else {
-							content := b.Output
-							if firstTool && guidancePrefix != "" {
-								// #474: guidance travels INSIDE the first
-								// tool message — ordering contract intact.
-								content = guidancePrefix + content
-							}
-							result = append(result, openai.ChatCompletionMessage{
-								Role:       openai.ChatMessageRoleTool,
-								Content:    content,
-								ToolCallID: b.ToolID,
-							})
-						}
-						firstTool = false
-					}
-				}
+				result = appendToolResultMessages(result, m.Content, guidancePrefix)
 				break
 			}
 			// Check if any content block is an image
@@ -1395,42 +1409,59 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			result = append(result, msg)
 		case "tool":
 			// Tool results - each tool_result block becomes a separate message
-			for _, b := range m.Content {
-				if b.Type == "tool_result" {
-					if len(b.Images) > 0 && !b.IsError {
-						var parts []openai.ChatMessagePart
-						for _, img := range b.Images {
-							parts = append(parts, openai.ChatMessagePart{
-								Type: openai.ChatMessagePartTypeImageURL,
-								ImageURL: &openai.ChatMessageImageURL{
-									URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
-									Detail: openai.ImageURLDetailAuto,
-								},
-							})
-						}
-						if b.Output != "" {
-							parts = append(parts, openai.ChatMessagePart{
-								Type: openai.ChatMessagePartTypeText,
-								Text: b.Output,
-							})
-						}
-						result = append(result, openai.ChatCompletionMessage{
-							Role:         openai.ChatMessageRoleTool,
-							ToolCallID:   b.ToolID,
-							MultiContent: parts,
-						})
-					} else {
-						result = append(result, openai.ChatCompletionMessage{
-							Role:       openai.ChatMessageRoleTool,
-							Content:    b.Output,
-							ToolCallID: b.ToolID,
-						})
-					}
-				}
-			}
+			result = appendToolResultMessages(result, m.Content, "")
 		}
 	}
 	return result
+}
+
+// appendToolResultMessages emits each tool_result block in blocks as a
+// separate OpenAI tool message, appending to dst. The first emitted text
+// content is prefixed with guidancePrefix so injected guidance text (#453/#474)
+// can ride along with the first tool result without inserting a user message
+// between assistant tool_calls and tool results (which strict backends reject).
+func appendToolResultMessages(dst []openai.ChatCompletionMessage, blocks []ContentBlock, guidancePrefix string) []openai.ChatCompletionMessage {
+	first := true
+	for _, b := range blocks {
+		if b.Type != "tool_result" {
+			continue
+		}
+		output := b.Output
+		if first && guidancePrefix != "" {
+			output = guidancePrefix + output
+		}
+		if len(b.Images) > 0 && !b.IsError {
+			var parts []openai.ChatMessagePart
+			for _, img := range b.Images {
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{
+						URL:    fmt.Sprintf("data:%s;base64,%s", img.MIME, img.Base64),
+						Detail: openai.ImageURLDetailAuto,
+					},
+				})
+			}
+			if output != "" {
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeText,
+					Text: output,
+				})
+			}
+			dst = append(dst, openai.ChatCompletionMessage{
+				Role:         openai.ChatMessageRoleTool,
+				ToolCallID:   b.ToolID,
+				MultiContent: parts,
+			})
+		} else {
+			dst = append(dst, openai.ChatCompletionMessage{
+				Role:       openai.ChatMessageRoleTool,
+				Content:    output,
+				ToolCallID: b.ToolID,
+			})
+		}
+		first = false
+	}
+	return dst
 }
 
 func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.Tool {

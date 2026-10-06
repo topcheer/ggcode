@@ -14,9 +14,9 @@ func TestStatuslineGrandchildPipeRelease(t *testing.T) {
 		t.Skip("unix-only")
 	}
 	start := time.Now()
-	got := runStatuslineCommand(`sleep 5 & sleep 5`, statuslinePayload{}, 80*time.Millisecond)
+	got, ok := runStatuslineCommand(`sleep 5 & sleep 5`, statuslinePayload{}, 80*time.Millisecond)
 	elapsed := time.Since(start)
-	if got != "" {
+	if ok || got != "" {
 		t.Fatalf("got %q, want empty", got)
 	}
 	if elapsed > 1500*time.Millisecond {
@@ -39,9 +39,9 @@ func TestStatuslineWaitDelayBackstop(t *testing.T) {
 	}
 	escape := `python3 -c 'import os,time; os.setsid(); time.sleep(5)' & sleep 5`
 	start := time.Now()
-	got := runStatuslineCommand(escape, statuslinePayload{}, 80*time.Millisecond)
+	got, ok := runStatuslineCommand(escape, statuslinePayload{}, 80*time.Millisecond)
 	elapsed := time.Since(start)
-	if got != "" {
+	if ok || got != "" {
 		t.Fatalf("got %q, want empty", got)
 	}
 	// WaitDelay is 1s: expect ~1.1s total, well under the 2s tolerance the

@@ -621,3 +621,50 @@ type Server struct {
 		t.Fatal("Issue #1101 #B: expected breaking change for embedded struct removal, got none")
 	}
 }
+
+// TestExportGuard_SubdirectoryFile covers gitFileContentAtHEAD rebasing a
+// subdirectory-relative path onto the repository root: running the guard with
+// cwd inside pkg/ must still resolve git path "pkg/service.go" at HEAD.
+func TestExportGuard_SubdirectoryFile(t *testing.T) {
+	initial := `package service
+
+func Process(input string) error {
+	return nil
+}
+`
+	dir := t.TempDir()
+	if err := exec.Command("git", "init", dir).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	exec.Command("git", "-C", dir, "config", "user.email", "test@test.com").Run()
+	exec.Command("git", "-C", dir, "config", "user.name", "Test").Run()
+
+	sub := filepath.Join(dir, "pkg")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "service.go"), []byte(initial), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	exec.Command("git", "-C", dir, "add", ".").Run()
+	exec.Command("git", "-C", dir, "commit", "-m", "initial").Run()
+
+	// Break the API: drop the exported function.
+	edited := `package service
+
+type Server struct{}
+`
+	if err := os.WriteFile(filepath.Join(sub, "service.go"), []byte(edited), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	old := gitHeadExportSymbols(sub, "service.go")
+	if old == nil {
+		t.Fatal("expected non-nil symbols from git HEAD for subdirectory file")
+	}
+	current := parseExportedSymbols(filepath.Join(sub, "service.go"))
+	changes := diffExportSymbols(old, current)
+	if len(changes) == 0 {
+		t.Fatal("expected breaking change for Process removal in subdirectory file, got none")
+	}
+}

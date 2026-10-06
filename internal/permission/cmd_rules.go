@@ -196,7 +196,15 @@ func (rs *CommandRuleSet) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0644)
+	// #3060-C2: temp+rename atomic write (SaveRules in rules_persist.go
+	// pattern) - the old plain WriteFile could leave a truncated file on a
+	// crash, and LoadRules then silently fell back to an empty rule set,
+	// losing the user's explicit deny rules.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // compileCommandPattern converts a user-friendly pattern into a compiled regex.
@@ -480,11 +488,4 @@ func ExtractCommandFromInput(input string) string {
 		}
 	}
 	return ""
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

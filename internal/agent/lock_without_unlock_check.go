@@ -40,7 +40,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"sort"
@@ -145,8 +144,7 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, fset, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return nil
 	}
@@ -184,7 +182,37 @@ func findLocksWithoutUnlock(src string) []lockWithoutUnlockInstance {
 //     `v := mu.Unlock` method-value idiom
 //   - defer calling a method whose name suggests release but is not the
 //     canonical Unlock/RUnlock on the same receiver (defer s.release())
+//
+// #2826: a bare-variable defer only keeps the exemption when the identifier
+// itself carries unlock/release semantics. Common non-lock defers (context
+// cancel, builtin close(ch), cleanup/done/stop callbacks) previously exempted
+// the WHOLE function, making a missing Unlock next to them systematically
+// invisible.
 func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
+	// #2838: the `un := mu.Unlock; defer un()` method-value idiom survives
+	// renaming (short names like un/v/fn carry no unlock/release substring),
+	// so scan for the ASSIGNMENT source first: any ident bound to a
+	// <selector>.Unlock/RUnlock method value makes a bare `defer <ident>()`
+	// a genuine indirect release. Everything else keeps #2826's tightened
+	// posture (cancel/close/cleanup no longer silence the whole function).
+	methodValues := map[string]bool{}
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != len(assign.Rhs) {
+			return true
+		}
+		for i, rhs := range assign.Rhs {
+			sel, ok := rhs.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "Unlock" && sel.Sel.Name != "RUnlock") {
+				continue
+			}
+			if id, ok := assign.Lhs[i].(*ast.Ident); ok {
+				methodValues[id.Name] = true
+			}
+		}
+		return true
+	})
+
 	indirect := false
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		d, ok := node.(*ast.DeferStmt)
@@ -193,9 +221,18 @@ func fnHasIndirectRelease(fn *ast.FuncDecl) bool {
 		}
 		switch callee := d.Call.Fun.(type) {
 		case *ast.Ident:
-			// defer unlock() - variable call: cannot resolve the receiver
-			// it releases without type info; treat as indirect.
-			indirect = true
+			// defer unlock() - bare variable call. Without type info the
+			// receiver cannot be resolved, so names carrying unlock/release
+			// semantics (the `v := mu.Unlock; defer v()` method-value
+			// idiom) stay conservative; anything else (cancel, close,
+			// cleanup, done...) is not a release shape the simulator must
+			// silence on (#2826). #2838: an ident whose ASSIGNMENT source
+			// is a Unlock/RUnlock method value is the same idiom renamed.
+			lower := strings.ToLower(callee.Name)
+			if methodValues[callee.Name] ||
+				strings.Contains(lower, "unlock") || strings.Contains(lower, "release") {
+				indirect = true
+			}
 		case *ast.SelectorExpr:
 			if callee.Sel.Name != "Unlock" && callee.Sel.Name != "RUnlock" {
 				lower := strings.ToLower(callee.Sel.Name)
@@ -258,9 +295,29 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 			return
 		}
 		if _, isLock := lockMethodNames[sel.Sel.Name]; isLock {
-			if _, exists := held[recv]; !exists {
-				held[recv] = &simHeldEntry{lock: lockCall{receiver: recv, method: sel.Sel.Name, pos: call.Pos()}}
+			if prev, exists := held[recv]; exists {
+				// #2740: re-acquiring an already-held lock on the same
+				// receiver is a guaranteed self-deadlock (Go mutexes are not
+				// reentrant) even when the function is syntactically
+				// balanced. The header's failure mode #3 promises this
+				// detection; the old code silently returned. Only Lock/
+				// TryLock warn - RLock re-entry is legal (sync.RWMutex
+				// reader reentrancy) and stays silent per the issue's
+				// conservative guidance. Mark the held entry reported so the
+				// function-end check does not emit a second, misleading
+				// missing-unlock warning for the same anchor (#1099).
+				if !prev.reported && (sel.Sel.Name == "Lock" || sel.Sel.Name == "TryLock") {
+					prev.reported = true
+					instances = append(instances, lockWithoutUnlockInstance{
+						receiver: recv,
+						method:   sel.Sel.Name,
+						funcName: fn.Name.Name,
+						posStr:   fset.Position(call.Pos()).String() + " (double lock / non-reentrant re-acquire)",
+					})
+				}
+				return
 			}
+			held[recv] = &simHeldEntry{lock: lockCall{receiver: recv, method: sel.Sel.Name, pos: call.Pos()}}
 			return
 		}
 		if sel.Sel.Name == "Unlock" || sel.Sel.Name == "RUnlock" {
@@ -295,6 +352,92 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 		body()
 		reportHeld("held at branch end")
 		held = saved
+	}
+	// switchHasDefault reports whether a switch body has a default clause
+	// (CaseClause with no case expressions). Without one, the
+	// no-case-matched path carries the incoming held set straight to the
+	// join, so the join must include it (#2717).
+	switchHasDefault := func(body *ast.BlockStmt) bool {
+		if body == nil {
+			return false
+		}
+		for _, cs := range body.List {
+			if cl, ok := cs.(*ast.CaseClause); ok && cl.List == nil {
+				return true
+			}
+		}
+		return false
+	}
+	// walkClauseBody walks the CaseClause/CommClause statements of a
+	// switch/select body (#2717). Each clause is an alternative execution
+	// path: its body runs on its own branch copy so an Unlock in one case
+	// neither satisfies nor double-releases for the other cases. After all
+	// clauses the join state is the UNION of every case-path end set (a
+	// receiver counts as held iff some path still holds it): all paths
+	// released means released, keeping the select per-case Unlock fan-out
+	// idiom warning-free instead of a false "held at function end"; any
+	// single leaking path still reports. select always runs exactly one
+	// case (blocking is path termination, not bypass); a switch without
+	// default can bypass the whole body, so bypassPossible adds the
+	// incoming set to the join. fallthrough chains are approximated as
+	// independent paths, the same conservative shape used for if/else-if
+	// ladders. Known approximation outside #2717 scope: a TryLock in a
+	// switch tag is modeled as an unconditional acquire, so its failure
+	// branch still reads as held (same shape as an if condition).
+	var walkClauseBody func(body *ast.BlockStmt, bypassPossible bool)
+	walkClauseBody = func(body *ast.BlockStmt, bypassPossible bool) {
+		if body == nil {
+			return
+		}
+		saved := held
+		joined := map[string]*simHeldEntry{}
+		if bypassPossible {
+			joined = copySimHeld(saved)
+		}
+		for _, cs := range body.List {
+			branchHeld := copySimHeld(saved)
+			held = branchHeld
+			switch cl := cs.(type) {
+			case *ast.CaseClause:
+				walkStmts(cl.Body)
+			case *ast.CommClause:
+				if cl.Comm != nil {
+					// case v := <-ch: / case ch <- x: - the comm statement
+					// runs on the taken path; it can carry calls (rare,
+					// but a TryLock in an assignment guard is legal Go).
+					walkStmts([]ast.Stmt{cl.Comm})
+				}
+				walkStmts(cl.Body)
+			default:
+				walkStmts([]ast.Stmt{cs})
+			}
+			reportHeld("held at branch end")
+			for recv, e := range branchHeld {
+				if _, ok := joined[recv]; !ok {
+					joined[recv] = e
+				}
+			}
+		}
+		// Merge the join state back into the incoming set: drop receivers
+		// every path released, add receivers some path acquired and kept.
+		held = saved
+		for recv := range saved {
+			if _, ok := joined[recv]; !ok {
+				delete(saved, recv)
+			}
+		}
+		for recv, e := range joined {
+			if outer, ok := saved[recv]; ok {
+				// A case path already reported this receiver (branch-end
+				// leak): propagate the flag so the function-end check does
+				// not double-report the same lock call (#1099 anchor rule).
+				if e.reported {
+					outer.reported = true
+				}
+			} else {
+				saved[recv] = e
+			}
+		}
 	}
 	walkStmts = func(stmts []ast.Stmt) {
 		for _, st := range stmts {
@@ -365,17 +508,34 @@ func simulateHeldLocks(fn *ast.FuncDecl, fset *token.FileSet) []lockWithoutUnloc
 					simBranch(func() { walkStmts(s.Body.List) })
 				}
 			case *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
-				var body *ast.BlockStmt
+				// #2717: switch/select bodies are lists of CaseClause /
+				// CommClause statements, not plain statements. The old
+				// single simBranch(body.List) walk hit the default arm for
+				// every clause header, so Lock/Unlock inside case bodies was
+				// invisible: a Lock leaked inside a case went unreported,
+				// and code that unlocks per-case (select fan-out) was
+				// misreported as held at function end.
 				switch e := st.(type) {
 				case *ast.SwitchStmt:
-					body = e.Body
+					if e.Init != nil {
+						walkStmts([]ast.Stmt{e.Init})
+					}
+					if call, ok := e.Tag.(*ast.CallExpr); ok {
+						// switch mu.TryLock() { case true: ... } - the tag is
+						// evaluated once on the taken path.
+						applyCall(call)
+					}
+					walkClauseBody(e.Body, !switchHasDefault(e.Body))
 				case *ast.TypeSwitchStmt:
-					body = e.Body
+					if e.Init != nil {
+						walkStmts([]ast.Stmt{e.Init})
+					}
+					walkClauseBody(e.Body, !switchHasDefault(e.Body))
 				case *ast.SelectStmt:
-					body = e.Body
-				}
-				if body != nil {
-					simBranch(func() { walkStmts(body.List) })
+					// select always runs exactly one case: blocking until a
+					// case is ready is path termination, not a bypass to the
+					// join, so no default detection is needed.
+					walkClauseBody(e.Body, false)
 				}
 			default:
 				// #2554: `go func(){ mu.Lock() }()` is a PERMANENT deadlock

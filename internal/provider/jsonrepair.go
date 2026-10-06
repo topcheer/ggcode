@@ -48,6 +48,25 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 		return []byte(repaired), true
 	}
 
+	// Step 2.5: Normalize Python-style literals (True/False/None) outside of
+	// strings. Weak models trained on Python corpora emit these as boolean/null
+	// values, which strict JSON rejects.
+	repaired = normalizePythonLiterals(repaired)
+
+	// Step 2.6: Quote bare object keys (JavaScript object literal style,
+	// e.g. {path: "x.go"} instead of {"path": "x.go"}).
+	repaired = quoteUnquotedKeys(repaired)
+
+	// Step 2.7: Convert single-quoted string values to double-quoted.
+	// Conservative: ambiguous content (embedded apostrophes or backslashes)
+	// is left untouched.
+	repaired = normalizeSingleQuotedStrings(repaired)
+
+	if json.Valid([]byte(repaired)) {
+		debug.Log("jsonrepair", "repaired by literal/key/quote normalization: %s -> %s", truncateForLog(original), truncateForLog(repaired))
+		return []byte(repaired), true
+	}
+
 	// Step 3: Extract the JSON object — find the first '{' and try to
 	// extend to the matching '}'. This removes leading/trailing prose.
 	repaired = extractJSONObject(repaired)
@@ -64,10 +83,17 @@ func RepairJSON(raw []byte) ([]byte, bool) {
 	}
 
 	// Step 5: Close unclosed braces and brackets (stream truncation fix).
-	repaired = closeUnclosed(repaired)
-	if json.Valid([]byte(repaired)) {
+	// A stream that ends INSIDE a string is refused (#3069): fabricating the
+	// closing quote turns a truncated value into valid-but-mutilated JSON
+	// (e.g. edit_file silently running on partial old_text). Refusal lets
+	// the caller retry instead of executing wrong arguments.
+	repaired, closable := closeUnclosed(repaired)
+	if closable && json.Valid([]byte(repaired)) {
 		debug.Log("jsonrepair", "repaired by closing unclosed delimiters: %s -> %s", truncateForLog(original), truncateForLog(repaired))
 		return []byte(repaired), true
+	}
+	if !closable {
+		debug.Log("jsonrepair", "refused repair: stream ends inside an unterminated string (truncated value): %s", truncateForLog(original))
 	}
 
 	// Repair failed — return original.
@@ -161,11 +187,15 @@ func removeTrailingCommas(s string) string {
 	return b.String()
 }
 
-// closeUnclosed balances unclosed '{', '[', and '"' delimiters by
-// appending the appropriate closing characters. This is the primary
-// fix for stream-truncated JSON where the model's output was cut off
-// mid-argument.
-func closeUnclosed(s string) string {
+// closeUnclosed balances unclosed '{' and '[' delimiters by appending the
+// appropriate closing characters. This is the primary fix for
+// stream-truncated JSON where the model's output was cut off mid-argument.
+//
+// Returns (repaired, false) when the input ends inside an unterminated
+// string: there is no way to know how much of the value was lost, and
+// closing the quote would fabricate a semantically truncated-but-valid
+// value (#3069). The caller must treat that as unrepairable and retry.
+func closeUnclosed(s string) (string, bool) {
 	var stack []byte
 	inString := false
 	escaped := false
@@ -200,9 +230,12 @@ func closeUnclosed(s string) string {
 		}
 	}
 
-	// If we're inside an unterminated string, close it first.
+	// Stream ends inside an unterminated string: unrepairable. Closing the
+	// quote here would silently truncate the value (valid-but-mutilated
+	// JSON); refuse so the caller retries instead of acting on partial
+	// data (#3069).
 	if inString {
-		s += `"`
+		return s, false
 	}
 
 	// Remove trailing comma if present (common before truncation point).
@@ -213,7 +246,7 @@ func closeUnclosed(s string) string {
 		s += string(stack[i])
 	}
 
-	return s
+	return s, true
 }
 
 // truncateForLog truncates a string for debug logging (avoids huge log lines).
@@ -224,4 +257,214 @@ func truncateForLog(s string) string {
 	}
 	runes := []rune(s)
 	return string(runes[:max]) + "...(truncated)"
+}
+
+// normalizePythonLiterals replaces bare Python-style literals (True, False,
+// None) with their JSON equivalents (true, false, null) outside of strings.
+// Only exact standalone words are replaced; occurrences inside string values
+// are preserved.
+func normalizePythonLiterals(s string) string {
+	if !strings.ContainsAny(s, "TFN") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			b.WriteByte(c)
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if c == '"' {
+			inString = true
+			b.WriteByte(c)
+			continue
+		}
+		switch {
+		case c == 'T' && matchBareWord(s, i, "True"):
+			b.WriteString("true")
+			i += len("True") - 1
+		case c == 'F' && matchBareWord(s, i, "False"):
+			b.WriteString("false")
+			i += len("False") - 1
+		case c == 'N' && matchBareWord(s, i, "None"):
+			b.WriteString("null")
+			i += len("None") - 1
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// matchBareWord reports whether the exact word starts at index i and is not
+// part of a longer identifier (word boundaries on both sides).
+func matchBareWord(s string, i int, word string) bool {
+	if i+len(word) > len(s) || s[i:i+len(word)] != word {
+		return false
+	}
+	if i > 0 && isIdentPart(s[i-1]) {
+		return false
+	}
+	if j := i + len(word); j < len(s) && isIdentPart(s[j]) {
+		return false
+	}
+	return true
+}
+
+// quoteUnquotedKeys wraps bare object keys in double quotes. JavaScript
+// object literal style (e.g. {path: "x.go"}) is invalid JSON but a common
+// LLM output. Only identifiers directly in a key position (after '{' or
+// ',' and followed by ':') are quoted; values are never touched.
+func quoteUnquotedKeys(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+	expectKey := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			b.WriteByte(c)
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			b.WriteByte(c)
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+			expectKey = false
+			b.WriteByte(c)
+		case '{':
+			expectKey = true
+			b.WriteByte(c)
+		case '[':
+			expectKey = false
+			b.WriteByte(c)
+		case ',':
+			expectKey = true
+			b.WriteByte(c)
+		case ':':
+			expectKey = false
+			b.WriteByte(c)
+		default:
+			if expectKey && isIdentStart(c) {
+				j := i
+				for j < len(s) && isIdentPart(s[j]) {
+					j++
+				}
+				ident := s[i:j]
+				k := j
+				for k < len(s) && (s[k] == ' ' || s[k] == '\t' || s[k] == '\n' || s[k] == '\r') {
+					k++
+				}
+				expectKey = false
+				if k < len(s) && s[k] == ':' {
+					b.WriteByte('"')
+					b.WriteString(ident)
+					b.WriteByte('"')
+				} else {
+					b.WriteString(ident)
+				}
+				i = j - 1
+				continue
+			}
+			if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+				expectKey = false
+			}
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// normalizeSingleQuotedStrings converts single-quoted string values to
+// double-quoted JSON strings. Surgical by design: content containing a
+// backslash or an embedded apostrophe is ambiguous and left untouched;
+// embedded double quotes are escaped. A single-quoted run is bounded within
+// one line to avoid pairing quotes across statements.
+func normalizeSingleQuotedStrings(s string) string {
+	if !strings.ContainsRune(s, '\'') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			b.WriteByte(c)
+			continue
+		}
+		if inString {
+			if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			b.WriteByte(c)
+			continue
+		}
+		if c == '"' {
+			inString = true
+			b.WriteByte(c)
+			continue
+		}
+		if c == '\'' {
+			end := -1
+			for j := i + 1; j < len(s); j++ {
+				if s[j] == '\'' {
+					end = j
+					break
+				}
+				if s[j] == '\n' {
+					break
+				}
+			}
+			if end > 0 {
+				inner := s[i+1 : end]
+				if !strings.ContainsRune(inner, '\\') {
+					b.WriteByte('"')
+					b.WriteString(strings.ReplaceAll(inner, `"`, `\"`))
+					b.WriteByte('"')
+					i = end
+					continue
+				}
+			}
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+func isIdentStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isIdentPart(c byte) bool {
+	return isIdentStart(c) || (c >= '0' && c <= '9')
 }

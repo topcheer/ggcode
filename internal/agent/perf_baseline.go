@@ -40,6 +40,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -91,6 +92,16 @@ type perfBaselineEntry struct {
 	ContextPeak int    `json:"ctx"`
 	Success     bool   `json:"ok"`
 	Timestamp   int64  `json:"ts"`
+
+	// Tokens is this run's total input+output LLM tokens (r394: cost
+	// dimension of the reliability baseline - resource consistency from
+	// "Towards a Science of AI Agent Reliability" (arXiv 2602.16666)
+	// adapted to a single-run harness: per-run token spend vs the rolling
+	// baseline catches prompt bloat, fallback chains landing on pricier
+	// models, and cache misses before they show in duration. 0 for
+	// baselines recorded before this field existed; the regression check
+	// only fires when the baseline carries a value.
+	Tokens int `json:"tok,omitempty"`
 
 	// TopTools holds this run's most-invoked tools as "name:count" entries
 	// (top 3, count desc then name asc). It feeds the regression advisory a
@@ -209,8 +220,98 @@ func computeMedianBaseline(runs []perfBaselineEntry) perfBaselineEntry {
 		DurationSec: medianInt(collectDurations(valid)),
 		Compactions: medianInt(collectCompactions(valid)),
 		ContextPeak: medianInt(collectContextPeak(valid)),
+		Tokens:      medianInt(collectTokens(valid)),
+		TopTools:    modalTopTools(valid),
 	}
 }
+
+// modalTopTools builds the baseline tool set for the tool-mix drift check
+// (r386, ASI tool-usage-pattern stability from arXiv 2601.04170): names that
+// appear in at least half of the successful runs' top-3 tool sets, top 3 by
+// frequency. Stored in the same "name:count" shape as run entries, where
+// count here is the number of historical runs containing the tool. Empty
+// when the recorded history predates TopTools persistence.
+func modalTopTools(runs []perfBaselineEntry) []string {
+	freq := make(map[string]int)
+	withTools := 0
+	for _, r := range runs {
+		names := perfTopToolNames(r)
+		if len(names) == 0 {
+			continue
+		}
+		withTools++
+		for _, n := range names {
+			freq[n]++
+		}
+	}
+	if withTools < 3 {
+		return nil // not enough tool-shape history to define a modal set
+	}
+	type nameFreq struct {
+		name string
+		n    int
+	}
+	var cands []nameFreq
+	half := (withTools + 1) / 2
+	for n, c := range freq {
+		if c >= half {
+			cands = append(cands, nameFreq{n, c})
+		}
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		if cands[i].n != cands[j].n {
+			return cands[i].n > cands[j].n
+		}
+		return cands[i].name < cands[j].name
+	})
+	if len(cands) > perfTopToolsCount {
+		cands = cands[:perfTopToolsCount]
+	}
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, fmt.Sprintf("%s:%d", c.name, c.n))
+	}
+	return out
+}
+
+// perfTopToolNames extracts the bare tool names from a "name:count" TopTools
+// entry slice.
+func perfTopToolNames(e perfBaselineEntry) []string {
+	if len(e.TopTools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(e.TopTools))
+	for _, s := range e.TopTools {
+		if i := strings.LastIndex(s, ":"); i > 0 {
+			names = append(names, s[:i])
+		}
+	}
+	return names
+}
+
+// jaccardToolSets returns the Jaccard similarity of two tool-name sets
+// (|A∩B| / |A∪B|); 1.0 when identical, 0.0 when disjoint.
+func jaccardToolSets(a, b []string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 1 // nothing comparable - treat as consistent, not drifted
+	}
+	setA := make(map[string]bool, len(a))
+	for _, n := range a {
+		setA[n] = true
+	}
+	inter := 0
+	for _, n := range b {
+		if setA[n] {
+			inter++
+		}
+	}
+	union := len(setA) + len(b) - inter
+	return float64(inter) / float64(union)
+}
+
+// perfToolMixDriftFloor is the Jaccard similarity below which a run's
+// top-tool set counts as drifted from the baseline modal set (r386).
+const perfToolMixDriftFloor = 0.5
 
 // collectX helpers extract a single field into a slice for median computation.
 func collectIterations(runs []perfBaselineEntry) []int {
@@ -263,6 +364,14 @@ func collectContextPeak(runs []perfBaselineEntry) []int {
 	return out
 }
 
+func collectTokens(runs []perfBaselineEntry) []int {
+	out := make([]int, len(runs))
+	for i, r := range runs {
+		out[i] = r.Tokens
+	}
+	return out
+}
+
 // medianInt returns the median value of a slice of ints.
 func medianInt(vals []int) int {
 	if len(vals) == 0 {
@@ -308,6 +417,7 @@ func recordPerfBaseline(workingDir string, stats *RunStats) {
 		ContextPeak: stats.ContextPeakTokens,
 		Success:     stats.Success,
 		Timestamp:   time.Now().Unix(),
+		Tokens:      stats.TotalTokens,
 		TopTools:    topToolMix(stats.ToolCalls, perfTopToolsCount),
 	}
 
@@ -371,11 +481,15 @@ func (a *Agent) maybeInjectPerfRegression() {
 	// Count how many of the last 3 runs exceeded regression thresholds,
 	// bucketed per metric. Consensus requires at least 2 of 3 recent runs to
 	// regress on the SAME metric -- cross-metric votes (run1 hits iterations,
-	// run2 hits duration) must not pass the gate (#1143).
+	// run2 hits duration) must not pass the gate (#1143). A single run that
+	// regresses on several metrics votes for EACH of them (#2723): metrics
+	// like iterations and duration are strongly correlated, and letting the
+	// first hit monopolize the run's vote systematically hid real 2/3
+	// same-metric consensus.
 	metricCounts := make(map[string]int)
 	for _, r := range recent3 {
-		if _, metric := checkSingleRunRegression(r, mid); metric != "" {
-			metricCounts[metric]++
+		for _, m := range collectRunRegressionMetrics(r, mid) {
+			metricCounts[m]++
 		}
 	}
 
@@ -404,15 +518,29 @@ func (a *Agent) maybeInjectPerfRegression() {
 }
 
 // checkSingleRunRegression checks if a single run regressed against baseline.
-// Returns (true, metricName) if any key metric regressed.
+// Returns (true, metricName) for the first regressed metric in perfMetricOrder
+// priority. Callers that need ALL regressed metrics (voting, worst-run
+// selection) must use collectRunRegressionMetrics (#2723).
 func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
+	if hits := collectRunRegressionMetrics(run, baseline); len(hits) > 0 {
+		return true, hits[0]
+	}
+	return false, ""
+}
+
+// collectRunRegressionMetrics returns EVERY metric this run regressed on,
+// in perfMetricOrder priority (#2723). The old first-hit-only return let a
+// dual-regression run (common: iterations and duration move together) cast
+// a single vote and hid same-metric 2/3 consensus.
+func collectRunRegressionMetrics(run, baseline perfBaselineEntry) []string {
+	var hits []string
 	// Iterations regression: 1.5x baseline
 	if baseline.Iterations > 0 && run.Iterations > int(float64(baseline.Iterations)*perfRegressionFactor) {
-		return true, "iterations"
+		hits = append(hits, "iterations")
 	}
 	// Duration regression: 1.5x baseline (skip if baseline is very short)
 	if baseline.DurationSec > 10 && run.DurationSec > int(float64(baseline.DurationSec)*perfRegressionFactor) {
-		return true, "duration"
+		hits = append(hits, "duration")
 	}
 	// Error rate regression: 2x baseline error count.
 	// #1143: removed the always-true "baseline.Errors >= 0" guard.
@@ -421,21 +549,34 @@ func checkSingleRunRegression(run, baseline perfBaselineEntry) (bool, string) {
 		runRate := float64(run.Errors) / float64(run.ToolCalls)
 		if baseRate == 0 && runRate > 0.05 {
 			// Baseline had 0 errors, current run has >5% error rate
-			return true, "error_rate"
+			hits = append(hits, "error_rate")
+		} else if baseRate > 0 && runRate > baseRate*perfErrorRateFactor {
+			hits = append(hits, "error_rate")
 		}
-		if baseRate > 0 && runRate > baseRate*perfErrorRateFactor {
-			return true, "error_rate"
-		}
+	}
+	// Token-spend regression (r394): run consumed 2x baseline tokens.
+	// Guarded by a 10k floor so tiny-baseline noise cannot fire; entries
+	// recorded before the field existed read as 0 and never fire.
+	if baseline.Tokens >= 10000 && run.Tokens > baseline.Tokens*2 {
+		hits = append(hits, "tokens")
 	}
 	// Context peak regression: context is growing 1.5x baseline
 	if baseline.ContextPeak > 1000 && run.ContextPeak > int(float64(baseline.ContextPeak)*perfRegressionFactor) {
-		return true, "context_usage"
+		hits = append(hits, "context_usage")
 	}
 	// Compaction regression: significantly more compactions than baseline
 	if baseline.Compactions == 0 && run.Compactions >= 3 {
-		return true, "compaction"
+		hits = append(hits, "compaction")
 	}
-	return false, ""
+	// Tool-mix drift (r386): the run's dominant tool set diverges from the
+	// historical modal set - e.g. a workflow historically shaped
+	// read_file+grep now dominated by run_command retries. Behavioral-drift
+	// signal from ASI's tool-usage-pattern stability dimension
+	// (arXiv 2601.04170); only comparable when both sides carry TopTools.
+	if jaccardToolSets(perfTopToolNames(run), perfTopToolNames(baseline)) < perfToolMixDriftFloor {
+		hits = append(hits, "tool_mix")
+	}
+	return hits
 }
 
 // perfRegressionConsensusRuns is how many of the recent runs must regress on
@@ -445,7 +586,7 @@ const perfRegressionConsensusRuns = 2
 // perfMetricOrder lists regression metrics in the evaluation priority used by
 // checkSingleRunRegression, keeping worst-metric selection deterministic
 // when multiple metrics reach consensus (#1143).
-var perfMetricOrder = []string{"iterations", "duration", "error_rate", "context_usage", "compaction"}
+var perfMetricOrder = []string{"iterations", "duration", "error_rate", "tokens", "context_usage", "compaction", "tool_mix"}
 
 // pickConsensusPerfMetric returns a metric whose hit count reaches
 // perfRegressionConsensusRuns across recent runs, preferring metrics earlier
@@ -468,10 +609,27 @@ func selectWorstPerfHit(runs []perfBaselineEntry, baseline perfBaselineEntry, me
 	worst := runs[len(runs)-1]
 	bestVal := -1
 	for _, r := range runs {
-		if _, m := checkSingleRunRegression(r, baseline); m != metric {
+		// Membership via the full collected set, not the first-hit metric: a
+		// dual-regression run IS a hit for duration too (#2723).
+		hit := false
+		for _, m := range collectRunRegressionMetrics(r, baseline) {
+			if m == metric {
+				hit = true
+				break
+			}
+		}
+		if !hit {
 			continue
 		}
-		if v := perfMetricValue(r, metric); v > bestVal {
+		var v int
+		if metric == "tool_mix" {
+			// Divergence from baseline (100 - similarity%): perfMetricValue
+			// has no baseline param, so tool_mix distance is computed here.
+			v = 100 - int(jaccardToolSets(perfTopToolNames(r), perfTopToolNames(baseline))*100)
+		} else {
+			v = perfMetricValue(r, metric)
+		}
+		if v > bestVal {
 			bestVal = v
 			worst = r
 		}
@@ -489,6 +647,8 @@ func perfMetricValue(entry perfBaselineEntry, metric string) int {
 		return entry.DurationSec
 	case "error_rate":
 		return entry.Errors
+	case "tokens":
+		return entry.Tokens
 	case "context_usage":
 		return entry.ContextPeak
 	case "compaction":
@@ -515,6 +675,10 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 		return formatPerfRegressionLine("error rate",
 			baseline.Errors, latest.Errors,
 			"High error rates suggest misjudging tool arguments. Double-check parameters before calling tools.")
+	case "tokens":
+		return formatPerfRegressionLine("total LLM tokens",
+			baseline.Tokens, latest.Tokens,
+			"Token spend jumped vs baseline: suspect prompt/context bloat, a fallback chain landing on a pricier model, or lost prompt caching. Prefer targeted reads and reuse established context.")
 	case "context_usage":
 		return formatPerfRegressionLine("peak context tokens",
 			baseline.ContextPeak, latest.ContextPeak,
@@ -523,6 +687,13 @@ func formatPerfRegressionWarning(metric string, baseline perfBaselineEntry, late
 		return formatPerfRegressionLine("compaction events",
 			baseline.Compactions, latest.Compactions,
 			"Frequent compaction means context is too large. Prefer narrow, targeted searches over broad exploration.")
+	case "tool_mix":
+		// r386 behavioral drift: no scalar pair to compare, so format the
+		// shape shift directly - modal baseline set vs this run's dominant
+		// tools.
+		return fmt.Sprintf("Performance regression notice: dominant tool mix drifted from the project baseline. Baseline modal tools: [%s]; this run: [%s]. The workflow this project historically used has shifted - if this is not a deliberate change of approach, return to the established tool pattern (targeted reads/searches before broad commands).",
+			strings.Join(perfTopToolNames(baseline), ", "),
+			strings.Join(perfTopToolNames(latest), ", "))
 	default:
 		return ""
 	}

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/debug"
+
 	"github.com/topcheer/ggcode/internal/safego"
 )
 
@@ -108,11 +110,11 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	key := workspace + "\x00" + resolved.Binary + "\x00" + strings.Join(resolved.Args, "\x1f")
 	var session *sessionClient
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	// #2144: reject once shutdownAll has drained - otherwise an in-flight
 	// tool call on the quit path (agent ctx is NOT cancelled by quit)
 	// spawned a fresh server AFTER the drain, orphaning it forever.
 	if m.closed {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("LSP sessions are shut down")
 	}
 	if existing := m.sessions[key]; existing != nil && !existing.isClosed() {
@@ -124,16 +126,25 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 		if existing.client == nil || existing.client.isFailed() {
 			delete(m.sessions, key)
 			stale := existing
+			m.mu.Unlock()
 			safego.Go("lsp.evictFailedSession", func() { stale.close() })
 		} else {
 			existing.touch()
+			m.mu.Unlock()
 			return existing, nil
 		}
+	} else {
+		m.mu.Unlock()
 	}
 	// The notification handler is created before startClient so it is
 	// installed prior to the initialize handshake (see startClient comment).
 	// markProjectReady below races benignly with notifications arriving
-	// during the handshake — sync.Once makes first close win.
+	// during the handshake - sync.Once makes first close win.
+	//
+	// #3037: startClient (process spawn + initialize handshake, seconds)
+	// runs OUTSIDE m.mu - the old defer-unlock serialized every concurrent
+	// LSP call and reapIdle behind one workspace's cold start. Classic
+	// double-check below re-takes the lock and reconciles the race.
 	session = &sessionClient{
 		workspace:             workspace,
 		resolved:              resolved,
@@ -151,7 +162,24 @@ func (m *sessionManager) acquire(ctx context.Context, workspace string, resolved
 	if !session.shouldRetryEmptyResults() {
 		session.markProjectReady()
 	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		stale := session
+		safego.Go("lsp.discardPostShutdown", func() { stale.close() })
+		return nil, fmt.Errorf("LSP sessions are shut down")
+	}
+	if existing := m.sessions[key]; existing != nil && existing != session && !existing.isClosed() &&
+		existing.client != nil && !existing.client.isFailed() {
+		// Another goroutine won the race and installed a live session.
+		m.mu.Unlock()
+		dup := session
+		safego.Go("lsp.discardDuplicateSession", func() { dup.close() })
+		existing.touch()
+		return existing, nil
+	}
 	m.sessions[key] = session
+	m.mu.Unlock()
 	return session, nil
 }
 
@@ -316,15 +344,28 @@ func (s *sessionClient) markProjectReady() {
 	})
 }
 
+// awaitProjectReadyTimeout bounds the wait for the project-ready signal
+// (#3037): csharp-ls variants with localized or reformatted log messages
+// may never emit the expected string, and a caller ctx without a deadline
+// would block primeProject forever. Timing out treats the project as ready
+// (best-effort retry semantics are preserved by shouldRetryEmptyResults).
+// Var (not const) so tests can shrink it (fileLockTimeout precedent).
+var awaitProjectReadyTimeout = 30 * time.Second
+
 func (s *sessionClient) awaitProjectReady(ctx context.Context) error {
 	if !s.shouldRetryEmptyResults() {
 		return nil
 	}
+	timer := time.NewTimer(awaitProjectReadyTimeout)
+	defer timer.Stop()
 	select {
 	case <-s.readySignal:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-timer.C:
+		debug.Log("lsp", "project-ready signal not observed within %s; proceeding anyway", awaitProjectReadyTimeout)
+		return nil
 	}
 }
 

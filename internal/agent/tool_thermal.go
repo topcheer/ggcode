@@ -25,7 +25,8 @@ package agent
 //   2. Exploration calls exceed explorationThreshold (55%) of total calls
 //   3. Modification calls are below modificationFloor (15%) of total calls
 //      (agent is reading but not producing changes)
-//   4. No warning has been given yet this run
+//
+// Warnings are rate-limited per category by an iteration-based cooldown.
 //
 // This is a zero-LLM-cost heuristic — pure counter-based, O(1) per call.
 
@@ -147,9 +148,6 @@ type thermalState struct {
 	// opposite inefficiency modes sharing one clock).
 	lastExploreWarnIter int
 	lastVerifyWarnIter  int
-
-	// Whether any warning has been given this run
-	warned bool
 }
 
 func newThermalState() *thermalState {
@@ -167,7 +165,6 @@ func (t *thermalState) reset() {
 	t.total = 0
 	t.lastExploreWarnIter = -thermalWarnCooldown
 	t.lastVerifyWarnIter = -thermalWarnCooldown
-	t.warned = false
 }
 
 // recordToolCall classifies and records a tool call.
@@ -207,12 +204,11 @@ func (t *thermalState) maybeWarn(iteration int) string {
 
 	// Mode 1: Explore-heavy (most common inefficiency)
 	if exploreFrac > explorationThreshold && modifyFrac < modificationFloor {
-		// #1855 case 3: document condition 4 via the warned field (it was
-		// declared, reset, never set, never read).
-		if t.warned && iteration-t.lastExploreWarnIter < thermalWarnCooldown {
+		// Per-category cooldown: lastWarnIter is seeded at -cooldown, so the
+		// first warning per category always fires; subsequent ones are gated.
+		if iteration-t.lastExploreWarnIter < thermalWarnCooldown {
 			return ""
 		}
-		t.warned = true
 		t.lastExploreWarnIter = iteration
 		debug.Log("thermal-profile", "explore-heavy: explore=%.0f%% modify=%.0f%% total=%d",
 			exploreFrac*100, modifyFrac*100, t.total)
@@ -227,10 +223,11 @@ func (t *thermalState) maybeWarn(iteration int) string {
 
 	// Mode 2: Verify-heavy (excessive checking)
 	if verifyFrac > 0.30 && modifyFrac < modificationFloor {
-		if t.warned && iteration-t.lastVerifyWarnIter < thermalWarnCooldown {
+		// #1855 case 3: separate cooldown clock from the explore mode -
+		// an explore-heavy warning must not cool down a verify trigger.
+		if iteration-t.lastVerifyWarnIter < thermalWarnCooldown {
 			return ""
 		}
-		t.warned = true
 		t.lastVerifyWarnIter = iteration
 		debug.Log("thermal-profile", "verify-heavy: verify=%.0f%% modify=%.0f%% total=%d",
 			verifyFrac*100, modifyFrac*100, t.total)

@@ -135,6 +135,21 @@ func (m *Model) switchToSession(ses *session.Session, isNew bool) {
 	// If so, display a recovery message to the user via the chat list.
 	if recoveryMsg := agentruntime.CheckCrashRecovery(ses.ID); recoveryMsg != "" {
 		m.chatWrite(chat.NewSystemItem("crash-recovery", recoveryMsg, m.chatStyles))
+		// Crash-restore idempotency window: pre-crash successful mutating
+		// calls are re-seeded into the dedup ledger so the recovery-prompted
+		// replay (double push / double IM send) is suppressed with an
+		// advisory instead of re-executing the side effect.
+		agentruntime.SeedCrashDedupWindow(m.agent, ses.ID)
+	}
+	// r445: user-interrupted (Ctrl+C) runs get a structured continuation
+	// point - shown to the user AND injected into the agent's context so
+	// the model knows where it was instead of guessing from cancelled-call
+	// placeholders. One-shot: the snapshot is consumed by the check.
+	if contMsg := agentruntime.CheckContinuation(ses.ID); contMsg != "" {
+		m.chatWrite(chat.NewSystemItem("continuation", contMsg, m.chatStyles))
+		if m.agent != nil {
+			m.agent.AddMessage(provider.Message{Role: "user", Content: []provider.ContentBlock{{Type: "text", Text: contMsg}}})
+		}
 	}
 
 	m.SetSession(ses, m.sessionStore)
@@ -658,9 +673,11 @@ func (m *Model) buildRestartArgs() []string {
 }
 
 // handleBranchCommand forks the current conversation into a new session.
-// The new session gets a copy of all messages and metadata, allowing the user
-// to explore a different direction without losing the original conversation.
-func (m *Model) handleBranchCommand() tea.Cmd {
+// With no argument it copies everything (tail fork). With "/branch N" it
+// drops the last N complete user turns first, forking from an earlier
+// point in the conversation to explore an alternative direction. The new
+// session records its lineage (ParentSessionID + ForkPoint).
+func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	if m.loading {
 		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
 		m.chatListScrollToBottom()
@@ -673,6 +690,24 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 	}
 	if len(m.session.Messages) == 0 {
 		m.chatWriteSystem(nextSystemID(), m.t("branch.empty"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// Optional "/branch N": fork after dropping the last N user turns.
+	dropRounds := 0
+	if len(parts) > 1 {
+		n, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || n < 0 {
+			m.chatWriteSystem(nextSystemID(), m.t("branch.bad_arg"))
+			m.chatListScrollToBottom()
+			return nil
+		}
+		dropRounds = n
+	}
+	cutoff, ok := session.ComputeBranchCutoff(m.session.Messages, dropRounds)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.back_too_far"))
 		m.chatListScrollToBottom()
 		return nil
 	}
@@ -707,9 +742,11 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 		branched.SidebarVisible = &val
 	}
 
-	// Deep-copy messages.
-	branched.Messages = make([]provider.Message, len(oldSes.Messages))
-	copy(branched.Messages, oldSes.Messages)
+	// Deep-copy messages up to the computed fork point.
+	branched.Messages = make([]provider.Message, cutoff)
+	copy(branched.Messages, oldSes.Messages[:cutoff])
+	branched.ParentSessionID = oldSes.ID
+	branched.ForkPoint = cutoff
 
 	// Deep-copy usage history.
 	if len(oldSes.UsageHistory) > 0 {
@@ -737,6 +774,9 @@ func (m *Model) handleBranchCommand() tea.Cmd {
 		origTitle = oldSes.ID
 	}
 	branched.Title = "Branch: " + origTitle
+	if dropRounds > 0 {
+		branched.Title = fmt.Sprintf("Branch (-%d turns): %s", dropRounds, origTitle)
+	}
 
 	// Persist the new session: touch file + update index, then write messages
 	// and metadata explicitly (Save no longer writes messages).

@@ -117,8 +117,7 @@ func checkDeprecatedAPI(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, parser.AllErrors)
+	file, fset, err := parseGoSource(filePath, newContent, parser.AllErrors)
 	if err != nil {
 		return ""
 	}
@@ -267,8 +266,7 @@ func countDeprecatedInstances(filePath, content string) map[string]int {
 	if strings.TrimSpace(content) == "" {
 		return counts
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, content, parser.AllErrors)
+	file, fset, err := parseGoSource(filePath, content, parser.AllErrors)
 	if err != nil {
 		return counts
 	}

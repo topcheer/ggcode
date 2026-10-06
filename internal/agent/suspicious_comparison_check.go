@@ -89,8 +89,7 @@ func checkSuspiciousComparison(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, parser.AllErrors)
+	file, fset, err := parseGoSource(filePath, newContent, parser.AllErrors)
 	if err != nil {
 		return ""
 	}
@@ -341,8 +340,7 @@ func collectSuspiciousCmps(filePath, oldContent string) map[string]bool {
 	if strings.TrimSpace(oldContent) == "" {
 		return nil
 	}
-	oldFset := token.NewFileSet()
-	oldFile, err := parser.ParseFile(oldFset, filePath, oldContent, parser.AllErrors)
+	oldFile, oldFset, err := parseGoSource(filePath, oldContent, parser.AllErrors)
 	if err != nil {
 		return nil
 	}

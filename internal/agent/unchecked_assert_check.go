@@ -34,7 +34,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strings"
@@ -106,8 +105,7 @@ func findUncheckedAsserts(filename, src string) []uncheckedAssertInfo {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filename, src, 0)
+	file, fset, err := parseGoSource(filename, src, 0)
 	if err != nil || file == nil {
 		return nil
 	}

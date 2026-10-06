@@ -42,6 +42,25 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen>
     with TickerProviderStateMixin {
   final _scrollController = ScrollController();
+
+  // Scroll-to-bottom FAB visibility: true when the viewport sits far from
+  // the bottom (> _jumpButtonThreshold px). Updated from
+  // ScrollNotification metrics; never rebuilt per-pixel (only on flip).
+  static const double _jumpButtonThreshold = 240;
+  bool _showJumpButton = false;
+
+  bool _onListScroll(ScrollNotification n) {
+    if (n is ScrollUpdateNotification ||
+        n is ScrollEndNotification ||
+        n is UserScrollNotification) {
+      final far =
+          n.metrics.maxScrollExtent - n.metrics.pixels > _jumpButtonThreshold;
+      if (far != _showJumpButton) {
+        setState(() => _showJumpButton = far);
+      }
+    }
+    return false; // keep bubbling (other listeners may exist)
+  }
   final _inputController = TextEditingController();
   TabController? _tabController;
   List<String> _tabIds = [];
@@ -136,6 +155,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
 
   @override
   Widget build(BuildContext context) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     ref.listen<ApprovalInfo?>(approvalProvider, (prev, next) {
       if (next != null && prev == null) {
         FocusManager.instance.primaryFocus?.unfocus();
@@ -490,19 +510,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                 child: Listener(
                   behavior: HitTestBehavior.translucent,
                   onPointerDown: (_) => _dismissComposerFocus(),
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    keyboardDismissBehavior:
-                        ScrollViewKeyboardDismissBehavior.onDrag,
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = messages[index];
-                      if (msg.toolName != null) {
-                        return _buildToolMessage(msg);
-                      }
-                      return MessageBubble(message: msg);
-                    },
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _onListScroll,
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                      itemCount: messages.length,
+                      itemBuilder: (context, index) {
+                        final msg = messages[index];
+                        if (msg.toolName != null) {
+                          return _buildToolMessage(msg);
+                        }
+                        return MessageBubble(message: msg);
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -510,6 +533,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
               InputBar(controller: _inputController),
             ],
           ),
+          // Scroll-to-bottom FAB: visible only when the list sits far from
+          // the bottom (see _onListScroll). Animated jump; also used as the
+          // escape hatch when the #1024 auto-follow guard (<=120px) has
+          // stopped following the stream.
+          if (_showJumpButton)
+            Positioned(
+              right: 16,
+              bottom: 96,
+              child: Material(
+                color: AppColors.surfaceElevated,
+                shape: const CircleBorder(),
+                elevation: 4,
+                shadowColor: Colors.black54,
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => _scrollController.hasClients
+                      ? _scrollController.animateTo(
+                          _scrollController.position.maxScrollExtent,
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeOutCubic,
+                        )
+                      : null,
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Icon(Icons.arrow_downward,
+                        size: 20, color: AppColors.textSecondary),
+                  ),
+                ),
+              ),
+            ),
           if (!connState.sessionReady &&
               connState.status != ConnectionStatus.disconnected)
             _SyncingOverlay(

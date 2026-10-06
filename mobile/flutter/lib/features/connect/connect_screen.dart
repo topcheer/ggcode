@@ -152,6 +152,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen>
 
   @override
   Widget build(BuildContext context) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     final connState = ref.watch(connectionProvider);
     ref.listen<TunnelConnectionState>(connectionProvider, (prev, next) {
       if (prev?.status != next.status) {

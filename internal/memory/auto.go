@@ -12,11 +12,18 @@ import (
 
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
+	"github.com/topcheer/ggcode/internal/util"
 )
 
 // AutoMemory manages automatic memory persistence in ~/.ggcode/memory/.
 type AutoMemory struct {
 	dir string
+	// projectRoot is set only for project-scoped instances (NewProjectAutoMemory).
+	// It anchors injection-time staleness checks (annotateStaleInline) so that
+	// relative paths inside memory entries are resolved against the right
+	// workspace. Global memory leaves it empty and the check degrades to a no-op
+	// (HOME would be a meaningless anchor for repo-style paths).
+	projectRoot string
 	// #1752 case 2: Load/Merge/Save read-modify-write cycles from concurrent
 	// goroutines (reflection, /reflect, daemon) raced and the later write
 	// silently dropped the earlier one; a bare WriteFile also let a reader
@@ -53,7 +60,7 @@ func NewProjectAutoMemory(workingDir string) *AutoMemory {
 	}
 	dir := filepath.Join(workingDir, ".ggcode", "memory")
 	_ = os.MkdirAll(dir, 0755)
-	return &AutoMemory{dir: dir}
+	return &AutoMemory{dir: dir, projectRoot: workingDir}
 }
 
 // SaveMemory saves a memory entry to ~/.ggcode/memory/{key}.md.
@@ -67,12 +74,39 @@ func (am *AutoMemory) SaveMemory(key, content string) error {
 // overwrites, so every prompt-injected memory can be traced to its origin
 // (arXiv:2608.29606 provenance-aware memory).
 func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
+	return am.SaveMemoryWithSourceActor(key, content, source, "")
+}
+
+// SaveMemoryWithSourceActor (r29) is SaveMemoryWithSource with the WRITER
+// identity recorded alongside the source label (actor-aware provenance,
+// completing the arXiv:2608.29606 actor dimension: sub-agents and swarm
+// teammates share this AutoMemory, and without an actor field a
+// sub-agent's overwrite of a main-agent memory left zero trace of who
+// wrote it). Empty actor = legacy callers, byte-identical behavior.
+func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor string) error {
 	// #775: sanitizeKey is not injective ("a/b"/"a.b"/"a b" all -> "a-b";
 	// pure-CJK keys -> "" -> untitled.md, so ALL Chinese memories shared one
 	// file and silently overwrote each other). disambiguateKey appends a short
 	// stable hash for keys whose sanitization collides.
 	safe := disambiguateKey(key, sanitizeKey(key))
 	path := filepath.Join(am.dir, safe+".md")
+
+	// r401 GAP-B: cross-process write safety. writeMu below only serializes
+	// writers within ONE process; two ggcode instances (a seat process plus a
+	// subagent process, or a daemon reflecting while a session saves) share
+	// this dir and raced last-write-wins, with .usage.json sidecar updates
+	// interleaving between the two. util.FileLock (flock / LockFileEx, shared
+	// with auth store and knight) serializes across processes; on lock
+	// failure we degrade to the previous single-process behavior rather than
+	// blocking memory writes on lock-infrastructure faults (knight
+	// semantic_memory.go precedent).
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		// #3120 V4: fail-open is deliberate (memory writes must not block
+		// on lock-infrastructure faults) but must be observable.
+		debug.Log("memory", "automemory filelock failed, degraded to unlocked write: %v", err)
+	}
 
 	// #1752 case 2: atomic write - temp file in the same directory, then
 	// rename (atomic on POSIX and Windows-NT). Concurrent readers see
@@ -104,7 +138,24 @@ func (am *AutoMemory) SaveMemoryWithSource(key, content, source string) error {
 		os.Remove(tmpName)
 		return err
 	}
-	am.RecordProvenance(safe, source)
+	am.RecordProvenanceActor(safe, source, actor)
+
+	// r409 memory-poisoning defense (MINJA arXiv 2601.05504, sleeper
+	// poisoning arXiv 2605.15338): a poisoned entry persisted here would be
+	// inlined raw into EVERY future system prompt via loadForPrompt - one
+	// successful injection buys a persistent, unreviewed channel. Scan at the
+	// AutoMemory layer so every writer (save_memory tool, run-reflection,
+	// preference distill) is covered. Never blocks the save (a legitimate
+	// security writeup must still persist) - it marks a quarantine sidecar
+	// that loadForPrompt demotes to index-only. A clean re-save of the same
+	// key clears the flag so a fixed entry recovers.
+	if pat := DetectInjectionTaint(key, content); pat != "" {
+		if err := am.MarkTainted(safe, pat); err != nil {
+			debug.Log("memory", "taint sidecar write failed for %q: %v", safe, err)
+		}
+	} else {
+		am.ClearTaint(safe)
+	}
 	return nil
 }
 
@@ -242,6 +293,59 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 	return metas, nil
 }
 
+// MemoryEntryInfo is the read-only projection returned by ListDetailed:
+// enough for the agent to decide which entries to re-save, supersede, or
+// delete, without loading full contents.
+type MemoryEntryInfo struct {
+	Key       string
+	SizeBytes int64
+	Uses      int
+	LastUsed  time.Time
+	Preview   string // first content line, markdown stripped, capped
+}
+
+// ListDetailed returns key/size/usage/preview for every stored entry
+// (including expired/deduped ones — visibility first, the agent judges).
+// This is the read side of the memory lifecycle: save_memory writes,
+// delete_memory removes, but until now the agent had no way to SEE what
+// is stored, so outdated entries persisted silently (SelfMem gap: agent
+// as memory curator needs an inventory view).
+func (am *AutoMemory) ListDetailed() ([]MemoryEntryInfo, error) {
+	metas, err := am.collectMetas()
+	if err != nil {
+		return nil, err
+	}
+	var out []MemoryEntryInfo
+	for _, m := range metas {
+		info := MemoryEntryInfo{Key: m.Key, Uses: m.Uses, LastUsed: m.LastUsedAt}
+		if st, err := os.Stat(filepath.Join(am.dir, m.Key+".md")); err == nil {
+			info.SizeBytes = st.Size()
+		}
+		if data, err := os.ReadFile(filepath.Join(am.dir, m.Key+".md")); err == nil {
+			info.Preview = previewLine(string(data), 160)
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// previewLine returns the first non-heading, non-empty line of a memory
+// body, capped to max runes.
+func previewLine(body string, max int) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue // skip blank and markdown heading lines
+		}
+		runes := []rune(line)
+		if len(runes) > max {
+			runes = runes[:max]
+		}
+		return string(runes)
+	}
+	return ""
+}
+
 // Clear removes all memory files.
 func (am *AutoMemory) Clear() error {
 	entries, err := os.ReadDir(am.dir)
@@ -308,6 +412,22 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 		return nil, nil, err
 	}
 	now := time.Now()
+
+	// Superseded entries (memory evolution, supersede.go): retired from
+	// prompt injection and recall arbitration, but kept on disk for history
+	// (read_file still works). This also stops the ghost-context guard from
+	// re-annotating a conflict that has already been structurally resolved.
+	if sup := am.SupersededSet(); len(sup) > 0 {
+		filtered := make([]MemoryMeta, 0, len(metas))
+		for _, m := range metas {
+			if sup[m.Key] {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		metas = filtered
+	}
+
 	active, _, _, _ := curateEntries(metas, now)
 
 	// Sort active entries: persistent first (inline priority), then by key
@@ -324,11 +444,38 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 
 	totalInline := 0
 	for _, m := range active {
+		// r409: quarantined entries (injection-pattern match at write time)
+		// are never auto-inlined into the system prompt - the persistent
+		// channel MINJA demonstrated. They stay index-only so the model can
+		// still retrieve them via read_file, which runs through the
+		// externalContentTools wrap (agent guard) - closed loop.
+		if pat, tainted := am.TaintOf(m.Key); tainted {
+			indexOnly = append(indexOnly, m.Key+" [tainted: "+pat+"]")
+			debug.Log("memory", "skipping inline of tainted entry %q (pattern %q)", m.Key, pat)
+			continue
+		}
 		path := filepath.Join(am.dir, m.Key+".md")
 		data, readErr := os.ReadFile(path)
 		content := ""
 		if readErr == nil {
 			content = strings.TrimSpace(string(data))
+		}
+
+		// #3137: read-time content backstop for legacy stock and bypass
+		// writes. The write-time scan (SaveMemoryWithSource) only covers
+		// entries that went through THIS process's save path; entries
+		// persisted before r409, or written by another instance / a plain
+		// os.WriteFile, carry no .taint sidecar and would be inlined raw.
+		// One pattern scan per inline candidate is negligible next to the
+		// file read itself; a hit backfills the sidecar so the next startup
+		// takes the fast TaintOf path.
+		if pat := DetectInjectionTaint(m.Key, content); pat != "" {
+			indexOnly = append(indexOnly, m.Key+" [tainted: "+pat+"]")
+			debug.Log("memory", "read-time backstop tainted entry %q (pattern %q)", m.Key, pat)
+			if err := am.MarkTainted(m.Key, pat); err != nil {
+				debug.Log("memory", "backfill sidecar failed for %q: %v (guarded this startup only)", m.Key, err)
+			}
+			continue
 		}
 
 		// Inline persistent entries that are small enough and within budget.
@@ -354,6 +501,14 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 		arb.Annotate(inline)
 		debug.Log("memory", "recall arbitration: %d conflict(s) among %d inline entries", len(arb.Conflicts), len(inline))
 	}
+
+	// Injection-time staleness annotation (STALE, arXiv:2605.06527 "Implicit
+	// Conflict"): ArbitrateInline only fires when two conflicting entries are
+	// inline simultaneously; a single entry whose referenced paths have since
+	// disappeared (broken-path) would otherwise be injected as an unflagged
+	// false premise. ScanStaleness feeds only the offline repair loop, so this
+	// is the inline-side front line: deterministic, annotation-only, capped.
+	am.annotateStaleInline(inline)
 
 	if record {
 		inlineKeys := make([]string, 0, len(inline))

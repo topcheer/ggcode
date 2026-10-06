@@ -26,6 +26,19 @@ type llmTurnMetrics struct {
 	hasFirstToken bool
 }
 
+// stampMetricModel fills ev.Model from the provider when it can report its
+// current model name (#3295). Events emitted by sub-agents running a model
+// override must carry their own model - collectors only fill-if-empty, so
+// without this stamp every event inherits the parent session's model and
+// per-model cost/performance reporting is wrong for cross-model delegation.
+func stampMetricModel(p provider.Provider, ev *metrics.MetricEvent) {
+	if mp, ok := p.(provider.ModelNameProvider); ok {
+		if name := mp.ModelName(); name != "" {
+			ev.Model = name
+		}
+	}
+}
+
 func newLLMTurnMetrics() *llmTurnMetrics {
 	return &llmTurnMetrics{start: time.Now()}
 }

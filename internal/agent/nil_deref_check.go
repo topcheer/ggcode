@@ -159,8 +159,7 @@ func checkNilDerefAfterError(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, parser.AllErrors)
+	file, fset, err := parseGoSource(filePath, newContent, parser.AllErrors)
 	if err != nil {
 		return ""
 	}

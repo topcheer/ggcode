@@ -381,11 +381,13 @@ func (m *Manager) fanOutBroadcaster() {
 
 	// Collect target channels under lock to prevent concurrent map write (StopTarget)
 	var targets []chan []byte
+	var targetPtrs []*Target
 	m.mu.Lock()
 	for _, t := range m.targets {
 		ch := make(chan []byte, 64)
 		t.broadcastCh = ch
 		targets = append(targets, ch)
+		targetPtrs = append(targetPtrs, t)
 		safego.Go("stream.targetWriter", func() { m.targetWriter(t, ch) })
 	}
 	m.mu.Unlock()
@@ -395,6 +397,17 @@ func (m *Manager) fanOutBroadcaster() {
 			close(ch)
 		}
 	}()
+
+	// #3094: every internal exit path must Stop its own targets - the
+	// write-failure and encoder-nil exits previously left the ffmpeg
+	// child process and the upstream RTMP connection dangling until the
+	// outer Manager.Stop() ran. Stop() is lock-guarded and idempotent
+	// (Idle/Stopped early-exit), so stopping here never double-kills.
+	stopAllTargets := func() {
+		for _, t := range targetPtrs {
+			t.Stop()
+		}
+	}
 
 	for {
 		select {
@@ -408,6 +421,7 @@ func (m *Manager) fanOutBroadcaster() {
 		m.encoderMu.RUnlock()
 		if enc == nil {
 			debug.Log("stream", "broadcaster: encoder is nil, exiting")
+			stopAllTargets() // #3094: targets would otherwise dangle until Manager.Stop
 			return
 		}
 
@@ -432,6 +446,13 @@ func (m *Manager) fanOutBroadcaster() {
 			if err != io.EOF {
 				debug.Log("stream", "broadcaster read error: %v", err)
 			}
+			// #3154: the read-error exit is the third internal exit path and
+			// must honor the #3094 contract - without this Stop, every
+			// target's ffmpeg pusher child and upstream RTMP connection
+			// dangles until the outer Manager.Stop() (which may never come
+			// for a long-lived manager), and with no data flowing the
+			// targetWriter write-error self-stop can never fire.
+			stopAllTargets()
 			return
 		}
 	}
@@ -444,6 +465,9 @@ func (m *Manager) targetWriter(target *Target, ch chan []byte) {
 		n, err := target.Write(data)
 		if err != nil {
 			debug.Log("stream", "target %s write error: %v", target.Name(), err)
+			// #3094: stop this target's ffmpeg pusher and connection now -
+			// returning without Stop left them dangling until Manager.Stop.
+			target.Stop()
 			return
 		}
 		total += n

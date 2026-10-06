@@ -472,6 +472,25 @@ func (m Model) handleApprovalKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case "t", "T":
+		// Trust Node — endorse the peer NODE (stable device identity,
+		// unlike the nick-keyed "Always") and approve this message. The
+		// endorsement persists in trusted-peers.json and exempts this
+		// node's agent DMs from the requireAgentApproval gate.
+		if len(pending) > 0 {
+			p.approvalIdx %= len(pending) // #899
+			msg := pending[p.approvalIdx].Message
+			m.lanChatHub.SetTrustedPeer(msg.FromNodeID, true)
+			approved, _ := m.lanChatHub.ApproveMessage(msg.ID)
+			p.approvalPopup = false
+			if approved != nil {
+				m.lanChatPendingComplete = approved.ID
+				agentText := fmt.Sprintf("[LAN Chat from %s]: %s", approved.FromNick, approved.Content)
+				m.closeLanChatPanel()
+				return m, m.submitLanChatAgentText(agentText)
+			}
+		}
+		return m, nil
 	case "n", "N", "r", "R":
 		if len(pending) > 0 {
 			p.approvalIdx %= len(pending) // #899
@@ -690,7 +709,7 @@ func (m *Model) renderLanChatPanel() string {
 			}
 			body = append(body, "")
 			current := pending[p.approvalIdx]
-			popup := fmt.Sprintf(">> %s -> your agent:\n  %q\n\n  [Enter] Approve Once  [A] Always Approve  [N] Reject  [Esc] Close",
+			popup := fmt.Sprintf(">> %s -> your agent:\n  %q\n\n  [Enter] Approve Once  [A] Always (nick)  [T] Trust Node  [N] Reject  [Esc] Close",
 				current.Message.FromNick, current.Message.Content)
 			popupStyle := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#FBBF24")).

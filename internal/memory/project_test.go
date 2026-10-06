@@ -156,7 +156,7 @@ func TestResolveProjectMemoryInitTarget_CurrentDirOnly(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// Should target the current working dir, not walk up to git root
-	if target != filepath.Join(subDir, "GGCODE.md") {
+	if target != filepath.Join(subDir, "AGENTS.md") {
 		t.Fatalf("expected current-dir target, got %q", target)
 	}
 	if len(existing) != 0 {

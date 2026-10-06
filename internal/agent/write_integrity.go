@@ -534,6 +534,13 @@ func registerAllChecks() {
 		{Name: "sensitive-json", Langs: []Language{LangGo}, Severity: SeverityCritical, Run: sliceCheck(checkSensitiveJSONExposure)},
 		{Name: "hardcoded-secret", Severity: SeverityCritical, Run: sliceCheck(checkHardcodedSecrets)},
 		{Name: "insecure-patterns", Langs: []Language{LangGo, LangJSTS, LangPython}, Severity: SeverityCritical, Run: sliceCheck(checkInsecurePatterns)},
+		// #2904: jsts-antipattern - delta-based JS/TS anti-pattern detection
+		// (loose equality, var, explicit any, as any, empty catch, @ts-ignore).
+		// Previously dead code: checkJSTSAntiPatterns existed but was never
+		// registered, so the documented write-time detection never ran. Now
+		// wired here with comment/string stripping (jstsStripForScan) applied
+		// before delta counting, so comment/string mentions do not misfire.
+		{Name: "jsts-antipattern", Langs: []Language{LangJSTS}, Run: stringCheck(checkJSTSAntiPatterns)},
 		// #571: http-plaintext — detects http:// URLs pointing to non-localhost
 		// hosts (OWASP A02:2021). Complements insecure-patterns (TLS bypass).
 		// Fully implemented + unit tested.
@@ -544,9 +551,10 @@ func registerAllChecks() {
 		{Name: "logging-intel", Langs: []Language{LangGo, LangJSTS}, Severity: SeverityCritical, Run: sliceCheck(checkLoggingIntel)},
 
 		// --- Security: supply chain (#330) ---
-		{Name: "dep-major-bump", Severity: SeverityCritical, Run: stringCheck(checkBreakingChangeDepAsString)}, // all langs: self-filters by manifest filename
-		{Name: "dependency-vuln", Severity: SeverityCritical, Run: stringCheck(checkDependencyVulnsAsString)},  // all langs: self-filters by manifest filename
-		{Name: "typosquat", Severity: SeverityCritical, Run: stringCheck(checkTyposquattingAsString)},          // all langs: self-filters by manifest filename (#567)
+		{Name: "dep-major-bump", Severity: SeverityCritical, Run: stringCheck(checkBreakingChangeDepAsString)},  // all langs: self-filters by manifest filename
+		{Name: "dependency-vuln", Severity: SeverityCritical, Run: stringCheck(checkDependencyVulnsAsString)},   // all langs: self-filters by manifest filename
+		{Name: "typosquat", Severity: SeverityCritical, Run: stringCheck(checkTyposquattingAsString)},           // all langs: self-filters by manifest filename (#567)
+		{Name: "new-dep-verify", Severity: SeverityDefault, Run: stringCheck(checkNewDependencyVerifyAsString)}, // r356: slopsquatting - any non-well-known NEW dep gets a registry-verification notice
 
 		// --- Go correctness: API misuse / logic smells (#328/#330) ---
 		{Name: "deprecated-api", Langs: []Language{LangGo}, Run: stringCheck(checkDeprecatedAPI)},
@@ -710,8 +718,7 @@ func goSyntaxWarnings(filename string, parseErr error) []string {
 
 // checkGoSyntax is a convenience wrapper for tests.
 func checkGoSyntax(filename, src string) []string {
-	fset := token.NewFileSet()
-	_, err := parser.ParseFile(fset, filename, src, 0)
+	_, _, err := parseGoSource(filename, src, 0)
 	return goSyntaxWarnings(filename, err)
 }
 

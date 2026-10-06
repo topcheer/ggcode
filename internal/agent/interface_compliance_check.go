@@ -159,8 +159,7 @@ func extractInterfaceMethodSets(src string) map[string]map[string]string {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, _, err := parseGoSource("", src, 0)
 	if err != nil {
 		return nil
 	}

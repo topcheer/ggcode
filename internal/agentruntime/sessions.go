@@ -273,3 +273,21 @@ func CheckCrashRecovery(sessionID string) string {
 	info := agent.CheckCrashedRun(sessionID)
 	return agent.FormatCrashRecoveryMessage(info)
 }
+
+// SeedCrashDedupWindow opens the crash-restore idempotency window
+// (tool_dedup_crash.go): mutating calls that succeeded before the crash are
+// re-seeded into the agent's duplicate-suppression ledger, so a post-resume
+// replay is suppressed with an advisory instead of re-executing the side
+// effect (ACRFence arXiv:2603.20625). One-shot no-op when no crash sidecar
+// exists. Call after CheckCrashRecovery detected a crashed run.
+func SeedCrashDedupWindow(a *agent.Agent, sessionID string) {
+	agent.SeedCrashDedup(a, sessionID)
+}
+
+// CheckContinuation returns a model-facing continuation-point message
+// when the session's previous run was user-interrupted (r445). Unlike
+// CheckCrashRecovery this covers same-session Ctrl+C; the snapshot is
+// consumed on read. Empty string means nothing to resume.
+func CheckContinuation(sessionID string) string {
+	return agent.CheckContinuation(sessionID)
+}

@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -58,6 +60,7 @@ type SkillTool struct {
 	AgentFactory        subagent.AgentFactory
 	WorkingDir          string // working directory to propagate to sub-agent
 	OnUsage             func(provider.TokenUsage)
+	OnMetric            func(metrics.MetricEvent)           // sub-agent telemetry forwarding (#3296); runner stamps SubAgentID
 	OnSkillUsed         func(ref string)                    // optional callback when a skill is loaded by the agent
 	OnSkillCompleted    func(event SkillExecutionEvent)     // optional callback when execution finishes
 	SystemPromptBuilder func(task, agentType string) string // builds rich system prompt with project context
@@ -159,6 +162,14 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 		content = depHint + "\n\n" + content
 	}
 
+	// NLAH-style contracts and failure taxonomy (r466): surface the skill's
+	// declared precondition/postcondition/state semantics and recovery paths
+	// so mid-workflow failures consult the author's recovery plan instead of
+	// falling straight through to the generic error classifier.
+	if contractHint := buildContractHint(cmd); contractHint != "" {
+		content = contractHint + "\n\n" + content
+	}
+
 	// Return a brief confirmation + inject skill content as follow-up user message.
 	// This forces the model to process and act on the skill instructions,
 	// matching Claude Code's inline skill behavior.
@@ -172,13 +183,37 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 			{
 				Role: "user",
 				Content: []provider.ContentBlock{
-					{Type: "text", Text: content},
+					{Type: "text", Text: wrapSkillSource(cmd.Name, cmd.Version, content)},
 				},
 			},
 		},
 	}
 	t.notifySkillCompleted(cmd, SkillExecutionModeInline, result, nil)
 	return result, nil
+}
+
+// skillSourceTag is the trust-boundary marker wrapping third-party skill
+// bodies injected inline (r482, contextual authorization). The system
+// prompt declares that content inside this region is data at tool-output
+// trust level, not first-class instructions.
+const skillSourceTag = "skill-source"
+
+var skillSourceCloseRe = regexp.MustCompile(`(?i)<\s*/\s*skill-source\s*>`)
+
+// wrapSkillSource wraps a skill body in a <skill-source> trust boundary.
+// Any forged closing tag inside the body is neutralized so the region
+// cannot be terminated early by malicious skill content (same escaping
+// discipline as untrusted_tool_output.go for tool results).
+func wrapSkillSource(name, version, content string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "unknown"
+	}
+	attrs := fmt.Sprintf(" name=%q", name)
+	if v := strings.TrimSpace(version); v != "" {
+		attrs += fmt.Sprintf(" version=%q", v)
+	}
+	return fmt.Sprintf("<%s%s>\n%s\n</%s>", skillSourceTag, attrs, skillSourceCloseRe.ReplaceAllString(content, "<\u200b/skill-source>"), skillSourceTag)
 }
 
 // resolveSkill looks up the named skill, handles MCP prompt fallback,
@@ -244,6 +279,7 @@ func (t SkillTool) executeForkedSkill(ctx context.Context, cmd *commands.Command
 			AgentFactory:        t.AgentFactory,
 			WorkingDir:          t.WorkingDir,
 			OnUsage:             t.OnUsage,
+			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: t.SystemPromptBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				// Clone the registry so each skill sub-agent gets its own tool
@@ -310,7 +346,7 @@ func (t SkillTool) executeMCPPromptSkill(ctx context.Context, skillName, rawArgs
 		FollowUpMessages: []provider.Message{
 			{
 				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: content}},
+				Content: []provider.ContentBlock{{Type: "text", Text: wrapSkillSource(skillName, "", content)}},
 			},
 		},
 	}, true
@@ -397,6 +433,7 @@ func (t SkillTool) Clone() Tool {
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
+		OnMetric:            t.OnMetric,
 		OnSkillUsed:         t.OnSkillUsed,
 		OnSkillCompleted:    t.OnSkillCompleted,
 		SystemPromptBuilder: t.SystemPromptBuilder,
@@ -552,6 +589,43 @@ func checkRequiredTools(tools []string) []string {
 	return missing
 }
 
+// buildContractHint renders a skill's NLAH-style declarations (precondition,
+// postcondition, state contract, failure taxonomy) as a compact advisory
+// preamble. Returns "" when the skill declares none.
+func buildContractHint(cmd *commands.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	var lines []string
+	if v := strings.TrimSpace(cmd.Precondition); v != "" {
+		lines = append(lines, "Precondition (verify before starting): "+v)
+	}
+	if v := strings.TrimSpace(cmd.Postcondition); v != "" {
+		lines = append(lines, "Postcondition (verify before declaring done): "+v)
+	}
+	if v := strings.TrimSpace(cmd.StateContract); v != "" {
+		lines = append(lines, "State contract (cross-stage semantics): "+v)
+	}
+	for _, fm := range cmd.FailureModes {
+		name := strings.TrimSpace(fm.Name)
+		if name == "" {
+			continue
+		}
+		entry := "Failure mode \"" + name + "\""
+		if d := strings.TrimSpace(fm.Detect); d != "" {
+			entry += " | detect: " + d
+		}
+		if r := strings.TrimSpace(fm.Recover); r != "" {
+			entry += " | recover: " + r
+		}
+		lines = append(lines, entry)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "[skill contract] " + strings.Join(lines, "\n[skill contract] ")
+}
+
 // buildDependencyHint returns a short advisory message if the skill declares
 // prerequisite skills that should be loaded first. Missing dependencies are
 // noted but do not block execution - the agent can still proceed.
@@ -663,6 +737,16 @@ func (t SkillTool) handleImportSkill(rest, args string) Result {
 	}
 	if manifest.Description != "" {
 		sb.WriteString(fmt.Sprintf("Description: %s\n", manifest.Description))
+	}
+	// #r481: advisory content scan. The bundle body is injected as a USER
+	// message when this skill loads, so malicious text that survived the
+	// structural import guards must be visible at import time. Warnings do
+	// NOT block the import (false positives must not lock users out).
+	if warns := scanSkillDir(skillDir); len(warns) > 0 {
+		sb.WriteString(fmt.Sprintf("\nWarning: security scan flagged %d issue(s) - review before invoking this skill:\n", len(warns)))
+		for _, w := range warns {
+			sb.WriteString(fmt.Sprintf("  - %s\n", w))
+		}
 	}
 	sb.WriteString("\nThe skill is now available. Use the skill tool to load it.")
 	return Result{Content: sb.String()}

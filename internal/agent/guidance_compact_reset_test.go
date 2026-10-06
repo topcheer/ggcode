@@ -105,15 +105,14 @@ func TestBClassDetectorsOncePerRun(t *testing.T) {
 // (int counter, quota map, quota bools) must all reset.
 func TestResetGuidanceCounters1651Extension(t *testing.T) {
 	a := &Agent{
-		trajectoryHealth:   &trajectoryHealthState{warnings: 2},
-		planAbandon:        &planAbandonState{warnings: 1},
-		delegationOrch:     &delegationState{orphanWarnCount: 1, serialWarnCount: 2, overDelWarned: true},
-		fixAmnesia:         newFixAmnesiaState(),
-		heterogeneousModel: &heterogeneousModelState{warnsIssued: 1},
-		driftRecurrence:    &driftRecurrenceState{fired: true, warned: true},
-		crossFileImpact:    &crossFileImpactState{fired: true},
-		serialRead:         &serialReadState{fired: true},
-		diskSpace:          &diskSpaceState{fired: true},
+		trajectoryHealth: &trajectoryHealthState{warnings: 2},
+		planAbandon:      &planAbandonState{warnings: 1},
+		delegationOrch:   &delegationState{orphanWarnCount: 1, serialWarnCount: 2, overDelWarned: true},
+		fixAmnesia:       newFixAmnesiaState(),
+		driftRecurrence:  &driftRecurrenceState{fired: true, warned: true},
+		crossFileImpact:  &crossFileImpactState{fired: true},
+		serialRead:       &serialReadState{fired: true},
+		diskSpace:        &diskSpaceState{fired: true},
 	}
 	a.fixAmnesia.mu.Lock()
 	a.fixAmnesia.warned["build"] = true
@@ -127,9 +126,6 @@ func TestResetGuidanceCounters1651Extension(t *testing.T) {
 	}
 	if len(a.fixAmnesia.warned) != 0 {
 		t.Fatal("fixAmnesia warned map must clear")
-	}
-	if a.heterogeneousModel.warnsIssued != 0 {
-		t.Fatal("heterogeneousModel quota must reset")
 	}
 	if a.driftRecurrence.fired || a.driftRecurrence.warned || a.crossFileImpact.fired || a.serialRead.fired || a.diskSpace.fired {
 		t.Fatal("quota bools must reset")

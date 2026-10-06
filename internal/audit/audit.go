@@ -45,6 +45,13 @@ const (
 	StatusError     = "error"
 	StatusCancelled = "cancelled"
 	StatusInvalid   = "invalid" // rejected before execution (e.g. preflight)
+	// Approval-decision statuses (ATR-2026-00118 / ESCALATE.md): the human
+	// gate itself is auditable - who approved what when. The local CLI has a
+	// single approver (the interactive user), so approver identity is the
+	// session's user; timeout covers an Ask that expired without an answer.
+	StatusUserApproved = "approved"
+	StatusUserDenied   = "user_denied"
+	StatusAskTimeout   = "ask_timeout"
 )
 
 // GenesisPrevHash is the prev_hash of the first entry in a chain.
@@ -65,6 +72,15 @@ type Event struct {
 	DurationMS int64  // wall time of the action in milliseconds
 	Err        string // short error/result summary, already truncated by the caller
 	Session    string // optional per-event session override (falls back to the ledger's)
+	// InvariantID (r454) names the declared behavior invariant that caused
+	// a rejection; empty for normal actions.
+	InvariantID string
+	// Peer and TaskID attribute the event to a REMOTE A2A handoff (r33):
+	// tasks submitted by a peer agent that execute locally. Peer identifies
+	// the calling agent when known (auth-derived); TaskID ties the entry to
+	// the A2A task lifecycle (received -> terminal).
+	Peer   string
+	TaskID string
 }
 
 // Entry is a sealed ledger record: the event plus chain bookkeeping.
@@ -77,8 +93,15 @@ type Entry struct {
 	InputHash  string `json:"input_hash"`
 	DurationMS int64  `json:"duration_ms"`
 	Err        string `json:"err,omitempty"`
-	PrevHash   string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
-	Hash       string `json:"hash"`      // SHA-256 over all fields above
+	// InvariantID tags rejections caused by a declared behavior invariant
+	// (r454); empty for normal actions. Backward-compatible (omitempty).
+	InvariantID string `json:"invariant_id,omitempty"`
+	// Peer/TaskID attribute the entry to a remote A2A handoff (r33);
+	// empty for purely local actions. Backward-compatible (omitempty).
+	Peer     string `json:"peer,omitempty"`
+	TaskID   string `json:"task_id,omitempty"`
+	PrevHash string `json:"prev_hash"` // previous entry's Hash (genesis: zeros)
+	Hash     string `json:"hash"`      // SHA-256 over all fields above
 }
 
 // hashEntry computes the chain hash over every field of e except Hash
@@ -100,6 +123,26 @@ func hashEntry(e Entry) string {
 	writeField(e.InputHash)
 	writeField(fmt.Sprintf("%d", e.DurationMS))
 	writeField(e.Err)
+	// #3240: InvariantID is sealed into the chain hash too - it is the
+	// sole attribution field for invariant rejections, so a post-hoc edit
+	// (rewriting which rule fired, erasing the fact, or framing a normal
+	// action) must trip Verify. Conditional append: an empty InvariantID
+	// writes zero bytes, so pre-r454 entries hash identically under old
+	// and new code (chain compatibility - old chains still Verify).
+	if e.InvariantID != "" {
+		writeField(e.InvariantID)
+	}
+	// r33: A2A handoff attribution is sealed into the chain hash too - a
+	// governance ledger must not allow post-hoc anonymous-izing a remote
+	// submission. Same conditional-append pattern as InvariantID: empty
+	// fields write zero bytes, so pre-r33 entries hash identically under
+	// old and new code (chain compatibility).
+	if e.Peer != "" {
+		writeField(e.Peer)
+	}
+	if e.TaskID != "" {
+		writeField(e.TaskID)
+	}
 	writeField(e.PrevHash)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
@@ -232,15 +275,18 @@ func (l *Ledger) Append(e Event) (Entry, error) {
 		session = e.Session
 	}
 	entry := Entry{
-		Seq:        l.seq + 1,
-		Time:       time.Now().UTC().Format(time.RFC3339Nano),
-		Session:    session,
-		Tool:       e.Tool,
-		Status:     e.Status,
-		InputHash:  e.InputHash,
-		DurationMS: e.DurationMS,
-		Err:        e.Err,
-		PrevHash:   l.prev,
+		Seq:         l.seq + 1,
+		Time:        time.Now().UTC().Format(time.RFC3339Nano),
+		Session:     session,
+		Tool:        e.Tool,
+		Status:      e.Status,
+		InputHash:   e.InputHash,
+		DurationMS:  e.DurationMS,
+		Err:         e.Err,
+		InvariantID: e.InvariantID,
+		Peer:        e.Peer,
+		TaskID:      e.TaskID,
+		PrevHash:    l.prev,
 	}
 	entry.Hash = hashEntry(entry)
 	line, err := json.Marshal(entry)

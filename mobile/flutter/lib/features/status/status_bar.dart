@@ -10,6 +10,7 @@ class StatusBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    watchAppTheme(ref); // re-run on theme switch: AppColors is static/non-reactive
     final status = ref.watch(displayedAgentStatusProvider);
     final message = ref.watch(displayedAgentStatusMessageProvider);
     final label = _statusLabel(status);

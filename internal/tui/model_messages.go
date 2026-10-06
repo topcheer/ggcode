@@ -75,10 +75,10 @@ type sessionMetricMsg struct {
 	Metric metrics.MetricEvent
 }
 
-// initPromptCheckMsg carries the result of the startup GGCODE.md existence check.
+// initPromptCheckMsg carries the result of the startup AGENTS.md existence check.
 type initPromptCheckMsg struct {
 	needsInit bool
-	target    string // path to GGCODE.md that would be created
+	target    string // path to AGENTS.md that would be created
 }
 
 type projectMemoryLoadedMsg struct {

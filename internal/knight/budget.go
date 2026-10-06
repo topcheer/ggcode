@@ -119,6 +119,17 @@ func (b *Budget) Record(task string, inputTokens, outputTokens int) error {
 	b.ensureLoadedAt(now)
 
 	total := inputTokens + outputTokens
+	// #3017: account consumption in memory BEFORE persisting. A failed
+	// disk write (disk full / quota / permission) must never un-account
+	// tokens the provider already consumed - the old order returned early
+	// and CanSpend kept approving against a stale todayUsed, overdrafting
+	// the budget for as long as writes kept failing (the write-side mirror
+	// of #1575-A's read-side fail-closed fix). The JSONL line is lost on
+	// write failure, but today's in-memory ledger stays accurate for the
+	// process lifetime; the caller only logs, it never retries, so there
+	// is no double-accounting risk.
+	b.todayUsed += total
+
 	rec := usageRecord{
 		Time:   now,
 		Task:   task,
@@ -140,10 +151,11 @@ func (b *Budget) Record(task string, inputTokens, outputTokens int) error {
 	defer f.Close()
 
 	if _, err := f.Write(append(line, '\n')); err != nil {
+		// In-memory ledger already updated above (#3017) - the error
+		// propagates for logging, but consumption stays accounted.
 		return fmt.Errorf("knight budget: write record: %w", err)
 	}
 
-	b.todayUsed += total
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -31,6 +32,10 @@ type TrialForkTool struct {
 	AgentFactory subagent.AgentFactory
 	WorkingDir   string
 	OnUsage      func(provider.TokenUsage)
+	// OnMetric forwards sub-agent telemetry to the parent collector;
+	// the runner stamps events with SubAgentID (#3296). best_of_n's trial
+	// fan-out is the heaviest token path and was a full OTLP black box.
+	OnMetric func(metrics.MetricEvent)
 }
 
 const (
@@ -181,6 +186,7 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			SubAgentID:   ids[i],
 			AgentFactory: t.AgentFactory,
 			WorkingDir:   dirs[i],
+			OnMetric:     t.OnMetric,
 			OnUsage: func(u provider.TokenUsage) {
 				res.Tokens += u.Total()
 				if t.OnUsage != nil {
@@ -231,7 +237,11 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 
 	winner := pickWinner(results)
 	keep := -1
-	if winner >= 0 && results[winner].Commits > 0 {
+	if winner >= 0 && (results[winner].Commits > 0 || results[winner].VerifyPass) {
+		// #2795: a verify-passed winner must never be force-deleted -
+		// verify validates the worktree tree state itself, which may be
+		// entirely uncommitted (dirty). "usable" here now matches the
+		// anyUsable semantics below instead of contradicting them.
 		keep = winner
 		results[winner].Kept = true
 	}
@@ -243,7 +253,7 @@ func (t *TrialForkTool) Execute(ctx context.Context, input json.RawMessage) (Res
 			anyUsable = true
 		}
 	}
-	report := formatTrialReport(base, in.VerifyCmd, results, winner)
+	report := formatTrialReport(base, in.VerifyCmd, results, winner, anyUsable)
 	return Result{IsError: !anyUsable, Content: report}, nil
 }
 
@@ -438,7 +448,7 @@ func trimSummary(s string, max int) string {
 	return cut + "…"
 }
 
-func formatTrialReport(base, verifyCmd string, results []trialResult, winner int) string {
+func formatTrialReport(base, verifyCmd string, results []trialResult, winner int, usable bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Trial fork complete: %d trials forked from %s\n", len(results), abbrevSHA(base))
 	if verifyCmd != "" {
@@ -469,13 +479,26 @@ func formatTrialReport(base, verifyCmd string, results []trialResult, winner int
 			fmt.Fprintf(&sb, "summary: %s\n", r.Summary)
 		}
 	}
-	if winner < 0 {
+	// #3224: a pickWinner index exists even when EVERY trial failed to
+	// produce committed or verify-passed work (pure score ranking). The
+	// IsError flag alone does not stop an LLM caller from following the
+	// report body: a WINNER block plus pointers to already-deleted
+	// worktrees is active misinformation. Gate the winner block on the
+	// caller's anyUsable verdict instead.
+	if winner < 0 || !usable {
 		sb.WriteString("\nNo usable trial: every attempt failed to produce committed work.\n")
 	} else {
 		w := results[winner]
 		fmt.Fprintf(&sb, "\nWINNER: trial %d (branch %s)\n", w.Index, w.Branch)
 		if w.Kept {
 			fmt.Fprintf(&sb, "winner worktree kept for inspection: %s\n", w.Worktree)
+		}
+		if w.Commits == 0 && w.Kept {
+			// #3224: only when the winner actually passed verify (Kept is set
+			// exactly then) is "passed verify but committed nothing" true and
+			// the kept-worktree pointer real. Without the Kept guard this
+			// warning references an already-deleted worktree.
+			sb.WriteString("warning: winner passed verify but committed nothing; the work lives uncommitted in the kept worktree above - the branch diff and the git-apply hint below are EMPTY. Commit inside that worktree first, then adopt.\n")
 		}
 		fmt.Fprintf(&sb, "adopt (non-destructive, from your checkout): git diff %s..%s | git apply\n",
 			abbrevSHA(base), w.Branch)

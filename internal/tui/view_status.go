@@ -402,12 +402,16 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 	c := m.costCache
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sid == m.session.ID && c.n == len(m.session.UsageHistory) {
+	// #3086: read UsageHistory through the lock-guarded snapshot - the
+	// usage callbacks append it from agent-stream goroutines while this
+	// runs on the View thread every frame.
+	history := m.session.UsageHistorySnapshot()
+	if c.sid == m.session.ID && c.n == len(history) {
 		return c.cost, c.usage
 	}
 	var total float64
 	var agg provider.TokenUsage
-	for _, entry := range m.session.UsageHistory {
+	for _, entry := range history {
 		agg = agg.Add(entry.Usage)
 		if entry.Usage.Total() == 0 {
 			continue
@@ -428,7 +432,7 @@ func (m *Model) sessionCostSnapshot() (float64, provider.TokenUsage) {
 			float64(u.CacheWrite)*rate.CacheWritePerM/1e6
 	}
 	c.sid = m.session.ID
-	c.n = len(m.session.UsageHistory)
+	c.n = len(history)
 	c.cost = total
 	c.usage = agg
 	return total, agg
@@ -447,7 +451,7 @@ func (m Model) sessionCostHint() string {
 	}
 	// Fallback: aggregate from UsageHistory if session-level total is still 0
 	// (aggregation is cached — see sessionCostSnapshot).
-	if usage.Total() == 0 && len(m.session.UsageHistory) > 0 {
+	if usage.Total() == 0 && len(m.session.UsageHistorySnapshot()) > 0 {
 		_, usage = m.sessionCostSnapshot()
 	}
 	totalTokens := usage.Total()
@@ -494,7 +498,9 @@ func (m Model) estimateSessionCost() float64 {
 		rate := resolveRate(m.session.Vendor, m.session.Endpoint, m.session.Model)
 		if rate.IsKnown() && rate.IsMetered() {
 			u := m.session.TokenUsage
-			total = float64(u.InputTokens)*rate.InputPerM/1e6 +
+			// #3434: fallback path (no UsageHistory - restored/imported
+			// sessions) must normalize the same way as the #2315 main path.
+			total = float64(u.DisplayInputTokens())*rate.InputPerM/1e6 +
 				float64(u.OutputTokens)*rate.OutputPerM/1e6 +
 				float64(u.CacheRead)*rate.CacheReadPerM/1e6 +
 				float64(u.CacheWrite)*rate.CacheWritePerM/1e6

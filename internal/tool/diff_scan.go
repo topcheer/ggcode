@@ -63,6 +63,10 @@ var pythonOnlyPattern = map[string]bool{
 	`\bprint\(`:           true,
 	`\bpprint\.pprint\(`:  true,
 	`\bpprint\.pformat\(`: true,
+	// #3168: dd( is also Python-only — a custom `.dd(x)` method in
+	// Go/Rust/etc hit \bdd\( and fired an info-level false positive
+	// (same family as the #826 print( fix).
+	`\bdd\(`: true,
 }
 
 // debuggerPatterns matches debugger/breakpoint statements.
@@ -101,7 +105,14 @@ var testFilePattern = regexp.MustCompile(`(_test\.go|\.test\.[jt]sx?|\.spec\.[jt
 // in unified diff output to track the current file.
 var diffFileHeader = regexp.MustCompile(`^\+\+\+\s+b/(.+)`)
 var diffOldFileHeader = regexp.MustCompile(`^---\s+a/(.+)`)
-var diffHunkHeader = regexp.MustCompile(`^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@`)
+
+// #3133: accept BOTH plain hunks (@@ -a,b +c,d @@) and combined-diff
+// hunks (@@@ -a,b -c,d +e,f @@@ - emitted for unmerged paths during
+// cherry-pick/rebase conflicts). The capture is the start line of the
+// LAST + section (the new-file line numbers the scan must report);
+// without this, combined headers missed the match and newLineNum kept
+// the previous hunk's residue, misplacing every reported issue line.
+var diffHunkHeader = regexp.MustCompile(`^@{2,3}\s+(?:-\d+(?:,\d+)?\s+)+\+(\d+)(?:,\d+)?\s+@{2,3}`)
 
 // ScanStagedDiffForIssues analyzes a unified diff (e.g. from "git diff --cached")
 // and returns quality issues found in ADDED lines only. This provides a
@@ -127,6 +138,11 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 	currentFile := ""
 	newLineNum := 0
 	isTestFile := false
+	// #3167: combined-diff hunks (@@@, unmerged paths during
+	// cherry-pick/rebase) prefix added lines with "++" and removed lines
+	// with "--"/"- ": strip two markers in that mode, or every ^-anchored
+	// pattern (conflict markers, ^import pdb) silently misses.
+	inCombinedHunk := false
 
 	lines := strings.Split(diffOutput, "\n")
 
@@ -145,22 +161,32 @@ func ScanStagedDiffForIssues(diffOutput string) []DiffIssue {
 		// Track line numbers from hunk headers: @@ -old,count +new,count @@
 		if m := diffHunkHeader.FindStringSubmatch(line); m != nil {
 			fmt.Sscanf(m[1], "%d", &newLineNum)
+			// #3167: @@@ opens a combined hunk (double prefixes), @@ a plain
+			// one (single prefixes).
+			inCombinedHunk = strings.HasPrefix(line, "@@@")
 			continue
 		}
 
 		// Only check ADDED lines (lines starting with '+', not "+++").
 		if len(line) == 0 || line[0] != '+' {
-			// Context lines and removed lines advance the new line counter
-			// for context lines (' '), removed lines ('-') do not.
+			// Context lines advance the new line counter, removed lines do
+			// not. In a combined hunk, context lines carry two spaces but the
+			// first byte is still ' ', so the counter holds either way.
 			if len(line) > 0 && line[0] == ' ' {
 				newLineNum++
 			}
 			continue
 		}
 
-		addedContent := line[1:] // strip the leading '+'
-		issueLine := newLineNum  // this added line's number in the new file
-		newLineNum++             // advance for the next line
+		// #3167: strip one marker in plain hunks, two in combined hunks.
+		var addedContent string
+		if inCombinedHunk && len(line) > 1 && line[1] == '+' {
+			addedContent = line[2:]
+		} else {
+			addedContent = line[1:]
+		}
+		issueLine := newLineNum // this added line's number in the new file
+		newLineNum++            // advance for the next line
 
 		// #1676 case 1: the cap used to break HERE, before any category
 		// check - 15 leading TODO lines silently starved the secret scan on

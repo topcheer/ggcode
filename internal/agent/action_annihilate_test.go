@@ -91,6 +91,9 @@ func TestActionAnnihilate_MultiEditThenUndo(t *testing.T) {
 func TestActionAnnihilate_GitCommitThenRevert(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_commit", rawJSON(t, map[string]interface{}{"message": "msg"}), 1)
+	// #2684: the warning fires only when the revert targets the commit the
+	// agent itself made (hash recorded by the wiring layer).
+	s.recordCommitHash(1, "abc1234")
 	warn := s.recordToolCall("git_revert", rawJSON(t, map[string]interface{}{"commit": "abc123"}), 2)
 
 	if warn == "" {
@@ -290,6 +293,8 @@ func TestActionAnnihilate_LookbackWindow(t *testing.T) {
 func TestActionAnnihilate_WarningContainsDescription(t *testing.T) {
 	s := newActionAnnihilateState()
 	s.recordToolCall("git_commit", rawJSON(t, map[string]interface{}{"message": "m"}), 1)
+	// #2684: revert must target the recorded commit hash to warn.
+	s.recordCommitHash(1, "abc1234")
 	warn := s.recordToolCall("git_revert", rawJSON(t, map[string]interface{}{"commit": "abc"}), 2)
 
 	if warn == "" {

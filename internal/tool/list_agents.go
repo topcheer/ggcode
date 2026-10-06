@@ -103,7 +103,10 @@ func formatSubAgentSnapshot(snap subagent.Snapshot) string {
 		sb.WriteString(fmt.Sprintf("    Phase: %s\n", snap.CurrentPhase))
 	}
 	if snap.Status == subagent.StatusCompleted && strings.TrimSpace(snap.Result) != "" {
-		sb.WriteString(fmt.Sprintf("    Result: %s\n", snap.Result))
+		// #3176: the sibling fields above all truncate (80/120) but Result
+		// streamed the full snap.Result on one line - up to the manager's
+		// 100KB cap, a whole-report dump into the context. Same style cap.
+		sb.WriteString(fmt.Sprintf("    Result: %s\n", truncate(snap.Result, 200)))
 	}
 	if snap.Error != "" {
 		sb.WriteString(fmt.Sprintf("    Error: %s\n", truncate(snap.Error, 120)))

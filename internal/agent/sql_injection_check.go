@@ -40,7 +40,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"strconv"
@@ -135,8 +134,7 @@ func sqlInjScanAll(filePath, content string) []sqlInjIssue {
 }
 
 func sqlInjScanCapped(filePath, content string, capped bool) []sqlInjIssue {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, content, 0)
+	file, fset, err := parseGoSource(filePath, content, 0)
 	if err != nil || file == nil {
 		return nil
 	}

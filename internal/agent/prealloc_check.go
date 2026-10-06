@@ -47,10 +47,6 @@ type preallocWarning struct {
 	loopLine int
 }
 
-func (w preallocWarning) String() string {
-	return fmt.Sprintf("slice %q appended in loop without preallocation", w.varName)
-}
-
 // checkMissingPrealloc detects slices that are appended to inside loops
 // without being preallocated with make([]T, 0, capacity).
 func checkMissingPrealloc(filePath, oldContent, newContent string) []string {
@@ -64,8 +60,7 @@ func checkMissingPrealloc(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return nil // syntax errors handled by other checks
 	}
@@ -227,16 +222,18 @@ func addValueSpecSliceDecls(vs *ast.ValueSpec, decls map[string]*zeroCapSliceDec
 			// var x []T - check if type is a slice.
 			if _, isSlice := vs.Type.(*ast.ArrayType); isSlice {
 				if i < len(vs.Values) {
-					decls[name.Name] = analyzeInitExpr(name.Name, name.Pos(), vs.Values[i])
-				} else {
-					decls[name.Name] = &zeroCapSliceDecl{
-						name: name.Name, pos: name.Pos(), hasMakeCapacity: false,
+					if d := analyzeInitExpr(name.Name, name.Pos(), vs.Values[i]); d != nil {
+						recordDeclRespectingConflicts(decls, d)
 					}
+				} else {
+					recordDeclRespectingConflicts(decls, &zeroCapSliceDecl{
+						name: name.Name, pos: name.Pos(), hasMakeCapacity: false,
+					})
 				}
 			}
 		} else if i < len(vs.Values) {
 			if d := analyzeInitExpr(name.Name, name.Pos(), vs.Values[i]); d != nil {
-				decls[name.Name] = d
+				recordDeclRespectingConflicts(decls, d)
 			}
 		}
 	}
@@ -264,21 +261,58 @@ func collectFuncSliceDecls(body *ast.BlockStmt, decls map[string]*zeroCapSliceDe
 				}
 			}
 		case *ast.AssignStmt:
-			if node.Tok != token.DEFINE {
-				return true
-			}
 			for i, lhs := range node.Lhs {
 				ident, ok := lhs.(*ast.Ident)
 				if !ok || i >= len(node.Rhs) {
 					continue
 				}
-				if d := analyzeInitExpr(ident.Name, ident.Pos(), node.Rhs[i]); d != nil {
-					decls[ident.Name] = d
+				d := analyzeInitExpr(ident.Name, ident.Pos(), node.Rhs[i])
+				if node.Tok == token.DEFINE {
+					if d != nil {
+						recordDeclRespectingConflicts(decls, d)
+					}
+					continue
+				}
+				// #3355: a `var x []T` later granted capacity via plain
+				// assignment (x = make([]T, 0, N), including branch-selected
+				// capacities) is correctly preallocated. Mirrors the map
+				// check's excludeShadowedBinds (#1103) conservatism: the
+				// already-sized assignment means subsequent appends belong to
+				// a sized variable, so stop treating the binding as zero-cap.
+				// The entry is replaced with an upgraded copy so a shared
+				// package-level decl pointer never leaks the flip to sibling
+				// function units.
+				if d != nil && d.hasMakeCapacity {
+					if prev, ok := decls[ident.Name]; ok && !prev.hasMakeCapacity {
+						upgraded := *prev
+						upgraded.hasMakeCapacity = true
+						decls[ident.Name] = &upgraded
+					}
 				}
 			}
 		}
 		return true
 	})
+}
+
+// recordDeclRespectingConflicts merges d into decls, aware that the map is
+// name-keyed while Go declarations are lexically scoped (#2920). Two
+// same-name declarations in different blocks may coexist in one unit
+// (shadowing is legal); last-write-wins would let a nested shadow whose
+// capability flag differs from the outer declaration flip the entry either
+// way - false positive on correctly preallocated loops (Trigger A) or
+// missed detection on genuinely zero-cap ones (Trigger B). Conservative
+// resolution: a name with conflicting declarations is treated as having
+// capacity, which suppresses the advisory (advisory cost asymmetry: a
+// false positive wastes agent iterations, a miss merely under-reports).
+func recordDeclRespectingConflicts(decls map[string]*zeroCapSliceDecl, d *zeroCapSliceDecl) {
+	if prev, ok := decls[d.name]; ok && prev.hasMakeCapacity != d.hasMakeCapacity {
+		merged := *d
+		merged.hasMakeCapacity = true
+		decls[d.name] = &merged
+		return
+	}
+	decls[d.name] = d
 }
 
 // aSTInspectLoops invokes fn for every for/range loop lexically inside body,

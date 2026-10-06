@@ -72,8 +72,7 @@ func checkConcurrentMapAccess(filePath, oldContent, newContent string) string {
 		return ""
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, filePath, newContent, 0)
+	file, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil || file == nil {
 		return ""
 	}

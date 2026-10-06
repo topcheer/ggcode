@@ -34,7 +34,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"path/filepath"
 	"regexp"
@@ -58,6 +57,14 @@ func checkDuplicateDeclarations(filePath, oldContent, newContent string) string 
 	// names across different test functions (not package-level duplicates, but
 	// our regex heuristics for non-Go languages may false-positive in tests).
 	if isTestFile(filePath) {
+		return ""
+	}
+
+	// #2821: .d.ts files are ambient declaration files whose every function
+	// entry is an overload signature (no body, ';' terminator) — that is the
+	// only legal form there. Counting them as duplicates would misfire on the
+	// file's core idiom.
+	if strings.HasSuffix(filePath, ".d.ts") {
 		return ""
 	}
 
@@ -166,8 +173,7 @@ func collectGoDecls(filePath, src string) map[goDeclKey]int {
 		return counts
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filePath, src, 0)
+	f, _, err := parseGoSource(filePath, src, 0)
 	if err != nil {
 		// If the file doesn't parse, we can't reliably detect duplicates.
 		// Syntax errors are caught by checkWriteIntegrity; skip here.
@@ -298,10 +304,22 @@ func collectPythonDecls(src string) map[regexDeclKey]int {
 // jsFuncRe matches TOP-LEVEL function declarations (column 0): "function foo(".
 // Indented "function foo(" is a nested/block-scoped function (legal ES6
 // idiom inside any function body) and is excluded (#2703 scenario 2).
-var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(`)
+//
+// #2821: the pattern requires a BODY ("{" after the parameter list and an
+// optional return-type annotation). TypeScript overload signatures
+// ("function foo(s: string): Date;") legally repeat the same name with no
+// body and a ';' terminator — they are not duplicates and must not be
+// counted; only 2+ implementations (both with bodies) are real errors.
+var jsFuncRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\((?:[^;{}()]|\([^()]*\))*\)\s*(?::\s*[^;{=]+)?\s*\{`)
 
-// jsClassRe matches top-level class declarations.
-var jsClassRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)\s*[\{<]`)
+// jsClassRe matches top-level class declarations. #2734: inheritance is the
+// dominant class form in real JS/TS (React components extend Component,
+// services extend Base) -- the old `[\{<]` only matched bare classes and
+// silently excluded `class Foo extends Bar {` / `implements`, making the
+// duplicate-class check dead code for those forms (old/new counts both 0,
+// no failure signal). Match an optional extends/implements heritage list
+// before the `{`/`<` terminator.
+var jsClassRe = regexp.MustCompile(`(?m)^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+[\w.<>[\]]+)?(?:\s+implements\s+[\w.<>[\],\s]+)?\s*[\{<]`)
 
 // jsConstFuncRe matches top-level "const foo = (" arrow function declarations.
 // Indented const is a block-scoped local (the most common false-positive

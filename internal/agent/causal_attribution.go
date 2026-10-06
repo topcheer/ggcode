@@ -78,6 +78,17 @@ type causalEditStep struct {
 type causalAttributionState struct {
 	edits    []causalEditStep
 	warnings int
+
+	// lastSuspect is the file path of the most recent top suspect (r405:
+	// consumed by the attribution-experiment state machine to arm a
+	// Dov-style intervention validation of the attribution).
+	lastSuspect string
+
+	// lastSuspectStep/lastSuspectCRS capture the full final suspect (r413:
+	// persisted failure attribution). takeFinalSuspect consumes them so a
+	// stale suspect can never leak into a later turn's terminal record.
+	lastSuspectStep *causalEditStep
+	lastSuspectCRS  int
 }
 
 func newCausalAttributionState() *causalAttributionState {
@@ -501,10 +512,14 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 		return ""
 	}
 
-	// Find top suspect
+	// Find top suspect. Ties break to the MORE RECENT edit: results are
+	// appended oldest-first (rank = append index, most recent last), and
+	// the recency design ("Higher for more recent edits") means an equal
+	// score must resolve to the later step. Compare rank (loop order),
+	// not wall-clock - parallel tool calls share timestamps. (#3150)
 	best := results[0]
 	for _, r := range results[1:] {
-		if r.score > best.score {
+		if r.score > best.score || (r.score == best.score && r.rank > best.rank) {
 			best = r
 		}
 	}
@@ -515,6 +530,10 @@ func (s *causalAttributionState) attributeFailure(output string) string {
 	}
 
 	s.warnings++
+	s.lastSuspect = best.step.filePath // r405: hypothesis for the experiment arm
+	stepCopy := best.step              // r413: full suspect for persisted attribution
+	s.lastSuspectStep = &stepCopy
+	s.lastSuspectCRS = best.score
 
 	// Format guidance
 	var sb strings.Builder
@@ -552,4 +571,17 @@ func looksLikeFailure(output string) bool {
 func (s *causalAttributionState) reset() {
 	s.edits = s.edits[:0]
 	s.warnings = 0
+	s.lastSuspectStep = nil
+	s.lastSuspectCRS = 0
+}
+
+// takeFinalSuspect returns the current full suspect (if any) and clears
+// it, so the terminal record hook (r413 recordFailureAttribution) reads
+// each suspect exactly once.
+func (s *causalAttributionState) takeFinalSuspect() (*causalEditStep, int) {
+	step := s.lastSuspectStep
+	s.lastSuspectStep = nil
+	crs := s.lastSuspectCRS
+	s.lastSuspectCRS = 0
+	return step, crs
 }

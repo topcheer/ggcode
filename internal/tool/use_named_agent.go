@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/provider"
 	"github.com/topcheer/ggcode/internal/safego"
 	"github.com/topcheer/ggcode/internal/subagent"
@@ -22,6 +23,7 @@ type UseNamedAgentTool struct {
 	AgentFactory        func(provider.Provider, interface{}, string, int) subagent.AgentRunner
 	WorkingDir          string
 	OnUsage             func(provider.TokenUsage)
+	OnMetric            func(metrics.MetricEvent) // sub-agent telemetry forwarding (#3296); runner stamps SubAgentID
 	SystemPromptBuilder func(task, agentType string) string
 	// AvailableModels returns the models offered by the current endpoint.
 	// When set and non-empty, a template's Model override must be on the
@@ -221,6 +223,7 @@ func (t UseNamedAgentTool) Execute(ctx context.Context, input json.RawMessage) (
 			Model:               effectiveModel,
 			WorkingDir:          t.WorkingDir,
 			OnUsage:             t.OnUsage,
+			OnMetric:            t.OnMetric,
 			SystemPromptBuilder: customBuilder,
 			BuildToolSet: func(allowedTools []string, _ []subagent.ToolInfo) interface{} {
 				cloned := tools.Clone()
@@ -259,6 +262,7 @@ func (t UseNamedAgentTool) Clone() Tool {
 		AgentFactory:        t.AgentFactory,
 		WorkingDir:          t.WorkingDir,
 		OnUsage:             t.OnUsage,
+		OnMetric:            t.OnMetric,
 		SystemPromptBuilder: t.SystemPromptBuilder,
 		AvailableModels:     t.AvailableModels,
 	}

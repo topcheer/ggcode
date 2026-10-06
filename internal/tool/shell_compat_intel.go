@@ -61,8 +61,14 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- readlink -f (GNU only) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "readlink ") && strings.Contains(cmd, " -f")) ||
-				strings.Contains(out, "readlink: illegal option") ||
+			// #2792: anchor the flag to the readlink invocation itself -
+			// the old " -f" Contains matched a flag on any later pipeline/
+			// chain segment (e.g. `readlink l | sort -f`, where -f is a legal
+			// BSD sort flag).
+			if segmentHasFlagToken(cmd, "readlink", "-f", "--canonicalize") {
+				return true
+			}
+			return strings.Contains(out, "readlink: illegal option") ||
 				strings.Contains(out, "readlink: invalid option -- 'f'")
 		},
 		fix: "readlink -f is GNU-only. On macOS/BSD use: realpath file  or  python3 -c \"import os; print(os.path.realpath('file'))\"",
@@ -70,8 +76,13 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- grep -P (GNU PCRE) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "grep ") && strings.Contains(cmd, " -p")) ||
-				strings.Contains(out, "grep: option requires an argument") ||
+			// #2792: anchor the flag to the grep invocation itself (cmd is
+			// lowercased by the caller, so -P arrives as -p) - the old " -p"
+			// Contains matched flags of later segments (curl -P, find -print).
+			if segmentHasFlagToken(cmd, "grep", "-p", "--perl-regexp") {
+				return true
+			}
+			return strings.Contains(out, "grep: option requires an argument") ||
 				(strings.Contains(out, "grep:") && strings.Contains(out, "invalid option"))
 		},
 		fix: "grep -P (PCRE) is GNU-only. Use: grep -E 'pattern' (ERE, cross-platform) or rg 'pattern' (ripgrep, if installed)",
@@ -79,8 +90,12 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- date -d (GNU) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "date ") && strings.Contains(cmd, " -d")) ||
-				strings.Contains(out, "date: illegal option") ||
+			// #2792: anchor to the date invocation itself - the old " -d"
+			// Contains matched later-segment flags (curl -D).
+			if segmentHasFlagToken(cmd, "date", "-d", "--date") {
+				return true
+			}
+			return strings.Contains(out, "date: illegal option") ||
 				strings.Contains(out, "date: invalid option -- 'd'")
 		},
 		fix: "date -d is GNU-only. On macOS/BSD use: date -v-1d (yesterday) or date -v+1d (tomorrow). For parsing use: python3 -c \"from datetime import datetime; print(datetime.strptime('2024-01-01', '%Y-%m-%d'))\"",
@@ -88,8 +103,12 @@ var shellCompatPatterns = []shellCompatPattern{
 	// --- stat -c (GNU) vs stat -f (BSD) ---
 	{
 		match: func(cmd, out string) bool {
-			return (strings.HasPrefix(strings.TrimSpace(cmd), "stat ") && strings.Contains(cmd, " -c")) ||
-				strings.Contains(out, "stat: illegal option") ||
+			// #2792: anchor to the stat invocation itself - the old " -c"
+			// Contains matched later-segment flags (tail -c).
+			if segmentHasFlagToken(cmd, "stat", "-c", "--format") {
+				return true
+			}
+			return strings.Contains(out, "stat: illegal option") ||
 				strings.Contains(out, "stat: invalid option -- 'c'")
 		},
 		fix: "stat -c is GNU-only. On macOS/BSD use: stat -f '%z' file (file size), stat -f '%m' file (mtime). Or use: wc -c < file for size",
@@ -195,6 +214,35 @@ var shellCompatPatterns = []shellCompatPattern{
 		},
 		fix: "GNU and BSD mktemp differ. Portable forms: mktemp (file), mktemp -d (directory), or mktemp /tmp/prefix.XXXXXX (template works on both GNU and macOS)",
 	},
+}
+
+// segmentHasFlagToken reports whether any pipeline/chain segment of cmd
+// (split on |, &&, and ;) STARTS with the named command and contains one
+// of the given flags as an exact whitespace-delimited token. This anchors
+// flag detection to the command's own invocation: a -p/-f/-d/-c flag on a
+// LATER segment (curl -P, sort -f, find -print, tail -c...) belongs to a
+// different command and must not fire this command's arm (#2792, the
+// pattern the #1703 xargs -r fix established). cmd arrives lowercased
+// from diagnoseShellCompat; flags must therefore be listed lowercase.
+func segmentHasFlagToken(cmd, name string, flags ...string) bool {
+	flagSet := make(map[string]bool, len(flags))
+	for _, f := range flags {
+		flagSet[f] = true
+	}
+	for _, seg := range strings.FieldsFunc(cmd, func(r rune) bool {
+		return r == '|' || r == '&' || r == ';'
+	}) {
+		seg = strings.TrimSpace(seg)
+		if seg != name && !strings.HasPrefix(seg, name+" ") {
+			continue
+		}
+		for _, tok := range strings.Fields(seg) {
+			if flagSet[tok] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // diagnoseShellCompat detects BSD/GNU command incompatibilities and returns

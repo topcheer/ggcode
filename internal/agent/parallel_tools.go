@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/topcheer/ggcode/internal/audit"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/metrics"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -229,16 +230,43 @@ func (a *Agent) usePreExecutedWithPermission(ctx context.Context, tc provider.To
 				break
 			}
 			if onApproval != nil {
+				// Approval-fatigue circuit breaker, same policy as the serial path.
+				if a.askThrottle.ShouldSuppress(tc.Name, tc.Arguments) {
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "suppressed by ask throttle (repeated denial, parallel)", 0, "")
+					debug.Log("approval-throttle", "suppressed re-ask for %s (parallel, denied twice recently)", tc.Name)
+					return tool.Result{
+						Content: fmt.Sprintf("Permission denied for tool %q without prompting: this exact request was denied twice within the last minute. Re-asking is blocked to avoid nagging the user. Change your approach instead of repeating the request.", tc.Name),
+						IsError: true,
+					}
+				}
 				resp := onApproval(ctx, tc.Name, string(tc.Arguments))
 				if resp == permission.Deny {
+					// ATR-2026-00118: denial is a first-class auditable event.
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserDenied, "user denied at approval gate (parallel)", 0, "")
 					if a.approvalMemory != nil {
 						a.approvalMemory.RecordDeny(tc.Name, tc.Arguments)
 					}
+					a.askThrottle.RecordDenial(tc.Name, tc.Arguments)
 					return tool.Result{
 						Content: fmt.Sprintf("Permission denied for tool %q. User rejected the request.", tc.Name),
 						IsError: true,
 					}
 				}
+				if resp.IsNonDecision() {
+					// #3370: mirror of the serial path - timeout/cancellation is
+					// fail-closed but never attributed to the user.
+					note := "approval timed out (no user response, parallel)"
+					if resp == permission.Cancelled {
+						note = "approval cancelled (run interrupted or request displaced, parallel)"
+					}
+					a.auditToolResult(tc.Name, tc.Arguments, audit.StatusAskTimeout, note, 0, "")
+					debug.Log("approval-gate", "ask ended without user decision for %s (parallel, %v)", tc.Name, resp)
+					return tool.Result{
+						Content: fmt.Sprintf("Approval for tool %q ended without a user decision (%s). The tool was not executed. If this step is still needed, ask again when the user is available; do not treat this as a rejection of the approach.", tc.Name, resp),
+						IsError: true,
+					}
+				}
+				a.auditToolResult(tc.Name, tc.Arguments, audit.StatusUserApproved, "", 0, "")
 				if a.approvalMemory != nil {
 					a.approvalMemory.RecordApproval(tc.Name, tc.Arguments)
 				}

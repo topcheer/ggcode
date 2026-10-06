@@ -226,7 +226,7 @@ func TestTeamToolDescriptionsClarifyTeammateLifecycleAndResults(t *testing.T) {
 	}
 
 	spawnDesc := TeammateSpawnTool{}.Description()
-	for _, want := range []string{"persistent idle loop", "parallel work", "distinct role", "swarm_task_create", "parallel work"} {
+	for _, want := range []string{"persistent idle loop", "parallel work", "distinct role", "swarm_task_create", "parallel work", "coordination overhead"} {
 		if !strings.Contains(spawnDesc, want) {
 			t.Fatalf("teammate_spawn description should mention %q, got %q", want, spawnDesc)
 		}

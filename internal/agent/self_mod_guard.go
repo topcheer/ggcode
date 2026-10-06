@@ -58,6 +58,11 @@ type selfModState struct {
 
 	// warnedPaths tracks paths already warned about (dedup).
 	warnedPaths map[string]bool
+
+	// root is the agent working directory (workspace root), used to
+	// normalize absolute paths before matching (#2954). Empty means unknown
+	// (unit tests) - paths are then matched as given.
+	root string
 }
 
 const (
@@ -146,6 +151,24 @@ func (s *selfModState) reset() {
 	s.warnedPaths = make(map[string]bool)
 }
 
+// setRoot records the workspace root for absolute-path normalization.
+func (s *selfModState) setRoot(root string) {
+	s.mu.Lock()
+	s.root = strings.ReplaceAll(root, "\\", "/")
+	s.mu.Unlock()
+}
+
+// normalizeSelfModPath strips the workspace-root prefix from an absolute
+// path and folds Windows separators, so "/ws/agents.md" matches the bare
+// "agents.md" pattern the same way the relative "agents.md" does (#2954).
+func normalizeSelfModPath(p, root string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	if root != "" && strings.HasPrefix(p, root+"/") {
+		p = p[len(root)+1:]
+	}
+	return p
+}
+
 // checkSelfModification examines a write tool call's arguments for
 // self-referential file targets. Returns a guidance message if found.
 func (s *selfModState) checkSelfModification(toolName string, args json.RawMessage) string {
@@ -173,7 +196,7 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 	warnedThisCall := make(map[string]bool)
 
 	for _, path := range paths {
-		matched := matchSelfModTarget(path)
+		matched := matchSelfModTarget(normalizeSelfModPath(path, s.root))
 		if matched == nil {
 			continue
 		}
@@ -212,11 +235,35 @@ func (s *selfModState) checkSelfModification(toolName string, args json.RawMessa
 }
 
 // matchSelfModTarget checks if a path matches any self-modification pattern.
+// #2954: pattern semantics are split by shape -
+//   - anchored patterns (containing "/", e.g. ".ggcode/memory/") keep
+//     substring matching as before;
+//   - bare filename patterns ("agents.md", "system_prompt.json", ...) are
+//     matched by ROOT-LEVEL equality only (path == name or "./"+name).
+//     The old Contains match hit ordinary files in ANY subdirectory
+//     (docs/agents.md, assets/system_prompt.json, examples/mcp_server.json)
+//     with HIGH/CRITICAL "Self-Modification Warning" + prompt-injection
+//     wording - the same defect class fix #163 already ruled a bug for the
+//     "/memory/" and "allowlist" bare substrings. Bare config filenames are
+//     only self-infrastructure when they sit at the workspace root; callers
+//     normalize absolute paths against the workspace root first
+//     (normalizeSelfModPath).
 func matchSelfModTarget(path string) *selfModTarget {
-	lowerPath := strings.ToLower(path)
+	// Normalize separators so a Windows-style "\\agents.md" is still treated
+	// as a root-level file, not a subdirectory.
+	lp := strings.ToLower(strings.ReplaceAll(path, "\\", "/"))
+	lp = strings.TrimPrefix(lp, "./")
 	for i := range selfModPatterns {
 		for _, pat := range selfModPatterns[i].patterns {
-			if strings.Contains(lowerPath, strings.ToLower(pat)) {
+			lpat := strings.ToLower(pat)
+			if strings.Contains(lpat, "/") {
+				if strings.Contains(lp, lpat) {
+					return &selfModPatterns[i]
+				}
+				continue
+			}
+			// Bare filename: root-level equality only.
+			if lp == lpat {
 				return &selfModPatterns[i]
 			}
 		}
@@ -302,6 +349,9 @@ func (a *Agent) checkSelfModification(toolName string, args json.RawMessage) str
 	if a.selfMod == nil {
 		return ""
 	}
+	// #2954: supply the workspace root so absolute tool paths are normalized
+	// to workspace-relative before bare-filename matching.
+	a.selfMod.setRoot(a.workingDir)
 	return a.selfMod.checkSelfModification(toolName, args)
 }
 

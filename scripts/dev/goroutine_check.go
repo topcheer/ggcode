@@ -7,7 +7,9 @@
 //  1. go safego.Go(name, fn)          - the canonical wrapper
 //  2. go safego.Run(name, fn)         - spawn-with-recover variant
 //  3. go func() { defer safego.Recover(name); ... }  - manual form;
-//     any `defer safego.Recover(...)` statement inside the literal body
+//     a `defer safego.Recover(...)` statement directly in the goroutine
+//     frame (blocks inside the frame count; nested closures do NOT - a
+//     defer only protects its lexically enclosing function, #3349)
 //  4. go func() { <body> }() where <body> itself contains ONLY a
 //     safego.Run/safego.Go call (go safego.Run(...) with a wrapper)
 //
@@ -106,9 +108,19 @@ func compliant(fset *token.FileSet, gostmt *ast.GoStmt) bool {
 // bodyHasManualRecover reports whether the body defers a closure that calls
 // recover() - the hand-rolled equivalent of safego.Recover (e.g.
 // check_registry.go's per-worker guard). Counted as compliant.
+//
+// #3349: only defers in the goroutine's OWN frame count. ast.Inspect has no
+// function-boundary semantics, so without an explicit FuncLit stop a defer
+// inside a nested closure (which protects only that closure's frame) would
+// pass the gate while the goroutine body itself stays unprotected. The inner
+// recover-search still descends into the deferred closure itself -
+// `defer func() { recover() }()` is the legitimate manual form.
 func bodyHasManualRecover(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
+		if _, isLit := n.(*ast.FuncLit); isLit {
+			return false // nested closure defers don't protect the goroutine frame
+		}
 		deferStmt, ok := n.(*ast.DeferStmt)
 		if !ok {
 			return true
@@ -126,14 +138,25 @@ func bodyHasManualRecover(body *ast.BlockStmt) bool {
 
 // bodyHasSafegoRecover reports whether the body contains a defer of
 // safego.Recover (or a call to safego.Run/Go, which carries its own recover).
+//
+// #3349: the defer must sit in the goroutine's OWN frame - a
+// `defer safego.Recover` inside a nested closure registers on that closure's
+// defer stack and cannot recover a panic in the goroutine body. The DeferStmt
+// branch is also tightened to Recover only (#1426-C alignment): deferring any
+// other safego.X (e.g. safego.SetLogger) has no recovery semantics at all.
 func bodyHasSafegoRecover(body *ast.BlockStmt) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
+		if _, isLit := n.(*ast.FuncLit); isLit {
+			return false // nested closure defers don't protect the goroutine frame
+		}
 		switch stmt := n.(type) {
 		case *ast.DeferStmt:
 			if sel, ok := stmt.Call.Fun.(*ast.SelectorExpr); ok {
 				if pkg, isIdent := sel.X.(*ast.Ident); isIdent && pkg.Name == safegoPkg {
-					found = true
+					if sel.Sel != nil && sel.Sel.Name == "Recover" {
+						found = true
+					}
 				}
 			}
 		case *ast.ExprStmt:

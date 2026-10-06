@@ -168,14 +168,3 @@ func (am *AttachmentManager) HandleAttachmentDownload(w http.ResponseWriter, r *
 	}
 	w.Write(att.data)
 }
-
-// attachmentDownloadClient is a shared HTTP client with a timeout for peer attachment downloads.
-// AttachmentDownloadError represents a failed attachment download.
-type AttachmentDownloadError struct {
-	StatusCode int
-	URL        string
-}
-
-func (e *AttachmentDownloadError) Error() string {
-	return strings.ToLower(http.StatusText(e.StatusCode))
-}

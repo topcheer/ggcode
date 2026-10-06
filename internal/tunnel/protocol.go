@@ -61,6 +61,11 @@ const (
 	EventRelayAck              = "relay_ack"  // Relay → Client: relay received the message
 	EventServerAck             = "server_ack" // Server → Client: desktop processed the message
 
+	// Mobile file transfer V1 (server→client, chunked inline; docs/design/mobile-file-transfer.md)
+	EventFileOffer = "file_offer" // host announces a file before its chunks
+	EventFileChunk = "file_chunk" // one base64-encoded raw chunk (512 KiB nominal)
+	EventFileDone  = "file_done"  // optional terminator; success inferred from chunks+sha256
+
 	// WebRTC P2P signaling types (bidirectional, exchanged over relay).
 	EventRTCOffer     = "rtc_offer"     // Host → Mobile: WebRTC SDP offer
 	EventRTCAnswer    = "rtc_answer"    // Mobile → Host: WebRTC SDP answer

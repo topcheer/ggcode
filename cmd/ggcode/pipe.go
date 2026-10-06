@@ -18,6 +18,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/image"
 	"github.com/topcheer/ggcode/internal/memory"
 	"github.com/topcheer/ggcode/internal/permission"
@@ -29,11 +30,48 @@ import (
 
 // RunPipe executes the agent in non-interactive pipe mode.
 // Returns the exit code (0=success, 1=failure).
-func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string) int {
+func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDirs []string, outputPath string, bypass bool, readOnlyAllowedDirs []string, outputSchemaPath string) int {
+	// Crash-leftover sweep (mirrors root.run; sa-242 runtime audit).
+	if wd, wdErr := os.Getwd(); wdErr == nil {
+		if n, sweepErr := util.SweepStaleTempFiles(filepath.Join(wd, ".ggcode"), time.Hour); sweepErr == nil && n > 0 {
+			debug.Log("pipe", "swept %d stale atomic-write temp file(s)", n)
+		}
+		// #3343: config root shares the same crash-orphan exposure (see root.run).
+		if n, sweepErr := util.SweepStaleTempFiles(config.ConfigDir(), time.Hour); sweepErr == nil && n > 0 {
+			debug.Log("pipe", "swept %d stale atomic-write temp file(s) in config dir", n)
+		}
+		// #3346: HOME-level todo files share the same unbounded growth (see root.run).
+		tool.SweepStaleTodoFiles(30 * 24 * time.Hour)
+	}
+
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 1
+	}
+
+	// --output-schema: constrain the final response to a JSON Schema
+	// (structured outputs). Providers implementing ResponseSchemaSetter
+	// get constrained decoding; others fall back to prompt guidance +
+	// JSON-validity check at the end of the run.
+	var outputSchema json.RawMessage
+	if outputSchemaPath != "" {
+		raw, readErr := os.ReadFile(outputSchemaPath)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "reading --output-schema: %v\n", readErr)
+			return 1
+		}
+		if !json.Valid(raw) {
+			fmt.Fprintf(os.Stderr, "--output-schema: %s is not valid JSON\n", outputSchemaPath)
+			return 1
+		}
+		outputSchema = raw
+		if s, ok := prov.(provider.ResponseSchemaSetter); ok {
+			s.SetResponseSchema(raw)
+		} else {
+			fmt.Fprintf(os.Stderr, "note: %s does not support constrained decoding; falling back to prompt guidance + JSON check\n", resolved.VendorID)
+			prompt = prompt + "\n\nRespond with a single JSON object that conforms to this JSON Schema (no prose, no markdown fences):\n" + string(raw)
+		}
 	}
 
 	workingDir, err := os.Getwd()
@@ -77,6 +115,11 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	}
 	registry := core.Registry
 	core.StartBackgroundServices()
+	// r71: reap managed background jobs (detach=true included) when the pipe
+	// run ends so its children do not outlive the process as orphans.
+	if jm := registry.JobManager(); jm != nil {
+		defer jm.ShutdownAll(2 * time.Second)
+	}
 	defer core.Close()
 
 	// Load project memory file list (for path-triggered dynamic loading).
@@ -91,7 +134,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		a.SetWorkingDir(ag.WorkingDir())
 		return a
 	}
-	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil, nil))
+	_ = registry.Register(agentruntime.NewSkillTool(commandMgr, core.MCPManager, prov, registry, skillAgentFactory, workingDir, nil, nil, nil))
 	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
 		_ = registry.Register(&tool.TrialForkTool{
 			Provider:     prov,
@@ -126,6 +169,7 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Setup agent
 	maxIter := cfg.MaxIterations
 	ag = agent.NewAgent(prov, registry, systemPrompt, maxIter)
+	agentruntime.RegisterCompactContextTool(registry, ag)
 	core.SetConfigAgent(ag)
 	ag.SetProjectMemoryFiles(projectMemFiles)
 	agentruntime.ApplyResolvedLimitsToAgent(ag, resolved)
@@ -134,12 +178,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
+	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
 	// Pipe mode has no session JSONL, but todo_write needs a session ID.
 	// Use a PID-based pseudo ID so todos work during pipe execution and are
 	// cleaned up automatically when the run ends (agent defer ClearTodos).
 	ag.SetSessionID(fmt.Sprintf("pipe-%d", os.Getpid()))
-	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 	ag.SetSupportsVision(resolved.SupportsVision)
 	saveMemoryTool.SetAfterSave(func() {
@@ -197,7 +242,13 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 	// Fprint errors now set writeErr and feed the exit code; the output
 	// file is Close-checked too (NFS commit/flush).
 	var writeErr error
+	// --output-schema: accumulate the streamed response text so the JSON
+	// validity check can run after the stream completes.
+	var schemaOut strings.Builder
 	writeText := func(text string) {
+		if outputSchema != nil {
+			schemaOut.WriteString(text)
+		}
 		if _, err := fmt.Fprint(w, text); err != nil && writeErr == nil {
 			writeErr = err
 			fmt.Fprintf(os.Stderr, "warning: writing output failed: %v\n", err)
@@ -241,11 +292,27 @@ func RunPipe(cfg *config.Config, cfgPath, prompt string, allowedTools, allowedDi
 		})
 	}
 
+	// r414: preference capture aligned with the TUI reflection path
+	// (run/RunPipe behavioral-parity convention). Same memory.CapturePreferences
+	// sink, keyed to the pipe working dir; skipped on cancellation to mirror
+	// the TUI's non-cancelled guard. Must never disturb the exit-code path.
+	if ctx.Err() == nil {
+		memory.CapturePreferences(workingDir, fullPrompt)
+	}
+
 	if agentErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", agentErr)
 		return 1
 	}
 	if hasError {
+		return 1
+	}
+	// --output-schema contract: the final response must be parseable JSON
+	// (after markdown-fence stripping for the fallback path). Structured-
+	// output endpoints guarantee this server-side; the check catches
+	// fallback-path drift and gives CI a trustworthy exit code.
+	if outputSchema != nil && !pipeOutputIsValidJSON(schemaOut.String()) {
+		fmt.Fprintln(os.Stderr, "ggcode pipe: --output-schema set but the final response is not valid JSON (after fence stripping)")
 		return 1
 	}
 	// #1531: Fprint to *os.File lands in the page cache and returns nil -
@@ -289,6 +356,26 @@ func effectivePipeAllowedDirs(cfg *config.Config, cfgPath, workingDir string, al
 		return dedupeStrings(allowedDirs)
 	}
 	return pipeAllowedDirs(cfg, cfgPath, workingDir)
+}
+
+// pipeOutputIsValidJSON reports whether the final response body is valid
+// JSON, tolerating a single markdown-fenced block (the fallback path asks
+// for raw JSON but models sometimes wrap it).
+func pipeOutputIsValidJSON(s string) bool {
+	if json.Valid([]byte(s)) {
+		return true
+	}
+	if i := strings.Index(s, "```"); i >= 0 {
+		rest := s[i+3:]
+		if j := strings.Index(rest, "\n"); j >= 0 {
+			rest = rest[j+1:]
+		}
+		if k := strings.LastIndex(rest, "```"); k >= 0 {
+			rest = rest[:k]
+		}
+		return json.Valid([]byte(strings.TrimSpace(rest)))
+	}
+	return false
 }
 
 func pipePermissionMode(bypass bool, defaultMode string) permission.PermissionMode {

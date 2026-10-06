@@ -88,11 +88,6 @@ func (s *buildIdempotencyState) reset() {
 	s.warnsIssued = 0
 }
 
-// sourceMutatingTools lists tools that change source code, justifying a
-// rebuild. Canonical definition lives in verify_hint.go (#154) - this alias
-// keeps the historical name working and guaranteed in sync.
-var sourceMutatingToolsAlias = sourceMutatingTools
-
 // buildTestPrefixes lists tool prefixes that skip env-var stripping.
 var buildTestToolPrefixes = []string{
 	"go ", "make ", "npm ", "yarn ", "pnpm ", "cargo ", "python ",

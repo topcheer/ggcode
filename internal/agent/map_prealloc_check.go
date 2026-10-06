@@ -62,10 +62,6 @@ type mapPreallocWarning struct {
 	sourceLen string // expression whose len() should be used as hint
 }
 
-func (w mapPreallocWarning) String() string {
-	return fmt.Sprintf("map %q populated in loop without size hint", w.varName)
-}
-
 // checkMapPrealloc detects maps created without a size hint that are then
 // populated from a known-size source inside a for/range loop.
 func checkMapPrealloc(filePath, oldContent, newContent string) []string {
@@ -79,8 +75,7 @@ func checkMapPrealloc(filePath, oldContent, newContent string) []string {
 		return nil
 	}
 
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return nil
 	}
@@ -172,8 +167,17 @@ func findMissingMapPrealloc(file *ast.File, fset *token.FileSet) []mapPreallocWa
 		// One warning per variable name within a unit, mirroring the
 		// historical per-file suppression.
 		unitWarned := make(map[string]bool)
+		unsafeSources := collectUnsafeRangeSources(fnTypeParams(fnType), body)
 
 		onLoop := func(loopBody *ast.BlockStmt, loopPos token.Pos, sourceName string, knownRange bool) {
+			// #2910: a provably len()-unsafe source (channel / int / func)
+			// has no knowable iteration count — the size-hint advice itself
+			// is unimplementable, so suppress the warning entirely instead of
+			// suggesting make(map[K]V, len(ch)) which is semantically wrong
+			// (channel) or does not compile (range-over-int/func).
+			if sourceName != "" && unsafeSources[sourceName] {
+				return
+			}
 			for _, m := range scanForMapWrite(loopBody, loopPos, binds) {
 				if unitWarned[m] {
 					continue
@@ -331,7 +335,10 @@ func analyzeMapInit(name string, pos token.Pos, expr ast.Expr) *mapDeclInfo {
 }
 
 // getRangeSourceName extracts the variable name from a range expression.
-// Returns "" for channels or complex expressions where the source size is unknown.
+// Returns "" for complex expressions where the source size is unknown.
+// #2910: a returned name is NOT yet proof that len() is valid — the caller
+// must also check collectUnsafeRangeSources, which flags identifiers
+// declared as channels, integer builtins or funcs (range-over-func).
 func getRangeSourceName(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
@@ -344,10 +351,128 @@ func getRangeSourceName(expr ast.Expr) string {
 	return ""
 }
 
+// rangeUnsafeBuiltins are integer builtin types: ranging over them yields
+// index values (Go 1.22+ range-over-int), where len(source) does not compile
+// (#2910).
+var rangeUnsafeBuiltins = map[string]bool{
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uintptr": true, "byte": true, "rune": true,
+}
+
+// collectUnsafeRangeSources returns identifiers whose declared type makes a
+// len() size hint invalid or meaningless: channels, integer builtins and
+// func values (range-over-func, Go 1.23+). go/parser carries no type
+// information, so the detector cannot prove an arbitrary range source is a
+// slice/array/map — but for sources it CAN prove unsafe, the warning (and
+// its len() advice) must be suppressed entirely: a channel/int/func range
+// has no knowable iteration count, so the "add a size hint" advice itself
+// is unimplementable (#2910).
+func collectUnsafeRangeSources(params *ast.FieldList, body *ast.BlockStmt) map[string]bool {
+	unsafe := make(map[string]bool)
+	markType := func(name string, typ ast.Expr) {
+		if name == "" || typ == nil {
+			return
+		}
+		switch t := typ.(type) {
+		case *ast.ChanType, *ast.FuncType:
+			unsafe[name] = true
+		case *ast.Ident:
+			if rangeUnsafeBuiltins[t.Name] {
+				unsafe[name] = true
+			}
+		}
+	}
+	if params != nil {
+		for _, field := range params.List {
+			for _, name := range field.Names {
+				markType(name.Name, field.Type)
+			}
+		}
+	}
+	if body != nil {
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncLit:
+				return false // nested closure: analyzed as its own unit
+			case *ast.GenDecl:
+				if node.Tok != token.VAR {
+					return true
+				}
+				for _, spec := range node.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, name := range vs.Names {
+						if i < len(vs.Values) {
+							markUnsafeExpr(name.Name, vs.Values[i], unsafe)
+						} else {
+							markType(name.Name, vs.Type)
+						}
+					}
+				}
+			case *ast.AssignStmt:
+				if node.Tok != token.DEFINE {
+					return true
+				}
+				for i, lhs := range node.Lhs {
+					ident, ok := lhs.(*ast.Ident)
+					if !ok || i >= len(node.Rhs) {
+						continue
+					}
+					markUnsafeExpr(ident.Name, node.Rhs[i], unsafe)
+				}
+			}
+			return true
+		})
+	}
+	return unsafe
+}
+
+// markUnsafeExpr flags identifiers bound to expressions whose range has no
+// knowable iteration count (#2910).
+func markUnsafeExpr(name string, expr ast.Expr, unsafe map[string]bool) {
+	if name == "" || expr == nil {
+		return
+	}
+	switch v := expr.(type) {
+	case *ast.CallExpr:
+		if fn, ok := v.Fun.(*ast.Ident); ok {
+			switch fn.Name {
+			case "make":
+				if len(v.Args) > 0 {
+					if _, isChan := v.Args[0].(*ast.ChanType); isChan {
+						unsafe[name] = true
+					}
+				}
+			case "len", "cap":
+				// n := len(x): integer value; range-over-int (#2910).
+				unsafe[name] = true
+			}
+		}
+	case *ast.BasicLit:
+		if v.Kind == token.INT {
+			unsafe[name] = true // n := 10
+		}
+	case *ast.FuncLit, *ast.ChanType:
+		// iterator := func(yield ...) / var c chan T: range-over-func / chan.
+		unsafe[name] = true
+	}
+}
+
 // onLoopFn receives each loop discovered in a unit: its body block, position,
 // rendered range source (empty when unknown), and whether the range source
 // supports a reliable len() hint.
 type onLoopFn func(loopBody *ast.BlockStmt, loopPos token.Pos, sourceName string, knownRange bool)
+
+// fnTypeParams returns the parameter list of fn, or nil.
+func fnTypeParams(fn *ast.FuncType) *ast.FieldList {
+	if fn == nil {
+		return nil
+	}
+	return fn.Params
+}
 
 // scanUnitLoops invokes fn for every for/range loop lexically inside body,
 // including loops located in nested closures (closure loops still consult

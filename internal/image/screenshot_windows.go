@@ -3,6 +3,7 @@
 package image
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -11,6 +12,15 @@ import (
 
 // CaptureScreen captures a screenshot on Windows using PowerShell.
 func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
+	// #3009 (W4): a zero/negative region reaches PowerShell as
+	// New-Object Bitmap(0,0), which throws and - with the exit-code gate -
+	// degraded into a stale-file success or a misleading "no such file"
+	// error. Reject it here with a root-cause message.
+	if opts.Region != nil && (opts.Region.Width <= 0 || opts.Region.Height <= 0) {
+		return ScreenshotResult{}, fmt.Errorf("screenshot region must have positive width and height (got %dx%d)",
+			opts.Region.Width, opts.Region.Height)
+	}
+
 	applyDelay(opts.DelayMs)
 
 	rawPath, cleanup, err := createTempScreenshotPath(opts)
@@ -41,6 +51,14 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 
 func buildWindowsScreenshotScript(outPath string, opts ScreenshotOptions) string {
 	var sb strings.Builder
+	// #3009 (W1): powershell -Command returns exit 0 for non-terminating
+	// failures (Add-Type unavailable, CopyFromScreen throwing on a locked
+	// session / secure desktop, Save failing), so the Go-side exit-code gate
+	// treated the failure as success and finalizeImage happily served the
+	// PREVIOUS capture sitting at the same OutputPath. Every statement
+	// failure is now terminating, and the catch reports + exits 1.
+	sb.WriteString("$ErrorActionPreference = 'Stop'\n")
+	sb.WriteString("try {\n")
 	sb.WriteString("Add-Type -AssemblyName System.Windows.Forms\n")
 	sb.WriteString("Add-Type -AssemblyName System.Drawing\n")
 	// #763: powershell.exe is DPI-unaware by default, so GetWindowRect /
@@ -117,6 +135,7 @@ $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
 		strings.ReplaceAll(outPath, "'", "''")))
 	sb.WriteString("$g.Dispose()\n")
 	sb.WriteString("$bmp.Dispose()\n")
+	sb.WriteString("} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n")
 	return sb.String()
 }
 
@@ -132,11 +151,30 @@ func ListDisplays() ([]DisplayInfo, error) {
 	}
 
 	var displays []DisplayInfo
-	if err := json.Unmarshal(out, &displays); err != nil {
+	displays, err = parseDisplayInfos(out)
+	if err != nil {
+		return nil, fmt.Errorf("listing displays: %w", err)
+	}
+	return displays, nil
+}
+
+// parseDisplayInfos decodes PowerShell ConvertTo-Json output for the
+// displays query (#3009 W2): empty output is a legitimate empty list (zero
+// displays), but non-empty output that fails BOTH decodings is a real parse
+// failure (polluted stdout) and must surface as an error instead of being
+// silently reported as "0 displays".
+func parseDisplayInfos(out []byte) ([]DisplayInfo, error) {
+	trimmed := bytes.TrimSpace(out)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	var displays []DisplayInfo
+	if err := json.Unmarshal(trimmed, &displays); err != nil {
 		var single DisplayInfo
-		if err2 := json.Unmarshal(out, &single); err2 == nil {
-			displays = []DisplayInfo{single}
+		if err2 := json.Unmarshal(trimmed, &single); err2 == nil {
+			return []DisplayInfo{single}, nil
 		}
+		return nil, fmt.Errorf("unexpected displays output (not valid JSON): %.120s", trimmed)
 	}
 	return displays, nil
 }
@@ -159,11 +197,28 @@ Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
 	}
 
 	var windows []WindowInfo
-	if err := json.Unmarshal(out, &windows); err != nil {
+	windows, err = parseWindowInfos(out)
+	if err != nil {
+		return nil, fmt.Errorf("listing windows: %w", err)
+	}
+	return windows, nil
+}
+
+// parseWindowInfos mirrors parseDisplayInfos for the windows query
+// (#3009 W2): empty pipeline output means zero capturable windows (legal),
+// non-empty non-JSON output is a parse failure that must be reported.
+func parseWindowInfos(out []byte) ([]WindowInfo, error) {
+	trimmed := bytes.TrimSpace(out)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	var windows []WindowInfo
+	if err := json.Unmarshal(trimmed, &windows); err != nil {
 		var single WindowInfo
-		if err2 := json.Unmarshal(out, &single); err2 == nil {
-			windows = []WindowInfo{single}
+		if err2 := json.Unmarshal(trimmed, &single); err2 == nil {
+			return []WindowInfo{single}, nil
 		}
+		return nil, fmt.Errorf("unexpected windows output (not valid JSON): %.120s", trimmed)
 	}
 	return windows, nil
 }

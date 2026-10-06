@@ -384,7 +384,10 @@ var SlashCommands = []string{
 	"/search",
 	// #889: these have descriptions/placeholders (and real handlers) but
 	// were missing from the list, so Tab completion never offered them.
-	"/redo", "/notify", "/export-trace", "/runreport",
+	"/redo", "/notify", "/export-trace", "/runreport", "/traj",
+	// #2835: same omission family - /pin /style /goal have live handlers
+	// (commands.go dispatch) but never appeared in Tab completion.
+	"/pin", "/style", "/goal",
 }
 
 // SlashCommandDescriptions provides short descriptions for slash commands.
@@ -428,15 +431,17 @@ var SlashCommandDescriptions = map[string]string{
 	"/undo-run":      "Revert ALL file changes from the last agent run",
 	"/redo":          "Redo the last undone file edit (re-apply checkpoint)",
 	"/runreport":     "Evaluate this session's trajectory (offline scorecard)",
+	"/traj":          "List / purge past-run learnings injected into your prompt",
 	"/files":         "Show files modified by agent",
 	"/tools":         "List available tools",
 	"/checkpoints":   "List checkpoints",
 	"/plugins":       "List loaded plugins",
 	"/inspector":     "Open inspector panel (sessions|checkpoints|memory|plugins|config|status)",
+	"/interventions": "Show user-takeover history (/interventions clear wipes it)",
 	"/chat":          "Open LAN chat panel",
 	"/nick":          "Set LAN chat nickname, role, and team",
 	"/image":         "Attach an image",
-	"/init":          "Create GGCODE.md",
+	"/init":          "Create AGENTS.md",
 	"/exit":          "Exit ggcode",
 	"/quit":          "Exit ggcode",
 	"/compact":       "Compress conversation history",
@@ -469,6 +474,9 @@ var SlashCommandDescriptions = map[string]string{
 	"/branch":        "Fork current conversation into a new session",
 	"/title":         "Set or show the session title (e.g. /title My new title)",
 	"/pin-session":   "Pin session (protected from cleanup, lists first in /sessions)",
+	"/pin":           "Show or manage pinned context blocks (survive compaction)",
+	"/style":         "Show, set, or list output style presets (/style list)",
+	"/goal":          "Show, set, or clear persistent autopilot goal",
 	"/unpin-session": "Unpin the current session",
 	"/tag":           "Add tags to the session (e.g. /tag rust perf)",
 	"/untag":         "Remove tags from the session (e.g. /untag rust)",
@@ -563,6 +571,9 @@ var SlashCommandPlaceholders = map[string]string{
 	"/branch":        "",
 	"/title":         "<new title>",
 	"/pin-session":   "",
+	"/pin":           "[<subcommand>]",
+	"/style":         "<style-name|list>",
+	"/goal":          "[<goal text>|clear]",
 	"/unpin-session": "",
 	"/tag":           "<tag>...",
 	"/untag":         "<tag>...",

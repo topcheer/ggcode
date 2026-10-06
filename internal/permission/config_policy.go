@@ -144,7 +144,7 @@ func (p *ConfigPolicy) Check(toolName string, input json.RawMessage) (Decision, 
 	// state, never project source. Fast-path approval also keeps the
 	// protocol usable in plan mode, where the model may legitimately record
 	// research findings.
-	case "ask_user", "save_memory", "delete_memory", "memory":
+	case "ask_user", "save_memory", "delete_memory", "memory", "recall_experience":
 		return Allow, nil
 	}
 

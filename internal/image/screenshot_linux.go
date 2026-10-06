@@ -33,6 +33,31 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 	// the next usable tool takes over. Normalize options per tool: translate
 	// unsupported modes (window, multi-display) into what the tool can do,
 	// or skip that tool (#555, #975).
+	toolSucceeded, lastErr := runLinuxToolCandidates(tools, rawPath, opts)
+	// #3002: when every candidate failed (lastErr != nil, no success), a
+	// pre-existing file at rawPath (e.g. a stale capture from a previous run
+	// at the same OutputPath) must NOT be mistaken for this round's output:
+	// return the tool error instead of serving stale bytes as success (#1259).
+	if !toolSucceeded && lastErr != nil {
+		return ScreenshotResult{}, lastErr
+	}
+
+	img, err := finalizeImage(rawPath, opts)
+	if err != nil {
+		return ScreenshotResult{}, err
+	}
+
+	result := ScreenshotResult{Image: img}
+	if opts.OutputPath != "" {
+		result.SavedPath = opts.OutputPath
+	}
+	return result, nil
+}
+
+// runLinuxToolCandidates tries each candidate tool in order and returns
+// whether one of them succeeded (exited 0 and wrote rawPath) this round.
+// lastErr keeps the most recent failure for callers to report (#1571-A, #3002).
+func runLinuxToolCandidates(tools []string, rawPath string, opts ScreenshotOptions) (bool, error) {
 	var lastErr error
 	for _, tool := range tools {
 		toolOpts, err := prepareLinuxCaptureOpts(tool, opts)
@@ -67,22 +92,9 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 			continue
 		}
 		// Found a working tool - finalize below re-reads the file.
-		break
+		return true, nil
 	}
-	if lastErr != nil && !fileExists(rawPath) {
-		return ScreenshotResult{}, lastErr
-	}
-
-	img, err := finalizeImage(rawPath, opts)
-	if err != nil {
-		return ScreenshotResult{}, err
-	}
-
-	result := ScreenshotResult{Image: img}
-	if opts.OutputPath != "" {
-		result.SavedPath = opts.OutputPath
-	}
-	return result, nil
+	return false, lastErr
 }
 
 // prepareLinuxCaptureOpts normalizes opts for the detected tool:
@@ -91,7 +103,8 @@ func CaptureScreen(opts ScreenshotOptions) (ScreenshotResult, error) {
 //     into a Region; tools that cannot target a window by title fail with an
 //     explicit, actionable error instead of returning the wrong image.
 //   - gnome-screenshot limits (#975): no CLI region capture and no per-output
-//     selection, so Display>1/Region fail explicitly (same treatment).
+//     selection, so Display>=1/Region fail explicitly (same treatment; the
+//     gate is kept in sync with the Region-translation gate, #3013).
 //   - Best-effort display selection (#555): most tools cannot select an
 //     output by index, so translate the 1-based display index into a region
 //     covering that output (geometry from xrandr/wlr-randr). Region and
@@ -120,20 +133,59 @@ func prepareLinuxCaptureOpts(tool string, opts ScreenshotOptions) (ScreenshotOpt
 		}
 	}
 
-	if opts.Window == "" && opts.Region == nil && opts.Display > 1 {
+	// #3003: Display is a 1-based monitor index (screenshot_common.go:
+	// "1-based monitor index, 0=primary"), matching darwin/windows. The old
+	// `> 1` gate left Display==1 without a region, and grim without -g
+	// composites ALL outputs - a 3-monitor setup returned a panoramic shot
+	// when the primary screen was requested. linuxDisplayBounds accepts
+	// index 1 (it only rejects <1), so >= 1 is the correct gate.
+	if opts.Window == "" && opts.Region == nil && opts.Display >= 1 {
 		if region, err := linuxDisplayBounds(opts.Display); err == nil {
+			opts.Region = &region
+		}
+	} else if opts.Window == "" && opts.Region == nil && opts.Display == 0 {
+		// #3003 follow-up: 0=primary (the documented default) still fell
+		// through to grim's all-outputs composite after the >=1 fix. Resolve
+		// the primary output explicitly so a plain capture (no Display set)
+		// on a multi-monitor setup captures the primary screen, not a
+		// panorama. Resolution failure keeps the best-effort fallback (#555).
+		if region, err := linuxDisplayRegionForFn(0); err == nil {
 			opts.Region = &region
 		}
 	}
 	return opts, nil
 }
 
-func detectLinuxScreenshotTool() string {
-	if tools := candidateLinuxScreenshotTools(); len(tools) > 0 {
-		return tools[0]
+// primaryDisplayIndex returns the 1-based index of the primary output in
+// displays, falling back to the first display when none is flagged primary
+// (single-head setups and some wlr-randr versions) (#3003).
+func primaryDisplayIndex(displays []DisplayInfo) int {
+	for i, d := range displays {
+		if d.IsPrimary {
+			return i + 1
+		}
 	}
-	return ""
+	return 1
 }
+
+// linuxDisplayRegionFor resolves the capture region for display index 0
+// (the primary output). Index >= 1 keeps going through linuxDisplayBounds
+// directly (#3003).
+func linuxDisplayRegionFor(_ int) (ScreenshotRegion, error) {
+	displays, err := ListDisplays()
+	if err != nil {
+		return ScreenshotRegion{}, err
+	}
+	if len(displays) == 0 {
+		return ScreenshotRegion{}, fmt.Errorf("no displays reported")
+	}
+	return linuxDisplayBounds(primaryDisplayIndex(displays))
+}
+
+// linuxDisplayRegionForFn is the test seam for prepareLinuxCaptureOpts
+// (#3003): probes stub the primary-output resolver instead of shelling
+// out to xrandr/wlr-randr.
+var linuxDisplayRegionForFn = linuxDisplayRegionFor
 
 // candidateLinuxScreenshotTools returns installed screenshot tools ordered
 // for the current session type (#1571-A): on X11, an incidental grim
@@ -410,9 +462,3 @@ func linuxDisplayBounds(index int) (ScreenshotRegion, error) {
 
 // Guard against unused import warnings on some build paths.
 var _ = filepath.Join
-
-// fileExists reports whether the given path exists (#1571-A capture loop).
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}

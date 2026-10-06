@@ -166,6 +166,7 @@ type Manager struct {
 	onPersist                func(msg provider.Message) // called on every Add() for real-time JSONL persistence
 	toolDefinitionOverhead   int                        // tokens reserved for tool definitions (set by Agent)
 	pinned                   *PinnedContext             // user-pinned context that survives compaction
+	postCompactNoteFn        func() string              // optional: non-empty return is re-injected as a system note after every compaction
 	lastLoggedReserve        int                        // last logged effectiveOutputReserve value (suppress duplicate logs)
 	lastLoggedThreshold      int                        // last logged autoCompactThreshold value (suppress duplicate logs)
 	// #663: attribution for message removals. When ApplyCompactResult rejects
@@ -257,6 +258,69 @@ func (m *Manager) injectPinnedAfterCompaction() {
 	m.messages[insertIdx] = pinnedMsg
 
 	debug.Log("ctx", "injectPinnedAfterCompaction: injected %d pinned items at position %d", len(m.pinned.List()), insertIdx)
+}
+
+// SetPostCompactNoteProvider registers an optional callback invoked after
+// every successful compaction (both the ApplyCompactResult and the direct
+// Summarize paths). Its non-empty return value is injected as a durable
+// system note right after the compaction summary, mirroring the
+// pinned-context contract: state the model must see after compaction is
+// re-materialized rather than entrusted to the summary. A nil provider
+// (the default) or an empty return disables the note. Used by the agent to
+// rehydrate the live task board after compaction.
+func (m *Manager) SetPostCompactNoteProvider(fn func() string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.postCompactNoteFn = fn
+}
+
+// postCompactNoteMarker identifies the injected state note so a stale copy
+// from a previous compaction cycle can be replaced.
+const postCompactNoteMarker = "[Session State Note - refreshed after compaction]"
+
+// injectPostCompactNoteAfterCompaction re-materializes the registered
+// post-compaction note (e.g. the live task board) right after the summary.
+// Without it, structured task state lives only in tool_results that the
+// summary compresses away, leaving the model with no signal that pending
+// work exists or that task IDs remain usable.
+//
+// Must be called with m.mu held.
+func (m *Manager) injectPostCompactNoteAfterCompaction() {
+	// Replace any stale note from a previous compaction cycle.
+	m.removeSystemMessageByMarker(postCompactNoteMarker)
+
+	if m.postCompactNoteFn == nil {
+		return
+	}
+	note := strings.TrimSpace(m.postCompactNoteFn())
+	if note == "" {
+		return
+	}
+
+	noteMsg := provider.Message{
+		Role: "system",
+		Content: []provider.ContentBlock{
+			{Type: "text", Text: postCompactNoteMarker + "\n" + note},
+		},
+	}
+	noteMsg.ID = newMessageID()
+
+	// Insert right after the compaction summary (same positioning as the
+	// pinned-context message), or after the first system message as fallback.
+	insertIdx := m.findSystemMessageIdx("[Previous conversation summary]")
+	if insertIdx >= 0 {
+		insertIdx++ // after the summary
+	} else if len(m.messages) > 0 && m.messages[0].Role == "system" {
+		insertIdx = 1
+	} else {
+		insertIdx = 0
+	}
+
+	m.messages = append(m.messages, provider.Message{})
+	copy(m.messages[insertIdx+1:], m.messages[insertIdx:])
+	m.messages[insertIdx] = noteMsg
+
+	debug.Log("ctx", "injectPostCompactNoteAfterCompaction: injected %d-char note at position %d", len(note), insertIdx)
 }
 
 // findSystemMessageIdx returns the index of the first system message whose
@@ -373,18 +437,38 @@ func (m *Manager) ReconcileToolCalls() bool {
 	// assistant message (or any open tool_call) are orphaned. Remove them.
 	m.removeOrphanToolResults()
 
-	// ── Phase 1: collect information ──
-	type lateResult struct {
-		msgIdx   int
-		blockIdx int // position of the block inside m.messages[msgIdx].Content (#535)
-		block    provider.ContentBlock
+	fixes := m.collectReconcileFixes()
+	if len(fixes) == 0 {
+		return false
 	}
-	type needFix struct {
-		insertBefore int
-		lateBlocks   []lateResult
-		missingIDs   []struct{ id, name string }
-	}
-	var fixes []needFix
+	return m.applyReconcileFixes(fixes)
+}
+
+// reconcileLateResult locates a tool_result block that arrived after the
+// next assistant message (#535 granularity is block-level).
+type reconcileLateResult struct {
+	msgIdx   int
+	blockIdx int // position of the block inside m.messages[msgIdx].Content (#535)
+	block    provider.ContentBlock
+}
+
+// reconcileID identifies a tool_use that has neither a properly-placed nor a
+// late tool_result and therefore needs a cancelled placeholder.
+type reconcileID struct{ id, name string }
+
+// reconcileNeedFix describes one assistant message whose tool_results need to
+// be relocated (late) or synthesized (missing) before the next assistant msg.
+type reconcileNeedFix struct {
+	insertBefore int
+	lateBlocks   []reconcileLateResult
+	missingIDs   []reconcileID
+}
+
+// collectReconcileFixes scans the message history for assistant tool_use
+// messages whose tool_results are missing or placed after the next assistant
+// message. Callers must hold m.mu.
+func (m *Manager) collectReconcileFixes() []reconcileNeedFix {
+	var fixes []reconcileNeedFix
 
 	for idx := range m.messages {
 		if m.messages[idx].Role != "assistant" {
@@ -400,14 +484,7 @@ func (m *Manager) ReconcileToolCalls() bool {
 			continue
 		}
 
-		// Find the next assistant boundary.
-		nextAssistantIdx := len(m.messages)
-		for j := idx + 1; j < len(m.messages); j++ {
-			if m.messages[j].Role == "assistant" {
-				nextAssistantIdx = j
-				break
-			}
-		}
+		nextAssistantIdx := m.nextAssistantIndex(idx)
 
 		// Collect tool_results BEFORE the next assistant -> properly placed.
 		for j := idx + 1; j < nextAssistantIdx; j++ {
@@ -422,44 +499,61 @@ func (m *Manager) ReconcileToolCalls() bool {
 			continue
 		}
 
-		// Check for LATE results (after next assistant).
-		var late []lateResult
-		var missingIDs []struct{ id, name string }
-		for id, name := range toolIDs {
-			foundLate := false
-			for j := nextAssistantIdx; j < len(m.messages); j++ {
-				for bi, block := range m.messages[j].Content {
-					if block.Type == "tool_result" && block.ToolID == id {
-						late = append(late, lateResult{msgIdx: j, blockIdx: bi, block: block})
-						foundLate = true
-						break
-					}
-				}
-				if foundLate {
-					break
-				}
-			}
-			if !foundLate {
-				missingIDs = append(missingIDs, struct{ id, name string }{id, name})
-			}
-		}
-
+		late, missingIDs := m.findLateOrMissingResults(toolIDs, nextAssistantIdx)
 		if len(late) == 0 && len(missingIDs) == 0 {
 			continue
 		}
 
-		fixes = append(fixes, needFix{
+		fixes = append(fixes, reconcileNeedFix{
 			insertBefore: nextAssistantIdx,
 			lateBlocks:   late,
 			missingIDs:   missingIDs,
 		})
 	}
+	return fixes
+}
 
-	if len(fixes) == 0 {
-		return false
+// nextAssistantIndex returns the index of the first assistant message after
+// start, or len(m.messages) if there is none.
+func (m *Manager) nextAssistantIndex(start int) int {
+	for j := start + 1; j < len(m.messages); j++ {
+		if m.messages[j].Role == "assistant" {
+			return j
+		}
 	}
+	return len(m.messages)
+}
 
-	// ── Phase 2: apply fixes ──
+// findLateOrMissingResults partitions unresolved tool IDs into those whose
+// tool_result appears after boundaryIdx (late) and those with no result at
+// all (missing).
+func (m *Manager) findLateOrMissingResults(toolIDs map[string]string, boundaryIdx int) (late []reconcileLateResult, missingIDs []reconcileID) {
+	for id, name := range toolIDs {
+		foundLate := false
+		for j := boundaryIdx; j < len(m.messages); j++ {
+			for bi, block := range m.messages[j].Content {
+				if block.Type == "tool_result" && block.ToolID == id {
+					late = append(late, reconcileLateResult{msgIdx: j, blockIdx: bi, block: block})
+					foundLate = true
+					break
+				}
+			}
+			if foundLate {
+				break
+			}
+		}
+		if !foundLate {
+			missingIDs = append(missingIDs, reconcileID{id: id, name: name})
+		}
+	}
+	return late, missingIDs
+}
+
+// applyReconcileFixes rebuilds the message history, relocating late
+// tool_results before their assistant boundary, dropping the stale blocks in
+// place (preserving sibling user content, #535), and inserting cancelled
+// placeholders for missing results. Callers must hold m.mu. Returns true.
+func (m *Manager) applyReconcileFixes(fixes []reconcileNeedFix) bool {
 	oldMsgs := m.messages
 
 	// Stale granularity is BLOCK-level, not message-level (#535): a late
@@ -484,18 +578,18 @@ func (m *Manager) ReconcileToolCalls() bool {
 				seen[lr.block.ToolID] = true
 			}
 		}
-		for _, m := range fix.missingIDs {
-			if !seen[m.id] {
-				name := m.name
+		for _, mid := range fix.missingIDs {
+			if !seen[mid.id] {
+				name := mid.name
 				if name == "" {
 					name = "unknown"
 				}
 				content = append(content, provider.ToolResultNamedBlock(
-					m.id, name,
+					mid.id, name,
 					"operation cancelled - tool call was interrupted before it could complete",
 					true,
 				))
-				seen[m.id] = true
+				seen[mid.id] = true
 			}
 		}
 		if len(content) > 0 {
@@ -1008,6 +1102,9 @@ func (m *Manager) ApplyCompactResult(snapshot CompactSnapshot, result CompactRes
 	// summary. This ensures critical context (build flags, constraints, etc.)
 	// is never lost during context summarization.
 	m.injectPinnedAfterCompaction()
+	// Re-materialize the registered post-compaction state note (task board
+	// rehydration) - same "survives compaction" contract as pinned context.
+	m.injectPostCompactNoteAfterCompaction()
 
 	m.version++
 	m.nonTailMutSeq++
@@ -1419,6 +1516,9 @@ func (m *Manager) Summarize(ctx context.Context, prov provider.Provider) error {
 	// (PTL recovery, /compact), not just ApplyCompactResult. Without this,
 	// pinned items compressed into the summary were silently lost (#382).
 	m.injectPinnedAfterCompaction()
+	// Same contract for the registered state note (task board rehydration):
+	// it must survive on the direct Summarize path (PTL recovery, /compact).
+	m.injectPostCompactNoteAfterCompaction()
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
@@ -1534,16 +1634,6 @@ func (m *Manager) recalcTokens() {
 	m.invalidateUsageBaselineLocked()
 }
 
-// toolResultClearMinLen is the minimum Output length to bother clearing.
-// Small results (e.g. "ok", "done") waste negligible tokens and may be
-// more useful to keep inline for context.
-const toolResultClearMinLen = 500
-
-// toolUseInputClearMinLen is the minimum Input (arguments) length to bother
-// clearing. Many tool calls have tiny arguments (e.g. {"path": "main.go"})
-// that aren't worth truncating.
-const toolUseInputClearMinLen = 200
-
 // reasoningCompactMinLen is the minimum ReasoningContent length to bother
 // compacting. Short reasoning traces waste negligible tokens. Reasoning
 // from past turns provides zero marginal value once the turn is complete
@@ -1553,311 +1643,18 @@ const reasoningCompactMinLen = 200
 // EstimateClearableTokens was removed (#718): it returned ~920*count CHARS
 // while its name/doc promised TOKENS (a 4x overestimate that would have made
 // any cache-break-vs-savings gate decide in the wrong direction), and it had
-// zero callers repo-wide. ClearOldToolResults below is the live mechanism.
-
-// ClearOldToolResults replaces large tool_result outputs from older messages
-// with short placeholders, keeping the most recent `keepN` tool results intact.
-// This is a cheap, mechanical context-recovery technique that avoids the cost
-// of LLM-based compaction. It is safe to call repeatedly (idempotent).
+// zero callers repo-wide.
 //
-// Only clears:
-//   - tool_result blocks with Output > toolResultClearMinLen
-//   - that are not error results (IsError == false)
-//   - that have not already been cleared (idempotency)
-//
-// Returns the estimated number of tokens freed.
-func (m *Manager) ClearOldToolResults(keepN int) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Pass 0: build tool info map from tool_use blocks for ACON-inspired
-	// observation compression (ICML 2026). Instead of generic "[cleared: N chars]",
-	// produce tool-specific summaries that preserve key context — file paths,
-	// search patterns, command names — so the agent knows whether re-running
-	// the tool is worthwhile.
-	type toolInfo struct {
-		name string
-		args map[string]any
-	}
-	toolMap := make(map[string]toolInfo)
-	for _, msg := range m.messages {
-		for _, b := range msg.Content {
-			if b.Type == "tool_use" && b.ToolID != "" {
-				info := toolInfo{name: b.ToolName}
-				if len(b.Input) > 0 {
-					var args map[string]any
-					if json.Unmarshal(b.Input, &args) == nil {
-						info.args = args
-					}
-				}
-				toolMap[b.ToolID] = info
-			}
-		}
-	}
-
-	// Pass 1: count clearable tool_results (large, non-error, not yet cleared).
-	// Also skip results with semantic importance (error/debugging context) to
-	// avoid "context collapse" — the phenomenon where iterative clearing erodes
-	// critical debugging information (inspired by SWE-Pruner task-aware pruning
-	// and ACE context collapse research, ICLR 2026).
-	type clearTarget struct {
-		msgIdx  int
-		blkIdx  int
-		origLen int
-	}
-	var targets []clearTarget
-	skippedImportant := 0
-	for i, msg := range m.messages {
-		for j, b := range msg.Content {
-			if b.Type != "tool_result" {
-				continue
-			}
-			if b.IsError {
-				continue
-			}
-			if len(b.Output) < toolResultClearMinLen {
-				continue
-			}
-			if strings.HasPrefix(b.Output, "[cleared:") {
-				continue
-			}
-			// Semantic importance: preserve results containing build/test
-			// error output that the agent may still need for debugging.
-			if hasSemanticImportance(b.Output) {
-				skippedImportant++
-				continue
-			}
-			targets = append(targets, clearTarget{msgIdx: i, blkIdx: j, origLen: len(b.Output)})
-		}
-	}
-
-	// Determine which targets to clear (all except the last keepN)
-	if len(targets) <= keepN {
-		return 0
-	}
-	toClear := targets[:len(targets)-keepN]
-
-	// Pass 2: replace outputs with tool-aware summaries
-	freedChars := 0
-	for _, t := range toClear {
-		block := &m.messages[t.msgIdx].Content[t.blkIdx]
-		origLen := t.origLen
-		freedChars += origLen
-		// Use tool name from the result block, or look up from tool_use.
-		toolName := block.ToolName
-		var args map[string]any
-		if info, ok := toolMap[block.ToolID]; ok {
-			if toolName == "" {
-				toolName = info.name
-			}
-			args = info.args
-		}
-		block.Output = summarizeClearedResult(toolName, origLen, block.Output, args)
-		block.Images = nil // clear images too — they're large and re-fetchable
-	}
-
-	if freedChars == 0 {
-		return 0
-	}
-
-	before := m.tokens
-	m.version++
-	m.nonTailMutSeq++
-	m.recalcTokens()
-	freed := before - m.tokens
-	debug.Log("ctx", "ClearOldToolResults: cleared %d tool results, freed ~%d tokens (keepN=%d, total_clearable=%d, skipped_important=%d)",
-		len(toClear), freed, keepN, len(targets), skippedImportant)
-	return freed
-}
-
-// hasSemanticImportance checks whether a tool result output contains content
-// that is likely to be important for the agent's current debugging context.
-// Such results are preserved during context clearing to avoid losing critical
-// debugging information (SWE-Pruner task-aware pruning concept).
-//
-// This is a lightweight heuristic — no ML model needed. It checks for common
-// error/build/test failure markers that indicate the output is error-relevant
-// rather than just large file content.
-func hasSemanticImportance(output string) bool {
-	// Quick exit: only check outputs that might contain errors (> 50 chars).
-	// Very short outputs are unlikely to contain meaningful error context.
-	if len(output) < 50 {
-		return false
-	}
-
-	// Check first 2000 chars — errors typically appear early in output.
-	// This avoids scanning very large outputs fully (performance).
-	check := output
-	if len(check) > 2000 {
-		check = check[:2000]
-	}
-
-	// Strong error markers: these substrings are almost certainly from
-	// build/compiler/test/runtime errors. We check per-line and skip lines
-	// that are code comments (// # /*) to reduce false positives.
-	strongMarkers := []string{
-		"error:", "fail:", "failed:", "panic:", "fatal:",
-		"undefined:", "cannot find", "does not compile",
-		"syntax error", "type error", "referenceerror", "typeerror:",
-		"traceback (most recent call last)",
-	}
-	checkLower := strings.ToLower(check)
-	for _, marker := range strongMarkers {
-		if strings.Contains(checkLower, marker) {
-			// Verify the marker is not solely inside a comment line.
-			for _, line := range strings.Split(check, "\n") {
-				trimmed := strings.TrimLeft(line, " \t")
-				if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "/*") {
-					continue // skip comment lines
-				}
-				if strings.Contains(strings.ToLower(trimmed), marker) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// summarizeClearedResult produces a concise, tool-aware summary for a cleared
-// tool result placeholder. Instead of the generic "[cleared: N chars]", it
-// preserves key context — file paths, search patterns, command names — so the
-// agent can decide whether re-running the tool is worthwhile.
-//
-// This implements ACON's "observation compression" concept (ICML 2026):
-// "optimally compress both observations and history into concise, informative
-// representations." Our approach uses deterministic heuristics per tool type
-// rather than LLM-based compression, keeping it fast and cost-free.
-//
-// The output always starts with "[cleared:" for backward compatibility with
-// idempotency checks and ClearOldToolUseInputs matching.
-func summarizeClearedResult(toolName string, origLen int, output string, args map[string]any) string {
-	summary := buildToolSummary(toolName, origLen, output, args)
-	if summary == "" {
-		summary = fmt.Sprintf("output was %d chars", origLen)
-	}
-	return fmt.Sprintf("[cleared: %s — re-run to see full result]", summary)
-}
-
-// buildToolSummary extracts the key contextual information from a tool result
-// based on the tool type. Returns a short string (e.g., "read_file of
-// main.go (~2KB)") or empty string if no specific info could be extracted.
-func buildToolSummary(toolName string, origLen int, output string, args map[string]any) string {
-	if args == nil {
-		args = map[string]any{}
-	}
-	kbSize := origLen / 1024
-	if kbSize == 0 {
-		kbSize = 1 // show at least 1KB for readability
-	}
-
-	switch toolName {
-	case "read_file":
-		if path, ok := extractPath(args); ok {
-			return fmt.Sprintf("read_file of %s (~%dKB)", shortPath(path), kbSize)
-		}
-		return fmt.Sprintf("read_file output (~%dKB)", kbSize)
-
-	case "multi_file_read":
-		if n := extractFileCount(args); n > 0 {
-			return fmt.Sprintf("multi_file_read of %d files (~%dKB)", n, kbSize)
-		}
-		return fmt.Sprintf("multi_file_read output (~%dKB)", kbSize)
-
-	case "grep":
-		pattern, _ := args["pattern"].(string)
-		resultLines := strings.Count(output, "\n")
-		return fmt.Sprintf("grep for %q (%d lines, ~%dKB)", truncStr(pattern, 40), resultLines, kbSize)
-
-	case "search_files":
-		pattern, _ := args["pattern"].(string)
-		return fmt.Sprintf("search_files for %q (~%dKB)", truncStr(pattern, 40), kbSize)
-
-	case "list_directory":
-		if path, ok := extractPath(args); ok {
-			return fmt.Sprintf("list_directory of %s (~%dKB)", shortPath(path), kbSize)
-		}
-		return fmt.Sprintf("list_directory output (~%dKB)", kbSize)
-
-	case "run_command":
-		cmd, _ := args["command"].(string)
-		firstLine := cmd
-		if idx := strings.IndexByte(cmd, '\n'); idx > 0 {
-			firstLine = cmd[:idx]
-		}
-		return fmt.Sprintf("run_command: %s (~%dKB)", truncStr(firstLine, 50), kbSize)
-
-	case "glob":
-		pattern, _ := args["pattern"].(string)
-		return fmt.Sprintf("glob %q (~%dKB)", truncStr(pattern, 40), kbSize)
-
-	case "git_diff", "git_status", "git_log", "git_show", "git_blame":
-		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
-
-	case "lsp_symbols", "lsp_definition", "lsp_references", "lsp_hover",
-		"lsp_diagnostics", "lsp_implementation", "lsp_code_actions",
-		"lsp_rename", "lsp_workspace_symbols", "lsp_document_highlights":
-		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
-
-	case "web_fetch", "web_search":
-		if url, _ := args["url"].(string); url != "" {
-			return fmt.Sprintf("%s of %s (~%dKB)", toolName, truncStr(url, 50), kbSize)
-		}
-		if q, _ := args["query"].(string); q != "" {
-			return fmt.Sprintf("%s for %q (~%dKB)", toolName, truncStr(q, 40), kbSize)
-		}
-		return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
-
-	default:
-		if toolName != "" {
-			return fmt.Sprintf("%s output (~%dKB)", toolName, kbSize)
-		}
-		return fmt.Sprintf("output was %d chars", origLen)
-	}
-}
-
-// extractPath gets the "path" field from args, handling both string and
-// nested "files" array structures.
-func extractPath(args map[string]any) (string, bool) {
-	if path, ok := args["path"].(string); ok && path != "" {
-		return path, true
-	}
-	return "", false
-}
-
-// extractFileCount counts entries in a "files" array argument.
-func extractFileCount(args map[string]any) int {
-	if files, ok := args["files"].([]any); ok {
-		return len(files)
-	}
-	return 0
-}
-
-// shortPath abbreviates long paths to keep summaries compact.
-// Example: "/Volumes/new/ggai/ggcode/internal/agent/agent.go" → ".../agent/agent.go"
-func shortPath(path string) string {
-	// Keep last 3 path components for readability.
-	parts := strings.Split(path, "/")
-	if len(parts) <= 3 {
-		return path
-	}
-	return ".../" + strings.Join(parts[len(parts)-3:], "/")
-}
-
-// truncStr truncates a string to maxLen, appending "..." if truncated.
-// Rune-safe (#718): byte-boundary slicing split multi-byte UTF-8 sequences
-// (CJK, emoji), and json.Marshal then emitted U+FFFD for the dangling
-// partial rune.
-func truncStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return headRunesPlain(s, maxLen-3) + "..."
-}
+// ClearOldToolResults and ClearOldToolUseInputs were removed as dead code:
+// they were never wired into Compact or any other call path (compaction uses
+// the summary-payload path above instead), and grep found zero callers
+// repo-wide.
 
 // headRunesPlain returns the longest prefix of s that is at most maxBytes
 // long AND ends on a rune boundary. Unlike headRunes it appends no marker.
+// Rune-safe (#718): byte-boundary slicing split multi-byte UTF-8 sequences
+// (CJK, emoji), and json.Marshal then emitted U+FFFD for the dangling
+// partial rune.
 func headRunesPlain(s string, maxBytes int) string {
 	if maxBytes <= 0 {
 		return ""
@@ -1870,85 +1667,6 @@ func headRunesPlain(s string, maxBytes int) string {
 		cut--
 	}
 	return s[:cut]
-}
-
-// ClearOldToolUseInputs truncates the Input (arguments) of tool_use blocks
-// whose corresponding tool_result has already been cleared by ClearOldToolResults.
-// This recovers context from large tool arguments (e.g., full file content in
-// edit_file/write_file Input) that are no longer needed once the result is gone.
-//
-// Only clears tool_use blocks where:
-//   - Input length exceeds toolUseInputClearMinLen
-//   - The matching tool_result Output starts with "[cleared:" (already cleared)
-//   - Input has not already been truncated (idempotency)
-//
-// Returns the estimated number of tokens freed.
-func (m *Manager) ClearOldToolUseInputs() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Pass 1: collect ToolIDs of cleared tool_results
-	clearedIDs := make(map[string]bool)
-	for _, msg := range m.messages {
-		for _, b := range msg.Content {
-			if b.Type == "tool_result" && strings.HasPrefix(b.Output, "[cleared:") {
-				clearedIDs[b.ToolID] = true
-			}
-		}
-	}
-	if len(clearedIDs) == 0 {
-		return 0
-	}
-
-	// Pass 2: truncate matching tool_use Input blocks
-	type inputTarget struct {
-		msgIdx  int
-		blkIdx  int
-		origLen int
-	}
-	var targets []inputTarget
-	for i, msg := range m.messages {
-		for j, b := range msg.Content {
-			if b.Type != "tool_use" {
-				continue
-			}
-			if !clearedIDs[b.ToolID] {
-				continue
-			}
-			if len(b.Input) < toolUseInputClearMinLen {
-				continue
-			}
-			// Idempotency: check if already truncated
-			var check map[string]any
-			if json.Unmarshal(b.Input, &check) == nil {
-				if v, ok := check["_cleared"].(bool); ok && v {
-					continue
-				}
-			}
-			targets = append(targets, inputTarget{msgIdx: i, blkIdx: j, origLen: len(b.Input)})
-		}
-	}
-
-	if len(targets) == 0 {
-		return 0
-	}
-
-	freedChars := 0
-	for _, t := range targets {
-		block := &m.messages[t.msgIdx].Content[t.blkIdx]
-		origTool := block.ToolName
-		freedChars += t.origLen
-		// Replace with minimal placeholder that preserves tool name for context
-		block.Input = json.RawMessage(fmt.Sprintf(`{"_cleared":true,"_tool":%q,"_note":"input was %d chars — already executed"}`, origTool, t.origLen))
-	}
-
-	before := m.tokens
-	m.version++
-	m.nonTailMutSeq++
-	m.recalcTokens()
-	freed := before - m.tokens
-	debug.Log("ctx", "ClearOldToolUseInputs: cleared %d tool_use inputs, freed ~%d tokens", len(targets), freed)
-	return freed
 }
 
 // CompactOldReasoningBlocks truncates the ReasoningContent of thinking/reasoning
@@ -2149,15 +1867,85 @@ func (m *Manager) CompactSupersededReads() int {
 	}
 
 	// Phase 3: Compact tool_results for superseded ToolIDs.
-	freedChars := 0
-	compacted := 0
+	freedChars, compacted := m.compactSupersededToolResults(supersededIDs,
+		"file was re-read later in the conversation")
+	if freedChars == 0 {
+		return 0
+	}
+
+	freed := m.commitMechanicalCompaction()
+	debug.Log("ctx", "CompactSupersededReads: compacted %d superseded file reads, freed ~%d tokens", compacted, freed)
+	return freed
+}
+
+// CompactSupersededCommands replaces the output of earlier run_command calls
+// that were re-run later in the conversation with a compact placeholder.
+// Repeated command execution is one of the largest sources of stale context
+// in coding agents (build/test cycles): once `go build` has been re-run
+// after an edit, the previous run's output is expired — only the latest run
+// reflects the current state of the code (the "expired" waste category from
+// AgentDiet, arXiv:2509.23586). Like CompactSupersededReads this is a purely
+// mechanical operation (no LLM call) and protocol-safe: tool_result output
+// is rewritten in place, so tool_use/tool_result pairing and message order
+// are untouched.
+//
+// Returns the approximate number of tokens freed.
+func (m *Manager) CompactSupersededCommands() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Phase 1: collect run_command tool_use blocks keyed by normalized
+	// command string, preserving chronological order.
+	cmdToToolIDs := make(map[string][]string)
+	for _, msg := range m.messages {
+		for _, b := range msg.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			cmd := extractCommand(b.ToolName, b.Input)
+			if cmd == "" {
+				continue
+			}
+			cmdToToolIDs[cmd] = append(cmdToToolIDs[cmd], b.ToolID)
+		}
+	}
+
+	// Phase 2: for each command run more than once, all runs except the
+	// last are superseded by the newer run.
+	supersededIDs := make(map[string]bool)
+	for _, ids := range cmdToToolIDs {
+		for _, id := range ids[:len(ids)-1] {
+			supersededIDs[id] = true
+		}
+	}
+	if len(supersededIDs) == 0 {
+		return 0
+	}
+
+	// Phase 3: rewrite superseded tool_results in place.
+	freedChars, compacted := m.compactSupersededToolResults(supersededIDs,
+		"command was re-run later in the conversation")
+	if freedChars == 0 {
+		return 0
+	}
+
+	freed := m.commitMechanicalCompaction()
+	debug.Log("ctx", "CompactSupersededCommands: compacted %d superseded command runs, freed ~%d tokens", compacted, freed)
+	return freed
+}
+
+// compactSupersededToolResults rewrites the tool_result blocks whose ToolID is
+// in supersededIDs with a one-line placeholder. It is the shared Phase 3 of
+// the mechanical supersession passes (reads and commands): both categories
+// expire stale output the same way, so the rewrite loop, the idempotency
+// guard, the small-result threshold and the placeholder format live here.
+// Mutates blocks in place; the caller must hold m.mu. Returns the characters
+// freed and the number of blocks compacted.
+func (m *Manager) compactSupersededToolResults(supersededIDs map[string]bool, reason string) (freedChars, compacted int) {
 	for i := range m.messages {
 		for j := range m.messages[i].Content {
 			b := &m.messages[i].Content[j]
-			if b.Type != "tool_result" {
-				continue
-			}
-			if !supersededIDs[b.ToolID] {
+			if b.Type != "tool_result" || !supersededIDs[b.ToolID] {
 				continue
 			}
 			// Skip already-cleared or superseded results (idempotent).
@@ -2168,25 +1956,54 @@ func (m *Manager) CompactSupersededReads() int {
 			if origLen < 200 {
 				continue // skip small results — not worth compacting
 			}
-			b.Output = fmt.Sprintf("[superseded: file was re-read later in the conversation, output was %d chars]", origLen)
+			b.Output = fmt.Sprintf("[superseded: %s, output was %d chars]", reason, origLen)
 			b.Images = nil
 			freedChars += origLen
 			compacted++
 		}
 	}
+	return freedChars, compacted
+}
 
-	if freedChars == 0 {
-		return 0
-	}
-
+// commitMechanicalCompaction applies the shared bookkeeping after a mechanical
+// supersession pass rewrote tool_result outputs: marks the removal benign
+// (#663/#702a), bumps the version counters, recalculates the token estimate
+// and returns the approximate tokens freed. The caller must hold m.mu and must
+// only call this when something was actually freed.
+func (m *Manager) commitMechanicalCompaction() int {
 	before := m.tokens
-	m.markBenignRemoval() // #663/#702a: superseded-read compaction is benign bookkeeping
+	m.markBenignRemoval()
 	m.version++
 	m.nonTailMutSeq++
 	m.recalcTokens()
-	freed := before - m.tokens
-	debug.Log("ctx", "CompactSupersededReads: compacted %d superseded file reads, freed ~%d tokens", compacted, freed)
-	return freed
+	return before - m.tokens
+}
+
+// extractCommand returns the normalized key identifying a run_command
+// invocation, or "" if the tool is not run_command or the input cannot be
+// parsed. The key is the command string (trimmed) plus, when set, the
+// working_dir: `go build` and `cd x && go build` are different commands, and
+// so is the same command run in a different directory - none may supersede
+// each other.
+func extractCommand(toolName string, input json.RawMessage) string {
+	if toolName != "run_command" || len(input) == 0 {
+		return ""
+	}
+	var args struct {
+		Command    string `json:"command"`
+		WorkingDir string `json:"working_dir"`
+	}
+	if json.Unmarshal(input, &args) != nil {
+		return ""
+	}
+	cmd := strings.TrimSpace(args.Command)
+	if cmd == "" {
+		return ""
+	}
+	if wd := strings.TrimSpace(args.WorkingDir); wd != "" {
+		return wd + "\x00" + cmd
+	}
+	return cmd
 }
 
 // readRange describes which slice of a file a read_file call covered.
@@ -2585,6 +2402,18 @@ Omit entirely:
 			},
 		}
 
+		// PCC (arXiv 2605.23296): large payloads fan out into parallel
+		// per-block summaries to cut the blocking wall time; ANY block
+		// failure or emptiness falls back to the sequential path below,
+		// so parallel compaction is never worse than the baseline.
+		if blocks := splitPayloadBlocks(payload, pccMinPayloadTokens); len(blocks) > 1 {
+			if summaryText, ok := summarizeParallel(ctx, prov, blocks, summaryTokenLimit, onUsage); ok {
+				// sa-237 fact retention: deterministically re-attach dropped
+				// constraints and recurring paths on every summary path.
+				return applyFactRetention(summaryText, payload), nil
+			}
+		}
+
 		resp, err := prov.Chat(ctx, summaryMsgs, nil)
 		if err != nil {
 			if !isPromptTooLongError(err) || attempt == maxPTLRetries {
@@ -2612,7 +2441,7 @@ Omit entirely:
 		}
 		debug.Log("ctx", "summarizeMessages: summary len=%d chars estimated=%d tokens limit=%d usage=%+v",
 			len(summaryText), EstimateTokens(summaryText), summaryTokenLimit, resp.Usage)
-		return summaryText, nil
+		return applyFactRetention(summaryText, payload), nil
 	}
 	return "", fmt.Errorf("summarization returned empty text")
 }

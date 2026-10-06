@@ -320,6 +320,11 @@ func searchFile(path, baseDir string, re *regexp.Regexp) []string {
 
 	var matches []string
 	scanner := bufio.NewScanner(f)
+	// #3191: default 64KB token limit makes >64KB lines hit ErrTooLong,
+	// which Scan() surfaces as a silent stop - matches in the rest of the
+	// file are missed. Same fix form as grep.go (#3190): raise the cap to
+	// the package-wide grepMaxLineLen.
+	scanner.Buffer(make([]byte, 0, 64*1024), grepMaxLineLen)
 	lineNum := 0
 	for scanner.Scan() {
 		lineNum++

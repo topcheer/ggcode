@@ -46,8 +46,10 @@ For gRPC plugins, the command is the executable and its arguments:
   ggcode plugin install jira-tools python -m my_jira_plugin
   ggcode plugin install jira-tools node ./jira-plugin.js --env JIRA_TOKEN=xxx
 
-For command plugins:
-  ggcode plugin install my-tools --type command -- ./deploy.sh
+For command plugins, tools are defined as sub-commands in the yaml config
+(there is no positional command to install):
+  ggcode plugin install my-tools --type command
+  # then define tools under plugins[].commands in ggcode.yaml
 
 Examples:
   # Install a Go-compiled gRPC plugin
@@ -73,7 +75,11 @@ Examples:
 			if err != nil {
 				return err
 			}
-			if len(positionals) < 2 {
+			pluginType, err = validatePluginInstallShape(pluginType, positionals)
+			if err != nil {
+				return err
+			}
+			if pluginType != "command" && len(positionals) < 2 {
 				return fmt.Errorf("usage: ggcode plugin install <name> <command...>")
 			}
 
@@ -127,7 +133,11 @@ Examples:
 
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s plugin %q in %s\n", action, name, cfg.FilePath)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  type:    %s\n", pluginType)
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  command: %s\n", strings.Join(command, " "))
+			if pluginType == "command" {
+				_, _ = fmt.Fprint(cmd.OutOrStdout(), "  tools:   (none yet - define sub-commands under plugins[].commands in the yaml config)\n")
+			} else {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  command: %s\n", strings.Join(command, " "))
+			}
 			if len(envMap) > 0 {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  env:     %d variables\n", len(envMap))
 			}
@@ -309,6 +319,32 @@ func newPluginTestCmd(cfgFile *string) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// validatePluginInstallShape normalizes and validates the --type flag and
+// the positional shape for that type (#2873). It returns the normalized
+// plugin type ("grpc" or "command") or an error:
+//   - --type accepts ONLY grpc|command (case-insensitive); any other value
+//     used to silently fall through to the grpc branch and misconfigure the
+//     plugin entry as type: grpc.
+//   - --type command takes only <name>: a positional command (the old help
+//     example "-- ./deploy.sh") was silently DROPPED by AddCommandPlugin
+//     (which stores nil commands) while the success output still printed
+//     "command: ./deploy.sh" as if it had been installed.
+func validatePluginInstallShape(pluginType string, positionals []string) (string, error) {
+	t := strings.ToLower(strings.TrimSpace(pluginType))
+	if t == "" {
+		t = "grpc"
+	}
+	if t != "grpc" && t != "command" {
+		return "", fmt.Errorf("invalid --type %q: must be \"grpc\" or \"command\"", pluginType)
+	}
+	if t == "command" && len(positionals) > 1 {
+		return "", fmt.Errorf("--type command takes only <name>: got extra positional(s) %q. "+
+			"Command plugin tools are defined as sub-commands under plugins[].commands in the yaml config, "+
+			"not on the command line. Use: ggcode plugin install <name> --type command", positionals[1:])
+	}
+	return t, nil
 }
 
 // parsePluginInstallArgs separates positional args from flags.

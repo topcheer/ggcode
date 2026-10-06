@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/provider"
@@ -47,6 +48,14 @@ const (
 	// seqConsecutiveReads: number of individual read_file calls in sequence
 	// (within seqWindow) that triggers a batch suggestion.
 	seqConsecutiveReads = 3
+
+	// r361 Pattern 6: an identical cross-tool sequence of seqRepeatLen calls
+	// repeating seqRepeatCount times inside the window is a stable SOP the
+	// agent keeps re-issuing by hand (Tool-Making, arXiv 2607.08010: repeated
+	// SOP re-generation wastes latency and reliability). 3×3 = 9 of the 12
+	// window slots is an unambiguous signal.
+	seqRepeatLen   = 3
+	seqRepeatCount = 3
 )
 
 type seqEntry struct {
@@ -90,6 +99,12 @@ func (v *toolSequenceValidator) record(tc provider.ToolCallDelta, iter int) stri
 	v.history = append(v.history, entry)
 	if len(v.history) > seqWindow {
 		v.history = v.history[len(v.history)-seqWindow:]
+	}
+
+	// Pattern 6 needs the current call IN the history (full-window scan),
+	// so it runs after the append above, unlike patterns 1-5.
+	if guidance == "" {
+		guidance = v.checkRepeatedSequence()
 	}
 
 	if guidance != "" {
@@ -189,14 +204,28 @@ func (v *toolSequenceValidator) checkSequentialReads(curr seqEntry) string {
 	if consecutive+1 < seqConsecutiveReads {
 		return ""
 	}
-	// Check that these reads are of DIFFERENT files (same file reads are handled by memoization)
+	// #2767: same-iteration parallel read_file batches are the RECOMMENDED
+	// pattern (system prompt encourages parallel tool calls in one block) —
+	// the hint is only for cross-iteration serial reads. Require the trigger
+	// window (history tail + current) to span at least 2 distinct iterations.
+	// The trailing `consecutive` entries are all read_file by construction,
+	// so a single reverse pass collects both the iteration set and the
+	// distinct-file set (different files; same-file re-reads are memoized).
+	iters := make(map[int]bool)
 	files := make(map[string]bool)
+	iters[curr.iter] = true
 	files[curr.filePath] = true
-	for i := len(v.history) - 1; i >= 0 && i >= len(v.history)-consecutive; i-- {
-		if v.history[i].tool == "read_file" && v.history[i].filePath != "" {
-			files[v.history[i].filePath] = true
+	for i := len(v.history) - 1; i >= len(v.history)-consecutive; i-- {
+		e := v.history[i]
+		iters[e.iter] = true
+		if e.filePath != "" {
+			files[e.filePath] = true
 		}
 	}
+	if len(iters) < 2 {
+		return "" // single parallel batch, not sequential reads
+	}
+	// Check that these reads are of DIFFERENT files (same file reads are handled by memoization)
 	if len(files) < seqConsecutiveReads {
 		return "" // re-reads of same file, not a batch scenario
 	}
@@ -251,7 +280,23 @@ func (v *toolSequenceValidator) checkReadThenGrep(curr seqEntry) string {
 	}
 	for i := len(v.history) - 1; i >= 0; i-- {
 		e := v.history[i]
+		// #2813: an edit to X after the read invalidates the "you already
+		// have the content" premise - grepping X to re-ground on the CHANGED
+		// content is standard verify behavior and must not be discouraged
+		// (same staleness principle as #2675: state changed → history entry
+		// no longer applies).
+		if sourceMutatingTools[e.tool] && e.filePath == searchPath {
+			return ""
+		}
 		if e.tool == "read_file" && e.filePath == searchPath {
+			// #2813: a ranged read (offset/limit) never produced the full
+			// content - grepping to locate a section is legitimate.
+			if _, hasOffset := e.args["offset"]; hasOffset {
+				return ""
+			}
+			if _, hasLimit := e.args["limit"]; hasLimit {
+				return ""
+			}
 			v.hintsGiven["read_then_grep"] = true
 			return fmt.Sprintf(
 				"[tool-sequence] You already read %s in this session. "+
@@ -305,6 +350,74 @@ func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string
 					currPattern, currDir,
 				)
 			}
+		}
+	}
+	return ""
+}
+
+// Pattern 6: identical cross-tool sequence repeated seqRepeatCount times -
+// a stable SOP being re-issued by hand. Suggest consolidating it into a
+// saved cmd_snippet / skill. Suggestion only (r340/r361 decision): auto-
+// saving risks固化 mistyped or situational sequences.
+func (v *toolSequenceValidator) checkRepeatedSequence() string {
+	if v.hintsGiven["repeated_sequence"] {
+		return ""
+	}
+	n := len(v.history)
+	if n < seqRepeatLen*seqRepeatCount {
+		return ""
+	}
+	// Try sequence lengths 3 then 4; the tail is the most recent SOP.
+	for L := seqRepeatLen; L <= seqRepeatLen+1; L++ {
+		if n < L*seqRepeatCount {
+			continue
+		}
+		tail := v.history[n-L:]
+		// Cross-tool only: a single-tool repeat is the loop detector's /
+		// repetition tracker's domain, not this validator's charter.
+		distinct := make(map[string]bool, len(tail))
+		for _, e := range tail {
+			distinct[e.tool] = true
+		}
+		if len(distinct) < 2 {
+			continue
+		}
+		count := 0
+		for i := 0; i+L <= n; i++ {
+			match := true
+			for j := 0; j < L; j++ {
+				if v.history[i+j].tool != tail[j].tool {
+					match = false
+					break
+				}
+				// #3050: the fingerprint must repeat the same TARGETS, not
+				// just the same tool names - a normal cross-file
+				// read -> edit -> verify loop is three different jobs, not
+				// one SOP re-issued by hand. Compare filePath when the tail
+				// entry carries one; entries without a path (e.g. plain
+				// run_command) match on tool name alone, as before.
+				if tail[j].filePath != "" && v.history[i+j].filePath != tail[j].filePath {
+					match = false
+					break
+				}
+			}
+			if match {
+				count++
+			}
+		}
+		if count >= seqRepeatCount {
+			v.hintsGiven["repeated_sequence"] = true
+			tools := make([]string, 0, L)
+			for _, e := range tail {
+				tools = append(tools, e.tool)
+			}
+			return fmt.Sprintf(
+				"[tool-sequence] The same tool sequence (%s) has repeated %d times this run. "+
+					"This looks like a stable workflow you are re-issuing by hand - consider "+
+					"saving it once (cmd_snippet save for shell portions, or a reusable skill) "+
+					"and proposing it to the user instead of repeating the same steps.",
+				strings.Join(tools, " -> "), count,
+			)
 		}
 	}
 	return ""

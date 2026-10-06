@@ -496,14 +496,21 @@ func (k *Knight) Queue() *CandidateQueue {
 
 // Status returns a human-readable status string.
 func (k *Knight) Status() string {
-	if !k.cfg.Enabled {
+	// #2757: cfg.Enabled/running/lock are written under k.mu by
+	// Start/Stop/Enable; snapshot them under the same lock (Running() is the
+	// reference pattern). Unlocked reads were a Go memory model data race
+	// (WebUI Status polling vs daemon control commands).
+	k.mu.Lock()
+	enabled, running, lock := k.cfg.Enabled, k.running, k.lock
+	k.mu.Unlock()
+	if !enabled {
 		return "disabled"
 	}
-	if !k.running {
-		if k.lock == nil {
+	if !running {
+		if lock == nil {
 			pid, _ := LockHeldBy(k.projDir)
 			if pid > 0 {
-				return fmt.Sprintf("deferred — instance PID %d holds lock", pid)
+				return fmt.Sprintf("deferred - instance PID %d holds lock", pid)
 			}
 		}
 		return "stopped"
@@ -525,7 +532,11 @@ func (k *Knight) NotifyActivity() {
 
 // CanPerformTask checks if Knight has budget and is allowed to run.
 func (k *Knight) CanPerformTask() bool {
-	if !k.cfg.Enabled || !k.running {
+	// #2757: same locked snapshot as Status().
+	k.mu.Lock()
+	enabled, running := k.cfg.Enabled, k.running
+	k.mu.Unlock()
+	if !enabled || !running {
 		return false
 	}
 	return k.budget.CanSpend()

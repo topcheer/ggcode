@@ -2,6 +2,7 @@ package im
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/tool"
@@ -81,6 +82,31 @@ func (a *ToolManagerAdapter) SendDirect(ctx context.Context, adapter string, eve
 		}
 	}
 	return ErrNoChannelBound
+}
+
+// SendFileDirect (#3316) routes an arbitrary-file upload to the adapter's
+// optional FileSender capability. supported=false tells the tool layer to
+// fall back to path-as-text delivery.
+func (a *ToolManagerAdapter) SendFileDirect(ctx context.Context, adapter string, file tool.IMOutboundFile, caption string) (bool, error) {
+	if a == nil || a.Mgr == nil {
+		return false, ErrNoChannelBound
+	}
+	snap := a.Mgr.Snapshot()
+	for _, b := range snap.CurrentBindings {
+		if b.Adapter == adapter {
+			err := a.Mgr.SendFileDirect(ctx, b, OutboundFile{
+				Path:     file.Path,
+				Filename: file.Filename,
+				MIME:     file.MIME,
+				Data:     file.Data,
+			}, caption)
+			if errors.Is(err, ErrFileUploadUnsupported) {
+				return false, nil
+			}
+			return err == nil, err
+		}
+	}
+	return false, ErrNoChannelBound
 }
 
 // OtherInstancesHaveActiveChannels returns true if other instances in the

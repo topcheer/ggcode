@@ -168,6 +168,32 @@ func TestIssue607_B3_ConflictHintCountsTowardCap(t *testing.T) {
 	}
 }
 
+func TestIssue607_B3_ExemptHintBypassesCapWithoutConsumingBudget(t *testing.T) {
+	a := issue607Agent()
+	// Exhaust the budget with advisory hints.
+	for i := 0; i < guidanceBudgetPerTurn; i++ {
+		res := &tool.Result{Content: "ok"}
+		a.applyToolResultGuidance(res, "", "[advisory-"+string(rune('a'+i))+"] filler", "", "", "")
+	}
+	before := a.guidanceBudget.injected
+
+	// The [guidance-conflict] arbitration meta-hint is exempt from the
+	// advisory counter (#607 B3): charging it against the same counter as
+	// the contradictory directives it arbitrates would drop the hint
+	// exactly when the contradiction stands. It must still inject past
+	// the cap (byte pool still applies) and consume no counter slot.
+	// (Loop-recovery nudges bypass injectGuidance entirely via cm.Add.)
+	res := &tool.Result{Content: "ok"}
+	a.applyToolResultGuidance(res, "", "[guidance-conflict] contradictory directives detected; proceed with the retained hint", "", "", "")
+	if !strings.Contains(res.Content, "[guidance-conflict]") {
+		t.Error("exempt hint suppressed by exhausted budget; want bypass")
+	}
+	// ...and must not consume a budget slot.
+	if a.guidanceBudget.injected != before {
+		t.Errorf("exempt hint consumed budget: injected %d -> %d", before, a.guidanceBudget.injected)
+	}
+}
+
 func TestIssue607_B3_MetaHintDedupedAcrossResults(t *testing.T) {
 	a := issue607Agent()
 
@@ -258,5 +284,26 @@ func TestIssue607_B3_ConflictHintDoesNotExceedCap(t *testing.T) {
 	// themselves plus 1 separator after "ok". Cap: conflict(1) + retained(1).
 	if messages > 3 { // "ok" sep + conflict + retained = 3 separators max
 		t.Errorf("too many guidance messages in result (cap bypass): %q", res.Content)
+	}
+}
+
+// Cross-result conflict: a conflicting pair split across two tool results
+// was invisible pre-fix because the per-result scan only saw the current
+// result's retained hints. The delivered history (recorded by
+// allowDeduped) must join the scan so the second half of the pair
+// triggers the [guidance-conflict] meta-hint.
+func TestIssue607_B3_ConflictDetectedAcrossResults(t *testing.T) {
+	a := issue607Agent()
+
+	res1 := &tool.Result{Content: "ok"}
+	a.applyToolResultGuidance(res1, "", "[explore-expand] Explore more to understand before editing.", "", "", "")
+	if !strings.Contains(res1.Content, "[explore-expand]") {
+		t.Fatalf("first result: expected advisory hint; content=%q", res1.Content)
+	}
+
+	res2 := &tool.Result{Content: "ok"}
+	a.applyToolResultGuidance(res2, "", "[analysis-paralysis] ACT NOW: make your best-guess edit.", "", "", "")
+	if !strings.Contains(res2.Content, "[guidance-conflict]") {
+		t.Errorf("conflicting hint delivered on a later tool result did not trigger conflict meta-hint; content=%q", res2.Content)
 	}
 }

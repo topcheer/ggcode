@@ -38,8 +38,6 @@ package agent
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -142,8 +140,7 @@ func countGoroutineLaunches(src string) int {
 	if strings.TrimSpace(src) == "" {
 		return 0
 	}
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, _, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		return strings.Count(src, "go ")
 	}
@@ -164,8 +161,7 @@ func countConcurrencyPrimitives(src string) int {
 		return 0
 	}
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "", src, 0)
+	file, _, err := parseGoSource("", src, 0)
 	if err != nil || file == nil {
 		// Fall back to simple string matching if AST parsing fails.
 		return countConcurrencyPatternsString(src)

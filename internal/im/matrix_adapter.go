@@ -681,7 +681,12 @@ func (a *matrixAdapter) handleEvent(ctx context.Context, evt *event.Event) {
 	if a.manager != nil {
 		pairingResult, err := a.manager.HandlePairingInbound(msg)
 		debug.Log("matrix", "adapter=%s pairing: consumed=%v bound=%v err=%v", a.name, pairingResult.Consumed, pairingResult.Bound, err)
-		if err != nil && err.Error() != "no session bound" {
+		// #2823: the previous string compare ("no session bound") never
+		// matched the sentinel text ("no active session bound"), so a healthy
+		// adapter without a bound session was flagged warning on every
+		// inbound message. Use sentinel comparison like all other adapters;
+		// errors.Is is also immune to %w wrapping.
+		if err != nil && !errors.Is(err, ErrNoSessionBound) {
 			a.publishState(false, "warning", err.Error())
 		}
 		if pairingResult.Consumed {
@@ -780,13 +785,24 @@ func (a *matrixAdapter) hasMention(body string, raw map[string]any) bool {
 		}
 	}
 
-	// @localpart in body
+	// @localpart in body. Word-boundary match, same class as #963
+	// (mattermost): a bot named "al" must not fire on "@alex" or on
+	// ordinary words containing "al" (#2719).
 	localPart := a.userID
 	if idx := strings.Index(localPart, ":"); idx > 0 {
 		localPart = localPart[1:idx] // strip @ and :domain
 	}
-	if localPart != "" && strings.Contains(lower, strings.ToLower(localPart)) {
-		return true
+	if localPart != "" {
+		// #2749: \b is an ASCII word boundary and never matches when the
+		// localpart ends with a non-word char (Matrix legal localpart
+		// charset [a-z0-9._=-+/] allows endings like "bot-", "x=", "a."),
+		// silently dropping those mentions. Go's RE2 has no negative
+		// lookahead, so the boundary is a post-match check: the character
+		// after the hit must NOT be a legal localpart continuation char
+		// (refuses the "@bot" inside "@bot.a" prefix confusion, #2719).
+		if mentionsLocalPart(lower, localPart) {
+			return true
+		}
 	}
 
 	return false
@@ -804,10 +820,60 @@ func (a *matrixAdapter) stripMention(text string) string {
 		localPart = localPart[1:idx]
 	}
 	if localPart != "" {
-		re := regexp.MustCompile(`(?i)@` + regexp.QuoteMeta(localPart))
-		text = re.ReplaceAllString(text, "")
+		// Post-match boundary check (#2749): keeps a longer handle intact
+		// ("@alex" with localPart "al" is NOT mangled) while still matching
+		// non-word endings like "bot-" that \b missed. RE2 has no lookahead.
+		text = stripLocalPartMention(text, localPart)
 	}
 	return strings.TrimSpace(text)
+}
+
+// matrixLocalPartContChars are the characters that may legally continue a
+// Matrix localpart after a prefix (#2749): if the byte following a candidate
+// match is one of these, the match is a strict PREFIX of a longer handle and
+// must not count.
+const matrixLocalPartContChars = "abcdefghijklmnopqrstuvwxyz0123456789._=-+/"
+
+// mentionsLocalPart reports whether text contains "@localpart" NOT followed
+// by a legal localpart continuation character (RE2-safe boundary).
+func mentionsLocalPart(lower, localPart string) bool {
+	// #2749 case follow-up: the old (?i) regex was case-insensitive, and
+	// self-hosted homeservers may issue mixed-case localparts (@Bot:...).
+	// The body is already lowered by callers; lower the needle too.
+	needle := "@" + strings.ToLower(localPart)
+	for start := 0; ; {
+		i := strings.Index(lower[start:], needle)
+		if i < 0 {
+			return false
+		}
+		at := start + i
+		end := at + len(needle)
+		if end >= len(lower) || !strings.ContainsAny(string(lower[end]), matrixLocalPartContChars) {
+			return true
+		}
+		start = at + 1
+	}
+}
+
+// stripLocalPartMention removes "@localpart" occurrences that are not
+// prefixes of a longer handle (same boundary rule as mentionsLocalPart).
+func stripLocalPartMention(text, localPart string) string {
+	lower := strings.ToLower(text)
+	// #2749 case follow-up: lower the needle to match the (?i) behavior.
+	needle := "@" + strings.ToLower(localPart)
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(lower[i:], needle) {
+			end := i + len(needle)
+			if end >= len(lower) || !strings.ContainsAny(string(lower[end]), matrixLocalPartContChars) {
+				i = end // skip the mention
+				continue
+			}
+		}
+		b.WriteByte(text[i])
+		i++
+	}
+	return b.String()
 }
 
 // --- Outbound ---
@@ -983,9 +1049,13 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 		}
 	}
 
+	// #2737: wrap as m.room.encrypted when the room is E2EE so bot replies
+	// do not land in plaintext on the homeserver.
+	evtType, payload := a.maybeEncryptMessage(ctx, roomID, content)
+
 	txnID := fmt.Sprintf("ggcode-img-%d", a.txnID.Add(1))
 	for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-		_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+		_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), evtType, payload, mautrix.ReqSendEvent{TransactionID: txnID})
 		if err == nil {
 			return nil
 		}
@@ -1015,6 +1085,26 @@ func (a *matrixAdapter) sendImage(ctx context.Context, roomID, threadID string, 
 
 func (a *matrixAdapter) outboundText(event OutboundEvent) string {
 	return defaultOutboundText(event)
+}
+
+// maybeEncryptMessage wraps a m.room.message content as m.room.encrypted
+// when the room is E2EE and the Olm machine is available (#2737). On
+// encryption failure it falls back to the plaintext payload so messages are
+// never silently dropped.
+func (a *matrixAdapter) maybeEncryptMessage(ctx context.Context, roomID string, content *event.MessageEventContent) (event.Type, interface{}) {
+	a.mu.RLock()
+	mach := a.mach
+	a.mu.RUnlock()
+	if mach == nil {
+		return event.EventMessage, content
+	}
+	enc, err := mach.EncryptMegolmEvent(ctx, id.RoomID(roomID), event.EventMessage, content)
+	if err != nil {
+		debug.Log("matrix", "adapter=%s encrypt room=%s failed (%v), sending plaintext fallback", a.name, roomID, err)
+		return event.EventMessage, content
+	}
+	debug.Log("matrix", "adapter=%s sending E2EE m.room.encrypted to room=%s", a.name, roomID)
+	return event.EventEncrypted, enc
 }
 
 func (a *matrixAdapter) TriggerTyping(ctx context.Context, binding ChannelBinding) error {
@@ -1088,10 +1178,14 @@ func (a *matrixAdapter) sendText(ctx context.Context, roomID, threadID, text str
 			}
 		}
 
+		// #2737: wrap as m.room.encrypted when the room is E2EE so bot replies
+		// (which may carry code, paths, key fragments) do not land in plaintext.
+		evtType, payload := a.maybeEncryptMessage(ctx, roomID, content)
+
 		txnID := fmt.Sprintf("ggcode-%d", a.txnID.Add(1))
 		var err error
 		for attempt := 0; attempt <= matrixMaxRetries; attempt++ {
-			_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), event.EventMessage, content, mautrix.ReqSendEvent{TransactionID: txnID})
+			_, err = client.SendMessageEvent(ctx, id.RoomID(roomID), evtType, payload, mautrix.ReqSendEvent{TransactionID: txnID})
 			if err == nil {
 				break
 			}

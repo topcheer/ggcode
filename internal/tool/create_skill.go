@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/commands"
+	"github.com/topcheer/ggcode/internal/util"
 
 	"gopkg.in/yaml.v3"
 )
@@ -62,7 +63,7 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 			"requires_tools": {
 				"type": "array",
 				"items": {"type": "string"},
-				"description": "External CLI tools that must be on PATH for this skill to work (e.g. ["docker", "kubectl"]). Validated at load time."
+				"description": "External CLI tools that must be on PATH for this skill to work (e.g. ['docker', 'kubectl']). Validated at load time."
 			},
 			"dependencies": {
 				"type": "array",
@@ -78,15 +79,17 @@ func (t CreateSkillTool) Parameters() json.RawMessage {
 				"type": "string",
 				"enum": ["inline", "fork"],
 				"description": "Execution mode: 'inline' (default, injects into current conversation) or 'fork' (runs as sub-agent)."
-			},
-			"description_label": {
-				"type": "string",
-				"description": "REQUIRED. Brief activity label shown in the UI."
 			}
 		},
-		"required": ["name", "description", "content", "description_label"]
+		"required": ["name", "description", "content"]
 	}`)
 }
+
+// #3128 V1 note: "description_label" used to be declared required in the
+// Parameters schema above, but the args struct never received it
+// (json.Unmarshal silently dropped it) and no consumer reads such a
+// frontmatter field. Removed to make the schema truthful; description
+// is the label.
 
 func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, error) {
 	var args struct {
@@ -99,6 +102,11 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 		Dependencies  []string `json:"dependencies"`
 		Scope         string   `json:"scope"`
 		Context       string   `json:"context"`
+		// NLAH-style contracts + failure taxonomy (r466).
+		Precondition  string `json:"precondition"`
+		Postcondition string `json:"postcondition"`
+		StateContract string `json:"state_contract"`
+		FailureModes  string `json:"failure_modes"` // JSON array [{"name","detect","recover"}]
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("invalid input: %v", err)}, nil
@@ -130,11 +138,51 @@ func (t CreateSkillTool) Execute(ctx context.Context, input json.RawMessage) (Re
 	if _, err := os.Stat(skillFile); err == nil {
 		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk. Use a different name or delete the existing skill first.", name)}, nil
 	}
-	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, body)
+	contract := skillContract{
+		Precondition:  strings.TrimSpace(args.Precondition),
+		Postcondition: strings.TrimSpace(args.Postcondition),
+		StateContract: strings.TrimSpace(args.StateContract),
+	}
+	if raw := strings.TrimSpace(args.FailureModes); raw != "" {
+		var modes []commands.SkillFailureMode
+		if err := json.Unmarshal([]byte(raw), &modes); err != nil {
+			return Result{IsError: true, Content: fmt.Sprintf("invalid failure_modes JSON (expect [{\"name\",\"detect\",\"recover\"}]): %v", err)}, nil
+		}
+		contract.FailureModes = modes
+	}
+
+	markdown := buildSkillMarkdown(name, desc, args.WhenToUse, args.AllowedTools, args.RequiresTools, args.Dependencies, args.Context, contract, body)
 	if err := os.MkdirAll(filepath.Dir(skillFile), 0o755); err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill directory: %v", err)}, nil
 	}
-	if err := os.WriteFile(skillFile, []byte(markdown), 0o644); err != nil {
+	// #3128 V2: atomic tmp+rename write (same helper as #3100) - a direct
+	// os.WriteFile could leave a truncated SKILL.md on crash/full disk,
+	// which #822's malformed-frontmatter skip path then silently swallows
+	// (skill unusable AND blocked from re-creation by the disk check above).
+	//
+	// #3163: the Stat check above and this write are a classic check-then-act
+	// TOCTOU - two agents creating the same-named skill concurrently both
+	// pass Stat and the second AtomicWriteFile rename silently clobbers the
+	// first, defeating #822's guard (instances are registered per-process in
+	// cmd/ggcode and desktop, so an in-process mutex is not enough). An
+	// O_CREATE|O_EXCL placeholder is the atomic cross-process gate: the
+	// loser gets EEXIST (placeholder visible even at 0 bytes, mid-race) and
+	// is rejected; the winner's rename then atomically replaces its own
+	// placeholder. Go maps O_EXCL to CREATE_NEW on Windows, so this needs
+	// no platform split.
+	ph, err := os.OpenFile(skillFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if os.IsExist(err) {
+		return Result{IsError: true, Content: fmt.Sprintf("skill %q already exists on disk (or is concurrently being created). Use a different name or delete the existing skill first.", name)}, nil
+	}
+	if err != nil {
+		return Result{IsError: true, Content: fmt.Sprintf("cannot create skill file: %v", err)}, nil
+	}
+	ph.Close()
+	if err := util.AtomicWriteFile(skillFile, []byte(markdown), 0o644); err != nil {
+		// Best-effort cleanup: a leftover 0-byte placeholder would block
+		// re-creation until manually removed. Concurrent creators see the
+		// placeholder and are rejected (correct); we only remove our own.
+		os.Remove(skillFile)
 		return Result{IsError: true, Content: fmt.Sprintf("cannot write skill file: %v", err)}, nil
 	}
 
@@ -246,16 +294,29 @@ func validateSkillName(name string) error {
 }
 
 // buildSkillMarkdown creates the SKILL.md file content with YAML frontmatter.
-func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, dependencies []string, execMode, body string) string {
+// skillContract carries a skill's NLAH-style declarations through
+// buildSkillMarkdown (r466).
+type skillContract struct {
+	Precondition  string
+	Postcondition string
+	StateContract string
+	FailureModes  []commands.SkillFailureMode
+}
+
+func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requiresTools, dependencies []string, execMode string, contract skillContract, body string) string {
 	type frontmatter struct {
-		Name                   string   `yaml:"name"`
-		Description            string   `yaml:"description"`
-		WhenToUse              string   `yaml:"when_to_use,omitempty"`
-		AllowedTools           []string `yaml:"allowed-tools,omitempty"`
-		RequiresTools          []string `yaml:"requires-tools,omitempty"`
-		Dependencies           []string `yaml:"dependencies,omitempty"`
-		Context                string   `yaml:"context,omitempty"`
-		DisableModelInvocation bool     `yaml:"disable-model-invocation,omitempty"`
+		Name                   string                      `yaml:"name"`
+		Description            string                      `yaml:"description"`
+		WhenToUse              string                      `yaml:"when_to_use,omitempty"`
+		AllowedTools           []string                    `yaml:"allowed-tools,omitempty"`
+		RequiresTools          []string                    `yaml:"requires-tools,omitempty"`
+		Dependencies           []string                    `yaml:"dependencies,omitempty"`
+		Context                string                      `yaml:"context,omitempty"`
+		DisableModelInvocation bool                        `yaml:"disable-model-invocation,omitempty"`
+		Precondition           string                      `yaml:"precondition,omitempty"`
+		Postcondition          string                      `yaml:"postcondition,omitempty"`
+		StateContract          string                      `yaml:"state-contract,omitempty"`
+		FailureModes           []commands.SkillFailureMode `yaml:"failure-modes,omitempty"`
 	}
 
 	fm := frontmatter{
@@ -276,6 +337,18 @@ func buildSkillMarkdown(name, description, whenToUse string, allowedTools, requi
 	}
 	if mode := strings.TrimSpace(execMode); mode == "fork" || mode == "inline" {
 		fm.Context = mode
+	}
+	if contract.Precondition != "" {
+		fm.Precondition = contract.Precondition
+	}
+	if contract.Postcondition != "" {
+		fm.Postcondition = contract.Postcondition
+	}
+	if contract.StateContract != "" {
+		fm.StateContract = contract.StateContract
+	}
+	if len(contract.FailureModes) > 0 {
+		fm.FailureModes = contract.FailureModes
 	}
 
 	fmBytes, err := yaml.Marshal(fm)

@@ -16,6 +16,12 @@ type DesktopControlTool struct {
 	WorkingDir string
 }
 
+// Clone implements Cloner (#2596 siblings): WorkingDir is currently unused by
+// Execute, but the tool holds mutable state per the Cloner contract; the
+// pointer copy keeps future WorkingDir consumers agent-isolated instead of
+// silently pinning every clone to the original registry's directory.
+func (t DesktopControlTool) Clone() Tool { return &DesktopControlTool{WorkingDir: t.WorkingDir} }
+
 func (DesktopControlTool) Name() string { return "desktop_control" }
 
 func (DesktopControlTool) Description() string {

@@ -41,19 +41,29 @@ android {
         applicationId = "gg.ai.ggcode.mobile"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2026092401
-        versionName = "1.3.245"
+        versionCode = 2026100501
+        versionName = "1.3.253"
     }
 
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")
         }
+    }
+
+    androidResources {
+        // Keep only zh/en locales; cuts dependency locale tables (~30MB on
+        // the fat APK) so the arm64 APK fits mobile-share's 50MiB cap.
+        localeFilters += listOf("zh", "en")
     }
 }
 

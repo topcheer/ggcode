@@ -21,6 +21,6 @@ func (a *Agent) HealthCheck(ctx context.Context) error {
 		Role:    "user",
 		Content: []provider.ContentBlock{{Type: "text", Text: "ping"}},
 	}}
-	_, err := a.provider.Chat(ctx, messages, nil)
+	_, err := a.auxChat(ctx, messages, nil)
 	return err
 }

@@ -667,6 +667,9 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 	// resources/updated subscription notifications drop the per-URI entry.
 	if v, ok := c.listingCache.get(cacheResourceRead, uri); ok {
 		res := v.(ReadResourceResult)
+		// #3041: like the tools/prompts paths, clone the Contents backing
+		// array so a caller mutating its copy cannot pollute the cache entry.
+		res.Contents = cloneCachedSlice(res.Contents)
 		return &res, nil
 	}
 	params := ReadResourceParams{URI: uri}
@@ -677,7 +680,16 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceRes
 		// agent can act on.
 		return nil, fmt.Errorf("mcp[%s]: resources/read: %w", c.name, annotateResourceReadError(err, uri))
 	}
-	c.storeListingsCache(cacheResourceRead, uri, result, []CacheableResult{result.CacheableResult})
+	// #3042: the cache must own its own Contents copy. The cache-hit path
+	// clones on read (#3041/09c72cf28) but the MISS path stored the very
+	// slice the returned &result aliases - a caller mutating the first
+	// (miss) result (sort, dedupe, element rewrite) polluted every later
+	// TTL hit. Note: assigning result.Contents = clone(...) FIRST would not
+	// help (store and return would then alias the clone); the cached value
+	// gets a separate copy while the caller keeps the decoded original.
+	cached := result
+	cached.Contents = cloneCachedSlice(result.Contents)
+	c.storeListingsCache(cacheResourceRead, uri, cached, []CacheableResult{result.CacheableResult})
 	return &result, nil
 }
 
@@ -750,6 +762,9 @@ func (c *Client) Close() error {
 	waitDone := c.procWaitDone
 	oauthHandler := c.oauthHandler
 	c.oauthHandler = nil
+	// #3044-V2: retire pending URL-elicitation bookkeeping — no completion
+	// notification can arrive after the transport is gone.
+	c.pendingURLElicitations = nil
 	c.mu.Unlock()
 
 	// Cancel the standalone GET SSE stream first so its body read unblocks
@@ -2786,12 +2801,27 @@ func (c *Client) handleElicitation(req *Request) error {
 	return c.writeResultResponse(req.ID, result)
 }
 
+// pendingURLElicitationsCap bounds the pending URL-elicitation set. The
+// set exists to match LATER completion notifications (out-of-band flow),
+// so entries cannot be dropped when the elicitation handler returns —
+// but a faulty/malicious server that floods elicitation/create and never
+// sends complete would otherwise grow the set without bound (#3044-V2).
+// At the cap the oldest accounting is sacrificed: complete notifications
+// for dropped IDs are ignored per spec (unknown IDs), which is the same
+// observable behavior as having seen them.
+const pendingURLElicitationsCap = 128
+
 // trackURLElicitation records an in-flight URL mode elicitation ID (MCP
 // 2025-11-25) so the completion notification can be matched.
 func (c *Client) trackURLElicitation(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.pendingURLElicitations == nil {
+		c.pendingURLElicitations = make(map[string]struct{})
+	}
+	if len(c.pendingURLElicitations) >= pendingURLElicitationsCap {
+		// Reset rather than grow: bookkeeping only, dropping the ability to
+		// match completes for a flooded batch beats unbounded memory.
 		c.pendingURLElicitations = make(map[string]struct{})
 	}
 	c.pendingURLElicitations[id] = struct{}{}

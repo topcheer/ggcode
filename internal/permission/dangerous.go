@@ -79,8 +79,18 @@ func NewDangerousDetector() *DangerousDetector {
 		// scored only Medium and ran with zero confirmation under
 		// bypass/autopilot (config_policy blocks >=Critical only). Same
 		// for $HOME expanding to the root of everything the user owns.
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']/["']\s*$`), "rm -rf quoted-root would delete the entire filesystem"},
-		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']?\$HOME["']?\s*$`), "rm -rf $HOME would delete the user's entire home directory"},
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']/["']{1,2}\s*$`), "rm -rf quoted-root would delete the entire filesystem"},
+		// #3061-C1: the old \s*$ anchor missed `rm -rf $HOME/` and
+		// `rm -rf $HOME/projects` (trailing path), leaving whole-home deletions
+		// below the Critical bar that bypass/autopilot enforces.
+		// r371 adversarial: {0,2} instead of ? - a nested form like
+		// sh -c 'rm -rf "$HOME"' has BOTH the inner double quote and the
+		// outer wrapping single quote after the target, and the single
+		// optional quote let it slip to Medium (zero-confirm under bypass).
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?["']?\$HOME["']{0,2}(/.*)?\s*$`), "rm -rf $HOME would delete the user's entire home directory"},
+		// #3061-C1: `~` is the same target and had NO Critical rule at all
+		// (bare `rm -r ~` without -f matched nothing).
+		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*r[a-zA-Z]*\s+)?["']?~["']{0,2}(/.*)?\s*$`), "rm -r ~ would delete the user's entire home directory"},
 		{DangerCritical, regexp.MustCompile(`(?i)\brm\s+(?:(?:-{1,2}[a-zA-Z][a-zA-Z-]*|-[a-zA-Z]+)\s+)*(?:-[a-zA-Z]*f[a-zA-Z]*\s+)?/\*`), "rm -rf /* would delete the entire filesystem"},
 		// --no-preserve-root alone turns `rm -rf /` from a guarded refusal
 		// into a real filesystem wipe; Critical wherever it appears.
@@ -143,7 +153,13 @@ func NewDangerousDetector() *DangerousDetector {
 		{DangerMedium, regexp.MustCompile(`(?i)\bcurl\b.*\|\s*bash\b`), "piping remote script to bash"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bwget\b.*\|\s*sh\b`), "piping remote script to shell"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bnc\b.*-e\b`), "netcat in listen mode could be a reverse shell"},
-		{DangerMedium, regexp.MustCompile(`(?i)\b>\s*/dev/sd[a-z]`), "writing directly to a disk device"},
+		// #3062... #3061-C2: redirecting straight onto a raw disk is the same
+		// physical consequence as dd of= (Critical there) - was Medium and only
+		// matched sd[a-z], missing nvme/rdisk(macos)/mmcblk/vd and friends.
+		// #3061-C2 note: no \b before > - a word boundary never exists between a
+		// space and `>` (both non-word chars), which is why even the old rule
+		// only fired when `>` directly followed a word char.
+		{DangerCritical, regexp.MustCompile(`(?i)>{1,2}\s*/dev/(sd|hd|nvme|vd|r?disk|mmcblk|mapper|loop|dm-|xvd)`), "writing directly to a disk device would destroy it"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bcrontab\b`), "modifying cron jobs"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bnsenter\b`), "nsenter can escape containers"},
 		{DangerMedium, regexp.MustCompile(`(?i)\bchroot\b`), "chroot changes the root directory"},

@@ -81,6 +81,32 @@ The model name is displayed in the TUI as `[model-name]` in the sub-agent label,
 
 Sub-agents always use the parent agent's **current runtime provider**, not the provider that was active at process startup. If you switch models mid-session via the model picker, subsequently spawned sub-agents will use the new provider. This ensures sub-agents respect runtime configuration changes.
 
+### Best-of-N Sampling
+
+**Spawned by**: `best_of_n` tool (implementation: `internal/agentruntime/bon_orchestrator.go`)
+
+For tasks where a single attempt frequently fails (tricky refactor, elusive bug, ambiguous architecture), `best_of_n` launches N (2-4, default 3) **independent sub-agent candidates on the same task**, waits for all to finish, and picks the winner:
+
+- **Isolation**: each candidate runs in its own git worktree by default (`isolation: "worktree"`), so file edits never collide. The winner's worktree path is reported for merging; the others are disposable. Use `isolation: "none"` only for read-only/research tasks.
+- **Task contract**: a suffix appended to the task requires every candidate to verify its own work (targeted build/test) and state the outcome in its final message.
+- **Selection**: per-rollout distilled summaries (attempted/progress/failures/verdict) are ranked by consensus; ties or a failed "best-of-a-bad-lot" degrade to a **sequential-retry conditioning hint** distilled from ALL rollouts (RTV escalation from "Scaling Test-time Compute for LLM Agents", arXiv 2506.12928).
+- **Economics**: N runs cost N x sub-agent tokens - only justified for tasks where one attempt frequently fails. The orchestrator needs N free sub-agent slots (16-session budget) and refuses cleanly otherwise.
+- **Cancellation**: cancelling the tool call does NOT kill the candidates; a partial report with live IDs comes back and they keep running (poll via `wait_agent`/`list_agents`).
+- **Cross-model ensemble** (heterogeneous candidates): pass `models` (2-4 model names, each available on the current endpoint) instead of `n` — one candidate runs per model, e.g. mixing a cheap model with flagships. Decorrelating candidate errors gives the consensus ranking genuinely independent votes instead of N copies of one model's failure modes (Mixture-of-Models-style ensembles, 2026); the per-candidate model appears in the report lines.
+- **Heterogeneous verifier** (verdict independence): pass `verifier_models` (1-4 model names) to route the execution tie-break discriminator - used when candidates rank too close to separate by consensus - to a model different from the tied candidates. The first entry not used by either candidate is picked, and the discriminator evidence is tagged `[verifier=<model>]`. Same-family verification is measurably weaker than cross-family (arXiv:2512.02304): a judge sharing the candidates' model inherits their blind spots, so this decorrelates the verdict too. Omitted = discriminator inherits the parent model.
+
+```json
+{"task": "Fix the flaky test in internal/session by ..., verify with go test -run TestSession ./internal/session/", "n": 3, "isolation": "worktree", "description": "并行修 flaky 测试"}
+```
+
+```json
+{"task": "...same contract...", "models": ["glm-5.3-flash", "glm-5.2"], "description": "异构双模型并行取证"}
+```
+
+```json
+{"task": "...same contract...", "models": ["glm-5.3", "glm-5.2"], "verifier_models": ["glm-5.3-flash"], "description": "异构候选 + 独立判别者"}
+```
+
 ---
 
 ## Swarm Teammate

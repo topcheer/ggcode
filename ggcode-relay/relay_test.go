@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1442,5 +1443,31 @@ func TestSendChCapacityFloor(t *testing.T) {
 	p := newPeer(nil, newRoom("token"), "client", nil)
 	if cap(p.sendCh) < 1024 {
 		t.Fatalf("sendCh capacity %d below locked floor 1024 (see #1347 LOCKED INVARIANTS in relay.go)", cap(p.sendCh))
+	}
+}
+
+// #2907: bindRoomSession's stats recording was gated behind a `hydrated`
+// return value that was never assigned (dead hydration logic), freezing
+// activeSessionChanges at 0 forever. This test pins that a session change
+// arriving via server broadcast actually increments the counter.
+func TestBindRoomSessionStatsUnfrozen(t *testing.T) {
+	h := newHub(nil)
+	r := h.getOrCreateRoom("token-issue2907")
+
+	server := newPeer(h, r, "server", nil)
+	server.clientID = "the-server"
+	r.mu.Lock()
+	r.server = server
+	r.sessionID = "old-session"
+	r.mu.Unlock()
+
+	server.handleServerBroadcast(nil, relayMessage{
+		Type:      "encrypted",
+		SessionID: "new-session",
+		EventID:   "ev-issue2907",
+	})
+
+	if n := atomic.LoadUint64(&h.stats.activeSessionChanges); n != 1 {
+		t.Fatalf("session change must increment activeSessionChanges (was frozen by #2907 dead branch), got %d", n)
 	}
 }

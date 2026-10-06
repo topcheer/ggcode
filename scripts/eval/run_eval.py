@@ -9,7 +9,7 @@ Can be used standalone (pointing to a running daemon) or in one-shot mode
 where it starts and stops the daemon automatically.
 
 Usage:
-    # One-shot mode (recommended — starts daemon, runs eval, shuts down):
+    # One-shot mode (recommended - starts daemon, runs eval, shuts down):
     python scripts/eval/run_eval.py --auto --output .tmp/knight-eval/results.csv
 
     # Connect to already-running daemon:
@@ -35,6 +35,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).parent))
 
 from llm_client import FALLBACK_ANSWER, LLMClient
+from task_registry import TaskRegistry
 from task_templates import TASKS
 
 
@@ -327,6 +328,47 @@ def _handle_approval(llm: LLMClient, send_fn, data: dict):
 # Task runner
 # ---------------------------------------------------------------------------
 
+def run_verify(verify: dict, cwd: str | None = None, timeout: int = 60) -> tuple[str, str]:
+    """Fail-closed task verification (arXiv:2610.02142 diagnostic ladder).
+
+    Supported assertion types (all must pass when present):
+      - artifact: {"artifact": "relative/path"} - file must exist
+      - content_contains: {"artifact": ..., "content_contains": ["s", ...]}
+        - the artifact file must contain every substring
+      - command: {"command": ["bash", "-c", "..."]} - must exit 0
+
+    Returns ("pass" | "fail", detail). A verify block with neither an
+    artifact nor a command is itself a failure (fail-closed, not skipped).
+    """
+    try:
+        artifact = verify.get("artifact")
+        if artifact:
+            p = Path(artifact)
+            if not p.is_file():
+                return "fail", f"artifact missing: {artifact}"
+            needles = verify.get("content_contains")
+            if needles:
+                text = p.read_text(errors="replace")
+                for n in needles:
+                    if n not in text:
+                        return "fail", f"content missing {n!r} in {artifact}"
+        cmd = verify.get("command")
+        if cmd:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd,
+            )
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "")[-200:]
+                return "fail", f"command exit {proc.returncode}: {tail}"
+        if not artifact and not cmd:
+            return "fail", "verify block has no artifact/command assertion"
+        return "pass", "ok"
+    except subprocess.TimeoutExpired:
+        return "fail", f"verify command timeout ({timeout}s)"
+    except Exception as e:  # noqa: BLE001 - verifier must never crash the run
+        return "fail", f"verify error: {e}"
+
+
 def run_task(
     base_url: str,
     task: dict,
@@ -445,6 +487,20 @@ def run_task(
     if summary["rounds"] > 0 and summary["text_chunks"] > 0 and not summary["timed_out"]:
         success = True
 
+    # Fail-closed verification layer (arXiv:2610.02142: keyword/text-only
+    # success judgments are fail-open). When a task declares a `verify`
+    # block, success additionally requires the artifact/content/command
+    # assertion to pass; without one we degrade the judgment explicitly to
+    # "text_only" instead of silently claiming grounded success.
+    verify = task.get("verify")
+    verify_status = "text_only"
+    verify_detail = ""
+    if verify:
+        v_status, v_detail = run_verify(verify)
+        if v_status != "pass":
+            success = False
+        verify_status = "artifact_verified" if v_status == "pass" else "verify_failed"
+
     result = {
         "task_id": task_id,
         "task_type": task.get("type", ""),
@@ -459,6 +515,8 @@ def run_task(
         "knight_reports": summary["knight_reports"],
         "user_messages": metrics.get("user_messages", 1),
         "rework_count": metrics.get("rework_count", 0),
+        "verify_status": verify_status,
+        "verify_detail": verify_detail[:200],
     }
 
     status = "DONE" if success else ("TIMEOUT" if summary["timed_out"] else "PARTIAL")
@@ -592,7 +650,7 @@ def generate_config(
 ):
     """Generate a minimal ggcode config YAML for the given mode.
 
-    Only overrides vendor/endpoint/model/im — ggcode daemon merges these with
+    Only overrides vendor/endpoint/model/im - ggcode daemon merges these with
     its built-in defaults (vendor registry, system_prompt, etc.).
     All paths MUST be absolute so the daemon can find them regardless of cwd.
     """
@@ -673,6 +731,7 @@ CSV_FIELDS = [
     "success", "timed_out", "elapsed_sec", "tool_calls",
     "tool_errors", "ask_user_count", "knight_reports",
     "user_messages", "rounds", "rework_count",
+    "verify_status", "verify_detail",
 ]
 
 
@@ -680,6 +739,46 @@ def write_csv_header(path: str):
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
+
+
+def _git_sha() -> str:
+    """Current repo SHA for trend provenance (empty when git is absent)."""
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+    except Exception:
+        return ""
+
+
+def append_trend_jsonl(out_dir: str | Path, mode: str, task_set: str, task_version: str,
+                       results: list[dict], score: dict, run_id: str, meta: dict | None = None):
+    """r442: append one run record to trend.jsonl for regression gating.
+
+    Each line: task_set, task_version, git SHA, timestamp, per-task outcomes,
+    and the aggregate knight score. Append-only so local history accumulates
+    across runs; regression_gate.py consumes it.
+    """
+    entry = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "run_id": run_id,
+        "task_set": task_set,
+        "task_version": task_version,
+        "git_sha": _git_sha(),
+        "mode": mode,
+        "n_tasks": len(results),
+        "tasks": [
+            {"id": r.get("task_id", r.get("id", "")), "success": r.get("success"), "mode": r.get("mode")}
+            for r in results
+        ],
+        "score": score,
+        "meta": meta or {},
+    }
+    path = Path(out_dir) / "trend.jsonl"
+    with open(path, "a") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+    print(f"[eval] trend appended: {path}")
 
 
 def append_csv_row(path: str, result: dict):
@@ -700,6 +799,7 @@ def run_single_mode(
     run_id: str,
     auto: bool = False,
     working_dir: str | None = None,
+    trend_spec: dict | None = None,
 ) -> list[dict]:
     """Run evaluation in a single mode (baseline or knight).
 
@@ -718,7 +818,7 @@ def run_single_mode(
     shutdown_token = ""
 
     if auto:
-        # Generate temp config — use absolute paths so daemon can find
+        # Generate temp config - use absolute paths so daemon can find
         # port_file and metrics_path regardless of its working directory
         port_file = str((out_dir / f".{mode}-port").resolve())
         metrics_path = str((out_dir / f"{mode}-metrics.json").resolve())
@@ -758,6 +858,9 @@ def run_single_mode(
     score_path = str(out_dir / f"{mode}.scorecard.md")
     score = compute_knight_score(results, results)
     write_scorecard(score_path, results, score, mode)
+    if trend_spec:
+        append_trend_jsonl(out_dir, mode, trend_spec["task_set"], trend_spec["task_version"],
+                           results, score, run_id, trend_spec.get("meta"))
 
     # Shutdown daemon if we started it
     if auto and proc:
@@ -843,7 +946,7 @@ def write_final_report(path: str, all_results: list, duration_hours: float):
             for r in mode_results:
                 by_task.setdefault(r["task_id"], []).append(r)
 
-            f.write(f"## Per-Task Statistics — {mode.title()}\n\n")
+            f.write(f"## Per-Task Statistics - {mode.title()}\n\n")
             f.write("| Task | Success Rate | Avg Time | Std Time | Avg Tools | Std Tools |\n")
             f.write("|------|-------------|----------|----------|-----------|----------|\n")
 
@@ -894,6 +997,16 @@ def main():
                         help="Max duration in hours (0 = use --rounds). Mutually exclusive with rounds.")
     parser.add_argument("--no-reset", action="store_true",
                         help="Don't git-reset workdir between rounds")
+    parser.add_argument("--task-set", default=None, metavar="NAME[@VERSION]",
+                        help="r442: select task set with optional version pin (e.g. teamclaw@v2)")
+    parser.add_argument("--sample", type=int, default=0,
+                        help="r442 rotation: draw N random tasks instead of the full set")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Sampling seed (default: run-specific, non-deterministic)")
+    parser.add_argument("--exclude-before", default=None, metavar="YYYY-MM-DD",
+                        help="r442 rotation: drop tasks added before this date (contamination control)")
+    parser.add_argument("--no-trend", action="store_true",
+                        help="Skip appending trend.jsonl (default: append)")
     args = parser.parse_args()
 
     if not args.auto and not args.base_url and not args.port_file:
@@ -910,6 +1023,24 @@ def main():
         pass
 
     all_templates = template_sets.get(args.templates, TASKS)
+
+    # r442: registry-backed selection - version pinning, date-based rotation,
+    # and random sampling. Default (no --task-set/--sample/--exclude-before)
+    # is exactly the legacy full-set behavior.
+    registry = TaskRegistry(template_sets)
+    task_version = "v1"
+    if args.task_set:
+        name, _, ver = args.task_set.partition("@")
+        task_version = ver or None
+        all_templates = registry.get(name, task_version)
+        args.templates = name
+    if args.exclude_before:
+        all_templates = registry.exclude_before(args.templates, args.exclude_before)
+    if args.sample > 0:
+        all_templates = registry.sample(
+            args.templates, args.sample,
+            exclude_before=args.exclude_before, seed=args.seed,
+        )
 
     # Select tasks
     if args.tasks:
@@ -939,7 +1070,7 @@ def main():
     mode_label = "A/B" if args.ab else args.mode
     duration_label = f"{args.duration}h" if use_duration else f"{max_rounds} rounds"
     print(f"\n{'#'*60}")
-    print(f"  Knight Evaluation — {args.templates}")
+    print(f"  Knight Evaluation - {args.templates}")
     print(f"  Tasks: {len(tasks)} | Templates: {args.templates}")
     print(f"  Workdir: {working_dir}")
     print(f"  Output: {args.output}")
@@ -977,7 +1108,7 @@ def main():
                 # A/B: run baseline then knight in each round
                 baseline_results = run_single_mode(
                     "baseline", tasks, llm, args.output, round_run_id,
-                    auto=args.auto, working_dir=working_dir,
+                    auto=args.auto, working_dir=working_dir, trend_spec=None,
                 )
                 all_results.append((round_num, "baseline", baseline_results))
 
@@ -987,6 +1118,10 @@ def main():
                 knight_results = run_single_mode(
                     "knight", tasks, llm, args.output, round_run_id,
                     auto=args.auto, working_dir=working_dir,
+                    trend_spec=None if args.no_trend else {
+                        "task_set": args.templates, "task_version": task_version,
+                        "meta": {"sample": args.sample, "ab": True},
+                    },
                 )
                 all_results.append((round_num, "knight", knight_results))
 
@@ -999,6 +1134,10 @@ def main():
                 results = run_single_mode(
                     args.mode, tasks, llm, args.output, round_run_id,
                     auto=True, working_dir=working_dir,
+                    trend_spec=None if args.no_trend else {
+                        "task_set": args.templates, "task_version": task_version,
+                        "meta": {"sample": args.sample, "ab": False},
+                    },
                 )
                 all_results.append((round_num, args.mode, results))
 

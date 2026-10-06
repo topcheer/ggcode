@@ -185,6 +185,124 @@ func TestCountFileReferences_ExcludesURLs(t *testing.T) {
 	}
 }
 
+func TestStripURLs(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"no urls here", "no urls here"},
+		{"see https://example.com/a/b end", "see  end"},
+		{"http://a.com/x https://b.org/y", " "},             // both removed
+		{"ftp://files.example.com/pub/x.txt next", " next"}, // trailing text kept
+		{"ssh://git@host/repo.git tail", " tail"},           // ssh scheme stripped
+		{"ssh://host/repo", ""},                             // URL alone at end
+		{"keep a/b/c paths", "keep a/b/c paths"},            // non-URL slashes kept
+	}
+	for _, c := range cases {
+		if got := stripURLs(c.in); got != c.want {
+			t.Errorf("stripURLs(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestHasMultiSegmentPath(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"internal/agent/planner.go", true}, // 2+ separators
+		{"internal/agent/", true},           // trailing slash dir ref
+		{"main.go", false},                  // no separator
+		{"src/main.go", false},              // only 1 separator
+		{"https://example.com/a/b", false},  // slashes only inside URL
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := hasMultiSegmentPath(c.in); got != c.want {
+			t.Errorf("hasMultiSegmentPath(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestIsFilenameByte(t *testing.T) {
+	valid := "/_-.a0z9"
+	for i := 0; i < len(valid); i++ {
+		if !isFilenameByte(valid[i]) {
+			t.Errorf("isFilenameByte(%q) = false, want true", valid[i])
+		}
+	}
+	invalid := "ABC X+~" // uppercase, space and punctuation are not filename bytes
+	for i := 0; i < len(invalid); i++ {
+		if isFilenameByte(invalid[i]) {
+			t.Errorf("isFilenameByte(%q) = true, want false", invalid[i])
+		}
+	}
+}
+
+func TestCollectExtensionRefs_Boundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ext  string
+		want []string // distinct filenames expected in seen
+	}{
+		{
+			name: "plain filename",
+			in:   "edit main.c now",
+			ext:  ".c",
+			want: []string{"main.c"},
+		},
+		{
+			name: "domain not a filename (example.com)",
+			in:   "visit example.com today",
+			ext:  ".c",
+			want: nil, // char after ".c" is 'o' -> not a match
+		},
+		{
+			name: "word-internal ext is not a file (foo.cbar)",
+			in:   "use foo.cbar here",
+			ext:  ".c",
+			want: nil, // char after ".c" is 'b' -> not a match
+		},
+		{
+			name: "ext preceded by separator is not a file",
+			in:   "edit .c file",
+			ext:  ".c",
+			want: nil, // char before ".c" is ' ' -> rejected
+		},
+		{
+			name: "path-prefixed filename",
+			in:   "fix internal/util/handler.go",
+			ext:  ".go",
+			want: []string{"internal/util/handler.go"},
+		},
+		{
+			name: "trailing x consumes tsx",
+			in:   "rename component.tsx",
+			ext:  ".ts",
+			want: []string{"component.tsx"}, // 'x' after ".ts" is absorbed
+		},
+		{
+			name: "trailing slash directory ref kept",
+			in:   "scan main.go/ all",
+			ext:  ".go",
+			want: []string{"main.go"}, // '/' after ext is allowed (dir ref), not absorbed
+		},
+	}
+	for _, c := range cases {
+		seen := make(map[string]bool)
+		collectExtensionRefs(c.in, c.ext, seen)
+		if len(seen) != len(c.want) {
+			t.Errorf("%s: seen = %v, want %v", c.name, seen, c.want)
+			continue
+		}
+		for _, w := range c.want {
+			if !seen[w] {
+				t.Errorf("%s: missing %q in seen %v", c.name, w, seen)
+			}
+		}
+	}
+}
+
 func TestCountKeywordMatches(t *testing.T) {
 	// No keywords.
 	if c := countKeywordMatches("hello world", []string{"foo", "bar"}); c != 0 {

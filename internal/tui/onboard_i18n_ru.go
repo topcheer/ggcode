@@ -45,7 +45,6 @@ func ruOnboardTexts() map[string]string {
 		"im_more":          "Больше каналов доступно в TUI",
 		"hint_nav":         "↑↓ навигация · Enter выбор · Tab переключение · Esc назад · Ctrl+C выход",
 		"hint_filter":      "Нажмите / для фильтра",
-		"skip":             "пропустить",
 		"on":               "вкл",
 		"off":              "выкл",
 	}

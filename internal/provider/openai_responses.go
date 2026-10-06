@@ -60,6 +60,7 @@ type OpenAIResponsesProvider struct {
 	reasoningEffort   string
 	textVerbosity     string // GPT-5 text.verbosity: "", "low", "medium", "high"
 	serviceTier       string // sa-81: processing tier ("", auto, default, flex, priority, fast, scale)
+	promptCacheKey    string // sa-231: prompt_cache_key cache-routing affinity ("" = none)
 	toolChoice        string
 	maxTokensOverride int
 
@@ -161,8 +162,6 @@ func (p *OpenAIResponsesProvider) CountTokens(ctx context.Context, messages []Me
 	return estimateTokensForMessages(messages), nil
 }
 
-type sseEventHandler struct{}
-
 // normalizeResponsesEffort maps the shared effort vocabulary (minimal/low/
 // medium/high/xhigh/max/turbo) onto the Responses API values. Unknown levels
 // are passed through untouched so future API levels keep working.
@@ -236,6 +235,7 @@ type responsesRequest struct {
 	Reasoning       *responsesReasoning  `json:"reasoning,omitempty"`
 	Text            *responsesTextConfig `json:"text,omitempty"`
 	ServiceTier     string               `json:"service_tier,omitempty"`
+	PromptCacheKey  string               `json:"prompt_cache_key,omitempty"` // sa-231: cache-routing affinity
 	Store           *bool                `json:"store,omitempty"`
 	// Background (sa-73) asks the API to execute the response asynchronously;
 	Background *bool `json:"background,omitempty"`
@@ -460,6 +460,8 @@ func (p *OpenAIResponsesProvider) buildRequest(messages []Message, tools []ToolD
 	}
 	// sa-81: processing-tier hint; omitempty drops it when unset.
 	req.ServiceTier = p.serviceTier
+	// sa-231: prompt-cache routing affinity; omitempty drops it when unset.
+	req.PromptCacheKey = p.promptCacheKey
 	for _, t := range tools {
 		params := t.Parameters
 		if len(params) == 0 {

@@ -28,6 +28,12 @@ type RunStats struct {
 	// CommandsRun lists shell commands executed via run_command or start_command.
 	CommandsRun []string
 
+	// SuccessfulCommands lists commands that completed successfully
+	// (non-error result), deduplicated and capped. Consumed by the
+	// trajectory→asset distiller to persist verified commands as
+	// cmd_snippet entries.
+	SuccessfulCommands []string
+
 	// Errors records error messages from failed tool calls or stream errors.
 	// Truncated to 500 chars each, max 10 entries.
 	Errors []string
@@ -52,6 +58,14 @@ type RunStats struct {
 	// UserPrompt is the first 200 chars of the user's input, for context.
 	UserPrompt string
 
+	// UserPromptFull is the complete, untruncated user input (r414). It is
+	// NOT serialized to the run journal (the 200-char form is the persisted
+	// context record). Consumers that must not lose late-position content -
+	// e.g. preference distillation, where a durable "from now on ..."
+	// statement routinely follows a pasted log or code block - read this
+	// field instead of UserPrompt.
+	UserPromptFull string `json:"-"`
+
 	// ContextPeakTokens is the highest token count observed during the run.
 	// Tracked per-iteration from contextManager.TokenCount().
 	ContextPeakTokens int
@@ -62,6 +76,12 @@ type RunStats struct {
 	// CompactionCount is the number of compaction events triggered during the run.
 	// Includes both auto-compact and reactive compact.
 	CompactionCount int
+
+	// TotalTokens accumulates input+output tokens across all LLM calls this
+	// run (r394: cost dimension of the perf baseline). Prompt bloat, fallback
+	// chains switching to pricier models, and cache misses show up here
+	// before they show in duration.
+	TotalTokens int
 
 	// startTime is used internally to compute Duration.
 	startTime time.Time
@@ -74,10 +94,11 @@ type RunStats struct {
 // newRunStats creates a fresh RunStats with the start time set.
 func newRunStats(userPrompt string) *RunStats {
 	return &RunStats{
-		ToolCalls:  make(map[string]int),
-		UserPrompt: truncatePrompt(userPrompt, 200),
-		startTime:  time.Now(),
-		runID:      generateRunID(),
+		ToolCalls:      make(map[string]int),
+		UserPrompt:     truncatePrompt(userPrompt, 200),
+		UserPromptFull: userPrompt,
+		startTime:      time.Now(),
+		runID:          generateRunID(),
 	}
 }
 
@@ -113,6 +134,25 @@ func (s *RunStats) recordFileEdit(path string) {
 	s.FilesEdited = append(s.FilesEdited, path)
 }
 
+// recordSuccessfulCommand adds a verified-successful shell command
+// (non-error tool result) for trajectory→asset distillation.
+// Deduplicated, max 30 entries, each truncated to 500 chars.
+func (s *RunStats) recordSuccessfulCommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return
+	}
+	for _, existing := range s.SuccessfulCommands {
+		if existing == cmd {
+			return
+		}
+	}
+	if len(s.SuccessfulCommands) >= 30 {
+		return
+	}
+	s.SuccessfulCommands = append(s.SuccessfulCommands, truncatePrompt(cmd, 500))
+}
+
 // recordCommand adds a shell command to the list (truncated).
 // Max 30 entries, each truncated to 200 chars. Prevents unbounded
 // growth in long autopilot/cron sessions.
@@ -140,6 +180,12 @@ func (s *RunStats) recordToolError(toolName, errMsg string) {
 	}
 	msg := fmt.Sprintf("%s: %s", toolName, errMsg)
 	s.Errors = append(s.Errors, truncatePrompt(msg, 500))
+}
+
+// recordTokens accumulates total input+output tokens for the run (r394
+// perf-baseline cost dimension).
+func (s *RunStats) recordTokens(input, output int) {
+	s.TotalTokens += input + output
 }
 
 // recordContextUsage tracks peak token usage across iterations.

@@ -194,16 +194,32 @@ func (t DebugLogTool) doExport(lines int, category, keyword string) (Result, err
 	if err != nil {
 		return Result{IsError: true, Content: fmt.Sprintf("failed to create temp file: %v", err)}, nil
 	}
-	defer f.Close()
 
-	// Write header
+	// #3128 V3: surface write failures instead of reporting success over a
+	// truncated file - exports are routinely shared over IM / used for
+	// forensics, so a silent partial export is worse than an error.
+	written := 0
+	var writeErr error
 	header := fmt.Sprintf("# ggcode debug log export\n# Time: %s\n# Category filter: %q\n# Keyword filter: %q\n# Entries: %d (of %d in buffer, capacity %d)\n\n",
 		time.Now().Format("2006-01-02 15:04:05 MST"),
 		category, keyword, len(filtered), count, capacity)
-	f.WriteString(header)
-
-	for _, e := range filtered {
-		f.WriteString(fmt.Sprintf("[%s] [%s] %s\n", e.Time, e.Category, e.Message))
+	if _, err := f.WriteString(header); err != nil {
+		writeErr = err
+	} else {
+		for _, e := range filtered {
+			if _, err := f.WriteString(fmt.Sprintf("[%s] [%s] %s\n", e.Time, e.Category, e.Message)); err != nil {
+				writeErr = err
+				break
+			}
+			written++
+		}
+	}
+	if cerr := f.Close(); cerr != nil && writeErr == nil {
+		writeErr = cerr
+	}
+	if writeErr != nil {
+		return Result{IsError: true, Content: fmt.Sprintf(
+			"export incomplete: wrote %d of %d entries, then failed: %v. Partial file left at:\n%s", written, len(filtered), writeErr, path)}, nil
 	}
 
 	return Result{Content: fmt.Sprintf("Exported %d log entries (category=%q keyword=%q) to:\n%s\n\nBuffer stats: %d/%d entries used.", len(filtered), category, keyword, path, count, capacity)}, nil

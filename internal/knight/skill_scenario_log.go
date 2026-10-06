@@ -205,13 +205,34 @@ func (k *Knight) skillScenarioLogPath() string {
 // formatRecentSemanticMemoryForEval renders recent semantic memory entries for
 // inclusion in Knight evaluator prompts so past lessons influence new gating
 // decisions. Returns "" when no memory exists.
+//
+// #3030: nightlyMaintenance writes an unconditional self-reflection entry
+// every night (MetaLesson is never empty), and without filtering the eval
+// window filled with near-identical statistics lines - after ~8 nights real
+// promotion/reject lessons were pushed out entirely. Self-reflection entries
+// are rate-limited to the single most recent one; a wider fetch window
+// (limit*4) keeps older REAL lessons reachable past a run of self-reflections.
 func (k *Knight) formatRecentSemanticMemoryForEval(limit int) string {
-	entries, err := k.RecentSemanticMemory(limit)
+	wide := limit * 4
+	if wide < limit {
+		wide = limit
+	}
+	entries, err := k.RecentSemanticMemory(wide)
 	if err != nil || len(entries) == 0 {
 		return ""
 	}
-	lines := make([]string, 0, len(entries))
+	lines := make([]string, 0, limit)
+	selfReflectionSeen := false
 	for _, e := range entries {
+		if e.Kind == "self-reflection" {
+			if selfReflectionSeen {
+				continue
+			}
+			selfReflectionSeen = true
+		}
+		if len(lines) == limit {
+			break
+		}
 		summary := truncateRunes(e.Summary, 220)
 		when := ""
 		if !e.Time.IsZero() {

@@ -251,11 +251,11 @@ func shouldExecuteWhileBusy(text string) bool {
 		"/lang", "/model", "/provider", "/impersonate", "/chat", "/nick",
 		"/qq", "/telegram", "/tg", "/pc", "/discord",
 		"/feishu", "/lark", "/slack", "/dingtalk", "/ding", "/wechat", "/wecom", "/mattermost", "/mm", "/matrix", "/signal", "/irc", "/nostr", "/twitch", "/whatsapp", "/wa", "/im",
-		"/skills", "/stats", "/sessions", "/search", "/mcp", "/usage",
+		"/skills", "/skill", "/stats", "/sessions", "/search", "/mcp", "/usage",
 		"/checkpoints", "/memory", "/todo", "/plugins", "/config", "/status", "/inspector",
 		"/stream", "/restart", "/help", "/?",
 		"/share", "/tunnel", "/unshare",
-		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin", "/runreport":
+		"/diff", "/hooks", "/cost", "/commit", "/retry", "/edit", "/copy", "/context", "/regenerate", "/regen", "/cron", "/debug", "/title", "/pin", "/runreport", "/traj", "/interventions":
 		return true
 	}
 	return false
@@ -463,6 +463,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handlePluginsCommand()
 		case "/inspector":
 			return m.handleInspectorCommand(parts)
+		case "/interventions":
+			return m.handleInterventionsCommand(parts)
 		case "/chat":
 			m.openLanChatPanel()
 			return nil
@@ -476,6 +478,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/skills":
 			m.openSkillsPanel()
 			return nil
+		case "/skill":
+			return m.handleSkillCommand(parts)
 		case "/pin":
 			return m.handlePinCommand(parts)
 		case "/mode":
@@ -546,6 +550,10 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleRedoCommand()
 		case "/runreport":
 			return m.handleRunReportCommand()
+		case "/traj":
+			return m.handleTrajCommand(parts)
+		case "/forecast":
+			return m.handleForecastCommand(parts[1:])
 		case "/context":
 			return m.handleContextCommand()
 		case "/notify":
@@ -555,7 +563,7 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 		case "/regenerate", "/regen":
 			return m.handleRegenerateCommand()
 		case "/branch", "/fork":
-			return m.handleBranchCommand()
+			return m.handleBranchCommand(parts)
 		case "/tools":
 			return m.handleToolsCommand()
 		case "/style":
@@ -691,13 +699,32 @@ func (m *Model) handleInitCommand() tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("init.generate_failed", err))
 		return nil
 	}
-	// Build init prompt directly
-	var prompt string
+	// Exploration-first init prompt (#AGENTS.md standard): the agent must
+	// understand the repository BEFORE writing the memory file, instead of
+	// dumping the heuristic snapshot verbatim. The detected facts below are
+	// hints to verify, not the final content.
+	verb := "Create"
 	if existed {
-		prompt = fmt.Sprintf("Update project memory file at %s with the following content:\n\n%s", targetPath, content)
-	} else {
-		prompt = fmt.Sprintf("Create project memory file at %s with the following content:\n\n%s", targetPath, content)
+		verb = "Update"
 	}
+	prompt := fmt.Sprintf(`%s the project memory file at %s (AGENTS.md - the cross-CLI agent instructions standard).
+
+FIRST understand this repository - do NOT write the file from a generic template:
+1. Read the README and docs/ overview: what does this application do?
+2. Read build manifests (go.mod / package.json / Cargo.toml / ...) and map entrypoints (cmd/, main.*, src/) to major directories and their responsibilities.
+3. Read Makefile / CI workflows (.github/workflows, ...) to learn the REAL build, test, and lint commands.
+4. Skim a few representative source and test files to infer conventions (logging, error handling, i18n, testing style).
+
+THEN %s AGENTS.md with durable guidance for coding agents:
+- Project snapshot: what the app is, module path, stack
+- Validation: exact build/test/lint commands as verified in CI/Makefile
+- Architecture: major directories and what lives where
+- Coding conventions: rules this repo actually follows
+- Concise (~100-150 lines), durable guidance only - no one-off task plans
+
+Heuristically detected hints (VERIFY each against the repository; discard anything wrong or stale):
+
+%s`, verb, targetPath, verb, content)
 
 	m.chatWriteUser(nextChatID(), "/init")
 	m.appendUserMessage("/init")

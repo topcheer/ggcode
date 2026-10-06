@@ -722,6 +722,15 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 	timeoutCtx, cancel := context.WithTimeout(tab.ctx, time.Duration(waitTimeout+5)*time.Second)
 	defer cancel()
 
+	// r34 post-action effect verification: CDP click "success" only means
+	// the event dispatched — overlays, JS interception, or stale nodes all
+	// return ok with zero effect, the #1 source of cascading agent errors in
+	// 2026 computer-use postmortems. Capture state BEFORE clicking so the
+	// after-check has a baseline.
+	var urlBefore string
+	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlBefore))
+	stateBefore := b.evaluateClickState(timeoutCtx, selector)
+
 	actions := []chromedp.Action{
 		chromedp.WaitVisible(selector, chromedp.ByQuery),
 		chromedp.Click(selector, chromedp.ByQuery),
@@ -736,7 +745,87 @@ func (b *Browser) doClick(ctx context.Context, profile, session, selector, waitF
 
 	var urlAfter string
 	_ = chromedp.Run(timeoutCtx, chromedp.Location(&urlAfter))
-	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s", selector, urlAfter)}, nil
+	stateAfter := b.evaluateClickState(timeoutCtx, selector)
+	note := clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter)
+	return Result{Content: fmt.Sprintf("Clicked: %s\nCurrent URL: %s%s", selector, urlAfter, note)}, nil
+}
+
+// evaluateClickState reads the selector's state-bearing attributes
+// (checked / selected / aria-expanded / aria-checked). Empty string means
+// none present (or evaluation failed - conservative). Extracted so doClick
+// can capture the same reading before AND after the click (#3407).
+// stateProbeFailed is the sentinel evaluateClickState returns when the
+// CDP probe itself errors: distinct from "" (no state attribute) so
+// clickEffectNote can refuse to CONFIRM on a failed baseline read - the
+// state-branch mirror of the urlBefore!="" hardening from the #3398
+// review (a probe failure must never masquerade as evidence).
+const stateProbeFailed = "\x00probe-failed"
+
+func (b *Browser) evaluateClickState(timeoutCtx context.Context, selector string) string {
+	// #3407 mirror defect: the JS chain `e.checked||e.selected||...` returns
+	// a BOOLEAN true on a successfully checked checkbox/radio/option; the
+	// old `var stateExpr string` + Evaluate(&stateExpr) made chromedp's
+	// json.Unmarshal fail on `bool -> string` EVERY time, so a successful
+	// check was reported as no-effect 100% of the time (the false-negative
+	// mirror of the truthy-string false-positive #3410 fixed). Unmarshal to
+	// any and dispatch by concrete type.
+	var raw any
+	expr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);if(!e)return "";`+
+		`return e.checked||e.selected||e.getAttribute("aria-expanded")||e.getAttribute("aria-checked")||"";})()`, selector)
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(expr, &raw)); err != nil {
+		return stateProbeFailed
+	}
+	if v := stateFromRaw(raw); v != "" {
+		return v
+	}
+	// No state attribute at all is indistinguishable from a probe that
+	// returned an empty string - treat as no signal, not as failure.
+	return ""
+}
+
+// stateFromRaw dispatches the raw CDP JSON value of the state expression.
+// A checked checkbox/radio arrives as JSON true (#3407 mirror: unmarshaling
+// into a string failed on every such click); attribute reads arrive as
+// strings; anything else (nil, numbers) carries no state signal here.
+func stateFromRaw(raw any) string {
+	switch v := raw.(type) {
+	case bool:
+		if v {
+			return "true"
+		}
+		return ""
+	case string:
+		return v
+	default:
+		return ""
+	}
+}
+
+// clickEffectNote verifies the click produced an observable effect (r34):
+// navigation, or a CHANGE in the selector's state-bearing attributes
+// (checked / aria-expanded / aria-checked) versus the pre-click baseline
+// (#3407). Absent both, it appends follow-up guidance so the agent
+// re-extracts instead of assuming the click landed. Guidance, not error —
+// SPA clicks legitimately change nothing addressable from here.
+func clickEffectNote(urlBefore, urlAfter, stateBefore, stateAfter string) string {
+	// r34 hardening (#3398 review, verdict 5990361368): an empty baseline
+	// (Location failed before the click) must never count as navigation -
+	// urlBefore=="" && urlAfter!="" would falsely emit "effect: confirmed"
+	// and unlock the spiral gate on zero evidence.
+	if urlBefore != "" && urlAfter != urlBefore && urlAfter != "" {
+		return fmt.Sprintf("\neffect: confirmed (navigation to %s)", urlAfter)
+	}
+	// #3407: state confirmation requires a CHANGE versus the baseline, not
+	// mere attribute presence. aria-expanded="false" is a truthy non-empty
+	// STRING in the JS || chain, so a collapsed menu reported "confirmed"
+	// even when the click changed nothing - unconfirmed by zero evidence,
+	// the exact inversion of the #3398 discipline. Comparing against
+	// stateBefore also keeps legitimate collapses (true->false) confirmed.
+	if stateAfter != "" && stateAfter != stateProbeFailed && stateBefore != stateProbeFailed && stateAfter != stateBefore {
+		return fmt.Sprintf("\neffect: confirmed (state: %v)", stateAfter)
+	}
+	return "\n⚠ no observable effect: URL unchanged and selector state unchanged — " +
+		"follow up with action 'extract'/'screenshot' to confirm the click landed before building on it"
 }
 
 // doType clears an input field and types text into it.
@@ -1368,7 +1457,19 @@ func (b *Browser) doUpload(ctx context.Context, profile, session, selector, file
 		return Result{IsError: true, Content: fmt.Sprintf("upload failed: %v", err)}, nil
 	}
 
-	return Result{Content: fmt.Sprintf("Uploaded file: %s into %s", absPath, selector)}, nil
+	// r34 post-action effect verification: SetUploadFiles "ok" does not mean
+	// the file landed — React controlled inputs and shadow DOM routinely clear
+	// .files right after. Read back the node state; zero files is a hard error.
+	var fileCount int
+	countExpr := fmt.Sprintf(`(function(){var e=document.querySelector(%q);return e&&e.files?e.files.length:-1;})()`, selector)
+	if err := chromedp.Run(timeoutCtx, chromedp.Evaluate(countExpr, &fileCount)); err == nil && fileCount == 0 {
+		return Result{IsError: true, Content: fmt.Sprintf("upload had no effect: %s reports 0 selected files (controlled input cleared it?) — retry via a visible file chooser or verify the selector", selector)}, nil
+	}
+	countNote := ""
+	if fileCount > 0 {
+		countNote = fmt.Sprintf("\neffect: confirmed (%d file(s) selected)", fileCount)
+	}
+	return Result{Content: fmt.Sprintf("Uploaded file: %s into %s%s", absPath, selector, countNote)}, nil
 }
 
 // doCookies manages browser cookies. With no args, gets all cookies.

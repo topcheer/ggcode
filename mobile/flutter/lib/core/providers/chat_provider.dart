@@ -47,6 +47,7 @@ class ChatMessage {
   final bool reasoningCollapsed;
   final DateTime time;
   final MessageStatus status; // ack tracking for user messages
+  final String? fileTransferId; // outbound file card (mobile transfer V1)
 
   ChatMessage({
     required this.id,
@@ -70,6 +71,7 @@ class ChatMessage {
     this.reasoningCollapsed = false,
     required this.time,
     this.status = MessageStatus.acknowledged, // default for server-originated
+    this.fileTransferId,
   });
 
   ChatMessage copyWith({
@@ -162,6 +164,11 @@ final chatProvider = NotifierProvider<ChatNotifier, List<ChatMessage>>(
 
 class ChatNotifier extends Notifier<List<ChatMessage>> {
   int _msgCounter = 0;
+  // #2811: bindRemoteUserMessage renames outgoing messages from their
+  // client id (user-X) to the relay eventId, but relay/server acks echo the
+  // ORIGINAL client id - resolve through this alias when a direct lookup
+  // misses.
+  final Map<String, String> _ackIdAlias = {};
 
   @override
   List<ChatMessage> build() => [];
@@ -175,14 +182,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   /// Send a user message with ack tracking.
   /// Generates a message_id, adds the message in 'sending' status,
   /// and sets a 5s timeout to mark as failed if no relay_ack arrives.
-  void addUserMessage(String text, {List<proto.MessageImage> images = const []}) {
+  void addUserMessage(String text,
+      {List<proto.MessageImage> images = const []}) {
     final messageId =
         'user-${_msgCounter++}-${DateTime.now().millisecondsSinceEpoch}';
 
     // Build thumbnail data URLs for display in the bubble.
-    final thumbnails = images
-        .map((img) => 'data:${img.mime};base64,${img.data}')
-        .toList();
+    final thumbnails =
+        images.map((img) => 'data:${img.mime};base64,${img.data}').toList();
 
     final msg = ChatMessage(
       id: messageId,
@@ -201,8 +208,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       'data': {
         'text': text,
         'message_id': messageId,
-        if (images.isNotEmpty)
-          'images': images.map((e) => e.toJson()).toList(),
+        if (images.isNotEmpty) 'images': images.map((e) => e.toJson()).toList(),
       },
     });
 
@@ -211,7 +217,16 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // Only mark as truly failed if the connection itself is broken.
     Future.delayed(const Duration(seconds: 5), () {
       if (!ref.mounted) return;
-      final idx = state.indexWhere((m) => m.id == messageId);
+      // #2811: the message may have been renamed to its eventId by
+      // bindRemoteUserMessage meanwhile - resolve the alias first.
+      var effectiveId = messageId;
+      var idx = state.indexWhere((m) => m.id == effectiveId);
+      if (idx < 0) {
+        effectiveId = _ackIdAlias[messageId] ?? '';
+        if (effectiveId.isNotEmpty) {
+          idx = state.indexWhere((m) => m.id == effectiveId);
+        }
+      }
       if (idx < 0) return;
       final current = state[idx];
       if (current.status == MessageStatus.sending) {
@@ -232,7 +247,15 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   /// Update message status by message_id (called when ack events arrive).
   void updateMessageStatus(String messageId, MessageStatus status) {
-    final idx = state.indexWhere((m) => m.id == messageId);
+    var idx = state.indexWhere((m) => m.id == messageId);
+    // #2811: acks echo the client-sent id, which bindRemoteUserMessage may
+    // have renamed to the eventId - resolve the alias on a miss.
+    if (idx < 0) {
+      final aliased = _ackIdAlias[messageId];
+      if (aliased != null && aliased.isNotEmpty) {
+        idx = state.indexWhere((m) => m.id == aliased);
+      }
+    }
     if (idx < 0) return;
     // Only advance status forward: sending → delivered → acknowledged.
     // #932: failed (index 3) ranked above acknowledged under a raw index
@@ -242,7 +265,18 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // use new IDs, so this only fires for the original).
     final current = state[idx].status;
     int rank(MessageStatus s) => s == MessageStatus.failed ? 0 : s.index + 1;
-    if (rank(status) <= rank(current) && !(current == MessageStatus.failed && status != MessageStatus.sending)) return;
+    // #2811: unconfirmed is "terminal-until-acked" - the 5s timeout made it
+    // the HIGHEST rank, so a late relay_ack(delivered)/server_ack
+    // (acknowledged) was rank-<= and dropped forever, leaving the message
+    // stuck. A real ack arriving clears unconfirmed.
+    final lateAckClearsUnconfirmed = current == MessageStatus.unconfirmed &&
+        (status == MessageStatus.delivered ||
+            status == MessageStatus.acknowledged);
+    if (!lateAckClearsUnconfirmed &&
+        rank(status) <= rank(current) &&
+        !(current == MessageStatus.failed && status != MessageStatus.sending)) {
+      return;
+    }
     state = [
       for (int i = 0; i < state.length; i++)
         if (i == idx) state[i].copyWith(status: status) else state[i],
@@ -272,6 +306,21 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         id: messageId ?? 'remote-system-${_msgCounter++}',
         kind: kind,
         text: text,
+        time: DateTime.now(),
+      ),
+    ];
+  }
+
+  /// Mobile file transfer V1: surface a file card keyed by transfer id;
+  /// the bubble reads progress/state from FileTransferNotifier.
+  void addFileMessage(String fileId) {
+    finalizePendingReasoning(sourceId: null, collapse: true);
+    state = [
+      ...state,
+      ChatMessage(
+        id: 'file-$fileId',
+        text: '',
+        fileTransferId: fileId,
         time: DateTime.now(),
       ),
     ];
@@ -308,6 +357,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       return false;
     }
     final msg = state[idx];
+    // #2811: record the rename so late acks / timeout closures that still
+    // reference the client-sent user-X id can resolve to this message.
+    _ackIdAlias[msg.id] = remoteMessageId;
     state = [
       for (int i = 0; i < state.length; i++)
         if (i == idx) msg.copyWith(id: remoteMessageId) else state[i],
@@ -317,6 +369,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   void clearMessages() {
     state = [];
+    _ackIdAlias.clear();
   }
 
   void handleTextChunk(proto.TextData data) {
@@ -336,6 +389,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             state[i],
       ];
     } else {
+      // Session switch replays the recorded projection; some recorded text
+      // frames carry an EMPTY chunk (done-only / heartbeat frames). With no
+      // guard each one materialized a text:'' message - the stack of blank
+      // bubbles after switching sessions. handleReasoningChunk already
+      // guards the same way ("if (chunk.isEmpty) return;").
+      if (data.chunk.isEmpty) {
+        return;
+      }
       state = [
         ...state,
         ChatMessage(

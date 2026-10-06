@@ -167,7 +167,10 @@ func analyzeArgSize(toolName string, args []byte) string {
 }
 
 // analyzeMultiFileEditSize checks the files[].edits[] structure for oversized
-// old_text or new_text values.
+// old_text or new_text values, applying the same per-field thresholds as
+// edit_file (argSizeWarnField / argSizeSevereField). #2880: the initial
+// version only warned at the severe threshold, silently passing the
+// 4KB-16KB range that edit_file and multi_edit_file already flag.
 func analyzeMultiFileEditSize(argMap map[string]json.RawMessage) string {
 	filesRaw, ok := argMap["files"]
 	if !ok {
@@ -184,29 +187,23 @@ func analyzeMultiFileEditSize(argMap map[string]json.RawMessage) string {
 		return ""
 	}
 
-	var maxFieldLen int
-	var maxFieldName string
+	maxWarn := ""
+	var maxWarnLen int
 	for _, f := range files {
 		for _, e := range f.Edits {
-			if len(e.OldText) > maxFieldLen {
-				maxFieldLen = len(e.OldText)
-				maxFieldName = "old_text"
-			}
-			if len(e.NewText) > maxFieldLen {
-				maxFieldLen = len(e.NewText)
-				maxFieldName = "new_text"
+			for _, fld := range []struct {
+				name string
+				val  string
+			}{{"old_text", e.OldText}, {"new_text", e.NewText}} {
+				if len(fld.val) < argSizeWarnField || len(fld.val) <= maxWarnLen {
+					continue
+				}
+				maxWarnLen = len(fld.val)
+				maxWarn = strings.Join(argSizeEditFieldHint(fld.name, len(fld.val)), "")
 			}
 		}
 	}
-
-	if maxFieldLen < argSizeSevereField {
-		return ""
-	}
-
-	return fmt.Sprintf(
-		"%s in a file edit is %s — use concise line-number anchors from read_file instead of pasting large code blocks",
-		maxFieldName, formatArgBytes(maxFieldLen),
-	)
+	return maxWarn
 }
 
 // analyzeMultiEditFileSize checks the edits[] structure of multi_edit_file

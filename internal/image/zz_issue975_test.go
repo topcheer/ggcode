@@ -146,8 +146,17 @@ func TestGnomeScreenshotUnsupportedOpts(t *testing.T) {
 	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{}); err != nil {
 		t.Errorf("plain full-screen capture must be allowed, got %v", err)
 	}
-	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{Display: 1}); err != nil {
-		t.Errorf("Display=1 (primary) must be allowed, got %v", err)
+	// #3013: Display is 1-based (0=primary default); an EXPLICIT Display=1
+	// is a first-screen request gnome cannot honor - it must fail explicitly
+	// so the candidate loop falls back to region-capable tools instead of
+	// silently returning the all-outputs composite.
+	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{Display: 1}); err == nil {
+		t.Error("explicit Display=1 must fail explicitly (cannot select output by index)")
+	} else if !strings.Contains(err.Error(), "gnome-screenshot") {
+		t.Errorf("Display=1 error should name the tool, got: %v", err)
+	}
+	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{Display: 0}); err != nil {
+		t.Errorf("Display=0 (implicit primary default) must be allowed, got %v", err)
 	}
 	if err := gnomeScreenshotUnsupportedOpts(ScreenshotOptions{Display: 2}); err == nil {
 		t.Error("Display>1 must fail explicitly (cannot select output by index)")

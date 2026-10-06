@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -49,7 +50,7 @@ func TestFilesResolveCachesByID(t *testing.T) {
 	sum := sha256.Sum256(data)
 	key := hex.EncodeToString(sum[:])
 	u.mu.Lock()
-	u.cache[key] = "file_abc123"
+	u.cache[key] = filesCacheEntry{fileID: "file_abc123", uploadedAt: time.Now()}
 	u.mu.Unlock()
 
 	id, ok = u.resolve(context.Background(), "image/png", data)

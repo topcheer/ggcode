@@ -69,13 +69,15 @@ func (l *instanceLock) release() {
 }
 
 // readLockPID reads the PID from a lock file for informational purposes.
+// Understands both platform layouts: unix offset-0 first, then the
+// windows offset-32 layout for lock files written on the other side of a
+// shared tree (#3020).
 func readLockPID(f *os.File) int {
 	data, err := os.ReadFile(f.Name())
-	if err != nil || len(data) == 0 {
+	if err != nil {
 		return 0
 	}
-	pid, _ := strconv.Atoi(string(data[:min(len(data), 16)]))
-	return pid
+	return parseLockFileData(data)
 }
 
 // LockHeldBy returns the PID of the process holding the Knight lock for the
@@ -86,7 +88,7 @@ func LockHeldBy(projDir string) (int, error) {
 	if err != nil {
 		return 0, nil // no lock file
 	}
-	pid, _ := strconv.Atoi(string(data[:min(len(data), 16)]))
+	pid := parseLockFileData(data)
 	if pid <= 0 {
 		return 0, nil
 	}

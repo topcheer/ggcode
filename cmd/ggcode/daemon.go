@@ -139,12 +139,41 @@ func startBackgroundDaemon(cfg *config.Config, cfgFile string, bypass bool, resu
 	return nil
 }
 
+// unbindBelongsToWorkspace reports whether a persisted binding's workspace
+// is owned by the daemon running in daemonWorkspace for unbind purposes
+// (#2728). Exact match, or a legacy binding with an empty workspace
+// (pre-v1.3.84 entries predate workspace scoping and can only be managed by
+// whichever daemon encounters them).
+//
+// #2763: both sides are normalized (EvalSymlinks + Clean) before comparing.
+// Persisted bindings were normalized on save, but daemonWorkspace came raw
+// from os.Getwd(); under a symlinked PWD (or a non-Clean path) the raw ==
+// comparison never matched, so WebUI unbind always reported "no persisted
+// binding" while bind/list (which normalize internally) kept working.
+func unbindBelongsToWorkspace(bindingWorkspace, daemonWorkspace string) bool {
+	if bindingWorkspace == "" {
+		return true
+	}
+	return session.NormalizeWorkspacePath(bindingWorkspace) == session.NormalizeWorkspacePath(daemonWorkspace)
+}
+
 func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive bool, resumeID string, _ bool, noIM bool, startTunnel bool, newSession bool, fullLoad bool) error {
 	// --- Steps 1-8: same as run() in root.go ---
 
 	prov, resolved, err := ResolveProvider(cfg)
 	if err != nil {
 		return err
+	}
+	// #2868: `resolved` is reassigned by the provider-switch hook (IM
+	// goroutine) and read by the keyboard 't' tunnel path and the snapshot
+	// goroutine — guard the pointer with a mutex. ActivateCurrentSelection
+	// returns a FRESH pointer on every activation and never mutates an old
+	// one, so a lock-copied pointer is safe to read without holding the lock.
+	resolvedMu := &sync.Mutex{}
+	currentResolved := func() *config.ResolvedEndpoint {
+		resolvedMu.Lock()
+		defer resolvedMu.Unlock()
+		return resolved
 	}
 	_, knightProv, err := resolveKnightProvider(cfg, resolved, prov)
 	if err != nil {
@@ -192,7 +221,7 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		return a, nil
 	}
 
-	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil, nil)
+	skillTool := agentruntime.NewSkillTool(commandMgr, mcpMgr, prov, registry, skillAgentFactory, workingDir, nil, nil, nil)
 	if os.Getenv("GGCODE_TRIAL_FORK") != "" {
 		_ = registry.Register(&tool.TrialForkTool{
 			Provider:     prov,
@@ -329,9 +358,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	ag.SetProbeKey(provider.MakeProbeKey(resolved.VendorID, resolved.BaseURL, resolved.Model))
 	ag.SetPermissionPolicy(policy)
 	ag.SetHookConfig(cfg.Hooks)
+	ag.SetAuxModel(resolved, cfg.AuxModel)
 	ag.SetWorkingDir(workingDir)
 	ag.SetSupportsVision(resolved.SupportsVision)
-	ag.SetCheckpointManager(checkpoint.NewManager(50))
+	ag.SetCheckpointManager(checkpoint.NewPersistentManager(50, workingDir))
 	tool.SetPreWriteHook(tool.CheckpointSaver(ag.CheckpointManager()))
 
 	// Approval handler: always auto-approve in daemon mode.
@@ -608,6 +638,14 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	})
 	agentruntime.RegisterCronTools(registry, cronScheduler)
 
+	// Ambient file-watch triggers (r372) share the cron enqueue bridge.
+	fileWatch := agentruntime.NewFileWatchTrigger(cfg.Watch, workingDir, cronScheduler.Emit)
+	fileWatch.Start()
+	defer fileWatch.Stop()
+	// Sleep-time compute (r373): pre-compact during idle windows.
+	idleMaint := agentruntime.ApplyIdleMaintenance(ag, cfg.Idle)
+	defer idleMaint.Stop()
+
 	// Sub-agent manager
 	subMgr = subagent.NewManager(cfg.SubAgents)
 	defer subMgr.Shutdown()
@@ -640,23 +678,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	// Start mobile tunnel if requested
 	var tunnelSession *tunnel.Session
 	if startTunnel {
+		// #2868: read via currentResolved() so switches land here too.
+		rs := currentResolved()
 		sessionInfo := tunnel.SessionInfoData{
 			Workspace: workingDir,
-			Model:     resolved.Model,
-			Provider:  resolved.VendorName,
+			Model:     rs.Model,
+			Provider:  rs.VendorName,
 			Mode:      mode.String(),
 			Version:   version.Version,
 		}
 		var shareResult *agentruntime.ShareResult
 		result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
 			Workspace: workingDir,
-			Model:     resolved.Model,
-			Provider:  resolved.VendorName,
+			Model:     rs.Model,
+			Provider:  rs.VendorName,
 			Mode:      mode.String(),
 			Version:   version.Version,
 			ClientTag: "daemon",
 			SnapshotProvider: func() tunnel.BrokerSnapshot {
-				return daemonSnapshot(bridge, workingDir, resolved, mode.String())
+				return daemonSnapshot(bridge, workingDir, currentResolved(), mode.String())
 			},
 			OnCommand: func(cmd tunnel.GatewayMessage) {
 				var b *tunnel.Broker
@@ -867,6 +907,10 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	knightAgent = knight.New(cfg.Knight(), homeDir, workingDir, store)
 	knightAgent.SetFactory(knightFactory)
 	bridge.SetActivityHook(knightAgent.NotifyActivity)
+	// lanchatHub is assigned later (A2A-enabled branch, after NewHub);
+	// declared here so the provider-switch hook closure below can capture
+	// the variable and keep LAN presence in sync after a switch (#2876).
+	var lanchatHub *lanchat.Hub
 	bridge.SetRestartHook(func() {
 		daemonRestartRequested = true
 		select {
@@ -875,11 +919,25 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		}
 	})
 	bridge.SetProviderSwitchHook(func(vendor, endpoint, model string) (string, error) {
-		resolved, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
+		// #2868: do NOT shadow the outer `resolved` with `:=` here — the
+		// shadow left the outer pointer stuck at daemon-startup values, so
+		// every tunnel SessionInfo/BrokerSnapshot reported the stale model
+		// and vendor after any in-session switch. Capture fresh, then
+		// reassign the outer pointer under resolvedMu.
+		r, prov, err := agentruntime.ActivateCurrentSelection(cfg, vendor, endpoint, model)
 		if err != nil {
 			return "", err
 		}
-		agentruntime.ApplyProviderToAgent(ag, prov, resolved)
+		resolvedMu.Lock()
+		resolved = r
+		resolvedMu.Unlock()
+		agentruntime.ApplyProviderToAgent(ag, prov, r)
+		// #2876: keep LAN presence in sync after a switch - mirrors the TUI
+		// (model.go) and Desktop (chat.go) switch paths. SetModel also clears
+		// stale degraded status (new model = new quota pool / credential).
+		if lanchatHub != nil {
+			lanchatHub.SetModel(r.Model)
+		}
 		agentruntime.StartAsyncRelayModelLimitRefresh(cfg, resolved, ag, nil)
 		if ses != nil {
 			ses.Vendor = cfg.Vendor
@@ -987,7 +1045,6 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 	var a2aSrv *a2a.Server
 	// a2aReg already declared above for system prompt access
 	var a2aHandler *a2a.TaskHandler
-	var lanchatHub *lanchat.Hub
 	if !cfg.A2A.Disabled {
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
@@ -1233,12 +1290,35 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		case "enable":
 			return imMgr.EnableBinding(adapter)
 		case "unbind":
+			// #2728: delete only THIS daemon's bindings. Iterating all
+			// persisted bindings and deleting the first adapter-name match
+			// could remove a DIFFERENT workspace's binding (legacy
+			// multi-binding states are real - see desktop/wailskit/im.go
+			// #587 note), with map order deciding the victim. Match
+			// semantics align with the TUI: exact (adapter, workspace) hit;
+			// legacy entries with an empty workspace are treated as ours
+			// (pre-v1.3.84 bindings predate workspace scoping); multiple
+			// matches are all deleted deterministically.
+			deleted := false
 			for _, pb := range imMgr.AllPersistedBindings() {
-				if pb.Adapter == adapter {
-					return imMgr.DeleteBinding(adapter, pb.Workspace)
+				if pb.Adapter != adapter {
+					continue
 				}
+				if !unbindBelongsToWorkspace(pb.Workspace, workingDir) {
+					// Belongs to another workspace's daemon - leave it alone.
+					continue
+				}
+				if err := imMgr.DeleteBinding(adapter, pb.Workspace); err != nil {
+					return err
+				}
+				deleted = true
 			}
-			return fmt.Errorf("no persisted binding for adapter %q", adapter)
+			if !deleted {
+				// Report the normalized workspace so the error matches what
+				// is actually persisted (bindings are stored normalized).
+				return fmt.Errorf("no persisted binding for adapter %q in workspace %q", adapter, session.NormalizeWorkspacePath(workingDir))
+			}
+			return nil
 		default:
 			return fmt.Errorf("unknown action: %s", action)
 		}
@@ -1542,10 +1622,12 @@ loop:
 					fmt.Fprintf(os.Stderr, "%s\r\n", strings.ReplaceAll(info.QRCode, "\n", "\r\n"))
 				} else {
 					// Create share controller once (before StartShare so OnCommand can use it)
+					// #2868: read via currentResolved() so switches land here too.
+					rs := currentResolved()
 					sessionInfo := tunnel.SessionInfoData{
 						Workspace: workingDir,
-						Model:     resolved.Model,
-						Provider:  resolved.VendorName,
+						Model:     rs.Model,
+						Provider:  rs.VendorName,
 						Mode:      mode.String(),
 						Version:   version.Version,
 					}
@@ -1554,13 +1636,13 @@ loop:
 					// Start tunnel via unified StartShare
 					result, err := core.Tunnel.StartShare(agentruntime.ShareConfig{
 						Workspace: workingDir,
-						Model:     resolved.Model,
-						Provider:  resolved.VendorName,
+						Model:     rs.Model,
+						Provider:  rs.VendorName,
 						Mode:      mode.String(),
 						Version:   version.Version,
 						ClientTag: "daemon",
 						SnapshotProvider: func() tunnel.BrokerSnapshot {
-							return daemonSnapshot(bridge, workingDir, resolved, mode.String())
+							return daemonSnapshot(bridge, workingDir, currentResolved(), mode.String())
 						},
 						OnCommand: func(cmd tunnel.GatewayMessage) {
 							// Route inbound commands through a controller wired to the share broker
@@ -1638,10 +1720,21 @@ loop:
 		runfile.Remove(ses.ID)
 
 		var args []string
+		// #2739: exec-restart must carry the daemon identity marker, or
+		// daemonIdentityMatches (which keys on "--__daemonized" /
+		// "ggcode[") sees the restarted PID as an unrelated process that
+		// happens to reuse the PID, deletes the PID file, and admits a
+		// second daemon. ForkIntoBackground writes the same marker
+		// (internal/daemon/background.go:282). argv[0] display-name
+		// rewriting is deliberately NOT replicated: ExecSelf treats args
+		// as the flag list after argv[0], so an injected display name
+		// would become a stray positional argument and break cobra
+		// parsing. Contains-based identity matching needs the flag alone.
 		if cfgFile != "" {
 			args = append(args, "--config", cfgFile)
 		}
 		args = append(args, "daemon", "--follow")
+		args = append(args, "--__daemonized")
 		if ses.ID != "" {
 			args = append(args, "--resume", ses.ID)
 		}
@@ -1667,7 +1760,14 @@ loop:
 
 		debug.Log("daemon", "exec restart: %s %v", binary, args)
 		if err := restart.ExecRestart(binary, args, env); err != nil {
+			// #2817: resources (bridge/lanchatHub/sessionLock/runfile) are already
+			// irreversibly released above. Returning nil here exits with code 0,
+			// which supervisors (systemd Restart=on-failure, supervisord exitcodes)
+			// treat as a clean stop and never re-launch. Mirror the ResolveBinary
+			// failure branch above: surface the error so the process exits non-zero.
+			debug.Log("daemon", "exec restart failed: %v", err)
 			fmt.Fprintf(os.Stderr, "[ggcode restart] failed: %v\r\n", err)
+			return fmt.Errorf("restart: exec: %w", err)
 		}
 		return nil
 	}

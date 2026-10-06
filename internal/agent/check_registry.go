@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
 )
@@ -123,10 +125,21 @@ func init() {
 	registerAllChecks()
 }
 
+// checkTimeout bounds how long a single integrity check may run before the
+// registry gives up on it and moves on. Most checks finish in microseconds;
+// this budget only matters when a check hangs (pathological input, blocked
+// external command). Without it, one wedged check would stall wg.Wait()
+// forever and freeze the write tool. A timed-out check is logged and skipped —
+// its goroutine may linger, but the write pipeline always completes.
+const checkTimeout = 2 * time.Second
+
 // runChecksParallel executes all applicable checks concurrently with panic
 // recovery. Returns warnings sorted by registration order for deterministic
 // output.
 func runChecksParallel(ctx CheckContext) []string {
+	// Start each check run with a clean parse memo: entries must never
+	// outlive the write that produced them.
+	resetParseMemo()
 	applicable := make([]int, 0, len(allChecks))
 	for i, c := range allChecks {
 		if c.appliesTo(ctx.Lang) {
@@ -163,7 +176,33 @@ func runChecksParallel(ctx CheckContext) []string {
 				}
 			}()
 
-			warnings := allChecks[checkIdx].Run(ctx)
+			// Run the check under a timeout so a hung check cannot stall
+			// the whole registry: wait for its result or give up after
+			// checkTimeout and let the write proceed.
+			done := make(chan []string, 1)
+			go func() {
+				var warnings []string
+				defer func() {
+					if r := recover(); r != nil {
+						debug.Log("integrity", "check %q panicked: %v", allChecks[checkIdx].Name, r)
+						warnings = nil
+					}
+					// Always send (buffered) so a panic resolves the
+					// select immediately instead of waiting out the
+					// timeout.
+					done <- warnings
+				}()
+				warnings = allChecks[checkIdx].Run(ctx)
+			}()
+
+			var warnings []string
+			select {
+			case warnings = <-done:
+			case <-time.After(checkTimeout):
+				debug.Log("integrity", "check %q timed out after %v and was skipped", allChecks[checkIdx].Name, checkTimeout)
+				warnings = nil
+			}
+
 			if len(warnings) > 0 {
 				mu.Lock()
 				results = append(results, result{index: checkIdx, severity: allChecks[checkIdx].Severity, warnings: warnings})
@@ -207,7 +246,12 @@ func formatWarnings(warnings []string) string {
 	}
 
 	if len(warnings) > maxIntegrityWarnings {
+		suppressed := len(warnings) - maxIntegrityWarnings
 		warnings = warnings[:maxIntegrityWarnings]
+		// The cap intentionally keeps context small, but silently dropping
+		// findings hides signal: tell the model how many more exist so it
+		// can decide to inspect (all are in the debug log).
+		warnings = append(warnings, fmt.Sprintf("... and %d more integrity warning(s) suppressed (see debug log: integrity)", suppressed))
 	}
 
 	var b strings.Builder

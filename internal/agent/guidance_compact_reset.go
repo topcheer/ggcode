@@ -216,7 +216,7 @@ var guidanceCounterResets = []func(*Agent){
 	// tool_thermal (no mutex; agent-loop single-goroutine access)
 	func(a *Agent) {
 		if a.toolThermal != nil {
-			a.toolThermal.warned = false
+			a.toolThermal.reset()
 		}
 	},
 	// strategy_fixation (no mutex; agent-loop single-goroutine access)
@@ -513,13 +513,6 @@ var guidanceCounterResets = []func(*Agent){
 			// warnings only - categoriesEverRun is session-level (#1478-A)
 			// and stays.
 			a.phantomVerify.warnings = 0
-		}
-	},
-	func(a *Agent) {
-		if a.heterogeneousModel != nil {
-			a.heterogeneousModel.mu.Lock()
-			a.heterogeneousModel.warnsIssued = 0
-			a.heterogeneousModel.mu.Unlock()
 		}
 	},
 	func(a *Agent) {

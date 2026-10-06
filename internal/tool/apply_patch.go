@@ -221,14 +221,41 @@ func parseV4APatch(diff string) ([]v4aSection, error) {
 // selectV4ASection picks the section matching the apply_patch_call operation.
 // The Responses protocol sends one operation per call, but a model-generated
 // diff may bundle several file sections; only the addressed one applies.
+//
+// #3158: the section's kind must AGREE with the requested opType - a
+// self-contradictory call (type=delete_file but the path's section is an
+// "*** Update File:" body) used to silently execute the section's kind
+// (writing instead of deleting), violating the fail-closed contract.
 func selectV4ASection(sections []v4aSection, opType, opPath string) (v4aSection, error) {
+	var opKind string
+	switch opType {
+	case "create_file":
+		opKind = "add"
+	case "update_file":
+		opKind = "update"
+	case "delete_file":
+		opKind = "delete"
+	default:
+		return v4aSection{}, fmt.Errorf("unknown apply_patch operation %q", opType)
+	}
 	for _, s := range sections {
 		if s.path == opPath {
+			if s.kind != opKind {
+				return v4aSection{}, fmt.Errorf(
+					"op %q (section kind %q) contradicts patch section for %q (kind %q) - refusing to guess",
+					opType, opKind, opPath, s.kind)
+			}
 			return s, nil
 		}
 	}
 	if len(sections) == 1 && (opPath == "" || opPath == ".") {
-		return sections[0], nil
+		s := sections[0]
+		if s.kind != opKind {
+			return v4aSection{}, fmt.Errorf(
+				"op %q (section kind %q) contradicts the single patch section for %q (kind %q) - refusing to guess",
+				opType, opKind, s.path, s.kind)
+		}
+		return s, nil
 	}
 	return v4aSection{}, fmt.Errorf("patch has no section for %q (op %s)", opPath, opType)
 }
@@ -303,7 +330,12 @@ func applyV4ASection(root string, sec v4aSection) (string, error) {
 		}
 		if target != root {
 			if err := os.Remove(root); err != nil {
-				return "", fmt.Errorf("move: removing old %s: %v", sec.path, err)
+				// #3110: the new content IS on disk at target - only the old-file
+				// removal failed (Windows lock/AV/EPERM). A bare "removing old
+				// failed" hides the half-migrated state and misleads the model into
+				// treating it as a conflict (delete+add hits the existing target)
+				// and retrying into the same error. State the actual disk state.
+				return "", fmt.Errorf("move: removing old %s: %v (partial migration: new content already written to %s; resolve the file lock or remove %s manually, then treat the update as applied)", sec.path, err, target, root)
 			}
 			return fmt.Sprintf("Moved %s -> %s (%d hunks applied)", sec.path, sec.moveTo, len(hunks)), nil
 		}

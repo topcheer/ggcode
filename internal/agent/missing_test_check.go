@@ -69,8 +69,7 @@ func checkMissingTestCompanion(filePath, oldContent, newContent string) string {
 	}
 
 	// Parse the new content's AST to find exported functions.
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, _, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return "" // Unparseable; let syntax check handle it.
 	}
@@ -172,8 +171,7 @@ func diffExportedFuncs(newFuncs, oldFuncs []string) []string {
 
 // countSubstantiveGoLines counts non-blank, non-comment lines in Go source.
 func countSubstantiveGoLines(src string) int {
-	fset := token.NewFileSet()
-	astFile, err := parser.ParseFile(fset, "", src, parser.ParseComments)
+	astFile, fset, err := parseGoSource("", src, parser.ParseComments)
 	if err != nil {
 		// Fallback: count non-blank lines.
 		count := 0

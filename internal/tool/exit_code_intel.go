@@ -31,6 +31,7 @@ package tool
 //   - Includes actionable hints for the most impactful codes
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -93,8 +94,11 @@ var exitCodeIntelMap = map[int]exitCodeInfo{
 // Signaled() is always false and the original -1 flows through -- consistent
 // with the #1683 Windows 128+N shielding in interpretExitCode.
 func exitCodeFromErr(err error) int {
-	ee, ok := err.(*exec.ExitError)
-	if !ok {
+	// #3135 V2 (rider): errors.As instead of a bare type assertion - the
+	// current caller passes an unwrapped error, but any future wrap would
+	// silently degrade #2588's OOM/signal diagnosis (128+N) to -1.
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
 		return -1
 	}
 	if code := ee.ExitCode(); code >= 0 {

@@ -114,6 +114,16 @@ The agent can remove outdated or incorrect memories via the `delete_memory` tool
 delete_memory(key="old-build-process", scope="project")
 ```
 
+### Recalling Past Experience
+
+Completed runs are distilled into an experience store automatically (task / approach / outcome / files). The store surfaces on its own at run start and on the first matching failure; the read-only `recall_experience` tool lets the agent consult it at ANY decision moment — approach selection, mid-run debugging, unfamiliar errors:
+
+```
+recall_experience(query="flaky login test wall time", max=3)
+```
+
+Returns the most relevant past cases (empty result = no relevant experience, not an error). Read-only; cases are recorded at run completion, never by this tool.
+
 This gives the agent full lifecycle control: save, read, and delete. Only
 auto-saved memory entries can be deleted - project bootstrap files (GGCODE.md,
 AGENTS.md, etc.) are not affected.
@@ -159,6 +169,16 @@ If a persistent entry exceeds the per-entry limit, it falls back to the
 title-only index. This keeps the system prompt small while ensuring the most
 valuable knowledge is always in context.
 
+## Skill Suggestions (Recurring-Workflow Detection)
+
+When the same task shape succeeds a second time (the experience store's
+reconsolidation signal) with a clean, multi-tool run, the reflection pass
+records one line into the `skill-suggestions` memory key — recurring
+workflows surface as invocable-skill candidates (`create_skill`) instead of
+being redone by hand every session. Conservative by design: nothing is
+auto-written to the skill library; the suggestion only rides the existing
+memory injection channel.
+
 ## Experience Case Bank (Case-Based Memory)
 
 Beyond the rolling run-insights blob, ggcode keeps a **case-based experience
@@ -180,6 +200,14 @@ Treat these as hints about what worked before — verify against current code, n
 ```
 
 Key properties:
+
+- **Decision-time recall**: besides the run-start block, the case bank is
+  queried once more *at the moment a failing-strategy pattern is confirmed
+  mid-run* (error strategy loop detector). Up-to-2 cases matching task +
+  error excerpt are injected as `## Past Experience for This Failure`, so
+  the agent sees "how this was solved last time" exactly when a strategy
+  change is needed — run-start recall cannot see the error yet. One shot
+  per run; silent on cold or non-matching stores.
 
 - **Reconsolidation**: re-running the same logical task (normalized text
   match) updates the existing case instead of duplicating it — fresh outcome

@@ -393,3 +393,48 @@ func TestCheckLockWithoutUnlock_ClosureBodies(t *testing.T) {
 		})
 	}
 }
+
+// #2717: walkStmts never traversed CaseClause/CommClause bodies, making
+// switch/select case interiors invisible to the simulator. Two defect
+// faces: a Lock leaked inside a case went unreported (blind spot), and
+// per-case Unlock fan-out (select) was misreported as held at function
+// end. Clauses now run on independent branch copies, matching select's
+// exactly-one-case-runs semantics.
+func TestCheckLockWithoutUnlock_SwitchSelectCaseBodies(t *testing.T) {
+	body := func(fn string) string {
+		return "package main\n\nimport \"sync\"\n\nvar mu sync.Mutex\n\n" + fn + "\n"
+	}
+	cases := []struct {
+		name string
+		fn   string
+		want int
+	}{
+		// Blind-spot face: Lock inside a case body with no Unlock.
+		{"switch case body lock leak", `func w(v int) { switch v { case 1: mu.Lock(); process() } }`, 1},
+		{"switch default body lock leak", `func w(v int) { switch v { default: mu.Lock() } }`, 1},
+		{"type switch case body lock leak", `func w(v any) { switch v.(type) { case int: mu.Lock() } }`, 1},
+		{"select case body lock leak", `func w(a, b chan int) { select { case <-a: mu.Lock(); process() } }`, 1},
+		// Per-case release face: every path that takes the lock returns it -
+		// must stay warning-free (exactly-one-case semantics, no double count).
+		{"select per-case unlock all covered", `func w(a, b chan int) { mu.Lock(); select { case <-a: mu.Unlock(); case <-b: mu.Unlock() } }`, 0},
+		{"switch per-case unlock all covered", `func w(v int) { mu.Lock(); switch v { case 1: mu.Unlock(); default: mu.Unlock() } }`, 0},
+		{"case body unlock only on taken path", `func w(v int) { mu.Lock(); switch { case v > 0: mu.Unlock() } }`, 1},
+		{"select one case leaks", `func w(a, b chan int) { mu.Lock(); select { case <-a: mu.Unlock(); case <-b: process() } }`, 1},
+		// Lock + Unlock wholly inside one case body: balanced on its own path.
+		{"case body balanced lock pair", `func w(v int) { switch v { case 1: mu.Lock(); process(); mu.Unlock() } }`, 0},
+		// NOTE: switch mu.TryLock() { case true: ... } tag acquires are NOT
+		// covered here - TryLock is modeled as an unconditional acquire, so
+		// the failure branch reads as held (same pre-existing approximation
+		// as TryLock in an if condition; outside #2717 scope).
+		// Comm-statement calls run on the taken path.
+		{"comm clause assignment body", `func w(ch chan int) { select { case v := <-ch: mu.Lock(); use(v); mu.Unlock() } }`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			warnings := checkLockWithoutUnlock("test.go", "", body(tc.fn))
+			if got := len(warnings); got != tc.want {
+				t.Errorf("%s: warnings=%d want %d (got %v)", tc.name, got, tc.want, warnings)
+			}
+		})
+	}
+}

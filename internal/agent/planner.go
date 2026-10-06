@@ -326,97 +326,114 @@ func (a *Agent) resetPlanner() {
 
 // --- Complexity detection helpers ---
 
+// fileRefExtensions lists file extensions treated as file-like references.
+var fileRefExtensions = []string{
+	".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".java",
+	".rb", ".c", ".cpp", ".h", ".hpp", ".yaml", ".yml", ".json",
+	".toml", ".xml", ".md", ".txt", ".sql", ".sh", ".bash",
+	".vue", ".svelte", ".kt", ".swift", ".dart", ".scala",
+	".proto", ".graphql", ".tf", ".dockerfile",
+}
+
+func isAlphaByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
 // countFileReferences counts distinct file-like references in the text.
 // Detects: .go, .py, .js, .ts, .rs, .java, .rb, .c, .cpp, .h, .yaml, .json,
 // .toml, .md, .sql, .sh, paths with slashes, backtick-quoted identifiers.
 func countFileReferences(lower string) int {
-	extensions := []string{
-		".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".java",
-		".rb", ".c", ".cpp", ".h", ".hpp", ".yaml", ".yml", ".json",
-		".toml", ".xml", ".md", ".txt", ".sql", ".sh", ".bash",
-		".vue", ".svelte", ".kt", ".swift", ".dart", ".scala",
-		".proto", ".graphql", ".tf", ".dockerfile",
-	}
 	seen := make(map[string]bool)
-	isAlpha := func(b byte) bool {
-		return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+	for _, ext := range fileRefExtensions {
+		collectExtensionRefs(lower, ext, seen)
 	}
-	for _, ext := range extensions {
-		idx := 0
-		for {
-			pos := strings.Index(lower[idx:], ext)
-			if pos < 0 {
-				break
-			}
-			absPos := idx + pos
-			// Validate: the char before the extension must be a letter (part
-			// of a filename, not a domain like "example.com" matching ".c").
-			// The char after must be a non-alphanumeric separator (space,
-			// quote, comma, end-of-string) so ".c" in "check" doesn't match.
-			if absPos > 0 && !isAlpha(lower[absPos-1]) {
-				idx = absPos + len(ext)
-				continue
-			}
-			end := absPos + len(ext)
-			if end < len(lower) {
-				next := lower[end]
-				// Allow trailing 'x' for .tsx/.jsx, and '/' for directory refs.
-				if next != 'x' && next != '/' && isAlpha(next) {
-					idx = absPos + len(ext)
-					continue
-				}
-			}
-			// Extract the filename around this extension.
-			start := absPos
-			for start > 0 && (lower[start-1] == '/' || lower[start-1] == '_' ||
-				lower[start-1] == '-' || lower[start-1] == '.' ||
-				(lower[start-1] >= 'a' && lower[start-1] <= 'z') ||
-				(lower[start-1] >= '0' && lower[start-1] <= '9')) {
-				start--
-			}
-			for end < len(lower) && lower[end] == 'x' { // .tsx etc
-				end++
-			}
-			filename := lower[start:end]
-			if filename != "" && len(filename) > len(ext) {
-				seen[filename] = true
-			}
-			idx = absPos + len(ext)
-		}
-	}
-
-	// Count slash-separated paths (e.g., "internal/agent/", "src/main.go")
-	// Look for patterns like word/word indicating directory paths.
-	pathPattern := false
-	if strings.Contains(lower, "/") {
-		// Strip URLs before checking for path separators.
-		stripped := lower
-		for _, prefix := range []string{"http://", "https://", "ftp://", "ssh://"} {
-			for {
-				idx := strings.Index(stripped, prefix)
-				if idx < 0 {
-					break
-				}
-				// Find end of URL (whitespace or end of string).
-				end := idx + len(prefix)
-				for end < len(stripped) && stripped[end] != ' ' && stripped[end] != '\n' && stripped[end] != '\t' {
-					end++
-				}
-				stripped = stripped[:idx] + stripped[end:]
-			}
-		}
-		// Simple heuristic: if there are 2+ path separators, likely multi-file
-		slashCount := strings.Count(stripped, "/")
-		if slashCount >= 2 {
-			pathPattern = true
-		}
-	}
-
 	refCount := len(seen)
-	if pathPattern {
-		refCount += 1
+	if hasMultiSegmentPath(lower) {
+		refCount++
 	}
 	return refCount
+}
+
+// isFilenameStart reports whether the byte before an extension match is a
+// valid filename character, i.e. the extension belongs to a filename rather
+// than a domain like "example.com" matching ".c".
+func validFilenameCharBefore(lower string, absPos int) bool {
+	return absPos > 0 && isAlphaByte(lower[absPos-1])
+}
+
+// collectExtensionRefs records distinct filenames ending with ext into seen.
+// The char after the match must be a separator (or trailing 'x' / '/') so
+// ".c" inside "check" doesn't match.
+func collectExtensionRefs(lower, ext string, seen map[string]bool) {
+	idx := 0
+	for {
+		pos := strings.Index(lower[idx:], ext)
+		if pos < 0 {
+			return
+		}
+		absPos := idx + pos
+		end := absPos + len(ext)
+		idx = end
+		if !validFilenameCharBefore(lower, absPos) {
+			continue
+		}
+		if end < len(lower) {
+			if next := lower[end]; next != 'x' && next != '/' && isAlphaByte(next) {
+				continue
+			}
+		}
+		// Extract the filename around this extension.
+		start := absPos
+		for start > 0 && isFilenameByte(lower[start-1]) {
+			start--
+		}
+		for end < len(lower) && lower[end] == 'x' { // .tsx/.jsx etc
+			end++
+		}
+		if filename := lower[start:end]; len(filename) > len(ext) {
+			seen[filename] = true
+		}
+	}
+}
+
+// isFilenameByte reports whether b may appear inside a filename token.
+func isFilenameByte(b byte) bool {
+	switch {
+	case b == '/' || b == '_' || b == '-' || b == '.':
+		return true
+	case b >= 'a' && b <= 'z', b >= '0' && b <= '9':
+		return true
+	}
+	return false
+}
+
+// stripURLs removes http/https/ftp/ssh URLs from the text so that URL
+// separators don't count as path separators.
+func stripURLs(s string) string {
+	for _, prefix := range []string{"http://", "https://", "ftp://", "ssh://"} {
+		for {
+			idx := strings.Index(s, prefix)
+			if idx < 0 {
+				break
+			}
+			end := idx + len(prefix)
+			for end < len(s) && s[end] != ' ' && s[end] != '\n' && s[end] != '\t' {
+				end++
+			}
+			s = s[:idx] + s[end:]
+		}
+	}
+	return s
+}
+
+// hasMultiSegmentPath reports whether the text contains a slash-separated
+// path pattern (e.g., "internal/agent/", "src/main.go") after URLs are
+// stripped: 2+ separators likely indicate a multi-file directory reference.
+func hasMultiSegmentPath(lower string) bool {
+	if !strings.Contains(lower, "/") {
+		return false
+	}
+	return strings.Count(stripURLs(lower), "/") >= 2
 }
 
 // countKeywordMatches counts how many distinct keywords from the list

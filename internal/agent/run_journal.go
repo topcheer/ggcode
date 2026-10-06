@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -31,6 +32,20 @@ import (
 
 const (
 	journalFileName = "run_journal.json"
+
+	// crashLivePIDTrustWindow (#3222): a live-PID "concurrent access" verdict
+	// is only trusted for journals younger than this. Beyond it, PID reuse
+	// (crash + reboot reallocates low PIDs to unrelated long-lived processes)
+	// is far more likely than a same-PID run alive for hours with zero
+	// journal updates, so the entry is reported as a crash suspect.
+	crashLivePIDTrustWindow = 4 * time.Hour
+
+	// runningJournalHardDelete (#3222): running/corrupt journals are exempt
+	// from the normal CleanupOldJournals maxAge so CheckCrashedRun can still
+	// report them on /resume; past this much longer window a report is no
+	// longer actionable and the files are removed to prevent unbounded
+	// accumulation.
+	runningJournalHardDelete = 7 * 24 * time.Hour
 )
 
 // journalDirFunc is the directory resolver. Overridable for testing.
@@ -61,6 +76,24 @@ type RunJournalEntry struct {
 	Iterations  int       `json:"iterations,omitempty"`
 	FilesEdited int       `json:"files_edited,omitempty"`
 	Success     bool      `json:"success,omitempty"`
+	// Interrupted holds the r445 continuation snapshot when the run was
+	// user-interrupted (Ctrl+C) rather than crashed. Nil on clean runs.
+	// Consumed (cleared) by CheckContinuation on the next resume.
+	Interrupted *InterruptSnapshot `json:"interrupted,omitempty"`
+}
+
+// InterruptSnapshot is the structured continuation point captured when a
+// run is interrupted mid-flight (r445). Unlike the crash path (#1123),
+// which only fires on dead-PID journals, this covers same-session
+// Ctrl+C: the run defer marks the journal completed and stamps the
+// snapshot, so the next resume can tell the model WHERE it was - not
+// just that "operation cancelled" placeholders exist.
+type InterruptSnapshot struct {
+	Timestamp    time.Time `json:"timestamp"`
+	LastTool     string    `json:"last_tool,omitempty"`
+	Iterations   int       `json:"iterations,omitempty"`
+	FilesTouched int       `json:"files_touched,omitempty"`
+	UserPrompt   string    `json:"user_prompt,omitempty"`
 }
 
 func journalPath(sessionID string) string {
@@ -95,6 +128,10 @@ func MarkRunning(sessionID, userPrompt string, pid int) {
 	}
 
 	path := journalPath(sessionID)
+	// A fresh run invalidates any crash-window sidecar from an older run
+	// (tool_dedup_crash.go): the crash window opens only when the PREVIOUS
+	// run crashed, and MarkRunning starts a new run.
+	_ = os.Remove(crashSidecarPath(sessionID))
 	if err := atomicWriteJournal(path, data); err != nil {
 		debug.Log("run_journal", "MarkRunning: write failed: %v", err)
 	}
@@ -120,6 +157,10 @@ func MarkCompleted(sessionID string, success bool, iterations, filesEdited int) 
 	if sessionID == "" {
 		return
 	}
+	// Clean run: the crash sidecar is no longer needed - MarkCompleted is
+	// reached only when the run unwound normally (not via SIGKILL). Runs even
+	// when the journal is missing (no run / already consumed).
+	_ = os.Remove(crashSidecarPath(sessionID))
 	path := journalPath(sessionID)
 
 	data, err := os.ReadFile(path)
@@ -201,10 +242,21 @@ func CheckCrashedRun(sessionID string) *CrashRecoveryInfo {
 		return nil
 	}
 
-	// State is "running": check if the PID is still alive
-	if entry.PID > 0 && isProcessAlive(entry.PID) {
+	// State is "running": check if the PID is still alive.
+	// #3222: a live PID alone must not be trusted on old journals - after a
+	// crash + reboot, PIDs are reallocated from the low range and an
+	// unrelated long-lived process can hold the old PID forever, silently
+	// turning every real crash into "concurrent access". For journals older
+	// than crashLivePIDTrustWindow, PID reuse is far more likely than a
+	// same-PID run being alive for hours with zero journal updates, so the
+	// entry is reported as a crash suspect regardless of isProcessAlive.
+	journalAge := time.Since(entry.StartTime)
+	if entry.PID > 0 && isProcessAlive(entry.PID) && journalAge < crashLivePIDTrustWindow {
 		// The process is still running: not a crash, just concurrent access
 		return nil
+	}
+	if entry.PID > 0 && isProcessAlive(entry.PID) {
+		debug.Log("run_journal", "CheckCrashedRun: running journal age=%.1fh exceeds trust window despite live PID %d - treating as PID-reuse crash suspect", journalAge.Hours(), entry.PID)
 	}
 
 	// Stale "running" entry with dead PID: this is a crash
@@ -247,8 +299,120 @@ func FormatCrashRecoveryMessage(info *CrashRecoveryInfo) string {
 		ageStr, info.UserPrompt)
 }
 
+// MarkInterrupted stamps a continuation snapshot onto the session journal
+// (r445). Called from the run's cancellation path: MarkCompleted has
+// already flipped State to "completed" (or will - read-modify-write here
+// preserves either), and this adds the WHERE-was-I payload. No-op if the
+// journal does not exist (run never got far enough to MarkRunning).
+func MarkInterrupted(sessionID string, snap InterruptSnapshot) {
+	if sessionID == "" {
+		return
+	}
+	path := journalPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var entry RunJournalEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		// Same #1666 discipline as MarkCompleted: corrupt journal is
+		// evidence, never overwrite it.
+		return
+	}
+	if snap.Timestamp.IsZero() {
+		snap.Timestamp = time.Now()
+	}
+	entry.Interrupted = &snap
+	updated, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	if err := atomicWriteJournal(path, updated); err != nil {
+		debug.Log("run_journal", "MarkInterrupted: write failed: %v", err)
+	}
+}
+
+// continuationFreshWindow: how long an interrupt snapshot stays meaningful.
+// A Ctrl+C from yesterday is stale context, not a continuation point.
+const continuationFreshWindow = 2 * time.Hour
+
+// CheckContinuation returns a model-facing continuation message if the
+// session's last run was user-interrupted within the fresh window. The
+// snapshot is consumed on read (one-shot, mirroring CheckCrashedRun) so
+// it never replays twice. Returns "" when there is nothing to resume.
+func CheckContinuation(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	path := journalPath(sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var entry RunJournalEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return ""
+	}
+	snap := entry.Interrupted
+	if snap == nil {
+		return ""
+	}
+	// Consume the snapshot regardless of freshness (stale = discard, not
+	// re-offer), then decide whether it merits a message.
+	entry.Interrupted = nil
+	if updated, merr := json.Marshal(entry); merr == nil {
+		if werr := atomicWriteJournal(path, updated); werr != nil {
+			debug.Log("run_journal", "CheckContinuation: consume write failed: %v", werr)
+		}
+	}
+	// #3220: Success=true means the run COMPLETED - an Interrupted snapshot
+	// riding on it is the cancel-during-finalize race (err==nil but the ctx
+	// was already cancelled when isCancelled was evaluated), not a real
+	// mid-flight interruption. There is nothing to resume; offering
+	// "continue where it left off" would mislead the model into redoing
+	// finished work. The consume above already cleared the contradictory
+	// snapshot so it cannot replay later.
+	if entry.Success {
+		return ""
+	}
+	if time.Since(snap.Timestamp) > continuationFreshWindow {
+		return ""
+	}
+	return formatContinuationMessage(&entry, snap)
+}
+
+// formatContinuationMessage renders the continuation point for both the
+// model (via AddMessage on resume) and the user (chat system item).
+// Wording deliberately says "interrupted" - never "crashed" (#1123: do
+// not assert a cause the evidence does not support).
+func formatContinuationMessage(entry *RunJournalEntry, snap *InterruptSnapshot) string {
+	var b strings.Builder
+	b.WriteString("Continuation point: the previous run in this session was interrupted mid-flight")
+	if snap.Iterations > 0 {
+		fmt.Fprintf(&b, " after %d iteration(s)", snap.Iterations)
+	}
+	if snap.LastTool != "" {
+		fmt.Fprintf(&b, "; last tool in flight: %s", snap.LastTool)
+	}
+	if snap.FilesTouched > 0 {
+		fmt.Fprintf(&b, "; %d file(s) already touched", snap.FilesTouched)
+	}
+	b.WriteString(". Tool results for cancelled calls show as placeholders - re-check the touched files' current state before continuing, then resume the task where it left off rather than restarting from scratch.")
+	if entry.UserPrompt != "" {
+		fmt.Fprintf(&b, "\nOriginal task: %s", entry.UserPrompt)
+	}
+	return b.String()
+}
+
 // CleanupOldJournals removes journal files older than maxAge. Called at
 // startup to prevent unbounded journal accumulation.
+//
+// #3222: "running"-state journals are NOT removed at maxAge - deleting
+// them silently would destroy crash evidence before CheckCrashedRun ever
+// gets to report it (the only report path is /resume). They are kept until
+// runningJournalHardDelete, a much longer window past which a report is no
+// longer actionable. Corrupt journals (#1666 evidence) get the same grace:
+// unparseable state is treated as running for retention purposes.
 func CleanupOldJournals(maxAge time.Duration) {
 	dir := journalDir()
 	matches, err := filepath.Glob(filepath.Join(dir, "*_"+journalFileName))
@@ -256,21 +420,44 @@ func CleanupOldJournals(maxAge time.Duration) {
 		return
 	}
 
-	cutoff := time.Now().Add(-maxAge)
+	now := time.Now()
+	cutoff := now.Add(-maxAge)
+	hardCutoff := now.Add(-runningJournalHardDelete)
 	removed := 0
 	for _, path := range matches {
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
-		if info.ModTime().Before(cutoff) {
-			os.Remove(path)
-			removed++
+		if info.ModTime().After(cutoff) {
+			continue // young enough: keep regardless of state
 		}
+		if info.ModTime().After(hardCutoff) && journalStateUncertain(path) {
+			// running/corrupt: retain for CheckCrashedRun crash reporting
+			// until the hard-delete window expires
+			continue
+		}
+		os.Remove(path)
+		removed++
 	}
 	if removed > 0 {
 		debug.Log("run_journal", "CleanupOldJournals: removed %d stale journals", removed)
 	}
+}
+
+// journalStateUncertain reports whether the journal at path is in a state
+// whose deletion would destroy unreported crash evidence: "running" or
+// unparseable (#1666 torn writes are themselves crash-suspect evidence).
+func journalStateUncertain(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false // unreadable: fall back to age-based removal
+	}
+	var entry RunJournalEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return true // corrupt = evidence, retain
+	}
+	return entry.State == "running"
 }
 
 // isProcessAlive checks if a process with the given PID is running.

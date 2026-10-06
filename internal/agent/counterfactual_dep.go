@@ -61,12 +61,6 @@ type depPair struct {
 	argMatch func(producerArgs, consumerArgs map[string]interface{}) bool
 }
 
-// canonicalArgs extracts path-like and command-like arguments for matching.
-type argInfo struct {
-	path    string
-	command string
-}
-
 // depPairs is the set of known producer-consumer dependency patterns.
 var depPairs = []depPair{
 	// write_file → run_command(build/compile/test): build needs the file

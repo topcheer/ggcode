@@ -18,18 +18,31 @@ type loadTarget struct {
 }
 
 type frontmatter struct {
-	Name                   string   `yaml:"name"`
-	Description            string   `yaml:"description"`
-	AllowedTools           []string `yaml:"allowed-tools"`
-	ArgumentHint           string   `yaml:"argument-hint"`
-	Arguments              []string `yaml:"arguments"`
-	WhenToUse              string   `yaml:"when_to_use"`
-	RequiresTools          []string `yaml:"requires-tools"`
-	Dependencies           []string `yaml:"dependencies"`
-	Version                string   `yaml:"version"`
-	UserInvocable          *bool    `yaml:"user-invocable"`
-	DisableModelInvocation bool     `yaml:"disable-model-invocation"`
-	Context                string   `yaml:"context"`
+	Name                   string             `yaml:"name"`
+	Description            string             `yaml:"description"`
+	AllowedTools           []string           `yaml:"allowed-tools,omitempty"`
+	ArgumentHint           string             `yaml:"argument-hint,omitempty"`
+	Arguments              []string           `yaml:"arguments,omitempty"`
+	WhenToUse              string             `yaml:"when_to_use,omitempty"`
+	RequiresTools          []string           `yaml:"requires-tools,omitempty"`
+	Dependencies           []string           `yaml:"dependencies,omitempty"`
+	Version                string             `yaml:"version,omitempty"`
+	UserInvocable          *bool              `yaml:"user-invocable,omitempty"`
+	DisableModelInvocation bool               `yaml:"disable-model-invocation,omitempty"`
+	Context                string             `yaml:"context,omitempty"`
+	Precondition           string             `yaml:"precondition,omitempty"`
+	Postcondition          string             `yaml:"postcondition,omitempty"`
+	StateContract          string             `yaml:"state-contract,omitempty"`
+	FailureModes           []SkillFailureMode `yaml:"failure-modes,omitempty"`
+}
+
+// SkillFailureMode is one entry in a skill's declared failure taxonomy
+// (NLAH-style harness externalization, r466): a named failure mode, how to
+// detect it, and the author's intended recovery path.
+type SkillFailureMode struct {
+	Name    string `yaml:"name"`
+	Detect  string `yaml:"detect"`
+	Recover string `yaml:"recover"`
 }
 
 // Loader finds and loads reusable skills and legacy custom slash commands.
@@ -174,6 +187,10 @@ func loadCommandFile(path, name string, target loadTarget) (*Command, bool) {
 		Version:                strings.TrimSpace(meta.Version),
 		DisableModelInvocation: meta.DisableModelInvocation,
 		Context:                strings.TrimSpace(meta.Context),
+		Precondition:           strings.TrimSpace(meta.Precondition),
+		Postcondition:          strings.TrimSpace(meta.Postcondition),
+		StateContract:          strings.TrimSpace(meta.StateContract),
+		FailureModes:           append([]SkillFailureMode(nil), meta.FailureModes...),
 		UserInvocable:          true,
 		Enabled:                true,
 	}

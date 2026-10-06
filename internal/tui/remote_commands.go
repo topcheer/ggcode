@@ -259,6 +259,26 @@ func (m *Model) executeRemoteConfig() string {
 // and current-turn fresh), falling back to the shared disk renderers.
 type tuiSlashDeps struct{ m *Model }
 
+// SetLanIdentity implements the optional capability consumed by the IM
+// slash registry's /nick entry: empty args show the current identity,
+// otherwise set nick/role/team on the LAN hub. Mirrors the TUI-local
+// handleNickCommand (lanchat_panel.go) so IM-bound users get the same
+// behavior remote as at the terminal.
+func (d tuiSlashDeps) SetLanIdentity(nick, role, team string) (string, error) {
+	if d.m.lanChatHub == nil {
+		return "", fmt.Errorf("LAN chat is not available (A2A not enabled)")
+	}
+	if nick == "" {
+		return fmt.Sprintf("Current: %s (role: %s, team: %s, agent: %s)",
+			d.m.lanChatHub.HumanNick(), d.m.lanChatHub.Role(), d.m.lanChatHub.Team(), d.m.lanChatHub.AgentNick()), nil
+	}
+	if err := d.m.lanChatHub.SetNickRoleTeam(nick, role, team); err != nil {
+		return "", fmt.Errorf("failed to set nickname: %w", err)
+	}
+	return fmt.Sprintf("Set: %s (role: %s, team: %s, agent: %s)",
+		d.m.lanChatHub.HumanNick(), role, team, d.m.lanChatHub.AgentNick()), nil
+}
+
 func (d tuiSlashDeps) SessionCostSummary() (string, error) {
 	if d.m.session != nil {
 		// #2319: the local /cost twin takes sessionMutex for this exact

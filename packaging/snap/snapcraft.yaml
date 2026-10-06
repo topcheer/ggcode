@@ -1,0 +1,44 @@
+name: ggcode
+base: core24
+version: "1.3.247"
+summary: AI coding agent for the terminal
+
+description: |
+  AI coding agent for the terminal with a polished TUI, resumable
+  sessions, MCP integrations, built-in tools, and self-update support.
+
+grade: stable
+confinement: classic
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  ggcode:
+    command: bin/ggcode
+
+parts:
+  ggcode:
+    plugin: nil
+    # Reuse the release binary instead of rebuilding Go in the snap
+    # sandbox (classic + prebuilt keeps the build fast and identical to
+    # the official tarball).
+    source: https://github.com/topcheer/ggcode/releases/download/v$SNAPCRAFT_PROJECT_VERSION/ggcode_linux_x86_64.tar.gz
+    source-type: tar
+    override-prime: |
+      set -eu
+      ARCH="$(uname -m)"
+      case "${ARCH}" in
+        x86_64)  TARBALL="ggcode_linux_x86_64.tar.gz" ;;
+        aarch64) TARBALL="ggcode_linux_arm64.tar.gz" ;;
+        *) echo "unsupported arch ${ARCH}" >&2; exit 1 ;;
+      esac
+      curl -fL -o "${SNAPCRAFT_PRIME}/tmp.tgz" \
+        "https://github.com/topcheer/ggcode/releases/download/v${SNAPCRAFT_PROJECT_VERSION}/${TARBALL}"
+      mkdir -p "${SNAPCRAFT_PRIME}/bin"
+      tar -xzf "${SNAPCRAFT_PRIME}/tmp.tgz" -C "${SNAPCRAFT_PRIME}/bin" ggcode
+      rm -f "${SNAPCRAFT_PRIME}/tmp.tgz"
+      chmod 755 "${SNAPCRAFT_PRIME}/bin/ggcode"
+    build-packages:
+      - curl

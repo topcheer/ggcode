@@ -46,6 +46,10 @@ type tunnelStartMsg struct {
 	session    *tunnel.Session
 	broker     *tunnel.Broker
 	err        error
+
+	// reply, when non-nil, carries the outcome back to the agent-initiated
+	// start_share tool call (synchronous bridge from the tool goroutine).
+	reply chan<- agentShareReply
 }
 
 type tunnelRefreshMsg struct {
@@ -190,6 +194,7 @@ func (m *Model) detachTunnelLifecycle() (*tunnel.Session, *tunnel.Broker) {
 	m.closeQROverlay()
 	m.tunnelSession = nil
 	m.tunnelBroker = nil
+	m.clearMobileFileSender()
 
 	// Detach online broker from unified TunnelHost
 	if m.tunnelHost != nil {
@@ -250,12 +255,76 @@ func (m *Model) closeTunnelGracefullyAsync(timeout time.Duration) {
 	})
 }
 
+// ─── Agent-initiated share control (start_share / stop_share tools) ───
+
+// agentShareReply carries the synchronous outcome of an agent-initiated
+// share start/stop back to the tool goroutine that requested it.
+type agentShareReply struct {
+	connectURL string
+	err        error
+}
+
+// agentShareRequestMsg is sent by the tool-side controller adapter so the
+// share lifecycle transition runs INSIDE the Bubble Tea Update loop (no data
+// races on tunnelSession/tunnelStarting/generation). The tool goroutine
+// blocks on reply until Update completes the transition.
+type agentShareRequestMsg struct {
+	stop  bool // false = start, true = stop
+	reply chan agentShareReply
+}
+
+func (m *Model) handleAgentShareRequest(msg agentShareRequestMsg) (tea.Model, tea.Cmd) {
+	reply := func(r agentShareReply) {
+		if msg.reply != nil {
+			msg.reply <- r
+		}
+	}
+	if !msg.stop {
+		// start: mirror the /share start branch, but reply with the result.
+		if m.tunnelSession != nil {
+			reply(agentShareReply{err: fmt.Errorf("share already active")})
+			return m, nil
+		}
+		if m.tunnelStarting {
+			reply(agentShareReply{err: fmt.Errorf("share start already in progress")})
+			return m, nil
+		}
+		if m.tunnelHost == nil {
+			reply(agentShareReply{err: fmt.Errorf("tunnel host not initialized")})
+			return m, nil
+		}
+		m.tunnelStarting = true
+		generation := m.nextTunnelGeneration()
+		m.chatWriteSystem(nextSystemID(), "Agent is starting a mobile share session...")
+		return m, m.startTunnelWithReply(generation, msg.reply)
+	}
+	// stop: mirror the /share stop branch.
+	if m.tunnelSession != nil || m.tunnelStarting {
+		m.closeTunnelGracefullyAsync(2 * time.Second)
+		m.chatWriteSystem(nextSystemID(), "Agent stopped the mobile share session.")
+		reply(agentShareReply{})
+		return m, nil
+	}
+	reply(agentShareReply{})
+	return m, nil
+}
+
 // ─── Tunnel lifecycle ───
 
 func (m *Model) startTunnel(generation uint64) tea.Cmd {
+	return m.startTunnelWithReply(generation, nil)
+}
+
+func (m *Model) startTunnelWithReply(generation uint64, reply chan<- agentShareReply) tea.Cmd {
 	return func() tea.Msg {
 		if m.tunnelHost == nil {
-			return tunnelStartMsg{generation: generation, err: fmt.Errorf("tunnel host not initialized")}
+			// agent share request: pass the reply channel through so the
+			// completion handler can answer the blocked tool goroutine.
+			return tunnelStartMsg{
+				generation: generation,
+				err:        fmt.Errorf("tunnel host not initialized"),
+				reply:      reply,
+			}
 		}
 
 		// Bind projection session BEFORE StartShare so PrepareOnlineShare
@@ -295,13 +364,14 @@ func (m *Model) startTunnel(generation uint64) tea.Cmd {
 		})
 		shareResult.Store(result)
 		if err != nil {
-			return tunnelStartMsg{generation: generation, err: err}
+			return tunnelStartMsg{generation: generation, err: err, reply: reply}
 		}
 		return tunnelStartMsg{
 			generation: generation,
 			info:       &tunnel.SessionInfo{ConnectURL: result.ConnectURL, QRCode: result.QRCode, QRCodePNG: result.QRCodePNG},
 			session:    result.Session,
 			broker:     result.Broker,
+			reply:      reply,
 		}
 	}
 }
@@ -319,12 +389,18 @@ func (m *Model) refreshTunnelInvite(generation uint64, sess *tunnel.Session) tea
 }
 
 func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
+	reply := func(r agentShareReply) {
+		if msg.reply != nil {
+			msg.reply <- r
+		}
+	}
 	if !m.isCurrentTunnelGeneration(msg.generation) {
 		if msg.broker != nil || msg.session != nil {
 			safego.Go("tui.tunnel.discardStaleStart", func() {
 				agentruntime.StopSharedTunnelGracefully(msg.session, msg.broker, 2*time.Second)
 			})
 		}
+		reply(agentShareReply{err: fmt.Errorf("stale generation")})
 		return m, nil
 	}
 	m.tunnelStarting = false
@@ -332,6 +408,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 		debug.Log("tunnel", "tunnel start failed (gen=%d): %v", msg.generation, msg.err)
 		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Tunnel failed: %v", msg.err))
 		m.chatListFollowOutput()
+		reply(agentShareReply{err: msg.err})
 		return m, nil
 	}
 
@@ -345,6 +422,10 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	// leaving the broker nil for the whole share whenever the replay raced.
 	m.tunnelBroker = msg.broker
 	m.tunnelSpawned = make(map[string]bool)
+	// Wire the mobile file-transfer tool to this broker (same injection
+	// pattern as SetIMManager): look the tool up, inject the adapter,
+	// re-register. Mobile file transfer V1 (docs/design/mobile-file-transfer.md).
+	m.injectMobileFileSender(msg.broker)
 	// #1825 case 1: replay a connected event that raced StartShare. Only the
 	// QR flow is skipped - the client is already connected, so a QR would be
 	// noise (the replayed handler also closes any open overlay).
@@ -369,6 +450,7 @@ func (m *Model) handleTunnelStartMsg(msg tunnelStartMsg) (tea.Model, tea.Cmd) {
 	if msg.info.ConnectURL != "" {
 		_ = clipboard.WriteAll(msg.info.ConnectURL)
 	}
+	reply(agentShareReply{connectURL: msg.info.ConnectURL})
 
 	return m, nil
 }
@@ -1830,12 +1912,18 @@ func tunnelHistoryMatches(a, b []tunnel.HistoryEntry) bool {
 
 func (m *Model) currentIncompleteTunnelHistoryTail() []tunnel.HistoryEntry {
 	m.sessionMutex().Lock()
-	if m.session == nil || m.session.TunnelEventsComplete || len(m.session.TunnelEvents) == 0 {
+	if m.session == nil || m.session.TunnelEventsComplete {
 		m.sessionMutex().Unlock()
 		return nil
 	}
-	events := append([]session.TunnelEvent(nil), m.session.TunnelEvents...)
+	ses := m.session
 	m.sessionMutex().Unlock()
+	// #2917: recordEvent appends from publisher goroutines without holding
+	// the TUI sessionMutex — snapshot under the session leaf lock instead.
+	events := ses.SnapshotTunnelEvents()
+	if len(events) == 0 {
+		return nil
+	}
 	return tunnelEventsToHistory(events)
 }
 
@@ -1875,13 +1963,18 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 	// Replay reading the full old ledger, and new events dropped by the
 	// #666 epoch rule, with zero user signal. The old events are now
 	// captured and RESTORED on failure.
-	prevEvents := m.session.TunnelEvents
-	prevComplete := m.session.TunnelEventsComplete
-	m.session.TunnelEvents = nil
-	m.session.TunnelEventsComplete = false
 	ses := m.session
 	projectionStore := m.tunnelHostProjectionStore()
 	m.sessionMutex().Unlock()
+
+	// #2917: clear under the session-scoped leaf lock — recordEvent may
+	// append from publisher goroutines concurrently with this reset.
+	ses.TunnelEventsMu.Lock()
+	prevEvents := ses.TunnelEvents
+	prevComplete := ses.TunnelEventsComplete
+	ses.TunnelEvents = nil
+	ses.TunnelEventsComplete = false
+	ses.TunnelEventsMu.Unlock()
 
 	// Tunnel events are no longer persisted to session JSONL.
 	// Only cut authority in the projection store to reset the ledger.
@@ -1897,11 +1990,16 @@ func (m *Model) prepareCurrentSessionTunnelLedger() {
 			// #1422-B: restore the cleared events so the TUI view matches
 			// the still-old on-disk ledger (no three-way split).
 			m.sessionMutex().Lock()
-			if m.session != nil && m.session.ID == ses.ID {
-				m.session.TunnelEvents = prevEvents
-				m.session.TunnelEventsComplete = prevComplete
-			}
+			cur := m.session
 			m.sessionMutex().Unlock()
+			if cur != nil && cur.ID == ses.ID {
+				// #2917: restore under the session leaf lock (same protocol
+				// as the clear above).
+				cur.TunnelEventsMu.Lock()
+				cur.TunnelEvents = prevEvents
+				cur.TunnelEventsComplete = prevComplete
+				cur.TunnelEventsMu.Unlock()
+			}
 		} else {
 			if m.tunnelEventBroker() != nil {
 				m.tunnelEventBroker().SetAuthorityEpoch(epoch)

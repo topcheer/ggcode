@@ -401,13 +401,23 @@ type Manager struct {
 	onToolCall   func(agentID, toolID, toolName, displayName, args, detail string)                 // called on tool call
 	onToolResult func(agentID, toolID, toolName, displayName, detail, result string, isError bool) // called on tool result
 	onSystem     func(agentID, text string)                                                        // called on system events (retry, compaction)
-	lastNotify   time.Time                                                                         // throttle: last time onUpdate was called
+	lastNotify   map[string]time.Time                                                              // per-agent throttle watermark (#2784): last onUpdate time per agent ID
 	nextID       int
 	// maxConcurrent is the configured concurrency limit (cfg.MaxConcurrent,
 	// default 16). Spawn's early-reject check uses this instead of a hardcoded
 	// constant so the semaphore capacity and the Spawn check never diverge
 	// when the user configures max_concurrent > 5 (#226).
 	maxConcurrent int
+
+	// maxTotal is the configured lifetime spawn budget (cfg.MaxTotal,
+	// default 0 = unlimited). Unlike maxConcurrent, completed agents do
+	// NOT release budget: it bounds the total number of agent calls a
+	// session can make (2026 production "maxAgentCalls" cost control),
+	// because a runaway loop can otherwise burn unlimited calls in
+	// 16-wide waves. totalSpawned counts every accepted Spawn and never
+	// decreases. Both guarded by m.mu.
+	maxTotal     int
+	totalSpawned int
 	// cancelAllTimeout is the max time CancelAll waits for each Running sub-agent's
 	// goroutine to actually terminate after context cancellation. Each agent gets
 	// the full budget (per-agent, not shared — #619). Default: 5s.
@@ -462,6 +472,7 @@ func NewManager(cfg config.SubAgentConfig) *Manager {
 		watchdogDone:      make(chan struct{}),
 		inactivityTimeout: 5 * time.Minute,
 		maxConcurrent:     max,
+		maxTotal:          cfg.MaxTotal,
 		semOwners:         make(map[string]bool),
 	}
 	m.startWatchdog()
@@ -550,6 +561,10 @@ func (m *Manager) reapInactiveAgents() {
 		}
 		sa.mu.Unlock()
 		m.mu.Unlock()
+		// #2785: the started-but-stuck path goes through Cancel() (which
+		// notifies); this direct flip used to be silent, leaving TUI and
+		// desktop collectors showing the agent as pending forever.
+		m.notifyUpdate(sa)
 		debug.Log("subagent", "watchdog: failed never-started pending sub-agent %s (slot reclaimed)", id)
 	}
 	// Also purge old terminal agents to bound memory growth
@@ -608,6 +623,26 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	}
 	// Enforce concurrent sub-agent limit to prevent resource exhaustion.
 	m.mu.Lock()
+	// Lifetime budget first: unlike the concurrency limit, this is NOT
+	// released when agents finish - it bounds total agent calls per session.
+	if m.maxTotal > 0 && m.totalSpawned >= m.maxTotal {
+		errID := fmt.Sprintf("sa-budget-%d", time.Now().UnixNano())
+		sa := &SubAgent{
+			ID:           errID,
+			Name:         name,
+			Task:         task,
+			DisplayTask:  displayTask,
+			Status:       StatusFailed,
+			CurrentPhase: "rejected",
+			CreatedAt:    time.Now(),
+			Error:        fmt.Errorf("sub-agent spawn budget exhausted: %d/%d lifetime spawns used (subagents.max_total). Raise the budget in config or continue without new sub-agents.", m.totalSpawned, m.maxTotal),
+			done:         make(chan struct{}),
+		}
+		close(sa.done)
+		m.agents[errID] = sa
+		m.mu.Unlock()
+		return errID
+	}
 	running := 0
 	for _, sa := range m.agents {
 		sa.mu.Lock()
@@ -637,6 +672,7 @@ func (m *Manager) Spawn(name, task, displayTask string, tools []string, ctx cont
 	}
 	m.nextID++
 	id := fmt.Sprintf("sa-%d", m.nextID)
+	m.totalSpawned++
 
 	// Construct outside the lock, then insert in the SAME critical section as
 	// the limit check above (the unlock/relock window between check and insert
@@ -1037,11 +1073,24 @@ func (m *Manager) Complete(id string, result string, err error) {
 		// completed work. Now any non-empty result is backfilled when sa.Result
 		// is empty; the terminal status and error stay untouched so the parent
 		// still sees the cancellation.
+		backfilled := false
 		if result != "" && sa.Result == "" {
 			sa.Result = result
+			backfilled = true
 		}
 		sa.closeDone()
 		sa.mu.Unlock()
+		// #2783: the backfilled result is new information the UI collectors
+		// have never seen - the terminal branch used to return silently, so
+		// a successful output computed before the cancel was invisible (no
+		// TUI subAgentDoneMsg, no desktop onComplete collection). Cancel's
+		// own notifyUpdate already covered the terminal transition itself.
+		if backfilled {
+			if onComplete != nil {
+				onComplete(sa)
+			}
+			m.notifyUpdate(sa)
+		}
 		return
 	}
 	if err != nil {
@@ -1362,21 +1411,31 @@ func (m *Manager) ShowOutput() bool {
 func (m *Manager) notifyUpdate(sa *SubAgent) {
 	m.mu.Lock()
 	fn := m.onUpdate
-	now := time.Now()
-	lastNotify := m.lastNotify
-	m.mu.Unlock()
 	if fn == nil {
+		m.mu.Unlock()
 		return
 	}
-	// Throttle: skip if we notified less than 100ms ago.
-	// Do NOT update m.lastNotify on skipped calls — that would advance the
-	// watermark unconditionally and permanently suppress updates during
-	// continuous streaming (events arriving <100ms apart).
-	if !lastNotify.IsZero() && now.Sub(lastNotify) < 100*time.Millisecond {
+	now := time.Now()
+	if m.lastNotify == nil {
+		m.lastNotify = make(map[string]time.Time)
+	}
+	last := m.lastNotify[sa.ID]
+	// #2784: the throttle watermark is PER AGENT. A Manager-level single
+	// timestamp meant one streaming agent suppressed every other agent's
+	// notifications within the 100ms window - including low-frequency
+	// terminal states that have no follow-up event to recover with.
+	// Terminal-state transitions are additionally EXEMPT from throttling:
+	// they are rare, and dropping one (e.g. a terminal-branch backfill
+	// arriving right after the cancel notification, #2783) leaves the UI
+	// stale indefinitely.
+	sa.mu.Lock()
+	terminal := sa.Status == StatusCompleted || sa.Status == StatusFailed || sa.Status == StatusCancelled
+	sa.mu.Unlock()
+	if !terminal && !last.IsZero() && now.Sub(last) < 100*time.Millisecond {
+		m.mu.Unlock()
 		return
 	}
-	m.mu.Lock()
-	m.lastNotify = time.Now()
+	m.lastNotify[sa.ID] = now
 	m.mu.Unlock()
 	fn(sa)
 }

@@ -316,6 +316,12 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 		if len(fields) < 2 {
 			return discordBindResultMsg{err: errors.New(m.t("panel.discord.error.config_format"))}
 		}
+		// #2797 (a #1370-C recurrence): Fields splits on whitespace - a
+		// token WITH spaces was silently truncated to its first token,
+		// then persisted as a guaranteed-to-fail credential. Reject extras.
+		if len(fields) > 2 {
+			return discordBindResultMsg{err: errors.New("extra fields after token (values must not contain spaces): " + spec)}
+		}
 		name := strings.TrimSpace(fields[0])
 		token := strings.TrimSpace(fields[1])
 		adapter := config.IMAdapterConfig{
@@ -344,11 +350,34 @@ func (m *Model) createDiscordAdapterCmd(spec string) tea.Cmd {
 			},
 			next: func(m *Model) tea.Cmd {
 				return func() tea.Msg {
+					rollback := func(origErr error) tea.Msg {
+						// #2797 (a #1370-B recurrence): the adapter was already
+						// persisted with its plaintext token - without
+						// compensation a wrong token stays on disk forever and
+						// blocks the name on retry ("already exists"); the panel
+						// has no delete key. The rollback REMOVE is itself a map
+						// write, so it must route through configMutationMsg too
+						// (#1367) - never touch config on this Cmd goroutine.
+						return configMutationMsg{
+							apply: func(m *Model) error {
+								if rerr := m.config.RemoveIMAdapter(name); rerr != nil {
+									return rerr
+								}
+								return m.saveConfig()
+							},
+							next: func(m *Model) tea.Cmd {
+								return func() tea.Msg { return discordBindResultMsg{err: origErr} }
+							},
+							fail: func(rerr error) tea.Msg {
+								return discordBindResultMsg{err: fmt.Errorf("%v (rollback failed: %v)", origErr, rerr)}
+							},
+						}
+					}
 					if err := m.ensureDiscordRuntime(); err != nil {
-						return discordBindResultMsg{err: err}
+						return rollback(err)
 					}
 					if err := m.startDiscordAdapterIfNeeded(name); err != nil {
-						return discordBindResultMsg{err: err}
+						return rollback(err)
 					}
 					return discordBindResultMsg{message: m.t("panel.discord.message.added_bot", name)}
 				}
@@ -415,8 +444,9 @@ func (m Model) discordBindingEntries() []discordBindingEntry {
 			}
 		}
 	}
-	keys := make([]string, 0, len(m.config.IM.Adapters))
-	for name, adapter := range m.config.IMSnapshot().Adapters {
+	snapAdapters := m.config.IMSnapshot().Adapters
+	keys := make([]string, 0, len(snapAdapters))
+	for name, adapter := range snapAdapters {
 		if strings.EqualFold(adapter.Platform, string(im.PlatformDiscord)) {
 			keys = append(keys, name)
 		}

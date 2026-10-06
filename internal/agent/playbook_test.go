@@ -239,7 +239,7 @@ func TestPlaybookHintsForPrompt(t *testing.T) {
 	pb := NewPlaybook(dir)
 
 	// Empty playbook should return empty hints
-	hints := pb.HintsForPrompt(5)
+	hints := pb.HintsForPrompt("", 5)
 	if hints != "" {
 		t.Errorf("expected empty hints for empty playbook, got %q", hints)
 	}
@@ -256,7 +256,7 @@ func TestPlaybookHintsForPrompt(t *testing.T) {
 		})
 	}
 
-	hints = pb.HintsForPrompt(5)
+	hints = pb.HintsForPrompt("", 5)
 	if hints == "" {
 		t.Fatal("expected non-empty hints")
 	}
@@ -289,7 +289,7 @@ func TestPlaybookHintsForPromptMaxEntries(t *testing.T) {
 	}
 
 	// Request only 2 hints
-	hints := pb.HintsForPrompt(2)
+	hints := pb.HintsForPrompt("", 2)
 	// Count lines starting with "- "
 	lines := 0
 	for _, line := range strings.Split(hints, "\n") {
@@ -332,7 +332,7 @@ func TestPlaybookNilSafe(t *testing.T) {
 	var pb *Playbook
 	// All methods should be nil-safe
 	pb.Record(&RunStats{Success: true})
-	if hints := pb.HintsForPrompt(5); hints != "" {
+	if hints := pb.HintsForPrompt("", 5); hints != "" {
 		t.Error("expected empty hints from nil playbook")
 	}
 }
@@ -406,7 +406,7 @@ func TestPlaybookHintsEfficiencyRanking(t *testing.T) {
 	// Score C: 10 * (10/15) = 6.67
 	// Score A: 5 * (10/40) = 1.25
 	// So ranking should be: C (6.67) > B (6.0) > A (1.25)
-	hints := pb.HintsForPrompt(3)
+	hints := pb.HintsForPrompt("", 3)
 	if hints == "" {
 		t.Fatal("expected non-empty hints")
 	}
@@ -461,5 +461,108 @@ func TestPlaybookAtomicSave(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "bugfix") {
 		t.Errorf("expected playbook to contain 'bugfix' task type")
+	}
+}
+
+// r387: intent-aware hint ranking (SimpleMem, ICML 2026). A hint matching
+// the current prompt's task type must outrank a globally higher-scored hint
+// of a different type; empty/unclassifiable prompts keep global ranking.
+func TestPlaybookHintsForPromptIntentBoost(t *testing.T) {
+	tmp := t.TempDir()
+	pb := NewPlaybook(tmp)
+	if pb == nil {
+		t.Fatal("NewPlaybook returned nil")
+	}
+
+	// Bugfix entry: low global score (2 uses, high iterations).
+	pb.entries = []PlaybookEntry{{
+		ID: "b1", TaskType: "bugfix", ToolSequence: "read>edit>execute",
+		Uses: 2, SuccessRate: 1.0, AvgIter: 40, LastSeen: time.Now(), CreatedAt: time.Now(),
+	}}
+	// Build entry: high global score (10 uses, low iterations) - without
+	// intent boost this always ranks first.
+	pb.entries = append(pb.entries, PlaybookEntry{
+		ID: "c1", TaskType: "build", ToolSequence: "execute",
+		Uses: 10, SuccessRate: 1.0, AvgIter: 5, LastSeen: time.Now(), CreatedAt: time.Now(),
+	})
+
+	// Prompt classified as bugfix: matching entry must rank first.
+	hints := pb.HintsForPrompt("fix the panic crash in daemon startup", 2)
+	if !strings.Contains(hints, "bugfix") {
+		t.Fatalf("expected bugfix hint present, got: %s", hints)
+	}
+	first := strings.Split(strings.SplitN(hints, "\n", 3)[1], ":")[0]
+	if first != "- bugfix" {
+		t.Errorf("intent-matching entry should rank first, first line: %q", first)
+	}
+
+	// Empty prompt: global ranking - build entry first.
+	hints = pb.HintsForPrompt("", 2)
+	first = strings.Split(strings.SplitN(hints, "\n", 3)[1], ":")[0]
+	if first != "- build" {
+		t.Errorf("empty prompt should keep global ranking, first line: %q", first)
+	}
+}
+
+// r389 (AutoRefine repository maintenance): failed runs degrade the success
+// rate of a matching fingerprint but never create entries; entries whose
+// success rate collapses after enough evidence are pruned; young entries
+// are protected from a single early failure.
+func TestPlaybookFailureAwareRecording(t *testing.T) {
+	tmp := t.TempDir()
+	pb := NewPlaybook(tmp)
+	if pb == nil {
+		t.Fatal("NewPlaybook returned nil")
+	}
+	stats := func(success bool, iters int) *RunStats {
+		s := &RunStats{Success: success, Iterations: iters, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
+		return s
+	}
+
+	// Success creates the entry.
+	pb.Record(stats(true, 5))
+	if len(pb.entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(pb.entries))
+	}
+
+	// Failure with a matching fingerprint degrades the rate.
+	pb.Record(stats(false, 8))
+	e := pb.entries[0]
+	if e.Uses != 2 {
+		t.Errorf("Uses = %d, want 2", e.Uses)
+	}
+	if want := 0.5; e.SuccessRate != want {
+		t.Errorf("SuccessRate = %v, want %v", e.SuccessRate, want)
+	}
+
+	// Failure with NO matching fingerprint creates nothing.
+	odd := stats(false, 3)
+	odd.ToolCalls = map[string]int{"browser": 4} // different fingerprint
+	pb.Record(odd)
+	if len(pb.entries) != 1 {
+		t.Errorf("failure must not create entries, got %d", len(pb.entries))
+	}
+}
+
+func TestPlaybookPruneDegraded(t *testing.T) {
+	tmp := t.TempDir()
+	pb := NewPlaybook(tmp)
+	if pb == nil {
+		t.Fatal("NewPlaybook returned nil")
+	}
+	stats := func(success bool) *RunStats {
+		return &RunStats{Success: success, Iterations: 6, ToolCalls: map[string]int{"read_file": 2, "edit_file": 2}}
+	}
+
+	pb.Record(stats(true))  // uses=1 rate=1.0
+	pb.Record(stats(false)) // uses=2 rate=0.5
+	pb.Record(stats(false)) // uses=3 rate=0.33
+	pb.Record(stats(false)) // uses=4 rate=0.25 - young, protected (uses<5)
+	if len(pb.entries) != 1 {
+		t.Fatalf("young degraded entry must be protected, got %d entries", len(pb.entries))
+	}
+	pb.Record(stats(false)) // uses=5 rate=0.2 - pruned
+	if len(pb.entries) != 0 {
+		t.Errorf("degraded entry (uses=5, rate=0.2) must be pruned, got %d entries", len(pb.entries))
 	}
 }

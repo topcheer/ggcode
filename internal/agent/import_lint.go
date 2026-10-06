@@ -46,7 +46,6 @@ package agent
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -490,8 +489,7 @@ func checkGoImportsWithDir(filePath, src, workingDir string) []string {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filePath, src, 0)
+	f, _, err := parseGoSource(filePath, src, 0)
 	if err != nil {
 		return nil
 	}

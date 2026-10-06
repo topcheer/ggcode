@@ -108,8 +108,8 @@ type room struct {
 	protocolVersion int
 	upgradeReason   string
 	serverReady     bool
+	expired         bool // #2898: set by expireRoom under mu; aborts in-flight registrations
 	history         []roomEvent
-	bootstrap       map[string]roomEvent
 	server          *peer
 	clients         map[*peer]struct{}
 	clientsByID     map[string]*peer
@@ -126,7 +126,6 @@ type room struct {
 func newRoom(token string) *room {
 	return &room{
 		token:       token,
-		bootstrap:   make(map[string]roomEvent),
 		clients:     make(map[*peer]struct{}),
 		clientsByID: make(map[string]*peer),
 	}
@@ -158,7 +157,6 @@ func (r *room) appendEvent(ev roomEvent) bool {
 
 func (r *room) clearHistoryLocked() {
 	r.history = nil
-	r.bootstrap = make(map[string]roomEvent)
 	r.lastEventAt = time.Time{}
 }
 
@@ -175,37 +173,10 @@ func (r *room) hydrateLocked(state persistedRoomState) (bool, int) {
 	r.providerName = state.providerName
 	r.modelName = state.modelName
 	r.history = append([]roomEvent(nil), state.history...)
-	r.bootstrap = make(map[string]roomEvent)
-	for _, ev := range r.history {
-		r.rememberBootstrap(ev)
-	}
 	if len(r.history) > 0 {
 		r.lastEventAt = time.Now()
 	}
 	return true, len(r.history)
-}
-
-func (r *room) rememberBootstrap(ev roomEvent) {
-	if ev.typ == "" || len(ev.raw) == 0 {
-		return
-	}
-	r.bootstrap[ev.typ] = ev
-}
-
-func (r *room) bootstrapEvents(sessionID string) []roomEvent {
-	order := []string{"session_info", "status", "activity"}
-	out := make([]roomEvent, 0, len(order))
-	for _, typ := range order {
-		ev, ok := r.bootstrap[typ]
-		if !ok {
-			continue
-		}
-		if sessionID != "" && ev.sessionID != "" && ev.sessionID != sessionID {
-			continue
-		}
-		out = append(out, ev)
-	}
-	return out
 }
 
 func (r *room) projectionHashLocked(limit int) string {
@@ -503,6 +474,44 @@ func (p *peer) detachFromRoom(roomDestroyed bool, h *hub) {
 
 // ─── Message handlers ───
 
+// relayPersistMaxAttempts bounds persist retries before a failure is
+// escalated to a peer close (#2892).
+const relayPersistMaxAttempts = 3
+
+// persistEventDurable persists a relay event with bounded retries; if the
+// store still fails, the originating peer is closed so the stream fails
+// visibly (the peer reconnects and re-syncs) instead of silently diverging
+// from the replay store. A live-delivered event that never lands in the
+// store creates a permanent gap on resume: clients with eventID/ordinal
+// continuity checks stall forever waiting for an event that exists nowhere
+// (#2892).
+func (h *hub) persistEventDurable(p *peer, label, token string, msg relayMessage, raw []byte) {
+	s := h.store
+	safego.Go(label, func() {
+		var err error
+		for attempt := 1; attempt <= relayPersistMaxAttempts; attempt++ {
+			if attempt > 1 {
+				time.Sleep(time.Duration(attempt-1) * 50 * time.Millisecond)
+			}
+			if err = s.persistEvent(token, msg, raw); err == nil {
+				if h.stats != nil {
+					h.stats.recordPersistResult(true)
+				}
+				return
+			}
+			if h.stats != nil {
+				h.stats.recordPersistResult(false)
+			}
+			log.Printf("[relay] %s: persist error (attempt %d/%d): %v",
+				label, attempt, relayPersistMaxAttempts, err)
+		}
+		h.trace("persist_failed", token, msg)
+		log.Printf("[relay] %s: persist failed after %d attempts, closing peer to force resync: room=%s event=%s err=%v",
+			label, relayPersistMaxAttempts, shortToken(token), msg.EventID, err)
+		p.closeWithReason(1011, "persist failed; please reconnect to resync")
+	})
+}
+
 func (p *peer) onEncrypted(raw []byte, msg relayMessage) {
 	if p.role == "server" {
 		p.handleServerBroadcast(raw, msg)
@@ -561,15 +570,12 @@ func (p *peer) handleClientEncrypted(raw []byte, msg relayMessage) {
 		return
 	}
 
-	// Persist async.
+	// Persist async. #2892: bounded retries + visible failure via
+	// persistEventDurable (same policy as handleServerBroadcast).
 	if p.hub.store != nil && msg.SessionID != "" {
 		token := p.room.token
-		s := p.hub.store
-		safego.Go("relay.persist-client-event", func() {
-			if err := s.persistEvent(token, msg, append([]byte(nil), raw...)); err != nil {
-				log.Printf("[relay] persist client event error: %v", err)
-			}
-		})
+		p.hub.persistEventDurable(p, "relay.persist-client-event", token, msg,
+			append([]byte(nil), raw...))
 	}
 }
 
@@ -591,7 +597,7 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 		return
 	}
 
-	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
+	authorityEpoch, changed := p.bindRoomSession(msg.SessionID, msg.AuthorityEpoch, false)
 	if msg.SessionID == "" {
 		p.room.mu.Lock()
 		msg.SessionID = p.room.sessionID
@@ -602,23 +608,11 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	msg.AuthorityEpoch = authorityEpoch
 	wire := mustJSON(msg)
 
-	if hydrated {
-		log.Printf("[relay] hydrate room=%s session=%s events=%d",
-			shortToken(p.room.token), msg.SessionID, loaded)
-		if p.hub.stats != nil {
-			p.hub.stats.recordActiveSession(changed, loaded)
-		}
+	if p.hub.stats != nil {
+		p.hub.stats.recordActiveSession(changed, 0)
 	}
 
 	p.room.mu.Lock()
-	switch msg.Type {
-	case "session_info", "status", "activity":
-		p.room.rememberBootstrap(roomEvent{
-			sessionID: msg.SessionID,
-			typ:       msg.Type,
-			raw:       append([]byte(nil), wire...),
-		})
-	}
 	ev := roomEvent{
 		sessionID: msg.SessionID,
 		eventID:   msg.EventID,
@@ -666,14 +660,13 @@ func (p *peer) handleServerBroadcast(_ []byte, msg relayMessage) {
 	// Persist async — only for events with an eventID (durable, replayable).
 	// Transient events (no eventID) are forwarded to live clients but not
 	// persisted, since they can't be dedup'd on replay.
+	// #2892: a live-delivered event that never lands in the store creates a
+	// permanent gap on resume — persistEventDurable retries and closes the
+	// peer on final failure so the stream fails visibly instead.
 	if p.hub.store != nil && msg.SessionID != "" && msg.EventID != "" {
 		token := p.room.token
-		s := p.hub.store
-		safego.Go("relay.persist-event", func() {
-			if err := s.persistEvent(token, msg, append([]byte(nil), wire...)); err != nil {
-				log.Printf("[relay] persist error: %v", err)
-			}
-		})
+		p.hub.persistEventDurable(p, "relay.persist-event", token, msg,
+			append([]byte(nil), wire...))
 	}
 }
 
@@ -747,7 +740,7 @@ func (p *peer) onActiveSession(msg relayMessage) {
 	}
 	p.room.mu.Unlock()
 
-	authorityEpoch, changed, hydrated, loaded := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
+	authorityEpoch, changed := p.bindRoomSession(sessionID, msg.AuthorityEpoch, msg.ResumeMode == activeSessionModeReplace)
 	msg.SessionID = sessionID
 	msg.Generation = 0
 	msg.AuthorityEpoch = authorityEpoch
@@ -759,12 +752,8 @@ func (p *peer) onActiveSession(msg relayMessage) {
 		client.send(msg)
 	}
 
-	if hydrated {
-		log.Printf("[relay] hydrate room=%s session=%s events=%d",
-			shortToken(p.room.token), sessionID, loaded)
-		if p.hub.stats != nil {
-			p.hub.stats.recordActiveSession(changed, loaded)
-		}
+	if p.hub.stats != nil {
+		p.hub.stats.recordActiveSession(changed, 0)
 	}
 
 	p.hub.trace("relay_push", p.room.token, msg)
@@ -959,16 +948,28 @@ func (p *peer) onStopSharing(msg relayMessage, h *hub) bool {
 	if p.role != "server" || p.room == nil || h == nil {
 		return false
 	}
-	h.trace("server_request", p.room.token, msg)
-	h.destroyRoom(p.room.token)
+	room := p.room
+	// #2890: only the CURRENT room server may stop sharing. A shadow
+	// server (superseded by a newer registration while it was connected)
+	// must not destroy the room out from under the legitimate server and
+	// its clients.
+	room.mu.RLock()
+	isCurrent := room.server == p
+	room.mu.RUnlock()
+	if !isCurrent {
+		h.trace("server_request_ignored_stale_server", room.token, msg)
+		return true // consumed, no-op
+	}
+	h.trace("server_request", room.token, msg)
+	h.destroyRoom(room.token)
 	return true
 }
 
-func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceHistory bool) (epoch uint64, changed bool, hydrated bool, loadedCount int) {
+func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceHistory bool) (epoch uint64, changed bool) {
 	if sessionID == "" {
 		p.room.mu.Lock()
 		defer p.room.mu.Unlock()
-		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+		return p.room.ensureAuthorityEpochLocked(), false
 	}
 	if authorityEpoch == 0 {
 		authorityEpoch = 1
@@ -982,7 +983,7 @@ func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceH
 	defer p.room.mu.Unlock()
 
 	if expectedSessionID != sessionID && p.room.sessionID != expectedSessionID && p.room.sessionID != sessionID {
-		return p.room.ensureAuthorityEpochLocked(), false, false, 0
+		return p.room.ensureAuthorityEpochLocked(), false
 	}
 
 	changed = p.room.sessionID != sessionID
@@ -993,7 +994,7 @@ func (p *peer) bindRoomSession(sessionID string, authorityEpoch uint64, replaceH
 	}
 	p.room.authorityEpoch = authorityEpoch
 	epoch = p.room.ensureAuthorityEpochLocked()
-	return epoch, changed || authorityChanged, hydrated, loadedCount
+	return epoch, changed || authorityChanged
 }
 
 func (h *hub) hydrateRoomFromStore(r *room) (bool, int) {
@@ -1204,16 +1205,20 @@ func (h *hub) notifyRelayRestarting() {
 		state := roomRecoveryStateLocked(room)
 		clients := room.snapshotClientsLocked(nil)
 		server := room.server
+		// #2891: copy sessionID inside the RLock critical section - the write
+		// side (bindRoomSession) mutates it under room.mu; reading it after
+		// RUnlock is a data race (torn string header under -race).
+		sessionID := room.sessionID
 		room.mu.RUnlock()
 
 		// Send role-specific server_offline notices with staggered retry delays:
 		// server (host) gets 10s, clients (mobile) get 30s. This ensures host
 		// reconnects first and rebuilds the room before mobile tries.
 		serverNotice := relayServerOfflineMessageWithReason(
-			room.sessionID, state, serverRestartRetryAfter, relayRestartReason,
+			sessionID, state, serverRestartRetryAfter, relayRestartReason,
 		)
 		clientNotice := relayServerOfflineMessageWithReason(
-			room.sessionID, state, clientRestartRetryAfter, relayRestartReason,
+			sessionID, state, clientRestartRetryAfter, relayRestartReason,
 		)
 		for _, client := range clients {
 			if client.trySend(clientNotice) {
@@ -1272,6 +1277,7 @@ func (h *hub) expireRoom(token string) {
 	}
 	stopOfflineTimerLocked(r)
 	delete(h.rooms, token)
+	r.expired = true // #2898: tombstone - in-flight registrations must abort, not orphan
 	r.mu.Unlock()
 	h.mu.Unlock()
 
@@ -1576,6 +1582,35 @@ func (h *hub) handleWS(w http.ResponseWriter, r *http.Request) {
 			room.mu.Unlock()
 			old.send(relayMessage{Type: "sharing_stopped"})
 			room.mu.Lock()
+			// #2890: re-check after relock - a third server connection C may
+			// have registered during the unlock window (it saw room.server ==
+			// nil and claimed the slot). Overwriting unconditionally would
+			// leave C as an unnotified shadow server whose stop_sharing could
+			// later destroy the room (see onStopSharing guard). Kick the
+			// interloper the same way before taking the slot.
+			if shadow := room.server; shadow != nil && shadow != old {
+				room.server = nil
+				room.serverReady = false
+				room.mu.Unlock()
+				shadow.send(relayMessage{Type: "sharing_stopped"})
+				room.mu.Lock()
+			}
+		}
+		// #2898: expireRoom's 5-minute timer may have fired during the
+		// fragmented registration above (kick window, connected-frame write
+		// with up to 30s deadline, hydrate I/O) and removed this room from
+		// the hub + destroyed its store. Committing the registration would
+		// silently orphan the peer: clients get "Room not found" forever
+		// while the server believes it is live. The tombstone is set under
+		// room.mu; checking it at this commit point (same mutex) closes the
+		// race without inverting the h.mu -> room.mu lock order. Do NOT
+		// re-put the room - the store was already destroyed.
+		if room.expired {
+			room.mu.Unlock()
+			p.send(relayMessage{Type: "sharing_stopped"})
+			conn.Close()
+			log.Printf("[relay] %s rejected: room=%s expired during registration", role, shortToken(token))
+			return
 		}
 		room.server = p
 		room.serverReady = false
@@ -1612,18 +1647,6 @@ func logRejectedHandshake(r *http.Request, status int, reason string) {
 	caps := strings.TrimSpace(q.Get("caps"))
 	log.Printf("[relay] handshake rejected: status=%d reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
 		status, reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
-}
-
-func logUpgradedClientReject(r *http.Request, reason string) {
-	q := r.URL.Query()
-	roomID := strings.TrimSpace(q.Get("room_id"))
-	role := strings.TrimSpace(q.Get("role"))
-	proto := strings.TrimSpace(q.Get("proto"))
-	clientKind := strings.TrimSpace(q.Get("client"))
-	clientVersion := strings.TrimSpace(q.Get("client_version"))
-	caps := strings.TrimSpace(q.Get("caps"))
-	log.Printf("[relay] upgraded client rejected: reason=%q role=%s proto=%s room=%s client_kind=%s client_version=%s caps=%q",
-		reason, role, proto, shortToken(roomID), clientKind, clientVersion, caps)
 }
 
 func (p *peer) notifyServerClientConnected(resumeComplete bool) {

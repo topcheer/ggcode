@@ -118,8 +118,7 @@ func checkNPlus1Loop(filePath, oldContent, newContent string) []string {
 	}
 
 	// Parse the new content.
-	fset := token.NewFileSet()
-	newAST, err := parser.ParseFile(fset, filePath, newContent, 0)
+	newAST, fset, err := parseGoSource(filePath, newContent, 0)
 	if err != nil {
 		return nil // syntax errors are handled by other checks
 	}

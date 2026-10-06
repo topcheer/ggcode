@@ -567,6 +567,15 @@ if [ "${FULL}" = "1" ]; then
   fi
 
   echo ""
+  # r358: eval-harness integrity gate (task templates + scoring smoke).
+  # Zero-LLM so it is CI-safe; skips with a warning if python3 is absent.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 scripts/eval/validate_tasks.py || exit 1
+    echo "[verify-ci:eval] eval harness integrity passed"
+  else
+    echo "[verify-ci:eval] WARNING: python3 not found, skipping eval-check"
+  fi
+  echo ""
   echo "[verify-ci:full] all checks passed"
   vc_write_verdict
 fi

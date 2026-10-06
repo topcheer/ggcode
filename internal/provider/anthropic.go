@@ -98,6 +98,12 @@ func (p *AnthropicProvider) CloneWithModel(model string) Provider {
 	if ce := p.contextEditing.Load(); ce != nil {
 		clone.contextEditing.Store(ce)
 	}
+	// #3066: samplingOverride is the same atomic.Pointer trap - a struct
+	// literal (or simply forgetting the field) copies the zero state and the
+	// clone silently loses MaxTokens/StopSequences/Temperature overrides.
+	if ov := p.samplingOverride.Load(); ov != nil {
+		clone.samplingOverride.Store(ov)
+	}
 	// Inherit the endpoint capability latch (an endpoint that rejected
 	// output_config stays off), but reset the per-conversation stability
 	// window: the clone re-learns effort stabilization for its own cache
@@ -194,10 +200,35 @@ func (p *AnthropicProvider) anthropicBetaHeader(hasTools bool) string {
 	return ""
 }
 
-// betaHeaderOpts wraps the beta header into SDK request options for the
-// per-call sites (Messages.New / Messages.NewStreaming).
-func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
+// betaHeaderValue aggregates every enabled anthropic-beta token into one
+// comma-separated value (#2774): interleaved-thinking (manual thinking +
+// tools), programmatic-tool-calling (PTC server tool), and
+// advanced-tool-use (tool search). Multiple WithHeader calls on the same
+// key are Header.Set - the last one wins - so the pre-fix split emitters
+// silently dropped the interleaved token whenever PTC was enabled, and
+// the thinking/effort retry paths rebuilt options without the PTC header
+// while params still declared the code_execution tool; both hard-failed
+// with 400.
+func (p *AnthropicProvider) betaHeaderValue(hasTools bool) string {
+	var tokens []string
 	if h := p.anthropicBetaHeader(hasTools); h != "" {
+		tokens = append(tokens, h)
+	}
+	if p.ptcCodeExecutionEnabled() {
+		tokens = append(tokens, ptcBetaHeader)
+	}
+	if p.toolSearchBeta {
+		tokens = append(tokens, advancedToolUseBeta)
+	}
+	return strings.Join(tokens, ",")
+}
+
+// betaHeaderOpts wraps the aggregated beta header into a SINGLE SDK
+// request option for the per-call sites (Messages.New /
+// Messages.NewStreaming). Call sites must not append further
+// anthropic-beta emitters - a second Set would overwrite this one.
+func (p *AnthropicProvider) betaHeaderOpts(hasTools bool) []option.RequestOption {
+	if h := p.betaHeaderValue(hasTools); h != "" {
 		return []option.RequestOption{option.WithHeader("anthropic-beta", h)}
 	}
 	return nil
@@ -287,16 +318,6 @@ func (p *AnthropicProvider) ServerToolSearchActive() bool { return p.toolSearchB
 // Tool Search Tool declarations.
 const advancedToolUseBeta = "advanced-tool-use-2025-11-20"
 
-// serverToolOpts returns the per-request options needed when a Tool Search
-// Tool is configured (nil otherwise, so unaffected deployments never send
-// the beta header).
-func (p *AnthropicProvider) serverToolOpts() []option.RequestOption {
-	if !p.toolSearchBeta {
-		return nil
-	}
-	return []option.RequestOption{option.WithHeader("anthropic-beta", advancedToolUseBeta)}
-}
-
 // SetMemoryTool enables the Anthropic Memory Tool declaration
 // (memory_20250818). Unlike server tools, memory is client-executed: the
 // agent's handler (internal/agent/memory_tool.go) fulfills the model's
@@ -345,15 +366,10 @@ func (p *AnthropicProvider) freshPTCContainer() (string, bool) {
 	return p.ptcContainerID, true
 }
 
-// ptcRequestOptions returns the request options required for programmatic
-// tool calling (the beta-gated code execution server tool), or nil when PTC
-// is not configured.
-func (p *AnthropicProvider) ptcRequestOptions() []option.RequestOption {
-	if !p.ptcCodeExecutionEnabled() {
-		return nil
-	}
-	return []option.RequestOption{option.WithHeader("anthropic-beta", "programmatic-tool-calling-2026-01-20")}
-}
+// ptcBetaHeader is the anthropic-beta token gating programmatic tool
+// calling (the code execution server tool). Aggregated into the single
+// betaHeaderValue emission (#2774) - never sent as a standalone header.
+const ptcBetaHeader = "programmatic-tool-calling-2026-01-20"
 
 // SetTemperature sets the sampling temperature. 0 means "use provider default".
 func (p *AnthropicProvider) SetTemperature(temp float64) { p.temperature = temp }
@@ -380,7 +396,7 @@ func (p *AnthropicProvider) SetAdaptiveCap(c *adaptiveCap) { p.cap = c }
 // cap tracking. Used by context window probing.
 func (p *AnthropicProvider) probeChat(ctx context.Context, messages []Message) error {
 	params := p.buildParams(ctx, messages, nil)
-	_, err := p.client.Messages.New(ctx, params, p.serverToolOpts()...)
+	_, err := p.client.Messages.New(ctx, params, p.betaHeaderOpts(false)...)
 	return err
 }
 
@@ -635,22 +651,21 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 	debug.Log("anthropic", "Chat START model=%s msgs=%d tools=%d", p.model, len(messages), len(tools))
 	p.beginEffortTracking()
 	params := p.buildParams(ctx, messages, tools)
-	callOpts := append(p.betaHeaderOpts(len(tools) > 0), p.ptcRequestOptions()...)
+	callOpts := p.betaHeaderOpts(len(tools) > 0)
 
 	var resp *anthropic.Message
 	err := retryWithBackoffCtx(ctx, func() error {
 		var callErr error
-		resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.ptcRequestOptions()...)...)
+		resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 		return callErr
 	}, p.policy.attempts())
 	// Retry once without extended thinking if the model rejects it.
 	if err != nil && params.Thinking.OfEnabled != nil && isThinkingError(err) {
 		debug.Log("anthropic", "Chat: retrying without extended thinking (model rejected thinking parameters)")
 		params.Thinking = anthropic.ThinkingConfigParamUnion{}
-		callOpts = nil
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
+			resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 			return callErr
 		}, p.policy.attempts())
 	}
@@ -662,7 +677,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []Message, tools 
 		params.OutputConfig = anthropic.OutputConfigParam{}
 		err = retryWithBackoffCtx(ctx, func() error {
 			var callErr error
-			resp, callErr = p.client.Messages.New(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.serverToolOpts()...)...)
+			resp, callErr = p.client.Messages.New(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 			return callErr
 		}, p.policy.attempts())
 	}
@@ -744,7 +759,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 			truncated = false
 
 			func() {
-				stream := p.client.Messages.NewStreaming(ctx, params, append(append(callOpts, p.contextEditingOptions()...), p.ptcRequestOptions()...)...)
+				stream := p.client.Messages.NewStreaming(ctx, params, append(callOpts, p.contextEditingOptions()...)...)
 				defer func() {
 					_ = stream.Close()
 				}()
@@ -754,67 +769,9 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 
 					switch event.Type {
 					case "content_block_start":
-						cb := event.ContentBlock
-						switch cb.Type {
-						case "tool_use":
-							idx := int(event.Index)
-							tc := &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name}
-							if tu := cb.AsToolUse(); tu.JSON.Caller.Valid() {
-								tc.Caller = callerRawOf(tu.Caller) // PTC echo-back
-							}
-							toolCalls[idx] = tc
-							debug.Log("anthropic", "content_block_start tool_use id=%s name=%s idx=%d", cb.ID, cb.Name, idx)
-						case "server_tool_use":
-							// Anthropic server-side tool invocation (executed in-API).
-							// Input arrives via input_json_delta like a client tool_use,
-							// but the block must NOT be surfaced as a client tool call —
-							// it is emitted verbatim at content_block_stop.
-							idx := int(event.Index)
-							toolCalls[idx] = &ToolCallDelta{Index: idx, ID: cb.ID, Name: cb.Name, ServerTool: true}
-						case "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result":
-							// Result blocks arrive complete (no deltas). Keep the raw
-							// JSON verbatim for echo-back on the next request. For the
-							// Tool Search Tool this preserves the tool_reference
-							// expansions so the API does not treat them as deferred.
+						if handleContentBlockStart(ch, toolCalls, event) {
 							emitted = true
-							ch <- StreamEvent{
-								Type:  StreamEventServerTool,
-								Block: ContentBlock{Type: cb.Type, Raw: json.RawMessage(cb.RawJSON())},
-							}
-						case "code_execution_tool_result":
-							// PTC: code execution result, executed in-API inside the
-							// container. Arrives complete; echo verbatim like the web
-							// server-tool results above.
-							emitted = true
-							ch <- StreamEvent{
-								Type:  StreamEventServerTool,
-								Block: ContentBlock{Type: cb.Type, Raw: json.RawMessage(cb.RawJSON())},
-							}
-						case "thinking":
-							debug.Log("anthropic", "content_block_start thinking idx=%d sig_len=%d", event.Index, len(cb.Signature))
-							toolCalls[int(event.Index)] = &ToolCallDelta{
-								Index: int(event.Index),
-								ID:    cb.Signature, // carries signature for echo-back
-							}
-							// Emit reasoning event with signature so agent can store it
-							emitted = true
-							ch <- StreamEvent{Type: StreamEventReasoning, ThinkingSignature: cb.Signature}
-						case "redacted_thinking":
-							debug.Log("anthropic", "content_block_start redacted_thinking idx=%d data_len=%d", event.Index, len(cb.Data))
-							// Register with empty Name (like the thinking branch)
-							// so content_block_stop's `tc.Name != ""` check skips
-							// it — redacted thinking is reasoning data, not a
-							// tool call. Echo-back happens via the reasoning
-							// event below (#224).
-							toolCalls[int(event.Index)] = &ToolCallDelta{
-								Index: int(event.Index),
-								ID:    cb.Data, // carries redacted data for echo-back
-							}
-							// Emit reasoning event with redacted data for echo-back
-							emitted = true
-							ch <- StreamEvent{Type: StreamEventReasoning, Text: "__redacted_thinking__", ThinkingSignature: cb.Data}
 						}
-
 					case "content_block_delta":
 						delta := event.Delta
 						switch delta.Type {
@@ -835,47 +792,11 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 						}
 
 					case "content_block_stop":
-						idx := int(event.Index)
-						if tc, ok := toolCalls[idx]; ok && tc.ServerTool {
-							debug.Log("anthropic", "content_block_stop server_tool_use id=%s name=%s", tc.ID, tc.Name)
+						dc, de := handleContentBlockStop(ch, toolCalls, int(event.Index))
+						outputChars += dc
+						if de {
 							emitted = true
-							if tc.Name == "code_execution" {
-								// PTC: the code execution call streams as a regular
-								// tool_use block executed in-API. Store the FULL tool_use
-								// block fields so the next request echoes back a valid
-								// tool_use (type+caller), not a bare server_tool_use.
-								ch <- StreamEvent{
-									Type: StreamEventServerTool,
-									Block: ContentBlock{
-										Type:      "tool_use",
-										ToolID:    tc.ID,
-										ToolName:  tc.Name,
-										Input:     tc.Arguments,
-										CallerRaw: tc.Caller,
-									},
-								}
-							} else {
-								ch <- StreamEvent{
-									Type: StreamEventServerTool,
-									Block: ContentBlock{
-										Type: "server_tool_use",
-										ID:   tc.ID,
-										Raw:  serverToolUseRaw(tc.ID, tc.Name, tc.Arguments),
-									},
-								}
-							}
-							delete(toolCalls, idx)
-						} else if tc, ok := toolCalls[idx]; ok && tc.Name != "" {
-							debug.Log("anthropic", "content_block_stop tool_call id=%s name=%s args=%s", tc.ID, tc.Name, string(tc.Arguments))
-							outputChars += len(tc.Name) + len(tc.Arguments)
-							emitted = true
-							ch <- StreamEvent{
-								Type: StreamEventToolCallDone,
-								Tool: *tc,
-							}
-							delete(toolCalls, idx)
 						}
-
 					case "message_delta":
 						// #2129: symmetric zero-guard with the input/cache tokens
 						// below (#722/#1168): the SSE protocol allows MULTIPLE
@@ -980,17 +901,12 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []Message, 
 					}
 					// Retry if no content has been emitted yet and the error is retryable.
 					if !emitted && isRetryableForContext(ctx, err) && attempt < p.policy.attempts()-1 {
-						// Notify user about retry
-						delay := retryDelay(err, attempt)
-						ch <- StreamEvent{Type: StreamEventSystem, Text: fmt.Sprintf("[Retry %d/%d, waiting %v...] ", attempt+1, p.policy.attempts(), delay)}
-						if sleepErr := budget.sleep(ctx, delay); sleepErr != nil {
-							// #722: budget exhausted — stop retrying now; wrap with the
-							// sentinel so the failover layer switches immediately.
-							if sleepErr == errRetryBudgetExhausted {
-								sleepErr = fmt.Errorf("%w: %w", errRetryBudgetExhausted, err)
+						slept, sErr := p.sleepBeforeRetry(ctx, ch, budget, err, attempt)
+						if !slept {
+							if sErr != nil {
+								ch <- StreamEvent{Type: StreamEventError, Error: sErr}
+								streamError = true
 							}
-							ch <- StreamEvent{Type: StreamEventError, Error: sleepErr}
-							streamError = true
 							return
 						}
 						retry = true
@@ -1177,7 +1093,31 @@ func (p *AnthropicProvider) remoteCountTokens(ctx context.Context, messages []Me
 // buildCountTokensParams converts internal messages to the Anthropic
 // MessageCountTokensParams format, reusing the same block-conversion logic
 // as buildParams but without tool definitions or max_tokens.
+// appendToToolResultContent inserts the folded guidance text AFTER the last
+// tool_result block (or at the end when none exists). Anthropic requires
+// tool_result blocks to be the first content of the user turn that answers
+// tool_use, so the OpenAI-style prepend-before ordering is invalid here (#2819).
+func appendToToolResultContent(blocks []ContentBlock, prefix string) []ContentBlock {
+	lastToolResult := -1
+	for i, b := range blocks {
+		if b.Type == "tool_result" {
+			lastToolResult = i
+		}
+	}
+	if lastToolResult < 0 {
+		return append(blocks, ContentBlock{Type: "text", Text: prefix})
+	}
+	result := make([]ContentBlock, 0, len(blocks)+1)
+	result = append(result, blocks[:lastToolResult+1]...)
+	result = append(result, ContentBlock{Type: "text", Text: prefix})
+	result = append(result, blocks[lastToolResult+1:]...)
+	return result
+}
+
 func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic.MessageCountTokensParams {
+	// #2819: fold detector-injected text-only user messages into the following
+	// tool_result message (Anthropic ordering: tool_result blocks first).
+	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
 	type sysBlock struct {
 		text string
@@ -1282,6 +1222,12 @@ func (p *AnthropicProvider) buildCountTokensParams(messages []Message) anthropic
 // resolve large images into Files API file_ids (the upload happens inline here,
 // at most once per unique image, and is cancellable with the request).
 func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message, tools []ToolDefinition) anthropic.MessageNewParams {
+	// #2819: mid-loop detectors inject guidance as text-only user messages
+	// between assistant tool_use and user tool_result. Anthropic rejects that
+	// sequence with a 400 ("tool_use ids found without tool_result blocks
+	// immediately after") and the loop cannot self-heal. Fold such messages
+	// into the tool_result turn, keeping tool_result blocks first.
+	messages = foldInjectedUserMessages(messages, appendToToolResultContent)
 	var msgParams []anthropic.MessageParam
 	// Collect system content blocks preserving cache hints so we can emit
 	// separate Anthropic text blocks with selective cache_control breakpoints.

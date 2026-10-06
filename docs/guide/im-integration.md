@@ -70,7 +70,7 @@ The agent can manage IM adapters and send messages via the `im` tool. This tool 
 | `disable` | `adapter` | Disable an adapter: moves binding to disabled state, drops connection. |
 | `enable` | `adapter` | Re-enable: moves binding back, reconnects. |
 | `send` | `adapter`, `message`, `auto_start?` | Send a text message to the adapter's bound channel. |
-| `send_file` | `adapter`, `path`, `caption?`, `auto_start?` | Push a local file to the bound channel. Image files (png/jpg/jpeg/gif/webp, ≤20MB, absolute path) are uploaded as media on media-capable adapters (qq/telegram/discord/feishu/matrix/whatsapp/slack/mattermost/signal/wecom; wechat only carries public http(s) image URLs, so local files degrade to path text there); other file types are delivered as the file path text. Message text that contains local image paths also triggers media upload automatically — no explicit call needed. |
+| `send_file` | `adapter`, `path`, `caption?`, `auto_start?` | Push a local file to the bound channel (absolute path, ≤20MB). Image files (png/jpg/jpeg/gif/webp) are uploaded as preview-capable media; on adapters implementing the file channel (#3316 — telegram/qq/discord/matrix/slack) ANY file type is uploaded as a real downloadable file/document (caption rides the same message where the platform allows it, otherwise as a follow-up text). On other adapters non-image files are delivered as the file path text; wechat only carries public http(s) image URLs, so local files degrade to path text there. Message text that contains local image paths also triggers media upload automatically — no explicit call needed. |
 
 ### Send with `auto_start`
 

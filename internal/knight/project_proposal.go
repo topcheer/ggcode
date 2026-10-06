@@ -134,8 +134,18 @@ func gitStatusSnapshot(dir string) string {
 	var b strings.Builder
 	for _, line := range strings.Split(string(out), "\n") {
 		if len(line) > 3 && strings.HasPrefix(line[3:], prefix) {
+			rest := strings.TrimPrefix(line[3:], prefix)
+			// #2755: a staged rename reads "R old -> new" and BOTH sides are
+			// root-relative. The old whole-line strip left the dst side
+			// prefixed ("R .ggcode/a.md -> mobile/.ggcode/b.md"), so the pure
+			// .ggcode rename exemption (which requires both sides in .ggcode)
+			// failed in monorepo subdirs and fired a false guardrail
+			// violation. Strip the dst side too.
+			if arrow := strings.Index(rest, " -> "); arrow >= 0 {
+				rest = rest[:arrow] + " -> " + strings.TrimPrefix(rest[arrow+4:], prefix)
+			}
 			b.WriteString(line[:3])
-			b.WriteString(line[3+len(prefix):])
+			b.WriteString(rest)
 		} else {
 			b.WriteString(line)
 		}
@@ -372,9 +382,25 @@ func (k *Knight) writeProjectImprovementProposal(goal, content string) (ProjectI
 	// proposals - AtomicWriteFile overwrote the first .md and the jsonl
 	// collapse kept only the latest, silently losing the first proposal.
 	// Millisecond suffix disambiguates.
-	id := now.Format("20060102-150405") + "-" + slugifyProjectProposal(title) + "-" + now.Format("150405.000000000")[9:]
-	if len(id) > 80 {
-		id = id[:80]
+	//
+	// #3024: the slug must be truncated BEFORE assembling the id. The old
+	// whole-id [:80] cut ate the disambiguating suffix first whenever the
+	// slug ran past 53 chars, deterministically re-creating the #1576-B
+	// collision for long titles generated in the same second.
+	const proposalIDMaxLen = 80
+	timestamp := now.Format("20060102-150405")
+	suffix := now.Format("150405.000000000")[9:]
+	slugBudget := proposalIDMaxLen - len(timestamp) - 2 /* separators */ - len(suffix)
+	if slugBudget < 1 {
+		slugBudget = 1
+	}
+	slug := slugifyProjectProposal(title)
+	if len(slug) > slugBudget {
+		slug = slug[:slugBudget]
+	}
+	id := timestamp + "-" + slug + "-" + suffix
+	if len(id) > proposalIDMaxLen {
+		id = id[:proposalIDMaxLen]
 	}
 	dir := filepath.Join(k.projDir, ".ggcode", "project-proposals")
 	path := filepath.Join(dir, id+".md")

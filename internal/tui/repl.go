@@ -320,6 +320,10 @@ func (r *REPL) SetCore(core *agentruntime.InteractiveRuntimeCore) {
 		r.model.tunnelHost.Close()
 	}
 	r.model.tunnelHost = core.Tunnel
+	// Wire the start_share/stop_share tools to this session (same injection
+	// pattern as SetIMManager / injectMobileFileSender). The tools then live
+	// for the whole session; ShareActive gates per-call behavior.
+	r.injectShareController()
 
 	// Wire the code index manager from the tool registry to the agent so
 	// that @ fuzzy file search (CompleteMention) can use it.
@@ -784,6 +788,15 @@ func (r *REPL) SetSystemPromptBuilder(fn func(task, agentType string) string) {
 }
 
 // SetSubAgentManager wires the sub-agent manager and registers sub-agent tools.
+// SetJobManager wires the shared background-command manager to the TUI model
+// so exit-time shutdownAll can reap running start_command jobs (r71).
+func (r *REPL) SetJobManager(jm *tool.CommandJobManager) {
+	if jm == nil {
+		return
+	}
+	r.model.SetJobManager(jm)
+}
+
 func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider, tools *tool.Registry) {
 	r.model.SetSubAgentManager(mgr)
 
@@ -824,7 +837,7 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		}
 		return ""
 	}
-	tools.Register(tool.SpawnAgentTool{
+	spawnTool := tool.SpawnAgentTool{
 		Manager:             mgr,
 		Provider:            prov,
 		ProviderGetter:      providerGetter,
@@ -833,7 +846,18 @@ func (r *REPL) SetSubAgentManager(mgr *subagent.Manager, prov provider.Provider,
 		AgentFactory:        factory,
 		WorkingDir:          r.model.agent.WorkingDir(),
 		OnUsage:             func(usage provider.TokenUsage) { r.recordSessionUsage(usage, "subagent") },
+		OnMetric:            r.metricCollector.Emit,
 		SystemPromptBuilder: r.systemPromptBuilder,
+	}
+	tools.Register(spawnTool)
+	tools.Register(tool.BestOfNTool{
+		Manager: mgr,
+		Run:     agentruntime.BestOfNRunnerFor(spawnTool, mgr),
+	})
+	// r436: dynamic workflow orchestration (externalized task graph).
+	tools.Register(tool.WorkflowRunTool{
+		Manager: mgr,
+		Run:     agentruntime.WorkflowRunnerFor(spawnTool, mgr),
 	})
 	cascadeHints := tool.NewCascadeHintTracker()
 	tools.Register(tool.WaitAgentTool{
@@ -1142,7 +1166,8 @@ func (r *REPL) SetACPClientManager(mgr *acpclient.ClientManager) {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			return permission.Deny
+			// #3370: run cancelled while awaiting the user - not a denial.
+			return permission.DecisionFromContext(ctx.Err())
 		}
 	})
 }
@@ -1457,6 +1482,11 @@ func (r *REPL) Run() error {
 	traceMark("markdown warmup")
 
 	r.program = tea.NewProgram(r.model)
+	// #2844: give the Model a thread-safe message injector so background
+	// goroutines (context probe results) never touch shared state directly.
+	// Assignment happens before Run(), so the happens-before edge is the
+	// program startup itself.
+	r.model.tuiSend = func(msg tea.Msg) { r.sendTUI(msg) }
 	if r.planSwitcher != nil {
 		r.planSwitcher.program = r.program
 	}
@@ -1533,7 +1563,8 @@ func (r *REPL) Run() error {
 		case d := <-resp:
 			return d
 		case <-ctx.Done():
-			return permission.Deny
+			// #3370: TUI exit / run cancel while awaiting the user - not a denial.
+			return permission.DecisionFromContext(ctx.Err())
 		}
 	})
 	traceMark("wire approval handler")

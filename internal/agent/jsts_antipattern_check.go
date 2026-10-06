@@ -40,13 +40,19 @@ type jstsAntiPattern struct {
 	description string
 	// tsOnly restricts to .ts/.tsx/.mts/.cts files (not plain JS)
 	tsOnly bool
+	// commentDirective marks patterns whose target lives inside comments
+	// (@ts-ignore / @ts-nocheck / @ts-expect-error are compiler directives
+	// written as line comments). These are scanned against a strings-only
+	// stripped view: string contents removed, comments KEPT - stripping
+	// comments would strip the detection target itself (#2904).
+	commentDirective bool
 }
 
 // jstsAntiPatterns lists the anti-patterns to detect, ordered by severity.
 var jstsAntiPatterns = []jstsAntiPattern{
 	{
 		name:        "loose equality ==/!=",
-		pattern:     regexp.MustCompile(`[^=!<>]==[^=]`),
+		pattern:     regexp.MustCompile(`[^=!<>]==[^=]|[^=!<>]!=[^=]`),
 		description: "Loose equality (== or !=) performs type coercion and can cause subtle bugs. Use strict equality (=== or !==) instead.",
 	},
 	{
@@ -72,10 +78,11 @@ var jstsAntiPatterns = []jstsAntiPattern{
 		description: "Empty catch block silently swallows errors. At minimum, log the error or rethrow it. If intentional, add a comment explaining why.",
 	},
 	{
-		name:        "@ts-ignore/@ts-nocheck/@ts-expect-error suppression",
-		pattern:     regexp.MustCompile(`@ts-(?:ignore|nocheck|expect-error)`),
-		description: "@ts-ignore/@ts-nocheck/@ts-expect-error suppresses TypeScript compiler diagnostics, masking potential type errors. Fix the underlying type issue instead.",
-		tsOnly:      true,
+		name:             "@ts-ignore/@ts-nocheck/@ts-expect-error suppression",
+		pattern:          regexp.MustCompile(`@ts-(?:ignore|nocheck|expect-error)`),
+		commentDirective: true,
+		description:      "@ts-ignore/@ts-nocheck/@ts-expect-error suppresses TypeScript compiler diagnostics, masking potential type errors. Fix the underlying type issue instead.",
+		tsOnly:           true,
 	},
 }
 
@@ -115,15 +122,21 @@ func isExemptJSTSPath(lowerPath string) bool {
 }
 
 // detectJSTSAntiPatternDeltas compares old vs new content for each applicable
-// anti-pattern and returns descriptions of newly introduced ones.
-func detectJSTSAntiPatternDeltas(scanOld, scanNew string, isTS bool) []string {
+// anti-pattern and returns descriptions of newly introduced ones. scanOld/
+// scanNew carry the comment+string stripped view; directiveOld/directiveNew
+// carry the strings-only view for comment-directive patterns (#2904).
+func detectJSTSAntiPatternDeltas(scanOld, scanNew, directiveOld, directiveNew string, isTS bool) []string {
 	var flagged []string
 	for _, ap := range jstsAntiPatterns {
 		if ap.tsOnly && !isTS {
 			continue
 		}
-		oldCount := len(ap.pattern.FindAllString(scanOld, -1))
-		newCount := len(ap.pattern.FindAllString(scanNew, -1))
+		oldSrc, newSrc := scanOld, scanNew
+		if ap.commentDirective {
+			oldSrc, newSrc = directiveOld, directiveNew
+		}
+		oldCount := len(ap.pattern.FindAllString(oldSrc, -1))
+		newCount := len(ap.pattern.FindAllString(newSrc, -1))
 		if introduced := newCount - oldCount; introduced > 0 {
 			flagged = append(flagged, fmt.Sprintf("%d x %s - %s", introduced, ap.name, ap.description))
 		}
@@ -133,6 +146,14 @@ func detectJSTSAntiPatternDeltas(scanOld, scanNew string, isTS bool) []string {
 
 // checkJSTSAntiPatterns detects JS/TS anti-patterns INTRODUCED by this edit.
 // Returns a combined warning string if any new anti-patterns are found.
+//
+// #2904: comment/string stripping. Old and new content are stripped through
+// jsStripCommentsAndStrings (line-level, same heuristic the insecure-pattern
+// JS path uses since #1063) BEFORE delta counting, so mentions inside string
+// literals ("expect(msg).toContain(': any')") or comments
+// ("// migrate var to let") no longer count as introduced anti-patterns.
+// Known limitation (shared with #1063): the stripper is line-scoped, so a
+// template literal opened on a previous line is not tracked across lines.
 func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
 	if strings.TrimSpace(newContent) == "" {
 		return ""
@@ -148,7 +169,8 @@ func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
 	}
 
 	flagged := detectJSTSAntiPatternDeltas(
-		capScanLen(oldContent), capScanLen(newContent), tsExts[ext],
+		capScanLen(jstsStripForScan(oldContent)), capScanLen(jstsStripForScan(newContent)),
+		capScanLen(jstsStripStringsOnly(oldContent)), capScanLen(jstsStripStringsOnly(newContent)), tsExts[ext],
 	)
 	if len(flagged) == 0 {
 		return ""
@@ -158,4 +180,61 @@ func checkJSTSAntiPatterns(filePath, oldContent, newContent string) string {
 		"[JS/TS Anti-Pattern Warning] Detected %d new anti-pattern(s) introduced by this edit:\n%s",
 		len(flagged), strings.Join(flagged, "\n"),
 	)
+}
+
+// jstsStripForScan strips comments and string-literal contents from every
+// line so pattern counting only sees real code. Line structure is preserved
+// (one output line per input line) to keep multi-line patterns such as the
+// empty-catch regex working across the stripped text.
+func jstsStripForScan(content string) string {
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for i, ln := range lines {
+		lines[i] = jsStripCommentsAndStrings(ln)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// jstsStripStringsOnly removes string-literal contents but KEEPS comments,
+// for comment-directive patterns (@ts-ignore etc.) whose detection target is
+// the comment text itself (#2904).
+func jstsStripStringsOnly(content string) string {
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for i, ln := range lines {
+		lines[i] = stripJSStringLiteralsKeepComments(ln)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// stripJSStringLiteralsKeepComments removes '...'/"..."/`...` literal
+// contents from a single line, leaving everything else (including // comments)
+// intact. Escape sequences inside quotes are honored.
+func stripJSStringLiteralsKeepComments(line string) string {
+	var b strings.Builder
+	r := []rune(line)
+	n := len(r)
+	i := 0
+	for i < n {
+		c := r[i]
+		if c == '\'' || c == '"' || c == '`' {
+			quote := c
+			j := i + 1
+			for j < n && r[j] != quote {
+				if r[j] == '\\' && j+1 < n {
+					j++ // skip escaped char
+				}
+				j++
+			}
+			i = j + 1 // consume contents + closing quote (or rest of line)
+			continue
+		}
+		b.WriteRune(c)
+		i++
+	}
+	return b.String()
 }

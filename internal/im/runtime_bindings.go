@@ -965,8 +965,81 @@ func (m *Manager) SyncSessionHistory(ctx context.Context, binding ChannelBinding
 	return nil
 }
 
+// ReservePassiveSeqs atomically reserves n passive-reply seq slots for the
+// binding matching (workspace, messageID) and returns the first usable seq
+// (store count before reservation + 1). The reservation happens in the
+// binding store under its cross-process file lock when the store implements
+// PassiveSeqReserver (#3319: TUI + daemon instances each holding divergent
+// in-memory counters previously emitted the same msg_seq and QQ deduplicated
+// one send away). Stores without the capability fall back to the in-process
+// counter (single-instance behavior, unchanged).
+//
+// Reserving before sending (rather than recording after) may skip seq
+// numbers when a send later fails; skipping is safe - the server dedup key
+// only requires uniqueness, not density.
+func (m *Manager) ReservePassiveSeqs(workspace, messageID string, n int) (int, error) {
+	if n < 1 {
+		return 0, fmt.Errorf("reserving %d passive seqs: n must be >= 1", n)
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return 0, ErrNoChannelBound
+	}
+	if reserver, ok := m.bindingStore.(PassiveSeqReserver); ok {
+		start, err := reserver.ReservePassiveSeqs(workspace, messageID, n)
+		if err != nil {
+			return 0, err
+		}
+		// Sync the in-memory view so subsequent reads (window checks, UI)
+		// observe the reserved count. Best-effort: the store is the source
+		// of truth; a stale memory copy only lags, never double-allocates.
+		m.mu.Lock()
+		for k, b := range m.currentBindings {
+			if normalizeWorkspace(b.Workspace) == normalizeWorkspace(workspace) &&
+				strings.TrimSpace(b.LastInboundMessageID) == messageID && b.PassiveReplyCount < start+n-1 {
+				b.PassiveReplyCount = start + n - 1
+				if b.PassiveReplyStartedAt.IsZero() {
+					b.PassiveReplyStartedAt = time.Now()
+				}
+				m.currentBindings[k] = b
+			}
+		}
+		snapshot, cb := m.snapshotAndCallbackLocked()
+		m.mu.Unlock()
+		if cb != nil {
+			cb(snapshot)
+		}
+		return start, nil
+	}
+	// Fallback: in-process reservation (single-instance semantics).
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.currentBindings {
+		if normalizeWorkspace(b.Workspace) != normalizeWorkspace(workspace) ||
+			strings.TrimSpace(b.LastInboundMessageID) != messageID {
+			continue
+		}
+		if b.PassiveReplyStartedAt.IsZero() {
+			b.PassiveReplyStartedAt = time.Now()
+		}
+		start := b.PassiveReplyCount + 1
+		b.PassiveReplyCount += n
+		if m.bindingStore != nil {
+			if err := m.persistBinding(*b); err != nil {
+				// #967 rollback semantics: don't let the counter drift ahead
+				// of what the store reflects.
+				b.PassiveReplyCount = start - 1
+				return 0, err
+			}
+		}
+		return start, nil
+	}
+	return 0, ErrNoChannelBound
+}
+
 func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Time) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if workspace == "" && m.session != nil {
 		workspace = m.session.Workspace
 	}
@@ -980,36 +1053,71 @@ func (m *Manager) RecordPassiveReply(workspace, messageID string, sentAt time.Ti
 		if messageID == "" || strings.TrimSpace(b.LastInboundMessageID) != messageID {
 			continue
 		}
-		if sentAt.IsZero() {
-			sentAt = time.Now()
-		}
-		if b.PassiveReplyStartedAt.IsZero() {
-			b.PassiveReplyStartedAt = sentAt
-		}
-		// #967: snapshot before mutating so a persist failure can roll back
-		// the counter (WeChat passive quota window would otherwise drift
-		// ahead of what the store reflects).
-		oldCount, oldStart := b.PassiveReplyCount, b.PassiveReplyStartedAt
-		b.PassiveReplyCount++
-		if m.bindingStore != nil {
-			if err := m.persistBinding(*b); err != nil {
-				b.PassiveReplyCount = oldCount
-				b.PassiveReplyStartedAt = oldStart
-				m.mu.Unlock()
-				return err
-			}
-		}
 		found = true
+		if err := m.recordPassiveReplyLocked(b, sentAt); err != nil {
+			return err
+		}
 		break
 	}
 	if !found {
-		m.mu.Unlock()
 		return ErrNoChannelBound
 	}
 	snapshot, cb := m.snapshotAndCallbackLocked()
-	m.mu.Unlock()
 	if cb != nil {
 		cb(snapshot)
+	}
+	return nil
+}
+
+// RecordPassiveReplyByMessage (#3326) locates the binding by its inbound
+// message id alone (no workspace at hand on echo paths) and records one
+// passive reply - everything under m.mu, unlike the adapter-side bare map
+// range it replaces.
+func (m *Manager) RecordPassiveReplyByMessage(messageID string, sentAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	messageID = strings.TrimSpace(messageID)
+	var found bool
+	for _, b := range m.currentBindings {
+		if messageID == "" || strings.TrimSpace(b.LastInboundMessageID) != messageID {
+			continue
+		}
+		found = true
+		if err := m.recordPassiveReplyLocked(b, sentAt); err != nil {
+			return err
+		}
+		break
+	}
+	if !found {
+		return ErrNoChannelBound
+	}
+	snapshot, cb := m.snapshotAndCallbackLocked()
+	if cb != nil {
+		cb(snapshot)
+	}
+	return nil
+}
+
+// recordPassiveReplyLocked advances one binding's passive-reply counter
+// with the #967 persist-rollback discipline. Caller holds m.mu.
+func (m *Manager) recordPassiveReplyLocked(b *ChannelBinding, sentAt time.Time) error {
+	if sentAt.IsZero() {
+		sentAt = time.Now()
+	}
+	if b.PassiveReplyStartedAt.IsZero() {
+		b.PassiveReplyStartedAt = sentAt
+	}
+	// #967: snapshot before mutating so a persist failure can roll back
+	// the counter (WeChat passive quota window would otherwise drift
+	// ahead of what the store reflects).
+	oldCount, oldStart := b.PassiveReplyCount, b.PassiveReplyStartedAt
+	b.PassiveReplyCount++
+	if m.bindingStore != nil {
+		if err := m.persistBinding(*b); err != nil {
+			b.PassiveReplyCount = oldCount
+			b.PassiveReplyStartedAt = oldStart
+			return err
+		}
 	}
 	return nil
 }
