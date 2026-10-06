@@ -81,8 +81,10 @@ type ToolPresenter interface {
 	Present(toolName, rawArgs string) (displayName, detail, activity string)
 }
 
-// ANSIColors for consistent rendering
-const (
+// ANSI escapes for consistent rendering. Declared as vars (not consts)
+// so a11y.go's init can blank them under NO_COLOR / non-TTY output
+// (sa-46 terminal accessibility) without touching call sites.
+var (
 	ansiDim       = "\033[2m"
 	ansiReset     = "\033[0m"
 	ansiClearLine = "\033[2K\r"
@@ -91,6 +93,9 @@ const (
 	ansiFgGreen   = "\033[32m"
 	ansiFgRed     = "\033[31m"
 	ansiBgBlue    = "\033[44m"
+)
+
+const (
 	// In raw terminal mode, \n only moves cursor down without returning to
 	// column 0. We must use \r\n for proper line breaks.
 	nl = "\r\n"

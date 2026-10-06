@@ -207,6 +207,23 @@ func TestResumeFlagWithValueIsParsedCorrectly(t *testing.T) {
 	}
 }
 
+// TestPlainFlagRegistered (sa-46): --plain must exist on the root command;
+// its runtime effect (setting NO_COLOR) is covered by the daemon package's
+// TestColorEnabledRespectsNoColor - this only pins the CLI surface.
+func TestPlainFlagRegistered(t *testing.T) {
+	cmd := NewRootCmd()
+	if err := cmd.ParseFlags([]string{"--plain"}); err != nil {
+		t.Fatalf("ParseFlags() error = %v", err)
+	}
+	plainFlag, err := cmd.Flags().GetBool("plain")
+	if err != nil {
+		t.Fatalf("GetBool(plain) error = %v", err)
+	}
+	if !plainFlag {
+		t.Fatal("expected --plain to be true after parsing")
+	}
+}
+
 func TestResumeFlagPickerKeywordTriggersPicker(t *testing.T) {
 	cmd := NewRootCmd()
 	if err := cmd.ParseFlags([]string{"--resume-picker"}); err != nil {

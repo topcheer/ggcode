@@ -54,6 +54,7 @@ func NewRootCmd() *cobra.Command {
 	var allowedDirs []string
 	var readOnlyAllowedDirs []string
 	var bypassFlag bool
+	var plainFlag bool
 	var outputPath string
 	var outputSchemaPath string
 	// r415 per-run budget overrides (see the RunE mutation site).
@@ -120,6 +121,15 @@ func NewRootCmd() *cobra.Command {
 			} else {
 				for _, w := range persistWarnings {
 					fmt.Fprintln(os.Stderr, "warning:", w)
+				}
+			}
+
+			// --plain (sa-46 terminal accessibility): set NO_COLOR early so
+			// every downstream renderer (daemon follow escapes, lipgloss TUI
+			// styles, spinners) converges on the same plain-output path.
+			if plainFlag {
+				if err := os.Setenv("NO_COLOR", "1"); err != nil {
+					fmt.Fprintln(os.Stderr, "warning: failed to set NO_COLOR:", err)
 				}
 			}
 
@@ -200,6 +210,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&readOnlyAllowedDirs, "readOnlyAllowedDir", nil, "extra read-only sandbox directory for pipe mode (can be repeated)")
 	_ = cmd.Flags().MarkHidden("readOnlyAllowedDir")
 	cmd.Flags().BoolVar(&bypassFlag, "bypass", false, "start in bypass permission mode (auto-approve safe ops, warn on dangerous)")
+	cmd.Flags().BoolVar(&plainFlag, "plain", false, "disable ANSI colors and decorative rendering (dumb terminals, screen readers, piped output; sets NO_COLOR)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "output file path (default: stdout)")
 	cmd.Flags().StringVar(&outputSchemaPath, "output-schema", "", "path to a JSON Schema the final response must conform to (structured outputs; supported endpoints constrain decoding, others fall back to prompt guidance)")
 	// r415: per-run budget overrides (this invocation only, not persisted).
