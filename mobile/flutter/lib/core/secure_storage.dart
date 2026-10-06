@@ -110,16 +110,29 @@ class SecureTokenStorage {
       if (_fallbackWritesByKey[key] == true) {
         final prefs = await SharedPreferences.getInstance();
         final fallbackValue = prefs.getString(fallbackKey);
-        if (fallbackValue != null && fallbackValue != result) {
+        // #3452: gate the plaintext-copy deletion on "the secure store
+        // durably holds the newest value" - the same discipline the write
+        // path follows before deleting its copy.
+        var secured = fallbackValue == null || fallbackValue == result;
+        if (!secured) {
           try {
             await _storage
                 .write(key: key, value: fallbackValue)
                 .timeout(_timeout);
+            secured = true;
             debugPrint(
                 '[secure_storage] healed $key from newer fallback value written during degradation');
           } catch (_) {
             // Heal is best-effort; the newer value is still returned.
           }
+        }
+        if (!secured) {
+          // #3452: the heal write failed (quota/ACL/timeout) - the prefs
+          // copy is the ONLY persistent copy of the user's newer value
+          // (token-bearing JSON). Keep it AND the flag so a later read
+          // retries the heal; deleting them unconditionally was the #2814
+          // regression that destroyed the edit on the next launch.
+          return fallbackValue;
         }
         _fallbackWritesByKey.remove(key);
         // #2814: once the secure store holds the healed value, the plaintext
