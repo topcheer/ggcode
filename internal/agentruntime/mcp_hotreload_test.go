@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/config"
+	"github.com/topcheer/ggcode/internal/mcp"
 	"github.com/topcheer/ggcode/internal/plugin"
 	"github.com/topcheer/ggcode/internal/tool"
 )
@@ -79,6 +80,85 @@ func TestMCPHotReloadGlobalEditKeepsWorkspaceServers(t *testing.T) {
 	}
 }
 
+// TestMCPHotReloadGatesProjectMCPServers: a .mcp.json appearing behind a
+// running session must not add child processes on reload until the user
+// approves it - the same containment as startup, pinned at the watcher.
+func TestMCPHotReloadGatesProjectMCPServers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(mcp.ProjectGateEnvVar, "")
+	globalDir := filepath.Join(home, ".ggcode")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(globalDir, "mcp_servers.yaml")
+	writeMCPYAML(t, globalPath, "global-srv")
+
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, ".mcp.json"), []byte(`{"mcpServers":{"proj-srv":{"type":"stdio","command":"node","args":["server.js"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := plugin.NewMCPManager([]config.MCPServerConfig{
+		{Name: "global-srv", Type: "stdio", Command: "echo"},
+	}, tool.NewRegistry(), "")
+	w := NewMCPHotReload(globalDir, ws, mgr)
+	time.Sleep(10 * time.Millisecond)
+	// Seed baselines with a PAST mtime (mirrors Start()'s seeding of real
+	// file states): detection advances on mtime, so a future watermark would
+	// swallow every subsequent edit.
+	past := time.Now().Add(-1 * time.Second)
+	for _, p := range w.watchedPaths() {
+		w.watched[p] = &watchState{exists: true, mtime: past, hash: hashFile(p)}
+	}
+
+	snapshotNames := func() map[string]bool {
+		out := map[string]bool{}
+		for _, s := range mgr.Snapshot() {
+			out[s.Name] = true
+		}
+		return out
+	}
+
+	// pollUntilReload waits for the watcher's reload to reach the manager.
+	// Reload effects are asynchronous (existing #497 tests poll too), so a
+	// reload is only known to have fired once its content is observable.
+	pollUntilReload := func(want string, deadline time.Duration) bool {
+		timeout := time.Now().Add(deadline)
+		for time.Now().Before(timeout) {
+			if snapshotNames()[want] {
+				return true
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return false
+	}
+
+	// Phase 1: a real reload (distinct content so the watermark moves) that
+	// merges the workspace .mcp.json - the gate must keep the project server
+	// out while the user-owned server lands.
+	writeMCPYAML(t, globalPath, "global-srv2")
+	w.checkAndReload(context.Background())
+	if !pollUntilReload("global-srv2", 5*time.Second) {
+		t.Fatalf("reload never reached the manager; snapshot=%v", snapshotNames())
+	}
+	if snapshotNames()["proj-srv"] {
+		t.Fatal("reload must not admit unapproved project .mcp.json server")
+	}
+
+	// Phase 2: approving via the same API the CLI uses must let the server
+	// in on the NEXT reload (another watched edit re-fires the merge).
+	merged, _ := mcp.MergeStartupServersWithDeleted(ws, nil, nil)
+	if approved, err := mcp.ApproveProjectServers(ws, merged, []string{"proj-srv"}); err != nil || approved != 1 {
+		t.Fatalf("approve: %d %v", approved, err)
+	}
+	writeMCPYAML(t, globalPath, "global-srv3")
+	w.checkAndReload(context.Background())
+	if !pollUntilReload("proj-srv", 5*time.Second) {
+		t.Fatalf("approved project server must appear after approval reload; snapshot=%v", snapshotNames())
+	}
+}
+
 // TestMCPHotReloadWorkspaceFileTriggersReload: editing the WORKSPACE
 // mcp_servers.yaml must be detected (previously only the global file was
 // watched — a manual workspace edit never reloaded the manager).
@@ -140,5 +220,34 @@ func TestMCPHotReloadNoReloadStormWithoutGlobalFile(t *testing.T) {
 	after := mgr.Snapshot()
 	if len(before) != len(after) {
 		t.Fatalf("reload storm: snapshot changed across quiet ticks (%d → %d)", len(before), len(after))
+	}
+}
+
+// TestMCPHotReloadWatchesProjectGrants (#3438 follow-up): the grants file
+// must be in watchedPaths — without it `ggcode mcp approve` only takes
+// effect after a restart, because the gate re-runs exclusively on
+// watched-file reloads.
+func TestMCPHotReloadWatchesProjectGrants(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	globalDir := filepath.Join(home, ".ggcode")
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws := t.TempDir()
+	w := NewMCPHotReload(globalDir, ws, plugin.NewMCPManager(nil, tool.NewRegistry(), ""))
+
+	grantsPath := mcp.ProjectGrantsPath(ws)
+	if grantsPath == "" {
+		t.Fatal("precondition: grants path must be resolvable for a workspace")
+	}
+	found := false
+	for _, p := range w.watchedPaths() {
+		if p == grantsPath {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("grants file %s missing from watchedPaths: %v", grantsPath, w.watchedPaths())
 	}
 }

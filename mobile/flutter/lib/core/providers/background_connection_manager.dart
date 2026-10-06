@@ -213,6 +213,14 @@ class BackgroundConnectionManager extends Notifier<void> {
   String? urlForSession(String sessionId) => _sessionIdToUrl[sessionId];
 
   void _disposeAll() {
+    // #3449: clear-cache must PERSIST the teardown, not just drop it from
+    // memory. connectAllCachedSessions restores store.alive connections on
+    // the next launch, so tearing down the sockets while leaving the alive
+    // flags set resurrects exactly the sessions the user just cleared.
+    // Mirror the graceful-shutdown path (markAllDead).
+    ConnectionStore.instance
+        .load()
+        .then((_) => ConnectionStore.instance.markAllDead());
     for (final subs in _subscriptions.values) {
       for (final s in subs) {
         s.cancel();
