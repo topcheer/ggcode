@@ -44,6 +44,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -302,6 +303,29 @@ func (a *Agent) recordUserRefusals(userText string) {
 		a.refusalLedger.record(ex, "nl")
 	}
 }
+
+// remoteRefusalInhibit (#3460): consume-once gate marking the NEXT run as
+// remote-origin (LAN Chat @agent DM / IM inbound), whose user text must NOT
+// mutate the persistent refusal ledger. The ledger turns conversational
+// refusals into 30-day cross-run write blocks; a LAN peer can forge
+// FromRole=agent (self-reported, unauthenticated) and inject "never touch
+// X" into an auto-approved DM, permanently poisoning the workspace without
+// the local user ever seeing the message. Remote runs skip BOTH record and
+// release - a remote "you may X now" lifting the user's own blocks is the
+// same integrity violation in reverse.
+var remoteRefusalInhibit atomic.Bool
+
+// InhibitNextRefusalLedgerWrite marks the next agent run as remote-origin:
+// its user text is exempt from refusal-ledger record/release. Set by the
+// TUI at the remote injection boundaries (lanchat DM / IM inbound) right
+// before triggering the run; consumed by RunStreamWithContent at the
+// ledger gate.
+func (a *Agent) InhibitNextRefusalLedgerWrite() { remoteRefusalInhibit.Store(true) }
+
+// consumeRemoteRefusalInhibit returns and clears the flag. Call once per
+// candidate ledger mutation site; the first consumer wins and later sites
+// in the same run see false (record and release sit in the same gate).
+func consumeRemoteRefusalInhibit() bool { return remoteRefusalInhibit.Swap(false) }
 
 // ReleaseMatchingRefusals lifts refusals matching the user's lift text.
 func (a *Agent) ReleaseMatchingRefusals(text string) int {

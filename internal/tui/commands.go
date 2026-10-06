@@ -666,6 +666,9 @@ func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
 	// Persist as a normal user message — lanchat messages ARE user messages,
 	// they just originate from an external agent instead of the keyboard.
 	m.appendUserMessage(text)
+	// #3460: remote-origin text must not mutate the refusal ledger (a
+	// forged FromRole=agent DM could poison/lift 30-day write blocks).
+	m.agent.InhibitNextRefusalLedgerWrite()
 	// Inject into the agent loop so the agent can process and respond
 	return m.continueDisplayedNormalTextRun(text)
 }
