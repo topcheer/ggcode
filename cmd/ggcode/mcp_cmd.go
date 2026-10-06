@@ -264,8 +264,12 @@ func loadMCPConfig(path string, persistClaude bool) (*config.Config, error) {
 		}
 	}
 	if persistClaude {
-		if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
+		if persistWarnings, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
 			return nil, fmt.Errorf("persisting Claude MCP servers: %w", err)
+		} else {
+			for _, w := range persistWarnings {
+				fmt.Fprintln(os.Stderr, "warning:", w)
+			}
 		}
 	}
 	return cfg, nil

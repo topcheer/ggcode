@@ -115,8 +115,12 @@ func NewRootCmd() *cobra.Command {
 			if timeBudgetFlag > 0 {
 				cfg.SessionTimeBudget = timeBudgetFlag
 			}
-			if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
+			if persistWarnings, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
 				return fmt.Errorf("persisting Claude MCP servers: %w", err)
+			} else {
+				for _, w := range persistWarnings {
+					fmt.Fprintln(os.Stderr, "warning:", w)
+				}
 			}
 
 			// Pipe mode: non-interactive single execution

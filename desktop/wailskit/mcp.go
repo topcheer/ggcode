@@ -249,8 +249,30 @@ func reloadSessionMCPServers(chat *ChatBridge, cfg *config.Config) {
 	if chat != nil {
 		workDir = chat.WorkingDir()
 	}
-	merged, _ := mcp.MergeStartupServersWithDeleted(workDir, cfg.MCPServers, cfg.DeletedMCPServers)
-	chat.mcpManager.Reload(context.Background(), merged)
+	merged, mergeWarnings := mcp.MergeStartupServersWithDeleted(workDir, cfg.MCPServers, cfg.DeletedMCPServers)
+	// Containment parity (#3438 follow-up): the desktop panel reload channel
+	// must not bypass the workspace trust gate - any Add/Update/Remove here
+	// re-merges every source, which would resurrect ungated .mcp.json
+	// servers as connected child processes. Same gate as CLI startup
+	// (agentruntime interactive_core.go) and hot-reload (mcp_hotreload.go).
+	allowed, blocked, gateWarnings := mcp.GateProjectServers(merged, workDir)
+	for _, warning := range append(mergeWarnings, gateWarnings...) {
+		debug.Log("mcp", "%s", warning)
+	}
+	if len(blocked) > 0 || len(mergeWarnings) > 0 {
+		blockedNames := make([]string, 0, len(blocked))
+		for _, b := range blocked {
+			blockedNames = append(blockedNames, b.Name)
+		}
+		payload := map[string]any{
+			"blocked":  blockedNames,
+			"warnings": mergeWarnings,
+		}
+		if raw, err := json.Marshal(payload); err == nil && chat.OnStreamEvent != nil {
+			chat.OnStreamEvent("mcp:gate", raw)
+		}
+	}
+	chat.mcpManager.Reload(context.Background(), allowed)
 }
 
 // AddMCPServer adds a new MCP server configuration.

@@ -166,11 +166,11 @@ func (w *MCPHotReload) checkAndReload(ctx context.Context) {
 	// the panel / tombstone path.
 	servers := w.resolveScopeMCPServers()
 	deleted := config.LoadMCPDeleted(w.configDir)
-	merged, _ := mcp.MergeStartupServersWithDeleted(w.workingDir, servers, deleted)
+	merged, mergeWarnings := mcp.MergeStartupServersWithDeleted(w.workingDir, servers, deleted)
 	// Same containment as startup: a .mcp.json added or edited behind the
 	// running session's back cannot start new child processes unasked.
 	merged, gateWarnings := applyProjectMCPGate(merged, w.workingDir)
-	for _, warning := range gateWarnings {
+	for _, warning := range append(mergeWarnings, gateWarnings...) {
 		debug.Log("mcp", "%s", warning)
 	}
 	w.manager.Reload(ctx, merged)
@@ -185,6 +185,12 @@ func (w *MCPHotReload) watchedPaths() []string {
 		if !slices.Contains(paths, p) {
 			paths = append(paths, p)
 		}
+	}
+	// Watch the project-gate grants file too (#3438 follow-up): without
+	// this, `ggcode mcp approve` only takes effect after a restart, because
+	// the gate re-runs exclusively on watched-file reloads.
+	if grantsPath := mcp.ProjectGrantsPath(w.workingDir); grantsPath != "" && !slices.Contains(paths, grantsPath) {
+		paths = append(paths, grantsPath)
 	}
 	return paths
 }
