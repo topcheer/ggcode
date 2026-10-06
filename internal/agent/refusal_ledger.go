@@ -116,6 +116,28 @@ var refusalNegatePattern = regexp.MustCompile(
 var refusalReleasePattern = regexp.MustCompile(
 	`(?i)\b(?:ok|fine|alright|go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|it'?s ok|lift|解除|允许|可以了)\b[^\n.]{0,80}`)
 
+// #3469 reaffirmation guard: lift text that ALSO continues the refusal is
+// a reaffirmation, not a release. "Ok, don't touch config.yaml, that's
+// exactly right" must never silently delete the 30-day block.
+var refusalReaffirmPattern = regexp.MustCompile(
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|别|不许|不要|禁止)\b`)
+
+// #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
+// weak to release on their own (reaffirmations routinely start with
+// them); they require a co-occurring positive authorization. Strong
+// imperative/expermission phrases stand alone.
+var refusalWeakLiftPattern = regexp.MustCompile(`(?i)\b(?:ok|fine|alright|it'?s ok)\b`)
+var refusalStrongLiftPattern = regexp.MustCompile(
+	`(?i)\b(?:go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|lift(?:ed)?|解除|允许|可以了)\b`)
+var refusalAuthorizePattern = regexp.MustCompile(
+	`(?i)\b(?:can|may|now|go ahead|allowed|free to|resume|again|touch|modify|edit|write|use|可以|动了?|改了?|碰)\b`)
+
+// #3469 (note): provably read-only command shapes are not write-class
+// actions; blocking "grep foo build/" on a "build/" refusal target would
+// defeat harmless verification without protecting anything.
+var refusalReadOnlyCmdPattern = regexp.MustCompile(
+	`^\s*(?:git\s+(?:status|log|diff|show|blame)|grep|rg|cat|head|tail|ls|find|wc|file|stat|which|pwd|echo)\b`)
+
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
 var refusalPathPattern = regexp.MustCompile(`[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,8})`)
 
@@ -190,13 +212,28 @@ func (l *refusalLedger) release(text string) int {
 		return 0
 	}
 	lower := strings.ToLower(text)
+	// #3469: a lift phrase accompanied by continuing-refusal wording is a
+	// reaffirmation ("Ok, don't touch config.yaml, that's exactly right").
+	// Reaffirmations never release; deletion is persistent and silent, so
+	// ambiguity must fail closed.
+	if refusalReaffirmPattern.MatchString(lower) {
+		return 0
+	}
+	// #3469: weak conversational prefixes (ok/fine/alright) alone are not
+	// release evidence; require a positive authorization co-occurrence.
+	strong := refusalStrongLiftPattern.MatchString(lower)
+	if !strong {
+		if !refusalWeakLiftPattern.MatchString(lower) || !refusalAuthorizePattern.MatchString(lower) {
+			return 0
+		}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	kept := l.data.Entries[:0]
 	removed := 0
 	for _, e := range l.data.Entries {
 		hit := false
-		if refusalReleasePattern.MatchString(text) || refusalReleasePattern.MatchString(lower) {
+		if strong || refusalReleasePattern.MatchString(lower) {
 			for _, t := range refusalTargets(e.Excerpt) {
 				if strings.Contains(lower, t) {
 					hit = true
@@ -251,6 +288,16 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 		return ""
 	}
 	lower := strings.ToLower(args)
+	// #3469 (note): read-only run_command shapes never mutate the refusal
+	// target, so they are exempt from the write-class block.
+	if tool == "run_command" {
+		var rc struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(args), &rc) == nil && refusalReadOnlyCmdPattern.MatchString(rc.Command) {
+			return ""
+		}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now().Unix()
