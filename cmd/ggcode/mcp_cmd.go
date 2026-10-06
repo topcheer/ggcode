@@ -25,7 +25,8 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 		Long:               "Install an MCP server into ggcode config.\n\nExamples:\n  ggcode mcp install stdio npx -y 12306-mcp stdio\n  ggcode mcp install 12306-mcp stdio npx -y 12306-mcp stdio\n  ggcode mcp install stdio uvx wikipedia-mcp-server@latest\n  ggcode mcp install web-reader http https://mcp.example.com/api\n  ggcode mcp install z-ai --env ZAI_AI_API_KEY=xxxx -- npx -y @z_ai/mcp-server\n  ggcode mcp install web-reader -t http https://mcp.example.com/api --header \"Authorization: Bearer xxx\"",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			args = sanitizeMCPInstallArgs(args)
+			var cfgOverride string
+			args, cfgOverride = sanitizeMCPInstallArgs(args)
 			if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
 				_ = cmd.Help()
 				return nil
@@ -42,6 +43,11 @@ func newMCPCmd(cfgFile *string) *cobra.Command {
 				return fmt.Errorf("usage: %s", cmd.UseLine())
 			}
 			path := *cfgFile
+			if cfgOverride != "" {
+				// #3457: honor the --config value the user passed -
+				// DisableFlagParsing means cobra never assigned cfgFile itself.
+				path = cfgOverride
+			}
 			if path == "" {
 				path = config.ConfigPath()
 			}
@@ -303,25 +309,34 @@ func isMalformedMCPServer(server config.MCPServerConfig) bool {
 	return strings.HasPrefix(command, "-")
 }
 
-func sanitizeMCPInstallArgs(args []string) []string {
+// sanitizeMCPInstallArgs strips the global --config flag (and its value)
+// out of the raw install args and HANDS IT BACK so the caller can honor it
+// (#3457). install runs with DisableFlagParsing, so cobra never parses the
+// inherited persistent flag - the old version silently dropped it and
+// Save() then wrote the DEFAULT config path while exit 0 claimed success
+// in the flag-specified one (fail-silent misdirect).
+func sanitizeMCPInstallArgs(args []string) ([]string, string) {
 	if len(args) == 0 {
-		return args
+		return args, ""
 	}
 	out := make([]string, 0, len(args))
+	configVal := ""
 	for i := 0; i < len(args); i++ {
 		arg := strings.TrimSpace(args[i])
 		if arg == "--config" {
 			if i+1 < len(args) {
 				i++
+				configVal = strings.TrimSpace(args[i])
 			}
 			continue
 		}
 		if strings.HasPrefix(arg, "--config=") {
+			configVal = strings.TrimSpace(strings.TrimPrefix(arg, "--config="))
 			continue
 		}
 		out = append(out, args[i])
 	}
-	return out
+	return out, configVal
 }
 
 // mcpInstallWizard provides an interactive prompt to configure an MCP server.
