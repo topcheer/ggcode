@@ -64,6 +64,11 @@ type annihilationPair struct {
 	// matchFn returns true if the cancel call's args match the prior call.
 	// If nil, any prior→cancel sequence within the window matches.
 	matchFn func(priorArgs, cancelArgs json.RawMessage) bool
+	// qualifyFn optionally downgrades the warning when the cancellation is
+	// only PARTIAL (#3477): it returns a corrective qualifier that REPLACES
+	// the net-zero claim (which would be factually wrong), or "" to keep
+	// the full net-zero wording. nil means the pair always fully cancels.
+	qualifyFn func(priorArgs, cancelArgs json.RawMessage) string
 	// description for the warning message.
 	description string
 }
@@ -141,6 +146,7 @@ var annihilationPairs = []annihilationPair{
 		cancelTool:  "git_reset",
 		description: "git_add then git_reset (staged then unstaged the same files)",
 		matchFn:     matchGitAddReset,
+		qualifyFn:   qualifyGitAddResetPartial,
 	},
 	{
 		priorTool:   "git_commit",
@@ -270,7 +276,14 @@ func (s *actionAnnihilateState) checkAnnihilation(currentTool string, currentArg
 			s.warnsIssued++
 			debug.Log("agent", "Iteration %d: action annihilation detected: %s (pair #%d)",
 				iteration, pair.description, s.cancelCount)
-			return formatAnnihilationWarning(pair.description, prior.iteration, iteration, s.cancelCount)
+			// #3477: a pair may cancel only PART of the prior side effect --
+			// the qualifier swaps the (then false) net-zero claim for wording
+			// that matches what actually happened.
+			qualifier := ""
+			if pair.qualifyFn != nil {
+				qualifier = pair.qualifyFn(prior.args, currentArgs)
+			}
+			return formatAnnihilationWarning(pair.description, prior.iteration, iteration, s.cancelCount, qualifier)
 		}
 	}
 
@@ -302,7 +315,7 @@ func (s *actionAnnihilateState) checkUndoEditAnnihilation(currentArgs json.RawMe
 		s.warnsIssued++
 		debug.Log("agent", "Iteration %d: action annihilation detected: %s (pair #%d)",
 			iteration, desc, s.cancelCount)
-		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount)
+		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount, "")
 	}
 	return ""
 }
@@ -355,7 +368,7 @@ func (s *actionAnnihilateState) checkCheckoutRoundtripAnnihilation(currentArgs j
 		desc, _ := checkoutRoundtripDescription()
 		debug.Log("agent", "Iteration %d: action annihilation detected: %s (pair #%d)",
 			iteration, desc, s.cancelCount)
-		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount)
+		return formatAnnihilationWarning(desc, prior.iteration, iteration, s.cancelCount, "")
 	}
 	return ""
 }
@@ -397,9 +410,16 @@ func undoEditPriorDescription(priorTool string) (string, bool) {
 	return "", false
 }
 
-func formatAnnihilationWarning(desc string, priorIter, curIter int, totalCancels int) string {
+func formatAnnihilationWarning(desc string, priorIter, curIter int, totalCancels int, qualifier string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[Action Annihilation] Iterations %d-%d: %s.\n", priorIter, curIter, desc))
+	if qualifier != "" {
+		// Partial cancellation (#3477): the net-zero claim would be a false
+		// statement of fact, and the oscillation meta-critique does not fit
+		// standard curation workflows. The qualifier speaks for itself.
+		sb.WriteString(qualifier)
+		return sb.String()
+	}
 	sb.WriteString("These two actions produced net-zero state change -- the work between them was wasted.\n")
 	if totalCancels > 1 {
 		sb.WriteString(fmt.Sprintf("This is cancellation pair #%d this run. Repeated annihilation signals an undecided or oscillating approach.\n", totalCancels))
@@ -433,6 +453,41 @@ func matchGitAddReset(priorArgs, cancelArgs json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+// partialResetQualifier replaces the net-zero claim when a reset cancels
+// only part of the staged set (#3477). The old wording flatly asserted
+// "net-zero state change" right after the agent had staged dozens of files
+// and unstaged exactly one -- a factually wrong statement aimed at the
+// project's own recommended release-sweep curation workflow
+// (stage-all, then unstage swept-in WIP files).
+const partialResetQualifier = "This reset cancelled only PART of the staged set -- most staged files remain staged, so this is NOT net-zero. Partial unstaging after a stage-all (e.g. excluding swept-in WIP files before a release commit) is a standard curation step; if that is what you did, proceed. Repeated partial resets, however, may signal an unsettled staging plan."
+
+// qualifyGitAddResetPartial returns "" when the reset cancels the ENTIRE
+// staged set (keep the original net-zero wording), and a corrective
+// qualifier when it cancels only part of it (#3477):
+//   - reset with no files  -> full reset, genuinely net-zero
+//   - add ["."]/["*"]/none -> the reset can only ever cancel a part
+//   - concrete file lists  -> net-zero only if every staged file is reset
+func qualifyGitAddResetPartial(priorArgs, cancelArgs json.RawMessage) string {
+	resetFiles := extractStringSlice(cancelArgs, "files")
+	if len(resetFiles) == 0 {
+		return "" // full reset unstages everything -- genuinely net-zero
+	}
+	priorFiles := extractStringSlice(priorArgs, "files")
+	if len(priorFiles) == 0 || (len(priorFiles) == 1 && (priorFiles[0] == "." || priorFiles[0] == "*")) {
+		return partialResetQualifier // stage-all + selective unstage
+	}
+	resetSet := make(map[string]bool, len(resetFiles))
+	for _, f := range resetFiles {
+		resetSet[f] = true
+	}
+	for _, f := range priorFiles {
+		if !resetSet[f] {
+			return partialResetQualifier // some staged file survives
+		}
+	}
+	return "" // every staged file was unstaged
 }
 
 // matchMkdirDelete checks if file_ops delete targets a path that was mkdir'd.
