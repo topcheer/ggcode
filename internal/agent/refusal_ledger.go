@@ -116,6 +116,21 @@ var refusalNegatePattern = regexp.MustCompile(
 var refusalReleasePattern = regexp.MustCompile(
 	`(?i)\b(?:ok|fine|alright|go ahead|you (?:may|can) now|you(?:'re| are) (?:allowed|free) to|it'?s ok|lift|解除|允许|可以了)\b[^\n.]{0,80}`)
 
+// refusalRestatePattern (#3469): persistence/restatement words that turn a
+// phrase like "Ok, don't touch config.yaml, that's exactly right" into a
+// CONFIRMATION of the refusal, not a lift. A release-phrase + target hit
+// with any of these in the same sentence is a restatement: the entry must
+// survive. Lifting is persistent, silent, and irreversible, so release
+// precision has to beat release recall.
+var refusalRestatePattern = regexp.MustCompile(
+	`(?i)\b(?:don'?t|do not|never|no new|avoid|must not|should not|stop using|still\b|stays?\b|untouched|off[- ]limits|keep(?:out| avoiding| it that way)?|forbidden|not allowed|prohibited)\b|不许|别碰|禁止|继续|保持`)
+
+// isRestatement reports whether text confirms rather than lifts a refusal:
+// a release phrase co-occurring with persistence words (#3469).
+func isRestatement(text string) bool {
+	return refusalRestatePattern.MatchString(text)
+}
+
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
 var refusalPathPattern = regexp.MustCompile(`[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,8})`)
 
@@ -197,10 +212,15 @@ func (l *refusalLedger) release(text string) int {
 	for _, e := range l.data.Entries {
 		hit := false
 		if refusalReleasePattern.MatchString(text) || refusalReleasePattern.MatchString(lower) {
-			for _, t := range refusalTargets(e.Excerpt) {
-				if strings.Contains(lower, t) {
-					hit = true
-					break
+			// #3469: a release phrase co-occurring with persistence words is a
+			// restatement ("Ok, don't touch config.yaml, exactly right") - it
+			// confirms the block; only a clean lift phrase releases.
+			if !isRestatement(text) {
+				for _, t := range refusalTargets(e.Excerpt) {
+					if strings.Contains(lower, t) {
+						hit = true
+						break
+					}
 				}
 			}
 		}
