@@ -73,11 +73,46 @@ var commandCosts sync.Map // normalized command string -> *costStat
 
 // normalizeCostKey collapses a shell command to a stable key so that
 // trivial variations (extra whitespace, trailing comment) still hit the
-// same history bucket.
+// same history bucket (#3463): the comment promise was previously
+// documented but not implemented - comment-bearing variants of the same
+// command landed in separate buckets and never reached costHintMinRuns.
 func normalizeCostKey(cmd string) string {
-	cmd = strings.TrimSpace(cmd)
+	cmd = stripTrailingComment(strings.TrimSpace(cmd))
+	// Collapse internal whitespace runs to single spaces so "go  test"
+	// and "go test" share a bucket.
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return ""
+	}
+	cmd = strings.Join(fields, " ")
 	if len(cmd) > 160 {
 		cmd = cmd[:160]
+	}
+	return cmd
+}
+
+// stripTrailingComment removes an unquoted trailing shell comment ("# ..."
+// or "// ...") from cmd. '#' or '/' inside single/double quotes is literal
+// and never starts a comment (e.g. awk '{print $1 "#"}', URLs "host//path").
+func stripTrailingComment(cmd string) string {
+	var quote rune
+	for i, r := range cmd {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote = r
+		case '#':
+			return cmd[:i]
+		case '/':
+			if i+1 < len(cmd) && cmd[i+1] == '/' {
+				return cmd[:i]
+			}
+		}
 	}
 	return cmd
 }
