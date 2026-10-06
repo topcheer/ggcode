@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -132,11 +133,51 @@ func (t WaitAgentTool) Execute(ctx context.Context, input json.RawMessage) (Resu
 
 // annotateWorktree appends the isolation worktree path to a wait_agent
 // snapshot so the parent can locate the sub-agent's edits after the run.
+// For COMPLETED runs it also appends a delivery hint (#r31, Background
+// Agents pattern: delegated work should return as a review-ready diff):
+// when the worktree branch carries commits no remote has, the parent is
+// reminded to push and open a draft PR so the work is reviewable and
+// cannot be lost.
 func annotateWorktree(content string, snap subagent.Snapshot) string {
 	if snap.Worktree == "" {
 		return content
 	}
-	return content + fmt.Sprintf("\n\nIsolated worktree: %s (branch: %s)", snap.Worktree, filepath.Base(snap.Worktree))
+	content += fmt.Sprintf("\n\nIsolated worktree: %s (branch: %s)", snap.Worktree, filepath.Base(snap.Worktree))
+	if snap.Status == subagent.StatusCompleted {
+		if n := unpushedCommitCount(snap.Worktree); n > 0 {
+			branch := filepath.Base(snap.Worktree)
+			content += fmt.Sprintf(
+				"\n[Delivery hint: branch %q has %d unpushed commit(s). If the work is done, hand it off for review: "+
+					"cd %s && git push -u origin %s && gh pr create --draft (do NOT merge it yourself unless explicitly asked).]",
+				branch, n, snap.Worktree, branch)
+		}
+	}
+	return content
+}
+
+// unpushedCommitCount returns how many commits HEAD has that no remote
+// ref contains, i.e. work that exists only in the isolated worktree.
+// Any git failure (not a repo, no commits yet, git missing) maps to 0 -
+// the hint is advisory and must never turn into an error path.
+func unpushedCommitCount(worktree string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", worktree,
+		"rev-list", "--count", "HEAD", "--not", "--remotes").Output()
+	if err != nil {
+		return 0
+	}
+	return parseUnpushedCount(string(out))
+}
+
+// parseUnpushedCount is the pure parsing half of unpushedCommitCount,
+// split out for table-driven tests.
+func parseUnpushedCount(out string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // exploreRegionRe matches the "path:startLine-endLine" contract lines an
