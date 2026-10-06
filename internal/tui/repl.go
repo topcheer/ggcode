@@ -86,7 +86,7 @@ type REPL struct {
 }
 
 // NewREPL creates a new REPL with optional permission policy.
-func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
+func NewREPL(a *agent.Agent, policy permission.PermissionPolicy, startupNotices []string) *REPL {
 	m := NewModel(a, policy)
 	r := &REPL{
 		model: m,
@@ -96,6 +96,14 @@ func NewREPL(a *agent.Agent, policy permission.PermissionPolicy) *REPL {
 	// /api/status can read the live busy state (Model.loading changes
 	// happen inside the tea.Program which REPL doesn't see).
 	r.model.agentBusy = &r.agentBusy
+	// Startup notices (sa-45): flush user-actionable startup findings as
+	// system messages before the first frame. NewModel has already built
+	// chatList (chat_bridge has a nil guard), and the tunnel broker is
+	// nil-safe, so the append lands in the conversation and is pushed to
+	// desktop/tunnel peers once connected.
+	for i, notice := range startupNotices {
+		r.model.chatWriteSystem(fmt.Sprintf("startup-notice-%d", i), notice)
+	}
 	if a != nil {
 		a.SetUsageHandler(func(usage provider.TokenUsage) {
 			r.recordSessionUsage(usage, a.UsageSource())

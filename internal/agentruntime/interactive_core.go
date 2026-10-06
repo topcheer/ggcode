@@ -33,11 +33,15 @@ type InteractiveRuntimeCore struct {
 	SaveMemoryTool   *tool.SaveMemoryTool
 	DeleteMemoryTool *tool.DeleteMemoryTool
 	StartupAssets    StartupAssets
-	CommandManager   *commands.Manager
-	Tunnel           *TunnelHost // unified tunnel event management
-	configAccess     *configAccess
-	configPath       string // ggcode.yaml the session loaded (hot-reload watch target)
-	workingDir       string
+	// StartupNotices (sa-45): user-actionable startup-time findings
+	// (MCP merge/gate warnings, memory consolidation findings). Flushed as
+	// system messages on the TUI first frame; empty in the common case.
+	StartupNotices []string
+	CommandManager *commands.Manager
+	Tunnel         *TunnelHost // unified tunnel event management
+	configAccess   *configAccess
+	configPath     string // ggcode.yaml the session loaded (hot-reload watch target)
+	workingDir     string
 
 	mcpCtx          context.Context
 	mcpCancel       context.CancelFunc
@@ -64,11 +68,20 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 	// approved them for THIS workspace (internal/mcp/project_gate.go).
 	// A cloned repo must not reach child-process execution unasked.
 	mergedServers, gateWarnings := applyProjectMCPGate(mergedServers, workingDir)
-	for _, warning := range append(mergeWarnings, gateWarnings...) {
+	// Startup notices (sa-45): merge/gate warnings are user-actionable
+	// ("server X held out pending ggcode mcp approve"), so they ride the
+	// notice channel to the TUI first frame instead of living only in
+	// debug logs. debug.Log stays for log-file parity.
+	notices := append([]string{}, mergeWarnings...)
+	notices = append(notices, gateWarnings...)
+	for _, warning := range notices {
 		debug.Log("mcp", "%s", warning)
 	}
 	// Placeholder core so the closure below can reach the per-runtime
 	// provider field set later by SetConfigAgent (#1592-B).
+	// StartupNotices is NOT set here: the fresh literal at the tail of
+	// this function replaces the whole struct and would orphan it; it
+	// is carried explicitly there instead.
 	core := &InteractiveRuntimeCore{}
 	mcpMgr := plugin.NewMCPManager(mergedServers, registry, workingDir)
 	_ = registry.Register(tool.ListMCPCapabilitiesTool{Runtime: mcpMgr})
@@ -144,6 +157,7 @@ func BuildInteractiveRuntimeCore(cfg *config.Config, workingDir string, policy p
 		SaveMemoryTool:   saveMemoryTool,
 		DeleteMemoryTool: deleteMemoryTool,
 		StartupAssets:    startupAssets,
+		StartupNotices:   notices,
 		CommandManager:   commandMgr,
 		Tunnel:           th,
 		configAccess:     cfgAccess,

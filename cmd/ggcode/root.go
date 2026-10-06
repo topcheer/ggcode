@@ -492,6 +492,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	projectAutoMem := core.ProjectAutoMem
 	saveMemoryTool := core.SaveMemoryTool
 	startupAssets := core.StartupAssets
+	// Startup notices (sa-45): merge MCP gate/merge warnings with
+	// sleep-time consolidation findings and hand the combined list to the
+	// TUI so they render as system messages on the first frame.
+	startupNotices := append(core.StartupNotices, startupAssets.ConsolidationFindings...)
 	autoFiles := startupAssets.AutoFiles
 	commandMgr := startupAssets.CommandManager
 	trace.Mark("build interactive runtime core")
@@ -939,7 +943,7 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 	}
 
 	// Start TUI REPL
-	repl := tui.NewREPL(ag, policy)
+	repl := tui.NewREPL(ag, policy, startupNotices)
 	skillUsageHandler = repl.SessionUsageHandler()
 	if a2aTaskHandler != nil {
 		repl.SetA2AHandler(a2aTaskHandler)
