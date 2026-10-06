@@ -44,6 +44,30 @@ func TestAnalyzeMessageDiffConsistency_PhantomFile(t *testing.T) {
 	}
 }
 
+// TestAnalyzeMessageDiffConsistency_AbbreviationNoFalsePositive (#3448):
+// the highest-frequency English abbreviations all match msgFileTokenRe and
+// used to produce constant phantom-file warnings (~1.2% of this repo's
+// recent commits contain "e.g."). They must be filtered as
+// abbreviation-shaped tokens, while real phantom detection stays live.
+func TestAnalyzeMessageDiffConsistency_AbbreviationNoFalsePositive(t *testing.T) {
+	for _, msg := range []string{
+		"fix(agent): retry on transient errors, e.g. 429/503",
+		"refactor config parsing, i.e. the yaml loader",
+		"symbols like U.S and a.m must not be files",
+		"see x.y for details", // also covers a.k.a shape
+	} {
+		if got := AnalyzeMessageDiffConsistency(msg, consistencyDiff); got != "" {
+			t.Fatalf("abbreviation-only message must not warn, msg=%q got: %s", msg, got)
+		}
+	}
+	// Real phantom detection still fires alongside an abbreviation.
+	got := AnalyzeMessageDiffConsistency(
+		"fix(agent): retry on transient errors, e.g. 429/503 (see provider_panel.go)", consistencyDiff)
+	if !strings.Contains(got, "provider_panel.go") {
+		t.Fatalf("real phantom must still warn, got: %s", got)
+	}
+}
+
 func TestAnalyzeMessageDiffConsistency_PhantomSymbols(t *testing.T) {
 	msg := "refactor(tool): extract ValidateHarnessState and ResetProbeBuffer helpers"
 	got := AnalyzeMessageDiffConsistency(msg, consistencyDiff)
