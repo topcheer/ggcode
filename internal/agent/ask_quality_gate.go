@@ -41,11 +41,17 @@ import (
 // determinable fact. Deliberately conservative: each pattern must be
 // unambiguously codebase/environment-lookupable, never a preference.
 var askSelfAnswerable = []*regexp.Regexp{
-	// "which/what version of X" - go.mod/package.json/CHANGELOG answer this.
-	regexp.MustCompile(`(?i)\b(which|what)\s+(version|release)\b`),
+	// #3473: the bare "which/what version" pattern was REMOVED - it cannot
+	// lexically distinguish "the version in go.mod" (lookupable) from
+	// "which version would you like to target?" (a user preference), and
+	// the spec above demands "never a preference". Explicit file mentions
+	// are still covered by the go.mod/package.json pattern below.
 	// "does (the) file X exist" / "is there a file".
 	regexp.MustCompile(`(?i)\b(file|directory|folder)\s+\S+\s+(exists|exist)\b`),
-	regexp.MustCompile(`(?i)\bdoes\s+the\s+\S+\s+(file|dir|directory)\b`),
+	// #3473: "does the X file/dir" alone matched ANY "does the <word> file"
+	// phrasing ("does the new file layout work for you?") - the pattern
+	// now requires the exist anchor so only the lookupable form matches.
+	regexp.MustCompile(`(?i)\bdoes\s+the\s+\S+\s+(file|dir|directory)\s+(exist|exists)\b`),
 	// function/type/method signature questions.
 	regexp.MustCompile(`(?i)\b(signature|prototype)\s+of\b`),
 	// "which branch" - git answers this.
@@ -153,6 +159,10 @@ func (g *askQualityGateState) blockSelfAnswerableQG(req askGateRequest) string {
 }
 
 // blockSameRunDuplicateQG fingerprints each question and rejects re-asks.
+// #3474: READ-ONLY at gate time. The fingerprint is recorded only after
+// the ask_user tool actually executes (markAskAskedQG) - a denied,
+// cancelled, or failed ask never reached the user, so it must not consume
+// the dedup quota.
 func (g *askQualityGateState) blockSameRunDuplicateQG(req askGateRequest) string {
 	for _, q := range req.Questions {
 		labels := make([]string, 0, len(q.Choices))
@@ -163,13 +173,33 @@ func (g *askQualityGateState) blockSameRunDuplicateQG(req askGateRequest) string
 		if _, dup := g.asked[fp]; dup {
 			return fmt.Sprintf(
 				"[Ask Gate] Question %q (or a near-identical variant) was already asked this run. "+
-					"Re-asking yields zero belief update. Proceed on the answer already given, or ask a "+
-					"genuinely NEW question.",
+					"Re-asking yields zero belief update. Ask a genuinely NEW question "+
+					"(the user has already answered this one).",
 				q.Title)
 		}
-		g.asked[fp] = struct{}{}
 	}
 	return ""
+}
+
+// markAskAskedQG records fingerprints of an ask_user invocation AFTER it
+// executed successfully (#3474). Called from the tool-result pipeline so
+// denied/cancelled/failed asks leave no trace in the dedup set.
+func (a *Agent) markAskAskedQG(rawArgs string) {
+	g := a.askQualityGate
+	if g == nil {
+		return
+	}
+	var req askGateRequest
+	if err := json.Unmarshal([]byte(rawArgs), &req); err != nil || len(req.Questions) == 0 {
+		return
+	}
+	for _, q := range req.Questions {
+		labels := make([]string, 0, len(q.Choices))
+		for _, c := range q.Choices {
+			labels = append(labels, c.Label)
+		}
+		g.asked[askFingerprint(q.Title, q.Prompt, labels)] = struct{}{}
+	}
 }
 
 // safeDefaultAdvisoryQG downgrades urgency (never blocks) when a choice is

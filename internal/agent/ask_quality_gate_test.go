@@ -35,7 +35,10 @@ func askArgs(t *testing.T, title, prompt string, labels []string) string {
 func TestAskGateBlocksSelfAnswerable(t *testing.T) {
 	a := &Agent{askQualityGate: newAskQualityGateState()}
 	cases := [][2]string{
-		{"Version", "Which version of the module are we using?"},
+		// #3473: the bare "which version" form is gone (lexically
+		// indistinguishable from preference asks); the explicit file
+		// mention is the lookupable form that stays blocked.
+		{"Version", "Check go.mod: which version is declared for the module?"},
 		{"Existence", "Does the file config.go exist?"},
 		{"Signature", "What is the signature of NewManager?"},
 		{"Branch", "Which branch should I target?"},
@@ -59,6 +62,10 @@ func TestAskGateBlocksDuplicate(t *testing.T) {
 	if block, _ := a.checkAskQualityGate(args); block != "" {
 		t.Fatalf("first ask must pass, got block: %s", block)
 	}
+	// #3474: the gate is read-only now - the fingerprint is recorded only
+	// after a SUCCESSFUL execution (markAskAskedQG, wired in agent.go's
+	// result pipeline). Simulate that success, then re-asks are duplicates.
+	a.markAskAskedQG(args)
 	if block, _ := a.checkAskQualityGate(args); block == "" {
 		t.Fatal("identical re-ask must be blocked")
 	}
