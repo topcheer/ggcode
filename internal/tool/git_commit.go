@@ -125,6 +125,12 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 	convTip = AnalyzeCommitMessage(args.Message)
 
+	// Message-diff consistency: cross-check the claims in the commit
+	// message (files, symbols, scope) against the actual staged diff so a
+	// description that drifted from the change is caught before it enters
+	// history. Advisory (non-blocking), same tier as the checks above.
+	consistencyWarning := AnalyzeMessageDiffConsistency(args.Message, diffOutput)
+
 	gitArgs := []string{"commit", "-m", fullMessage}
 	if args.All {
 		gitArgs = []string{"commit", "-a", "-m", fullMessage}
@@ -139,8 +145,8 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	}
 
 	trimmed := strings.TrimSpace(string(out))
-	// Append advisory warnings (build gate, branch, message quality, diff scan, scope, convention tip).
-	for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip} {
+	// Append advisory warnings (build gate, branch, message quality, diff scan, scope, convention tip, consistency).
+	for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip, consistencyWarning} {
 		if w != "" {
 			trimmed += "\n\n" + w
 		}
@@ -148,7 +154,7 @@ func (t GitCommit) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	if trimmed == "" {
 		var b strings.Builder
 		b.WriteString("Committed successfully.")
-		for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip} {
+		for _, w := range []string{buildWarning, branchWarning, msgWarning, diffScanWarning, stagingWarning, scopeWarning, convTip, consistencyWarning} {
 			if w != "" {
 				b.WriteString("\n\n")
 				b.WriteString(w)
