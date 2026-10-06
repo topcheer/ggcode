@@ -149,4 +149,40 @@ void main() {
     final history = await SecureTokenStorage.instance.loadHistory();
     expect(history, ['https://a', 'https://b']);
   });
+
+  // #3452: the heal write itself may fail (quota/ACL/timeout right after a
+  // successful read). The #2814 cleanup deleted the plaintext fallback copy
+  // unconditionally - destroying the ONLY persistent copy of the user's
+  // newer value. The fix keeps copy + flag on heal failure so a later read
+  // retries (write-path discipline: delete only after secure persistence).
+  test('#3452: failed heal keeps the plaintext copy and retries later',
+      () async {
+    final mock = _MockSecureStorage();
+    final storage = SecureTokenStorage.forTesting(mock as FlutterSecureStorage);
+    storage.secureRetryAfter = Duration.zero;
+
+    // Seed: secure holds old; a degraded write lands the NEWER value in the
+    // fallback (consumes the first one-shot write failure).
+    mock.store["ggcode_connections_secure"] = "{\"v\":1}";
+    mock.failWrites.add('ggcode_connections_secure');
+    await storage.saveConnectionsJson('{"v":2}');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('ggcode_connections'), '{"v":2}');
+
+    // Re-arm the one-shot failure so the HEAL write fails too.
+    mock.failWrites.add('ggcode_connections_secure');
+    final raw = await storage.loadConnectionsJson();
+    expect(raw, contains('"v":2'), reason: 'newer fallback value still wins');
+    expect(prefs.getString('ggcode_connections'), '{"v":2}',
+        reason: '#3452: failed heal MUST keep the only persistent copy');
+
+    // Recovery: a later read with a healthy store retries the heal, lands
+    // the newer value in the secure store, and only then scrubs the copy.
+    final raw2 = await storage.loadConnectionsJson();
+    expect(raw2, contains('"v":2'));
+    expect(mock.store["ggcode_connections_secure"], '{"v":2}',
+        reason: 'kept flag must retry the heal on a later read');
+    expect(prefs.getString('ggcode_connections'), isNull,
+        reason: 'successful heal still scrubs the copy (#2814 intact)');
+  });
 }
