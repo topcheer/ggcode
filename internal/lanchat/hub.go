@@ -1817,11 +1817,13 @@ func (h *Hub) persistPinsLocked() {
 		pins[k] = v
 	}
 	dir := h.store.dir
-	go func() {
+	// #987 discipline: async disk write wrapped in safego (no unprotected
+	// goroutine launches - pins marshal is already snapshotted above).
+	safego.Go("lanchat.persistPins", func() {
 		if err := SaveKeyPins(dir, pins); err != nil {
 			debug.Log("lanchat", "persist key pins: %v", err)
 		}
-	}()
+	})
 }
 
 // SetTrustedPeer endorses (or revokes) a peer NODE as trusted and persists
