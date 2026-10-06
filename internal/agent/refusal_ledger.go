@@ -119,8 +119,11 @@ var refusalReleasePattern = regexp.MustCompile(
 // #3469 reaffirmation guard: lift text that ALSO continues the refusal is
 // a reaffirmation, not a release. "Ok, don't touch config.yaml, that's
 // exactly right" must never silently delete the 30-day block.
+// English terms are \b-bounded; CJK terms are NOT (Go regexp \b is an
+// ASCII word boundary and never matches beside CJK runes, so 别/保持 etc.
+// must live outside the \b group or they silently fail to veto).
 var refusalReaffirmPattern = regexp.MustCompile(
-	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|别|不许|不要|禁止)\b`)
+	`(?i)\b(?:don'?t|do not|never|no\s+new|avoid|must not|should not|stop using|still\s+(?:do(?:n'?t)?|not)?\b|stays?\b|keep\s+(?:avoiding|out|away|it\s+that\s+way)|leave\s+[^\n]{0,10}alone|untouched|off[- ]limits|forbidden|not\s+allowed|prohibited)\b|不许|别碰|不要|禁止|继续|保持`)
 
 // #3469 weak/strong lift split: bare "ok/fine/alright" prefixes are too
 // weak to release on their own (reaffirmations routinely start with

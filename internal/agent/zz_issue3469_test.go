@@ -23,6 +23,13 @@ func TestRefusalReleaseReaffirmationVeto(t *testing.T) {
 		"config.yaml stays untouched",
 		// Chinese reaffirmation.
 		"好的，别动 config.yaml",
+		// CJK veto must fire even alongside a STRONG lift phrase (the
+		// \b-bounded form failed here: Go \b never matches beside CJK).
+		"可以了，不过 config.yaml 继续保持别碰",
+		// Absorbed from PR #3471's broader English word list.
+		"Ok, config.yaml is forbidden, that's exactly right",
+		"Alright, config.yaml stays off-limits",
+		"解除吧，其实不要动了，保持现状",
 	}
 	for _, v := range vetoes {
 		if n := l.release(v); n != 0 {
