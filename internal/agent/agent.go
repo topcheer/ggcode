@@ -366,6 +366,7 @@ type Agent struct {
 	strategyStagnation       *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
 	iterPressure             *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
 	termGuard                *prematureTerminationGuard            // r26: premature-termination risk (struggle density x context occupancy, pre-surrender)
+	askQualityGate           *askQualityGateState                  // r27: ask_user quality gate (self-answerable/duplicate block, safe-default advisory)
 	diminishingEdit          *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
 	overcorrection           *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
 	giveupRevert             *giveupRevertState                    // #1823 case 2: give-up language + tree rollback pairing
@@ -567,6 +568,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		strategyStagnation:     newStrategyStagnationState(),
 		iterPressure:           newIterPressureState(maxIter),
 		termGuard:              newPrematureTerminationGuard(),
+		askQualityGate:         newAskQualityGateState(),
 		diminishingEdit:        newDiminishingEditState(),
 		overcorrection:         newOvercorrectionState(),
 		giveupRevert:           &giveupRevertState{},
@@ -1895,6 +1897,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// agents are long-lived, one RunStream per user turn - same rationale
 	// as the #3403 spiralState fix above).
 	a.termGuard.reset()
+	// r27: ask fingerprints are per-run; a new user turn re-opens asking.
+	a.askQualityGate.reset()
 	a.fixCascade.reset()
 	a.errRegression.reset()
 	a.stalledConvergence.reset()
@@ -3774,6 +3778,23 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Check memoization cache: if a read-only tool was called with identical args
 			// earlier in this run (and the underlying resource hasn't changed), return the
 			// cached result. This prevents redundant re-execution after tool-result clearing.
+			// r27 ask quality gate: block zero-information-gain asks (self-
+			// answerable facts, same-run duplicates) BEFORE execution; advisory
+			// for safe-default choices rides along on allowed asks.
+			if tc.Name == "ask_user" {
+				if blockMsg, advMsg := a.checkAskQualityGate(string(tc.Arguments)); blockMsg != "" {
+					toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name, blockMsg, true))
+					onEvent(provider.StreamEvent{
+						Type:    provider.StreamEventToolResult,
+						Tool:    tc,
+						Result:  blockMsg,
+						IsError: true,
+					})
+					continue
+				} else if advMsg != "" {
+					debug.Log("ask-gate", "safe-default advisory attached to ask_user call")
+				}
+			}
 			// Secret-redaction write guard (#1195): a file-write tool whose
 			// arguments contain [REDACTED:*] markers would destroy the real
 			// secret stored in the target file. Block before any cache or
