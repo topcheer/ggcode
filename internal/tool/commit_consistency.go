@@ -69,6 +69,16 @@ func AnalyzeMessageDiffConsistency(message, diffOutput string) string {
 		if _, ok := files[base]; ok {
 			continue
 		}
+		// #3448: filter abbreviation-shaped tokens ("e.g", "i.e", "a.m",
+		// "U.S", "x.y") - the highest-frequency English abbreviations all
+		// match msgFileTokenRe and produced constant false-positive
+		// phantom-file warnings. A real file basename virtually never has
+		// a single-character first segment or a sub-4-char total length;
+		// Rule 1 has no min-count gate (unlike Rule 2), so precision here
+		// is the only defense.
+		if abbrevLikeFileToken(base) {
+			continue
+		}
 		if !consistencyHas(phantoms, base) {
 			phantoms = append(phantoms, base)
 		}
@@ -195,6 +205,19 @@ func pathBase(p string) string {
 		p = p[i+1:]
 	}
 	return p
+}
+
+// abbrevLikeFileToken reports whether a msgFileTokenRe match shaped like an
+// English abbreviation ("e.g", "i.e", "a.m", "U.S", "x.y") rather than a
+// file basename: single-character first segment, or total length under 4.
+// Real basenames ("ab.go", "f_test.go") pass; single-letter filename stems
+// with short extensions are vanishingly rare and this check is advisory.
+func abbrevLikeFileToken(base string) bool {
+	if len(base) < 4 {
+		return true
+	}
+	first := strings.SplitN(base, ".", 2)[0]
+	return len(first) < 2
 }
 
 func consistencyHas(list []string, s string) bool {
