@@ -66,7 +66,7 @@ func doneSnap(id, result string, fail bool) subagent.Snapshot {
 	evs = append(evs,
 		subagent.AgentEvent{Type: subagent.AgentEventToolResult, ToolName: "edit_file", Result: "ok"},
 	)
-	return subagent.Snapshot{ID: id, Status: st, Result: "ok: edit applied, tests pass", Events: evs}
+	return subagent.Snapshot{ID: id, Status: st, Result: result, Events: evs}
 }
 
 // --- tests ---
@@ -291,5 +291,76 @@ func TestRunBestOfN_NoModelsInheritsParent(t *testing.T) {
 		if call.Model != "" {
 			t.Errorf("candidate %d: Model=%q, want empty (inherit)", i+1, call.Model)
 		}
+	}
+}
+
+// r478 probes: shared-error correlation sentinel. When all successful
+// candidates return near-identical results, consensus ranking gets a
+// high-confidence winner that may simply be the SAME mistake everywhere -
+// the sentinel must flag it instead of staying silent.
+func TestRunBestOfN_FlagsSharedErrorCorrelation(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "ok: edit applied to parser.go, tests pass", false),
+		"cand-2": doneSnap("cand-2", "", true),
+		"cand-3": doneSnap("cand-3", "ok: edit applied to parser.go, tests pass", false),
+	}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "fix bug X", N: 3, Name: "shared-err", Poll: time.Millisecond})
+	if rep.Err != "" {
+		t.Fatalf("unexpected orchestration error: %s", rep.Err)
+	}
+	if rep.WinnerIndex < 0 {
+		t.Fatalf("expected a consensus winner, got none (Degraded=%v)", rep.Degraded)
+	}
+	if !rep.HighCorrelation {
+		t.Fatalf("identical successful results must set HighCorrelation (sim=%.2f)", rep.AvgSimilarity)
+	}
+	if rep.AvgSimilarity < bonSharedErrorSimWarn {
+		t.Fatalf("sim=%.2f, want >= %.2f", rep.AvgSimilarity, bonSharedErrorSimWarn)
+	}
+	if !strings.Contains(rep.Report, "near-identical") || !strings.Contains(rep.Report, "shared error") {
+		t.Fatalf("report must carry the shared-error warning, got:\n%s", rep.Report)
+	}
+}
+
+func TestRunBestOfN_DistinctResultsNoCorrelationFlag(t *testing.T) {
+	sp := &fakeSpawner{}
+	sn := &fakeSnaps{m: map[string]subagent.Snapshot{
+		"cand-1": doneSnap("cand-1", "ok: fixed the race in the writer by adding a mutex around the flush path, go test ./internal/store/ green", false),
+		"cand-2": doneSnap("cand-2", "ok: replaced the shared map with a channel-based pipeline so each stage owns its state, build passes and stress test clean", false),
+		"cand-3": doneSnap("cand-3", "ok: split the single goroutine into per-key workers with bounded semaphore, tests pass with -race on", false),
+	}}
+	rep := RunBestOfN(context.Background(), sp, sn, BestOfNOptions{Task: "fix bug X", N: 3, Name: "distinct", Poll: time.Millisecond})
+	if rep.Err != "" {
+		t.Fatalf("unexpected orchestration error: %s", rep.Err)
+	}
+	if rep.HighCorrelation {
+		t.Fatalf("distinct results must not flag correlation (sim=%.2f)", rep.AvgSimilarity)
+	}
+	if strings.Contains(rep.Report, "near-identical") {
+		t.Fatalf("no shared-error warning expected, got:\n%s", rep.Report)
+	}
+}
+
+// Pure-function edges: fewer than two results is not a correlation signal.
+func TestPairwiseResultSimilarityEdges(t *testing.T) {
+	if _, ok := pairwiseResultSimilarity(nil); ok {
+		t.Fatal("nil results must not produce a similarity")
+	}
+	if _, ok := pairwiseResultSimilarity([]string{"only one"}); ok {
+		t.Fatal("single result must not produce a similarity")
+	}
+	sim, ok := pairwiseResultSimilarity([]string{"alpha beta gamma delta epsilon zeta", "alpha beta gamma delta epsilon zeta"})
+	if !ok || sim != 1.0 {
+		t.Fatalf("identical results => sim=1.0, got %.2f ok=%v", sim, ok)
+	}
+	// Failed candidates never feed the similarity estimate.
+	got := successfulResults([]CandidateOutcome{
+		{Status: string(subagent.StatusCompleted), Result: "r1"},
+		{Status: "failed", Result: "same text"},
+		{Status: string(subagent.StatusCompleted), Result: ""},
+	})
+	if len(got) != 1 || got[0] != "r1" {
+		t.Fatalf("successfulResults must keep only non-empty successes, got %v", got)
 	}
 }

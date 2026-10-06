@@ -14,6 +14,19 @@
 // on the same task, poll them to terminal state, build each candidate's
 // trajectory, rank by distilled-summary consensus, and on no-winner degrade
 // to a sequential-retry conditioning hint (the paper's escalation chain).
+//
+// Shared-error correlation sentinel (r478, "Phase Transition for Budgeted
+// Multi-Agent Synergy"): that theory names shared-error correlation as a
+// key predictor of when multi-agent ensembles collapse - when every
+// candidate makes the SAME mistake, consensus ranking confidently picks
+// that mistake. Existing mechanisms are orthogonal: heterogeneous models
+// (r380) decorrelate by DESIGN but never MEASURE it; the r439 discriminator
+// resolves candidates that are TOO CLOSE to rank, not candidates that are
+// uniformly wrong; the Degraded path fires on no-consensus (disagreement).
+// Nobody watches over-agreement. The sentinel measures pairwise similarity
+// of successful candidates' results and flags near-identical outputs as
+// doubtful ensemble gain (suspected shared error), recommending a
+// third-family verifier instead.
 package agentruntime
 
 import (
@@ -35,6 +48,15 @@ const (
 	bestOfNMaxCandidates = 4
 	bestOfNDefaultPoll   = 2 * time.Second
 	bestOfNMaxSlots      = 16
+	// bonSharedErrorSimWarn is the mean pairwise Jaccard similarity of the
+	// successful candidates' results above which the ensemble is flagged as
+	// near-identical (suspected shared error; ensemble gain doubtful).
+	bonSharedErrorSimWarn = 0.85
+	// bonSimClip caps each result's contribution to the shingle set so one
+	// verbose candidate cannot dominate the similarity estimate.
+	bonSimClip = 2000
+	// bonSimShingleWords is the word-shingle window size for similarity.
+	bonSimShingleWords = 5
 )
 
 // CandidateSpawner launches one candidate run. Production implementation is
@@ -162,8 +184,13 @@ type BestOfNReport struct {
 	// execution-based discriminator sub-agent (not text consensus).
 	Discriminated bool
 	Evidence      string // discriminator report (present when Discriminated)
-	Report        string
-	Err           string // orchestration-level error (gate failure, launch failure)
+	// r478 shared-error sentinel: HighCorrelation is true when the successful
+	// candidates' results were near-identical (mean pairwise similarity >=
+	// bonSharedErrorSimWarn); AvgSimilarity carries the measurement.
+	HighCorrelation bool
+	AvgSimilarity   float64
+	Report          string
+	Err             string // orchestration-level error (gate failure, launch failure)
 }
 
 // candidateTaskSuffix standardizes what each candidate's final message must
@@ -395,6 +422,12 @@ func RunBestOfN(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSou
 		}
 		rep.ConditioningHint = DistillIntoPrompt(sums)
 	}
+	// r478: measure shared-error correlation among SUCCESSFUL candidates.
+	// Failures ("<error>" strings) would inflate similarity meaninglessly.
+	if sim, okSim := pairwiseResultSimilarity(successfulResults(rep.Candidates)); okSim {
+		rep.AvgSimilarity = sim
+		rep.HighCorrelation = sim >= bonSharedErrorSimWarn
+	}
 	rep.Report = formatBestOfNReport(rep, winnerSummary(wsum, ok))
 	return rep
 }
@@ -508,6 +541,9 @@ func formatBestOfNReport(rep BestOfNReport, winnerVerdict string) string {
 		} else {
 			fmt.Fprintf(&b, "\nWinner: %s (id=%s, verdict=%q).\n", w.Name, w.ID, winnerVerdict)
 		}
+		if rep.HighCorrelation {
+			fmt.Fprintf(&b, "\nWarning: candidates are near-identical (avg pairwise similarity=%.2f): ensemble gain doubtful - suspected shared error. Consider verifying this result with a third-family model before trusting it.\n", rep.AvgSimilarity)
+		}
 		if w.Worktree != "" {
 			fmt.Fprintf(&b, "Winner's isolated worktree: %s - inspect and merge from there; the other worktrees are disposable.\n", w.Worktree)
 		}
@@ -520,4 +556,84 @@ func formatBestOfNReport(rep BestOfNReport, winnerVerdict string) string {
 		b.WriteString("\nRetry the task once yourself with this conditioning appended, or inspect the candidate worktrees individually.")
 	}
 	return b.String()
+}
+
+// successfulResults collects the Result strings of candidates that reached
+// the terminal completed status with non-empty output. Shared-error
+// similarity is only meaningful among successful outputs (error strings
+// would trivially match each other).
+func successfulResults(cs []CandidateOutcome) []string {
+	var out []string
+	for _, c := range cs {
+		if c.Status != string(subagent.StatusCompleted) || strings.TrimSpace(c.Result) == "" {
+			continue
+		}
+		out = append(out, c.Result)
+	}
+	return out
+}
+
+// pairwiseResultSimilarity returns the mean Jaccard similarity over all
+// result pairs. ok=false when fewer than two results (nothing to correlate).
+func pairwiseResultSimilarity(results []string) (float64, bool) {
+	if len(results) < 2 {
+		return 0, false
+	}
+	shingles := make([]map[string]struct{}, 0, len(results))
+	for _, r := range results {
+		shingles = append(shingles, resultShingles(r))
+	}
+	var sum float64
+	var pairs int
+	for i := 0; i < len(shingles); i++ {
+		for j := i + 1; j < len(shingles); j++ {
+			sum += jaccardSets(shingles[i], shingles[j])
+			pairs++
+		}
+	}
+	if pairs == 0 {
+		return 0, false
+	}
+	return sum / float64(pairs), true
+}
+
+// resultShingles builds a 5-word shingle set from the clipped result text.
+// Word shingles (vs character n-grams) are robust to whitespace churn and
+// cheap enough for a handful of 2KB clips.
+func resultShingles(s string) map[string]struct{} {
+	words := strings.Fields(strings.ToLower(clip(s, bonSimClip)))
+	set := make(map[string]struct{}, len(words))
+	if len(words) < bonSimShingleWords {
+		for _, w := range words {
+			set[w] = struct{}{}
+		}
+		return set
+	}
+	for i := 0; i+bonSimShingleWords <= len(words); i++ {
+		set[strings.Join(words[i:i+bonSimShingleWords], " ")] = struct{}{}
+	}
+	return set
+}
+
+// jaccardSets is the local set-Jaccard (twin of internal/knight's
+// jaccardSimilarity, kept local to avoid a cross-package dependency for
+// three lines of arithmetic).
+func jaccardSets(a, b map[string]struct{}) float64 {
+	if len(a) == 0 && len(b) == 0 {
+		return 1
+	}
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	inter := 0
+	for w := range a {
+		if _, ok := b[w]; ok {
+			inter++
+		}
+	}
+	union := len(a) + len(b) - inter
+	if union <= 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
 }
