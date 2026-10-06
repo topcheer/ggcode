@@ -27,6 +27,59 @@ func probeMissedSkillEnv(t *testing.T, skillName string) string {
 	return wd
 }
 
+// r477 probes: routing-health sentinel (skill-selection scaling-limits
+// watch). Pure-function coverage of the size x accumulated-notices gate.
+func TestSkillRoutingHealthNoticeGate(t *testing.T) {
+	cases := []struct {
+		name    string
+		lib     int
+		notices int
+		wantOn  bool
+	}{
+		{"small library many notices stays silent", 12, 10, false},
+		{"large library few notices stays silent", 40, 3, false},
+		{"large library at threshold stays silent", 39, 10, false},
+		{"notices at threshold stays silent", 40, 5, false},
+		{"large library degrading notices fires", 40, 6, true},
+		{"very large library many notices fires", 96, 10, true},
+		{"boundary exactly on both thresholds fires", skillLibrarySizeWarn, skillRoutingHealthMinNotices, true},
+		{"zero notices never fires", 96, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := skillRoutingHealthNotice(c.lib, c.notices)
+			if c.wantOn && got == "" {
+				t.Fatalf("expected sentinel line for lib=%d notices=%d, got empty", c.lib, c.notices)
+			}
+			if !c.wantOn && got != "" {
+				t.Fatalf("expected silence for lib=%d notices=%d, got: %q", c.lib, c.notices, got)
+			}
+			if c.wantOn {
+				if !strings.HasPrefix(got, "# routing-health:") {
+					t.Fatalf("sentinel must start with '# routing-health:' so mergeMissedSkills skips it, got: %q", got)
+				}
+				if !strings.Contains(got, "/skills list") {
+					t.Fatalf("sentinel should point the user at /skills list, got: %q", got)
+				}
+			}
+		})
+	}
+}
+
+// The sentinel must survive merge round-trips only via live recomputation:
+// a "#"-prefixed line is dropped by mergeMissedSkills, so a stale sentinel
+// never lingers when conditions clear.
+func TestSkillRoutingHealthSentinelNotAccumulatedByMerge(t *testing.T) {
+	existing := "# routing-health: 40 user skills, 6 missed-skill notices - old\nskill foo matched a recent task's prompt but was not invoked - consider the skill tool or /skills list"
+	merged := mergeMissedSkills(existing, []string{"bar"})
+	if strings.Contains(merged, "# routing-health") {
+		t.Fatalf("merge must drop stale sentinel lines (recomputed on write), got: %q", merged)
+	}
+	if !strings.Contains(merged, "bar") {
+		t.Fatalf("merge must still record the new hit, got: %q", merged)
+	}
+}
+
 func TestMissedSkillPromptNamesSkillNotInvoked(t *testing.T) {
 	wd := probeMissedSkillEnv(t, "browser-automation")
 	stats := agent.RunStats{

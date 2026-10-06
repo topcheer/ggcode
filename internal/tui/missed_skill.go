@@ -2,7 +2,16 @@ package tui
 
 // Missed-skill detection (r398, SAGE lineage — arXiv:2512.17102).
 //
-// Research basis: RL for Self-Improving Agent with Skill Library (SAGE)
+// Routing-health sentinel (r477, arXiv-inspired scaling-limits watch):
+// "When Single-Agent with Skills Replace Multi-Agent Systems and When
+// They Fail" observes phase transitions in skill selection as libraries
+// grow - routing reliability degrades with library size. Every existing
+// mechanism here is single-run (missed notice) or positive (usageScore);
+// none watches the size axis. The sentinel fires when BOTH the library
+// is large AND missed notices accumulate: it appends one "# routing-health"
+// line into the same memory key. The "#" prefix is deliberately the same
+// marker mergeMissedSkills skips (:170) - the sentinel is recomputed from
+// live state each time it is written, never accumulated or deduped.
 // observes that skill libraries' universal weakness is not "missing
 // skills" but inconsistent INVOCATION: "current skill library approaches
 // rely primarily on LLM prompting, making consistent skill library
@@ -38,6 +47,7 @@ package tui
 // on any prompt.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +66,14 @@ const (
 	// missedSkillMinNameLen rejects short/generic normalized names ("debug",
 	// "verify", "spec") that appear in almost any prompt.
 	missedSkillMinNameLen = 6
+	// skillLibrarySizeWarn is the user-skill count at which the library is
+	// considered large enough for routing degradation to become likely
+	// (bundled skills excluded; user libraries rarely exceed a dozen).
+	skillLibrarySizeWarn = 40
+	// skillRoutingHealthMinNotices is the accumulated missed-notice count
+	// (60% of missedSkillCap) beyond which routing is deemed degrading
+	// rather than occasionally missing.
+	skillRoutingHealthMinNotices = 6
 )
 
 // normMissedSkill lowercases and strips separators for name-vs-prompt
@@ -123,7 +141,8 @@ func detectMissedSkills(workingDir string, stats agent.RunStats) {
 		return
 	}
 	var hits []string
-	for _, name := range userSkillNames(workingDir) {
+	names := userSkillNames(workingDir)
+	for _, name := range names {
 		norm := normMissedSkill(name)
 		if len(norm) < missedSkillMinNameLen {
 			continue
@@ -149,6 +168,9 @@ func detectMissedSkills(workingDir string, stats agent.RunStats) {
 		return
 	}
 	merged := mergeMissedSkills(existing, hits)
+	if notice := skillRoutingHealthNotice(len(names), strings.Count(merged, "\n")+1); notice != "" && len(merged) > 0 {
+		merged = strings.TrimSpace(merged) + "\n" + notice
+	}
 	if merged == strings.TrimSpace(existing) {
 		return // nothing new (all already recorded)
 	}
@@ -195,4 +217,17 @@ func missedSkillNameFromLine(line string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// skillRoutingHealthNotice returns a one-line sentinel warning when the
+// skill library is large enough that routing degradation is plausible AND
+// missed notices have accumulated past the degrading threshold. Empty
+// string means healthy (or library too small for the signal to matter).
+// The "#" prefix keeps it outside mergeMissedSkills' dedup/cap bookkeeping:
+// it is recomputed from live state on every write instead of accumulating.
+func skillRoutingHealthNotice(librarySize, recordedNotices int) string {
+	if librarySize < skillLibrarySizeWarn || recordedNotices < skillRoutingHealthMinNotices {
+		return ""
+	}
+	return "# routing-health: " + fmt.Sprintf("%d user skills, %d missed-skill notices - routing degrades with library size; consider consolidating or disabling low-signal skills (see /skills list)", librarySize, recordedNotices)
 }
