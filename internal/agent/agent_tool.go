@@ -543,6 +543,19 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 		}
 	}
 
+	// r23 refusal ledger (arXiv 2605.00055): a persisted user refusal that
+	// deterministically matches this write-class call is a HARD error, not a
+	// reminder - prior refusals must be enforceable constraints. Deliberately
+	// does not apply to read-class tools (a "don't touch" refusal targets
+	// mutation; blocking reads breaks harmless verification).
+	if blockMsg := a.refusalLedger.checkBlocked(tc.Name, string(tc.Arguments)); blockMsg != "" {
+		debug.Log("agent", "refusal ledger blocked %s", tc.Name)
+		return tool.Result{
+			Content: blockMsg,
+			IsError: true,
+		}
+	}
+
 	// Git destructive operation detection: inspect shell commands and git_*
 	// tool calls for irreversible operations (reset --hard, force push, clean
 	// -fd, rm -rf, etc.). Advisory only - injects a warning but does not block.

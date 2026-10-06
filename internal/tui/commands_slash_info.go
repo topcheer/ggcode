@@ -1517,3 +1517,21 @@ func (m *Model) handleInterventionsCommand(parts []string) tea.Cmd {
 	m.chatWriteSystem(nextSystemID(), m.agent.InterventionSummary())
 	return nil
 }
+
+// handleRefusalsCommand backs /refusals (r23): show persisted user
+// refusals, or wipe them with "/refusals clear".
+func (m *Model) handleRefusalsCommand(parts []string) tea.Cmd {
+	if len(parts) > 1 && strings.ToLower(parts[1]) == "clear" {
+		if m.agent != nil {
+			m.agent.ClearRefusals()
+		}
+		m.chatWriteSystem(nextSystemID(), "Refusal ledger cleared.")
+		return nil
+	}
+	if m.agent == nil {
+		m.chatWriteSystem(nextSystemID(), "No agent session yet.")
+		return nil
+	}
+	m.chatWriteSystem(nextSystemID(), m.agent.RefusalSummary())
+	return nil
+}

@@ -253,6 +253,7 @@ type Agent struct {
 	latencyTracker               *LatencyTracker            // per-tool latency baseline & slow-tool outlier detection
 	toolSequence                 *toolSequenceValidator     // cross-iteration tool call anti-pattern detection
 	interventionLedger           *interventionLedger        // r395: user-takeover history → proactive defer hints
+	refusalLedger                *refusalLedger             // r23: persisted user refusals → enforceable write-block (arXiv 2605.00055)
 	lastExecutedTool             string                     // r395: tool behind the most recent tool result (guarded by mu)
 	planDrift                    *planDriftState            // plan drift detection (exit_plan_mode item tracking)
 	unverifiedClaim              *unverifiedClaimState      // unverified success claim detection (text claims vs actual verification)
@@ -489,6 +490,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		toolDedup:              newToolDedupLedger(),
 		toolSequence:           newToolSequenceValidator(),
 		interventionLedger:     newInterventionLedger(""), // re-anchored in SetWorkingDir
+		refusalLedger:          newRefusalLedger(""),      // re-anchored in SetWorkingDir
 		effortAdapter:          newAdaptiveEffortStateDetectOverride(p),
 		sessionTimeout:         newSessionTimeoutState(0),
 		fileFreshness:          newFileFreshnessSentinel(),
@@ -1301,6 +1303,9 @@ func (a *Agent) SetWorkingDir(dir string) {
 	if a.interventionLedger == nil || a.interventionLedger.workingDir != dir {
 		a.interventionLedger = newInterventionLedger(dir)
 	}
+	if a.refusalLedger == nil || a.refusalLedger.workingDir != dir {
+		a.refusalLedger = newRefusalLedger(dir)
+	}
 	// #1559-C: the read/edit guard states key files by path - anchor
 	// them to the workspace root so relative reads and absolute edits
 	// hit the same map entry.
@@ -1722,6 +1727,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// record.
 	a.constraintAmnesia.reset()
 	a.constraintAmnesia.recordConstraints(userText, 1)
+	// r23 refusal ledger: conversational refusals persist as enforceable
+	// constraints (arXiv 2605.00055 lesson 1 - "message-level reminders"
+	// fail); conversational lifts release them. Order matters: release
+	// first so "ok you can X now" does not re-record a stale denial.
+	a.ReleaseMatchingRefusals(userText)
+	a.recordUserRefusals(userText)
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	workDir := a.workingDir
