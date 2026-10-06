@@ -99,13 +99,18 @@ func (a *Agent) flushGuidanceStats() {
 	}
 	defer f.Close()
 	ts := time.Now().UTC().Format(time.RFC3339)
+	model := ""
+	if m, ok := a.provider.(interface{ ModelName() string }); ok {
+		model = m.ModelName()
+	}
 	for tag, st := range a.guidanceStats {
 		rec := struct {
 			TS         string `json:"ts"`
+			Model      string `json:"model,omitempty"`
 			Tag        string `json:"tag"`
 			Delivered  int    `json:"delivered"`
 			Suppressed int    `json:"suppressed"`
-		}{ts, tag, st.Delivered, st.Suppressed}
+		}{ts, model, tag, st.Delivered, st.Suppressed}
 		b, err := json.Marshal(rec)
 		if err != nil {
 			continue
@@ -113,4 +118,7 @@ func (a *Agent) flushGuidanceStats() {
 		f.Write(append(b, '\n'))
 	}
 	debug.Log("guidance-stats", "flushed %d tag(s) to %s", len(a.guidanceStats), path)
+	// r22: harness-assumption expiry check - cross-model dead-weight
+	// detection over the file we just flushed into. Best-effort.
+	analyzeStaleGuidance(path, model)
 }
