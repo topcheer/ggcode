@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -182,13 +183,37 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 			{
 				Role: "user",
 				Content: []provider.ContentBlock{
-					{Type: "text", Text: content},
+					{Type: "text", Text: wrapSkillSource(cmd.Name, cmd.Version, content)},
 				},
 			},
 		},
 	}
 	t.notifySkillCompleted(cmd, SkillExecutionModeInline, result, nil)
 	return result, nil
+}
+
+// skillSourceTag is the trust-boundary marker wrapping third-party skill
+// bodies injected inline (r482, contextual authorization). The system
+// prompt declares that content inside this region is data at tool-output
+// trust level, not first-class instructions.
+const skillSourceTag = "skill-source"
+
+var skillSourceCloseRe = regexp.MustCompile(`(?i)<\s*/\s*skill-source\s*>`)
+
+// wrapSkillSource wraps a skill body in a <skill-source> trust boundary.
+// Any forged closing tag inside the body is neutralized so the region
+// cannot be terminated early by malicious skill content (same escaping
+// discipline as untrusted_tool_output.go for tool results).
+func wrapSkillSource(name, version, content string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "unknown"
+	}
+	attrs := fmt.Sprintf(" name=%q", name)
+	if v := strings.TrimSpace(version); v != "" {
+		attrs += fmt.Sprintf(" version=%q", v)
+	}
+	return fmt.Sprintf("<%s%s>\n%s\n</%s>", skillSourceTag, attrs, skillSourceCloseRe.ReplaceAllString(content, "<\u200b/skill-source>"), skillSourceTag)
 }
 
 // resolveSkill looks up the named skill, handles MCP prompt fallback,
@@ -321,7 +346,7 @@ func (t SkillTool) executeMCPPromptSkill(ctx context.Context, skillName, rawArgs
 		FollowUpMessages: []provider.Message{
 			{
 				Role:    "user",
-				Content: []provider.ContentBlock{{Type: "text", Text: content}},
+				Content: []provider.ContentBlock{{Type: "text", Text: wrapSkillSource(skillName, "", content)}},
 			},
 		},
 	}, true
