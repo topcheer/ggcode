@@ -66,6 +66,9 @@ func (m *Model) handleWebchatUserMsg(msg webchatUserMsg) (Model, tea.Cmd) {
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
+		// #3466: webchat is a remote channel - arm the refusal-ledger
+		// inhibit right before the run starts (direct idle path).
+		m.agent.InhibitNextRefusalLedgerWrite()
 		cmd := m.startAgent(text)
 		return *m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 	}
@@ -74,6 +77,7 @@ func (m *Model) handleWebchatUserMsg(msg webchatUserMsg) (Model, tea.Cmd) {
 	// is drained. Calling appendUserMessage here would duplicate
 	// the message in the JSONL file.
 	// queuePendingSubmission renders the user bubble immediately.
-	m.queuePendingSubmission(text)
+	// #3466: remote-origin entry so the drain arms the inhibit.
+	m.queuePendingSubmissionRemote(text)
 	return *m, nil
 }

@@ -385,6 +385,11 @@ type pendingSubmission struct {
 	Hidden                bool
 	TunnelMessageOverride *tunnel.MessageData
 	Images                []imageAttachedMsg
+	// RemoteOrigin (#3466): text injected by a remote channel (lanchat DM,
+	// IM inbound, tunnel, webchat). Drain arms the refusal-ledger inhibit
+	// for the run this entry feeds, so remote text queued while the agent
+	// is busy cannot bypass the gate the direct paths honor.
+	RemoteOrigin bool
 }
 
 type pendingQueue struct {

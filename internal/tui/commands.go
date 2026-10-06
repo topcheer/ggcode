@@ -657,7 +657,9 @@ func (m *Model) submitLanChatAgentText(text string) tea.Cmd {
 	// user input (update_keys.go) and IM remote inbound (update_remote.go).
 	// #1762 case 2: projectMemoryLoading included, same as the local gate.
 	if m.loading || m.projectMemoryLoading {
-		m.queuePendingSubmission(text)
+		// #3466: remote-origin queue entry so the drain path arms the
+		// refusal-ledger inhibit for this text.
+		m.queuePendingSubmissionRemote(text)
 		return nil
 	}
 	// Render as a user markdown message (not a gray system note)
