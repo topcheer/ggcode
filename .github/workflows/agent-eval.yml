@@ -41,6 +41,17 @@ jobs:
       - name: Install eval deps
         run: pip install -r scripts/eval/requirements.txt
 
+      # #3440: the eval task templates target the eval-workbench project at
+      # ~/ggai/eval-workbench (dev-machine semantics: a second clone of this
+      # repo the agent edits inside). The workflow never provisioned it, so
+      # the FIRST scheduled run (2026-10-06) died with FileNotFoundError and
+      # the fail-closed gate correctly rejected the empty trend. Shallow-clone
+      # the repo itself - zero run_eval.py changes, matches local semantics.
+      - name: Provision eval workbench
+        run: |
+          mkdir -p "$HOME/ggai"
+          git clone --depth 1 "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$HOME/ggai/eval-workbench"
+
       - name: Run rotation-sampled eval
         env:
           GGCODE_EVAL_LLM_KEY: ${{ secrets.GGCODE_EVAL_LLM_KEY }}
