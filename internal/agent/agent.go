@@ -229,6 +229,7 @@ type Agent struct {
 	diffSummary                  *diffSummaryState          // pre-completion holistic change summary for self-review
 	oversightTriage              *oversightTriageState      // r397: novel-vs-routine triage for human review attention
 	autonomyDial                 *autonomyDialState         // r407: advisory progressive-autonomy dial
+	trustRepair                  *trustRepairState          // user-facing trust-repair debrief ledger
 	commitHint                   *commitHintState           // post-completion commit reminder for uncommitted changes
 	docDrift                     *docDriftState             // r465: documentation drift advisory (code-heavy run, zero doc edits)
 	draftPRHint                  *draftPRHintState          // post-completion draft-PR reminder for unpushed feature branches (sa-223)
@@ -482,6 +483,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		diffSummary:            newDiffSummaryState(),
 		oversightTriage:        newOversightTriageState(),
 		autonomyDial:           newAutonomyDialState(),
+		trustRepair:            newTrustRepairState(),
 		guidanceStats:          guidanceRunStats{}, // r402: also reset per-run in runPrompt
 		commitHint:             newCommitHintState(),
 		draftPRHint:            newDraftPRHintState(),
@@ -1946,6 +1948,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.fulfillmentGate.reset()
 	a.oversightTriage.reset()
 	a.autonomyDial.reset() // r407: fresh observation window per run
+	a.trustRepair.reset()  // trust-repair debrief: fresh failure ledger per run
 	// #3111: emit the novel-decision digest on ANY run exit, not just the
 	// natural no-tool-calls convergence. Error / cancel / iteration-limit
 	// exits previously dropped accumulated novel decisions silently - and a
@@ -1958,6 +1961,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		}
 		// r407: advisory autonomy-dial suggestion on any exit (one-shot gates).
 		if d := a.autonomyDial.suggest(); d != "" {
+			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
+		}
+		// Trust-repair debrief: deterministic user-facing failure account
+		// (root cause + counterfactual + boundary) on any exit, one-shot.
+		if d := a.maybeEmitTrustRepairDebrief(); d != "" {
 			onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: d})
 		}
 	}()
@@ -4204,6 +4212,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.oversightTriage.record(tc)
 			// r407: observe reliability for the advisory autonomy dial.
 			a.autonomyDial.record(result.IsError, result.Content)
+			// Trust-repair debrief: observe this outcome for the user-facing
+			// failure ledger.
+			a.trustRepair.record(trustRepairEvent{Step: i + 1, Tool: tc.Name, Arguments: string(tc.Arguments), IsError: result.IsError, Content: result.Content})
 			// r395: track the tool behind this result for intervention
 			// attribution, and surface a defer hint when this tool has a
 			// repeated user-takeover history (non-blocking, result-appended).
