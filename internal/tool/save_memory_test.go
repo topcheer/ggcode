@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/topcheer/ggcode/internal/memory"
@@ -18,6 +19,20 @@ func createTestProjectDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// TestSaveMemoryTool_ParametersDiscloseProceduralNaming guards the #r33
+// follow-up: the key param description must disclose the '-impl'/'build-'/
+// 'release-' naming convention so procedural knowledge actually rides the
+// persistent-memory channel instead of silently falling to index-only.
+func TestSaveMemoryTool_ParametersDiscloseProceduralNaming(t *testing.T) {
+	tol := NewSaveMemoryTool(nil, nil)
+	params := string(tol.Parameters())
+	for _, want := range []string{"-impl", "build-", "release-", "procedural"} {
+		if !strings.Contains(params, want) {
+			t.Errorf("Parameters() missing %q (procedural naming convention dropped?)", want)
+		}
+	}
 }
 
 func TestSaveMemoryTool_DefaultProjectScope(t *testing.T) {
