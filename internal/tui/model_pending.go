@@ -37,6 +37,17 @@ func (m *Model) promptExitConfirm() {
 }
 
 func (m *Model) queuePendingSubmission(text string) {
+	m.queuePendingSubmissionOrigin(text, false)
+}
+
+// queuePendingSubmissionRemote enqueues remote-origin text (lanchat DM / IM
+// inbound / tunnel / webchat) so the drain path arms the refusal-ledger
+// inhibit for the run it feeds (#3466).
+func (m *Model) queuePendingSubmissionRemote(text string) {
+	m.queuePendingSubmissionOrigin(text, true)
+}
+
+func (m *Model) queuePendingSubmissionOrigin(text string, remote bool) {
 	// Capture images attached with this submission and clear them from the
 	// pending list so they don't leak into the next submission.
 	imgs := m.pendingImages
@@ -44,7 +55,7 @@ func (m *Model) queuePendingSubmission(text string) {
 	chatID := nextChatID()
 	m.lastQueuedChatID = chatID
 	m.queuedChatIDs = append(m.queuedChatIDs, chatID)
-	count := m.pending.enqueueWithImages(text, imgs)
+	count := m.pending.enqueueWithImagesOrigin(text, imgs, remote)
 	debug.Log("tui", "queuePendingSubmission: count=%d text=%s imgs=%d", count, util.Truncate(text, 100), len(imgs))
 	if count == 0 {
 		return
@@ -187,13 +198,21 @@ func (m *Model) consumePendingSubmission() string {
 }
 
 func (m *Model) consumePendingSubmissionDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg) {
-	return m.pending.consumeDetailed()
+	text, hidden, override, imgs, _ := m.pending.consumeDetailed()
+	return text, hidden, override, imgs
 }
 
 func (m *Model) submitPendingSubmissionCmd() tea.Cmd {
-	text, hidden, override, imgs := m.consumePendingSubmissionDetailed()
+	text, hidden, override, imgs, remote := m.pending.consumeDetailed()
 	if text == "" && len(imgs) == 0 {
 		return nil
+	}
+	if remote {
+		// #3466: this drained submission carries remote-origin text (queued
+		// while the agent was busy). Arm the inhibit NOW - right before the
+		// run starts - so the ledger gate exempts it just like the direct
+		// remote paths, and no unrelated run can consume the flag first.
+		m.agent.InhibitNextRefusalLedgerWrite()
 	}
 	if override != nil {
 		m.setNextTunnelUserMessageOverride(*override)
@@ -414,18 +433,21 @@ func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue
 		q.q = queue
 		return
 	}
-	// Collect images from existing items to preserve through the rebuild.
+	// Collect per-entry side data to preserve through the rebuild.
 	// Use text as a match key; each match is consumed (first-wins) to handle
-	// duplicate text submissions.
-	type imgSlot struct {
+	// duplicate text submissions. Images AND the #3466 remote-origin flag
+	// live only on q.items (the runtime queue knows neither), so both ride
+	// these slots or they are lost on every re-sync.
+	type entrySlot struct {
 		text   string
 		images []imageAttachedMsg
+		remote bool
 		used   bool
 	}
-	var imgSlots []imgSlot
+	var slots []entrySlot
 	for _, item := range q.items {
-		if len(item.Images) > 0 {
-			imgSlots = append(imgSlots, imgSlot{text: item.Text, images: item.Images})
+		if len(item.Images) > 0 || item.RemoteOrigin {
+			slots = append(slots, entrySlot{text: item.Text, images: item.Images, remote: item.RemoteOrigin})
 		}
 	}
 
@@ -436,10 +458,11 @@ func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue
 			Hidden:                item.Hidden,
 			TunnelMessageOverride: cloneTunnelMessageData(item.Meta),
 		}
-		for i := range imgSlots {
-			if !imgSlots[i].used && imgSlots[i].text == item.Text {
-				ps.Images = imgSlots[i].images
-				imgSlots[i].used = true
+		for i := range slots {
+			if !slots[i].used && slots[i].text == item.Text {
+				ps.Images = slots[i].images
+				ps.RemoteOrigin = slots[i].remote
+				slots[i].used = true
 				break
 			}
 		}
@@ -453,15 +476,22 @@ func (q *pendingQueue) syncItemsFromQueueLocked(queue *agentruntime.PendingQueue
 // The agentruntime.PendingQueue doesn't support images, so we store them
 // directly and recover them during consume.
 func (q *pendingQueue) enqueueWithImages(text string, imgs []imageAttachedMsg) int {
+	return q.enqueueWithImagesOrigin(text, imgs, false)
+}
+
+// enqueueWithImagesOrigin is enqueueWithImages with the #3466 remote-origin
+// flag stamped onto the enqueued entry.
+func (q *pendingQueue) enqueueWithImagesOrigin(text string, imgs []imageAttachedMsg, remote bool) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	queue := q.ensureQueueLocked()
 	count := queue.Enqueue(text, false, nil)
 	q.syncItemsFromQueueLocked(queue)
 	// After sync, the last item in q.items corresponds to our submission.
-	// Store images there.
+	// Store images (and the origin flag) there.
 	if len(q.items) > 0 {
 		q.items[len(q.items)-1].Images = imgs
+		q.items[len(q.items)-1].RemoteOrigin = remote
 	}
 	return count
 }
@@ -524,7 +554,7 @@ func (q *pendingQueue) popLastVisible() (text string, imgs []imageAttachedMsg, o
 }
 
 func (q *pendingQueue) consume() string {
-	text, _, _, _ := q.consumeDetailed()
+	text, _, _, _, _ := q.consumeDetailed()
 	return text
 }
 
@@ -558,18 +588,19 @@ func (q *pendingQueue) consumeVisiblePrefix() (string, []imageAttachedMsg) {
 	return strings.TrimSpace(strings.Join(parts, "\n\n")), allImgs
 }
 
-func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg) {
+func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []imageAttachedMsg, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	queue := q.ensureQueueLocked()
 	item, ok := queue.Consume()
 	if !ok {
 		q.syncItemsFromQueueLocked(queue)
-		return "", false, nil, nil
+		return "", false, nil, nil, false
 	}
 	if item.Hidden || item.Meta != nil {
+		remote := q.itemsRemoteLocked(1)
 		q.syncItemsFromQueueLocked(queue)
-		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta), nil
+		return strings.TrimSpace(item.Text), true, cloneTunnelMessageData(item.Meta), nil, remote
 	}
 	items := queue.ConsumePrefix(func(item agentruntime.PendingMessage[*tunnel.MessageData]) bool {
 		return !item.Hidden && item.Meta == nil
@@ -578,6 +609,7 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 	// q.items still holds the pre-consume state; consumedCount tells us
 	// how many leading entries were consumed.
 	consumedCount := 1 + len(items)
+	remote := q.itemsRemoteLocked(consumedCount)
 	var allImgs []imageAttachedMsg
 	for i := 0; i < consumedCount && i < len(q.items); i++ {
 		allImgs = append(allImgs, q.items[i].Images...)
@@ -587,7 +619,19 @@ func (q *pendingQueue) consumeDetailed() (string, bool, *tunnel.MessageData, []i
 	for _, pending := range items {
 		parts = append(parts, pending.Text)
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil, allImgs
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), false, nil, allImgs, remote
+}
+
+// itemsRemoteLocked reports whether any of the first n queued entries is
+// remote-origin (#3466). Call while holding q.mu, before sync destroys the
+// consumed slice.
+func (q *pendingQueue) itemsRemoteLocked(n int) bool {
+	for i := 0; i < n && i < len(q.items); i++ {
+		if q.items[i].RemoteOrigin {
+			return true
+		}
+	}
+	return false
 }
 
 // stripImagePlaceholder removes a leading image placeholder from a value.

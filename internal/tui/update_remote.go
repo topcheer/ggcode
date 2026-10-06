@@ -167,7 +167,8 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 	// its first turn without the project-memory system injection and
 	// reorder behind locally queued messages.
 	if m.loading || m.projectMemoryLoading {
-		m.queuePendingSubmission(prompt)
+		// #3466: remote-origin queue entry (drain arms the inhibit).
+		m.queuePendingSubmissionRemote(prompt)
 		return m, nil
 	}
 	// #3460: IM inbound is remote-origin - it must not mutate the refusal

@@ -625,15 +625,15 @@ func TestPendingQueueConsumeDetailedKeepsHiddenEntriesSeparate(t *testing.T) {
 	q.enqueueHidden("hidden cron", nil)
 	q.enqueue("visible two")
 
-	text, hidden, override, _ := q.consumeDetailed()
+	text, hidden, override, _, _ := q.consumeDetailed()
 	if text != "visible one" || hidden || override != nil {
 		t.Fatalf("unexpected first consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
-	text, hidden, override, _ = q.consumeDetailed()
+	text, hidden, override, _, _ = q.consumeDetailed()
 	if text != "hidden cron" || !hidden || override != nil {
 		t.Fatalf("unexpected second consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
-	text, hidden, override, _ = q.consumeDetailed()
+	text, hidden, override, _, _ = q.consumeDetailed()
 	if text != "visible two" || hidden || override != nil {
 		t.Fatalf("unexpected third consume: text=%q hidden=%v override=%+v", text, hidden, override)
 	}
@@ -877,7 +877,7 @@ func TestPendingQueuePreservesImagesThroughConsume(t *testing.T) {
 	}
 
 	// Consume should return images
-	text, hidden, override, consumedImgs := q.consumeDetailed()
+	text, hidden, override, consumedImgs, _ := q.consumeDetailed()
 	if text != "hello with image" {
 		t.Fatalf("unexpected text: %q", text)
 	}

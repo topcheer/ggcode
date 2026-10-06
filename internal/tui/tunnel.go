@@ -1051,6 +1051,9 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 		m.statusToolName = ""
 		m.statusToolArg = ""
 		m.statusToolCount = 0
+		// #3466: tunnel is a remote channel - arm the refusal-ledger
+		// inhibit right before the run starts (direct idle path).
+		m.agent.InhibitNextRefusalLedgerWrite()
 		cmd := m.startAgent(text)
 		return m, tea.Batch(m.startLoadingSpinner(m.statusActivity), cmd)
 	}
@@ -1058,7 +1061,8 @@ func (m *Model) handleTunnelInboundMsg(msg tunnelInboundMsg) (tea.Model, tea.Cmd
 	// by startNormalTextRun when the pending submission is drained,
 	// so we must NOT call appendUserMessage here (would duplicate).
 	// queuePendingSubmission renders the user bubble immediately.
-	m.queuePendingSubmission(text)
+	// #3466: remote-origin entry so the drain arms the inhibit.
+	m.queuePendingSubmissionRemote(text)
 	return m, nil
 }
 
