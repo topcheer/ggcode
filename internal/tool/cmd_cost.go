@@ -94,6 +94,10 @@ func normalizeCostKey(cmd string) string {
 // stripTrailingComment removes an unquoted trailing shell comment ("# ..."
 // or "// ...") from cmd. '#' or '/' inside single/double quotes is literal
 // and never starts a comment (e.g. awk '{print $1 "#"}', URLs "host//path").
+// #3472: a bare (unquoted) URL's scheme separator is also not a comment -
+// "curl https://example.com" must keep its "//". A "//" only counts as a
+// comment when it starts a token (preceded by whitespace or line start),
+// so "cmd // note" is stripped but "https://..." survives.
 func stripTrailingComment(cmd string) string {
 	var quote rune
 	for i, r := range cmd {
@@ -110,7 +114,13 @@ func stripTrailingComment(cmd string) string {
 			return cmd[:i]
 		case '/':
 			if i+1 < len(cmd) && cmd[i+1] == '/' {
-				return cmd[:i]
+				prev := byte(' ')
+				if i > 0 {
+					prev = cmd[i-1]
+				}
+				if prev == ' ' || prev == '\t' {
+					return cmd[:i]
+				}
 			}
 		}
 	}
