@@ -236,6 +236,11 @@ func TestWecomUploadFileTypedAndSend(t *testing.T) {
 	f := newFakeWeComServer(t)
 	defer f.srv.Close()
 	a := newWecomMediaAdapter(t, f)
+	// #3444: 22 chunk round-trips over 11MB on a loaded CI runner can stall
+	// past the default 2s ack wait; a healthy run acks instantly and pays
+	// nothing, so raise only this test's wait budget. The end-to-end path
+	// under test (#3325) is unchanged.
+	a.ackTimeout = 15 * time.Second
 
 	// 11MB: would be rejected by the image cap, must pass the file cap.
 	data := make([]byte, 11<<20)
