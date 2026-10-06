@@ -132,6 +132,11 @@ class ChatMessage {
         'is_tool_error': isToolError,
         'reasoning_collapsed': reasoningCollapsed,
         'time': time.toIso8601String(),
+        // #3447: persist delivery status so failed/unconfirmed user
+        // messages survive the snapshot-restore loop. Without this,
+        // fromJson fell back to the constructor default (acknowledged)
+        // and silently masked send failures as success after restart.
+        'status': status.name,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -155,7 +160,21 @@ class ChatMessage {
         reasoningCollapsed: json['reasoning_collapsed'] as bool? ?? false,
         time:
             DateTime.tryParse(json['time'] as String? ?? '') ?? DateTime.now(),
+        // #3447: restore the persisted delivery status; legacy snapshots
+        // without the field keep the acknowledged default. A snapshot that
+        // caught a message mid-'sending' means the relay never acked it
+        // before the app went down - degrade to 'unconfirmed' (honest
+        // retryable-until-acked) instead of resurrecting a live 'sending'
+        // state that no timer is driving anymore.
+        status: _statusFromPersisted(json['status'] as String?),
       );
+
+  static MessageStatus _statusFromPersisted(String? name) {
+    if (name == null) return MessageStatus.acknowledged;
+    if (name == MessageStatus.sending.name) return MessageStatus.unconfirmed;
+    return MessageStatus.values
+        .firstWhere((s) => s.name == name, orElse: () => MessageStatus.acknowledged);
+  }
 }
 
 final chatProvider = NotifierProvider<ChatNotifier, List<ChatMessage>>(
