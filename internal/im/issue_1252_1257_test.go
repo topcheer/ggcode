@@ -162,9 +162,21 @@ func TestWecomUploadChunkAckRetried(t *testing.T) {
 	if mediaID != "MEDIA123" {
 		t.Fatalf("media_id = %q", mediaID)
 	}
-	// 2 logical chunks + 1 re-sent chunk = 3 chunk frames on the wire.
-	if got := f.cmdCount(wecomCmdUploadChunk); got != 3 {
-		t.Fatalf("expected 3 chunk frames (2 chunks + 1 retry), got %d", got)
+	// #3444: the #1254 contract is "a lost ack is retried, not fatal" - 2
+	// logical chunks + >=1 re-sent chunk. An EXACT frame count (==3) also
+	// counts spurious re-sends when a healthy ack crosses the 300ms ack
+	// window on a loaded CI runner, which is precisely how this family
+	// flaked across five PRs. Assert the drop was consumed exactly once
+	// (retry really happened) plus the >=3 floor; extra latency-induced
+	// re-sends are idempotent by protocol and must not fail the test.
+	if got := f.cmdCount(wecomCmdUploadChunk); got < 3 {
+		t.Fatalf("expected >=3 chunk frames (2 chunks + retry), got %d", got)
+	}
+	f.mu.Lock()
+	drops := f.chunkDrops
+	f.mu.Unlock()
+	if drops != 0 {
+		t.Fatalf("the single dropped ack must have been consumed by a retry, %d left", drops)
 	}
 }
 
