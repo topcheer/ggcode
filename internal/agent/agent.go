@@ -3888,6 +3888,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.appendGuidance(&result, hint)
 				}
 			}
+			// #3474: record ask fingerprints only after a SUCCESSFUL ask_user
+			// execution - denied/cancelled/failed asks never reached the user
+			// and must not consume the same-run dedup quota.
+			if tc.Name == "ask_user" && !result.IsError {
+				a.markAskAskedQG(string(tc.Arguments))
+			}
 			// File-editing tools invalidate the speculative cache: any
 			// pre-executed read_file/grep results for edited files are now
 			// stale. Clear the cache to prevent serving outdated content.
