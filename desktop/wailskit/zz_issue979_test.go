@@ -3,6 +3,8 @@ package wailskit
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/topcheer/ggcode/internal/mcp"
 	"testing"
 )
 
@@ -48,6 +50,16 @@ func writeProjectMCPJSON(t *testing.T, ws string) {
 }`
 	if err := os.WriteFile(filepath.Join(ws, ".mcp.json"), []byte(mcpJSON), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	// #979 invariant updated for the workspace trust gate (#3438
+	// follow-up): the .mcp.json server must be pre-approved for this
+	// workspace, otherwise the gate (correctly) holds it out of the
+	// session. What #979 protects is that an APPROVED project server
+	// survives unrelated panel writes - approval is a precondition, not
+	// the thing under test.
+	merged, _ := mcp.MergeStartupServersWithDeleted(ws, nil, nil)
+	if _, err := mcp.ApproveProjectServers(ws, merged, []string{"migrated-srv"}); err != nil {
+		t.Fatalf("pre-approving project server: %v", err)
 	}
 }
 

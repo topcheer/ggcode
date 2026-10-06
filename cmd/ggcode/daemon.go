@@ -69,8 +69,12 @@ func newDaemonCmd(cfgFile *string) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			if _, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
+			if persistWarnings, _, err := mcp.PersistUserClaudeServers(cfg); err != nil {
 				return fmt.Errorf("persisting Claude MCP servers: %w", err)
+			} else {
+				for _, w := range persistWarnings {
+					fmt.Fprintln(os.Stderr, "warning:", w)
+				}
 			}
 
 			// If --__daemonized, skip fork logic - we ARE the daemonized child
