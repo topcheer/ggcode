@@ -1731,8 +1731,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// constraints (arXiv 2605.00055 lesson 1 - "message-level reminders"
 	// fail); conversational lifts release them. Order matters: release
 	// first so "ok you can X now" does not re-record a stale denial.
-	a.ReleaseMatchingRefusals(userText)
-	a.recordUserRefusals(userText)
+	// #3460: remote-origin runs (LAN @agent DM / IM inbound) are exempt -
+	// FromRole is self-reported and a forged DM must not poison (or lift)
+	// the local user's 30-day enforceable blocks.
+	if !consumeRemoteRefusalInhibit() {
+		a.ReleaseMatchingRefusals(userText)
+		a.recordUserRefusals(userText)
+	}
 	a.mu.RLock()
 	hookCfg := a.hookConfig
 	workDir := a.workingDir

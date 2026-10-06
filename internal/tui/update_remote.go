@@ -170,6 +170,9 @@ func (m Model) handleRemoteInbound(msg remoteInboundMsg, spinnerCmd tea.Cmd) (te
 		m.queuePendingSubmission(prompt)
 		return m, nil
 	}
+	// #3460: IM inbound is remote-origin - it must not mutate the refusal
+	// ledger (30-day enforceable blocks) any more than a LAN DM can.
+	m.agent.InhibitNextRefusalLedgerWrite()
 	return m, m.submitText(prompt, false)
 
 }
