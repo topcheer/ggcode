@@ -84,6 +84,25 @@ mcp_servers:
 
 When `read_only: true`, ggcode blocks any MCP tool whose name matches a write/create/delete/execute keyword: short roots (`set`, `put`, `post`, `run`, `exec`, `edit`, `move`) must match a whole underscore- or camelCase-delimited word segment (`set_value`, `setValue` blocked; `get_dataset` allowed), while longer keywords (`write`, `delete`, `create`, `update`, `insert`, `patch`, `execute`, `shell`, `rename`, `upload`, `install`, `deploy`, `upsert`) match anywhere in the name. Read-only tools such as `read`, `get`, `list`, `search`, `fetch`, `query`, `stat`, and `show` are still allowed. Blocked tool calls return an error result explaining that the server is in read-only mode.
 
+## Tool Definition Drift Alerts (Anti-Rug-Pull)
+
+A compromised or updated MCP server can silently change its tool definitions after you approved them — swapped descriptions, added tools, or rolled-back versions (the "rug pull" pattern). ggcode content-hashes each server's tool definitions at first connection, persists the baseline to `mcp_baselines.json` under the config directory, and re-checks it on every reconnect and `tools/list_changed` refresh, surviving restarts.
+
+When the hash changes after the approved baseline, the drift is reported through the host's alert channel (`OnToolDrift`), diffed at tool-name granularity. Two false-positive guards are built in:
+
+- **Onboarding window**: changes within 24h of approval update the baseline silently (first-day iteration of a server under active development).
+- **Escape hatch**: for a server whose definitions legitimately churn, opt out of the alert:
+
+```yaml
+mcp_servers:
+  dev-server:
+    name: dev-server
+    command: ./my-dev-server
+    allow_tool_drift: true
+```
+
+With `allow_tool_drift: true` changes are logged (debug log, `mcp-drift` category) but never raise the alert; the baseline still moves forward with each observed change, so each drift reports at most once.
+
 ## Stateless Protocol Mode (MCP 2026-07-28)
 
 The MCP 2026-07-28 revision (SEP-2575) removes the protocol-level session and the initialize handshake: every request carries its protocol version, client info and client capabilities as per-request `_meta` members, and servers advertise themselves via a new `server/discover` method. ggcode supports this as an opt-in per server:
