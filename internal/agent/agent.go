@@ -3892,6 +3892,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool results BEFORE any recorder, cache annotation, context append,
 			// or session-history persistence sees them. Applies uniformly to all
 			// result paths above (memo/speculative/pre-executed/command-cache/execute).
+			// Exfiltration chain source recording (#3539): MUST run on the
+			// pre-redaction content - the detector fingerprints exactly what
+			// redactSecrets masks, so recording after redaction made Trigger A
+			// (secret-value fingerprints) dead code in the production assembly.
+			// The fingerprint plaintext stays in memory only (5min expiry, cap 6),
+			// the same trust level as taintInfluence's injected-content records.
+			a.exfilChain.recordSensitiveSource(tc.Name, string(tc.Arguments), result.Content)
 			result.Content = redactSecrets(tc.Name, result.Content)
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
@@ -5294,11 +5301,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool calls (edit_file, write_file, run_command, etc.).
 			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
 			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
-			// Exfiltration chain source recording: when a read-type tool returns
-			// secret-pattern content or was aimed at a sensitive path, record
-			// fingerprints so the pre-exec sink check can flag outbound tool
-			// calls carrying them (Log-to-Leak chain detection).
-			a.exfilChain.recordSensitiveSource(tc.Name, string(tc.Arguments), result.Content)
+			// Exfiltration chain source recording moved UP to the pre-redaction
+			// chokepoint (#3539); see the secret-redaction block above.
 			// Spiral-of-hallucination: an execution-type tool call with
 			// observable side effects breaks the spiral chain (#161 — prose
 			// keyword matching fired on nearly every turn; #167 — read-only
