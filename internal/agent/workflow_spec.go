@@ -161,8 +161,19 @@ func (e *workflowEngine) recordCompletion(path string) {
 	}
 }
 
+// wfClockSkew is the wall-clock tolerance applied when comparing artifact
+// mtime against the engine anchor. Both timestamps come from CLOCK_REALTIME
+// (no monotonic component), and CI runners / NTP-adjusted hosts can step the
+// clock backwards between `time.Now()` (anchor) and the kernel stamping the
+// file write, making a genuinely fresh artifact look stale - which deadlocks
+// block mode on a step that actually completed (observed twice consecutively
+// on GitHub Actions runners, PR #3490). A 2s grace window absorbs that skew
+// while keeping pre-run artifacts (minutes old) correctly stale.
+const wfClockSkew = 2 * time.Second
+
 // globFreshOnDisk reports whether pattern resolves to at least one file
-// on disk whose mtime is at or after the engine's freshness anchor (#3414).
+// on disk whose mtime is at or after the engine's freshness anchor (#3414),
+// modulo the wfClockSkew wall-clock tolerance.
 // Patterns are interpreted relative to the working dir (the parent of
 // loadDir); absolute patterns are used as-is.
 func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
@@ -203,7 +214,7 @@ func (e *workflowEngine) globFreshOnDisk(pattern string) bool {
 			return nil
 		}
 		info, infoErr := d.Info()
-		if infoErr == nil && !info.IsDir() && !info.ModTime().Before(e.startedAt) {
+		if infoErr == nil && !info.IsDir() && !info.ModTime().Before(e.startedAt.Add(-wfClockSkew)) {
 			found = true
 			return fs.SkipAll
 		}
