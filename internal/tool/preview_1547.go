@@ -52,7 +52,7 @@ func (t MultiEditFile) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit,
 		// Anchor mismatch: let the executor surface its error verbatim.
 		return nil, fmt.Errorf("%s", msg)
 	}
-	return []PlannedFileEdit{{Path: resolved, OldContent: original, NewContent: content}}, nil
+	return []PlannedFileEdit{{Path: resolved, OldContent: original, NewContent: content, Existed: true}}, nil
 }
 
 // PreviewChanges plans multi_file_write (full content is given directly).
@@ -72,8 +72,9 @@ func (t MultiFileWrite) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit
 		if err != nil {
 			return nil, err
 		}
-		old, _ := os.ReadFile(resolved) // missing file = create, old ""
-		plans = append(plans, PlannedFileEdit{Path: resolved, OldContent: string(old), NewContent: f.Content})
+		old, rerr := os.ReadFile(resolved)             // missing file = create, old ""
+		existed := rerr == nil || !os.IsNotExist(rerr) // #3512: create-vs-edit drives undo semantics
+		plans = append(plans, PlannedFileEdit{Path: resolved, OldContent: string(old), NewContent: f.Content, Existed: existed})
 	}
 	return plans, nil
 }
@@ -128,7 +129,7 @@ func (t BatchReplace) PreviewChanges(input json.RawMessage) ([]PlannedFileEdit, 
 			}
 		}
 		if newContent != content {
-			plans = append(plans, PlannedFileEdit{Path: resolved, OldContent: content, NewContent: newContent})
+			plans = append(plans, PlannedFileEdit{Path: resolved, OldContent: content, NewContent: newContent, Existed: true})
 		}
 	}
 	return plans, nil
