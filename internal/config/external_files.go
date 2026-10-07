@@ -300,8 +300,17 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 		if yaml.Unmarshal(existingData, &existingList) == nil {
 			outList := []interface{}{}
 			if yaml.Unmarshal(out, &outList) == nil {
+				// #3533: restoreEnvRefs aligns array elements BY INDEX,
+				// but removing or reordering a server shifts indices - the
+				// equality test would then compare two DIFFERENT servers
+				// and never restore, silently persisting expanded
+				// plaintext. Re-align the existing list by the servers'
+				// stable identity (name) into the OUT order first;
+				// anonymous elements (or non-server arrays) fall back to
+				// index alignment, which is correct within one server.
+				aligned := alignByName(existingList, outList)
 				lookup := runtimeEnvLookup(nil)
-				restored := restoreEnvRefs(existingList, outList, lookup)
+				restored := restoreEnvRefs(aligned, outList, lookup)
 				if re, rerr := yaml.Marshal(restored); rerr == nil {
 					out = re
 				}
@@ -309,6 +318,59 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 		}
 	}
 	return writeSecureConfigFile(path, out)
+}
+
+// alignByName reorders `existing` (the on-disk list) to match the element
+// order of `out` by the elements' "name" key when both sides are lists of
+// name-bearing maps (#3533). Elements without a usable name keep their
+// positional correspondence (append in original order). Non-list inputs are
+// returned unchanged.
+func alignByName(existing, out []interface{}) []interface{} {
+	idxByName := map[string]int{}
+	for i, el := range existing {
+		m, ok := el.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if name == "" {
+			continue
+		}
+		if _, dup := idxByName[name]; !dup {
+			idxByName[name] = i
+		}
+	}
+	if len(idxByName) == 0 {
+		return existing
+	}
+	used := map[int]bool{}
+	aligned := make([]interface{}, 0, len(out))
+	fallback := 0
+	for _, el := range out {
+		m, ok := el.(map[string]interface{})
+		matched := false
+		if ok {
+			name, _ := m["name"].(string)
+			if i, hit := idxByName[name]; hit && !used[i] {
+				aligned = append(aligned, existing[i])
+				used[i] = true
+				matched = true
+			}
+		}
+		if !matched {
+			for fallback < len(existing) && used[fallback] {
+				fallback++
+			}
+			if fallback < len(existing) {
+				aligned = append(aligned, existing[fallback])
+				used[fallback] = true
+				fallback++
+			}
+			// existing shorter than out (new server): nothing to align -
+			// restoreEnvRefs skips beyond the existing length.
+		}
+	}
+	return aligned
 }
 
 // restoreEnvRefs walks an on-disk (unexpanded) tree and an outgoing
