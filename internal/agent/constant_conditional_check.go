@@ -42,27 +42,78 @@ import (
 	"go/token"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/diff"
 )
 
 const maxConstantCondWarnings = 5
 
+// ccFinding pairs a warning message with a structural fingerprint of its
+// constant condition (rendered condition text + evaluated constant), used
+// for #3491 delta accounting across edits.
+type ccFinding struct {
+	msg string
+	key string
+}
+
 // checkConstantConditional detects if-statements whose condition is a
 // compile-time boolean constant (always true or always false).
-func checkConstantConditional(filePath, _, newContent string) []string {
+//
+// #3491 W4 delta gate: this check used to discard OldContent (`_`) and scan
+// NewContent in full, so a file with a pre-existing intentional `if false`
+// debug block re-reported it on EVERY unrelated edit (up to 5+1 warnings per
+// write), violating the write-integrity W4 contract (deltaGateNew,
+// write_integrity.go:101-130) that sibling checks honor (merge-conflict-
+// markers, config-syntax, tag-balance, magic-numbers). Now: zero-delta writes
+// are skipped entirely, and only conditions NEW to this write are reported,
+// matched by condition fingerprint with count subtraction (#1102
+// magic-numbers pattern: a second instance of a pre-existing cond still
+// surfaces, the pre-existing instance does not).
+func checkConstantConditional(filePath, oldContent, newContent string) []string {
+	// W4: a zero-delta write (old == new) introduces nothing.
+	if !diff.HasChanges(oldContent, newContent) {
+		return nil
+	}
+	findings := ccScan(filePath, newContent)
+	if len(findings) == 0 {
+		return nil
+	}
+	// New files / empty old content: everything found is new (keeps the
+	// zero-old-content behavior of the 22 pre-existing unit tests intact).
+	if strings.TrimSpace(oldContent) == "" {
+		return ccMessages(findings)
+	}
+	oldSeen := make(map[string]int)
+	for _, f := range ccScan(filePath, oldContent) {
+		oldSeen[f.key]++
+	}
+	var fresh []ccFinding
+	for _, f := range findings {
+		if oldSeen[f.key] > 0 {
+			oldSeen[f.key]-- // count-subtract: pre-existing instance consumed
+			continue
+		}
+		fresh = append(fresh, f)
+	}
+	return ccMessages(fresh)
+}
+
+// ccScan parses content and returns one finding per constant-conditional
+// if-statement, in source order.
+func ccScan(filePath, content string) []ccFinding {
 	if filepath.Ext(filePath) != ".go" {
 		return nil
 	}
-	src := strings.TrimSpace(newContent)
-	if src == "" {
+	if strings.TrimSpace(content) == "" {
 		return nil
 	}
 
-	file, fset, err := parseGoSource(filePath, newContent, 0)
+	file, fset, err := parseGoSource(filePath, content, 0)
 	if err != nil || file == nil {
 		return nil
 	}
 
-	var warnings []string
+	var findings []ccFinding
 	ast.Inspect(file, func(n ast.Node) bool {
 		stmt, ok := n.(*ast.IfStmt)
 		if !ok || stmt.Cond == nil {
@@ -72,12 +123,25 @@ func checkConstantConditional(filePath, _, newContent string) []string {
 		if !isConst {
 			return true
 		}
-		ccEmitWarning(stmt, val, fset, &warnings)
+		findings = append(findings, ccEmitWarning(stmt, val, fset))
 		// Do not descend into the body: code inside a constant-conditional
 		// branch is dead, and visiting nested ifs there only adds noise.
 		return false
 	})
+	return findings
+}
 
+// ccMessages flattens findings to warning strings, applying the cap only to
+// what survived delta filtering (pre-existing conditions never consume cap
+// slots).
+func ccMessages(findings []ccFinding) []string {
+	if len(findings) == 0 {
+		return nil
+	}
+	warnings := make([]string, 0, len(findings))
+	for _, f := range findings {
+		warnings = append(warnings, f.msg)
+	}
 	if len(warnings) > maxConstantCondWarnings {
 		trunc := fmt.Sprintf("... and %d more constant-conditional warning(s)",
 			len(warnings)-maxConstantCondWarnings)
@@ -87,22 +151,29 @@ func checkConstantConditional(filePath, _, newContent string) []string {
 	return warnings
 }
 
-// ccEmitWarning appends a warning for a constant-conditional if-statement.
-func ccEmitWarning(stmt *ast.IfStmt, val bool, fset *token.FileSet, warnings *[]string) {
+// ccEmitWarning builds a warning for a constant-conditional if-statement.
+// The fingerprint key (rendered condition text + evaluated constant) is
+// position-independent, so an edit that merely shifts a pre-existing
+// condition's line number does not make it "new" (#1527 case D rationale).
+func ccEmitWarning(stmt *ast.IfStmt, val bool, fset *token.FileSet) ccFinding {
 	pos := fset.Position(stmt.Pos())
+	key := renderNode(fset, stmt.Cond) + fmt.Sprintf("|const=%v", val)
 	if val {
-		*warnings = append(*warnings,
-			fmt.Sprintf("%s:%d: if-statement has an always-true condition; "+
+		return ccFinding{
+			msg: fmt.Sprintf("%s:%d: if-statement has an always-true condition; "+
 				"the else-branch (if any) is dead code. "+
 				"Replace with the real predicate or remove the condition.",
-				pos.Filename, pos.Line))
-		return
+				pos.Filename, pos.Line),
+			key: key,
+		}
 	}
-	*warnings = append(*warnings,
-		fmt.Sprintf("%s:%d: if-statement has an always-false condition; "+
+	return ccFinding{
+		msg: fmt.Sprintf("%s:%d: if-statement has an always-false condition; "+
 			"the then-branch is dead code and will never execute. "+
 			"This is likely a stubbed-out predicate or a logic bug.",
-			pos.Filename, pos.Line))
+			pos.Filename, pos.Line),
+		key: key,
+	}
 }
 
 // ccBoolValue evaluates an expression to a compile-time boolean constant.
