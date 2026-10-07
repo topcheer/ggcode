@@ -397,6 +397,18 @@ type BackgroundTaskProvider interface {
 	GetTaskOutput(taskID string) (string, bool)
 }
 
+// DelegationTaskTextProvider is optionally implemented by BackgroundTaskProvider
+// implementations that know the task text behind a completed output (the
+// sub-agent manager). It lets task_output attach the same acceptance
+// checkpoint wait_agent attaches, so retrieving a delegation result through
+// this side path does not bypass delegation validation (r-sa-99: the
+// provenance-paradox bypass - wait_agent validates, task_output didn't).
+type DelegationTaskTextProvider interface {
+	// GetTaskText must return ok=false unless the run is completed and its
+	// result is final; callers inject nothing in that case.
+	GetTaskText(taskID string) (string, bool)
+}
+
 // TaskOutputTool retrieves the output of a background task by ID.
 type TaskOutputTool struct {
 	Provider BackgroundTaskProvider
@@ -463,6 +475,20 @@ func (t TaskOutputTool) Execute(_ context.Context, input json.RawMessage) (Resul
 			omitted := len(lines) - args.TailLines
 			output = fmt.Sprintf("[... %d earlier lines omitted; re-call with a larger tail_lines to page further back ...]\n%s",
 				omitted, strings.Join(lines[omitted:], "\n"))
+		}
+	}
+
+	// Delegation validation side path: when this output is a completed
+	// sub-agent result whose task carried acceptance criteria, append the
+	// same checkpoint wait_agent appends, so the parent does not consume the
+	// builder's self-report unvalidated just because it used task_output.
+	// acceptanceReminder is a no-op for shell jobs (no task text), running
+	// tasks (GetTaskText ok=false), and tasks without criteria.
+	if tp, ok := t.Provider.(DelegationTaskTextProvider); ok && args.TailLines == 0 {
+		if taskText, found := tp.GetTaskText(args.TaskID); found {
+			if reminder := acceptanceReminder(taskText, output); reminder != "" {
+				output += reminder
+			}
 		}
 	}
 
