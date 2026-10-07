@@ -334,9 +334,11 @@ func tryClaimPendingTask(
 				// task board consistent — the metadata records the permanent failure.
 				completed := task.StatusCompleted
 				errMsg := util.Truncate(taskErr.Error(), 200)
+				meta := map[string]string{"permanent_error": fc.String(), "error": errMsg}
+				meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
 				tmMgr.Update(claimed.ID, task.UpdateOptions{
 					Status:   &completed,
-					Metadata: map[string]string{"permanent_error": fc.String(), "error": errMsg},
+					Metadata: meta,
 				})
 				debug.Log("swarm", "teammate %s task %s permanently failed (%s): %v",
 					tm.ID, claimed.ID, fc, taskErr)
@@ -356,13 +358,15 @@ func tryClaimPendingTask(
 				if attempts >= maxTransientTaskRetries {
 					completed := task.StatusCompleted
 					errMsg := util.Truncate(taskErr.Error(), 200)
+					meta := map[string]string{
+						"permanent_error": "max_retries_exceeded",
+						"error":           errMsg,
+						"retry_attempts":  strconv.Itoa(attempts),
+					}
+					meta = attachAttribution(meta, buildFailureAttribution(tm, claimed.ID, taskErr)) // sa-90 step-level attribution
 					tmMgr.Update(claimed.ID, task.UpdateOptions{
-						Status: &completed,
-						Metadata: map[string]string{
-							"permanent_error": "max_retries_exceeded",
-							"error":           errMsg,
-							"retry_attempts":  strconv.Itoa(attempts),
-						},
+						Status:   &completed,
+						Metadata: meta,
 					})
 					debug.Log("swarm", "teammate %s task %s exceeded %d transient retries, parking as completed(max_retries): %v",
 						tm.ID, claimed.ID, maxTransientTaskRetries, taskErr)
@@ -474,14 +478,16 @@ func rollbackClaimedTask(mgr *Manager, team *Team, tm *Teammate) {
 	attempts++
 	if attempts >= maxTransientTaskRetries {
 		completed := task.StatusCompleted
+		meta := map[string]string{
+			"permanent_error": "max_retries_exceeded",
+			"error":           "teammate panicked repeatedly",
+			"retry_attempts":  strconv.Itoa(attempts),
+		}
+		meta = attachAttribution(meta, buildFailureAttribution(tm, taskID, fmt.Errorf("teammate panicked repeatedly"))) // sa-90 step-level attribution
 		if _, uerr := board.Update(taskID, task.UpdateOptions{
 			ExpectedStatus: &inProgress,
 			Status:         &completed,
-			Metadata: map[string]string{
-				"permanent_error": "max_retries_exceeded",
-				"error":           "teammate panicked repeatedly",
-				"retry_attempts":  strconv.Itoa(attempts),
-			},
+			Metadata:       meta,
 		}); uerr != nil {
 			debug.Log("swarm", "panic rollback failed task=%s err=%v", taskID, uerr)
 		}
