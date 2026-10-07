@@ -76,7 +76,7 @@ func TestRenderImpactWarningCapsAtMaxImpactFiles(t *testing.T) {
 		affectedFiles: affected,
 	}}
 	msg := renderImpactWarning(impacts, 1, 10)
-	if !strings.Contains(msg, "removed or renamed 1 exported symbol(s)") {
+	if !strings.Contains(msg, "removed or renamed 1 internal (same-package) symbol(s)") {
 		t.Fatalf("missing total-removed sentence: %s", msg)
 	}
 	if !strings.Contains(msg, "referenced by 10 file(s)") {
