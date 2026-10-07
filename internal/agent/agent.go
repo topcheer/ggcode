@@ -5213,7 +5213,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			if trMsg := a.toolResultRedundancy.recordResult(tc.Name, result.Content, i+1); trMsg != "" {
 				a.appendGuidance(&result, trMsg)
 			}
-			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
+			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError, result.Content); cascadeGuidance != "" {
 				// #952: explicit firing record (the old content scan could never
 				// match - this detector's guidance header is "[HYPOTHESIS LOCK-IN
 				// WARNING]", not the stale "[Fix Cascade" tag).

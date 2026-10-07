@@ -37,6 +37,7 @@ package agent
 // run. Reset on new user turn.
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -44,9 +45,9 @@ import (
 )
 
 // strictVerifyCommands is the fix-cascade verification subset (#469):
-// build / test / lint only. Formatters (gofmt/prettier — they fail on
+// build / test / lint only. Formatters (gofmt/prettier - they fail on
 // unrelated mid-refactor syntax errors) and bare task-runners (make /
-// just / task — "make deploy" is not verification) are excluded.
+// just / task - "make deploy" is not verification) are excluded.
 var strictVerifyCommands = map[string]bool{
 	"go build": true, "go test": true, "go vet": true,
 	"cargo build": true, "cargo test": true, "cargo clippy": true,
@@ -87,13 +88,14 @@ func isStrictVerifyCommand(cmd string) bool {
 // fixCascadeCheckCommand is the Agent-level wrapper that checks whether a
 // tool call result represents a verify command failure, and if so, records
 // it in the fix cascade state machine. Returns guidance if threshold reached.
-func (a *Agent) fixCascadeCheckCommand(toolName string, args []byte, isError bool) string {
+// content is the tool result text (needed for the async path's terminal-state
+// classification, mirroring correctionSpiral's #1773 case-4 wiring).
+func (a *Agent) fixCascadeCheckCommand(toolName string, args []byte, isError bool, content string) string {
 	if a.fixCascade == nil {
 		return ""
 	}
-	// Only track run_command results that are verify commands.
 	if toolName != "run_command" {
-		return ""
+		return a.fixCascadeCheckAsync(toolName, args, content)
 	}
 	cmd := extractCommandFromArgs(args)
 	// #469: fix-cascade uses the STRICT verification set; verify_hint's
@@ -101,9 +103,58 @@ func (a *Agent) fixCascadeCheckCommand(toolName string, args []byte, isError boo
 	if cmd == "" || !isStrictVerifyCommand(cmd) {
 		return ""
 	}
+	// #3530 second blind path: run_command that hits its timeout returns a
+	// NON-error handoff notice ("Automatically moved to background (job N)").
+	// Counting that as a successful verify would reset the cascade counter
+	// and zero editCount just before the real (failed) outcome arrives via
+	// read_command_output - the async path above then sees hadEdits=false
+	// and never counts the cycle. The handoff is not an outcome: skip it.
+	if !isError && strings.Contains(content, "Automatically moved to background") {
+		return ""
+	}
 	// Record the verify result. hadEdits is derived from editCount > 0.
 	hadEdits := a.fixCascade.editCount > 0
 	return a.fixCascade.recordVerify(hadEdits, isError)
+}
+
+// fixCascadeCheckAsync (#3530): the final outcome of a long verification
+// run arrives via wait_command / read_command_output / task_output, not the
+// originating run_command (which may itself have timed out into the
+// background with a non-error "moved-to-background" result). correctionSpiral
+// fixed this exact blind spot in #1773; the cascade detector kept the
+// run_command-only wiring and stayed silent in its highest-risk scenario -
+// long test suites, the very runs this repo's own guidance steers to
+// start_command. Same gateway, same discipline: only jobs registered as
+// verification (#1153 registry) and only TERMINAL snapshots count; the
+// tools' IsError describes the wait/read ACTION, not the job, so the
+// pass/fail verdict comes from psTerminalVerifyOutcome. A still-running
+// poll changes nothing (no reset, no increment).
+func (a *Agent) fixCascadeCheckAsync(toolName string, args []byte, content string) string {
+	switch toolName {
+	case "wait_command", "read_command_output", "task_output":
+	default:
+		return ""
+	}
+	var m map[string]any
+	if len(args) > 0 {
+		_ = json.Unmarshal(args, &m)
+	}
+	jobID, _ := m["job_id"].(string)
+	if jobID == "" {
+		jobID, _ = m["task_id"].(string)
+	}
+	if jobID == "" || !a.prematureSuccess.psJobIsVerify(jobID) {
+		return ""
+	}
+	terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(content))
+	if !terminal {
+		return ""
+	}
+	// Edit-count window: edits made while waiting belong to the SAME cycle
+	// (edit -> verify -> fail) - a failure after further edits is an even
+	// stronger lock-in signal, so the coarse editCount>0 form matches the
+	// synchronous semantics.
+	return a.fixCascade.recordVerify(a.fixCascade.editCount > 0, !passed)
 }
 
 const (
