@@ -374,6 +374,54 @@ def run_verify(verify: dict, cwd: str | None = None, timeout: int = 60) -> tuple
         return "fail", f"verify error: {e}"
 
 
+# sa-124 (arXiv:2602.16666): a single success metric hides operational flaws.
+# Every failed run carries a structured failure-mode reason code so the
+# scorecard, CSV, and trend rows can report a failure-mode distribution and
+# the regression gate can assert on failure-mix drift, not just aggregates.
+def classify_failure_mode(result: dict) -> str:
+    """Map one result row to a stable failure-mode reason code.
+
+    Priority: infrastructure errors first (send/timeout/no response), then
+    verify-layer codes derived from the stable run_verify detail prefixes,
+    then flaky/other. Returns "" for successful runs.
+    """
+    if result.get("success"):
+        return ""
+    if result.get("error"):
+        return "send_error"
+    if result.get("timed_out"):
+        return "timeout"
+    if not result.get("rounds"):
+        return "no_response"
+    detail = result.get("verify_detail", "")
+    prefix_map = (
+        ("artifact missing", "verify_artifact_missing"),
+        ("content missing", "verify_content_missing"),
+        ("command exit", "verify_command_fail"),
+        ("verify command timeout", "verify_timeout"),
+        ("verify error", "verify_error"),
+        ("verify block has no artifact/command assertion", "verify_no_assertion"),
+    )
+    for prefix, mode in prefix_map:
+        if detail.startswith(prefix):
+            return mode
+    if result.get("verify_status") == "verify_failed":
+        return "verify_other"
+    return "other"
+
+
+def _failure_mode_mix(results: list[dict]) -> dict:
+    """Per-mode failure rate over a run's result rows (successes excluded)."""
+    if not results:
+        return {}
+    counts: dict[str, int] = {}
+    for r in results:
+        mode = r.get("failure_mode") or classify_failure_mode(r)
+        if mode:
+            counts[mode] = counts.get(mode, 0) + 1
+    return {m: round(c / len(results), 4) for m, c in sorted(counts.items())}
+
+
 def run_task(
     base_url: str,
     task: dict,
@@ -527,6 +575,7 @@ def run_task(
         "verify_status": verify_status,
         "verify_detail": verify_detail[:200],
     }
+    result["failure_mode"] = classify_failure_mode(result)
 
     status = "DONE" if success else ("TIMEOUT" if summary["timed_out"] else "PARTIAL")
     print(f"[eval] Task {task_id} {status}: elapsed={result['elapsed_sec']}s "
@@ -700,6 +749,12 @@ def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
         f.write(f"- **Total tool calls:** {sum(r.get('tool_calls', 0) for r in results)}\n")
         f.write(f"- **Total errors:** {sum(r.get('tool_errors', 0) for r in results)}\n")
         f.write(f"- **Total elapsed:** {sum(r.get('elapsed_sec', 0) for r in results):.1f}s\n")
+        mix = _failure_mode_mix(results)
+        if mix:
+            f.write("\n## Failure Modes\n\n")
+            f.write("| Mode | Rate |\n|---|---|\n")
+            for mode, rate in mix.items():
+                f.write(f"| {mode} | {rate:.2%} |\n")
 
         if successes:
             f.write(f"- **Best task:** {successes[0]['task_id']} "
@@ -800,7 +855,7 @@ CSV_FIELDS = [
     "success", "timed_out", "elapsed_sec", "tool_calls",
     "tool_errors", "ask_user_count", "knight_reports",
     "user_messages", "rounds", "rework_count",
-    "verify_status", "verify_detail",
+    "verify_status", "verify_detail", "failure_mode",
 ]
 
 
@@ -834,6 +889,7 @@ def append_trend_jsonl(out_dir: str | Path, mode: str, task_set: str, task_versi
         "run_id": run_id,
         "task_set": task_set,
         "task_version": task_version,
+        "failure_mode_mix": _failure_mode_mix(results),
         "git_sha": _git_sha(),
         "mode": mode,
         "n_tasks": len(results),
