@@ -31,6 +31,21 @@ type Checkpoint struct {
 	Timestamp time.Time `json:"timestamp"`
 	ToolCall  string    `json:"tool_call"`
 	RunID     string    `json:"run_id,omitempty"` // agent run that created this checkpoint
+	// Intent (sa-91, agent-native edit provenance à la PROV-AGENT arXiv
+	// 2508.02866) answers WHY this edit exists: which todo/subtask it
+	// served and a one-line rationale. Zero value for legacy checkpoints
+	// and runs without an active todo - all existing behavior unchanged.
+	Intent EditIntent `json:"intent,omitempty"`
+}
+
+// EditIntent captures the motivation metadata attached to a checkpoint at
+// save time. It is populated automatically from the agent's active todo
+// state (Manager.SetActiveIntent), never from model free-typed arguments,
+// so provenance stays tied to the real task state machine.
+type EditIntent struct {
+	TaskID    string `json:"task_id,omitempty"`   // active todo item ID
+	TaskDesc  string `json:"task_desc,omitempty"` // todo content (what the item is)
+	Rationale string `json:"rationale,omitempty"` // tool-call purpose summary
 }
 
 // Correction represents a user-initiated undo of agent file changes.
@@ -76,6 +91,11 @@ type Manager struct {
 	// previous approach was rejected. Cleared at the start of each new run.
 	corrections []Correction
 
+	// activeIntent (sa-91 edit provenance) is stamped onto every checkpoint
+	// saved while it is set. The agent updates it when the in_progress todo
+	// item changes; zero value = no attribution attached.
+	activeIntent EditIntent
+
 	// journal persists every mutation to an append-only JSONL file so undo
 	// history survives a process restart (see journal.go). nil for plain
 	// NewManager Managers — journalAppendLocked is then a no-op, making the
@@ -98,7 +118,17 @@ func (m *Manager) StartRun(runID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.currentRunID = runID
+	m.activeIntent = EditIntent{} // sa-91: task attribution does not cross runs
 	m.journalAppendLocked(journalEvent{Type: evStartRun, RunID: runID})
+}
+
+// SetActiveIntent (sa-91 edit provenance) sets the task attribution stamped
+// onto checkpoints saved afterwards. The agent calls this when the
+// in_progress todo item changes; pass the zero value to clear.
+func (m *Manager) SetActiveIntent(in EditIntent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.activeIntent = in
 }
 
 // Save records a checkpoint before a file edit.
@@ -128,6 +158,7 @@ func (m *Manager) SaveWithExistence(filePath, oldContent, newContent, toolCall s
 		Timestamp:  time.Now(),
 		ToolCall:   toolCall,
 		RunID:      m.currentRunID,
+		Intent:     m.activeIntent,
 	}
 
 	m.applySaveLocked(cp)

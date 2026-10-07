@@ -797,6 +797,7 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 	}
 
 	if cpMgr != nil && len(plans) > 0 {
+		a.stampEditIntent() // sa-91 edit provenance: stamp active task before saving
 		var outcome tool.MultiFileEditContent
 		if err := json.Unmarshal([]byte(result.Content), &outcome); err == nil {
 			planByPath := make(map[string]tool.PlannedFileEdit, len(plans))
@@ -1054,6 +1055,7 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 	// Save checkpoint. fileExisted distinguishes a file-creating write from an
 	// overwrite so undo removes vs restores the file correctly (issue #554 B).
 	if cpMgr != nil && !result.IsError {
+		a.stampEditIntent() // sa-91 edit provenance: stamp active task before saving
 		cpMgr.SaveWithExistence(filePath, oldContent, newContent, tc.Name, fileExisted)
 	}
 
