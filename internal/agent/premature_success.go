@@ -398,12 +398,36 @@ func (p *prematureSuccessState) recordToolCall(toolName string, args map[string]
 // "checkout"); build-system invocations (make/npm run/mvn/gradle/cmake) use
 // target whitelists so hygiene/service commands (make clean, npm run dev)
 // do NOT count as verification (#350).
+// psStripCdPrefix removes leading `cd <path>` segments (with their joining
+// `&&`) from a token stream (#3481). `cd /repo && make verify-ci` and the
+// multi-line flattened form `cd /repo\nmake verify-ci` left `cd` as
+// tokens[0], so psBuildSystemVerify never dispatched on the real build
+// command and hyphen/underscore variants never reached segment-first
+// position - the verify step went unrecognized and the premature-success
+// detector fired on a run that HAD verified. Only leading segments are
+// stripped: cd in the middle of a pipeline is unrelated.
+func psStripCdPrefix(tokens []string) []string {
+	for len(tokens) > 0 && tokens[0] == "cd" {
+		tokens = tokens[1:]
+		// Drop the path argument if present (stop at a joining &&).
+		if len(tokens) > 0 && tokens[0] != "&&" {
+			tokens = tokens[1:]
+		}
+		// Drop the joining && so the next real command becomes tokens[0].
+		if len(tokens) > 0 && tokens[0] == "&&" {
+			tokens = tokens[1:]
+		}
+	}
+	return tokens
+}
+
 func psIsVerifyCommand(cmd string) bool {
 	if cmd == "" {
 		return false
 	}
 	lower := strings.ToLower(cmd)
 	tokens := strings.Fields(lower)
+	tokens = psStripCdPrefix(tokens)
 	if len(tokens) == 0 {
 		return false
 	}
