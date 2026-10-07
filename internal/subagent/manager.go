@@ -732,6 +732,25 @@ func (m *Manager) SnapshotByID(id string) (Snapshot, bool) {
 
 // GetOutput returns the result of a completed (or in-progress) sub-agent.
 // Returns (result, true) if the agent exists, ("", false) otherwise.
+// GetTaskText returns the original task text of a COMPLETED sub-agent run
+// with a non-empty result. task_output uses it to attach the acceptance
+// checkpoint (delegation validation, same as wait_agent) when the parent
+// retrieves a delegation result through that side path instead of wait_agent.
+// Returns ok=false for pending/running agents (result still changing), failed
+// runs, and agents without task text - callers must treat that as "nothing to
+// validate against", never as an error.
+func (m *Manager) GetTaskText(id string) (string, bool) {
+	sa, ok := m.Get(id)
+	if !ok {
+		return "", false
+	}
+	snap := sa.snapshot()
+	if snap.Status != StatusCompleted || snap.Result == "" || snap.Task == "" {
+		return "", false
+	}
+	return snap.Task, true
+}
+
 // Failed/cancelled/limit-rejected agents surface their error as
 // "[failed] <err>" (#351): previously they returned an empty string with
 // ok=true, making them indistinguishable from "no output yet" and hiding
