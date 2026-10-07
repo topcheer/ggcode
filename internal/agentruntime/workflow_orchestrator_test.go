@@ -3,6 +3,7 @@ package agentruntime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -200,5 +201,108 @@ func TestWorkflowRunnerForRejectsBadJSON(t *testing.T) {
 	out = run(context.Background(), tool.WorkflowRequest{Workflow: json.RawMessage(`{"steps":[{"id":"a","task":"t","dependsOn":["b"]},{"id":"b","task":"t","dependsOn":["a"]}],"synthesis":"s"}`)})
 	if !strings.Contains(out, "cycle") {
 		t.Fatalf("cycle not surfaced via runner: %q", out)
+	}
+}
+
+// wfSlowFake defers completion of chosen worker IDs for extra polls, so
+// ready-set scheduling decisions (launch vs. wait) are observable.
+type wfSlowFake struct {
+	wfFake
+	slow map[string]int // worker id -> extra polls before terminal
+}
+
+func (f *wfSlowFake) Snapshot(id string) (subagent.Snapshot, bool) {
+	if n := f.slow[id]; n > 0 {
+		f.slow[id] = n - 1
+		return subagent.Snapshot{ID: id, Status: subagent.StatusRunning}, true
+	}
+	return f.wfFake.Snapshot(id)
+}
+
+// TestWorkflowCriticalPathPriority (research sa-123): with equal readiness,
+// the step on the longest downstream chain launches first.
+func TestWorkflowCriticalPathPriority(t *testing.T) {
+	f := newWfFake()
+	spec := WorkflowSpec{
+		Synthesis: "fold",
+		Steps: []WorkflowStep{
+			{ID: "chainA", Task: "t"},
+			{ID: "chainB", Task: "t", DependsOn: []string{"chainA"}},
+			{ID: "leafX", Task: "t"},
+			{ID: "leafY", Task: "t"},
+		},
+	}
+	rep := RunWorkflow(context.Background(), f, f, spec, wfPoll)
+	if rep.Err != "" {
+		t.Fatalf("unexpected error: %s", rep.Err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.names) < 1 || f.names[0] != "wf-chainA" {
+		t.Fatalf("deepest-chain step should launch first, got %v", f.names)
+	}
+}
+
+// TestWorkflowReadyFiresWithoutLayerBarrier (research sa-123): chainA->chainB
+// plus a slow independent step; chainB must launch while the independent step
+// is still running (old layer barrier made it wait).
+func TestWorkflowReadyFiresWithoutLayerBarrier(t *testing.T) {
+	f := &wfSlowFake{wfFake: *newWfFake(), slow: map[string]int{"sa-fake-wf-slowIndep": 4}}
+	spec := WorkflowSpec{
+		Synthesis: "fold",
+		Steps: []WorkflowStep{
+			{ID: "chainA", Task: "t"},
+			{ID: "chainB", Task: "t", DependsOn: []string{"chainA"}},
+			{ID: "slowIndep", Task: "t"},
+		},
+	}
+	rep := RunWorkflow(context.Background(), f, f, spec, wfPoll)
+	if rep.Err != "" {
+		t.Fatalf("unexpected error: %s", rep.Err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.names) != 4 { // 3 workers + synthesis
+		t.Fatalf("expected 4 launches, got %v", f.names)
+	}
+	// chainB launches at the poll right after chainA's terminal flip (poll 3),
+	// while slowIndep is still draining its 4-poll slow budget: without the
+	// ready-set fix the old layer barrier held chainB until slowIndep
+	// finished (poll 6+). Position 3 in the launch order proves it fired early.
+	found := false
+	for i, n := range f.names {
+		if n == "wf-chainB" {
+			found = true
+			if i != 2 {
+				t.Fatalf("chainB should be the 3rd launch (after chainA completes), got order %v", f.names)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("chainB never launched: %v", f.names)
+	}
+}
+
+// TestWorkflowWideGraphQueuesBeyondCap (research sa-123): a 10-step wide
+// graph exceeds workflowLayerCap; the old Validate rejected it, ready-set
+// scheduling runs it by queuing.
+func TestWorkflowWideGraphQueuesBeyondCap(t *testing.T) {
+	f := newWfFake()
+	spec := WorkflowSpec{Synthesis: "fold"}
+	for i := 0; i < 10; i++ {
+		spec.Steps = append(spec.Steps, WorkflowStep{ID: fmt.Sprintf("w%02d", i), Task: "t"})
+	}
+	if _, err := spec.Validate(); err != nil {
+		t.Fatalf("wide graph should validate: %v", err)
+	}
+	rep := RunWorkflow(context.Background(), f, f, spec, wfPoll)
+	if rep.Err != "" {
+		t.Fatalf("unexpected error: %s", rep.Err)
+	}
+	if rep.Partial {
+		t.Fatalf("unexpected partial run")
+	}
+	if got := f.launchCount(); got != 11 { // 10 workers + synthesis
+		t.Fatalf("expected 11 launches, got %d", got)
 	}
 }

@@ -153,12 +153,37 @@ func (s *WorkflowSpec) Validate() ([][]int, error) {
 	if visited != len(s.Steps) {
 		return nil, fmt.Errorf("workflow: dependency cycle detected (%d of %d steps reachable)", visited, len(s.Steps))
 	}
-	for _, l := range layers {
-		if len(l) > workflowLayerCap {
-			return nil, fmt.Errorf("workflow: layer has %d steps, cap is %d (add dependencies to split it)", len(l), workflowLayerCap)
+	// Layer width is no longer a hard error (research sa-123): the runtime
+	// schedules a ready set bounded by workflowLayerCap, so wide graphs queue
+	// instead of being rejected.
+	return layers, nil
+}
+
+// downstreamDepth returns, per step ID, the length of the longest chain from
+// that step to a sink (itself counted). Computed by reverse topological DP
+// over the Kahn layers from Validate; used to prioritize the longest
+// downstream chain (critical path) when the in-flight window is contended.
+func (s *WorkflowSpec) downstreamDepth(layers [][]int) map[string]int {
+	dependents := make(map[string][]string, len(s.Steps))
+	for _, st := range s.Steps {
+		for _, d := range st.DependsOn {
+			dependents[d] = append(dependents[d], st.ID)
 		}
 	}
-	return layers, nil
+	depth := make(map[string]int, len(s.Steps))
+	for li := len(layers) - 1; li >= 0; li-- {
+		for _, i := range layers[li] {
+			id := s.Steps[i].ID
+			d := 1
+			for _, child := range dependents[id] {
+				if cd := depth[child] + 1; cd > d {
+					d = cd
+				}
+			}
+			depth[id] = d
+		}
+	}
+	return depth
 }
 
 // workflowTaskSuffix makes each worker self-sufficient and forces an
@@ -192,19 +217,87 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 	statuses := make([]string, len(spec.Steps))    // terminal status per step
 	blocking := make([]string, 0, len(spec.Steps)) // refuted/broken step IDs
 
-	for _, layer := range layers {
+	// Ready-set scheduling with critical-path priority (research sa-123,
+	// latency-aware orchestration): a step launches the moment its last
+	// dependency reaches a terminal state instead of waiting for its whole
+	// Kahn layer to drain, and when the in-flight window (workflowLayerCap)
+	// is contended the longest downstream chain goes first. Single-layer
+	// graphs and uncontended windows behave exactly like the old barrier.
+	depth := spec.downstreamDepth(layers)
+	idx := make(map[string]int, len(spec.Steps))
+	depsLeft := make([]int, len(spec.Steps))
+	dependents := make(map[int][]int, len(spec.Steps))
+	for i, st := range spec.Steps {
+		idx[st.ID] = i
+		depsLeft[i] = len(st.DependsOn)
+		for _, d := range st.DependsOn {
+			dependents[idx[d]] = append(dependents[idx[d]], i)
+		}
+	}
+	readyLess := func(a, b int) bool {
+		da, db := depth[spec.Steps[a].ID], depth[spec.Steps[b].ID]
+		if da != db {
+			return da > db // deepest downstream chain first
+		}
+		return a < b // stable tie-break by spec order
+	}
+	var ready []int
+	for i := range spec.Steps {
+		if depsLeft[i] == 0 {
+			ready = append(ready, i)
+		}
+	}
+	sort.Slice(ready, func(x, y int) bool { return readyLess(ready[x], ready[y]) })
+
+	doneStep := make([]bool, len(spec.Steps))
+	release := func(i int) {
+		for _, j := range dependents[i] {
+			depsLeft[j]--
+			if depsLeft[j] == 0 {
+				ready = append(ready, j)
+				sort.Slice(ready, func(x, y int) bool { return readyLess(ready[x], ready[y]) })
+			}
+		}
+	}
+	// finalize records a terminal step, runs its adversarial verifier when
+	// configured, then releases dependents into the ready set.
+	finalize := func(i int, status, result string) {
+		statuses[i] = status
+		results[i] = result
+		doneStep[i] = true
+		st := &spec.Steps[i]
+		if status == string(subagent.StatusCompleted) && strings.TrimSpace(st.Verifier) != "" {
+			verdict := runVerifier(ctx, spawner, snaps, st, result, poll)
+			switch {
+			case verdict == "":
+				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] completed (verifier unavailable — unverified)", st.ID))
+			case strings.HasPrefix(verdict, "REJECTED"):
+				refuted[i] = true
+				blocking = append(blocking, st.ID)
+				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] REFUTED by adversarial verifier: %s", st.ID, firstLine(verdict)))
+			default:
+				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] completed (verifier upheld)", st.ID))
+			}
+		}
+		release(i)
+	}
+
+	type inFlight struct {
+		i  int
+		id string
+	}
+	var act []inFlight
+	for len(ready) > 0 || len(act) > 0 {
 		if ctx.Err() != nil {
 			rep.Partial = true
 			break
 		}
-		type launched struct {
-			i  int
-			id string
-		}
-		var ls []launched
-		for _, i := range layer {
+		// Fill the in-flight window. Blocked (poisoned) and launch-failed
+		// steps free their slot immediately and release their dependents.
+		for len(ready) > 0 && len(act) < workflowLayerCap {
+			i := ready[0]
+			ready = ready[1:]
 			st := &spec.Steps[i]
-			task := st.Task + workflowTaskSuffix
 			// A refuted dependency poisons downstream consumers: surface the
 			// break instead of silently building on struck output.
 			poisoned := false
@@ -220,11 +313,12 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 				refuted[i] = true
 				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] BLOCKED: a dependency was refuted", st.ID))
 				blocking = append(blocking, st.ID)
+				release(i)
 				continue
 			}
 			id, _, err := spawner.Launch(ctx, tool.LaunchOptions{
 				Name:        "wf-" + st.ID,
-				Task:        task,
+				Task:        st.Task + workflowTaskSuffix,
 				DisplayTask: "workflow step " + st.ID,
 				Tools:       st.Tools,
 				Model:       st.Model,
@@ -233,71 +327,47 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 				statuses[i] = "launch-failed"
 				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] LAUNCH FAILED: %v", st.ID, err))
 				blocking = append(blocking, st.ID)
+				release(i)
 				continue
 			}
 			st.workerID = id
-			ls = append(ls, launched{i, id})
+			act = append(act, inFlight{i, id})
 		}
 
-		// Poll the layer to terminal state (best_of_n pattern).
-		terminal := make(map[int]bool, len(ls))
-		for {
-			allDone := true
-			for _, l := range ls {
-				if terminal[l.i] {
-					continue
-				}
-				s, ok := snaps.Snapshot(l.id)
-				if !ok {
-					terminal[l.i] = true
-					statuses[l.i] = "failed"
-					results[l.i] = "sub-agent not found"
-					continue
-				}
-				switch s.Status {
-				case subagent.StatusCompleted, subagent.StatusFailed, subagent.StatusCancelled:
-					terminal[l.i] = true
-					statuses[l.i] = string(s.Status)
-					results[l.i] = s.Result
-				default:
-					allDone = false
-				}
-			}
-			if allDone {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				rep.Partial = true
-				for _, l := range ls {
-					if !terminal[l.i] {
-						rep.LiveStepID[spec.Steps[l.i].ID] = l.id
-					}
-				}
-				return rep
-			case <-time.After(poll):
-			}
-		}
-
-		// Adversarial verification for completed steps with a Verifier prompt.
-		for _, l := range ls {
-			i := l.i
-			st := &spec.Steps[i]
-			if statuses[i] != string(subagent.StatusCompleted) || strings.TrimSpace(st.Verifier) == "" {
+		// Poll in-flight workers to terminal state (best_of_n pattern).
+		allDone := true
+		for _, a := range act {
+			if doneStep[a.i] {
 				continue
 			}
-			verdict := runVerifier(ctx, spawner, snaps, st, results[i], poll)
-			switch {
-			case verdict == "":
-				// verifier itself failed to run: keep the result, note it.
-				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] completed (verifier unavailable — unverified)", st.ID))
-			case strings.HasPrefix(verdict, "REJECTED"):
-				refuted[i] = true
-				blocking = append(blocking, st.ID)
-				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] REFUTED by adversarial verifier: %s", st.ID, firstLine(verdict)))
-			default:
-				rep.StepLines = append(rep.StepLines, fmt.Sprintf("[%s] completed (verifier upheld)", st.ID))
+			s, ok := snaps.Snapshot(a.id)
+			if !ok {
+				finalize(a.i, "failed", "sub-agent not found")
+				continue
 			}
+			switch s.Status {
+			case subagent.StatusCompleted, subagent.StatusFailed, subagent.StatusCancelled:
+				finalize(a.i, string(s.Status), s.Result)
+			default:
+				allDone = false
+			}
+		}
+		if allDone {
+			act = act[:0] // compact finished entries
+		}
+		if len(act) == 0 && len(ready) == 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			rep.Partial = true
+			for _, a := range act {
+				if !doneStep[a.i] {
+					rep.LiveStepID[spec.Steps[a.i].ID] = a.id
+				}
+			}
+			return rep
+		case <-time.After(poll):
 		}
 	}
 
