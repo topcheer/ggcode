@@ -157,8 +157,9 @@ func (t SkillTool) Execute(ctx context.Context, input json.RawMessage) (Result, 
 	})
 	content = strings.TrimSpace(content)
 
-	// If the skill declares dependencies on other skills, advise the agent.
-	if depHint := buildDependencyHint(cmd, t.Skills); depHint != "" {
+	// If the skill declares dependencies on other skills, advise the agent
+	// (sa-85: closure-aware chain, not just direct deps - GoS prerequisite gap).
+	if depHint := closureDependencyHint(cmd, t.Skills); depHint != "" {
 		content = depHint + "\n\n" + content
 	}
 
@@ -485,7 +486,7 @@ func (t SkillTool) searchSkills(query string) Result {
 	if len(matches) > maxSearchResults {
 		matches = matches[:maxSearchResults]
 	}
-	return Result{Content: formatSkillSearchResults(matches, queryLower, query, total)}
+	return Result{Content: formatSkillSearchResults(matches, queryLower, query, total, t.Skills)}
 }
 
 type skillSearchMatch struct {
@@ -545,7 +546,7 @@ func sortMatches(matches []skillSearchMatch) {
 
 const maxSearchResults = 25
 
-func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query string, total int) string {
+func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query string, total int, lookup SkillLookup) string {
 	var sb strings.Builder
 	if queryLower == "" {
 		sb.WriteString(fmt.Sprintf("Available skills (%d total):\n\n", total))
@@ -563,6 +564,13 @@ func formatSkillSearchResults(matches []skillSearchMatch, queryLower, query stri
 				sb.WriteString(": " + m.desc[:maxDesc-3] + "...")
 			} else {
 				sb.WriteString(": " + m.desc)
+			}
+		}
+		// sa-85 GoS prerequisite-gap fix: for searched (not listed) skills,
+		// surface the dependency closure so the bundle is execution-complete.
+		if queryLower != "" && lookup != nil {
+			if closure := skillClosureForSearch(m.name, lookup); closure != "" {
+				sb.WriteString("\n  " + closure)
 			}
 		}
 		sb.WriteString("\n")
