@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/topcheer/ggcode/internal/memory"
 )
 
 // buildSessionFile writes a fake session JSONL under <dir>/.ggcode/sessions/
@@ -119,5 +121,68 @@ func TestMaybeToolflowSuggestion_MatchAndWording(t *testing.T) {
 	}
 	if again := a.maybeToolflowSuggestion([]string{"grep", "read_file", "edit_file"}); again != "" {
 		t.Errorf("second call in same run must be suppressed, got:\n%s", again)
+	}
+}
+
+// r340 consolidation exit: the cmd_snippet suggestion appears only when the
+// matched pattern involves run_command AND support clears the doubled bar.
+func TestToolflowConsolidationAdvice(t *testing.T) {
+	// High-support run_command workflow: must carry the consolidation advice.
+	hot := &memory.ToolFlowPattern{
+		Prefix:     []string{"edit_file", "run_command"},
+		Next:       "git_add",
+		Count:      toolflowConsolidateMinSupport,
+		Confidence: 0.9,
+	}
+	a := &Agent{}
+	if got := a.toolflowConsolidationAdvice(hot); !strings.Contains(got, "cmd_snippet save") {
+		t.Errorf("high-support run_command pattern must suggest cmd_snippet save, got:\n%s", got)
+	}
+	// Just below the bar: no advice (hint-level support is not enough).
+	cool := &memory.ToolFlowPattern{
+		Prefix:     []string{"edit_file", "run_command"},
+		Next:       "git_add",
+		Count:      toolflowConsolidateMinSupport - 1,
+		Confidence: 0.9,
+	}
+	if got := a.toolflowConsolidationAdvice(cool); got != "" {
+		t.Errorf("below-bar support must not advise consolidation, got:\n%s", got)
+	}
+	// High support but pure read orchestration: no snippet makes sense.
+	read := &memory.ToolFlowPattern{
+		Prefix:     []string{"grep", "read_file"},
+		Next:       "edit_file",
+		Count:      500,
+		Confidence: 0.95,
+	}
+	if got := a.toolflowConsolidationAdvice(read); got != "" {
+		t.Errorf("read-only pattern must not advise consolidation, got:\n%s", got)
+	}
+}
+
+// End to end: a mined run_command-heavy workflow with support >= the doubled
+// bar produces a hint that carries the consolidation advice; the advice stays
+// reference-level (no instruction wording).
+func TestMaybeToolflowSuggestion_ConsolidationEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	seq := []string{"read_file", "run_command", "git_add"}
+	var repeated []string
+	for i := 0; i < toolflowConsolidateMinSupport+2; i++ {
+		repeated = append(repeated, seq...)
+	}
+	buildSessionFile(t, dir, "s1.jsonl", repeated...)
+	t.Setenv("HOME", strings.TrimSuffix(dir, "/.ggcode/sessions"))
+	resetToolflowCacheForTest()
+	defer resetToolflowCacheForTest()
+	a := &Agent{}
+	got := a.maybeToolflowSuggestion([]string{"grep", "read_file", "run_command"})
+	if got == "" {
+		t.Fatalf("expected a hint, got empty")
+	}
+	if !strings.Contains(got, "cmd_snippet save") {
+		t.Errorf("run_command workflow at support %d must carry the consolidation advice, got:\n%s", toolflowConsolidateMinSupport+2, got)
+	}
+	if !strings.Contains(got, "not an instruction") {
+		t.Errorf("consolidation advice must stay reference-level, got:\n%s", got)
 	}
 }

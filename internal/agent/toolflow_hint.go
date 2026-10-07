@@ -37,6 +37,14 @@ const (
 	// sessions-occurrences, confidence >= 0.7.
 	toolflowHintMinSupport    = 5
 	toolflowHintMinConfidence = 0.7
+	// toolflowConsolidateMinSupport is the higher bar for suggesting the
+	// r340 consolidation exit (cmd_snippet save). A hint is advisory and
+	// cheap; recommending that the agent durably save a snippet writes state
+	// and changes future behavior, so it demands roughly double the evidence.
+	// Frontier basis: RecMem (ACL 2026 Findings, arXiv 2605.16045) - only
+	// repeated or recurring patterns drive consolidation into stable
+	// long-term form.
+	toolflowConsolidateMinSupport = 10
 )
 
 var (
@@ -115,8 +123,27 @@ func (a *Agent) maybeToolflowSuggestion(recentTools []string) string {
 	a.toolflowHintFired = true
 	// Reference-level wording (r483 discipline): mined statistics are the
 	// user's own past usage, advisory only - never a standing instruction.
-	return fmt.Sprintf("## Established Workflow Hint (statistical, reference only)\nYour recent tool sequence %s matches a recurring workflow in your past sessions (support=%d, confidence=%.0f%%), which usually continues with `%s`. Reference data from your own usage history - follow it only if it fits the current task.\n",
+	out := fmt.Sprintf("## Established Workflow Hint (statistical, reference only)\nYour recent tool sequence %s matches a recurring workflow in your past sessions (support=%d, confidence=%.0f%%), which usually continues with `%s`. Reference data from your own usage history - follow it only if it fits the current task.\n",
 		strings.Join(best.Prefix, " -> "), best.Count, best.Confidence*100, best.Next)
+	out += a.toolflowConsolidationAdvice(best)
+	return out
+}
+
+// toolflowConsolidationAdvice returns the r340 consolidation exit: when the
+// matched recurring workflow involves run_command and the evidence is strong
+// (support >= toolflowConsolidateMinSupport), suggest the agent fold the
+// repeated command sequence into a named cmd_snippet so future runs replace
+// N tool calls with one. Empty string otherwise - most matched patterns are
+// pure read orchestration (grep -> read_file) where a snippet makes no sense.
+func (a *Agent) toolflowConsolidationAdvice(p *memory.ToolFlowPattern) string {
+	if p.Count < toolflowConsolidateMinSupport {
+		return ""
+	}
+	involved := strings.Join(append(append([]string{}, p.Prefix...), p.Next), " ")
+	if !strings.Contains(involved, "run_command") {
+		return ""
+	}
+	return fmt.Sprintf("This exact run_command sequence has recurred %d times. If the underlying shell commands are stable across sessions, consider `cmd_snippet save` to fold them into one reusable snippet - reference-level suggestion, not an instruction.\n", p.Count)
 }
 
 // toolflowPrefixMatchesSuffix reports whether prefix is a contiguous
