@@ -219,10 +219,16 @@ type MCPServerConfig struct {
 	// (per-request _meta versioning) instead of the legacy initialize
 	// handshake, falling back to the handshake on non-modern errors.
 	// Default false — legacy behavior is unchanged.
-	Stateless  bool   `yaml:"stateless,omitempty" json:"stateless,omitempty"`
-	Source     string `yaml:"-" json:"-"`
-	OriginPath string `yaml:"-" json:"-"`
-	Migrated   bool   `yaml:"-" json:"-"`
+	Stateless bool `yaml:"stateless,omitempty" json:"stateless,omitempty"`
+	// AllowToolDrift opts this server out of the anti-rug-pull tool
+	// definition drift alert (research sa-119): hash changes after the
+	// approved baseline are logged silently instead of raising the
+	// OnToolDrift callback. For servers under active development whose
+	// tool definitions legitimately churn.
+	AllowToolDrift bool   `yaml:"allow_tool_drift,omitempty" json:"allow_tool_drift,omitempty"`
+	Source         string `yaml:"-" json:"-"`
+	OriginPath     string `yaml:"-" json:"-"`
+	Migrated       bool   `yaml:"-" json:"-"`
 }
 
 // PluginConfigEntry describes a single plugin from the config file.

@@ -84,6 +84,16 @@ type MCPPlugin struct {
 	// LLM-visible tool schemas and adapter object stay untouched.
 	toolsHash string
 
+	// baselines persists per-server approved tool definition hashes
+	// (anti-rug-pull, research sa-119). nil disables drift tracking.
+	baselines *ToolBaselineStore
+
+	// OnToolDrift, if set, is invoked when a server's tool definitions
+	// change after the persisted approval baseline (outside the 24h
+	// onboarding window and unless AllowToolDrift is set). Called on a
+	// separate goroutine; must not take the plugin write lock directly.
+	OnToolDrift func(server string, added, removed []string)
+
 	// lastRefreshAt throttles manual tool refreshes so a user cannot hammer
 	// the server (each refresh is a ListTools roundtrip + potential rebuild).
 	lastRefreshAt time.Time
@@ -118,8 +128,9 @@ type MCPPlugin struct {
 // NewMCPPlugin creates a plugin from an MCP server configuration.
 func NewMCPPlugin(cfg config.MCPServerConfig) *MCPPlugin {
 	return &MCPPlugin{
-		cfg:    cfg,
-		status: MCPStatusPending,
+		cfg:       cfg,
+		status:    MCPStatusPending,
+		baselines: NewToolBaselineStore(""),
 	}
 }
 
@@ -294,6 +305,9 @@ func (m *MCPPlugin) Connect(ctx context.Context) (*mcp.Adapter, error) {
 	m.status = MCPStatusConnected
 	m.lastError = ""
 	m.toolsHash = computeToolsHash(tools)
+	if added, removed, fire := m.recordToolBaselineLocked(m.toolsHash, toolNamesOf(tools)); fire {
+		m.notifyToolDrift(added, removed)
+	}
 	m.prompts = prompts
 	m.resources = resources
 	m.resourceTemplates = templates
@@ -415,6 +429,9 @@ func (m *MCPPlugin) refreshTools(client *mcp.Client) (changed bool, count int) {
 		return false, len(tools)
 	}
 	m.toolsHash = newHash
+	if added, removed, fire := m.recordToolBaselineLocked(newHash, toolNamesOf(tools)); fire {
+		m.notifyToolDrift(added, removed)
+	}
 	m.lastRefreshAt = time.Now()
 	oldAdapter := m.adapter
 	registry := m.registry
@@ -916,6 +933,10 @@ type MCPManager struct {
 	urlOpener          func(string) error
 	samplingHandler    mcp.SamplingHandler
 	elicitationHandler mcp.ElicitationHandler
+	// onToolDrift, if set, receives anti-rug-pull drift alerts (sa-119)
+	// from every plugin created by this manager and is propagated to new
+	// plugins in newPluginFromConfig/NewMCPManager.
+	onToolDrift func(server string, added, removed []string)
 }
 
 func NewMCPManager(servers []config.MCPServerConfig, registry *tool.Registry, scope string) *MCPManager {
@@ -944,6 +965,18 @@ func (m *MCPManager) SetOnUpdate(fn func([]MCPServerInfo)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onUpdate = fn
+}
+
+// SetOnToolDrift registers the anti-rug-pull drift alert sink (sa-119):
+// a server's tool definitions changed after the user-approved baseline.
+// Must be called before Connect; plugins created afterwards inherit it.
+func (m *MCPManager) SetOnToolDrift(fn func(server string, added, removed []string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onToolDrift = fn
+	for _, p := range m.plugins {
+		p.OnToolDrift = fn
+	}
 }
 
 func (m *MCPManager) SetURLOpener(fn func(string) error) {
@@ -1645,6 +1678,7 @@ func (m *MCPManager) Reload(ctx context.Context, servers []config.MCPServerConfi
 func (m *MCPManager) newPluginFromConfig(s config.MCPServerConfig) *MCPPlugin {
 	p := NewMCPPlugin(s)
 	p.registry = m.registry
+	p.OnToolDrift = m.onToolDrift
 	if m.samplingHandler != nil {
 		p.SetSamplingHandler(m.samplingHandler)
 	}

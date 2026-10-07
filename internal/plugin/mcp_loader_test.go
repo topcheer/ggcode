@@ -108,6 +108,9 @@ func TestMCPManagerConnectAllTimesOutHungStdioServer(t *testing.T) {
 }
 
 func TestMCPPluginInfoIncludesPromptAndResourceNames(t *testing.T) {
+	// Tool baselines (sa-119) persist under ConfigDir(); isolate HOME so
+	// Connect's baseline I/O never touches the real user home in tests.
+	t.Setenv("HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		if r.Method == http.MethodGet {
