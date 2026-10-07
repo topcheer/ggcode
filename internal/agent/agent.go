@@ -379,6 +379,7 @@ type Agent struct {
 	attemptBrief             *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
 	crossDetectorConsensus   *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
 	taintInfluence           *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
+	exfilChain               *exfilChainState                      // exfiltration chain detection (Log-to-Leak: sensitive source read -> outbound tool with payload linkage)
 	falsePremise             *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline             *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats             *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -465,6 +466,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		askThrottle:            permission.NewAskThrottle(),
 		crossDetectorConsensus: newConsensusState(),
 		taintInfluence:         newTaintInfluenceState(),
+		exfilChain:             newExfilChainState(),
 		perfBaseline:           newPerfBaselineState(),
 		fulfillmentGate:        newFulfillmentGateState(),
 		constraintAudit:        newConstraintAuditState(),
@@ -4320,6 +4322,19 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				})
 				msgs = a.contextManager.Messages()
 			}
+			// Exfiltration chain detection (Log-to-Leak): check whether content
+			// from a prior sensitive-source read (secret-pattern tool result, or
+			// ~/.ssh/.pem/.env/credentials path) is being sent out via an
+			// outbound tool. Chain-level sequence detection -- each single action
+			// looks legitimate, content filters cannot catch this class.
+			if exfilWarn := a.exfilChain.checkExfilChain(tc.Name, string(tc.Arguments)); exfilWarn != "" {
+				debug.Log("agent", "Iteration %d: exfiltration chain detected on %s", i+1, tc.Name)
+				a.contextManager.Add(provider.Message{
+					Role:    "user",
+					Content: []provider.ContentBlock{{Type: "text", Text: exfilWarn}},
+				})
+				msgs = a.contextManager.Messages()
+			}
 			// Tool call storm tracking: record each tool call to detect
 			// diverse-tool bursts without interleaved reasoning.
 			a.serialRead.recordToolCall(tc.Name)
@@ -5279,6 +5294,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool calls (edit_file, write_file, run_command, etc.).
 			// Research: Microsoft IFC (arXiv:2505.23643), OWASP ATR-2026-00032.
 			a.taintInfluence.recordIfTainted(tc.Name, result.Content)
+			// Exfiltration chain source recording: when a read-type tool returns
+			// secret-pattern content or was aimed at a sensitive path, record
+			// fingerprints so the pre-exec sink check can flag outbound tool
+			// calls carrying them (Log-to-Leak chain detection).
+			a.exfilChain.recordSensitiveSource(tc.Name, string(tc.Arguments), result.Content)
 			// Spiral-of-hallucination: an execution-type tool call with
 			// observable side effects breaks the spiral chain (#161 — prose
 			// keyword matching fired on nearly every turn; #167 — read-only

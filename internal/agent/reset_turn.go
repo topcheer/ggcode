@@ -18,6 +18,7 @@ func (a *Agent) resetTurnDetectors() {
 	a.scopeNarrow.reset()
 	a.crossDetectorConsensus.reset()
 	a.taintInfluence.reset()
+	a.exfilChain.reset()
 	a.perfBaseline.reset()
 	a.argSizeGuardFires = 0
 	a.redundantRead.reset()
