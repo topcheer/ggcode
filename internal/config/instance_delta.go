@@ -259,9 +259,10 @@ func (*Config) diffA2A(current, global *A2AConfig, delta map[string]interface{})
 	if current.Host != global.Host {
 		a2aDelta["host"] = current.Host
 	}
-	if current.Auth.APIKey != global.Auth.APIKey {
-		a2aDelta["auth"] = map[string]any{"api_key": current.Auth.APIKey}
-	}
+	// NOTE: api_key is written ONLY via authDelta below (#3531). The old
+	// first write here could record an explicit clear (""), which the later
+	// `a2aDelta["auth"] = authDelta` wholesale-overwrote whenever any other
+	// auth field was added - silently dropping the clear from the delta.
 	if current.MaxTasks != global.MaxTasks {
 		a2aDelta["max_tasks"] = current.MaxTasks
 	}
@@ -270,7 +271,11 @@ func (*Config) diffA2A(current, global *A2AConfig, delta map[string]interface{})
 	}
 	// Auth
 	authDelta := map[string]interface{}{}
-	if current.Auth.APIKey != global.Auth.APIKey && current.Auth.APIKey != "" {
+	// #3531: no `!= ""` guard - an explicit CLEAR (api_key set to "") must
+	// stay in the delta so deepMerge materializes it. The guard used to
+	// drop clears, and together with the removed first write they vanished
+	// whenever another auth field was also being added.
+	if current.Auth.APIKey != global.Auth.APIKey {
 		authDelta["api_key"] = current.Auth.APIKey
 	}
 	if len(current.Auth.APIKeys) > 0 && len(global.Auth.APIKeys) == 0 {
