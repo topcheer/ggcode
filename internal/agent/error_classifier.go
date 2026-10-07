@@ -48,6 +48,19 @@ func (ec *ErrorClassifier) reset() {
 	ec.fired = make(map[string]bool)
 }
 
+// firedCategories snapshots the category names that fired this run
+// (weakness-signal collection, sa-112). The classifier's mu also guards
+// parallel tool batches touching it mid-run.
+func (ec *ErrorClassifier) firedCategories() []string {
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	out := make([]string, 0, len(ec.fired))
+	for name := range ec.fired {
+		out = append(out, name)
+	}
+	return out
+}
+
 // classifyToolError examines a tool error result and returns a category with
 // targeted guidance. Returns empty Name if the error doesn't match a known
 // pattern or if guidance for this category was already fired.

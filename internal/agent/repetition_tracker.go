@@ -107,6 +107,19 @@ func (rt *repetitionTracker) recordEditAttempt(toolName string, args json.RawMes
 	return rt.checkEscalation(filePath, count)
 }
 
+// failedEditSnapshot copies the per-file failed-edit counters for
+// run-end weakness-signal collection (sa-112); mu-guarded because parallel
+// tool batches record from worker goroutines.
+func (rt *repetitionTracker) failedEditSnapshot() map[string]int {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	out := make(map[string]int, len(rt.failedEditsByFile))
+	for f, n := range rt.failedEditsByFile {
+		out[f] = n
+	}
+	return out
+}
+
 // recordReadAttempt tracks read_file calls that follow failed edits to the
 // same file. This detects the "read-edit-fail-read-edit-fail" cycle.
 // Returns guidance if the cycle threshold is exceeded.

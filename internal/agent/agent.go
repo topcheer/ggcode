@@ -1965,6 +1965,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// rationale as the digest defer above) - suppressed-by-budget evidence
 	// is most interesting exactly on runs that ended early/aborted.
 	defer a.flushGuidanceStats()
+	// sa-112: route weakness signals (forgetting/boundary/rare) into the
+	// cross-run store and project memory on any exit, after the guidance
+	// flush so final detector states are visible.
+	defer a.routeWeaknessSignals()
 	a.constraintAudit.reset()
 	a.ambiguityPoint.reset()
 	a.planDrift.reset()
