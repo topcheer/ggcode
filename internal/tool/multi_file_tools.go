@@ -596,6 +596,7 @@ func (t MultiFileEdit) planEntries(entries []multiFileEditEntry) ([]PlannedFileE
 			OldContent:       pr.oldContent,
 			NewContent:       pr.newContent,
 			AppliedEditCount: pr.applied,
+			Existed:          true, // multi_file_edit only touches pre-existing files (missing ones fail planning)
 		})
 	}
 	return plans, results, hasFailures

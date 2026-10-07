@@ -35,6 +35,12 @@ type PlannedFileEdit struct {
 	OldContent       string
 	NewContent       string
 	AppliedEditCount int
+	// Existed reports whether Path was present on disk when the plan was
+	// made. #3512: multi_file_write can CREATE files, and the checkpoint
+	// layer needs the create-vs-edit distinction to undo by removal instead
+	// of writing back "" (issue #554 B, multi-file leg). Edit-only planners
+	// (multi_file_edit / multi_edit_file / batch_replace) set it true.
+	Existed bool
 }
 
 type MultiFileEditFileResult struct {

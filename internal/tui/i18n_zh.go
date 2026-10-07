@@ -702,6 +702,8 @@ func zhCatalog(key string) string {
 		return "注意：全局层仍有 %d 条学习（/traj list 中标记 g）且仍在注入。执行 /traj clear global 可清除。"
 	case "traj.empty":
 		return "尚无历史运行学习条目。"
+	case "why.empty":
+		return "尚无工具调用决策记录——先运行任务，之后 /why [n] 可解释 agent 做了什么以及为什么。"
 	case "traj.header":
 		return "历史运行学习库（共存 %d 条，其中 %d 条会注入提示词；> = 会注入）："
 	case "traj.usage":

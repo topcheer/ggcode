@@ -787,6 +787,13 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			debug.Log("agent", "#1786 baseline drift on %s: refreshing plan baseline", plans[i].Path)
 			plans[i].OldContent = string(cur)
 		}
+		// #3512: the same drift window applies to existence - a file planned
+		// as "create" may have been created by an external writer while we
+		// paused at diffConfirm. If it is on disk now, undo must RESTORE its
+		// external content, not remove the file.
+		if !plans[i].Existed {
+			plans[i].Existed = true
+		}
 	}
 
 	multiStart := time.Now()
@@ -806,7 +813,10 @@ func (a *Agent) executeMultiFileTool(ctx context.Context, t tool.Tool, previewer
 			}
 			for _, path := range outcome.WrittenPaths {
 				if plan, ok := planByPath[path]; ok {
-					cpMgr.Save(path, plan.OldContent, plan.NewContent, tc.Name)
+					// #3512: multi_file_write can CREATE files - the checkpoint
+					// must record that so undo removes the file instead of
+					// writing back "" (issue #554 B, multi-file leg).
+					cpMgr.SaveWithExistence(path, plan.OldContent, plan.NewContent, tc.Name, plan.Existed)
 				}
 			}
 		}

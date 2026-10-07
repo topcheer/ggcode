@@ -202,6 +202,12 @@ func (a *Agent) StartPreCompact() {
 			debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
 		}
 
+		// r491: pre-compaction memory flush — persist constraint-line facts
+		// from the about-to-be-folded slice into project memory BEFORE the
+		// summarizer condenses it. Deterministic, bounded, idempotent; failures
+		// are logged inside and never abort the compaction.
+		a.preflushFacts("auto", snapshot.Messages)
+
 		// Delay before sending the compression request.
 		// When precompact triggers, the agent's regular LLM turn fires
 		// simultaneously — the API rate-limits one of them if both hit at

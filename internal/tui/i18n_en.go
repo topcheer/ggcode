@@ -691,6 +691,8 @@ func enCatalog(key string) string {
 		return "Note: %d global-tier learnings remain (marked g in /traj list) and still inject. Run /traj clear global to purge them."
 	case "traj.empty":
 		return "No past-run learnings stored yet."
+	case "why.empty":
+		return "No tool-call decisions recorded yet — run a task first, then /why [n] explains what the agent did and why."
 	case "traj.header":
 		return "Past-run learnings (%d stored, %d injecting into your prompt; > = injected):"
 	case "traj.usage":
@@ -1235,7 +1237,8 @@ Session & History:
   /sessions          List all saved sessions
   /resume <id>       Resume a previous session
   /export <id>       Export session to markdown file
-  /export-trace [--otel] [id] Export execution trace (JSON, or OTLP/GenAI)
+	/export-trace [--otel] [id] Export execution trace (JSON, or OTLP/GenAI)
+	/why [n]           Explain recent tool decisions (paired reasoning + results)
   /clear             Clear conversation history
   /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)

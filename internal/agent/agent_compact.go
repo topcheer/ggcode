@@ -175,6 +175,10 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 	}); res.Err != nil {
 		debug.Log("hooks", "pre_compact hook error (non-fatal): %v", res.Err)
 	}
+	// r491: same pre-compaction memory flush on the reactive path (PTL
+	// recovery). If an auto pre-compact flush already covered this slice the
+	// merge-dedupe makes this a no-op.
+	a.preflushFacts("reactive", a.contextManager.Messages())
 	// Capture last message ID BEFORE compaction for checkpoint.
 	var lastMsgID string
 	if msgs := a.contextManager.Messages(); len(msgs) > 0 {

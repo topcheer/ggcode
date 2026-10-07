@@ -79,6 +79,24 @@ func TestCompleteMention(t *testing.T) {
 	completions = CompleteMention("internal/", dir, nil) // Directory is empty so 0 completions is valid
 }
 
+func TestWhySlashCompletionRegistered(t *testing.T) {
+	// r103 companion: /why must stay in the completion list and carry a
+	// description (registration was split across commands.go/completion.go).
+	found := false
+	for _, c := range SlashCommands {
+		if c == "/why" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("/why missing from SlashCommands completion list")
+	}
+	if !strings.Contains(SlashCommandDescriptions["/why"], "reasoning") {
+		t.Fatal("/why missing a description")
+	}
+}
+
 func TestCompleteMentionEmptyPrefix(t *testing.T) {
 	// When prefix is empty, should list contents of workDir, not parent directory
 	dir := t.TempDir()

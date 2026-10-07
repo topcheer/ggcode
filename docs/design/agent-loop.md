@@ -36,6 +36,7 @@ All optimization layers are deterministic and run in-process without extra LLM c
 | Tool-result clearing | `agent_precompact.go` | Mechanical placeholder replacement at 50/65/75% fill |
 | Tool-use input clearing | `agent_precompact.go` | Truncate old edit/write inputs after results are cleared |
 | Reasoning block compaction | `internal/context/manager.go` | Clear old thinking/reasoning_content blocks |
+| Pre-compaction memory flush | `agent_preflush.go` + `internal/memory/preflush.go` | Persist constraint-line facts to the `compaction-facts` project memory key BEFORE summarization folds the slice (idempotent, deterministic; survives compaction chains) |
 | Adaptive effort | `adaptive_effort.go` | Per-turn reasoning effort adaptation based on tool complexity (Opus 5 effort toggle pattern) |
 | Adaptive sampling | `adaptive_sampling.go` | Per-turn temperature adaptation based on task phase: low for edits/errors, higher for exploration/creative |
 | Command caching | `command_cache.go` | Deterministic build/test command result caching |

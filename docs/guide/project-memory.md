@@ -124,6 +124,10 @@ recall_experience(query="flaky login test wall time", max=3)
 
 Returns the most relevant past cases (empty result = no relevant experience, not an error). Read-only; cases are recorded at run completion, never by this tool.
 
+### Pre-Compaction Fact Flush
+
+When the context window fills and compaction (lossy summarization) is about to fold the older conversation slice, a deterministic flush runs first: constraint-carrying lines from user and assistant messages ("不要修改 tests", "never push directly to main", "must keep X in sync" - the same marker set as the summary fact-retention pass) are merged into the auto-saved `compaction-facts` memory key. This runs on both compaction paths (background pre-compact and reactive overflow recovery), is idempotent (re-flushing the same slice adds nothing), and never blocks or aborts the compaction. Facts therefore survive the whole compaction chain in project memory even when the summary drops them. The entry is auto-saved memory: it can be deleted like any other auto entry.
+
 This gives the agent full lifecycle control: save, read, and delete. Only
 auto-saved memory entries can be deleted - project bootstrap files (GGCODE.md,
 AGENTS.md, etc.) are not affected.
