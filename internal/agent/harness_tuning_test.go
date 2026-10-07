@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -157,5 +158,38 @@ func TestHarnessTuningRollbackByFileDeletion(t *testing.T) {
 	}
 	if wrapped := ApplyOverridesToAllow(func(string) bool { return true }); !wrapped("Target Scatter") {
 		t.Fatal("after rollback the tag must be allowed again")
+	}
+}
+
+// injectGuidance must honor a persisted override even when the budget would
+// allow the message: the tuning store gets the final say after the budget
+// verdict (sa-109 Tier A consumer-side check - guards the write-only death
+// sa-84 flagged for guidancePromoter). Suppression flows back into stats.
+func TestHarnessTuningInjectGuidanceHonorsOverride(t *testing.T) {
+	_, overridesPath := tuningSetup(t)
+	suppressedMsg := "advisory-tune-test dead weight: consider slowing down"
+	tag := guidanceTag(suppressedMsg)
+	seed := harnessOverride{tag: {Tier: tuningSuppressTier, Model: "glm-5.2"}}
+	b, err := json.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overridesPath, b, 0644); err != nil {
+		t.Fatal(err)
+	}
+	harnessMu.Lock()
+	harnessOverrides = nil // force reload from the seeded store
+	harnessMu.Unlock()
+
+	a, _ := issue677Agent(t)
+	a.guidanceStats = guidanceRunStats{}
+	if a.injectGuidance(suppressedMsg) {
+		t.Fatal("budget-legal guidance for an overridden tag must be suppressed")
+	}
+	if st := a.guidanceStats[tag]; st == nil || st.Suppressed == 0 {
+		t.Fatalf("suppression must flow into guidanceStats, got %+v", a.guidanceStats)
+	}
+	if !a.injectGuidance("advisory-free-tag totally fine") {
+		t.Fatal("non-overridden tags must pass through untouched")
 	}
 }
