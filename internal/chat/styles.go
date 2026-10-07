@@ -422,7 +422,9 @@ func FormatBody(content string, width int, maxLines int) (string, bool) {
 		truncated = true
 		hidden := len(wrapped) - maxLines
 		wrapped = wrapped[len(wrapped)-maxLines:]
-		wrapped = append([]string{fmt.Sprintf("  … %d more lines", hidden)}, wrapped...)
+		// sa-86: the hint advertises the level-2 disclosure key; degrades
+		// width-safely (see truncationHint).
+		wrapped = append([]string{truncationHint(hidden, width)}, wrapped...)
 	}
 
 	return strings.Join(wrapped, "\n"), truncated

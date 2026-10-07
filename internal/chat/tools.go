@@ -32,6 +32,7 @@ type BaseToolItem struct {
 	suppressHeader bool // hide header entirely (e.g., read_command_output)
 	formatJSON     bool // parse JSON result and render as formatted key-value pairs
 	noTruncate     bool // render body without line limit (e.g., lanchat)
+	expanded       bool // sa-86: second-level disclosure - render full body (alt+e)
 	styles         Styles
 	fileBodyMode   string        // "" default, "linecount" for read/write, "editdiff" for edit
 	lang           string        // "zh-CN", "en"
@@ -207,8 +208,11 @@ func (t *BaseToolItem) RenderBody(width int) string {
 		// #1697 case 1: the normal path caps at ToolBodyMaxLines (and
 		// streaming too) - the error path had NO cap, so a 200-line
 		// build/test failure flooded the body. Same cap, error styling.
-		if len(lines) > ToolBodyMaxLines {
+		// sa-86: expanded lifts the cap (progressive disclosure level 2).
+		if !t.expanded && len(lines) > ToolBodyMaxLines {
+			hidden := len(lines) - ToolBodyMaxLines
 			lines = lines[:ToolBodyMaxLines]
+			lines = append(lines, truncationHint(hidden, width))
 		}
 		return t.styles.ErrorStyle.Render(strings.Join(lines, "\n"))
 	}
@@ -252,7 +256,7 @@ func (t *BaseToolItem) RenderBody(width int) string {
 	}
 
 	maxLines := ToolBodyMaxLines
-	if t.noTruncate {
+	if t.noTruncate || t.expanded {
 		maxLines = 0 // 0 = unlimited
 	}
 	body, _ := FormatBody(t.result, width, maxLines)
