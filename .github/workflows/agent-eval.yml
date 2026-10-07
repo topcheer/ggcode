@@ -58,7 +58,7 @@ jobs:
         run: |
           python scripts/eval/run_eval.py --auto \
             --output .tmp/agent-eval \
-            --sample 5 --seed 42 \
+            --sample 3 --repeat 2 --seed 42 \
             --run-id "ci-${{ github.run_id }}" \
             --no-llm
 

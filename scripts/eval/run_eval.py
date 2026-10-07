@@ -599,8 +599,68 @@ def compute_knight_score(baseline: list[dict], knight: list[dict]) -> dict:
         "trust_score": round(trust, 4),
         "baseline_success_rate": round(b_success / n, 4),
         "knight_success_rate": round(k_success / n, 4),
+        # r102 pass^k (tau-bench lineage): on collapse_repeats() input this IS
+        # pass@k - the fraction of tasks that passed ALL K repeats. Distinct
+        # name so regression_gate can pin it as its own dimension.
+        "pass_at_k": round(k_success / n, 4),
         "n_tasks": n,
     }
+
+
+def _split_repeat_id(task_id: str) -> tuple[str, int | None]:
+    """Split a '#rN' repeat suffix off a task id (None when absent)."""
+    base, sep, suffix = task_id.rpartition("#r")
+    if sep and suffix.isdigit() and suffix != "":
+        return base, int(suffix)
+    return task_id, None
+
+
+def collapse_repeats(results: list[dict]) -> list[dict]:
+    """r102 pass^k: collapse '#rN' repeat entries into one per task.
+
+    tau-bench pass^k semantics: a task counts as passed only if every repeat
+    passed. Success/completed are AND-ed, timed_out OR-ed, numeric metric
+    fields averaged so downstream score comparisons stay meaningful. Tasks
+    that passed some-but-not-all repeats are flagged `flaky` for reporting
+    (the flaky list is surfaced in the score dict, not gated). Entries
+    without a repeat suffix pass through unchanged (deep-ish copy).
+    """
+    groups: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for r in results:
+        base, _ = _split_repeat_id(str(r.get("task_id", "")))
+        if base not in groups:
+            order.append(base)
+            groups[base] = []
+        groups[base].append(r)
+
+    mean_fields = (
+        "elapsed_sec", "tool_calls", "tool_errors", "ask_user_count",
+        "rounds", "knight_reports", "user_messages", "rework_count",
+    )
+    collapsed: list[dict] = []
+    for base in order:
+        runs = groups[base]
+        if len(runs) == 1:
+            merged = dict(runs[0])
+            merged["task_id"] = base
+            collapsed.append(merged)
+            continue
+        k = len(runs)
+        passes = sum(1 for r in runs if r.get("success"))
+        merged = dict(runs[0])
+        merged["task_id"] = base
+        merged["repeats"] = k
+        merged["success"] = passes == k
+        merged["completed"] = all(r.get("completed") for r in runs)
+        merged["timed_out"] = any(r.get("timed_out") for r in runs)
+        merged["flaky"] = 0 < passes < k
+        for f in mean_fields:
+            merged[f] = round(sum(float(r.get(f, 0) or 0) for r in runs) / k, 1)
+        if any(r.get("verify_status") == "verify_failed" for r in runs):
+            merged["verify_status"] = "verify_failed"
+        collapsed.append(merged)
+    return collapsed
 
 
 def write_scorecard(path: str, results: list[dict], score: dict, mode: str):
@@ -809,6 +869,7 @@ def run_single_mode(
     auto: bool = False,
     working_dir: str | None = None,
     trend_spec: dict | None = None,
+    repeat: int = 1,
 ) -> list[dict]:
     """Run evaluation in a single mode (baseline or knight).
 
@@ -855,17 +916,30 @@ def run_single_mode(
     results = []
 
     for task in tasks:
-        log_file = f"{log_dir}/{run_id}_{task['id']}.ndjson"
-        result = run_task(base_url, task, llm, log_file, working_dir=working_dir)
-        result["run_id"] = run_id
-        result["phase"] = mode
-        result["mode"] = mode
-        results.append(result)
-        append_csv_row(csv_path, result)
+        for rep in range(1, repeat + 1):
+            if repeat > 1:
+                # r102 pass^k: strip repeat-1 artifacts so each repeat must
+                # genuinely re-achieve the task (same reset the multi-round
+                # loop applies between rounds).
+                if rep > 1 and working_dir:
+                    git_reset_workdir(working_dir)
+                t = dict(task, id=f"{task['id']}#r{rep}")
+            else:
+                t = task
+            log_file = f"{log_dir}/{run_id}_{t['id']}.ndjson"
+            result = run_task(base_url, t, llm, log_file, working_dir=working_dir)
+            result["run_id"] = run_id
+            result["phase"] = mode
+            result["mode"] = mode
+            results.append(result)
+            append_csv_row(csv_path, result)
 
-    # Write scorecard
+    # Write scorecard. Scoring runs on collapsed (pass^k) entries; the
+    # per-task table keeps raw '#rN' rows for inspection.
     score_path = str(out_dir / f"{mode}.scorecard.md")
-    score = compute_knight_score(results, results)
+    collapsed = collapse_repeats(results)
+    score = compute_knight_score(collapsed, collapsed)
+    score["flaky_tasks"] = sorted(c["task_id"] for c in collapsed if c.get("flaky"))
     write_scorecard(score_path, results, score, mode)
     if trend_spec:
         append_trend_jsonl(out_dir, mode, trend_spec["task_set"], trend_spec["task_version"],
@@ -1012,11 +1086,17 @@ def main():
                         help="r442 rotation: draw N random tasks instead of the full set")
     parser.add_argument("--seed", type=int, default=None,
                         help="Sampling seed (default: run-specific, non-deterministic)")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="r102 pass^k: run each sampled task K times "
+                             "(ids get '#rN'; scoring collapses to min-pass)")
     parser.add_argument("--exclude-before", default=None, metavar="YYYY-MM-DD",
                         help="r442 rotation: drop tasks added before this date (contamination control)")
     parser.add_argument("--no-trend", action="store_true",
                         help="Skip appending trend.jsonl (default: append)")
     args = parser.parse_args()
+
+    if args.repeat < 1:
+        parser.error("--repeat must be >= 1")
 
     if not args.auto and not args.base_url and not args.port_file:
         parser.error("Either --auto, --base-url, or --port-file is required")
@@ -1080,7 +1160,7 @@ def main():
     duration_label = f"{args.duration}h" if use_duration else f"{max_rounds} rounds"
     print(f"\n{'#'*60}")
     print(f"  Knight Evaluation - {args.templates}")
-    print(f"  Tasks: {len(tasks)} | Templates: {args.templates}")
+    print(f"  Tasks: {len(tasks)} | Templates: {args.templates} | Repeat: {args.repeat}")
     print(f"  Workdir: {working_dir}")
     print(f"  Output: {args.output}")
     print(f"  Mode: {mode_label}")
@@ -1118,6 +1198,7 @@ def main():
                 baseline_results = run_single_mode(
                     "baseline", tasks, llm, args.output, round_run_id,
                     auto=args.auto, working_dir=working_dir, trend_spec=None,
+                    repeat=args.repeat,
                 )
                 all_results.append((round_num, "baseline", baseline_results))
 
@@ -1129,13 +1210,15 @@ def main():
                     auto=args.auto, working_dir=working_dir,
                     trend_spec=None if args.no_trend else {
                         "task_set": args.templates, "task_version": task_version,
-                        "meta": {"sample": args.sample, "ab": True},
+                        "meta": {"sample": args.sample, "repeat": args.repeat, "ab": True},
                     },
+                    repeat=args.repeat,
                 )
                 all_results.append((round_num, "knight", knight_results))
 
-                # Per-round comparison scorecard
-                score = compute_knight_score(baseline_results, knight_results)
+                # Per-round comparison scorecard (pass^k-collapsed both sides)
+                score = compute_knight_score(
+                    collapse_repeats(baseline_results), collapse_repeats(knight_results))
                 score_path = str(Path(args.output) / f"round-{round_num:03d}-ab.scorecard.md")
                 write_ab_scorecard(score_path, tasks, baseline_results, knight_results, score)
 
@@ -1145,8 +1228,9 @@ def main():
                     auto=True, working_dir=working_dir,
                     trend_spec=None if args.no_trend else {
                         "task_set": args.templates, "task_version": task_version,
-                        "meta": {"sample": args.sample, "ab": False},
+                        "meta": {"sample": args.sample, "repeat": args.repeat, "ab": False},
                     },
+                    repeat=args.repeat,
                 )
                 all_results.append((round_num, args.mode, results))
 
@@ -1174,16 +1258,23 @@ def main():
                 results = []
 
                 for task in tasks:
-                    log_file = f"{log_dir}/{args.run_id}_{task['id']}.ndjson"
-                    result = run_task(base_url, task, llm, log_file, working_dir=working_dir)
-                    result["run_id"] = args.run_id
-                    result["phase"] = args.mode
-                    result["mode"] = args.mode
-                    results.append(result)
-                    append_csv_row(csv_path, result)
+                    for rep in range(1, args.repeat + 1):
+                        if args.repeat > 1:
+                            if rep > 1 and working_dir:
+                                git_reset_workdir(working_dir)
+                            t = dict(task, id=f"{task['id']}#r{rep}")
+                        else:
+                            t = task
+                        log_file = f"{log_dir}/{args.run_id}_{t['id']}.ndjson"
+                        result = run_task(base_url, t, llm, log_file, working_dir=working_dir)
+                        result["run_id"] = args.run_id
+                        result["phase"] = args.mode
+                        result["mode"] = args.mode
+                        results.append(result)
+                        append_csv_row(csv_path, result)
 
                 score_path = str(out_dir / f"{args.mode}.scorecard.md")
-                score = compute_knight_score(results, results)
+                score = compute_knight_score(collapse_repeats(results), collapse_repeats(results))
                 write_scorecard(score_path, results, score, args.mode)
                 all_results.append((round_num, args.mode, results))
                 break  # Manual mode is single-round
@@ -1210,7 +1301,7 @@ def main():
             agg_b = [r for _, m, res in all_results if m == "baseline" for r in res]
             agg_k = [r for _, m, res in all_results if m == "knight" for r in res]
             if agg_b and agg_k:
-                agg_score = compute_knight_score(agg_b, agg_k)
+                agg_score = compute_knight_score(collapse_repeats(agg_b), collapse_repeats(agg_k))
                 agg_path = str(Path(args.output) / "ab-comparison.scorecard.md")
                 write_ab_scorecard(agg_path, tasks, agg_b, agg_k, agg_score)
 

@@ -32,7 +32,7 @@ DEFAULT_DIM_THRESHOLD = 0.10
 # success_delta collapse could hide behind the other 0.65 of the weight
 # (r101; futureagi 2026 "a CI gate that beats aggregate scoring").
 DIMENSIONS = [
-    "success_delta", "time_improvement", "tool_reduction",
+    "success_delta", "pass_at_k", "time_improvement", "tool_reduction",
     "turn_reduction", "skill_rate", "trust_score",
 ]
 
@@ -51,8 +51,10 @@ def dimension_assertions(window: list[dict], baseline: dict,
 
     Absolute drop (ref - current), not fractional: dimensions like
     success_delta legitimately range negative where a fractional comparison
-    is meaningless. success_delta uses a stricter threshold (half) because
-    task success is what users feel first. Window entries lacking the
+    is meaningless. success_delta and pass_at_k use a stricter threshold
+    (half) because task success is what users feel first - and single-sample
+    Bernoulli noise on a 5-task run has sigma ~0.22, so the gate only makes
+    sense on pass^k (--repeat) or windowed data. Window entries lacking the
     dimension are skipped, never counted as drops.
     """
     refs = baseline.get("dimensions") or {}
@@ -61,7 +63,7 @@ def dimension_assertions(window: list[dict], baseline: dict,
         current = dim_mean(window, dim)
         if current is None:
             continue
-        thr = default_thr / 2 if dim == "success_delta" else default_thr
+        thr = default_thr / 2 if dim in ("success_delta", "pass_at_k") else default_thr
         results.append((dim, float(ref), current, (float(ref) - current) <= thr))
     return results
 
@@ -152,7 +154,7 @@ def main():
     dim_results = dimension_assertions(window, baseline, args.dim_threshold)
     failed_dims = []
     for dim, d_ref, d_cur, ok in dim_results:
-        thr = args.dim_threshold / 2 if dim == "success_delta" else args.dim_threshold
+        thr = args.dim_threshold / 2 if dim in ("success_delta", "pass_at_k") else args.dim_threshold
         print(f"  {'ok  ' if ok else 'FAIL'} {dim}: current={d_cur:.4f} "
               f"baseline={d_ref:.4f} drop={d_ref - d_cur:.4f} (max {thr:.2f})")
         if not ok:
