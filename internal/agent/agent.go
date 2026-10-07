@@ -2145,8 +2145,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 		if a.consumeReadyPreCompact(onEvent) {
 			runStats.recordCompaction()
 		}
-		if a.injectPendingInterruptions() {
+		if injected, kind := a.injectPendingInterruptions(); injected {
 			a.recordIntervention(i + 1)
+			// Retraction-stop: the user withdrew the task. Abort the run
+			// without another LLM call; returning context.Canceled rides the
+			// r445 isCancelled path so the InterruptSnapshot is stamped for
+			// the next resume (which will also see the retraction notice).
+			if kind == InterruptionRetractStop {
+				debug.Log("agent", "retraction-stop: aborting run after user withdrew the task")
+				return context.Canceled
+			}
 			continue
 		}
 		if err := a.maybeAutoCompact(ctx, onEvent, &transientCompactWarned); err != nil {
@@ -3050,8 +3058,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				debug.Log("agent", "Iteration %d: context-length goal drift detected", i+1)
 				a.injectGuidance(gdHint)
 			}
-			if a.injectPendingInterruptions() {
+			if injected, kind := a.injectPendingInterruptions(); injected {
 				a.recordIntervention(i + 1)
+				// Retraction-stop aborts the run; see the Run loop site for the
+				// full rationale (context.Canceled rides the r445 snapshot path).
+				if kind == InterruptionRetractStop {
+					debug.Log("agent", "retraction-stop: aborting run after user withdrew the task")
+					return context.Canceled
+				}
 				continue
 			}
 			// Autopilot strategist: when in autopilot mode with a confirmed
@@ -5533,13 +5547,18 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 
 // --- Interruption injection ---
 // injectPendingInterruptions checks for mid-run user guidance and injects it
-// as a high-priority user message. Returns true if an interruption was injected.
-func (a *Agent) injectPendingInterruptions() bool {
+// as a high-priority user message. Returns whether an interruption was
+// injected and its typed kind (InterruptBench arXiv:2604.00892: addition /
+// revision / retraction-stop). Addition keeps the legacy preamble verbatim;
+// revision tells the model the old goal is superseded; retraction-stop
+// additionally signals the caller to abort the run (the injected notice
+// survives in context so the next resume knows the task was withdrawn).
+func (a *Agent) injectPendingInterruptions() (bool, InterruptionKind) {
 	a.mu.RLock()
 	fn := a.onInterrupt
 	a.mu.RUnlock()
 	if fn == nil {
-		return false
+		return false, InterruptionAddition
 	}
 	blocks := fn()
 	// #1585-C: the gate was TrimSpace(text)=="" before #1472 widened the
@@ -5556,21 +5575,22 @@ func (a *Agent) injectPendingInterruptions() bool {
 		break
 	}
 	if !nonBlank {
-		return false
+		return false, InterruptionAddition
 	}
-	debug.Log("agent", "injecting mid-run user guidance")
+	kind := classifyInterruption(firstTextBlock(blocks))
+	debug.Log("agent", "injecting mid-run user guidance (kind=%s)", kind)
 	// #1472-A: image blocks ride along - a mid-run screenshot is data the
 	// model must see, not payload to strip.
 	content := []provider.ContentBlock{{
 		Type: "text",
-		Text: "New user guidance arrived while you were working. Treat it as higher-priority context, adjust your plan immediately if needed, and then continue.",
+		Text: interruptionPreamble(kind),
 	}}
 	content = append(content, blocks...)
 	a.contextManager.Add(provider.Message{
 		Role:    "user",
 		Content: content,
 	})
-	return true
+	return true, kind
 }
 
 // --- Stream response parsing ---

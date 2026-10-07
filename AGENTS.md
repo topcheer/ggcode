@@ -101,6 +101,9 @@ Quick checklist:
 | `bypass` | Almost everything allowed |
 | `autopilot` | Bypass + autonomous goal-directed execution |
 
+Mid-run user interruptions are typed (InterruptBench arXiv:2604.00892):
+**addition** (default, legacy preamble) / **revision** (explicit redirection marker -> goal-supersession preamble) / **retraction-stop** (whole-message stop phrase like `stop`, `算了` -> abort the run without another LLM call; the withdrawal notice stays in context for the next resume). Classification is deterministic (`internal/agent/interrupt_typing.go`).
+
 ## Coding Conventions
 
 - **Build tag**: All `go build`/`go test` must use `-tags goolm`

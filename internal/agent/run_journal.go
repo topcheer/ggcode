@@ -87,7 +87,10 @@ type RunJournalEntry struct {
 // which only fires on dead-PID journals, this covers same-session
 // Ctrl+C: the run defer marks the journal completed and stamps the
 // snapshot, so the next resume can tell the model WHERE it was - not
-// just that "operation cancelled" placeholders exist.
+// just that "operation cancelled" placeholders exist. It is also stamped
+// on a typed retraction-stop interruption (whole-message stop phrase,
+// interrupt_typing.go): the resume then sees both this snapshot and the
+// injected withdrawal notice, so it must not continue the old task.
 type InterruptSnapshot struct {
 	Timestamp    time.Time `json:"timestamp"`
 	LastTool     string    `json:"last_tool,omitempty"`
