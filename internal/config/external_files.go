@@ -227,6 +227,19 @@ func SaveIMConfig(configDir string, im *IMConfig) error {
 		}
 		return nil
 	}
+	// #3528: same #608 protection as SaveVendors - Load expands ${VAR} refs
+	// into memory; an unguarded save rewrote im.yaml with the materialized
+	// literals, destroying the env references. Restore any on-disk ${VAR}
+	// leaf whose expansion equals the in-memory value before writing.
+	if existingData, readErr := os.ReadFile(path); readErr == nil {
+		existingRaw := map[string]interface{}{}
+		if yaml.Unmarshal(existingData, &existingRaw) == nil {
+			lookup := runtimeEnvLookup(nil)
+			if restored, ok := restoreEnvRefs(existingRaw, raw, lookup).(map[string]interface{}); ok {
+				raw = restored
+			}
+		}
+	}
 	out, err := yaml.Marshal(raw)
 	if err != nil {
 		return err
@@ -276,6 +289,24 @@ func SaveMCPServers(configDir string, servers []MCPServerConfig) error {
 	out, err := yaml.Marshal(persist)
 	if err != nil {
 		return fmt.Errorf("marshaling mcp servers: %w", err)
+	}
+	// #3528: same #608 protection as SaveVendors - loadMCPServersFile expands
+	// ${VAR} env/header refs into memory; an unguarded save rewrote
+	// mcp_servers.yaml with the materialized secrets, destroying the
+	// references (and persisting plaintext). Restore on-disk ${VAR} leaves
+	// whose expansion equals the in-memory value before writing.
+	if existingData, readErr := os.ReadFile(path); readErr == nil {
+		existingList := []interface{}{}
+		if yaml.Unmarshal(existingData, &existingList) == nil {
+			outList := []interface{}{}
+			if yaml.Unmarshal(out, &outList) == nil {
+				lookup := runtimeEnvLookup(nil)
+				restored := restoreEnvRefs(existingList, outList, lookup)
+				if re, rerr := yaml.Marshal(restored); rerr == nil {
+					out = re
+				}
+			}
+		}
 	}
 	return writeSecureConfigFile(path, out)
 }
