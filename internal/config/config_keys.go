@@ -40,6 +40,19 @@ func (c *Config) SetEndpointAPIKey(vendor, endpoint, apiKey string, vendorScoped
 
 	apiKey = strings.TrimSpace(apiKey)
 
+	// #3522: for the endpoint-scoped path, validate the endpoint EXISTS
+	// before ANY side effect. The old order ran os.Setenv + writeKeysEnv
+	// first and only then checked the endpoint - a typo'd endpoint name
+	// returned an error while the plaintext secret had already been
+	// persisted to keys.env and leaked into the process env. The env-ref
+	// branch above already validated early; the plaintext branch now
+	// mirrors it (fail fast, zero side effects on the failure path).
+	if !vendorScoped {
+		if _, ok := vc.Endpoints[endpoint]; !ok {
+			return fmt.Errorf("endpoint %q is not configured for vendor %q", endpoint, vendor)
+		}
+	}
+
 	// If the value is already an env reference (${VAR}), store as-is.
 	if _, isRef := envReferenceVarName(apiKey); isRef || apiKey == "" {
 		if vendorScoped {
