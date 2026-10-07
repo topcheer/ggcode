@@ -363,7 +363,7 @@ func resolveImpactPendings(dirFset *token.FileSet, scan *impactSiblingScan, edit
 func renderImpactWarning(impacts []fileImpact, totalRemoved, totalAffected int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf(
-		"[cross-file impact analysis] Your edits removed or renamed %d exported symbol(s) "+
+		"[cross-file impact analysis] Your edits removed or renamed %d internal (same-package) symbol(s) "+
 			"that are referenced by %d file(s) you did NOT edit. These files may fail "+
 			"to compile. Update them to fix the broken references:\n\n",
 		totalRemoved, totalAffected,
@@ -418,8 +418,11 @@ func extractImpactRemovedSymbols(oldContent, newContent, filename string) []impa
 	return removed
 }
 
-// extractImpactSymbols parses Go source and returns all exported top-level
-// declarations (functions, types, variables, constants) and exported methods.
+// extractImpactSymbols parses Go source and returns all UNexported top-level
+// declarations (functions, types, variables, constants) and unexported methods
+// (#1450-A: exported symbols' referents live outside the package, which the
+// same-directory sibling scan never intersects - excluded by design; the
+// warning text speaks of internal/same-package symbols, #3502).
 func extractImpactSymbols(src, filename string) []impactRemovedSymbol {
 	file, _, err := parseGoSource(filename, src, 0)
 	if err != nil {

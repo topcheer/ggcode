@@ -25,7 +25,7 @@ const privateConst = 1
 
 	syms := extractImpactSymbols(src, "test.go")
 	if len(syms) == 0 {
-		t.Fatal("expected exported symbols, got none")
+		t.Fatal("expected internal (same-package) symbols, got none")
 	}
 
 	names := make(map[string]string)
