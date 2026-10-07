@@ -815,7 +815,25 @@ func retryRPCLater(ctx context.Context, attempt int, backoff *time.Duration, met
 	}
 }
 
+// rpc sends one JSON-RPC request to the peer, gated by the per-peer
+// circuit breaker (peer_breaker.go, sa-88): an OPEN circuit fast-fails
+// with peerCircuitOpenError instead of burning the full retry+timeout
+// pipeline against a peer that just failed repeatedly, and every call's
+// outcome is recorded so a recovered peer closes the circuit via the
+// half-open probe.
 func (c *Client) rpc(ctx context.Context, method string, params interface{}, result interface{}) error {
+	pb := peerBreakerFor(c.baseURL)
+	if pb != nil && !pb.allow() {
+		return &peerCircuitOpenError{Peer: c.baseURL, Method: method, Cooldown: peerBreakerCooldown}
+	}
+	err := c.rpcCore(ctx, method, params, result)
+	if pb != nil {
+		pb.record(classifyRPCError(err))
+	}
+	return err
+}
+
+func (c *Client) rpcCore(ctx context.Context, method string, params interface{}, result interface{}) error {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("a2a %s: marshal params: %w", method, err)
