@@ -42,7 +42,8 @@ func (t *SaveMemoryTool) SetAfterSave(fn func()) {
 
 func (t *SaveMemoryTool) Name() string { return "save_memory" }
 func (t *SaveMemoryTool) Description() string {
-	return "Save a pattern or experience to persistent memory for future sessions. Default scope='project' for project-specific knowledge; use scope='global' sparingly — it loads into EVERY project's system prompt."
+	return "Save a pattern or experience to persistent memory for future sessions. Default scope='project' for project-specific knowledge; use scope='global' sparingly — it loads into EVERY project's system prompt. " +
+		"Re-saving an existing key archives the previous version to .history instead of destroying it; read a past version with list_memory key=<key> as_of=<RFC3339>."
 }
 
 func (t *SaveMemoryTool) Parameters() json.RawMessage {

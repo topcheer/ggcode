@@ -134,6 +134,13 @@ func (am *AutoMemory) SaveMemoryWithSourceActor(key, content, source, actor stri
 	mu := muAny.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
+	// r488 non-destructive overwrite (Mem++, arXiv:2610.02002): archive the
+	// outgoing version into .history/ before the rename below destroys it.
+	// Fail-open per #3120 precedent - a save must not block on archive
+	// faults - but the potential loss stays observable via debug.Log.
+	if err := am.archiveVersion(safe, path); err != nil {
+		debug.Log("memory", "history archive failed for %q (continuing overwrite): %v", safe, err)
+	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return err

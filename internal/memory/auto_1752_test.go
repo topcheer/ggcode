@@ -37,12 +37,14 @@ func Test1752SaveMemoryAtomicConcurrent(t *testing.T) {
 		t.Fatalf("torn write: got %d bytes", len(data))
 	}
 
-	// No temp residue: the directory holds only the final file plus the
-	// sa-85 provenance sidecar (.usage.json is legitimate persistent
-	// state, not a leftover temp file).
+	// No temp residue: the directory holds only the final file plus
+	// legitimate persistent state - the sa-85 provenance sidecar
+	// (.usage.json) and the r488 non-destructive archive dir (.history,
+	// populated when concurrent overwrites archive outgoing versions;
+	// Mem++ arXiv:2610.02002).
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.Name() != "race-key.md" && e.Name() != usageFileName {
+		if e.Name() != "race-key.md" && e.Name() != usageFileName && e.Name() != ".history" {
 			t.Fatalf("temp residue left behind: %s", e.Name())
 		}
 	}
