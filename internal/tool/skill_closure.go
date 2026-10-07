@@ -62,7 +62,21 @@ func DependencyClosure(cmd *commands.Command, lookup SkillLookup, maxDepth int) 
 		cur := queue[0]
 		queue = queue[1:]
 		if cur.depth >= maxDepth {
-			edgesLeft = true
+			// #3492: only count as truncated if the capped node actually
+			// HAS an unexplored outgoing edge. A leaf sitting exactly at
+			// cap depth has a complete closure - flagging it Truncated
+			// contradicted the field's own contract ("edges remaining")
+			// and produced a bogus "(depth capped at N)" suffix.
+			for _, dep := range cur.cmd.Dependencies {
+				dep = strings.TrimSpace(dep)
+				if dep == "" {
+					continue
+				}
+				if !visited[commands.ParseDependency(dep).Name] {
+					edgesLeft = true
+					break
+				}
+			}
 			continue
 		}
 		for _, dep := range cur.cmd.Dependencies {

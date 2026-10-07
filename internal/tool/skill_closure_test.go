@@ -76,7 +76,10 @@ func TestSkillClosure_VersionMismatch(t *testing.T) {
 	}
 }
 
-// Depth cap truncates a 4-deep chain at skillClosureMaxDepth.
+// Depth cap truncates a 4-deep chain at skillClosureMaxDepth: the node
+// AT the cap still has an unexplored edge (s4), so Truncated is set (#3492:
+// a capped LEAF with no outgoing edges must NOT be flagged - old test
+// pinned that false positive).
 func TestSkillClosure_DepthCap(t *testing.T) {
 	lookup := closureSkillLookup{
 		"s1": mkSkill("s1", "s2"),
@@ -85,8 +88,8 @@ func TestSkillClosure_DepthCap(t *testing.T) {
 		"s4": mkSkill("s4"),
 	}
 	c := DependencyClosure(mkSkill("s1", "s2"), lookup, 0)
-	if len(c.Order) != skillClosureMaxDepth || !c.Truncated {
-		t.Fatalf("expected depth cap at %d with Truncated, got %+v (trunc=%v)", skillClosureMaxDepth, c.Order, c.Truncated)
+	if len(c.Order) != skillClosureMaxDepth || c.Truncated {
+		t.Fatalf("expected depth cap at %d members with NO Truncated (s4 is a leaf), got %+v (trunc=%v)", skillClosureMaxDepth, c.Order, c.Truncated)
 	}
 }
 
