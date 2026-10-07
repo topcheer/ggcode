@@ -144,6 +144,11 @@ func (v *toolSequenceValidator) checkAntiPatterns(curr seqEntry) string {
 		return guidance
 	}
 
+	// Pattern 7: text search → LSP workspace symbol search for the same symbol
+	if guidance := v.checkSymbolRetrievalDup(curr); guidance != "" {
+		return guidance
+	}
+
 	return ""
 }
 
@@ -351,6 +356,75 @@ func (v *toolSequenceValidator) checkBroadThenNarrowSearch(curr seqEntry) string
 				)
 			}
 		}
+	}
+	return ""
+}
+
+// Pattern 7 (sa-98): grep/search_files(pattern≈sym) → lsp_workspace_symbols
+// (query≈sym). Symbol-level duplicate retrieval is invisible to result-content
+// Jaccard (tool_result_redundancy: grep emits matched lines, LSP emits
+// file:line lists - formats never overlap ≥0.6), and tool_redundancy only
+// catches same-tool repeats. Process-axis framing (PRM survey, arXiv
+// 2510.08049): outcome gates see "found it"; only a sequence check sees the
+// wasted second retrieval. Grounded: literal symbol alignment only - the
+// coordinate-based LSP calls (lsp_references/definition take path+line+char,
+// no symbol string) are deliberately NOT matched because aligning a grep
+// pattern to a source position would be intent-guessing. LSP→grep is also
+// excluded: that direction is the documented fallback path when LSP is
+// cold/unavailable (tool_error_fallback).
+const (
+	// seqRetrievalGap: max iterations between the two retrievals. Beyond it
+	// the earlier result may legitimately be considered stale.
+	seqRetrievalGap = 3
+	// seqMinSymbolRunes: shorter symbols/pattern fragments match too easily.
+	seqMinSymbolRunes = 5
+)
+
+// checkSymbolRetrievalDup fires when the current lsp_workspace_symbols query
+// re-retrieves a symbol that a recent grep/search_files already searched
+// for, with no source mutation in between (#2813 staleness principle).
+func (v *toolSequenceValidator) checkSymbolRetrievalDup(curr seqEntry) string {
+	if v.hintsGiven["symbol_retrieval_dup"] {
+		return ""
+	}
+	if curr.tool != "lsp_workspace_symbols" {
+		return ""
+	}
+	query, _ := curr.args["query"].(string)
+	if len([]rune(query)) < seqMinSymbolRunes {
+		return ""
+	}
+	for i := len(v.history) - 1; i >= 0 && curr.iter-v.history[i].iter <= seqRetrievalGap; i-- {
+		e := v.history[i]
+		if e.tool != "grep" && e.tool != "search_files" {
+			continue
+		}
+		pattern, _ := e.args["pattern"].(string)
+		// Literal containment either way (a grep pattern often wraps the bare
+		// symbol with anchors/whitespace): "MyFunc" ≈ "MyFunc", "^\s*MyFunc\("
+		// ≈ "MyFunc". Go symbols are case-sensitive; keep it that way.
+		shorter := query
+		if len(pattern) < len(query) {
+			shorter = pattern
+		}
+		if len([]rune(shorter)) < seqMinSymbolRunes ||
+			(!strings.Contains(pattern, query) && !strings.Contains(query, pattern)) {
+			continue
+		}
+		// Any source mutation between the two retrievals invalidates the
+		// earlier hit set (symbols may have moved) - same principle as #2813.
+		for j := len(v.history) - 1; j > i; j-- {
+			if sourceMutatingTools[v.history[j].tool] {
+				return ""
+			}
+		}
+		v.hintsGiven["symbol_retrieval_dup"] = true
+		return fmt.Sprintf(
+			"[tool-sequence] You recently searched for the same symbol via %s "+
+				"(iteration %d); lsp_workspace_symbols on %q re-retrieves references "+
+				"you likely already have. Reuse the earlier results unless they are stale.",
+			e.tool, e.iter, query,
+		)
 	}
 	return ""
 }
