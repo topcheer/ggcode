@@ -69,6 +69,37 @@ func TestManager_Complete(t *testing.T) {
 	}
 }
 
+func TestManager_GetTaskText(t *testing.T) {
+	m := newTestManager()
+	ctx := context.Background()
+
+	// Completed run with result: task text is exposed for delegation validation.
+	id := m.Spawn("test", "## Objective\nfix X\n## Acceptance Criteria\n- tests pass", "fix X", nil, ctx)
+	m.Complete(id, "done", nil)
+	task, ok := m.GetTaskText(id)
+	if !ok || task == "" || !strings.Contains(task, "Acceptance Criteria") {
+		t.Fatalf("completed run must expose task text: ok=%v task=%q", ok, task)
+	}
+
+	// Unknown agent: nothing to validate against, not an error.
+	if _, ok := m.GetTaskText("no-such-agent"); ok {
+		t.Fatal("unknown agent must return ok=false")
+	}
+
+	// Running agent (result still changing): no task text yet.
+	rid := m.Spawn("test", "test", "task with criteria", nil, ctx)
+	if _, ok := m.GetTaskText(rid); ok {
+		t.Fatal("running agent must return ok=false")
+	}
+
+	// Failed run: no validation target.
+	fid := m.Spawn("test", "test", "task with criteria", nil, ctx)
+	m.Complete(fid, "", context.Canceled)
+	if _, ok := m.GetTaskText(fid); ok {
+		t.Fatal("failed run must return ok=false")
+	}
+}
+
 func TestManager_Complete_WithError(t *testing.T) {
 	m := newTestManager()
 	ctx := context.Background()
