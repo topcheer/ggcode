@@ -600,13 +600,14 @@ func TestSA150_UsageLoadSaveErrorPaths(t *testing.T) {
 	}
 	usageFile := filepath.Join(ggDir, "skill_usage.json")
 
-	// Corrupt JSON: treated as empty usage, not an error.
+	// Corrupt JSON: #3517 - treated as an ERROR (quarantined aside), never
+	// as empty-with-nil (that let RecordUsage erase the whole history).
 	if err := os.WriteFile(usageFile, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := loadUsageLocked()
-	if err != nil || len(usage) != 0 {
-		t.Errorf("corrupt usage JSON: got (%v, %v), want (empty, nil)", usage, err)
+	if err == nil || usage != nil {
+		t.Errorf("corrupt usage JSON: got (%v, %v), want (nil, error)", usage, err)
 	}
 
 	// JSON null: must come back as a non-nil empty map.
