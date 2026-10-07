@@ -289,8 +289,19 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 	var act []inFlight
 	for len(ready) > 0 || len(act) > 0 {
 		if ctx.Err() != nil {
+			// #3537: the loop-top cancellation exit must honor the same
+			// Partial contract as the select branch below - LiveStepID
+			// carries every still-running worker, and we return WITHOUT
+			// synthesis (ctx is dead; the parent may wait_agent the live
+			// workers). The old bare `break` dropped the IDs and fell
+			// through to synthesis.
 			rep.Partial = true
-			break
+			for _, a := range act {
+				if !doneStep[a.i] {
+					rep.LiveStepID[spec.Steps[a.i].ID] = a.id
+				}
+			}
+			return rep
 		}
 		// Fill the in-flight window. Blocked (poisoned) and launch-failed
 		// steps free their slot immediately and release their dependents.
