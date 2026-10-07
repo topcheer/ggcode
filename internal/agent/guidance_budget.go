@@ -238,6 +238,12 @@ func (a *Agent) injectGuidance(text string) bool {
 	// here, so one hook records the full fire/suppress profile (recorded
 	// AFTER the allow() verdict to avoid double-counting one message).
 	allowed := a.guidanceBudget.allow(text)
+	// sa-109 Tier A: the harness-tuning override store gets the final say -
+	// a tag double-confirmed stale through the acceptance gate (see
+	// harness_tuning.go) stays suppressed even when the budget allows it.
+	if allowed && harnessOverrideSuppresses(guidanceTag(text)) {
+		allowed = false
+	}
 	if a.guidanceStats != nil {
 		a.guidanceStats.record(guidanceTag(text), allowed)
 	}

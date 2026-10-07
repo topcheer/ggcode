@@ -121,4 +121,11 @@ func (a *Agent) flushGuidanceStats() {
 	// r22: harness-assumption expiry check - cross-model dead-weight
 	// detection over the file we just flushed into. Best-effort.
 	analyzeStaleGuidance(path, model)
+	// sa-109 Tier A: Self-Harness-style component self-tuning. Stale tags
+	// (double-confirmed) go through the acceptance gate + per-model budget;
+	// passing tags get a suppress override in ~/.ggcode/harness-overrides.json
+	// (delete the file to roll back). Best-effort.
+	if err := MaybeTuneHarness(staleHeuristicSummary(path, model), path); err != nil {
+		debug.Log("guidance-stats", "harness tuning skipped: %v", err)
+	}
 }
