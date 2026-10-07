@@ -593,7 +593,12 @@ func removeKeysEnv(names []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), secureConfigDirMode); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(b.String()), secureConfigFileMode)
+	// #3519: atomic write, same as writeKeysEnvTo below - a crash mid
+	// truncate-and-write here would lose EVERY remaining API key at once.
+	if err := util.AtomicWriteFile(path, []byte(b.String()), secureConfigFileMode); err != nil {
+		return fmt.Errorf("writing keys.env: %w", err)
+	}
+	return nil
 }
 
 // writeKeysEnvTo merges new entries into the keys.env file at the given path.
