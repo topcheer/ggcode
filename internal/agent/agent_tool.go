@@ -293,6 +293,14 @@ func (a *Agent) executeToolWithTimeout(ctx context.Context, tc provider.ToolCall
 // of a recently-successful mutating call replays the prior result instead of
 // re-executing the side effect (Agent Mesh S2 seam, arXiv:2608.26225).
 func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool.Result {
+	// sa-85: every executed command feeds the workflow step-attempt ledger
+	// (attribution for future violations). Blocked calls never reach here -
+	// they did not run, so they are not attempts.
+	runTraced := func() tool.Result {
+		res := a.executeToolInner(ctx, tc)
+		a.wfTraceRecord(tc, res)
+		return res
+	}
 	if suppressed := a.dedupLedger().suppressDuplicate(tc.Name, string(tc.Arguments)); suppressed != nil {
 		return *suppressed
 	}
@@ -308,6 +316,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 		if wv := wf.checkPreconditions(tc.Name, tc.Arguments); wv != nil {
 			msg := fmt.Sprintf("[workflow:%s %s] %q is guarded by step %q which requires step %q first, and no artifact matching %q was produced this run. Complete the prerequisite (or fix the workflow spec) before running this command.",
 				wv.Step.ID, strings.ToUpper(wv.Step.Mode), wv.Command, wv.Step.ID, wv.Missing, wv.WantGlob)
+			msg += wfAttemptAttribution(wv)
 			if wv.Step.Message != "" {
 				msg += " Note: " + wv.Step.Message
 			}
@@ -316,7 +325,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 				debug.Log("agent", "[workflow-spec] BLOCK %s before %s (missing %s)", wv.Command, wv.Step.ID, wv.Missing)
 				return tool.Result{Content: msg, IsError: true}
 			}
-			res := a.executeToolInner(ctx, tc)
+			res := runTraced()
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
 			res.Content += "\n\n" + msg
 			return res
@@ -331,7 +340,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 				debug.Log("agent", "[invariants] BLOCK %s on %s target=%q", v.Inv.ID, tc.Name, v.Target)
 				return tool.Result{Content: msg, IsError: true}
 			}
-			res := a.executeToolInner(ctx, tc)
+			res := runTraced()
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
 			// #3366: failed calls are never sidecar-recorded - a post-crash
 			// restore would otherwise replay them as if they had happened,
@@ -344,7 +353,7 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			return res
 		}
 	}
-	res := a.executeToolInner(ctx, tc)
+	res := runTraced()
 	a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
 	// #3366: see the invariant branch above - errors never hit the sidecar.
 	if !res.IsError {

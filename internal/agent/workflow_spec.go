@@ -52,6 +52,11 @@ type WorkflowViolation struct {
 	Missing  string // unmet prerequisite step ID
 	WantGlob string // artifact that would have proven it
 	Command  string // the guarded command that triggered the check
+	// sa-85 structural attribution: recent attempts (outcome + artifact
+	// grounding) of the MISSING step's guarded commands, so the rejection can
+	// say where execution broke (never ran / failed / no artifact).
+	Attempts    []StepAttempt
+	LastAttempt *StepAttempt
 }
 
 // workflowSpecFileDoc is the user-facing contract (mirrors invariantFile).
@@ -69,6 +74,11 @@ type workflowEngine struct {
 	loadDir   string    // dir whose .ggcode/workflow-spec.json to read
 	startedAt time.Time // #3414: freshness anchor for on-disk artifact probing
 	completed sync.Map  // step ID -> struct{} (grounded by artifact this run)
+	// sa-85 failure ledger: outcomes of executed guarded commands, kept on a
+	// dedicated lock (never taken while holding traceMu) so attribution reads
+	// stay safe inside checkPreconditions' e.mu critical section.
+	traceMu sync.Mutex
+	trace   []StepAttempt
 }
 
 const workflowSpecFileName = "workflow-spec.json"
@@ -332,6 +342,11 @@ func (e *workflowEngine) checkPreconditions(toolName string, args json.RawMessag
 				want = rs.ArtifactGlob
 			}
 			v := &WorkflowViolation{Step: st, Missing: req, WantGlob: want, Command: command}
+			if att := e.recentAttempts(req, wfTraceMaxPerViolation); len(att) > 0 {
+				v.Attempts = att
+				last := att[len(att)-1]
+				v.LastAttempt = &last
+			}
 			if st.Mode == "block" {
 				return v
 			}
