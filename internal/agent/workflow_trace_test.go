@@ -31,11 +31,22 @@ func testArgs() json.RawMessage {
 	return json.RawMessage(`{"command":"go test ./..."}`)
 }
 
+// wfTestAnchor returns the freshness anchor for tests. Linux inode mtimes
+// come from the COARSE kernel clock (jiffy granularity) while time.Now()
+// uses the fine vDSO clock: a file written immediately after startedAt can
+// carry an mtime from a coarse tick that STARTED BEFORE startedAt, failing
+// globFreshOnDisk's !ModTime().Before(anchor) check. Fast local machines
+// cross a tick boundary first; 2-core CI runners schedule the write inside
+// the stale tick deterministically (2/2 CI, 0/7 local). Anchoring one
+// second in the past keeps the freshness semantics while tolerating the
+// coarse-clock lag (#3487 flake, cross-domain hotfix).
+func wfTestAnchor() time.Time { return time.Now().Add(-time.Second) }
+
 // Failed prerequisite command -> violation carries the failing attempt and
 // the attribution names WHERE it broke plus the local repair.
 func TestWFTrace_FailedAttemptAttributed(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	e.recordAttempt("run_command", testArgs(), tool.Result{Content: "exit status 1: build failed in ./internal/agent", IsError: true})
@@ -63,7 +74,7 @@ func TestWFTrace_FailedAttemptAttributed(t *testing.T) {
 // outcome: ran fine, verifiable transition still missing.
 func TestWFTrace_SuccessNoArtifactAttribution(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	e.recordAttempt("run_command", testArgs(), tool.Result{Content: "ok  all tests passed"})
@@ -85,7 +96,7 @@ func TestWFTrace_SuccessNoArtifactAttribution(t *testing.T) {
 // of leaving the agent to guess.
 func TestWFTrace_NeverAttempted(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	v := e.checkPreconditions("run_command", pushArgs())
@@ -105,7 +116,7 @@ func TestWFTrace_NeverAttempted(t *testing.T) {
 // the gate lifts.
 func TestWFTrace_GroundedAttemptLiftsGate(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	if err := os.WriteFile(filepath.Join(filepath.Dir(e.loadDir), "coverage.out"), []byte("mode: set"), 0o644); err != nil {
@@ -127,7 +138,7 @@ func TestWFTrace_GroundedAttemptLiftsGate(t *testing.T) {
 // Unguarded and non-run_command calls leave no trace entries.
 func TestWFTrace_NoTraceForUnguarded(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	e.recordAttempt("run_command", json.RawMessage(`{"command":"ls -la"}`), tool.Result{Content: "x"})
@@ -141,7 +152,7 @@ func TestWFTrace_NoTraceForUnguarded(t *testing.T) {
 // The ledger is a sliding window: old attempts drop off.
 func TestWFTrace_WindowCap(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	for i := 0; i < wfTraceWindow+10; i++ {
@@ -158,7 +169,7 @@ func TestWFTrace_WindowCap(t *testing.T) {
 // Violation attaches at most wfTraceMaxPerViolation attempts.
 func TestWFTrace_ViolationAttemptCap(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	for i := 0; i < wfTraceMaxPerViolation+2; i++ {
@@ -173,7 +184,7 @@ func TestWFTrace_ViolationAttemptCap(t *testing.T) {
 // Concurrent recording and attribution reads stay race-free (run -race).
 func TestWFTrace_ConcurrentSafe(t *testing.T) {
 	e := newWFEngineWithSpec(t, specSa85)
-	e.startedAt = time.Now()
+	e.startedAt = wfTestAnchor()
 	e.loadWorkflowSpec()
 
 	done := make(chan struct{})
