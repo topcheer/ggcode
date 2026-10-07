@@ -805,14 +805,27 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			continue
 		}
 		name, _ := srv["name"].(string)
-		if name != srvName {
+		// #3524: resolve the SAME key detectPlaintextAPIKeysFromRaw used:
+		// a named server by its name, an anonymous one by its mcp_%d
+		// fallback. The old `name != srvName` never matched anonymous
+		// servers (their stored name is "", never "mcp_0"), so their
+		// plaintext keys silently failed to migrate.
+		resolved := name
+		if resolved == "" {
+			resolved = fmt.Sprintf("mcp_%d", i)
+		}
+		if resolved != srvName {
 			continue
 		}
 		if isHeader {
 			headers, _ := srv["headers"].(map[string]interface{})
 			value, ok := stringValue(headers[keyName])
 			if !ok || !isPlaintextAPIKeyValue(value) {
-				return
+				// #3524: per-server skip (not a loop-wide return) so a
+				// DUPLICATE-named server later in the list can still be
+				// migrated; also keep scanning when this server was already
+				// migrated by an earlier identical finding.
+				continue
 			}
 			util.RegisterSecretEnv(f.EnvVar) // #2284-A
 			os.Setenv(f.EnvVar, value)
@@ -823,7 +836,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			env, _ := srv["env"].(map[string]interface{})
 			value, ok := stringValue(env[keyName])
 			if !ok || !isPlaintextAPIKeyValue(value) {
-				return
+				continue // #3524: see headers branch
 			}
 			util.RegisterSecretEnv(f.EnvVar) // #2284-A
 			os.Setenv(f.EnvVar, value)
@@ -832,6 +845,7 @@ func migrateMCPFinding(raw map[string]interface{}, f APIKeyFinding, envEntries m
 			srv["env"] = env
 		}
 		mcpServers[i] = srv
-		break
+		// #3524: no break - duplicate-named servers sharing the finding
+		// key must EACH be migrated, not just the first match.
 	}
 }
