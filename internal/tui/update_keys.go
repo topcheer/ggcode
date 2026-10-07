@@ -90,6 +90,17 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg, spinnerCmd tea.Cmd) (tea.Mode
 		return m, nil
 	}
 
+	// sa-86: alt+e toggles second-level disclosure on the most recent
+	// tool item (expand truncated bodies - "… N more lines"). alt+e is
+	// chosen over ctrl+e because the textarea reserves ctrl+e for
+	// end-of-line cursor movement.
+	if msg.String() == "alt+e" {
+		if m.chatList.ToggleLastExpandable() {
+			m.chatListFollowOutput()
+		}
+		return m, nil
+	}
+
 	// Ctrl+O cycles output style (concise/detailed/socratic/default)
 	if msg.String() == "ctrl+o" {
 		style, ok := m.cycleOutputStyle()
