@@ -1053,7 +1053,7 @@ func zhCatalog(key string) string {
 	case "slash.context":
 		return "显示上下文窗口使用情况（token、消息、容量）"
 	case "slash.runreport":
-		return "评估本次会话轨迹，离线输出效率评分卡"
+		return "评估本次会话轨迹，离线输出效率评分卡；含 swarm/subagent 活动的会话额外显示跨 agent 协调质量段"
 	case "slash.traj":
 		return "查看（/traj）或清空（/traj clear）注入系统提示的历史经验学习库"
 	case "panel.qq.directory":

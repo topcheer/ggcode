@@ -773,7 +773,8 @@ func (m *Model) handleRunReportCommand() tea.Cmd {
 			usage = append(usage, runeval.UsageSample{Source: e.Source, Usage: e.Usage})
 		}
 	}
-	m.chatWriteSystem(nextSystemID(), runeval.Render(runeval.Evaluate(msgs, usage)))
+	m.chatWriteSystem(nextSystemID(), runeval.Render(runeval.EvaluateWithCoordination(
+		msgs, usage, runeval.CoordEventsFromMessages(msgs))))
 	return nil
 }
 

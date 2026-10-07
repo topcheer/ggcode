@@ -1038,7 +1038,7 @@ func enCatalog(key string) string {
 	case "slash.context":
 		return "Show context window usage breakdown (tokens, messages, capacity)"
 	case "slash.runreport":
-		return "Evaluate this session's trajectory and print an offline efficiency scorecard"
+		return "Evaluate this session's trajectory and print an offline efficiency scorecard; sessions with swarm/subagent activity also get a cross-agent coordination section"
 	case "slash.traj":
 		return "List (/traj) or purge (/traj clear) the past-run learnings injected into your system prompt"
 	case "slash.im":
