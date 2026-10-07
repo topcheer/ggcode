@@ -346,7 +346,6 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 		}
 
 		// Poll in-flight workers to terminal state (best_of_n pattern).
-		allDone := true
 		for _, a := range act {
 			if doneStep[a.i] {
 				continue
@@ -359,13 +358,20 @@ func RunWorkflow(ctx context.Context, spawner CandidateSpawner, snaps SnapshotSo
 			switch s.Status {
 			case subagent.StatusCompleted, subagent.StatusFailed, subagent.StatusCancelled:
 				finalize(a.i, string(s.Status), s.Result)
-			default:
-				allDone = false
 			}
 		}
-		if allDone {
-			act = act[:0] // compact finished entries
+		// #3544: compact finalized entries EVERY round. The old compaction
+		// ran only when every in-flight step had finished (allDone), so a
+		// finished step kept occupying a workflowLayerCap slot until its
+		// whole batch drained - ready downstream steps starved below the
+		// cap even though the window had free capacity.
+		kept := act[:0]
+		for _, a := range act {
+			if !doneStep[a.i] {
+				kept = append(kept, a)
+			}
 		}
+		act = kept
 		if len(act) == 0 && len(ready) == 0 {
 			break
 		}
