@@ -99,6 +99,11 @@ type Report struct {
 	// feedback on work already done.
 	CorrectionSignals int
 
+	// Coordination is the cross-agent section (multi-agent coordination
+	// quality, per sa-76's NEW_GAP adjudication of MDPI Future Internet
+	// 18(6):326). Nil for single-agent sessions - the section is hidden.
+	Coordination *CoordinationQualityReport
+
 	// EfficiencyScore is 100 minus transparent penalties (see Evaluate).
 	// 0-100; 100 = clean trajectory.
 	EfficiencyScore int
@@ -485,6 +490,11 @@ func Render(r Report) string {
 			len(r.DuplicateGroups), r.DuplicateGroups[0].Tool, r.DuplicateGroups[0].Count)
 	} else {
 		b.WriteString("  Duplicate groups: none\n")
+	}
+	// Cross-agent coordination section: only rendered for sessions with
+	// swarm/subagent activity (Coordination is nil otherwise).
+	if r.Coordination != nil {
+		renderCoordination(&b, r.Coordination)
 	}
 	if len(r.Findings) > 0 {
 		b.WriteString("Findings:\n")

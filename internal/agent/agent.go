@@ -4523,6 +4523,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					a.appendGuidance(&result, silentMsg)
 				}
 			}
+			// r34 plan adherence trend: sample plan coverage after each
+			// tool call (throttled internally); pure observability, no
+			// prompt injection - the fire-once drift gate stays separate.
+			a.planDrift.adherence.noteToolCall(a.planDrift.items, runStats)
 			if tc.Name == "run_command" || tc.Name == "start_command" {
 				cmd := extractCommandFromToolCall(tc.Arguments)
 				if cmd != "" {

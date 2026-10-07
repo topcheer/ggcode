@@ -51,7 +51,7 @@ func (t *SaveMemoryTool) Parameters() json.RawMessage {
 			"properties": {
 				"key": {
 					"type": "string",
-					"description": "Short identifier for this memory (e.g. 'build-process', 'api-gotcha')"
+					"description": "Short identifier for this memory (e.g. 'build-process', 'api-gotcha'). For procedural knowledge (workflows, conventions, how-to steps), use an '-impl' suffix or 'build-'/'release-' prefix in the key - such keys are classified persistent and inlined into future sessions' prompts; other keys may be index-only."
 				},
 				"content": {
 					"type": "string",
