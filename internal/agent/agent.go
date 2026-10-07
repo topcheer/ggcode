@@ -347,39 +347,44 @@ type Agent struct {
 	// wfEngine (r26, Lean4Agent-inspired): stateful per-workflow step
 	// ordering + artifact grounding from .ggcode/workflow-spec.json;
 	// nil-safe lazy init, inert with no file.
-	wfEngine                 *workflowEngine
-	outcomeMisattrib         *outcomeMisattribState                // outcome misattribution detection (success claim despite failure result)
-	trajectoryHealth         *trajectoryHealthState                // metacognitive trajectory health synthesis (multi-signal composite)
-	tokenWasteBudget         *tokenWasteBudgetState                // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
-	reversibility            *reversibilityState                   // pre-action reversibility assessment (irreversible action safety check)
-	mindlessAction           *mindlessActionState                  // mindless action detection (rapid-fire tool calls without reasoning)
-	reproducerLifecycle      *reproducerLifecycleState             // reproducer lifecycle tracker (reproduce->edit->rerun gap)
-	successDeclare           *successDeclareState                  // premature success declaration detection (calibration gap: done claim + continued work)
-	criteriaDrift            *criteriaDriftState                   // success criteria drift detection (proxy gaming via evaluator weakening)
-	goalDriftCtx             *goalDriftCtxState                    // context-length goal drift detection (arXiv:2505.02709)
-	reasonAction             *reasonActionState                    // reasoning-action alignment verification (cognitive category mismatch)
-	inputUnderspec           *inputUnderspecState                  // input underspecification detection (vague/underspecified user request)
-	futileCycle              *futileCycleState                     // futile cycle detection (circular exploration without writes)
-	compoundedUncert         *compoundedUncertaintyState           // compounded trajectory uncertainty (multiplicative epistemic risk accumulation)
-	spiralState              *spiralHallucinationState             // cross-turn epistemic error propagation (Spiral of Hallucination)
-	trajIntel                *trajIntelState                       // post-run trajectory intelligence extraction
-	strategyStagnation       *strategyStagnationState              // strategy stagnation detection (same-tool+target retries after failure)
-	iterPressure             *iterPressureState                    // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
-	termGuard                *prematureTerminationGuard            // r26: premature-termination risk (struggle density x context occupancy, pre-surrender)
-	askQualityGate           *askQualityGateState                  // r27: ask_user quality gate (self-answerable/duplicate block, safe-default advisory)
-	diminishingEdit          *diminishingEditState                 // polish-spiral detection (diminishing edit substance)
-	overcorrection           *overcorrectionState                  // overcorrection cascade detection (disproportionate fix size)
-	giveupRevert             *giveupRevertState                    // #1823 case 2: give-up language + tree rollback pairing
-	prematureRefactor        *prematureRefactorState               // premature refactoring detection (unverified code restructuring awareness)
-	subgoalTrack             *subgoalState                         // subgoal completion integrity (missing-step planning failure awareness)
-	infoScent                *infoScentState                       // information scent decay detection (diminishing novelty across explorations)
-	foresightCalib           *foresightCalibrateState              // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
-	causalAttribution        *causalAttributionState               // causal failure attribution (CausalFlow-inspired root-cause step identification)
-	attrExperiment           *attributionExperimentState           // r405: Dov-style intervention validation of causal attributions
-	attemptBrief             *attemptBriefState                    // compact attempt summary for knowledge reuse across failed approaches
-	crossDetectorConsensus   *consensusState                       // cross-detector consensus (systemic failure from simultaneous detector firings)
-	taintInfluence           *taintInfluenceState                  // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
-	exfilChain               *exfilChainState                      // exfiltration chain detection (Log-to-Leak: sensitive source read -> outbound tool with payload linkage)
+	wfEngine               *workflowEngine
+	outcomeMisattrib       *outcomeMisattribState      // outcome misattribution detection (success claim despite failure result)
+	trajectoryHealth       *trajectoryHealthState      // metacognitive trajectory health synthesis (multi-signal composite)
+	tokenWasteBudget       *tokenWasteBudgetState      // aggregate token waste ratio tracker (AgentDiet arXiv:2509.23586)
+	reversibility          *reversibilityState         // pre-action reversibility assessment (irreversible action safety check)
+	mindlessAction         *mindlessActionState        // mindless action detection (rapid-fire tool calls without reasoning)
+	reproducerLifecycle    *reproducerLifecycleState   // reproducer lifecycle tracker (reproduce->edit->rerun gap)
+	successDeclare         *successDeclareState        // premature success declaration detection (calibration gap: done claim + continued work)
+	criteriaDrift          *criteriaDriftState         // success criteria drift detection (proxy gaming via evaluator weakening)
+	goalDriftCtx           *goalDriftCtxState          // context-length goal drift detection (arXiv:2505.02709)
+	reasonAction           *reasonActionState          // reasoning-action alignment verification (cognitive category mismatch)
+	inputUnderspec         *inputUnderspecState        // input underspecification detection (vague/underspecified user request)
+	futileCycle            *futileCycleState           // futile cycle detection (circular exploration without writes)
+	compoundedUncert       *compoundedUncertaintyState // compounded trajectory uncertainty (multiplicative epistemic risk accumulation)
+	spiralState            *spiralHallucinationState   // cross-turn epistemic error propagation (Spiral of Hallucination)
+	trajIntel              *trajIntelState             // post-run trajectory intelligence extraction
+	strategyStagnation     *strategyStagnationState    // strategy stagnation detection (same-tool+target retries after failure)
+	iterPressure           *iterPressureState          // iteration pressure degradation detection (verify/edit ratio drop near budget limit)
+	termGuard              *prematureTerminationGuard  // r26: premature-termination risk (struggle density x context occupancy, pre-surrender)
+	askQualityGate         *askQualityGateState        // r27: ask_user quality gate (self-answerable/duplicate block, safe-default advisory)
+	diminishingEdit        *diminishingEditState       // polish-spiral detection (diminishing edit substance)
+	overcorrection         *overcorrectionState        // overcorrection cascade detection (disproportionate fix size)
+	giveupRevert           *giveupRevertState          // #1823 case 2: give-up language + tree rollback pairing
+	prematureRefactor      *prematureRefactorState     // premature refactoring detection (unverified code restructuring awareness)
+	subgoalTrack           *subgoalState               // subgoal completion integrity (missing-step planning failure awareness)
+	infoScent              *infoScentState             // information scent decay detection (diminishing novelty across explorations)
+	foresightCalib         *foresightCalibrateState    // foresight calibration (prediction-observation mismatch tracking, WorldEvolver arXiv:2606.30639)
+	causalAttribution      *causalAttributionState     // causal failure attribution (CausalFlow-inspired root-cause step identification)
+	attrExperiment         *attributionExperimentState // r405: Dov-style intervention validation of causal attributions
+	attemptBrief           *attemptBriefState          // compact attempt summary for knowledge reuse across failed approaches
+	crossDetectorConsensus *consensusState             // cross-detector consensus (systemic failure from simultaneous detector firings)
+	taintInfluence         *taintInfluenceState        // tainted data influence detection (IFC: tracks untrusted content flowing into privileged tool calls)
+	exfilChain             *exfilChainState            // exfiltration chain detection (Log-to-Leak: sensitive source read -> outbound tool with payload linkage)
+
+	// r343/sa-130 deep-research planner+synthesizer: fire-once sub-query
+	// plan for research-mode runs, and the plan saved for the gate's gap list.
+	researchPlan             researchPlanState
+	researchPlanSubs         []ResearchSubQuery
 	falsePremise             *falsePremiseState                    // false premise detection: ungrounded success claims contradicting tool errors (world-model drift)
 	perfBaseline             *perfBaselineState                    // cross-session performance regression detection
 	lastRunStats             *RunStats                             // stats from the most recent run (for post-run summary display)
@@ -1871,6 +1876,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	// lines earlier let resetPlanner wipe isComplex before maybeSuggestPlan
 	// could ever consume it, dead-ending the planner on every run.
 	a.plannerAnalyze(userText)
+	// r343/sa-130 research planner: fire-once perspective-scoped sub-query
+	// plan for research-mode runs (deep-research planner pattern).
+	a.maybeInjectResearchPlan(userText)
 	a.resetTodoStaleness()
 	a.resetTodoDrop()
 	a.resetScopeDrift()
@@ -3329,6 +3337,13 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			a.mu.Unlock()
 			if researchMsg != "" {
+				// r343/sa-130 synthesizer: pre-fold collected findings into a
+				// draft (per-sub-query grouping, numbered sources, conflict
+				// candidates, gaps) so the model REFINES the draft instead of
+				// re-reading scattered search results from context.
+				if draft := SynthesizeResearchReport("", a.overseer.findingsSnapshot(), a.researchPlanSubs); draft != "" {
+					researchMsg = draft + "\n\n" + researchMsg
+				}
 				debug.Log("agent", "Iteration %d: research-report gate fired, demanding structured synthesis before stop", i+1)
 				a.contextManager.Add(provider.Message{
 					Role: "user",
@@ -3900,6 +3915,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// the same trust level as taintInfluence's injected-content records.
 			a.exfilChain.recordSensitiveSource(tc.Name, string(tc.Arguments), result.Content)
 			result.Content = redactSecrets(tc.Name, result.Content)
+			// r343/sa-130: collect research findings POST-redaction (#1195:
+			// snippets never hold unredacted secrets) for the synthesis
+			// draft. Advisory synthesis input; never persisted to history.
+			a.overseer.recordFinding(tc.Name, string(tc.Arguments), result.Content)
 			// Record the tool call for speculative pattern learning.
 			a.speculator.recordObservation(tc.Name)
 			// Track todo_write usage for the agent-side planner: once the
