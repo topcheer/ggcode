@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/topcheer/ggcode/internal/memory"
 )
@@ -79,5 +80,56 @@ func TestListMemoryTool_NilScopeStoreSkipped(t *testing.T) {
 	out, _ := tol.Execute(context.Background(), json.RawMessage(`{}`))
 	if !strings.Contains(out.Content, "build-process") {
 		t.Fatalf("nil global store must not break listing:\n%s", out.Content)
+	}
+}
+
+// r488 (Mem++ arXiv:2610.02002) tool-level coverage: key view shows archive
+// depth, as_of reads the historical version, as_of without key is rejected.
+func TestListMemoryTool_KeyViewShowsArchiveDepth(t *testing.T) {
+	_, project := mkMemStores(t)
+	if err := project.SaveMemory("build-process", "# Build v2\nmake verify-ci twice\n"); err != nil {
+		t.Fatal(err) // second write archives v1 per r488
+	}
+	tol := NewListMemoryTool(nil, project)
+	out, _ := tol.Execute(context.Background(), json.RawMessage(`{"key":"build-process"}`))
+	if out.IsError {
+		t.Fatalf("key view errored: %s", out.Content)
+	}
+	for _, want := range []string{"build-process", "1 archived version(s)", "make verify-ci twice"} {
+		if !strings.Contains(out.Content, want) {
+			t.Fatalf("key view missing %q:\n%s", want, out.Content)
+		}
+	}
+}
+
+func TestListMemoryTool_AsOfRequiresKey(t *testing.T) {
+	_, project := mkMemStores(t)
+	tol := NewListMemoryTool(nil, project)
+	out, _ := tol.Execute(context.Background(), json.RawMessage(`{"as_of":"2026-10-07T09:00:00Z"}`))
+	if !out.IsError {
+		t.Fatalf("as_of without key must be rejected, got:\n%s", out.Content)
+	}
+}
+
+func TestListMemoryTool_AsOfReadsHistoricalVersion(t *testing.T) {
+	_, project := mkMemStores(t) // build-process v1 written here
+	// mid is strictly between the two writes: after v1, before v2.
+	mid := time.Now()
+	time.Sleep(5 * time.Millisecond)
+	if err := project.SaveMemory("build-process", "v2 content"); err != nil {
+		t.Fatal(err)
+	}
+	// mid was captured AFTER v1 but BEFORE v2's save.
+	tol := NewListMemoryTool(nil, project)
+	payload := `{"key":"build-process","as_of":"` + mid.Format(time.RFC3339Nano) + `"}`
+	out, _ := tol.Execute(context.Background(), json.RawMessage(payload))
+	if out.IsError {
+		t.Fatalf("as_of read errored: %s", out.Content)
+	}
+	if !strings.Contains(out.Content, "Use make verify-ci before pushing") {
+		t.Fatalf("as_of must return v1 content, got:\n%s", out.Content)
+	}
+	if strings.Contains(out.Content, "v2 content") {
+		t.Fatalf("as_of must not leak live v2 content:\n%s", out.Content)
 	}
 }
