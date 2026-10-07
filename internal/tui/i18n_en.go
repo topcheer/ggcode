@@ -693,6 +693,8 @@ func enCatalog(key string) string {
 		return "No past-run learnings stored yet."
 	case "why.empty":
 		return "No tool-call decisions recorded yet — run a task first, then /why [n] explains what the agent did and why."
+	case "evidence.empty":
+		return "No citable claims yet — after the agent answers with code references (file.go:42, `symbol`), /evidence links each to the tool output that backs it."
 	case "traj.header":
 		return "Past-run learnings (%d stored, %d injecting into your prompt; > = injected):"
 	case "traj.usage":
@@ -1239,6 +1241,7 @@ Session & History:
   /export <id>       Export session to markdown file
 	/export-trace [--otel] [id] Export execution trace (JSON, or OTLP/GenAI)
 	/why [n]           Explain recent tool decisions (paired reasoning + results)
+	/evidence          Cite the last answer's claims against recorded tool evidence
   /clear             Clear conversation history
   /compact           Compress conversation history (manual)
   /undo              Undo the last file edit (checkpoint rollback)

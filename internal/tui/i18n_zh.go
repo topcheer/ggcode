@@ -704,6 +704,8 @@ func zhCatalog(key string) string {
 		return "尚无历史运行学习条目。"
 	case "why.empty":
 		return "尚无工具调用决策记录——先运行任务，之后 /why [n] 可解释 agent 做了什么以及为什么。"
+	case "evidence.empty":
+		return "尚无可引用的结论——当 agent 的答复包含代码引用（file.go:42、`symbol`）后，/evidence 会把每条结论链接到支撑它的工具输出。"
 	case "traj.header":
 		return "历史运行学习库（共存 %d 条，其中 %d 条会注入提示词；> = 会注入）："
 	case "traj.usage":

@@ -384,7 +384,7 @@ var SlashCommands = []string{
 	"/search",
 	// #889: these have descriptions/placeholders (and real handlers) but
 	// were missing from the list, so Tab completion never offered them.
-	"/redo", "/notify", "/export-trace", "/runreport", "/traj", "/why",
+	"/redo", "/notify", "/export-trace", "/runreport", "/traj", "/why", "/evidence",
 	// #2835: same omission family - /pin /style /goal have live handlers
 	// (commands.go dispatch) but never appeared in Tab completion.
 	"/pin", "/style", "/goal",
@@ -488,6 +488,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/export":        "Export session to markdown file",
 	"/export-trace":  "Export session execution trace as JSON (--otel for OTLP/GenAI format)",
 	"/why":           "Explain recent tool-call decisions: paired reasoning, results, error anchors",
+	"/evidence":      "Cite the last answer's claims against recorded tool evidence (claim to source)",
 	"/bug":           "Report a bug with diagnostics",
 	"/config":        "View/modify configuration",
 	"/reflect":       "Show recent run reflections",
