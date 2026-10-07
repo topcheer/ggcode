@@ -26,6 +26,7 @@ package agent
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 )
@@ -109,12 +110,30 @@ func extractHTTPHosts(content string) map[string]bool {
 }
 
 // isLocalhost checks if a host represents a local development address.
+// Fix #3536: the old exact-string whitelist missed standard dev addresses:
+//   - `*.localhost` subdomains (RFC 6761 §6.3 reserves the whole domain for
+//     loopback; Vite's recommended `host: true` setup uses app.localhost)
+//   - the rest of 127.0.0.0/8 (RFC 1122 §3.2.1.3 - 127.0.0.2 is a common
+//     multi-service local test address on macOS/Linux)
 func isLocalhost(host string) bool {
 	lower := strings.ToLower(host)
+	// Exact whitelist kept as fallback (covers "0.0.0.0" and malformed but
+	// intended-local spellings that net.ParseIP rejects).
 	for _, lh := range localhostHosts {
 		if lower == strings.ToLower(lh) {
 			return true
 		}
+	}
+	// *.localhost subdomains: any depth under the reserved loopback domain.
+	// Suffix match is safe: "evil.localhost.example.com" does not end in
+	// ".localhost".
+	if strings.HasSuffix(lower, ".localhost") {
+		return true
+	}
+	// IP literals: covers all of 127.0.0.0/8 and ::1 (brackets are already
+	// stripped by extractHTTPHosts).
+	if ip := net.ParseIP(lower); ip != nil && ip.IsLoopback() {
+		return true
 	}
 	return false
 }
