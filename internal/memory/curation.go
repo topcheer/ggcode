@@ -269,9 +269,29 @@ func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) 
 		return active, nil
 	}
 
-	// Sort defaults oldest-first; the oldest `overflow` entries are evicted.
+	// Eviction order is interference-aware (Microsoft Human-Inspired Memory
+	// 2026, interference-based forgetting; arXiv:2603.07670 9.4 learning to
+	// forget): a never-injected entry is pure interference - it costs prompt
+	// budget but has never earned it - so Uses==0 entries are evicted FIRST
+	// (oldest-first within that group); entries with Uses>0 are evicted only
+	// after all never-used ones, still oldest-first. The old CreatedAt-only
+	// order could evict a frequently-injected old default entry while keeping
+	// a never-used one that had simply been saved later.
+	usageTier := func(m MemoryMeta) int {
+		if m.Uses == 0 {
+			return 0 // evict first: never contributed
+		}
+		return 1 // evict later: has retrieval history
+	}
 	sort.Slice(defaults, func(i, j int) bool {
-		return defaults[i].CreatedAt.Before(defaults[j].CreatedAt)
+		ti, tj := usageTier(defaults[i]), usageTier(defaults[j])
+		if ti != tj {
+			return ti < tj
+		}
+		if !defaults[i].CreatedAt.Equal(defaults[j].CreatedAt) {
+			return defaults[i].CreatedAt.Before(defaults[j].CreatedAt)
+		}
+		return defaults[i].Key < defaults[j].Key // deterministic tiebreak
 	})
 	evict := make(map[string]bool, overflow)
 	for i := 0; i < overflow; i++ {
