@@ -44,7 +44,8 @@ import (
 //
 // This detector is deterministic and zero-LLM-cost. It identifies
 // dependency-ordered pairs within a single assistant turn's parallel tool call
-// batch and within the sliding window of recent actions.
+// batch (cross-batch sequencing is the recommended correct pattern and is
+// intentionally NOT flagged).
 
 // ---------------------------------------------------------------------------
 // Dependency pair definitions
@@ -152,15 +153,37 @@ func depModInitThenGet(producerArgs, consumerArgs map[string]interface{}) bool {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// buildCommandPrefixes are command forms that consume code written by the
+// producer call. Matched as SEGMENT PREFIXES (the command or any &&/||/;/|/newline
+// separated segment starts with the prefix, optionally followed by a space) -
+// never as bare substrings. #3499: bare "build"/"tsc" Contains matched
+// zero-relation commands like "cat logs/build.log" or "grep tsc", flagging
+// independent parallel calls as dependency violations.
+var buildCommandPrefixes = []string{
+	"go build", "go test", "go vet", "go run", "go install", "go generate",
+	"cargo build", "cargo test", "cargo check", "cargo run",
+	"npm test", "npm run build", "npm run test",
+	"yarn build", "yarn test", "pnpm build", "pnpm test",
+	"tsc", "make", "mvn", "gradle", "pytest",
+	"python -m build", "pip install", "cmake --build", "bazel build",
+}
+
 func commandIsBuildLike(args map[string]interface{}) bool {
 	cmd := strings.ToLower(extractStringArg(args, "command"))
 	if cmd == "" {
 		return false
 	}
-	buildKeywords := []string{"build", "compile", "make ", "go test", "go build", "go vet", "go run", "cargo build", "cargo test", "npm test", "npm run build", "yarn build", "tsc", "pytest", "pip install", "mvn ", "gradle "}
-	for _, kw := range buildKeywords {
-		if strings.Contains(cmd, kw) {
-			return true
+	for _, seg := range strings.FieldsFunc(cmd, func(r rune) bool {
+		return r == '\n' || r == ';' || r == '|' || r == '&'
+	}) {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		for _, p := range buildCommandPrefixes {
+			if seg == p || strings.HasPrefix(seg, p+" ") {
+				return true
+			}
 		}
 	}
 	return false
@@ -220,30 +243,28 @@ func extractFileOpsMkdirTarget(args map[string]interface{}) string {
 
 type cfDepState struct {
 	mu          sync.Mutex
-	recent      []cfDepAction // sliding window of recent actions
-	warnCount   int           // warnings emitted this run
+	warnCount   int // warnings emitted this run
 	maxWarnings int
-	windowSize  int
+}
+
+func newCFDepState() *cfDepState {
+	return &cfDepState{
+		maxWarnings: 2, // max 2 warnings per run to avoid noise
+	}
 }
 
 type cfDepAction struct {
 	tool string
 	args map[string]interface{}
 	// batchID groups tool calls emitted in the same assistant turn (parallel batch).
+	// Retained for call-site signature stability; within-batch checks infer
+	// grouping from the slice itself.
 	batchID int
-}
-
-func newCFDepState() *cfDepState {
-	return &cfDepState{
-		windowSize:  20,
-		maxWarnings: 2, // max 2 warnings per run to avoid noise
-	}
 }
 
 func (s *cfDepState) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.recent = nil
 	s.warnCount = 0
 }
 
@@ -255,8 +276,6 @@ func (s *cfDepState) recordBatch(toolNames []string, rawArgsList []json.RawMessa
 	defer s.mu.Unlock()
 
 	if s.warnCount >= s.maxWarnings {
-		// Still record actions for future cross-batch checks, but skip warning.
-		s.appendBatchLocked(toolNames, rawArgsList, batchID)
 		return ""
 	}
 
@@ -270,32 +289,12 @@ func (s *cfDepState) recordBatch(toolNames []string, rawArgsList []json.RawMessa
 		batch = append(batch, cfDepAction{tool: name, args: args, batchID: batchID})
 	}
 
-	warning := s.checkBatchLocked(batch)
-
-	// Append to history regardless.
-	s.recent = append(s.recent, batch...)
-	if len(s.recent) > s.windowSize {
-		s.recent = s.recent[len(s.recent)-s.windowSize:]
-	}
-
-	return warning
+	return s.checkBatchLocked(batch)
 }
 
-func (s *cfDepState) appendBatchLocked(toolNames []string, rawArgsList []json.RawMessage, batchID int) {
-	for i, name := range toolNames {
-		var args map[string]interface{}
-		if i < len(rawArgsList) {
-			_ = json.Unmarshal(rawArgsList[i], &args)
-		}
-		s.recent = append(s.recent, cfDepAction{tool: name, args: args, batchID: batchID})
-	}
-	if len(s.recent) > s.windowSize {
-		s.recent = s.recent[len(s.recent)-s.windowSize:]
-	}
-}
-
-// checkBatchLocked looks for dependency violations within a single parallel batch
-// and against recent prior batches (unverified dependency assumption).
+// checkBatchLocked looks for dependency violations within a single parallel
+// batch. Cross-batch sequencing (emit A in turn N, B in turn N+1) is the
+// recommended correct pattern and is not checked.
 func (s *cfDepState) checkBatchLocked(batch []cfDepAction) string {
 	var violations []string
 
