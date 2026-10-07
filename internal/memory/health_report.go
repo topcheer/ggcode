@@ -71,7 +71,7 @@ func (am *AutoMemory) HealthReport(workingDir string) HealthReport {
 	// Budget usage (what LoadForPrompt would inject). Uses the
 	// non-tracking variant so a health check does not inflate the
 	// very usage counters it reports (sa-85).
-	inline, indexOnly, _ := am.loadForPrompt(false)
+	inline, indexOnly, _ := am.loadForPrompt(false, "")
 	report.InlineEntries = len(inline)
 	report.IndexEntries = len(indexOnly)
 	for _, e := range inline {

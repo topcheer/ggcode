@@ -118,7 +118,8 @@ func BuildInteractiveSystemPromptWithPromptRefs(
 	if strings.TrimSpace(remoteAgentsInfo) != "" {
 		prompt += "\n\n## Remote Agents\n" + strings.TrimSpace(remoteAgentsInfo)
 	}
-	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem)
+	// Main interactive prompt: no single task yet, gate stays off.
+	prompt = appendAutoMemory(prompt, globalAutoMem, projectAutoMem, "")
 
 	// Named subagent templates
 	namedAgentInfo := buildNamedAgentHint(workingDir)
@@ -173,7 +174,7 @@ type SubAgentPromptContext struct {
 //   - No ask_user tool (sub-agents cannot interact with the user)
 //   - Cannot spawn further sub-agents
 func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string) string {
-	prompt := buildSharedAgentPrompt(ctx)
+	prompt := buildSharedAgentPrompt(ctx, task)
 
 	// Append sub-agent specific constraints
 	roleLine := "You are running as a sub-agent."
@@ -208,7 +209,9 @@ func BuildSubAgentSystemPrompt(ctx SubAgentPromptContext, task, agentType string
 // BuildTeammateSystemPrompt builds a system prompt for a swarm teammate that
 // mirrors the main agent's prompt but with teammate-specific constraints.
 func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName string) string {
-	prompt := buildSharedAgentPrompt(ctx)
+	// Teammates work inbox/board tasks, not one fixed task string - keep
+	// the memory gate off so standing workspace rules stay inline.
+	prompt := buildSharedAgentPrompt(ctx, "")
 
 	// Append teammate-specific constraints
 	prompt += "\n\n## Teammate Constraints\n"
@@ -234,8 +237,10 @@ func BuildTeammateSystemPrompt(ctx SubAgentPromptContext, name, teamName string)
 // buildSharedAgentPrompt assembles the common portion of the system prompt
 // (DefaultSystemPrompt, tools, git status, memory, skills, remote agents)
 // shared between sub-agents and teammates. It does NOT include autopilot,
-// slash commands, or any role-specific constraints.
-func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
+// slash commands, or any role-specific constraints. task, when non-empty,
+// feeds the sa-113 memory relevance gate (unrelated persistent memories
+// stay index-only instead of being inlined).
+func buildSharedAgentPrompt(ctx SubAgentPromptContext, task string) string {
 	// 1. Gather sorted tool names from the registry
 	toolNames := sortedToolNames(ctx.Registry)
 
@@ -304,8 +309,10 @@ func buildSharedAgentPrompt(ctx SubAgentPromptContext) string {
 		}
 	}
 
-	// 5. Add auto memory (same as main agent)
-	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem)
+	// 5. Add auto memory (same as main agent; sub-agents pass their task so
+	// the sa-113 relevance gate can drop unrelated persistent memories to
+	// index-only - a focused sub-agent should not carry every standing rule).
+	prompt = appendAutoMemory(prompt, ctx.GlobalAutoMem, ctx.ProjectAutoMem, task)
 
 	return prompt
 }
@@ -340,7 +347,10 @@ type memSource struct {
 //
 // This implements the "hill climbing" loop: every session's learnings
 // compound into automatically available context for future sessions.
-func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory) string {
+//
+// task (sa-113): when non-empty, persistent entries lexically unrelated
+// to it degrade from inline to index-only.
+func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoMemory, task string) string {
 	// r438 memory repair loop (after TEPA arXiv:2604.07429-style pollution
 	// revocation, human-in-the-loop variant): surface unresolved sleep-time
 	// consolidation findings so the agent can supersede/rewrite the stale or
@@ -350,7 +360,7 @@ func appendAutoMemory(prompt string, globalAutoMem, projectAutoMem *memory.AutoM
 	if repair != "" {
 		prompt += "\n\n## Memory Repair\n" + repair
 	}
-	sources := collectMemSources(globalAutoMem, projectAutoMem)
+	sources := collectMemSources(globalAutoMem, projectAutoMem, task)
 	if len(sources) == 0 {
 		return prompt
 	}
@@ -390,13 +400,20 @@ func memoryRepairBlock(globalAutoMem, projectAutoMem *memory.AutoMemory) string 
 
 // collectMemSources loads curated entries from both global and project memory,
 // returning only non-empty sources.
-func collectMemSources(globalAutoMem, projectAutoMem *memory.AutoMemory) []memSource {
+func collectMemSources(globalAutoMem, projectAutoMem *memory.AutoMemory, task string) []memSource {
 	var sources []memSource
 	add := func(name string, am *memory.AutoMemory) {
 		if am == nil {
 			return
 		}
-		inline, indexOnly, err := am.LoadForPrompt()
+		var inline []memory.MemoryEntry
+		var indexOnly []string
+		var err error
+		if task != "" {
+			inline, indexOnly, err = am.LoadForPromptForTask(task)
+		} else {
+			inline, indexOnly, err = am.LoadForPrompt()
+		}
 		if err != nil || (len(inline) == 0 && len(indexOnly) == 0) {
 			return
 		}

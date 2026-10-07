@@ -410,10 +410,20 @@ type MemoryEntry struct {
 // Diagnostics-only callers (HealthReport) use loadForPrompt(false) so a
 // health check does not inflate the usage telemetry it reports.
 func (am *AutoMemory) LoadForPrompt() (inline []MemoryEntry, indexOnly []string, err error) {
-	return am.loadForPrompt(true)
+	return am.loadForPrompt(true, "")
 }
 
-func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnly []string, err error) {
+// LoadForPromptForTask is LoadForPrompt with a task-relevance gate
+// (sa-113, Self-RAG [IsRel] deterministic equivalent): when task is
+// non-empty, persistent entries lexically unrelated to the task degrade
+// from inline to index-only instead of occupying the system prompt.
+// Callers that have a concrete task (sub-agent prompts) should prefer
+// this; callers without one keep LoadForPrompt and the gate stays off.
+func (am *AutoMemory) LoadForPromptForTask(task string) (inline []MemoryEntry, indexOnly []string, err error) {
+	return am.loadForPrompt(true, task)
+}
+
+func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEntry, indexOnly []string, err error) {
 	metas, err := am.collectMetas()
 	if err != nil {
 		return nil, nil, err
@@ -450,6 +460,22 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 	})
 
 	totalInline := 0
+	// sa-113 task-relevance gate: pre-read persistent candidates once to
+	// build the IDF statistics, then score each inline decision. Only the
+	// persistent channel is gated - the index list always stays complete.
+	var relGate *relevanceGate
+	if task != "" {
+		var cands []relCandidate
+		for _, m := range active {
+			if m.Category != CategoryPersistent {
+				continue
+			}
+			if b, err := os.ReadFile(filepath.Join(am.dir, m.Key+".md")); err == nil {
+				cands = append(cands, relCandidate{key: m.Key, content: string(b)})
+			}
+		}
+		relGate = newRelevanceGate(task, cands)
+	}
 	for _, m := range active {
 		// r409: quarantined entries (injection-pattern match at write time)
 		// are never auto-inlined into the system prompt - the persistent
@@ -486,7 +512,7 @@ func (am *AutoMemory) loadForPrompt(record bool) (inline []MemoryEntry, indexOnl
 		}
 
 		// Inline persistent entries that are small enough and within budget.
-		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= maxTotalInlineBytes {
+		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= maxTotalInlineBytes && relGate.relevant(m.Key, content) {
 			inline = append(inline, MemoryEntry{
 				Key:     m.Key,
 				Content: content,

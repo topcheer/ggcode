@@ -68,7 +68,7 @@ func TestSubagentNeverEnablesPostLoopVerify(t *testing.T) {
 func TestSubagentPromptCarriesInLoopVerifyMandate(t *testing.T) {
 	prompt := buildSharedAgentPrompt(SubAgentPromptContext{
 		WorkingDir: t.TempDir(),
-	})
+	}, "")
 	if !strings.Contains(prompt, "narrowest existing validation") {
 		t.Error("subagent prompt must carry the in-loop scoped verification mandate")
 	}

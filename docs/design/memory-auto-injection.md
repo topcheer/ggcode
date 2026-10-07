@@ -47,6 +47,7 @@ classifies memory entries:
 ## Files Changed
 
 - `internal/memory/auto.go`: New `LoadForPrompt()` method, `MemoryEntry` type
+- `internal/memory/relevance.go`: Task-relevance gate (sa-113, Self-RAG [IsRel] deterministic equivalent) — `LoadForPromptForTask(task)` degrades persistent entries lexically unrelated to the task from inline to index-only (minDistinct>=2, IDF score>=0.5, same BM25-lite weighting as the experience channel); empty task bypasses the gate. Sub-agent prompts pass their task through `buildSharedAgentPrompt(ctx, task)`; interactive/teammate prompts keep the gate off.
 - `internal/agentruntime/prompt.go`: `appendAutoMemory` rewritten to use
   two-tier injection
 - `internal/memory/auto_prompt_test.go`: Tests for inline/index splitting,
