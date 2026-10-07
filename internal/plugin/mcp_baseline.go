@@ -34,9 +34,19 @@ const driftOnboardingWindow = 24 * time.Hour
 // ToolBaseline is the persisted, user-approved tool definition snapshot
 // for one MCP server.
 type ToolBaseline struct {
-	ToolsHash  string    `json:"tools_hash"`
+	ToolsHash string `json:"tools_hash"`
+	// ApprovedAt stamps the LAST observed change: the baseline moves forward
+	// with every change so an alert fires once per change instead of
+	// replaying forever.
 	ApprovedAt time.Time `json:"approved_at"`
-	ToolNames  []string  `json:"tool_names,omitempty"`
+	// FirstApprovedAt anchors the user's INITIAL approval (#3540): the 24h
+	// onboarding window is measured from here, not ApprovedAt. Without a
+	// separate anchor, every change resets the window, so a server making
+	// small changes more often than once a day keeps the window open forever
+	// and a later rug pull lands silently. Zero for legacy records; readers
+	// fall back to ApprovedAt.
+	FirstApprovedAt time.Time `json:"first_approved_at,omitempty"`
+	ToolNames       []string  `json:"tool_names,omitempty"`
 }
 
 type baselineFile struct {
@@ -145,6 +155,9 @@ func (s *ToolBaselineStore) LoadBaseline(name string) (*ToolBaseline, error) {
 // SaveBaseline records the approved tool snapshot for name. ApprovedAt is
 // stamped now: the baseline moves forward with every observed change, so a
 // drift alert fires once per change instead of replaying forever.
+// FirstApprovedAt is stamped only on the first-ever approval and preserved
+// across subsequent baseline updates (#3540) so the onboarding window stays
+// anchored to the initial approval.
 func (s *ToolBaselineStore) SaveBaseline(name, hash string, names []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,10 +165,16 @@ func (s *ToolBaselineStore) SaveBaseline(name, hash string, names []string) erro
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	first := now
+	if prev, ok := servers[name]; ok && !prev.FirstApprovedAt.IsZero() {
+		first = prev.FirstApprovedAt
+	}
 	servers[name] = &ToolBaseline{
-		ToolsHash:  hash,
-		ApprovedAt: time.Now(),
-		ToolNames:  sortedCopy(names),
+		ToolsHash:       hash,
+		ApprovedAt:      now,
+		FirstApprovedAt: first,
+		ToolNames:       sortedCopy(names),
 	}
 	return s.saveLocked(servers)
 }
@@ -208,9 +227,13 @@ func sortedCopy(names []string) []string {
 }
 
 // driftInOnboardingWindow reports whether a change observed at now falls
-// inside the 24h post-approval onboarding window for a baseline approved
-// at approvedAt. A zero ApprovedAt (corrupt legacy record) is treated as
-// outside the window so drift still surfaces.
+// inside the 24h post-approval onboarding window for a baseline whose
+// INITIAL approval was at approvedAt (#3540: pass base.FirstApprovedAt,
+// falling back to ApprovedAt for legacy records that predate the anchor
+// field; never the rolling last-change ApprovedAt, or a server refreshing
+// its own tools more often than daily keeps the window open forever).
+// A zero timestamp (corrupt legacy record) is treated as outside the window
+// so drift still surfaces.
 func driftInOnboardingWindow(approvedAt, now time.Time) bool {
 	if approvedAt.IsZero() {
 		return false
@@ -262,7 +285,14 @@ func (m *MCPPlugin) recordToolBaselineLocked(newHash string, newNames []string) 
 		debug.Log("mcp-drift", "server=%s tool definitions changed but allow_tool_drift is set: %+v / -%+v", m.cfg.Name, added, removed)
 		return nil, nil, false
 	}
-	if driftInOnboardingWindow(base.ApprovedAt, time.Now()) {
+	// #3540: anchor the onboarding window to the FIRST approval, falling back
+	// to ApprovedAt only for legacy records without the anchor field. Using
+	// base.ApprovedAt (last change) here made the window rolling.
+	anchor := base.FirstApprovedAt
+	if anchor.IsZero() {
+		anchor = base.ApprovedAt
+	}
+	if driftInOnboardingWindow(anchor, time.Now()) {
 		debug.Log("mcp-drift", "server=%s tool definitions changed inside 24h onboarding window (baseline updated silently)", m.cfg.Name)
 		return nil, nil, false
 	}

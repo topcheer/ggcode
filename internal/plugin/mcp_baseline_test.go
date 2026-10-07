@@ -131,7 +131,8 @@ func TestRecordToolBaseline_DriftAfterApproval(t *testing.T) {
 	m.mu.Unlock()
 
 	// Simulate post-approval time passage beyond the onboarding window by
-	// rewriting the baseline's ApprovedAt under the store lock.
+	// rewriting the baseline's ApprovedAt AND the #3540 first-approval anchor
+	// under the store lock (the window is measured from FirstApprovedAt).
 	m.baselines.mu.Lock()
 	servers, err := m.baselines.load()
 	if err != nil {
@@ -139,6 +140,7 @@ func TestRecordToolBaseline_DriftAfterApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	servers["srv"].ApprovedAt = time.Now().Add(-48 * time.Hour)
+	servers["srv"].FirstApprovedAt = time.Now().Add(-48 * time.Hour)
 	if err := m.baselines.saveLocked(servers); err != nil {
 		m.baselines.mu.Unlock()
 		t.Fatal(err)
@@ -185,13 +187,15 @@ func TestRecordToolBaseline_AllowToolDriftEscapeHatch(t *testing.T) {
 	m := newBaselineTestPlugin(t, config.MCPServerConfig{Name: "srv", AllowToolDrift: true})
 	m.mu.Lock()
 	m.recordToolBaselineLocked("h1", []string{"t1"})
-	// Age past the window so only the escape hatch can suppress.
+	// Age past the window so only the escape hatch can suppress (#3540: age
+	// BOTH timestamps; the window is anchored to FirstApprovedAt).
 	servers, err := m.baselines.load()
 	if err != nil {
 		m.mu.Unlock()
 		t.Fatal(err)
 	}
 	servers["srv"].ApprovedAt = time.Now().Add(-48 * time.Hour)
+	servers["srv"].FirstApprovedAt = time.Now().Add(-48 * time.Hour)
 	m.baselines.saveLocked(servers)
 	_, _, fire := m.recordToolBaselineLocked("h2", []string{"t1"})
 	m.mu.Unlock()
