@@ -265,7 +265,7 @@ func invariantOpTargets(name string, args json.RawMessage) []invariantOpTarget {
 // delete | mkdir | move | write | exec | "" (non-mutating).
 func invariantOpOf(name string, args json.RawMessage) string {
 	switch name {
-	case "write_file", "edit_file", "multi_edit_file", "multi_file_write", "batch_replace":
+	case "write_file", "edit_file", "multi_edit_file", "multi_file_write", "batch_replace", "notebook_edit":
 		return "write"
 	case "run_command", "start_command", "write_command_input", "desktop_control":
 		return "exec"
@@ -317,6 +317,22 @@ func invariantTargetPath(name string, args json.RawMessage) string {
 	switch name {
 	case "write_file", "edit_file", "multi_edit_file":
 		return str("file_path")
+	case "notebook_edit":
+		return str("notebook_path")
+	case "multi_file_write":
+		// #3547: classified as write by invariantOpOf but had no target
+		// extraction case, so path-predicated invariants (PathGlob etc.)
+		// silently never fired for batch writes. Extract the first file's
+		// path (primary target; the check is best-effort like batch_replace).
+		var a struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		}
+		if json.Unmarshal(args, &a) == nil && len(a.Files) > 0 {
+			return a.Files[0].Path
+		}
+		return ""
 	case "batch_replace":
 		var a struct {
 			Files []string `json:"files"`
