@@ -91,16 +91,21 @@ func (c *Command) Title() string {
 }
 
 func replaceVar(s, key, value string) string {
-	// Simple string replacement
-	result := ""
+	// Simple string replacement. Non-matching bytes are passed through
+	// VERBATIM (#3515): the old `result += string(s[i])` re-encoded each
+	// raw byte as its rune code point, so multi-byte UTF-8 (Chinese text
+	// in a template) turned into Latin-1 mojibake. Keys are ASCII, so
+	// byte-wise matching is unchanged; only the passthrough is fixed.
+	var b strings.Builder
+	b.Grow(len(s))
 	for i := 0; i < len(s); {
 		if i+len(key) <= len(s) && s[i:i+len(key)] == key {
-			result += value
+			b.WriteString(value)
 			i += len(key)
 		} else {
-			result += string(s[i])
+			b.WriteByte(s[i])
 			i++
 		}
 	}
-	return result
+	return b.String()
 }
