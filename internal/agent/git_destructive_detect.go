@@ -113,8 +113,15 @@ var (
 	// #1886: `git checkout -b feature .` fits the discard-all shape but git
 	// itself rejects -b combined with a pathspec - the advisory would fire
 	// on a doomed command. RE2 has no lookahead, so this is filtered at the
-	// consumer (L195) instead of inside the big pattern.
+	// consumer (discardAllFires) instead of inside the big pattern.
+	// #3535: the filter is SEGMENT-scoped - applied per chained subcommand,
+	// never to the whole string. `git checkout -f . && git checkout -b fix`
+	// used to have its first segment's CRITICAL swallowed by the second
+	// segment's -b under whole-string matching.
 	reGitBranchCreate = regexp.MustCompile(`\s-b\s`)
+	// #3535: chain separators for segment-scoped checks. Mirrors the break
+	// set of cleanForceSingleLine (&&, ||, |, &, ;) plus newlines.
+	reChainSep = regexp.MustCompile(`\|\||&&|\||&|;|\n`)
 	// checkout/switch with a force-bearing flag discards local changes to
 	// reach the target state (checkout -f / switch -f / checkout -B main).
 	reGitCheckoutForce = regexp.MustCompile(`\bgit\s+(checkout|switch)\s+(-[a-zA-Z]*[fB][a-zA-Z]*|--force)\b`)
@@ -250,8 +257,10 @@ func detectDestructiveInShellCommand(cmd string) []destructivePattern {
 	// #1569-D: bare checkout/restore . and checkout/switch force forms.
 	// #1886: -b branch-create forms are excluded (git rejects -b with a
 	// pathspec - the advisory would only fire on a doomed command).
-	if (reGitDiscardAll.MatchString(cmd) || reGitCheckoutForce.MatchString(cmd)) &&
-		!reGitBranchCreate.MatchString(cmd) {
+	// #3535: the exclusion is per SEGMENT via discardAllFires, so a real
+	// discard in one chained subcommand can no longer be silenced by an
+	// unrelated -b in a later one.
+	if discardAllFires(cmd) {
 		found = append(found, destructivePattern{
 			name:        "discard_all",
 			severity:    "critical",
@@ -651,6 +660,28 @@ func flagTakesValue(fl string) bool {
 		return true
 	case fl == "-c":
 		return true
+	}
+	return false
+}
+
+// discardAllFires reports whether ANY single chained subcommand of cmd is a
+// discard-all / force-checkout without a same-segment -b. #3535: the #1886
+// doomed-command filter (`git checkout -b name .` - git rejects -b with a
+// pathspec) must only suppress the advisory for the segment that carries
+// the -b. Under the old whole-string form, `git checkout -f . && git
+// checkout -b fix` - a real unconditional discard followed by an unrelated
+// branch create - had its CRITICAL silently swallowed (sa-62 probe).
+// Segment set mirrors reGitDiscardAll's chain awareness (&& and ; anchors,
+// #1754/#1886) and cleanForceSingleLine's break set (adds ||, |, &).
+func discardAllFires(cmd string) bool {
+	for _, seg := range reChainSep.Split(cmd, -1) {
+		if seg == "" {
+			continue
+		}
+		if (reGitDiscardAll.MatchString(seg) || reGitCheckoutForce.MatchString(seg)) &&
+			!reGitBranchCreate.MatchString(seg) {
+			return true
+		}
 	}
 	return false
 }

@@ -352,6 +352,29 @@ func TestGitDiscardAllWorktreeSemicolonBranchCreate(t *testing.T) {
 	if !hasPattern(detectDestructiveInShellCommand("git checkout -f ."), "discard_all") {
 		t.Error("checkout -f . must keep firing discard_all")
 	}
+	// #3535: the -b filter is segment-scoped. A REAL discard in one chained
+	// subcommand must not be silenced by an unrelated -b in a later one.
+	for _, cmd := range []string{
+		"git checkout -f . && git checkout -b fix",
+		"git checkout -- . && git checkout -b fix",
+		"git checkout -f .; git checkout -b x",
+		"git checkout -f . || git checkout -b x",
+		"git checkout -f . && git switch -c fix", // -c never matched; control
+	} {
+		if !hasPattern(detectDestructiveInShellCommand(cmd), "discard_all") {
+			t.Errorf("chained real discard must keep firing discard_all: %q", cmd)
+		}
+	}
+	// ...and the #1886 doomed-command exemption still holds within its own
+	// segment (single command, -b + pathspec).
+	for _, cmd := range []string{
+		"git checkout -b feature .",
+		"echo hi && git checkout -b feature .", // only the -b segment exists
+	} {
+		if hasPattern(detectDestructiveInShellCommand(cmd), "discard_all") {
+			t.Errorf("same-segment -b + pathspec must stay exempt: %q", cmd)
+		}
+	}
 }
 
 func hasPattern(pats []destructivePattern, name string) bool {
