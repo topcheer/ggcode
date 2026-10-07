@@ -866,6 +866,16 @@ func (h *Handler) handleSessionResume(params json.RawMessage) (interface{}, erro
 			return nil, err
 		}
 		session.CWD = req.CWD
+		// #3483: the CWD override must re-anchor SaveDir to the NEW
+		// workspace-hash directory (the session/new and session/load
+		// registration points both SetSaveDir; resume was the only one
+		// that skipped it - the same bug class #1477-B fixed for load).
+		// Without this, a resume from a different CWD kept saving into
+		// the OLD workspace's sessions/<hash(old-cwd)> directory and
+		// compaction checkpoints landed in the wrong store.
+		sessionDir := workspaceSessionsDir(h.sessionsDir, req.CWD)
+		os.MkdirAll(sessionDir, 0o755)
+		session.SetSaveDir(sessionDir)
 	} else if err := validateCWD(session.CWD); err != nil {
 		return nil, fmt.Errorf("session has invalid stored cwd: %w", err)
 	}
