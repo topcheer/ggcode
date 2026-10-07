@@ -1,9 +1,15 @@
 package agent
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 )
+
+// compileMissingFileRe matches the go compiler's missing-source form
+// `open /path/to/x.go: no such file or directory` emitted by go build/test
+// when a package references a deleted or renamed file (#3525).
+var compileMissingFileRe = regexp.MustCompile(`open \S+\.go: no such file or directory`)
 
 // ErrorClassifier provides error-type-specific guidance for tool failures.
 //
@@ -91,6 +97,48 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 
 	// Order matters: most specific patterns first
 
+	// Auth errors (#3525): 'unauthorized' / HTTP 401 / expired tokens are API
+	// authentication failures (MCP tools, web_fetch), NOT filesystem
+	// permission problems - misfiling them into permission_denied injected
+	// "check file write access / do not retry" guidance that blocked the
+	// legitimate fix (rotate the key, then retry). Checked before both
+	// file_not_found and permission_denied.
+	if errorContainsAny(c,
+		"unauthorized",
+		"http 401",
+		"401 unauthorized",
+		"authentication failed",
+		"authentication required",
+		"invalid api key",
+		"token expired",
+	) {
+		return ErrorCategory{
+			Name: "auth_error",
+			Guidance: "An authentication error occurred (401/unauthorized/expired token). " +
+				"The API key or access token is missing, invalid, or expired - check and " +
+				"rotate/update the credential (e.g. re-login or update the key in config), " +
+				"then retry the operation.",
+		}
+	}
+
+	// Compile-form missing file FIRST (#3525): `go build` emits
+	// `open /path/x.go: no such file or directory` when a package references
+	// a deleted/renamed file. The path comes from the compiler's resolution of
+	// package declarations, not from anything the agent typed - filing it as
+	// file_not_found ("check path spelling") wastes an iteration. Scoped to
+	// command-execution tools and the .go compile form; genuine tool-level
+	// path typos (read_file/write_file) keep the file_not_found branch.
+	if (toolName == "run_command" || toolName == "start_command" ||
+		toolName == "wait_command" || toolName == "read_command_output") &&
+		compileMissingFileRe.MatchString(c) {
+		return ErrorCategory{
+			Name: "build_error",
+			Guidance: "A build error occurred: the compiler cannot open a .go file - a package " +
+				"references a deleted or renamed file. Fix the import/package declaration " +
+				"or restore the file; checking your own path spelling will not help.",
+		}
+	}
+
 	// File not found / does not exist
 	if errorContainsAny(c,
 		"no such file or directory",
@@ -98,7 +146,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		"file not found",
 		"does not exist",
 		// "cannot find" is too generic — "cannot find package" should match import_error
-		"no such file",
 		"no such file",
 	) {
 		return ErrorCategory{
@@ -115,7 +162,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		"access denied",
 		"access is denied",
 		"operation not permitted",
-		"unauthorized",
 	) {
 		return ErrorCategory{
 			Name: "permission_denied",
@@ -258,7 +304,6 @@ func classifyErrorContent(toolName, content string) ErrorCategory {
 		"another git process",
 		"unable to create '.git/index.lock'",
 		"fatal: unable to write new index file",
-		"exists already",
 	) {
 		return ErrorCategory{
 			Name: "git_lock_contention",
