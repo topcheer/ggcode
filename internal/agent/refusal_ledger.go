@@ -141,6 +141,19 @@ var refusalAuthorizePattern = regexp.MustCompile(
 var refusalReadOnlyCmdPattern = regexp.MustCompile(
 	`^\s*(?:git\s+(?:status|log|diff|show|blame)|grep|rg|cat|head|tail|ls|find|wc|file|stat|which|pwd|echo)\b`)
 
+// refusalCmdWriteEvidence (#3484): shapes that make an otherwise
+// read-only-prefixed command a writer. Any occurrence disqualifies the
+// read-only exemption:
+//   - `>` / `>>` / `1>` / `2>` / `&>` output redirection (covers `echo x > f`,
+//     `cat a > b`, `head -n5 f > f` self-truncation, `git log > f`)
+//   - find write-flags: -delete, -exec/-execdir, -fprint*/-fls
+//   - git --output=<file> (log/diff/show write their output to a file)
+//
+// `>>` and fd-prefixed forms are subsumed by the bare `>` alternative.
+// Heredoc `<<` contains no `>` and is input-side only - not matched.
+var refusalCmdWriteEvidence = regexp.MustCompile(
+	`(?:\d)?>{1,2}|&>|-delete\b|-exec(dir)?\b|-fprint\w*\b|-fls\b|--output(=|\s)`)
+
 // refusalPathPattern: path-like tokens (contain / or .ext), ≥4 chars.
 var refusalPathPattern = regexp.MustCompile(`[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,8})`)
 
@@ -293,11 +306,18 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	lower := strings.ToLower(args)
 	// #3469 (note): read-only run_command shapes never mutate the refusal
 	// target, so they are exempt from the write-class block.
+	// #3484: the prefix match alone is NOT proof of read-only-ness - shell
+	// redirection and find write-flags turn these prefixes into writers
+	// (`echo x > f`, `cat a > b`, `find . -name f -delete`, `git log --output=f`).
+	// Any write evidence in the command disqualifies the exemption and the
+	// call falls through to normal entry matching (fail-closed).
 	if tool == "run_command" {
 		var rc struct {
 			Command string `json:"command"`
 		}
-		if json.Unmarshal([]byte(args), &rc) == nil && refusalReadOnlyCmdPattern.MatchString(rc.Command) {
+		if json.Unmarshal([]byte(args), &rc) == nil &&
+			refusalReadOnlyCmdPattern.MatchString(rc.Command) &&
+			!refusalCmdWriteEvidence.MatchString(rc.Command) {
 			return ""
 		}
 	}
