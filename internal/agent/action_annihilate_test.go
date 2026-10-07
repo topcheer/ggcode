@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +29,14 @@ func TestActionAnnihilate_GitAddThenReset_SameFiles(t *testing.T) {
 	if s.cancelCount != 1 {
 		t.Errorf("expected cancelCount=1, got %d", s.cancelCount)
 	}
+	// #3477: only b.go was unstaged; a.go is still staged -- this is a
+	// PARTIAL cancellation and must not be described as net-zero.
+	if strings.Contains(warn, "net-zero state change") {
+		t.Errorf("partial reset mislabeled as net-zero: %q", warn)
+	}
+	if !strings.Contains(warn, "PART of the staged set") {
+		t.Errorf("partial-reset qualifier missing: %q", warn)
+	}
 }
 
 func TestActionAnnihilate_GitAddThenReset_DifferentFiles(t *testing.T) {
@@ -53,6 +62,50 @@ func TestActionAnnihilate_GitAddDotThenReset(t *testing.T) {
 
 	if warn == "" {
 		t.Fatal("expected annihilation warning for git_add . → git_reset")
+	}
+	// #3477: stage-all then unstage ONE file is the release-sweep curation
+	// workflow (release-sweep-exclude-broken-wip) -- the trigger stays, but
+	// the wording must not claim net-zero nor call it oscillation.
+	if strings.Contains(warn, "net-zero state change") || strings.Contains(warn, "oscillating") {
+		t.Errorf("stage-all + single-file unstage mislabeled as net-zero/oscillation: %q", warn)
+	}
+	if !strings.Contains(warn, "standard curation step") {
+		t.Errorf("curation qualifier missing: %q", warn)
+	}
+}
+
+func TestActionAnnihilate_GitAddDotThenFullReset_KeepsNetZeroWording(t *testing.T) {
+	// #3477 symmetric guard: a reset with NO files unstages everything, so
+	// the original net-zero wording is factually correct and must stay.
+	s := newActionAnnihilateState()
+	addArgs := rawJSON(t, map[string]interface{}{"files": []string{"."}})
+	resetArgs := rawJSON(t, map[string]interface{}{})
+
+	s.recordToolCall("git_add", addArgs, 1)
+	warn := s.recordToolCall("git_reset", resetArgs, 2)
+
+	if warn == "" {
+		t.Fatal("expected annihilation warning for git_add . → full git_reset")
+	}
+	if !strings.Contains(warn, "net-zero state change") {
+		t.Errorf("full reset must keep the net-zero wording: %q", warn)
+	}
+}
+
+func TestActionAnnihilate_GitAddThenReset_ExactSet_KeepsNetZeroWording(t *testing.T) {
+	// #3477: resetting EXACTLY the staged set cancels the whole add.
+	s := newActionAnnihilateState()
+	addArgs := rawJSON(t, map[string]interface{}{"files": []string{"a.go"}})
+	resetArgs := rawJSON(t, map[string]interface{}{"files": []string{"a.go"}})
+
+	s.recordToolCall("git_add", addArgs, 1)
+	warn := s.recordToolCall("git_reset", resetArgs, 2)
+
+	if warn == "" {
+		t.Fatal("expected annihilation warning")
+	}
+	if !strings.Contains(warn, "net-zero state change") {
+		t.Errorf("exact-set reset must keep the net-zero wording: %q", warn)
 	}
 }
 
