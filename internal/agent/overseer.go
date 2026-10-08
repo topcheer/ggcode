@@ -207,8 +207,11 @@ func (o *overseerState) effectiveDriftThreshold() int {
 	return driftThreshold
 }
 
-// recordToolCall adds a tool call to the trajectory.
-func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint string) {
+// recordToolCall adds a tool call to the trajectory. resultContent is the
+// tool's result body (may be empty): #3568 uses extractWrittenPaths on it to
+// honor partial_success semantics (IsError=true but files actually reached
+// disk counts as productive, matching #1762's correction everywhere else).
+func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint, resultContent string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
@@ -230,10 +233,14 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 		}
 	}
 
-	// A tool call is productive if it's a productive tool AND it succeeded.
-	// Failed run_command calls (e.g. failed builds) are NOT productive —
-	// they don't represent forward progress. This prevents the drift detector
-	// from being suppressed when the agent is stuck running failing commands.
+	// A tool call is productive if it's a productive tool AND it succeeded
+	// (or, #3568, partially succeeded with files actually on disk —
+	// extractWrittenPaths is the same partial_success signal #1762 case 1
+	// wired into the other trackers). Failed edit_file calls (old_text
+	// mismatch) and failed builds alike don't represent forward progress:
+	// counting them as productive reset itersSinceProductive and cleared
+	// fileReadsSinceEdit on every failure, letting read→edit-fail loops
+	// escape the drift and file-stuck detectors entirely.
 	//
 	// In research mode, research-specific tools (web_search, code_search, etc.)
 	// also count as productive because reading and searching IS the work.
@@ -241,7 +248,7 @@ func (o *overseerState) recordToolCall(toolName string, isError bool, fileHint s
 	if o.researchMode && !isProductive {
 		isProductive = researchProductiveTools[toolName]
 	}
-	if isProductive && !(isError && toolName == "run_command") {
+	if isProductive && (!isError || len(extractWrittenPaths(resultContent)) > 0) {
 		o.itersSinceProductive = 0
 		// Reset file-read tracking after an edit.
 		o.fileReadsSinceEdit = make(map[string]int)
@@ -555,11 +562,11 @@ func (o *overseerState) checkDrift(traj []trajectoryEntry) string {
 
 // overseerCheck is called from the agent loop. It records the tool call and
 // periodically runs analysis, returning guidance if intervention is needed.
-func (a *Agent) overseerCheck(toolName string, isError bool, fileHint string, iteration int) string {
+func (a *Agent) overseerCheck(toolName string, isError bool, fileHint, resultContent string, iteration int) string {
 	if a.overseer == nil {
 		return ""
 	}
-	a.overseer.recordToolCall(toolName, isError, fileHint)
+	a.overseer.recordToolCall(toolName, isError, fileHint, resultContent)
 	return a.overseer.analyze(iteration)
 }
 
