@@ -239,6 +239,13 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// #3581: the ListByWorkspace call above runs UNLOCKED; a concurrent
+	// UnbindSession may have set m.session (or swapped m.bindingStore) to
+	// nil in that window. Re-check the live pointer and reuse the snapshot
+	// taken under the first lock - never dereference m.session here.
+	if m.session == nil {
+		return
+	}
 	for _, b := range bindings {
 		if b.LastSessionID != "" {
 			continue // already claimed
@@ -248,7 +255,7 @@ func (m *Manager) claimUnclaimedBindings(sessionID string) {
 			continue
 		}
 		// Claim it for this session in the persistent store
-		if err := m.bindingStore.UpdateSessionID(m.session.Workspace, b.Adapter, sessionID); err != nil {
+		if err := store.UpdateSessionID(workspace, b.Adapter, sessionID); err != nil {
 			debug.Log("im", "claimUnclaimedBindings: UpdateSessionID error for %s: %v", b.Adapter, err)
 		} else {
 			debug.Log("im", "claimed binding %s for session=%s (was unclaimed)", b.Adapter, sessionID)
