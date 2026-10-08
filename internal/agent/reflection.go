@@ -14,6 +14,15 @@ import (
 	"github.com/topcheer/ggcode/internal/util"
 )
 
+// assistantTextMaxBytes / assistantTextMaxTurns (sa-147) cap the
+// consumption-scanning corpus recorded per run: memory fingerprints
+// (keys, first content lines) live early in a turn; reflection needs
+// evidence, not fidelity.
+const (
+	assistantTextMaxBytes = 2048
+	assistantTextMaxTurns = 40
+)
+
 // RunStats accumulates observability data during a single RunStreamWithContent
 // call. It is the input to the reflection system (the "hill climbing loop"):
 // after each run, the stats are analyzed to extract insights that compound
@@ -86,6 +95,11 @@ type RunStats struct {
 	// startTime is used internally to compute Duration.
 	startTime time.Time
 
+	// assistantTexts (sa-147, LIMBO inference-time memory allocation)
+	// holds capped assistant text turns for post-run consumption scanning
+	// (memory key / fingerprint matching, memory/consumption.go). Unexported;\t	// exposed via AssistantCorpus.
+	assistantTexts []string
+
 	// runID is a unique identifier for this run, used for checkpoint
 	// run-boundary tracking (UndoRun). Generated at creation time.
 	runID string
@@ -104,6 +118,29 @@ func newRunStats(userPrompt string) *RunStats {
 
 // RunID returns the unique run identifier.
 func (s *RunStats) RunID() string { return s.runID }
+
+// recordAssistantText (sa-147) appends one assistant turn's text for
+// post-run memory-consumption scanning. Capped: last 40 turns, first 2KB
+// each - consumption fingerprints (memory keys, first content lines) live
+// early in a turn, and reflection only needs evidence, not fidelity.
+func (s *RunStats) recordAssistantText(text string) {
+	if text == "" {
+		return
+	}
+	if len(text) > assistantTextMaxBytes {
+		text = text[:assistantTextMaxBytes]
+	}
+	s.assistantTexts = append(s.assistantTexts, text)
+	if len(s.assistantTexts) > assistantTextMaxTurns {
+		s.assistantTexts = s.assistantTexts[len(s.assistantTexts)-40:]
+	}
+}
+
+// AssistantCorpus returns the capped concatenation of recorded assistant
+// texts ("" when none) for memory consumption scanning.
+func (s *RunStats) AssistantCorpus() string {
+	return strings.Join(s.assistantTexts, "\n")
+}
 
 // generateRunID produces a short hex string for run identification.
 func generateRunID() string {

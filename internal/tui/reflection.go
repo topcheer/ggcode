@@ -71,6 +71,19 @@ func setupReflection(a *agent.Agent) {
 			return
 		}
 
+		// sa-147 (LIMBO arXiv:2609.14138, inference-time memory allocation):
+		// scan the run's assistant corpus for injected-memory fingerprints.
+		// Consumption signal feeds EffectiveInlineBudget, so stores whose
+		// injections are never quoted stop paying the full inline budget.
+		// Runs before the insights early-return: consumption evidence is
+		// independent of whether this run produced insights.
+		if corpus := stats.AssistantCorpus(); corpus != "" {
+			autoMem.ScanConsumption(corpus)
+			if globalMem := memory.NewAutoMemory(); globalMem != nil {
+				globalMem.ScanConsumption(corpus)
+			}
+		}
+
 		key := "run-insights"
 		// #1388: LoadAll merges EVERY active memory key ("### {key}" per
 		// entry) - using it here ingested all unrelated memories into
