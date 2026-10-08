@@ -491,7 +491,7 @@ var SlashCommandDescriptions = map[string]string{
 	"/export":          "Export session to markdown file",
 	"/export-trace":    "Export session execution trace as JSON (--otel for OTLP/GenAI format)",
 	"/why":             "Explain recent tool-call decisions: paired reasoning, results, error anchors",
-	"/guidance":        "Guidance-detector stats: which detectors fired/were suppressed (from guidance-stats.jsonl)",
+	"/guidance":        "Guidance-detector stats, <tag> drill-down, and suppress/reset <tag> overrides (from guidance-stats.jsonl)",
 	"/evidence":        "Cite the last answer's claims against recorded tool evidence (claim to source)",
 	"/bug":             "Report a bug with diagnostics",
 	"/config":          "View/modify configuration",

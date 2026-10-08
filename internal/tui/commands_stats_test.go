@@ -22,6 +22,11 @@ func TestGuidanceSlashCompletionRegistered(t *testing.T) {
 	if !strings.Contains(SlashCommandDescriptions["/guidance"], "detector") {
 		t.Fatal("/guidance missing a description")
 	}
+	// r16: the description must advertise the manual override verbs so the
+	// completion menu surfaces the control channel, not just observability.
+	if !strings.Contains(SlashCommandDescriptions["/guidance"], "suppress") {
+		t.Fatal("/guidance description missing suppress verb")
+	}
 }
 
 func TestSummarizeGuidanceStats(t *testing.T) {
