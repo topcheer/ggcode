@@ -27,11 +27,15 @@ import (
 const (
 	mattermostDefaultMaxPostLen = 16383 // Official hard limit: https://docs.mattermost.com/administration-guide/manage/product-limits.html
 	mattermostAPIVersion        = "api/v4"
-	mattermostConnectTimeout    = 20 * time.Second
-	mattermostHeartbeatPeriod   = 30 * time.Second
-	mattermostDedupMaxSize      = 1000
-	mattermostRequestTimeout    = 30 * time.Second
-	mattermostInterMsgDelay     = 200 * time.Millisecond // Small delay between multi-chunk sends to avoid overwhelming self-hosted servers
+	// mattermostHealthySession is how long a connection must stay up
+	// before a disconnect is treated as a fresh transient (backoff reset)
+	// - same threshold family as matrix #432 / irc #3562.
+	mattermostHealthySession  = 60 * time.Second
+	mattermostConnectTimeout  = 20 * time.Second
+	mattermostHeartbeatPeriod = 30 * time.Second
+	mattermostDedupMaxSize    = 1000
+	mattermostRequestTimeout  = 30 * time.Second
+	mattermostInterMsgDelay   = 200 * time.Millisecond // Small delay between multi-chunk sends to avoid overwhelming self-hosted servers
 )
 
 // mattermostWSReadTimeout is a var so tests can shorten it (deadline
@@ -55,12 +59,16 @@ type mattermostAdapter struct {
 	replyMode      string // "thread" or "off"
 	allowedUsers   []string
 
-	mu          sync.RWMutex
-	ws          *websocket.Conn
-	writeMu     sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
-	conn        *http.Client
-	connected   bool
-	closed      bool
+	mu        sync.RWMutex
+	ws        *websocket.Conn
+	writeMu   sync.Mutex // protects websocket writes (gorilla/websocket not concurrent-safe)
+	conn      *http.Client
+	connected bool
+	closed    bool
+	// healthyAt marks when the current websocket connection was
+	// established (#3565); run() uses it to reset the backoff ladder after
+	// a healthy session. Only the run-loop goroutine reads and writes it.
+	healthyAt   time.Time
 	seen        map[string]time.Time
 	reactionAck reactionAckState
 }
@@ -155,12 +163,18 @@ func (a *mattermostAdapter) run(ctx context.Context) {
 			a.publishState(false, "error", err.Error())
 			debug.Log("mattermost", "adapter=%s error: %v", a.name, err)
 		}
-		// Successful return (nil error) means the connection served until a
-		// clean disconnect — reset the backoff counter so the NEXT first retry
-		// uses the short delay instead of the capped 60s (#389).
-		if err == nil {
+		// #3565: the old `if err == nil { attempt = 0 }` reset was dead code
+		// - the ONLY nil return of connectAndServe is the serve-loop's
+		// ctx.Done, and the run loop exits on the same ctx immediately
+		// after, so the reset never mattered. What actually needs the reset
+		// is a session that served HEALTHILY for a while and then dropped:
+		// that drop is a fresh transient (same family as matrix #432 /
+		// discord #389 / irc #3562). Short sessions keep the accumulated
+		// ladder so rapid-fail loops still back off.
+		if !a.healthyAt.IsZero() && time.Since(a.healthyAt) >= mattermostHealthySession {
 			attempt = 0
 		}
+		a.healthyAt = time.Time{}
 		a.mu.RLock()
 		isClosed := a.closed
 		a.mu.RUnlock()
@@ -227,6 +241,7 @@ func (a *mattermostAdapter) connectAndServe(ctx context.Context) error {
 	a.connected = true
 	a.mu.Unlock()
 	a.publishState(true, "connected", "")
+	a.healthyAt = time.Now() // #3565: healthy connection established
 	debug.Log("mattermost", "adapter=%s connected to %s", a.name, wsURL)
 
 	// 3.5 Heartbeat goroutine: send application-level ping to keep connection alive.
