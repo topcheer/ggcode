@@ -1672,6 +1672,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.trajIntel.clearInjectedRun()
 			}
 			a.trajIntel.maybeExtractAndPersist(a.WorkingDir(), runStats)
+			// sa-149 (GEPA-style policy distillation): learnings whose
+			// r461 outcome counters PROVED them effective are rewritten from
+			// statistical template prose into imperative policy text via one
+			// throttled aux-tier call, then injected in place of the raw
+			// Insight (see policy_distill.go). Fail-open, <=1 batch/hour.
+			a.maybeDistillPolicies(a.WorkingDir())
 		}
 		// Record run metrics for cross-session regression detection.
 		recordPerfBaseline(a.WorkingDir(), runStats)
