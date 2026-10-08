@@ -812,6 +812,148 @@ func (m *Model) handleBranchCommand(parts []string) tea.Cmd {
 	return nil
 }
 
+// handleBranchesCommand lists the branch tree around the current session:
+// when the current session was forked via /branch, its parent and siblings;
+// plus every session forked from the current one. Before this, lineage
+// (ParentSessionID/ForkPoint) was write-only — users could not see which
+// branches existed or jump between them.
+func (m *Model) handleBranchesCommand(parts []string) tea.Cmd {
+	if m.session == nil || m.sessionStore == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.no_session"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	jsonlStore, ok := m.sessionStore.(*session.JSONLStore)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), "Branch listing requires a JSONL session store.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	own, err := jsonlStore.ListChildren(m.session.ID)
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to list branches: %v", err))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	var lines []string
+	if m.session.ParentSessionID != "" {
+		if parent, perr := jsonlStore.Load(m.session.ParentSessionID); perr == nil && parent != nil {
+			pt := parent.Title
+			if pt == "" {
+				pt = parent.ID
+			}
+			lines = append(lines, fmt.Sprintf("Parent: %s (%s)", pt, parent.ID))
+		} else {
+			lines = append(lines, fmt.Sprintf("Parent: %s", m.session.ParentSessionID))
+		}
+		siblings, serr := jsonlStore.ListChildren(m.session.ParentSessionID)
+		if serr == nil && len(siblings) > 0 {
+			lines = append(lines, "Sibling branches ('>' marks this session):")
+			for _, sib := range siblings {
+				marker := "  "
+				if sib.ID == m.session.ID {
+					marker = "> "
+				}
+				lines = append(lines, fmt.Sprintf("%s%s (%s, forked at msg %d)", marker, sib.Title, sib.ID, sib.ForkPoint))
+			}
+		}
+	}
+	if len(own) > 0 {
+		lines = append(lines, fmt.Sprintf("Branches of this session (%d):", len(own)))
+		for _, ch := range own {
+			lines = append(lines, fmt.Sprintf("  %s (%s, forked at msg %d)", ch.Title, ch.ID, ch.ForkPoint))
+		}
+	} else if m.session.ParentSessionID == "" {
+		lines = append(lines, "No branches yet. Use /branch [N] to fork this session.")
+	}
+	m.chatWriteSystem(nextSystemID(), strings.Join(lines, "\n"))
+	m.chatListScrollToBottom()
+	return nil
+}
+
+// handleBranchSwitchCommand switches to another session in the current
+// branch tree. The target must be related to the current session (parent,
+// child, or sibling); arbitrary sessions stay on /resume.
+func (m *Model) handleBranchSwitchCommand(parts []string) tea.Cmd {
+	if m.loading {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.busy"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if m.session == nil || m.sessionStore == nil {
+		m.chatWriteSystem(nextSystemID(), m.t("branch.no_session"))
+		m.chatListScrollToBottom()
+		return nil
+	}
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		m.chatWriteSystem(nextSystemID(), "Usage: /branch-switch <session-id> (see /branches for IDs)")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	id := strings.TrimSpace(parts[1])
+
+	jsonlStore, ok := m.sessionStore.(*session.JSONLStore)
+	if !ok {
+		m.chatWriteSystem(nextSystemID(), "Branch switching requires a JSONL session store.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+	related := id == m.session.ID || id == m.session.ParentSessionID
+	if !related {
+		if own, err := jsonlStore.ListChildren(m.session.ID); err == nil {
+			for _, ch := range own {
+				if ch.ID == id {
+					related = true
+					break
+				}
+			}
+		}
+	}
+	if !related && m.session.ParentSessionID != "" {
+		if sibs, err := jsonlStore.ListChildren(m.session.ParentSessionID); err == nil {
+			for _, sib := range sibs {
+				if sib.ID == id {
+					related = true
+					break
+				}
+			}
+		}
+	}
+	if !related {
+		m.chatWriteSystem(nextSystemID(), "That session is not in the current branch tree. Use /resume <id> for arbitrary sessions.")
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	target, err := m.sessionStore.Load(id)
+	if err != nil || target == nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Failed to load session %s: %v", id, err))
+		m.chatListScrollToBottom()
+		return nil
+	}
+
+	// Flush current session meta before switching (mirrors /branch).
+	oldSes := m.session
+	oldStore := m.sessionStore
+	safego.Go("tui.branchSwitch.metaFlush", func() {
+		if js, ok := oldStore.(*session.JSONLStore); ok {
+			if err := js.AppendMetaToDisk(oldSes); err != nil {
+				debug.Log("tui", "branchSwitch meta persist: %v", err)
+			}
+		}
+	})
+
+	m.applyResumedSession(target)
+	title := target.Title
+	if title == "" {
+		title = target.ID
+	}
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf("Switched to %s (%s).", title, target.ID))
+	m.chatListScrollToBottom()
+	return nil
+}
+
 // extractCommandFromInput parses a tool input JSON and extracts the command string.
 // extractCommandFromInput delegates to permission.ExtractCommandFromInput.
 // Kept as a local wrapper for compatibility with existing call sites.
