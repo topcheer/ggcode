@@ -5197,16 +5197,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					if hint := a.expiredRead.checkPostEditReread(readPaths[0]); hint != "" {
 						a.appendGuidance(&result, hint)
 					}
-					// Search-result invalidation: record search-type tool results
-					// for later invalidation detection on file edits.
-					// #1491-A layer 1: this call sits OUTSIDE the readPaths
-					// else-if - extractFilePathsFromArgs only knows path-carrying
-					// argument keys (file/path/directory/...), so a repo-wide
-					// grep with no explicit path (the most common form) starved
-					// the detector; recordSearchResult carries its own
-					// searchResultTools whitelist gate.
-					a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 				}
+				// Search-result invalidation: record search-type tool results
+				// for later invalidation detection on file edits.
+				// #1491-A layer 1 / #3590: this call sits OUTSIDE the readPaths
+				// block - extractFilePathsFromArgs only knows path-carrying
+				// argument keys (file/path/directory/...), so a repo-wide
+				// grep with no explicit path (the most common form) starved
+				// the detector; recordSearchResult carries its own
+				// searchResultTools whitelist gate.
+				a.searchInvalidation.recordSearchResult(tc.Name, result.Content)
 			}
 			// Working-tree invalidation: detect cross-file stale reads after git mutations
 			// #1527 case C: run_command carrying a mutating git command is
