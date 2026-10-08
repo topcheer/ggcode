@@ -75,6 +75,32 @@ func TestOutcomeRankWeightOrdering(t *testing.T) {
 	}
 }
 
+func TestArbitrateInline_OutcomeBeatsRecency(t *testing.T) {
+	// sa-139 end-to-end: at equal category, the entry written by a SUCCESSFUL
+	// run must win a conflicting claim over a fresh-but-failed one.
+	now := time.Now()
+	failedFresh := MemoryEntry{
+		Key:     "deploy-failed-run",
+		Content: "deploy command: make deploy",
+		Meta:    MemoryMeta{Key: "deploy-failed-run", Category: CategoryPersistent, CreatedAt: now.Add(-1 * time.Hour), Outcome: "failed"},
+	}
+	verifiedOlder := MemoryEntry{
+		Key:     "deploy-verified-run",
+		Content: "deploy command: make release deploy",
+		Meta:    MemoryMeta{Key: "deploy-verified-run", Category: CategoryPersistent, CreatedAt: now.Add(-40 * 24 * time.Hour), Outcome: "success"},
+	}
+	arb := ArbitrateInline([]MemoryEntry{failedFresh, verifiedOlder}, now)
+	if !arb.HasConflicts() || len(arb.Conflicts) != 1 {
+		t.Fatalf("expected exactly 1 conflict, got %+v", arb.Conflicts)
+	}
+	c := arb.Conflicts[0]
+	// failed(1h: fresh +0.1, outcome -0.4) vs success(40d: outcome +0.2) -
+	// the outcome branch must override the recency gap.
+	if c.WinnerKey != verifiedOlder.Key || c.LoserKey != failedFresh.Key {
+		t.Fatalf("winner=%s loser=%s; want verified success to beat fresh failure", c.WinnerKey, c.LoserKey)
+	}
+}
+
 func TestRetrieveRanksSuccessAboveFailedAtEqualRelevance(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "experience")
 	es := NewExperienceStore(dir)
