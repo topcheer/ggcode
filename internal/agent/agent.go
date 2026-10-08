@@ -4777,7 +4777,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Overseer: deterministic trajectory analysis (SICA-inspired).
 			// Detects tool spam, read-only stall, stuck-on-file, error escalation, and drift.
-			if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), runStats.Iterations); overseerGuidance != "" {
+			if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), result.Content, runStats.Iterations); overseerGuidance != "" {
 				a.appendGuidance(&result, overseerGuidance)
 			}
 			// Repetition tracker: semantic-level detection of failed edit clusters.
