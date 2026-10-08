@@ -696,6 +696,10 @@ func zhCatalog(key string) string {
 		return "无可用的工作区目录。"
 	case "traj.cleared":
 		return "轨迹学习库已清空，后续运行将从空库开始。"
+	case "trainexport.empty":
+		return "当前会话没有可导出的消息。"
+	case "trainexport.done":
+		return "已导出 %d 条消息为训练样本（脱敏后），追加至 .ggcode/training-samples.jsonl。"
 	case "traj.cleared_global":
 		return "全局轨迹学习库已清空（跨工作区层已移除）。"
 	case "traj.cleared_global_hint":

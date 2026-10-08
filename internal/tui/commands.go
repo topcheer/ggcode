@@ -554,6 +554,8 @@ func (m *Model) handleCommandWithDisplay(text string, displayInChat bool) tea.Cm
 			return m.handleRunReportCommand()
 		case "/traj":
 			return m.handleTrajCommand(parts)
+		case "/export-training":
+			return m.handleExportTrainingCommand()
 		case "/why":
 			return m.handleWhyCommand(parts)
 		case "/evidence":

@@ -685,6 +685,10 @@ func enCatalog(key string) string {
 		return "No workspace directory available."
 	case "traj.cleared":
 		return "Trajectory learnings purged. Fresh runs start with a clean store."
+	case "trainexport.empty":
+		return "No messages in the current session to export."
+	case "trainexport.done":
+		return "Exported %d messages as a redacted training sample, appended to .ggcode/training-samples.jsonl."
 	case "traj.cleared_global":
 		return "Global trajectory learnings purged (cross-workspace tier removed)."
 	case "traj.cleared_global_hint":
