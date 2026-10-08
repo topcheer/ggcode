@@ -204,6 +204,11 @@ type indexEntry struct {
 	Model     string    `json:"model,omitempty"`
 	Pinned    bool      `json:"pinned,omitempty"`
 	Tags      []string  `json:"tags,omitempty"`
+	// Branch lineage (parent + fork point) so /branches can navigate the
+	// session tree without opening every session file. omitempty keeps old
+	// index files loading unchanged.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	ForkPoint       int    `json:"fork_point,omitempty"`
 }
 
 // JSONLStore implements Store using JSONL files.
@@ -844,18 +849,20 @@ func (s *JSONLStore) removeFromIndex(id string) error {
 
 func sessionToIndexEntry(s *Session) indexEntry {
 	return indexEntry{
-		ID:        s.ID,
-		Title:     s.Title,
-		Preview:   s.Preview,
-		CreatedAt: s.CreatedAt,
-		UpdatedAt: s.UpdatedAt,
-		Workspace: s.Workspace,
-		MsgCount:  len(s.Messages),
-		Vendor:    s.Vendor,
-		Endpoint:  s.Endpoint,
-		Model:     s.Model,
-		Pinned:    s.Pinned,
-		Tags:      s.Tags,
+		ID:              s.ID,
+		Title:           s.Title,
+		Preview:         s.Preview,
+		CreatedAt:       s.CreatedAt,
+		UpdatedAt:       s.UpdatedAt,
+		Workspace:       s.Workspace,
+		MsgCount:        len(s.Messages),
+		Vendor:          s.Vendor,
+		Endpoint:        s.Endpoint,
+		Model:           s.Model,
+		Pinned:          s.Pinned,
+		Tags:            s.Tags,
+		ParentSessionID: s.ParentSessionID,
+		ForkPoint:       s.ForkPoint,
 	}
 }
 
@@ -888,8 +895,12 @@ type jsonlRecord struct {
 	SidebarVisible *bool    `json:"sidebar_visible,omitempty"`
 	Pinned         bool     `json:"pinned,omitempty"`
 	Tags           []string `json:"tags,omitempty"`
-	ContextWindow  int      `json:"context_window,omitempty"`
-	MaxTokens      int      `json:"max_tokens,omitempty"`
+	// Branch lineage: set once at fork time. Previously not persisted, so
+	// a fork's parent was lost on reload (write-only field).
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	ForkPoint       int    `json:"fork_point,omitempty"`
+	ContextWindow   int    `json:"context_window,omitempty"`
+	MaxTokens       int    `json:"max_tokens,omitempty"`
 	// Session task board snapshot (opaque task.Manager JSON; see Session.TasksJSON).
 	TasksJSON []byte `json:"tasks,omitempty"`
 	// Workspace fingerprint captured alongside TasksJSON (see Session.TasksEnvJSON).
@@ -1341,6 +1352,13 @@ func (s *JSONLStore) loadSession(id string) (*Session, error) {
 		// Latest meta record wins: the board is a full snapshot each write.
 		ses.TasksJSON = rec.TasksJSON
 		ses.TasksEnvJSON = rec.TasksEnvJSON
+		// Branch lineage is immutable: set once at fork time. Guard with a
+		// non-empty check so pre-lineage meta records (field absent) never
+		// clear it once a later record has established it.
+		if rec.ParentSessionID != "" {
+			ses.ParentSessionID = rec.ParentSessionID
+			ses.ForkPoint = rec.ForkPoint
+		}
 	}
 
 	// Fallback: if no meta record contained a workspace (sessions created
@@ -1632,20 +1650,41 @@ func (s *JSONLStore) List() ([]*Session, error) {
 	result := make([]*Session, 0, len(idx))
 	for _, e := range idx {
 		result = append(result, &Session{
-			ID:        e.ID,
-			Title:     e.Title,
-			Preview:   e.Preview,
-			CreatedAt: e.CreatedAt,
-			UpdatedAt: e.UpdatedAt,
-			Workspace: e.Workspace,
-			Vendor:    e.Vendor,
-			Endpoint:  e.Endpoint,
-			Model:     e.Model,
-			Pinned:    e.Pinned,
-			Tags:      e.Tags,
+			ID:              e.ID,
+			Title:           e.Title,
+			Preview:         e.Preview,
+			CreatedAt:       e.CreatedAt,
+			UpdatedAt:       e.UpdatedAt,
+			Workspace:       e.Workspace,
+			Vendor:          e.Vendor,
+			Endpoint:        e.Endpoint,
+			Model:           e.Model,
+			Pinned:          e.Pinned,
+			Tags:            e.Tags,
+			ParentSessionID: e.ParentSessionID,
+			ForkPoint:       e.ForkPoint,
 		})
 	}
 	return result, nil
+}
+
+// ListChildren returns all sessions forked (via /branch) from parentID,
+// newest first. Works off the index (no per-session file reads) since the
+// lineage fields are persisted in the index entry. Sessions forked before
+// lineage persistence landed have an empty ParentSessionID and are not
+// discoverable; a fresh /branch records lineage going forward.
+func (s *JSONLStore) ListChildren(parentID string) ([]*Session, error) {
+	all, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	children := make([]*Session, 0)
+	for _, ses := range all {
+		if ses.ParentSessionID == parentID {
+			children = append(children, ses)
+		}
+	}
+	return children, nil
 }
 
 // setIndexDirty / getIndexDirty guard the indexDirty flag with its own
@@ -2421,6 +2460,8 @@ func (s *JSONLStore) appendMetaLocked(ses *Session) error {
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,
 		TasksEnvJSON:         ses.TasksEnvJSON,
+		ParentSessionID:      ses.ParentSessionID,
+		ForkPoint:            ses.ForkPoint,
 	}
 	if err := appendRecordLine(path, rec); err != nil {
 		return err
@@ -2566,6 +2607,8 @@ func (s *JSONLStore) EnsureMeta(ses *Session) error {
 		ContextWindow:        ses.ContextWindow,
 		MaxTokens:            ses.MaxTokens,
 		TasksJSON:            ses.TasksJSON,
+		ParentSessionID:      ses.ParentSessionID,
+		ForkPoint:            ses.ForkPoint,
 	}
 	if err := enc.Encode(meta); err != nil {
 		os.Remove(path)
