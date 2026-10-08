@@ -294,6 +294,7 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 			meta.Uses = rec.Uses
 			meta.LastUsedAt = rec.LastUsed
 			meta.Source = rec.Source
+			meta.Outcome = rec.Outcome // sa-139 MemGuard lifecycle metadata
 		}
 		metas = append(metas, meta)
 	}

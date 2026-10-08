@@ -39,6 +39,13 @@ type MemoryMeta struct {
 	Uses       int       // prompt-injection count (debounced)
 	LastUsedAt time.Time // last injection time
 	Source     string    // origin label: save_memory:<scope>, run-reflection, ...
+
+	// Outcome (sa-139, MemGuard arXiv:2608.21867): verification signal of the
+	// run that last wrote this entry - "success"/"partial"/"failed". Empty
+	// means unknown (legacy or agent-curated without run telemetry). Feeds
+	// recall arbitration trust scoring; NOT an admission blocker - failed-run
+	// observations keep negative-example value, they just rank lower.
+	Outcome string
 }
 
 // transientExpiry is how long transient memories stay active.

@@ -85,6 +85,12 @@ func (ra RecallArbitration) HasConflicts() bool {
 	return len(ra.Conflicts) > 0
 }
 
+// Trust-score deltas for the sa-139 outcome branch (MemGuard).
+const (
+	trustOutcomeSuccessBonus  = 0.2
+	trustOutcomeFailedPenalty = 0.4
+)
+
 // memoryTrustScore computes the provenance-inspired trust score for one
 // memory entry from its curation metadata. Deterministic and cheap.
 func memoryTrustScore(m MemoryMeta, now time.Time) float64 {
@@ -101,6 +107,16 @@ func memoryTrustScore(m MemoryMeta, now time.Time) float64 {
 	}
 	if age >= 0 && age <= freshWindow {
 		score += trustFreshBonus
+	}
+	// sa-139 (MemGuard arXiv:2608.21867): the outcome of the run that wrote
+	// the entry is persistent lifecycle metadata. A fresh-but-failed entry
+	// must not outrank an older verified one just because it is new - the
+	// fresh bonus rewards recency, the outcome branch rewards reliability.
+	switch m.Outcome {
+	case "success":
+		score += trustOutcomeSuccessBonus
+	case "failed":
+		score -= trustOutcomeFailedPenalty
 	}
 	return score
 }
