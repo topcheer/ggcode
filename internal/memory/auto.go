@@ -462,6 +462,13 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	})
 
 	totalInline := 0
+	// sa-147 (LIMBO arXiv:2609.14138, inference-time memory allocation):
+	// the total inline budget is not a constant. The store-wide
+	// Consumed/Uses ratio (consumption.go) scales it between the floor
+	// (25%) and the ceiling (100%); fail-open returns the full constant
+	// when no consumption signal exists yet, so fresh stores and legacy
+	// sidecars behave exactly as before.
+	totalBudget := am.EffectiveInlineBudget()
 	// sa-113 task-relevance gate: pre-read persistent candidates once to
 	// build the IDF statistics, then score each inline decision. Only the
 	// persistent channel is gated - the index list always stays complete.
@@ -514,7 +521,7 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		}
 
 		// Inline persistent entries that are small enough and within budget.
-		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= maxTotalInlineBytes && relGate.relevant(m.Key, content) {
+		if m.Category == CategoryPersistent && len(content) > 0 && len(content) <= maxInlineBytes && totalInline+len(content) <= totalBudget && relGate.relevant(m.Key, content) {
 			inline = append(inline, MemoryEntry{
 				Key:     m.Key,
 				Content: content,

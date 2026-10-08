@@ -62,6 +62,14 @@ type usageInfo struct {
 	// a negative retrieval-time signal that feeds curation eviction order
 	// and arbitration trust scoring. Debounced like Uses.
 	Conflicts int `json:"conflicts,omitempty"`
+
+	// Consumed (sa-147, LIMBO arXiv:2609.14138 inference-time memory
+	// allocation) counts consumption events: run-end scans found this
+	// entry's key or first-line fingerprint quoted in the assistant corpus
+	// AFTER injection. Uses counts exposure; Consumed measures whether the
+	// exposure paid off. The store-wide Consumed/Uses ratio adapts the
+	// inline budget (consumption.go). Debounced like Uses.
+	Consumed int `json:"consumed,omitempty"`
 }
 
 // usageIndex is the sidecar document. Keyed by the sanitized filename
@@ -261,6 +269,53 @@ func (am *AutoMemory) RecordConflictLoss(keys []string) {
 	}
 	if err := am.saveUsage(idx); err != nil {
 		debug.Log("memory", "conflict-loss persist failed: %v", err)
+	}
+}
+
+// RecordConsumption (sa-147, LIMBO arXiv:2609.14138 inference-time memory
+// allocation) persists consumption evidence: the entry's key or first-line
+// fingerprint appeared in the assistant corpus after injection, so the
+// prompt bytes it occupied paid for themselves. Feeds EffectiveInlineBudget.
+// Debounced per key in a "consum:" namespace (independent of the Uses and
+// "loss:" debouncers); fail-open with a log like every sidecar write.
+func (am *AutoMemory) RecordConsumption(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	now := time.Now()
+	var fresh []string
+	for _, k := range keys {
+		dk := "consum:" + k
+		if v, ok := am.useOnce.Load(dk); ok {
+			if last, ok2 := v.(time.Time); ok2 && now.Sub(last) < usageDebounce {
+				continue
+			}
+		}
+		am.useOnce.Store(dk, now)
+		fresh = append(fresh, k)
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	// #3120 lock contract, same as RecordUse: FileLock outer, am.mu inner.
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("memory", "automemory sidecar filelock failed, degraded to unlocked write: %v", err)
+	}
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	idx := am.loadUsage()
+	for _, k := range fresh {
+		rec := idx.Entries[k]
+		if rec == nil {
+			rec = &usageInfo{FirstSeen: now}
+			idx.Entries[k] = rec
+		}
+		rec.Consumed++
+	}
+	if err := am.saveUsage(idx); err != nil {
+		debug.Log("memory", "consumption persist failed: %v", err)
 	}
 }
 

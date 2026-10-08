@@ -2846,6 +2846,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			a.successDeclare.recordAssistantText(assistantText, i)
 			a.criteriaDrift.recordAssistantText(assistantText, i)
 			a.subgoalTrack.recordAssistantText(assistantText, i)
+			// sa-147 (LIMBO): capture the turn text for post-run memory
+			// consumption scanning (tui reflection -> ScanConsumption).
+			runStats.recordAssistantText(assistantText)
 			// Belief defense escalation: detect when an agent re-states an earlier
 			// belief after a contradicting tool output (arXiv:2606.22936).
 			// Bridging rationalization: detect when an agent explains away a
