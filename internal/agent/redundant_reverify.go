@@ -36,6 +36,7 @@ package agent
 //   - Resets each user turn.
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -168,6 +169,21 @@ func stripLeadingPrefixes(fields []string) []string {
 	return fields
 }
 
+// extractShellCommand returns the shell command string from raw tool
+// arguments. Production call sites pass the raw JSON arguments
+// (agent.go: tc.Arguments), where the command lives in the "command"
+// field; shell-level quoting only has meaning AFTER extraction (#3588).
+// Non-JSON input (bare command, test-compat) is returned unchanged.
+func extractShellCommand(args string) string {
+	var wrapper struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(args), &wrapper); err == nil && wrapper.Command != "" {
+		return wrapper.Command
+	}
+	return args
+}
+
 // verificationSignature returns a normalized fingerprint of the verification
 // command (issues #1173, #1190). The fingerprint is taken from the FIRST
 // command segment that actually matches a verification verb, not blindly the
@@ -177,6 +193,7 @@ func stripLeadingPrefixes(fields []string) []string {
 // a redundant re-run. Leading cd/env/$(...) prefixes are stripped from the
 // chosen segment. If no segment matches, the full args are used as fallback.
 func verificationSignature(args string) string {
+	args = extractShellCommand(args) // #3588: fingerprint the shell command, not the JSON wrapper
 	chosen := ""
 	for _, seg := range commandSegments(args) {
 		for _, re := range reverifyCmdPatterns {
@@ -201,6 +218,10 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 	if toolName != "run_command" && toolName != "start_command" {
 		return ""
 	}
+	// #3588: production args are raw JSON; the shell command lives in the
+	// "command" field. Extract it first so shell-level quoting is analyzed
+	// in its own layer (JSON string quoting never reaches the matcher).
+	args = extractShellCommand(args)
 	// Take the first pipeline segment's first word: if the command itself is a
 	// text operation, any "go test" mention is data, not execution.
 	fields := strings.Fields(firstPipelineSegment(args))

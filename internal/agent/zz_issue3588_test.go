@@ -86,3 +86,26 @@ func s3588Classify(t *testing.T, args string) string {
 	s := newRedundantReverifyState()
 	return s.classifyVerificationCommand("run_command", args)
 }
+
+// Production shape: agent.go passes RAW JSON arguments (tc.Arguments) where
+// the shell command lives in the "command" field. JSON-level quoting must
+// not confuse the shell-level analysis, in both directions.
+func TestIssue3588_RawJSONArgsBothDirections(t *testing.T) {
+	s := newRedundantReverifyState()
+	// JSON git grep quoting a verb: the escaped quotes become real shell
+	// quotes after extraction - git is blocked AND the verb is in quotes.
+	gitJSON := `{"command":"git grep -n \"go test\" ./internal/","description":"find literal"}`
+	if h1 := s.recordToolCall("run_command", gitJSON, 1, false); h1 != "" {
+		t.Fatalf("JSON git grep must not hint, got %q", h1)
+	}
+	if h2 := s.recordToolCall("run_command", gitJSON, 2, false); h2 != "" {
+		t.Fatalf("JSON git grep repeat must not hint, got %q", h2)
+	}
+	// JSON real verification: classify + redundant repeat warns (#1486 parity).
+	s2 := newRedundantReverifyState()
+	goJSON := `{"command":"go test ./..."}`
+	s2.recordToolCall("run_command", goJSON, 1, false)
+	if h := s2.recordToolCall("run_command", goJSON, 2, false); h == "" {
+		t.Fatal("JSON go test repeat MUST still hint")
+	}
+}
