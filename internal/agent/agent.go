@@ -1678,6 +1678,10 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// throttled aux-tier call, then injected in place of the raw
 			// Insight (see policy_distill.go). Fail-open, <=1 batch/hour.
 			a.maybeDistillPolicies(a.WorkingDir())
+			// sa-152 (trajectory→training-data export): opt-in RLVR/SFT
+			// sample outlet. Only fires when GGCODE_TRAINING_EXPORT=1 is set;
+			// never on cancelled runs (this block is the non-cancelled path).
+			a.maybeExportTrainingSample(a.WorkingDir(), runStats)
 		}
 		// Record run metrics for cross-session regression detection.
 		recordPerfBaseline(a.WorkingDir(), runStats)

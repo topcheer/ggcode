@@ -24,6 +24,32 @@ func trajClearArgIsGlobal(parts []string) bool {
 	return len(parts) >= 3 && strings.EqualFold(strings.TrimSpace(parts[2]), "global")
 }
 
+// handleExportTrainingCommand (sa-152) is the manual outlet for the
+// trajectory→training-data exporter: it appends the current session's
+// redacted message history as one JSONL sample under .ggcode/. The
+// automatic post-run path (traj_export.go) only fires with
+// GGCODE_TRAINING_EXPORT=1; this command is the explicit, per-invocation
+// consent path for SFT-style corpus collection.
+func (m *Model) handleExportTrainingCommand() tea.Cmd {
+	wd := m.agent.WorkingDir()
+	if wd == "" {
+		m.chatWriteSystem(nextSystemID(), m.t("traj.no_workspace"))
+		return nil
+	}
+	msgs := m.currentSessionMessages()
+	if len(msgs) == 0 {
+		m.chatWriteSystem(nextSystemID(), m.t("trainexport.empty"))
+		return nil
+	}
+	n, err := agent.ExportSessionTrainingSample(wd, "(tui manual export)", msgs)
+	if err != nil {
+		m.chatWriteSystem(nextSystemID(), fmt.Sprintf("/export-training: %v", err))
+		return nil
+	}
+	m.chatWriteSystem(nextSystemID(), fmt.Sprintf(m.t("trainexport.done"), n))
+	return nil
+}
+
 func (m *Model) handleTrajCommand(parts []string) tea.Cmd {
 	wd := m.agent.WorkingDir()
 	if wd == "" {

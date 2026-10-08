@@ -18,6 +18,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/stats` | Open session statistics panel |
 | `/cost` | Show session token usage and estimated cost |
 | `/runreport` | Evaluate this session's trajectory and print an offline efficiency scorecard (wasted calls, duplicate tool calls, error rate, token overhead); sessions with swarm/subagent activity also show a Coordination section (cross-agent duplicate work, message round trips, delegation chain integrity, parallel-layer waste, coordination token share) |
+| `/export-training` | Append the current session (redacted: secrets masked, images dropped, last 400 messages) as one JSONL training sample to `.ggcode/training-samples.jsonl` for RLVR/SFT corpus collection. Automatic post-run export with reward labels is available via `GGCODE_TRAINING_EXPORT=1`; manual exports carry outcome `manual` and reward 0 |
 | `/exit` | Exit ggcode |
 | `/restart` | Restart ggcode (preserves current session) |
 | `/update` | Check and install updates |
