@@ -194,6 +194,7 @@ type Agent struct {
 	todoDrop                     *todoDropState             // mid-run todo contract drop detection (silent commitment removal)
 	recurringError               *recurringErrorState       // recurring build/test error fingerprint detection across edit cycles
 	errStrategyLoop              *errStrategyState          // error strategy loop detection (procedural memory failure)
+	progressGate                 *progressGateState         // ReflexGrad-style progress-gated replan mode switch (behavioral, sa-138)
 	experienceFailureRecallFired bool                       // one-shot gate: decision-time experience recall fired this run (r379)
 	experienceInjectedCaseIDs    []string                   // case IDs injected at run-start; decision-time recall excludes them (#3072)
 	toolflowHintFired            bool                       // one-shot gate: toolflow next-step hint fired this run (r484)
@@ -441,6 +442,7 @@ func NewAgent(p provider.Provider, tools *tool.Registry, systemPrompt string, ma
 		todoDrop:               newTodoDropState(),
 		recurringError:         newRecurringErrorState(),
 		errStrategyLoop:        newErrStrategyState(),
+		progressGate:           newProgressGateState(),
 		fixCascade:             newFixCascadeState(),
 		errRegression:          newErrRegressionState(),
 		stalledConvergence:     newStalledConvergenceState(),
@@ -1895,6 +1897,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 	a.resetLastGoodCheckpoint()
 	a.recurringError.reset()
 	a.errStrategyLoop.reset()
+	a.progressGate.reset()
 	// r26: struggle window and fired-quota are per-run state (TUI/desktop
 	// agents are long-lived, one RunStream per user turn - same rationale
 	// as the #3403 spiralState fix above).
@@ -3704,6 +3707,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				a.fillCancelledToolResults(toolCalls[idx:], &toolResults)
 				return err
 			}
+			// Progress gate freeze (sa-138): after the gate fires, mutation-class
+			// calls in the remainder of this batch are skipped with an error
+			// placeholder (keeps tool_use/tool_result pairing; read-only calls
+			// still run) so a failing strategy cannot keep compounding writes.
+			if a.progressGate.freezingMutations() && isMutationTool(tc.Name) {
+				debug.Log("agent", "Iteration %d: progress gate froze mutation tool=%s", i+1, tc.Name)
+				toolResults = append(toolResults, provider.ToolResultNamedBlock(tc.ID, tc.Name,
+					a.progressGate.freezePlaceholder(tc.Name), true))
+				continue
+			}
 			// #1799 case 1: undo-blind detection BEFORE execution. The old
 			// call site sat in the post-execution result loop: the blind edit
 			// had ALREADY landed on disk by the time the "read before editing"
@@ -4441,6 +4454,16 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// calls to detect systemic approach failures (procedural memory
 			// gap from ProcMEM arXiv:2602.01869).
 			a.errStrategyLoop.recordResult(result.Content, result.IsError)
+			// Progress gate (ReflexGrad dual-process routing): a sustained
+			// cross-category failure streak with no interleaved success is an
+			// APPROACH-level failure, not an edit-level one. Behavioral on
+			// trigger: freezes remaining mutations in this batch and queues a
+			// replan directive on a dedicated (non-guidanceEmit) channel.
+			a.progressGate.recordToolResult(result.Content, result.IsError)
+			if a.progressGate.shouldTrigger(i + 1) {
+				a.progressGate.trigger(i + 1)
+				debug.Log("agent", "Iteration %d: progress gate fired - replan mode switch, batch mutations frozen", i+1)
+			}
 			// Strategy exhaustion: track diverse recovery strategies failing
 			// for the same error (EEA robustness entropy, MiRA subgoal decomposition).
 			if seMsg := a.strategyExhaustion.recordToolCall(tc.Name, result.IsError, result.Content, i+1); seMsg != "" {
@@ -5450,6 +5473,20 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 				Content: []provider.ContentBlock{{
 					Type: "text",
 					Text: serialWarn,
+				}},
+			})
+		}
+		// Progress gate replan checkpoint (sa-138): dedicated channel (NOT
+		// guidanceEmit) so guidance-budget throttling cannot swallow the mode
+		// switch; the next model turn starts from this directive.
+		a.progressGate.endBatch()
+		if replanMsg := a.progressGate.consumePendingReplan(); replanMsg != "" {
+			debug.Log("agent", "Iteration %d: progress gate injected replan checkpoint", i+1)
+			a.contextManager.Add(provider.Message{
+				Role: "user",
+				Content: []provider.ContentBlock{{
+					Type: "text",
+					Text: replanMsg,
 				}},
 			})
 		}
