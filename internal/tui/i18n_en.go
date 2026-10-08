@@ -697,6 +697,10 @@ func enCatalog(key string) string {
 		return "No past-run learnings stored yet."
 	case "why.empty":
 		return "No tool-call decisions recorded yet — run a task first, then /why [n] explains what the agent did and why."
+	case "guidance.empty":
+		return "No guidance stats recorded yet — .ggcode/memory/guidance-stats.jsonl is absent or empty (it fills after a run where any detector fires)."
+	case "guidance.unavailable":
+		return "Cannot resolve the workspace directory to locate guidance-stats.jsonl."
 	case "evidence.empty":
 		return "No citable claims yet — after the agent answers with code references (file.go:42, `symbol`), /evidence links each to the tool output that backs it."
 	case "traj.header":

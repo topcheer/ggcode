@@ -708,6 +708,10 @@ func zhCatalog(key string) string {
 		return "尚无历史运行学习条目。"
 	case "why.empty":
 		return "尚无工具调用决策记录——先运行任务，之后 /why [n] 可解释 agent 做了什么以及为什么。"
+	case "guidance.empty":
+		return "尚无引导统计记录——.ggcode/memory/guidance-stats.jsonl 不存在或为空（任一检测器开火后的运行会写入）。"
+	case "guidance.unavailable":
+		return "无法解析工作区目录以定位 guidance-stats.jsonl。"
 	case "evidence.empty":
 		return "尚无可引用的结论——当 agent 的答复包含代码引用（file.go:42、`symbol`）后，/evidence 会把每条结论链接到支撑它的工具输出。"
 	case "traj.header":
