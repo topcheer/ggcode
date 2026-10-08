@@ -234,6 +234,36 @@ type invariantOpTarget struct {
 // that fails to parse degrades to the legacy single empty pair, mirroring
 // the old classifier's output for the same input.
 func invariantOpTargets(name string, args json.RawMessage) []invariantOpTarget {
+	// #3547 (reopen): batch write tools expand PER FILE, mirroring the
+	// file_ops #3254 principle - a blocked target must not hide behind a
+	// benign first entry. invariantTargetPath keeps its first-path primary
+	// role for single-target consumers; the engine evaluates every file.
+	switch name {
+	case "multi_file_write":
+		var a struct {
+			Files []struct {
+				Path string `json:"path"`
+			} `json:"files"`
+		}
+		if json.Unmarshal(args, &a) == nil && len(a.Files) > 0 {
+			out := make([]invariantOpTarget, 0, len(a.Files))
+			for _, f := range a.Files {
+				out = append(out, invariantOpTarget{Op: "write", Target: f.Path})
+			}
+			return out
+		}
+	case "batch_replace":
+		var a struct {
+			Files []string `json:"files"`
+		}
+		if json.Unmarshal(args, &a) == nil && len(a.Files) > 0 {
+			out := make([]invariantOpTarget, 0, len(a.Files))
+			for _, p := range a.Files {
+				out = append(out, invariantOpTarget{Op: "write", Target: p})
+			}
+			return out
+		}
+	}
 	if name != "file_ops" {
 		return []invariantOpTarget{{Op: invariantOpOf(name, args), Target: invariantTargetPath(name, args)}}
 	}
