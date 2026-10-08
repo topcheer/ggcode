@@ -29,7 +29,9 @@ type queryConvergeState struct {
 	// iteration of last code-modifying tool call (edit, write, etc.)
 	lastActionIter int
 
-	// whether a warning has been issued this run
+	// whether a warning has been issued this run (#3380 delivery
+	// observability; NOT a gate - the cap is enforced by warnCount alone,
+	// #3570)
 	warned bool
 
 	// total warnings issued (cap at 2 per run)
@@ -131,7 +133,7 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if q.warned || q.warnCount >= 1 {
+	if q.warnCount >= 2 {
 		return ""
 	}
 
@@ -184,7 +186,13 @@ func (q *queryConvergeState) maybeWarn(iteration int) string {
 
 	debug.Log("query-converge", "convergence failure detected: avgSim=%.2f, queries=%d, iters=%d", avgSim, len(window), len(iters))
 
-	return "[query-convergence] " + qcIntToStr(len(window)) + " similar queries across " + qcIntToStr(len(iters)) + " iterations (avg similarity: " + qcFloatToStr(avgSim) + "). Try different search strategy or proceed with available context."
+	// #3570: the second (final) warning escalates - the first hint was
+	// seen and the loop continued anyway.
+	prefix := "[query-convergence] "
+	if q.warnCount == 2 {
+		prefix = "[query-convergence][escalated] still looping after prior hint; "
+	}
+	return prefix + qcIntToStr(len(window)) + " similar queries across " + qcIntToStr(len(iters)) + " iterations (avg similarity: " + qcFloatToStr(avgSim) + "). Try different search strategy or proceed with available context."
 }
 
 // qcExtractQuery pulls the query/pattern string from tool arguments JSON.
