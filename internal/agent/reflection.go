@@ -325,6 +325,13 @@ func GenerateInsights(stats RunStats) string {
 		status = "failed"
 	}
 	fmt.Fprintf(&b, "## Run Reflection (%s, %d iterations, %s)\n", status, stats.Iterations, stats.Duration.Round(time.Second))
+	// sa-139 (MemGuard): run-insights are injected into every future prompt,
+	// so the verification signal must travel WITH the text, not only in the
+	// sidecar. Observations distilled from a failed run are unverified - say
+	// so up front so later runs do not treat them as proven practices.
+	if !stats.Success {
+		b.WriteString("[verified: no - this run FAILED; the observations below are unverified post-mortem notes, not proven practices]\n")
+	}
 	if stats.UserPrompt != "" {
 		fmt.Fprintf(&b, "Task: %s\n\n", stats.UserPrompt)
 	}

@@ -49,6 +49,12 @@ type usageInfo struct {
 	// says which subsystem wrote; Actor says who was running it. Empty =
 	// legacy entries written before r29 (backfilled on next write).
 	Actor string `json:"actor,omitempty"`
+	// Outcome (sa-139, MemGuard arXiv:2608.21867) records the verification
+	// signal of the run that LAST wrote this key: "success", "partial", or
+	// "failed". Unlike Source/Actor it is overwrite-on-write semantics - a
+	// re-saved key carries the new run's outcome. Empty = legacy entries
+	// written before sa-139 (consumers treat as unknown, no bonus/penalty).
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // usageIndex is the sidecar document. Keyed by the sanitized filename
@@ -175,6 +181,31 @@ func (am *AutoMemory) RecordProvenanceActor(key, source, actor string) {
 	}
 	if err := am.saveUsage(idx); err != nil {
 		debug.Log("memory", "usage provenance persist failed for %s: %v", key, err)
+	}
+}
+
+// RecordOutcome (sa-139, MemGuard) attaches the writing run's verification
+// outcome to the sidecar record. Overwrite semantics: re-writing a key with
+// new content makes the new run's outcome the authoritative signal.
+func (am *AutoMemory) RecordOutcome(key, outcome string) {
+	if outcome != "success" && outcome != "partial" && outcome != "failed" {
+		return // unknown outcomes are simply not recorded
+	}
+	safe := disambiguateKey(key, sanitizeKey(key))
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	idx := am.loadUsage()
+	rec, ok := idx.Entries[safe]
+	if !ok || rec == nil {
+		rec = &usageInfo{FirstSeen: time.Now()}
+		idx.Entries[safe] = rec
+	}
+	if rec.Outcome == outcome {
+		return
+	}
+	rec.Outcome = outcome
+	if err := am.saveUsage(idx); err != nil {
+		debug.Log("memory", "usage outcome persist failed for %s: %v", safe, err)
 	}
 }
 
