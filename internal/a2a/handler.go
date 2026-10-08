@@ -530,6 +530,7 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 		reg = restrictRegistry(reg, perm.AllowedTools)
 	}
 	a := agent.NewAgent(h.agent.Provider(), reg, h.agent.SystemPrompt(), maxIter)
+	h.propagateWorkingDir(a)
 
 	prompt := buildAgentPrompt(skill, text)
 
@@ -545,6 +546,23 @@ func (h *TaskHandler) executeAgent(ctx context.Context, perm *SkillPermission, s
 	}
 
 	return buf.String(), nil
+}
+
+// propagateWorkingDir anchors a per-task A2A agent to the same workspace as
+// the parent agent (ClawGuard coverage, sa-135): without a working dir the
+// invariant engine stays inert (invariantEngineLazy returns nil for
+// wd == ""), so every tool call inside the A2A task would bypass the
+// declared block/warn invariants. Mirrors the subagent runner, which
+// propagates WorkingDir for exactly this reason. Falls back to the
+// handler's bound workspace when the parent has no working dir set.
+func (h *TaskHandler) propagateWorkingDir(a *agent.Agent) {
+	wd := h.agent.WorkingDir()
+	if wd == "" {
+		wd = h.workspace
+	}
+	if wd != "" {
+		a.SetWorkingDir(wd)
+	}
 }
 
 // cancelEntry pairs a cancel func with the generation that installed it.
