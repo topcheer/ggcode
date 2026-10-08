@@ -393,3 +393,23 @@ func TestParseMentions_SymlinkEscapeBlocked(t *testing.T) {
 		t.Fatalf("legitimate mention broken: %+v err=%v", mentions2, err2)
 	}
 }
+
+// TestCompleteSlashCommandIncludesBranches pins the built-in completion
+// entries for the branch-lineage navigation commands (#3558): /branches and
+// /branch-switch must complete from the "/bran" prefix, with descriptions and
+// the session-id placeholder for /branch-switch.
+func TestCompleteSlashCommandIncludesBranches(t *testing.T) {
+	matches := CompleteSlashCommand("/bran", nil)
+	if len(matches) != 3 || matches[0] != "/branch" || matches[1] != "/branch-switch" || matches[2] != "/branches" {
+		t.Fatalf("matches = %v, want [/branch /branch-switch /branches]", matches)
+	}
+	if got := SlashCommandDescriptions["/branches"]; got == "" {
+		t.Fatal("expected /branches description")
+	}
+	if got := SlashCommandDescriptions["/branch-switch"]; got == "" {
+		t.Fatal("expected /branch-switch description")
+	}
+	if got := SlashCommandPlaceholders["/branch-switch"]; got != "<session-id>" {
+		t.Fatalf("expected /branch-switch placeholder <session-id>, got %q", got)
+	}
+}
