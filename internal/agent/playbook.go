@@ -478,9 +478,14 @@ func playbookScore(e PlaybookEntry) float64 {
 	return freq * (10.0 / iter)
 }
 
-// recordPlaybook is called from maybeReflect to record successful strategies.
+// recordPlaybook is called from maybeReflect to record run outcomes.
+// Failed runs are NOT filtered here: Record (r389) needs failure samples to
+// degrade SuccessRate of existing entries and let prune evict degraded
+// strategies. The old !stats.Success gate (75eccdddd) predates that semantic
+// and made the r389 negative-evidence channel unreachable in production
+// (#3557).
 func (a *Agent) recordPlaybook(stats *RunStats) {
-	if stats == nil || !stats.Success {
+	if stats == nil {
 		return
 	}
 	workingDir := a.WorkingDir()
