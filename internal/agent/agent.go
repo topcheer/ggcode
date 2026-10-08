@@ -3058,6 +3058,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// execution. After execution, checkCalibration compares them
 			// against actual results to detect prediction-observation gaps.
 			a.foresightCalib.recordPrediction(assistantText, toolCalls, i+1)
+			// sa-140 (TVAE): one-time announcement of the structured
+			// expectation-declaration channel, sent when the first
+			// side-effect tool call appears.
+			if epHint := a.foresightCalib.expectProtocolHint(toolCalls); epHint != "" {
+				a.injectGuidance(epHint)
+			}
 			// Context-length goal drift: check if recent tool targets have
 			// drifted from the original user request keywords (arXiv:2505.02709).
 			if gdHint := a.goalDriftCtx.checkDrift(i + 1); gdHint != "" {
