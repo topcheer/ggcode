@@ -12,9 +12,10 @@ import (
 // GCStats holds statistics from a garbage collection run.
 // All counts are informational; GC never fails the session.
 type GCStats struct {
-	ExpiredRemoved int // transient files past their TTL that were deleted from disk
-	DedupRemoved   int // superseded evolving files that were deleted from disk
-	Total          int // total files scanned before GC
+	ExpiredRemoved   int // transient files past their TTL that were deleted from disk
+	DedupRemoved     int // superseded evolving files that were deleted from disk
+	ForgottenRemoved int // r10 user-forgotten files (forget.go) deleted from disk
+	Total            int // total files scanned before GC
 }
 
 // GarbageCollect physically removes memory files that the curation logic
@@ -50,6 +51,16 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		activeKeys[m.Key] = true // capped ≠ dead: keep the file
 	}
 
+	// r10: user-forgotten entries (forget.go) lose their whitelist slot —
+	// GC is the only physical deleter (#779 doctrine), so the forget mark
+	// takes effect on disk here. RestoreKey before this run still saves
+	// the entry; after it, only re-saving recreates it.
+	forgotten := am.ForgottenSet()
+	for k := range forgotten {
+		delete(activeKeys, k)
+	}
+	var digestedForgotten []string
+
 	stats := GCStats{Total: len(metas)}
 
 	for _, m := range metas {
@@ -75,12 +86,30 @@ func (am *AutoMemory) GarbageCollect() GCStats {
 		} else if m.Category == CategoryEvolving {
 			stats.DedupRemoved++
 		}
+		if forgotten[m.Key] {
+			stats.ForgottenRemoved++
+			am.ForgetUsage(m.Key) // drop sidecar ghosts, same as DeleteMemory
+			digestedForgotten = append(digestedForgotten, m.Key)
+		}
 	}
 
-	removed := stats.ExpiredRemoved + stats.DedupRemoved
+	// The forget sidecar must not keep marks for files GC just digested —
+	// otherwise RestoreKey reports success for an entry that no longer
+	// exists on disk (ghost-restore).
+	if len(digestedForgotten) > 0 {
+		f := am.loadForgotten()
+		for _, k := range digestedForgotten {
+			delete(f.Entries, k)
+		}
+		if err := am.saveForgotten(f); err != nil {
+			debug.Log("memory", "GC: failed to prune forget sidecar: %v", err)
+		}
+	}
+
+	removed := stats.ExpiredRemoved + stats.DedupRemoved + stats.ForgottenRemoved
 	if removed > 0 {
-		debug.Log("memory", "GC: removed %d files (%d expired, %d deduped) from %s",
-			removed, stats.ExpiredRemoved, stats.DedupRemoved, am.dir)
+		debug.Log("memory", "GC: removed %d files (%d expired, %d deduped, %d forgotten) from %s",
+			removed, stats.ExpiredRemoved, stats.DedupRemoved, stats.ForgottenRemoved, am.dir)
 	}
 
 	return stats
@@ -107,9 +136,15 @@ func (am *AutoMemory) DeleteMemory(key string) error {
 
 // GCFormatSummary returns a human-readable summary of GC results.
 func (s GCStats) String() string {
-	if s.ExpiredRemoved == 0 && s.DedupRemoved == 0 {
+	if s.ExpiredRemoved == 0 && s.DedupRemoved == 0 && s.ForgottenRemoved == 0 {
 		return fmt.Sprintf("memory GC: %d files scanned, 0 removed", s.Total)
 	}
-	return fmt.Sprintf("memory GC: %d files scanned, %d removed (%d expired, %d deduped)",
-		s.Total, s.ExpiredRemoved+s.DedupRemoved, s.ExpiredRemoved, s.DedupRemoved)
+	// Keep the pre-r10 format when nothing was forgotten-digested so
+	// existing consumers (and tests) see byte-identical output.
+	if s.ForgottenRemoved == 0 {
+		return fmt.Sprintf("memory GC: %d files scanned, %d removed (%d expired, %d deduped)",
+			s.Total, s.ExpiredRemoved+s.DedupRemoved, s.ExpiredRemoved, s.DedupRemoved)
+	}
+	return fmt.Sprintf("memory GC: %d files scanned, %d removed (%d expired, %d deduped, %d forgotten)",
+		s.Total, s.ExpiredRemoved+s.DedupRemoved+s.ForgottenRemoved, s.ExpiredRemoved, s.DedupRemoved, s.ForgottenRemoved)
 }

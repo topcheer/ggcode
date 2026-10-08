@@ -730,6 +730,20 @@ func zhCatalog(key string) string {
 		return "清空记忆失败：%v\n\n"
 	case "memory.cleared":
 		return "已清空所有自动记忆。\n\n"
+	case "memory.forget_usage":
+		return "用法: /memory forget <key> | /memory restore <key> | /memory forgotten\n\n"
+	case "memory.forgot":
+		return "已遗忘记忆 %q（下次 GC 前可通过 /memory restore 恢复）。\n\n"
+	case "memory.forget_failed":
+		return "遗忘记忆失败: %v\n\n"
+	case "memory.forgotten_empty":
+		return "没有已遗忘的记忆。\n\n"
+	case "memory.forgotten_title":
+		return "已遗忘的记忆:\n"
+	case "memory.restored":
+		return "记忆 %q 已恢复注入。\n\n"
+	case "memory.restore_failed":
+		return "恢复记忆失败: %v\n\n"
 	case "memory.title":
 		return "记忆：\n"
 	case "memory.project":
