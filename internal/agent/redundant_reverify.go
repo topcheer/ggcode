@@ -102,6 +102,10 @@ var reverifyTextToolFirstWords = map[string]bool{
 	"printf": true, "tail": true, "head": true, "less": true, "sort": true,
 	"uniq": true, "wc": true, "tr": true, "cut": true, "tee": true, "xargs": true,
 	"man": true, "which": true, "type": true, "find": true, "ls": true,
+	// #3588: content operations and wrapper commands whose ARGUMENTS quote
+	// verification verbs (git grep "go test", git commit -m "make test pass",
+	// docker run make test) - the verb is data there, not execution.
+	"git": true, "docker": true, "kubectl": true, "podman": true,
 }
 
 func firstPipelineSegment(args string) string {
@@ -209,13 +213,45 @@ func (s *redundantReverifyState) classifyVerificationCommand(toolName, args stri
 			return ""
 		}
 	}
-	combined := toolName + " " + args
+	// #3588: quoted spans are DATA, not command position - strip their
+	// contents before pattern matching so `git grep -n "go test"` (also
+	// first-word blocked) or `commit -m "make test pass"` cannot match a
+	// verification verb that lives only inside a string literal. Unquoted
+	// command positions (including later pipeline segments) still match.
+	combined := toolName + " " + stripQuotedSpans(args)
 	for cat, re := range reverifyCmdPatterns {
 		if re.MatchString(combined) {
 			return cat
 		}
 	}
 	return ""
+}
+
+// stripQuotedSpans replaces the contents of single/double-quoted spans
+// (including the quote characters) with spaces. Escaped quotes (\" and \')
+// do not toggle quote state. Shell command substitution inside quotes is
+// also data at match time, which is the desired semantics here.
+func stripQuotedSpans(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			b.WriteByte(' ')
+			continue
+		}
+		if (c == '"' || c == '\'') && i > 0 && s[i-1] != '\\' {
+			quote = c
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // recordToolCall tracks verification commands and checks for redundant
