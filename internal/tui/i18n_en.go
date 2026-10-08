@@ -699,6 +699,16 @@ func enCatalog(key string) string {
 		return "No tool-call decisions recorded yet — run a task first, then /why [n] explains what the agent did and why."
 	case "guidance.empty":
 		return "No guidance stats recorded yet — .ggcode/memory/guidance-stats.jsonl is absent or empty (it fills after a run where any detector fires)."
+	case "guidance.suppressed":
+		return "Suppressed %q — guidance from this detector is now blocked (takes effect immediately). Undo with /guidance reset <tag>."
+	case "guidance.reset":
+		return "Reset %q — detector default behavior restored."
+	case "guidance.noreset":
+		return "No override recorded for %q (nothing to reset)."
+	case "guidance.ambiguous":
+		return "Ambiguous tag %q — matches multiple detectors. Use the full tag:\n  %s"
+	case "guidance.usage":
+		return "Usage: /guidance [n] | /guidance <tag> | /guidance suppress <tag> | /guidance reset <tag>"
 	case "guidance.nohints":
 		return "No hint texts recorded yet — .ggcode/memory/guidance-hints.jsonl is absent or empty (written when a guidance hint is delivered; rerun after a detector fires)."
 	case "guidance.tagmiss":

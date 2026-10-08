@@ -17,6 +17,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -356,4 +357,62 @@ func ApplyOverridesToAllow(allow func(tag string) bool) func(tag string) bool {
 		}
 		return allow(tag)
 	}
+}
+
+// SetHarnessSuppressed (r16) is the manual half of the
+// observability→controllability loop: /guidance suppress <tag> lands here.
+// The sa-109 auto channel only reacts to double-confirmed stale tags;
+// until now a user who drilled into a misfiring detector via
+// /guidance <tag> had no action channel other than hand-editing
+// harness-overrides.json and restarting. Mirrors the MaybeTuneHarness
+// write pattern (lock, load, mutate, atomic store, refresh process
+// cache). Model is pinned to "manual" so manual entries never count
+// against the per-model auto budget (tuningCountModel matches real
+// model names) and remain distinguishable in the JSONL provenance.
+func SetHarnessSuppressed(tag string) error {
+	if tag == "" {
+		return errors.New("harness override: empty tag")
+	}
+	path := harnessPathFn()
+	if path == "" {
+		return errors.New("harness override: store path unavailable")
+	}
+	harnessMu.Lock()
+	defer harnessMu.Unlock()
+	cur := loadHarnessOverrides(path)
+	cur[tag] = tierOverride{Tier: tuningSuppressTier, Version: 1, Model: "manual", AppliedAt: time.Now().UTC()}
+	if err := storeHarnessOverrides(path, cur); err != nil {
+		return err
+	}
+	harnessOverrides = cur
+	debug.Log("harness-tuning", "manual suppress: %q", tag)
+	return nil
+}
+
+// ClearHarnessOverride (r16) removes one tag's override (/guidance reset
+// <tag>), restoring detector default behavior immediately (the process
+// cache is refreshed in the same critical section). Returns false when no
+// override existed for the tag - a no-op the TUI surfaces instead of
+// pretending a reset happened.
+func ClearHarnessOverride(tag string) (bool, error) {
+	if tag == "" {
+		return false, errors.New("harness override: empty tag")
+	}
+	path := harnessPathFn()
+	if path == "" {
+		return false, errors.New("harness override: store path unavailable")
+	}
+	harnessMu.Lock()
+	defer harnessMu.Unlock()
+	cur := loadHarnessOverrides(path)
+	if _, ok := cur[tag]; !ok {
+		return false, nil
+	}
+	delete(cur, tag)
+	if err := storeHarnessOverrides(path, cur); err != nil {
+		return false, err
+	}
+	harnessOverrides = cur
+	debug.Log("harness-tuning", "manual reset: %q", tag)
+	return true, nil
 }
