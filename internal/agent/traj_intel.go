@@ -105,6 +105,12 @@ type trajectoryLearning struct {
 	InjectedRuns int `json:"injected_runs,omitempty"`
 	AfterSuccess int `json:"after_success,omitempty"`
 	AfterFail    int `json:"after_fail,omitempty"`
+
+	// sa-149 (GEPA-style policy distillation): LLM-refined imperative
+	// policy text, compiled once the r461 outcome counters above have
+	// proven this entry effective (see policy_distill.go). Empty = never
+	// distilled; prompt injection falls back to the raw Insight.
+	Refined string `json:"refined,omitempty"`
 }
 
 // trajIntelState manages post-run trajectory intelligence extraction.
@@ -513,7 +519,13 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 		seenCat[key] = true
 		counts[l.Type]++
 		s.recordInjectedLocked(l)
-		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, l.Insight))
+		// sa-149: prefer the distilled policy text when present; the raw
+		// statistical Insight remains the fallback for unrefined entries.
+		text := l.Refined
+		if text == "" {
+			text = l.Insight
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s", l.Type, text))
 		total++
 	}
 	if len(lines) == 0 {
