@@ -46,6 +46,12 @@ type MemoryMeta struct {
 	// recall arbitration trust scoring; NOT an admission blocker - failed-run
 	// observations keep negative-example value, they just rank lower.
 	Outcome string
+
+	// Conflicts (sa-146, REALM arXiv:2609.33226): count of high-confidence
+	// recall arbitration losses (retrieval-time signal, unlike the
+	// write-time Outcome above). Consumed by cap eviction order and trust
+	// scoring; never a deletion trigger (non-destructive contract, r488).
+	Conflicts int
 }
 
 // transientExpiry is how long transient memories stay active.
@@ -279,16 +285,22 @@ func capByCountSplit(active []MemoryMeta, max int) (kept, evicted []MemoryMeta) 
 	// Eviction order is interference-aware (Microsoft Human-Inspired Memory
 	// 2026, interference-based forgetting; arXiv:2603.07670 9.4 learning to
 	// forget): a never-injected entry is pure interference - it costs prompt
-	// budget but has never earned it - so Uses==0 entries are evicted FIRST
-	// (oldest-first within that group); entries with Uses>0 are evicted only
-	// after all never-used ones, still oldest-first. The old CreatedAt-only
+	// budget but has never earned it - so Uses==0 entries are evicted before
+	// used ones (oldest-first within each group). The old CreatedAt-only
 	// order could evict a frequently-injected old default entry while keeping
 	// a never-used one that had simply been saved later.
+	// sa-146 (REALM 2609.33226): repeatedly-arbitrated losers (Conflicts>=2)
+	// rank below even never-used entries - a contradictory signal re-injected
+	// every recall is worse than absent signal, so it is the first to go when
+	// the cap bites.
 	usageTier := func(m MemoryMeta) int {
-		if m.Uses == 0 {
-			return 0 // evict first: never contributed
+		if m.Conflicts >= 2 {
+			return 0 // evict first: repeated high-confidence arbitration loser
 		}
-		return 1 // evict later: has retrieval history
+		if m.Uses == 0 {
+			return 1 // evict next: never contributed
+		}
+		return 2 // evict last: has retrieval history
 	}
 	sort.Slice(defaults, func(i, j int) bool {
 		ti, tj := usageTier(defaults[i]), usageTier(defaults[j])

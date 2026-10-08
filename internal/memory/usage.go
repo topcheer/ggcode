@@ -55,6 +55,13 @@ type usageInfo struct {
 	// re-saved key carries the new run's outcome. Empty = legacy entries
 	// written before sa-139 (consumers treat as unknown, no bonus/penalty).
 	Outcome string `json:"outcome,omitempty"`
+	// Conflicts (sa-146, REALM arXiv:2609.33226 retrieval-driven
+	// reconsolidation) counts high-confidence recall arbitration losses:
+	// times this entry lost to a clearly-higher-trust contradicting entry
+	// while being injected. Unlike Uses (positive retrieval signal) this is
+	// a negative retrieval-time signal that feeds curation eviction order
+	// and arbitration trust scoring. Debounced like Uses.
+	Conflicts int `json:"conflicts,omitempty"`
 }
 
 // usageIndex is the sidecar document. Keyed by the sanitized filename
@@ -206,6 +213,54 @@ func (am *AutoMemory) RecordOutcome(key, outcome string) {
 	rec.Outcome = outcome
 	if err := am.saveUsage(idx); err != nil {
 		debug.Log("memory", "usage outcome persist failed for %s: %v", safe, err)
+	}
+}
+
+// RecordConflictLoss (sa-146, REALM arXiv:2609.33226 retrieval-driven
+// reconsolidation) persists one high-confidence arbitration loss per key:
+// the retrieval episode itself revises the entry's standing instead of the
+// verdict being use-and-forget. Debounced per key in the same window as
+// RecordUse (separate "loss:" namespace so the two counters never fight
+// over one debounce slot), and fail-open with a log like every sidecar
+// write. Callers pass ALREADY-SANITIZED keys (MemoryEntry.Key).
+func (am *AutoMemory) RecordConflictLoss(keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	now := time.Now()
+	var fresh []string
+	for _, k := range keys {
+		dk := "loss:" + k
+		if last, ok := am.useOnce.Load(dk); ok {
+			if now.Sub(last.(time.Time)) < usageDebounce {
+				continue
+			}
+		}
+		am.useOnce.Store(dk, now)
+		fresh = append(fresh, k)
+	}
+	if len(fresh) == 0 {
+		return
+	}
+	// #3120 lock contract, same as RecordUse: FileLock outer, am.mu inner.
+	if unlock, err := util.FileLock(am.dir + ".lock"); err == nil {
+		defer unlock()
+	} else {
+		debug.Log("memory", "automemory sidecar filelock failed, degraded to unlocked write: %v", err)
+	}
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	idx := am.loadUsage()
+	for _, k := range fresh {
+		rec := idx.Entries[k]
+		if rec == nil {
+			rec = &usageInfo{FirstSeen: now}
+			idx.Entries[k] = rec
+		}
+		rec.Conflicts++
+	}
+	if err := am.saveUsage(idx); err != nil {
+		debug.Log("memory", "conflict-loss persist failed: %v", err)
 	}
 }
 

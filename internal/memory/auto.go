@@ -294,7 +294,8 @@ func (am *AutoMemory) collectMetas() ([]MemoryMeta, error) {
 			meta.Uses = rec.Uses
 			meta.LastUsedAt = rec.LastUsed
 			meta.Source = rec.Source
-			meta.Outcome = rec.Outcome // sa-139 MemGuard lifecycle metadata
+			meta.Outcome = rec.Outcome     // sa-139 MemGuard lifecycle metadata
+			meta.Conflicts = rec.Conflicts // sa-146 REALM reconsolidation signal
 		}
 		metas = append(metas, meta)
 	}
@@ -531,7 +532,8 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	// with no warning. Arbitrate among the inline set and annotate the
 	// lower-trust side; winners stay clean. Annotation happens after
 	// budget accounting and is capped by maxRecallConflicts.
-	if arb := ArbitrateInline(inline, now); arb.HasConflicts() {
+	arb := ArbitrateInline(inline, now)
+	if arb.HasConflicts() {
 		arb.Annotate(inline)
 		debug.Log("memory", "recall arbitration: %d conflict(s) among %d inline entries", len(arb.Conflicts), len(inline))
 	}
@@ -545,6 +547,18 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 	am.annotateStaleInline(inline)
 
 	if record {
+		// sa-146 (REALM arXiv:2609.33226 retrieval-driven reconsolidation):
+		// the recall episode itself revises the activated entries' standing -
+		// persist high-confidence losses so curation eviction and trust
+		// scoring can consume retrieval-time conflict signal. Ties and thin
+		// margins (< recallConflictLossGap) stay ephemeral annotations.
+		var losers []string
+		for _, c := range arb.Conflicts {
+			if c.WinnerTrust-c.LoserTrust >= recallConflictLossGap {
+				losers = append(losers, c.LoserKey)
+			}
+		}
+		am.RecordConflictLoss(losers)
 		inlineKeys := make([]string, 0, len(inline))
 		for _, e := range inline {
 			inlineKeys = append(inlineKeys, e.Key)
