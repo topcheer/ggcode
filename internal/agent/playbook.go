@@ -455,6 +455,16 @@ func (pb *Playbook) HintsForPrompt(runPrompt string, maxHints int) string {
 		lines = append(lines, fmt.Sprintf("- %s%s: %s (%d runs, ~%.0f iter%s)",
 			e.TaskType, fileHint, e.ToolSequence, e.Uses, e.AvgIter, durHint))
 	}
+	// sa-148 (tool composition): bridge learned patterns to callable assets.
+	// A well-observed read-heavy pattern is a macro candidate - hint once so
+	// the model knows it can persist the sequence via the macro tool instead
+	// of re-deriving every call each run.
+	for i := 0; i < maxHints; i++ {
+		if sorted[i].Uses >= 3 {
+			lines = append(lines, "Tip: a recurring read-only tool pattern above can be persisted once with the macro tool (action=define) and replayed by name (action=run).")
+			break
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 

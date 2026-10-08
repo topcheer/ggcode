@@ -232,6 +232,12 @@ func RegisterBuiltinTools(registry *Registry, policy permission.PermissionPolicy
 		return err
 	}
 
+	// Tool macros (sa-148): record/replay reusable read-only tool-call
+	// sequences. Also holds a registry reference for run-time lookup.
+	if err := registry.Register(&MacroTool{WorkingDir: workingDir, Registry: registry}); err != nil {
+		return err
+	}
+
 	return nil
 }
 
