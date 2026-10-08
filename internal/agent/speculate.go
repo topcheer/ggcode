@@ -66,6 +66,29 @@ var argLinkedPatterns = map[string]bool{
 	"multi_edit_file→multi_file_read": true,
 	"write_file→read_file":            true,
 	"write_file→multi_file_read":      true,
+	// r11: same-path post-edit diagnostics/lookup. The LLM checks the file
+	// it just edited — lsp_diagnostics and lsp_symbols are single-"path"
+	// tools (lspPathTool), so the same path linkage as read_file applies.
+	"edit_file→lsp_diagnostics":       true,
+	"multi_edit_file→lsp_diagnostics": true,
+	"write_file→lsp_diagnostics":      true,
+	"edit_file→lsp_symbols":           true,
+	"multi_edit_file→lsp_symbols":     true,
+	"write_file→lsp_symbols":          true,
+}
+
+// noArgTemplates holds tools whose useful invocation needs no arguments (or
+// only optional ones), so the argument prediction degenerates to a constant
+// template. This makes name-only bigram predictions (e.g. anything→git_status
+// after an edit) actually speculatable instead of being skipped with
+// predArgs==nil. Keys must be speculativeSafeTools members. git_diff is
+// deliberately excluded: its bare invocation is a whole-tree diff whose
+// output size dwarfs the latency it saves, and real invocations usually pass
+// file/cached flags (guaranteed cache-key miss).
+var noArgTemplates = map[string]json.RawMessage{
+	"git_status":      json.RawMessage(`{}`),
+	"git_branch_list": json.RawMessage(`{}`),
+	"git_log":         json.RawMessage(`{}`),
 }
 
 // speculator implements pattern-aware speculative tool execution.
@@ -392,6 +415,12 @@ func (s *speculator) hasCached(toolName string, args json.RawMessage) bool {
 // For argument-linked patterns (e.g., edit_file→read_file), it extracts the
 // "path" or "file_path" field from the previous tool's args.
 func predictArgs(nextTool, prevTool string, prevArgs json.RawMessage) json.RawMessage {
+	// r11: constant-template tools need no linkage — any learned bigram that
+	// predicts them can be served with the template directly.
+	if tmpl, ok := noArgTemplates[nextTool]; ok {
+		return tmpl
+	}
+
 	linkKey := prevTool + "→" + nextTool
 	if !argLinkedPatterns[linkKey] {
 		return nil
@@ -427,6 +456,16 @@ func predictArgs(nextTool, prevTool string, prevArgs json.RawMessage) json.RawMe
 		obj := map[string]json.RawMessage{
 			"files": json.RawMessage(`[{"path": ` + string(pathBytes) + `}]`),
 		}
+		result, err := json.Marshal(obj)
+		if err != nil {
+			return nil
+		}
+		return result
+	}
+	// r11: single-path lsp tools (lspPathTool) take {"path": ...} exactly like
+	// read_file — the predicted shape mirrors the read_file branch above.
+	if nextTool == "lsp_diagnostics" || nextTool == "lsp_symbols" {
+		obj := map[string]json.RawMessage{"path": pathBytes}
 		result, err := json.Marshal(obj)
 		if err != nil {
 			return nil
