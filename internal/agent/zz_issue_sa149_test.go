@@ -192,3 +192,35 @@ func TestSA149_BatchCap(t *testing.T) {
 		t.Fatalf("batch cap exceeded: %d > %d", seen, policyDistillBatchMax)
 	}
 }
+
+// P7: Agent-side wiring - nil-state no-op, fresh-stamp early return (no LLM,
+// store untouched), and expired-stamp path with no store (fail-open no-op).
+func TestSA149_MaybeDistillThrottleWiring(t *testing.T) {
+	// nil trajIntel / empty workingDir: silent no-op.
+	a := &Agent{}
+	a.maybeDistillPolicies("")
+	a.maybeDistillPolicies(t.TempDir())
+
+	dir := t.TempDir()
+	gg := filepath.Join(dir, ".ggcode")
+	if err := os.MkdirAll(gg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a2 := &Agent{trajIntel: newTrajIntelState()}
+
+	// Fresh stamp: early return, nothing written.
+	stamp := filepath.Join(gg, policyDistillStampFile)
+	if err := os.WriteFile(stamp, []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a2.maybeDistillPolicies(dir)
+	if _, err := os.Stat(filepath.Join(gg, "trajectory-learnings.jsonl")); err == nil {
+		t.Fatal("fresh stamp must not create the learnings store")
+	}
+
+	// Expired stamp + no store: fail-open no-op, no panic.
+	if err := os.Chtimes(stamp, time.Now().Add(-2*policyDistillThrottle), time.Now().Add(-2*policyDistillThrottle)); err != nil {
+		t.Fatal(err)
+	}
+	a2.maybeDistillPolicies(dir)
+}
