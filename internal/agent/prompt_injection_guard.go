@@ -203,7 +203,10 @@ func guardPromptInjection(toolName string, args json.RawMessage, content string)
 		return content
 	}
 
-	lowered := strings.ToLower(content)
+	// G1 (sa-157): match against the normalized copy so zero-width,
+	// full-width, and homoglyph obfuscation cannot bypass the patterns;
+	// wrapUntrustedContent below still emits the ORIGINAL content.
+	lowered := strings.ToLower(memory.NormalizeForInjectionMatch(content))
 	for _, pattern := range injectionPatterns {
 		if strings.Contains(lowered, pattern) {
 			debug.Log("prompt-injection-guard", "detected injection pattern %q in tool=%s content_len=%d", pattern, toolName, len(content))
