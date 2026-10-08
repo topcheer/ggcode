@@ -295,12 +295,20 @@ func extractEditFilePaths(toolName string, args json.RawMessage) []string {
 	case "notebook_edit":
 		return extractSinglePath(m, "notebook_path")
 	case "file_ops":
-		// operations[] carries source/destination per op.
+		// operations[] carries source/destination per op. mkdir creates a
+		// directory: it edits no file content, and its source is a brand-new
+		// path that can never have been read, so feeding it to the
+		// read-before-edit check guarantees a false positive. Skip mkdir ops;
+		// delete/move stay in the bookkeeping (freshness/readHash still want
+		// to know the path changed hands).
 		if ops, ok := m["operations"].([]any); ok {
 			var paths []string
 			for _, o := range ops {
 				om, ok := o.(map[string]any)
 				if !ok {
+					continue
+				}
+				if act, _ := om["action"].(string); act == "mkdir" {
 					continue
 				}
 				for _, key := range []string{"source", "destination"} {
