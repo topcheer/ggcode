@@ -858,14 +858,19 @@ func mentionsLocalPart(lower, localPart string) bool {
 // stripLocalPartMention removes "@localpart" occurrences that are not
 // prefixes of a longer handle (same boundary rule as mentionsLocalPart).
 func stripLocalPartMention(text, localPart string) string {
-	lower := strings.ToLower(text)
-	// #2749 case follow-up: lower the needle to match the (?i) behavior.
+	// #3572: match and consume in ONE coordinate system. The old code
+	// located matches in strings.ToLower(text) but consumed bytes of the
+	// ORIGINAL text with the same indices - valid only while ToLower is
+	// byte-length-preserving, which expanding mappings like U+0130 break,
+	// misaligning every byte after the first such rune. Matrix localpart
+	// needles are ASCII, so case-insensitive matching on the original is a
+	// per-byte ASCII fold (length-preserving by construction).
 	needle := "@" + strings.ToLower(localPart)
 	var b strings.Builder
 	for i := 0; i < len(text); {
-		if strings.HasPrefix(lower[i:], needle) {
-			end := i + len(needle)
-			if end >= len(lower) || !strings.ContainsAny(string(lower[end]), matrixLocalPartContChars) {
+		if n, ok := matrixASCIIFoldPrefix(text[i:], needle); ok {
+			end := i + n
+			if end >= len(text) || !matrixIsLocalPartContByte(text[end]) {
 				i = end // skip the mention
 				continue
 			}
@@ -874,6 +879,39 @@ func stripLocalPartMention(text, localPart string) string {
 		i++
 	}
 	return b.String()
+}
+
+// matrixASCIIFoldPrefix reports whether s starts with the ASCII needle
+// case-insensitively (needle MUST already be lowercased) and returns the
+// matched length in s's own bytes.
+func matrixASCIIFoldPrefix(s, needleLower string) (int, bool) {
+	if len(s) < len(needleLower) {
+		return 0, false
+	}
+	for j := 0; j < len(needleLower); j++ {
+		c := needleLower[j]
+		d := s[j]
+		if d == c {
+			continue
+		}
+		// ASCII letter fold: 'a'-'z' vs 'A'-'Z' only (non-ASCII bytes can
+		// never match an ASCII needle byte).
+		if c >= 'a' && c <= 'z' && d == c-('a'-'A') {
+			continue
+		}
+		return 0, false
+	}
+	return len(needleLower), true
+}
+
+// matrixIsLocalPartContByte is the byte-level form of the
+// matrixLocalPartContChars boundary rule (#2749): a non-ASCII byte can
+// never be a legal localpart continuation.
+func matrixIsLocalPartContByte(b byte) bool {
+	if b >= 'a' && b <= 'z' || b >= '0' && b <= '9' {
+		return true
+	}
+	return b == '.' || b == '_' || b == '=' || b == '-' || b == '+' || b == '/'
 }
 
 // --- Outbound ---
