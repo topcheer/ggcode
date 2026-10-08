@@ -710,6 +710,10 @@ func zhCatalog(key string) string {
 		return "尚无工具调用决策记录——先运行任务，之后 /why [n] 可解释 agent 做了什么以及为什么。"
 	case "guidance.empty":
 		return "尚无引导统计记录——.ggcode/memory/guidance-stats.jsonl 不存在或为空（任一检测器开火后的运行会写入）。"
+	case "guidance.nohints":
+		return "尚无提示原文记录——.ggcode/memory/guidance-hints.jsonl 不存在或为空（提示送达时写入；检测器开火后重跑一次即可）。"
+	case "guidance.tagmiss":
+		return "没有匹配 %q 的提示记录。可用 tag:\n  %s"
 	case "guidance.unavailable":
 		return "无法解析工作区目录以定位 guidance-stats.jsonl。"
 	case "evidence.empty":

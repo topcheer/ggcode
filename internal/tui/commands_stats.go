@@ -25,17 +25,27 @@ import (
 // finding sa-164: dimension-1 exposure gap + the root cause of
 // dimension-2 (guidance-budget contention) being unobservable.
 //
-// Usage: /guidance [n]  - aggregate the last n jsonl lines (default 200,
-// clamped 1..1000, same arg discipline as /why).
+// Usage:
+//
+//	/guidance        - aggregate view (last 200 jsonl lines)
+//	/guidance <n>    - aggregate over the last n lines (1..1000)
+//	/guidance <tag>  - drill down: the last hint text injected for that
+//	                  tag from guidance-hints.jsonl (r15 introspection
+//	                  span-payload layer: aggregate counts → exact prose)
 func (m *Model) handleGuidanceStatsCommand(parts []string) tea.Cmd {
-	n := agent.WhyCountArg(parts)
-	if n < 1 || n > 1000 {
-		n = 200
-	}
 	wd := m.agent.WorkingDir()
 	if wd == "" {
 		m.chatWriteSystem(nextSystemID(), m.t("guidance.unavailable"))
 		return nil
+	}
+	// Non-numeric first arg (possibly multi-word) selects a tag drill-down.
+	if len(parts) > 1 && !isAllDigits(parts[1]) {
+		m.chatWriteSystem(nextSystemID(), m.drilldownGuidanceHint(wd, strings.Join(parts[1:], " ")))
+		return nil
+	}
+	n := agent.WhyCountArg(parts)
+	if n < 1 || n > 1000 {
+		n = 200
 	}
 	path := filepath.Join(wd, ".ggcode", "memory", "guidance-stats.jsonl")
 	lines, err := readTailLines(path, n)
@@ -43,8 +53,81 @@ func (m *Model) handleGuidanceStatsCommand(parts []string) tea.Cmd {
 		m.chatWriteSystem(nextSystemID(), m.t("guidance.empty"))
 		return nil
 	}
-	m.chatWriteSystem(nextSystemID(), summarizeGuidanceStats(lines))
+	m.chatWriteSystem(nextSystemID(), summarizeGuidanceStats(lines, m.agent.ClaimsSupervisionEnabled()))
 	return nil
+}
+
+// isAllDigits reports whether s is a non-empty pure digit string.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// drilldownGuidanceHint (r15) resolves a tag query against
+// guidance-hints.jsonl: exact match first, then unique case-insensitive
+// prefix/substring match. Falls back to listing the available tags so the
+// user can retry without opening the file.
+func (m *Model) drilldownGuidanceHint(wd, query string) string {
+	q := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(query), "##"))
+	path := filepath.Join(wd, ".ggcode", "memory", "guidance-hints.jsonl")
+	lines, err := readTailLines(path, 1000)
+	if err != nil || len(lines) == 0 {
+		return m.t("guidance.nohints")
+	}
+	type hintRec struct {
+		TS   string `json:"ts"`
+		Tag  string `json:"tag"`
+		Text string `json:"text"`
+	}
+	var recs []hintRec
+	for _, line := range lines {
+		var r hintRec
+		if json.Unmarshal([]byte(line), &r) == nil && r.Tag != "" && r.Text != "" {
+			recs = append(recs, r)
+		}
+	}
+	if len(recs) == 0 {
+		return m.t("guidance.nohints")
+	}
+	// Exact match wins (last record = most recent).
+	var last *hintRec
+	for i := range recs {
+		if strings.EqualFold(recs[i].Tag, q) {
+			last = &recs[i]
+		}
+	}
+	if last == nil {
+		// Otherwise a unique case-insensitive substring match.
+		var cand []int
+		for i := range recs {
+			if strings.Contains(strings.ToLower(recs[i].Tag), strings.ToLower(q)) {
+				cand = append(cand, i)
+			}
+		}
+		if len(cand) >= 1 {
+			last = &recs[cand[len(cand)-1]]
+		}
+	}
+	if last == nil {
+		tags := make([]string, 0, len(recs))
+		seen := map[string]bool{}
+		for _, r := range recs {
+			if !seen[r.Tag] {
+				seen[r.Tag] = true
+				tags = append(tags, r.Tag)
+			}
+		}
+		sort.Strings(tags)
+		return fmt.Sprintf(m.t("guidance.tagmiss"), q, strings.Join(tags, "\n  "))
+	}
+	return fmt.Sprintf("%s  (%s)\n\n%s", last.Tag, trimTS(last.TS), last.Text)
 }
 
 // readTailLines returns up to the last n lines of path. Files are small
@@ -76,23 +159,36 @@ func readTailLines(path string, n int) ([]string, error) {
 // summarizeGuidanceStats aggregates jsonl records
 // {ts, model?, tag, delivered, suppressed} by tag, sorted by total
 // injections (delivered+suppressed) descending, plus a header with the
-// observed time window and per-model split.
-func summarizeGuidanceStats(lines []string) string {
+// observed time window and per-model split. claimsOn labels the gated
+// claimsSupervision family (default off, sa-164 discoverability finding).
+// type=stale_heuristic report lines in the same file surface as a trailing
+// "stale" list (r22 harness-assumption expiry, previously grep-only).
+func summarizeGuidanceStats(lines []string, claimsOn bool) string {
 	type stat struct {
 		delivered, suppressed int
 	}
 	tags := map[string]*stat{}
 	models := map[string]int{}
+	var staleTags []string
+	seenStale := map[string]bool{}
 	firstTS, lastTS := "", ""
 	for _, line := range lines {
 		var rec struct {
 			TS         string `json:"ts"`
 			Model      string `json:"model"`
 			Tag        string `json:"tag"`
+			Type       string `json:"type"`
 			Delivered  int    `json:"delivered"`
 			Suppressed int    `json:"suppressed"`
 		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil || rec.Tag == "" {
+			continue
+		}
+		if rec.Type == "stale_heuristic" {
+			if !seenStale[rec.Tag] {
+				seenStale[rec.Tag] = true
+				staleTags = append(staleTags, rec.Tag)
+			}
 			continue
 		}
 		st := tags[rec.Tag]
@@ -122,7 +218,7 @@ func summarizeGuidanceStats(lines []string) string {
 		window = fmt.Sprintf("%s .. %s", trimTS(firstTS), trimTS(lastTS))
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Guidance stats: %d tag(s), window %s\n", len(tags), window))
+	b.WriteString(fmt.Sprintf("Guidance stats: %d tag(s), window %s  [claimsSupervision: %s]\n", len(tags), window, onOff(claimsOn)))
 	if len(models) > 0 {
 		ml := make([]string, 0, len(models))
 		for mo, c := range models {
@@ -147,7 +243,22 @@ func summarizeGuidanceStats(lines []string) string {
 		st := tags[t]
 		b.WriteString(fmt.Sprintf("%-4d %5d %5d %6d  %s\n", i+1, st.delivered, st.suppressed, st.delivered+st.suppressed, t))
 	}
+	if len(staleTags) > 0 {
+		sort.Strings(staleTags)
+		b.WriteString(fmt.Sprintf("\nstale (harness-flagged, sa-109 auto-suppress candidates):\n"))
+		for _, t := range staleTags {
+			b.WriteString("  - " + t + "\n")
+		}
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// onOff renders a bool as on/off for the gated-detector header label.
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 // trimTS shortens an RFC3339 timestamp to minute precision for the header.

@@ -29,12 +29,16 @@ func TestSummarizeGuidanceStats(t *testing.T) {
 		`{"ts":"2026-10-08T10:00:00Z","model":"m1","tag":"## Attention Fragmentation","delivered":3,"suppressed":1}`,
 		`{"ts":"2026-10-08T11:00:00Z","model":"m1","tag":"## Attention Fragmentation","delivered":2,"suppressed":0}`,
 		`{"ts":"2026-10-08T12:00:00Z","model":"m2","tag":"ACT NOW: verify","delivered":1,"suppressed":4}`,
+		`{"ts":"2026-10-08T13:00:00Z","tag":"## Old Detector","type":"stale_heuristic","delivered":0,"suppressed":50}`,
 		`not-json`,
 		``,
 	}
-	out := summarizeGuidanceStats(lines)
+	out := summarizeGuidanceStats(lines, false)
 	if out == "" {
 		t.Fatal("expected non-empty summary")
+	}
+	if !strings.Contains(out, "claimsSupervision: off") {
+		t.Errorf("expected gated-detector header, got: %s", out)
 	}
 	// Aggregation: fragmentation 5 fire + 1 supp = 6 (rank 1), verify 1+4=5 (rank 2).
 	if !strings.Contains(out, "2 tag(s)") {
@@ -55,10 +59,32 @@ func TestSummarizeGuidanceStats(t *testing.T) {
 	if fi < 0 || vi < 0 || fi > vi {
 		t.Errorf("expected descending sort by total, got: %s", out)
 	}
+	// r15: stale_heuristic report lines surface as a trailing list and are
+	// excluded from the aggregate rows.
+	if !strings.Contains(out, "stale (harness-flagged") || !strings.Contains(out, "Old Detector") {
+		t.Errorf("expected stale tag list, got: %s", out)
+	}
+	if strings.Contains(out[:fi], "Old Detector") {
+		t.Errorf("stale line leaked into aggregate rows, got: %s", out)
+	}
+	if on2 := summarizeGuidanceStats(lines, true); !strings.Contains(on2, "claimsSupervision: on") {
+		t.Errorf("expected on label, got: %s", on2)
+	}
+}
+
+func TestIsAllDigits(t *testing.T) {
+	for _, c := range []struct {
+		in string
+		ok bool
+	}{{"200", true}, {"0", true}, {"", false}, {"20x", false}, {"Attention", false}} {
+		if got := isAllDigits(c.in); got != c.ok {
+			t.Errorf("isAllDigits(%q)=%v want %v", c.in, got, c.ok)
+		}
+	}
 }
 
 func TestSummarizeGuidanceStatsEmpty(t *testing.T) {
-	if out := summarizeGuidanceStats([]string{"garbage"}); out != "" {
+	if out := summarizeGuidanceStats([]string{"garbage"}, false); out != "" {
 		t.Errorf("expected empty summary for unparseable input, got %q", out)
 	}
 }

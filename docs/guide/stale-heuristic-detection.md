@@ -33,6 +33,13 @@ The cross-model contrast is what separates "model behavior changed" from "this p
 
 ## Reading the results
 
+Since r14/r15 the `/guidance` TUI command surfaces all of this without hand-grepping:
+
+- `/guidance` — per-tag fire/suppress aggregates, per-model split, gated-detector state, and a trailing "stale (harness-flagged)" list (the `stale_heuristic` reports below).
+- `/guidance <tag>` — drill down to the exact hint text last delivered for that tag (from `.ggcode/memory/guidance-hints.jsonl`).
+
+Raw fallback (pre-r14 workspaces):
+
 ```sh
 grep stale_heuristic .ggcode/memory/guidance-stats.jsonl | tail -20
 ```

@@ -29,6 +29,8 @@ package agent
 // providing a hard per-turn limit across ALL detectors combined.
 
 import (
+	"time"
+
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -246,6 +248,12 @@ func (a *Agent) injectGuidance(text string) bool {
 	}
 	if a.guidanceStats != nil {
 		a.guidanceStats.record(guidanceTag(text), allowed)
+	}
+	// r15: delivered hints are the drill-down payload for /guidance <tag>.
+	// Suppressed text is the same template as delivered for a given tag,
+	// so recording only delivered copies keeps the map minimal.
+	if allowed {
+		a.recordGuidanceHint(guidanceTag(text), text, time.Now().UTC().Format(time.RFC3339))
 	}
 	if !allowed {
 		debug.Log("guidance-budget", "suppressing guidance message (budget exceeded, %d suppressed this turn)",

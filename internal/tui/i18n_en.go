@@ -699,6 +699,10 @@ func enCatalog(key string) string {
 		return "No tool-call decisions recorded yet — run a task first, then /why [n] explains what the agent did and why."
 	case "guidance.empty":
 		return "No guidance stats recorded yet — .ggcode/memory/guidance-stats.jsonl is absent or empty (it fills after a run where any detector fires)."
+	case "guidance.nohints":
+		return "No hint texts recorded yet — .ggcode/memory/guidance-hints.jsonl is absent or empty (written when a guidance hint is delivered; rerun after a detector fires)."
+	case "guidance.tagmiss":
+		return "No recorded hint matches tag %q. Available tags:\n  %s"
 	case "guidance.unavailable":
 		return "Cannot resolve the workspace directory to locate guidance-stats.jsonl."
 	case "evidence.empty":
