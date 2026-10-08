@@ -29,10 +29,10 @@ func TestResearchReportGate(t *testing.T) {
 // source) must not inflate the multi-hop signal; other tools stay at zero.
 func TestOverseerRetrievalCounters(t *testing.T) {
 	o := newOverseerState()
-	o.recordToolCall("web_search", false, "")
-	o.recordToolCall("web_search", true, "") // failed retry: not counted
-	o.recordToolCall("web_fetch", false, "")
-	o.recordToolCall("read_file", false, "/x.go")
+	o.recordToolCall("web_search", false, "", "")
+	o.recordToolCall("web_search", true, "", "") // failed retry: not counted
+	o.recordToolCall("web_fetch", false, "", "")
+	o.recordToolCall("read_file", false, "/x.go", "")
 	if o.searchCalls != 1 || o.fetchCalls != 1 {
 		t.Fatalf("counters: search=%d fetch=%d, want 1/1 (errors excluded)", o.searchCalls, o.fetchCalls)
 	}
