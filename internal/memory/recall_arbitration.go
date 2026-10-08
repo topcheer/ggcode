@@ -91,6 +91,19 @@ const (
 	trustOutcomeFailedPenalty = 0.4
 )
 
+// sa-146 (REALM arXiv:2609.33226): retrieval-time reconsolidation knobs.
+// A conflict only persists a loss when the verdict is high-confidence -
+// winner's trust clears the loser's by recallConflictLossGap - so ties and
+// thin margins stay ephemeral annotations instead of accumulating noise.
+// Each persisted loss costs the loser trustConflictPenaltyUnit, capped at
+// trustConflictPenaltyCap losses so one noisy subject cannot zero out an
+// otherwise reliable entry.
+const (
+	recallConflictLossGap    = 0.2
+	trustConflictPenaltyUnit = 0.1
+	trustConflictPenaltyCap  = 3
+)
+
 // memoryTrustScore computes the provenance-inspired trust score for one
 // memory entry from its curation metadata. Deterministic and cheap.
 func memoryTrustScore(m MemoryMeta, now time.Time) float64 {
@@ -117,6 +130,14 @@ func memoryTrustScore(m MemoryMeta, now time.Time) float64 {
 		score += trustOutcomeSuccessBonus
 	case "failed":
 		score -= trustOutcomeFailedPenalty
+	}
+	// sa-146 (REALM): retrieval-time reconsolidation feeds back into trust.
+	// An entry that repeatedly lost high-confidence arbitration ranks lower
+	// the next time it contradicts something - a bounded positive feedback
+	// (arbitration -> demotion -> arbitration) that lets the store converge
+	// toward the consistent side without deleting anything.
+	if m.Conflicts > 0 {
+		score -= trustConflictPenaltyUnit * float64(min(m.Conflicts, trustConflictPenaltyCap))
 	}
 	return score
 }
