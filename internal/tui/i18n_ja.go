@@ -1065,6 +1065,14 @@ func jaCatalog(key string) string {
 		return "コンテキストマネージャが利用できません。"
 	case "regenerate.no_response":
 		return "再生成する応答がありません。"
+	case "rewind.bad_arg":
+		return "使い方: /rewind [N]（N >= 1、巻き戻すユーザーターン数）"
+	case "rewind.revert_failed":
+		return "ファイルのロールバックが拒否されたため、巻き戻しを中止しました（何も変更されていません）: %v"
+	case "rewind.success":
+		return "%d ターンを巻き戻しました。ファイル編集を取り消しました（%s）。セッション %s で継続します - 元セッションは保持されます。"
+	case "rewind.success_no_edits":
+		return "%d ターンを巻き戻しました。巻き戻したターンには追跡対象のファイル編集がありませんでした。セッション %s で継続します - 元セッションは保持されます。"
 	case "branch.busy":
 		return "エージェント実行中はブランチできません。Ctrl+C でキャンセルしてください。"
 	case "branch.no_session":

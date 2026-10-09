@@ -497,7 +497,14 @@ type skillSearchMatch struct {
 }
 
 // collectSkillMatches iterates all skills, scoring each against the query.
+// #r484 (SkillForge pruning core): lexical score alone lets a skill that has
+// been unused for months rank level with a skill the agent invokes daily.
+// The knight scheduler already DETECTS staleness (30-day notice) but nothing
+// feeds that back into retrieval. Here the lexical score is decayed by the
+// skill's last-used age from .ggcode/skill-usage.json: never-used skills are
+// NOT penalized (new skills need discovery), stale ones sink in ranking.
 func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skillSearchMatch {
+	usageIdx := loadSkillUsageIndex(t.WorkingDir)
 	var matches []skillSearchMatch
 	for _, name := range names {
 		cmd, ok := t.Skills.Get(name)
@@ -506,10 +513,66 @@ func (t SkillTool) collectSkillMatches(names []string, queryLower string) []skil
 		}
 		score, desc := scoreSkill(name, cmd, queryLower)
 		if score > 0 {
+			score -= stalePenalty(usageIdx, name, time.Now())
+			if score < 1 {
+				// Clamp: a strong lexical match stays retrievable even at
+				// maximum staleness - demote, never erase.
+				score = 1
+			}
 			matches = append(matches, skillSearchMatch{name: name, desc: desc, version: cmd.Version, score: score})
 		}
 	}
 	return matches
+}
+
+// skillUsageLite mirrors the fields of knight's skillUsage
+// (internal/knight/usage_tracker.go) that retrieval cares about. Kept as a
+// local type so internal/tool does not import the knight package (which
+// would drag scheduler/governance deps into the tool layer).
+type skillUsageLite struct {
+	LastUsed time.Time `json:"last_used"`
+}
+
+// skillUsageIndex maps skill name -> last-used timestamp.
+type skillUsageIndex map[string]skillUsageLite
+
+// loadSkillUsageIndex reads .ggcode/skill-usage.json once per search call.
+// Any failure (missing file, parse error, permission) yields an empty index:
+// retrieval degrades to the pre-#r484 pure-lexical behavior, never errors.
+func loadSkillUsageIndex(workingDir string) skillUsageIndex {
+	idx := skillUsageIndex{}
+	if workingDir == "" {
+		return idx
+	}
+	data, err := os.ReadFile(filepath.Join(workingDir, ".ggcode", "skill-usage.json"))
+	if err != nil {
+		return idx
+	}
+	var raw map[string]skillUsageLite
+	if json.Unmarshal(data, &raw) != nil {
+		return idx
+	}
+	return raw
+}
+
+// stalePenalty returns the score deduction for a skill based on how long
+// since its last recorded use (SkillForge-style decay; aligned with the
+// knight scheduler's 30-day staleness notice and 90-day deep-staleness
+// window). Zero for skills with no usage record - new skills must not be
+// buried before they ever get a chance.
+func stalePenalty(idx skillUsageIndex, name string, now time.Time) int {
+	entry, ok := idx[name]
+	if !ok || entry.LastUsed.IsZero() {
+		return 0
+	}
+	age := now.Sub(entry.LastUsed)
+	switch {
+	case age > 90*24*time.Hour:
+		return 8 // deep-stale: heavy demotion, clamp keeps score >= 1
+	case age > 30*24*time.Hour:
+		return 4 // stale: same threshold the knight notice uses
+	}
+	return 0
 }
 
 // scoreSkill returns a relevance score and display description for a skill.
