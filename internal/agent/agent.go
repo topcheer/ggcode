@@ -3459,8 +3459,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Complexity quality gate: after build verification passes (or no
 			// build was needed), check edited Go files for complexity hotspots.
-			// This is an advisory warning — it doesn't block completion but
-			// alerts the agent to refactor-worthy functions before finishing.
+			// This injects a reminder and continues for one confirmation
+			// round (same shape as the sibling gates below) - it does not
+			// silently end the run, but it also never hard-fails it.
 			if complexityMsg := a.checkComplexityGate(runStats); complexityMsg != "" {
 				debug.Log("agent", "Iteration %d: complexity gate detected quality issues, injecting advisory", i+1)
 				a.contextManager.Add(provider.Message{
@@ -3533,7 +3534,9 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Post-completion commit hint: after all gates pass, remind the agent
 			// to stage and commit its work if it hasn't already. This is the last
-			// gate and is advisory (non-blocking) -- it does not force a continue.
+			// gate. It injects a reminder and continues for one confirmation
+			// round (the fired flag makes it one-shot per run); it never
+			// hard-fails completion.
 			if commitHintMsg := a.checkCommitHintGate(runStats); commitHintMsg != "" {
 				debug.Log("agent", "Iteration %d: commit hint gate injected reminder", i+1)
 				a.contextManager.Add(provider.Message{
@@ -3547,7 +3550,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// r465 doc-drift advisory: a code-heavy run that touched no docs
 			// gets one reminder about the documentation-update skill and the
-			// leaf-to-root ordering. Advisory, one shot per run.
+			// leaf-to-root ordering. Injects a reminder and continues for one
+			// confirmation round (one shot per run via the fired flag).
 			if docDriftMsg := a.checkDocDriftGate(runStats); docDriftMsg != "" {
 				debug.Log("agent", "Iteration %d: doc-drift advisory injected", i+1)
 				a.contextManager.Add(provider.Message{
