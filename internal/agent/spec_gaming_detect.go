@@ -602,19 +602,63 @@ func isSkipMarkerRemovalCommand(cmd string) bool {
 	return isAwkSkipRemoval(lower)
 }
 
-// isSedSkipRemoval detects sed 's/PATTERN/REPLACEMENT/' where PATTERN
-// contains a skip marker but REPLACEMENT does NOT contain the same marker
-// (i.e., the marker is being removed, not introduced).
+// sedNormalizeDelimiters rewrites sed s-expressions that use a
+// non-slash delimiter (s|a|b|, s#a#b#, s,a,b, - any punctuation except
+// '/' and alphanumerics) into their s/a/b/ form (#3652), so downstream
+// slash-split parsing sees one shape regardless of the delimiter the
+// agent typed. Escaped delimiters inside fields are not handled - such
+// expressions degrade to non-exemption (the pre-#3652 behavior), never
+// to a wrong exemption.
+func sedNormalizeDelimiters(cmd string) string {
+	const delimClass = "|,#:;%!~@^_"
+	var b strings.Builder
+	i := 0
+	for i < len(cmd) {
+		c := cmd[i]
+		// An `s` that starts a word (start/whitespace/quote/semicolon before
+		// it) and is followed by a candidate delimiter.
+		if c == 's' && i+1 < len(cmd) && strings.IndexByte(delimClass, cmd[i+1]) >= 0 {
+			prevOK := i == 0 || cmd[i-1] == ' ' || cmd[i-1] == '\t' || cmd[i-1] == '\'' || cmd[i-1] == '"' || cmd[i-1] == ';'
+			if prevOK {
+				delim := cmd[i+1]
+				// Find the next two unescaped occurrences of the delimiter:
+				// field1 ends at the 2nd, field2 at the 3rd.
+				p1 := strings.IndexByte(cmd[i+2:], delim)
+				if p1 >= 0 {
+					p2 := strings.IndexByte(cmd[i+2+p1+1:], delim)
+					if p2 >= 0 {
+						f1 := cmd[i+2 : i+2+p1]
+						f2 := cmd[i+2+p1+1 : i+2+p1+1+p2]
+						rest := cmd[i+2+p1+1+p2+1:]
+						// Fields containing '/' would corrupt the slash form - leave
+						// the expression untouched (degrades to non-exemption).
+						if !strings.Contains(f1, "/") && !strings.Contains(f2, "/") {
+							b.WriteString("s/" + f1 + "/" + f2 + "/" + rest)
+							i = len(cmd)
+							continue
+						}
+					}
+				}
+			}
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
 func isSedSkipRemoval(cmd string) bool {
-	// Extract the s/// pattern (simplified parsing). #3628: agents write
-	// the sed expression in either quote style - `sed -i 's/t.Skip(//g'`
-	// AND `sed -i "s/t.Skip(//g"`. The single-quote delimiter alone never
-	// matched the double-quoted form, so a legitimate skip-REMOVAL was
-	// reported as tampering. Try the single-quote split first, fall back
-	// to the double-quote one.
-	parts := strings.Split(cmd, "'s/")
+	// Extract the s/// pattern (simplified parsing). #3628: single- OR
+	// double-quoted `s/` forms. #3652: sed accepts ANY delimiter after
+	// `s` (`s|x|y|`, `s,x,y,`, `s#x#y#`); normalize those to `s/` first so
+	// the split logic below sees one shape. Unquoted `sed -i s/x/y/g` is
+	// covered by the space-prefixed fallback split.
+	normalized := sedNormalizeDelimiters(cmd)
+	parts := strings.Split(normalized, "'s/")
 	if len(parts) < 2 {
-		parts = strings.Split(cmd, "\"s/")
+		parts = strings.Split(normalized, "\"s/")
+	}
+	if len(parts) < 2 {
+		parts = strings.Split(normalized, " s/")
 	}
 	if len(parts) < 2 {
 		return false
