@@ -54,8 +54,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-const maxSpecGamingWarnings = 1
-
 // specGamingState tracks whether the specification gaming detector has fired.
 type specGamingState struct {
 	fired bool
