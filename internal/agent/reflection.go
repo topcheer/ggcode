@@ -37,6 +37,16 @@ type RunStats struct {
 	// CommandsRun lists shell commands executed via run_command or start_command.
 	CommandsRun []string
 
+	// EditContents lists the ADDED text of edit-family tool calls
+	// (write_file content / edit_file+multi_* new_text / notebook new
+	// source): the write-vector counterpart of CommandsRun. Consumed by
+	// spec-gaming Pattern 2 (#3696) so injecting a test skip marker via the
+	// agent's primary edit tools cannot silently bypass the detector the
+	// way it could when only shell commands were scanned. Only ADDED text
+	// is kept (old_text is removal, not gaming); entries truncated and
+	// capped like CommandsRun.
+	EditContents []string
+
 	// SuccessfulCommands lists commands that completed successfully
 	// (non-error result), deduplicated and capped. Consumed by the
 	// trajectory→asset distiller to persist verified commands as
@@ -204,6 +214,21 @@ func (s *RunStats) recordCommand(cmd string) {
 	s.CommandsRun = append(s.CommandsRun, truncatePrompt(cmd, 200))
 }
 
+// recordEditContent adds one edit-family tool call's added text to
+// EditContents (#3696). Max 30 entries, each truncated to 4KB - skip
+// markers are short but sit anywhere in a large new_text, so the truncat
+// budget is deliberately larger than recordCommand's 200.
+func (s *RunStats) recordEditContent(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if len(s.EditContents) >= 30 {
+		return
+	}
+	s.EditContents = append(s.EditContents, truncatePrompt(text, 4096))
+}
+
 // recordToolError adds a tool execution error for reflection/ratchet rule
 // extraction. The format includes the tool name so the LLM can categorize
 // the rule correctly. Max 10 entries, each truncated to 500 chars.
@@ -325,6 +350,14 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 		if path, ok := args["file_path"].(string); ok {
 			s.recordFileEdit(path)
 		}
+		// #3696: capture the ADDED text so spec-gaming Pattern 2 can scan
+		// edit-injected skip markers, not just shell-injected ones.
+		if t, ok := args["new_text"].(string); ok {
+			s.recordEditContent(t)
+		}
+		if t, ok := args["content"].(string); ok {
+			s.recordEditContent(t)
+		}
 	case "multi_file_edit", "multi_file_write":
 		// {"files": [{"path": "...", ...}, ...]}
 		if files, ok := args["files"].([]any); ok {
@@ -333,12 +366,31 @@ func extractPathsFromToolCall(toolName string, rawArgs json.RawMessage, s *RunSt
 					if path, ok := fm["path"].(string); ok {
 						s.recordFileEdit(path)
 					}
+					// #3696: same added-text capture for batched edits.
+					if t, ok := fm["new_text"].(string); ok {
+						s.recordEditContent(t)
+					}
+					if t, ok := fm["content"].(string); ok {
+						s.recordEditContent(t)
+					}
 				}
 			}
 		}
 	case "notebook_edit":
 		if path, ok := args["notebook_path"].(string); ok {
 			s.recordFileEdit(path)
+		}
+		// #3696: notebook cells carry source as a list of lines; a skip
+		// marker can be injected on any line.
+		if srcs, ok := args["new_source"].([]any); ok {
+			var b strings.Builder
+			for _, ln := range srcs {
+				if l, ok := ln.(string); ok {
+					b.WriteString(l)
+					b.WriteByte('\n')
+				}
+			}
+			s.recordEditContent(b.String())
 		}
 	case "run_command", "start_command":
 		if cmd, ok := args["command"].(string); ok {
