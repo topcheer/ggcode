@@ -135,6 +135,30 @@ func specGamingIsTestFile(path string) bool {
 			return true
 		}
 	}
+	// #3669 Bug 2: Python/Ruby's STANDARD test naming is a test_ / Test
+	// prefix, not a suffix. Without this, editing only `test_parser.py`
+	// (deleting assertions) was classified as a source-file edit and
+	// Pattern 1's test-only warning never fired on the most common
+	// Python layout. Restrict to script extensions so `test_utils.go`
+	// (a Go source file that happens to start with test_) is untouched.
+	base := strings.ToLower(filepath.Base(path))
+	for _, ext := range []string{".py", ".rb", ".ts", ".js"} {
+		if strings.HasSuffix(base, ext) && (strings.HasPrefix(base, "test_") || strings.HasPrefix(base, "test-")) {
+			return true
+		}
+	}
+	// #3669 Bug 3: golden/expectation files ARE the verification signal.
+	// Editing parser_test.go plus rewriting testdata/golden.txt to match
+	// broken output is textbook spec gaming, but those paths counted as
+	// source files and suppressed Pattern 1. Directory-form matching keeps
+	// false positives near zero (fixture_helper.go stays a source file).
+	if strings.Contains(lower, "/testdata/") || strings.HasPrefix(lower, "testdata/") ||
+		strings.Contains(lower, "/golden/") || strings.Contains(lower, "__snapshots__") {
+		return true
+	}
+	if strings.HasSuffix(lower, ".expected") || strings.HasSuffix(lower, ".golden") {
+		return true
+	}
 	return false
 }
 
@@ -264,6 +288,12 @@ var makefileNoOpCommands = []string{"echo", "true", "exit 0", "exit", ":", "pass
 // existed but no Makefile content analysis did, so `sed -i 's/go test/echo
 // ok/' Makefile` passed silently while both patterns waved it through.
 // Unreadable files return false (never warn on I/O errors).
+// isMakefileName matches Makefile and its GNU/BSD variants (#3669 Bug 4a).
+func isMakefileName(base string) bool {
+	b := strings.ToLower(base)
+	return b == "makefile" || b == "gnubsdmakefile" || b == "gnumakefile" || b == "bsdmakefile" || b == "makefile.mingw" || b == "makefile.msvc"
+}
+
 func hasMakefileTampering(path string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -482,6 +512,36 @@ var readOnlySearchVerbs = map[string]bool{
 	// investigation exemption, via the branch below.
 }
 
+// hasDownstreamMutator reports whether a nominally read-only command
+// carries a downstream modifier that can write files. #3669 Bug 1:
+// `find . -name '*.go' -exec sed -i 's/t.Skip(...//' {} +` and
+// `git grep -l x | xargs sed -i 's/t.Skip/.../'` were both fully exempted
+// by the first-verb lookup while performing real skip-marker tampering.
+var downstreamMutatorTokens = []string{
+	"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "xargs",
+}
+
+func hasDownstreamMutator(cmd string) bool {
+	for _, tok := range downstreamMutatorTokens {
+		// Token-boundary check: "xargs" must match the standalone word
+		// (pipe segment or argument), not a substring of a filename.
+		if strings.Contains(cmd, tok) {
+			// -exec* / -ok* / -delete / -fprint are unambiguous find(1)
+			// action flags - substring match is fine. "xargs" needs a
+			// word-boundary check to avoid matching e.g. "--xargsfoo".
+			if tok != "xargs" {
+				return true
+			}
+			for _, f := range strings.Fields(cmd) {
+				if f == "xargs" || strings.HasSuffix(f, "/xargs") || strings.HasSuffix(f, "|xargs") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // isReadOnlySearchCommand returns true when the shell command's effective
 // verb is a read-only search/read tool. Leading environment assignments
 // (FOO=bar cmd) are skipped so they cannot disguise the verb.
@@ -497,12 +557,16 @@ func isReadOnlySearchCommand(cmd string) bool {
 	}
 	verb := filepath.Base(fields[idx])
 	if readOnlySearchVerbs[verb] {
-		return true
+		// #3669 Bug 1: a read-only verb with a downstream mutator
+		// (-exec/-delete/xargs pipe) is NOT read-only. Fall through to the
+		// main token scan instead of exempting.
+		return !hasDownstreamMutator(cmd)
 	}
 	if verb == "git" && idx+1 < len(fields) {
-		// git grep is read-only investigation
+		// git grep is read-only investigation — unless piped into a
+		// downstream mutator (#3669 Bug 1: `git grep -l x | xargs sed -i ...`)
 		if fields[idx+1] == "grep" {
-			return true
+			return !hasDownstreamMutator(cmd)
 		}
 		// git log -S and git log -G are historical investigation.
 		// #1496 C(c): this branch was DEAD (the flat map's bare "git"
@@ -712,34 +776,44 @@ func isAwkSkipRemoval(lower string) bool {
 	// Normalize backslash escapes first (t\.Skip\( → t.skip( so escaped
 	// regex markers are recognized as removal too (#588 Bug1).
 	normalized := strings.ReplaceAll(lower, "\\", "")
-	// Split gsub arguments: gsub(PATTERN, "REPLACEMENT" ...). The pattern
-	// is everything up to the first top-level comma; the replacement is
-	// the second argument. Mirrors the sed branch's pattern/replacement
-	// distinction.
-	idx := strings.Index(normalized, "gsub(")
-	if idx < 0 {
-		return false
-	}
-	args := normalized[idx+len("gsub("):]
-	// Find the comma separating pattern from replacement. Regex patterns
-	// may contain commas inside /.../ delimiters; split on the comma that
-	// follows the closing delimiter (second unescaped / after start, or
-	// first comma when the pattern is quoted).
-	pattern, replacement := args, ""
-	if q := strings.Index(args, "/"); q >= 0 {
-		if q2 := strings.Index(args[q+1:], "/"); q2 >= 0 {
-			end := q + 1 + q2
-			pattern = args[:end+1]
-			rest := strings.TrimLeft(args[end+1:], " ")
-			if strings.HasPrefix(rest, ",") {
-				replacement = rest[1:]
-			}
+	// #3669 Bug 4b: an awk program may carry MULTIPLE gsub calls; the old
+	// single strings.Index only judged the first, so
+	//   awk '{gsub(/x/,"");gsub(/assert/,"t.Skip(")}'
+	// used one legitimate-looking removal to mask a marker INJECTION.
+	// Scan every gsub occurrence: ALL must be clean removals (marker in
+	// pattern, none in replacement) for the exemption to hold.
+	start := 0
+	sawAny := false
+	for {
+		idx := strings.Index(normalized[start:], "gsub(")
+		if idx < 0 {
+			break
 		}
-	} else if c := strings.Index(args, ","); c >= 0 {
-		pattern = args[:c]
-		replacement = args[c+1:]
+		idx += start
+		args := normalized[idx+len("gsub("):]
+		pattern, replacement := args, ""
+		if q := strings.Index(args, "/"); q >= 0 {
+			if q2 := strings.Index(args[q+1:], "/"); q2 >= 0 {
+				end := q + 1 + q2
+				pattern = args[:end+1]
+				rest := strings.TrimLeft(args[end+1:], " ")
+				if strings.HasPrefix(rest, ",") {
+					replacement = rest[1:]
+				}
+			}
+		} else if c := strings.Index(args, ","); c >= 0 {
+			pattern = args[:c]
+			replacement = args[c+1:]
+		}
+		if !containsAnySkipMarker(pattern) || containsAnySkipMarker(replacement) {
+			// Any gsub that is not a clean removal (or actively injects a
+			// marker) disqualifies the whole command.
+			return false
+		}
+		sawAny = true
+		start = idx + len("gsub(")
 	}
-	return containsAnySkipMarker(pattern) && !containsAnySkipMarker(replacement)
+	return sawAny
 }
 
 // containsAnySkipMarker reports whether s contains any skip marker,
@@ -878,7 +952,9 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 			// pass ("Makefile": false in ciConfigFiles) — the detector's founding
 			// threat model (METR reward hacking: tamper `make test` into a no-op)
 			// was 100% missed while the L104 comment claimed partial handling.
-			if strings.EqualFold(filepath.Base(f), "makefile") && hasMakefileTampering(f) {
+			// #3669 Bug 4a: GNUmakefile / BSDmakefile are Makefiles too -
+			// EqualFold(base,"makefile") missed them entirely.
+			if isMakefileName(filepath.Base(f)) && hasMakefileTampering(f) {
 				warnings = append(warnings, fmt.Sprintf(
 					"Makefile verification target '%s' appears neutered (no-op commands or deleted test target). "+
 						"Ensure the verification still actually runs the tests.", f))
