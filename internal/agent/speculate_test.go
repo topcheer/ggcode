@@ -87,7 +87,7 @@ func TestSpeculator_CacheStoreAndGet(t *testing.T) {
 	s := newSpeculator()
 
 	args := json.RawMessage(`{"path":"/test/file.go"}`)
-	s.store("read_file", args, mockToolResult("file content"))
+	s.store("read_file", args, mockToolResult("file content"), "", 0, 0)
 
 	result, hit := s.getCached("read_file", args)
 	if !hit {
@@ -101,7 +101,7 @@ func TestSpeculator_CacheStoreAndGet(t *testing.T) {
 func TestSpeculator_CacheMissOnDifferentArgs(t *testing.T) {
 	s := newSpeculator()
 
-	s.store("read_file", json.RawMessage(`{"path":"/a.go"}`), mockToolResult("a"))
+	s.store("read_file", json.RawMessage(`{"path":"/a.go"}`), mockToolResult("a"), "", 0, 0)
 
 	_, hit := s.getCached("read_file", json.RawMessage(`{"path":"/b.go"}`))
 	if hit {
@@ -114,7 +114,7 @@ func TestSpeculator_CacheExpiry(t *testing.T) {
 	s.ttl = 50 * time.Millisecond // very short TTL for testing
 
 	args := json.RawMessage(`{"path":"/test.go"}`)
-	s.store("read_file", args, mockToolResult("content"))
+	s.store("read_file", args, mockToolResult("content"), "", 0, 0)
 
 	// Immediately should hit.
 	_, hit := s.getCached("read_file", args)
@@ -227,7 +227,7 @@ func TestSpeculator_CloseClearsCache(t *testing.T) {
 	s := newSpeculator()
 
 	args := json.RawMessage(`{"path":"/test.go"}`)
-	s.store("read_file", args, mockToolResult("content"))
+	s.store("read_file", args, mockToolResult("content"), "", 0, 0)
 
 	s.Close()
 
@@ -243,7 +243,7 @@ func TestSpeculator_CacheEvictionLRU(t *testing.T) {
 	// Fill cache beyond specMaxCacheSize.
 	for i := 0; i < specMaxCacheSize+5; i++ {
 		path := "/file" + string(rune('a'+i)) + ".go"
-		s.store("read_file", json.RawMessage(`{"path":"`+path+`"}`), mockToolResult(path))
+		s.store("read_file", json.RawMessage(`{"path":"`+path+`"}`), mockToolResult(path), "", 0, 0)
 	}
 
 	s.mu.Lock()
@@ -272,7 +272,7 @@ func TestSpeculator_AdaptiveThresholdLowHitRate(t *testing.T) {
 
 	// Store one result.
 	args := json.RawMessage(`{"path":"/test.go"}`)
-	s.store("read_file", args, mockToolResult("content"))
+	s.store("read_file", args, mockToolResult("content"), "", 0, 0)
 
 	// Generate many misses to drive hit rate down.
 	// Default threshold is 2; with low hit rate it should increase.
@@ -293,7 +293,7 @@ func TestSpeculator_AdaptiveThresholdHighHitRate(t *testing.T) {
 
 	// Generate mostly hits to drive hit rate up.
 	args := json.RawMessage(`{"path":"/test.go"}`)
-	s.store("read_file", args, mockToolResult("content"))
+	s.store("read_file", args, mockToolResult("content"), "", 0, 0)
 
 	for i := 0; i < specAdaptiveWindow; i++ {
 		s.getCached("read_file", args) // always hit

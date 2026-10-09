@@ -18,7 +18,8 @@ func Test1831SpeculatorFreshness(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{"file_path": p, "limit": 100})
 
 	sp := newSpeculator()
-	sp.store("read_file", args, tool.Result{Content: "content of v0"})
+	fp, fm, fs := statSnapshotFor("read_file", args) // snapshot at speculation time (#3611)
+	sp.store("read_file", args, tool.Result{Content: "content of v0"}, fp, fm, fs)
 
 	if _, ok := sp.getCached("read_file", args); !ok {
 		t.Fatal("unchanged file must stay a hit")
@@ -39,7 +40,8 @@ func Test1831HasCachedFreshness(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{"file_path": p})
 
 	sp := newSpeculator()
-	sp.store("read_file", args, tool.Result{Content: "v0"})
+	fp, fm, fs := statSnapshotFor("read_file", args)
+	sp.store("read_file", args, tool.Result{Content: "v0"}, fp, fm, fs)
 	if !sp.hasCached("read_file", args) {
 		t.Fatal("precondition: unchanged entry must report cached")
 	}
@@ -56,7 +58,8 @@ func Test1831SpeculatorAbsenceSemantics(t *testing.T) {
 	p := filepath.Join(dir, "new.txt")
 	args, _ := json.Marshal(map[string]any{"file_path": p})
 	sp := newSpeculator()
-	sp.store("read_file", args, tool.Result{Content: "was absent"})
+	fp, fm, fs := statSnapshotFor("read_file", args)
+	sp.store("read_file", args, tool.Result{Content: "was absent"}, fp, fm, fs)
 	os.WriteFile(p, []byte("now here"), 0o644)
 	if _, ok := sp.getCached("read_file", args); ok {
 		t.Fatal("file appearing after speculation must read as drift")
@@ -65,7 +68,8 @@ func Test1831SpeculatorAbsenceSemantics(t *testing.T) {
 	p2 := filepath.Join(dir, "never.txt")
 	args2, _ := json.Marshal(map[string]any{"file_path": p2})
 	sp2 := newSpeculator()
-	sp2.store("read_file", args2, tool.Result{Content: "absent"})
+	fp2, fm2, fs2 := statSnapshotFor("read_file", args2)
+	sp2.store("read_file", args2, tool.Result{Content: "absent"}, fp2, fm2, fs2)
 	if _, ok := sp2.getCached("read_file", args2); !ok {
 		t.Fatal("still-absent file must remain a hit (no false drift)")
 	}
