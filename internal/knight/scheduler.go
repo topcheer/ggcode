@@ -630,6 +630,16 @@ func (k *Knight) promoteStagingEntry(s *SkillEntry) error {
 	if !result.Valid {
 		return fmt.Errorf("skill %q failed validation: %s", s.Name, result.Errors)
 	}
+	// r23: the same deterministic safety scan guards manual promotion -
+	// validation is structural only, and staging content is inlined into
+	// future prompts once active. Blocking here degrades to a clear error
+	// the human can review.
+	if content, rerr := readSkillContent(s.Path); rerr == nil {
+		if findings := scanSkillContentSafety(string(content)); len(findings) > 0 {
+			return fmt.Errorf("skill %q blocked by safety scan: %s (edit the skill or reject it)",
+				s.Name, summarizeSkillSafetyFindings(findings))
+		}
+	}
 
 	active, err := k.index.ActiveSkills()
 	if err != nil {
@@ -1018,6 +1028,21 @@ func (k *Knight) evaluateAutoPromoteCandidate(ctx context.Context, entry *SkillE
 			FailureMode: "read_error",
 		})
 		return false, fmt.Sprintf("cannot read staging skill for scenario evaluation: %v", err)
+	}
+	// r23: deterministic safety scan before any eval cost is spent. The
+	// LLM gate's "no destructive actions / no credentials" clause is
+	// fail-open; this is its deterministic counterpart (skill files are
+	// persisted then inlined into every future prompt - the same injection
+	// surface r409 closed for save_memory). Findings never echo the matched
+	// content: a hit may itself be a credential.
+	if findings := scanSkillContentSafety(string(content)); len(findings) > 0 {
+		reason := fmt.Sprintf("safety scan flagged %d pattern(s): %s - manual review required",
+			len(findings), summarizeSkillSafetyFindings(findings))
+		k.appendAutoPromoteEval(entry, autoPromoteEvalDecision{
+			Rationale:   reason,
+			FailureMode: "safety_scan",
+		})
+		return false, reason
 	}
 	// Deterministic rule-based overlap check. Run before invoking the LLM so
 	// that an obviously redundant candidate doesn't burn eval-bucket tokens.
@@ -1952,8 +1977,10 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		}
 		// Semantic dedup via name+description token Jaccard. 0.6 is empirically
 		// the threshold above which two candidates describe the same workflow
-		// in this repo's existing skills.
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= 0.6 {
+		// in this repo's existing skills. CJK-dominant fingerprints use a
+		// stricter 0.75 (#3637): bigram density makes same-prefix Chinese
+		// families score 0.55-0.60 without being duplicates.
+		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
 			return true
 		}
 	}
@@ -1961,7 +1988,7 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		if a == nil {
 			continue
 		}
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= 0.6 {
+		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
 			return true
 		}
 	}
