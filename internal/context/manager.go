@@ -1851,8 +1851,27 @@ func (m *Manager) CompactSupersededReads() int {
 		allFilesSuperseded := true
 		for p := range toolIDToPaths[id] {
 			ids := pathToToolIDs[p]
-			// This file is superseded if a later tool_id also read it.
-			if len(ids) <= 1 || ids[len(ids)-1] == id {
+			// #3726: supersession requires CONTENT coverage, not mere
+			// existence of a later read (#718 principle, as phase-2 above
+			// implements for the triggering path). The old check - "some
+			// later tool_id read this path" - let a LATER PARTIAL read of
+			// this path (an offset re-read of a slice the original read
+			// already covered) mark the whole multi-file read superseded,
+			// dropping tool results the conversation still depends on.
+			covered := false
+			for i, x := range ids {
+				if x != id {
+					continue
+				}
+				for _, laterID := range ids[i+1:] {
+					if readCovers(toolIDToRange[laterID], toolIDToRange[id]) {
+						covered = true
+						break
+					}
+				}
+				break // tool ids appear once per path
+			}
+			if !covered {
 				allFilesSuperseded = false
 				break
 			}
