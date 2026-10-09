@@ -20,6 +20,13 @@ type ValidationResult struct {
 // ValidateSkill runs all validation checks on a skill entry.
 func ValidateSkill(entry *SkillEntry) ValidationResult {
 	var result ValidationResult
+	if entry == nil {
+		// #3656 defect 3: checkFormat guarded nil but checkDependencies
+		// dereferences entry.Meta.Requires — a nil entry panicked at L80.
+		result.Errors = append(result.Errors, "skill entry is nil")
+		result.Valid = false
+		return result
+	}
 
 	// 1. Format check — required frontmatter fields
 	result.checkFormat(entry)
