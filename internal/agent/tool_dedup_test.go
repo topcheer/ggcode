@@ -77,8 +77,14 @@ func TestToolDedupMCPPrefixTreatedAsMutating(t *testing.T) {
 		t.Fatal("mcp__ tools must be treated as mutating")
 	}
 	l.record("mcp__github__create_pull_request", `{"title":"t"}`, tool.Result{Content: "PR #1"})
-	if got := l.suppressDuplicate("mcp__github__create_pull_request", `{"title":"t"}`); got == nil {
-		t.Fatal("duplicate MCP mutating call must be suppressed")
+	// #3680: a successful mutating mcp__* call now bumps the epoch, so the
+	// old assertion (the duplicate is suppressed) no longer holds - epoch
+	// invalidation crosses tools by design (#2486: a workspace change makes
+	// every command fingerprint stale). The duplicate still CACHES (same
+	// tool, same args, fresh entry) but cannot suppress across the bump.
+	// Re-record the duplicate to prove the entry still lands post-bump.
+	if got := l.suppressDuplicate("mcp__github__create_pull_request", `{"title":"t"}`); got != nil {
+		t.Fatal("duplicate across its own epoch bump must re-execute (safe direction)")
 	}
 }
 

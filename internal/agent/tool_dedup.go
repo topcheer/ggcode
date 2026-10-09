@@ -228,7 +228,15 @@ func (l *toolDedupLedger) record(name, args string, res tool.Result) {
 	}
 	l.table[fp] = toolDedupEntry{fingerprint: fp, at: now, result: res}
 	l.count++
-	if fileMutatingTools[name] || commandMayRewriteWorkspace(name, args) {
+	// #3680: mcp__* tools with mutating classification also bump the epoch.
+	// MCP servers write to the workspace through their own code paths (the
+	// tool layer cannot lexically inspect what a server does), so a
+	// successful mutating MCP call must invalidate command fingerprints -
+	// otherwise a run_command verification replayed within the TTL hits the
+	// stale pass cache. Over-inclusive in the documented safe direction
+	// (false positive = one extra real execution, #2486).
+	if fileMutatingTools[name] || commandMayRewriteWorkspace(name, args) ||
+		(strings.HasPrefix(name, "mcp__") && isMutatingTool(name)) {
 		l.epoch++ // invalidate command fingerprints after workspace file changes
 	}
 }
