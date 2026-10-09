@@ -606,8 +606,16 @@ func isSkipMarkerRemovalCommand(cmd string) bool {
 // contains a skip marker but REPLACEMENT does NOT contain the same marker
 // (i.e., the marker is being removed, not introduced).
 func isSedSkipRemoval(cmd string) bool {
-	// Extract the s/// pattern (simplified parsing)
+	// Extract the s/// pattern (simplified parsing). #3628: agents write
+	// the sed expression in either quote style - `sed -i 's/t.Skip(//g'`
+	// AND `sed -i "s/t.Skip(//g"`. The single-quote delimiter alone never
+	// matched the double-quoted form, so a legitimate skip-REMOVAL was
+	// reported as tampering. Try the single-quote split first, fall back
+	// to the double-quote one.
 	parts := strings.Split(cmd, "'s/")
+	if len(parts) < 2 {
+		parts = strings.Split(cmd, "\"s/")
+	}
 	if len(parts) < 2 {
 		return false
 	}
