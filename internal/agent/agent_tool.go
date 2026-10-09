@@ -696,10 +696,13 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// #3641: the search tools' headline scenario ("When grep returns
 	// nothing...") never fired - grep renders zero matches as a SUCCESS
 	// result (by contract, grep.go), and the hint path was gated on
-	// IsError alone. Successful results of the three search tools now also
+	// IsError alone. Successful results of the search/LSP tools now also
 	// go through toolFallbackHint; the hint itself decides via
-	// isEmptyToolResult (non-empty successes return "" unchanged, so no
-	// other tool or success path is affected).
+	// isEmptyToolResult / lspFallbackHint (non-empty successes return ""
+	// unchanged, so no other tool or success path is affected).
+	// #3673: this is now the SINGLE engine for zero-match success hints
+	// (agent.go's toolFallbackCheck is IsError-gated again) and the
+	// coverage set matches isZeroMatchSuccess exactly.
 	if result.IsError || toolFallbackHintOnSuccess(t.Name()) {
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
 			// Trim the hint's leading newline: appendGuidance inserts its own

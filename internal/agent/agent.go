@@ -4668,8 +4668,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.
-			// #3641: zero-match search results are successes, not errors.
-			if result.IsError || isZeroMatchSuccess(tc.Name, result.Content) {
+			// #3673-B: zero-match SUCCESS results are handled exclusively by
+			// the executeToolInner engine (toolFallbackHint via
+			// toolFallbackHintOnSuccess, budgeted + tag-deduped). Routing them
+			// here as well stacked a second, differently-worded hint through
+			// the _default rule (match=always true).
+			if result.IsError {
 				if fallbackHint := a.toolFallbackCheck(tc.Name, result.Content); fallbackHint != "" {
 					a.appendGuidance(&result, fallbackHint)
 				}

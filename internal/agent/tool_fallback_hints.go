@@ -28,9 +28,14 @@ import (
 // should also flow through toolFallbackHint (#3641): the search tools
 // render zero matches as success, and their empty-result hints are the
 // documented headline scenario of this module.
+// #3673-C: coverage set is shared with isZeroMatchSuccess - both engines
+// must agree on which tools' SUCCESS results are inspected, otherwise
+// lsp_* zero-match successes behave differently depending on which
+// call site sees them first.
 func toolFallbackHintOnSuccess(toolName string) bool {
 	switch toolName {
-	case "grep", "search_files", "code_search":
+	case "grep", "search_files", "code_search",
+		"lsp_workspace_symbols", "lsp_references", "lsp_implementation":
 		return true
 	}
 	return false
@@ -54,8 +59,13 @@ func toolFallbackHint(toolName, errorContent string) string {
 		return lspFallbackHint(lower)
 
 	// Grep/search returning empty — suggest broader search
+	// #3670/#3673-A: zero-match judgment is isZeroMatchSuccess (first-line
+	// sentinel, not bare substrings) so rich results that QUOTE the phrase
+	// are not misjudged. Real zero matches render as a short sentinel-led
+	// payload (grep.go contract); error-path empty messages are short too
+	// and match the same sentinels.
 	case toolName == "grep" || toolName == "search_files":
-		if isEmptyToolResult(lower) {
+		if isZeroMatchSuccess(toolName, errorContent) {
 			return "\n[Hint: No matches found. Try: (1) broaden the pattern with wildcards, (2) use code_search for semantic matching, (3) use glob to find files by name pattern, (4) check if the file extension filter is too narrow.]"
 		}
 		if isTimeout(lower) {
@@ -64,7 +74,7 @@ func toolFallbackHint(toolName, errorContent string) string {
 
 	// Code search returning empty — suggest keyword-based alternatives
 	case toolName == "code_search":
-		if isEmptyToolResult(lower) {
+		if isZeroMatchSuccess(toolName, errorContent) {
 			return "\n[Hint: Semantic search found nothing. Try: (1) grep with exact keywords, (2) glob for file name patterns, (3) list_directory to explore the structure.]"
 		}
 
@@ -132,28 +142,52 @@ func lspFallbackHint(lowerErr string) string {
 }
 
 // isEmptyToolResult checks if the error indicates no results were found.
+// #3673-A: "not found" and "empty" removed - a successful search result's
+// content IS the searched file's content, and ordinary source lines carry
+// those words constantly ("// err is not found here", "// list is empty").
+// Kept phrases are the explicit no-match sentinels only.
 func isEmptyToolResult(s string) bool {
 	return strings.Contains(s, "no match") || strings.Contains(s, "no result") ||
-		strings.Contains(s, "no symbol") || strings.Contains(s, "not found") ||
-		strings.Contains(s, "empty")
+		strings.Contains(s, "no symbol")
 }
 
 // isZeroMatchSuccess reports whether a SUCCESS (non-error) tool result is a
 // zero-match outcome for a search-class tool (#3641). grep/search_files
 // render "No matches found" as a successful empty result, so IsError-gated
 // fallback hints never fired for the detector's headline scenario.
-// Deliberately narrow: only search tools, only explicit no-match phrases -
-// bare "not found"/"empty" substrings would false-positive on ordinary
-// file content.
+// Deliberately narrow: only search tools, and the match must be the
+// result's OWN sentinel line, not content that happens to contain the
+// phrase (#3670: a rich grep result whose hit lines quote the literal
+// "no match" source text must not be mistaken for a zero match).
+// A real zero-match payload is short: sentinel line + optional suggestion
+// block (grep.go: "No matches found.\nSuggestions:..."). Anything longer
+// than zeroMatchMaxBytes is by definition a rich result.
+const zeroMatchMaxBytes = 512
+
 func isZeroMatchSuccess(toolName, content string) bool {
 	switch toolName {
 	case "grep", "search_files", "code_search", "lsp_workspace_symbols", "lsp_references", "lsp_implementation":
 	default:
 		return false
 	}
-	lower := strings.ToLower(content)
-	return strings.Contains(lower, "no match") || strings.Contains(lower, "no result") ||
-		strings.Contains(lower, "no symbol")
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+	if len(trimmed) > zeroMatchMaxBytes {
+		return false
+	}
+	first := trimmed
+	if i := strings.IndexByte(first, '\n'); i >= 0 {
+		first = first[:i]
+	}
+	first = strings.ToLower(strings.TrimSpace(first))
+	for _, sentinel := range []string{"no matches found", "no match found", "no files matched", "no results", "no symbols found"} {
+		if strings.HasPrefix(first, sentinel) && len(first) <= len(sentinel)+64 {
+			return true
+		}
+	}
+	return false
 }
 
 // isTimeout checks if the error indicates a timeout.
