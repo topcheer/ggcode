@@ -21,6 +21,7 @@ import (
 	"github.com/topcheer/ggcode/internal/agentruntime"
 	"github.com/topcheer/ggcode/internal/auth"
 	"github.com/topcheer/ggcode/internal/checkpoint"
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/im"
@@ -891,6 +892,10 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 			a2aServer = a2aSrv
 			a2aRegistry = a2aReg
 			a2aTaskHandler = a2aHandler
+			// Advertise this instance's real local skills alongside the generic
+			// baseline so A2A peers can discover them (previously every node
+			// broadcast the same hardcoded 6-skill card).
+			a2aSrv.SetSkills(append(a2a.DefaultSkills(), localA2ASkills(commandMgr)...))
 			// Start async background refresh so CachedInstances() returns
 			// useful data without ever blocking the UI thread.
 			a2aBgCtx, a2aBgCancel := context.WithCancel(context.Background())
@@ -1423,6 +1428,36 @@ func a2aExtensionsFromConfig(exts []config.A2AExtensionConfig) []a2a.AgentExtens
 			Description: ext.Description,
 			Required:    ext.Required,
 			Params:      ext.Params,
+		})
+	}
+	return out
+}
+
+// localA2ASkills converts this instance's locally installed skills (user +
+// project sources) into A2A card skills so peers on the mesh can discover the
+// instance's real capabilities. Bundled skills are skipped - the generic set
+// from a2a.DefaultSkills already represents them; the gap this closes is that
+// user-built skill assets were previously invisible to A2A peers (every node
+// broadcast the same hardcoded 6-skill card).
+func localA2ASkills(m *commands.Manager) []a2a.Skill {
+	if m == nil {
+		return nil
+	}
+	var out []a2a.Skill
+	for _, cmd := range m.List() {
+		if cmd.Source == commands.SourceBundled || cmd.Description == "" {
+			continue
+		}
+		name := cmd.DisplayName
+		if name == "" {
+			name = cmd.Name
+		}
+		out = append(out, a2a.Skill{
+			ID:          "skill:" + cmd.Name,
+			Name:        name,
+			Description: cmd.Description,
+			Tags:        []string{"skill", string(cmd.Source)},
+			Source:      string(cmd.Source),
 		})
 	}
 	return out

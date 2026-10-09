@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/topcheer/ggcode/internal/commands"
 	"github.com/topcheer/ggcode/internal/config"
 	"github.com/topcheer/ggcode/internal/session"
 )
@@ -529,5 +530,55 @@ func TestParseA2AMaxTasks(t *testing.T) {
 	}
 	if got := parseA2AMaxTasks(7); got != 7 {
 		t.Fatalf("positive value not preserved: %d", got)
+	}
+}
+
+// TestLocalA2ASkills pins the #3547 broadcast filter: only non-bundled skills
+// with a description are advertised in the A2A Agent Card (bundled ones are
+// represented by a2a.DefaultSkills' generic set; description-less skills
+// carry no discovery value), with DisplayName falling back to Name.
+func TestLocalA2ASkills(t *testing.T) {
+	if got := localA2ASkills(nil); got != nil {
+		t.Fatalf("localA2ASkills(nil) = %v, want nil", got)
+	}
+
+	dir := t.TempDir()
+	skillsDir := filepath.Join(dir, ".ggcode", "skills")
+	writeSkill := func(name, frontmatter, body string) {
+		t.Helper()
+		skillDir := filepath.Join(skillsDir, name)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nname: " + name + "\n" + frontmatter + "---\n" + body
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSkill("deploy-vercel", "description: Ship the project to Vercel\n", "body")
+	// no frontmatter description AND no body: the loader fills Description
+	// from the SKILL.md body, so both must be empty for the filter to bite.
+	writeSkill("bare-skill", "", "")
+
+	mgr := commands.NewManager(dir)
+	got := localA2ASkills(mgr)
+
+	var found bool
+	for _, s := range got {
+		if s.ID == "skill:deploy-vercel" {
+			found = true
+			if s.Description != "Ship the project to Vercel" {
+				t.Fatalf("description = %q", s.Description)
+			}
+			if s.Source != string(commands.SourceProject) {
+				t.Fatalf("source = %q, want %q", s.Source, commands.SourceProject)
+			}
+		}
+		if s.ID == "skill:bare-skill" {
+			t.Fatalf("description-less skill must be filtered, got %+v", s)
+		}
+	}
+	if !found {
+		t.Fatalf("deploy-vercel not advertised; got %+v", got)
 	}
 }
