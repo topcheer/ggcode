@@ -99,12 +99,14 @@ type Agent struct {
 	provider provider.Provider
 	// Task-tier model routing (model_routing.go): optional aux provider for
 	// mechanical auxiliary calls (strategist, health check, compaction).
-	auxResolved                *config.ResolvedEndpoint // main endpoint clone with Model=aux_model
-	auxProvider                provider.Provider        // lazily built
-	auxModelName               string                   // aux model for diagnostics
-	auxFailed                  bool                     // aux build failed once: permanent fallback to main
-	cascade                    modelCascadeState        // r485 turn-tier routing: consecutive read-only batch streak (value type, zero = dormant)
-	cascadeSavedProvider       provider.Provider        // r485: main provider parked while an exploratory turn runs on the aux model (nil = not swapped)
+	auxResolved          *config.ResolvedEndpoint // main endpoint clone with Model=aux_model
+	auxProvider          provider.Provider        // lazily built
+	auxModelName         string                   // aux model for diagnostics
+	auxFailed            bool                     // aux build failed once: permanent fallback to main
+	cascade              modelCascadeState        // r485 turn-tier routing: consecutive read-only batch streak (value type, zero = dormant)
+	cascadeSavedProvider provider.Provider        // r485: main provider parked while an exploratory turn runs on the aux model (nil = not swapped)
+
+	llmOverseer                llmOverseerState // r489: SICA semantic-level LLM overseer state (dormant unless aux_model set)
 	tools                      *tool.Registry
 	contextManager             ctxpkg.ContextManager
 	maxIter                    int
@@ -4830,6 +4832,12 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// Detects tool spam, read-only stall, stuck-on-file, error escalation, and drift.
 			if overseerGuidance := a.overseerCheck(tc.Name, result.IsError, extractFileHint(tc.Name, tc.Arguments), result.Content, runStats.Iterations); overseerGuidance != "" {
 				a.appendGuidance(&result, overseerGuidance)
+			}
+			// r489: SICA semantic-level overseer - a cheap aux-model call that
+			// judges WRONG APPROACH / WRONG PROBLEM, which deterministic
+			// heuristics cannot see. Dormant unless aux_model is configured.
+			if llmOverseerGuidance := a.llmOverseerCheck(runStats.Iterations); llmOverseerGuidance != "" {
+				a.appendGuidance(&result, llmOverseerGuidance)
 			}
 			// Repetition tracker: semantic-level detection of failed edit clusters.
 			// Catches near-miss loops that exact-match loop detection misses.
