@@ -109,14 +109,23 @@ func (lt *LatencyTracker) RecordAndCheck(toolName string, dur time.Duration) str
 	// measured against the prior baseline (otherwise an extreme value
 	// inflates the mean and masks itself). Only for monitored tools.
 	var warning string
+	isOutlier := false
 	if latencyMonitoredTools[toolName] {
 		warning = lt.checkOutlier(toolName, dur, samples)
+		isOutlier = warning != ""
 	}
 
 	// Record latency for ALL tools (used by adaptive timeout computation).
-	samples = append(samples, latencySample{dur: dur, recorded: time.Now()})
-	if len(samples) > maxLatencySamples {
-		samples = samples[len(samples)-maxLatencySamples:]
+	// #3639: an outlier sample does NOT enter the rolling window. Appending
+	// it unconditionally polluted the baseline (one 60s stall lifted the
+	// mean to ~15s, and the NEXT genuine 20s outlier no longer cleared the
+	// 5x bar - a detection blind spot). The warning for the current event
+	// already fired above; the window keeps tracking the healthy baseline.
+	if !isOutlier {
+		samples = append(samples, latencySample{dur: dur, recorded: time.Now()})
+		if len(samples) > maxLatencySamples {
+			samples = samples[len(samples)-maxLatencySamples:]
+		}
 	}
 	lt.samples[toolName] = samples
 
@@ -171,12 +180,16 @@ func formatLatencyWarning(toolName string, dur, mean time.Duration) string {
 
 	var hint string
 	switch {
+	// #3639: edit BEFORE the read/file branch - edit_file, multi_edit_file
+	// and multi_file_edit all contain "file" and used to fall into the
+	// read hint ("use offset/limit"), leaving the edit branch unreachable
+	// dead code for every tool in the monitored set.
+	case strings.Contains(toolName, "edit"):
+		hint = "this should normally be fast — check if the file is unusually large."
 	case strings.Contains(toolName, "read") || strings.Contains(toolName, "file"):
 		hint = "consider using offset/limit to read only the relevant section."
 	case strings.Contains(toolName, "search") || strings.Contains(toolName, "grep") || toolName == "glob":
 		hint = "consider narrowing the search pattern or directory scope."
-	case strings.Contains(toolName, "edit"):
-		hint = "this should normally be fast — check if the file is unusually large."
 	case strings.Contains(toolName, "lsp"):
 		hint = "LSP may be indexing — subsequent calls should be faster."
 	default:

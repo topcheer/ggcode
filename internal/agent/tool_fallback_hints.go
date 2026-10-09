@@ -24,6 +24,18 @@ import (
 	"strings"
 )
 
+// toolFallbackHintOnSuccess reports whether a SUCCESS result of this tool
+// should also flow through toolFallbackHint (#3641): the search tools
+// render zero matches as success, and their empty-result hints are the
+// documented headline scenario of this module.
+func toolFallbackHintOnSuccess(toolName string) bool {
+	switch toolName {
+	case "grep", "search_files", "code_search":
+		return true
+	}
+	return false
+}
+
 // toolFallbackHint returns a short, context-aware fallback suggestion for a
 // failed tool call. Returns empty string if no hint is applicable.
 //

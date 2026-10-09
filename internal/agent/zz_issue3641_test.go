@@ -1,35 +1,29 @@
 package agent
 
-// #3641 probes: the fallback hint pathway must fire for zero-match
-// SUCCESS results of search-class tools (grep renders "No matches found"
-// with IsError unset), while non-search tools and ordinary content must
-// stay out.
+// #3641 probe: grep/search_files/code_search render zero matches as a
+// SUCCESS result (grep.go contract), so the fallback-hint path gated on
+// IsError alone never fired - the module's headline scenario ("When grep
+// returns nothing...") was unreachable. Successful empty results of the
+// three search tools must now produce a hint; successful non-empty results
+// and other tools' successes must not.
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-func TestIssue3641_ZeroMatchSuccessDetection(t *testing.T) {
-	if !isZeroMatchSuccess("grep", "No matches found for pattern \"foo\" in /src") {
-		t.Fatal("grep zero-match success must be detected")
+func TestIssue3641_SuccessGateCoversSearchTools(t *testing.T) {
+	if !toolFallbackHintOnSuccess("grep") || !toolFallbackHintOnSuccess("search_files") || !toolFallbackHintOnSuccess("code_search") {
+		t.Fatal("the three search tools must flow success results through the hint path")
 	}
-	if !isZeroMatchSuccess("code_search", "no results found for query") {
-		t.Fatal("code_search zero-match success must be detected")
+	for _, name := range []string{"read_file", "edit_file", "run_command", "glob"} {
+		if toolFallbackHintOnSuccess(name) {
+			t.Fatalf("%s must not gain success-result hints (scope creep)", name)
+		}
 	}
-	if isZeroMatchSuccess("read_file", "The file says: no match for X in this doc") {
-		t.Fatal("non-search tool content must never trigger")
+	// The hint itself still decides: empty success content -> hint.
+	if toolFallbackHint("grep", "No matches found for pattern") == "" {
+		t.Fatal("empty grep result must yield a broaden-the-search hint")
 	}
-	if isZeroMatchSuccess("grep", "42 matches:\nfoo.go: match at line 3") {
-		t.Fatal("grep with real matches must not trigger")
-	}
-}
-
-func TestIssue3641_HintTextForZeroMatch(t *testing.T) {
-	// The existing detector branch must produce the broaden-pattern hint
-	// for the exact zero-match success content.
-	hint := toolFallbackHint("grep", "No matches found for pattern \"zzz\" in /src")
-	if hint == "" || !strings.Contains(hint, "broaden") {
-		t.Fatalf("zero-match grep must yield broaden hint, got %q", hint)
+	// Non-empty success content -> no hint (unchanged behavior).
+	if toolFallbackHint("grep", "internal/agent/agent.go:42: func Run(") != "" {
+		t.Fatal("non-empty grep result must not be hinted")
 	}
 }
