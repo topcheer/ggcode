@@ -76,6 +76,17 @@ skill(skill="verify")               → "Did you mean: verify, verify-lint, veri
 
 This saves the agent an iteration by pointing directly to the correct name.
 
+## Search Ranking Decay
+
+Skill search results are ranked by lexical relevance, then demoted by
+staleness: a skill whose last recorded use (`.ggcode/skill-usage.json`) is
+more than 30 days old loses ranking points, and one unused for 90+ days
+loses more. Skills with no usage history are never penalized, so newly
+installed skills remain discoverable; and a strong name/description match
+always stays retrievable -- staleness demotes, it never erases. This keeps
+long-lived workspaces from surfacing months-abandoned skills ahead of the
+ones the agent actually uses.
+
 ## Skill Versioning
 
 Skills can declare a semantic version in frontmatter. This enables version-aware
