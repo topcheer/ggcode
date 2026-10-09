@@ -1479,8 +1479,6 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 		}
 	}()
-	// Stop any background cache-keepalive pings — the user is sending a new
-	// message, so the cache will be refreshed naturally by this request.
 	// Write run-start journal entry for crash detection. If the process dies
 	// before the defer below runs, CheckCrashedRun() on next startup will detect
 	// the stale "running" entry and alert the user.

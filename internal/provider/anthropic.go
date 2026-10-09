@@ -54,10 +54,11 @@ type AnthropicProvider struct {
 	// change does not preserve cached prefixes, so the carrier is attached
 	// only once a level stabilizes across consecutive requests — per-turn
 	// adaptive-effort oscillation never touches it (see beginEffortTracking).
-	effortCarrier      atomic.Bool // true until the endpoint rejects output_config
-	lastCallEffort     string      // effort level observed on the previous request
-	conversationEffort string      // effort level established for the cached prefix
-	policy             callPolicy  // sa-78: per-call deadline + retry budget
+	effortCarrier       atomic.Bool // true until the endpoint rejects output_config
+	lastCallEffort      string      // effort level observed on the previous request
+	conversationEffort  string      // effort level established for the cached prefix
+	adaptiveEffortLatch string      // first effort latched for the adaptive bypass; held constant so the top-level value never flaps (cache-flap guard)
+	policy              callPolicy  // sa-78: per-call deadline + retry budget
 }
 
 // ModelName returns the current model name used by this provider.
@@ -1468,7 +1469,12 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	// output_config marker (cache-preserving mid-conversation switching) is
 	// not expressible in SDK v1.68 typed params; when the SDK gains it, flip
 	// re-establishments to the marker form.
-	if p.effortCarrier.Load() && p.conversationEffort != "" && p.lastCallEffort == p.conversationEffort {
+	// Established means constant: once conversationEffort is set the carrier
+	// rides every request, even when a transient per-turn deviation (the
+	// adaptive adapter's apply/restore cycle) leaves lastCallEffort out of
+	// sync - dropping the carrier for one request would flip the top-level
+	// value to the model default and restart the cache just the same.
+	if p.effortCarrier.Load() && p.conversationEffort != "" {
 		params.OutputConfig = anthropic.OutputConfigParam{
 			Effort: anthropic.OutputConfigEffort(p.conversationEffort),
 		}
@@ -1477,10 +1483,20 @@ func (p *AnthropicProvider) buildParams(ctx context.Context, messages []Message,
 	// control, so it rides every request from the first call (subject to
 	// the endpoint latch — an endpoint that rejected output_config keeps
 	// running on the default level, mirroring the manual-mode degradation).
+	// The per-turn effort cannot ride the top-level slot raw: adaptive-adapter
+	// levels oscillate per call and a top-level change does not preserve
+	// cached prefixes (official effort guidance, 2026), so the raw form would
+	// restart the prompt cache every round. Latch the first observed level
+	// and hold it constant; a persistent user switch still re-establishes
+	// conversationEffort through the hysteresis path above (one deliberate
+	// cache rewrite).
 	if useAdaptive && params.OutputConfig.Effort == "" && p.effortCarrier.Load() {
-		if effort != "" {
+		if p.adaptiveEffortLatch == "" && effort != "" {
+			p.adaptiveEffortLatch = effort
+		}
+		if p.adaptiveEffortLatch != "" {
 			params.OutputConfig = anthropic.OutputConfigParam{
-				Effort: anthropic.OutputConfigEffort(effort),
+				Effort: anthropic.OutputConfigEffort(p.adaptiveEffortLatch),
 			}
 		}
 	}
