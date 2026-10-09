@@ -447,6 +447,21 @@ func (am *AutoMemory) loadForPrompt(record bool, task string) (inline []MemoryEn
 		metas = filtered
 	}
 
+	// r10 user-forgotten entries (forget.go): the user explicitly asked to
+	// forget these - stronger than supersession: excluded from both the
+	// inline channel AND the index list (an index entry would invite the
+	// model to read it back). Disk file remains until GC digests it.
+	if fg := am.ForgottenSet(); len(fg) > 0 {
+		filtered := make([]MemoryMeta, 0, len(metas))
+		for _, m := range metas {
+			if fg[m.Key] {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		metas = filtered
+	}
+
 	active, _, _, _ := curateEntries(metas, now)
 
 	// Sort active entries: persistent first (inline priority), then by key
