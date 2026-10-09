@@ -401,17 +401,46 @@ func (a *Agent) llmDecideVerifyCommand(ctx context.Context, changedFiles []strin
 // fenced command reached the pre-flight LookPath as a 3-backtick prefix,
 // failed, and came back Passed=true "verification skipped" - a silent
 // false green for every fenced oracle answer.
+//
+// #3743: the old prefix-strip + LastIndex-truncate pipeline broke on the
+// prose-then-fence shape common for non-English models ("建议运行：\n```bash
+// ..."). The LastIndex hit the CLOSING fence, leaving "prose + opening
+// fence" behind; the first-line cut then reduced it to the bare prose, which
+// leaked into executeVerifyCommand, failed LookPath, got skip-amnestied to
+// Passed=true, AND bypassed the deterministic fallback (a non-empty string
+// was returned). Now, whenever a fence opener appears ANYWHERE, the command
+// is the content of the LAST fenced block - prose before it is discarded.
 func stripCodeFence(s string) string {
 	t := strings.TrimSpace(s)
-	for _, fence := range []string{"```go", "```bash", "```sh", "```shell", "```"} {
-		if strings.HasPrefix(t, fence) {
-			t = strings.TrimPrefix(t, fence)
-			t = strings.TrimSpace(t)
+	// Collect every fence marker; fences pair left-to-right (opener, closer).
+	var fences []int
+	for i := 0; i+3 <= len(t); {
+		if j := strings.Index(t[i:], "```"); j >= 0 {
+			fences = append(fences, i+j)
+			i += j + 3
+		} else {
 			break
 		}
 	}
-	if idx := strings.LastIndex(t, "```"); idx >= 0 {
-		t = strings.TrimSpace(t[:idx])
+	if n := len(fences); n > 0 {
+		var block string
+		if n >= 2 {
+			// Last block = between the final opener/closer pair.
+			opener, closer := fences[n-2], fences[n-1]
+			block = t[opener+3 : closer]
+		} else {
+			// Single fence: an opener with unterminated content (prose
+			// before it, command after - the #3743 shape), or trailing
+			// noise after a bare command. Either way the command, if any,
+			// is what follows the fence's language-tag line.
+			block = t[fences[0]+3:]
+		}
+		if nl := strings.IndexByte(block, '\n'); nl >= 0 {
+			block = block[nl+1:] // drop the language-tag line
+		} else {
+			block = "" // lang-only / trailing fence: no command, use fallback
+		}
+		t = block
 	}
 	// Single line only - the oracle is asked for ONE command.
 	if nl := strings.IndexByte(t, '\n'); nl >= 0 {
