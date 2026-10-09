@@ -83,7 +83,7 @@ func TestUnexportedHelper(t *testing.T) {}
 func helper() {}
 `), 0644)
 
-	names := parseTestFuncNames(src)
+	names, _ := parseTestFuncNames(src)
 	if len(names) != 3 {
 		t.Fatalf("expected 3 test funcs, got %d: %v", len(names), names)
 	}
