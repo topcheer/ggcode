@@ -107,6 +107,8 @@ func enCommandModule() map[string]string {
   /memory            Show loaded memory files
   /memory list       List auto memory entries
   /memory clear      Clear all auto memories
+  /memory forget <k> Forget a single memory (soft delete, restorable)
+  /memory forgotten  List forgotten memories
   /undo              Undo the last file edit (checkpoint rollback)
   /files             Show files modified by agent in this session
   /checkpoints       List all file edit checkpoints
@@ -252,6 +254,8 @@ func zhCommandModule() map[string]string {
   /memory            显示已加载记忆
   /memory list       列出自动记忆条目
   /memory clear      清空自动记忆
+  /memory forget <k> 遗忘单条记忆（软删除，可恢复）
+  /memory forgotten  列出已遗忘的记忆
   /undo              撤销最近一次文件修改（回滚检查点）
   /files             查看 agent 在本次会话中修改的文件
   /checkpoints       列出所有文件修改检查点

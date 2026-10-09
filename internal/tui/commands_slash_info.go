@@ -407,6 +407,47 @@ func (m *Model) handleMemoryCommand(parts []string) tea.Cmd {
 			return nil
 		}
 		m.chatWriteSystem(nextSystemID(), m.t("memory.cleared"))
+	case "forget", "restore":
+		// r10 instruction-driven per-entry forgetting (sa-160): soft
+		// delete that hides from prompt injection; GC digests the file.
+		if m.autoMem == nil {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.auto_unavailable"))
+			return nil
+		}
+		if len(parts) < 3 {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.forget_usage"))
+			return nil
+		}
+		if sub == "forget" {
+			if err := m.autoMem.ForgetKey(parts[2]); err != nil {
+				m.chatWriteSystem(nextSystemID(), m.t("memory.forget_failed", err))
+				return nil
+			}
+			m.chatWriteSystem(nextSystemID(), m.t("memory.forgot", parts[2]))
+			return nil
+		}
+		if err := m.autoMem.RestoreKey(parts[2]); err != nil {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.restore_failed", err))
+			return nil
+		}
+		m.chatWriteSystem(nextSystemID(), m.t("memory.restored", parts[2]))
+	case "forgotten":
+		if m.autoMem == nil {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.auto_unavailable"))
+			return nil
+		}
+		items := m.autoMem.ListForgotten()
+		if len(items) == 0 {
+			m.chatWriteSystem(nextSystemID(), m.t("memory.forgotten_empty"))
+			return nil
+		}
+		var b strings.Builder
+		b.WriteString(m.t("memory.forgotten_title"))
+		for _, it := range items {
+			b.WriteString("  " + it + "\n")
+		}
+		b.WriteString("\n")
+		m.chatWriteSystem(nextSystemID(), b.String())
 	default:
 		m.openInspectorPanel(inspectorPanelMemory)
 	}
