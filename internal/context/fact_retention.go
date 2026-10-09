@@ -145,6 +145,7 @@ func applyFactRetention(summary, payload string) string {
 	b.WriteString(summary)
 	b.WriteString("\n\n## Auto-preserved Facts\nRe-attached deterministically from the pre-compaction transcript (the summary above dropped them; treat as binding):\n")
 	appended := 0
+	written := 0
 	for _, f := range facts {
 		if appended+len(f) > maxRetentionChars {
 			break
@@ -153,8 +154,9 @@ func applyFactRetention(summary, payload string) string {
 		b.WriteString(f)
 		b.WriteString("\n")
 		appended += len(f)
+		written++
 	}
 	out := b.String()
-	debug.Log("ctx", "fact retention: %d/%d candidate facts re-attached (%d chars appended)", len(facts), len(facts), appended)
+	debug.Log("ctx", "fact retention: %d/%d candidate facts re-attached (%d chars appended)", written, len(facts), appended)
 	return out
 }
