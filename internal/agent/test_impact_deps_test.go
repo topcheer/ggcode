@@ -61,11 +61,11 @@ func TestTransitiveImporters_TwoLevelChain(t *testing.T) {
 
 	// The first call to transitiveImporters triggers a background build.
 	// Call it twice: the first triggers the build, the second uses the cache.
-	_ = transitiveImporters(dir, []string{})
+	_, _ = transitiveImporters(dir, []string{})
 	waitForCacheBuild(dir)
 
 	// Now call with the actual changed package
-	importers := transitiveImporters(dir, []string{"pkg/c"})
+	importers, _ := transitiveImporters(dir, []string{"pkg/c"})
 
 	t.Logf("importers result: %v", importers)
 
@@ -109,12 +109,12 @@ func TestTransitiveImporters_Determinism(t *testing.T) {
 	writeTestGoFile(t, dir, "pkg/z/z.go", "package z\nimport \"test/pkg/c\"\n")
 
 	// Trigger cache build
-	_ = transitiveImporters(dir, []string{})
+	_, _ = transitiveImporters(dir, []string{})
 	waitForCacheBuild(dir)
 
 	// Run twice and compare
-	importers1 := transitiveImporters(dir, []string{"pkg/a", "pkg/b", "pkg/c"})
-	importers2 := transitiveImporters(dir, []string{"pkg/a", "pkg/b", "pkg/c"})
+	importers1, _ := transitiveImporters(dir, []string{"pkg/a", "pkg/b", "pkg/c"})
+	importers2, _ := transitiveImporters(dir, []string{"pkg/a", "pkg/b", "pkg/c"})
 
 	if importers1 == nil {
 		t.Fatal("expected importers on first call, got nil")
@@ -147,7 +147,7 @@ func TestTransitiveImporters_Determinism(t *testing.T) {
 func TestTransitiveImporters_NoGraph(t *testing.T) {
 	resetImportGraphCache()
 	// Non-existent directory
-	importers := transitiveImporters("/nonexistent/path", []string{"pkg/a"})
+	importers, _ := transitiveImporters("/nonexistent/path", []string{"pkg/a"})
 	if importers != nil {
 		t.Errorf("expected nil for non-existent dir, got %v", importers)
 	}
@@ -157,7 +157,7 @@ func TestTransitiveImporters_NoGraph(t *testing.T) {
 func TestTransitiveImporters_EmptyChanges(t *testing.T) {
 	resetImportGraphCache()
 	dir := initTestModule(t)
-	importers := transitiveImporters(dir, []string{})
+	importers, _ := transitiveImporters(dir, []string{})
 	if importers != nil {
 		t.Errorf("expected nil for empty changes, got %v", importers)
 	}
@@ -175,7 +175,7 @@ func TestTransitiveImporters_ExternalImports(t *testing.T) {
 	writeTestGoFile(t, dir, "pkg/b/b.go", "package b\n")
 
 	// A does not import B, so no importers should be found
-	importers := transitiveImporters(dir, []string{"pkg/b"})
+	importers, _ := transitiveImporters(dir, []string{"pkg/b"})
 	if importers != nil {
 		t.Errorf("expected nil (A imports fmt, not B), got %v", importers)
 	}

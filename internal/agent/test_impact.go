@@ -78,9 +78,13 @@ func changedGoPackageDirs(workingDir string) []string {
 	var dirs []string
 	for _, f := range files {
 		dir := filepath.ToSlash(filepath.Dir(f))
-		if dir == "." || dir == "" {
+		if dir == "" {
 			continue
 		}
+		// #3648: keep "." - the module root package (main.go at repo root,
+		// the single-binary CLI layout) is one of Go's most common shapes.
+		// Skipping it made changedDirs empty and the whole Go TIA chain
+		// silently return "" for root-only edits.
 		if !seen[dir] {
 			seen[dir] = true
 			dirs = append(dirs, dir)
@@ -151,9 +155,18 @@ func impactScopedTestCommand(workingDir string) string {
 	}
 	parts := make([]string, len(dirs))
 	for i, d := range dirs {
-		parts[i] = "./" + d + "/"
+		parts[i] = goPkgArg(d)
 	}
 	return "go test " + strings.Join(parts, " ")
+}
+
+// goPkgArg renders a changed dir as a `go test` package argument. The module
+// root package is ".", not "./." (invalid) or "./" (module path itself).
+func goPkgArg(d string) string {
+	if d == "." {
+		return "."
+	}
+	return "./" + d + "/"
 }
 
 // testCoverageNudge generates a hint string about changed Go files that lack
