@@ -2,6 +2,7 @@ package memory
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,9 @@ const (
 	toolFlowMinSupport     = 5
 	toolFlowMinConfidence  = 0.7
 	toolFlowScanSessionCap = 50 // newest N session files
+
+	// toolNameToken is the JSONL field marker both extractors scan for.
+	toolNameToken = `"tool_name":"`
 )
 
 // ExtractToolSequence returns the ordered tool names recorded in one session
@@ -45,11 +49,11 @@ const (
 func ExtractToolSequence(body string) []string {
 	var seq []string
 	for {
-		i := strings.Index(body, `"tool_name":"`)
+		i := strings.Index(body, toolNameToken)
 		if i < 0 {
 			return seq
 		}
-		rest := body[i+len(`"tool_name":"`):]
+		rest := body[i+len(toolNameToken):]
 		end := strings.IndexByte(rest, '"')
 		if end < 0 {
 			return seq
@@ -58,6 +62,31 @@ func ExtractToolSequence(body string) []string {
 			seq = append(seq, name)
 		}
 		body = rest[end:]
+	}
+}
+
+// appendToolNamesFromLine is the per-line form of ExtractToolSequence
+// (#3699): it pulls every `"tool_name":"..."` value out of ONE JSONL line
+// so AnalyzeToolFlows can stream sessions file-by-file without ever holding
+// a whole session's text in memory. The token cannot straddle a line
+// boundary, so streaming yields the identical sequence to the old
+// whole-body scan.
+func appendToolNamesFromLine(seq []string, line []byte) []string {
+	tok := []byte(toolNameToken)
+	for {
+		i := bytes.Index(line, tok)
+		if i < 0 {
+			return seq
+		}
+		rest := line[i+len(tok):]
+		end := bytes.IndexByte(rest, '"')
+		if end < 0 {
+			return seq
+		}
+		if name := rest[:end]; len(name) > 0 {
+			seq = append(seq, string(name))
+		}
+		line = rest[end:]
 	}
 }
 
@@ -100,18 +129,25 @@ func AnalyzeToolFlows(sessionsDir string, maxPatterns int) ([]ToolFlowPattern, e
 		if err != nil {
 			continue
 		}
-		var body strings.Builder
+		// #3699: stream line-by-line. The previous shape slurped the ENTIRE
+		// session file into one strings.Builder before extracting tool names
+		// - on a multi-hundred-MB session store (real-world long-lived
+		// workspaces) each analysis pass retained the full file text in the
+		// heap, which profiled as GBs of live strings.Builder allocations
+		// and was the dominant term of the "agent loop eats several GB of
+		// RSS" regression. The token `"tool_name":"` can never straddle a
+		// JSONL line boundary, so per-line extraction is semantically
+		// identical to the old whole-body scan (ExtractToolSequence).
+		var seq []string
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for sc.Scan() {
-			body.WriteByte('\n')
-			body.Write(sc.Bytes())
+			seq = appendToolNamesFromLine(seq, sc.Bytes())
 		}
 		f.Close()
 		if err := sc.Err(); err != nil {
 			continue
 		}
-		seq := ExtractToolSequence(body.String())
 		if len(seq) < 2 {
 			continue
 		}
