@@ -452,9 +452,19 @@ func (s *trajIntelState) RenderPromptSection(workingDir string) string {
 	// categories; global only fills gaps.
 	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
 		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			// #3729: count only INJECTION-ELIGIBLE local entries. The old
+			// file-existence count let retired zombies (below the 0.3
+			// confidence floor, or r461 effectiveness-gated) suppress
+			// same-category global entries too - a double supply cut: the
+			// category was injected neither locally nor globally, exactly
+			// when cross-workspace knowledge was most valuable (the local
+			// pattern no longer reproduces). Aligned with the injection
+			// filter chain (trajInjectEligible).
 			localCats := map[string]bool{}
 			for _, l := range entries {
-				localCats[l.Category] = true
+				if trajInjectEligible(l) {
+					localCats[l.Category] = true
+				}
 			}
 			for _, l := range gEntries {
 				if l.Category == "" || localCats[l.Category] {
@@ -627,9 +637,19 @@ func TrajListLearnings(workingDir string) []TrajLearningView {
 	}
 	if globalPath, gErr := TrajGlobalPath(); gErr == nil {
 		if gEntries, gLoadErr := loadTrajFile(globalPath); gLoadErr == nil && len(gEntries) > 0 {
+			// #3729: count only INJECTION-ELIGIBLE local entries. The old
+			// file-existence count let retired zombies (below the 0.3
+			// confidence floor, or r461 effectiveness-gated) suppress
+			// same-category global entries too - a double supply cut: the
+			// category was injected neither locally nor globally, exactly
+			// when cross-workspace knowledge was most valuable (the local
+			// pattern no longer reproduces). Aligned with the injection
+			// filter chain (trajInjectEligible).
 			localCats := map[string]bool{}
 			for _, l := range entries {
-				localCats[l.Category] = true
+				if trajInjectEligible(l) {
+					localCats[l.Category] = true
+				}
 			}
 			for _, l := range gEntries {
 				if l.Category == "" || localCats[l.Category] {
@@ -989,6 +1009,16 @@ func (l trajectoryLearning) EffectiveConfidence() float64 {
 func effectivenessGated(l trajectoryLearning) bool {
 	return l.InjectedRuns >= trajEffectMinSamples &&
 		float64(l.AfterSuccess)/float64(l.InjectedRuns) < trajEffectMinSuccess
+}
+
+// trajInjectEligible reports whether an entry would survive the injection
+// filter chain (confidence floor + r461 effectiveness gate). #3729: the
+// global-tier fill-gaps top-up keys on this, so a locally-retired zombie
+// category no longer suppresses an eligible global entry of the same
+// category. The r462 holdout is per-run sampling, not retirement, so it
+// deliberately does not factor in.
+func trajInjectEligible(l trajectoryLearning) bool {
+	return l.EffectiveConfidence() >= trajPromptMinConfidence && !effectivenessGated(l)
 }
 
 // consolidateLearnings merges same Category+Type entries into a single
