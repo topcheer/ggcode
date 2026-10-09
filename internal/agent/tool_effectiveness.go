@@ -191,6 +191,22 @@ func lineStartsWithAdvisoryMarker(ln string) bool {
 	return false
 }
 
+// sourceEchoTools are the tools whose result content ECHOES repository
+// source text (patches, previews, fetched page/source dumps) rather than a
+// status the tool layer composed (#3663, the #3632 residual): git_show and
+// git_diff of this repository's own tool sources embed the truncation
+// marker literals verbatim, batch_replace dry-run previews them, and
+// browser content fetches pages that mention them - none of these tools
+// ever APPENDS a marker from the truncation list, so a bare substring hit
+// is always payload, never a degradation advisory. Same skip semantics as
+// filePayloadTools.
+var sourceEchoTools = map[string]bool{
+	"git_show":      true,
+	"git_diff":      true,
+	"batch_replace": true,
+	"browser":       true,
+}
+
 // isPoorResult checks if a non-error result is still effectively a failure
 // (e.g., empty search results, truncated output with advisory).
 func isPoorResult(toolName, content string) bool {
@@ -199,7 +215,7 @@ func isPoorResult(toolName, content string) bool {
 	}
 	// File-payload tools: content is file data, not a tool-layer report -
 	// marker literals are payload (#2964). See filePayloadTools doc comment.
-	if filePayloadTools[toolName] {
+	if filePayloadTools[toolName] || sourceEchoTools[toolName] {
 		return false
 	}
 	// run_command payloads are arbitrary command stdout/stderr: cat-ing or
