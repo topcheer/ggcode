@@ -59,10 +59,10 @@ func TestIssue3607_ProseMentionUnit(t *testing.T) {
 		t.Fatal("bare trailing directive misread as prose")
 	}
 	// Rule arguments carry punctuation and are not prose continuations.
-	if proseContinuation("no-foo") || proseContinuation("no-console, no-alert") {
+	if proseContinuation("no-foo", false) || proseContinuation("no-console, no-alert", false) {
 		t.Fatal("rule argument treated as prose continuation")
 	}
-	if !proseContinuation("in this repo") {
+	if !proseContinuation("in this repo", false) {
 		t.Fatal("prose continuation not detected")
 	}
 }
