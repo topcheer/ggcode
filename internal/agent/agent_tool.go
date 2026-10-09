@@ -693,7 +693,11 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// direct Content += - the direct append bypassed the per-turn guidance
 	// budget and duplicated the agent.go toolFallbackCheck pathway, stacking
 	// an extra unbudgeted hint onto every failing result.
-	if result.IsError {
+	// #3641: same IsError-only gate defect as #3630 - grep/search zero
+	// matches return as success, so the "No matches found. Try broader
+	// pattern" hint (this file's stated main scenario) never fired. Reuse
+	// the #3630 gate: zero-result search tools qualify on success too.
+	if fallbackCheckApplies(t.Name(), result.IsError) {
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
 			// Trim the hint's leading newline: appendGuidance inserts its own
 			// "\n\n" separator, which would otherwise yield a triple newline.
