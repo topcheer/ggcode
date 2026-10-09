@@ -101,6 +101,17 @@ func receiverTypeName(expr ast.Expr) string {
 func parseTestFuncNames(filePath string) (map[string]bool, bool) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
+		// A MISSING file is not a parse failure (#3662 defect 1, resurrected
+		// by #3649's ok-flag rework and caught by the #3620 word-boundary
+		// invariant probe on main): the sibling-absent case (foo.go with no
+		// foo_test.go) returned ok=false, set anyParseFailed, and the
+		// defect-2 suppression then vetoed every exact-name miss - the
+		// entire no-sibling branch reported nothing, the exact regression
+		// TestIssue3620_WordBoundaryNoPrefixHit pins. Absent = empty set,
+		// parse ok. Real parse failures keep the suppression.
+		if os.IsNotExist(err) {
+			return nil, true
+		}
 		return nil, false
 	}
 	file, _, err := parseGoSource(filePath, string(data), 0)
