@@ -135,6 +135,14 @@ func resetSpecPersistForTest() {
 // maybePersistSpecPatterns saves the model to disk at most once per
 // specPersistInterval. Called at run end; failures are silent.
 func maybePersistSpecPatterns(s *speculator) {
+	// #3594: the nil guard must precede the throttle window. Advancing
+	// specLastPersist before the s == nil check burned a full window on
+	// every nil-receiver call, contradicting the documented semantics
+	// ("at most one save per window" - a save that can never happen must
+	// not consume the window).
+	if s == nil {
+		return
+	}
 	specPersistMu.Lock()
 	if time.Since(specLastPersist) < specPersistInterval {
 		specPersistMu.Unlock()
@@ -143,9 +151,6 @@ func maybePersistSpecPatterns(s *speculator) {
 	specLastPersist = time.Now()
 	specPersistMu.Unlock()
 
-	if s == nil {
-		return
-	}
 	s.mu.Lock()
 	snapshot := make(map[string]map[string]int, len(s.patterns))
 	for prev, nexts := range s.patterns {
