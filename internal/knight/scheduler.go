@@ -137,27 +137,27 @@ func (k *Knight) Start(ctx context.Context) error {
 	}
 
 	// Acquire cross-process lock — only one Knight per project directory.
+	// #3657: keep the acquired lock in a LOCAL variable until the k.mu
+	// section below. Assigning k.lock here (unlocked, like every error
+	// path below releasing it) raced Stop/Status reading k.lock under k.mu
+	// (same family as the #2757 Status race; Start was the missed path).
 	lock := tryAcquireLock(k.projDir)
 	if lock == nil {
 		pid, _ := LockHeldBy(k.projDir)
 		debug.Log("knight", "%s", FormatLockMessage(pid))
 		return ErrLockConflict
 	}
-	k.lock = lock
 
 	if err := k.budget.EnsureDir(); err != nil {
-		k.lock.release()
-		k.lock = nil
+		lock.release()
 		return fmt.Errorf("knight: init budget dir: %w", err)
 	}
 	if err := k.usage.EnsureDir(); err != nil {
-		k.lock.release()
-		k.lock = nil
+		lock.release()
 		return fmt.Errorf("knight: init usage dir: %w", err)
 	}
 	if err := k.queue.EnsureDir(); err != nil {
-		k.lock.release()
-		k.lock = nil
+		lock.release()
 		return fmt.Errorf("knight: init candidate queue dir: %w", err)
 	}
 
@@ -168,8 +168,7 @@ func (k *Knight) Start(ctx context.Context) error {
 		filepath.Join(k.projDir, ".ggcode", "skills-snapshots"),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			k.lock.release()
-			k.lock = nil
+			lock.release()
 			return fmt.Errorf("knight: create dir %s: %w", dir, err)
 		}
 	}
@@ -190,6 +189,9 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.mu.Lock()
 	if k.running {
 		k.mu.Unlock()
+		// Freshly acquired flock is redundant when already running
+		// (normally unreachable: double-Start fails at tryAcquireLock).
+		lock.release()
 		debug.Log("knight", "already running, start skipped")
 		return nil
 	}
@@ -197,6 +199,8 @@ func (k *Knight) Start(ctx context.Context) error {
 	k.cancel = cancel
 	k.running = true
 	k.lastIdle = time.Now()
+	// #3657: the k.lock field is written only here, under k.mu.
+	k.lock = lock
 	k.mu.Unlock()
 
 	k.wg.Add(1)
@@ -216,16 +220,21 @@ func (k *Knight) Stop() {
 		k.cancel = nil
 	}
 	k.running = false
+	k.mu.Unlock()
+
+	// Wait for runLoop to fully exit BEFORE releasing the cross-process
+	// instance lock (#3657). The old order (release inside k.mu, then
+	// wg.Wait) opened a window where another process could acquire the
+	// instance lock and run a second Knight while this runLoop was still
+	// mid-tick writing skill files. wg.Wait must not run under k.mu:
+	// runLoop takes k.mu during ticks and would deadlock.
+	k.wg.Wait()
+	k.mu.Lock()
 	if k.lock != nil {
 		k.lock.release()
 		k.lock = nil
 	}
 	k.mu.Unlock()
-
-	// Wait for runLoop to fully exit before returning. Without this,
-	// a quick Start→Stop→Start sequence can have two runLoop goroutines
-	// concurrently accessing stagingFailCount (no mutex on that map).
-	k.wg.Wait()
 	debug.Log("knight", "stopped")
 }
 
