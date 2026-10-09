@@ -79,39 +79,83 @@ func detectGoBuildTags(workingDir string) []string {
 			continue
 		}
 		content := string(data)
-		words := strings.Fields(content)
+		// #3619: resolve Makefile variable references first. The repo's
+		// real form is `TAGS := goolm` + `-tags "$(TAGS)"` - the old code
+		// took the next Fields token verbatim and returned the literal
+		// "$(TAGS)" as a build tag.
+		vars := makefileVars(content)
+		words := strings.Fields(expandMakefileVars(content, vars))
 		for i, w := range words {
 			// Match -tags <tags> (space-separated)
 			if w == "-tags" && i+1 < len(words) {
-				tag := strings.Trim(words[i+1], "'\"")
-				tags := strings.Split(tag, ",")
-				var result []string
-				for _, t := range tags {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						result = append(result, t)
-					}
-				}
-				return result
+				return splitBuildTagList(words[i+1])
 			}
 			// Match -tags=<tags>
 			if strings.HasPrefix(w, "-tags=") {
-				tag := strings.TrimPrefix(w, "-tags=")
-				tag = strings.Trim(tag, "'\"")
-				tags := strings.Split(tag, ",")
-				var result []string
-				for _, t := range tags {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						result = append(result, t)
-					}
-				}
-				return result
+				return splitBuildTagList(strings.TrimPrefix(w, "-tags="))
 			}
 		}
 		break // found Makefile but no tags — stop searching
 	}
 	return nil
+}
+
+// makefileVars extracts simple `NAME := value` / `NAME = value` / `NAME ?=
+// value` assignments (first wins, matching make).
+func makefileVars(content string) map[string]string {
+	vars := map[string]string{}
+	for _, ln := range strings.Split(content, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		eq := strings.Index(ln, "=")
+		if eq <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(ln[:eq], ":"), "+"))
+		if name == "" || strings.ContainsAny(name, " \t$") {
+			continue
+		}
+		if _, dup := vars[name]; dup {
+			continue
+		}
+		vars[name] = strings.TrimSpace(ln[eq+1:])
+	}
+	return vars
+}
+
+// expandMakefileVars substitutes $(NAME) references (two passes so
+// VAR := $(OTHER) chains resolve).
+func expandMakefileVars(s string, vars map[string]string) string {
+	for pass := 0; pass < 2; pass++ {
+		changed := false
+		for name, val := range vars {
+			ref := "$(" + name + ")"
+			if strings.Contains(s, ref) {
+				s = strings.ReplaceAll(s, ref, val)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return s
+}
+
+// splitBuildTagList trims quotes and splits a -tags argument value.
+func splitBuildTagList(v string) []string {
+	tag := strings.Trim(v, "'\"")
+	tags := strings.Split(tag, ",")
+	var result []string
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t != "" && !strings.HasPrefix(t, "$") {
+			result = append(result, t)
+		}
+	}
+	return result
 }
 
 // buildImportGraph runs `go list` to build a map of package import paths to
