@@ -229,6 +229,30 @@ func (a *Agent) tryReactiveCompact(ctx context.Context, onEvent func(provider.St
 // schedules a background precompact (LLM summarization). If precompact succeeds,
 // the next turn will consume the result and shrink the context. If precompact
 // fails or is too slow, reactive compact (PTL recovery) handles it synchronously.
+// shouldDeferCacheAwareCompact decides whether auto-compaction should be
+// deferred one more turn because the prompt cache is currently hot.
+//
+// Cache-aware deferral (r20, TokenPilot EMNLP 2026 arXiv:2606.17016):
+// compacting busts the prompt cache prefix - subsequent turns re-process it
+// at full price instead of the ~10x cheaper cached read. When the recent
+// cache hit ratio is high, compacting NOW has negative net win: we would
+// give up the cache discount on tokens that still fit the window.
+//
+// Policy: defer ONLY (never advance compaction), and only while tokens stay
+// below 97% of the context window (hard protection line). The absolute cap
+// is still guarded by ensurePromptSendable / tryReactiveCompact. Providers
+// without caching semantics report hitRatio ~0 and are unaffected
+// (bit-for-bit behavior).
+func shouldDeferCacheAwareCompact(hitRatio float64, tokens, contextWindow int) bool {
+	if hitRatio < 0.6 {
+		return false
+	}
+	if contextWindow <= 0 {
+		return false // unknown window: never defer, fall back to old behavior
+	}
+	return tokens < int(float64(contextWindow)*0.97)
+}
+
 func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.StreamEvent), transientWarned *bool) error {
 	tokens := a.contextManager.TokenCount()
 	threshold := a.contextManager.AutoCompactThreshold()
@@ -238,6 +262,20 @@ func (a *Agent) maybeAutoCompact(ctx context.Context, onEvent func(provider.Stre
 
 	// Trigger precompact when message tokens reach the fixed-overhead threshold.
 	if tokens < threshold {
+		return nil
+	}
+
+	// Cache-aware deferral (r20, TokenPilot EMNLP 2026 arXiv:2606.17016):
+	// compacting busts the prompt cache prefix - subsequent turns re-process
+	// it at full price instead of the ~10x cheaper cached read. When the
+	// recent cache hit ratio is high, compacting NOW has negative net win:
+	// we would give up the cache discount on tokens that still fit the
+	// window. Defer, but only up to the hard protection line (97% of the
+	// window); never advance - ensurePromptSendable / tryReactiveCompact
+	// still guard the absolute cap. Providers without caching semantics
+	// report hitRatio ~0 and are unaffected (bit-for-bit).
+	if ratio := a.cacheEffMonitor.recentHitRatio(); shouldDeferCacheAwareCompact(ratio, tokens, a.contextManager.ContextWindow()) {
+		debug.Log("agent", "maybeAutoCompact: DEFERRED cache-aware (hitRatio=%.2f tokens=%d)", ratio, tokens)
 		return nil
 	}
 

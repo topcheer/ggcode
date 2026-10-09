@@ -179,6 +179,24 @@ func (m *cacheEffMonitor) hitRatio(s cacheEffSample) float64 {
 	return float64(s.cacheRead) / float64(s.total)
 }
 
+// recentHitRatio returns the mean cache hit ratio over the rolling window.
+// It returns 0 until at least cacheEffMinCalls samples exist, so providers
+// without prompt caching (CacheRead always 0 after the #1441-B provider
+// semantics normalization in record) naturally report ~0 and never trip
+// cache-aware compaction deferral - behavior stays identical for them.
+func (m *cacheEffMonitor) recentHitRatio() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.samples) < cacheEffMinCalls {
+		return 0
+	}
+	var sum float64
+	for _, s := range m.samples {
+		sum += m.hitRatio(s)
+	}
+	return sum / float64(len(m.samples))
+}
+
 // formatStormGuidance produces actionable guidance when a cache bust storm
 // is detected.
 func (m *cacheEffMonitor) formatStormGuidance() string {

@@ -217,3 +217,46 @@ func TestCacheEfficiencyMonitorOpenAICompatSubset(t *testing.T) {
 		t.Fatal("90% cache-hit samples never recorded warm - subset double-count regression")
 	}
 }
+
+// recentHitRatio (r20 cache-aware compaction deferral) unit coverage.
+func TestCacheEffMonitor_RecentHitRatio(t *testing.T) {
+	t.Run("insufficient samples returns 0", func(t *testing.T) {
+		m := newCacheEffMonitor()
+		for i := 0; i < cacheEffMinCalls-1; i++ {
+			m.record(provider.TokenUsage{InputTokens: 100, CacheRead: 90})
+		}
+		if r := m.recentHitRatio(); r != 0 {
+			t.Fatalf("want 0 below cacheEffMinCalls, got %v", r)
+		}
+	})
+
+	t.Run("empty monitor returns 0", func(t *testing.T) {
+		m := newCacheEffMonitor()
+		if r := m.recentHitRatio(); r != 0 {
+			t.Fatalf("want 0 on empty window, got %v", r)
+		}
+	})
+
+	t.Run("mean over window", func(t *testing.T) {
+		m := newCacheEffMonitor()
+		// 3 calls at ratio 0.9 (90/100), 1 call at ratio 0.1 (10/100) -> mean 0.7
+		for i := 0; i < 3; i++ {
+			m.record(provider.TokenUsage{InputTokens: 10, CacheRead: 90})
+		}
+		m.record(provider.TokenUsage{InputTokens: 90, CacheRead: 10})
+		got := m.recentHitRatio()
+		if got < 0.69 || got > 0.71 {
+			t.Fatalf("want ~0.7 mean, got %v", got)
+		}
+	})
+
+	t.Run("no-cache provider stays ~0 (no-op invariant)", func(t *testing.T) {
+		m := newCacheEffMonitor()
+		for i := 0; i < cacheEffWindow+2; i++ {
+			m.record(provider.TokenUsage{InputTokens: 1000, CacheRead: 0})
+		}
+		if r := m.recentHitRatio(); r != 0 {
+			t.Fatalf("want 0 for CacheRead=0 providers, got %v", r)
+		}
+	})
+}
