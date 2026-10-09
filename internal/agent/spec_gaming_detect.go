@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/topcheer/ggcode/internal/debug"
@@ -117,12 +118,38 @@ var skipMarkers = []string{
 	"test.skip(",
 	"describe.skip(",
 	"xdescribe(",
-	"xit(",
-	"xtest(",
+	// "xit(" / "xtest(" moved to boundarySkipMarkerRes (#3735): as plain
+	// substrings they hit the tail of every mainstream exit call
+	// (os.Exit / sys.exit / process.exit / exit(...)), turning normal
+	// error handling into a spec-gaming accusation and burning the
+	// fired-once detection budget on a false positive.
 	"// @ts-ignore", // suppress type errors
 	"@Disabled",     // JUnit
 	"testing.Skip(", // Go
 	"t.Skip(",       // Go testing
+}
+
+// boundarySkipMarkerRes are skip markers that REQUIRE a word boundary on
+// their left edge (#3735): the Jest/Mocha "xit("/"xtest(" forms are a bare
+// suffix of exit-family calls, so plain Contains matched every
+// os.Exit/sys.exit/process.exit in edits and commands. The boundary class
+// excludes identifier chars, so `xit(` still matches "foo() xit(1)" or
+// "describe('x', () => { it... xit(" but NOT os.exit( / nextest( / exit( .
+// Case-insensitive by construction (inputs are lowered before matching).
+var boundarySkipMarkerRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?:^|[^a-z0-9_])xit\(`),
+	regexp.MustCompile(`(?:^|[^a-z0-9_])xtest\(`),
+}
+
+// containsBoundarySkipMarker reports whether lower (ALREADY lowercased)
+// text contains any boundary-guarded skip marker.
+func containsBoundarySkipMarker(lower string) bool {
+	for _, re := range boundarySkipMarkerRes {
+		if re.MatchString(lower) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTestFile returns true if the path matches a known test file naming pattern.
@@ -768,8 +795,15 @@ func isAwkSkipRemoval(lower string) bool {
 // containsAnySkipMarker reports whether s contains any skip marker,
 // case-insensitively.
 func containsAnySkipMarker(s string) bool {
+	// #3735: lower the INPUT, not just the marker - the case-insensitive
+	// promise in the doc comment was only half-kept (sed-exemption paths
+	// fed original-case text against lowered markers).
+	lower := strings.ToLower(s)
+	if containsBoundarySkipMarker(lower) {
+		return true
+	}
 	for _, marker := range skipMarkers {
-		if strings.Contains(s, strings.ToLower(marker)) {
+		if strings.Contains(lower, strings.ToLower(marker)) {
 			return true
 		}
 	}
@@ -789,6 +823,9 @@ func hasSkipMarkersInCommands(commands []string) bool {
 			continue
 		}
 		lower := strings.ToLower(cmd)
+		if containsBoundarySkipMarker(lower) { // #3735: xit(/xtest( boundary forms
+			return true
+		}
 		for _, marker := range skipMarkers {
 			// Check for both unescaped and escaped forms of skip markers
 			// e.g., "t.Skip(" and "t.Skip\(" or "t\.Skip\("
@@ -817,6 +854,9 @@ func hasSkipMarkersInCommands(commands []string) bool {
 func hasSkipMarkersInEdits(contents []string) bool {
 	for _, text := range contents {
 		lower := strings.ToLower(text)
+		if containsBoundarySkipMarker(lower) { // #3735: xit(/xtest( boundary forms
+			return true
+		}
 		for _, marker := range skipMarkers {
 			markerLower := strings.ToLower(marker)
 			if strings.Contains(lower, markerLower) {
