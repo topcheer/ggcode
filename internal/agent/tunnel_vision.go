@@ -96,7 +96,13 @@ func (s *tunnelVisionState) reset() {
 var searchPathRe = regexp.MustCompile(`(?m)^\s*([^\s:]+\.[A-Za-z0-9]+):\d+`)
 
 // extractSearchResultPaths pulls unique file paths from search output.
-func extractSearchResultPaths(content string) []string {
+// #3736: grep's DEFAULT output_mode (files_with_matches) lists one bare
+// path per line and code_search prints "N. path (relevance: %d%%)" —
+// neither carries the ":N" suffix searchPathRe requires, so the #476
+// breadth counting was silently zero on the most typical search shapes.
+// Reuse #1491-A's pathOnlyRe/barePathTools/lspTools layering from
+// search_invalid.go (same package) for those tools.
+func extractSearchResultPaths(toolName, content string) []string {
 	if content == "" {
 		return nil
 	}
@@ -106,6 +112,17 @@ func extractSearchResultPaths(content string) []string {
 		if len(m) >= 2 && !seen[m[1]] {
 			seen[m[1]] = true
 			paths = append(paths, m[1])
+		}
+	}
+	if barePathTools[toolName] || lspTools[toolName] {
+		for _, m := range pathOnlyRe.FindAllStringSubmatch(content, 50) {
+			if len(m) >= 2 {
+				p := strings.TrimSpace(m[1])
+				if p != "" && !seen[p] && isValidFilePath(p) {
+					seen[p] = true
+					paths = append(paths, p)
+				}
+			}
 		}
 	}
 	return paths
