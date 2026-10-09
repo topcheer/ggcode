@@ -693,7 +693,14 @@ func (a *Agent) executeToolInner(ctx context.Context, tc provider.ToolCallDelta)
 	// direct Content += - the direct append bypassed the per-turn guidance
 	// budget and duplicated the agent.go toolFallbackCheck pathway, stacking
 	// an extra unbudgeted hint onto every failing result.
-	if result.IsError {
+	// #3641: the search tools' headline scenario ("When grep returns
+	// nothing...") never fired - grep renders zero matches as a SUCCESS
+	// result (by contract, grep.go), and the hint path was gated on
+	// IsError alone. Successful results of the three search tools now also
+	// go through toolFallbackHint; the hint itself decides via
+	// isEmptyToolResult (non-empty successes return "" unchanged, so no
+	// other tool or success path is affected).
+	if result.IsError || toolFallbackHintOnSuccess(t.Name()) {
 		if hint := toolFallbackHint(t.Name(), result.Content); hint != "" {
 			// Trim the hint's leading newline: appendGuidance inserts its own
 			// "\n\n" separator, which would otherwise yield a triple newline.
