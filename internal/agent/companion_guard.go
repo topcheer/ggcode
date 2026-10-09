@@ -46,8 +46,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-const maxCompanionGuardWarnings = 1
-
 // companionGuardState tracks whether the guard has already fired this run.
 type companionGuardState struct {
 	fired bool

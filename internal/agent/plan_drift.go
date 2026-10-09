@@ -39,8 +39,6 @@ import (
 //
 // The gate fires AT MOST ONCE per run (advisory, doesn't block completion).
 
-const maxPlanDriftWarnings = 1
-
 // planDriftState tracks the plan from exit_plan_mode and whether drift was checked.
 type planDriftState struct {
 	captured bool       // whether a plan was captured this run

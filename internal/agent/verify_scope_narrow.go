@@ -44,8 +44,6 @@ import (
 	"github.com/topcheer/ggcode/internal/debug"
 )
 
-const maxScopeNarrowWarnings = 1
-
 // scopeNarrowState tracks test/build commands to detect scope narrowing.
 type scopeNarrowState struct {
 	// history stores normalized scope info for each verification command.
