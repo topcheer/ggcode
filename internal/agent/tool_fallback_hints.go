@@ -113,7 +113,12 @@ func lspFallbackHint(lowerErr string) string {
 		strings.Contains(lowerErr, "server crashed") || strings.Contains(lowerErr, "starting") {
 		return "\n[Hint: LSP server unavailable. Try: (1) grep/search_files to find the symbol by name, (2) code_search for semantic lookup, (3) read the file directly and scan for the definition.]"
 	}
-	if strings.Contains(lowerErr, "no result") || strings.Contains(lowerErr, "not found") {
+	// #3641: real LSP zero-result payloads ("No definition found.",
+	// "No hover information", "No references found.") use these phrasings;
+	// bare "not found" never matches them.
+	if strings.Contains(lowerErr, "no result") || strings.Contains(lowerErr, "not found") ||
+		strings.Contains(lowerErr, "no definition") || strings.Contains(lowerErr, "no hover") ||
+		strings.Contains(lowerErr, "no reference") || strings.Contains(lowerErr, "no symbol") {
 		return "\n[Hint: LSP found no matches. Try: (1) lsp_workspace_symbols for project-wide search, (2) grep for the exact symbol name, (3) check if you're in the right file.]"
 	}
 	return ""

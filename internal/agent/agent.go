@@ -4651,7 +4651,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.
-			if result.IsError {
+			// #3630: zero-result successes (grep/glob/lsp_* "No matches
+			// found") also qualify - these tools return empty results as
+			// success, and the zero-result fallback rules were dead code
+			// under the IsError-only gate.
+			if fallbackCheckApplies(tc.Name, result.IsError) {
 				if fallbackHint := a.toolFallbackCheck(tc.Name, result.Content); fallbackHint != "" {
 					a.appendGuidance(&result, fallbackHint)
 				}

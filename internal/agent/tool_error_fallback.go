@@ -267,6 +267,35 @@ var fallbackRules = map[string][]fallbackRule{
 	},
 }
 
+// zeroResultFallbackTools lists tools whose zero-match outcomes return as
+// SUCCESS (IsError=false) with distinctive content phrasing ("No matches
+// found", "No definition found.", ...). The agent-loop fallback check used
+// to run only under result.IsError, so the zero-result rules in fallbackRules
+// were deterministic dead code (#3630) - the search-spiral scenario they were
+// written for never reached them. For these tools the loop also runs the
+// fallback check on successful results; rule matching is content-anchored,
+// so non-empty hits never trigger the zero-result phrases.
+var zeroResultFallbackTools = map[string]bool{
+	"grep":                  true,
+	"search_files":          true,
+	"glob":                  true,
+	"code_search":           true,
+	"lsp_definition":        true,
+	"lsp_references":        true,
+	"lsp_hover":             true,
+	"lsp_workspace_symbols": true,
+}
+
+// fallbackCheckApplies reports whether the agent loop should run the
+// fallback chain for this result: genuine errors always, and zero-result
+// success payloads for the tools in zeroResultFallbackTools (#3630).
+func fallbackCheckApplies(toolName string, isError bool) bool {
+	if isError {
+		return true
+	}
+	return zeroResultFallbackTools[toolName]
+}
+
 // maybeFallbackSuggestion checks whether a fallback suggestion should be injected
 // for the given tool failure. Returns the suggestion text, or "" if none applies.
 // Each tool gets at most one suggestion per run.
