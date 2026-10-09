@@ -187,6 +187,13 @@ func stripTestSuffix(path string) string {
 			if suffix == ".test.kt" {
 				return base + ".kt"
 			}
+			// For Java: FooTest.java -> Foo.java (#3627: every other
+			// suffix family re-attaches its extension; Java alone fell
+			// through to the bare-base fallback, so sourceExists looked
+			// for an extension-less "Foo" and never found the source).
+			if suffix == "test.java" {
+				return base + ".java"
+			}
 			// Fallback: just strip suffix
 			return base
 		}
