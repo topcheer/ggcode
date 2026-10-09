@@ -165,3 +165,34 @@ func TestWeaknessAgingAndEviction(t *testing.T) {
 		t.Fatal("oldest entry must be evicted first")
 	}
 }
+
+// r17: one go-test failure sighting in a run seeds WeakRare; rerunning the
+// same failing test within one run (2 sightings) is WeakForgetting - the
+// agent was told and did not adapt.
+func TestTestFailSightingClassification(t *testing.T) {
+	out := "--- PASS: TestOther (0.00s)\n--- FAIL: TestWidget (0.01s)\nFAIL\n"
+	a, dir := weaknessTestAgent(t)
+	a.testFails = newTestFailCollector()
+	a.testFails.record(out) // single sighting
+	a.routeWeaknessSignals()
+	store := loadWeaknessStore(weaknessStorePath(dir))
+	if rec := store["test-fail:TestWidget"]; rec.Count != 1 || rec.Class != WeakRare {
+		t.Fatalf("single sighting: store record = %+v, want Count=1 WeakRare", rec)
+	}
+	// Route-end reset: collector must be empty for the next run.
+	if n := len(a.testFails.snapshot()); n != 0 {
+		t.Fatalf("collector not reset after route: %d entries", n)
+	}
+	// Rerun in one run: same test fails again -> WeakForgetting + enforce line.
+	a.testFails.record(out)
+	a.testFails.record(out)
+	a.routeWeaknessSignals()
+	store = loadWeaknessStore(weaknessStorePath(dir))
+	rec := store["test-fail:TestWidget"]
+	if rec.Count != 2 || rec.Class != WeakForgetting || !rec.Routed {
+		t.Fatalf("rerun sighting: store record = %+v, want Count=2 WeakForgetting Routed", rec)
+	}
+	if mem := readWeaknessMemory(t, dir); !strings.Contains(mem, "enforce: test-fail:TestWidget") {
+		t.Fatalf("expected enforce line for rerun test failure, got:\n%s", mem)
+	}
+}
