@@ -217,12 +217,28 @@ func Digest(path, session string) (RunDigest, error) {
 	// Embed chain tamper state: a digest over a broken chain is still useful
 	// (everything before the break is vouched), but the break must travel with
 	// it or a consumer could mistake post-break absence for "nothing happened".
-	if rep, err := Verify(path); err == nil {
-		d.VerifyOK = rep.OK()
-		d.FirstBreak = rep.FirstBreak
-		d.Truncated = rep.Truncated
-	}
+	// #3692: a Verify IO failure must fail CLOSED - the initial VerifyOK=true
+	// used to survive the error branch and Render() reported "VERIFIED
+	// intact" for a chain it could not even read. Unverifiable != intact.
+	// verifyChain is a seam: the IO error is only reachable via a TOCTOU
+	// between Digest's own scanEntries read and Verify's (same path, two
+	// opens); tests swap this to exercise the failure deterministically.
+	ok, firstBreak, truncated := verifyChain(path)
+	d.VerifyOK = ok
+	d.FirstBreak = firstBreak
+	d.Truncated = truncated
 	return d, nil
+}
+
+// verifyChain runs Verify and folds its error into a fail-closed triple.
+// Package var (not a plain func) so tests can swap it: the IO error is only
+// reachable via a TOCTOU between Digest's scanEntries read and Verify's.
+var verifyChain = func(path string) (ok bool, firstBreak *Break, truncated *Truncation) {
+	rep, err := Verify(path)
+	if err != nil {
+		return false, nil, nil
+	}
+	return rep.OK(), rep.FirstBreak, rep.Truncated
 }
 
 // Render formats a digest as the human-readable audit report. Blast radius
