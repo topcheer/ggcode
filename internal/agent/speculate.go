@@ -449,30 +449,34 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 	}
 
 	for _, predicted := range predictions {
-		// Check concurrency limit.
-		s.mu.Lock()
-		if s.activeSpeculations >= specMaxConcurrent {
-			s.mu.Unlock()
+		// Reserve the concurrency slot atomically (#3593): the old code
+		// checked the limit under this lock but incremented only under the
+		// second lock, after the unlocked predictArgs window - two loop
+		// iterations could both pass the check and both increment (effective
+		// limit max+N). Check+increment must happen in one critical section;
+		// every bail path below releases the reserved slot via releaseSpecSlot,
+		// and the goroutine's defer releases it on completion.
+		if !s.reserveSpecSlot() {
 			debug.Log("speculate", "max concurrent speculations (%d) reached, skipping %s", specMaxConcurrent, predicted)
 			continue
 		}
-		// Predict arguments for this tool.
-		s.mu.Unlock()
 
+		// Predict arguments for this tool.
 		predArgs := predictArgs(predicted, lastTool, lastArgs)
 		if predArgs == nil {
+			s.releaseSpecSlot()
 			debug.Log("speculate", "no arg prediction for %s after %s, skipping", predicted, lastTool)
 			continue
 		}
 
 		// Skip if already cached.
 		if s.hasCached(predicted, predArgs) {
+			s.releaseSpecSlot()
 			continue
 		}
 
 		s.mu.Lock()
 		s.speculations++
-		s.activeSpeculations++
 		s.mu.Unlock()
 
 		// Launch background goroutine for speculative execution.
@@ -513,6 +517,27 @@ func (s *speculator) speculate(ctx context.Context, tools *tool.Registry, lastTo
 			debug.Log("speculate", "speculatively executed %s in %v (cached for future use)", toolName, dur)
 		}(predicted, predArgs)
 	}
+}
+
+// reserveSpecSlot atomically checks the concurrency limit and increments
+// activeSpeculations, reporting whether the caller holds a reserved slot
+// (#3593: closes the check-then-increment TOCTOU window).
+func (s *speculator) reserveSpecSlot() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeSpeculations >= specMaxConcurrent {
+		return false
+	}
+	s.activeSpeculations++
+	return true
+}
+
+// releaseSpecSlot returns a slot reserved by reserveSpecSlot (bail paths
+// and goroutine completion).
+func (s *speculator) releaseSpecSlot() {
+	s.mu.Lock()
+	s.activeSpeculations--
+	s.mu.Unlock()
 }
 
 // Close stops all background goroutines and clears the cache.
