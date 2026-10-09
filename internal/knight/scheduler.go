@@ -1977,8 +1977,10 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		}
 		// Semantic dedup via name+description token Jaccard. 0.6 is empirically
 		// the threshold above which two candidates describe the same workflow
-		// in this repo's existing skills.
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= 0.6 {
+		// in this repo's existing skills. CJK-dominant fingerprints use a
+		// stricter 0.75 (#3637): bigram density makes same-prefix Chinese
+		// families score 0.55-0.60 without being duplicates.
+		if jaccardSimilarity(candFP, skillSimilarityFingerprint(s.Name, s.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
 			return true
 		}
 	}
@@ -1986,7 +1988,7 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		if a == nil {
 			continue
 		}
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= 0.6 {
+		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
 			return true
 		}
 	}
