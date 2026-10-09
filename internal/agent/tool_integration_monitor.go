@@ -120,8 +120,16 @@ var integrationMutatingTools = derivedEditTools(map[string]bool{
 // These represent the "evidence" an agent should carry forward.
 var (
 	integrationFilePathRe = regexp.MustCompile(`(?:[\w.-]+/)+[\w.-]+\.\w+`)
-	integrationLineRefRe  = regexp.MustCompile(`(?i)(?:line|l)[:\s]+(\d{1,4})`)
+	// #3640: broaden the line-reference shape beyond English "line 42":
+	// L42 (no separator), 第42行 / 第 42 行 (Chinese), and :42 forms must
+	// all produce evidence. The token itself is the bare number (group 1),
+	// so a Chinese reply "第 42 行的 Foo 未定义" matches token "42" without
+	// needing the English literal.
+	integrationLineRefRe  = regexp.MustCompile(`(?i)(?:\bline\s*[:：]?\s*|\bl\s*[:：]?\s*|第\s*)(\d{1,4})(?:\s*行)?`)
 	integrationGoSymbolRe = regexp.MustCompile(`\b(?:func|type|var|const)\s+([A-Z]\w+)`)
+	// integrationSummaryLineRe matches grep files_with_matches' trailing
+	// summary line ("12 file(s) matched"). See isPathListOutput (#3640).
+	integrationSummaryLineRe = regexp.MustCompile(`^\d+ file\(s\) matched$`)
 	// integrationPathLineRe matches a single line that is exactly a
 	// path-like token (no spaces, contains /, has a short extension) --
 	// used to detect pure path-list browsing outputs.
@@ -198,7 +206,10 @@ func extractEvidenceTokens(content string) []string {
 	}
 
 	extract(integrationFilePathRe, 0)
-	extract(integrationLineRefRe, 0) // full match: "line 142" - more meaningful than bare number
+	// Full match ("line 142", len >= minEvidenceLen). Chinese replies do
+	// not contain the English literal; evidenceTokenInText carries a digit
+	// fallback for line-ref tokens instead (#3640).
+	extract(integrationLineRefRe, 0)
 	extract(integrationGoSymbolRe, 1)
 	return tokens
 }
@@ -273,6 +284,15 @@ func isPathListOutput(content string) bool {
 		scan = scan[:3000]
 	}
 	lines := strings.Split(strings.TrimRight(scan, "\n"), "\n")
+	// #3640: grep files_with_matches unconditionally appends a summary
+	// line ("12 file(s) matched") which contains spaces - a strict every-
+	// line-is-a-path check made the exemption dead code for exactly the
+	// output shape it was written for. Tolerate ONE trailing summary line.
+	if n := len(lines); n > 0 {
+		if last := strings.TrimSpace(lines[n-1]); integrationSummaryLineRe.MatchString(last) {
+			lines = lines[:n-1]
+		}
+	}
 	paths := 0
 	for _, l := range lines {
 		l = strings.TrimSpace(l)
@@ -361,8 +381,31 @@ func evidenceTokenInText(tok, lowerText string) bool {
 	if strings.Contains(lowerText, tok) {
 		return true
 	}
+	// #3640: line-ref tokens ("line 142") must also integrate via their
+	// bare digits - Chinese replies say 第 142 行 / L142 and never carry the
+	// English literal. The digit sequence must actually appear in the
+	// reply text (any line-reference shape), not merely as a substring of
+	// some longer number.
+	if m := integrationLineRefRe.FindStringSubmatch(tok); m != nil {
+		digits := m[1]
+		idx := strings.Index(lowerText, digits)
+		for idx >= 0 {
+			beforeOK := idx == 0 || !isDigit(lowerText[idx-1])
+			after := idx + len(digits)
+			afterOK := after >= len(lowerText) || !isDigit(lowerText[after])
+			if beforeOK && afterOK {
+				return true
+			}
+			next := strings.Index(lowerText[idx+1:], digits)
+			if next < 0 {
+				break
+			}
+			idx = idx + 1 + next
+		}
+		return false
+	}
 	if !strings.Contains(tok, "/") {
-		return false // symbol/line-ref tokens: exact substring only
+		return false // symbol tokens: exact substring only
 	}
 	base := filepath.Base(tok)
 	if len(base) >= minEvidenceLen && !isCommonNoise(base) && strings.Contains(lowerText, base) {
