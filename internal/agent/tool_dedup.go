@@ -257,6 +257,15 @@ func commandMayRewriteWorkspace(name, args string) bool {
 		return false
 	}
 	cmd := payload.Command
+	// #3629: normalize pipe/semicolon adjacency before signal matching.
+	// The fragment table is space-delimited (" tee ", " sed -i"), so the
+	// tight shell forms - `cmd |tee broken.go`, `x;tee out` - matched
+	// nothing and the mutation epoch never bumped, replaying stale cached
+	// results over a rewritten workspace. Padding is detection-only and
+	// over-inclusive in the documented safe direction (false positive =
+	// one extra real execution).
+	cmd = strings.ReplaceAll(cmd, "|", " | ")
+	cmd = strings.ReplaceAll(cmd, ";", " ; ")
 	// Neutralize known-harmless sinks first (same forms as the irrev-gate
 	// redirect neutralizer) so plain "2>&1" pipelines do not trip the
 	// bare-'>' file-write signal.
