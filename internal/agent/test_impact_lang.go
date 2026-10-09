@@ -718,7 +718,8 @@ func parseTestFuncNamesMulti(filePath string, profile *langProfile) map[string]b
 	}
 	// Go uses AST
 	if profile.Name == "go" {
-		return parseTestFuncNames(filePath)
+		names, _ := parseTestFuncNames(filePath)
+		return names
 	}
 	// For other languages, read and scan for test patterns
 	data, err := os.ReadFile(filePath)

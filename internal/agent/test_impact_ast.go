@@ -21,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/topcheer/ggcode/internal/debug"
 )
 
 // exportedFuncInfo describes an exported function or method found via AST
@@ -96,14 +98,14 @@ func receiverTypeName(expr ast.Expr) string {
 // parseTestFuncNames reads a Go test file and returns the set of function names
 // that start with "Test" (the Go testing convention). Returns nil on parse
 // error or when no test functions exist.
-func parseTestFuncNames(filePath string) map[string]bool {
+func parseTestFuncNames(filePath string) (map[string]bool, bool) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	file, _, err := parseGoSource(filePath, string(data), 0)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	names := make(map[string]bool)
 	for _, decl := range file.Decls {
@@ -115,7 +117,7 @@ func parseTestFuncNames(filePath string) map[string]bool {
 			names[fn.Name.Name] = true
 		}
 	}
-	return names
+	return names, true
 }
 
 // untestedExportedFuncs returns the display names of exported functions/methods
@@ -139,11 +141,18 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 		return nil
 	}
 
+	// #3649: tracks whether any candidate test file failed to parse -
+	// exact-name misses are untrustworthy then, so reporting suppresses.
+	anyParseFailed := false
+
 	// Find the corresponding test file.
 	base := filepath.Base(goFile)
 	srcName := strings.TrimSuffix(base, ".go")
 	testFile := filepath.Join(filepath.Dir(abs), srcName+"_test.go")
-	testFuncs := parseTestFuncNames(testFile)
+	testFuncs, siblingOK := parseTestFuncNames(testFile)
+	if !siblingOK {
+		anyParseFailed = true
+	}
 	noSibling := len(testFuncs) == 0
 	if noSibling {
 		// #3620: no same-name sibling, but the package may still test this
@@ -161,9 +170,18 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 			}
 			return result
 		}
+		// #3649: a sibling _test.go that fails to parse (mid-edit WIP is
+		// routine on this shared tree) must not escalate to "every exported
+		// func untested" - track parse failures separately from empty maps.
 		testFuncs = map[string]bool{}
 		for _, tf := range testFiles {
-			for name := range parseTestFuncNames(tf) {
+			names, ok := parseTestFuncNames(tf)
+			if !ok {
+				anyParseFailed = true
+				debug.Log("test-impact", "sibling test parse failed (partial): %s", tf)
+				continue
+			}
+			for name := range names {
 				testFuncs[name] = true
 			}
 		}
@@ -186,9 +204,19 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 				}
 			}
 		}
-		// #3620: no-sibling packages may reference the exported symbol
-		// directly from any test file (word boundary to avoid prefix hits).
-		if noSibling && dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
+		// #3649 (defect 1): the reference scan was #3620's no-sibling-only
+		// fallback - sibling files using table-driven naming
+		// (TestParseConfig_tableDriven) or coverage living in another test
+		// file (zz_issue123_test.go) never hit the exact-name map and were
+		// misreported as untested. Fall back to the directory reference
+		// scan in the sibling case too.
+		if dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
+			continue
+		}
+		// #3649 (defect 2): with a parse-failed sibling we can't trust the
+		// exact-name miss - suppress rather than misreport (advisory hint,
+		// false negatives are cheaper than false positives here).
+		if anyParseFailed {
 			continue
 		}
 		untested = append(untested, f.DisplayName)
