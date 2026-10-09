@@ -365,9 +365,15 @@ func hasMakefileTamperingContent(content string) bool {
 			effCmds = collectDelegatedCommands(targets, deps, name)
 		}
 		if len(effCmds) == 0 {
-			// test/build target exists with no commands at all and no
-			// delegations — nothing to run
-			return true
+			// #3626: an empty BUILD target ("all:" / "build:" with no recipe
+			// and no deps) is a legal placeholder - make just prints
+			// "Nothing to be done for 'all'". Only an empty TEST target (or
+			// a surviving .PHONY trace of one) is a sabotage signal; empty
+			// build placeholders are skipped.
+			if isTestTarget || makefilePhonyMentionsTest(lines) {
+				return true
+			}
+			continue
 		}
 		allNoOp := true
 		for _, c := range effCmds {
