@@ -73,6 +73,28 @@ func TestIssue3676_LeakBandDuplicateNowCaught(t *testing.T) {
 	}
 }
 
+func TestIssue3676_LeakBandCaughtViaActiveLoop(t *testing.T) {
+	// Review 6088096655: the active loop kept the candidate-side-only gate
+	// after the staging loop was fixed - this end-to-end probe walks
+	// isKnownCandidate with an English ACTIVE skill and the issue's
+	// trailing-Han candidate (band jaccard ~0.727) and pins the catch.
+	k := &Knight{}
+	c := SkillCandidate{
+		Name:        "deploy-vercel-prod",
+		Description: "deploy the vercel project build preview alias dns edge cache prod 部署",
+	}
+	active := []*SkillEntry{{
+		Name: "deploy-vercel",
+		Meta: SkillMeta{
+			Name:        "deploy-vercel",
+			Description: "deploy the vercel project build preview alias dns edge cache",
+		},
+	}}
+	if !k.isKnownCandidate(c, active, nil) {
+		t.Fatal("[0.6,0.75) duplicate must be caught via the ACTIVE loop too")
+	}
+}
+
 func TestIssue3676_SameFamilyCJKStillGuarded(t *testing.T) {
 	// #3637 regression guard: same-prefix Chinese families score ~0.55-0.60
 	// and must NOT be flagged as duplicates under the pair gate.

@@ -2001,7 +2001,12 @@ func (k *Knight) isKnownCandidate(c SkillCandidate, active, staging []*SkillEntr
 		if a == nil {
 			continue
 		}
-		if jaccardSimilarity(candFP, skillSimilarityFingerprint(a.Name, a.Meta.Description, "")) >= similarityDuplicateThreshold(candFP) {
+		// #3676: pair-wise gate on the active loop too - the candidate-side-only
+		// lookup here had the same direction dependence as the staging loop
+		// (review 6088096655): a wide-script candidate vs an English active
+		// skill leaked [0.6,0.75) duplicates through this path.
+		activeFP := skillSimilarityFingerprint(a.Name, a.Meta.Description, "")
+		if jaccardSimilarity(candFP, activeFP) >= duplicateThresholdForPair(candFP, activeFP) {
 			return true
 		}
 	}
