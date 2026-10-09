@@ -4958,7 +4958,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// recordSourceEdit adds 1 back) - zero the debt, so debt never
 			// exceeded 1 and the warn thresholds (7/12) were unreachable:
 			// the detector was permanently silent.
-			if tc.Name == "run_command" && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
+			// #3685-A: the six command channels, not just run_command - bash/
+			// powershell are reachable tool names (OpenAI responses builtin)
+			// and a `go test` run through them clears debt exactly like
+			// run_command does.
+			if isCommandChannelTool(tc.Name) && !result.IsError && isVerificationCommand(extractCommandFromArgs(tc.Arguments)) {
 				a.verifyDebt.recordVerifyCommand(extractCommandFromArgs(tc.Arguments), result.IsError)
 			}
 			// #2992 case 2: the long-test workflow runs builds/tests via
@@ -4979,6 +4983,11 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					// alignment).
 					if terminal, passed := psTerminalVerifyOutcome(psParseJobStatus(result.Content)); terminal {
 						a.bgVerifyJobs.remove(bgVerifyExtractJobID(tc.Arguments))
+						// #3685-B: strategyFixation's real verification event for a
+						// background job is its TERMINAL outcome, not the launch -
+						// mirroring the clears below closes the #2992 gap that left it
+						// accumulating streaks across green background test runs.
+						a.strategyFixation.recordVerification(tc.Name, result.Content, !passed)
 						if passed {
 							a.verifyDebt.recordVerifyCommand(cmd, false)
 							a.editPropagation.recordGreenBuild()
@@ -5002,7 +5011,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// runs BEFORE recordEdit, the set size stayed <=1 and the
 			// detector's own charter ("7 edits to 7 DIFFERENT files") was
 			// unreachable. Only a successful VERIFY COMMAND resets now.
-			if tc.Name == "run_command" && !result.IsError {
+			// #3685-A: same six-channel widening as the verifyDebt gate above.
+			if isCommandChannelTool(tc.Name) && !result.IsError {
 				if cmd := extractCommandFromArgs(tc.Arguments); cmd != "" && isVerifyCommand(cmd) {
 					a.editPropagation.recordGreenBuild()
 					// #1460-C: a green verification confirms the edit
@@ -5140,9 +5150,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// inject a bogus failure (#485). Filter through the same
 			// command-position analysis as premature_success (#483).
 			sfIsVerify := strategyFixationIsVerification(tc.Name)
-			if sfIsVerify && (tc.Name == "run_command" || tc.Name == "start_command") {
+			if sfIsVerify && (tc.Name == "run_command" || tc.Name == "bash" || tc.Name == "powershell") {
 				sfIsVerify = psIsVerifyCommand(sfCommandArg(psArgs))
 			}
+			// #3685-B: start_command's launch result only means "job
+			// started" - counting it as verification cleared streaks before
+			// any test ran (reverse distortion). Its enum entry was removed;
+			// the real event is the terminal outcome wired above (#2992
+			// mirror).
 			if strategyFixationIsMutation(tc.Name) {
 				// Record EVERY referenced file: multi_file_edit edits all
 				// files[] entries and notebook_edit carries notebook_path —
