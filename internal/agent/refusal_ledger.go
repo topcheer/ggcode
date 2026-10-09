@@ -303,7 +303,7 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 	if l == nil || !refusalWriteTools[tool] {
 		return ""
 	}
-	lower := strings.ToLower(args)
+	lower := strings.ToLower(refusalMatchDomain(tool, args))
 	// #3469 (note): read-only run_command shapes never mutate the refusal
 	// target, so they are exempt from the write-class block.
 	// #3484: the prefix match alone is NOT proof of read-only-ness - shell
@@ -341,6 +341,70 @@ func (l *refusalLedger) checkBlocked(tool string, args string) string {
 		}
 	}
 	return ""
+}
+
+// refusalMatchDomain narrows #3717: the refusal check used to match against
+// the ENTIRE tool args JSON, so an edit_file whose new_text merely MENTIONED
+// a refused filename ("config.yaml supports many options") was hard-blocked
+// even though the write targeted a completely different file. The match
+// domain is now:
+//   - run_command / start_command: the command string itself (the command
+//     IS the write vector; whole-domain matching is correct there);
+//   - every other write tool: the path-bearing FIELD VALUES only
+//     (file_path/path/notebook_path/notebook/file/source/destination,
+//     recursively - covers files[].path and operations[].source/dest);
+//   - non-JSON args (or a non-object root): fall back to the raw string so
+//     a malformed payload fails CLOSED, never open.
+func refusalMatchDomain(tool string, args string) string {
+	if tool == "run_command" || tool == "start_command" {
+		var rc struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal([]byte(args), &rc) == nil && rc.Command != "" {
+			return rc.Command
+		}
+		return args
+	}
+	var root any
+	if err := json.Unmarshal([]byte(args), &root); err != nil {
+		return args // fail closed: unparseable payload keeps old semantics
+	}
+	var b strings.Builder
+	collectPathValues(root, &b)
+	if b.Len() == 0 {
+		// No path-bearing field at all: keep the raw args rather than an
+		// empty domain - an unrecognized write shape must not silently pass.
+		return args
+	}
+	return b.String()
+}
+
+// refusalPathKeys are the argument keys that carry a write TARGET. Content
+// keys (content/old_text/new_text/description...) are deliberately absent:
+// text that merely mentions a refused path is not a write to it.
+var refusalPathKeys = map[string]bool{
+	"file_path": true, "path": true, "file": true,
+	"notebook_path": true, "notebook": true,
+	"source": true, "destination": true, "to_path": true,
+}
+
+func collectPathValues(node any, b *strings.Builder) {
+	switch v := node.(type) {
+	case map[string]any:
+		for k, child := range v {
+			if refusalPathKeys[k] {
+				if s, ok := child.(string); ok {
+					b.WriteString(s)
+					b.WriteByte('\n')
+				}
+			}
+			collectPathValues(child, b)
+		}
+	case []any:
+		for _, child := range v {
+			collectPathValues(child, b)
+		}
+	}
 }
 
 func refusalAgeWords(secs int64) string {
