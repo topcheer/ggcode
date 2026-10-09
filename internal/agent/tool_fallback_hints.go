@@ -138,6 +138,24 @@ func isEmptyToolResult(s string) bool {
 		strings.Contains(s, "empty")
 }
 
+// isZeroMatchSuccess reports whether a SUCCESS (non-error) tool result is a
+// zero-match outcome for a search-class tool (#3641). grep/search_files
+// render "No matches found" as a successful empty result, so IsError-gated
+// fallback hints never fired for the detector's headline scenario.
+// Deliberately narrow: only search tools, only explicit no-match phrases -
+// bare "not found"/"empty" substrings would false-positive on ordinary
+// file content.
+func isZeroMatchSuccess(toolName, content string) bool {
+	switch toolName {
+	case "grep", "search_files", "code_search", "lsp_workspace_symbols", "lsp_references", "lsp_implementation":
+	default:
+		return false
+	}
+	lower := strings.ToLower(content)
+	return strings.Contains(lower, "no match") || strings.Contains(lower, "no result") ||
+		strings.Contains(lower, "no symbol")
+}
+
 // isTimeout checks if the error indicates a timeout.
 func isTimeout(s string) bool {
 	return strings.Contains(s, "timeout") || strings.Contains(s, "timed out") ||

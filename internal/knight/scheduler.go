@@ -1916,7 +1916,7 @@ func (k *Knight) normalizeGeneratedSkillDocument(candidate SkillCandidate, conte
 	if name == "" {
 		name = strings.TrimSpace(candidate.Name)
 	}
-	if err := validateSkillName(name); err != nil {
+	if _, err := validateSkillName(name); err != nil {
 		return candidate, "", err
 	}
 	scope := strings.TrimSpace(meta.Scope)

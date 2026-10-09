@@ -247,13 +247,13 @@ func TestTrimSpace(t *testing.T) {
 // --- skill_promoter.go ---
 
 func TestValidateSkillName(t *testing.T) {
-	if err := validateSkillName("my-skill-123"); err != nil {
-		t.Errorf("unexpected error: %v", err)
+	if got, err := validateSkillName("my-skill-123"); err != nil || got != "my-skill-123" {
+		t.Errorf("unexpected error/value: %v %q", err, got)
 	}
-	if err := validateSkillName(""); err == nil {
+	if _, err := validateSkillName(""); err == nil {
 		t.Error("expected error for empty name")
 	}
-	if err := validateSkillName("a b c"); err == nil {
+	if _, err := validateSkillName("a b c"); err == nil {
 		t.Error("expected error for spaces")
 	}
 }

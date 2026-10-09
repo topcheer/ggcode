@@ -4651,7 +4651,8 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			}
 			// Tool error fallback chain: on tool failure, inject actionable
 			// alternative strategy suggestions. Fires once per tool per run.
-			if result.IsError {
+			// #3641: zero-match search results are successes, not errors.
+			if result.IsError || isZeroMatchSuccess(tc.Name, result.Content) {
 				if fallbackHint := a.toolFallbackCheck(tc.Name, result.Content); fallbackHint != "" {
 					a.appendGuidance(&result, fallbackHint)
 				}
