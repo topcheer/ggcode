@@ -886,6 +886,15 @@ func run(cfg *config.Config, cfgFile, resumeID string, bypass bool) error {
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err := startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
+			// #3677: configuration errors must abort startup visibly - the old
+			// debug.Log-only downgrade left the server silently broken. Runtime
+			// errors (e.g. port in use) warn on stderr and keep the TUI alive.
+			if errors.Is(err, a2a.ErrConfig) {
+				fmt.Fprintf(os.Stderr, "A2A server configuration error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Fix the [a2a.auth] settings in ggcode.yaml and restart.")
+				return fmt.Errorf("a2a: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "A2A server startup warning: %v\n", err)
 			debug.Log("root", "A2A server startup warning: %v", err)
 		} else {
 			a2aServer = a2aSrv
@@ -1441,6 +1450,40 @@ func parseA2ATimeout(s string) time.Duration {
 	return d
 }
 
+// buildA2ATokenValidator validates one oauth2/oidc auth block and returns
+// the token validator. Every failure here is a configuration problem and
+// wraps a2a.ErrConfig so callers fail fast (#3677); runtime startup errors
+// are never produced by this path. kind is "oauth2" or "oidc" and only
+// affects the error text. Fail-fast semantics preserved from #1174
+// (unknown provider / no client_id), #1175 (issuer derivation) and
+// #1503/#2781 (preset placeholders).
+func buildA2ATokenValidator(kind, provider, clientID, issuerURL, scopes string, authCfg *config.A2AAuthConfig) (*auth.TokenValidator, error) {
+	_, _, resolvedClientID, _, err := auth.ResolveA2AAuth(provider, clientID, issuerURL, scopes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: a2a %s: %v", a2a.ErrConfig, kind, err)
+	}
+	if resolvedClientID == "" {
+		return nil, fmt.Errorf("%w: a2a %s: no client_id resolved (set client_id, or a provider with a default)", a2a.ErrConfig, kind)
+	}
+	resolvedIssuer := auth.ResolveA2AIssuerURL(provider, issuerURL)
+	if resolvedIssuer == "" {
+		return nil, fmt.Errorf("%w: a2a %s: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", a2a.ErrConfig, kind, provider)
+	}
+	if strings.Contains(resolvedIssuer, "AUTH0_TENANT") || strings.Contains(resolvedIssuer, "AZURE_TENANT") {
+		return nil, fmt.Errorf("%w: a2a %s: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", a2a.ErrConfig, kind, provider, resolvedIssuer)
+	}
+	// resolvedIssuer and resolvedClientID are provably non-empty here (the
+	// fail-fasts above return), so the old redundant guard is gone.
+	tv, err := auth.NewTokenValidator(resolvedClientID, resolvedIssuer,
+		auth.WithHMACSecret(authCfg.HMACSecret),
+		auth.WithValidIssuers(authCfg.ValidIssuers),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: a2a %s: %v", a2a.ErrConfig, kind, err)
+	}
+	return tv, nil
+}
+
 func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, workingDir string) (*a2a.Server, *a2a.Registry, *a2a.TaskHandler, error) {
 	a2aReg, err := a2a.NewRegistry()
 	if err != nil {
@@ -1460,88 +1503,26 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		Extensions: a2aExtensionsFromConfig(cfg.A2A.Extensions),
 	}, handler)
 
-	// Wire OAuth2/OIDC token validation if configured
+	// Wire OAuth2/OIDC token validation if configured. Every failure in
+	// these blocks is a configuration error (wraps a2a.ErrConfig) so the
+	// TUI and daemon callers can fail fast (#3677).
 	if cfg.A2A.Auth.OAuth2 != nil {
 		oc := cfg.A2A.Auth.OAuth2
-		// Issue #1174: propagate the resolve error - an unknown provider name
-		// must abort startup instead of silently disabling token validation.
-		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
+		tv, err := buildA2ATokenValidator("oauth2", oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes, &cfg.A2A.Auth)
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
+			return nil, nil, nil, err
 		}
-		// Issue #1174: refuse to silently run without token validation when an
-		// oauth2 auth block is present but resolves to nothing (fail-open
-		// downgrade to the public default API key would otherwise be invisible).
-		if clientID == "" {
-			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: no client_id resolved (set client_id, or a provider with a default)")
-		}
-		// Issue #1175: derive the issuer from the OIDC discovery URL, never
-		// from the token endpoint - TokenURL is not a valid issuer and makes
-		// every validation path fail with per-request 401s.
-		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
-		if issuerURL == "" {
-			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: no issuer available for provider %q (preset has no OIDC discovery URL); set issuer_url explicitly", oc.Provider)
-		}
-		// #1503: preset placeholders (AUTH0_TENANT/AZURE_TENANT) pass the
-		// non-empty checks and the server starts fine - then every JWKS
-		// fetch hits a NXDOMAIN and every request 401s silently. Fail fast
-		// at startup instead, matching the #1174/#1175 spirit.
-		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
-			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oauth2: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
-		}
-		if issuerURL != "" && clientID != "" {
-			tv, err := auth.NewTokenValidator(clientID, issuerURL,
-				auth.WithHMACSecret(cfg.A2A.Auth.HMACSecret),
-				auth.WithValidIssuers(cfg.A2A.Auth.ValidIssuers),
-			)
-			if err != nil {
-				srv.Stop()
-				return nil, nil, nil, fmt.Errorf("a2a oauth2: %w", err)
-			}
-			srv.SetTokenValidator(tv)
-		}
+		srv.SetTokenValidator(tv)
 	}
 	if cfg.A2A.Auth.OIDC != nil {
 		oc := cfg.A2A.Auth.OIDC
-		// Issue #1174: propagate the resolve error instead of discarding it.
-		_, _, clientID, _, err := auth.ResolveA2AAuth(oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes)
+		tv, err := buildA2ATokenValidator("oidc", oc.Provider, oc.ClientID, oc.IssuerURL, oc.Scopes, &cfg.A2A.Auth)
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
+			return nil, nil, nil, err
 		}
-		// Issue #1174: fail fast when the oidc block resolves to nothing.
-		if clientID == "" {
-			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: no client_id resolved (set client_id, or a provider with a default)")
-		}
-		issuerURL := auth.ResolveA2AIssuerURL(oc.Provider, oc.IssuerURL)
-		if issuerURL == "" {
-			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: no issuer available for provider %q; set issuer_url explicitly", oc.Provider)
-		}
-		// #2781: the same preset-placeholder fail-fast as the OAuth2 block
-		// (#1503) - without it an auth0/azure preset without a filled
-		// tenant starts the server clean and every JWKS fetch hits an
-		// NXDOMAIN placeholder host: silent per-request 401s.
-		if strings.Contains(issuerURL, "AUTH0_TENANT") || strings.Contains(issuerURL, "AZURE_TENANT") {
-			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a oidc: provider %q issuer is an unfilled preset placeholder (%s); set issuer_url/tenant and restart", oc.Provider, issuerURL)
-		}
-		if issuerURL != "" && clientID != "" {
-			tv, err := auth.NewTokenValidator(clientID, issuerURL,
-				auth.WithHMACSecret(cfg.A2A.Auth.HMACSecret),
-				auth.WithValidIssuers(cfg.A2A.Auth.ValidIssuers),
-			)
-			if err != nil {
-				srv.Stop()
-				return nil, nil, nil, fmt.Errorf("a2a oidc: %w", err)
-			}
-			srv.SetTokenValidator(tv)
-		}
+		srv.SetTokenValidator(tv)
 	}
 	if cfg.A2A.Auth.MTLS != nil {
 		mtlsCfg := &auth.MTLSConfig{
@@ -1552,7 +1533,9 @@ func startA2AServer(cfg *config.Config, ag *agent.Agent, reg *tool.Registry, wor
 		tlsCfg, err := mtlsCfg.BuildTLSConfig()
 		if err != nil {
 			srv.Stop()
-			return nil, nil, nil, fmt.Errorf("a2a mtls: %w", err)
+			// Bad cert/key/CA material is a configuration error (#3677): fail
+			// fast instead of degrading to warn-and-continue.
+			return nil, nil, nil, fmt.Errorf("%w: a2a mtls: %v", a2a.ErrConfig, err)
 		}
 		srv.SetTLSConfig(tlsCfg)
 	}

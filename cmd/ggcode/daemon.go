@@ -1053,6 +1053,13 @@ func runDaemon(cfg *config.Config, cfgFile string, bypass bool, followActive boo
 		// A2A instance override already applied by LoadWithInstance.
 		a2aSrv, a2aReg, a2aHandler, err = startA2AServer(cfg, ag, registry, workingDir)
 		if err != nil {
+			// #3677: same classification as the TUI path - configuration
+			// errors abort the daemon; runtime errors warn and continue.
+			if errors.Is(err, a2a.ErrConfig) {
+				fmt.Fprintf(os.Stderr, "A2A server configuration error: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Fix the [a2a.auth] settings in ggcode.yaml and restart.")
+				return fmt.Errorf("a2a: %w", err)
+			}
 			debug.Log("daemon", "A2A server start failed: %v", err)
 			fmt.Fprintf(os.Stderr, "A2A server warning: %v\n", err)
 		} else {
