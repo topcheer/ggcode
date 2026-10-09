@@ -144,13 +144,29 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 	srcName := strings.TrimSuffix(base, ".go")
 	testFile := filepath.Join(filepath.Dir(abs), srcName+"_test.go")
 	testFuncs := parseTestFuncNames(testFile)
-	if len(testFuncs) == 0 {
-		// No test file at all — every exported function is untested.
-		result := make([]string, 0, len(funcs))
-		for _, f := range funcs {
-			result = append(result, f.DisplayName)
+	noSibling := len(testFuncs) == 0
+	if noSibling {
+		// #3620: no same-name sibling, but the package may still test this
+		// file's exports from OTHER *_test.go files (Go convention; this
+		// repo's zz_issueNNNN_test.go pattern). Only when the whole
+		// directory has no test file may every export be called untested.
+		// Convention matching merges Test names across the directory;
+		// reference matching catches direct calls (zz tests call exported
+		// functions directly - the Test name never contains the symbol).
+		testFiles, _ := filepath.Glob(filepath.Join(filepath.Dir(abs), "*_test.go"))
+		if len(testFiles) == 0 {
+			result := make([]string, 0, len(funcs))
+			for _, f := range funcs {
+				result = append(result, f.DisplayName)
+			}
+			return result
 		}
-		return result
+		testFuncs = map[string]bool{}
+		for _, tf := range testFiles {
+			for name := range parseTestFuncNames(tf) {
+				testFuncs[name] = true
+			}
+		}
 	}
 
 	var untested []string
@@ -170,9 +186,33 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 				}
 			}
 		}
+		// #3620: no-sibling packages may reference the exported symbol
+		// directly from any test file (word boundary to avoid prefix hits).
+		if noSibling && dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
+			continue
+		}
 		untested = append(untested, f.DisplayName)
 	}
 	return untested
+}
+
+// dirTestFilesReferenceSymbol reports whether any *_test.go in dir
+// references symbol as a whole word (#3620 no-sibling reference match).
+func dirTestFilesReferenceSymbol(dir, symbol string) bool {
+	if symbol == "" {
+		return false
+	}
+	testFiles, _ := filepath.Glob(filepath.Join(dir, "*_test.go"))
+	for _, tf := range testFiles {
+		data, err := os.ReadFile(tf)
+		if err != nil {
+			continue
+		}
+		if identBoundaryReferenced(string(data), symbol) {
+			return true
+		}
+	}
+	return false
 }
 
 // funcLevelCoverageGaps analyzes changed Go files and returns per-file lists
@@ -207,4 +247,28 @@ func funcLevelCoverageGaps(workingDir string, maxFiles, maxFuncsPerFile int) []f
 		}
 	}
 	return gaps
+}
+
+// identBoundaryReferenced reports whether symbol occurs in src as a
+// complete Go identifier (#3620): "Widget" must not match inside
+// "WidgetExtended". isIdentByte covers the FULL identifier byte set -
+// the shared isWordByte (success_declare.go) is lowercase-specialized and
+// does not treat uppercase as a word byte.
+func identBoundaryReferenced(src, symbol string) bool {
+	for i := 0; i+len(symbol) <= len(src); i++ {
+		if src[i:i+len(symbol)] != symbol {
+			continue
+		}
+		beforeOK := i == 0 || !isIdentByte(src[i-1])
+		afterOK := i+len(symbol) >= len(src) || !isIdentByte(src[i+len(symbol)])
+		if beforeOK && afterOK {
+			return true
+		}
+	}
+	return false
+}
+
+// isIdentByte covers the full Go identifier byte set.
+func isIdentByte(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }

@@ -169,15 +169,19 @@ func TestUntestedChangedFiles(t *testing.T) {
 	// File with test.
 	writeGoFile(t, dir, "tested.go", "package main\n")
 	writeGoFile(t, dir, "tested_test.go", "package main\n")
-	// File without test.
-	writeGoFile(t, dir, "untested.go", "package main\n")
+	// File in the same package without its own sibling: #3620 package-level
+	// semantics - ANY *_test.go in the directory covers it (same rule as
+	// missing_test_check.go), so it is NOT untested.
+	writeGoFile(t, dir, "peer.go", "package main\n")
+	// True gap: a package with no test file at all.
+	writeGoFile(t, dir, "pkg/untested.go", "package pkg\n")
 
 	untested := untestedChangedFiles(dir)
 	if len(untested) != 1 {
 		t.Fatalf("expected 1 untested file, got %d: %v", len(untested), untested)
 	}
-	if untested[0] != "untested.go" {
-		t.Errorf("expected untested.go, got %s", untested[0])
+	if untested[0] != "pkg/untested.go" {
+		t.Errorf("expected pkg/untested.go, got %s", untested[0])
 	}
 }
 

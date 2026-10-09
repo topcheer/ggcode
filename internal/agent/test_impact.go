@@ -21,7 +21,6 @@ package agent
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -101,11 +100,13 @@ func hasGoTestFile(workingDir, goFile string) bool {
 		abs = filepath.Join(workingDir, goFile)
 	}
 	absDir := filepath.Dir(abs)
-	base := filepath.Base(goFile)
-	name := strings.TrimSuffix(base, ".go")
-	testFile := name + "_test.go"
-	_, err := os.Stat(filepath.Join(absDir, testFile))
-	return err == nil
+	// #3620: package-level semantics, same as missing_test_check.go - Go
+	// convention allows ANY _test.go in the package to test a file's
+	// exported functions (this repo: internal/agent functions covered by
+	// zz_issueNNNN_test.go across files). Exact same-name sibling matching
+	// reported 8% of non-test files as test-less on that convention alone.
+	matches, _ := filepath.Glob(filepath.Join(absDir, "*_test.go"))
+	return len(matches) > 0
 }
 
 // untestedChangedFiles returns changed Go source files that lack a
