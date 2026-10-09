@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/topcheer/ggcode/internal/audit"
+	"github.com/topcheer/ggcode/internal/checkpoint"
 	"github.com/topcheer/ggcode/internal/debug"
 	"github.com/topcheer/ggcode/internal/diff"
 	"github.com/topcheer/ggcode/internal/hooks"
@@ -327,6 +329,14 @@ func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCallDelta) tool
 			}
 			res := runTraced()
 			a.dedupLedger().record(tc.Name, string(tc.Arguments), res)
+			// #3671-1: warn-mode workflow still EXECUTES the real tool (same
+			// runTraced as the normal path) - a successful side effect must hit
+			// the crash sidecar exactly like the invariant-warn branch and the
+			// normal path (#3366 semantics), or a post-crash restore replays the
+			// call as if it never happened and repeats the write.
+			if !res.IsError {
+				a.appendCrashSidecar(tc.Name, string(tc.Arguments))
+			}
 			res.Content += "\n\n" + msg
 			return res
 		}
@@ -1086,6 +1096,18 @@ func (a *Agent) executeFileTool(ctx context.Context, t tool.Tool, tc provider.To
 		// change from remove to restore.
 		fileExisted = true
 		oldContent = string(cur)
+		// #3671-2: the drift branch above re-runs the dry-run gate on its
+		// refreshed baseline; this externally-created branch flips Existed and
+		// swaps oldContent (a " from nothing" overwrite of real external
+		// content) without re-running it - the exact asymmetry #3690 fixed on
+		// the multi-file leg. Run the gate on the external content too: the
+		// empty-loss and conflict-marker checks are baseline-relative and this
+		// is now the real baseline.
+		if diff.HasChanges(oldContent, newContent) {
+			if blockMsg := dryRunValidate(filePath, oldContent, newContent); blockMsg != "" {
+				return tool.Result{Content: blockMsg, IsError: true}
+			}
+		}
 	}
 
 	// Execute the actual tool (with panic recovery)
@@ -1982,9 +2004,19 @@ func (a *Agent) executeUndoEditInner(ctx context.Context, tc provider.ToolCallDe
 	case "undo":
 		cp, err := cpMgr.Undo("agent")
 		if err != nil {
+			// #3671-3: distinguish "stack empty" (benign, sentinel) from
+			// IO/corruption failures - the old uniform "Nothing to undo"
+			// label made the LLM read a corrupt checkpoint store as an
+			// empty stack and diagnose from wrong disk state.
+			if errors.Is(err, checkpoint.ErrNothingToUndo) {
+				return tool.Result{
+					IsError: true,
+					Content: fmt.Sprintf("Nothing to undo: %v", err),
+				}
+			}
 			return tool.Result{
 				IsError: true,
-				Content: fmt.Sprintf("Nothing to undo: %v", err),
+				Content: fmt.Sprintf("Undo failed (checkpoint store error, not an empty stack): %v", err),
 			}
 		}
 		// Existed (not OldContent=="") distinguishes created files from
