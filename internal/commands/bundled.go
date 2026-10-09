@@ -51,7 +51,7 @@ func bundledSkills() []*Command {
 			DisplayName:   "Use browser automation",
 			Description:   "Browser automation through the built-in 'browser' tool (Go-native CDP, no Node.js/Playwright needed).",
 			WhenToUse:     "Use when the user wants to open websites, click elements, fill forms, capture screenshots, inspect console output, or automate browser flows.",
-			Template:      "Handle browser tasks through the built-in `browser` tool. It provides full SPA/JavaScript support via Chrome DevTools Protocol (CDP) without Node.js or Playwright. Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. Requires Chrome/Chromium installed. For simple non-JS page fetching, use `web_fetch` instead.",
+			Template:      "Handle browser tasks through the built-in `browser` tool. It provides full SPA/JavaScript support via Chrome DevTools Protocol (CDP) without Node.js or Playwright. Actions: navigate, click, type, extract, screenshot, evaluate (run JS), wait, links, scroll, back, content, close. Requires Chrome/Chromium installed. For simple non-JS page fetching, use `web_fetch` instead. On failure the result carries a typed `[error_code=...]` prefix (ELEMENT_NOT_FOUND / ELEMENT_NOT_VISIBLE / TIMEOUT / NAV_REFUSED / CHROME_UNAVAILABLE / UNKNOWN) plus a retry hint - read the code before retrying: ELEMENT_NOT_FOUND means re-extract for a fresh selector, ELEMENT_NOT_VISIBLE means the element exists but is hidden/covered (try variants, iframe frame param, or a longer wait_timeout).",
 			Source:        SourceBundled,
 			LoadedFrom:    LoadedFromBundled,
 			UserInvocable: false,
