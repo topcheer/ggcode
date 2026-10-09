@@ -602,50 +602,75 @@ func isSkipMarkerRemovalCommand(cmd string) bool {
 	return isAwkSkipRemoval(lower)
 }
 
-// isSedSkipRemoval detects sed 's/PATTERN/REPLACEMENT/' where PATTERN
-// contains a skip marker but REPLACEMENT does NOT contain the same marker
-// (i.e., the marker is being removed, not introduced).
+// isSedSkipRemoval detects sed s/separator PATTERN sep REPLACEMENT sep in
+// any legal spelling where PATTERN contains a skip marker but REPLACEMENT
+// does not (i.e., the marker is being removed, not introduced).
+//
+// #3652: sed accepts ANY non-alphanumeric delimiter after `s` (/, |, comma,
+// #...) and the expression may be single-quoted, double-quoted or bare.
+// The old `Split(cmd, "'s/")` matched exactly one spelling, so legitimate
+// skip-marker REMOVALS like sed -i "s/t.Skip(/t.Log(/" or 's|t.Skip(|t.Log(|'
+// failed the exemption and were misjudged as marker injections.
 func isSedSkipRemoval(cmd string) bool {
-	// Extract the s/// pattern (simplified parsing)
-	parts := strings.Split(cmd, "'s/")
-	if len(parts) < 2 {
-		return false
-	}
-	// #1685 case 1: a sed expression string can carry MULTIPLE ;-separated
-	// expressions; the old code judged only the FIRST - 's/t.Skip(//g;
-	// s/assert/t.Skip(/g' exempted the whole command while the SECOND
-	// expression injected the skip marker. Scan every expression: any
-	// marker in a replacement disqualifies; at least one legitimate
-	// removal (marker in pattern, none in replacement) is still required.
+	// #1685 case 1: one sed expression string can carry MULTIPLE
+	// ;-separated expressions; the old code judged only the FIRST -
+	// 's/t.Skip(//g; s/assert/t.Skip(/g' exempted the whole command while
+	// the SECOND expression injected the skip marker. Scan every
+	// expression: any marker in a replacement disqualifies; at least one
+	// legitimate removal (marker in pattern, none in replacement) is still
+	// required.
 	sawLegitRemoval := false
-	for _, rawExpr := range strings.Split(parts[1], ";") {
-		// #1891: every chunk after the first still carries the `s` command
-		// prefix (e.g. `; s/assert/t.Skip(/g`). Splitting that on "/" made
-		// pattern=" s" and replacement="assert" - the injected marker sat at
-		// index 2 where neither check looked, so the exact #1685 case was
-		// STILL exempted. Normalize each chunk first: trim spaces and the
-		// s-command prefix.
-		expr := strings.TrimSpace(rawExpr)
-		if strings.HasPrefix(expr, "s/") {
-			// Strip the FULL "s/" so slash-split alignment matches chunk1
-			// (stripping one char left a leading "/" and shifted every
-			// field - the marker landed between checks again).
-			expr = expr[2:]
-		}
-		replacementParts := strings.Split(expr, "/")
-		if len(replacementParts) < 2 {
+	sawAnyExpr := false
+	for _, raw := range strings.Fields(cmd) {
+		expr := trimSedQuotes(raw)
+		if len(expr) < 3 || expr[0] != 's' || isSedDelimiterAlnum(expr[1]) {
 			continue
 		}
-		pattern := strings.ToLower(replacementParts[0])
-		replacement := strings.ToLower(replacementParts[1])
-		if containsAnySkipMarker(replacement) {
-			return false // injection in ANY expression: not exempt
-		}
-		if containsAnySkipMarker(pattern) {
-			sawLegitRemoval = true
+		sep := expr[1]
+		sawAnyExpr = true
+		for _, one := range strings.Split(expr, ";") {
+			// #1891: every chunk after the first still carries the `s`
+			// command prefix; normalize before splitting on the delimiter
+			// so pattern/replacement alignment matches chunk1.
+			chunk := strings.TrimSpace(one)
+			if len(chunk) < 3 || chunk[0] != 's' || chunk[1] != sep {
+				continue
+			}
+			fields := strings.Split(chunk[2:], string(sep))
+			if len(fields) < 2 {
+				continue
+			}
+			pattern := strings.ToLower(fields[0])
+			replacement := strings.ToLower(fields[1])
+			if containsAnySkipMarker(replacement) {
+				return false // injection in ANY expression: not exempt
+			}
+			if containsAnySkipMarker(pattern) {
+				sawLegitRemoval = true
+			}
 		}
 	}
-	return sawLegitRemoval
+	return sawAnyExpr && sawLegitRemoval
+}
+
+// trimSedQuotes strips a leading and/or trailing quote from a shell word.
+// Quoted expressions split by strings.Fields lose their pairing ('s/a/b/; +
+// s/c/d/') - strip whichever end still carries one.
+func trimSedQuotes(tok string) string {
+	if len(tok) >= 1 && (tok[0] == '\'' || tok[0] == '"') {
+		tok = tok[1:]
+	}
+	if len(tok) >= 1 && (tok[len(tok)-1] == '\'' || tok[len(tok)-1] == '"') {
+		tok = tok[:len(tok)-1]
+	}
+	return tok
+}
+
+// isSedDelimiterAlnum reports whether the byte is a character that may not
+// serve as a sed s-command delimiter.
+func isSedDelimiterAlnum(b byte) bool {
+	return b == '_' || b == ';' || b == '-' || b == '.' ||
+		(b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 // isAwkSkipRemoval detects awk gsub(/PATTERN/, "REPLACEMENT") where the
