@@ -188,8 +188,21 @@ func untestedExportedFuncs(workingDir, goFile string) []string {
 		}
 		// #3620: no-sibling packages may reference the exported symbol
 		// directly from any test file (word boundary to avoid prefix hits).
+		// #3662 defect 2: a METHOD's DisplayName is recvType_Method
+		// ("Foo_Bar"), but tests invoke the method ("x.Bar()") - the
+		// underscore form never appears in test code, so methods had no
+		// reference fallback at all. Scan the bare method name too.
 		if noSibling && dirTestFilesReferenceSymbol(filepath.Dir(abs), f.DisplayName) {
 			continue
+		}
+		if noSibling && f.IsMethod {
+			if idx := strings.LastIndex(f.DisplayName, "_"); idx >= 0 {
+				if bare := f.DisplayName[idx+1:]; len(bare) >= 3 {
+					if dirTestFilesReferenceSymbol(filepath.Dir(abs), bare) {
+						continue
+					}
+				}
+			}
 		}
 		untested = append(untested, f.DisplayName)
 	}
