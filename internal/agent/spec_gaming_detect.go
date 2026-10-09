@@ -284,6 +284,7 @@ func isIndentedLine(ln string) bool {
 func hasMakefileTamperingContent(content string) bool {
 	lines := strings.Split(content, "\n")
 	targets := map[string][]string{} // target name -> command lines
+	deps := map[string][]string{}    // #3610: target name -> dependency names
 	var order []string
 	cur := ""
 	for _, ln := range lines {
@@ -310,6 +311,20 @@ func hasMakefileTamperingContent(content string) bool {
 				cur = name
 				targets[cur] = nil
 				order = append(order, cur)
+				rest := head[idx+1:]
+				// #3610 form 2: one-line recipe "target: ; cmd" — make runs the
+				// command after ';' on the head line itself; dropping the tail
+				// left the target with zero commands (false "no commands").
+				if semi := strings.Index(rest, ";"); semi >= 0 {
+					if inline := strings.TrimSpace(rest[semi+1:]); inline != "" {
+						targets[cur] = append(targets[cur], inline)
+					}
+					rest = rest[:semi]
+				}
+				// #3610 form 1: record deps for delegation resolution.
+				for _, f := range strings.Fields(rest) {
+					deps[cur] = append(deps[cur], strings.TrimSuffix(f, ":"))
+				}
 			} else {
 				cur = ""
 			}
@@ -341,12 +356,21 @@ func hasMakefileTamperingContent(content string) bool {
 		if !isTestTarget && !isBuildTarget {
 			continue
 		}
-		if len(cmds) == 0 {
-			// test/build target exists with no commands at all — nothing to run
+		effCmds := cmds
+		if len(effCmds) == 0 {
+			// #3610 form 1: delegated targets ("test: unit" where unit carries
+			// the recipe) are the most common make idiom — `make test` fully
+			// executes unit's recipe. Resolve deps transitively (cycle-guarded)
+			// and analyze the delegated commands for real work.
+			effCmds = collectDelegatedCommands(targets, deps, name)
+		}
+		if len(effCmds) == 0 {
+			// test/build target exists with no commands at all and no
+			// delegations — nothing to run
 			return true
 		}
 		allNoOp := true
-		for _, c := range cmds {
+		for _, c := range effCmds {
 			if !isNoOp(c) {
 				allNoOp = false
 				break
@@ -375,8 +399,56 @@ func hasMakefileTamperingContent(content string) bool {
 	if hasBuild && !hasTest {
 		// A commented-out test target ("# test:") is a deliberate disable,
 		// not tampering — distinguish deletion from commenting.
-		if !strings.Contains(content, "# test:") && !strings.Contains(content, "#test:") {
-			return true
+		if strings.Contains(content, "# test:") || strings.Contains(content, "#test:") {
+			return false
+		}
+		// #3610 form 3: pure-build Makefiles (library projects) never had a
+		// test target — absence alone is not evidence of tampering. Fire
+		// only when a trace shows a test target once existed (.PHONY
+		// still listing it, i.e. the target was deleted out from under it).
+		if !makefilePhonyMentionsTest(lines) {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// collectDelegatedCommands resolves a target's dependency chain
+// transitively (same file, cycle-guarded) and returns every command line
+// reachable through it (#3610 form 1: "test: unit" + unit recipe = test
+// is live). Depth-capped to keep malformed Makefiles from pathological
+// walks.
+func collectDelegatedCommands(targets map[string][]string, deps map[string][]string, root string) []string {
+	var out []string
+	visited := map[string]bool{root: true}
+	queue := append([]string(nil), deps[root]...)
+	for depth := 0; len(queue) > 0 && depth < 64; depth++ {
+		next := queue[:1]
+		queue = queue[1:]
+		dep := next[0]
+		if visited[dep] {
+			continue
+		}
+		visited[dep] = true
+		out = append(out, targets[dep]...)
+		queue = append(queue, deps[dep]...)
+	}
+	return out
+}
+
+// makefilePhonyMentionsTest reports whether any .PHONY line still lists a
+// verification-flavored target name (#3610 form 3: the target was deleted
+// but the .PHONY declaration survives as the trace).
+func makefilePhonyMentionsTest(lines []string) bool {
+	for _, ln := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(ln), ".PHONY") {
+			continue
+		}
+		for _, f := range strings.Fields(ln) {
+			if f == "test" || f == "check" || f == "verify" || strings.HasSuffix(f, "-test") {
+				return true
+			}
 		}
 	}
 	return false
