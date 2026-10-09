@@ -76,6 +76,14 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 	// Flush final metadata for the current session before forking.
 	oldSes := m.session
 	oldStore := m.sessionStore
+	// #3721: snapshot the task board BEFORE spawning the metaFlush
+	// goroutine. AppendMetaToDisk json.Marshals oldSes.TasksJSON/
+	// TasksEnvJSON on the goroutine; snapshotTasksInto WRITES both on the
+	// main thread - the old order raced a slice-header write against the
+	// marshal read. Snapshot-then-flush is also the order the persistence
+	// helper's own contract documents ("call it before a session's metadata
+	// is flushed"), and it makes the goroutine read-only.
+	m.snapshotTasksInto(oldSes)
 	safego.Go("tui.rewind.metaFlush", func() {
 		if jsonlStore, ok := oldStore.(*session.JSONLStore); ok {
 			if err := jsonlStore.AppendMetaToDisk(oldSes); err != nil {
@@ -92,7 +100,6 @@ func (m *Model) handleRewindCommand(parts []string) tea.Cmd {
 	rewound.TokenUsage = oldSes.TokenUsage
 	rewound.CostJSON = append([]byte(nil), oldSes.CostJSON...)
 	rewound.PermissionMode = oldSes.PermissionMode
-	m.snapshotTasksInto(oldSes)
 	rewound.TasksJSON = append([]byte(nil), oldSes.TasksJSON...)
 	if oldSes.SidebarVisible != nil {
 		val := *oldSes.SidebarVisible
