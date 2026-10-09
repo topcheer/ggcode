@@ -5129,7 +5129,7 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 			// tool I/O so we can detect ungrounded references later.
 			// Tool result redundancy: detect when result content substantially
 			// overlaps with a prior result still in context (AgentDiet waste).
-			if trMsg := a.toolResultRedundancy.recordResult(tc.Name, result.Content, i+1); trMsg != "" {
+			if trMsg := a.toolResultRedundancy.recordToolCall(tc.Name, tc.Arguments, result.Content, i+1); trMsg != "" {
 				a.appendGuidance(&result, trMsg)
 			}
 			if cascadeGuidance := a.fixCascadeCheckCommand(tc.Name, tc.Arguments, result.IsError); cascadeGuidance != "" {
