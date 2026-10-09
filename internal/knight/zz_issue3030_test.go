@@ -49,14 +49,24 @@ func TestIssue3030_EvalWindowRateLimitsSelfReflection(t *testing.T) {
 func TestIssue3030_PureLessonWindowUnchanged(t *testing.T) {
 	projDir := t.TempDir()
 	k := New(config.KnightConfig{Enabled: true}, t.TempDir(), projDir, nil)
-	for i := 0; i < 5; i++ {
-		if err := k.RecordSemanticMemory("lesson", "real lesson "+strings.Repeat("x", i+1), nil, "eval"); err != nil {
+	// #r25: semantic dedup merges near-identical recurrences into one entry,
+	// so genuinely DISTINCT lessons are required here to keep the original
+	// contract meaningful (five different lessons all render).
+	lessons := []string{
+		"reject-promote: cross-module edits need verify-ci not go build",
+		"promote: flutter changes need widget tests before approval",
+		"parser edge cases belong in table-driven tests",
+		"guard concurrent map access with a path-keyed mutex",
+		"prefer configuration over hardcoded constants",
+	}
+	for _, text := range lessons {
+		if err := k.RecordSemanticMemory("lesson", text, nil, "eval"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	out := k.formatRecentSemanticMemoryForEval(8)
-	if lines := strings.Count(out, "\n") + 1; lines != 5 {
-		t.Fatalf("five real lessons must all render, got %d lines:\n%s", lines, out)
+	if lines := strings.Count(out, "\n") + 1; lines != len(lessons) {
+		t.Fatalf("%d real lessons must all render, got %d lines:\n%s", len(lessons), lines, out)
 	}
 	if strings.Contains(out, "self-reflection") {
 		t.Fatal("no self-reflection was written; none should appear")

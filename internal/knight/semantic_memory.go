@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +28,25 @@ type SemanticMemoryEntry struct {
 	Refs      []string  `json:"refs,omitempty"`
 	Source    string    `json:"source,omitempty"`
 	SessionID string    `json:"session,omitempty"`
+	// #r25 (ICML 2026 Experience-Driven Self-Distillation): principle-level
+	// memories carry an empirical utility score. Repeated recurrence of the
+	// same lesson MERGES into one entry (semantic dedup) instead of flooding
+	// the store; eviction prunes by utility, not blind FIFO. Older JSONL
+	// records without these fields unmarshal as zero values and map to the
+	// 0.5 default via entryUtility below - no migration needed.
+	Utility     float64   `json:"utility,omitempty"` // [0,1]; 0 = unset (default 0.5)
+	Hits        int       `json:"hits,omitempty"`    // times this lesson recurred / was injected
+	LastApplied time.Time `json:"last_applied,omitempty"`
+}
+
+// entryUtility returns the effective utility of an entry, defaulting
+// legacy zero-value records to 0.5 so they neither dominate nor get
+// insta-pruned relative to fresh entries.
+func entryUtility(e SemanticMemoryEntry) float64 {
+	if e.Utility <= 0 {
+		return 0.5
+	}
+	return e.Utility
 }
 
 const (
@@ -104,9 +125,42 @@ func (s *semanticMemoryStore) Append(entry SemanticMemoryEntry) error {
 		// code proceeded with nil and the rewrite below wiped all history.
 		return fmt.Errorf("semantic memory: read %s: %w", s.path, readErr)
 	}
-	entries = append(entries, entry)
+	// #r25: semantic dedup - if an existing entry says substantially the
+	// same thing (jaccard over the similarity tokenizer already used for
+	// skill dedup), MERGE instead of appending. A lesson that keeps
+	// recurring is one strong principle, not N rows flooding the 500-slot
+	// store (which starved heterogeneous lessons under FIFO eviction).
+	newTok := tokenizeForSimilarity(entry.Summary)
+	merged := false
+	for i := len(entries) - 1; i >= 0 && i >= len(entries)-semanticDedupScanWindow; i-- {
+		if jaccardSimilarity(newTok, tokenizeForSimilarity(entries[i].Summary)) >= similarityDuplicateThreshold(newTok) {
+			entries[i].Hits++
+			entries[i].Utility = math.Min(1, entryUtility(entries[i])+0.1)
+			entries[i].Time = entry.Time
+			if len(entry.Refs) > 0 {
+				entries[i].Refs = append(entries[i].Refs, entry.Refs...)
+			}
+			merged = true
+			break
+		}
+	}
+	if !merged {
+		entry.Hits = 1
+		entry.Utility = 0.5
+		entries = append(entries, entry)
+	}
 	if len(entries) > maxSemanticMemoryEntries {
+		// #r25: utility-aware eviction replaces blind FIFO. Lowest effective
+		// utility goes first; ties break to oldest.
+		sort.SliceStable(entries, func(a, b int) bool {
+			ua, ub := entryUtility(entries[a]), entryUtility(entries[b])
+			if ua != ub {
+				return ua < ub
+			}
+			return entries[a].Time.Before(entries[b].Time)
+		})
 		entries = entries[len(entries)-maxSemanticMemoryEntries:]
+		sort.SliceStable(entries, func(a, b int) bool { return entries[a].Time.Before(entries[b].Time) })
 	}
 	var b strings.Builder
 	for _, e := range entries {
@@ -148,6 +202,77 @@ func (s *semanticMemoryStore) recentLocked(limit int) ([]SemanticMemoryEntry, er
 		out[len(entries)-1-i] = e
 	}
 	return out, nil
+}
+
+// semanticDedupScanWindow bounds the dedup scan to the most recent N
+// entries (cost control; near-duplicates cluster in time).
+const semanticDedupScanWindow = 200
+
+// TopByUtility returns at most limit entries ranked by effective utility
+// (desc), breaking ties by recency. #r25: the eval-prompt injection path
+// uses this instead of plain recency so lessons that repeatedly proved
+// useful outrank whatever happened most recently (ICML 2026 top-ranked
+// principles).
+func (s *semanticMemoryStore) TopByUtility(limit int) ([]SemanticMemoryEntry, error) {
+	if s == nil || s.path == "" {
+		return nil, nil
+	}
+	pathMu := semanticMemoryPathLock(s.path)
+	pathMu.Lock()
+	defer pathMu.Unlock()
+	entries, err := readSemanticMemoryEntries(s.path)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(entries, func(a, b int) bool {
+		ua, ub := entryUtility(entries[a]), entryUtility(entries[b])
+		if ua != ub {
+			return ua > ub
+		}
+		return entries[a].Time.After(entries[b].Time)
+	})
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
+}
+
+// Reinforce adjusts an entry's utility by delta (positive or negative,
+// clamped to [0,1]) and records the application timestamp. #r25 feedback
+// loop: eval decisions that acted on injected lessons feed the score back.
+func (s *semanticMemoryStore) Reinforce(id string, delta float64) error {
+	if s == nil || s.path == "" || id == "" {
+		return nil
+	}
+	pathMu := semanticMemoryPathLock(s.path)
+	pathMu.Lock()
+	defer pathMu.Unlock()
+	entries, err := readSemanticMemoryEntries(s.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	found := false
+	for i := range entries {
+		if entries[i].ID == id {
+			entries[i].Utility = math.Max(0, math.Min(1, entryUtility(entries[i])+delta))
+			entries[i].LastApplied = time.Now().UTC()
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		raw, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		b.Write(raw)
+		b.WriteByte('\n')
+	}
+	return util.AtomicWriteFile(s.path, []byte(b.String()), 0o600)
 }
 
 func readSemanticMemoryEntries(path string) ([]SemanticMemoryEntry, error) {
@@ -207,4 +332,23 @@ func (k *Knight) RecentSemanticMemory(limit int) ([]SemanticMemoryEntry, error) 
 		return nil, nil
 	}
 	return newSemanticMemoryStore(k.semanticMemoryPath()).Recent(limit)
+}
+
+// TopSemanticMemoryByUtility returns entries ranked by empirical utility
+// (#r25): lessons that repeatedly proved useful outrank recent-but-unproven
+// ones. Used by the eval-prompt injection path.
+func (k *Knight) TopSemanticMemoryByUtility(limit int) ([]SemanticMemoryEntry, error) {
+	if k == nil {
+		return nil, nil
+	}
+	return newSemanticMemoryStore(k.semanticMemoryPath()).TopByUtility(limit)
+}
+
+// ReinforceSemanticMemory adjusts a lesson's utility score after an eval
+// decision acted on it (#r25 feedback loop). Safe on nil Knight.
+func (k *Knight) ReinforceSemanticMemory(id string, delta float64) error {
+	if k == nil {
+		return nil
+	}
+	return newSemanticMemoryStore(k.semanticMemoryPath()).Reinforce(id, delta)
 }
