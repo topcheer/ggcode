@@ -3121,6 +3121,15 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: fmt.Sprintf("[Autopilot: agent idle for %d consecutive rounds — terminating to avoid deadlock. Last output: %s]", a.strategistNoProgressCount, preview)})
 					a.ClearAutopilotGoal()
+					// #3683: this early return used to skip EVERY completion gate
+					// below (sync verify, async verify goroutine — asyncVerifyStats
+					// stayed nil), so code changed during the run exited as
+					// "success" without ever being built or tested. Hand the stats
+					// to the deferred async verification so unverified changes still
+					// get checked on the way out.
+					if codeChangedInRun(runStats) {
+						asyncVerifyStats = runStats
+					}
 					return nil
 				}
 				debug.Log("agent", "Iteration %d: autopilot calling strategist (call #%d/%d, no-progress=%d/%d)", i+1, a.autopilotStrategistCount, maxAutopilotStrategistCalls, a.strategistNoProgressCount, maxConsecutiveStrategistNoProgress)
@@ -3145,6 +3154,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					}
 					onEvent(provider.StreamEvent{Type: provider.StreamEventSystem, Text: msg})
 					a.ClearAutopilotGoal()
+					// #3683: same bypass as the deadlock path above — the strategist's
+					// Complete verdict used to return before any completion gate ran.
+					// The verdict is a judgment call, not a verification result; hand
+					// the run's stats to the deferred async verification so changed
+					// code is still built/tested before the run is reported complete.
+					if codeChangedInRun(runStats) {
+						asyncVerifyStats = runStats
+					}
 					return nil
 				} else if result.Guidance != "" {
 					debug.Log("agent", "Iteration %d: strategist injecting guidance (%d chars)", i+1, len(result.Guidance))
