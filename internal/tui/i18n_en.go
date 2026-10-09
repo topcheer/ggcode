@@ -1221,6 +1221,14 @@ func enCatalog(key string) string {
 		return "Context manager not available."
 	case "regenerate.no_response":
 		return "No assistant response to regenerate."
+	case "rewind.bad_arg":
+		return "Usage: /rewind [N] where N >= 1 is the number of user turns to rewind."
+	case "rewind.revert_failed":
+		return "File rollback refused, rewind aborted (nothing changed): %v"
+	case "rewind.success":
+		return "Rewound %d turn(s); reverted file edits (%s). Continuing in session %s - original preserved."
+	case "rewind.success_no_edits":
+		return "Rewound %d turn(s); the rewound turns made no tracked file edits. Continuing in session %s - original preserved."
 	case "branch.busy":
 		return "Cannot branch while the agent is running. Press Ctrl+C to cancel first."
 	case "branch.no_session":

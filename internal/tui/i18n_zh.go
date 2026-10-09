@@ -1234,6 +1234,14 @@ func zhCatalog(key string) string {
 		return "上下文管理器不可用。"
 	case "regenerate.no_response":
 		return "没有可重新生成的 AI 回复。"
+	case "rewind.bad_arg":
+		return "用法：/rewind [N]，N >= 1，为要回退的用户轮数。"
+	case "rewind.revert_failed":
+		return "文件回滚被拒绝，已中止回退（未做任何改动）：%v"
+	case "rewind.success":
+		return "已回退 %d 轮；文件编辑已还原（%s）。在会话 %s 中继续 - 原会话保留。"
+	case "rewind.success_no_edits":
+		return "已回退 %d 轮；被回退的轮次没有受追踪的文件编辑。在会话 %s 中继续 - 原会话保留。"
 	case "branch.busy":
 		return "Agent 正在运行，无法分叉。请先按 Ctrl+C 取消。"
 	case "branch.no_session":

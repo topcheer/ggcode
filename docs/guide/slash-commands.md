@@ -104,6 +104,7 @@ Slash commands are typed directly in the chat input within the TUI.
 | `/doctor` | Run health diagnostics (provider, config, MCP, LSP, permissions) |
 | `/style` | Cycle output style (default → concise → detailed → socratic) |
 | `/branch [N]` / `/fork [N]` | Branch/fork current session; N drops the last N user turns to fork from an earlier point |
+| `/rewind [N]` | Coordinated rewind: drop the last N user turns (default 1) AND revert the file edits those runs made, then continue in a forked session with a rewind-memory breadcrumb; the original session is preserved (refuses safely if checkpoint baselines were evicted) |
 | `/pin-session` / `/unpin-session` | Pin/unpin session (pinned sessions are never removed by cleanup and list first in `/sessions`; distinct from `/pin`, which pins context items) |
 | `/tag <tag>...` | Add tags to the session (deduplicated case-insensitively) |
 | `/untag <tag>...` | Remove tags from the session |
