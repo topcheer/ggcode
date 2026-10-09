@@ -246,3 +246,25 @@ func TestClassifyErrorContent_TestDeadlockTimeoutIsTestFailure(t *testing.T) {
 		t.Fatal("network deadline hijacked into test_failure")
 	}
 }
+
+// r21: classifyToolError must attach the cost-ordered recovery action to the
+// returned category (integration point for recovery_budget escalation).
+func TestClassifyToolError_AttachesAction(t *testing.T) {
+	ec := NewErrorClassifier()
+	cat := ec.classifyToolError("read_file", "open /x/y.go: no such file or directory")
+	if cat.Name != "file_not_found" {
+		t.Fatalf("Name = %q, want file_not_found", cat.Name)
+	}
+	if cat.Action != "refresh" {
+		t.Fatalf("Action = %q, want refresh", cat.Action)
+	}
+
+	ec2 := NewErrorClassifier()
+	cat2 := ec2.classifyToolError("run_command", "edit failed: permission denied")
+	if cat2.Name != "permission_denied" {
+		t.Fatalf("Name = %q, want permission_denied", cat2.Name)
+	}
+	if cat2.Action != "escalate" {
+		t.Fatalf("Action = %q, want escalate", cat2.Action)
+	}
+}
