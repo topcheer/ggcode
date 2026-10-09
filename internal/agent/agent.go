@@ -1544,6 +1544,14 @@ func (a *Agent) RunStreamWithContent(ctx context.Context, content []provider.Con
 					Type:  provider.StreamEventError,
 					Error: fmt.Errorf("%s", ssRes.Output),
 				})
+				// #3684: this return happens BEFORE the MarkCompleted defer
+				// is registered (it only covers the normal run body below),
+				// so the journal entry MarkRunning wrote stays in "running"
+				// state - byte-identical to a real crash, and the NEXT
+				// startup's CheckCrashedRun reports a false crash-recovery
+				// prompt. Close the entry here: a hook-rejected session never
+				// ran, which is a completed-not-crashed outcome.
+				MarkCompleted(sid, false, 0, 0)
 				return fmt.Errorf("session start blocked by hook: %s", ssRes.Output)
 			}
 			if out := strings.TrimSpace(ssRes.Output); out != "" && a.contextManager != nil {
