@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -75,7 +77,10 @@ func (o *outputOffloader) spillDir() (string, error) {
 		// Directory vanished (OS temp cleanup); recreate on next write.
 		o.dir = ""
 	}
-	dir, err := os.MkdirTemp("", "ggcode-spill-*")
+	// #3642: embed the PID so pruneStaleSpillDirs can attribute the
+	// directory to a live process instead of deleting an active long
+	// session's spills just because its ModTime crossed the threshold.
+	dir, err := os.MkdirTemp("", fmt.Sprintf("ggcode-spill-%d-*", os.Getpid()))
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +162,13 @@ func (o *outputOffloader) pruneLocked(dir string) {
 }
 
 // pruneStaleSpillDirs removes ggcode-spill-* directories under the system
-// temp dir that are older than 24h (crashed sessions). Errors are ignored.
+// temp dir left by crashed sessions. Errors are ignored.
+//
+// #3642: directories are named ggcode-spill-<pid>-<rand>; a directory whose
+// PID is still alive is NEVER removed, no matter how old - a long-running
+// session's promised "Full output saved to <path>" files must stay
+// recoverable while the session lives. Only PID-dead (or 7+ day old
+// legacy-unparseable) directories are removed.
 func pruneStaleSpillDirs() {
 	tmp := os.TempDir()
 	entries, err := os.ReadDir(tmp)
@@ -165,17 +176,54 @@ func pruneStaleSpillDirs() {
 		return
 	}
 	cutoff := time.Now().Add(-24 * time.Hour)
+	legacyCutoff := time.Now().Add(-7 * 24 * time.Hour)
 	for _, e := range entries {
 		name := e.Name()
 		if !e.IsDir() || !strings.HasPrefix(name, "ggcode-spill-") {
 			continue
 		}
 		info, err := e.Info()
-		if err != nil || info.ModTime().After(cutoff) {
+		if err != nil {
+			continue
+		}
+		if pid, ok := spillDirPID(name); ok {
+			// Skip live-owner directories unconditionally (#3642).
+			if processAlive(pid) {
+				continue
+			}
+			if !info.ModTime().Before(cutoff) {
+				continue
+			}
+		} else if !info.ModTime().Before(legacyCutoff) {
+			// Pre-#3642 name format: owner unknowable, only reap after 7
+			// days so a same-day upgraded live session is not hit.
 			continue
 		}
 		_ = os.RemoveAll(filepath.Join(tmp, name))
 	}
+}
+
+// spillDirPID extracts the owning PID from a ggcode-spill-<pid>-<rand>
+// directory name (#3642). Legacy names (ggcode-spill-<rand>) report false.
+func spillDirPID(name string) (int, bool) {
+	rest := strings.TrimPrefix(name, "ggcode-spill-")
+	pidStr := rest
+	if i := strings.Index(rest, "-"); i >= 0 {
+		pidStr = rest[:i]
+	}
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// processAlive reports whether the PID belongs to a live process. Signal 0
+// performs no delivery; EPERM means the process exists but is owned by
+// another user - still alive.
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
 }
 
 // utilSnapRune snaps a byte offset to a UTF-8 rune boundary.
