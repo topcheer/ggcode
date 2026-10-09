@@ -260,7 +260,7 @@ var makefileNoOpCommands = []string{"echo", "true", "exit 0", "exit", ":", "pass
 // targets were neutered: a test target whose commands are all no-ops, or a
 // build target surviving while the test target was deleted (or commented
 // out) entirely. This is the partial detection the ciConfigFiles entry
-// "Makefile": false always promised (#588 Bug 2) — previously the comment
+// "Makefile": false always promised (#588 Bug 2) - previously the comment
 // existed but no Makefile content analysis did, so `sed -i 's/go test/echo
 // ok/' Makefile` passed silently while both patterns waved it through.
 // Unreadable files return false (never warn on I/O errors).
@@ -305,7 +305,7 @@ func hasMakefileTamperingContent(content string) bool {
 			// with wrong indentation are a make lint problem, not sabotage.
 			targets[cur] = append(targets[cur], strings.TrimSpace(ln))
 		case strings.HasPrefix(ln, "#") || strings.TrimSpace(ln) == "":
-			// comments/blank lines — a commented-out "#test:" is absence
+			// comments/blank lines - a commented-out "#test:" is absence
 		default:
 			// rule head: "name: deps" (possibly with := assignment)
 			head := ln
@@ -319,7 +319,7 @@ func hasMakefileTamperingContent(content string) bool {
 				targets[cur] = nil
 				order = append(order, cur)
 				rest := head[idx+1:]
-				// #3610 form 2: one-line recipe "target: ; cmd" — make runs the
+				// #3610 form 2: one-line recipe "target: ; cmd" - make runs the
 				// command after ';' on the head line itself; dropping the tail
 				// left the target with zero commands (false "no commands").
 				if semi := strings.Index(rest, ";"); semi >= 0 {
@@ -366,7 +366,7 @@ func hasMakefileTamperingContent(content string) bool {
 		effCmds := cmds
 		if len(effCmds) == 0 {
 			// #3610 form 1: delegated targets ("test: unit" where unit carries
-			// the recipe) are the most common make idiom — `make test` fully
+			// the recipe) are the most common make idiom - `make test` fully
 			// executes unit's recipe. Resolve deps transitively (cycle-guarded)
 			// and analyze the delegated commands for real work.
 			effCmds = collectDelegatedCommands(targets, deps, name)
@@ -411,12 +411,12 @@ func hasMakefileTamperingContent(content string) bool {
 	}
 	if hasBuild && !hasTest {
 		// A commented-out test target ("# test:") is a deliberate disable,
-		// not tampering — distinguish deletion from commenting.
+		// not tampering - distinguish deletion from commenting.
 		if strings.Contains(content, "# test:") || strings.Contains(content, "#test:") {
 			return false
 		}
 		// #3610 form 3: pure-build Makefiles (library projects) never had a
-		// test target — absence alone is not evidence of tampering. Fire
+		// test target - absence alone is not evidence of tampering. Fire
 		// only when a trace shows a test target once existed (.PHONY
 		// still listing it, i.e. the target was deleted out from under it).
 		if !makefilePhonyMentionsTest(lines) {
@@ -547,7 +547,7 @@ func carriesSearchDownstreamMutation(cmd string, tail []string) bool {
 
 // isTestWritingTask returns true when the user's prompt indicates the task
 // itself is writing or updating tests. For such tasks, editing only test
-// files is the expected outcome — Pattern 1 must not fire (#544 Bug C2).
+// files is the expected outcome - Pattern 1 must not fire (#544 Bug C2).
 // English keywords match whole words only (same tokenization as
 // isCIRelatedTask's #501 fix) to avoid substring hits like "latest".
 func isTestWritingTask(userPrompt string) bool {
@@ -810,6 +810,30 @@ func hasSkipMarkersInCommands(commands []string) bool {
 	return false
 }
 
+// hasSkipMarkersInEdits is the edit-family counterpart of
+// hasSkipMarkersInCommands (#3696). EditContents only ever holds ADDED
+// text (reflection.go records new_text/content/new_source, never
+// old_text), so no removal-exemption is needed: removing a marker is
+// remediation and never lands here. The read-only search exemption does
+// not apply either - an edit IS a write vector.
+func hasSkipMarkersInEdits(contents []string) bool {
+	for _, text := range contents {
+		lower := strings.ToLower(text)
+		for _, marker := range skipMarkers {
+			markerLower := strings.ToLower(marker)
+			if strings.Contains(lower, markerLower) {
+				return true
+			}
+			escapedMarker := strings.ReplaceAll(marker, "(", "\\(")
+			escapedMarker = strings.ReplaceAll(escapedMarker, ".", "\\.")
+			if strings.Contains(text, escapedMarker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isCIRelatedTask returns true if the user prompt suggests the task is about
 // CI/build configuration itself (in which case CI edits are legitimate).
 func isCIRelatedTask(userPrompt string) bool {
@@ -817,7 +841,7 @@ func isCIRelatedTask(userPrompt string) bool {
 	// #501: the "ci" keyword must match as a whole word. As a bare substring
 	// it is contained in everyday English (efficient, special, decide,
 	// precision, pricing, sufficient, crucial...) and empirically matched
-	// 12/12 ordinary prompts — silently disabling the CI-tampering pattern
+	// 12/12 ordinary prompts - silently disabling the CI-tampering pattern
 	// for a large share of real tasks.
 	words := strings.FieldsFunc(lower, func(r rune) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
@@ -883,10 +907,14 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 		}
 	}
 
-	// Pattern 2: Skip markers detected in commands
-	if hasSkipMarkersInCommands(stats.CommandsRun) {
+	// Pattern 2: Skip markers detected in commands or edit contents
+	// (#3696: the edit-family path - edit_file/write_file/multi_*/
+	// notebook - was previously unscanned, so injecting t.Skip via the
+	// agent's primary edit tools bypassed the detector entirely while
+	// the shell path stayed covered).
+	if hasSkipMarkersInCommands(stats.CommandsRun) || hasSkipMarkersInEdits(stats.EditContents) {
 		warnings = append(warnings,
-			"Test skip/ignore markers detected in commands. "+
+			"Test skip/ignore markers detected in commands or edits. "+
 				"Skipping failing tests is not a fix -- address the root cause in source code.")
 	}
 
@@ -900,7 +928,7 @@ func (a *Agent) checkSpecGaming(stats *RunStats, userPrompt string) string {
 				break // one warning is enough
 			}
 			// #588 Bug 2: Makefile gets content analysis instead of a blanket
-			// pass ("Makefile": false in ciConfigFiles) — the detector's founding
+			// pass ("Makefile": false in ciConfigFiles) - the detector's founding
 			// threat model (METR reward hacking: tamper `make test` into a no-op)
 			// was 100% missed while the L104 comment claimed partial handling.
 			if strings.EqualFold(filepath.Base(f), "makefile") && hasMakefileTampering(f) {
