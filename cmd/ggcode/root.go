@@ -268,6 +268,7 @@ func NewRootCmd() *cobra.Command {
 	}
 	cmd.AddCommand(completionCmd)
 	cmd.AddCommand(newMCPCmd(&cfgFile))
+	cmd.AddCommand(newAuditCmd())
 	cmd.AddCommand(newPluginCmd(&cfgFile))
 	cmd.AddCommand(newIMCmd(&cfgFile))
 	cmd.AddCommand(newDaemonCmd(&cfgFile))
