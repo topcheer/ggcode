@@ -48,6 +48,13 @@ package agent
 // bounded. Item 3 is excluded because it requires type knowledge to know
 // whether the nested method mutates.
 //
+// Known blind spots (deliberate, #3742): assignments through an index
+// expression (c.arr[0] = x, c.m[k] = v) are not checked -- map/slice fields
+// share their backing store through the copy, so flagging them wholesale
+// would false-positive on the map case; typed detection needs type info.
+// Value-semantics builders (methods returning the receiver type) are exempt
+// -- their mutations on the copy are the point, not a bug.
+//
 // Delta-aware: only flags mutations present in the NEW content.
 
 import (
@@ -110,8 +117,17 @@ func vrmCheckFunc(fn *ast.FuncDecl, fset *token.FileSet, filePath string, issues
 		return
 	}
 
-	// Check if this function already had mutations in oldContent
 	typeName := vrmReceiverTypeShort(fn.Recv.List[0].Type)
+
+	// #3742: value-semantics builder exemption -- a method that RETURNS the
+	// receiver type mutates the copy by design and hands it back to the
+	// caller (stdlib idiom: WithName/WithX chains). Nothing is lost; warning
+	// here taught the LLM to rewrite legal builders as pointer receivers.
+	if vrmReturnsReceiver(fn, typeName) {
+		return
+	}
+
+	// Check if this function already had mutations in oldContent
 	sig := typeName + "." + fn.Name.Name
 	if oldMutations != nil && oldMutations[sig] {
 		return // Skip - this mutation already existed
@@ -232,14 +248,42 @@ func vrmFindReceiverMutations(body *ast.BlockStmt, recvName string) []vrmMutatio
 	return results
 }
 
+// vrmReturnsReceiver reports whether any result type of fn is the receiver
+// type itself (value-semantics builder shape). Pointer results of the same
+// type are irrelevant here -- pointer receivers are never checked anyway.
+func vrmReturnsReceiver(fn *ast.FuncDecl, typeName string) bool {
+	if fn.Type == nil || fn.Type.Results == nil {
+		return false
+	}
+	for _, r := range fn.Type.Results.List {
+		if id, ok := r.Type.(*ast.Ident); ok && id.Name == typeName {
+			return true
+		}
+	}
+	return false
+}
+
 // vrmExtractRecvField checks if an expression is a field selection on the
-// receiver (e.g., "c.count"). Returns the field name if so, empty string otherwise.
+// receiver (e.g., "c.count", and nested "c.inner.count" -- #3742: the base
+// identifier of the selector chain must be the receiver). Returns the field
+// name if so, empty string otherwise.
 func vrmExtractRecvField(expr ast.Expr, recvName string) string {
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
 		return ""
 	}
-	ident, ok := sel.X.(*ast.Ident)
+	// Unwrap nested field selectors: for c.inner.f the chain's base is c.
+	// Mutating c.inner.f through a value receiver is lost with the copy just
+	// like a top-level field.
+	base := sel.X
+	for {
+		inner, isSel := base.(*ast.SelectorExpr)
+		if !isSel {
+			break
+		}
+		base = inner.X
+	}
+	ident, ok := base.(*ast.Ident)
 	if !ok || ident.Name != recvName {
 		return ""
 	}
